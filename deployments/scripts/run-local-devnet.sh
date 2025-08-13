@@ -19,10 +19,10 @@ if [[ -d ~/.penumbra/network_data ]] ; then
 else
     cargo run --release --bin pd -- network generate \
         --chain-id penumbra-local-devnet \
-        --unbonding-delay 50 \
-        --epoch-duration 50 \
+        --unbonding-delay 302400 \
+        --epoch-duration 302400 \
         --proposal-voting-blocks 50 \
-        --gas-price-simple 500 \
+        --gas-price-simple 0 \
         --timeout-commit 500ms
     # opt in to cometbft abci indexing to postgres
     postgresql_db_url="postgresql://penumbra:penumbra@localhost:5432/penumbra_cometbft?sslmode=disable"
