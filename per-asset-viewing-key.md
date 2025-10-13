@@ -61,13 +61,8 @@ Summary
 
   # Query the transfer of the test_usd from acc0 viewing key provided
   ```bash
-  # this is just so it works and is compatible (we should put asset viewing key in the config properly)
-  rm -rf  ~/.local/share/testviewingkey
-  pcli --home ~/.local/share/testviewingkey init --grpc-url http://localhost:8080 soft-kms generate
-
   # verify local1 has balances
   pcli --home ~/.local/share/local1 view balance
 
-  # Returns value of assets based on asset viewing key
-  pcli --home ~/.local/share/testviewingkey view balance --asset-viewing-key $ASSET_VIEWING_KEY_ACC1
+  pcli --grpc-url http://localhost:8080 view balance --asset-viewing-key $ASSET_VIEWING_KEY_ACC1
   ```

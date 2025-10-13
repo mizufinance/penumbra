@@ -53,6 +53,21 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Special handling for view balance with asset viewing key - doesn't need wallet/config
+    if let Command::View(ViewCmd::Balance(balance_cmd)) = &opt.cmd {
+        if let Some(avk_str) = &balance_cmd.asset_viewing_key {
+            // When using asset viewing key, we don't need the wallet config
+            // but we do need a GRPC URL
+            let grpc_url = opt.grpc_url.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "When using --asset-viewing-key without a configured wallet, you must provide --grpc-url"
+                )
+            })?;
+            balance_cmd.exec_standalone(avk_str, grpc_url).await?;
+            return Ok(());
+        }
+    }
+
     let (mut app, cmd) = opt.into_app().await?;
 
     if !cmd.offline() {

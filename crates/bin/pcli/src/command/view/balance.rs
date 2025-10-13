@@ -27,6 +27,7 @@ pub struct BalanceCmd {
     #[clap(long)]
     /// If set, query balances using an asset viewing key instead of the wallet's full viewing key.
     /// This allows querying balances for a specific asset only.
+    /// When using this flag without a configured wallet, you must also provide --grpc-url.
     pub asset_viewing_key: Option<String>,
 }
 
@@ -35,10 +36,16 @@ impl BalanceCmd {
         false
     }
 
+    /// Execute with just a GRPC URL and asset viewing key (no wallet required)
+    pub async fn exec_standalone(&self, avk_str: &str, grpc_url: url::Url) -> Result<()> {
+        self.exec_with_asset_viewing_key_standalone(avk_str, grpc_url).await
+    }
+
     pub async fn exec(&self, app: &mut App) -> Result<()> {
         // If an asset viewing key is provided, we need to scan the chain directly
         if let Some(avk_str) = &self.asset_viewing_key {
-            return self.exec_with_asset_viewing_key(app, avk_str).await;
+            let grpc_url = app.config.grpc_url.clone();
+            return self.exec_with_asset_viewing_key_standalone(avk_str, grpc_url).await;
         }
 
         // Otherwise, use the normal flow with the wallet's view service
@@ -115,7 +122,7 @@ impl BalanceCmd {
         }
     }
 
-    async fn exec_with_asset_viewing_key(&self, app: &mut App, avk_str: &str) -> Result<()> {
+    async fn exec_with_asset_viewing_key_standalone(&self, avk_str: &str, grpc_url: url::Url) -> Result<()> {
         // Parse the asset viewing key
         let avk: AssetViewingKey = avk_str
             .parse()
@@ -124,14 +131,12 @@ impl BalanceCmd {
         let asset_id = avk.asset_id();
         let ivk = avk.incoming_viewing_key();
 
-        // Get the asset cache to format the output
-        let view = app.view();
-        let asset_cache = view.assets().await?;
-
         // Connect to the chain to fetch compact blocks
-        let channel = app.pd_channel().await?;
+        let channel = penumbra_sdk_proto::box_grpc_svc::connect(
+            tonic::transport::Endpoint::new(grpc_url.to_string())?
+        ).await?;
         let mut tm_client = TendermintProxyServiceClient::new(channel.clone());
-        let mut cb_client = CompactBlockQueryServiceClient::new(channel);
+        let mut cb_client = CompactBlockQueryServiceClient::new(channel.clone());
 
         // Get the current block height
         let status = tm_client
@@ -210,31 +215,23 @@ impl BalanceCmd {
         table.load_preset(presets::NOTHING);
 
         if self.by_note {
-            table.set_header(vec!["Value", "Height", "Source"]);
+            table.set_header(vec!["Amount", "Asset ID", "Height", "Source"]);
 
             for (amount, height, source) in notes.iter() {
-                let value = Value {
-                    amount: (*amount).into(),
-                    asset_id,
-                };
                 table.add_row(vec![
-                    value.format(&asset_cache),
+                    amount.to_string(),
+                    asset_id.to_string(),
                     height.to_string(),
                     format_source(source),
                 ]);
             }
         } else {
-            table.set_header(vec!["Amount"]);
+            table.set_header(vec!["Total Amount", "Asset ID"]);
 
             // Sum all notes
             let total: u128 = notes.iter().map(|(amount, _, _)| amount).sum();
 
-            let total_value = Value {
-                amount: total.into(),
-                asset_id,
-            };
-
-            table.add_row(vec![total_value.format(&asset_cache)]);
+            table.add_row(vec![total.to_string(), asset_id.to_string()]);
         }
 
         println!("{table}");
