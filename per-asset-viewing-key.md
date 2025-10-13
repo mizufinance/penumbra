@@ -55,7 +55,6 @@ Summary
   ASSET_VIEWING_KEY_ACC1=penumbraassetviewingkey15xa8edy2ly97qp2mv6kwchpyvawxkxycsgmsrqagvr58l66n8qxa936f2engzk0tp4alv7pewr2tsckmjrzdl2c0euntkm96m6efgqz093n4sqesd86zced8r7mhkmc6yh0g0h
 
   # send test_usd from ADDR0 (local0) to ADDR1
-  # TODO: these error but it is actually successful
   pcli --home ~/.local/share/local0 tx send --to $ADDRESS1 1test_usd
   pcli --home ~/.local/share/local0 tx send --to $ADDRESS1 1penumbra
   pcli --home ~/.local/share/local0 view balance
@@ -63,10 +62,12 @@ Summary
 
   # Query the transfer of the test_usd from acc0 viewing key provided
   ```bash
+  pcli --home ~/.local/share/testviewingkey init --grpc-url http://localhost:8080 soft-kms generate
+
   pcli --home ~/.local/share/local1 view balance
 
   # this is not the right local account on PURPOSE (just so it's compatible so I can test it)
-  pcli --home ~/.local/share/local1 view balance --asset-viewing-key $ASSET_VIEWING_KEY_ACC1
+  pcli --home ~/.local/share/testviewingkey view balance --asset-viewing-key $ASSET_VIEWING_KEY_ACC1
   ```
 
   Architecture:

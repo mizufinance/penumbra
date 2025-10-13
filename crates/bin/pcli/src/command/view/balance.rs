@@ -1,9 +1,22 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use comfy_table::{presets, Table};
+use futures::StreamExt;
 
+use penumbra_sdk_asset::Value;
 use penumbra_sdk_keys::{AddressView, AssetViewingKey};
+use penumbra_sdk_proto::core::component::compact_block::v1::{
+    query_service_client::QueryServiceClient as CompactBlockQueryServiceClient,
+    CompactBlockRangeRequest,
+};
+use penumbra_sdk_proto::util::tendermint_proxy::v1::{
+    tendermint_proxy_service_client::TendermintProxyServiceClient,
+    GetStatusRequest,
+};
 use penumbra_sdk_sct::CommitmentSource;
+use penumbra_sdk_shielded_pool::{Note, NotePayload};
 use penumbra_sdk_view::ViewClient;
+
+use crate::App;
 
 #[derive(Debug, clap::Args)]
 pub struct BalanceCmd {
@@ -22,17 +35,15 @@ impl BalanceCmd {
         false
     }
 
-    pub async fn exec<V: ViewClient>(&self, view: &mut V) -> Result<()> {
-        let asset_cache = view.assets().await?;
+    pub async fn exec(&self, app: &mut App) -> Result<()> {
+        // If an asset viewing key is provided, we need to scan the chain directly
+        if let Some(avk_str) = &self.asset_viewing_key {
+            return self.exec_with_asset_viewing_key(app, avk_str).await;
+        }
 
-        // If an asset viewing key is provided, parse it and filter by that asset
-        let asset_filter = if let Some(avk_str) = &self.asset_viewing_key {
-            let avk: AssetViewingKey = avk_str.parse()
-                .map_err(|e| anyhow::anyhow!("Failed to parse asset viewing key: {}", e))?;
-            Some(avk.asset_id())
-        } else {
-            None
-        };
+        // Otherwise, use the normal flow with the wallet's view service
+        let view = app.view();
+        let asset_cache = view.assets().await?;
 
         // Initialize the table
         let mut table = Table::new();
@@ -47,34 +58,17 @@ impl BalanceCmd {
                 .iter()
                 .flat_map(|(index, notes_by_asset)| {
                     // Include each note individually:
-                    notes_by_asset.iter()
-                        // Filter by asset if an asset viewing key was provided
-                        .filter(|(asset_id, _notes)| {
-                            if let Some(filter_asset_id) = asset_filter {
-                                **asset_id == filter_asset_id
-                            } else {
-                                true
-                            }
+                    notes_by_asset.iter().flat_map(|(asset, notes)| {
+                        notes.iter().map(|record| {
+                            (
+                                *index,
+                                asset.value(record.note.amount()),
+                                record.source.clone(),
+                                record.return_address.clone(),
+                            )
                         })
-                        .flat_map(|(asset, notes)| {
-                            notes.iter().map(|record| {
-                                (
-                                    *index,
-                                    asset.value(record.note.amount()),
-                                    record.source.clone(),
-                                    record.return_address.clone(),
-                                )
-                            })
-                        })
-                })
-                /* Don't exclude withdrawn LPNFTs in by_note, which is a more precise view.
-                // Exclude withdrawn LPNFTs.
-                .filter(|(_, value, _, _)| match asset_cache.get(&value.asset_id) {
-                    None => true,
-                    Some(denom) => !denom.is_withdrawn_position_nft(),
+                    })
                 });
-                 */
-                ;
 
             for (index, value, source, return_address) in rows {
                 table.add_row(vec![
@@ -95,22 +89,13 @@ impl BalanceCmd {
                 .iter()
                 .flat_map(|(index, notes_by_asset)| {
                     // Sum the notes for each asset:
-                    notes_by_asset.iter()
-                        // Filter by asset if an asset viewing key was provided
-                        .filter(|(asset_id, _notes)| {
-                            if let Some(filter_asset_id) = asset_filter {
-                                **asset_id == filter_asset_id
-                            } else {
-                                true
-                            }
-                        })
-                        .map(|(asset, notes)| {
-                            let sum: u128 = notes
-                                .iter()
-                                .map(|record| u128::from(record.note.amount()))
-                                .sum();
-                            (*index, asset.value(sum.into()))
-                        })
+                    notes_by_asset.iter().map(|(asset, notes)| {
+                        let sum: u128 = notes
+                            .iter()
+                            .map(|record| u128::from(record.note.amount()))
+                            .sum();
+                        (*index, asset.value(sum.into()))
+                    })
                 })
                 // Exclude withdrawn LPNFTs and withdrawn auction NFTs.
                 .filter(|(_, value)| match asset_cache.get(&value.asset_id) {
@@ -128,6 +113,130 @@ impl BalanceCmd {
 
             return Ok(());
         }
+    }
+
+    async fn exec_with_asset_viewing_key(&self, app: &mut App, avk_str: &str) -> Result<()> {
+        // Parse the asset viewing key
+        let avk: AssetViewingKey = avk_str
+            .parse()
+            .context("Failed to parse asset viewing key")?;
+
+        let asset_id = avk.asset_id();
+        let ivk = avk.incoming_viewing_key();
+
+        // Get the asset cache to format the output
+        let view = app.view();
+        let asset_cache = view.assets().await?;
+
+        // Connect to the chain to fetch compact blocks
+        let channel = app.pd_channel().await?;
+        let mut tm_client = TendermintProxyServiceClient::new(channel.clone());
+        let mut cb_client = CompactBlockQueryServiceClient::new(channel);
+
+        // Get the current block height
+        let status = tm_client
+            .get_status(GetStatusRequest {})
+            .await?
+            .into_inner();
+        let latest_height = status
+            .sync_info
+            .ok_or_else(|| anyhow::anyhow!("missing sync info"))?
+            .latest_block_height;
+
+        eprintln!("Scanning blocks from height 0 to {}", latest_height);
+
+        // Fetch compact blocks and scan them
+        let request = CompactBlockRangeRequest {
+            start_height: 0,
+            end_height: latest_height,
+            keep_alive: false,
+        };
+
+        let mut stream = cb_client.compact_block_range(request).await?.into_inner();
+
+        // Track discovered notes - store amount as u128 for each note
+        let mut notes: Vec<(u128, u64, CommitmentSource)> = Vec::new();
+        let mut blocks_scanned = 0u64;
+
+        while let Some(compact_block_response) = stream.next().await {
+            let compact_block = compact_block_response?
+                .compact_block
+                .ok_or_else(|| anyhow::anyhow!("missing compact block"))?;
+
+            let height = compact_block.height;
+
+            // Scan all state payloads in this block
+            for state_payload_wrapper in compact_block.state_payloads {
+                use penumbra_sdk_proto::core::component::compact_block::v1::state_payload::StatePayload as StatePayloadEnum;
+
+                if let Some(StatePayloadEnum::Note(note_wrapper)) = state_payload_wrapper.state_payload {
+                    if let Some(note_payload_proto) = note_wrapper.note {
+                        // Try to deserialize and decrypt the note
+                        if let Ok(note_payload) = NotePayload::try_from(note_payload_proto) {
+                            // Try to decrypt with the IVK from the asset viewing key
+                            if let Ok(note) = Note::decrypt(&note_payload.encrypted_note, ivk, &note_payload.ephemeral_key) {
+                                // Check if this note matches the asset ID we're looking for
+                                if note.asset_id() == asset_id && note.commit() == note_payload.note_commitment {
+                                    let amount = u128::from(note.amount());
+
+                                    let source = state_payload_wrapper
+                                        .source
+                                        .and_then(|s| s.try_into().ok())
+                                        .unwrap_or(CommitmentSource::Genesis);
+
+                                    notes.push((amount, height, source));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            blocks_scanned += 1;
+            if blocks_scanned % 1000 == 0 {
+                eprint!("\rScanned {} blocks...", blocks_scanned);
+            }
+        }
+
+        if blocks_scanned > 0 {
+            eprintln!("\rScanned {} blocks total.", blocks_scanned);
+        }
+
+        // Display results
+        let mut table = Table::new();
+        table.load_preset(presets::NOTHING);
+
+        if self.by_note {
+            table.set_header(vec!["Value", "Height", "Source"]);
+
+            for (amount, height, source) in notes.iter() {
+                let value = Value {
+                    amount: (*amount).into(),
+                    asset_id,
+                };
+                table.add_row(vec![
+                    value.format(&asset_cache),
+                    height.to_string(),
+                    format_source(source),
+                ]);
+            }
+        } else {
+            table.set_header(vec!["Amount"]);
+
+            // Sum all notes
+            let total: u128 = notes.iter().map(|(amount, _, _)| amount).sum();
+
+            let total_value = Value {
+                amount: total.into(),
+                asset_id,
+            };
+
+            table.add_row(vec![total_value.format(&asset_cache)]);
+        }
+
+        println!("{table}");
+
+        Ok(())
     }
 }
 

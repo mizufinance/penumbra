@@ -115,8 +115,7 @@ impl ViewCmd {
                 noble_address_cmd.exec(&full_viewing_key)?;
             }
             ViewCmd::Balance(balance_cmd) => {
-                let view_client = app.view();
-                balance_cmd.exec(view_client).await?;
+                balance_cmd.exec(app).await?;
             }
             ViewCmd::Staked(staked_cmd) => {
                 let channel = app.pd_channel().await?;
