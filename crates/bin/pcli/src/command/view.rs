@@ -8,6 +8,7 @@ use staked::StakedCmd;
 use transaction_hashes::TransactionHashesCmd;
 use tx::TxCmd;
 use wallet_id::WalletIdCmd;
+use asset_viewing_key::AssetViewingKeyCmd;
 
 use crate::App;
 
@@ -20,6 +21,7 @@ mod lps;
 mod noble_address;
 mod staked;
 mod wallet_id;
+mod asset_viewing_key;
 
 pub mod transaction_hashes;
 mod tx;
@@ -53,6 +55,12 @@ pub enum ViewCmd {
     /// View information about the liquidity positions you control.
     #[clap(visible_alias = "lps")]
     LiquidityPositions(LiquidityPositionsCmd),
+    /// Export an asset-specific viewing key for selective disclosure.
+    ///
+    /// This key allows viewing transactions for a single asset across all addresses,
+    /// while keeping other assets private. Useful for compliance scenarios.
+    #[clap(visible_alias = "avk")]
+    AssetViewingKey(AssetViewingKeyCmd),
 }
 
 impl ViewCmd {
@@ -69,6 +77,7 @@ impl ViewCmd {
             ViewCmd::ListTransactionHashes(transactions_cmd) => transactions_cmd.offline(),
             ViewCmd::Tx(tx_cmd) => tx_cmd.offline(),
             ViewCmd::LiquidityPositions(lps_cmd) => lps_cmd.offline(),
+            ViewCmd::AssetViewingKey(avk_cmd) => avk_cmd.offline(),
         }
     }
 
@@ -117,6 +126,9 @@ impl ViewCmd {
                     .await?;
             }
             ViewCmd::LiquidityPositions(cmd) => cmd.exec(app).await?,
+            ViewCmd::AssetViewingKey(avk_cmd) => {
+                avk_cmd.exec(&full_viewing_key)?;
+            }
         }
 
         Ok(())

@@ -13,7 +13,7 @@ pub mod symmetric;
 pub mod test_keys;
 
 pub use address::{Address, AddressVar, AddressView};
-pub use keys::FullViewingKey;
+pub use keys::{AssetViewingKey, FullViewingKey};
 pub use symmetric::{BackreferenceKey, PayloadKey, PositionMetadataKey};
 
 fn fmt_hex<T: AsRef<[u8]>>(data: T, f: &mut std::fmt::Formatter) -> std::fmt::Result {

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use comfy_table::{presets, Table};
 
-use penumbra_sdk_keys::AddressView;
+use penumbra_sdk_keys::{AddressView, AssetViewingKey};
 use penumbra_sdk_sct::CommitmentSource;
 use penumbra_sdk_view::ViewClient;
 
@@ -10,6 +10,11 @@ pub struct BalanceCmd {
     #[clap(long)]
     /// If set, prints the value of each note individually.
     pub by_note: bool,
+
+    #[clap(long)]
+    /// If set, query balances using an asset viewing key instead of the wallet's full viewing key.
+    /// This allows querying balances for a specific asset only.
+    pub asset_viewing_key: Option<String>,
 }
 
 impl BalanceCmd {
@@ -19,6 +24,15 @@ impl BalanceCmd {
 
     pub async fn exec<V: ViewClient>(&self, view: &mut V) -> Result<()> {
         let asset_cache = view.assets().await?;
+
+        // If an asset viewing key is provided, parse it and filter by that asset
+        let asset_filter = if let Some(avk_str) = &self.asset_viewing_key {
+            let avk: AssetViewingKey = avk_str.parse()
+                .map_err(|e| anyhow::anyhow!("Failed to parse asset viewing key: {}", e))?;
+            Some(avk.asset_id())
+        } else {
+            None
+        };
 
         // Initialize the table
         let mut table = Table::new();
@@ -33,16 +47,25 @@ impl BalanceCmd {
                 .iter()
                 .flat_map(|(index, notes_by_asset)| {
                     // Include each note individually:
-                    notes_by_asset.iter().flat_map(|(asset, notes)| {
-                        notes.iter().map(|record| {
-                            (
-                                *index,
-                                asset.value(record.note.amount()),
-                                record.source.clone(),
-                                record.return_address.clone(),
-                            )
+                    notes_by_asset.iter()
+                        // Filter by asset if an asset viewing key was provided
+                        .filter(|(asset_id, _notes)| {
+                            if let Some(filter_asset_id) = asset_filter {
+                                **asset_id == filter_asset_id
+                            } else {
+                                true
+                            }
                         })
-                    })
+                        .flat_map(|(asset, notes)| {
+                            notes.iter().map(|record| {
+                                (
+                                    *index,
+                                    asset.value(record.note.amount()),
+                                    record.source.clone(),
+                                    record.return_address.clone(),
+                                )
+                            })
+                        })
                 })
                 /* Don't exclude withdrawn LPNFTs in by_note, which is a more precise view.
                 // Exclude withdrawn LPNFTs.
@@ -72,13 +95,22 @@ impl BalanceCmd {
                 .iter()
                 .flat_map(|(index, notes_by_asset)| {
                     // Sum the notes for each asset:
-                    notes_by_asset.iter().map(|(asset, notes)| {
-                        let sum: u128 = notes
-                            .iter()
-                            .map(|record| u128::from(record.note.amount()))
-                            .sum();
-                        (*index, asset.value(sum.into()))
-                    })
+                    notes_by_asset.iter()
+                        // Filter by asset if an asset viewing key was provided
+                        .filter(|(asset_id, _notes)| {
+                            if let Some(filter_asset_id) = asset_filter {
+                                **asset_id == filter_asset_id
+                            } else {
+                                true
+                            }
+                        })
+                        .map(|(asset, notes)| {
+                            let sum: u128 = notes
+                                .iter()
+                                .map(|record| u128::from(record.note.amount()))
+                                .sum();
+                            (*index, asset.value(sum.into()))
+                        })
                 })
                 // Exclude withdrawn LPNFTs and withdrawn auction NFTs.
                 .filter(|(_, value)| match asset_cache.get(&value.asset_id) {

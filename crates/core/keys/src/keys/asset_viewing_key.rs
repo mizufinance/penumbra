@@ -29,6 +29,8 @@
 //! ```
 
 use penumbra_sdk_asset::asset;
+use penumbra_sdk_proto::serializers::bech32str;
+use anyhow::Context;
 
 use crate::{keys::IncomingViewingKey, FullViewingKey};
 
@@ -82,6 +84,72 @@ impl AssetViewingKey {
     /// The IVK can decrypt notes at any address derived from the original FVK.
     pub fn incoming_viewing_key(&self) -> &IncomingViewingKey {
         &self.ivk
+    }
+
+    /// Encode the AssetViewingKey to bytes.
+    ///
+    /// Format: asset_id (32 bytes) || ivk (32 bytes) || dk (16 bytes) = 80 bytes total
+    pub fn to_bytes(&self) -> [u8; 80] {
+        let mut bytes = [0u8; 80];
+        bytes[0..32].copy_from_slice(&self.asset_id.to_bytes());
+        bytes[32..64].copy_from_slice(&self.ivk.ivk.to_bytes());
+        bytes[64..80].copy_from_slice(&self.ivk.dk.0);
+        bytes
+    }
+
+    /// Decode an AssetViewingKey from bytes.
+    pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
+        if bytes.len() != 80 {
+            anyhow::bail!("AssetViewingKey must be 80 bytes, got {}", bytes.len());
+        }
+
+        let asset_id_bytes: [u8; 32] = bytes[0..32]
+            .try_into()
+            .context("asset_id wrong length")?;
+        let asset_id = asset::Id::try_from(asset_id_bytes)
+            .context("invalid asset_id bytes")?;
+
+        let ivk_bytes: [u8; 32] = bytes[32..64]
+            .try_into()
+            .context("ivk wrong length")?;
+        let ivk_secret = crate::ka::Secret::new_from_field(
+            decaf377::Fr::from_le_bytes_mod_order(&ivk_bytes)
+        );
+
+        let dk_bytes: [u8; 16] = bytes[64..80]
+            .try_into()
+            .context("dk wrong length")?;
+        let dk = crate::keys::DiversifierKey(dk_bytes);
+
+        let ivk = IncomingViewingKey {
+            ivk: ivk_secret,
+            dk,
+        };
+
+        Ok(Self { asset_id, ivk })
+    }
+}
+
+impl std::fmt::Display for AssetViewingKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(&bech32str::encode(
+            &self.to_bytes(),
+            bech32str::asset_viewing_key::BECH32_PREFIX,
+            bech32str::Bech32m,
+        ))
+    }
+}
+
+impl std::str::FromStr for AssetViewingKey {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let bytes = bech32str::decode(
+            s,
+            bech32str::asset_viewing_key::BECH32_PREFIX,
+            bech32str::Bech32m,
+        )?;
+        Self::from_bytes(&bytes)
     }
 }
 
@@ -141,6 +209,57 @@ mod tests {
             fvk.incoming(),
             "AssetViewingKey IVK should match FVK IVK"
         );
+    }
+
+    #[test]
+    fn test_asset_viewing_key_serialization() {
+        // Create a full viewing key
+        let seed_phrase = SeedPhrase::generate(OsRng);
+        let spend_key = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
+        let fvk = spend_key.full_viewing_key();
+
+        // Create an asset-specific key for USDC
+        let usdc_id = AssetId::try_from(pb::AssetId {
+            alt_base_denom: "usdc".to_owned(),
+            ..Default::default()
+        })
+        .expect("valid asset id");
+
+        let asset_key = AssetViewingKey::from_fvk(fvk, usdc_id);
+
+        // Test byte serialization
+        let bytes = asset_key.to_bytes();
+        assert_eq!(bytes.len(), 80, "AssetViewingKey should be 80 bytes");
+
+        let decoded_key = AssetViewingKey::from_bytes(&bytes)
+            .expect("should decode from bytes");
+
+        assert_eq!(decoded_key.asset_id(), asset_key.asset_id());
+        assert_eq!(decoded_key.incoming_viewing_key(), asset_key.incoming_viewing_key());
+    }
+
+    #[test]
+    fn test_asset_viewing_key_bech32_roundtrip() {
+        // Create a full viewing key
+        let seed_phrase = SeedPhrase::generate(OsRng);
+        let spend_key = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
+        let fvk = spend_key.full_viewing_key();
+
+        // Create an asset-specific key
+        let asset_id = *STAKING_TOKEN_ASSET_ID;
+        let asset_key = AssetViewingKey::from_fvk(fvk, asset_id);
+
+        // Test bech32m serialization
+        let bech32_str = asset_key.to_string();
+        assert!(bech32_str.starts_with("penumbraassetviewingkey"),
+            "Bech32 string should start with correct prefix");
+
+        // Test parsing
+        let parsed_key: AssetViewingKey = bech32_str.parse()
+            .expect("should parse from bech32m string");
+
+        assert_eq!(parsed_key.asset_id(), asset_key.asset_id());
+        assert_eq!(parsed_key.incoming_viewing_key(), asset_key.incoming_viewing_key());
     }
 
     // Integration tests with Note/NotePayload should be added to verify:
