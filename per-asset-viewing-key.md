@@ -39,11 +39,9 @@ Summary
   ```
 
   ```bash
-  # penumbra1eu5pnv6qptp2p0aevfc0adjrpd24glz5shey7wvwlg5sp3ffca2zk32cemjd90ughdh7xqplrej9lqzc06337w2scxykjajd2nrtttvmqt6tssr6pmzp283hhte7y4jf6sn2wh
   echo 'test test test test test test test test test test test junk' | pcli --home ~/.local/share/local0 init --grpc-url http://localhost:8080 soft-kms import-phrase
   ADDRESS0=$(pcli --home ~/.local/share/local0 view address); echo "ADDRESS0: $ADDRESS0"
 
-  # used as the relayer
   echo 'rhythm marine super pact sketch burden link uncover alert hip fossil board' | pcli --home ~/.local/share/local1 init --grpc-url http://localhost:8080 soft-kms import-phrase
   ADDRESS1=$(pcli --home ~/.local/share/local1 view address); echo "ADDRESS1: $ADDRESS1"
   ```

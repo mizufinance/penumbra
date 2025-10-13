@@ -8,6 +8,10 @@ use penumbra_sdk_proto::core::component::compact_block::v1::{
     query_service_client::QueryServiceClient as CompactBlockQueryServiceClient,
     CompactBlockRangeRequest,
 };
+use penumbra_sdk_proto::core::component::shielded_pool::v1::{
+    query_service_client::QueryServiceClient as ShieldedPoolQueryServiceClient,
+    AssetMetadataByIdRequest,
+};
 use penumbra_sdk_proto::util::tendermint_proxy::v1::{
     tendermint_proxy_service_client::TendermintProxyServiceClient,
     GetStatusRequest,
@@ -210,28 +214,53 @@ impl BalanceCmd {
             eprintln!("\rScanned {} blocks total.", blocks_scanned);
         }
 
+        // Query asset metadata from the chain
+        let mut sp_client = ShieldedPoolQueryServiceClient::new(channel.clone());
+        let metadata_response = sp_client
+            .asset_metadata_by_id(AssetMetadataByIdRequest {
+                asset_id: Some(asset_id.into()),
+            })
+            .await?;
+
+        // Build an asset cache with the metadata
+        let asset_cache = if let Some(denom_metadata) = metadata_response.into_inner().denom_metadata {
+            let metadata: penumbra_sdk_asset::asset::Metadata = denom_metadata.try_into()?;
+            vec![metadata].into_iter().collect()
+        } else {
+            // If we can't find the metadata, create an empty cache
+            penumbra_sdk_asset::asset::Cache::default()
+        };
+
         // Display results
         let mut table = Table::new();
         table.load_preset(presets::NOTHING);
 
         if self.by_note {
-            table.set_header(vec!["Amount", "Asset ID", "Height", "Source"]);
+            table.set_header(vec!["Amount", "Height", "Source"]);
 
             for (amount, height, source) in notes.iter() {
+                let value = Value {
+                    amount: (*amount).into(),
+                    asset_id,
+                };
                 table.add_row(vec![
-                    amount.to_string(),
-                    asset_id.to_string(),
+                    value.format(&asset_cache),
                     height.to_string(),
                     format_source(source),
                 ]);
             }
         } else {
-            table.set_header(vec!["Total Amount", "Asset ID"]);
+            table.set_header(vec!["Total Amount"]);
 
             // Sum all notes
             let total: u128 = notes.iter().map(|(amount, _, _)| amount).sum();
 
-            table.add_row(vec![total.to_string(), asset_id.to_string()]);
+            let value = Value {
+                amount: total.into(),
+                asset_id,
+            };
+
+            table.add_row(vec![value.format(&asset_cache)]);
         }
 
         println!("{table}");
