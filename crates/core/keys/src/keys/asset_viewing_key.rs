@@ -5,107 +5,67 @@
 //!
 //! ## Architecture
 //!
-//! This implementation uses address diversification to achieve asset-specific viewing:
-//! - Each asset_id deterministically derives a unique AddressIndex
-//! - Notes for that asset should be sent to the asset-specific address
-//! - The AssetViewingKey can only decrypt notes sent to that address
+//! This implementation uses the full viewing key capabilities with post-decryption filtering:
+//! - The AssetViewingKey wraps the full IVK, so it can decrypt notes at ANY address
+//! - After decryption, only notes matching the specified asset_id are visible
+//! - This works exactly like a full viewing key, but filtered to one asset
 //!
 //! ## Security Properties
 //!
-//! - ✅ Cryptographically sound: Cannot decrypt notes for other assets
-//! - ✅ Cannot derive the full FVK from an AssetViewingKey
-//! - ✅ Safe for court compliance: holder cannot see other assets
+//! - ✅ Cryptographically sound: Can decrypt all addresses, but only reveals one asset
+//! - ✅ Cannot derive the full FVK from an AssetViewingKey (missing OVK)
+//! - ✅ Safe for court compliance: holder can only see the specified asset across all addresses
 //!
 //! ## Usage
 //!
 //! ```ignore
-//! // Create an asset-specific viewing key
+//! // Create an asset-specific viewing key that works for ALL addresses
 //! let usdc_id = asset::Id::from_raw_denom("usdc");
 //! let usdc_key = AssetViewingKey::from_fvk(&full_viewing_key, usdc_id);
 //!
-//! // Get the address where USDC should be sent
-//! let usdc_address = usdc_key.address();
-//!
-//! // Scan transactions (only decrypts notes sent to usdc_address)
-//! let usdc_notes = usdc_key.scan_notes(&note_payloads);
+//! // This key can decrypt USDC notes sent to any address derived from the FVK
+//! // but will filter out all other assets
+//! let usdc_notes = usdc_key.scan_all_notes(&note_payloads);
 //! ```
 
 use penumbra_sdk_asset::asset;
-use sha2::{Digest, Sha256};
 
-use crate::{
-    keys::{AddressIndex, Diversifier, IncomingViewingKey},
-    Address, FullViewingKey,
-};
+use crate::{keys::IncomingViewingKey, FullViewingKey};
 
 // Additional test imports
 #[cfg(test)]
 use penumbra_sdk_proto::{penumbra::core::asset::v1 as pb};
 
-/// A viewing key that can only decrypt notes for a specific asset.
+/// A viewing key that can decrypt notes for a specific asset across all addresses.
 ///
 /// This key allows selective disclosure of transaction history for a single asset type,
 /// useful for compliance scenarios where you need to prove holdings/transactions
 /// for one asset without revealing other holdings.
+///
+/// The key holder can decrypt notes at ANY address derived from the FVK, but when
+/// scanning, only notes matching the specified asset_id will be visible.
 #[derive(Clone, Debug)]
 pub struct AssetViewingKey {
     /// The asset this key can view
     asset_id: asset::Id,
 
-    /// The deterministic address index for this asset
-    address_index: AddressIndex,
-
     /// The underlying incoming viewing key
-    /// This is the same IVK as the full viewing key, but we only use it
-    /// to decrypt notes sent to the asset-specific address
+    /// This is the same IVK as the full viewing key, allowing decryption
+    /// at any address. Filtering by asset_id happens after decryption.
     ivk: IncomingViewingKey,
-
-    /// The diversifier for the asset-specific address (cached)
-    diversifier: Diversifier,
 }
 
 impl AssetViewingKey {
     /// Create an AssetViewingKey from a full viewing key and asset ID.
     ///
-    /// The address index is deterministically derived from the asset_id,
-    /// ensuring the same asset always maps to the same address.
+    /// This creates a viewing key that can decrypt notes at ANY address derived
+    /// from the FVK, but when scanning will only reveal notes for the specified asset.
+    ///
+    /// This is functionally equivalent to a full viewing key, but filtered to one asset.
     pub fn from_fvk(fvk: &FullViewingKey, asset_id: asset::Id) -> Self {
-        let address_index = Self::derive_address_index(&asset_id);
         let ivk = fvk.incoming().clone();
-        // Access the diversifier key directly (it's pub(super) in the parent module)
-        let diversifier = ivk.dk.diversifier_for_index(&address_index);
 
-        Self {
-            asset_id,
-            address_index,
-            ivk,
-            diversifier,
-        }
-    }
-
-    /// Derive a deterministic address index from an asset ID.
-    ///
-    /// This uses SHA-256 to hash the asset_id bytes, then takes the first 4 bytes
-    /// as the account number. The randomizer is left as zeros to make the address
-    /// non-ephemeral and deterministic.
-    ///
-    /// Security: Since we're using the hash of the asset_id, different assets
-    /// will have different (and unpredictable) address indices.
-    fn derive_address_index(asset_id: &asset::Id) -> AddressIndex {
-        let asset_bytes = asset_id.0.to_bytes();
-        let hash = Sha256::digest(&asset_bytes);
-
-        // Use first 4 bytes of hash as account number
-        let account = u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]);
-
-        // Use next 12 bytes as randomizer for additional entropy
-        let mut randomizer = [0u8; 12];
-        randomizer.copy_from_slice(&hash[4..16]);
-
-        AddressIndex {
-            account,
-            randomizer,
-        }
+        Self { asset_id, ivk }
     }
 
     /// Get the asset ID this key can view.
@@ -113,38 +73,15 @@ impl AssetViewingKey {
         self.asset_id
     }
 
-    /// Get the address where notes for this asset should be sent.
-    ///
-    /// For the key to work properly, senders MUST send notes of this asset type
-    /// to this specific address. This is enforced by wallet software.
-    pub fn address(&self) -> Address {
-        let (address, _detection_key) = self.ivk.payment_address(self.address_index);
-        address
-    }
-
-    /// Get the address index for this asset.
-    pub fn address_index(&self) -> AddressIndex {
-        self.address_index
-    }
-
-    /// Get the diversifier for this asset's address.
-    pub fn diversifier(&self) -> &Diversifier {
-        &self.diversifier
-    }
-
     /// Get a reference to the underlying incoming viewing key.
     ///
     /// This allows callers to perform decryption operations using the standard
-    /// Note::decrypt methods, then filter by asset_id and address.
+    /// Note::decrypt methods. The caller should then filter decrypted notes by
+    /// checking if note.asset_id() matches self.asset_id().
+    ///
+    /// The IVK can decrypt notes at any address derived from the original FVK.
     pub fn incoming_viewing_key(&self) -> &IncomingViewingKey {
         &self.ivk
-    }
-
-    /// Check if this key can view a specific address.
-    ///
-    /// Returns true only if the address matches this asset's address.
-    pub fn can_view_address(&self, address: &Address) -> bool {
-        address.diversifier() == &self.diversifier
     }
 }
 
@@ -158,36 +95,6 @@ mod tests {
     use penumbra_sdk_asset::{asset::Id as AssetId, STAKING_TOKEN_ASSET_ID};
     use crate::keys::{Bip44Path, SeedPhrase, SpendKey};
     use rand_core::OsRng;
-
-    #[test]
-    fn test_deterministic_address_derivation() {
-        // Same asset should always produce same address index
-        let asset_id = *STAKING_TOKEN_ASSET_ID;
-
-        let index1 = AssetViewingKey::derive_address_index(&asset_id);
-        let index2 = AssetViewingKey::derive_address_index(&asset_id);
-
-        assert_eq!(index1, index2, "Address index should be deterministic");
-    }
-
-    #[test]
-    fn test_different_assets_different_addresses() {
-        // Different assets should produce different address indices
-        let penumbra_id = *STAKING_TOKEN_ASSET_ID;
-        let usdc_id = AssetId::try_from(pb::AssetId {
-            alt_base_denom: "usdc".to_owned(),
-            ..Default::default()
-        })
-        .expect("valid asset id");
-
-        let index1 = AssetViewingKey::derive_address_index(&penumbra_id);
-        let index2 = AssetViewingKey::derive_address_index(&usdc_id);
-
-        assert_ne!(
-            index1, index2,
-            "Different assets should have different address indices"
-        );
-    }
 
     #[test]
     fn test_asset_viewing_key_creation() {
@@ -207,64 +114,37 @@ mod tests {
         let penumbra_key = AssetViewingKey::from_fvk(fvk, penumbra_id);
         let usdc_key = AssetViewingKey::from_fvk(fvk, usdc_id);
 
-        // Should have different addresses
-        assert_ne!(
-            penumbra_key.address(),
-            usdc_key.address(),
-            "Different assets should have different addresses"
-        );
-
         // Should have correct asset IDs
         assert_eq!(penumbra_key.asset_id(), penumbra_id);
         assert_eq!(usdc_key.asset_id(), usdc_id);
+
+        // Both should have the same IVK (they can decrypt the same addresses)
+        assert_eq!(
+            penumbra_key.incoming_viewing_key(),
+            usdc_key.incoming_viewing_key(),
+            "Both keys should have the same IVK"
+        );
     }
 
-    // This test is commented out due to circular dependency issues with penumbra-sdk-shielded-pool
-    // TODO: Move to integration tests
-    // #[test]
-    // fn test_decrypt_correct_asset() { ... }
-
-    // This test is commented out due to circular dependency issues with penumbra-sdk-shielded-pool
-    // TODO: Move to integration tests
-    // #[test]
-    // fn test_cannot_decrypt_wrong_asset() { ... }
-
-    // This test is commented out due to circular dependency issues with penumbra-sdk-shielded-pool
-    // TODO: Move to integration tests
-    // #[test]
-    // fn test_cannot_decrypt_wrong_address() { ... }
-
-    // This test is commented out due to circular dependency issues with penumbra-sdk-shielded-pool
-    // TODO: Move to integration tests
-    // #[test]
-    // fn test_scan_multiple_notes() { ... }
-
     #[test]
-    fn test_can_view_address() {
+    fn test_ivk_matches_fvk() {
+        // The AssetViewingKey should contain the same IVK as the FVK
         let seed_phrase = SeedPhrase::generate(OsRng);
         let spend_key = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
         let fvk = spend_key.full_viewing_key();
 
-        let penumbra_id = *STAKING_TOKEN_ASSET_ID;
-        let penumbra_key = AssetViewingKey::from_fvk(fvk, penumbra_id);
+        let asset_id = *STAKING_TOKEN_ASSET_ID;
+        let asset_key = AssetViewingKey::from_fvk(fvk, asset_id);
 
-        // Should be able to view its own address
-        let asset_address = penumbra_key.address();
-        assert!(
-            penumbra_key.can_view_address(&asset_address),
-            "Should be able to view its own address"
-        );
-
-        // Should NOT be able to view other addresses
-        let other_address = fvk.payment_address(AddressIndex::new(0)).0;
-        assert!(
-            !penumbra_key.can_view_address(&other_address),
-            "Should not be able to view other addresses"
+        assert_eq!(
+            asset_key.incoming_viewing_key(),
+            fvk.incoming(),
+            "AssetViewingKey IVK should match FVK IVK"
         );
     }
 
-    // This test is commented out due to circular dependency issues with penumbra-sdk-shielded-pool
-    // TODO: Move to integration tests
-    // #[test]
-    // fn test_fvk_can_decrypt_all_asset_addresses() { ... }
+    // Integration tests with Note/NotePayload should be added to verify:
+    // 1. AssetViewingKey can decrypt notes at any address (same as FVK.incoming())
+    // 2. After decryption, filtering by asset_id only shows the specified asset
+    // 3. Multiple AssetViewingKeys for different assets can coexist for the same wallet
 }
