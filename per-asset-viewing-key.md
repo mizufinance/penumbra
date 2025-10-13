@@ -51,8 +51,7 @@ Summary
   # Using raw denomination
   ```bash
   pcli --home ~/.local/share/local0 view balance
-  pcli --home ~/.local/share/local1 view asset-viewing-key --asset-id test_usd
-  ASSET_VIEWING_KEY_ACC1=penumbraassetviewingkey15xa8edy2ly97qp2mv6kwchpyvawxkxycsgmsrqagvr58l66n8qxa936f2engzk0tp4alv7pewr2tsckmjrzdl2c0euntkm96m6efgqz093n4sqesd86zced8r7mhkmc6yh0g0h
+  ASSET_VIEWING_KEY_ACC1=$(pcli --home ~/.local/share/local1 view asset-viewing-key --asset-id test_usd | jq -r '.asset_viewing_key') && echo "ASSET_VIEWING_KEY_ACC1: $ASSET_VIEWING_KEY_ACC1"
 
   # send test_usd from ADDR0 (local0) to ADDR1
   pcli --home ~/.local/share/local0 tx send --to $ADDRESS1 1test_usd
@@ -62,20 +61,13 @@ Summary
 
   # Query the transfer of the test_usd from acc0 viewing key provided
   ```bash
+  # this is just so it works and is compatible (we should put asset viewing key in the config properly)
+  rm -rf  ~/.local/share/testviewingkey
   pcli --home ~/.local/share/testviewingkey init --grpc-url http://localhost:8080 soft-kms generate
 
+  # verify local1 has balances
   pcli --home ~/.local/share/local1 view balance
 
-  # this is not the right local account on PURPOSE (just so it's compatible so I can test it)
+  # Returns value of assets based on asset viewing key
   pcli --home ~/.local/share/testviewingkey view balance --asset-viewing-key $ASSET_VIEWING_KEY_ACC1
   ```
-
-  Architecture:
-
-  The AssetViewingKey contains:
-  - The full IVK (incoming viewing key) from the FVK
-  - The specific asset ID to filter on
-  - Can decrypt notes at any address (same as FVK)
-  - Only reveals notes matching the specified asset_id
-
-  This is perfect for compliance scenarios where you need to prove holdings/transactions for one asset without revealing other holdings!

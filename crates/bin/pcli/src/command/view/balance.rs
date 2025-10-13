@@ -176,15 +176,18 @@ impl BalanceCmd {
                             // Try to decrypt with the IVK from the asset viewing key
                             if let Ok(note) = Note::decrypt(&note_payload.encrypted_note, ivk, &note_payload.ephemeral_key) {
                                 // Check if this note matches the asset ID we're looking for
-                                if note.asset_id() == asset_id && note.commit() == note_payload.note_commitment {
-                                    let amount = u128::from(note.amount());
+                                if note.asset_id() == asset_id {
+                                    // Verify the commitment matches
+                                    if note.commit() == note_payload.note_commitment {
+                                        let amount = u128::from(note.amount());
 
-                                    let source = state_payload_wrapper
-                                        .source
-                                        .and_then(|s| s.try_into().ok())
-                                        .unwrap_or(CommitmentSource::Genesis);
+                                        let source = state_payload_wrapper
+                                            .source
+                                            .and_then(|s| s.try_into().ok())
+                                            .unwrap_or(CommitmentSource::Genesis);
 
-                                    notes.push((amount, height, source));
+                                        notes.push((amount, height, source));
+                                    }
                                 }
                             }
                         }

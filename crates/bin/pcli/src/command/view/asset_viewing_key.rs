@@ -1,7 +1,8 @@
 use anyhow::Result;
 use penumbra_sdk_keys::{AssetViewingKey, FullViewingKey};
-use penumbra_sdk_asset::asset;
+use penumbra_sdk_asset::asset::{self, REGISTRY};
 use penumbra_sdk_proto::penumbra::core::asset::v1 as pb;
+use serde::Serialize;
 
 #[derive(Debug, clap::Parser)]
 pub struct AssetViewingKeyCmd {
@@ -11,6 +12,12 @@ pub struct AssetViewingKeyCmd {
     /// - A raw denomination string (e.g., "upenumbra", "usdc")
     #[clap(long)]
     pub asset_id: String,
+}
+
+#[derive(Serialize)]
+struct AssetViewingKeyOutput {
+    asset_id: String,
+    asset_viewing_key: String,
 }
 
 impl AssetViewingKeyCmd {
@@ -25,25 +32,34 @@ impl AssetViewingKeyCmd {
             self.asset_id.parse()
                 .map_err(|e| anyhow::anyhow!("Failed to parse asset ID: {}", e))?
         } else {
-            // Treat as raw denomination
+            // Treat as raw denomination - need to resolve to base denomination first
+            // Parse the unit to check if it's a display denomination
+            let unit = REGISTRY.parse_unit(&self.asset_id);
+
+            // Get the base denomination from the unit
+            // ex: test_usd is actually wtest_usd underlying, which is the true asset ID used for the passet
+            let base_denom = unit.base();
+
+            // Use the base denomination to derive the asset ID
             pb::AssetId {
-                alt_base_denom: self.asset_id.clone(),
+                alt_base_denom: base_denom.to_string(),
                 ..Default::default()
             }
             .try_into()
             .map_err(|e| anyhow::anyhow!("Failed to derive asset ID from denom '{}': {}", self.asset_id, e))?
         };
 
-        // Show the asset ID being used
-        println!("Asset ID: {}", asset_id);
-        println!();
-
         // Create the asset viewing key
         let asset_viewing_key = AssetViewingKey::from_fvk(fvk, asset_id);
 
-        // Print the key in bech32m format
-        println!("Asset Viewing Key:");
-        println!("{}", asset_viewing_key);
+        // Create JSON output
+        let output = AssetViewingKeyOutput {
+            asset_id: asset_id.to_string(),
+            asset_viewing_key: asset_viewing_key.to_string(),
+        };
+
+        // Print as JSON
+        println!("{}", serde_json::to_string_pretty(&output)?);
 
         Ok(())
     }
