@@ -19,6 +19,7 @@ pub use wallet_id::WalletId;
 mod fvk;
 mod ivk;
 mod ovk;
+mod asset_viewing_key;
 
 pub(crate) use fvk::IVK_DOMAIN_SEP;
 pub use fvk::{
@@ -27,3 +28,4 @@ pub use fvk::{
 };
 pub use ivk::{IncomingViewingKey, IncomingViewingKeyVar, IVK_LEN_BYTES};
 pub use ovk::{OutgoingViewingKey, OVK_LEN_BYTES};
+pub use asset_viewing_key::AssetViewingKey;

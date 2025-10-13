@@ -5847,6 +5847,7 @@ dependencies = [
  "pbkdf2 0.12.2",
  "penumbra-sdk-asset",
  "penumbra-sdk-proto",
+ "penumbra-sdk-shielded-pool",
  "penumbra-sdk-tct",
  "poseidon377",
  "proptest",
