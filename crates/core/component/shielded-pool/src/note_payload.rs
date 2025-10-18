@@ -18,11 +18,52 @@ pub struct NotePayload {
 
 impl NotePayload {
     pub fn trial_decrypt(&self, fvk: &FullViewingKey) -> Option<Note> {
-        // Try to decrypt the encrypted note using the ephemeral key and persistent incoming
-        // viewing key -- if it doesn't decrypt, it wasn't meant for us.
-        let note = Note::decrypt(&self.encrypted_note, fvk.incoming(), &self.ephemeral_key).ok()?;
-        tracing::debug!(note_commitment = ?note.commit(), ?note, "found note while scanning");
+        // Notes are now encrypted with asset-specific transmission keys for cryptographic
+        // enforcement of asset-level viewing permissions. To decrypt, we need to try
+        // asset-specific IVKs for all known assets until one succeeds.
 
+        // First, try the base IVK for backward compatibility with old notes
+        let base_ivk = fvk.incoming();
+        if let Ok(note) = Note::decrypt(&self.encrypted_note, base_ivk, &self.ephemeral_key) {
+            tracing::debug!(
+                note_commitment = ?note.commit(),
+                ?note,
+                "found note while scanning (base IVK)"
+            );
+            return self.verify_note(note, fvk);
+        }
+
+        // Get all known assets and try decrypting with each asset-specific IVK
+        let asset_cache = penumbra_sdk_asset::asset::Cache::with_known_assets();
+
+        // The Cache implements Deref to BTreeMap<Id, Metadata>, so we can iterate directly
+        for (asset_id, _metadata) in asset_cache.iter() {
+            // Derive the asset-specific IVK
+            let asset_ivk = base_ivk.derive_asset_specific(&asset_id);
+
+            // Try to decrypt with this asset-specific IVK
+            if let Ok(note) =
+                Note::decrypt_with_asset(&self.encrypted_note, &asset_ivk, &self.ephemeral_key)
+            {
+                tracing::debug!(
+                    note_commitment = ?note.commit(),
+                    ?note,
+                    ?asset_id,
+                    "found note while scanning (asset-specific IVK)"
+                );
+                return self.verify_note(note, fvk);
+            }
+        }
+
+        // Could not decrypt with any known asset IVK
+        None
+    }
+
+    /// Verify a decrypted note's validity.
+    ///
+    /// This is extracted as a separate method to avoid code duplication between
+    /// the base IVK and asset-specific IVK decryption paths.
+    fn verify_note(&self, note: Note, fvk: &FullViewingKey) -> Option<Note> {
         // Verification logic (if any fails, return None & log error)
         // Reject notes with zero amount
         if note.amount() == Amount::zero() {

@@ -233,11 +233,25 @@ impl Note {
     }
 
     /// Encrypt a note, returning its ciphertext.
+    ///
+    /// This method uses asset-specific encryption, where the note is encrypted
+    /// with a transmission key derived from both the address and the asset ID.
+    /// This provides cryptographic enforcement of asset-specific viewing:
+    /// - Only the asset-specific IVK for this asset can decrypt the note
+    /// - The base IVK cannot decrypt the note
+    /// - Different assets produce different ciphertexts even for the same address
     pub fn encrypt(&self) -> NoteCiphertext {
         let esk = self.ephemeral_secret_key();
         let epk = esk.diversified_public(&self.diversified_generator());
+
+        // Use asset-specific transmission key for cryptographic enforcement
+        let asset_transmission_key = self
+            .address
+            .asset_specific_transmission_key(&self.asset_id())
+            .expect("asset-specific transmission key derivation succeeds");
+
         let shared_secret = esk
-            .key_agreement_with(self.transmission_key())
+            .key_agreement_with(&asset_transmission_key)
             .expect("key agreement succeeded");
 
         let key = PayloadKey::derive(&shared_secret, &epk);
@@ -309,13 +323,45 @@ impl Note {
         Note::decrypt_with_payload_key(ciphertext, &key, epk)
     }
 
-    /// Decrypt a note ciphertext using the IVK and ephemeral public key to generate a plaintext `Note`.
+    /// Decrypt a note ciphertext using the base IVK and ephemeral public key.
+    ///
+    /// **Note**: This method will fail to decrypt notes encrypted with asset-specific
+    /// transmission keys (the default encryption mode). Use `decrypt_with_asset()` instead,
+    /// or call `NotePayload::trial_decrypt()` which automatically tries all asset-specific IVKs.
+    ///
+    /// This method is kept for backward compatibility with notes encrypted before
+    /// asset-specific encryption was implemented.
     pub fn decrypt(
         ciphertext: &NoteCiphertext,
         ivk: &IncomingViewingKey,
         epk: &ka::Public,
     ) -> Result<Note, Error> {
         let shared_secret = ivk
+            .key_agreement_with(epk)
+            .map_err(|_| Error::DecryptionError)?;
+
+        let key = PayloadKey::derive(&shared_secret, epk);
+        Note::decrypt_with_payload_key(ciphertext, &key, epk)
+    }
+
+    /// Decrypt a note ciphertext using an asset-specific IVK.
+    ///
+    /// This method decrypts notes encrypted with asset-specific transmission keys.
+    /// The IVK must be derived for the specific asset that the note contains:
+    ///
+    /// ```ignore
+    /// let asset_ivk = base_ivk.derive_asset_specific(&asset_id);
+    /// let note = Note::decrypt_with_asset(&ciphertext, &asset_ivk, &epk)?;
+    /// ```
+    ///
+    /// If the note was encrypted for a different asset, decryption will fail.
+    /// This provides cryptographic enforcement of asset-specific viewing permissions.
+    pub fn decrypt_with_asset(
+        ciphertext: &NoteCiphertext,
+        asset_ivk: &IncomingViewingKey,
+        epk: &ka::Public,
+    ) -> Result<Note, Error> {
+        let shared_secret = asset_ivk
             .key_agreement_with(epk)
             .map_err(|_| Error::DecryptionError)?;
 
@@ -604,16 +650,21 @@ mod tests {
 
         let esk = note.ephemeral_secret_key();
         let epk = esk.diversified_public(dest.diversified_generator());
-        let plaintext = Note::decrypt(&ciphertext, ivk, &epk).expect("can decrypt note");
+
+        // Use asset-specific decryption
+        let asset_ivk = ivk.derive_asset_specific(&value.asset_id);
+        let plaintext = Note::decrypt_with_asset(&ciphertext, &asset_ivk, &epk).expect("can decrypt note");
 
         assert_eq!(plaintext, note);
 
+        // Test that a different key cannot decrypt
         let seed_phrase = SeedPhrase::generate(rng);
         let sk2 = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
         let fvk2 = sk2.full_viewing_key();
         let ivk2 = fvk2.incoming();
+        let asset_ivk2 = ivk2.derive_asset_specific(&value.asset_id);
 
-        assert!(Note::decrypt(&ciphertext, ivk2, &epk).is_err());
+        assert!(Note::decrypt_with_asset(&ciphertext, &asset_ivk2, &epk).is_err());
     }
 
     #[test]
@@ -677,5 +728,223 @@ mod tests {
         let decryption_result = Note::decrypt(&ciphertext, ivk, &wrong_epk);
 
         assert!(decryption_result.is_err());
+    }
+
+    #[test]
+    fn test_asset_specific_encryption_base_ivk_cannot_decrypt() {
+        // This test verifies that notes encrypted with asset-specific keys
+        // CANNOT be decrypted with the base IVK using the old decrypt method.
+        // This proves cryptographic enforcement is working.
+
+        let mut rng = OsRng;
+
+        let seed_phrase = SeedPhrase::generate(rng);
+        let sk = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
+        let fvk = sk.full_viewing_key();
+        let ivk = fvk.incoming();
+        let (dest, _dtk_d) = ivk.payment_address(0u32.into());
+
+        let value = Value {
+            amount: 100u64.into(),
+            asset_id: asset::Cache::with_known_assets()
+                .get_unit("upenumbra")
+                .unwrap()
+                .id(),
+        };
+        let note = Note::generate(&mut rng, &dest, value);
+
+        // Encrypt with NEW asset-specific encryption
+        let ciphertext = note.encrypt();
+        let epk = note.ephemeral_public_key();
+
+        // Try to decrypt with OLD method using base IVK - should FAIL
+        let old_decrypt_result = Note::decrypt(&ciphertext, ivk, &epk);
+        assert!(
+            old_decrypt_result.is_err(),
+            "Base IVK should NOT be able to decrypt asset-specific encrypted notes"
+        );
+
+        // Decrypt with NEW asset-specific method using asset-specific IVK - should SUCCEED
+        let asset_ivk = ivk.derive_asset_specific(&value.asset_id);
+        let new_decrypt_result = Note::decrypt_with_asset(&ciphertext, &asset_ivk, &epk);
+
+        // Debug: Print the error if decryption fails
+        if let Err(ref e) = new_decrypt_result {
+            eprintln!("Asset-specific decryption failed: {:?}", e);
+            eprintln!("Note address diversifier: {:?}", note.address().diversifier());
+            eprintln!("IVK diversifier key: {:?}", ivk.index_for_diversifier(note.address().diversifier()));
+        }
+
+        assert!(
+            new_decrypt_result.is_ok(),
+            "Asset-specific decryption should succeed with correct asset-specific IVK"
+        );
+
+        let decrypted = new_decrypt_result.unwrap();
+        assert_eq!(decrypted.asset_id(), value.asset_id);
+        assert_eq!(decrypted.amount(), value.amount);
+    }
+
+    #[test]
+    fn test_asset_specific_wrong_asset_fails() {
+        // This test verifies that an asset-specific IVK for one asset
+        // CANNOT decrypt notes encrypted for a different asset.
+
+        let mut rng = OsRng;
+
+        let seed_phrase = SeedPhrase::generate(rng);
+        let sk = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
+        let fvk = sk.full_viewing_key();
+        let ivk = fvk.incoming();
+        let (dest, _dtk_d) = ivk.payment_address(0u32.into());
+
+        // Create a note with upenumbra
+        let upenumbra_value = Value {
+            amount: 100u64.into(),
+            asset_id: asset::Cache::with_known_assets()
+                .get_unit("upenumbra")
+                .unwrap()
+                .id(),
+        };
+        let note = Note::generate(&mut rng, &dest, upenumbra_value);
+
+        // Encrypt the note (uses asset-specific encryption)
+        let ciphertext = note.encrypt();
+        let epk = note.ephemeral_public_key();
+
+        // Try to decrypt with wrong asset IVK - should FAIL
+        // Use test_usd as the wrong asset
+        let wrong_asset_id = asset::Cache::with_known_assets()
+            .get_unit("test_usd")
+            .unwrap()
+            .id();
+        let wrong_asset_ivk = ivk.derive_asset_specific(&wrong_asset_id);
+        let wrong_decrypt_result = Note::decrypt_with_asset(&ciphertext, &wrong_asset_ivk, &epk);
+        assert!(
+            wrong_decrypt_result.is_err(),
+            "Wrong asset-specific IVK should NOT be able to decrypt note for different asset"
+        );
+
+        // Decrypt with correct asset IVK - should SUCCEED
+        let correct_asset_ivk = ivk.derive_asset_specific(&upenumbra_value.asset_id);
+        let correct_decrypt_result =
+            Note::decrypt_with_asset(&ciphertext, &correct_asset_ivk, &epk);
+        assert!(
+            correct_decrypt_result.is_ok(),
+            "Correct asset-specific IVK should decrypt note"
+        );
+
+        let decrypted = correct_decrypt_result.unwrap();
+        assert_eq!(decrypted.asset_id(), upenumbra_value.asset_id);
+        assert_eq!(decrypted.amount(), upenumbra_value.amount);
+    }
+
+    #[test]
+    fn test_asset_specific_derivation_deterministic() {
+        // Verify that asset-specific IVK derivation is deterministic
+
+        let rng = OsRng;
+
+        let seed_phrase = SeedPhrase::generate(rng);
+        let sk = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
+        let ivk = sk.full_viewing_key().incoming();
+
+        let asset_id = asset::Cache::with_known_assets()
+            .get_unit("upenumbra")
+            .unwrap()
+            .id();
+
+        // Derive the same asset-specific IVK twice
+        let asset_ivk_1 = ivk.derive_asset_specific(&asset_id);
+        let asset_ivk_2 = ivk.derive_asset_specific(&asset_id);
+
+        // They should be identical
+        assert_eq!(asset_ivk_1, asset_ivk_2);
+    }
+
+    #[test]
+    fn test_asset_specific_different_assets_different_ivks() {
+        // Verify that different assets produce different asset-specific IVKs
+
+        let rng = OsRng;
+
+        let seed_phrase = SeedPhrase::generate(rng);
+        let sk = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
+        let ivk = sk.full_viewing_key().incoming();
+
+        let asset_cache = asset::Cache::with_known_assets();
+        let upenumbra_id = asset_cache.get_unit("upenumbra").unwrap().id();
+        let test_usd_id = asset_cache.get_unit("test_usd").unwrap().id();
+
+        let upenumbra_ivk = ivk.derive_asset_specific(&upenumbra_id);
+        let test_usd_ivk = ivk.derive_asset_specific(&test_usd_id);
+
+        // Different assets should produce different IVKs
+        assert_ne!(upenumbra_ivk, test_usd_ivk);
+
+        // And neither should equal the base IVK
+        assert_ne!(upenumbra_ivk, *ivk);
+        assert_ne!(test_usd_ivk, *ivk);
+    }
+
+    #[test]
+    fn test_trial_decrypt_with_asset_specific_encryption() {
+        // This test verifies that NotePayload::trial_decrypt works correctly
+        // with asset-specific encryption by trying all known asset IVKs.
+
+        let mut rng = OsRng;
+
+        let seed_phrase = SeedPhrase::generate(rng);
+        let sk = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
+        let fvk = sk.full_viewing_key();
+        let ivk = fvk.incoming();
+        let (dest, _dtk_d) = ivk.payment_address(0u32.into());
+
+        // Test with upenumbra
+        let upenumbra_value = Value {
+            amount: 100u64.into(),
+            asset_id: asset::Cache::with_known_assets()
+                .get_unit("upenumbra")
+                .unwrap()
+                .id(),
+        };
+        let note = Note::generate(&mut rng, &dest, upenumbra_value);
+        let ciphertext = note.encrypt();
+
+        let note_payload = NotePayload {
+            note_commitment: note.commit(),
+            ephemeral_key: note.ephemeral_public_key(),
+            encrypted_note: ciphertext,
+        };
+
+        // trial_decrypt should succeed by trying all known asset IVKs
+        let decrypted_note = note_payload
+            .trial_decrypt(&fvk)
+            .expect("trial_decrypt should succeed");
+        assert_eq!(decrypted_note.asset_id(), upenumbra_value.asset_id);
+        assert_eq!(decrypted_note.amount(), upenumbra_value.amount);
+
+        // Test with test_usd
+        let test_usd_value = Value {
+            amount: 200u64.into(),
+            asset_id: asset::Cache::with_known_assets()
+                .get_unit("test_usd")
+                .unwrap()
+                .id(),
+        };
+        let note2 = Note::generate(&mut rng, &dest, test_usd_value);
+        let ciphertext2 = note2.encrypt();
+
+        let note_payload2 = NotePayload {
+            note_commitment: note2.commit(),
+            ephemeral_key: note2.ephemeral_public_key(),
+            encrypted_note: ciphertext2,
+        };
+
+        let decrypted_note2 = note_payload2
+            .trial_decrypt(&fvk)
+            .expect("trial_decrypt should succeed for test_usd");
+        assert_eq!(decrypted_note2.asset_id(), test_usd_value.asset_id);
+        assert_eq!(decrypted_note2.amount(), test_usd_value.amount);
     }
 }

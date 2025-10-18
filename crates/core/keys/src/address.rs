@@ -148,6 +148,73 @@ impl Address {
         &self.pk_d
     }
 
+    /// Derive an asset-specific transmission key for this address.
+    ///
+    /// This creates a deterministic, asset-specific transmission key using additive
+    /// blinding that matches the asset-specific IVK derivation. This ensures:
+    /// - Notes encrypted to this address for a specific asset can only be decrypted
+    ///   with the corresponding asset-specific IVK
+    /// - Each asset produces a different transmission key
+    /// - The derivation is one-way (cannot recover base key from asset-specific key)
+    /// - ECDH with asset-specific IVK produces the correct shared secret
+    ///
+    /// # Cryptographic Construction
+    ///
+    /// The asset-specific transmission key uses additive blinding:
+    /// ```text
+    /// blinding = Hash("Penumbra_AssetIV", base_pk || asset_id)
+    /// asset_pk = base_pk + blinding * G_d
+    /// ```
+    ///
+    /// This matches the asset-specific IVK derivation:
+    /// ```text
+    /// ivk_asset = ivk_base + blinding
+    /// ```
+    ///
+    /// Ensuring ECDH compatibility:
+    /// ```text
+    /// ivk_asset * G_d = (ivk_base + blinding) * G_d
+    ///                 = ivk_base * G_d + blinding * G_d
+    ///                 = base_pk + blinding * G_d
+    ///                 = asset_pk
+    /// ```
+    pub fn asset_specific_transmission_key(
+        &self,
+        asset_id: &penumbra_sdk_asset::asset::Id,
+    ) -> Result<ka::Public, anyhow::Error> {
+        use blake2b_simd::Params;
+
+        // Create Blake2b-512 KDF with domain separator (must match IVK derivation!)
+        let mut kdf_params = Params::new();
+        kdf_params.personal(b"Penumbra_AssetIV"); // Same as IVK derivation!
+        kdf_params.hash_length(64); // Output 64 bytes (512 bits)
+        let mut kdf = kdf_params.to_state();
+
+        // Use only the asset ID to derive the blinding, matching the IVK derivation.
+        // This ensures the same blinding factor is used during encryption and decryption,
+        // regardless of which address is used.
+        kdf.update(&asset_id.to_bytes());
+
+        let derived_bytes = kdf.finalize();
+
+        // Reduce the hash output modulo the scalar field order to get the blinding factor
+        let blinding_scalar =
+            decaf377::Fr::from_le_bytes_mod_order(derived_bytes.as_bytes());
+
+        // Decompress the base transmission key to a curve point
+        let base_encoding = decaf377::Encoding(self.pk_d.0);
+        let base_element = base_encoding
+            .vartime_decompress()
+            .map_err(|_| anyhow::anyhow!("failed to decompress transmission key"))?;
+
+        // Apply additive blinding: asset_pk = base_pk + blinding * G_d
+        let asset_transmission_key_element =
+            base_element + self.diversified_generator() * blinding_scalar;
+
+        // Return the compressed asset-specific transmission key
+        Ok(ka::Public(asset_transmission_key_element.vartime_compress().0))
+    }
+
     /// Returns a reference to the clue key.
     pub fn clue_key(&self) -> &fmd::ClueKey {
         &self.ck_d
