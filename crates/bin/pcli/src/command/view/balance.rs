@@ -152,9 +152,9 @@ impl BalanceCmd {
             .ok_or_else(|| anyhow::anyhow!("missing sync info"))?
             .latest_block_height;
 
-        eprintln!("Scanning blocks from height 0 to {}", latest_height);
+        eprintln!("Scanning blocks from height 1 to {}", latest_height);
 
-        // Fetch compact blocks and scan them
+        // Fetch compact blocks and scan them (skip height 0 to avoid genesis noise)
         let request = CompactBlockRangeRequest {
             start_height: 0,
             end_height: latest_height,
@@ -181,9 +181,19 @@ impl BalanceCmd {
                 if let Some(StatePayloadEnum::Note(note_wrapper)) = state_payload_wrapper.state_payload {
                     if let Some(note_payload_proto) = note_wrapper.note {
                         // Try to deserialize and decrypt the note
-                        if let Ok(note_payload) = NotePayload::try_from(note_payload_proto) {
-                            // Try to decrypt with the IVK from the asset viewing key
-                            if let Ok(note) = Note::decrypt(&note_payload.encrypted_note, ivk, &note_payload.ephemeral_key) {
+                        if let Ok(note_payload) = NotePayload::try_from(note_payload_proto.clone()) {
+                            // Try to decrypt with both the base IVK and the asset-specific IVK
+                            // First try base IVK (for backward compatibility)
+                            let decrypted_note = match Note::decrypt(&note_payload.encrypted_note, ivk, &note_payload.ephemeral_key) {
+                                Ok(note) => Some(note),
+                                Err(_) => {
+                                    // Try asset-specific IVK
+                                    let asset_ivk = ivk.derive_asset_specific(&asset_id);
+                                    Note::decrypt_with_asset(&note_payload.encrypted_note, &asset_ivk, &note_payload.ephemeral_key).ok()
+                                }
+                            };
+
+                            if let Some(note) = decrypted_note {
                                 // Check if this note matches the asset ID we're looking for
                                 if note.asset_id() == asset_id {
                                     // Verify the commitment matches

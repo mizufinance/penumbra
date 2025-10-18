@@ -40,6 +40,7 @@ impl AssetViewingKeyCmd {
             // ex: test_usd is actually wtest_usd underlying, which is the true asset ID used for the passet
             let base_denom = unit.base();
 
+
             // Use the base denomination to derive the asset ID
             pb::AssetId {
                 alt_base_denom: base_denom.to_string(),

@@ -239,6 +239,39 @@ mod tests {
     }
 
     #[test]
+    fn test_ivk_serialization_roundtrip() {
+        // Test that IVK serialization and deserialization preserves the exact value
+        let seed_phrase = SeedPhrase::generate(OsRng);
+        let spend_key = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
+        let fvk = spend_key.full_viewing_key();
+        let original_ivk = fvk.incoming();
+        
+        let asset_id = *STAKING_TOKEN_ASSET_ID;
+        
+        // Create asset viewing key
+        let avk = AssetViewingKey::from_fvk(fvk, asset_id);
+        
+        // Serialize to bytes
+        let bytes = avk.to_bytes();
+        
+        // Deserialize back
+        let restored_avk = AssetViewingKey::from_bytes(&bytes).unwrap();
+        
+        // The IVK should be identical
+        let restored_ivk = restored_avk.incoming_viewing_key();
+        
+        // Test that both IVKs produce the same address
+        let addr1 = original_ivk.payment_address(0u32.into()).0;
+        let addr2 = restored_ivk.payment_address(0u32.into()).0;
+        
+        assert_eq!(addr1, addr2, "IVKs should produce the same address");
+        
+        // Test that both IVKs view the same address
+        assert!(original_ivk.views_address(&addr1), "Original IVK should view address");
+        assert!(restored_ivk.views_address(&addr1), "Restored IVK should view address");
+    }
+
+    #[test]
     fn test_asset_viewing_key_bech32_roundtrip() {
         // Create a full viewing key
         let seed_phrase = SeedPhrase::generate(OsRng);
