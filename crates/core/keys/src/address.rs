@@ -198,8 +198,7 @@ impl Address {
         let derived_bytes = kdf.finalize();
 
         // Reduce the hash output modulo the scalar field order to get the blinding factor
-        let blinding_scalar =
-            decaf377::Fr::from_le_bytes_mod_order(derived_bytes.as_bytes());
+        let blinding_scalar = decaf377::Fr::from_le_bytes_mod_order(derived_bytes.as_bytes());
 
         // Decompress the base transmission key to a curve point
         let base_encoding = decaf377::Encoding(self.pk_d.0);
@@ -212,7 +211,9 @@ impl Address {
             base_element + self.diversified_generator() * blinding_scalar;
 
         // Return the compressed asset-specific transmission key
-        Ok(ka::Public(asset_transmission_key_element.vartime_compress().0))
+        Ok(ka::Public(
+            asset_transmission_key_element.vartime_compress().0,
+        ))
     }
 
     /// Returns a reference to the clue key.

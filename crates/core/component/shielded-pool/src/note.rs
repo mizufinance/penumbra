@@ -653,7 +653,8 @@ mod tests {
 
         // Use asset-specific decryption
         let asset_ivk = ivk.derive_asset_specific(&value.asset_id);
-        let plaintext = Note::decrypt_with_asset(&ciphertext, &asset_ivk, &epk).expect("can decrypt note");
+        let plaintext =
+            Note::decrypt_with_asset(&ciphertext, &asset_ivk, &epk).expect("can decrypt note");
 
         assert_eq!(plaintext, note);
 
@@ -771,8 +772,14 @@ mod tests {
         // Debug: Print the error if decryption fails
         if let Err(ref e) = new_decrypt_result {
             eprintln!("Asset-specific decryption failed: {:?}", e);
-            eprintln!("Note address diversifier: {:?}", note.address().diversifier());
-            eprintln!("IVK diversifier key: {:?}", ivk.index_for_diversifier(note.address().diversifier()));
+            eprintln!(
+                "Note address diversifier: {:?}",
+                note.address().diversifier()
+            );
+            eprintln!(
+                "IVK diversifier key: {:?}",
+                ivk.index_for_diversifier(note.address().diversifier())
+            );
         }
 
         assert!(

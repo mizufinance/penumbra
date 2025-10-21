@@ -13,8 +13,7 @@ use penumbra_sdk_proto::core::component::shielded_pool::v1::{
     AssetMetadataByIdRequest,
 };
 use penumbra_sdk_proto::util::tendermint_proxy::v1::{
-    tendermint_proxy_service_client::TendermintProxyServiceClient,
-    GetStatusRequest,
+    tendermint_proxy_service_client::TendermintProxyServiceClient, GetStatusRequest,
 };
 use penumbra_sdk_sct::CommitmentSource;
 use penumbra_sdk_shielded_pool::{Note, NotePayload};
@@ -42,14 +41,17 @@ impl BalanceCmd {
 
     /// Execute with just a GRPC URL and asset viewing key (no wallet required)
     pub async fn exec_standalone(&self, avk_str: &str, grpc_url: url::Url) -> Result<()> {
-        self.exec_with_asset_viewing_key_standalone(avk_str, grpc_url).await
+        self.exec_with_asset_viewing_key_standalone(avk_str, grpc_url)
+            .await
     }
 
     pub async fn exec(&self, app: &mut App) -> Result<()> {
         // If an asset viewing key is provided, we need to scan the chain directly
         if let Some(avk_str) = &self.asset_viewing_key {
             let grpc_url = app.config.grpc_url.clone();
-            return self.exec_with_asset_viewing_key_standalone(avk_str, grpc_url).await;
+            return self
+                .exec_with_asset_viewing_key_standalone(avk_str, grpc_url)
+                .await;
         }
 
         // Otherwise, use the normal flow with the wallet's view service
@@ -65,21 +67,19 @@ impl BalanceCmd {
         if self.by_note {
             table.set_header(vec!["Account", "Value", "Source", "Sender"]);
 
-            let rows = notes
-                .iter()
-                .flat_map(|(index, notes_by_asset)| {
-                    // Include each note individually:
-                    notes_by_asset.iter().flat_map(|(asset, notes)| {
-                        notes.iter().map(|record| {
-                            (
-                                *index,
-                                asset.value(record.note.amount()),
-                                record.source.clone(),
-                                record.return_address.clone(),
-                            )
-                        })
+            let rows = notes.iter().flat_map(|(index, notes_by_asset)| {
+                // Include each note individually:
+                notes_by_asset.iter().flat_map(|(asset, notes)| {
+                    notes.iter().map(|record| {
+                        (
+                            *index,
+                            asset.value(record.note.amount()),
+                            record.source.clone(),
+                            record.return_address.clone(),
+                        )
                     })
-                });
+                })
+            });
 
             for (index, value, source, return_address) in rows {
                 table.add_row(vec![
@@ -126,7 +126,11 @@ impl BalanceCmd {
         }
     }
 
-    async fn exec_with_asset_viewing_key_standalone(&self, avk_str: &str, grpc_url: url::Url) -> Result<()> {
+    async fn exec_with_asset_viewing_key_standalone(
+        &self,
+        avk_str: &str,
+        grpc_url: url::Url,
+    ) -> Result<()> {
         // Parse the asset viewing key
         let avk: AssetViewingKey = avk_str
             .parse()
@@ -136,9 +140,10 @@ impl BalanceCmd {
         let ivk = avk.incoming_viewing_key();
 
         // Connect to the chain to fetch compact blocks
-        let channel = penumbra_sdk_proto::box_grpc_svc::connect(
-            tonic::transport::Endpoint::new(grpc_url.to_string())?
-        ).await?;
+        let channel = penumbra_sdk_proto::box_grpc_svc::connect(tonic::transport::Endpoint::new(
+            grpc_url.to_string(),
+        )?)
+        .await?;
         let mut tm_client = TendermintProxyServiceClient::new(channel.clone());
         let mut cb_client = CompactBlockQueryServiceClient::new(channel.clone());
 
@@ -178,18 +183,30 @@ impl BalanceCmd {
             for state_payload_wrapper in compact_block.state_payloads {
                 use penumbra_sdk_proto::core::component::compact_block::v1::state_payload::StatePayload as StatePayloadEnum;
 
-                if let Some(StatePayloadEnum::Note(note_wrapper)) = state_payload_wrapper.state_payload {
+                if let Some(StatePayloadEnum::Note(note_wrapper)) =
+                    state_payload_wrapper.state_payload
+                {
                     if let Some(note_payload_proto) = note_wrapper.note {
                         // Try to deserialize and decrypt the note
-                        if let Ok(note_payload) = NotePayload::try_from(note_payload_proto.clone()) {
+                        if let Ok(note_payload) = NotePayload::try_from(note_payload_proto.clone())
+                        {
                             // Try to decrypt with both the base IVK and the asset-specific IVK
                             // First try base IVK (for backward compatibility)
-                            let decrypted_note = match Note::decrypt(&note_payload.encrypted_note, ivk, &note_payload.ephemeral_key) {
+                            let decrypted_note = match Note::decrypt(
+                                &note_payload.encrypted_note,
+                                ivk,
+                                &note_payload.ephemeral_key,
+                            ) {
                                 Ok(note) => Some(note),
                                 Err(_) => {
                                     // Try asset-specific IVK
                                     let asset_ivk = ivk.derive_asset_specific(&asset_id);
-                                    Note::decrypt_with_asset(&note_payload.encrypted_note, &asset_ivk, &note_payload.ephemeral_key).ok()
+                                    Note::decrypt_with_asset(
+                                        &note_payload.encrypted_note,
+                                        &asset_ivk,
+                                        &note_payload.ephemeral_key,
+                                    )
+                                    .ok()
                                 }
                             };
 
@@ -233,13 +250,14 @@ impl BalanceCmd {
             .await?;
 
         // Build an asset cache with the metadata
-        let asset_cache = if let Some(denom_metadata) = metadata_response.into_inner().denom_metadata {
-            let metadata: penumbra_sdk_asset::asset::Metadata = denom_metadata.try_into()?;
-            vec![metadata].into_iter().collect()
-        } else {
-            // If we can't find the metadata, create an empty cache
-            penumbra_sdk_asset::asset::Cache::default()
-        };
+        let asset_cache =
+            if let Some(denom_metadata) = metadata_response.into_inner().denom_metadata {
+                let metadata: penumbra_sdk_asset::asset::Metadata = denom_metadata.try_into()?;
+                vec![metadata].into_iter().collect()
+            } else {
+                // If we can't find the metadata, create an empty cache
+                penumbra_sdk_asset::asset::Cache::default()
+            };
 
         // Display results
         let mut table = Table::new();

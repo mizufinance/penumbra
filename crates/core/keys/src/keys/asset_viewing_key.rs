@@ -28,15 +28,15 @@
 //! let usdc_notes = usdc_key.scan_all_notes(&note_payloads);
 //! ```
 
+use anyhow::Context;
 use penumbra_sdk_asset::asset;
 use penumbra_sdk_proto::serializers::bech32str;
-use anyhow::Context;
 
 use crate::{keys::IncomingViewingKey, FullViewingKey};
 
 // Additional test imports
 #[cfg(test)]
-use penumbra_sdk_proto::{penumbra::core::asset::v1 as pb};
+use penumbra_sdk_proto::penumbra::core::asset::v1 as pb;
 
 /// A viewing key that can decrypt notes for a specific asset across all addresses.
 ///
@@ -103,22 +103,14 @@ impl AssetViewingKey {
             anyhow::bail!("AssetViewingKey must be 80 bytes, got {}", bytes.len());
         }
 
-        let asset_id_bytes: [u8; 32] = bytes[0..32]
-            .try_into()
-            .context("asset_id wrong length")?;
-        let asset_id = asset::Id::try_from(asset_id_bytes)
-            .context("invalid asset_id bytes")?;
+        let asset_id_bytes: [u8; 32] = bytes[0..32].try_into().context("asset_id wrong length")?;
+        let asset_id = asset::Id::try_from(asset_id_bytes).context("invalid asset_id bytes")?;
 
-        let ivk_bytes: [u8; 32] = bytes[32..64]
-            .try_into()
-            .context("ivk wrong length")?;
-        let ivk_secret = crate::ka::Secret::new_from_field(
-            decaf377::Fr::from_le_bytes_mod_order(&ivk_bytes)
-        );
+        let ivk_bytes: [u8; 32] = bytes[32..64].try_into().context("ivk wrong length")?;
+        let ivk_secret =
+            crate::ka::Secret::new_from_field(decaf377::Fr::from_le_bytes_mod_order(&ivk_bytes));
 
-        let dk_bytes: [u8; 16] = bytes[64..80]
-            .try_into()
-            .context("dk wrong length")?;
+        let dk_bytes: [u8; 16] = bytes[64..80].try_into().context("dk wrong length")?;
         let dk = crate::keys::DiversifierKey(dk_bytes);
 
         let ivk = IncomingViewingKey {
@@ -160,8 +152,8 @@ impl std::str::FromStr for AssetViewingKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use penumbra_sdk_asset::{asset::Id as AssetId, STAKING_TOKEN_ASSET_ID};
     use crate::keys::{Bip44Path, SeedPhrase, SpendKey};
+    use penumbra_sdk_asset::{asset::Id as AssetId, STAKING_TOKEN_ASSET_ID};
     use rand_core::OsRng;
 
     #[test]
@@ -231,11 +223,13 @@ mod tests {
         let bytes = asset_key.to_bytes();
         assert_eq!(bytes.len(), 80, "AssetViewingKey should be 80 bytes");
 
-        let decoded_key = AssetViewingKey::from_bytes(&bytes)
-            .expect("should decode from bytes");
+        let decoded_key = AssetViewingKey::from_bytes(&bytes).expect("should decode from bytes");
 
         assert_eq!(decoded_key.asset_id(), asset_key.asset_id());
-        assert_eq!(decoded_key.incoming_viewing_key(), asset_key.incoming_viewing_key());
+        assert_eq!(
+            decoded_key.incoming_viewing_key(),
+            asset_key.incoming_viewing_key()
+        );
     }
 
     #[test]
@@ -245,30 +239,36 @@ mod tests {
         let spend_key = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
         let fvk = spend_key.full_viewing_key();
         let original_ivk = fvk.incoming();
-        
+
         let asset_id = *STAKING_TOKEN_ASSET_ID;
-        
+
         // Create asset viewing key
         let avk = AssetViewingKey::from_fvk(fvk, asset_id);
-        
+
         // Serialize to bytes
         let bytes = avk.to_bytes();
-        
+
         // Deserialize back
         let restored_avk = AssetViewingKey::from_bytes(&bytes).unwrap();
-        
+
         // The IVK should be identical
         let restored_ivk = restored_avk.incoming_viewing_key();
-        
+
         // Test that both IVKs produce the same address
         let addr1 = original_ivk.payment_address(0u32.into()).0;
         let addr2 = restored_ivk.payment_address(0u32.into()).0;
-        
+
         assert_eq!(addr1, addr2, "IVKs should produce the same address");
-        
+
         // Test that both IVKs view the same address
-        assert!(original_ivk.views_address(&addr1), "Original IVK should view address");
-        assert!(restored_ivk.views_address(&addr1), "Restored IVK should view address");
+        assert!(
+            original_ivk.views_address(&addr1),
+            "Original IVK should view address"
+        );
+        assert!(
+            restored_ivk.views_address(&addr1),
+            "Restored IVK should view address"
+        );
     }
 
     #[test]
@@ -284,15 +284,21 @@ mod tests {
 
         // Test bech32m serialization
         let bech32_str = asset_key.to_string();
-        assert!(bech32_str.starts_with("penumbraassetviewingkey"),
-            "Bech32 string should start with correct prefix");
+        assert!(
+            bech32_str.starts_with("penumbraassetviewingkey"),
+            "Bech32 string should start with correct prefix"
+        );
 
         // Test parsing
-        let parsed_key: AssetViewingKey = bech32_str.parse()
+        let parsed_key: AssetViewingKey = bech32_str
+            .parse()
             .expect("should parse from bech32m string");
 
         assert_eq!(parsed_key.asset_id(), asset_key.asset_id());
-        assert_eq!(parsed_key.incoming_viewing_key(), asset_key.incoming_viewing_key());
+        assert_eq!(
+            parsed_key.incoming_viewing_key(),
+            asset_key.incoming_viewing_key()
+        );
     }
 
     // Integration tests with Note/NotePayload should be added to verify:

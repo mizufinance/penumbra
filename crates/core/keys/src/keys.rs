@@ -16,11 +16,12 @@ pub use bip44::Bip44Path;
 mod wallet_id;
 pub use wallet_id::WalletId;
 
+mod asset_viewing_key;
 mod fvk;
 mod ivk;
 mod ovk;
-mod asset_viewing_key;
 
+pub use asset_viewing_key::AssetViewingKey;
 pub(crate) use fvk::IVK_DOMAIN_SEP;
 pub use fvk::{
     r1cs::{AuthorizationKeyVar, RandomizedVerificationKey, SpendAuthRandomizerVar},
@@ -28,4 +29,3 @@ pub use fvk::{
 };
 pub use ivk::{IncomingViewingKey, IncomingViewingKeyVar, IVK_LEN_BYTES};
 pub use ovk::{OutgoingViewingKey, OVK_LEN_BYTES};
-pub use asset_viewing_key::AssetViewingKey;

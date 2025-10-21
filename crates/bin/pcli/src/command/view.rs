@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use address::AddressCmd;
+use asset_viewing_key::AssetViewingKeyCmd;
 use balance::BalanceCmd;
 use lps::LiquidityPositionsCmd;
 use noble_address::NobleAddressCmd;
@@ -8,20 +9,19 @@ use staked::StakedCmd;
 use transaction_hashes::TransactionHashesCmd;
 use tx::TxCmd;
 use wallet_id::WalletIdCmd;
-use asset_viewing_key::AssetViewingKeyCmd;
 
 use crate::App;
 
 use self::auction::AuctionCmd;
 
 mod address;
+mod asset_viewing_key;
 mod auction;
 mod balance;
 mod lps;
 mod noble_address;
 mod staked;
 mod wallet_id;
-mod asset_viewing_key;
 
 pub mod transaction_hashes;
 mod tx;

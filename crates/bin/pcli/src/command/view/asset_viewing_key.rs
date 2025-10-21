@@ -1,6 +1,6 @@
 use anyhow::Result;
-use penumbra_sdk_keys::{AssetViewingKey, FullViewingKey};
 use penumbra_sdk_asset::asset::{self, REGISTRY};
+use penumbra_sdk_keys::{AssetViewingKey, FullViewingKey};
 use penumbra_sdk_proto::penumbra::core::asset::v1 as pb;
 use serde::Serialize;
 
@@ -29,7 +29,8 @@ impl AssetViewingKeyCmd {
     pub fn exec(&self, fvk: &FullViewingKey) -> Result<()> {
         // Try parsing as bech32m first, then fall back to raw denom
         let asset_id: asset::Id = if self.asset_id.starts_with("passet") {
-            self.asset_id.parse()
+            self.asset_id
+                .parse()
                 .map_err(|e| anyhow::anyhow!("Failed to parse asset ID: {}", e))?
         } else {
             // Treat as raw denomination - need to resolve to base denomination first
@@ -40,14 +41,19 @@ impl AssetViewingKeyCmd {
             // ex: test_usd is actually wtest_usd underlying, which is the true asset ID used for the passet
             let base_denom = unit.base();
 
-
             // Use the base denomination to derive the asset ID
             pb::AssetId {
                 alt_base_denom: base_denom.to_string(),
                 ..Default::default()
             }
             .try_into()
-            .map_err(|e| anyhow::anyhow!("Failed to derive asset ID from denom '{}': {}", self.asset_id, e))?
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to derive asset ID from denom '{}': {}",
+                    self.asset_id,
+                    e
+                )
+            })?
         };
 
         // Create the asset viewing key
