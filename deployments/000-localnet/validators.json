@@ -1,0 +1,16 @@
+[
+    {
+        "name": "Local Validator 1",
+        "website": "",
+        "description": "Local development validator 1",
+        "funding_streams": [],
+        "sequence_number": 0
+    },
+    {
+        "name": "Local Validator 2",
+        "website": "",
+        "description": "Local development validator 2",
+        "funding_streams": [],
+        "sequence_number": 0
+    }
+]
