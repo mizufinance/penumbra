@@ -1,21 +1,14 @@
-# docker-compose file for running a 1 or 2-validator Penumbra local network.
+# docker-compose file for running a single-validator Penumbra local network.
 #
 # Genesis account mnemonic (for pcli wallet recovery):
 #   decorate bright ozone fork gallery riot bus exhaust worth way bone indoor
 #   calm squirrel merry zero scheme cotton until shop any excess stage laundry
 #
-# Stores node configs in docker "volumes", which should be
-# reset between networks: `docker volume rm compose_penumbra-pd-node0 compose_penumbra-pd-node1`
-#
-# Usage (1 validator):
-#   VALIDATORS=1 docker compose -f deployments/compose/docker-compose.yml up -d
-#
-# Usage (2 validators):
-#   VALIDATORS=2 docker compose -f deployments/compose/docker-compose.yml --profile two-validators up -d
+# Usage:
+#   docker compose -f deployments/compose/docker-compose.yml up -d
 #
 # To reset and start fresh:
-#   docker compose -f deployments/compose/docker-compose.yml --profile two-validators down -v
-#   # Then run one of the above commands
+#   docker compose -f deployments/compose/docker-compose.yml down -v
 
 networks:
   penumbra:
@@ -23,26 +16,19 @@ networks:
 
 services:
 
-  # Initialize network config for validators
+  # Initialize network config
   pd-network-init:
     image: ghcr.io/penumbra-zone/penumbra:local
     networks:
       - penumbra
-    environment:
-      - VALIDATORS=${VALIDATORS:-2}
     command:
       - sh
       - -c
       - |
         pd --version
         if ! test -e /pd/network_data/node0/cometbft/config/config.toml ; then
-          echo "WARN: network config not found. Creating fresh $${VALIDATORS}-validator network."
+          echo "WARN: network config not found. Creating fresh single-validator network."
           rm -rf /pd/network_data
-          if [ "$${VALIDATORS}" = "1" ]; then
-            VALIDATORS_FILE=/localnet/validators-1.json
-          else
-            VALIDATORS_FILE=/localnet/validators.json
-          fi
           /bin/pd network --network-dir /pd/network_data generate \
             --chain-id penumbra-local-devnet \
             --preserve-chain-id \
@@ -51,20 +37,16 @@ services:
             --epoch-duration 100 \
             --proposal-voting-blocks 50 \
             --timeout-commit 500ms \
-            --validators-input-file $${VALIDATORS_FILE} \
-            --allocations-input-file /localnet/allocations.csv \
-            --peer-address-template validator
+            --validators-input-file /localnet/validators-1.json \
+            --allocations-input-file /localnet/allocations.csv
+          # Clear seeds for single-validator mode (no peers needed)
+          sed -i 's/^seeds = .*/seeds = ""/' /pd/network_data/node0/cometbft/config/config.toml
         else
           echo 'Network config already found, using it'
         fi
         mkdir -p /pd/network_data/node0/cometbft/data
         chown 100 -R /pd/network_data/node0/cometbft
         chown 1000 -R /pd/network_data/node0/pd
-        if [ "$${VALIDATORS}" = "2" ] && test -d /pd/network_data/node1 ; then
-          mkdir -p /pd/network_data/node1/cometbft/data
-          chown 100 -R /pd/network_data/node1/cometbft
-          chown 1000 -R /pd/network_data/node1/pd
-        fi
         ls -l /pd/network_data/
         if test -d /pd/network_data/node0 ; then
           exit 0
@@ -78,37 +60,7 @@ services:
       - ../000-localnet:/localnet:ro
     user: "0"
 
-  # Copy node1 data to its own volume (only for 2-validator setup)
-  pd-node1-copy:
-    image: ghcr.io/penumbra-zone/penumbra:local
-    profiles:
-      - two-validators
-    networks:
-      - penumbra
-    command:
-      - sh
-      - -c
-      - |
-        if ! test -e /pd1/network_data/node1/cometbft/config/config.toml ; then
-          echo 'Copying node1 config from shared volume...'
-          mkdir -p /pd1/network_data
-          cp -r /pd0/network_data/node1 /pd1/network_data/
-          chown 100 -R /pd1/network_data/node1/cometbft
-          chown 1000 -R /pd1/network_data/node1/pd
-          ls -l /pd1/network_data/node1/
-        else
-          echo 'Node1 config already exists'
-        fi
-    restart: on-failure
-    volumes:
-      - penumbra-pd-node0:/pd0:ro
-      - penumbra-pd-node1:/pd1
-    user: "0"
-    depends_on:
-      pd-network-init:
-        condition: service_completed_successfully
-
-  # Validator 0 - Penumbra daemon
+  # Penumbra daemon
   pd-node0:
     image: ghcr.io/penumbra-zone/penumbra:local
     networks:
@@ -131,32 +83,7 @@ services:
       - "26658:26658"
       - "8080:8080"
 
-  # Validator 1 - Penumbra daemon (only for 2-validator setup)
-  pd-node1:
-    image: ghcr.io/penumbra-zone/penumbra:local
-    profiles:
-      - two-validators
-    networks:
-      penumbra:
-        aliases:
-          - pd-node1
-    command: >-
-      /bin/pd start --home /pd/network_data/node1/pd
-      --grpc-bind 0.0.0.0:8080 --abci-bind 0.0.0.0:26658
-      --cometbft-addr http://cometbft-node1:26657
-    restart: on-failure
-    volumes:
-      - penumbra-pd-node1:/pd
-    user: "${UID:-1000}"
-    stop_signal: SIGKILL
-    depends_on:
-      pd-node1-copy:
-        condition: service_completed_successfully
-    ports:
-      - "26668:26658"
-      - "8081:8080"
-
-  # Validator 0 - CometBFT node
+  # CometBFT node
   cometbft-node0:
     image: "docker.io/cometbft/cometbft:v0.37.15"
     networks:
@@ -177,30 +104,5 @@ services:
     depends_on:
       - pd-node0
 
-  # Validator 1 - CometBFT node (only for 2-validator setup)
-  cometbft-node1:
-    image: "docker.io/cometbft/cometbft:v0.37.15"
-    profiles:
-      - two-validators
-    networks:
-      penumbra:
-        aliases:
-          - cometbft-node1
-          - validator-1
-    ports:
-      - "26666:26656"
-      - "26667:26657"
-    volumes:
-      - penumbra-pd-node1:/cometbft
-    user: "100"
-    environment:
-      CMTHOME: /cometbft/network_data/node1/cometbft
-    command: start --proxy_app=tcp://pd-node1:26658
-    restart: on-failure
-    depends_on:
-      - pd-node0
-      - pd-node1
-
 volumes:
   penumbra-pd-node0: {}
-  penumbra-pd-node1: {}
