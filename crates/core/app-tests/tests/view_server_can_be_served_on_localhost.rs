@@ -27,7 +27,6 @@ mod common;
 
 // NB: a multi-thread runtime is needed to run both the view server and its client.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "Flaked in #4627,#4632,#4624"]
 async fn view_server_can_be_served_on_localhost() -> anyhow::Result<()> {
     // Install a test logger, acquire some temporary storage, and start the test node.
     let guard = common::set_tracing_subscriber();
@@ -113,9 +112,10 @@ async fn view_server_can_be_served_on_localhost() -> anyhow::Result<()> {
         while let Some(status) = status_stream.next().await.transpose()? {
             tracing::info!(?status, "view client received status stream response");
         }
-        // Confirm that the status is as expected: synced up to the 11th block.
+        // Confirm that the status is as expected: synced up to height 10.
+        // (Genesis at height 0 + 10 fast_forward blocks = height 10)
         let status = view_client.status(StatusRequest {}).await?.into_inner();
-        debug_assert_eq!(
+        assert_eq!(
             status,
             StatusResponse {
                 full_sync_height: 10,
@@ -154,6 +154,9 @@ async fn view_server_can_be_served_on_localhost() -> anyhow::Result<()> {
             .await?
     };
     client.sync_to_latest(storage.latest_snapshot()).await?;
+    // Use witness_auth_build (not witness_auth_build_with_compliance) because
+    // Planner.plan() already enriched the plan with compliance data.
+    // This matches the CI/pcli path: single enrichment in Planner.
     let tx = client.witness_auth_build(&plan).await?;
 
     // Execute the transaction, applying it to the chain state.
@@ -179,9 +182,10 @@ async fn view_server_can_be_served_on_localhost() -> anyhow::Result<()> {
         while let Some(status) = status_stream.next().await.transpose()? {
             tracing::info!(?status, "view client received status stream response");
         }
-        // Confirm that the status is as expected: synced up to the 11th block.
+        // Confirm that the status is as expected: synced up to height 11.
+        // (Previous 10 + 1 transaction block = 11)
         let status = view_client.status(StatusRequest {}).await?.into_inner();
-        debug_assert_eq!(
+        assert_eq!(
             status,
             StatusResponse {
                 full_sync_height: 11,

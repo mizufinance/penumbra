@@ -1,15 +1,44 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use cnidarium::{StateRead, StateWrite};
-use decaf377::Fq;
 use penumbra_sdk_asset::asset;
 use penumbra_sdk_proto::{StateReadProto, StateWriteProto};
+use penumbra_sdk_sct::component::clock::EpochRead;
 use penumbra_sdk_tct::StateCommitment;
 
-use crate::{state_key, structs::ComplianceLeaf, tree::QuadTree};
+use crate::{
+    event,
+    indexed_tree::{IndexedLeaf, IndexedMerkleTree},
+    state_key,
+    structs::{ComplianceLeaf, MerklePath},
+    tree::QuadTree,
+};
+
+// Note: QuadTree is still used for the user tree. Asset tree has been migrated to IMT.
+
+/// Maximum age of compliance anchors in blocks (~1.7 hours at 6s blocks).
+///
+/// This prevents the "genesis anchor attack" where an attacker uses an old anchor
+/// to falsely prove non-membership for assets that were registered after genesis.
+/// Similar in spirit to the target_timestamp ±1 hour window.
+pub const MAX_ANCHOR_AGE_BLOCKS: u64 = 1000;
 
 // Re-export bincode for serialization
 use bincode;
+
+/// Proof data for an asset in the IMT.
+/// Contains all information needed for membership or non-membership proofs.
+#[derive(Clone, Debug)]
+pub struct AssetProofData {
+    /// The indexed leaf (for membership or non-membership proof).
+    pub indexed_leaf: IndexedLeaf,
+    /// Position of the leaf in the IMT.
+    pub position: u64,
+    /// Authentication path from leaf to root.
+    pub auth_path: MerklePath,
+    /// Whether the asset is regulated (membership) or not (non-membership).
+    pub is_regulated: bool,
+}
 
 /// Extension trait for reading compliance registry state.
 #[async_trait]
@@ -22,11 +51,46 @@ pub trait ComplianceRegistryRead: StateRead {
         }
     }
 
-    /// Get the asset regulation tree from state.
-    async fn get_asset_tree(&self) -> Result<QuadTree> {
-        match self.get_raw(state_key::asset_tree()).await? {
+    /// Get the asset Indexed Merkle Tree (IMT) from state.
+    async fn get_asset_imt(&self) -> Result<IndexedMerkleTree> {
+        match self.get_raw(state_key::asset_imt()).await? {
             Some(bytes) => Ok(bincode::deserialize(&bytes)?),
-            None => Ok(QuadTree::new()),
+            None => Ok(IndexedMerkleTree::new()),
+        }
+    }
+
+    /// Get the asset IMT root hash.
+    async fn get_asset_imt_root(&self) -> Result<StateCommitment> {
+        let tree = self.get_asset_imt().await?;
+        Ok(tree.root())
+    }
+
+    /// Get proof data for an asset using the IMT.
+    ///
+    /// For regulated assets: returns membership proof (exact match).
+    /// For unregulated assets: returns non-membership proof (gap).
+    async fn get_asset_proof_data(&self, asset_id: asset::Id) -> Result<AssetProofData> {
+        let tree = self.get_asset_imt().await?;
+        let value = asset_id.0;
+
+        if tree.contains(value) {
+            // Regulated asset - membership proof
+            let (position, indexed_leaf, path) = tree.membership_proof(value)?;
+            Ok(AssetProofData {
+                indexed_leaf,
+                position,
+                auth_path: MerklePath::from_auth_path(path),
+                is_regulated: true,
+            })
+        } else {
+            // Unregulated asset - non-membership proof
+            let (position, indexed_leaf, path) = tree.non_membership_proof(value)?;
+            Ok(AssetProofData {
+                indexed_leaf,
+                position,
+                auth_path: MerklePath::from_auth_path(path),
+                is_regulated: false,
+            })
         }
     }
 
@@ -52,41 +116,10 @@ pub trait ComplianceRegistryRead: StateRead {
         Ok(tree.root())
     }
 
-    /// Get the asset tree root hash.
-    async fn get_asset_tree_root(&self) -> Result<StateCommitment> {
-        let tree = self.get_asset_tree().await?;
-        Ok(tree.root())
-    }
-
-    /// Get the position index for an asset in the asset tree.
-    ///
-    /// Returns the position where the asset's regulation status is stored,
-    /// allowing clients to generate proofs.
-    async fn get_asset_index(&self, asset_id: asset::Id) -> Result<Option<u64>> {
-        self.get_proto(&state_key::asset_index(&asset_id)).await
-    }
-
-    /// Get the public regulation status of an asset.
-    ///
-    /// Returns whether the asset is regulated (true) or not (false).
-    async fn get_asset_status(&self, asset_id: asset::Id) -> Result<Option<bool>> {
-        match self.get_raw(&state_key::asset_status(&asset_id)).await? {
-            Some(bytes) if bytes.len() == 1 => Ok(Some(bytes[0] != 0)),
-            Some(_) => Err(anyhow::anyhow!("invalid asset status format")),
-            None => Ok(None),
-        }
-    }
-
     /// Get an authentication path for a user at the given position.
     async fn get_user_auth_path(&self, position: u64) -> Result<Vec<[StateCommitment; 3]>> {
         let tree = self.get_user_tree().await?;
-        Ok(tree.auth_path(position))
-    }
-
-    /// Get an authentication path for an asset at the given position.
-    async fn get_asset_auth_path(&self, position: u64) -> Result<Vec<[StateCommitment; 3]>> {
-        let tree = self.get_asset_tree().await?;
-        Ok(tree.auth_path(position))
+        tree.auth_path(position)
     }
 
     /// Get the position of a user's leaf in the user tree.
@@ -170,13 +203,96 @@ pub trait ComplianceRegistryRead: StateRead {
 
         Ok(false)
     }
+
+    // ========== Historical Anchor Validation ==========
+
+    /// Check if a user tree anchor is valid (exists in historical records).
+    ///
+    /// Returns `Some(height)` if the anchor was recorded at that block height,
+    /// `None` if the anchor is unknown.
+    async fn check_user_anchor(&self, anchor: &StateCommitment) -> Result<Option<u64>> {
+        let key = state_key::anchor::user_anchor_lookup(anchor);
+        self.get_proto(&key).await
+    }
+
+    /// Check if an asset IMT anchor is valid (exists in historical records).
+    ///
+    /// Returns `Some(height)` if the anchor was recorded at that block height,
+    /// `None` if the anchor is unknown.
+    async fn check_asset_anchor(&self, anchor: &StateCommitment) -> Result<Option<u64>> {
+        let key = state_key::anchor::asset_anchor_lookup(anchor);
+        self.get_proto(&key).await
+    }
+
+    /// Get the user tree anchor at a specific block height.
+    async fn get_user_anchor_by_height(&self, height: u64) -> Result<Option<StateCommitment>> {
+        self.get(&state_key::anchor::user_anchor_by_height(height))
+            .await
+    }
+
+    /// Get the asset IMT anchor at a specific block height.
+    async fn get_asset_anchor_by_height(&self, height: u64) -> Result<Option<StateCommitment>> {
+        self.get(&state_key::anchor::asset_anchor_by_height(height))
+            .await
+    }
+
+    /// Validate that a compliance proof uses valid historical anchors.
+    ///
+    /// Checks that both anchors:
+    /// 1. Exist in historical records
+    /// 2. Are not older than MAX_ANCHOR_AGE_BLOCKS from current height
+    ///
+    /// The age check prevents the "genesis anchor attack" where an attacker
+    /// uses an old anchor to prove false non-membership for newly regulated assets.
+    ///
+    /// Returns `Ok(())` if both anchors are valid and recent, otherwise returns an error.
+    async fn validate_compliance_anchors(
+        &self,
+        user_anchor: &StateCommitment,
+        asset_anchor: &StateCommitment,
+    ) -> Result<()> {
+        let current_height = self.get_block_height().await?;
+
+        // Check user anchor exists and is recent enough
+        let user_anchor_height = self.check_user_anchor(user_anchor).await?.ok_or_else(|| {
+            anyhow::anyhow!("invalid user compliance anchor: not found in history")
+        })?;
+
+        if current_height > user_anchor_height + MAX_ANCHOR_AGE_BLOCKS {
+            anyhow::bail!(
+                "user compliance anchor too old: height {} is more than {} blocks behind current height {}",
+                user_anchor_height,
+                MAX_ANCHOR_AGE_BLOCKS,
+                current_height
+            );
+        }
+
+        // Check asset anchor exists and is recent enough
+        let asset_anchor_height =
+            self.check_asset_anchor(asset_anchor)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("invalid asset compliance anchor: not found in history")
+                })?;
+
+        if current_height > asset_anchor_height + MAX_ANCHOR_AGE_BLOCKS {
+            anyhow::bail!(
+                "asset compliance anchor too old: height {} is more than {} blocks behind current height {}",
+                asset_anchor_height,
+                MAX_ANCHOR_AGE_BLOCKS,
+                current_height
+            );
+        }
+
+        Ok(())
+    }
 }
 
 impl<T: StateRead + ?Sized> ComplianceRegistryRead for T {}
 
 /// Extension trait for writing compliance registry state.
 #[async_trait]
-pub trait ComplianceRegistryWrite: StateWrite {
+pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     /// Add a compliance leaf for a user.
     ///
     /// This registers a user's compliance viewing key for a regulated asset.
@@ -184,7 +300,10 @@ pub trait ComplianceRegistryWrite: StateWrite {
     ///
     /// # Arguments
     /// * `leaf` - The compliance leaf containing address, CVK, and asset_id
-    async fn add_compliance_leaf(&mut self, leaf: ComplianceLeaf) -> Result<()> {
+    ///
+    /// # Returns
+    /// The position in the user tree where the leaf was added.
+    async fn add_compliance_leaf(&mut self, leaf: ComplianceLeaf) -> Result<u64> {
         // Load the current user tree (or create new)
         let mut tree = self.get_user_tree().await?;
 
@@ -195,7 +314,7 @@ pub trait ComplianceRegistryWrite: StateWrite {
         let commitment = leaf.commit();
 
         // Update the tree at the next available position
-        tree.update(position, commitment);
+        tree.update(position, commitment)?;
 
         // Increment the user count
         let new_count = position + 1;
@@ -216,72 +335,82 @@ pub trait ComplianceRegistryWrite: StateWrite {
         let leaf_bytes = leaf.encode_to_vec();
         self.put_raw(leaf_data_key, leaf_bytes);
 
+        Ok(position)
+    }
+
+    /// Register a regulated asset in the IMT.
+    ///
+    /// Only regulated assets are stored in the IMT. Unregulated status is proven
+    /// via non-membership proofs (asset falls in a gap between leaves).
+    ///
+    /// This method is idempotent - if the asset is already registered, it returns the existing position.
+    ///
+    /// # Returns
+    /// The position in the IMT where the asset is stored.
+    async fn register_regulated_asset(&mut self, asset_id: asset::Id) -> Result<u64> {
+        let mut tree = self.get_asset_imt().await?;
+
+        // Check if already exists - be idempotent
+        if let Some(position) = tree.get_position(asset_id.0) {
+            tracing::debug!(?asset_id, position, "asset already in IMT, skipping");
+            return Ok(position);
+        }
+
+        // Insert into the IMT and get the position
+        let position = tree.insert(asset_id.0)?;
+
+        // Save the updated tree
+        let tree_bytes = bincode::serialize(&tree)?;
+        self.put_raw(state_key::asset_imt().to_string(), tree_bytes);
+
+        tracing::debug!(?asset_id, position, "registered regulated asset in IMT");
+        Ok(position)
+    }
+
+    /// Save the asset IMT to state.
+    async fn put_asset_imt(&mut self, tree: &IndexedMerkleTree) -> Result<()> {
+        let tree_bytes = bincode::serialize(tree)?;
+        self.put_raw(state_key::asset_imt().to_string(), tree_bytes);
         Ok(())
     }
 
-    /// Update an asset's regulation status.
+    // ========== Historical Anchor Storage ==========
+
+    /// Record the current compliance tree anchors at the given block height.
     ///
-    /// This registers whether an asset is regulated (requires compliance) or not.
-    /// The status is committed and added to the asset tree.
-    ///
-    /// # Arguments
-    /// * `asset_id` - The asset ID to register
-    /// * `is_regulated` - Whether the asset is regulated
-    ///
-    /// # Note
-    /// For demo purposes, this function does not allow updating existing assets.
-    /// Once an asset is registered, attempting to re-register it will return an error.
-    /// TODO: Implement proper update logic that modifies the existing tree entry instead
-    /// of creating duplicates.
-    async fn update_asset_regulation(
-        &mut self,
-        asset_id: asset::Id,
-        is_regulated: bool,
-    ) -> Result<()> {
-        // Check if asset is already registered
-        if let Some(_existing_index) = self.get_asset_index(asset_id).await? {
-            anyhow::bail!(
-                "Asset {} is already registered in compliance registry. \
-                Re-registration is not supported in this demo version.",
-                asset_id
-            );
-        }
+    /// This should be called at the end of each block to store bidirectional
+    /// mappings for both user tree and asset IMT anchors. These mappings enable
+    /// validation of historical anchors in compliance proofs.
+    async fn record_compliance_anchors(&mut self, height: u64) -> Result<()> {
+        // Get current anchors
+        let user_anchor = self.get_user_tree_root().await?;
+        let asset_anchor = self.get_asset_imt_root().await?;
 
-        // Load the current asset tree (or create new)
-        let mut tree = self.get_asset_tree().await?;
+        // Store user anchor bidirectionally using verifiable storage (matching SCT pattern)
+        self.put(
+            state_key::anchor::user_anchor_by_height(height),
+            user_anchor,
+        );
+        self.put_proto(state_key::anchor::user_anchor_lookup(&user_anchor), height);
 
-        // Load the current asset count
-        let asset_count = self.get_asset_count().await?;
+        // Store asset anchor bidirectionally using verifiable storage
+        self.put(
+            state_key::anchor::asset_anchor_by_height(height),
+            asset_anchor,
+        );
+        self.put_proto(
+            state_key::anchor::asset_anchor_lookup(&asset_anchor),
+            height,
+        );
 
-        // Calculate the leaf commitment for this asset regulation status
-        // Hash: poseidon377::hash_2(domain_sep, (asset_id, is_regulated))
-        let regulation_flag = if is_regulated {
-            Fq::from(1u64)
-        } else {
-            Fq::from(0u64)
-        };
-        let domain_sep = Fq::from(0u64); // Use zero as domain separator
-        let commitment_hash = poseidon377::hash_2(&domain_sep, (asset_id.0, regulation_flag));
-        let commitment = StateCommitment(commitment_hash);
+        // Emit anchor event for local sync
+        self.record_proto(event::compliance_anchor(height, user_anchor, asset_anchor));
 
-        // Update the tree at the next available position
-        tree.update(asset_count, commitment);
-
-        // Increment the asset count
-        let new_count = asset_count + 1;
-
-        // Save the updated tree and count
-        let tree_bytes = bincode::serialize(&tree)?;
-        self.put_raw(state_key::asset_tree().to_string(), tree_bytes);
-        self.put_proto(state_key::asset_count().to_string(), new_count);
-
-        // Store the index mapping so clients can look up the position
-        self.put_proto(state_key::asset_index(&asset_id), asset_count);
-
-        // Store the public regulation status as a single byte (0 = not regulated, 1 = regulated)
-        self.put_raw(
-            state_key::asset_status(&asset_id),
-            vec![u8::from(is_regulated)],
+        tracing::debug!(
+            height,
+            ?user_anchor,
+            ?asset_anchor,
+            "recorded compliance anchors"
         );
 
         Ok(())
@@ -295,7 +424,9 @@ mod tests {
     use super::*;
     use crate::tree::QuadTree;
     use cnidarium::TempStorage;
+    use decaf377::Fq;
     use penumbra_sdk_keys::{keys::AddressComplianceKey, Address};
+    use penumbra_sdk_sct::component::clock::EpochManager;
 
     #[tokio::test]
     async fn test_add_compliance_leaf() {
@@ -323,48 +454,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_asset_regulation() {
+    async fn test_register_regulated_asset() {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
 
         let asset_id = asset::Id(Fq::from(123u64));
 
-        // Register an asset as regulated
-        state.update_asset_regulation(asset_id, true).await.unwrap();
+        // Initially asset is unregulated (not in IMT)
+        let proof_before = state.get_asset_proof_data(asset_id).await.unwrap();
+        assert!(!proof_before.is_regulated);
 
-        // Check that asset count increased
-        let count = state.get_asset_count().await.unwrap();
-        assert_eq!(count, 1);
+        // Register as regulated
+        state.register_regulated_asset(asset_id).await.unwrap();
 
-        // Check that the tree root changed
-        let root = state.get_asset_tree_root().await.unwrap();
-        assert_ne!(root.0, Fq::from(0u64));
+        // Now asset is regulated (in IMT)
+        let proof_after = state.get_asset_proof_data(asset_id).await.unwrap();
+        assert!(proof_after.is_regulated);
+        assert_eq!(proof_after.indexed_leaf.value, asset_id.0);
 
-        // Verify the index mapping was stored
-        let index = state.get_asset_index(asset_id).await.unwrap();
-        assert_eq!(index, Some(0), "First asset should be at index 0");
-
-        // Verify the public status was stored
-        let status = state.get_asset_status(asset_id).await.unwrap();
-        assert_eq!(status, Some(true), "Asset should be marked as regulated");
-
-        // Test with a second asset (unregulated)
-        let asset_id_2 = asset::Id(Fq::from(456u64));
-        state
-            .update_asset_regulation(asset_id_2, false)
-            .await
-            .unwrap();
-
-        let index_2 = state.get_asset_index(asset_id_2).await.unwrap();
-        assert_eq!(index_2, Some(1), "Second asset should be at index 1");
-
-        let status_2 = state.get_asset_status(asset_id_2).await.unwrap();
-        assert_eq!(
-            status_2,
-            Some(false),
-            "Second asset should be marked as unregulated"
-        );
+        // IMT root should have changed
+        let empty_imt = IndexedMerkleTree::new();
+        let root = state.get_asset_imt_root().await.unwrap();
+        assert_ne!(root.0, empty_imt.root().0);
     }
 
     #[tokio::test]
@@ -408,36 +520,31 @@ mod tests {
 
         // First registration should succeed
         state
-            .update_asset_regulation(asset_id, true)
+            .register_regulated_asset(asset_id)
             .await
             .expect("First registration should succeed");
 
-        // Verify asset was registered
-        let status = state.get_asset_status(asset_id).await.unwrap();
-        assert_eq!(status, Some(true));
+        // Verify asset is regulated
+        let proof = state.get_asset_proof_data(asset_id).await.unwrap();
+        assert!(proof.is_regulated);
 
-        // Second registration of same asset should fail
-        let result = state.update_asset_regulation(asset_id, false).await;
-        assert!(result.is_err(), "Duplicate registration should fail");
+        // Get IMT leaf count
+        let imt = state.get_asset_imt().await.unwrap();
+        let count_before = imt.leaf_count();
 
-        // Verify error message mentions duplicate
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("already registered"),
-            "Error should mention asset is already registered, got: {}",
-            err_msg
-        );
+        // Second registration of same asset should be idempotent (succeed but no change)
+        state
+            .register_regulated_asset(asset_id)
+            .await
+            .expect("Duplicate registration should be idempotent");
 
-        // Verify asset count didn't increase
-        let count = state.get_asset_count().await.unwrap();
+        // Verify IMT leaf count didn't increase
+        let imt = state.get_asset_imt().await.unwrap();
         assert_eq!(
-            count, 1,
-            "Asset count should remain 1 after failed duplicate registration"
+            imt.leaf_count(),
+            count_before,
+            "IMT leaf count should remain unchanged after idempotent registration"
         );
-
-        // Verify original status unchanged
-        let status = state.get_asset_status(asset_id).await.unwrap();
-        assert_eq!(status, Some(true), "Original status should be unchanged");
     }
 
     #[tokio::test]
@@ -595,7 +702,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_phase1_comprehensive_integration() {
+    async fn test_comprehensive_integration() {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
@@ -603,31 +710,22 @@ mod tests {
 
         // Bridged asset (USDC) - regulated
         let usdc_asset_id = asset::Id(Fq::from(12345u64));
-        state
-            .update_asset_regulation(usdc_asset_id, true)
-            .await
-            .unwrap();
-        assert_eq!(
-            state.get_asset_status(usdc_asset_id).await.unwrap(),
-            Some(true)
-        );
-        assert_eq!(state.get_asset_index(usdc_asset_id).await.unwrap(), Some(0));
-        assert_ne!(state.get_asset_tree_root().await.unwrap().0, Fq::from(0u64));
+        state.register_regulated_asset(usdc_asset_id).await.unwrap();
 
-        // Native asset (penumbra) - unregulated
+        let usdc_proof = state.get_asset_proof_data(usdc_asset_id).await.unwrap();
+        assert!(usdc_proof.is_regulated);
+
+        let empty_imt = IndexedMerkleTree::new();
+        assert_ne!(
+            state.get_asset_imt_root().await.unwrap().0,
+            empty_imt.root().0
+        );
+
+        // Native asset (penumbra) - unregulated (NOT in IMT)
         let penumbra_asset_id = asset::Id(Fq::from(1u64));
-        state
-            .update_asset_regulation(penumbra_asset_id, false)
-            .await
-            .unwrap();
-        assert_eq!(
-            state.get_asset_status(penumbra_asset_id).await.unwrap(),
-            Some(false)
-        );
-        assert_eq!(
-            state.get_asset_index(penumbra_asset_id).await.unwrap(),
-            Some(1)
-        );
+        // Don't register - unregulated assets are proven via non-membership
+        let penumbra_proof = state.get_asset_proof_data(penumbra_asset_id).await.unwrap();
+        assert!(!penumbra_proof.is_regulated);
 
         // Multiple wallets for same user
         let wallet1 = Address::dummy(&mut rng);
@@ -668,10 +766,10 @@ mod tests {
         assert!(state.verify_compliance_leaf(&received_leaf).await.unwrap());
         assert_eq!(received_leaf.key.inner(), ack1.inner());
 
-        // Query non-existent asset
+        // Query unregistered asset - should get non-membership proof
         let unknown_asset = asset::Id(Fq::from(99999u64));
-        assert_eq!(state.get_asset_status(unknown_asset).await.unwrap(), None);
-        assert_eq!(state.get_asset_index(unknown_asset).await.unwrap(), None);
+        let unknown_proof = state.get_asset_proof_data(unknown_asset).await.unwrap();
+        assert!(!unknown_proof.is_regulated);
 
         // Authentication paths
         let path = state.get_user_auth_path(0).await.unwrap();
@@ -685,14 +783,10 @@ mod tests {
             user_root,
             tree.depth()
         ));
-        assert_eq!(state.get_asset_count().await.unwrap(), 2);
 
         // Same wallet registered for multiple assets
         let dai_asset_id = asset::Id(Fq::from(67890u64));
-        state
-            .update_asset_regulation(dai_asset_id, true)
-            .await
-            .unwrap();
+        state.register_regulated_asset(dai_asset_id).await.unwrap();
         let leaf1_dai = ComplianceLeaf {
             address: wallet1,
             key: AddressComplianceKey::new(
@@ -824,5 +918,411 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    // ========== IMT Tests ==========
+
+    #[tokio::test]
+    async fn test_imt_register_regulated_asset() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        let asset_id = asset::Id(Fq::from(12345u64));
+
+        // Register regulated asset
+        state.register_regulated_asset(asset_id).await.unwrap();
+
+        // Check the asset is in the IMT
+        let tree = state.get_asset_imt().await.unwrap();
+        assert!(tree.contains(asset_id.0));
+        assert_eq!(tree.leaf_count(), 2); // sentinel + 1 asset
+
+        // Check via get_asset_proof_data
+        let proof_data = state.get_asset_proof_data(asset_id).await.unwrap();
+        assert!(proof_data.is_regulated);
+
+        // IMT root should have changed from empty
+        let empty_tree = IndexedMerkleTree::new();
+        let root = state.get_asset_imt_root().await.unwrap();
+        assert_ne!(root.0, empty_tree.root().0);
+    }
+
+    #[tokio::test]
+    async fn test_imt_register_idempotent() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        let asset_id = asset::Id(Fq::from(12345u64));
+
+        // Register twice - should be idempotent
+        state.register_regulated_asset(asset_id).await.unwrap();
+        state.register_regulated_asset(asset_id).await.unwrap();
+
+        let tree = state.get_asset_imt().await.unwrap();
+        assert_eq!(tree.leaf_count(), 2); // sentinel + 1 asset (not 3)
+    }
+
+    #[tokio::test]
+    async fn test_imt_get_proof_data_regulated() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        let asset_id = asset::Id(Fq::from(12345u64));
+        state.register_regulated_asset(asset_id).await.unwrap();
+
+        // Get proof data for regulated asset
+        let proof_data = state.get_asset_proof_data(asset_id).await.unwrap();
+
+        assert!(proof_data.is_regulated);
+        assert_eq!(proof_data.indexed_leaf.value, asset_id.0);
+        assert_eq!(proof_data.position, 1); // First after sentinel
+        assert_eq!(proof_data.auth_path.layers.len(), 16);
+
+        // Verify the path
+        let tree = state.get_asset_imt().await.unwrap();
+        let root = tree.root();
+        assert!(IndexedMerkleTree::verify_auth_path(
+            proof_data.position,
+            &proof_data.indexed_leaf,
+            &tree.auth_path(proof_data.position).unwrap(),
+            root,
+            tree.depth()
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_imt_get_proof_data_unregulated() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        // Register one asset
+        let regulated_asset = asset::Id(Fq::from(100u64));
+        state
+            .register_regulated_asset(regulated_asset)
+            .await
+            .unwrap();
+
+        // Get proof for unregistered asset (should be non-membership proof)
+        let unregulated_asset = asset::Id(Fq::from(50u64));
+        let proof_data = state.get_asset_proof_data(unregulated_asset).await.unwrap();
+
+        assert!(!proof_data.is_regulated);
+        // The low leaf should be the sentinel (value=0)
+        assert_eq!(proof_data.indexed_leaf.value, Fq::from(0u64));
+        assert_eq!(proof_data.position, 0); // Sentinel position
+
+        // Verify the unregulated asset falls in the gap
+        assert!(proof_data.indexed_leaf.value < unregulated_asset.0);
+        assert!(unregulated_asset.0 < proof_data.indexed_leaf.next_value);
+    }
+
+    #[tokio::test]
+    async fn test_imt_multiple_regulated_assets() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        // Register multiple assets in non-sorted order
+        let assets = [
+            asset::Id(Fq::from(500u64)),
+            asset::Id(Fq::from(100u64)),
+            asset::Id(Fq::from(300u64)),
+        ];
+
+        for asset_id in &assets {
+            state.register_regulated_asset(*asset_id).await.unwrap();
+        }
+
+        let tree = state.get_asset_imt().await.unwrap();
+        assert_eq!(tree.leaf_count(), 4); // sentinel + 3 assets
+
+        // All should have valid membership proofs
+        for asset_id in &assets {
+            let proof_data = state.get_asset_proof_data(*asset_id).await.unwrap();
+            assert!(proof_data.is_regulated);
+            assert_eq!(proof_data.indexed_leaf.value, asset_id.0);
+        }
+
+        // An unregistered asset in a gap should have non-membership proof
+        let unregistered = asset::Id(Fq::from(200u64)); // Between 100 and 300
+        let proof_data = state.get_asset_proof_data(unregistered).await.unwrap();
+        assert!(!proof_data.is_regulated);
+        // Low leaf should be the one with value=100
+        assert_eq!(proof_data.indexed_leaf.value, Fq::from(100u64));
+    }
+
+    // ========== Historical Anchor Tests ==========
+
+    #[tokio::test]
+    async fn test_record_and_validate_anchors() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+        let mut rng = rand::thread_rng();
+
+        // Set block height first (required for validation)
+        state.put_block_height(1);
+
+        // Add a user and asset
+        let leaf = ComplianceLeaf {
+            address: Address::dummy(&mut rng),
+            key: AddressComplianceKey::new(decaf377::Element::GENERATOR),
+            asset_id: asset::Id(Fq::from(100u64)),
+        };
+        state.add_compliance_leaf(leaf).await.unwrap();
+        state
+            .register_regulated_asset(asset::Id(Fq::from(200u64)))
+            .await
+            .unwrap();
+
+        // Record anchors at height 1
+        state.record_compliance_anchors(1).await.unwrap();
+
+        // Get the anchors
+        let user_anchor = state.get_user_tree_root().await.unwrap();
+        let asset_anchor = state.get_asset_imt_root().await.unwrap();
+
+        // Validation should succeed
+        state
+            .validate_compliance_anchors(&user_anchor, &asset_anchor)
+            .await
+            .unwrap();
+
+        // Can retrieve by height
+        let user_anchor_by_height = state.get_user_anchor_by_height(1).await.unwrap().unwrap();
+        let asset_anchor_by_height = state.get_asset_anchor_by_height(1).await.unwrap().unwrap();
+        assert_eq!(user_anchor.0, user_anchor_by_height.0);
+        assert_eq!(asset_anchor.0, asset_anchor_by_height.0);
+
+        // Can check via lookup
+        let user_height = state.check_user_anchor(&user_anchor).await.unwrap();
+        let asset_height = state.check_asset_anchor(&asset_anchor).await.unwrap();
+        assert_eq!(user_height, Some(1));
+        assert_eq!(asset_height, Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_invalid_anchor_rejected() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        // Set block height first (required for validation)
+        state.put_block_height(1);
+
+        // Record initial anchors
+        state.record_compliance_anchors(1).await.unwrap();
+
+        let valid_user_anchor = state.get_user_tree_root().await.unwrap();
+        let valid_asset_anchor = state.get_asset_imt_root().await.unwrap();
+
+        // Create invalid anchors
+        let invalid_user_anchor = StateCommitment(Fq::from(12345u64));
+        let invalid_asset_anchor = StateCommitment(Fq::from(67890u64));
+
+        // Valid anchors should pass
+        assert!(state
+            .validate_compliance_anchors(&valid_user_anchor, &valid_asset_anchor)
+            .await
+            .is_ok());
+
+        // Invalid user anchor should fail
+        assert!(state
+            .validate_compliance_anchors(&invalid_user_anchor, &valid_asset_anchor)
+            .await
+            .is_err());
+
+        // Invalid asset anchor should fail
+        assert!(state
+            .validate_compliance_anchors(&valid_user_anchor, &invalid_asset_anchor)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_historical_anchors_preserved() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+        let mut rng = rand::thread_rng();
+
+        // Set initial block height and record anchors at height 1 (empty state)
+        state.put_block_height(1);
+        state.record_compliance_anchors(1).await.unwrap();
+        let anchor_at_1 = state.get_user_tree_root().await.unwrap();
+
+        // Add a user and record at height 2
+        state.put_block_height(2);
+        let leaf = ComplianceLeaf {
+            address: Address::dummy(&mut rng),
+            key: AddressComplianceKey::new(decaf377::Element::GENERATOR),
+            asset_id: asset::Id(Fq::from(100u64)),
+        };
+        state.add_compliance_leaf(leaf).await.unwrap();
+        state.record_compliance_anchors(2).await.unwrap();
+        let anchor_at_2 = state.get_user_tree_root().await.unwrap();
+
+        // Both anchors should be different
+        assert_ne!(anchor_at_1.0, anchor_at_2.0);
+
+        // Both should be valid (current height is 2, both anchors within window)
+        let asset_anchor = state.get_asset_imt_root().await.unwrap();
+        assert!(state
+            .validate_compliance_anchors(&anchor_at_1, &asset_anchor)
+            .await
+            .is_ok());
+        assert!(state
+            .validate_compliance_anchors(&anchor_at_2, &asset_anchor)
+            .await
+            .is_ok());
+
+        // Can retrieve both by height
+        assert_eq!(
+            state.get_user_anchor_by_height(1).await.unwrap().unwrap().0,
+            anchor_at_1.0
+        );
+        assert_eq!(
+            state.get_user_anchor_by_height(2).await.unwrap().unwrap().0,
+            anchor_at_2.0
+        );
+    }
+
+    // ========== Bounded Anchor Window Tests (Phase 7) ==========
+
+    #[tokio::test]
+    async fn test_anchor_too_old_rejected() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+        let mut rng = rand::thread_rng();
+
+        // Set initial height and record anchor
+        state.put_block_height(1);
+        state.record_compliance_anchors(1).await.unwrap();
+        let old_user_anchor = state.get_user_tree_root().await.unwrap();
+        let old_asset_anchor = state.get_asset_imt_root().await.unwrap();
+
+        // Add something to change the tree roots (so old anchors remain distinct)
+        let leaf = ComplianceLeaf {
+            address: Address::dummy(&mut rng),
+            key: AddressComplianceKey::new(decaf377::Element::GENERATOR),
+            asset_id: asset::Id(Fq::from(9999u64)),
+        };
+        state.add_compliance_leaf(leaf).await.unwrap();
+
+        // Advance to height just past the window (MAX_ANCHOR_AGE_BLOCKS + 2)
+        let new_height = 1 + MAX_ANCHOR_AGE_BLOCKS + 1;
+        state.put_block_height(new_height);
+        state.record_compliance_anchors(new_height).await.unwrap();
+
+        // New anchors should be different
+        let new_user_anchor = state.get_user_tree_root().await.unwrap();
+        assert_ne!(
+            old_user_anchor.0, new_user_anchor.0,
+            "Anchors should differ after adding leaf"
+        );
+
+        // Validation of old anchors should fail (they're too old)
+        let result = state
+            .validate_compliance_anchors(&old_user_anchor, &old_asset_anchor)
+            .await;
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("too old"),
+            "Error should mention 'too old': {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_anchor_within_window_accepted() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        // Set initial height and record anchor
+        state.put_block_height(1);
+        state.record_compliance_anchors(1).await.unwrap();
+        let user_anchor = state.get_user_tree_root().await.unwrap();
+        let asset_anchor = state.get_asset_imt_root().await.unwrap();
+
+        // Advance to height within the window (MAX_ANCHOR_AGE_BLOCKS / 2)
+        let new_height = 1 + MAX_ANCHOR_AGE_BLOCKS / 2;
+        state.put_block_height(new_height);
+        state.record_compliance_anchors(new_height).await.unwrap();
+
+        // Validation of old anchors should succeed (within window)
+        let result = state
+            .validate_compliance_anchors(&user_anchor, &asset_anchor)
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "Anchors within window should be valid: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_genesis_anchor_attack_prevented() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        // Genesis: IMT is empty, record anchor at height 0
+        state.put_block_height(0);
+        state.record_compliance_anchors(0).await.unwrap();
+        let genesis_user_anchor = state.get_user_tree_root().await.unwrap();
+        let genesis_asset_anchor = state.get_asset_imt_root().await.unwrap();
+
+        // Register USDC as regulated at height 100
+        state.put_block_height(100);
+        let usdc_id = asset::Id(Fq::from(12345u64));
+        state.register_regulated_asset(usdc_id).await.unwrap();
+        state.record_compliance_anchors(100).await.unwrap();
+
+        // The asset IMT root should have changed
+        let new_asset_anchor = state.get_asset_imt_root().await.unwrap();
+        assert_ne!(
+            genesis_asset_anchor.0, new_asset_anchor.0,
+            "IMT root should change after registration"
+        );
+
+        // Advance to height past the window (genesis anchor now too old)
+        let attack_height = MAX_ANCHOR_AGE_BLOCKS + 1;
+        state.put_block_height(attack_height);
+        state
+            .record_compliance_anchors(attack_height)
+            .await
+            .unwrap();
+
+        // Attempt to use genesis anchor for USDC non-membership proof
+        // This is the "genesis anchor attack" - should FAIL
+        let result = state
+            .validate_compliance_anchors(&genesis_user_anchor, &genesis_asset_anchor)
+            .await;
+
+        // Should fail because genesis anchor is > MAX_ANCHOR_AGE_BLOCKS blocks old
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("too old"),
+            "Genesis anchor attack should be prevented: {}",
+            err_msg
+        );
+
+        // But a recent anchor should still work
+        let recent_user_anchor = state.get_user_tree_root().await.unwrap();
+        let recent_asset_anchor = state.get_asset_imt_root().await.unwrap();
+        assert!(state
+            .validate_compliance_anchors(&recent_user_anchor, &recent_asset_anchor)
+            .await
+            .is_ok());
     }
 }

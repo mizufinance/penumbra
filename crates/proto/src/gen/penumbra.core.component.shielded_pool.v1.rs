@@ -582,6 +582,20 @@ pub struct SpendPlan {
     pub asset_anchor: ::core::option::Option<
         super::super::super::super::crypto::tct::v1::StateCommitment,
     >,
+    /// Compliance Merkle path for proving user is in the compliance registry.
+    #[prost(message, optional, tag = "17")]
+    pub compliance_path: ::core::option::Option<
+        super::super::compliance::v1::MerklePath,
+    >,
+    /// Position of the user's compliance leaf in the compliance tree.
+    #[prost(uint64, tag = "18")]
+    pub compliance_position: u64,
+    /// Asset Merkle path for proving asset is in the asset registry.
+    #[prost(message, optional, tag = "19")]
+    pub asset_path: ::core::option::Option<super::super::compliance::v1::MerklePath>,
+    /// Position of the asset in the asset registry tree.
+    #[prost(uint64, tag = "20")]
+    pub asset_position: u64,
 }
 impl ::prost::Name for SpendPlan {
     const NAME: &'static str = "SpendPlan";
@@ -793,6 +807,20 @@ pub struct OutputPlan {
     pub asset_anchor: ::core::option::Option<
         super::super::super::super::crypto::tct::v1::StateCommitment,
     >,
+    /// Compliance Merkle path for proving user is in the compliance registry.
+    #[prost(message, optional, tag = "17")]
+    pub compliance_path: ::core::option::Option<
+        super::super::compliance::v1::MerklePath,
+    >,
+    /// Position of the user's compliance leaf in the compliance tree.
+    #[prost(uint64, tag = "18")]
+    pub compliance_position: u64,
+    /// Asset Merkle path for proving asset is in the asset registry.
+    #[prost(message, optional, tag = "19")]
+    pub asset_path: ::core::option::Option<super::super::compliance::v1::MerklePath>,
+    /// Position of the asset in the asset registry tree.
+    #[prost(uint64, tag = "20")]
+    pub asset_position: u64,
 }
 impl ::prost::Name for OutputPlan {
     const NAME: &'static str = "OutputPlan";

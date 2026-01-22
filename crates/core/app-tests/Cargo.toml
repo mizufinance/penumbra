@@ -153,6 +153,10 @@ features = [
 name = "compliance_full_flow"
 path = "tests/compliance_full_flow.rs"
 
+[[test]]
+name = "compliance_action_blocking"
+path = "tests/compliance_action_blocking.rs"
+
 # Tests that don't use SpendPlan/OutputPlan (no compliance anchor needed):
 [[test]]
 name = "app_blocktimes_increment"
@@ -174,20 +178,84 @@ path = "tests/mock_consensus_can_define_a_genesis_validator.rs"
 name = "mock_consensus_can_send_a_sequence_of_empty_blocks"
 path = "tests/mock_consensus_can_send_a_sequence_of_empty_blocks.rs"
 
-# TODO: Tests excluded until updated for compliance anchors:
-# - app_can_define_and_delegate_to_a_validator.rs
-# - app_can_deposit_into_community_pool.rs
-# - app_can_disable_community_pool_spends.rs
-# - app_can_propose_community_pool_spends.rs
-# - app_can_spend_notes_and_detect_outputs.rs
-# - app_can_sweep_a_collection_of_small_notes.rs
-# - app_can_undelegate_from_a_validator.rs
-# - app_check_dex_vcb.rs
-# - app_rejects_validator_definitions_with_invalid_auth_sigs.rs
-# - app_reproduce_testnet_75_vcb_close.rs
-# - app_tracks_uptime_for_validators_only_once_active.rs
-# - ics23_transfer.rs
-# - mock_consensus_block_proving.rs
-# - spend.rs
-# - swap_and_swap_claim.rs
-# - view_server_can_be_served_on_localhost.rs
+# Tests updated to use MockClient::witness_auth_build_with_compliance:
+[[test]]
+name = "app_can_spend_notes_and_detect_outputs"
+path = "tests/app_can_spend_notes_and_detect_outputs.rs"
+
+# Tests without SpendPlan/OutputPlan (no compliance needed):
+[[test]]
+name = "app_rejects_validator_definitions_with_invalid_auth_sigs"
+path = "tests/app_rejects_validator_definitions_with_invalid_auth_sigs.rs"
+
+# IBC proof verification test (uses IbcRelay action, not regulated):
+[[test]]
+name = "mock_consensus_block_proving"
+path = "tests/mock_consensus_block_proving.rs"
+
+# Tests updated to use compliance registration + witness_auth_build_with_compliance:
+[[test]]
+name = "app_can_deposit_into_community_pool"
+path = "tests/app_can_deposit_into_community_pool.rs"
+
+[[test]]
+name = "app_can_define_and_delegate_to_a_validator"
+path = "tests/app_can_define_and_delegate_to_a_validator.rs"
+
+[[test]]
+name = "app_can_disable_community_pool_spends"
+path = "tests/app_can_disable_community_pool_spends.rs"
+
+[[test]]
+name = "app_can_propose_community_pool_spends"
+path = "tests/app_can_propose_community_pool_spends.rs"
+
+# DEX tests (Swap doesn't have compliance proofs, just action blocking for regulated assets):
+[[test]]
+name = "app_check_dex_vcb"
+path = "tests/app_check_dex_vcb.rs"
+
+[[test]]
+name = "swap_and_swap_claim"
+path = "tests/swap_and_swap_claim.rs"
+
+[[test]]
+name = "app_can_undelegate_from_a_validator"
+path = "tests/app_can_undelegate_from_a_validator.rs"
+
+[[test]]
+name = "app_reproduce_testnet_75_vcb_close"
+path = "tests/app_reproduce_testnet_75_vcb_close.rs"
+
+[[test]]
+name = "app_tracks_uptime_for_validators_only_once_active"
+path = "tests/app_tracks_uptime_for_validators_only_once_active.rs"
+
+# IBC transfer test with compliance setup:
+[[test]]
+name = "ics23_transfer"
+path = "tests/ics23_transfer.rs"
+
+# Spend action handler test with compliance:
+[[test]]
+name = "spend"
+path = "tests/spend.rs"
+
+# Tests using Planner (now with compliance setup):
+[[test]]
+name = "view_server_can_be_served_on_localhost"
+path = "tests/view_server_can_be_served_on_localhost.rs"
+
+[[test]]
+name = "app_can_sweep_a_collection_of_small_notes"
+path = "tests/app_can_sweep_a_collection_of_small_notes.rs"
+
+# Test for diversifier fix in compliance enrichment:
+[[test]]
+name = "compliance_diversifier_fix"
+path = "tests/compliance_diversifier_fix.rs"
+
+# Test for multi-spend batched compliance enrichment:
+[[test]]
+name = "compliance_multi_spend_planner"
+path = "tests/compliance_multi_spend_planner.rs"

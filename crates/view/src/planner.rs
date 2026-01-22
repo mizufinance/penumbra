@@ -11,7 +11,10 @@ use rand::{CryptoRng, RngCore};
 use rand_core::OsRng;
 use tracing::instrument;
 
-use crate::{SpendableNoteRecord, ViewClient, ViewClientComplianceExt};
+use crate::{
+    client_compliance::{enrich_plan_with_compliance, ViewClientComplianceProvider},
+    SpendableNoteRecord, ViewClient,
+};
 use anyhow::anyhow;
 use penumbra_sdk_asset::{
     asset::{self, Denom},
@@ -574,262 +577,21 @@ impl<R: RngCore + CryptoRng> Planner<R> {
     ///
     /// This ensures all transfers look identical on-chain regardless of regulation status.
     ///
-    /// # Limitations
-    /// - Multi-spend transactions are not yet supported
-    async fn enrich_with_compliance<V: ViewClient + ?Sized>(
+    /// Uses the shared `enrich_plan_with_compliance` function with a ViewClient provider.
+    /// This correctly handles multi-asset transactions (e.g., delegation) by using
+    /// canonical binding assets for cross-action leaf binding.
+    async fn enrich_with_compliance<V: ViewClient + Send + ?Sized>(
         &mut self,
         view: &mut V,
         plan: &mut TransactionPlan,
     ) -> Result<()> {
-        use penumbra_sdk_compliance::{ComplianceLeaf, MerklePath, BLACK_HOLE_ACK};
-        use penumbra_sdk_keys::keys::AddressComplianceKey;
-        use penumbra_sdk_transaction::plan::ActionPlan;
-
-        // First pass: collect indices and check for multi-spend
-        let mut spend_indices = Vec::new();
-        let mut output_indices = Vec::new();
-
-        for (i, action) in plan.actions.iter().enumerate() {
-            match action {
-                ActionPlan::Spend(_) => spend_indices.push(i),
-                ActionPlan::Output(_) => output_indices.push(i),
-                _ => {}
-            }
-        }
-
-        // Need at least one spend and one output for compliance
-        if spend_indices.is_empty() || output_indices.is_empty() {
-            return Ok(());
-        }
-
-        // Multi-spend not yet supported
-        if spend_indices.len() > 1 {
-            tracing::debug!("Multi-spend transaction detected, skipping compliance enrichment");
-            return Ok(());
-        }
-
-        // Get the spend info (we know there's exactly one)
-        let spend_idx = spend_indices[0];
-        let (asset_id, sender_address) = {
-            let ActionPlan::Spend(spend) = &plan.actions[spend_idx] else {
-                unreachable!()
-            };
-            (spend.note.asset_id(), spend.note.address())
-        };
-
-        // Fetch the sender's compliance Merkle proofs from the chain
-        // This includes paths, positions, anchors, and regulation status
-        let sender_proofs = view
-            .get_compliance_merkle_proofs(sender_address.clone(), asset_id)
-            .await?;
-
-        // Check if asset is registered in the compliance registry
-        if !sender_proofs.asset_registered {
-            return Err(anyhow!(
-                "Asset {:?} is not registered in the compliance registry. \
-                Asset issuers must register assets with 'register-asset --regulated' or '--unregulated' before transfers.",
-                asset_id
-            ));
-        }
-
-        let is_regulated = sender_proofs.is_regulated;
-        tracing::debug!(
-            ?asset_id,
-            is_regulated,
-            "Asset regulation status from chain"
-        );
-
-        // Extract anchors from the proofs (they're the same for all users)
-        let compliance_anchor = sender_proofs.compliance_anchor;
-        let asset_anchor = sender_proofs.asset_anchor;
-        tracing::debug!(
-            ?compliance_anchor,
-            ?asset_anchor,
-            "Fetched compliance anchors from chain"
-        );
-
-        // For unregulated assets, we create synthetic leaves with BLACK_HOLE_ACK
-        // For regulated assets, we fetch real leaves from the registry
-        let black_hole_ack = AddressComplianceKey::new(*BLACK_HOLE_ACK);
-
-        // Create a helper to get the appropriate leaf for an address
-        let get_leaf_for_address = |address: &Address, is_regulated: bool| -> ComplianceLeaf {
-            if is_regulated {
-                // Will be replaced with actual fetch below
-                unreachable!("regulated path handled separately")
-            } else {
-                // For unregulated: synthetic leaf with BLACK_HOLE_ACK
-                ComplianceLeaf {
-                    address: address.clone(),
-                    key: black_hole_ack.clone(),
-                    asset_id,
-                }
-            }
-        };
-
-        // Get sender's leaf (real for regulated, synthetic for unregulated)
-        let sender_leaf = if is_regulated {
-            view.get_compliance_leaf(sender_address.clone(), asset_id)
-                .await?
-        } else {
-            get_leaf_for_address(&sender_address, false)
-        };
-
-        // Find the "primary" output (non-change, i.e., different address from sender)
-        // to use as counterparty for the spend
-        let mut primary_output_idx = None;
-        for &idx in &output_indices {
-            let ActionPlan::Output(output) = &plan.actions[idx] else {
-                continue;
-            };
-            if output.value.asset_id == asset_id && output.dest_address != sender_address {
-                primary_output_idx = Some(idx);
-                break;
-            }
-        }
-
-        // If no primary output found, use the first output with matching asset
-        let primary_output_idx = primary_output_idx.unwrap_or_else(|| {
-            output_indices
-                .iter()
-                .copied()
-                .find(|&idx| {
-                    let ActionPlan::Output(output) = &plan.actions[idx] else {
-                        return false;
-                    };
-                    output.value.asset_id == asset_id
-                })
-                .unwrap_or(output_indices[0])
-        });
-
-        // Get primary recipient info for spend's counterparty
-        let primary_recipient_address = {
-            let ActionPlan::Output(output) = &plan.actions[primary_output_idx] else {
-                unreachable!()
-            };
-            output.dest_address.clone()
-        };
-
-        // Get primary recipient's leaf
-        let primary_recipient_leaf = if is_regulated {
-            view.get_compliance_leaf(primary_recipient_address.clone(), asset_id)
-                .await?
-        } else {
-            get_leaf_for_address(&primary_recipient_address, false)
-        };
-
-        // Set compliance details on the spend
-        {
-            let ActionPlan::Spend(spend) = &mut plan.actions[spend_idx] else {
-                unreachable!()
-            };
-            spend.set_compliance_details(
-                &mut self.rng,
-                &sender_leaf.key,
-                &sender_address,
-                is_regulated,
-                &primary_recipient_address,
-                primary_recipient_leaf.clone(),
-            )?;
-            // Set the compliance anchors (always use real anchors from chain)
-            spend.compliance_anchor = compliance_anchor;
-            spend.asset_anchor = asset_anchor;
-
-            // For regulated: use real Merkle paths from chain
-            // For unregulated: use dummy paths (circuit won't verify them)
-            if is_regulated {
-                spend.compliance_path = sender_proofs.compliance_path.clone();
-                spend.compliance_position = sender_proofs.compliance_position;
-            } else {
-                // Dummy compliance path - circuit skips verification for unregulated
-                spend.compliance_path = MerklePath::default();
-                spend.compliance_position = 0;
-            }
-            // Asset path is always real (proves asset's regulation status)
-            spend.asset_path = sender_proofs.asset_path.clone();
-            spend.asset_position = sender_proofs.asset_position;
-        }
-
-        // Get the tx_blinding_nonce from the spend to share with all outputs
-        let tx_blinding_nonce = {
-            let ActionPlan::Spend(spend) = &plan.actions[spend_idx] else {
-                unreachable!()
-            };
-            spend.tx_blinding_nonce
-        };
-
-        // Set compliance details on ALL outputs with matching asset
-        for &idx in &output_indices {
-            let ActionPlan::Output(output) = &mut plan.actions[idx] else {
-                continue;
-            };
-
-            // Skip outputs with different asset
-            if output.value.asset_id != asset_id {
-                continue;
-            }
-
-            let recipient_address = output.dest_address.clone();
-
-            // Get recipient's leaf and proofs
-            let (recipient_leaf, recipient_compliance_path, recipient_compliance_position) =
-                if is_regulated {
-                    let proofs = view
-                        .get_compliance_merkle_proofs(recipient_address.clone(), asset_id)
-                        .await?;
-                    let leaf = view
-                        .get_compliance_leaf(recipient_address.clone(), asset_id)
-                        .await?;
-                    (leaf, proofs.compliance_path, proofs.compliance_position)
-                } else {
-                    // For unregulated: synthetic leaf and dummy path
-                    let leaf = get_leaf_for_address(&recipient_address, false);
-                    (leaf, MerklePath::default(), 0u64)
-                };
-
-            // Set compliance details on this output
-            // Counterparty is always the sender (for both destination and change outputs)
-            output.set_compliance_details(
-                &mut self.rng,
-                &recipient_leaf.key,
-                is_regulated,
-                &sender_address,
-                sender_leaf.clone(),
-                tx_blinding_nonce,
-            )?;
-            // Set the compliance anchors (always use real anchors from chain)
-            output.compliance_anchor = compliance_anchor;
-            output.asset_anchor = asset_anchor;
-
-            // For regulated: use real Merkle paths
-            // For unregulated: use dummy paths (circuit skips verification)
-            output.compliance_path = recipient_compliance_path;
-            output.compliance_position = recipient_compliance_position;
-            // Asset path is always real (from sender's proofs - same for all)
-            output.asset_path = sender_proofs.asset_path.clone();
-            output.asset_position = sender_proofs.asset_position;
-
-            tracing::debug!(
-                "Enriched output {} with compliance details (recipient: {:?}, regulated: {})",
-                idx,
-                recipient_address,
-                is_regulated
-            );
-        }
-
-        tracing::debug!(
-            "Successfully enriched transaction with compliance details for asset {:?} (regulated: {}, {} outputs)",
-            asset_id,
-            is_regulated,
-            output_indices.len()
-        );
-
-        Ok(())
+        let provider = ViewClientComplianceProvider::new(view);
+        enrich_plan_with_compliance(plan, &provider, &mut self.rng).await
     }
 
     /// Add spends and change outputs as required to balance the transaction, using the view service
     /// provided to supply the notes and other information.
-    pub async fn plan<V: ViewClient + ?Sized>(
+    pub async fn plan<V: ViewClient + Send + ?Sized>(
         &mut self,
         view: &mut V,
         mut source: AddressIndex,
@@ -1012,6 +774,41 @@ mod tests {
             _asset_id: asset::Id,
         ) -> Pin<Box<dyn Future<Output = Result<Option<bool>>> + Send + 'static>> {
             async move { Ok(Some(true)) }.boxed()
+        }
+
+        fn compliance_batch_merkle_proofs(
+            &mut self,
+            queries: Vec<(Address, asset::Id)>,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<pb::ComplianceBatchMerkleProofsResponse>>
+                    + Send
+                    + 'static,
+            >,
+        > {
+            // Return mock batch proofs indicating all users are registered and assets are regulated
+            let results = queries
+                .into_iter()
+                .map(|_| pb::ComplianceMerkleProofsResponse {
+                    user_registered: true,
+                    asset_registered: true,
+                    is_regulated: true,
+                    compliance_path: None,
+                    compliance_position: 0,
+                    asset_path: None,
+                    asset_position: 0,
+                    compliance_anchor: vec![0u8; 32],
+                    asset_anchor: vec![0u8; 32],
+                })
+                .collect();
+            async move {
+                Ok(pb::ComplianceBatchMerkleProofsResponse {
+                    compliance_anchor: vec![0u8; 32],
+                    asset_anchor: vec![0u8; 32],
+                    results,
+                })
+            }
+            .boxed()
         }
 
         // Stub implementations for other required methods
@@ -1377,6 +1174,41 @@ mod tests {
             _asset_id: asset::Id,
         ) -> Pin<Box<dyn Future<Output = Result<Option<bool>>> + Send + 'static>> {
             async move { Ok(Some(false)) }.boxed()
+        }
+
+        fn compliance_batch_merkle_proofs(
+            &mut self,
+            queries: Vec<(Address, asset::Id)>,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<pb::ComplianceBatchMerkleProofsResponse>>
+                    + Send
+                    + 'static,
+            >,
+        > {
+            // Return mock batch proofs indicating all users are registered but assets are unregulated
+            let results = queries
+                .into_iter()
+                .map(|_| pb::ComplianceMerkleProofsResponse {
+                    user_registered: true,
+                    asset_registered: true,
+                    is_regulated: false,
+                    compliance_path: None,
+                    compliance_position: 0,
+                    asset_path: None,
+                    asset_position: 0,
+                    compliance_anchor: vec![0u8; 32],
+                    asset_anchor: vec![0u8; 32],
+                })
+                .collect();
+            async move {
+                Ok(pb::ComplianceBatchMerkleProofsResponse {
+                    compliance_anchor: vec![0u8; 32],
+                    asset_anchor: vec![0u8; 32],
+                    results,
+                })
+            }
+            .boxed()
         }
 
         // Stub implementations (same as above)

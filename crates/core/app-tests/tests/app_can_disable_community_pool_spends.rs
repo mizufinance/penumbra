@@ -152,7 +152,7 @@ async fn app_can_disable_community_pool_spends() -> anyhow::Result<()> {
         .try_into()
         .map_err(|validator| anyhow::anyhow!("expected one validator, got: {validator:?}"))?;
 
-    // Sync the mock client, using the test wallet's spend key, to the latest snapshot.
+    // Sync the mock client to the latest state.
     let client = MockClient::new(test_keys::SPEND_KEY.clone())
         .with_sync_to_storage(&storage)
         .await?
@@ -167,7 +167,7 @@ async fn app_can_disable_community_pool_spends() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow!("mock client had no note"))?;
 
     // Create a community pool transaction.
-    let plan = {
+    let mut plan = {
         let value = note.value();
         let spend = SpendPlan::new(
             &mut OsRng,
@@ -188,9 +188,11 @@ async fn app_can_disable_community_pool_spends() -> anyhow::Result<()> {
                 ..Default::default()
             },
         }
-        .with_populated_detection_data(OsRng, Default::default())
     };
-    let tx = client.witness_auth_build(&plan).await?;
+    plan.populate_detection_data(OsRng, Default::default());
+    let tx = client
+        .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
+        .await?;
 
     // Execute the transaction, applying it to the chain state.
     test_node
@@ -203,7 +205,7 @@ async fn app_can_disable_community_pool_spends() -> anyhow::Result<()> {
 
     // Now, make a governance proposal that we should spend community pool funds, to return
     // the note back to the test wallet.
-    let plan = {
+    let mut plan = {
         let value = note.value();
         let proposed_tx_plan = TransactionPlan {
             actions: vec![
@@ -257,9 +259,11 @@ async fn app_can_disable_community_pool_spends() -> anyhow::Result<()> {
                 ..Default::default()
             },
         }
-        .with_populated_detection_data(OsRng, Default::default())
     };
-    let tx = client.witness_auth_build(&plan).await?;
+    plan.populate_detection_data(OsRng, Default::default());
+    let tx = client
+        .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
+        .await?;
 
     // Execute the transaction, applying it to the chain state.
     test_node

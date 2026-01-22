@@ -3175,6 +3175,18 @@ impl serde::Serialize for OutputPlan {
         if self.asset_anchor.is_some() {
             len += 1;
         }
+        if self.compliance_path.is_some() {
+            len += 1;
+        }
+        if self.compliance_position != 0 {
+            len += 1;
+        }
+        if self.asset_path.is_some() {
+            len += 1;
+        }
+        if self.asset_position != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.OutputPlan", len)?;
         if let Some(v) = self.value.as_ref() {
             struct_ser.serialize_field("value", v)?;
@@ -3240,6 +3252,22 @@ impl serde::Serialize for OutputPlan {
         if let Some(v) = self.asset_anchor.as_ref() {
             struct_ser.serialize_field("assetAnchor", v)?;
         }
+        if let Some(v) = self.compliance_path.as_ref() {
+            struct_ser.serialize_field("compliancePath", v)?;
+        }
+        if self.compliance_position != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("compliancePosition", ToString::to_string(&self.compliance_position).as_str())?;
+        }
+        if let Some(v) = self.asset_path.as_ref() {
+            struct_ser.serialize_field("assetPath", v)?;
+        }
+        if self.asset_position != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("assetPosition", ToString::to_string(&self.asset_position).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -3280,6 +3308,14 @@ impl<'de> serde::Deserialize<'de> for OutputPlan {
             "complianceAnchor",
             "asset_anchor",
             "assetAnchor",
+            "compliance_path",
+            "compliancePath",
+            "compliance_position",
+            "compliancePosition",
+            "asset_path",
+            "assetPath",
+            "asset_position",
+            "assetPosition",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -3300,6 +3336,10 @@ impl<'de> serde::Deserialize<'de> for OutputPlan {
             TxBlindingNonce,
             ComplianceAnchor,
             AssetAnchor,
+            CompliancePath,
+            CompliancePosition,
+            AssetPath,
+            AssetPosition,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -3338,6 +3378,10 @@ impl<'de> serde::Deserialize<'de> for OutputPlan {
                             "txBlindingNonce" | "tx_blinding_nonce" => Ok(GeneratedField::TxBlindingNonce),
                             "complianceAnchor" | "compliance_anchor" => Ok(GeneratedField::ComplianceAnchor),
                             "assetAnchor" | "asset_anchor" => Ok(GeneratedField::AssetAnchor),
+                            "compliancePath" | "compliance_path" => Ok(GeneratedField::CompliancePath),
+                            "compliancePosition" | "compliance_position" => Ok(GeneratedField::CompliancePosition),
+                            "assetPath" | "asset_path" => Ok(GeneratedField::AssetPath),
+                            "assetPosition" | "asset_position" => Ok(GeneratedField::AssetPosition),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -3373,6 +3417,10 @@ impl<'de> serde::Deserialize<'de> for OutputPlan {
                 let mut tx_blinding_nonce__ = None;
                 let mut compliance_anchor__ = None;
                 let mut asset_anchor__ = None;
+                let mut compliance_path__ = None;
+                let mut compliance_position__ = None;
+                let mut asset_path__ = None;
+                let mut asset_position__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Value => {
@@ -3487,6 +3535,34 @@ impl<'de> serde::Deserialize<'de> for OutputPlan {
                             }
                             asset_anchor__ = map_.next_value()?;
                         }
+                        GeneratedField::CompliancePath => {
+                            if compliance_path__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compliancePath"));
+                            }
+                            compliance_path__ = map_.next_value()?;
+                        }
+                        GeneratedField::CompliancePosition => {
+                            if compliance_position__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compliancePosition"));
+                            }
+                            compliance_position__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::AssetPath => {
+                            if asset_path__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetPath"));
+                            }
+                            asset_path__ = map_.next_value()?;
+                        }
+                        GeneratedField::AssetPosition => {
+                            if asset_position__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetPosition"));
+                            }
+                            asset_position__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -3509,6 +3585,10 @@ impl<'de> serde::Deserialize<'de> for OutputPlan {
                     tx_blinding_nonce: tx_blinding_nonce__.unwrap_or_default(),
                     compliance_anchor: compliance_anchor__,
                     asset_anchor: asset_anchor__,
+                    compliance_path: compliance_path__,
+                    compliance_position: compliance_position__.unwrap_or_default(),
+                    asset_path: asset_path__,
+                    asset_position: asset_position__.unwrap_or_default(),
                 })
             }
         }
@@ -4421,6 +4501,18 @@ impl serde::Serialize for SpendPlan {
         if self.asset_anchor.is_some() {
             len += 1;
         }
+        if self.compliance_path.is_some() {
+            len += 1;
+        }
+        if self.compliance_position != 0 {
+            len += 1;
+        }
+        if self.asset_path.is_some() {
+            len += 1;
+        }
+        if self.asset_position != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.SpendPlan", len)?;
         if let Some(v) = self.note.as_ref() {
             struct_ser.serialize_field("note", v)?;
@@ -4488,6 +4580,22 @@ impl serde::Serialize for SpendPlan {
         if let Some(v) = self.asset_anchor.as_ref() {
             struct_ser.serialize_field("assetAnchor", v)?;
         }
+        if let Some(v) = self.compliance_path.as_ref() {
+            struct_ser.serialize_field("compliancePath", v)?;
+        }
+        if self.compliance_position != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("compliancePosition", ToString::to_string(&self.compliance_position).as_str())?;
+        }
+        if let Some(v) = self.asset_path.as_ref() {
+            struct_ser.serialize_field("assetPath", v)?;
+        }
+        if self.asset_position != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("assetPosition", ToString::to_string(&self.asset_position).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -4527,6 +4635,14 @@ impl<'de> serde::Deserialize<'de> for SpendPlan {
             "complianceAnchor",
             "asset_anchor",
             "assetAnchor",
+            "compliance_path",
+            "compliancePath",
+            "compliance_position",
+            "compliancePosition",
+            "asset_path",
+            "assetPath",
+            "asset_position",
+            "assetPosition",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4547,6 +4663,10 @@ impl<'de> serde::Deserialize<'de> for SpendPlan {
             TxBlindingNonce,
             ComplianceAnchor,
             AssetAnchor,
+            CompliancePath,
+            CompliancePosition,
+            AssetPath,
+            AssetPosition,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -4585,6 +4705,10 @@ impl<'de> serde::Deserialize<'de> for SpendPlan {
                             "txBlindingNonce" | "tx_blinding_nonce" => Ok(GeneratedField::TxBlindingNonce),
                             "complianceAnchor" | "compliance_anchor" => Ok(GeneratedField::ComplianceAnchor),
                             "assetAnchor" | "asset_anchor" => Ok(GeneratedField::AssetAnchor),
+                            "compliancePath" | "compliance_path" => Ok(GeneratedField::CompliancePath),
+                            "compliancePosition" | "compliance_position" => Ok(GeneratedField::CompliancePosition),
+                            "assetPath" | "asset_path" => Ok(GeneratedField::AssetPath),
+                            "assetPosition" | "asset_position" => Ok(GeneratedField::AssetPosition),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -4620,6 +4744,10 @@ impl<'de> serde::Deserialize<'de> for SpendPlan {
                 let mut tx_blinding_nonce__ = None;
                 let mut compliance_anchor__ = None;
                 let mut asset_anchor__ = None;
+                let mut compliance_path__ = None;
+                let mut compliance_position__ = None;
+                let mut asset_path__ = None;
+                let mut asset_position__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Note => {
@@ -4736,6 +4864,34 @@ impl<'de> serde::Deserialize<'de> for SpendPlan {
                             }
                             asset_anchor__ = map_.next_value()?;
                         }
+                        GeneratedField::CompliancePath => {
+                            if compliance_path__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compliancePath"));
+                            }
+                            compliance_path__ = map_.next_value()?;
+                        }
+                        GeneratedField::CompliancePosition => {
+                            if compliance_position__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compliancePosition"));
+                            }
+                            compliance_position__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::AssetPath => {
+                            if asset_path__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetPath"));
+                            }
+                            asset_path__ = map_.next_value()?;
+                        }
+                        GeneratedField::AssetPosition => {
+                            if asset_position__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetPosition"));
+                            }
+                            asset_position__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -4758,6 +4914,10 @@ impl<'de> serde::Deserialize<'de> for SpendPlan {
                     tx_blinding_nonce: tx_blinding_nonce__.unwrap_or_default(),
                     compliance_anchor: compliance_anchor__,
                     asset_anchor: asset_anchor__,
+                    compliance_path: compliance_path__,
+                    compliance_position: compliance_position__.unwrap_or_default(),
+                    asset_path: asset_path__,
+                    asset_position: asset_position__.unwrap_or_default(),
                 })
             }
         }

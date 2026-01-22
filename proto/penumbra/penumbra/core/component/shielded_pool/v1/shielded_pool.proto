@@ -220,6 +220,14 @@ message SpendPlan {
   crypto.tct.v1.StateCommitment compliance_anchor = 15;
   // The asset anchor (asset tree root) for proof generation.
   crypto.tct.v1.StateCommitment asset_anchor = 16;
+  // Compliance Merkle path for proving user is in the compliance registry.
+  compliance.v1.MerklePath compliance_path = 17;
+  // Position of the user's compliance leaf in the compliance tree.
+  uint64 compliance_position = 18;
+  // Asset Merkle path for proving asset is in the asset registry.
+  compliance.v1.MerklePath asset_path = 19;
+  // Position of the asset in the asset registry tree.
+  uint64 asset_position = 20;
 }
 
 // Creates a new shielded note.
@@ -308,6 +316,14 @@ message OutputPlan {
   crypto.tct.v1.StateCommitment compliance_anchor = 15;
   // The asset anchor (asset tree root) for proof generation.
   crypto.tct.v1.StateCommitment asset_anchor = 16;
+  // Compliance Merkle path for proving user is in the compliance registry.
+  compliance.v1.MerklePath compliance_path = 17;
+  // Position of the user's compliance leaf in the compliance tree.
+  uint64 compliance_position = 18;
+  // Asset Merkle path for proving asset is in the asset registry.
+  compliance.v1.MerklePath asset_path = 19;
+  // Position of the asset in the asset registry tree.
+  uint64 asset_position = 20;
 }
 
 // Query operations for the shielded pool component.

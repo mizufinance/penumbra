@@ -27,7 +27,9 @@ mod transaction_info;
 mod worker;
 
 pub use crate::client::ViewClient;
-pub use crate::client_compliance::ViewClientComplianceExt;
+pub use crate::client_compliance::{
+    enrich_plan_with_compliance, ViewClientComplianceExt, ViewClientComplianceProvider,
+};
 pub use crate::metrics::register_metrics;
 pub use crate::note_record::SpendableNoteRecord;
 pub use crate::planner::Planner;

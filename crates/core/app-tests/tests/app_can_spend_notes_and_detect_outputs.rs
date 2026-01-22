@@ -18,8 +18,7 @@ use {
     },
     rand_core::OsRng,
     std::ops::Deref,
-    tap::{Tap, TapFallible},
-    tracing::info,
+    tap::TapFallible,
 };
 
 mod common;
@@ -42,11 +41,10 @@ async fn app_can_spend_notes_and_detect_outputs() -> anyhow::Result<()> {
             .tap_ok(|e| tracing::info!(hash = %e.last_app_hash_hex(), "finished init chain"))?
     };
 
-    // Sync the mock client, using the test wallet's spend key, to the latest snapshot.
+    // Sync to populate notes from genesis allocations.
     let mut client = MockClient::new(test_keys::SPEND_KEY.clone())
         .with_sync_to_storage(&storage)
-        .await?
-        .tap(|c| info!(client.notes = %c.notes.len(), "mock client synced to test storage"));
+        .await?;
 
     // Take one of the test wallet's notes, and send it to a different account.
     let input_note = client
@@ -55,9 +53,8 @@ async fn app_can_spend_notes_and_detect_outputs() -> anyhow::Result<()> {
         .cloned()
         .next()
         .ok_or_else(|| anyhow!("mock client had no note"))?;
-
     // Write down a transaction plan with exactly one spend and one output.
-    let plan = TransactionPlan {
+    let mut plan = TransactionPlan {
         actions: vec![
             // First, spend the selected input note.
             SpendPlan::new(
@@ -90,7 +87,10 @@ async fn app_can_spend_notes_and_detect_outputs() -> anyhow::Result<()> {
     }
     .with_populated_detection_data(OsRng, Default::default());
 
-    let tx = client.witness_auth_build(&plan).await?;
+    // Build with compliance enrichment from committed storage state
+    let tx = client
+        .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
+        .await?;
 
     // Execute the transaction, applying it to the chain state.
     let pre_tx_snapshot = storage.latest_snapshot();

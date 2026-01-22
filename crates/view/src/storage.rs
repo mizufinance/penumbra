@@ -44,6 +44,7 @@ use tct::StateCommitment;
 
 use crate::{sync::FilteredBlock, SpendableNoteRecord, SwapRecord};
 
+mod compliance;
 mod sct;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]

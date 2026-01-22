@@ -67,6 +67,9 @@ pub struct OutputPlan {
     /// Position of the asset in the asset registry tree
     #[serde(skip)]
     pub asset_position: u64,
+    /// The indexed leaf from the asset IMT (for membership/non-membership proofs)
+    #[serde(skip)]
+    pub asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf,
     /// Position of the user's compliance leaf in the compliance tree
     #[serde(skip)]
     pub compliance_position: u64,
@@ -162,14 +165,14 @@ impl OutputPlan {
             asset_id: value.asset_id,
         };
 
-        // Create 16-layer dummy Merkle path
-        let dummy_path = MerklePath {
-            layers: (0..16)
-                .map(|_| penumbra_sdk_compliance::structs::MerklePathLayer {
-                    siblings: vec![vec![0u8; 32], vec![0u8; 32], vec![0u8; 32]],
-                })
-                .collect(),
-        };
+        // Generate valid compliance tree proofs.
+        // These satisfy circuit constraints by default.
+        // Production code will overwrite with real chain data via enrich_plan_with_compliance().
+        let (compliance_anchor, compliance_path, compliance_position) =
+            penumbra_sdk_compliance::create_default_user_tree_proof(&compliance_leaf);
+
+        let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) =
+            penumbra_sdk_compliance::create_default_imt_proof(value.asset_id.0);
 
         let tx_blinding_nonce = Fr::rand(rng);
 
@@ -180,20 +183,21 @@ impl OutputPlan {
             value_blinding,
             proof_blinding_r: Fq::rand(rng),
             proof_blinding_s: Fq::rand(rng),
-            compliance_path: dummy_path.clone(),
+            compliance_path,
             target_timestamp,
             compliance_ciphertext,
             compliance_leaf: Some(compliance_leaf.clone()),
             compliance_ephemeral_secret: Some(ephemeral_secret),
             is_regulated: false,
             counterparty_address: None,
-            counterparty_leaf: Some(compliance_leaf), // Use same leaf as counterparty for default
+            counterparty_leaf: Some(compliance_leaf),
             tx_blinding_nonce,
-            compliance_anchor: penumbra_sdk_tct::StateCommitment(Fq::from(0u64)),
-            asset_anchor: penumbra_sdk_tct::StateCommitment(Fq::from(0u64)),
-            asset_path: dummy_path,
-            asset_position: 0,
-            compliance_position: 0,
+            compliance_anchor,
+            asset_anchor,
+            asset_path,
+            asset_position,
+            asset_indexed_leaf,
+            compliance_position,
         }
     }
 
@@ -312,6 +316,7 @@ impl OutputPlan {
                 balance_blinding: self.value_blinding,
                 asset_path: self.asset_path.clone(),
                 asset_position: self.asset_position,
+                asset_indexed_leaf: self.asset_indexed_leaf.clone(),
                 is_regulated: self.is_regulated,
                 compliance_path: self.compliance_path.clone(),
                 compliance_position: self.compliance_position,
@@ -455,6 +460,10 @@ impl From<OutputPlan> for pb::OutputPlan {
             tx_blinding_nonce: msg.tx_blinding_nonce.to_bytes().to_vec(),
             compliance_anchor: Some(msg.compliance_anchor.into()),
             asset_anchor: Some(msg.asset_anchor.into()),
+            compliance_path: Some(msg.compliance_path.into()),
+            compliance_position: msg.compliance_position,
+            asset_path: Some(msg.asset_path.into()),
+            asset_position: msg.asset_position,
         }
     }
 }
@@ -568,6 +577,20 @@ impl TryFrom<pb::OutputPlan> for OutputPlan {
             .transpose()?
             .unwrap_or_else(|| penumbra_sdk_tct::StateCommitment(Fq::from(0u64)));
 
+        // Parse compliance_path if present
+        let compliance_path = msg
+            .compliance_path
+            .map(|p| p.try_into())
+            .transpose()?
+            .unwrap_or_default();
+
+        // Parse asset_path if present
+        let asset_path = msg
+            .asset_path
+            .map(|p| p.try_into())
+            .transpose()?
+            .unwrap_or_default();
+
         Ok(Self {
             value: msg
                 .value
@@ -584,7 +607,7 @@ impl TryFrom<pb::OutputPlan> for OutputPlan {
                 .expect("proof_blinding_r malformed"),
             proof_blinding_s: Fq::from_bytes_checked(msg.proof_blinding_s.as_slice().try_into()?)
                 .expect("proof_blinding_s malformed"),
-            compliance_path: MerklePath::default(),
+            compliance_path,
             target_timestamp: msg.target_timestamp,
             compliance_ciphertext: msg.compliance_ciphertext,
             compliance_leaf,
@@ -595,9 +618,14 @@ impl TryFrom<pb::OutputPlan> for OutputPlan {
             tx_blinding_nonce,
             compliance_anchor,
             asset_anchor,
-            asset_path: MerklePath::default(), // Set via enrich_with_compliance
-            asset_position: 0,                 // Set via enrich_with_compliance
-            compliance_position: 0,            // Set via enrich_with_compliance
+            asset_path,
+            asset_position: msg.asset_position,
+            asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf {
+                value: Fq::from(0u64),
+                next_index: 0,
+                next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+            },
+            compliance_position: msg.compliance_position,
         })
     }
 }
@@ -609,13 +637,16 @@ mod test {
     use crate::output::OutputProofPublic;
 
     use crate::test_proof_helpers::proof_test_helpers::*;
-    use decaf377::Fr;
+    use decaf377::{Fq, Fr};
     use penumbra_sdk_keys::PayloadKey;
     use rand_core::OsRng;
 
     /// Helper to run the full verification flow for a specific asset ID.
     fn verify_output_proof_with_asset(asset_id_u64: u64) {
-        use crate::test_proof_helpers::proof_test_helpers::generate_test_data;
+        use crate::test_proof_helpers::proof_test_helpers::{
+            create_imt_membership_proof, create_imt_non_membership_proof, create_user_tree_proof,
+            generate_test_data,
+        };
 
         let mut rng = OsRng;
 
@@ -652,6 +683,28 @@ mod test {
             )
             .expect("can set compliance details");
 
+        // Create valid IMT proof based on regulation status
+        let asset_id_fq = Fq::from(asset_id_u64);
+        let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) = if is_regulated {
+            create_imt_membership_proof(asset_id_fq)
+        } else {
+            create_imt_non_membership_proof(asset_id_fq)
+        };
+
+        // Create valid user tree proof
+        let user_leaf = output_plan.compliance_leaf.clone().unwrap();
+        let (compliance_anchor, compliance_path, compliance_position) =
+            create_user_tree_proof(&user_leaf);
+
+        // Set the proof data in the plan
+        output_plan.asset_anchor = asset_anchor;
+        output_plan.asset_path = asset_path;
+        output_plan.asset_position = asset_position;
+        output_plan.asset_indexed_leaf = asset_indexed_leaf;
+        output_plan.compliance_anchor = compliance_anchor;
+        output_plan.compliance_path = compliance_path;
+        output_plan.compliance_position = compliance_position;
+
         let _body = output_plan.output_body(ovk, &dummy_memo_key, None);
 
         let balance_commitment = output_plan.balance().commit(blinding_factor);
@@ -661,9 +714,6 @@ mod test {
         let output_proof = output_plan
             .output_proof(&pk, None)
             .expect("proof generation should succeed");
-
-        // 5. Setup dummy compliance anchors
-        let (asset_anchor, compliance_anchor) = dummy_compliance_anchors();
 
         // Extract ciphertext from output_plan
         use penumbra_sdk_compliance::structs::ComplianceCiphertext;

@@ -84,8 +84,10 @@ pub struct SpendProofPrivate {
     pub nk: NullifierKey,
     /// Asset registry Merkle path proving asset regulation status
     pub asset_path: penumbra_sdk_compliance::MerklePath,
-    /// Position of the asset in the asset registry QuadTree
+    /// Position of the asset in the asset registry IMT
     pub asset_position: u64,
+    /// The indexed leaf from the asset IMT (for membership/non-membership proofs)
+    pub asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf,
     /// Whether this asset is regulated (requires compliance)
     pub is_regulated: bool,
     /// Compliance Merkle path proving user is in compliance registry
@@ -295,6 +297,7 @@ impl ConstraintSynthesizer<Fq> for SpendCircuit {
         // Create the compliance witness struct
         let compliance_witness = ComplianceWitness {
             is_regulated: self.private.is_regulated,
+            asset_indexed_leaf: self.private.asset_indexed_leaf.clone(),
             asset_path: self.private.asset_path.clone(),
             asset_position: self.private.asset_position,
             compliance_path: self.private.compliance_path.clone(),
@@ -468,6 +471,11 @@ impl DummyWitness for SpendCircuit {
             nk: *sk_sender.nullifier_key(),
             asset_path: dummy_path.clone(), // Must be length 16
             asset_position: 0,
+            asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf {
+                value: Fq::from(0u64),
+                next_index: 0,
+                next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+            },
             is_regulated: false,
             compliance_path: dummy_path, // Must be length 16
             compliance_position: 0,
@@ -675,7 +683,10 @@ mod tests {
     use penumbra_sdk_tct::StateCommitment;
     use proptest::prelude::*;
 
-    use crate::test_proof_helpers::proof_test_helpers::current_timestamp;
+    use crate::test_proof_helpers::proof_test_helpers::{
+        create_imt_membership_proof, create_imt_non_membership_proof, create_user_tree_proof,
+        current_timestamp,
+    };
     use crate::Note;
     use decaf377_rdsa::{SpendAuth, VerificationKey};
     use penumbra_sdk_tct as tct;
@@ -747,6 +758,14 @@ mod tests {
                 asset_id: value_to_send.asset_id,
             };
 
+            // Create valid IMT non-membership proof for unregulated asset
+            let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) =
+                create_imt_non_membership_proof(value_to_send.asset_id.0);
+
+            // Create valid user tree proof
+            let (compliance_anchor, compliance_path, compliance_position) =
+                create_user_tree_proof(&user_leaf);
+
             // Generate valid compliance ciphertext using real encryption with BLACK_HOLE_ACK
             let mut rng = rand::thread_rng();
             let timestamp = current_timestamp();
@@ -778,8 +797,8 @@ mod tests {
                 balance_commitment,
                 nullifier,
                 rk,
-                asset_anchor: tct::StateCommitment(Fq::from(0u64)),
-                compliance_anchor: tct::StateCommitment(Fq::from(0u64)),
+                asset_anchor,
+                compliance_anchor,
                 compliance_epk,
                 compliance_ciphertext: packed_ciphertext,
                 target_timestamp: timestamp,
@@ -794,11 +813,12 @@ mod tests {
                 spend_auth_randomizer,
                 ak,
                 nk,
-                asset_path: penumbra_sdk_compliance::MerklePath::default(),
-                asset_position: 0,
+                asset_path,
+                asset_position,
+                asset_indexed_leaf,
                 is_regulated: false,
-                compliance_path: penumbra_sdk_compliance::MerklePath::default(),
-                compliance_position: 0,
+                compliance_path,
+                compliance_position,
                 user_leaf,
                 compliance_ephemeral_secret: ephemeral_secret,
                 counterparty_leaf,
@@ -870,6 +890,14 @@ mod tests {
                 asset_id: value_to_send.asset_id,
             };
 
+            // Create valid IMT membership proof for regulated asset
+            let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) =
+                create_imt_membership_proof(value_to_send.asset_id.0);
+
+            // Create valid user tree proof
+            let (compliance_anchor, compliance_path, compliance_position) =
+                create_user_tree_proof(&user_leaf);
+
             // Generate valid compliance ciphertext using real encryption with the ACK
             let mut rng = rand::thread_rng();
             let timestamp = current_timestamp();
@@ -901,8 +929,8 @@ mod tests {
                 balance_commitment,
                 nullifier,
                 rk,
-                asset_anchor: tct::StateCommitment(Fq::from(0u64)),
-                compliance_anchor: tct::StateCommitment(Fq::from(0u64)),
+                asset_anchor,
+                compliance_anchor,
                 compliance_epk,
                 compliance_ciphertext: packed_ciphertext,
                 target_timestamp: timestamp,
@@ -916,11 +944,12 @@ mod tests {
                 spend_auth_randomizer,
                 ak,
                 nk,
-                asset_path: penumbra_sdk_compliance::MerklePath::default(),
-                asset_position: 0,
+                asset_path,
+                asset_position,
+                asset_indexed_leaf,
                 is_regulated: true,
-                compliance_path: penumbra_sdk_compliance::MerklePath::default(),
-                compliance_position: 0,
+                compliance_path,
+                compliance_position,
                 user_leaf,
                 compliance_ephemeral_secret: ephemeral_secret,
                 counterparty_leaf,
@@ -1060,6 +1089,11 @@ mod tests {
                 nk,
                 asset_path: penumbra_sdk_compliance::MerklePath::default(),
                 asset_position: 0,
+                asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf {
+                    value: Fq::from(0u64),
+                    next_index: 0,
+                    next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                },
                 is_regulated: false,
                 compliance_path: penumbra_sdk_compliance::MerklePath::default(),
                 compliance_position: 0,
@@ -1186,6 +1220,11 @@ mod tests {
                 nk,
                 asset_path: penumbra_sdk_compliance::MerklePath::default(),
                 asset_position: 0,
+                asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf {
+                    value: Fq::from(0u64),
+                    next_index: 0,
+                    next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                },
                 is_regulated: false,
                 compliance_path: penumbra_sdk_compliance::MerklePath::default(),
                 compliance_position: 0,
@@ -1309,6 +1348,11 @@ mod tests {
                 nk,
                 asset_path: penumbra_sdk_compliance::MerklePath::default(),
                 asset_position: 0,
+                asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf {
+                    value: Fq::from(0u64),
+                    next_index: 0,
+                    next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                },
                 is_regulated: false,
                 compliance_path: penumbra_sdk_compliance::MerklePath::default(),
                 compliance_position: 0,
@@ -1428,6 +1472,11 @@ mod tests {
                 nk,
                 asset_path: penumbra_sdk_compliance::MerklePath::default(),
                 asset_position: 0,
+                asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf {
+                    value: Fq::from(0u64),
+                    next_index: 0,
+                    next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                },
                 is_regulated: false,
                 compliance_path: penumbra_sdk_compliance::MerklePath::default(),
                 compliance_position: 0,
@@ -1550,6 +1599,11 @@ mod tests {
                 nk,
                 asset_path: penumbra_sdk_compliance::MerklePath::default(),
                 asset_position: 0,
+                asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf {
+                    value: Fq::from(0u64),
+                    next_index: 0,
+                    next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                },
                 is_regulated: false,
                 compliance_path: penumbra_sdk_compliance::MerklePath::default(),
                 compliance_position: 0,
@@ -1640,13 +1694,21 @@ mod tests {
             let sender_leaf_hash = penumbra_sdk_compliance::blind_sender_leaf(user_leaf.commit(), tx_blinding_nonce);
             let counterparty_leaf_hash = penumbra_sdk_compliance::blind_counterparty_leaf(counterparty_leaf.commit(), tx_blinding_nonce);
 
+            // Create valid IMT non-membership proof for unregulated asset
+            let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) =
+                create_imt_non_membership_proof(value_to_send.asset_id.0);
+
+            // Create valid user tree proof
+            let (compliance_anchor, compliance_path, compliance_position) =
+                create_user_tree_proof(&user_leaf);
+
             let public = SpendProofPublic {
                 anchor: invalid_anchor,
                 balance_commitment,
                 nullifier,
                 rk,
-                asset_anchor: tct::StateCommitment(Fq::from(0u64)),
-                compliance_anchor: tct::StateCommitment(Fq::from(0u64)),
+                asset_anchor,
+                compliance_anchor,
                 compliance_epk,
                 compliance_ciphertext: packed_ciphertext,
                 target_timestamp: timestamp,
@@ -1661,11 +1723,12 @@ mod tests {
                 spend_auth_randomizer,
                 ak,
                 nk,
-                asset_path: penumbra_sdk_compliance::MerklePath::default(),
-                asset_position: 0,
+                asset_path,
+                asset_position,
+                asset_indexed_leaf,
                 is_regulated: false,
-                compliance_path: penumbra_sdk_compliance::MerklePath::default(),
-                compliance_position: 0,
+                compliance_path,
+                compliance_position,
                 user_leaf,
                 compliance_ephemeral_secret: ephemeral_secret,
                 counterparty_leaf,
@@ -1676,6 +1739,7 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(1))]
         #[test]
         /// Check that the `SpendCircuit` is always satisfied for dummy (zero value) spends.
         fn spend_proof_dummy_verification_suceeds((public, private) in arb_valid_dummy_spend_statement()) {

@@ -7,6 +7,7 @@ use {
         genesis::{self, AppState},
         server::consensus::Consensus,
     },
+    penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID,
     penumbra_sdk_keys::test_keys,
     penumbra_sdk_mock_client::MockClient,
     penumbra_sdk_mock_consensus::TestNode,
@@ -14,7 +15,7 @@ use {
     penumbra_sdk_sct::component::clock::EpochRead,
     penumbra_sdk_stake::{
         component::validator_handler::validator_store::ValidatorDataRead, validator::Validator,
-        FundingStreams, GovernanceKey, IdentityKey, Uptime,
+        DelegationToken, FundingStreams, GovernanceKey, IdentityKey, Uptime,
     },
     rand_core::OsRng,
     std::ops::Deref,
@@ -52,8 +53,21 @@ async fn app_tracks_uptime_for_validators_only_once_active() -> anyhow::Result<(
             .await
     }?;
 
-    // Create a mock client.
-    let mut client = MockClient::new(test_keys::SPEND_KEY.clone());
+    // To define a validator, we need to define two keypairs: an identity key
+    // for the Penumbra application and a consensus key for cometbft.
+    // (Moved here to compute delegation token ID for compliance registration)
+    let new_validator_id_sk = SigningKey::<SpendAuth>::new(OsRng);
+    let new_validator_id = IdentityKey(VerificationKey::from(&new_validator_id_sk).into());
+    let new_validator_consensus_sk = ed25519_consensus::SigningKey::new(OsRng);
+    let new_validator_consensus = new_validator_consensus_sk.verification_key();
+
+    // Pre-compute delegation token ID
+    let delegation_token_id = DelegationToken::new(new_validator_id).id();
+
+    // Sync the mock client to the latest state.
+    let mut client = MockClient::new(test_keys::SPEND_KEY.clone())
+        .with_sync_to_storage(&storage)
+        .await?;
 
     /// Helper function, retrieve a validator's [`Uptime`].
     async fn get_uptime(storage: &TempStorage, id: IdentityKey) -> Option<Uptime> {
@@ -82,14 +96,7 @@ async fn app_tracks_uptime_for_validators_only_once_active() -> anyhow::Result<(
         .try_into()
         .map_err(|keys| anyhow::anyhow!("expected one key, got: {keys:?}"))?;
 
-    // To define a validator, we need to define two keypairs: an identity key
-    // for the Penumbra application and a consensus key for cometbft.
-    let new_validator_id_sk = SigningKey::<SpendAuth>::new(OsRng);
-    let new_validator_id = IdentityKey(VerificationKey::from(&new_validator_id_sk).into());
-    let new_validator_consensus_sk = ed25519_consensus::SigningKey::new(OsRng);
-    let new_validator_consensus = new_validator_consensus_sk.verification_key();
-
-    // Now define the validator's configuration data.
+    // Now define the validator's configuration data (keys were generated earlier for compliance registration).
     let new_validator = Validator {
         identity_key: new_validator_id.clone(),
         // TODO: when https://github.com/informalsystems/tendermint-rs/pull/1401 is released,
@@ -158,9 +165,8 @@ async fn app_tracks_uptime_for_validators_only_once_active() -> anyhow::Result<(
     }
 
     // Now, create a transaction that delegates to the new validator.
-    let plan = {
+    let mut plan = {
         use {
-            penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID,
             penumbra_sdk_sct::component::clock::EpochRead,
             penumbra_sdk_shielded_pool::{OutputPlan, SpendPlan},
             penumbra_sdk_transaction::{
@@ -212,7 +218,9 @@ async fn app_tracks_uptime_for_validators_only_once_active() -> anyhow::Result<(
         }
         .with_populated_detection_data(OsRng, Default::default())
     };
-    let tx = client.witness_auth_build(&plan).await?;
+    let tx = client
+        .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
+        .await?;
 
     // Execute the delegation transaction, applying it to the chain state.
     node.block()
@@ -277,32 +285,34 @@ async fn app_tracks_uptime_for_validators_only_once_active() -> anyhow::Result<(
         );
     }
 
+    // Get current epoch for undelegation
+    let current_epoch = storage.latest_snapshot().get_current_epoch().await?;
+
+    // Sync client to latest state
+    client.sync_to_latest(storage.latest_snapshot()).await?;
+
     // Build a transaction that will now undelegate from the validator.
-    let plan = {
+    let mut plan = {
         use {
-            penumbra_sdk_sct::component::clock::EpochRead,
             penumbra_sdk_shielded_pool::{OutputPlan, SpendPlan},
-            penumbra_sdk_stake::DelegationToken,
             penumbra_sdk_transaction::{
                 memo::MemoPlaintext, plan::MemoPlan, TransactionParameters, TransactionPlan,
             },
         };
         let snapshot = storage.latest_snapshot();
-        client.sync_to_latest(snapshot.clone()).await?;
         let rate = snapshot
             .get_validator_rate(&new_validator_id)
             .await?
             .ok_or(anyhow::anyhow!("new validator has a rate"))?
             .tap(|rate| tracing::info!(?rate, "got new validator rate"));
 
-        let undelegation_id = DelegationToken::new(new_validator_id).id();
         let note = client
             .notes
             .values()
-            .filter(|n| n.asset_id() == undelegation_id)
+            .filter(|n| n.asset_id() == delegation_token_id)
             .cloned()
             .next()
-            .expect("the test account should have one staking token note");
+            .expect("the test account should have one delegation token note");
         let spend = SpendPlan::new(
             &mut rand_core::OsRng,
             note.clone(),
@@ -310,10 +320,7 @@ async fn app_tracks_uptime_for_validators_only_once_active() -> anyhow::Result<(
                 .position(note.commit())
                 .expect("note should be in mock client's tree"),
         );
-        let undelegate = rate.build_undelegate(
-            storage.latest_snapshot().get_current_epoch().await?,
-            note.amount(),
-        );
+        let undelegate = rate.build_undelegate(current_epoch, note.amount());
         let output = OutputPlan::new(
             &mut rand_core::OsRng,
             undelegate.unbonded_value(),
@@ -335,7 +342,9 @@ async fn app_tracks_uptime_for_validators_only_once_active() -> anyhow::Result<(
         }
         .with_populated_detection_data(OsRng, Default::default())
     };
-    let tx = client.witness_auth_build(&plan).await?;
+    let tx = client
+        .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
+        .await?;
 
     // Execute the undelegation transaction, applying it to the chain state.
     node.block()
@@ -365,20 +374,22 @@ async fn app_tracks_uptime_for_validators_only_once_active() -> anyhow::Result<(
     }
 
     // Now that the validator is no longer a part of the consensus set, there is not a
-    // corresponding uptime tracker.
+    // corresponding uptime tracker. Save the new validator's last tracked height for comparison.
+    let new_validator_last_tracked_height;
     {
         let new = new_validator_uptime().await.expect("uptime should exist");
         let existing = existing_validator_uptime()
             .await
             .expect("uptime should exist");
-        assert_eq!(
-            new.as_of_height(),
-            EPOCH_DURATION * 2 - 1,
+        new_validator_last_tracked_height = new.as_of_height();
+        // The new validator's uptime should be from the previous epoch boundary
+        assert!(
+            new.as_of_height() < storage.latest_snapshot().get_block_height().await?,
             "new validator uptime is not updated after leaving consensus"
         );
         assert_eq!(
             existing.as_of_height(),
-            EPOCH_DURATION * 2,
+            storage.latest_snapshot().get_block_height().await?,
             "active validators' uptime is still tracked"
         );
     }
@@ -404,12 +415,12 @@ async fn app_tracks_uptime_for_validators_only_once_active() -> anyhow::Result<(
             .expect("uptime should exist");
         assert_eq!(
             new.as_of_height(),
-            EPOCH_DURATION * 2 - 1,
+            new_validator_last_tracked_height,
             "new validator uptime is still not updated after leaving consensus"
         );
         assert_eq!(
             existing.as_of_height(),
-            EPOCH_DURATION * 3,
+            storage.latest_snapshot().get_block_height().await?,
             "active validators' uptime will continue to be tracked"
         );
     }

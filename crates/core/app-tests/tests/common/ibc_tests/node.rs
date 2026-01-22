@@ -24,13 +24,19 @@ use {
         genesis::{self, AppState},
         server::consensus::Consensus,
     },
+    penumbra_sdk_asset::asset,
+    penumbra_sdk_compliance::{ComplianceLeaf, MsgRegisterAsset, MsgRegisterUser, BLACK_HOLE_ACK},
     penumbra_sdk_ibc::{component::ClientStateReadExt as _, IBC_COMMITMENT_PREFIX},
-    penumbra_sdk_keys::test_keys,
+    penumbra_sdk_keys::{keys::AddressComplianceKey, test_keys, Address},
     penumbra_sdk_mock_client::MockClient,
     penumbra_sdk_mock_consensus::TestNode,
-    penumbra_sdk_proto::util::tendermint_proxy::v1::{
-        tendermint_proxy_service_client::TendermintProxyServiceClient, GetStatusRequest,
+    penumbra_sdk_proto::{
+        util::tendermint_proxy::v1::{
+            tendermint_proxy_service_client::TendermintProxyServiceClient, GetStatusRequest,
+        },
+        DomainType as _,
     },
+    penumbra_sdk_transaction::{Action, Transaction, TransactionBody, TransactionParameters},
     std::error::Error,
     tap::{Tap, TapFallible},
     tendermint::{
@@ -190,6 +196,69 @@ impl TestNodeWithIBC {
             .with_sync_to_storage(&self.storage)
             .await?
             .tap(|c| info!(client.notes = %c.notes.len(), "mock client synced to test storage")))
+    }
+
+    /// Execute a block containing compliance registration actions.
+    /// This commits compliance data to chain state so subsequent transactions
+    /// will have matching compliance anchors.
+    pub async fn execute_compliance_setup(
+        &mut self,
+        addresses: &[Address],
+        asset_ids: &[asset::Id],
+    ) -> Result<()> {
+        let black_hole_ack = AddressComplianceKey::new(*BLACK_HOLE_ACK);
+        let mut actions: Vec<Action> = Vec::new();
+
+        // Create MsgRegisterAsset for each asset (unregulated)
+        for &asset_id in asset_ids {
+            let msg = MsgRegisterAsset {
+                asset_id,
+                is_regulated: false,
+            };
+            actions.push(Action::ComplianceRegisterAsset(msg));
+        }
+
+        // Create MsgRegisterUser for each (address, asset) pair
+        for address in addresses {
+            for &asset_id in asset_ids {
+                let leaf = ComplianceLeaf {
+                    address: address.clone(),
+                    key: black_hole_ack.clone(),
+                    asset_id,
+                };
+                let msg = MsgRegisterUser {
+                    leaf,
+                    signature: vec![], // Signature validation is TODO/skipped
+                };
+                actions.push(Action::ComplianceRegisterUser(msg));
+            }
+        }
+
+        // Build minimal transaction directly (no SpendPlan = no witness data needed)
+        let transaction_body = TransactionBody {
+            actions,
+            transaction_parameters: TransactionParameters {
+                expiry_height: 0,
+                chain_id: self.chain_id.clone(),
+                fee: Default::default(),
+            },
+            detection_data: None,
+            memo: None,
+        };
+
+        let tx = Transaction {
+            transaction_body,
+            binding_sig: [0u8; 64].into(), // No binding sig needed (no value balance)
+            anchor: penumbra_sdk_tct::Tree::new().root(), // Default empty tree anchor
+        };
+
+        self.node
+            .block()
+            .with_data(vec![tx.encode_to_vec()])
+            .execute()
+            .await?;
+
+        Ok(())
     }
 
     pub async fn get_latest_height(&mut self) -> Result<Height, anyhow::Error> {

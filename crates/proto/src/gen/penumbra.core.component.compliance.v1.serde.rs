@@ -420,6 +420,353 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
         deserializer.deserialize_struct("penumbra.core.component.compliance.v1.ComplianceAssetStatusResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ComplianceBatchMerkleProofsRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.queries.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.ComplianceBatchMerkleProofsRequest", len)?;
+        if !self.queries.is_empty() {
+            struct_ser.serialize_field("queries", &self.queries)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ComplianceBatchMerkleProofsRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "queries",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Queries,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "queries" => Ok(GeneratedField::Queries),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ComplianceBatchMerkleProofsRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.compliance.v1.ComplianceBatchMerkleProofsRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ComplianceBatchMerkleProofsRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut queries__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Queries => {
+                            if queries__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("queries"));
+                            }
+                            queries__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(ComplianceBatchMerkleProofsRequest {
+                    queries: queries__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.compliance.v1.ComplianceBatchMerkleProofsRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ComplianceBatchMerkleProofsResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.compliance_anchor.is_empty() {
+            len += 1;
+        }
+        if !self.asset_anchor.is_empty() {
+            len += 1;
+        }
+        if !self.results.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.ComplianceBatchMerkleProofsResponse", len)?;
+        if !self.compliance_anchor.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("complianceAnchor", pbjson::private::base64::encode(&self.compliance_anchor).as_str())?;
+        }
+        if !self.asset_anchor.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("assetAnchor", pbjson::private::base64::encode(&self.asset_anchor).as_str())?;
+        }
+        if !self.results.is_empty() {
+            struct_ser.serialize_field("results", &self.results)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ComplianceBatchMerkleProofsResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "compliance_anchor",
+            "complianceAnchor",
+            "asset_anchor",
+            "assetAnchor",
+            "results",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ComplianceAnchor,
+            AssetAnchor,
+            Results,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "complianceAnchor" | "compliance_anchor" => Ok(GeneratedField::ComplianceAnchor),
+                            "assetAnchor" | "asset_anchor" => Ok(GeneratedField::AssetAnchor),
+                            "results" => Ok(GeneratedField::Results),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ComplianceBatchMerkleProofsResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.compliance.v1.ComplianceBatchMerkleProofsResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ComplianceBatchMerkleProofsResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut compliance_anchor__ = None;
+                let mut asset_anchor__ = None;
+                let mut results__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ComplianceAnchor => {
+                            if compliance_anchor__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("complianceAnchor"));
+                            }
+                            compliance_anchor__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::AssetAnchor => {
+                            if asset_anchor__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetAnchor"));
+                            }
+                            asset_anchor__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Results => {
+                            if results__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("results"));
+                            }
+                            results__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(ComplianceBatchMerkleProofsResponse {
+                    compliance_anchor: compliance_anchor__.unwrap_or_default(),
+                    asset_anchor: asset_anchor__.unwrap_or_default(),
+                    results: results__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.compliance.v1.ComplianceBatchMerkleProofsResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ComplianceBatchQuery {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.address.is_some() {
+            len += 1;
+        }
+        if self.asset_id.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.ComplianceBatchQuery", len)?;
+        if let Some(v) = self.address.as_ref() {
+            struct_ser.serialize_field("address", v)?;
+        }
+        if let Some(v) = self.asset_id.as_ref() {
+            struct_ser.serialize_field("assetId", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ComplianceBatchQuery {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "address",
+            "asset_id",
+            "assetId",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Address,
+            AssetId,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "address" => Ok(GeneratedField::Address),
+                            "assetId" | "asset_id" => Ok(GeneratedField::AssetId),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ComplianceBatchQuery;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.compliance.v1.ComplianceBatchQuery")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ComplianceBatchQuery, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut address__ = None;
+                let mut asset_id__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Address => {
+                            if address__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("address"));
+                            }
+                            address__ = map_.next_value()?;
+                        }
+                        GeneratedField::AssetId => {
+                            if asset_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetId"));
+                            }
+                            asset_id__ = map_.next_value()?;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(ComplianceBatchQuery {
+                    address: address__,
+                    asset_id: asset_id__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.compliance.v1.ComplianceBatchQuery", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ComplianceLeaf {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -1242,6 +1589,439 @@ impl<'de> serde::Deserialize<'de> for ComplianceViewingKey {
             }
         }
         deserializer.deserialize_struct("penumbra.core.component.compliance.v1.ComplianceViewingKey", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for EventAssetRegistered {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.asset_id.is_some() {
+            len += 1;
+        }
+        if self.is_regulated {
+            len += 1;
+        }
+        if self.position != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.EventAssetRegistered", len)?;
+        if let Some(v) = self.asset_id.as_ref() {
+            struct_ser.serialize_field("assetId", v)?;
+        }
+        if self.is_regulated {
+            struct_ser.serialize_field("isRegulated", &self.is_regulated)?;
+        }
+        if self.position != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("position", ToString::to_string(&self.position).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for EventAssetRegistered {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "asset_id",
+            "assetId",
+            "is_regulated",
+            "isRegulated",
+            "position",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            AssetId,
+            IsRegulated,
+            Position,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "assetId" | "asset_id" => Ok(GeneratedField::AssetId),
+                            "isRegulated" | "is_regulated" => Ok(GeneratedField::IsRegulated),
+                            "position" => Ok(GeneratedField::Position),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = EventAssetRegistered;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.compliance.v1.EventAssetRegistered")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<EventAssetRegistered, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut asset_id__ = None;
+                let mut is_regulated__ = None;
+                let mut position__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::AssetId => {
+                            if asset_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetId"));
+                            }
+                            asset_id__ = map_.next_value()?;
+                        }
+                        GeneratedField::IsRegulated => {
+                            if is_regulated__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("isRegulated"));
+                            }
+                            is_regulated__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Position => {
+                            if position__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("position"));
+                            }
+                            position__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(EventAssetRegistered {
+                    asset_id: asset_id__,
+                    is_regulated: is_regulated__.unwrap_or_default(),
+                    position: position__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.compliance.v1.EventAssetRegistered", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for EventComplianceAnchor {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.height != 0 {
+            len += 1;
+        }
+        if !self.user_anchor.is_empty() {
+            len += 1;
+        }
+        if !self.asset_anchor.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.EventComplianceAnchor", len)?;
+        if self.height != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("height", ToString::to_string(&self.height).as_str())?;
+        }
+        if !self.user_anchor.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("userAnchor", pbjson::private::base64::encode(&self.user_anchor).as_str())?;
+        }
+        if !self.asset_anchor.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("assetAnchor", pbjson::private::base64::encode(&self.asset_anchor).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for EventComplianceAnchor {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "height",
+            "user_anchor",
+            "userAnchor",
+            "asset_anchor",
+            "assetAnchor",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Height,
+            UserAnchor,
+            AssetAnchor,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "height" => Ok(GeneratedField::Height),
+                            "userAnchor" | "user_anchor" => Ok(GeneratedField::UserAnchor),
+                            "assetAnchor" | "asset_anchor" => Ok(GeneratedField::AssetAnchor),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = EventComplianceAnchor;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.compliance.v1.EventComplianceAnchor")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<EventComplianceAnchor, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut height__ = None;
+                let mut user_anchor__ = None;
+                let mut asset_anchor__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Height => {
+                            if height__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("height"));
+                            }
+                            height__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::UserAnchor => {
+                            if user_anchor__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("userAnchor"));
+                            }
+                            user_anchor__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::AssetAnchor => {
+                            if asset_anchor__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetAnchor"));
+                            }
+                            asset_anchor__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(EventComplianceAnchor {
+                    height: height__.unwrap_or_default(),
+                    user_anchor: user_anchor__.unwrap_or_default(),
+                    asset_anchor: asset_anchor__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.compliance.v1.EventComplianceAnchor", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for EventUserRegistered {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.position != 0 {
+            len += 1;
+        }
+        if !self.commitment.is_empty() {
+            len += 1;
+        }
+        if self.address.is_some() {
+            len += 1;
+        }
+        if self.asset_id.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.EventUserRegistered", len)?;
+        if self.position != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("position", ToString::to_string(&self.position).as_str())?;
+        }
+        if !self.commitment.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("commitment", pbjson::private::base64::encode(&self.commitment).as_str())?;
+        }
+        if let Some(v) = self.address.as_ref() {
+            struct_ser.serialize_field("address", v)?;
+        }
+        if let Some(v) = self.asset_id.as_ref() {
+            struct_ser.serialize_field("assetId", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for EventUserRegistered {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "position",
+            "commitment",
+            "address",
+            "asset_id",
+            "assetId",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Position,
+            Commitment,
+            Address,
+            AssetId,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "position" => Ok(GeneratedField::Position),
+                            "commitment" => Ok(GeneratedField::Commitment),
+                            "address" => Ok(GeneratedField::Address),
+                            "assetId" | "asset_id" => Ok(GeneratedField::AssetId),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = EventUserRegistered;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.compliance.v1.EventUserRegistered")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<EventUserRegistered, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut position__ = None;
+                let mut commitment__ = None;
+                let mut address__ = None;
+                let mut asset_id__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Position => {
+                            if position__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("position"));
+                            }
+                            position__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Commitment => {
+                            if commitment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("commitment"));
+                            }
+                            commitment__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Address => {
+                            if address__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("address"));
+                            }
+                            address__ = map_.next_value()?;
+                        }
+                        GeneratedField::AssetId => {
+                            if asset_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetId"));
+                            }
+                            asset_id__ = map_.next_value()?;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(EventUserRegistered {
+                    position: position__.unwrap_or_default(),
+                    commitment: commitment__.unwrap_or_default(),
+                    address: address__,
+                    asset_id: asset_id__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.compliance.v1.EventUserRegistered", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for MerklePath {

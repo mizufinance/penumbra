@@ -52,6 +52,31 @@ fn dummy_merkle_path() -> MerklePath {
     }
 }
 
+/// Create valid IMT proof data for an unregulated asset.
+/// Returns (asset_anchor, indexed_leaf, merkle_path, position) that satisfy circuit constraints.
+fn create_imt_non_membership_proof(
+    asset_id: Fq,
+) -> (
+    StateCommitment,
+    penumbra_sdk_compliance::IndexedLeaf,
+    MerklePath,
+    u64,
+) {
+    use penumbra_sdk_compliance::indexed_tree::IndexedMerkleTree;
+
+    let tree = IndexedMerkleTree::new();
+
+    // Get non-membership proof (asset falls in gap between sentinel and MAX)
+    let (position, indexed_leaf, auth_path) = tree
+        .non_membership_proof(asset_id)
+        .expect("should be able to generate non-membership proof for any asset");
+
+    let merkle_path = MerklePath::from_auth_path(auth_path);
+    let anchor = StateCommitment(tree.root().0);
+
+    (anchor, indexed_leaf, merkle_path, position)
+}
+
 /// Generate valid compliance inputs using real encryption.
 /// Returns (compliance_epk, compliance_ciphertext, ephemeral_secret) that satisfy circuit constraints.
 fn generate_compliance_inputs(
@@ -139,7 +164,11 @@ fn spend_proof_parameters_vs_current_spend_circuit() {
         value_to_send.amount,
     );
 
-    let dummy_anchor = StateCommitment(Fq::from(0u64));
+    // Create valid IMT proof for unregulated asset
+    let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) =
+        create_imt_non_membership_proof(value_to_send.asset_id.0);
+
+    let compliance_anchor = StateCommitment(Fq::from(0u64));
     let tx_blinding_nonce = Fr::from(0u64);
 
     // Compute blinded leaf hashes
@@ -155,8 +184,8 @@ fn spend_proof_parameters_vs_current_spend_circuit() {
         balance_commitment,
         nullifier,
         rk,
-        asset_anchor: dummy_anchor,
-        compliance_anchor: dummy_anchor,
+        asset_anchor,
+        compliance_anchor,
         compliance_epk,
         compliance_ciphertext,
         target_timestamp: 0, // Corresponds to date = 0 used in encryption
@@ -170,8 +199,9 @@ fn spend_proof_parameters_vs_current_spend_circuit() {
         spend_auth_randomizer,
         ak,
         nk,
-        asset_path: dummy_merkle_path(),
-        asset_position: 0,
+        asset_path,
+        asset_position,
+        asset_indexed_leaf,
         is_regulated: false,
         compliance_path: dummy_merkle_path(),
         compliance_position: 0,
@@ -459,7 +489,11 @@ fn output_proof_parameters_vs_current_output_circuit() {
             value_to_send.amount,
         );
 
-        let dummy_anchor = StateCommitment(Fq::from(0u64));
+        // Create valid IMT proof for unregulated asset
+        let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) =
+            create_imt_non_membership_proof(value_to_send.asset_id.0);
+
+        let compliance_anchor = StateCommitment(Fq::from(0u64));
         let tx_blinding_nonce = Fr::from(0u64);
 
         // Compute blinded leaf hashes (output uses counterparty for receiver, sender for counterparty)
@@ -475,8 +509,8 @@ fn output_proof_parameters_vs_current_output_circuit() {
             note_commitment,
             compliance_epk,
             compliance_ciphertext,
-            asset_anchor: dummy_anchor,
-            compliance_anchor: dummy_anchor,
+            asset_anchor,
+            compliance_anchor,
             target_timestamp: 0, // Corresponds to date = 0 used in encryption
             receiver_leaf_hash,
             counterparty_leaf_hash,
@@ -484,8 +518,9 @@ fn output_proof_parameters_vs_current_output_circuit() {
         let private = OutputProofPrivate {
             note,
             balance_blinding,
-            asset_path: dummy_merkle_path(),
-            asset_position: 0,
+            asset_path,
+            asset_position,
+            asset_indexed_leaf,
             is_regulated: false,
             compliance_path: dummy_merkle_path(),
             compliance_position: 0,

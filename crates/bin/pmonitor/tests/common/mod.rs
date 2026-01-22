@@ -448,11 +448,12 @@ async fn poll_for_blocks() -> anyhow::Result<()> {
     anyhow::bail!("network did not produce blocks after {} seconds", timeout);
 }
 
-/// Register required test assets in the compliance registry.
-/// This must be done before any transfers can be made.
-/// Note: the staking token (penumbra) and test_usd are auto-registered
-/// as unregulated at genesis, so no additional registration is needed.
+/// Assets are auto-registered at genesis via Content::with_defaults().
+/// The staking token (penumbra) and test_usd are registered as unregulated.
+/// User registration for unregulated assets happens automatically using
+/// synthetic BLACK_HOLE_ACK leaves - no explicit registration needed.
+/// Only regulated test assets would require explicit registration here.
 fn register_compliance_assets(_pcli_home: &PathBuf) -> anyhow::Result<()> {
-    tracing::debug!("skipping asset registration - test_usd is auto-registered at genesis");
+    tracing::debug!("assets auto-registered at genesis via Content::with_defaults()");
     Ok(())
 }

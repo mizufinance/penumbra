@@ -3,115 +3,86 @@
 ## Dual Ciphertext Architecture
 
 Each transfer creates TWO compliance ciphertexts:
-
-1. **Sender ciphertext** (on SpendPlan): Decryptable by sender's daily key
-2. **Receiver ciphertext** (on OutputPlan): Decryptable by receiver's daily key
+1. **Sender ciphertext** (on Spend): Encrypted to sender's keys
+2. **Receiver ciphertext** (on Output): Encrypted to receiver's keys
 
 Both contain the same data but encrypted for different parties.
 
-## Wire Format
-
-**Total: 256 bytes** (32 EPK + 224 ciphertext payload)
+## Wire Format (256 bytes)
 
 | Field | Bytes | Description |
 |-------|-------|-------------|
-| EPK | 32 | Ephemeral public key `R = r * B_d` |
-| Detection Tag | 32 | 1 Fq - encrypted asset_id |
-| Encrypted Core | 96 | 3 Fq - encrypted (amount + self address) |
-| Encrypted Extension | 96 | 3 Fq - encrypted counterparty address |
+| EPK | 32 | Ephemeral public key `EPK = r * B_d` |
+| Detection | 32 | 1 Fq - encrypted asset_id |
+| Core | 96 | 3 Fq - encrypted (amount + self address) |
+| Extension | 96 | 3 Fq - encrypted counterparty address |
 
-## Tiered Plaintext Layout
+## 3-Tier Encryption
 
-Three segments encrypted with different keys:
+Each segment uses a different daily key (DK):
 
-**Detection Segment (32 bytes → 1 Fq)**
-| Field | Bytes |
-|-------|-------|
-| asset_id | 32 |
+| Segment | Daily Key | Content |
+|---------|-----------|---------|
+| Detection | DK_det = AK + T_det * B_d | asset_id |
+| Core | DK_core = AK + T_core * B_d | amount + self address |
+| Extension | DK_ext = AK + T_ext * B_d | counterparty address |
 
-**Core Segment (80 bytes → 3 Fq at 31-byte chunks)**
-| Field | Bytes |
-|-------|-------|
-| amount | 16 |
-| self_g_d | 32 |
-| self_pk | 32 |
+### Encryption (Client)
 
-**Extension Segment (64 bytes → 3 Fq at 31-byte chunks)**
-| Field | Bytes |
-|-------|-------|
-| counterparty_g_d | 32 |
-| counterparty_pk | 32 |
-
-## 3-Key Tiered Encryption
-
-Each segment uses a different shared secret derived from a dedicated daily key:
+Client knows: AK (public), T (public tweak), B_d
 
 ```
-1. Derive 3 daily public keys (with domain separators):
-   PK_detection = ACK + Hash(date, detection_domain) * B_d
-   PK_core      = ACK + Hash(date, core_domain) * B_d
-   PK_extension = ACK + Hash(date, extension_domain) * B_d
-
-2. Generate single ephemeral secret: r (random Fr)
-3. Compute EPK: R = r * B_d
-
-4. Compute 3 shared secrets:
-   S_detection = r * PK_detection
-   S_core      = r * PK_core
-   S_extension = r * PK_extension
-
-5. Derive 3 seeds:
-   seed_X = hash_2(domain, S_X, R)
-
-6. Encrypt each segment with its seed:
-   Detection: C[0]   = asset_id + hash_2(seed_detection, 0)
-   Core:      C[1-3] = core[i] + hash_2(seed_core, i)
-   Extension: C[4-6] = ext[i]  + hash_2(seed_extension, i)
+1. Generate ephemeral: r, EPK = r * B_d
+2. Derive daily public keys:
+   DK_det = AK + T_det * B_d
+   DK_core = AK + T_core * B_d
+   DK_ext = AK + T_ext * B_d
+3. Compute shared secrets:
+   S_det = r * DK_det
+   S_core = r * DK_core
+   S_ext = r * DK_ext
+4. Derive seeds: seed_X = hash(S_X, EPK)
+5. Encrypt: C[i] = plaintext[i] + hash(seed_X, i)
 ```
 
-### Decryption (with 3 Daily Keys)
+### Decryption (Orbis)
+
+Orbis knows: UK (secret)
 
 ```
-1. Compute 3 shared secrets: S_X = dmk_X * R
-2. Derive 3 seeds: seed_X = hash_2(domain, S_X, R)
-3. Decrypt each segment:
-   asset_id = C[0] - hash_2(seed_detection, 0)
-   core     = C[1-3] - hash_2(seed_core, i)
-   ext      = C[4-6] - hash_2(seed_extension, i)
+1. Derive daily scalars:
+   dk_det = UK + T_det
+   dk_core = UK + T_core
+   dk_ext = UK + T_ext
+2. Compute shared secrets:
+   S_det = dk_det * EPK
+   S_core = dk_core * EPK
+   S_ext = dk_ext * EPK
+3. Derive seeds: seed_X = hash(S_X, EPK)
+4. Decrypt: plaintext[i] = C[i] - hash(seed_X, i)
 ```
 
-### Why 3 Keys?
+## Access Tiers
 
-Different access tiers for different auditor needs:
-- **Detection key only**: O(1) asset filtering without seeing amounts
-- **Core key**: See transfer amounts and self address
-- **Extension key**: Full access including counterparty
+| Tier | Daily Scalar Shared | Access |
+|------|---------------------|--------|
+| Detection | dk_det | Asset ID only |
+| Core | dk_det + dk_core | + Amount, self address |
+| Full | All dk | + Counterparty address |
 
-## BLACK_HOLE_ACK
+## BLACK_HOLE_AK
 
-For unregulated assets, encryption uses a special key:
+For unregulated assets:
 
 ```rust
-BLACK_HOLE_ACK = Element::GENERATOR
+BLACK_HOLE_AK = Element::GENERATOR
 ```
 
-
-## Randomness
-
-Each ciphertext uses fresh ephemeral secret `r`:
-
-```rust
-let r = Fr::rand(&mut rng);
-```
-
-### Randomness Requirements
-
-- `r` must be cryptographically random
-- Same `r` must never be reused across ciphertexts
-- Randomness source must be properly seeded
+Ciphertext is valid but nobody can decrypt (no corresponding UK).
 
 ## Source Files
 
-- Encryption: `crates/core/component/compliance/src/crypto.rs`
-- Structs: `crates/core/component/compliance/src/structs.rs`
-- Constants: compile-time assertions verify wire format sizes
+| Component | Location |
+|-----------|----------|
+| Encryption | `compliance/src/crypto.rs` |
+| Structs | `compliance/src/structs.rs` |

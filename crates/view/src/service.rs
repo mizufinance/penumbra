@@ -2135,6 +2135,95 @@ impl ViewService for ViewServer {
             leaf,
         }))
     }
+
+    #[instrument(skip_all, level = "trace")]
+    async fn compliance_batch_merkle_proofs(
+        &self,
+        request: tonic::Request<pb::ComplianceBatchMerkleProofsRequest>,
+    ) -> Result<tonic::Response<pb::ComplianceBatchMerkleProofsResponse>, tonic::Status> {
+        use penumbra_sdk_proto::core::component::compliance::v1::{
+            query_service_client::QueryServiceClient as ComplianceQueryServiceClient,
+            ComplianceBatchMerkleProofsRequest as ComplianceRequest,
+            ComplianceBatchQuery as ComplianceQuery,
+        };
+
+        let request_inner = request.into_inner();
+
+        // Connect to pd's compliance service
+        let endpoint = get_pd_endpoint(self.node.clone())
+            .await
+            .map_err(|e| tonic::Status::internal(format!("failed to connect to pd: {e}")))?;
+        let channel = endpoint
+            .connect()
+            .await
+            .map_err(|e| tonic::Status::internal(format!("failed to connect to pd: {e}")))?;
+        let mut client = ComplianceQueryServiceClient::new(channel);
+
+        // Convert view proto queries to compliance proto queries
+        let queries: Vec<ComplianceQuery> = request_inner
+            .queries
+            .into_iter()
+            .map(|q| ComplianceQuery {
+                address: q.address,
+                asset_id: q.asset_id,
+            })
+            .collect();
+
+        // Query the compliance service for batch Merkle proofs
+        let compliance_request = ComplianceRequest { queries };
+        let response = client
+            .compliance_batch_merkle_proofs(tonic::Request::new(compliance_request))
+            .await?
+            .into_inner();
+
+        // Convert compliance proto results to view proto results
+        let results: Vec<pb::ComplianceMerkleProofsResponse> = response
+            .results
+            .into_iter()
+            .map(|r| {
+                let compliance_path = r.compliance_path.map(|p| pb::MerklePath {
+                    layers: p
+                        .layers
+                        .into_iter()
+                        .map(|layer| pb::MerklePathLayer {
+                            siblings: layer.siblings,
+                        })
+                        .collect(),
+                });
+
+                let asset_path = r.asset_path.map(|p| pb::MerklePath {
+                    layers: p
+                        .layers
+                        .into_iter()
+                        .map(|layer| pb::MerklePathLayer {
+                            siblings: layer.siblings,
+                        })
+                        .collect(),
+                });
+
+                pb::ComplianceMerkleProofsResponse {
+                    user_registered: r.user_registered,
+                    asset_registered: r.asset_registered,
+                    is_regulated: r.is_regulated,
+                    compliance_path,
+                    compliance_position: r.compliance_position,
+                    asset_path,
+                    asset_position: r.asset_position,
+                    compliance_anchor: r.compliance_anchor,
+                    asset_anchor: r.asset_anchor,
+                }
+            })
+            .collect();
+
+        // Return as ViewService response
+        Ok(tonic::Response::new(
+            pb::ComplianceBatchMerkleProofsResponse {
+                compliance_anchor: response.compliance_anchor,
+                asset_anchor: response.asset_anchor,
+                results,
+            },
+        ))
+    }
 }
 
 /// Convert a pd node URL to a Tonic `Endpoint`.

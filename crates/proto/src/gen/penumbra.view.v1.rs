@@ -2561,6 +2561,69 @@ impl ::prost::Name for ComplianceUserLeafResponse {
         "/penumbra.view.v1.ComplianceUserLeafResponse".into()
     }
 }
+/// A single query in a batch request.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ComplianceBatchQuery {
+    /// The address to look up.
+    #[prost(message, optional, tag = "1")]
+    pub address: ::core::option::Option<super::super::core::keys::v1::Address>,
+    /// The asset ID to look up.
+    #[prost(message, optional, tag = "2")]
+    pub asset_id: ::core::option::Option<super::super::core::asset::v1::AssetId>,
+}
+impl ::prost::Name for ComplianceBatchQuery {
+    const NAME: &'static str = "ComplianceBatchQuery";
+    const PACKAGE: &'static str = "penumbra.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.view.v1.ComplianceBatchQuery".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.view.v1.ComplianceBatchQuery".into()
+    }
+}
+/// Request for batch querying multiple (address, asset) pairs.
+/// Use this for multi-spend/multi-output transactions to fetch all proofs in one call.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ComplianceBatchMerkleProofsRequest {
+    /// The queries to execute. Each query is an (address, asset_id) pair.
+    #[prost(message, repeated, tag = "1")]
+    pub queries: ::prost::alloc::vec::Vec<ComplianceBatchQuery>,
+}
+impl ::prost::Name for ComplianceBatchMerkleProofsRequest {
+    const NAME: &'static str = "ComplianceBatchMerkleProofsRequest";
+    const PACKAGE: &'static str = "penumbra.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.view.v1.ComplianceBatchMerkleProofsRequest".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.view.v1.ComplianceBatchMerkleProofsRequest".into()
+    }
+}
+/// Response containing batch Merkle proofs and anchors.
+/// Anchors are returned once (they're the same for all queries).
+/// Results are returned in the same order as the queries.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ComplianceBatchMerkleProofsResponse {
+    /// Current compliance tree root (StateCommitment, 32 bytes).
+    #[prost(bytes = "vec", tag = "1")]
+    pub compliance_anchor: ::prost::alloc::vec::Vec<u8>,
+    /// Current asset tree root (StateCommitment, 32 bytes).
+    #[prost(bytes = "vec", tag = "2")]
+    pub asset_anchor: ::prost::alloc::vec::Vec<u8>,
+    /// Results for each query, in the same order as the request.
+    #[prost(message, repeated, tag = "3")]
+    pub results: ::prost::alloc::vec::Vec<ComplianceMerkleProofsResponse>,
+}
+impl ::prost::Name for ComplianceBatchMerkleProofsResponse {
+    const NAME: &'static str = "ComplianceBatchMerkleProofsResponse";
+    const PACKAGE: &'static str = "penumbra.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.view.v1.ComplianceBatchMerkleProofsResponse".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.view.v1.ComplianceBatchMerkleProofsResponse".into()
+    }
+}
 /// Generated client implementations.
 #[cfg(feature = "rpc")]
 pub mod view_service_client {
@@ -3723,6 +3786,38 @@ pub mod view_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /// Batch query for multiple (address, asset) pairs.
+        /// This proxies to pd's compliance service.
+        /// Use this for multi-spend transactions to avoid multiple round trips.
+        pub async fn compliance_batch_merkle_proofs(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ComplianceBatchMerkleProofsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ComplianceBatchMerkleProofsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/penumbra.view.v1.ViewService/ComplianceBatchMerkleProofs",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "penumbra.view.v1.ViewService",
+                        "ComplianceBatchMerkleProofs",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /// Query a user's registered compliance leaf.
         /// This proxies to pd's compliance service.
         pub async fn compliance_user_leaf(
@@ -4225,6 +4320,16 @@ pub mod view_service_server {
             request: tonic::Request<super::ComplianceMerkleProofsRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ComplianceMerkleProofsResponse>,
+            tonic::Status,
+        >;
+        /// Batch query for multiple (address, asset) pairs.
+        /// This proxies to pd's compliance service.
+        /// Use this for multi-spend transactions to avoid multiple round trips.
+        async fn compliance_batch_merkle_proofs(
+            &self,
+            request: tonic::Request<super::ComplianceBatchMerkleProofsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ComplianceBatchMerkleProofsResponse>,
             tonic::Status,
         >;
         /// Query a user's registered compliance leaf.
@@ -6073,6 +6178,58 @@ pub mod view_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ComplianceMerkleProofsSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/penumbra.view.v1.ViewService/ComplianceBatchMerkleProofs" => {
+                    #[allow(non_camel_case_types)]
+                    struct ComplianceBatchMerkleProofsSvc<T: ViewService>(pub Arc<T>);
+                    impl<
+                        T: ViewService,
+                    > tonic::server::UnaryService<
+                        super::ComplianceBatchMerkleProofsRequest,
+                    > for ComplianceBatchMerkleProofsSvc<T> {
+                        type Response = super::ComplianceBatchMerkleProofsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::ComplianceBatchMerkleProofsRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ViewService>::compliance_batch_merkle_proofs(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ComplianceBatchMerkleProofsSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

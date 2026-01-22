@@ -147,3 +147,42 @@ CREATE TABLE epochs (
     root BLOB,
     start_height BIGINT
 );
+
+-- ========== Compliance Trees (Local Sync) ==========
+
+-- User compliance tree positions and commitments
+CREATE TABLE compliance_user_positions (
+    position BIGINT PRIMARY KEY,
+    commitment BLOB NOT NULL
+);
+
+-- Internal hashes for user tree auth paths
+CREATE TABLE compliance_user_hashes (
+    position BIGINT NOT NULL,
+    height TINYINT NOT NULL,
+    hash BLOB NOT NULL,
+    PRIMARY KEY (position, height)
+);
+
+-- Asset tree (IMT) indexed leaves
+CREATE TABLE compliance_asset_leaves (
+    position BIGINT PRIMARY KEY,
+    value BLOB NOT NULL,
+    next_index BIGINT NOT NULL,
+    next_value BLOB NOT NULL
+);
+
+-- Internal hashes for asset tree auth paths
+CREATE TABLE compliance_asset_hashes (
+    position BIGINT NOT NULL,
+    height TINYINT NOT NULL,
+    hash BLOB NOT NULL,
+    PRIMARY KEY (position, height)
+);
+
+-- Compliance tree anchors per block
+CREATE TABLE compliance_anchors (
+    height BIGINT PRIMARY KEY,
+    user_root BLOB NOT NULL,
+    asset_root BLOB NOT NULL
+);

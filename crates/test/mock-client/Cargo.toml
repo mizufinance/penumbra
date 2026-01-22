@@ -10,9 +10,13 @@ license.workspace = true
 
 [dependencies]
 anyhow = {workspace = true}
+async-trait = {workspace = true}
 cnidarium = {workspace = true, default-features = true}
+decaf377 = {workspace = true, default-features = true}
 penumbra-sdk-asset = {workspace = true}
+poseidon377 = {workspace = true}
 penumbra-sdk-compact-block = {workspace = true, default-features = true}
+penumbra-sdk-compliance = {workspace = true, features = ["component"], default-features = true}
 penumbra-sdk-dex = {workspace = true, default-features = true}
 penumbra-sdk-keys = {workspace = true, default-features = true}
 penumbra-sdk-sct = {workspace = true, default-features = true}
@@ -21,5 +25,6 @@ penumbra-sdk-shielded-pool = {workspace = true, features = [
 ], default-features = true}
 penumbra-sdk-tct = {workspace = true, default-features = true}
 penumbra-sdk-transaction = {workspace = true, default-features = true}
+penumbra-sdk-view = {workspace = true, default-features = true}
 rand_core = {workspace = true}
 

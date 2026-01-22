@@ -1,119 +1,95 @@
 # Orbis Flow
 
-End-to-end overview of the Orbis key management and re-encryption flow.
+Key management and re-encryption flow with Orbis.
 
 ## Key Hierarchy
 
 ```
-Asset Master Key (AMK) - Orbis only
-       │
-       ▼ Hash(AMK, user_id), one-way
-   User Key (UK) - Orbis only
-       │
-       ▼ UK + secret_n, linear (one secret per address)
-  Address Key (AK) - given to user address
+MK (Orbis ring, scalar)
+ │
+ └── UK = Hash(MK, user_id)     [Orbis only, scalar]
+      │
+      ├── AK = UK * B_d          [Registry, public point]
+      │    │
+      │    └── DK = AK + T * B_d [Public point, for encryption]
+      │
+      └── dk = UK + T            [Orbis only, scalar, for decryption]
 ```
 
-Detection keys follow the same hierarchy with a separate Detection Master Key (DMK).
-
----
+See [key-hierarchy.md](../architecture/key-hierarchy.md) for details.
 
 ## 1. Issuer Setup
 
-Issuer onboards a regulated asset with Orbis.
-
 ```
-Issuer → Creates ring parameters for asset
-       → Orbis generates Asset Master Key (AMK)
-       → Orbis generates Detection Master Key (DMK)
-       → Issuer registers asset on-chain (Penumbra only)
+Issuer → Creates ring parameters
+       → Orbis generates MK
+       → Issuer registers asset on-chain
+       → Issuer registers static public key with Orbis for re-encryption
 ```
 
-Issuer also registers a static public key with Orbis for re-encryption.
-
----
-
-## 2. User Registration (KYC) ----- TO REVISIT (DefraDB??)
-
-User completes KYC to transact with the regulated asset.
+## 2. User Registration (KYC)
 
 ```
-User   → Completes KYC with Orbis
-       → Orbis stores KYC information
-       → UK = hash(AMK, user_id), no need to store
+User → Completes KYC with Orbis
+     → Orbis derives UK = Hash(MK, user_id)
+     → KYC data stored (DefraDB TBD)
 ```
 
-The hash derivation is one-way: UK cannot reveal AMK.
-
----
-
-## 3. Address Key Generation (With signature)
-
-User requests an address key for their Penumbra address.
+## 3. Address Key Generation
 
 ```
-User   → Requests address key from Orbis
-       → Orbis generates secret_n (one per address)
-       → Orbis computes: AK = UK + secret_n
-       → Orbis (Or DefraDB ---) stores secret_n with KYC data
-       → User receives AK for their address
+User → Requests address key from Orbis (provides B_d)
+     → Orbis computes AK = UK * B_d
+     → User receives AK for their address
+     → User registers AK on-chain
 ```
 
-Multiple addresses can be generated for the same user:
-- `AK_1 = UK + secret_1`
-- `AK_2 = UK + secret_2`
+Multiple addresses per user:
+- `AK_1 = UK * B_d1`
+- `AK_2 = UK * B_d2`
 
-Linear derivation allows Orbis to decrypt any AK ciphertext by looking up the corresponding secret. Per-address secrets prevent address linkability (see below).
+Single UK can decrypt all addresses (via dk = UK + T).
 
-
-
----
-
-## 4. Address Registration (penumbra-only)
-
-User registers their address key on-chain, with the Orbis signature.
+## 4. Transaction Encryption (Client)
 
 ```
-User   → Derives Address Compliance Key: ACK = AK * B_d
-       → Submits RegisterUser { address, ACK, asset_id }
-       → User's compliance leaf added to on-chain registry
+Client → Fetches AK from registry (public)
+       → Derives DK = AK + T * B_d (daily public key)
+       → Encrypts: S = r * DK
+       → Stores EPK = r * B_d in ciphertext
 ```
-
----
 
 ## 5. Detection (Issuer Scanning)
 
-Issuer scans for transactions involving their asset.
-
 ```
-Issuer → Fetches detection key from Orbis (1 detection key, or 1 per day)
-       → Scans on-chain transactions
-       → Identifies transactions involving the regulated asset
+Issuer → Fetches dk (daily scalar) from Orbis
+       → dk = UK + T (Orbis computes this)
+       → Scans blocks: S = dk * EPK
+       → Decrypts detection segment to identify regulated assets
        → Compiles list of transactions of interest
 ```
 
----
-
 ## 6. Re-encryption
 
-Issuer requests decryption of identified transactions.
-
 ```
-Issuer → Sends transaction list to Orbis (Along with list of permissions, derivation path)
-       → Orbis re-encrypts data to issuer's static public key
-       → Issuer receives re-encrypted ciphertexts
+Issuer → Sends transaction list to Orbis
+       → Orbis re-encrypts to issuer's static key
        → Issuer decrypts with their private key
 ```
 
+## Key Summary
 
----
+| Key | Type | Holder | Purpose |
+|-----|------|--------|---------|
+| MK | Scalar | Orbis ring | Master key |
+| UK | Scalar | Orbis | User key (per user) |
+| AK | Point | Registry (public) | Address key (per address) |
+| DK | Point | Public | Daily key (client encryption) |
+| dk | Scalar | Orbis | Daily scalar (decryption) |
 
-Points to reconsider/consider
--KYC data (probably not Orbis, most likely defra?)
--Same for address secret, which would be with KYC data
--How does the address key gets generated? We need to ask Orbis to generate an address key from AMK, user_id, and secret_n. user_id and secret_n would be kept in defra db with KYC, the user does not have access to it.
--Audit part/warrant, (just don't know)
--Namespace (Orbis)
--What is Orbis bulletin
--How do we share the secrets (transactions), Orbis fetch them, Issuer sends them to Bulletin or ring directly
--Orbis does not derive any keys at any point in key generatoin. You send key derivation of the public side when you want to decrypt.
+## Open Items
+
+- KYC data storage (DefraDB?)
+- Orbis bulletin integration
+- Warrant/audit flow
+- Namespace management

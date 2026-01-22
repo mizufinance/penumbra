@@ -1,3 +1,9 @@
+pub mod enrichment;
+pub use enrichment::{BatchComplianceData, ComplianceProofProvider};
+
+pub mod event;
+pub use event::{EventAssetRegistered, EventComplianceAnchor, EventUserRegistered};
+
 pub mod structs;
 pub use structs::{
     ComplianceCiphertext,
@@ -25,6 +31,9 @@ pub use structs::{
 pub mod tree;
 pub use tree::{QuadTree, DEFAULT_DEPTH, ZERO_HASHES};
 
+pub mod indexed_tree;
+pub use indexed_tree::{IndexedLeaf, IndexedMerkleTree, IMT_LEAF_DOMAIN_SEP, IMT_ZERO_HASHES};
+
 pub mod state_key;
 
 // Registry requires cnidarium for state access
@@ -34,9 +43,17 @@ pub mod registry;
 pub use registry::{ComplianceRegistryRead, ComplianceRegistryWrite};
 
 #[cfg(feature = "component")]
+pub mod action_check;
+#[cfg(feature = "component")]
+pub use action_check::RegulatedAssetCheck;
+
+#[cfg(feature = "component")]
 pub mod component;
 #[cfg(feature = "component")]
 pub use component::{Compliance, RpcServer};
+
+pub mod genesis;
+pub use genesis::Content as GenesisContent;
 
 pub mod r1cs;
 pub use r1cs::{verify_compliance_integrity, verify_quad_path, ComplianceWitness};
@@ -68,6 +85,46 @@ pub mod leaf_binding;
 pub use leaf_binding::{
     blind_counterparty_leaf, blind_sender_leaf, DOMAIN_SEP_COUNTERPARTY, DOMAIN_SEP_SENDER,
 };
+
+/// Create valid IMT non-membership proof for an unregulated asset.
+///
+/// Returns (asset_anchor, indexed_leaf, merkle_path, position) that satisfy circuit constraints.
+/// The asset is proven to be unregulated via non-membership (falls in a gap).
+pub fn create_default_imt_proof(
+    asset_id: decaf377::Fq,
+) -> (
+    penumbra_sdk_tct::StateCommitment,
+    IndexedLeaf,
+    MerklePath,
+    u64,
+) {
+    let tree = IndexedMerkleTree::new();
+    let (position, indexed_leaf, auth_path) = tree
+        .non_membership_proof(asset_id)
+        .expect("can generate non-membership proof for any asset");
+    let merkle_path = MerklePath::from_auth_path(auth_path);
+    let anchor = penumbra_sdk_tct::StateCommitment(tree.root().0);
+    (anchor, indexed_leaf, merkle_path, position)
+}
+
+/// Create valid user tree (QuadTree) proof for a compliance leaf.
+///
+/// Returns (compliance_anchor, merkle_path, position) that satisfy circuit constraints.
+pub fn create_default_user_tree_proof(
+    user_leaf: &ComplianceLeaf,
+) -> (penumbra_sdk_tct::StateCommitment, MerklePath, u64) {
+    let mut tree = QuadTree::new();
+    let leaf_commitment = user_leaf.commit();
+    let position = 0u64;
+    tree.update(position, leaf_commitment)
+        .expect("can insert leaf");
+    let auth_path = tree
+        .auth_path(position)
+        .expect("can get auth path for inserted leaf");
+    let merkle_path = MerklePath::from_auth_path(auth_path);
+    let anchor = penumbra_sdk_tct::StateCommitment(tree.root().0);
+    (anchor, merkle_path, position)
+}
 
 /// Test helpers for compliance tests. Re-exported for use in other crates' tests.
 #[cfg(any(test, feature = "test-helpers"))]
@@ -185,7 +242,7 @@ mod tests {
         let tree = state.get_user_tree().await.unwrap();
 
         // Get the authentication path for User 1 (position 0)
-        let path = tree.auth_path(0);
+        let path = tree.auth_path(0).unwrap();
 
         // Assert: path is not empty
         assert!(!path.is_empty(), "Authentication path should not be empty");
@@ -288,7 +345,7 @@ mod tests {
         let tree = state.get_user_tree().await.unwrap();
 
         // Now verify the path for User 0
-        let path = tree.auth_path(0);
+        let path = tree.auth_path(0).unwrap();
 
         // The first layer siblings should NOT all be zero hashes now
         // because we have users at positions 1, 2, 3
@@ -365,7 +422,7 @@ mod tests {
 
         // Verify paths for each position
         for (pos, commitment) in leaves {
-            let path = tree.auth_path(pos);
+            let path = tree.auth_path(pos).unwrap();
             let verified =
                 QuadTree::verify_auth_path(pos, commitment, &path, tree_root, DEFAULT_DEPTH);
             assert!(
@@ -386,16 +443,16 @@ mod tests {
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
-        // Initialize trees
+        // Initialize user tree
         let user_tree = QuadTree::new();
-        let asset_tree = QuadTree::new();
         let tree_bytes = bincode::serialize(&user_tree).unwrap();
         state.put_raw(state_key::user_tree().to_string(), tree_bytes);
         state.put_proto(state_key::user_count().to_string(), 0u64);
 
-        let tree_bytes = bincode::serialize(&asset_tree).unwrap();
-        state.put_raw(state_key::asset_tree().to_string(), tree_bytes);
-        state.put_proto(state_key::asset_count().to_string(), 0u64);
+        // Initialize asset IMT
+        let asset_imt = indexed_tree::IndexedMerkleTree::new();
+        let imt_bytes = bincode::serialize(&asset_imt).unwrap();
+        state.put_raw(state_key::asset_imt().to_string(), imt_bytes);
 
         let mut rng = rand::thread_rng();
 
@@ -404,17 +461,13 @@ mod tests {
         // Create a regulated asset (e.g., USDC)
         let usdc_asset_id = asset::Id(Fq::from(1000u64));
 
-        // Register asset as regulated
-        state
-            .update_asset_regulation(usdc_asset_id, true)
-            .await
-            .unwrap();
+        // Register asset as regulated (only regulated assets go in IMT)
+        state.register_regulated_asset(usdc_asset_id).await.unwrap();
 
-        // Verify regulation status
-        let regulation_status = state.get_asset_status(usdc_asset_id).await.unwrap();
-        assert_eq!(
-            regulation_status,
-            Some(true),
+        // Verify regulation status via IMT proof
+        let proof_data = state.get_asset_proof_data(usdc_asset_id).await.unwrap();
+        assert!(
+            proof_data.is_regulated,
             "USDC should be registered as regulated"
         );
 
@@ -536,8 +589,8 @@ mod tests {
         // ========== VERIFICATION: Full Workflow ==========
 
         // 1. Verify asset is regulated
-        let final_status = state.get_asset_status(usdc_asset_id).await.unwrap();
-        assert_eq!(final_status, Some(true), "Asset should remain regulated");
+        let final_proof = state.get_asset_proof_data(usdc_asset_id).await.unwrap();
+        assert!(final_proof.is_regulated, "Asset should remain regulated");
 
         // 2. Verify both users are registered (via position lookup)
         assert!(state

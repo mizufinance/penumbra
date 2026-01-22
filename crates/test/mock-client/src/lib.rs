@@ -1,6 +1,7 @@
 use anyhow::Error;
 use cnidarium::StateRead;
 use penumbra_sdk_compact_block::{component::StateReadExt as _, CompactBlock, StatePayload};
+use penumbra_sdk_compliance::{ComplianceLeaf, ComplianceRegistryRead, MerklePath};
 use penumbra_sdk_dex::{swap::SwapPlaintext, swap_claim::SwapClaimPlan};
 use penumbra_sdk_keys::{keys::SpendKey, FullViewingKey};
 use penumbra_sdk_sct::{
@@ -10,6 +11,7 @@ use penumbra_sdk_sct::{
 use penumbra_sdk_shielded_pool::{note, Note, SpendPlan};
 use penumbra_sdk_tct as tct;
 use penumbra_sdk_transaction::{AuthorizationData, Transaction, TransactionPlan, WitnessData};
+use penumbra_sdk_view::enrich_plan_with_compliance;
 use rand_core::OsRng;
 use std::collections::BTreeMap;
 
@@ -271,6 +273,39 @@ impl MockClient {
             .await
     }
 
+    /// Build a transaction with compliance enrichment from state.
+    ///
+    /// This method enriches the plan with compliance data (anchors, Merkle paths, etc.)
+    /// from the provided state, then builds the transaction. Use this for tests that
+    /// involve SpendPlan/OutputPlan actions which require compliance anchors.
+    pub async fn witness_auth_build_with_compliance<S: StateRead + Send + Sync>(
+        &self,
+        plan: &mut TransactionPlan,
+        state: S,
+    ) -> Result<Transaction, Error> {
+        // Enrich the plan with compliance data
+        self.enrich_plan_with_compliance_internal(plan, state)
+            .await?;
+        // Then build normally
+        let witness_data = self.witness_plan(plan)?;
+        let auth_data = self.authorize_plan(plan)?;
+        plan.clone()
+            .build_concurrent(&self.fvk, &witness_data, &auth_data)
+            .await
+    }
+
+    /// Enrich a transaction plan with compliance data from state.
+    ///
+    /// Uses the shared enrichment function from the view crate with StateReadComplianceProvider.
+    async fn enrich_plan_with_compliance_internal<S: StateRead + Send + Sync>(
+        &self,
+        plan: &mut TransactionPlan,
+        state: S,
+    ) -> Result<(), Error> {
+        let provider = StateReadComplianceProvider::new(state);
+        enrich_plan_with_compliance(plan, &provider, &mut OsRng).await
+    }
+
     pub fn notes_by_asset(
         &self,
         asset_id: penumbra_sdk_asset::asset::Id,
@@ -291,5 +326,250 @@ impl MockClient {
         self.notes
             .values()
             .filter(move |n| n.asset_id() == asset_id && !self.spent_note(&n.commit()))
+    }
+}
+
+/// A compliance proof provider backed by StateRead.
+/// Used by mock-client for test transaction enrichment.
+pub struct StateReadComplianceProvider<S> {
+    state: S,
+}
+
+impl<S> StateReadComplianceProvider<S> {
+    pub fn new(state: S) -> Self {
+        Self { state }
+    }
+}
+
+#[async_trait::async_trait]
+impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvider
+    for StateReadComplianceProvider<S>
+{
+    async fn get_compliance_anchor(&self) -> anyhow::Result<tct::StateCommitment> {
+        let root = self.state.get_user_tree_root().await?;
+        Ok(tct::StateCommitment(root.0))
+    }
+
+    async fn get_asset_anchor(&self) -> anyhow::Result<tct::StateCommitment> {
+        let root = self.state.get_asset_imt_root().await?;
+        Ok(tct::StateCommitment(root.0))
+    }
+
+    async fn get_asset_proof(
+        &self,
+        asset_id: penumbra_sdk_asset::asset::Id,
+    ) -> anyhow::Result<(MerklePath, u64, penumbra_sdk_compliance::IndexedLeaf, bool)> {
+        // Use the IMT-based get_asset_proof_data for proper indexed leaf
+        let proof_data = self.state.get_asset_proof_data(asset_id).await?;
+
+        let path = MerklePath {
+            layers: proof_data
+                .auth_path
+                .layers
+                .into_iter()
+                .map(|layer| penumbra_sdk_compliance::MerklePathLayer {
+                    siblings: layer.siblings,
+                })
+                .collect(),
+        };
+        Ok((
+            path,
+            proof_data.position,
+            proof_data.indexed_leaf,
+            proof_data.is_regulated,
+        ))
+    }
+
+    async fn get_user_proof(
+        &self,
+        address: &penumbra_sdk_keys::Address,
+        asset_id: penumbra_sdk_asset::asset::Id,
+    ) -> anyhow::Result<(MerklePath, u64, ComplianceLeaf)> {
+        use penumbra_sdk_compliance::BLACK_HOLE_ACK;
+        use penumbra_sdk_keys::keys::AddressComplianceKey;
+
+        // First check if asset is regulated
+        let (_, _, _, is_regulated) = self.get_asset_proof(asset_id).await?;
+
+        // For unregulated assets, return synthetic leaf (circuit skips user tree check)
+        if !is_regulated {
+            let synthetic_leaf = ComplianceLeaf {
+                address: address.clone(),
+                key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
+                asset_id,
+            };
+            return Ok((MerklePath::default(), 0, synthetic_leaf));
+        }
+
+        // For regulated assets, user must be registered
+        let position = self
+            .state
+            .get_user_leaf_position(address, asset_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "user not registered in compliance tree for address {:?} and asset {:?}",
+                    address,
+                    asset_id
+                )
+            })?;
+
+        let path_layers = self.state.get_user_auth_path(position).await?;
+        let leaf = self
+            .state
+            .get_user_leaf(address, asset_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "user leaf not found for address {:?} and asset {:?}",
+                    address,
+                    asset_id
+                )
+            })?;
+
+        let path = MerklePath {
+            layers: path_layers
+                .into_iter()
+                .map(|siblings| penumbra_sdk_compliance::MerklePathLayer {
+                    siblings: siblings.iter().map(|s| s.0.to_bytes().to_vec()).collect(),
+                })
+                .collect(),
+        };
+
+        Ok((path, position, leaf))
+    }
+
+    /// Override get_batch_proofs to ensure anchor/proof consistency.
+    ///
+    /// CRITICAL: We read each tree ONCE and use the same instance for both
+    /// the anchor and the proofs. This prevents the bug where anchor and proofs
+    /// come from different tree deserializations (which could differ due to
+    /// serialization issues or timing).
+    async fn get_batch_proofs(
+        &self,
+        queries: &[(penumbra_sdk_keys::Address, penumbra_sdk_asset::asset::Id)],
+    ) -> anyhow::Result<penumbra_sdk_compliance::BatchComplianceData> {
+        use penumbra_sdk_compliance::{BatchComplianceData, IndexedMerkleTree, BLACK_HOLE_ACK};
+        use penumbra_sdk_keys::keys::AddressComplianceKey;
+        use std::collections::BTreeMap;
+
+        // Read trees ONCE to ensure consistency between anchors and proofs
+        let asset_tree = self.state.get_asset_imt().await?;
+        let user_tree = self.state.get_user_tree().await?;
+
+        // Get anchors from the same tree instances used for proofs
+        let asset_anchor = tct::StateCommitment(asset_tree.root().0);
+        let compliance_anchor = tct::StateCommitment(user_tree.root().0);
+
+        eprintln!(
+            "[DEBUG] get_batch_proofs: asset_anchor={:?}, compliance_anchor={:?}, leaf_count={}",
+            asset_anchor,
+            compliance_anchor,
+            asset_tree.leaf_count()
+        );
+
+        let mut asset_proofs = BTreeMap::new();
+        let mut user_proofs = BTreeMap::new();
+
+        for (address, asset_id) in queries {
+            // Generate asset proof from the SAME tree we got the anchor from
+            if !asset_proofs.contains_key(asset_id) {
+                let value = asset_id.0;
+
+                let (path, position, indexed_leaf, is_regulated) = if asset_tree.contains(value) {
+                    // Regulated asset - membership proof
+                    let (pos, leaf, auth_path) = asset_tree.membership_proof(value)?;
+                    (MerklePath::from_auth_path(auth_path), pos, leaf, true)
+                } else {
+                    // Unregulated asset - non-membership proof
+                    let (pos, leaf, auth_path) = asset_tree.non_membership_proof(value)?;
+
+                    // DEBUG: Verify the proof before returning
+                    let verified = IndexedMerkleTree::verify_auth_path(
+                        pos,
+                        &leaf,
+                        &auth_path,
+                        asset_tree.root(),
+                        asset_tree.depth(),
+                    );
+                    eprintln!(
+                        "[DEBUG] non-membership proof: asset_id={:?}, pos={}, leaf.value={:?}, leaf.next_value={:?}, path_len={}, verified={}",
+                        asset_id, pos, leaf.value, leaf.next_value, auth_path.len(), verified
+                    );
+                    if !verified {
+                        eprintln!("[ERROR] IMT non-membership proof verification FAILED before returning!");
+                    }
+
+                    (MerklePath::from_auth_path(auth_path), pos, leaf, false)
+                };
+
+                asset_proofs.insert(*asset_id, (path, position, indexed_leaf, is_regulated));
+            }
+
+            // Generate user proof
+            let key = (address.clone(), *asset_id);
+            if !user_proofs.contains_key(&key) {
+                let (_, _, _, is_regulated) = asset_proofs.get(asset_id).unwrap();
+
+                let user_proof = if !is_regulated {
+                    // Unregulated: synthetic leaf (circuit skips user tree check)
+                    let synthetic_leaf = ComplianceLeaf {
+                        address: address.clone(),
+                        key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
+                        asset_id: *asset_id,
+                    };
+                    (MerklePath::default(), 0u64, synthetic_leaf)
+                } else {
+                    // Regulated: get real proof from user tree
+                    let position = self
+                        .state
+                        .get_user_leaf_position(address, *asset_id)
+                        .await?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "user not registered for address {:?} and asset {:?}",
+                                address,
+                                asset_id
+                            )
+                        })?;
+
+                    let auth_path = user_tree.auth_path(position)?;
+                    let leaf = self
+                        .state
+                        .get_user_leaf(address, *asset_id)
+                        .await?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "user leaf not found for address {:?} and asset {:?}",
+                                address,
+                                asset_id
+                            )
+                        })?;
+
+                    let path = MerklePath {
+                        layers: auth_path
+                            .into_iter()
+                            .map(|siblings| penumbra_sdk_compliance::MerklePathLayer {
+                                siblings: siblings
+                                    .iter()
+                                    .map(|s| s.0.to_bytes().to_vec())
+                                    .collect(),
+                            })
+                            .collect(),
+                    };
+
+                    (path, position, leaf)
+                };
+
+                user_proofs.insert(key, user_proof);
+            }
+        }
+
+        Ok(BatchComplianceData {
+            compliance_anchor,
+            asset_anchor,
+            asset_proofs,
+            user_proofs,
+        })
     }
 }

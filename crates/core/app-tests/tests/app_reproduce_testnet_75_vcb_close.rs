@@ -80,19 +80,13 @@ async fn app_can_reproduce_tesnet_75_vcb_close() -> anyhow::Result<()> {
             .await
     }?;
 
-    let mut client = MockClient::new(test_keys::SPEND_KEY.clone())
-        .with_sync_to_storage(&storage)
-        .await?
-        .tap(|c| info!(client.notes = %c.notes.len(), "mock client synced to test storage"));
-
+    // Pre-compute auction ID and NFT asset IDs for compliance registration
     let input = Value {
         asset_id: *STAKING_TOKEN_ASSET_ID,
         amount: 1_000_000u128.into(),
     };
-
     let max_output = Value::from_str("100gm")?;
     let min_output = Value::from_str("1gm")?;
-
     let dutch_auction_description = DutchAuctionDescription {
         input,
         output_id: max_output.asset_id,
@@ -103,11 +97,20 @@ async fn app_can_reproduce_tesnet_75_vcb_close() -> anyhow::Result<()> {
         step_count: 50,
         nonce: [0u8; 32],
     };
+    let auction_id = dutch_auction_description.id();
+    let nft_auction_open = AuctionNft::new(auction_id, 0);
+    let nft_auction_closed = AuctionNft::new(auction_id, 1);
 
+    // Sync the mock client to the latest state.
+    let mut client = MockClient::new(test_keys::SPEND_KEY.clone())
+        .with_sync_to_storage(&storage)
+        .await?
+        .tap(|c| info!(client.notes = %c.notes.len(), "mock client synced to test storage"));
+
+    // Create the schedule action using the pre-computed description
     let schedule_plan = ActionDutchAuctionSchedule {
         description: dutch_auction_description.clone(),
     };
-    let auction_id = dutch_auction_description.id();
 
     let note = client
         .notes
@@ -133,8 +136,6 @@ async fn app_can_reproduce_tesnet_75_vcb_close() -> anyhow::Result<()> {
         test_keys::ADDRESS_0.deref().clone(),
     );
 
-    let nft_auction_open = AuctionNft::new(auction_id, 0);
-
     let nft_open_output_note = OutputPlan::new(
         &mut OsRng,
         Value {
@@ -151,7 +152,7 @@ async fn app_can_reproduce_tesnet_75_vcb_close() -> anyhow::Result<()> {
         nft_open_output_note.clone().into(),
     ];
 
-    let plan = TransactionPlan {
+    let mut plan = TransactionPlan {
         memo: Some(MemoPlan::new(
             &mut OsRng,
             MemoPlaintext::blank_memo(test_keys::ADDRESS_0.deref().clone()),
@@ -165,7 +166,9 @@ async fn app_can_reproduce_tesnet_75_vcb_close() -> anyhow::Result<()> {
     }
     .with_populated_detection_data(OsRng, Default::default());
 
-    let tx = client.witness_auth_build(&plan).await?;
+    let tx = client
+        .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
+        .await?;
     node.block()
         .add_tx(tx.encode_to_vec())
         .execute()
@@ -179,7 +182,6 @@ async fn app_can_reproduce_tesnet_75_vcb_close() -> anyhow::Result<()> {
     assert!(auction_state.is_some(), "the chain should have recorded some auction state associated with the description we provided");
 
     let action_end_auction = ActionDutchAuctionEnd { auction_id };
-    let nft_auction_closed = AuctionNft::new(auction_id, 1);
 
     client.sync_to_latest(post_execution.clone()).await?;
 
@@ -222,7 +224,7 @@ async fn app_can_reproduce_tesnet_75_vcb_close() -> anyhow::Result<()> {
         nft_closed_output_note,
     ];
 
-    let plan = TransactionPlan {
+    let mut plan = TransactionPlan {
         memo: Some(MemoPlan::new(
             &mut OsRng,
             MemoPlaintext::blank_memo(test_keys::ADDRESS_0.deref().clone()),
@@ -236,7 +238,9 @@ async fn app_can_reproduce_tesnet_75_vcb_close() -> anyhow::Result<()> {
     }
     .with_populated_detection_data(OsRng, Default::default());
 
-    let tx = client.witness_auth_build(&plan).await?;
+    let tx = client
+        .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
+        .await?;
     tracing::info!("closing the auction");
     node.block()
         .add_tx(tx.encode_to_vec())

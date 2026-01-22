@@ -68,7 +68,10 @@ impl ComplianceStorage {
 
     /// Save a detected transfer to the database.
     pub fn save_transfer(&self, transfer: &DetectedTransfer) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("mutex poisoned: {}", e))?;
 
         conn.execute(
             r#"
@@ -94,7 +97,10 @@ impl ComplianceStorage {
 
     /// Save multiple transfers in a single transaction.
     pub fn save_transfers(&self, transfers: &[DetectedTransfer]) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("mutex poisoned: {}", e))?;
         let tx = conn.unchecked_transaction()?;
 
         for transfer in transfers {
@@ -134,7 +140,10 @@ impl ComplianceStorage {
         min_height: Option<u64>,
         max_height: Option<u64>,
     ) -> Result<Vec<DetectedTransfer>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("mutex poisoned: {}", e))?;
 
         // Build dynamic query
         let mut query = String::from(
@@ -142,9 +151,9 @@ impl ComplianceStorage {
         );
         let mut params_vec: Vec<String> = Vec::new();
 
-        if asset_id.is_some() {
+        if let Some(id) = asset_id {
             query.push_str(" AND asset_id = ?");
-            params_vec.push(asset_id.unwrap().to_string());
+            params_vec.push(id.to_string());
         }
 
         if let Some(min) = min_height {
@@ -241,7 +250,10 @@ impl ComplianceStorage {
 
     /// Get the last synced height.
     pub fn last_sync_height(&self) -> Result<u64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("mutex poisoned: {}", e))?;
 
         let height: i64 = conn
             .query_row(
@@ -257,7 +269,10 @@ impl ComplianceStorage {
 
     /// Update the last synced height.
     pub fn update_sync_height(&self, height: u64) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("mutex poisoned: {}", e))?;
 
         conn.execute(
             "UPDATE sync_state SET last_height = ?1 WHERE id = 1",
@@ -269,7 +284,10 @@ impl ComplianceStorage {
 
     /// Get count of detected transfers.
     pub fn transfer_count(&self) -> Result<u64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("mutex poisoned: {}", e))?;
 
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM detected_transfers", [], |row| {
             row.get(0)

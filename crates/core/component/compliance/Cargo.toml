@@ -13,6 +13,7 @@ component = [
     "cnidarium-component",
     "penumbra-sdk-proto/cnidarium",
     "penumbra-sdk-proto/rpc",
+    "penumbra-sdk-sct/component",
     "rusqlite",
     "tokio",
     "tonic",
@@ -40,6 +41,7 @@ penumbra-sdk-asset = {workspace = true, default-features = false}
 penumbra-sdk-keys = {workspace = true, default-features = false}
 penumbra-sdk-num = {workspace = true, default-features = false}
 penumbra-sdk-proto = {workspace = true, default-features = false}
+penumbra-sdk-sct = {workspace = true, default-features = false}
 penumbra-sdk-tct = {workspace = true, default-features = false}
 penumbra-sdk-txhash = {workspace = true, default-features = false}
 poseidon377 = {workspace = true, features = ["r1cs"]}

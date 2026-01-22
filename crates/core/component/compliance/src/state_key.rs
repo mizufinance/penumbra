@@ -1,6 +1,6 @@
-/// State key for the asset regulation tree
-pub fn asset_tree() -> &'static str {
-    "compliance/asset_tree"
+/// State key for the asset Indexed Merkle Tree (IMT)
+pub fn asset_imt() -> &'static str {
+    "compliance/asset_imt"
 }
 
 /// State key for the user compliance tree
@@ -16,16 +16,6 @@ pub fn user_count() -> &'static str {
 /// State key for the asset count (number of registered assets)
 pub fn asset_count() -> &'static str {
     "compliance/asset_count"
-}
-
-/// State key for mapping an asset ID to its position in the asset tree
-pub fn asset_index(asset_id: &penumbra_sdk_asset::asset::Id) -> String {
-    format!("compliance/asset_index/{}", asset_id)
-}
-
-/// State key for the public regulation status of an asset
-pub fn asset_status(asset_id: &penumbra_sdk_asset::asset::Id) -> String {
-    format!("compliance/asset_status/{}", asset_id)
 }
 
 /// State key for reverse lookup: (address, asset_id) -> position in user tree
@@ -44,4 +34,35 @@ pub fn user_leaf_data(
     asset_id: &penumbra_sdk_asset::asset::Id,
 ) -> String {
     format!("compliance/user_leaf/{}/{}", address, asset_id)
+}
+
+/// State keys for historical anchor storage (following SCT pattern).
+///
+/// Anchors are stored bidirectionally:
+/// - anchor_by_height: height -> anchor (for querying current anchor)
+/// - anchor_lookup: anchor -> height (for validating historical anchors)
+pub mod anchor {
+    use penumbra_sdk_tct::StateCommitment;
+
+    /// State key for user tree anchor at a specific block height.
+    pub fn user_anchor_by_height(height: u64) -> String {
+        format!("compliance/anchor/user/by_height/{}", height)
+    }
+
+    /// State key for reverse lookup: user tree anchor -> block height.
+    /// Used to validate that a given anchor was valid at some historical point.
+    pub fn user_anchor_lookup(anchor: &StateCommitment) -> String {
+        format!("compliance/anchor/user/lookup/{}", anchor.0)
+    }
+
+    /// State key for asset IMT anchor at a specific block height.
+    pub fn asset_anchor_by_height(height: u64) -> String {
+        format!("compliance/anchor/asset/by_height/{}", height)
+    }
+
+    /// State key for reverse lookup: asset IMT anchor -> block height.
+    /// Used to validate that a given anchor was valid at some historical point.
+    pub fn asset_anchor_lookup(anchor: &StateCommitment) -> String {
+        format!("compliance/anchor/asset/lookup/{}", anchor.0)
+    }
 }

@@ -8,13 +8,15 @@ use {
         genesis::{self, AppState},
         server::consensus::Consensus,
     },
+    penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID,
     penumbra_sdk_keys::test_keys,
     penumbra_sdk_mock_client::MockClient,
     penumbra_sdk_mock_consensus::TestNode,
     penumbra_sdk_proto::DomainType,
+    penumbra_sdk_sct::component::clock::EpochRead as _,
     penumbra_sdk_stake::{
-        component::validator_handler::ValidatorDataRead as _, validator::Validator, FundingStreams,
-        GovernanceKey, IdentityKey,
+        component::validator_handler::ValidatorDataRead as _, validator::Validator,
+        DelegationToken, FundingStreams, GovernanceKey, IdentityKey, UnbondingToken,
     },
     rand_core::OsRng,
     std::ops::Deref,
@@ -35,6 +37,16 @@ async fn app_can_define_and_delegate_to_a_validator() -> anyhow::Result<()> {
     let guard = common::set_tracing_subscriber();
     let storage = TempStorage::new_with_penumbra_prefixes().await?;
 
+    // To define a validator, we need to define two keypairs: an identity key
+    // for the Penumbra application and a consensus key for cometbft.
+    let new_validator_id_sk = SigningKey::<SpendAuth>::new(OsRng);
+    let new_validator_id = IdentityKey(VerificationKey::from(&new_validator_id_sk).into());
+    let new_validator_consensus_sk = ed25519_consensus::SigningKey::new(OsRng);
+    let new_validator_consensus = new_validator_consensus_sk.verification_key();
+
+    // Calculate delegation token ID for compliance setup
+    let delegation_token_id = DelegationToken::new(new_validator_id.clone()).id();
+
     // Configure an AppState with slightly shorter epochs than usual.
     let app_state = AppState::Content(
         genesis::Content::default()
@@ -52,7 +64,7 @@ async fn app_can_define_and_delegate_to_a_validator() -> anyhow::Result<()> {
             .await
     }?;
 
-    // Sync the mock client, using the test wallet's spend key, to the latest snapshot.
+    // Sync the mock client to the latest state.
     let mut client = MockClient::new(test_keys::SPEND_KEY.clone())
         .with_sync_to_storage(&storage)
         .await?
@@ -108,16 +120,8 @@ async fn app_can_define_and_delegate_to_a_validator() -> anyhow::Result<()> {
         assert_eq!(end, expected, "validator should stay in the consensus set");
     }
 
-    // To define a validator, we need to define two keypairs: an identity key
-    // for the Penumbra application and a consensus key for cometbft.
-    let new_validator_id_sk = SigningKey::<SpendAuth>::new(OsRng);
-    let new_validator_id = IdentityKey(VerificationKey::from(&new_validator_id_sk).into());
-    let new_validator_consensus_sk = ed25519_consensus::SigningKey::new(OsRng);
-    let new_validator_consensus = new_validator_consensus_sk.verification_key();
-
     // Insert the validator's consensus keypair into the keyring so it can be used to sign blocks.
     node.keyring_mut()
-        // Keyring should just be a BTreeMap rather than creating a new API
         .insert(new_validator_consensus, new_validator_consensus_sk);
 
     // Now define the validator's configuration data.
@@ -220,9 +224,8 @@ async fn app_can_define_and_delegate_to_a_validator() -> anyhow::Result<()> {
     }
 
     // Now, create a transaction that delegates to the new validator.
-    let plan = {
+    let mut plan = {
         use {
-            penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID,
             penumbra_sdk_sct::component::clock::EpochRead,
             penumbra_sdk_shielded_pool::{OutputPlan, SpendPlan},
             penumbra_sdk_transaction::{
@@ -272,9 +275,11 @@ async fn app_can_define_and_delegate_to_a_validator() -> anyhow::Result<()> {
                 ..Default::default()
             },
         }
-        .with_populated_detection_data(OsRng, Default::default())
     };
-    let tx = client.witness_auth_build(&plan).await?;
+    plan.populate_detection_data(OsRng, Default::default());
+    let tx = client
+        .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
+        .await?;
 
     // Execute the transaction, applying it to the chain state.
     let pre_delegate_snapshot = storage.latest_snapshot();
@@ -378,63 +383,68 @@ async fn app_can_define_and_delegate_to_a_validator() -> anyhow::Result<()> {
         });
 
     // Build a transaction that will now undelegate from the validator.
-    let plan = {
+    // We need to first calculate the unbonding token ID to set up compliance.
+    let snapshot = storage.latest_snapshot();
+    client.sync_to_latest(snapshot.clone()).await?;
+    let rate = snapshot
+        .get_validator_rate(&new_validator_id)
+        .await?
+        .ok_or(anyhow!("new validator has a rate"))?
+        .tap(|rate| tracing::info!(?rate, "got new validator rate"));
+
+    let delegation_note = client
+        .notes
+        .values()
+        .filter(|n| n.asset_id() == delegation_token_id)
+        .cloned()
+        .next()
+        .expect("the test account should have one delegation token note");
+
+    // Get current epoch for undelegation
+    let current_epoch = storage.latest_snapshot().get_current_epoch().await?;
+
+    // Sync client to latest state
+    client.sync_to_latest(storage.latest_snapshot()).await?;
+
+    // Now build the undelegation transaction
+    let mut plan = {
         use {
-            penumbra_sdk_sct::component::clock::EpochRead,
             penumbra_sdk_shielded_pool::{OutputPlan, SpendPlan},
-            penumbra_sdk_stake::DelegationToken,
             penumbra_sdk_transaction::{
                 memo::MemoPlaintext, plan::MemoPlan, TransactionParameters, TransactionPlan,
             },
         };
-        let snapshot = storage.latest_snapshot();
-        client.sync_to_latest(snapshot.clone()).await?;
-        let rate = snapshot
-            .get_validator_rate(&new_validator_id)
-            .await?
-            .ok_or(anyhow!("new validator has a rate"))?
-            .tap(|rate| tracing::info!(?rate, "got new validator rate"));
-
-        let undelegation_id = DelegationToken::new(new_validator_id).id();
-        let note = client
-            .notes
-            .values()
-            .filter(|n| n.asset_id() == undelegation_id)
-            .cloned()
-            .next()
-            .expect("the test account should have one staking token note");
         let spend = SpendPlan::new(
             &mut rand_core::OsRng,
-            note.clone(),
+            delegation_note.clone(),
             client
-                .position(note.commit())
+                .position(delegation_note.commit())
                 .expect("note should be in mock client's tree"),
         );
-        let undelegate = rate.build_undelegate(
-            storage.latest_snapshot().get_current_epoch().await?,
-            note.amount(),
-        );
+        let undelegate = rate.build_undelegate(current_epoch, delegation_note.amount());
         let output = OutputPlan::new(
             &mut rand_core::OsRng,
             undelegate.unbonded_value(),
             test_keys::ADDRESS_1.deref().clone(),
         );
+
         TransactionPlan {
             actions: vec![spend.into(), output.into(), undelegate.into()],
-            // Now fill out the remaining parts of the transaction needed for verification:
             memo: Some(MemoPlan::new(
                 &mut OsRng,
                 MemoPlaintext::blank_memo(test_keys::ADDRESS_0.deref().clone()),
             )),
-            detection_data: None, // We'll set this automatically below
+            detection_data: None,
             transaction_parameters: TransactionParameters {
                 chain_id: TestNode::<()>::CHAIN_ID.to_string(),
                 ..Default::default()
             },
         }
-        .with_populated_detection_data(OsRng, Default::default())
     };
-    let tx = client.witness_auth_build(&plan).await?;
+    plan.populate_detection_data(OsRng, Default::default());
+    let tx = client
+        .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
+        .await?;
 
     // Execute the transaction, applying it to the chain state.
     node.block()
