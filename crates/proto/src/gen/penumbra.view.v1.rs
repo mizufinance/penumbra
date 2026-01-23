@@ -2438,6 +2438,26 @@ impl ::prost::Name for MerklePath {
         "/penumbra.view.v1.MerklePath".into()
     }
 }
+/// Data for an indexed leaf in the asset IMT (for proof verification).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IndexedLeafData {
+    #[prost(bytes = "vec", tag = "1")]
+    pub value: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint64, tag = "2")]
+    pub next_index: u64,
+    #[prost(bytes = "vec", tag = "3")]
+    pub next_value: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for IndexedLeafData {
+    const NAME: &'static str = "IndexedLeafData";
+    const PACKAGE: &'static str = "penumbra.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.view.v1.IndexedLeafData".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.view.v1.IndexedLeafData".into()
+    }
+}
 /// Response containing Merkle proofs for compliance ZK proofs.
 /// This provides all the data needed to populate SpendPlan/OutputPlan compliance fields.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2471,6 +2491,10 @@ pub struct ComplianceMerkleProofsResponse {
     /// Current asset tree root (StateCommitment, 32 bytes).
     #[prost(bytes = "vec", tag = "9")]
     pub asset_anchor: ::prost::alloc::vec::Vec<u8>,
+    /// The indexed leaf data for asset IMT proof verification.
+    /// Contains (value, next_index, next_value) needed for membership/non-membership proofs.
+    #[prost(message, optional, tag = "10")]
+    pub asset_indexed_leaf: ::core::option::Option<IndexedLeafData>,
 }
 impl ::prost::Name for ComplianceMerkleProofsResponse {
     const NAME: &'static str = "ComplianceMerkleProofsResponse";

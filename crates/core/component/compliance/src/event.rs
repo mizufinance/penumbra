@@ -1,21 +1,21 @@
 use anyhow::{anyhow, Context as _};
 use penumbra_sdk_asset::asset;
-use penumbra_sdk_keys::Address;
 use penumbra_sdk_proto::{core::component::compliance::v1 as pb, DomainType, Name as _};
 use penumbra_sdk_tct::StateCommitment;
+
+use crate::indexed_tree::IndexedLeaf;
+use crate::structs::ComplianceLeaf;
 
 /// Create a user registration event proto for emitting via record_proto.
 pub fn user_registered(
     position: u64,
     commitment: StateCommitment,
-    address: Address,
-    asset_id: asset::Id,
+    leaf: ComplianceLeaf,
 ) -> pb::EventUserRegistered {
     pb::EventUserRegistered {
         position,
         commitment: <[u8; 32]>::from(commitment).to_vec(),
-        address: Some(address.into()),
-        asset_id: Some(asset_id.into()),
+        leaf: Some(leaf.into()),
     }
 }
 
@@ -24,12 +24,45 @@ pub fn asset_registered(
     asset_id: asset::Id,
     is_regulated: bool,
     position: u64,
+    indexed_leaf: IndexedLeaf,
+    low_leaf_position: u64,
+    updated_low_leaf: IndexedLeaf,
 ) -> pb::EventAssetRegistered {
     pb::EventAssetRegistered {
         asset_id: Some(asset_id.into()),
         is_regulated,
         position,
+        indexed_leaf: Some(indexed_leaf_to_proto(&indexed_leaf)),
+        low_leaf_position,
+        updated_low_leaf: Some(indexed_leaf_to_proto(&updated_low_leaf)),
     }
+}
+
+fn indexed_leaf_to_proto(leaf: &IndexedLeaf) -> pb::IndexedLeafData {
+    pb::IndexedLeafData {
+        value: leaf.value.to_bytes().to_vec(),
+        next_index: leaf.next_index,
+        next_value: leaf.next_value.to_bytes().to_vec(),
+    }
+}
+
+fn indexed_leaf_from_proto(proto: pb::IndexedLeafData) -> anyhow::Result<IndexedLeaf> {
+    let value_bytes: [u8; 32] = proto
+        .value
+        .try_into()
+        .map_err(|_| anyhow!("value must be 32 bytes"))?;
+    let next_value_bytes: [u8; 32] = proto
+        .next_value
+        .try_into()
+        .map_err(|_| anyhow!("next_value must be 32 bytes"))?;
+
+    Ok(IndexedLeaf {
+        value: decaf377::Fq::from_bytes_checked(&value_bytes)
+            .map_err(|_| anyhow!("invalid value field element"))?,
+        next_index: proto.next_index,
+        next_value: decaf377::Fq::from_bytes_checked(&next_value_bytes)
+            .map_err(|_| anyhow!("invalid next_value field element"))?,
+    })
 }
 
 /// Create a compliance anchor event proto for emitting via record_proto.
@@ -51,8 +84,7 @@ pub fn compliance_anchor(
 pub struct EventUserRegistered {
     pub position: u64,
     pub commitment: StateCommitment,
-    pub address: Address,
-    pub asset_id: asset::Id,
+    pub leaf: ComplianceLeaf,
 }
 
 impl DomainType for EventUserRegistered {
@@ -73,14 +105,7 @@ impl TryFrom<pb::EventUserRegistered> for EventUserRegistered {
             Ok(EventUserRegistered {
                 position: value.position,
                 commitment,
-                address: value
-                    .address
-                    .ok_or(anyhow!("missing `address`"))?
-                    .try_into()?,
-                asset_id: value
-                    .asset_id
-                    .ok_or(anyhow!("missing `asset_id`"))?
-                    .try_into()?,
+                leaf: value.leaf.ok_or(anyhow!("missing `leaf`"))?.try_into()?,
             })
         }
         inner(value).context(format!("parsing {}", pb::EventUserRegistered::NAME))
@@ -92,8 +117,7 @@ impl From<EventUserRegistered> for pb::EventUserRegistered {
         Self {
             position: value.position,
             commitment: <[u8; 32]>::from(value.commitment).to_vec(),
-            address: Some(value.address.into()),
-            asset_id: Some(value.asset_id.into()),
+            leaf: Some(value.leaf.into()),
         }
     }
 }
@@ -103,6 +127,9 @@ pub struct EventAssetRegistered {
     pub asset_id: asset::Id,
     pub is_regulated: bool,
     pub position: u64,
+    pub indexed_leaf: IndexedLeaf,
+    pub low_leaf_position: u64,
+    pub updated_low_leaf: IndexedLeaf,
 }
 
 impl DomainType for EventAssetRegistered {
@@ -121,6 +148,17 @@ impl TryFrom<pb::EventAssetRegistered> for EventAssetRegistered {
                     .try_into()?,
                 is_regulated: value.is_regulated,
                 position: value.position,
+                indexed_leaf: indexed_leaf_from_proto(
+                    value
+                        .indexed_leaf
+                        .ok_or(anyhow!("missing `indexed_leaf`"))?,
+                )?,
+                low_leaf_position: value.low_leaf_position,
+                updated_low_leaf: indexed_leaf_from_proto(
+                    value
+                        .updated_low_leaf
+                        .ok_or(anyhow!("missing `updated_low_leaf`"))?,
+                )?,
             })
         }
         inner(value).context(format!("parsing {}", pb::EventAssetRegistered::NAME))
@@ -133,6 +171,9 @@ impl From<EventAssetRegistered> for pb::EventAssetRegistered {
             asset_id: Some(value.asset_id.into()),
             is_regulated: value.is_regulated,
             position: value.position,
+            indexed_leaf: Some(indexed_leaf_to_proto(&value.indexed_leaf)),
+            low_leaf_position: value.low_leaf_position,
+            updated_low_leaf: Some(indexed_leaf_to_proto(&value.updated_low_leaf)),
         }
     }
 }

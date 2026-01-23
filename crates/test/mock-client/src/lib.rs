@@ -14,6 +14,7 @@ use penumbra_sdk_transaction::{AuthorizationData, Transaction, TransactionPlan, 
 use penumbra_sdk_view::enrich_plan_with_compliance;
 use rand_core::OsRng;
 use std::collections::BTreeMap;
+use tracing;
 
 /// A bare-bones mock client for use exercising the state machine.
 pub struct MockClient {
@@ -492,12 +493,17 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
                         asset_tree.root(),
                         asset_tree.depth(),
                     );
-                    eprintln!(
-                        "[DEBUG] non-membership proof: asset_id={:?}, pos={}, leaf.value={:?}, leaf.next_value={:?}, path_len={}, verified={}",
-                        asset_id, pos, leaf.value, leaf.next_value, auth_path.len(), verified
+                    tracing::debug!(
+                        ?asset_id,
+                        pos,
+                        ?leaf.value,
+                        ?leaf.next_value,
+                        path_len = auth_path.len(),
+                        verified,
+                        "non-membership proof"
                     );
                     if !verified {
-                        eprintln!("[ERROR] IMT non-membership proof verification FAILED before returning!");
+                        tracing::error!("IMT non-membership proof verification FAILED");
                     }
 
                     (MerklePath::from_auth_path(auth_path), pos, leaf, false)

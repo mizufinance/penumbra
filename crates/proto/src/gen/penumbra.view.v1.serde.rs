@@ -3316,6 +3316,9 @@ impl serde::Serialize for ComplianceMerkleProofsResponse {
         if !self.asset_anchor.is_empty() {
             len += 1;
         }
+        if self.asset_indexed_leaf.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.view.v1.ComplianceMerkleProofsResponse", len)?;
         if self.user_registered {
             struct_ser.serialize_field("userRegistered", &self.user_registered)?;
@@ -3352,6 +3355,9 @@ impl serde::Serialize for ComplianceMerkleProofsResponse {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("assetAnchor", pbjson::private::base64::encode(&self.asset_anchor).as_str())?;
         }
+        if let Some(v) = self.asset_indexed_leaf.as_ref() {
+            struct_ser.serialize_field("assetIndexedLeaf", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -3380,6 +3386,8 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
             "complianceAnchor",
             "asset_anchor",
             "assetAnchor",
+            "asset_indexed_leaf",
+            "assetIndexedLeaf",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -3393,6 +3401,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
             AssetPosition,
             ComplianceAnchor,
             AssetAnchor,
+            AssetIndexedLeaf,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -3424,6 +3433,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
                             "assetPosition" | "asset_position" => Ok(GeneratedField::AssetPosition),
                             "complianceAnchor" | "compliance_anchor" => Ok(GeneratedField::ComplianceAnchor),
                             "assetAnchor" | "asset_anchor" => Ok(GeneratedField::AssetAnchor),
+                            "assetIndexedLeaf" | "asset_indexed_leaf" => Ok(GeneratedField::AssetIndexedLeaf),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -3452,6 +3462,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
                 let mut asset_position__ = None;
                 let mut compliance_anchor__ = None;
                 let mut asset_anchor__ = None;
+                let mut asset_indexed_leaf__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::UserRegistered => {
@@ -3516,6 +3527,12 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::AssetIndexedLeaf => {
+                            if asset_indexed_leaf__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetIndexedLeaf"));
+                            }
+                            asset_indexed_leaf__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -3531,6 +3548,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
                     asset_position: asset_position__.unwrap_or_default(),
                     compliance_anchor: compliance_anchor__.unwrap_or_default(),
                     asset_anchor: asset_anchor__.unwrap_or_default(),
+                    asset_indexed_leaf: asset_indexed_leaf__,
                 })
             }
         }
@@ -4880,6 +4898,149 @@ impl<'de> serde::Deserialize<'de> for IndexByAddressResponse {
             }
         }
         deserializer.deserialize_struct("penumbra.view.v1.IndexByAddressResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for IndexedLeafData {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.value.is_empty() {
+            len += 1;
+        }
+        if self.next_index != 0 {
+            len += 1;
+        }
+        if !self.next_value.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.view.v1.IndexedLeafData", len)?;
+        if !self.value.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("value", pbjson::private::base64::encode(&self.value).as_str())?;
+        }
+        if self.next_index != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("nextIndex", ToString::to_string(&self.next_index).as_str())?;
+        }
+        if !self.next_value.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("nextValue", pbjson::private::base64::encode(&self.next_value).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for IndexedLeafData {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "value",
+            "next_index",
+            "nextIndex",
+            "next_value",
+            "nextValue",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Value,
+            NextIndex,
+            NextValue,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "value" => Ok(GeneratedField::Value),
+                            "nextIndex" | "next_index" => Ok(GeneratedField::NextIndex),
+                            "nextValue" | "next_value" => Ok(GeneratedField::NextValue),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = IndexedLeafData;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.view.v1.IndexedLeafData")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<IndexedLeafData, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut value__ = None;
+                let mut next_index__ = None;
+                let mut next_value__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Value => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("value"));
+                            }
+                            value__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NextIndex => {
+                            if next_index__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nextIndex"));
+                            }
+                            next_index__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NextValue => {
+                            if next_value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nextValue"));
+                            }
+                            next_value__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(IndexedLeafData {
+                    value: value__.unwrap_or_default(),
+                    next_index: next_index__.unwrap_or_default(),
+                    next_value: next_value__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.view.v1.IndexedLeafData", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for LatestSwapsRequest {

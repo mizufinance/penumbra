@@ -6,7 +6,7 @@ use penumbra_sdk_proto::core::component::compliance::v1::{
     ComplianceAssetStatusRequest, ComplianceAssetStatusResponse,
     ComplianceBatchMerkleProofsRequest, ComplianceBatchMerkleProofsResponse,
     ComplianceMerkleProofsRequest, ComplianceMerkleProofsResponse, ComplianceUserLeafRequest,
-    ComplianceUserLeafResponse, MerklePath, MerklePathLayer,
+    ComplianceUserLeafResponse, IndexedLeafData, MerklePath, MerklePathLayer,
 };
 use penumbra_sdk_sct::component::clock::EpochRead;
 use tonic::Status;
@@ -237,6 +237,13 @@ impl QueryService for Server {
             "returning compliance merkle proofs"
         );
 
+        // Convert indexed_leaf to proto
+        let asset_indexed_leaf = Some(IndexedLeafData {
+            value: asset_proof_data.indexed_leaf.value.to_bytes().to_vec(),
+            next_index: asset_proof_data.indexed_leaf.next_index,
+            next_value: asset_proof_data.indexed_leaf.next_value.to_bytes().to_vec(),
+        });
+
         let response = ComplianceMerkleProofsResponse {
             user_registered,
             asset_registered,
@@ -247,6 +254,7 @@ impl QueryService for Server {
             asset_position: asset_pos,
             compliance_anchor: compliance_anchor.0.to_bytes().to_vec(),
             asset_anchor: asset_anchor.0.to_bytes().to_vec(),
+            asset_indexed_leaf,
         };
 
         Ok(tonic::Response::new(response))
@@ -400,6 +408,13 @@ impl QueryService for Server {
                     .collect(),
             });
 
+            // Convert indexed_leaf to proto
+            let asset_indexed_leaf = Some(IndexedLeafData {
+                value: asset_proof_data.indexed_leaf.value.to_bytes().to_vec(),
+                next_index: asset_proof_data.indexed_leaf.next_index,
+                next_value: asset_proof_data.indexed_leaf.next_value.to_bytes().to_vec(),
+            });
+
             results.push(ComplianceMerkleProofsResponse {
                 user_registered,
                 asset_registered: true, // With IMT, always have proof data
@@ -411,6 +426,7 @@ impl QueryService for Server {
                 // Individual results don't need anchors - they're in the batch response
                 compliance_anchor: vec![],
                 asset_anchor: vec![],
+                asset_indexed_leaf,
             });
         }
 

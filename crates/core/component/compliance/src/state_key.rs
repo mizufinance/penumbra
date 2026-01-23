@@ -36,6 +36,22 @@ pub fn user_leaf_data(
     format!("compliance/user_leaf/{}/{}", address, asset_id)
 }
 
+/// State key for pending user registrations (buffered during block execution).
+///
+/// These are accumulated during transaction processing and drained when
+/// building the CompactBlock, following the SCT pending_note_payloads pattern.
+pub fn pending_user_registrations() -> &'static str {
+    "compliance/pending_user_registrations"
+}
+
+/// State key for pending asset registrations (buffered during block execution).
+///
+/// These are accumulated during transaction processing and drained when
+/// building the CompactBlock, following the SCT pending_note_payloads pattern.
+pub fn pending_asset_registrations() -> &'static str {
+    "compliance/pending_asset_registrations"
+}
+
 /// State keys for historical anchor storage (following SCT pattern).
 ///
 /// Anchors are stored bidirectionally:

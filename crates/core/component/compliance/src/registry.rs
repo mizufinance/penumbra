@@ -7,7 +7,7 @@ use penumbra_sdk_sct::component::clock::EpochRead;
 use penumbra_sdk_tct::StateCommitment;
 
 use crate::{
-    event,
+    event, indexed_tree,
     indexed_tree::{IndexedLeaf, IndexedMerkleTree},
     state_key,
     structs::{ComplianceLeaf, MerklePath},
@@ -343,28 +343,40 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     /// Only regulated assets are stored in the IMT. Unregulated status is proven
     /// via non-membership proofs (asset falls in a gap between leaves).
     ///
-    /// This method is idempotent - if the asset is already registered, it returns the existing position.
+    /// This method is idempotent - if the asset is already registered, returns None.
     ///
     /// # Returns
-    /// The position in the IMT where the asset is stored.
-    async fn register_regulated_asset(&mut self, asset_id: asset::Id) -> Result<u64> {
+    /// Some(InsertResult) with full insertion data for client sync, or None if already registered.
+    async fn register_regulated_asset(
+        &mut self,
+        asset_id: asset::Id,
+    ) -> Result<Option<indexed_tree::InsertResult>> {
         let mut tree = self.get_asset_imt().await?;
 
         // Check if already exists - be idempotent
         if let Some(position) = tree.get_position(asset_id.0) {
             tracing::debug!(?asset_id, position, "asset already in IMT, skipping");
-            return Ok(position);
+            return Ok(None);
         }
 
-        // Insert into the IMT and get the position
-        let position = tree.insert(asset_id.0)?;
+        // Insert into the IMT and get full data
+        let result = tree.insert_with_data(asset_id.0)?;
 
         // Save the updated tree
         let tree_bytes = bincode::serialize(&tree)?;
         self.put_raw(state_key::asset_imt().to_string(), tree_bytes);
 
-        tracing::debug!(?asset_id, position, "registered regulated asset in IMT");
-        Ok(position)
+        // Update the persisted asset count
+        let new_count = tree.leaf_count();
+        self.put_proto(state_key::asset_count().to_string(), new_count);
+
+        tracing::debug!(
+            ?asset_id,
+            result.position,
+            new_count,
+            "registered regulated asset in IMT"
+        );
+        Ok(Some(result))
     }
 
     /// Save the asset IMT to state.
@@ -414,6 +426,53 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
         );
 
         Ok(())
+    }
+
+    // ========== Pending Registrations for CompactBlock ==========
+
+    /// Buffer a user registration event for inclusion in the CompactBlock.
+    ///
+    /// This should be called when a user is registered during transaction processing.
+    /// The events are accumulated and drained when building the CompactBlock.
+    fn record_pending_user_registration(&mut self, event: event::EventUserRegistered) {
+        let key = state_key::pending_user_registrations();
+        let mut pending: Vec<event::EventUserRegistered> = self.object_get(key).unwrap_or_default();
+        pending.push(event);
+        self.object_put(key, pending);
+    }
+
+    /// Buffer an asset registration event for inclusion in the CompactBlock.
+    ///
+    /// This should be called when an asset is registered during transaction processing.
+    /// The events are accumulated and drained when building the CompactBlock.
+    fn record_pending_asset_registration(&mut self, event: event::EventAssetRegistered) {
+        let key = state_key::pending_asset_registrations();
+        let mut pending: Vec<event::EventAssetRegistered> =
+            self.object_get(key).unwrap_or_default();
+        pending.push(event);
+        self.object_put(key, pending);
+    }
+
+    /// Retrieve and clear all pending user registrations.
+    ///
+    /// This should be called during CompactBlock finalization to include
+    /// user registration events for client sync.
+    fn pending_user_registrations(&mut self) -> Vec<event::EventUserRegistered> {
+        let key = state_key::pending_user_registrations();
+        let result = self.object_get(key).unwrap_or_default();
+        self.object_delete(key);
+        result
+    }
+
+    /// Retrieve and clear all pending asset registrations.
+    ///
+    /// This should be called during CompactBlock finalization to include
+    /// asset registration events for client sync.
+    fn pending_asset_registrations(&mut self) -> Vec<event::EventAssetRegistered> {
+        let key = state_key::pending_asset_registrations();
+        let result = self.object_get(key).unwrap_or_default();
+        self.object_delete(key);
+        result
     }
 }
 

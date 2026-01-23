@@ -799,6 +799,11 @@ mod tests {
                     asset_position: 0,
                     compliance_anchor: vec![0u8; 32],
                     asset_anchor: vec![0u8; 32],
+                    asset_indexed_leaf: Some(pb::IndexedLeafData {
+                        value: vec![0u8; 32],
+                        next_index: 0,
+                        next_value: vec![0u8; 32],
+                    }),
                 })
                 .collect();
             async move {
@@ -1044,6 +1049,11 @@ mod tests {
                     asset_position: 0,
                     compliance_anchor: vec![0u8; 32],
                     asset_anchor: vec![0u8; 32],
+                    asset_indexed_leaf: Some(pb::IndexedLeafData {
+                        value: vec![0u8; 32],
+                        next_index: 0,
+                        next_value: vec![0u8; 32],
+                    }),
                 })
             }
             .boxed()
@@ -1199,6 +1209,11 @@ mod tests {
                     asset_position: 0,
                     compliance_anchor: vec![0u8; 32],
                     asset_anchor: vec![0u8; 32],
+                    asset_indexed_leaf: Some(pb::IndexedLeafData {
+                        value: vec![0u8; 32],
+                        next_index: 0,
+                        next_value: vec![0u8; 32],
+                    }),
                 })
                 .collect();
             async move {
@@ -1444,6 +1459,11 @@ mod tests {
                     asset_position: 0,
                     compliance_anchor: vec![0u8; 32],
                     asset_anchor: vec![0u8; 32],
+                    asset_indexed_leaf: Some(pb::IndexedLeafData {
+                        value: vec![0u8; 32],
+                        next_index: 0,
+                        next_value: vec![0u8; 32],
+                    }),
                 })
             }
             .boxed()

@@ -144,9 +144,9 @@ chmod +x scripts/compliance-*.sh
 ./scripts/compliance-setup.sh
 
 # Test scenarios
-./scripts/compliance-test-regulated.sh      # Regulated transfers
-./scripts/compliance-test-unregulated.sh    # Unregulated transfers
-./scripts/compliance-test-unregistered.sh   # Unregistered (should FAIL)
+./scripts/compliance-test-regulated.sh      # Regulated transfers with scanner + local sync
+./scripts/compliance-test-unregulated.sh    # Unregulated transfers (BLACK_HOLE)
+./scripts/compliance-test-unregistered.sh   # Unregistered user sending regulated asset (should FAIL)
 ```
 
 ## Troubleshooting

@@ -1017,6 +1017,13 @@ message MerklePath {
   repeated MerklePathLayer layers = 1;
 }
 
+// Data for an indexed leaf in the asset IMT (for proof verification).
+message IndexedLeafData {
+  bytes value = 1;
+  uint64 next_index = 2;
+  bytes next_value = 3;
+}
+
 // Response containing Merkle proofs for compliance ZK proofs.
 // This provides all the data needed to populate SpendPlan/OutputPlan compliance fields.
 message ComplianceMerkleProofsResponse {
@@ -1042,6 +1049,10 @@ message ComplianceMerkleProofsResponse {
   bytes compliance_anchor = 8;
   // Current asset tree root (StateCommitment, 32 bytes).
   bytes asset_anchor = 9;
+
+  // The indexed leaf data for asset IMT proof verification.
+  // Contains (value, next_index, next_value) needed for membership/non-membership proofs.
+  IndexedLeafData asset_indexed_leaf = 10;
 }
 
 // Request for querying a user's registered compliance leaf.

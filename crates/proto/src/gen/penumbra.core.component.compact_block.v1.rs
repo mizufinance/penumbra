@@ -45,6 +45,22 @@ pub struct CompactBlock {
     /// The epoch index
     #[prost(uint64, tag = "11")]
     pub epoch_index: u64,
+    /// Compliance user tree anchor (root) for this block.
+    #[prost(bytes = "vec", tag = "12")]
+    pub compliance_user_anchor: ::prost::alloc::vec::Vec<u8>,
+    /// Compliance asset tree anchor (root) for this block.
+    #[prost(bytes = "vec", tag = "13")]
+    pub compliance_asset_anchor: ::prost::alloc::vec::Vec<u8>,
+    /// User registrations in this block (for client sync).
+    #[prost(message, repeated, tag = "14")]
+    pub compliance_user_registrations: ::prost::alloc::vec::Vec<
+        super::super::compliance::v1::EventUserRegistered,
+    >,
+    /// Asset registrations in this block (for client sync).
+    #[prost(message, repeated, tag = "15")]
+    pub compliance_asset_registrations: ::prost::alloc::vec::Vec<
+        super::super::compliance::v1::EventAssetRegistered,
+    >,
 }
 impl ::prost::Name for CompactBlock {
     const NAME: &'static str = "CompactBlock";

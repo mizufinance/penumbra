@@ -1130,7 +1130,6 @@ mod tests {
         let ack = master_key.derive_address_key(&diversifier);
 
         let date = 19000u64;
-        // Note: Using Detection key type for test - circuit will be updated to support all three
         let pk_day = ack.derive_daily_public_key(
             penumbra_sdk_keys::keys::KeyType::Detection,
             date,

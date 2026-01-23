@@ -1,15 +1,6 @@
 # Roadmap
 
-## 1. Local Sync
-
-| Item | Description |
-|------|-------------|
-| Tree sync via events | Subscribe to registration events, update local cache |
-| Path caching | Store auth paths in SQLite (tables exist, need impl) |
-| Anchor refresh | Lightweight RPC for roots before submission |
-| Offline TX building | Use cached paths + fresh anchor |
-
-## 2. Orbis integration
+## 1. Orbis integration
 
 | Item | Description |
 |------|-------------|
@@ -18,17 +9,16 @@
 | Per-address registration | Each address key from Orbis, Verify Orbis signature |
 | Asset registration | Verify asset registration |
 
-## 3. Security
+## 2. Security
 
 | Item | Description |
 |------|-------------|
-| BLACK_HOLE_ACK audit | Verify usage patterns |
+| BLACK_HOLE_ACK audit | Replace Element::GENERATOR with NUMS point (hash-to-curve) |
 | ZK circuit verification | Formal verification |
 | Randomness | Verify usage of randomness in ciphertext |
 | IMT security review | Non-membership soundness |
 
-
-## 4. Client UX
+## 3. Client UX
 
 | Item | Description |
 |------|-------------|
@@ -36,7 +26,7 @@
 | Clear errors | Descriptive failure messages |
 | Idempotent registration |  Handle duplicate registrations |
 
-## 5. Benchmarks
+## 4. Benchmarks
 
 | Item | Description |
 |------|-------------|
@@ -47,7 +37,7 @@
 | Tree sync | Compliance sync cost |
 | Scanner throughput | Txs per second |
 
-## 6. Future
+## 5. Future
 
 | Item | Description |
 |------|-------------|
@@ -55,3 +45,12 @@
 | Swap support | DEX integration |
 | Key rotation | Protocol for rotation |
 | Asset types | RWA, NFT, ERC20 support |
+
+## 6. Code Quality
+
+| Item | Description |
+|------|-------------|
+| Scanner speedup | Optimize compliance scanning performance |
+| Unify providers | Consolidate ComplianceProofProvider implementations |
+| Proto deduplication | Remove duplicate view/compliance proto conversions |
+| Error handling audit | Replace `.ok()` in manager.rs with explicit error handling for compliance anchors |

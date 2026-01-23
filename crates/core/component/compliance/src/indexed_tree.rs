@@ -70,6 +70,15 @@ pub struct IndexedLeaf {
     pub next_value: Fq,
 }
 
+/// Result of an IMT insertion with full data for client sync.
+#[derive(Debug, Clone)]
+pub struct InsertResult {
+    pub position: u64,
+    pub indexed_leaf: IndexedLeaf,
+    pub low_leaf_position: u64,
+    pub updated_low_leaf: IndexedLeaf,
+}
+
 impl IndexedLeaf {
     /// Compute the commitment for this leaf.
     pub fn commit(&self) -> StateCommitment {
@@ -406,10 +415,21 @@ impl IndexedMerkleTree {
         self.value_index.get(&value.to_bytes()).copied()
     }
 
+    /// Get the leaf at a given position.
+    pub fn get_leaf(&self, position: u64) -> Option<&IndexedLeaf> {
+        self.leaves.get(&position)
+    }
+
     /// Insert a new value into the tree.
     ///
     /// Returns the position of the new leaf.
     pub fn insert(&mut self, value: Fq) -> Result<u64> {
+        let result = self.insert_with_data(value)?;
+        Ok(result.position)
+    }
+
+    /// Insert a new value and return full data for client sync.
+    pub fn insert_with_data(&mut self, value: Fq) -> Result<InsertResult> {
         // Check if already exists
         if self.contains(value) {
             bail!("Value already exists in tree");
@@ -467,7 +487,12 @@ impl IndexedMerkleTree {
         let updated_low_commitment = updated_low_leaf.commit();
         self.update_path(low_pos, updated_low_commitment);
 
-        Ok(new_pos)
+        Ok(InsertResult {
+            position: new_pos,
+            indexed_leaf: new_leaf,
+            low_leaf_position: low_pos,
+            updated_low_leaf,
+        })
     }
 
     /// Get the authentication path for a position.
@@ -572,11 +597,6 @@ impl IndexedMerkleTree {
     /// Get the number of leaves in the tree (including sentinel).
     pub fn leaf_count(&self) -> u64 {
         self.leaf_count
-    }
-
-    /// Get the leaf at a position.
-    pub fn get_leaf(&self, position: u64) -> Option<&IndexedLeaf> {
-        self.leaves.get(&position)
     }
 
     /// Verify an authentication path.

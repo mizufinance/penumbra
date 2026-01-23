@@ -1,5 +1,3 @@
-# WARNING: Test-only keys for local smoke tests. DO NOT use in production.
-# These are throwaway keys with no real value.
 grpc_url = "http://127.0.0.1:8080/"
 full_viewing_key = "penumbrafullviewingkey1vzfytwlvq067g2kz095vn7sgcft47hga40atrg5zu2crskm6tyyjysm28qg5nth2fqmdf5n0q530jreumjlsrcxjwtfv6zdmfpe5kqsa5lg09"
 

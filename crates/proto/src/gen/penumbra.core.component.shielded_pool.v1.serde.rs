@@ -3187,6 +3187,9 @@ impl serde::Serialize for OutputPlan {
         if self.asset_position != 0 {
             len += 1;
         }
+        if self.asset_indexed_leaf.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.OutputPlan", len)?;
         if let Some(v) = self.value.as_ref() {
             struct_ser.serialize_field("value", v)?;
@@ -3268,6 +3271,9 @@ impl serde::Serialize for OutputPlan {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("assetPosition", ToString::to_string(&self.asset_position).as_str())?;
         }
+        if let Some(v) = self.asset_indexed_leaf.as_ref() {
+            struct_ser.serialize_field("assetIndexedLeaf", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -3316,6 +3322,8 @@ impl<'de> serde::Deserialize<'de> for OutputPlan {
             "assetPath",
             "asset_position",
             "assetPosition",
+            "asset_indexed_leaf",
+            "assetIndexedLeaf",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -3340,6 +3348,7 @@ impl<'de> serde::Deserialize<'de> for OutputPlan {
             CompliancePosition,
             AssetPath,
             AssetPosition,
+            AssetIndexedLeaf,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -3382,6 +3391,7 @@ impl<'de> serde::Deserialize<'de> for OutputPlan {
                             "compliancePosition" | "compliance_position" => Ok(GeneratedField::CompliancePosition),
                             "assetPath" | "asset_path" => Ok(GeneratedField::AssetPath),
                             "assetPosition" | "asset_position" => Ok(GeneratedField::AssetPosition),
+                            "assetIndexedLeaf" | "asset_indexed_leaf" => Ok(GeneratedField::AssetIndexedLeaf),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -3421,6 +3431,7 @@ impl<'de> serde::Deserialize<'de> for OutputPlan {
                 let mut compliance_position__ = None;
                 let mut asset_path__ = None;
                 let mut asset_position__ = None;
+                let mut asset_indexed_leaf__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Value => {
@@ -3563,6 +3574,12 @@ impl<'de> serde::Deserialize<'de> for OutputPlan {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::AssetIndexedLeaf => {
+                            if asset_indexed_leaf__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetIndexedLeaf"));
+                            }
+                            asset_indexed_leaf__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -3589,6 +3606,7 @@ impl<'de> serde::Deserialize<'de> for OutputPlan {
                     compliance_position: compliance_position__.unwrap_or_default(),
                     asset_path: asset_path__,
                     asset_position: asset_position__.unwrap_or_default(),
+                    asset_indexed_leaf: asset_indexed_leaf__,
                 })
             }
         }
@@ -4513,6 +4531,9 @@ impl serde::Serialize for SpendPlan {
         if self.asset_position != 0 {
             len += 1;
         }
+        if self.asset_indexed_leaf.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.SpendPlan", len)?;
         if let Some(v) = self.note.as_ref() {
             struct_ser.serialize_field("note", v)?;
@@ -4596,6 +4617,9 @@ impl serde::Serialize for SpendPlan {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("assetPosition", ToString::to_string(&self.asset_position).as_str())?;
         }
+        if let Some(v) = self.asset_indexed_leaf.as_ref() {
+            struct_ser.serialize_field("assetIndexedLeaf", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -4643,6 +4667,8 @@ impl<'de> serde::Deserialize<'de> for SpendPlan {
             "assetPath",
             "asset_position",
             "assetPosition",
+            "asset_indexed_leaf",
+            "assetIndexedLeaf",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4667,6 +4693,7 @@ impl<'de> serde::Deserialize<'de> for SpendPlan {
             CompliancePosition,
             AssetPath,
             AssetPosition,
+            AssetIndexedLeaf,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -4709,6 +4736,7 @@ impl<'de> serde::Deserialize<'de> for SpendPlan {
                             "compliancePosition" | "compliance_position" => Ok(GeneratedField::CompliancePosition),
                             "assetPath" | "asset_path" => Ok(GeneratedField::AssetPath),
                             "assetPosition" | "asset_position" => Ok(GeneratedField::AssetPosition),
+                            "assetIndexedLeaf" | "asset_indexed_leaf" => Ok(GeneratedField::AssetIndexedLeaf),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -4748,6 +4776,7 @@ impl<'de> serde::Deserialize<'de> for SpendPlan {
                 let mut compliance_position__ = None;
                 let mut asset_path__ = None;
                 let mut asset_position__ = None;
+                let mut asset_indexed_leaf__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Note => {
@@ -4892,6 +4921,12 @@ impl<'de> serde::Deserialize<'de> for SpendPlan {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::AssetIndexedLeaf => {
+                            if asset_indexed_leaf__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetIndexedLeaf"));
+                            }
+                            asset_indexed_leaf__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -4918,6 +4953,7 @@ impl<'de> serde::Deserialize<'de> for SpendPlan {
                     compliance_position: compliance_position__.unwrap_or_default(),
                     asset_path: asset_path__,
                     asset_position: asset_position__.unwrap_or_default(),
+                    asset_indexed_leaf: asset_indexed_leaf__,
                 })
             }
         }

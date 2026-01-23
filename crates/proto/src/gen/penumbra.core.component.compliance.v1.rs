@@ -246,6 +246,10 @@ pub struct ComplianceMerkleProofsResponse {
     /// Current asset tree root (StateCommitment, 32 bytes).
     #[prost(bytes = "vec", tag = "9")]
     pub asset_anchor: ::prost::alloc::vec::Vec<u8>,
+    /// The indexed leaf data for asset IMT proof verification.
+    /// Contains (value, next_index, next_value) needed for membership/non-membership proofs.
+    #[prost(message, optional, tag = "10")]
+    pub asset_indexed_leaf: ::core::option::Option<IndexedLeafData>,
 }
 impl ::prost::Name for ComplianceMerkleProofsResponse {
     const NAME: &'static str = "ComplianceMerkleProofsResponse";
@@ -363,6 +367,26 @@ impl ::prost::Name for ComplianceBatchMerkleProofsResponse {
             .into()
     }
 }
+/// Data for an indexed leaf in the asset IMT (for client sync).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IndexedLeafData {
+    #[prost(bytes = "vec", tag = "1")]
+    pub value: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint64, tag = "2")]
+    pub next_index: u64,
+    #[prost(bytes = "vec", tag = "3")]
+    pub next_value: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for IndexedLeafData {
+    const NAME: &'static str = "IndexedLeafData";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.IndexedLeafData".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.IndexedLeafData".into()
+    }
+}
 /// Emitted when a user is registered in the compliance tree.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EventUserRegistered {
@@ -372,12 +396,9 @@ pub struct EventUserRegistered {
     /// The commitment of the compliance leaf.
     #[prost(bytes = "vec", tag = "2")]
     pub commitment: ::prost::alloc::vec::Vec<u8>,
-    /// The address that was registered.
+    /// Full leaf data for client sync.
     #[prost(message, optional, tag = "3")]
-    pub address: ::core::option::Option<super::super::super::keys::v1::Address>,
-    /// The asset ID this registration applies to.
-    #[prost(message, optional, tag = "4")]
-    pub asset_id: ::core::option::Option<super::super::super::asset::v1::AssetId>,
+    pub leaf: ::core::option::Option<ComplianceLeaf>,
 }
 impl ::prost::Name for EventUserRegistered {
     const NAME: &'static str = "EventUserRegistered";
@@ -401,6 +422,15 @@ pub struct EventAssetRegistered {
     /// The position in the asset tree (for regulated assets).
     #[prost(uint64, tag = "3")]
     pub position: u64,
+    /// The indexed leaf data (for client sync).
+    #[prost(message, optional, tag = "4")]
+    pub indexed_leaf: ::core::option::Option<IndexedLeafData>,
+    /// The low leaf that was updated during IMT insertion.
+    #[prost(uint64, tag = "5")]
+    pub low_leaf_position: u64,
+    /// The updated low leaf data.
+    #[prost(message, optional, tag = "6")]
+    pub updated_low_leaf: ::core::option::Option<IndexedLeafData>,
 }
 impl ::prost::Name for EventAssetRegistered {
     const NAME: &'static str = "EventAssetRegistered";

@@ -141,6 +141,10 @@ message ComplianceMerkleProofsResponse {
   bytes compliance_anchor = 8;
   // Current asset tree root (StateCommitment, 32 bytes).
   bytes asset_anchor = 9;
+
+  // The indexed leaf data for asset IMT proof verification.
+  // Contains (value, next_index, next_value) needed for membership/non-membership proofs.
+  IndexedLeafData asset_indexed_leaf = 10;
 }
 
 // Request for querying a user's registered compliance leaf.
@@ -188,16 +192,21 @@ message ComplianceBatchMerkleProofsResponse {
 
 // Events
 
+// Data for an indexed leaf in the asset IMT (for client sync).
+message IndexedLeafData {
+  bytes value = 1;
+  uint64 next_index = 2;
+  bytes next_value = 3;
+}
+
 // Emitted when a user is registered in the compliance tree.
 message EventUserRegistered {
   // The position in the user compliance tree.
   uint64 position = 1;
   // The commitment of the compliance leaf.
   bytes commitment = 2;
-  // The address that was registered.
-  keys.v1.Address address = 3;
-  // The asset ID this registration applies to.
-  asset.v1.AssetId asset_id = 4;
+  // Full leaf data for client sync.
+  ComplianceLeaf leaf = 3;
 }
 
 // Emitted when an asset is registered in the compliance system.
@@ -208,6 +217,12 @@ message EventAssetRegistered {
   bool is_regulated = 2;
   // The position in the asset tree (for regulated assets).
   uint64 position = 3;
+  // The indexed leaf data (for client sync).
+  IndexedLeafData indexed_leaf = 4;
+  // The low leaf that was updated during IMT insertion.
+  uint64 low_leaf_position = 5;
+  // The updated low leaf data.
+  IndexedLeafData updated_low_leaf = 6;
 }
 
 // Emitted at end of block with the current compliance tree roots.

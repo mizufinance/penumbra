@@ -123,11 +123,21 @@ impl ActionHandler for MsgRegisterUser {
         let position = state.add_compliance_leaf(self.leaf.clone()).await?;
         let commitment = self.leaf.commit();
 
+        // Create the event
+        let event = crate::event::EventUserRegistered {
+            position,
+            commitment,
+            leaf: self.leaf.clone(),
+        };
+
+        // Buffer the event for CompactBlock inclusion
+        state.record_pending_user_registration(event.clone());
+
+        // Also emit as ABCI event (for existing event listeners)
         state.record_proto(event::user_registered(
             position,
             commitment,
-            self.leaf.address.clone(),
-            self.leaf.asset_id,
+            self.leaf.clone(),
         ));
 
         Ok(())
@@ -150,17 +160,35 @@ impl ActionHandler for MsgRegisterAsset {
     async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
         // Only regulated assets are stored in the IMT.
         // Unregulated status is proven via non-membership proofs.
-        let position = if self.is_regulated {
-            state.register_regulated_asset(self.asset_id).await?
-        } else {
-            0 // Unregulated assets have no position in IMT
-        };
+        if self.is_regulated {
+            if let Some(result) = state.register_regulated_asset(self.asset_id).await? {
+                // Create the event
+                let event = crate::event::EventAssetRegistered {
+                    asset_id: self.asset_id,
+                    is_regulated: self.is_regulated,
+                    position: result.position,
+                    indexed_leaf: result.indexed_leaf,
+                    low_leaf_position: result.low_leaf_position,
+                    updated_low_leaf: result.updated_low_leaf,
+                };
 
-        state.record_proto(event::asset_registered(
-            self.asset_id,
-            self.is_regulated,
-            position,
-        ));
+                // Also emit as ABCI event (for existing event listeners)
+                // We need to convert from the domain type to the proto type
+                state.record_proto(event::asset_registered(
+                    event.asset_id,
+                    event.is_regulated,
+                    event.position,
+                    event.indexed_leaf.clone(),
+                    event.low_leaf_position,
+                    event.updated_low_leaf.clone(),
+                ));
+
+                // Buffer the event for CompactBlock inclusion
+                state.record_pending_asset_registration(event);
+            }
+            // If None, asset was already registered - skip event
+        }
+        // Unregulated assets don't emit events (no state change)
 
         Ok(())
     }
@@ -184,7 +212,7 @@ mod tests {
         let mut state = cnidarium::StateDelta::new(snapshot);
 
         // Initialize the component with default genesis
-        let genesis = genesis::Content::with_defaults();
+        let genesis = genesis::Content::default();
         Compliance::init_chain(&mut state, Some(&genesis)).await;
 
         // Verify trees were initialized
@@ -243,7 +271,7 @@ mod tests {
         let mut state = cnidarium::StateDelta::new(snapshot);
 
         // Initialize component with defaults
-        let genesis = genesis::Content::with_defaults();
+        let genesis = genesis::Content::default();
         Compliance::init_chain(&mut state, Some(&genesis)).await;
 
         // Create a register user message
@@ -271,7 +299,7 @@ mod tests {
         let mut state = cnidarium::StateDelta::new(snapshot);
 
         // Initialize component
-        let genesis = genesis::Content::with_defaults();
+        let genesis = genesis::Content::default();
         Compliance::init_chain(&mut state, Some(&genesis)).await;
 
         // Initially the asset is unregulated (not in IMT)

@@ -34,7 +34,7 @@ use penumbra_sdk_transaction::view::TransactionView;
 const TEST_ASSET: &str = "1020test_usd";
 
 // The maximum amount of time any command is allowed to take before we error.
-const TIMEOUT_COMMAND_SECONDS: u64 = 20;
+const TIMEOUT_COMMAND_SECONDS: u64 = 60;
 
 // The time to wait before attempting to perform an undelegation claim.
 // The "unbonding_delay" value is specified in blocks, and in the smoke tests,

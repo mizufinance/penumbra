@@ -464,6 +464,11 @@ impl From<OutputPlan> for pb::OutputPlan {
             compliance_position: msg.compliance_position,
             asset_path: Some(msg.asset_path.into()),
             asset_position: msg.asset_position,
+            asset_indexed_leaf: Some(compliance_pb::IndexedLeafData {
+                value: msg.asset_indexed_leaf.value.to_bytes().to_vec(),
+                next_index: msg.asset_indexed_leaf.next_index,
+                next_value: msg.asset_indexed_leaf.next_value.to_bytes().to_vec(),
+            }),
         }
     }
 }
@@ -591,6 +596,31 @@ impl TryFrom<pb::OutputPlan> for OutputPlan {
             .transpose()?
             .unwrap_or_default();
 
+        // Parse asset_indexed_leaf if present
+        let asset_indexed_leaf = msg
+            .asset_indexed_leaf
+            .map(
+                |leaf| -> anyhow::Result<penumbra_sdk_compliance::IndexedLeaf> {
+                    let value = Fq::from_bytes_checked(&leaf.value.as_slice().try_into()?)
+                        .map_err(|_| anyhow::anyhow!("invalid asset_indexed_leaf value"))?;
+                    let next_value = Fq::from_bytes_checked(
+                        &leaf.next_value.as_slice().try_into()?,
+                    )
+                    .map_err(|_| anyhow::anyhow!("invalid asset_indexed_leaf next_value"))?;
+                    Ok(penumbra_sdk_compliance::IndexedLeaf {
+                        value,
+                        next_index: leaf.next_index,
+                        next_value,
+                    })
+                },
+            )
+            .transpose()?
+            .unwrap_or_else(|| penumbra_sdk_compliance::IndexedLeaf {
+                value: Fq::from(0u64),
+                next_index: 0,
+                next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+            });
+
         Ok(Self {
             value: msg
                 .value
@@ -620,11 +650,7 @@ impl TryFrom<pb::OutputPlan> for OutputPlan {
             asset_anchor,
             asset_path,
             asset_position: msg.asset_position,
-            asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf {
-                value: Fq::from(0u64),
-                next_index: 0,
-                next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
-            },
+            asset_indexed_leaf,
             compliance_position: msg.compliance_position,
         })
     }

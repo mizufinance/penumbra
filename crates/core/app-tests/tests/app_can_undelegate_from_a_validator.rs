@@ -8,7 +8,6 @@ use {
         genesis::{self, AppState},
         server::consensus::Consensus,
     },
-    penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID,
     penumbra_sdk_keys::test_keys,
     penumbra_sdk_mock_client::MockClient,
     penumbra_sdk_mock_consensus::TestNode,

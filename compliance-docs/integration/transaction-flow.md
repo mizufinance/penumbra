@@ -52,6 +52,7 @@ counterparty_address: Option<Address>,
 counterparty_leaf: Option<ComplianceLeaf>,
 asset_path: MerklePath,
 asset_anchor: StateCommitment,
+asset_indexed_leaf: Option<IndexedLeaf>, // For IMT proofs
 ```
 
 ## Source Files

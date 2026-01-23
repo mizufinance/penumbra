@@ -2,6 +2,56 @@
 //!
 //! This module provides compliance-related methods that wrap ViewClient calls
 //! and provide convenient access to compliance registry state.
+//!
+//! # Architecture
+//!
+//! The compliance system has a layered architecture:
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                    ViewClientComplianceExt                  │
+//! │  High-level trait for compliance queries (is_asset_regulated│
+//! │  get_compliance_data, etc.)                                 │
+//! └─────────────────────────────────────────────────────────────┘
+//!                              │
+//!                              ▼
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                  ComplianceDataProvider                     │
+//! │  Trait for fetching compliance data (proofs, anchors, etc.) │
+//! │  Two implementations:                                       │
+//! │    - GrpcComplianceProvider: Fetches from ViewService gRPC  │
+//! │    - MockComplianceProvider: In-memory for testing          │
+//! └─────────────────────────────────────────────────────────────┘
+//!                              │
+//!                              ▼
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                      ViewService RPC                        │
+//! │  compliance_asset_status, compliance_merkle_proofs, etc.    │
+//! │  Uses local trees with gRPC fallback to pd for user proofs  │
+//! └─────────────────────────────────────────────────────────────┘
+//!                              │
+//!                              ▼
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                    Local Compliance Trees                   │
+//! │  - compliance_user_tree (QuadTree): User registrations      │
+//! │  - compliance_asset_tree (IMT): Asset registrations         │
+//! │  Synced from chain via worker.rs                            │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Data Flow
+//!
+//! 1. **Asset proofs**: 100% local from `compliance_asset_tree` (IMT)
+//!    - Regulated assets: membership proofs
+//!    - Unregulated assets: non-membership proofs via BLACK_HOLE_ACK
+//!
+//! 2. **User proofs**: Local storage + gRPC fallback
+//!    - First checks `get_compliance_leaf_data()` in local storage
+//!    - Falls back to pd gRPC if not found locally
+//!
+//! 3. **Counterparty tracking**: Enables offline user proofs
+//!    - Recorded at TX build time (witness_and_build)
+//!    - Backfilled during sync from historical TXs (worker.rs)
 
 use anyhow::Result;
 use futures::FutureExt;
@@ -11,7 +61,7 @@ use penumbra_sdk_keys::{keys::AddressComplianceKey, Address};
 use penumbra_sdk_tct::StateCommitment;
 use std::{future::Future, pin::Pin};
 
-use crate::ViewClient;
+use crate::{Storage, ViewClient};
 
 /// Compliance extensions for ViewClient.
 ///
@@ -434,13 +484,31 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
 
             // Cache asset proof
             if !asset_proofs.contains_key(asset_id) {
+                // Parse indexed_leaf from proto response
+                let indexed_leaf = if let Some(leaf_data) = result.asset_indexed_leaf {
+                    let value_bytes: [u8; 32] = leaf_data
+                        .value
+                        .try_into()
+                        .map_err(|_| anyhow::anyhow!("indexed_leaf.value must be 32 bytes"))?;
+                    let next_value_bytes: [u8; 32] = leaf_data
+                        .next_value
+                        .try_into()
+                        .map_err(|_| anyhow::anyhow!("indexed_leaf.next_value must be 32 bytes"))?;
+                    penumbra_sdk_compliance::IndexedLeaf {
+                        value: decaf377::Fq::from_bytes_checked(&value_bytes)
+                            .map_err(|e| anyhow::anyhow!("invalid indexed_leaf.value: {}", e))?,
+                        next_index: leaf_data.next_index,
+                        next_value: decaf377::Fq::from_bytes_checked(&next_value_bytes).map_err(
+                            |e| anyhow::anyhow!("invalid indexed_leaf.next_value: {}", e),
+                        )?,
+                    }
+                } else {
+                    anyhow::bail!(
+                        "asset_indexed_leaf not provided in response - invalid compliance data"
+                    );
+                };
+
                 if result.asset_registered {
-                    // TODO: Parse indexed_leaf from proto when available
-                    let indexed_leaf = penumbra_sdk_compliance::IndexedLeaf {
-                        value: decaf377::Fq::from(0u64),
-                        next_index: 0,
-                        next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
-                    };
                     asset_proofs.insert(
                         *asset_id,
                         (
@@ -451,11 +519,6 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
                         ),
                     );
                 } else {
-                    let indexed_leaf = penumbra_sdk_compliance::IndexedLeaf {
-                        value: decaf377::Fq::from(0u64),
-                        next_index: 0,
-                        next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
-                    };
                     asset_proofs.insert(*asset_id, (MerklePath::default(), 0, indexed_leaf, false));
                 }
             }
@@ -486,6 +549,176 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
                         asset_id: *asset_id,
                     };
                     user_proofs.insert(key, (MerklePath::default(), 0, synthetic_leaf));
+                }
+            }
+        }
+
+        Ok(penumbra_sdk_compliance::BatchComplianceData {
+            compliance_anchor,
+            asset_anchor,
+            asset_proofs,
+            user_proofs,
+        })
+    }
+}
+
+/// A compliance proof provider backed by local in-memory trees.
+/// Used for offline transaction building when trees are synced locally.
+///
+/// This provider uses the locally synced compliance trees to generate proofs,
+/// avoiding RPC calls to the chain. It requires:
+/// 1. Full tree structure synced (all commitments)
+/// 2. Full leaf data stored for addresses in scope (own + counterparties)
+pub struct LocalComplianceProofProvider<'a> {
+    user_tree: &'a crate::compliance_tree::ComplianceUserTree,
+    asset_tree: &'a crate::compliance_tree::ComplianceAssetTree,
+    storage: &'a Storage,
+}
+
+impl<'a> LocalComplianceProofProvider<'a> {
+    pub fn new(
+        user_tree: &'a crate::compliance_tree::ComplianceUserTree,
+        asset_tree: &'a crate::compliance_tree::ComplianceAssetTree,
+        storage: &'a Storage,
+    ) -> Self {
+        Self {
+            user_tree,
+            asset_tree,
+            storage,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl<'a> ComplianceProofProvider for LocalComplianceProofProvider<'a> {
+    async fn get_compliance_anchor(&self) -> Result<StateCommitment> {
+        Ok(self.user_tree.root())
+    }
+
+    async fn get_asset_anchor(&self) -> Result<StateCommitment> {
+        Ok(self.asset_tree.root())
+    }
+
+    async fn get_asset_proof(
+        &self,
+        asset_id: asset::Id,
+    ) -> Result<(MerklePath, u64, penumbra_sdk_compliance::IndexedLeaf, bool)> {
+        // get_proof_data handles both membership and non-membership proofs
+        let (position, indexed_leaf, path, is_regulated) =
+            self.asset_tree.get_proof_data(asset_id)?;
+        Ok((path, position, indexed_leaf, is_regulated))
+    }
+
+    async fn get_user_proof(
+        &self,
+        address: &Address,
+        asset_id: asset::Id,
+    ) -> Result<(MerklePath, u64, ComplianceLeaf)> {
+        use penumbra_sdk_compliance::BLACK_HOLE_ACK;
+        use penumbra_sdk_keys::keys::AddressComplianceKey;
+
+        // First check if the asset is regulated
+        let asset_value = asset_id.0;
+        let is_regulated = self.asset_tree.contains(asset_value);
+
+        if !is_regulated {
+            // For unregulated assets, return synthetic leaf with BLACK_HOLE_ACK
+            let synthetic_leaf = ComplianceLeaf {
+                address: address.clone(),
+                key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
+                asset_id,
+            };
+            return Ok((MerklePath::default(), 0, synthetic_leaf));
+        }
+
+        // For regulated assets, try to get leaf data from local storage
+        let leaf_data = self
+            .storage
+            .get_compliance_leaf_data(address, &asset_id)
+            .await?;
+
+        match leaf_data {
+            Some((position, ack_bytes, commitment)) => {
+                // Reconstruct the leaf from stored data
+                let ack_element = decaf377::Encoding(ack_bytes)
+                    .vartime_decompress()
+                    .map_err(|_| anyhow::anyhow!("invalid ACK encoding in storage"))?;
+                let key = AddressComplianceKey::new(ack_element);
+
+                let leaf = ComplianceLeaf {
+                    address: address.clone(),
+                    key,
+                    asset_id,
+                };
+
+                // Verify commitment matches
+                if leaf.commit() != commitment {
+                    anyhow::bail!("stored leaf data does not match commitment");
+                }
+
+                // Get auth path from tree
+                let path = self.user_tree.witness(position)?;
+
+                Ok((path, position, leaf))
+            }
+            None => {
+                // Leaf data not in local storage - user needs to sync or use RPC
+                anyhow::bail!(
+                    "compliance leaf data not available locally for address {:?} and asset {:?}. \
+                     Sync required or use RPC-based provider.",
+                    address,
+                    asset_id
+                );
+            }
+        }
+    }
+
+    async fn get_batch_proofs(
+        &self,
+        queries: &[(Address, asset::Id)],
+    ) -> Result<penumbra_sdk_compliance::BatchComplianceData> {
+        use penumbra_sdk_compliance::BLACK_HOLE_ACK;
+        use penumbra_sdk_keys::keys::AddressComplianceKey;
+
+        if queries.is_empty() {
+            return Ok(penumbra_sdk_compliance::BatchComplianceData::default());
+        }
+
+        let compliance_anchor = self.user_tree.root();
+        let asset_anchor = self.asset_tree.root();
+
+        let mut asset_proofs: BTreeMap<
+            asset::Id,
+            (MerklePath, u64, penumbra_sdk_compliance::IndexedLeaf, bool),
+        > = BTreeMap::new();
+        let mut user_proofs: BTreeMap<(Address, asset::Id), (MerklePath, u64, ComplianceLeaf)> =
+            BTreeMap::new();
+
+        for (address, asset_id) in queries {
+            // Get asset proof (cached by asset_id)
+            if !asset_proofs.contains_key(asset_id) {
+                let (path, position, indexed_leaf, is_regulated) =
+                    self.get_asset_proof(*asset_id).await?;
+                asset_proofs.insert(*asset_id, (path, position, indexed_leaf, is_regulated));
+            }
+
+            // Get user proof
+            let key = (address.clone(), *asset_id);
+            if !user_proofs.contains_key(&key) {
+                let is_regulated = asset_proofs.get(asset_id).map(|p| p.3).unwrap_or(false);
+
+                if !is_regulated {
+                    // For unregulated assets, use synthetic leaf
+                    let synthetic_leaf = ComplianceLeaf {
+                        address: address.clone(),
+                        key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
+                        asset_id: *asset_id,
+                    };
+                    user_proofs.insert(key, (MerklePath::default(), 0, synthetic_leaf));
+                } else {
+                    // For regulated assets, get from local storage
+                    let (path, position, leaf) = self.get_user_proof(address, *asset_id).await?;
+                    user_proofs.insert(key, (path, position, leaf));
                 }
             }
         }

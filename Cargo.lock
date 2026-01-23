@@ -5507,6 +5507,7 @@ dependencies = [
  "futures",
  "im",
  "metrics",
+ "penumbra-sdk-compliance",
  "penumbra-sdk-dex",
  "penumbra-sdk-fee",
  "penumbra-sdk-governance",
@@ -5967,6 +5968,7 @@ dependencies = [
  "penumbra-sdk-view",
  "poseidon377",
  "rand_core",
+ "tracing",
 ]
 
 [[package]]

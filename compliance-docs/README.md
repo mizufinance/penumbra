@@ -54,7 +54,7 @@ pcli tx compliance register-asset <asset> --unregulated
 # User registration
 pcli tx compliance register-user <asset>
 
-# Key derivation
+# Key derivation (MCK = MK, the Master Compliance Key from Orbis)
 pcli tx compliance derive-daily-key --mck-hex <hex> --date <day_index>
 
 # Scanning

@@ -34,7 +34,8 @@ impl ComplianceTreeStore<'_, '_> {
             .context("failed to prepare user position query")?;
 
         let bytes = stmt
-            .query_row::<Option<Vec<u8>>, _, _>((&position,), |row| row.get("commitment"))
+            .query_row::<Vec<u8>, _, _>((&position,), |row| row.get("commitment"))
+            .optional()
             .context("failed to query user position")?;
 
         bytes
@@ -82,7 +83,8 @@ impl ComplianceTreeStore<'_, '_> {
             .context("failed to prepare user hash query")?;
 
         let bytes = stmt
-            .query_row::<Option<Vec<u8>>, _, _>((&position, &height), |row| row.get("hash"))
+            .query_row::<Vec<u8>, _, _>((&position, &height), |row| row.get("hash"))
+            .optional()
             .context("failed to query user hash")?;
 
         bytes
@@ -146,9 +148,12 @@ impl ComplianceTreeStore<'_, '_> {
                 let next_value: [u8; 32] = next_value
                     .try_into()
                     .map_err(|_| anyhow::anyhow!("next_value must be 32 bytes"))?;
+                let next_index = u64::try_from(next_index).map_err(|_| {
+                    anyhow::anyhow!("negative next_index in database: {}", next_index)
+                })?;
                 Ok(Some(IndexedLeafData {
                     value,
-                    next_index: next_index as u64,
+                    next_index,
                     next_value,
                 }))
             }
@@ -159,7 +164,8 @@ impl ComplianceTreeStore<'_, '_> {
     /// Add an asset tree indexed leaf.
     pub fn add_asset_leaf(&mut self, position: u64, leaf: IndexedLeafData) -> anyhow::Result<()> {
         let position = position_to_i64(position)?;
-        let next_index = leaf.next_index as i64;
+        let next_index = i64::try_from(leaf.next_index)
+            .map_err(|_| anyhow::anyhow!("next_index {} exceeds i64::MAX", leaf.next_index))?;
 
         self.0
             .prepare_cached(
@@ -193,7 +199,8 @@ impl ComplianceTreeStore<'_, '_> {
             .context("failed to prepare asset hash query")?;
 
         let bytes = stmt
-            .query_row::<Option<Vec<u8>>, _, _>((&position, &height), |row| row.get("hash"))
+            .query_row::<Vec<u8>, _, _>((&position, &height), |row| row.get("hash"))
+            .optional()
             .context("failed to query asset hash")?;
 
         bytes
@@ -327,6 +334,157 @@ impl ComplianceTreeStore<'_, '_> {
             }
             None => Ok(None),
         }
+    }
+
+    // ========== Leaf Data Operations (for addresses in sync scope) ==========
+
+    /// Store full compliance leaf data for an address in the sync scope.
+    pub fn add_leaf_data(
+        &mut self,
+        address: &[u8],
+        asset_id: &[u8],
+        position: u64,
+        ack: &[u8],
+        commitment: StateCommitment,
+    ) -> anyhow::Result<()> {
+        let position = position_to_i64(position)?;
+        let commitment = <[u8; 32]>::from(commitment).to_vec();
+
+        self.0
+            .prepare_cached(
+                "INSERT OR REPLACE INTO compliance_user_leaf_data \
+                 (address, asset_id, position, address_compliance_key, commitment) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )
+            .context("failed to prepare leaf data insert")?
+            .execute((address, asset_id, &position, ack, &commitment))
+            .context("failed to insert leaf data")?;
+
+        Ok(())
+    }
+
+    /// Get full compliance leaf data for an address/asset pair.
+    pub fn get_leaf_data(
+        &mut self,
+        address: &[u8],
+        asset_id: &[u8],
+    ) -> anyhow::Result<Option<(u64, Vec<u8>, StateCommitment)>> {
+        let mut stmt = self
+            .0
+            .prepare_cached(
+                "SELECT position, address_compliance_key, commitment \
+                 FROM compliance_user_leaf_data \
+                 WHERE address = ?1 AND asset_id = ?2",
+            )
+            .context("failed to prepare leaf data query")?;
+
+        let result = stmt
+            .query_row((address, asset_id), |row| {
+                let position: i64 = row.get("position")?;
+                let ack: Vec<u8> = row.get("address_compliance_key")?;
+                let commitment: Vec<u8> = row.get("commitment")?;
+                Ok((position, ack, commitment))
+            })
+            .optional()
+            .context("failed to query leaf data")?;
+
+        match result {
+            Some((position, ack, commitment)) => {
+                let commitment: [u8; 32] = commitment
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("commitment must be 32 bytes"))?;
+                Ok(Some((
+                    position as u64,
+                    ack,
+                    StateCommitment::try_from(commitment)?,
+                )))
+            }
+            None => Ok(None),
+        }
+    }
+
+    // ========== Counterparty Tracking ==========
+
+    /// Add a counterparty address to track.
+    pub fn add_counterparty(&mut self, address: &[u8], height: u64) -> anyhow::Result<()> {
+        let height = height as i64;
+
+        self.0
+            .prepare_cached(
+                "INSERT OR IGNORE INTO compliance_counterparties \
+                 (address, first_seen_height) VALUES (?1, ?2)",
+            )
+            .context("failed to prepare counterparty insert")?
+            .execute((address, &height))
+            .context("failed to insert counterparty")?;
+
+        Ok(())
+    }
+
+    /// Check if an address is a tracked counterparty.
+    pub fn is_counterparty(&mut self, address: &[u8]) -> anyhow::Result<bool> {
+        let count: i64 = self
+            .0
+            .prepare_cached("SELECT COUNT(*) FROM compliance_counterparties WHERE address = ?1")
+            .context("failed to prepare counterparty check")?
+            .query_row((address,), |row| row.get(0))
+            .context("failed to check counterparty")?;
+
+        Ok(count > 0)
+    }
+
+    // ========== Tree Position Cursors ==========
+
+    /// Get the current user tree position cursor.
+    pub fn get_user_tree_position(&mut self) -> anyhow::Result<u64> {
+        let position: i64 = self
+            .0
+            .prepare_cached("SELECT position FROM compliance_user_tree_position WHERE id = 0")
+            .context("failed to prepare user tree position query")?
+            .query_row([], |row| row.get(0))
+            .context("failed to query user tree position")?;
+
+        Ok(position as u64)
+    }
+
+    /// Set the user tree position cursor.
+    pub fn set_user_tree_position(&mut self, position: u64) -> anyhow::Result<()> {
+        let position = position_to_i64(position)?;
+
+        self.0
+            .prepare_cached("UPDATE compliance_user_tree_position SET position = ?1 WHERE id = 0")
+            .context("failed to prepare user tree position update")?
+            .execute((&position,))
+            .context("failed to update user tree position")?;
+
+        Ok(())
+    }
+
+    /// Get the current asset tree leaf count.
+    pub fn get_asset_tree_leaf_count(&mut self) -> anyhow::Result<u64> {
+        let count: i64 = self
+            .0
+            .prepare_cached("SELECT leaf_count FROM compliance_asset_tree_position WHERE id = 0")
+            .context("failed to prepare asset tree leaf count query")?
+            .query_row([], |row| row.get(0))
+            .context("failed to query asset tree leaf count")?;
+
+        Ok(count as u64)
+    }
+
+    /// Set the asset tree leaf count.
+    pub fn set_asset_tree_leaf_count(&mut self, leaf_count: u64) -> anyhow::Result<()> {
+        let count = leaf_count as i64;
+
+        self.0
+            .prepare_cached(
+                "UPDATE compliance_asset_tree_position SET leaf_count = ?1 WHERE id = 0",
+            )
+            .context("failed to prepare asset tree leaf count update")?
+            .execute((&count,))
+            .context("failed to update asset tree leaf count")?;
+
+        Ok(())
     }
 }
 

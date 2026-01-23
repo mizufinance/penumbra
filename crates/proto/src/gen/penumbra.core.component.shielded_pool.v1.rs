@@ -596,6 +596,11 @@ pub struct SpendPlan {
     /// Position of the asset in the asset registry tree.
     #[prost(uint64, tag = "20")]
     pub asset_position: u64,
+    /// Indexed leaf data for IMT proof verification (value, next_index, next_value).
+    #[prost(message, optional, tag = "21")]
+    pub asset_indexed_leaf: ::core::option::Option<
+        super::super::compliance::v1::IndexedLeafData,
+    >,
 }
 impl ::prost::Name for SpendPlan {
     const NAME: &'static str = "SpendPlan";
@@ -821,6 +826,11 @@ pub struct OutputPlan {
     /// Position of the asset in the asset registry tree.
     #[prost(uint64, tag = "20")]
     pub asset_position: u64,
+    /// Indexed leaf data for IMT proof verification (value, next_index, next_value).
+    #[prost(message, optional, tag = "21")]
+    pub asset_indexed_leaf: ::core::option::Option<
+        super::super::compliance::v1::IndexedLeafData,
+    >,
 }
 impl ::prost::Name for OutputPlan {
     const NAME: &'static str = "OutputPlan";

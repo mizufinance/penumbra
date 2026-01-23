@@ -143,11 +143,13 @@ impl App {
                 Governance::init_chain(&mut state_tx, Some(&genesis.governance_content)).await;
                 FeeComponent::init_chain(&mut state_tx, Some(&genesis.fee_content)).await;
                 Funding::init_chain(&mut state_tx, Some(&genesis.funding_content)).await;
-                // Compliance must be initialized after other components since it auto-registers
-                // the staking token as unregulated, which requires the asset tree to exist.
-                // Use with_defaults() to also register test_usd for integration testing.
-                let compliance_content = penumbra_sdk_compliance::genesis::Content::with_defaults();
-                Compliance::init_chain(&mut state_tx, Some(&compliance_content)).await;
+                // Initialize compliance component with empty trees for anchor tracking.
+                // Unregulated assets don't need registration (proven via non-membership).
+                Compliance::init_chain(
+                    &mut state_tx,
+                    Some(&penumbra_sdk_compliance::genesis::Content::default()),
+                )
+                .await;
 
                 state_tx
                     .finish_block()

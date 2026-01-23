@@ -228,6 +228,8 @@ message SpendPlan {
   compliance.v1.MerklePath asset_path = 19;
   // Position of the asset in the asset registry tree.
   uint64 asset_position = 20;
+  // Indexed leaf data for IMT proof verification (value, next_index, next_value).
+  compliance.v1.IndexedLeafData asset_indexed_leaf = 21;
 }
 
 // Creates a new shielded note.
@@ -324,6 +326,8 @@ message OutputPlan {
   compliance.v1.MerklePath asset_path = 19;
   // Position of the asset in the asset registry tree.
   uint64 asset_position = 20;
+  // Indexed leaf data for IMT proof verification (value, next_index, next_value).
+  compliance.v1.IndexedLeafData asset_indexed_leaf = 21;
 }
 
 // Query operations for the shielded pool component.

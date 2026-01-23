@@ -17,6 +17,7 @@ Unregulated assets are NOT registered. Non-membership proof = unregulated.
 User → KYC with Orbis
      → Orbis derives UK = Hash(MK, user_id)
      → Orbis computes AK = UK * B_d (per address)
+       where B_d = diversified basepoint from user's address
      → RegisterUser { address, AK, asset_id }
      → Compliance leaf added to user tree (QuadTree)
 ```
@@ -30,6 +31,7 @@ Alice → Build tx: Spend(alice_note) + Output(bob_addr, amount)
       → Planner enriches with compliance:
          - Fetches AK from registry (public)
          - Derives DK = AK + T * B_d (daily public key)
+           where T = Hash(key_type_domain, date)
          - Generates sender ciphertext (encrypted to alice's DK)
          - Generates receiver ciphertext (encrypted to bob's DK)
          - Fetches Merkle proofs (user tree + asset tree)
@@ -68,6 +70,9 @@ Issuer → Fetches dk (daily scalar) from Orbis
 | AK | Point | Registry (public) | Address key |
 | DK | Point | Public | Daily key (encryption) |
 | dk | Scalar | Orbis | Daily scalar (decryption) |
+| dk_det | Scalar | Orbis→Issuer | Detection daily scalar |
+| dk_core | Scalar | Orbis→Issuer | Core daily scalar (amount, self addr) |
+| EPK | Point | In ciphertext | Ephemeral public key (r * B_d) |
 
 ## Source Files
 

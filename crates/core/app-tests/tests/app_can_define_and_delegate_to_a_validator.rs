@@ -16,7 +16,7 @@ use {
     penumbra_sdk_sct::component::clock::EpochRead as _,
     penumbra_sdk_stake::{
         component::validator_handler::ValidatorDataRead as _, validator::Validator,
-        DelegationToken, FundingStreams, GovernanceKey, IdentityKey, UnbondingToken,
+        DelegationToken, FundingStreams, GovernanceKey, IdentityKey,
     },
     rand_core::OsRng,
     std::ops::Deref,

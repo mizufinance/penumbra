@@ -15,6 +15,7 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 mod client;
 mod client_compliance;
+mod compliance_tree;
 mod metrics;
 mod note_record;
 mod planner;
@@ -28,8 +29,10 @@ mod worker;
 
 pub use crate::client::ViewClient;
 pub use crate::client_compliance::{
-    enrich_plan_with_compliance, ViewClientComplianceExt, ViewClientComplianceProvider,
+    enrich_plan_with_compliance, LocalComplianceProofProvider, ViewClientComplianceExt,
+    ViewClientComplianceProvider,
 };
+pub use crate::compliance_tree::{ComplianceAssetTree, ComplianceUserTree};
 pub use crate::metrics::register_metrics;
 pub use crate::note_record::SpendableNoteRecord;
 pub use crate::planner::Planner;

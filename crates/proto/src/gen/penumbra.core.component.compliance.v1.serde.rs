@@ -1045,6 +1045,9 @@ impl serde::Serialize for ComplianceMerkleProofsResponse {
         if !self.asset_anchor.is_empty() {
             len += 1;
         }
+        if self.asset_indexed_leaf.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.ComplianceMerkleProofsResponse", len)?;
         if self.user_registered {
             struct_ser.serialize_field("userRegistered", &self.user_registered)?;
@@ -1081,6 +1084,9 @@ impl serde::Serialize for ComplianceMerkleProofsResponse {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("assetAnchor", pbjson::private::base64::encode(&self.asset_anchor).as_str())?;
         }
+        if let Some(v) = self.asset_indexed_leaf.as_ref() {
+            struct_ser.serialize_field("assetIndexedLeaf", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -1109,6 +1115,8 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
             "complianceAnchor",
             "asset_anchor",
             "assetAnchor",
+            "asset_indexed_leaf",
+            "assetIndexedLeaf",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1122,6 +1130,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
             AssetPosition,
             ComplianceAnchor,
             AssetAnchor,
+            AssetIndexedLeaf,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -1153,6 +1162,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
                             "assetPosition" | "asset_position" => Ok(GeneratedField::AssetPosition),
                             "complianceAnchor" | "compliance_anchor" => Ok(GeneratedField::ComplianceAnchor),
                             "assetAnchor" | "asset_anchor" => Ok(GeneratedField::AssetAnchor),
+                            "assetIndexedLeaf" | "asset_indexed_leaf" => Ok(GeneratedField::AssetIndexedLeaf),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -1181,6 +1191,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
                 let mut asset_position__ = None;
                 let mut compliance_anchor__ = None;
                 let mut asset_anchor__ = None;
+                let mut asset_indexed_leaf__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::UserRegistered => {
@@ -1245,6 +1256,12 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::AssetIndexedLeaf => {
+                            if asset_indexed_leaf__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetIndexedLeaf"));
+                            }
+                            asset_indexed_leaf__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -1260,6 +1277,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
                     asset_position: asset_position__.unwrap_or_default(),
                     compliance_anchor: compliance_anchor__.unwrap_or_default(),
                     asset_anchor: asset_anchor__.unwrap_or_default(),
+                    asset_indexed_leaf: asset_indexed_leaf__,
                 })
             }
         }
@@ -1608,6 +1626,15 @@ impl serde::Serialize for EventAssetRegistered {
         if self.position != 0 {
             len += 1;
         }
+        if self.indexed_leaf.is_some() {
+            len += 1;
+        }
+        if self.low_leaf_position != 0 {
+            len += 1;
+        }
+        if self.updated_low_leaf.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.EventAssetRegistered", len)?;
         if let Some(v) = self.asset_id.as_ref() {
             struct_ser.serialize_field("assetId", v)?;
@@ -1619,6 +1646,17 @@ impl serde::Serialize for EventAssetRegistered {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("position", ToString::to_string(&self.position).as_str())?;
+        }
+        if let Some(v) = self.indexed_leaf.as_ref() {
+            struct_ser.serialize_field("indexedLeaf", v)?;
+        }
+        if self.low_leaf_position != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("lowLeafPosition", ToString::to_string(&self.low_leaf_position).as_str())?;
+        }
+        if let Some(v) = self.updated_low_leaf.as_ref() {
+            struct_ser.serialize_field("updatedLowLeaf", v)?;
         }
         struct_ser.end()
     }
@@ -1635,6 +1673,12 @@ impl<'de> serde::Deserialize<'de> for EventAssetRegistered {
             "is_regulated",
             "isRegulated",
             "position",
+            "indexed_leaf",
+            "indexedLeaf",
+            "low_leaf_position",
+            "lowLeafPosition",
+            "updated_low_leaf",
+            "updatedLowLeaf",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1642,6 +1686,9 @@ impl<'de> serde::Deserialize<'de> for EventAssetRegistered {
             AssetId,
             IsRegulated,
             Position,
+            IndexedLeaf,
+            LowLeafPosition,
+            UpdatedLowLeaf,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -1667,6 +1714,9 @@ impl<'de> serde::Deserialize<'de> for EventAssetRegistered {
                             "assetId" | "asset_id" => Ok(GeneratedField::AssetId),
                             "isRegulated" | "is_regulated" => Ok(GeneratedField::IsRegulated),
                             "position" => Ok(GeneratedField::Position),
+                            "indexedLeaf" | "indexed_leaf" => Ok(GeneratedField::IndexedLeaf),
+                            "lowLeafPosition" | "low_leaf_position" => Ok(GeneratedField::LowLeafPosition),
+                            "updatedLowLeaf" | "updated_low_leaf" => Ok(GeneratedField::UpdatedLowLeaf),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -1689,6 +1739,9 @@ impl<'de> serde::Deserialize<'de> for EventAssetRegistered {
                 let mut asset_id__ = None;
                 let mut is_regulated__ = None;
                 let mut position__ = None;
+                let mut indexed_leaf__ = None;
+                let mut low_leaf_position__ = None;
+                let mut updated_low_leaf__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::AssetId => {
@@ -1711,6 +1764,26 @@ impl<'de> serde::Deserialize<'de> for EventAssetRegistered {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::IndexedLeaf => {
+                            if indexed_leaf__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("indexedLeaf"));
+                            }
+                            indexed_leaf__ = map_.next_value()?;
+                        }
+                        GeneratedField::LowLeafPosition => {
+                            if low_leaf_position__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("lowLeafPosition"));
+                            }
+                            low_leaf_position__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::UpdatedLowLeaf => {
+                            if updated_low_leaf__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("updatedLowLeaf"));
+                            }
+                            updated_low_leaf__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -1720,6 +1793,9 @@ impl<'de> serde::Deserialize<'de> for EventAssetRegistered {
                     asset_id: asset_id__,
                     is_regulated: is_regulated__.unwrap_or_default(),
                     position: position__.unwrap_or_default(),
+                    indexed_leaf: indexed_leaf__,
+                    low_leaf_position: low_leaf_position__.unwrap_or_default(),
+                    updated_low_leaf: updated_low_leaf__,
                 })
             }
         }
@@ -1883,10 +1959,7 @@ impl serde::Serialize for EventUserRegistered {
         if !self.commitment.is_empty() {
             len += 1;
         }
-        if self.address.is_some() {
-            len += 1;
-        }
-        if self.asset_id.is_some() {
+        if self.leaf.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.EventUserRegistered", len)?;
@@ -1900,11 +1973,8 @@ impl serde::Serialize for EventUserRegistered {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("commitment", pbjson::private::base64::encode(&self.commitment).as_str())?;
         }
-        if let Some(v) = self.address.as_ref() {
-            struct_ser.serialize_field("address", v)?;
-        }
-        if let Some(v) = self.asset_id.as_ref() {
-            struct_ser.serialize_field("assetId", v)?;
+        if let Some(v) = self.leaf.as_ref() {
+            struct_ser.serialize_field("leaf", v)?;
         }
         struct_ser.end()
     }
@@ -1918,17 +1988,14 @@ impl<'de> serde::Deserialize<'de> for EventUserRegistered {
         const FIELDS: &[&str] = &[
             "position",
             "commitment",
-            "address",
-            "asset_id",
-            "assetId",
+            "leaf",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Position,
             Commitment,
-            Address,
-            AssetId,
+            Leaf,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -1953,8 +2020,7 @@ impl<'de> serde::Deserialize<'de> for EventUserRegistered {
                         match value {
                             "position" => Ok(GeneratedField::Position),
                             "commitment" => Ok(GeneratedField::Commitment),
-                            "address" => Ok(GeneratedField::Address),
-                            "assetId" | "asset_id" => Ok(GeneratedField::AssetId),
+                            "leaf" => Ok(GeneratedField::Leaf),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -1976,8 +2042,7 @@ impl<'de> serde::Deserialize<'de> for EventUserRegistered {
             {
                 let mut position__ = None;
                 let mut commitment__ = None;
-                let mut address__ = None;
-                let mut asset_id__ = None;
+                let mut leaf__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Position => {
@@ -1996,17 +2061,11 @@ impl<'de> serde::Deserialize<'de> for EventUserRegistered {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::Address => {
-                            if address__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("address"));
+                        GeneratedField::Leaf => {
+                            if leaf__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("leaf"));
                             }
-                            address__ = map_.next_value()?;
-                        }
-                        GeneratedField::AssetId => {
-                            if asset_id__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("assetId"));
-                            }
-                            asset_id__ = map_.next_value()?;
+                            leaf__ = map_.next_value()?;
                         }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
@@ -2016,12 +2075,154 @@ impl<'de> serde::Deserialize<'de> for EventUserRegistered {
                 Ok(EventUserRegistered {
                     position: position__.unwrap_or_default(),
                     commitment: commitment__.unwrap_or_default(),
-                    address: address__,
-                    asset_id: asset_id__,
+                    leaf: leaf__,
                 })
             }
         }
         deserializer.deserialize_struct("penumbra.core.component.compliance.v1.EventUserRegistered", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for IndexedLeafData {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.value.is_empty() {
+            len += 1;
+        }
+        if self.next_index != 0 {
+            len += 1;
+        }
+        if !self.next_value.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.IndexedLeafData", len)?;
+        if !self.value.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("value", pbjson::private::base64::encode(&self.value).as_str())?;
+        }
+        if self.next_index != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("nextIndex", ToString::to_string(&self.next_index).as_str())?;
+        }
+        if !self.next_value.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("nextValue", pbjson::private::base64::encode(&self.next_value).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for IndexedLeafData {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "value",
+            "next_index",
+            "nextIndex",
+            "next_value",
+            "nextValue",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Value,
+            NextIndex,
+            NextValue,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "value" => Ok(GeneratedField::Value),
+                            "nextIndex" | "next_index" => Ok(GeneratedField::NextIndex),
+                            "nextValue" | "next_value" => Ok(GeneratedField::NextValue),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = IndexedLeafData;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.compliance.v1.IndexedLeafData")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<IndexedLeafData, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut value__ = None;
+                let mut next_index__ = None;
+                let mut next_value__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Value => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("value"));
+                            }
+                            value__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NextIndex => {
+                            if next_index__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nextIndex"));
+                            }
+                            next_index__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NextValue => {
+                            if next_value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nextValue"));
+                            }
+                            next_value__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(IndexedLeafData {
+                    value: value__.unwrap_or_default(),
+                    next_index: next_index__.unwrap_or_default(),
+                    next_value: next_value__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.compliance.v1.IndexedLeafData", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for MerklePath {

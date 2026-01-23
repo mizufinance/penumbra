@@ -42,6 +42,18 @@ impl serde::Serialize for CompactBlock {
         if self.epoch_index != 0 {
             len += 1;
         }
+        if !self.compliance_user_anchor.is_empty() {
+            len += 1;
+        }
+        if !self.compliance_asset_anchor.is_empty() {
+            len += 1;
+        }
+        if !self.compliance_user_registrations.is_empty() {
+            len += 1;
+        }
+        if !self.compliance_asset_registrations.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compact_block.v1.CompactBlock", len)?;
         if self.height != 0 {
             #[allow(clippy::needless_borrow)]
@@ -83,6 +95,22 @@ impl serde::Serialize for CompactBlock {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("epochIndex", ToString::to_string(&self.epoch_index).as_str())?;
         }
+        if !self.compliance_user_anchor.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("complianceUserAnchor", pbjson::private::base64::encode(&self.compliance_user_anchor).as_str())?;
+        }
+        if !self.compliance_asset_anchor.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("complianceAssetAnchor", pbjson::private::base64::encode(&self.compliance_asset_anchor).as_str())?;
+        }
+        if !self.compliance_user_registrations.is_empty() {
+            struct_ser.serialize_field("complianceUserRegistrations", &self.compliance_user_registrations)?;
+        }
+        if !self.compliance_asset_registrations.is_empty() {
+            struct_ser.serialize_field("complianceAssetRegistrations", &self.compliance_asset_registrations)?;
+        }
         struct_ser.end()
     }
 }
@@ -115,6 +143,14 @@ impl<'de> serde::Deserialize<'de> for CompactBlock {
             "altGasPrices",
             "epoch_index",
             "epochIndex",
+            "compliance_user_anchor",
+            "complianceUserAnchor",
+            "compliance_asset_anchor",
+            "complianceAssetAnchor",
+            "compliance_user_registrations",
+            "complianceUserRegistrations",
+            "compliance_asset_registrations",
+            "complianceAssetRegistrations",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -131,6 +167,10 @@ impl<'de> serde::Deserialize<'de> for CompactBlock {
             GasPrices,
             AltGasPrices,
             EpochIndex,
+            ComplianceUserAnchor,
+            ComplianceAssetAnchor,
+            ComplianceUserRegistrations,
+            ComplianceAssetRegistrations,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -165,6 +205,10 @@ impl<'de> serde::Deserialize<'de> for CompactBlock {
                             "gasPrices" | "gas_prices" => Ok(GeneratedField::GasPrices),
                             "altGasPrices" | "alt_gas_prices" => Ok(GeneratedField::AltGasPrices),
                             "epochIndex" | "epoch_index" => Ok(GeneratedField::EpochIndex),
+                            "complianceUserAnchor" | "compliance_user_anchor" => Ok(GeneratedField::ComplianceUserAnchor),
+                            "complianceAssetAnchor" | "compliance_asset_anchor" => Ok(GeneratedField::ComplianceAssetAnchor),
+                            "complianceUserRegistrations" | "compliance_user_registrations" => Ok(GeneratedField::ComplianceUserRegistrations),
+                            "complianceAssetRegistrations" | "compliance_asset_registrations" => Ok(GeneratedField::ComplianceAssetRegistrations),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -196,6 +240,10 @@ impl<'de> serde::Deserialize<'de> for CompactBlock {
                 let mut gas_prices__ = None;
                 let mut alt_gas_prices__ = None;
                 let mut epoch_index__ = None;
+                let mut compliance_user_anchor__ = None;
+                let mut compliance_asset_anchor__ = None;
+                let mut compliance_user_registrations__ = None;
+                let mut compliance_asset_registrations__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Height => {
@@ -274,6 +322,34 @@ impl<'de> serde::Deserialize<'de> for CompactBlock {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::ComplianceUserAnchor => {
+                            if compliance_user_anchor__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("complianceUserAnchor"));
+                            }
+                            compliance_user_anchor__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::ComplianceAssetAnchor => {
+                            if compliance_asset_anchor__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("complianceAssetAnchor"));
+                            }
+                            compliance_asset_anchor__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::ComplianceUserRegistrations => {
+                            if compliance_user_registrations__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("complianceUserRegistrations"));
+                            }
+                            compliance_user_registrations__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ComplianceAssetRegistrations => {
+                            if compliance_asset_registrations__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("complianceAssetRegistrations"));
+                            }
+                            compliance_asset_registrations__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -292,6 +368,10 @@ impl<'de> serde::Deserialize<'de> for CompactBlock {
                     gas_prices: gas_prices__,
                     alt_gas_prices: alt_gas_prices__.unwrap_or_default(),
                     epoch_index: epoch_index__.unwrap_or_default(),
+                    compliance_user_anchor: compliance_user_anchor__.unwrap_or_default(),
+                    compliance_asset_anchor: compliance_asset_anchor__.unwrap_or_default(),
+                    compliance_user_registrations: compliance_user_registrations__.unwrap_or_default(),
+                    compliance_asset_registrations: compliance_asset_registrations__.unwrap_or_default(),
                 })
             }
         }

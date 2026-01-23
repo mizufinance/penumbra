@@ -186,3 +186,34 @@ CREATE TABLE compliance_anchors (
     user_root BLOB NOT NULL,
     asset_root BLOB NOT NULL
 );
+
+-- Full compliance leaf data (for addresses in sync scope)
+CREATE TABLE compliance_user_leaf_data (
+    address BLOB NOT NULL,
+    asset_id BLOB NOT NULL,
+    position BIGINT NOT NULL,
+    address_compliance_key BLOB NOT NULL,
+    commitment BLOB NOT NULL,
+    PRIMARY KEY (address, asset_id)
+);
+CREATE INDEX compliance_user_leaf_data_position ON compliance_user_leaf_data(position);
+
+-- Tracked counterparty addresses (sparse sync scope)
+CREATE TABLE compliance_counterparties (
+    address BLOB PRIMARY KEY,
+    first_seen_height BIGINT NOT NULL,
+    last_tx_height BIGINT
+);
+
+-- Tree position cursors (for reconstruction on load)
+CREATE TABLE compliance_user_tree_position (
+    id INTEGER PRIMARY KEY CHECK (id = 0),
+    position BIGINT NOT NULL
+);
+INSERT INTO compliance_user_tree_position VALUES (0, 0);
+
+CREATE TABLE compliance_asset_tree_position (
+    id INTEGER PRIMARY KEY CHECK (id = 0),
+    leaf_count BIGINT NOT NULL
+);
+INSERT INTO compliance_asset_tree_position VALUES (0, 1); -- Starts with sentinel
