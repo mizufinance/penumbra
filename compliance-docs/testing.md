@@ -103,6 +103,9 @@ pd network unsafe-reset-all
 # Build binaries
 cargo build --release -p pd -p pcli
 
+# Install cometbft consensus engine
+go install github.com/cometbft/cometbft/cmd/cometbft@v0.37.15
+
 # Run smoke tests
 just smoke
 
