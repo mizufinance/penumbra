@@ -130,15 +130,12 @@ impl ComplianceTestHarness {
         let regulated_token_id = asset::Id(Fq::from(10001u64));
         let unregulated_token_id = asset::Id(Fq::from(20002u64));
 
-        // 3. Register Assets on-chain
+        // 3. Register regulated asset on-chain (unregulated assets don't need registration)
         {
             let mut state = StateDelta::new(storage.latest_snapshot());
-            state
-                .update_asset_regulation(regulated_token_id, true)
-                .await?;
-            state
-                .update_asset_regulation(unregulated_token_id, false)
-                .await?;
+            // Only register regulated assets in the IMT
+            state.register_regulated_asset(regulated_token_id).await?;
+            // unregulated_token_id doesn't need registration - proven via non-membership
             storage.commit(state).await?;
         }
 
@@ -250,22 +247,17 @@ impl ComplianceTestHarness {
     #[allow(dead_code)]
     async fn get_asset_position(&self, asset_id: asset::Id) -> Result<u64> {
         let snapshot = self._storage.latest_snapshot();
-        let index = snapshot
-            .get_asset_index(asset_id)
-            .await?
-            .expect("asset not found");
-        Ok(index)
+        let proof_data = snapshot.get_asset_proof_data(asset_id).await?;
+        Ok(proof_data.position)
     }
 
     #[allow(dead_code)]
-    async fn get_asset_path(&self, asset_id: asset::Id) -> Result<MerklePath> {
+    async fn get_asset_proof_data(
+        &self,
+        asset_id: asset::Id,
+    ) -> Result<penumbra_sdk_compliance::registry::AssetProofData> {
         let snapshot = self._storage.latest_snapshot();
-        let index = snapshot
-            .get_asset_index(asset_id)
-            .await?
-            .expect("asset not found");
-        let path = snapshot.get_asset_auth_path(index).await?;
-        Ok(Self::convert_merkle_path(path))
+        snapshot.get_asset_proof_data(asset_id).await
     }
 
     #[allow(dead_code)]
@@ -717,12 +709,24 @@ async fn test_full_compliance_proof_roundtrip() -> Result<()> {
     let asset_position = harness
         .get_asset_position(harness.regulated_token_id)
         .await?;
-    let asset_merkle_path = harness.get_asset_path(harness.regulated_token_id).await?;
+    let asset_proof_data = harness
+        .get_asset_proof_data(harness.regulated_token_id)
+        .await?;
+    let asset_merkle_path = MerklePath::from(penumbra_sdk_compliance::structs::MerklePath {
+        layers: asset_proof_data
+            .auth_path
+            .layers
+            .iter()
+            .map(|layer| penumbra_sdk_compliance::structs::MerklePathLayer {
+                siblings: layer.siblings.clone(),
+            })
+            .collect(),
+    });
 
     // Get compliance and asset anchors from state
     let snapshot = harness._storage.latest_snapshot();
     let compliance_anchor = snapshot.get_user_tree_root().await?;
-    let asset_anchor = snapshot.get_asset_tree_root().await?;
+    let asset_anchor = snapshot.get_asset_imt_root().await?;
     // STEP 2: Create compliance leaves
 
     let alice_leaf = ComplianceLeaf {

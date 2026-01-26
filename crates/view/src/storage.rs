@@ -44,6 +44,7 @@ use tct::StateCommitment;
 
 use crate::{sync::FilteredBlock, SpendableNoteRecord, SwapRecord};
 
+pub(crate) mod compliance;
 mod sct;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -1861,6 +1862,197 @@ impl Storage {
                     },
                 )
                 .map_err(anyhow::Error::from)
+        })
+        .await?
+    }
+
+    /// Load the compliance user tree from storage.
+    pub async fn compliance_user_tree(
+        &self,
+    ) -> anyhow::Result<crate::compliance_tree::ComplianceUserTree> {
+        let pool = self.pool.clone();
+
+        spawn_blocking(move || {
+            let mut conn = pool.get()?;
+            let mut tx = conn.transaction()?;
+            let mut store = compliance::ComplianceTreeStore(&mut tx);
+            crate::compliance_tree::ComplianceUserTree::from_store(&mut store)
+        })
+        .await?
+    }
+
+    /// Load the compliance asset tree from storage.
+    pub async fn compliance_asset_tree(
+        &self,
+    ) -> anyhow::Result<crate::compliance_tree::ComplianceAssetTree> {
+        let pool = self.pool.clone();
+
+        spawn_blocking(move || {
+            let mut conn = pool.get()?;
+            let mut tx = conn.transaction()?;
+            let mut store = compliance::ComplianceTreeStore(&mut tx);
+            crate::compliance_tree::ComplianceAssetTree::from_store(&mut store)
+        })
+        .await?
+    }
+
+    /// Record compliance tree changes for a block.
+    pub async fn record_compliance_block(
+        &self,
+        height: u64,
+        user_tree: &crate::compliance_tree::ComplianceUserTree,
+        asset_tree: &crate::compliance_tree::ComplianceAssetTree,
+        user_start_position: u64,
+        asset_start_position: u64,
+    ) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        let user_root = user_tree.root();
+        let asset_root = asset_tree.root();
+
+        // Clone tree state for persistence
+        let user_tree = user_tree.clone();
+        let asset_tree = asset_tree.clone();
+
+        spawn_blocking(move || {
+            let mut conn = pool.get()?;
+            let mut tx = conn.transaction()?;
+
+            {
+                let mut store = compliance::ComplianceTreeStore(&mut tx);
+
+                // Persist user tree changes
+                user_tree.persist(&mut store, user_start_position)?;
+
+                // Persist asset tree changes
+                asset_tree.persist(&mut store, asset_start_position)?;
+
+                // Store anchors for this block
+                store.add_anchor(height, user_root, asset_root)?;
+            }
+
+            tx.commit()?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(())
+    }
+
+    /// Record compliance leaf data for an address in the sync scope.
+    pub async fn record_compliance_leaf_data(
+        &self,
+        address: &penumbra_sdk_keys::Address,
+        asset_id: &asset::Id,
+        position: u64,
+        ack: &[u8],
+        commitment: StateCommitment,
+    ) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        let address_bytes = address.to_vec();
+        let asset_bytes = asset_id.to_bytes().to_vec();
+        let ack_bytes = ack.to_vec();
+
+        spawn_blocking(move || {
+            let mut conn = pool.get()?;
+            let mut tx = conn.transaction()?;
+            {
+                let mut store = compliance::ComplianceTreeStore(&mut tx);
+                store.add_leaf_data(
+                    &address_bytes,
+                    &asset_bytes,
+                    position,
+                    &ack_bytes,
+                    commitment,
+                )?;
+            }
+            tx.commit()?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(())
+    }
+
+    /// Record a counterparty address for tracking.
+    pub async fn record_counterparty(
+        &self,
+        address: &penumbra_sdk_keys::Address,
+        height: u64,
+    ) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        let address_bytes = address.to_vec();
+
+        spawn_blocking(move || {
+            let mut conn = pool.get()?;
+            let mut tx = conn.transaction()?;
+            {
+                let mut store = compliance::ComplianceTreeStore(&mut tx);
+                store.add_counterparty(&address_bytes, height)?;
+            }
+            tx.commit()?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(())
+    }
+
+    /// Check if an address is in the compliance sync scope (own or counterparty).
+    pub async fn is_address_in_compliance_scope(
+        &self,
+        fvk: &FullViewingKey,
+        address: &penumbra_sdk_keys::Address,
+    ) -> anyhow::Result<bool> {
+        // First check if it's one of our own addresses
+        if fvk.address_index(address).is_some() {
+            return Ok(true);
+        }
+
+        // Otherwise check if it's a tracked counterparty
+        let pool = self.pool.clone();
+        let address_bytes = address.to_vec();
+
+        spawn_blocking(move || {
+            let mut conn = pool.get()?;
+            let mut tx = conn.transaction()?;
+            let result = {
+                let mut store = compliance::ComplianceTreeStore(&mut tx);
+                store.is_counterparty(&address_bytes)?
+            };
+            Ok::<bool, anyhow::Error>(result)
+        })
+        .await?
+    }
+
+    /// Get compliance leaf data for an address and asset from local storage.
+    ///
+    /// Returns (position, ack_bytes, commitment) if available, None if not in scope.
+    pub async fn get_compliance_leaf_data(
+        &self,
+        address: &penumbra_sdk_keys::Address,
+        asset_id: &asset::Id,
+    ) -> anyhow::Result<Option<(u64, [u8; 32], StateCommitment)>> {
+        let pool = self.pool.clone();
+        let address_bytes = address.to_vec();
+        let asset_bytes = asset_id.to_bytes().to_vec();
+
+        spawn_blocking(move || {
+            let mut conn = pool.get()?;
+            let mut tx = conn.transaction()?;
+            let result = {
+                let mut store = compliance::ComplianceTreeStore(&mut tx);
+                store.get_leaf_data(&address_bytes, &asset_bytes)?
+            };
+            // Convert Vec<u8> to [u8; 32] if present
+            let converted = result
+                .map(|(pos, ack_vec, commitment)| -> anyhow::Result<_> {
+                    let ack_bytes: [u8; 32] = ack_vec.try_into().map_err(|v: Vec<u8>| {
+                        anyhow::anyhow!("ACK must be 32 bytes, got {}", v.len())
+                    })?;
+                    Ok((pos, ack_bytes, commitment))
+                })
+                .transpose()?;
+            Ok::<Option<(u64, [u8; 32], StateCommitment)>, anyhow::Error>(converted)
         })
         .await?
     }

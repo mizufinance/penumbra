@@ -10,6 +10,7 @@ pub mod proof_test_helpers {
     use ark_snark::SNARK;
     use decaf377::{Bls12_377, Fq, Fr};
     use penumbra_sdk_asset::{asset, Value};
+    use penumbra_sdk_compliance::{IndexedLeaf, IndexedMerkleTree, MerklePath};
     use penumbra_sdk_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
     use penumbra_sdk_tct as tct;
     use rand_core::OsRng;
@@ -81,6 +82,49 @@ pub mod proof_test_helpers {
             tct::StateCommitment(Fq::from(0u64)),
             tct::StateCommitment(Fq::from(0u64)),
         )
+    }
+
+    /// Create valid IMT proof data for an unregulated asset.
+    ///
+    /// Returns (asset_anchor, indexed_leaf, merkle_path, position) that satisfy circuit constraints.
+    /// The asset is proven to be unregulated via non-membership (falls in a gap).
+    pub fn create_imt_non_membership_proof(
+        asset_id: Fq,
+    ) -> (tct::StateCommitment, IndexedLeaf, MerklePath, u64) {
+        penumbra_sdk_compliance::create_default_imt_proof(asset_id)
+    }
+
+    /// Create valid user tree (QuadTree) proof data.
+    ///
+    /// Returns (compliance_anchor, merkle_path, position) that satisfy circuit constraints.
+    pub fn create_user_tree_proof(
+        user_leaf: &penumbra_sdk_compliance::ComplianceLeaf,
+    ) -> (tct::StateCommitment, MerklePath, u64) {
+        penumbra_sdk_compliance::create_default_user_tree_proof(user_leaf)
+    }
+
+    /// Create valid IMT proof data for a regulated asset.
+    ///
+    /// Returns (asset_anchor, indexed_leaf, merkle_path, position) that satisfy circuit constraints.
+    /// The asset is proven to be regulated via membership (exact match in tree).
+    pub fn create_imt_membership_proof(
+        asset_id: Fq,
+    ) -> (tct::StateCommitment, IndexedLeaf, MerklePath, u64) {
+        let mut tree = IndexedMerkleTree::new();
+
+        // Insert the asset as regulated
+        tree.insert(asset_id)
+            .expect("should be able to insert asset");
+
+        // Get membership proof
+        let (position, indexed_leaf, auth_path) = tree
+            .membership_proof(asset_id)
+            .expect("should be able to generate membership proof");
+
+        let merkle_path = MerklePath::from_auth_path(auth_path);
+        let anchor = tct::StateCommitment(tree.root().0);
+
+        (anchor, indexed_leaf, merkle_path, position)
     }
 
     /// Setup Groth16 proving and verifying keys for a circuit.
@@ -155,7 +199,12 @@ pub mod proof_test_helpers {
         pub compliance_ciphertext_bytes: Vec<u8>,
         pub ephemeral_secret: Fr,
         pub asset_anchor: tct::StateCommitment,
+        pub asset_indexed_leaf: IndexedLeaf,
+        pub asset_path: MerklePath,
+        pub asset_position: u64,
         pub compliance_anchor: tct::StateCommitment,
+        pub compliance_path: MerklePath,
+        pub compliance_position: u64,
         pub timestamp: u64,
     }
 
@@ -264,9 +313,20 @@ pub mod proof_test_helpers {
             .expect("can deserialize ciphertext");
         let (compliance_epk, compliance_ciphertext) = ct.to_circuit_public_inputs();
 
-        let asset_anchor = tct::StateCommitment(Fq::from(0u64));
-        let compliance_anchor = tct::StateCommitment(Fq::from(0u64));
         let timestamp = current_timestamp();
+
+        // Create valid user tree proof
+        let (compliance_anchor, compliance_path, compliance_position) =
+            create_user_tree_proof(&user_leaf);
+
+        // Create valid IMT proof data based on regulation status
+        // IMPORTANT: Generate anchor and proof from the SAME tree instance
+        let asset_id_fq = value.asset_id.0;
+        let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) = if is_regulated {
+            create_imt_membership_proof(asset_id_fq)
+        } else {
+            create_imt_non_membership_proof(asset_id_fq)
+        };
 
         TestData {
             note,
@@ -282,7 +342,12 @@ pub mod proof_test_helpers {
             compliance_ciphertext_bytes,
             ephemeral_secret,
             asset_anchor,
+            asset_indexed_leaf,
+            asset_path,
+            asset_position,
             compliance_anchor,
+            compliance_path,
+            compliance_position,
             timestamp,
         }
     }
@@ -311,6 +376,7 @@ pub mod proof_test_helpers {
         let counterparty_leaf_hash =
             penumbra_sdk_compliance::blind_sender_leaf(dummy_leaf.commit(), dummy_nonce);
 
+        // Use pre-computed IMT proof data from test_data (anchor and proof from same tree)
         let public = OutputProofPublic {
             balance_commitment,
             note_commitment,
@@ -326,11 +392,12 @@ pub mod proof_test_helpers {
         let private = OutputProofPrivate {
             note: test_data.note,
             balance_blinding: test_data.balance_blinding,
-            asset_path: penumbra_sdk_compliance::MerklePath::default(),
-            asset_position: 0,
+            asset_path: test_data.asset_path,
+            asset_position: test_data.asset_position,
+            asset_indexed_leaf: test_data.asset_indexed_leaf,
             is_regulated,
-            compliance_path: penumbra_sdk_compliance::MerklePath::default(),
-            compliance_position: 0,
+            compliance_path: test_data.compliance_path,
+            compliance_position: test_data.compliance_position,
             user_leaf: test_data.user_leaf,
             compliance_ephemeral_secret: test_data.ephemeral_secret,
             counterparty_leaf: dummy_leaf.clone(),
@@ -388,6 +455,7 @@ pub mod proof_test_helpers {
         let counterparty_leaf_hash =
             penumbra_sdk_compliance::blind_counterparty_leaf(dummy_leaf.commit(), dummy_nonce);
 
+        // Use pre-computed IMT proof data from test_data (anchor and proof from same tree)
         let public = SpendProofPublic {
             anchor,
             balance_commitment,
@@ -409,11 +477,12 @@ pub mod proof_test_helpers {
             spend_auth_randomizer: randomizer,
             ak: *test_data.fvk.spend_verification_key(),
             nk: *test_data.fvk.nullifier_key(),
-            asset_path: penumbra_sdk_compliance::MerklePath::default(),
-            asset_position: 0,
+            asset_path: test_data.asset_path,
+            asset_position: test_data.asset_position,
+            asset_indexed_leaf: test_data.asset_indexed_leaf,
             is_regulated,
-            compliance_path: penumbra_sdk_compliance::MerklePath::default(),
-            compliance_position: 0,
+            compliance_path: test_data.compliance_path,
+            compliance_position: test_data.compliance_position,
             user_leaf: test_data.user_leaf,
             compliance_ephemeral_secret: test_data.ephemeral_secret,
             counterparty_leaf: dummy_leaf.clone(),

@@ -184,7 +184,7 @@ async fn verify_storage_proof_simple() -> anyhow::Result<()> {
     )?;
 
     // now verify the proof retrieved via a gRPC call
-    let grpc_url = "http://127.0.0.1:8081" // see #4517
+    let grpc_url = "http://127.0.0.1:8082" // see #4517
         .parse::<url::Url>()?
         .tap(|url| tracing::debug!(%url, "parsed grpc url"));
     // Spawn the node's RPC server.

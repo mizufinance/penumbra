@@ -1,6 +1,7 @@
 syntax = "proto3";
 package penumbra.core.component.compact_block.v1;
 
+import "penumbra/core/component/compliance/v1/compliance.proto";
 import "penumbra/core/component/dex/v1/dex.proto";
 import "penumbra/core/component/fee/v1/fee.proto";
 import "penumbra/core/component/sct/v1/sct.proto";
@@ -32,6 +33,14 @@ message CompactBlock {
   repeated fee.v1.GasPrices alt_gas_prices = 100;
   // The epoch index
   uint64 epoch_index = 11;
+  // Compliance user tree anchor (root) for this block.
+  bytes compliance_user_anchor = 12;
+  // Compliance asset tree anchor (root) for this block.
+  bytes compliance_asset_anchor = 13;
+  // User registrations in this block (for client sync).
+  repeated compliance.v1.EventUserRegistered compliance_user_registrations = 14;
+  // Asset registrations in this block (for client sync).
+  repeated compliance.v1.EventAssetRegistered compliance_asset_registrations = 15;
 }
 
 // An encrypted payload, corresponding to a single commitment in the state commitment tree.

@@ -404,6 +404,17 @@ pub trait ViewClient {
         address: Address,
         asset_id: asset::Id,
     ) -> Pin<Box<dyn Future<Output = Result<pb::ComplianceUserLeafResponse>> + Send + 'static>>;
+
+    /// Batch query for compliance Merkle proofs for multiple (address, asset) pairs.
+    ///
+    /// This is more efficient than calling `compliance_merkle_proofs` multiple times
+    /// because it makes a single gRPC call and fetches the tree anchors only once.
+    fn compliance_batch_merkle_proofs(
+        &mut self,
+        queries: Vec<(Address, asset::Id)>,
+    ) -> Pin<
+        Box<dyn Future<Output = Result<pb::ComplianceBatchMerkleProofsResponse>> + Send + 'static>,
+    >;
 }
 
 // We need to tell `async_trait` not to add a `Send` bound to the boxed
@@ -1264,6 +1275,38 @@ where
                 ViewServiceClient::compliance_user_leaf(&mut self2, tonic::Request::new(request))
                     .await?
                     .into_inner();
+
+            Ok(response)
+        }
+        .boxed()
+    }
+
+    fn compliance_batch_merkle_proofs(
+        &mut self,
+        queries: Vec<(Address, asset::Id)>,
+    ) -> Pin<
+        Box<dyn Future<Output = Result<pb::ComplianceBatchMerkleProofsResponse>> + Send + 'static>,
+    > {
+        let mut self2 = self.clone();
+        async move {
+            let proto_queries = queries
+                .into_iter()
+                .map(|(address, asset_id)| pb::ComplianceBatchQuery {
+                    address: Some(address.into()),
+                    asset_id: Some(asset_id.into()),
+                })
+                .collect();
+
+            let request = pb::ComplianceBatchMerkleProofsRequest {
+                queries: proto_queries,
+            };
+
+            let response = ViewServiceClient::compliance_batch_merkle_proofs(
+                &mut self2,
+                tonic::Request::new(request),
+            )
+            .await?
+            .into_inner();
 
             Ok(response)
         }

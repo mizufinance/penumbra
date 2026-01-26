@@ -352,11 +352,6 @@ impl PmonitorTestRunner {
         // Wait for the network to be fully ready (blocks being produced)
         poll_for_blocks().await?;
 
-        // Register assets in the compliance registry before tests run.
-        // Use the first wallet for registration transactions.
-        let registration_wallet = self.wallets_dir()?.join("wallet-0");
-        register_compliance_assets(&registration_wallet)?;
-
         Ok(child)
     }
 }
@@ -446,13 +441,4 @@ async fn poll_for_blocks() -> anyhow::Result<()> {
     }
 
     anyhow::bail!("network did not produce blocks after {} seconds", timeout);
-}
-
-/// Register required test assets in the compliance registry.
-/// This must be done before any transfers can be made.
-/// Note: the staking token (penumbra) and test_usd are auto-registered
-/// as unregulated at genesis, so no additional registration is needed.
-fn register_compliance_assets(_pcli_home: &PathBuf) -> anyhow::Result<()> {
-    tracing::debug!("skipping asset registration - test_usd is auto-registered at genesis");
-    Ok(())
 }

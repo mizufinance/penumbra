@@ -82,20 +82,19 @@ done
 # Wait for a few more blocks to ensure state is fully committed
 sleep 10
 
-# Register test assets in the compliance registry before running tests.
-# The compliance system requires all assets to be registered (regulated or unregulated)
-# before they can be transferred. Note: the staking token (penumbra) is auto-registered
-# as unregulated at genesis, so we only need to register other test assets here.
->&2 echo "Registering test assets in compliance registry..."
+# Register the test wallet user in the compliance registry for regulated assets.
+# This is required for SpendPlan to generate valid proofs (merkle path to user leaf).
+# Note: unregulated assets (like gm, delegation tokens, LP NFTs) don't need registration.
+>&2 echo "Registering test user in compliance registry..."
 # Initialize a test wallet for registration transactions
 pcli_test_home="${smoke_test_dir}/pcli-test"
 mkdir -p "$pcli_test_home"
 echo "comfort ten front cycle churn burger oak absent rice ice urge result art couple benefit cabbage frequent obscure hurry trick segment cool job debate" | \
     cargo run --release --bin pcli -- --home "$pcli_test_home" init --grpc-url "http://127.0.0.1:8080" soft-kms import-phrase
 
-# Register gm as unregulated (penumbra is auto-registered at genesis)
-cargo run --release --bin pcli -- --home "$pcli_test_home" tx compliance register-asset gm --unregulated
->&2 echo "Asset registration complete."
+# Register the test wallet user for regulated assets (test_usd is regulated at genesis)
+cargo run --release --bin pcli -- --home "$pcli_test_home" tx compliance register-user test_usd
+>&2 echo "User registration complete."
 
 # Run the integration tests. Using `just` targets so that the exact
 # invocations are easily reusable on the CLI in dev loops.

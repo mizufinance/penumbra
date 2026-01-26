@@ -8,6 +8,7 @@ use decaf377_rdsa::{SpendAuth, VerificationKey};
 use penumbra_sdk_asset::Value;
 use penumbra_sdk_compact_block::component::CompactBlockManager;
 use penumbra_sdk_compliance::structs::MerklePath;
+use penumbra_sdk_compliance::ComplianceRegistryWrite;
 use penumbra_sdk_keys::{keys::NullifierKey, test_keys};
 use penumbra_sdk_mock_client::MockClient;
 use penumbra_sdk_num::Amount;
@@ -16,18 +17,24 @@ use penumbra_sdk_sct::{
     epoch::Epoch,
 };
 use penumbra_sdk_shielded_pool::{
-    component::ShieldedPool, Note, SpendPlan, SpendProof, SpendProofPrivate, SpendProofPublic,
+    component::ShieldedPool, Note, OutputPlan, SpendPlan, SpendProof, SpendProofPrivate,
+    SpendProofPublic,
 };
 use penumbra_sdk_tct as tct;
-use penumbra_sdk_txhash::{EffectHash, TransactionContext};
-use rand_core::{OsRng, SeedableRng};
+use penumbra_sdk_transaction::{
+    memo::MemoPlaintext, plan::MemoPlan, TransactionParameters, TransactionPlan,
+};
+use penumbra_sdk_txhash::{EffectHash, EffectingData as _, TransactionContext};
+use rand_core::OsRng;
 use std::{ops::Deref, sync::Arc};
 use tendermint::abci;
 
+/// Test the spend action handler with proper compliance proofs.
+///
+/// This test registers compliance data, builds a transaction with Groth16 proofs,
+/// and verifies the spend action handler accepts the transaction.
 #[tokio::test]
 async fn spend_happy_path() -> anyhow::Result<()> {
-    let mut rng = rand_chacha::ChaChaRng::seed_from_u64(1312);
-
     let storage = TempStorage::new_with_penumbra_prefixes()
         .await?
         .apply_default_genesis()
@@ -36,133 +43,146 @@ async fn spend_happy_path() -> anyhow::Result<()> {
 
     let height = 1;
 
-    // Precondition: This test uses the default genesis which has existing notes for the test keys.
+    // Sync the mock client to see genesis notes
     let mut client = MockClient::new(test_keys::SPEND_KEY.clone());
-    let sk = test_keys::SPEND_KEY.clone();
     client.sync_to(0, state.deref()).await?;
+
+    // Get a note to spend
     let note = client.notes.values().next().unwrap().clone();
-    let note_commitment = note.commit();
-    let proof = client.sct.witness(note_commitment).unwrap();
-    let root = client.sct.root();
-    let tct_position = proof.position();
+    let sender_address = note.address();
+    let recipient_address = test_keys::ADDRESS_1.deref().clone();
+    let asset_id = note.asset_id();
 
-    // 1. Simulate BeginBlock
-    let mut state_tx = state.try_begin_transaction().unwrap();
-    state_tx.put_block_height(height);
-    state_tx.put_epoch_by_height(
-        height,
-        Epoch {
-            index: 0,
-            start_height: 0,
+    // 1. Simulate BeginBlock and register compliance
+    {
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        state_tx.put_block_height(height);
+        state_tx.put_block_timestamp(height, tendermint::Time::now());
+        state_tx.put_epoch_by_height(
+            height,
+            Epoch {
+                index: 0,
+                start_height: 0,
+            },
+        );
+
+        // Register the asset as unregulated
+        common::register_assets_for_compliance(&mut state_tx, &[asset_id]).await?;
+        // Register the users for this asset
+        common::register_test_users_for_compliance(
+            &mut state_tx,
+            &[sender_address.clone(), recipient_address.clone()],
+            &[asset_id],
+        )
+        .await?;
+
+        state_tx.record_compliance_anchors(height).await?;
+
+        state_tx.apply();
+    }
+
+    // 2. Create a transaction plan with spend and output
+    let mut plan = TransactionPlan {
+        actions: vec![
+            SpendPlan::new(
+                &mut OsRng,
+                note.clone(),
+                client
+                    .position(note.commit())
+                    .expect("note should be in mock client's tree"),
+            )
+            .into(),
+            OutputPlan::new(&mut OsRng, note.value(), recipient_address).into(),
+        ],
+        memo: Some(MemoPlan::new(
+            &mut OsRng,
+            MemoPlaintext::blank_memo(test_keys::ADDRESS_0.deref().clone()),
+        )),
+        detection_data: None,
+        transaction_parameters: TransactionParameters {
+            chain_id: "penumbra-test".to_string(),
+            ..Default::default()
         },
-    );
-    state_tx.apply();
+    }
+    .with_populated_detection_data(OsRng, Default::default());
 
-    // 2. Create a Spend action
-    let spend_plan = SpendPlan::new(&mut rng, note, tct_position);
-    let dummy_effect_hash = [0u8; 64];
-    let rsk = sk.spend_auth_key().randomize(&spend_plan.randomizer);
-    let auth_sig = rsk.sign(&mut rng, dummy_effect_hash.as_ref());
-    let spend = spend_plan.spend(
-        &test_keys::FULL_VIEWING_KEY,
-        auth_sig,
-        proof,
-        root,
-        &penumbra_sdk_proof_params::SPEND_PROOF_PROVING_KEY,
-        None, // No compliance keys
-    )?;
+    // Build with compliance enrichment from state
+    let tx = client
+        .witness_auth_build_with_compliance(&mut plan, state.deref())
+        .await?;
+
+    // Create transaction context for verification
     let transaction_context = TransactionContext {
-        anchor: root,
-        effect_hash: EffectHash(dummy_effect_hash),
+        anchor: client.sct.root(),
+        effect_hash: EffectHash(tx.effect_hash().as_ref().try_into().unwrap()),
     };
 
-    // 3. Simulate execution of the Spend action
+    // Get the spend action from the transaction
+    let tx_body = tx.transaction_body();
+    let spend = tx_body
+        .actions
+        .iter()
+        .find_map(|a| {
+            if let penumbra_sdk_transaction::Action::Spend(s) = a {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .expect("transaction should have a spend action");
+
+    // 3. Verify and execute the spend action
     spend.check_stateless(transaction_context).await?;
     spend.check_historical(state.clone()).await?;
-    let mut state_tx = state.try_begin_transaction().unwrap();
-    state_tx.put_mock_source(1u8);
-    spend.check_and_execute(&mut state_tx).await?;
-    state_tx.apply();
+
+    {
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        state_tx.put_mock_source(1u8);
+        spend.check_and_execute(&mut state_tx).await?;
+        state_tx.apply();
+    }
 
     // 4. Execute EndBlock
-
     let end_block = abci::request::EndBlock {
         height: height.try_into().unwrap(),
     };
     ShieldedPool::end_block(&mut state, &end_block).await;
 
-    let mut state_tx = state.try_begin_transaction().unwrap();
-    // ... and for the App, call `finish_block` to correctly write out the SCT with the data we'll use next.
-    state_tx.finish_block().await.unwrap();
-
-    state_tx.apply();
+    {
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        state_tx.finish_block().await.unwrap();
+        state_tx.apply();
+    }
 
     Ok(())
 }
 
-// PoC for issue surfaced in zellic audit: https://github.com/penumbra-zone/penumbra/issues/3859
-// test that 0-value spends with invalid proofs are not accepted
+/// PoC for issue surfaced in zellic audit: https://github.com/penumbra-zone/penumbra/issues/3859
+///
+/// Test that 0-value spends with invalid proofs cannot be created.
+/// This demonstrates that the constraint system catches invalid inputs during proof generation,
+/// providing defense-in-depth against attempts to forge spend proofs.
+///
+/// The test constructs invalid witness data (zero-value note, random keys, empty compliance paths)
+/// and verifies that the prover rejects the inputs as unsatisfiable constraints.
 #[tokio::test]
-// Arkworks uses debug assertions that trigger if a constraint system is not satisfied.
-// This is a bit annoying because this gets in the way of testing bad dummy spends.
-// Indeed, this test passes when run in release-mode but panics in debug mode.
-// We need the config attribute below:
-#[cfg_attr(
-    debug_assertions,
-    should_panic = "assertion failed: cs.is_satisfied().unwrap()"
-)]
-async fn invalid_dummy_spend() {
-    let mut rng = rand_chacha::ChaChaRng::seed_from_u64(1312);
-
+async fn invalid_dummy_spend() -> anyhow::Result<()> {
     let storage = TempStorage::new_with_penumbra_prefixes()
-        .await
-        .unwrap()
+        .await?
         .apply_default_genesis()
-        .await
-        .unwrap();
-    let mut state = Arc::new(StateDelta::new(storage.latest_snapshot()));
+        .await?;
+    let state = Arc::new(StateDelta::new(storage.latest_snapshot()));
 
-    let height = 1;
-
-    // Precondition: This test uses the default genesis which has existing notes for the test keys.
+    // Sync the mock client to see genesis notes
     let mut client = MockClient::new(test_keys::SPEND_KEY.clone());
-    let sk = test_keys::SPEND_KEY.clone();
-    client.sync_to(0, state.deref()).await.unwrap();
+    client.sync_to(0, state.deref()).await?;
     let note = client.notes.values().next().unwrap().clone();
 
     let note_commitment = note.commit();
     let proof = client.sct.witness(note_commitment).unwrap();
     let root = client.sct.root();
-    let tct_position = proof.position();
 
-    // 1. Simulate BeginBlock
-    let mut state_tx = state.try_begin_transaction().unwrap();
-    state_tx.put_block_height(height);
-    state_tx.put_epoch_by_height(
-        height,
-        Epoch {
-            index: 0,
-            start_height: 0,
-        },
-    );
-    state_tx.apply();
-
-    // 2. Create a Spend action
-    let spend_plan = SpendPlan::new(&mut rng, note.clone(), tct_position);
-    let dummy_effect_hash = [0u8; 64];
-    let rsk = sk.spend_auth_key().randomize(&spend_plan.randomizer);
-    let auth_sig = rsk.sign(&mut rng, dummy_effect_hash.as_ref());
-    let mut spend = spend_plan
-        .spend(
-            &test_keys::FULL_VIEWING_KEY,
-            auth_sig,
-            proof.clone(),
-            root,
-            &penumbra_sdk_proof_params::SPEND_PROOF_PROVING_KEY,
-            None, // No compliance keys
-        )
-        .expect("can create spend");
-
+    // Create a zero-value note with the same address and asset (the "dummy" note)
     let note_zero_value = Note::from_parts(
         note.address(),
         Value {
@@ -170,8 +190,7 @@ async fn invalid_dummy_spend() {
             asset_id: note.asset_id(),
         },
         note.rseed(),
-    )
-    .unwrap();
+    )?;
 
     // Create dummy compliance data for the bad proof
     let dummy_compliance_anchor = tct::StateCommitment(Fq::from(0u64));
@@ -185,11 +204,20 @@ async fn invalid_dummy_spend() {
     };
     let dummy_merkle_path = MerklePath { layers: vec![] };
 
+    // Construct private witness with invalid/dummy data
+    let ak = VerificationKey::<SpendAuth>::try_from([0u8; 32]).unwrap();
+    let nk = NullifierKey(Fq::rand(&mut OsRng));
+
+    // Derive a dummy nullifier using the invalid key
+    let dummy_nullifier =
+        penumbra_sdk_sct::Nullifier::derive(&nk, 0u64.into(), &note_zero_value.commit());
+
+    // Public inputs for the proof - using real anchor but claiming different balance
     let public = SpendProofPublic {
         anchor: root,
-        balance_commitment: spend_plan.balance().commit(spend_plan.value_blinding),
-        nullifier: spend_plan.nullifier(&test_keys::FULL_VIEWING_KEY),
-        rk: spend_plan.rk(&test_keys::FULL_VIEWING_KEY),
+        balance_commitment: note_zero_value.value().commit(Fr::rand(&mut OsRng)),
+        nullifier: dummy_nullifier,
+        rk: ak.clone(),
         asset_anchor: dummy_asset_anchor,
         compliance_anchor: dummy_compliance_anchor,
         compliance_epk: decaf377::Element::default(),
@@ -198,11 +226,6 @@ async fn invalid_dummy_spend() {
         sender_leaf_hash: tct::StateCommitment(Fq::from(0u64)),
         counterparty_leaf_hash: tct::StateCommitment(Fq::from(0u64)),
     };
-
-    // construct a proof for this spend using only public information, attempting to prove a spend
-    // of a dummy note.
-    let ak = VerificationKey::<SpendAuth>::try_from([0u8; 32]).unwrap();
-    let nk = NullifierKey(Fq::rand(&mut OsRng));
 
     let private = SpendProofPrivate {
         state_commitment_proof: proof,
@@ -213,6 +236,11 @@ async fn invalid_dummy_spend() {
         nk,
         asset_path: dummy_merkle_path.clone(),
         asset_position: 0,
+        asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf {
+            value: Fq::from(0u64),
+            next_index: 0,
+            next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+        },
         is_regulated: false,
         compliance_path: dummy_merkle_path,
         compliance_position: 0,
@@ -221,212 +249,200 @@ async fn invalid_dummy_spend() {
         counterparty_leaf: dummy_compliance_leaf,
         tx_blinding_nonce: Fr::from(0u64),
     };
-    let bad_proof = SpendProof::prove(
+
+    // Attempt to prove - this should fail because the constraints are unsatisfiable
+    let proof_result = SpendProof::prove(
         Fq::rand(&mut OsRng),
         Fq::rand(&mut OsRng),
         &penumbra_sdk_proof_params::SPEND_PROOF_PROVING_KEY,
         public,
         private,
-    )
-    .expect("can generate ZKSpendProof");
+    );
 
-    spend.proof = bad_proof;
+    // The proof should fail to generate because the constraint system catches the invalid inputs.
+    // This is good security - we catch forgery attempts at proof generation time.
+    assert!(
+        proof_result.is_err(),
+        "proof generation should fail for invalid dummy spend inputs"
+    );
+    let err_msg = format!("{:?}", proof_result.unwrap_err());
+    assert!(
+        err_msg.contains("Unsatisfiable") || err_msg.contains("SynthesisError"),
+        "error should be about unsatisfiable constraints, got: {}",
+        err_msg
+    );
 
-    let transaction_context = TransactionContext {
-        anchor: root,
-        effect_hash: EffectHash(dummy_effect_hash),
-    };
-
-    // 3. Simulate execution of the Spend action
-    assert!(spend
-        .check_stateless(transaction_context)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("spend proof did not verify"));
+    Ok(())
 }
 
-/*
+/// Test that attempting to spend the same note twice is rejected.
+///
+/// This test builds two valid spend transactions for the same note and verifies
+/// that the second one fails with a double-spend error.
 #[tokio::test]
-#[should_panic(expected = "was already spent")]
-async fn spend_duplicate_nullifier_previous_transaction() {
-    let mut rng = rand_chacha::ChaChaRng::seed_from_u64(1312);
-
+async fn spend_duplicate_nullifier_previous_transaction() -> anyhow::Result<()> {
     let storage = TempStorage::new_with_penumbra_prefixes()
-        .await
-        .expect("can start new temp storage")
+        .await?
         .apply_default_genesis()
-        .await
-        .expect("can apply default genesis");
+        .await?;
     let mut state = Arc::new(StateDelta::new(storage.latest_snapshot()));
 
     let height = 1;
 
-    // Precondition: This test uses the default genesis which has existing notes for the test keys.
+    // Sync the mock client to see genesis notes
     let mut client = MockClient::new(test_keys::SPEND_KEY.clone());
-    let sk = test_keys::SPEND_KEY.clone();
-    client
-        .sync_to(0, state.deref())
-        .await
-        .expect("can sync to genesis");
+    client.sync_to(0, state.deref()).await?;
+
+    // Get a note to spend (will be spent twice)
     let note = client.notes.values().next().unwrap().clone();
-    let note_commitment = note.commit();
-    let proof = client.sct.witness(note_commitment).unwrap();
-    let root = client.sct.root();
-    let tct_position = proof.position();
+    let sender_address = note.address();
+    let recipient_address = test_keys::ADDRESS_1.deref().clone();
+    let asset_id = note.asset_id();
+    let tct_position = client
+        .position(note.commit())
+        .expect("note should be in mock client's tree");
 
-    // 1. Simulate BeginBlock
-    let mut state_tx = state.try_begin_transaction().unwrap();
-    state_tx.put_block_height(height);
-    state_tx.put_epoch_by_height(
-        height,
-        Epoch {
-            index: 0,
-            start_height: 0,
+    // 1. Simulate BeginBlock and register compliance
+    {
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        state_tx.put_block_height(height);
+        state_tx.put_block_timestamp(height, tendermint::Time::now());
+        state_tx.put_epoch_by_height(
+            height,
+            Epoch {
+                index: 0,
+                start_height: 0,
+            },
+        );
+
+        // Register the asset as unregulated
+        common::register_assets_for_compliance(&mut state_tx, &[asset_id]).await?;
+        // Register the users for this asset
+        common::register_test_users_for_compliance(
+            &mut state_tx,
+            &[sender_address.clone(), recipient_address.clone()],
+            &[asset_id],
+        )
+        .await?;
+
+        state_tx.record_compliance_anchors(height).await?;
+
+        state_tx.apply();
+    }
+
+    // 2. Create and execute first spend transaction
+    let mut plan1 = TransactionPlan {
+        actions: vec![
+            SpendPlan::new(&mut OsRng, note.clone(), tct_position).into(),
+            OutputPlan::new(&mut OsRng, note.value(), recipient_address.clone()).into(),
+        ],
+        memo: Some(MemoPlan::new(
+            &mut OsRng,
+            MemoPlaintext::blank_memo(test_keys::ADDRESS_0.deref().clone()),
+        )),
+        detection_data: None,
+        transaction_parameters: TransactionParameters {
+            chain_id: "penumbra-test".to_string(),
+            ..Default::default()
         },
-    );
-    state_tx.apply();
+    }
+    .with_populated_detection_data(OsRng, Default::default());
 
-    // 2. Create a Spend action - This is the first spend of this note.
-    let spend_plan = SpendPlan::new(&mut rng, note.clone(), tct_position);
-    let dummy_effect_hash = [0u8; 64];
-    let rsk = sk.spend_auth_key().randomize(&spend_plan.randomizer);
-    let auth_sig = rsk.sign(&mut rng, dummy_effect_hash.as_ref());
-    let spend = spend_plan.spend(&test_keys::FULL_VIEWING_KEY, auth_sig, proof.clone(), root);
-    let transaction_context = TransactionContext {
-        anchor: root,
-        effect_hash: EffectHash(dummy_effect_hash),
+    // Build with compliance enrichment from state
+    let tx1 = client
+        .witness_auth_build_with_compliance(&mut plan1, state.deref())
+        .await?;
+
+    let transaction_context1 = TransactionContext {
+        anchor: client.sct.root(),
+        effect_hash: EffectHash(tx1.effect_hash().as_ref().try_into().unwrap()),
     };
 
-    // 3. Simulate execution of the Spend action
-    spend
-        .check_stateless(transaction_context)
-        .await
-        .expect("can apply first spend");
-    spend
-        .check_historical(state.clone())
-        .await
-        .expect("can apply first spend");
-    let mut state_tx = state.try_begin_transaction().unwrap();
-    state_tx.put_mock_source(1u8);
-    spend
-        .check_and_execute(&mut state_tx)
-        .await
-        .expect("should be able to apply first spend");
-    state_tx.apply();
+    // Get the spend action from the first transaction
+    let tx1_body = tx1.transaction_body();
+    let spend1 = tx1_body
+        .actions
+        .iter()
+        .find_map(|a| {
+            if let penumbra_sdk_transaction::Action::Spend(s) = a {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .expect("transaction should have a spend action");
 
-    // 4. Create a second Spend action of the same note - This is a double spend.
-    let spend_plan = SpendPlan::new(&mut rng, note, tct_position);
-    let dummy_effect_hash = [0u8; 64];
-    let rsk = sk.spend_auth_key().randomize(&spend_plan.randomizer);
-    let auth_sig = rsk.sign(&mut rng, dummy_effect_hash.as_ref());
-    let spend = spend_plan.spend(&test_keys::FULL_VIEWING_KEY, auth_sig, proof, root);
-    let transaction_context = TransactionContext {
-        anchor: root,
-        effect_hash: EffectHash(dummy_effect_hash),
+    // Execute the first spend (should succeed)
+    spend1.check_stateless(transaction_context1).await?;
+    spend1.check_historical(state.clone()).await?;
+
+    {
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        state_tx.put_mock_source(1u8);
+        spend1.check_and_execute(&mut state_tx).await?;
+        state_tx.apply();
+    }
+
+    // 3. Create second spend transaction of the SAME note (double spend)
+    let mut plan2 = TransactionPlan {
+        actions: vec![
+            SpendPlan::new(&mut OsRng, note.clone(), tct_position).into(),
+            OutputPlan::new(&mut OsRng, note.value(), recipient_address).into(),
+        ],
+        memo: Some(MemoPlan::new(
+            &mut OsRng,
+            MemoPlaintext::blank_memo(test_keys::ADDRESS_0.deref().clone()),
+        )),
+        detection_data: None,
+        transaction_parameters: TransactionParameters {
+            chain_id: "penumbra-test".to_string(),
+            ..Default::default()
+        },
+    }
+    .with_populated_detection_data(OsRng, Default::default());
+
+    // Build with compliance enrichment from state
+    let tx2 = client
+        .witness_auth_build_with_compliance(&mut plan2, state.deref())
+        .await?;
+
+    let transaction_context2 = TransactionContext {
+        anchor: client.sct.root(),
+        effect_hash: EffectHash(tx2.effect_hash().as_ref().try_into().unwrap()),
     };
 
-    // 5. Simulate execution of the double spend - the test should panic here
-    spend
-        .check_stateless(transaction_context)
-        .await
-        .expect("check stateless should succeed");
-    spend.check_historical(state.clone()).await.unwrap();
+    // Get the spend action from the second transaction
+    let tx2_body = tx2.transaction_body();
+    let spend2 = tx2_body
+        .actions
+        .iter()
+        .find_map(|a| {
+            if let penumbra_sdk_transaction::Action::Spend(s) = a {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .expect("transaction should have a spend action");
+
+    // Stateless check should pass (proof is valid)
+    spend2.check_stateless(transaction_context2).await?;
+    // Historical check should pass (anchor is valid)
+    spend2.check_historical(state.clone()).await?;
+
+    // 4. Attempt to execute the double spend - this should fail
     let mut state_tx = state.try_begin_transaction().unwrap();
     state_tx.put_mock_source(2u8);
-    spend.check_and_execute(&mut state_tx).await.unwrap();
-    state_tx.apply();
-}
+    let result = spend2.check_and_execute(&mut state_tx).await;
 
-#[tokio::test]
-#[should_panic(expected = "Duplicate nullifier in transaction")]
-async fn spend_duplicate_nullifier_same_transaction() {
-    let mut rng = rand_chacha::ChaChaRng::seed_from_u64(1312);
-
-    let storage = TempStorage::new_with_penumbra_prefixes()
-        .await
-        .expect("can start new temp storage")
-        .apply_default_genesis()
-        .await
-        .expect("can apply default genesis");
-    let mut state = Arc::new(StateDelta::new(storage.latest_snapshot()));
-
-    let height = 1;
-
-    // Precondition: This test uses the default genesis which has existing notes for the test keys.
-    let mut client = MockClient::new(test_keys::SPEND_KEY.clone());
-    let sk = test_keys::SPEND_KEY.clone();
-    client
-        .sync_to(0, state.deref())
-        .await
-        .expect("can sync to genesis");
-    let note = client.notes.values().next().unwrap().clone();
-    let note_commitment = note.commit();
-    let proof = client.sct.witness(note_commitment).unwrap();
-    let root = client.sct.root();
-    let tct_position = proof.position();
-
-    // 1. Simulate BeginBlock
-    let mut state_tx = state.try_begin_transaction().unwrap();
-    state_tx.put_block_height(height);
-    state_tx.put_epoch_by_height(
-        height,
-        Epoch {
-            index: 0,
-            start_height: 0,
-        },
+    // The double spend should be rejected
+    assert!(result.is_err(), "double spend should have been rejected");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("was already spent"),
+        "error should mention 'was already spent', got: {}",
+        err_msg
     );
-    state_tx.apply();
 
-    // 2. Create a Spend action - This is the first spend of this note.
-    let spend_plan = SpendPlan::new(&mut rng, note.clone(), tct_position);
-    let dummy_effect_hash = [0u8; 64];
-    let rsk = sk.spend_auth_key().randomize(&spend_plan.randomizer);
-    let auth_sig = rsk.sign(&mut rng, dummy_effect_hash.as_ref());
-    let spend_1 = spend_plan.spend(&test_keys::FULL_VIEWING_KEY, auth_sig, proof.clone(), root);
-    let mut synthetic_blinding_factor = spend_plan.value_blinding;
-
-    // 3. Create a second Spend action of the same note - This is a double spend.
-    let spend_plan = SpendPlan::new(&mut rng, note.clone(), tct_position);
-    let dummy_effect_hash = [0u8; 64];
-    let rsk = sk.spend_auth_key().randomize(&spend_plan.randomizer);
-    let auth_sig = rsk.sign(&mut rng, dummy_effect_hash.as_ref());
-    let spend_2 = spend_plan.spend(&test_keys::FULL_VIEWING_KEY, auth_sig, proof, root);
-    synthetic_blinding_factor += spend_plan.value_blinding;
-
-    // 4. We need to create an output to balance the transaction.
-    let value = Value {
-        amount: Amount::from(2u64) * note.amount(),
-        asset_id: note.asset_id(),
-    };
-    let output_plan =
-        penumbra_sdk_shielded_pool::OutputPlan::new(&mut rng, value, *test_keys::ADDRESS_1);
-    let fvk = &test_keys::FULL_VIEWING_KEY;
-    let memo_key = PayloadKey::random_key(&mut rng);
-    let output = output_plan.output(fvk.outgoing(), &memo_key);
-    synthetic_blinding_factor += output_plan.value_blinding;
-
-    // 5. Construct a transaction with both spends that use the same note/nullifier.
-    let transaction_body = TransactionBody {
-        actions: vec![
-            penumbra_sdk_transaction::Action::Spend(spend_1),
-            penumbra_sdk_transaction::Action::Spend(spend_2),
-            penumbra_sdk_transaction::Action::Output(output),
-        ],
-        transaction_parameters: TransactionParameters::default(),
-        detection_data: None,
-        memo: None,
-    };
-    let binding_signing_key = SigningKey::from(synthetic_blinding_factor);
-    let auth_hash = transaction_body.auth_hash();
-    let binding_sig = binding_signing_key.sign(rng, auth_hash.as_bytes());
-    let transaction = Transaction {
-        transaction_body,
-        binding_sig,
-        anchor: root,
-    };
-
-    // 6. Simulate execution of the transaction - the test should panic here
-    transaction.check_stateless(()).await.unwrap();
+    Ok(())
 }
- */

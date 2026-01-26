@@ -1,7 +1,8 @@
 use {
     self::common::BuilderExt,
     anyhow::anyhow,
-    cnidarium::TempStorage,
+    cnidarium::{ArcStateDeltaExt, StateDelta, TempStorage},
+    cnidarium_component::ActionHandler as _,
     common::TempStorageExt as _,
     penumbra_sdk_app::{
         genesis::{self, AppState},
@@ -9,15 +10,17 @@ use {
     },
     penumbra_sdk_asset::asset,
     penumbra_sdk_community_pool::{CommunityPoolDeposit, StateReadExt},
+    penumbra_sdk_compliance::ComplianceRegistryWrite,
     penumbra_sdk_keys::test_keys,
     penumbra_sdk_mock_client::MockClient,
     penumbra_sdk_mock_consensus::TestNode,
     penumbra_sdk_num::Amount,
-    penumbra_sdk_proto::DomainType,
+    penumbra_sdk_sct::component::{clock::EpochManager as _, source::SourceContext as _},
     penumbra_sdk_shielded_pool::SpendPlan,
     penumbra_sdk_transaction::{TransactionParameters, TransactionPlan},
+    penumbra_sdk_txhash::{EffectHash, EffectingData as _, TransactionContext},
     rand_core::OsRng,
-    std::collections::BTreeMap,
+    std::{collections::BTreeMap, ops::Deref, sync::Arc},
     tap::{Tap, TapFallible},
     tracing::info,
 };
@@ -32,7 +35,7 @@ async fn app_can_deposit_into_community_pool() -> anyhow::Result<()> {
     let storage = TempStorage::new_with_penumbra_prefixes().await?;
 
     // Define our application state, and start the test node.
-    let mut test_node = {
+    let _test_node = {
         let app_state = AppState::Content(
             genesis::Content::default().with_chain_id(TestNode::<()>::CHAIN_ID.to_string()),
         );
@@ -45,11 +48,13 @@ async fn app_can_deposit_into_community_pool() -> anyhow::Result<()> {
             .tap_ok(|e| tracing::info!(hash = %e.last_app_hash_hex(), "finished init chain"))?
     };
 
+    // Get state for compliance registration
+    let mut state = Arc::new(StateDelta::new(storage.latest_snapshot()));
+
     // Sync the mock client, using the test wallet's spend key, to the latest snapshot.
-    let client = MockClient::new(test_keys::SPEND_KEY.clone())
-        .with_sync_to_storage(&storage)
-        .await?
-        .tap(|c| info!(client.notes = %c.notes.len(), "mock client synced to test storage"));
+    let mut client = MockClient::new(test_keys::SPEND_KEY.clone());
+    client.sync_to(0, state.deref()).await?;
+    info!(client.notes = %client.notes.len(), "mock client synced to test storage");
 
     // Take one of the test wallet's notes, and prepare to deposit it in the community pool.
     let note = client
@@ -58,6 +63,36 @@ async fn app_can_deposit_into_community_pool() -> anyhow::Result<()> {
         .cloned()
         .next()
         .ok_or_else(|| anyhow!("mock client had no note"))?;
+
+    let sender_address = note.address();
+    let asset_id = note.asset_id();
+
+    // Register asset and user for compliance (required for spend proofs)
+    let height = 1u64;
+    {
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        state_tx.put_block_height(height);
+        state_tx.put_block_timestamp(height, tendermint::Time::now());
+        state_tx.put_epoch_by_height(
+            height,
+            penumbra_sdk_sct::epoch::Epoch {
+                index: 0,
+                start_height: 0,
+            },
+        );
+
+        common::register_assets_for_compliance(&mut state_tx, &[asset_id]).await?;
+        common::register_test_users_for_compliance(
+            &mut state_tx,
+            &[sender_address.clone()],
+            &[asset_id],
+        )
+        .await?;
+
+        state_tx.record_compliance_anchors(height).await?;
+
+        state_tx.apply();
+    }
 
     // Create a community pool transaction.
     let mut plan = {
@@ -83,29 +118,78 @@ async fn app_can_deposit_into_community_pool() -> anyhow::Result<()> {
         }
     };
     plan.populate_detection_data(OsRng, Default::default());
-    let tx = client.witness_auth_build(&plan).await?;
-
-    // Execute the transaction, applying it to the chain state.
-    let pre_tx_snapshot = storage.latest_snapshot();
-    test_node
-        .block()
-        .with_data(vec![tx.encode_to_vec()])
-        .execute()
+    let tx = client
+        .witness_auth_build_with_compliance(&mut plan, state.deref())
         .await?;
-    let post_tx_snapshot = storage.latest_snapshot();
 
-    // Assert that the community pool balance looks correct for the deposited asset id, and that
-    // other amounts were not affected by the deposit.
+    info!("Transaction built successfully with compliance proofs");
+
+    // Create transaction context for verification
+    let transaction_context = TransactionContext {
+        anchor: client.sct.root(),
+        effect_hash: EffectHash(tx.effect_hash().as_ref().try_into().unwrap()),
+    };
+
+    // Get pre-tx balance from state
+    let pre_tx_balance: BTreeMap<asset::Id, Amount> = state.community_pool_balance().await?;
+    let id = note.asset_id();
+    let pre_tx_amount = pre_tx_balance.get(&id).copied().unwrap_or_default();
+
+    // Get the transaction body to access actions
+    let tx_body = tx.transaction_body();
+
+    // Verify and execute spend action
+    let spend = tx_body
+        .actions
+        .iter()
+        .find_map(|a| {
+            if let penumbra_sdk_transaction::Action::Spend(s) = a {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .expect("transaction should have a spend action");
+
+    spend.check_stateless(transaction_context).await?;
+    info!("Spend proof verified successfully");
+
+    {
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        state_tx.put_mock_source(1u8);
+        spend.check_and_execute(&mut state_tx).await?;
+        state_tx.apply();
+    }
+    info!("Spend action executed successfully");
+
+    // Verify and execute deposit action
+    let deposit = tx_body
+        .actions
+        .iter()
+        .find_map(|a| {
+            if let penumbra_sdk_transaction::Action::CommunityPoolDeposit(d) = a {
+                Some(d)
+            } else {
+                None
+            }
+        })
+        .expect("transaction should have a deposit action");
+
+    deposit.check_stateless(()).await?;
+    {
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        deposit.check_and_execute(&mut state_tx).await?;
+        state_tx.apply();
+    }
+    info!("CommunityPoolDeposit action executed successfully");
+
+    // Assert that the community pool balance looks correct for the deposited asset id
     {
         type Balance = BTreeMap<asset::Id, Amount>;
 
-        let id = note.asset_id();
-        let pre_tx_balance = pre_tx_snapshot.community_pool_balance().await?;
-        let post_tx_balance = post_tx_snapshot.community_pool_balance().await?;
+        let post_tx_balance: Balance = state.community_pool_balance().await?;
+        let post_tx_amount = post_tx_balance.get(&id).copied().unwrap_or_default();
 
-        let get_balance_for_id = |balance: &Balance| balance.get(&id).copied().unwrap_or_default();
-        let pre_tx_amount = get_balance_for_id(&pre_tx_balance);
-        let post_tx_amount = get_balance_for_id(&post_tx_balance);
         assert_eq!(
             pre_tx_amount + note.amount(),
             post_tx_amount,
@@ -127,9 +211,11 @@ async fn app_can_deposit_into_community_pool() -> anyhow::Result<()> {
         );
     }
 
+    info!("All assertions passed - deposit into community pool works correctly with compliance");
+
     // Free our temporary storage.
     Ok(())
-        .tap(|_| drop(test_node))
+        .tap(|_| drop(_test_node))
         .tap(|_| drop(storage))
         .tap(|_| drop(guard))
 }

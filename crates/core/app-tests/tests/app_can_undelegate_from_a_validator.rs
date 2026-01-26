@@ -87,7 +87,7 @@ async fn app_can_undelegate_from_a_validator() -> anyhow::Result<()> {
         .map_err(|keys| anyhow::anyhow!("expected one key, got: {keys:?}"))?;
     let delegate_token_id = penumbra_sdk_stake::DelegationToken::new(identity_key).id();
 
-    // Sync the mock client, using the test wallet's spend key, to the latest snapshot.
+    // Sync the mock client to the latest state.
     let mut client = MockClient::new(test_keys::SPEND_KEY.clone())
         .with_sync_to_storage(&storage)
         .await?
@@ -110,7 +110,7 @@ async fn app_can_undelegate_from_a_validator() -> anyhow::Result<()> {
         .await?
         .ok_or(anyhow!("validator has a rate"))?
         .tap(|rate| tracing::info!(?rate, "got validator rate"));
-    let (plan, staking_note, staking_note_nullifier) = {
+    let (mut plan, staking_note, staking_note_nullifier) = {
         use {
             penumbra_sdk_shielded_pool::{OutputPlan, SpendPlan},
             penumbra_sdk_transaction::{
@@ -155,7 +155,9 @@ async fn app_can_undelegate_from_a_validator() -> anyhow::Result<()> {
         .with_populated_detection_data(rand_core::OsRng, Precision::default());
         (plan, note, staking_note_nullifier)
     };
-    let tx = client.witness_auth_build(&plan).await?;
+    let tx = client
+        .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
+        .await?;
 
     // Show that the client does not have delegation tokens before delegating.
     assert_eq!(
@@ -204,7 +206,16 @@ async fn app_can_undelegate_from_a_validator() -> anyhow::Result<()> {
         .await?
         .ok_or(anyhow::anyhow!("new validator has a rate"))?
         .tap(|rate| tracing::info!(?rate, "got new validator rate"));
-    let (plan, undelegate_token_id) = {
+
+    // Get current epoch for undelegation
+    let current_epoch = storage.latest_snapshot().get_current_epoch().await?;
+    let undelegate_token_id =
+        penumbra_sdk_stake::UnbondingToken::new(identity_key, current_epoch.start_height).id();
+
+    // Sync client to latest state
+    client.sync_to_latest(storage.latest_snapshot()).await?;
+
+    let mut plan = {
         use {
             penumbra_sdk_shielded_pool::{OutputPlan, SpendPlan},
             penumbra_sdk_stake::DelegationToken,
@@ -212,8 +223,6 @@ async fn app_can_undelegate_from_a_validator() -> anyhow::Result<()> {
                 memo::MemoPlaintext, plan::MemoPlan, TransactionParameters, TransactionPlan,
             },
         };
-        let snapshot = storage.latest_snapshot();
-        client.sync_to_latest(snapshot.clone()).await?;
         let undelegation_id = DelegationToken::new(identity_key).id();
         let note = client
             .notes
@@ -229,17 +238,13 @@ async fn app_can_undelegate_from_a_validator() -> anyhow::Result<()> {
                 .position(note.commit())
                 .expect("note should be in mock client's tree"),
         );
-        let undelegate = undelegate_rate.build_undelegate(
-            storage.latest_snapshot().get_current_epoch().await?,
-            note.amount(),
-        );
-        let undelegate_token_id = undelegate.unbonding_token().id();
+        let undelegate = undelegate_rate.build_undelegate(current_epoch, note.amount());
         let output = OutputPlan::new(
             &mut rand_core::OsRng,
             undelegate.unbonded_value(),
             test_keys::ADDRESS_1.deref().clone(),
         );
-        let plan = TransactionPlan {
+        TransactionPlan {
             actions: vec![spend.into(), output.into(), undelegate.into()],
             // Now fill out the remaining parts of the transaction needed for verification:
             memo: Some(MemoPlan::new(
@@ -252,10 +257,11 @@ async fn app_can_undelegate_from_a_validator() -> anyhow::Result<()> {
                 ..Default::default()
             },
         }
-        .with_populated_detection_data(rand_core::OsRng, Precision::default());
-        (plan, undelegate_token_id)
+        .with_populated_detection_data(rand_core::OsRng, Precision::default())
     };
-    let tx = client.witness_auth_build(&plan).await?;
+    let tx = client
+        .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
+        .await?;
 
     // Execute the undelegation transaction, applying it to the chain state.
     let pre_undelegated_epoch = get_latest_epoch().await;

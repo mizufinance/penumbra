@@ -73,6 +73,11 @@ fn spend_proving_time(c: &mut Criterion) {
         nk: *test_data.fvk.nullifier_key(),
         asset_path: penumbra_sdk_compliance::MerklePath::default(),
         asset_position: 0,
+        asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf {
+            value: decaf377::Fq::from(0u64),
+            next_index: 0,
+            next_value: decaf377::Fq::from(0u64),
+        },
         is_regulated: false,
         compliance_path: penumbra_sdk_compliance::MerklePath::default(),
         compliance_position: 0,

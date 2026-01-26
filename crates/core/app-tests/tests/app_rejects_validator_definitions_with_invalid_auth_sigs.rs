@@ -127,6 +127,11 @@ async fn app_rejects_validator_definitions_with_invalid_auth_sigs() -> anyhow::R
             "executing block with validator definition transaction"
         ))
         .await?;
+
+    // Allow spawned verification tasks to complete cleanup after failed tx.
+    // When check_historical fails, JoinSet tasks may still hold Arc<State> briefly.
+    tokio::task::yield_now().await;
+
     let post_tx_snapshot = storage.latest_snapshot();
 
     // Assert that there is still only a single validator definition present, and that this

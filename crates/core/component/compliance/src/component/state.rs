@@ -4,16 +4,20 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cnidarium::StateWrite;
 use cnidarium_component::{ActionHandler, Component};
-use penumbra_sdk_asset::{STAKING_TOKEN_ASSET_ID, TEST_USD_ASSET_ID};
 use penumbra_sdk_proto::StateWriteProto;
 use tendermint::v0_37::abci;
 use tracing::instrument;
 
 use crate::{
+    event, genesis,
+    indexed_tree::IndexedMerkleTree,
     registry::{ComplianceRegistryRead, ComplianceRegistryWrite},
     structs::{MsgRegisterAsset, MsgRegisterUser},
     tree::QuadTree,
 };
+
+// Note: QuadTree is still used for the user tree.
+// Asset tree has been migrated to IMT (Indexed Merkle Tree).
 
 /// The Compliance component manages on-chain registries for regulated assets.
 ///
@@ -24,10 +28,10 @@ pub struct Compliance {}
 
 #[async_trait]
 impl Component for Compliance {
-    type AppState = ();
+    type AppState = genesis::Content;
 
-    #[instrument(name = "compliance", skip(state, _app_state))]
-    async fn init_chain<S: StateWrite>(mut state: S, _app_state: Option<&Self::AppState>) {
+    #[instrument(name = "compliance", skip(state, app_state))]
+    async fn init_chain<S: StateWrite>(mut state: S, app_state: Option<&Self::AppState>) {
         // Initialize empty trees if they don't exist
         // This ensures the trees are properly set up at genesis
 
@@ -39,38 +43,36 @@ impl Component for Compliance {
             state.put_proto(crate::state_key::user_count().to_string(), 0u64);
         }
 
-        // Check and initialize asset tree
-        if state.get_asset_tree().await.ok().is_none() {
-            let asset_tree = QuadTree::new();
-            let tree_bytes =
-                bincode::serialize(&asset_tree).expect("serialization should not fail");
-            state.put_raw(crate::state_key::asset_tree().to_string(), tree_bytes);
-            state.put_proto(crate::state_key::asset_count().to_string(), 0u64);
+        // Check and initialize asset IMT (Indexed Merkle Tree for regulated assets)
+        if state.get_asset_imt().await.ok().is_none() {
+            let asset_imt = IndexedMerkleTree::new();
+            let tree_bytes = bincode::serialize(&asset_imt).expect("serialization should not fail");
+            state.put_raw(crate::state_key::asset_imt().to_string(), tree_bytes);
         }
 
-        // Auto-register essential assets as unregulated at genesis.
-        // The staking token is required because fee payments use it, and without
-        // this registration, no transactions (including asset registration txs)
-        // could be submitted - a bootstrapping problem.
-        // test_usd is registered for integration tests.
-        for (asset_id, name) in [
-            (*STAKING_TOKEN_ASSET_ID, "staking token"),
-            (*TEST_USD_ASSET_ID, "test_usd"),
-        ] {
-            if state
-                .get_asset_status(asset_id)
-                .await
-                .ok()
-                .flatten()
-                .is_none()
-            {
-                state
-                    .update_asset_regulation(asset_id, false)
-                    .await
-                    .expect("must be able to register asset at genesis");
-                tracing::info!("registered {} as unregulated at genesis", name);
+        // Register regulated native assets from genesis configuration.
+        // Unregulated assets are NOT stored - they're proven via IMT non-membership.
+        if let Some(genesis) = app_state {
+            for registration in &genesis.native_assets {
+                if registration.is_regulated {
+                    state
+                        .register_regulated_asset(registration.asset_id)
+                        .await
+                        .expect("must be able to register regulated asset at genesis");
+                    tracing::info!(
+                        ?registration.asset_id,
+                        "registered regulated asset at genesis"
+                    );
+                }
             }
         }
+
+        // Record initial anchors at genesis (height 0)
+        state
+            .record_compliance_anchors(0)
+            .await
+            .expect("must be able to record initial compliance anchors");
+        tracing::info!("recorded initial compliance anchors at genesis");
     }
 
     #[instrument(name = "compliance", skip(_state, _begin_block))]
@@ -81,12 +83,19 @@ impl Component for Compliance {
         // No-op for compliance component
     }
 
-    #[instrument(name = "compliance", skip(_state, _end_block))]
+    #[instrument(name = "compliance", skip(state, end_block))]
     async fn end_block<S: StateWrite + 'static>(
-        _state: &mut Arc<S>,
-        _end_block: &abci::request::EndBlock,
+        state: &mut Arc<S>,
+        end_block: &abci::request::EndBlock,
     ) {
-        // No-op for compliance component
+        // Record compliance tree anchors at this block height.
+        // This enables historical anchor validation for proofs generated at past blocks.
+        let height = end_block.height as u64;
+        let state = Arc::get_mut(state).expect("state should be unique");
+        state
+            .record_compliance_anchors(height)
+            .await
+            .expect("must be able to record compliance anchors");
     }
 
     async fn end_epoch<S: StateWrite + 'static>(_state: &mut Arc<S>) -> Result<()> {
@@ -111,8 +120,26 @@ impl ActionHandler for MsgRegisterUser {
     async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
         // TODO(compliance): Check if user is already registered (idempotent but wasteful).
         // Could add check_stateful() to detect and skip duplicate registrations.
-        state.add_compliance_leaf(self.leaf.clone()).await?;
-        // TODO(compliance): Emit EventUserRegistered { address, asset_id, position }
+        let position = state.add_compliance_leaf(self.leaf.clone()).await?;
+        let commitment = self.leaf.commit();
+
+        // Create the event
+        let event = crate::event::EventUserRegistered {
+            position,
+            commitment,
+            leaf: self.leaf.clone(),
+        };
+
+        // Buffer the event for CompactBlock inclusion
+        state.record_pending_user_registration(event.clone());
+
+        // Also emit as ABCI event (for existing event listeners)
+        state.record_proto(event::user_registered(
+            position,
+            commitment,
+            self.leaf.clone(),
+        ));
+
         Ok(())
     }
 }
@@ -131,12 +158,38 @@ impl ActionHandler for MsgRegisterAsset {
     }
 
     async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        // TODO(compliance): Check if asset already registered and reject re-registration.
-        // Currently idempotent but may want to prevent status changes.
-        state
-            .update_asset_regulation(self.asset_id, self.is_regulated)
-            .await?;
-        // TODO(compliance): Emit EventAssetRegistered { asset_id, is_regulated, position }
+        // Only regulated assets are stored in the IMT.
+        // Unregulated status is proven via non-membership proofs.
+        if self.is_regulated {
+            if let Some(result) = state.register_regulated_asset(self.asset_id).await? {
+                // Create the event
+                let event = crate::event::EventAssetRegistered {
+                    asset_id: self.asset_id,
+                    is_regulated: self.is_regulated,
+                    position: result.position,
+                    indexed_leaf: result.indexed_leaf,
+                    low_leaf_position: result.low_leaf_position,
+                    updated_low_leaf: result.updated_low_leaf,
+                };
+
+                // Also emit as ABCI event (for existing event listeners)
+                // We need to convert from the domain type to the proto type
+                state.record_proto(event::asset_registered(
+                    event.asset_id,
+                    event.is_regulated,
+                    event.position,
+                    event.indexed_leaf.clone(),
+                    event.low_leaf_position,
+                    event.updated_low_leaf.clone(),
+                ));
+
+                // Buffer the event for CompactBlock inclusion
+                state.record_pending_asset_registration(event);
+            }
+            // If None, asset was already registered - skip event
+        }
+        // Unregulated assets don't emit events (no state change)
+
         Ok(())
     }
 }
@@ -149,6 +202,7 @@ mod tests {
     use penumbra_sdk_asset::asset;
     use penumbra_sdk_keys::{keys::AddressComplianceKey, Address};
 
+    use crate::genesis::NativeAssetRegistration;
     use crate::structs::ComplianceLeaf;
 
     #[tokio::test]
@@ -157,34 +211,57 @@ mod tests {
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
 
-        // Initialize the component
-        Compliance::init_chain(&mut state, None).await;
+        // Initialize the component with default genesis
+        let genesis = genesis::Content::default();
+        Compliance::init_chain(&mut state, Some(&genesis)).await;
 
         // Verify trees were initialized
         let user_tree = state.get_user_tree().await.unwrap();
-        let asset_tree = state.get_asset_tree().await.unwrap();
+        let asset_imt = state.get_asset_imt().await.unwrap();
 
         assert_eq!(user_tree.depth(), 16);
-        assert_eq!(asset_tree.depth(), 16);
+        assert_eq!(asset_imt.depth(), 16);
+    }
 
-        // Verify staking token was auto-registered as unregulated
-        let staking_status = state
-            .get_asset_status(*STAKING_TOKEN_ASSET_ID)
-            .await
-            .unwrap();
-        assert_eq!(
-            staking_status,
-            Some(false),
-            "staking token should be registered as unregulated"
-        );
+    #[tokio::test]
+    async fn test_init_chain_without_genesis() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
 
-        // Verify test_usd was auto-registered as unregulated
-        let test_usd_status = state.get_asset_status(*TEST_USD_ASSET_ID).await.unwrap();
-        assert_eq!(
-            test_usd_status,
-            Some(false),
-            "test_usd should be registered as unregulated"
-        );
+        // Initialize without genesis content
+        Compliance::init_chain(&mut state, None).await;
+
+        // Trees should be initialized
+        let user_tree = state.get_user_tree().await.unwrap();
+        let asset_imt = state.get_asset_imt().await.unwrap();
+
+        assert_eq!(user_tree.depth(), 16);
+        // IMT should only have sentinel leaf
+        assert_eq!(asset_imt.leaf_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_init_chain_with_custom_genesis() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        let custom_asset = asset::Id(Fq::from(999u64));
+
+        // Custom genesis with a regulated asset
+        let genesis = genesis::Content {
+            native_assets: vec![NativeAssetRegistration {
+                asset_id: custom_asset,
+                is_regulated: true,
+            }],
+        };
+
+        Compliance::init_chain(&mut state, Some(&genesis)).await;
+
+        // Custom asset should be in IMT (regulated)
+        let proof_data = state.get_asset_proof_data(custom_asset).await.unwrap();
+        assert!(proof_data.is_regulated, "custom asset should be regulated");
     }
 
     #[tokio::test]
@@ -193,8 +270,9 @@ mod tests {
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
 
-        // Initialize component
-        Compliance::init_chain(&mut state, None).await;
+        // Initialize component with defaults
+        let genesis = genesis::Content::default();
+        Compliance::init_chain(&mut state, Some(&genesis)).await;
 
         // Create a register user message
         let msg = MsgRegisterUser {
@@ -220,27 +298,57 @@ mod tests {
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
 
-        // Initialize component (this auto-registers the staking token and test_usd)
-        Compliance::init_chain(&mut state, None).await;
+        // Initialize component
+        let genesis = genesis::Content::default();
+        Compliance::init_chain(&mut state, Some(&genesis)).await;
 
-        // Get initial asset count (should be 2 after staking token and test_usd auto-registration)
-        let initial_count = state.get_asset_count().await.unwrap();
-        assert_eq!(
-            initial_count, 2,
-            "staking token and test_usd should be auto-registered"
-        );
+        // Initially the asset is unregulated (not in IMT)
+        let asset_id = asset::Id(Fq::from(123u64));
+        let proof_before = state.get_asset_proof_data(asset_id).await.unwrap();
+        assert!(!proof_before.is_regulated, "asset should start unregulated");
 
-        // Create a register asset message
+        // Create a register asset message (regulated)
         let msg = MsgRegisterAsset {
-            asset_id: asset::Id(Fq::from(123u64)),
+            asset_id,
             is_regulated: true,
         };
 
-        // Execute the action directly on state
+        // Execute the action
         msg.check_and_execute(&mut state).await.unwrap();
 
-        // Verify new asset was registered (count should be +1)
-        let asset_count = state.get_asset_count().await.unwrap();
-        assert_eq!(asset_count, initial_count + 1);
+        // Verify asset is now regulated
+        let proof_after = state.get_asset_proof_data(asset_id).await.unwrap();
+        assert!(
+            proof_after.is_regulated,
+            "asset should be regulated after registration"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_msg_register_unregulated_asset_is_noop() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        // Initialize component
+        Compliance::init_chain(&mut state, None).await;
+
+        let asset_id = asset::Id(Fq::from(456u64));
+
+        // Create a register asset message (unregulated)
+        let msg = MsgRegisterAsset {
+            asset_id,
+            is_regulated: false,
+        };
+
+        // Execute the action - should be a no-op
+        msg.check_and_execute(&mut state).await.unwrap();
+
+        // Asset should still be unregulated (not in IMT)
+        let proof = state.get_asset_proof_data(asset_id).await.unwrap();
+        assert!(
+            !proof.is_regulated,
+            "unregulated asset should not be added to IMT"
+        );
     }
 }

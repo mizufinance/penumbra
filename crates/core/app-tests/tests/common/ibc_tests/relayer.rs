@@ -1407,9 +1407,10 @@ impl MockRelayer {
         let chain_a_note = chain_a_client
             .notes
             .values()
+            .filter(|n| n.asset_id() == *penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID)
             .cloned()
             .next()
-            .ok_or_else(|| anyhow!("mock client had no note"))?;
+            .ok_or_else(|| anyhow!("mock client had no staking token note"))?;
 
         // Get the balance of that asset on chain A
         let pretransfer_balance_a: Amount = chain_a_client
@@ -1490,22 +1491,29 @@ impl MockRelayer {
         };
         // There will need to be `Spend` and `Output` actions
         // within the transaction in order for it to balance
-        let spend_plan = SpendPlan::new(
+        let mut spend_plan = SpendPlan::new(
             &mut rand_chacha::ChaChaRng::seed_from_u64(1312),
             chain_a_note.clone(),
             chain_a_client
                 .position(chain_a_note.commit())
                 .expect("note should be in mock client's tree"),
         );
-        let output_plan = OutputPlan::new(
+        // Override target_timestamp to match the test chain's timestamp
+        // (SpendPlan::new uses SystemTime::now() which is wrong for historical test chains)
+        let chain_timestamp_secs = self.chain_a_ibc.node.timestamp().unix_timestamp() as u64;
+        spend_plan.target_timestamp = chain_timestamp_secs;
+
+        let mut output_plan = OutputPlan::new(
             &mut rand_chacha::ChaChaRng::seed_from_u64(1312),
             // half the note is being withdrawn, so we can use `transfer_value` both for the withdrawal action
             // and the change output
             transfer_value.clone(),
             chain_a_client.fvk.payment_address(AddressIndex::new(0)).0,
         );
+        // Override target_timestamp to match the test chain's timestamp
+        output_plan.target_timestamp = chain_timestamp_secs;
 
-        let plan = {
+        let mut plan = {
             let ics20_msg = withdrawal.into();
             TransactionPlan {
                 actions: vec![ics20_msg, spend_plan.into(), output_plan.into()],
@@ -1531,7 +1539,10 @@ impl MockRelayer {
             .chain_a_ibc
             .client()
             .await?
-            .witness_auth_build(&plan)
+            .witness_auth_build_with_compliance(
+                &mut plan,
+                self.chain_a_ibc.storage.latest_snapshot(),
+            )
             .await?;
 
         let (_end_block_events, deliver_tx_events) = self

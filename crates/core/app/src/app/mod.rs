@@ -143,9 +143,13 @@ impl App {
                 Governance::init_chain(&mut state_tx, Some(&genesis.governance_content)).await;
                 FeeComponent::init_chain(&mut state_tx, Some(&genesis.fee_content)).await;
                 Funding::init_chain(&mut state_tx, Some(&genesis.funding_content)).await;
-                // Compliance must be initialized after other components since it auto-registers
-                // the staking token as unregulated, which requires the asset tree to exist.
-                Compliance::init_chain(&mut state_tx, None).await;
+                // Initialize compliance component with empty trees for anchor tracking.
+                // Unregulated assets don't need registration (proven via non-membership).
+                Compliance::init_chain(
+                    &mut state_tx,
+                    Some(&penumbra_sdk_compliance::genesis::Content::default()),
+                )
+                .await;
 
                 state_tx
                     .finish_block()
@@ -491,6 +495,7 @@ impl App {
         Staking::end_block(&mut arc_state_tx, end_block).await;
         FeeComponent::end_block(&mut arc_state_tx, end_block).await;
         Funding::end_block(&mut arc_state_tx, end_block).await;
+        Compliance::end_block(&mut arc_state_tx, end_block).await;
         let mut state_tx = Arc::try_unwrap(arc_state_tx)
             .expect("components did not retain copies of shared state");
         tracing::debug!("finished app components' `end_block` hooks");

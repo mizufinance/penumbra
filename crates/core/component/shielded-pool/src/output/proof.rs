@@ -61,8 +61,10 @@ pub struct OutputProofPrivate {
     pub balance_blinding: Fr,
     /// Asset registry Merkle path proving asset regulation status
     pub asset_path: penumbra_sdk_compliance::MerklePath,
-    /// Position of the asset in the asset registry QuadTree
+    /// Position of the asset in the asset registry IMT
     pub asset_position: u64,
+    /// The indexed leaf from the asset IMT (for membership/non-membership proofs)
+    pub asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf,
     /// Whether this asset is regulated (requires compliance)
     pub is_regulated: bool,
     /// Compliance Merkle path proving user is in compliance registry
@@ -207,6 +209,7 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
 
         let compliance_witness = ComplianceWitness {
             is_regulated: self.private.is_regulated,
+            asset_indexed_leaf: self.private.asset_indexed_leaf.clone(),
             asset_path: self.private.asset_path.clone(),
             asset_position: self.private.asset_position,
             compliance_path: self.private.compliance_path.clone(),
@@ -346,6 +349,11 @@ impl DummyWitness for OutputCircuit {
             balance_blinding,
             asset_path: penumbra_sdk_compliance::MerklePath::default(),
             asset_position: 0,
+            asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf {
+                value: Fq::from(0u64),
+                next_index: 0,
+                next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+            },
             is_regulated: false,
             compliance_path: penumbra_sdk_compliance::MerklePath::default(),
             compliance_position: 0,
@@ -523,6 +531,7 @@ mod tests {
     use proptest::prelude::*;
 
     use crate::test_proof_helpers::proof_test_helpers::{
+        create_imt_membership_proof, create_imt_non_membership_proof, create_user_tree_proof,
         current_timestamp, mock_compliance_inputs,
     };
     use crate::{note, Note};
@@ -580,8 +589,13 @@ mod tests {
                 asset_id: value_to_send.asset_id,
             };
 
-            let asset_anchor = tct::StateCommitment(Fq::from(0u64));
-            let compliance_anchor = tct::StateCommitment(Fq::from(0u64));
+            // Create valid IMT membership proof for regulated asset
+            let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) =
+                create_imt_membership_proof(value_to_send.asset_id.0);
+
+            // Create valid user tree proof for regulated asset
+            let (compliance_anchor, compliance_path, compliance_position) =
+                create_user_tree_proof(&user_leaf);
 
             // Generate valid compliance ciphertext using real encryption
             let mut rng = rand::thread_rng();
@@ -624,11 +638,12 @@ mod tests {
             let private = OutputProofPrivate {
                 note,
                 balance_blinding,
-                asset_path: penumbra_sdk_compliance::MerklePath::default(),
-                asset_position: 0,
+                asset_path,
+                asset_position,
+                asset_indexed_leaf,
                 is_regulated: true,
-                compliance_path: penumbra_sdk_compliance::MerklePath::default(),
-                compliance_position: 0,
+                compliance_path,
+                compliance_position,
                 user_leaf,
                 compliance_ephemeral_secret: ephemeral_secret,
                 counterparty_leaf: dummy_leaf,
@@ -678,7 +693,9 @@ mod tests {
                 asset_id: value_to_send.asset_id,
             };
 
-            let asset_anchor = tct::StateCommitment(Fq::from(0u64));
+            // Create valid IMT non-membership proof for unregulated asset
+            let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) =
+                create_imt_non_membership_proof(value_to_send.asset_id.0);
             let compliance_anchor = tct::StateCommitment(Fq::from(0u64));
 
             // Generate valid compliance ciphertext using real encryption with BLACK_HOLE_ACK
@@ -717,8 +734,9 @@ mod tests {
             let private = OutputProofPrivate {
                 note,
                 balance_blinding,
-                asset_path: penumbra_sdk_compliance::MerklePath::default(),
-                asset_position: 0,
+                asset_path,
+                asset_position,
+                asset_indexed_leaf,
                 is_regulated: false,
                 compliance_path: penumbra_sdk_compliance::MerklePath::default(),
                 compliance_position: 0,
@@ -835,6 +853,11 @@ mod tests {
                 balance_blinding,
                 asset_path: penumbra_sdk_compliance::MerklePath::default(),
                 asset_position: 0,
+                asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf {
+                    value: Fq::from(0u64),
+                    next_index: 0,
+                    next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                },
                 is_regulated: false,
                 compliance_path: penumbra_sdk_compliance::MerklePath::default(),
                 compliance_position: 0,
@@ -921,6 +944,11 @@ mod tests {
                 balance_blinding,
                 asset_path: penumbra_sdk_compliance::MerklePath::default(),
                 asset_position: 0,
+                asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf {
+                    value: Fq::from(0u64),
+                    next_index: 0,
+                    next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                },
                 is_regulated: false,
                 compliance_path: penumbra_sdk_compliance::MerklePath::default(),
                 compliance_position: 0,

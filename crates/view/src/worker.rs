@@ -33,6 +33,7 @@ use tonic::transport::Channel;
 use tracing::instrument;
 
 use crate::{
+    compliance_tree::{ComplianceAssetTree, ComplianceUserTree},
     sync::{scan_block, FilteredBlock},
     Storage,
 };
@@ -48,6 +49,10 @@ pub struct Worker {
     sync_height_tx: watch::Sender<u64>,
     /// Tonic channel used to create GRPC clients.
     channel: Channel,
+    /// In-memory compliance user tree for local sync.
+    compliance_user_tree: Arc<RwLock<ComplianceUserTree>>,
+    /// In-memory compliance asset tree for local sync.
+    compliance_asset_tree: Arc<RwLock<ComplianceAssetTree>>,
 }
 
 impl Worker {
@@ -56,7 +61,9 @@ impl Worker {
     /// - the worker itself;
     /// - a shared, in-memory SCT instance;
     /// - a shared error slot;
-    /// - a channel for notifying the client of sync progress.
+    /// - a channel for notifying the client of sync progress;
+    /// - a shared compliance user tree;
+    /// - a shared compliance asset tree.
     #[instrument(skip_all)]
     pub async fn new(
         storage: Storage,
@@ -67,6 +74,8 @@ impl Worker {
             Arc<RwLock<penumbra_sdk_tct::Tree>>,
             Arc<Mutex<Option<anyhow::Error>>>,
             watch::Receiver<u64>,
+            Arc<RwLock<ComplianceUserTree>>,
+            Arc<RwLock<ComplianceAssetTree>>,
         ),
         anyhow::Error,
     > {
@@ -87,6 +96,20 @@ impl Worker {
         // Mark the current height as seen, since it's not new.
         sync_height_rx.borrow_and_update();
 
+        // Load compliance trees from storage
+        let compliance_user_tree = Arc::new(RwLock::new(
+            storage
+                .compliance_user_tree()
+                .await
+                .context("failed to load compliance user tree")?,
+        ));
+        let compliance_asset_tree = Arc::new(RwLock::new(
+            storage
+                .compliance_asset_tree()
+                .await
+                .context("failed to load compliance asset tree")?,
+        ));
+
         Ok((
             Self {
                 storage,
@@ -95,11 +118,98 @@ impl Worker {
                 error_slot: error_slot.clone(),
                 sync_height_tx,
                 channel,
+                compliance_user_tree: compliance_user_tree.clone(),
+                compliance_asset_tree: compliance_asset_tree.clone(),
             },
             sct,
             error_slot,
             sync_height_rx,
+            compliance_user_tree,
+            compliance_asset_tree,
         ))
+    }
+
+    /// Process compliance registrations from a CompactBlock.
+    ///
+    /// This syncs:
+    /// 1. All user registrations into the user tree (for auth path computation)
+    /// 2. Full leaf data for addresses in sync scope (own + counterparties)
+    /// 3. All asset registrations into the asset tree
+    /// 4. Compliance anchors for the block
+    async fn process_compliance_block(&self, block: &CompactBlock) -> anyhow::Result<()> {
+        // Early return if no compliance data in this block
+        if block.compliance_user_registrations.is_empty()
+            && block.compliance_asset_registrations.is_empty()
+            && block.compliance_user_anchor.is_none()
+        {
+            return Ok(());
+        }
+
+        let height = block.height;
+
+        // Lock both compliance trees
+        let mut user_tree = self.compliance_user_tree.write().await;
+        let mut asset_tree = self.compliance_asset_tree.write().await;
+
+        // Track starting positions for persistence
+        let user_start_position = user_tree.position();
+        let asset_start_position = asset_tree.leaf_count();
+
+        // Process user registrations
+        for event in &block.compliance_user_registrations {
+            // Insert commitment into user tree (for path computation)
+            let position = user_tree.insert(event.commitment)?;
+
+            // Check if this address is in our sync scope
+            let is_in_scope = self
+                .storage
+                .is_address_in_compliance_scope(&self.fvk, &event.leaf.address)
+                .await?;
+
+            // If in scope, store full leaf data for offline proof generation
+            if is_in_scope {
+                let ack_bytes: [u8; 32] = event.leaf.key.inner().vartime_compress().0;
+                self.storage
+                    .record_compliance_leaf_data(
+                        &event.leaf.address,
+                        &event.leaf.asset_id,
+                        position,
+                        &ack_bytes,
+                        event.commitment,
+                    )
+                    .await?;
+            }
+        }
+
+        // Process asset registrations
+        for event in &block.compliance_asset_registrations {
+            // For asset tree, we need to replay the insert to get the correct structure
+            // The event contains the full indexed leaf data for verification
+            let value = event.indexed_leaf.value;
+            if !asset_tree.contains(value) {
+                asset_tree.insert(value)?;
+            }
+        }
+
+        // Persist compliance tree changes
+        self.storage
+            .record_compliance_block(
+                height,
+                &user_tree,
+                &asset_tree,
+                user_start_position,
+                asset_start_position,
+            )
+            .await?;
+
+        tracing::debug!(
+            height,
+            user_registrations = block.compliance_user_registrations.len(),
+            asset_registrations = block.compliance_asset_registrations.len(),
+            "processed compliance block"
+        );
+
+        Ok(())
     }
 
     pub async fn fetch_transactions(
@@ -247,6 +357,9 @@ impl Worker {
                     .await?;
             }
 
+            // Process compliance registrations regardless of whether block requires SCT scanning
+            self.process_compliance_block(&block).await?;
+
             if !block.requires_scanning() {
                 // Optimization: if the block is empty, seal the in-memory SCT,
                 // and skip touching the database:
@@ -367,6 +480,50 @@ impl Worker {
                             }
                             _ => (),
                         };
+                    }
+
+                    // Extract counterparties from outputs using OVK decryption
+                    // This enables offline compliance lookups for future transactions to these addresses
+                    let ovk = self.fvk.outgoing();
+                    for action in transaction.actions() {
+                        if let penumbra_sdk_transaction::Action::Output(output) = action {
+                            let note_commitment = output.body.note_payload.note_commitment;
+                            let cv = output.body.balance_commitment;
+                            let epk = &output.body.note_payload.ephemeral_key;
+
+                            if let Ok(decrypted_note) =
+                                penumbra_sdk_shielded_pool::Note::decrypt_outgoing(
+                                    &output.body.note_payload.encrypted_note,
+                                    output.body.ovk_wrapped_key.clone(),
+                                    note_commitment,
+                                    cv,
+                                    ovk,
+                                    epk,
+                                )
+                            {
+                                let dest_address = decrypted_note.address();
+                                // Skip self-sends (change outputs back to our own addresses)
+                                if !self.fvk.incoming().views_address(&dest_address) {
+                                    if let Err(e) = self
+                                        .storage
+                                        .record_counterparty(&dest_address, height)
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            ?dest_address,
+                                            ?e,
+                                            "failed to record counterparty during sync"
+                                        );
+                                    } else {
+                                        tracing::debug!(
+                                            ?dest_address,
+                                            height,
+                                            "recorded counterparty from historical TX"
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 

@@ -11,6 +11,7 @@ use once_cell::sync::Lazy;
 
 use penumbra_sdk_keys::keys::AddressComplianceKey;
 
+use crate::indexed_tree::{IndexedLeaf, IMT_LEAF_DOMAIN_SEP};
 use crate::structs::{ComplianceLeaf, MerklePath};
 use crate::tree::DEFAULT_DEPTH;
 use crate::BLACK_HOLE_ACK;
@@ -88,26 +89,32 @@ pub fn verify_quad_path(
         };
 
         // Construct the 4 children for quad-tree hashing based on position bits
-        // Position bits determine which child contains the current hash
-        let child_0 = bit_0
-            .not()
-            .and(&bit_1.not())?
-            .select(&current_hash, &siblings[0])?;
+        // child_index = bit_0 + 2*bit_1 (0, 1, 2, or 3)
+        // Siblings array contains the 3 sibling hashes (excluding the current hash position)
+        //
+        // Native mapping (from auth_path):
+        //   index=0: [current_hash, siblings[0], siblings[1], siblings[2]]
+        //   index=1: [siblings[0], current_hash, siblings[1], siblings[2]]
+        //   index=2: [siblings[0], siblings[1], current_hash, siblings[2]]
+        //   index=3: [siblings[0], siblings[1], siblings[2], current_hash]
+        let is_index_0 = bit_0.not().and(&bit_1.not())?; // !b0 && !b1
+        let is_index_1 = bit_0.clone().and(&bit_1.not())?; // b0 && !b1
+        let is_index_2 = bit_0.not().and(&bit_1.clone())?; // !b0 && b1
+        let is_index_3 = bit_0.clone().and(&bit_1.clone())?; // b0 && b1
 
-        let child_1 = bit_0.and(&bit_1.not())?.select(
-            &current_hash,
-            &bit_0
-                .not()
-                .and(&bit_1.not())?
-                .select(&siblings[0], &siblings[1])?,
-        )?;
+        // child_0: current_hash if index=0, else siblings[0]
+        let child_0 = is_index_0.select(&current_hash, &siblings[0])?;
 
-        let child_2 = bit_0.not().and(&bit_1)?.select(
-            &current_hash,
-            &bit_1.not().select(&siblings[1], &siblings[2])?,
-        )?;
+        // child_1: current_hash if index=1, else siblings[0] if index=0, else siblings[1]
+        let child_1_not_1 = is_index_0.select(&siblings[0], &siblings[1])?;
+        let child_1 = is_index_1.select(&current_hash, &child_1_not_1)?;
 
-        let child_3 = bit_0.and(&bit_1)?.select(&current_hash, &siblings[2])?;
+        // child_2: current_hash if index=2, else siblings[1] if index=0|1, else siblings[2]
+        let child_2_not_2 = bit_1.select(&siblings[2], &siblings[1])?; // if bit_1=1 (index 2 or 3), siblings[2]; else siblings[1]
+        let child_2 = is_index_2.select(&current_hash, &child_2_not_2)?;
+
+        // child_3: current_hash if index=3, else siblings[2]
+        let child_3 = is_index_3.select(&current_hash, &siblings[2])?;
 
         let parent_hash = poseidon377::r1cs::hash_4(
             cs.clone(),
@@ -407,9 +414,11 @@ pub fn verify_compliance_encryption(
 pub struct ComplianceWitness {
     /// Whether the asset is regulated (requires compliance checks).
     pub is_regulated: bool,
-    /// Merkle path proving asset's regulatory status in the Asset Registry.
+    /// Indexed Merkle Tree leaf for asset registry (membership or non-membership proof).
+    pub asset_indexed_leaf: IndexedLeaf,
+    /// Merkle path proving asset's regulatory status in the Asset Registry IMT.
     pub asset_path: MerklePath,
-    /// Position of the asset in the Asset Registry tree.
+    /// Position of the leaf in the Asset Registry IMT.
     pub asset_position: u64,
     /// Merkle path proving user authorization in the Compliance Registry.
     pub compliance_path: MerklePath,
@@ -417,6 +426,51 @@ pub struct ComplianceWitness {
     pub compliance_position: u64,
     /// The compliance leaf containing address, ACK, and asset_id.
     pub user_leaf: ComplianceLeaf,
+}
+
+/// Circuit variable for an Indexed Merkle Tree leaf.
+///
+/// Used for asset registry membership and non-membership proofs.
+pub struct IndexedLeafVar {
+    /// The value stored in this leaf (asset_id for membership proofs).
+    pub value: FqVar,
+    /// Position in tree of the next-higher value leaf.
+    pub next_index: FqVar,
+    /// Value at next_index (for gap verification in non-membership proofs).
+    pub next_value: FqVar,
+}
+
+impl IndexedLeafVar {
+    /// Allocate as witness variables.
+    pub fn new_witness(
+        cs: ConstraintSystemRef<Fq>,
+        leaf: &IndexedLeaf,
+    ) -> Result<Self, SynthesisError> {
+        let value = FqVar::new_witness(cs.clone(), || Ok(leaf.value))?;
+        let next_index = FqVar::new_witness(cs.clone(), || Ok(Fq::from(leaf.next_index)))?;
+        let next_value = FqVar::new_witness(cs, || Ok(leaf.next_value))?;
+        Ok(Self {
+            value,
+            next_index,
+            next_value,
+        })
+    }
+
+    /// Compute the leaf commitment in-circuit.
+    pub fn commit(&self, cs: ConstraintSystemRef<Fq>) -> Result<FqVar, SynthesisError> {
+        let domain_sep = FqVar::new_constant(cs.clone(), *IMT_LEAF_DOMAIN_SEP)?;
+        let zero = FqVar::new_constant(cs.clone(), Fq::from(0u64))?;
+        poseidon377::r1cs::hash_4(
+            cs,
+            &domain_sep,
+            (
+                self.value.clone(),
+                self.next_index.clone(),
+                self.next_value.clone(),
+                zero,
+            ),
+        )
+    }
 }
 
 /// Circuit variable representation of compliance plaintext.
@@ -601,13 +655,14 @@ pub fn verify_compliance_integrity(
     compliance_ephemeral_secret: Fr,
     witness: ComplianceWitness,
 ) -> Result<(), SynthesisError> {
-    let (is_regulated, asset_position, compliance_position, user_leaf_var) =
+    let (is_regulated, asset_indexed_leaf, asset_position, compliance_position, user_leaf_var) =
         allocate_compliance_witnesses(cs.clone(), &witness)?;
 
-    verify_asset_registry_path(
+    verify_asset_registry_imt(
         cs.clone(),
         note_asset_id.clone(),
         &is_regulated,
+        &asset_indexed_leaf,
         &witness.asset_path,
         &asset_position,
         &asset_anchor,
@@ -664,8 +719,9 @@ pub fn verify_compliance_integrity(
 fn allocate_compliance_witnesses(
     cs: ConstraintSystemRef<Fq>,
     witness: &ComplianceWitness,
-) -> Result<(Boolean<Fq>, FqVar, FqVar, ComplianceLeafVar), SynthesisError> {
+) -> Result<(Boolean<Fq>, IndexedLeafVar, FqVar, FqVar, ComplianceLeafVar), SynthesisError> {
     let is_regulated = Boolean::new_witness(cs.clone(), || Ok(witness.is_regulated))?;
+    let asset_indexed_leaf = IndexedLeafVar::new_witness(cs.clone(), &witness.asset_indexed_leaf)?;
     let asset_position = FqVar::new_witness(cs.clone(), || Ok(Fq::from(witness.asset_position)))?;
     let compliance_position =
         FqVar::new_witness(cs.clone(), || Ok(Fq::from(witness.compliance_position)))?;
@@ -674,38 +730,96 @@ fn allocate_compliance_witnesses(
 
     Ok((
         is_regulated,
+        asset_indexed_leaf,
         asset_position,
         compliance_position,
         user_leaf_var,
     ))
 }
 
-/// Verify asset registry Merkle path.
-fn verify_asset_registry_path(
+/// Compare two FqVar values using bit decomposition.
+/// Returns `Boolean<Fq>` that is true if `a < b`.
+///
+/// This works for ALL field elements, unlike `is_cmp` which only works
+/// for values < (p-1)/2. Since asset IDs are 256-bit hashes, they can
+/// exceed this limit, so we must use bit decomposition.
+///
+/// Algorithm: Decompose both values to bits, compare MSB to LSB.
+/// Based on `U128x128Var::enforce_cmp` in fixpoint.rs.
+fn fq_is_less_than(a: &FqVar, b: &FqVar) -> Result<Boolean<Fq>, SynthesisError> {
+    use std::iter::zip;
+
+    // Decompose to bits (little-endian), then reverse for MSB-first comparison
+    let a_bits: Vec<Boolean<Fq>> = a.to_bits_le()?.into_iter().rev().collect();
+    let b_bits: Vec<Boolean<Fq>> = b.to_bits_le()?.into_iter().rev().collect();
+
+    // Track comparison state from MSB to LSB
+    // gt = true if we've conclusively determined a > b
+    // lt = true if we've conclusively determined a < b
+    let mut gt: Boolean<Fq> = Boolean::constant(false);
+    let mut lt: Boolean<Fq> = Boolean::constant(false);
+
+    for (p, q) in zip(a_bits, b_bits) {
+        // If we see a=1, b=0 and haven't determined lt yet, then a > b
+        gt = gt.or(&lt.not().and(&p)?.and(&q.not())?)?;
+        // If we see a=0, b=1 and haven't determined gt yet, then a < b
+        lt = lt.or(&gt.not().and(&q)?.and(&p.not())?)?;
+    }
+
+    Ok(lt)
+}
+
+/// Verify asset registry using Indexed Merkle Tree (IMT).
+///
+/// For **regulated** assets: membership proof - `indexed_leaf.value == asset_id`
+/// For **unregulated** assets: non-membership proof - `indexed_leaf.value < asset_id < indexed_leaf.next_value`
+///
+/// Both proof types use identical constraint counts for circuit indistinguishability.
+fn verify_asset_registry_imt(
     cs: ConstraintSystemRef<Fq>,
     note_asset_id: FqVar,
     is_regulated: &Boolean<Fq>,
+    indexed_leaf: &IndexedLeafVar,
     asset_path: &MerklePath,
     asset_position: &FqVar,
     asset_anchor: &FqVar,
 ) -> Result<(), SynthesisError> {
-    let zero_domain_sep = FqVar::new_constant(cs.clone(), Fq::from(0u64))?;
-    let status_fq = is_regulated.select(&FqVar::one(), &FqVar::zero())?;
+    // 1. Compute leaf commitment
+    let leaf_commitment = indexed_leaf.commit(cs.clone())?;
 
-    let asset_leaf =
-        poseidon377::r1cs::hash_2(cs.clone(), &zero_domain_sep, (note_asset_id, status_fq))?;
+    // 2. Verify Merkle path (reuse existing verify_quad_path)
+    let calculated_root = verify_quad_path(
+        cs.clone(),
+        leaf_commitment,
+        asset_path,
+        asset_position.clone(),
+    )?;
+    calculated_root.enforce_equal(asset_anchor)?;
 
-    let calculated_asset_root =
-        verify_quad_path(cs.clone(), asset_leaf, asset_path, asset_position.clone())?;
+    // 3. Membership check: asset_id == leaf.value
+    let is_exact_match = note_asset_id.is_eq(&indexed_leaf.value)?;
 
-    // Conditionally enforce: only if anchor is non-zero
-    let is_real_anchor = asset_anchor.is_neq(&FqVar::zero())?;
-    calculated_asset_root.conditional_enforce_equal(asset_anchor, &is_real_anchor)?;
+    // 4. Non-membership (gap) check: leaf.value < asset_id < leaf.next_value
+    //
+    // Uses bit decomposition comparison which works for ALL field elements,
+    // unlike is_cmp which only works for values < (p-1)/2.
+    let gt_low = fq_is_less_than(&indexed_leaf.value, &note_asset_id)?; // leaf.value < asset_id
+    let lt_high = fq_is_less_than(&note_asset_id, &indexed_leaf.next_value)?; // asset_id < leaf.next_value
+    let is_in_gap = gt_low.and(&lt_high)?;
+
+    // 5. Select based on regulation status:
+    // - Regulated (is_regulated=true): must have exact match (membership)
+    // - Unregulated (is_regulated=false): must be in gap (non-membership)
+    let valid_proof = is_regulated.select(&is_exact_match, &is_in_gap)?;
+    valid_proof.enforce_equal(&Boolean::TRUE)?;
 
     Ok(())
 }
 
-/// Verify compliance registry Merkle path.
+/// Verify compliance registry Merkle path (user tree).
+///
+/// For regulated assets: enforces the user is registered in the compliance tree.
+/// For unregulated assets: enforcement is skipped (any witness accepted).
 fn verify_compliance_registry_path(
     cs: ConstraintSystemRef<Fq>,
     user_leaf_var: &ComplianceLeafVar,
@@ -723,11 +837,9 @@ fn verify_compliance_registry_path(
         compliance_position.clone(),
     )?;
 
-    // Conditional enforcement: only if regulated AND anchor is real
-    let is_dummy_anchor = compliance_anchor.is_eq(&FqVar::zero())?;
-    let should_enforce = is_regulated.and(&is_dummy_anchor.not())?;
-
-    calculated_user_root.conditional_enforce_equal(compliance_anchor, &should_enforce)?;
+    // Conditional enforcement: only if regulated
+    // Note: Removed redundant anchor != 0 check - validators reject invalid anchors
+    calculated_user_root.conditional_enforce_equal(compliance_anchor, is_regulated)?;
 
     Ok(())
 }
@@ -1018,7 +1130,6 @@ mod tests {
         let ack = master_key.derive_address_key(&diversifier);
 
         let date = 19000u64;
-        // Note: Using Detection key type for test - circuit will be updated to support all three
         let pk_day = ack.derive_daily_public_key(
             penumbra_sdk_keys::keys::KeyType::Detection,
             date,
@@ -1061,5 +1172,297 @@ mod tests {
 
         // Verify the circuit is satisfied
         assert!(cs.is_satisfied().unwrap(), "Circuit should be satisfied");
+    }
+
+    /// Test: verify_quad_path alone with IMT hashing
+    #[test]
+    fn test_verify_quad_path_with_imt() {
+        use crate::IndexedMerkleTree;
+
+        let cs = ConstraintSystem::<Fq>::new_ref();
+
+        // Create an IMT (empty except sentinel)
+        let tree = IndexedMerkleTree::new();
+
+        // Get proof for sentinel at position 0
+        let (position, indexed_leaf, auth_path) = tree
+            .non_membership_proof(Fq::from(999u64))
+            .expect("proof should succeed");
+
+        // Verify native proof first
+        let anchor = tree.root();
+        assert!(
+            IndexedMerkleTree::verify_auth_path(position, &indexed_leaf, &auth_path, anchor, 16),
+            "Native auth path should verify"
+        );
+
+        // Compute leaf commitment natively
+        let leaf_commitment = indexed_leaf.commit();
+
+        // Allocate in circuit
+        let leaf_var =
+            FqVar::new_witness(cs.clone(), || Ok(leaf_commitment.0)).expect("leaf allocation");
+        let position_var =
+            FqVar::new_witness(cs.clone(), || Ok(Fq::from(position))).expect("position allocation");
+        let anchor_var = FqVar::new_input(cs.clone(), || Ok(anchor.0)).expect("anchor allocation");
+
+        // Convert auth path to MerklePath
+        let merkle_path = MerklePath::from_auth_path(auth_path);
+
+        // Run verify_quad_path
+        let computed_root = verify_quad_path(cs.clone(), leaf_var, &merkle_path, position_var)
+            .expect("path verification should succeed");
+
+        // Enforce computed root equals anchor
+        computed_root.enforce_equal(&anchor_var).expect("enforce");
+
+        assert!(
+            cs.is_satisfied().unwrap(),
+            "Circuit should be satisfied for quad path"
+        );
+    }
+
+    /// Test: IndexedLeafVar commitment matches native IndexedLeaf::commit
+    #[test]
+    fn test_indexed_leaf_commit_native_vs_circuit() {
+        use crate::indexed_tree::{IndexedLeaf, FQ_MAX};
+
+        let cs = ConstraintSystem::<Fq>::new_ref();
+
+        // Create a test leaf (sentinel)
+        let leaf = IndexedLeaf {
+            value: Fq::from(0u64),
+            next_index: 0,
+            next_value: *FQ_MAX,
+        };
+
+        // Compute native commitment
+        let native_commit = leaf.commit();
+
+        // Allocate in circuit and compute
+        let leaf_var = IndexedLeafVar::new_witness(cs.clone(), &leaf).unwrap();
+        let circuit_commit = leaf_var.commit(cs.clone()).unwrap();
+
+        // Compare values
+        let circuit_value = circuit_commit.value().unwrap();
+
+        assert_eq!(
+            native_commit.0, circuit_value,
+            "Native and circuit commitments must match"
+        );
+
+        assert!(cs.is_satisfied().unwrap(), "Circuit should be satisfied");
+    }
+
+    /// Test: verify_quad_path with circuit-computed leaf commitment
+    #[test]
+    fn test_verify_quad_path_with_circuit_computed_leaf() {
+        use crate::IndexedMerkleTree;
+
+        let cs = ConstraintSystem::<Fq>::new_ref();
+
+        // Create an IMT
+        let tree = IndexedMerkleTree::new();
+
+        // Get proof for sentinel at position 0
+        let (position, indexed_leaf, auth_path) = tree
+            .non_membership_proof(Fq::from(999u64))
+            .expect("proof should succeed");
+
+        let anchor = tree.root();
+
+        // Allocate IndexedLeafVar and compute commitment IN-CIRCUIT
+        let indexed_leaf_var =
+            IndexedLeafVar::new_witness(cs.clone(), &indexed_leaf).expect("leaf allocation");
+        let leaf_commitment = indexed_leaf_var.commit(cs.clone()).expect("commitment");
+
+        let position_var =
+            FqVar::new_witness(cs.clone(), || Ok(Fq::from(position))).expect("position allocation");
+        let anchor_var = FqVar::new_input(cs.clone(), || Ok(anchor.0)).expect("anchor allocation");
+
+        // Convert auth path to MerklePath
+        let merkle_path = MerklePath::from_auth_path(auth_path);
+
+        // Run verify_quad_path with circuit-computed leaf
+        let computed_root =
+            verify_quad_path(cs.clone(), leaf_commitment, &merkle_path, position_var)
+                .expect("path verification should succeed");
+
+        // Enforce computed root equals anchor
+        computed_root.enforce_equal(&anchor_var).expect("enforce");
+
+        assert!(
+            cs.is_satisfied().unwrap(),
+            "Circuit should be satisfied for quad path with circuit-computed leaf"
+        );
+    }
+
+    /// Test: verify_asset_registry_imt gadget with membership proof (regulated asset)
+    #[test]
+    fn test_verify_asset_registry_imt_membership() {
+        use crate::IndexedMerkleTree;
+
+        let cs = ConstraintSystem::<Fq>::new_ref();
+
+        // Create an IMT and insert a regulated asset
+        let mut tree = IndexedMerkleTree::new();
+        let asset_id = Fq::from(42u64);
+        tree.insert(asset_id).expect("insert should succeed");
+
+        // Get membership proof
+        let (position, indexed_leaf, auth_path) = tree
+            .membership_proof(asset_id)
+            .expect("membership proof should succeed");
+        let anchor = tree.root();
+
+        // Allocate variables
+        let asset_id_var =
+            FqVar::new_witness(cs.clone(), || Ok(asset_id)).expect("asset_id allocation");
+        let is_regulated = Boolean::new_witness(cs.clone(), || Ok(true)).expect("is_regulated");
+        let indexed_leaf_var =
+            IndexedLeafVar::new_witness(cs.clone(), &indexed_leaf).expect("leaf allocation");
+        let position_var =
+            FqVar::new_witness(cs.clone(), || Ok(Fq::from(position))).expect("position allocation");
+        let anchor_var = FqVar::new_input(cs.clone(), || Ok(anchor.0)).expect("anchor allocation");
+
+        let merkle_path = MerklePath::from_auth_path(auth_path);
+
+        verify_asset_registry_imt(
+            cs.clone(),
+            asset_id_var,
+            &is_regulated,
+            &indexed_leaf_var,
+            &merkle_path,
+            &position_var,
+            &anchor_var,
+        )
+        .expect("verification should succeed");
+
+        assert!(
+            cs.is_satisfied().unwrap(),
+            "Circuit should be satisfied for membership proof"
+        );
+    }
+
+    /// Test: verify_asset_registry_imt gadget with non-membership proof (unregulated asset)
+    #[test]
+    fn test_verify_asset_registry_imt_non_membership() {
+        use crate::IndexedMerkleTree;
+
+        let cs = ConstraintSystem::<Fq>::new_ref();
+
+        // Create an IMT (empty except sentinel)
+        let tree = IndexedMerkleTree::new();
+        let asset_id = Fq::from(999u64); // Not in tree
+
+        // Get non-membership proof (sentinel proves the gap)
+        let (position, indexed_leaf, auth_path) = tree
+            .non_membership_proof(asset_id)
+            .expect("non-membership proof should succeed");
+        let anchor = tree.root();
+
+        // Verify the native proof is valid first
+        assert!(
+            IndexedMerkleTree::verify_auth_path(position, &indexed_leaf, &auth_path, anchor, 16),
+            "Native auth path should verify"
+        );
+
+        // Allocate variables
+        let asset_id_var =
+            FqVar::new_witness(cs.clone(), || Ok(asset_id)).expect("asset_id allocation");
+        let is_regulated = Boolean::new_witness(cs.clone(), || Ok(false)).expect("is_regulated");
+        let indexed_leaf_var =
+            IndexedLeafVar::new_witness(cs.clone(), &indexed_leaf).expect("leaf allocation");
+        let position_var =
+            FqVar::new_witness(cs.clone(), || Ok(Fq::from(position))).expect("position allocation");
+        let anchor_var = FqVar::new_input(cs.clone(), || Ok(anchor.0)).expect("anchor allocation");
+
+        let merkle_path = MerklePath::from_auth_path(auth_path);
+
+        verify_asset_registry_imt(
+            cs.clone(),
+            asset_id_var,
+            &is_regulated,
+            &indexed_leaf_var,
+            &merkle_path,
+            &position_var,
+            &anchor_var,
+        )
+        .expect("verification should succeed");
+
+        assert!(
+            cs.is_satisfied().unwrap(),
+            "Circuit should be satisfied for non-membership proof"
+        );
+    }
+
+    /// Test: verify_asset_registry_imt gadget with REAL staking token asset ID
+    /// This tests whether is_cmp works correctly with large field elements (256-bit hashes)
+    #[test]
+    fn test_verify_asset_registry_imt_non_membership_large_asset_id() {
+        use crate::IndexedMerkleTree;
+        use penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID;
+
+        let cs = ConstraintSystem::<Fq>::new_ref();
+
+        // Create an IMT (empty except sentinel)
+        let tree = IndexedMerkleTree::new();
+        let asset_id = STAKING_TOKEN_ASSET_ID.0; // Real 256-bit hash value
+
+        eprintln!("Testing with STAKING_TOKEN_ASSET_ID: {:?}", asset_id);
+
+        // Get non-membership proof (sentinel proves the gap)
+        let (position, indexed_leaf, auth_path) = tree
+            .non_membership_proof(asset_id)
+            .expect("non-membership proof should succeed");
+        let anchor = tree.root();
+
+        eprintln!(
+            "Proof: position={}, leaf.value={:?}, leaf.next_value={:?}",
+            position, indexed_leaf.value, indexed_leaf.next_value
+        );
+
+        // Verify the native proof is valid first
+        assert!(
+            IndexedMerkleTree::verify_auth_path(position, &indexed_leaf, &auth_path, anchor, 16),
+            "Native auth path should verify"
+        );
+
+        // Allocate variables
+        let asset_id_var =
+            FqVar::new_witness(cs.clone(), || Ok(asset_id)).expect("asset_id allocation");
+        let is_regulated = Boolean::new_witness(cs.clone(), || Ok(false)).expect("is_regulated");
+        let indexed_leaf_var =
+            IndexedLeafVar::new_witness(cs.clone(), &indexed_leaf).expect("leaf allocation");
+        let position_var =
+            FqVar::new_witness(cs.clone(), || Ok(Fq::from(position))).expect("position allocation");
+        let anchor_var = FqVar::new_input(cs.clone(), || Ok(anchor.0)).expect("anchor allocation");
+
+        let merkle_path = MerklePath::from_auth_path(auth_path);
+
+        verify_asset_registry_imt(
+            cs.clone(),
+            asset_id_var,
+            &is_regulated,
+            &indexed_leaf_var,
+            &merkle_path,
+            &position_var,
+            &anchor_var,
+        )
+        .expect("verification should succeed");
+
+        let satisfied = cs.is_satisfied().unwrap();
+        eprintln!("Circuit satisfied: {}", satisfied);
+        if !satisfied {
+            eprintln!("Unsatisfied constraints:");
+            for (i, constraint) in cs.which_is_unsatisfied().unwrap().iter().enumerate() {
+                eprintln!("  {}: {:?}", i, constraint);
+            }
+        }
+
+        assert!(
+            satisfied,
+            "Circuit should be satisfied for non-membership proof with large asset_id"
+        );
     }
 }

@@ -24,8 +24,8 @@ else
     # The default generates 2 validators, requiring 2/3+ voting power (i.e., both nodes).
     cargo run --release --bin pd -- network generate \
         --chain-id penumbra-local-devnet \
-        --unbonding-delay 302400 \
-        --epoch-duration 302400 \
+        --unbonding-delay 50 \
+        --epoch-duration 50 \
         --proposal-voting-blocks 50 \
         --gas-price-simple 0 \
         --timeout-commit 500ms \

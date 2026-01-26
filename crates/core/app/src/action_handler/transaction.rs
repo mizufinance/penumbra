@@ -20,7 +20,7 @@ use self::stateful::{
 };
 use stateless::{
     check_memo_exists_if_outputs_absent_if_not, check_non_empty_transaction,
-    num_clues_equal_to_num_outputs, valid_binding_signature,
+    num_clues_equal_to_num_outputs, valid_binding_signature, validate_spend_output_binding,
 };
 
 #[async_trait]
@@ -48,6 +48,8 @@ impl AppActionHandler for Transaction {
         check_memo_exists_if_outputs_absent_if_not(self)?;
         // This check ensures that transactions contain at least one action.
         check_non_empty_transaction(self)?;
+        // Validate spend↔output leaf binding for compliance
+        validate_spend_output_binding(self)?;
 
         let context = self.context();
 
@@ -147,9 +149,13 @@ mod tests {
     use std::ops::Deref;
 
     use anyhow::Result;
-    use penumbra_sdk_asset::{Value, STAKING_TOKEN_ASSET_ID};
+    use decaf377::Fr;
+    use penumbra_sdk_asset::{asset, Value, STAKING_TOKEN_ASSET_ID};
+    use penumbra_sdk_compliance::{
+        ComplianceLeaf, IndexedMerkleTree, MerklePath, QuadTree, BLACK_HOLE_ACK,
+    };
     use penumbra_sdk_fee::Fee;
-    use penumbra_sdk_keys::test_keys;
+    use penumbra_sdk_keys::{keys::AddressComplianceKey, test_keys, Address};
     use penumbra_sdk_shielded_pool::{Note, OutputPlan, SpendPlan};
     use penumbra_sdk_tct as tct;
     use penumbra_sdk_transaction::{
@@ -159,6 +165,122 @@ mod tests {
     use rand_core::OsRng;
 
     use crate::AppActionHandler;
+
+    /// Enrich a SpendPlan with valid compliance data for testing.
+    /// Uses unregulated (BLACK_HOLE) compliance for simplicity.
+    fn enrich_spend_for_test<R: rand_core::RngCore + rand_core::CryptoRng>(
+        rng: &mut R,
+        spend: &mut SpendPlan,
+        sender_address: &Address,
+        recipient_address: &Address,
+    ) {
+        let asset_id = spend.note.asset_id();
+
+        // Create IMT non-membership proof (unregulated asset)
+        let imt = IndexedMerkleTree::new();
+        let (position, indexed_leaf, auth_path) = imt
+            .non_membership_proof(asset_id.0)
+            .expect("can generate non-membership proof");
+        let asset_anchor = tct::StateCommitment(imt.root().0);
+        let asset_path = MerklePath::from_auth_path(auth_path);
+
+        // Create user tree proof
+        let user_leaf = ComplianceLeaf {
+            address: sender_address.clone(),
+            key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
+            asset_id,
+        };
+        let mut user_tree = QuadTree::new();
+        user_tree
+            .update(0, user_leaf.commit())
+            .expect("can update tree");
+        let compliance_anchor = tct::StateCommitment(user_tree.root().0);
+        let user_auth_path = user_tree.auth_path(0).expect("can get auth path");
+        let compliance_path = MerklePath::from_auth_path(user_auth_path);
+
+        // Counterparty leaf (also BLACK_HOLE for simplicity)
+        let counterparty_leaf = ComplianceLeaf {
+            address: recipient_address.clone(),
+            key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
+            asset_id,
+        };
+
+        spend
+            .set_compliance_details(
+                rng,
+                &AddressComplianceKey::new(*BLACK_HOLE_ACK),
+                sender_address,
+                false, // unregulated
+                recipient_address,
+                counterparty_leaf,
+            )
+            .expect("can set compliance details");
+
+        spend.asset_anchor = asset_anchor;
+        spend.asset_path = asset_path;
+        spend.asset_position = position;
+        spend.asset_indexed_leaf = indexed_leaf;
+        spend.compliance_anchor = compliance_anchor;
+        spend.compliance_path = compliance_path;
+        spend.compliance_position = 0;
+    }
+
+    /// Enrich an OutputPlan with valid compliance data for testing.
+    /// Uses unregulated (BLACK_HOLE) compliance for simplicity.
+    fn enrich_output_for_test<R: rand_core::RngCore + rand_core::CryptoRng>(
+        rng: &mut R,
+        output: &mut OutputPlan,
+        sender_address: &Address,
+        asset_id: asset::Id,
+    ) {
+        // Create IMT non-membership proof (unregulated asset)
+        let imt = IndexedMerkleTree::new();
+        let (position, indexed_leaf, auth_path) = imt
+            .non_membership_proof(asset_id.0)
+            .expect("can generate non-membership proof");
+        let asset_anchor = tct::StateCommitment(imt.root().0);
+        let asset_path = MerklePath::from_auth_path(auth_path);
+
+        // Create user tree proof for recipient
+        let user_leaf = ComplianceLeaf {
+            address: output.dest_address.clone(),
+            key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
+            asset_id,
+        };
+        let mut user_tree = QuadTree::new();
+        user_tree
+            .update(0, user_leaf.commit())
+            .expect("can update tree");
+        let compliance_anchor = tct::StateCommitment(user_tree.root().0);
+        let user_auth_path = user_tree.auth_path(0).expect("can get auth path");
+        let compliance_path = MerklePath::from_auth_path(user_auth_path);
+
+        // Counterparty leaf (sender, also BLACK_HOLE for simplicity)
+        let counterparty_leaf = ComplianceLeaf {
+            address: sender_address.clone(),
+            key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
+            asset_id,
+        };
+
+        output
+            .set_compliance_details(
+                rng,
+                &AddressComplianceKey::new(*BLACK_HOLE_ACK),
+                false, // unregulated
+                sender_address,
+                counterparty_leaf,
+                Fr::from(0u64), // tx_blinding_nonce
+            )
+            .expect("can set compliance details");
+
+        output.asset_anchor = asset_anchor;
+        output.asset_path = asset_path;
+        output.asset_position = position;
+        output.asset_indexed_leaf = indexed_leaf;
+        output.compliance_anchor = compliance_anchor;
+        output.compliance_path = compliance_path;
+        output.compliance_position = 0;
+    }
 
     #[tokio::test]
     async fn check_stateless_succeeds_on_valid_spend() -> Result<()> {
@@ -188,6 +310,30 @@ mod tests {
         let auth_path = sct.witness(note.commit()).unwrap();
         let auth_path2 = sct.witness(note2.commit()).unwrap();
 
+        // Create plans and enrich with compliance data
+        let mut spend1 = SpendPlan::new(&mut OsRng, note, auth_path.position());
+        let mut spend2 = SpendPlan::new(&mut OsRng, note2, auth_path2.position());
+        let mut output1 = OutputPlan::new(&mut OsRng, value, test_keys::ADDRESS_1.deref().clone());
+
+        enrich_spend_for_test(
+            &mut OsRng,
+            &mut spend1,
+            &test_keys::ADDRESS_0,
+            &test_keys::ADDRESS_1,
+        );
+        enrich_spend_for_test(
+            &mut OsRng,
+            &mut spend2,
+            &test_keys::ADDRESS_0,
+            &test_keys::ADDRESS_1,
+        );
+        enrich_output_for_test(
+            &mut OsRng,
+            &mut output1,
+            &test_keys::ADDRESS_0,
+            value.asset_id,
+        );
+
         // Add a single spend and output to the transaction plan such that the
         // transaction balances.
         let plan = TransactionPlan {
@@ -196,11 +342,7 @@ mod tests {
                 fee: Fee::default(),
                 chain_id: "".into(),
             },
-            actions: vec![
-                SpendPlan::new(&mut OsRng, note, auth_path.position()).into(),
-                SpendPlan::new(&mut OsRng, note2, auth_path2.position()).into(),
-                OutputPlan::new(&mut OsRng, value, test_keys::ADDRESS_1.deref().clone()).into(),
-            ],
+            actions: vec![spend1.into(), spend2.into(), output1.into()],
             detection_data: Some(DetectionDataPlan {
                 clue_plans: vec![CluePlan::new(
                     &mut OsRng,
@@ -258,6 +400,23 @@ mod tests {
         sct.insert(tct::Witness::Keep, note.commit()).unwrap();
         let auth_path = sct.witness(note.commit()).unwrap();
 
+        // Create plans and enrich with compliance data
+        let mut spend1 = SpendPlan::new(&mut OsRng, note, auth_path.position());
+        let mut output1 = OutputPlan::new(&mut OsRng, value, test_keys::ADDRESS_1.deref().clone());
+
+        enrich_spend_for_test(
+            &mut OsRng,
+            &mut spend1,
+            &test_keys::ADDRESS_0,
+            &test_keys::ADDRESS_1,
+        );
+        enrich_output_for_test(
+            &mut OsRng,
+            &mut output1,
+            &test_keys::ADDRESS_0,
+            value.asset_id,
+        );
+
         // Add a single spend and output to the transaction plan such that the
         // transaction balances.
         let plan = TransactionPlan {
@@ -266,10 +425,7 @@ mod tests {
                 fee: Fee::default(),
                 chain_id: "".into(),
             },
-            actions: vec![
-                SpendPlan::new(&mut OsRng, note, auth_path.position()).into(),
-                OutputPlan::new(&mut OsRng, value, test_keys::ADDRESS_1.deref().clone()).into(),
-            ],
+            actions: vec![spend1.into(), output1.into()],
             detection_data: None,
             memo: None,
         };

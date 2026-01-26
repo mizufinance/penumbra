@@ -2,10 +2,11 @@ use {
     anyhow::anyhow,
     common::ibc_tests::{MockRelayer, TestNodeWithIBC, ValidatorKeys},
     once_cell::sync::Lazy,
-    penumbra_sdk_asset::{asset::Cache, Value},
+    penumbra_sdk_asset::{asset::Cache, Value, STAKING_TOKEN_ASSET_ID},
     penumbra_sdk_ibc::IbcToken,
+    penumbra_sdk_keys::test_keys,
     penumbra_sdk_num::Amount,
-    std::time::Duration,
+    std::{ops::Deref, time::Duration},
     tap::Tap as _,
 };
 
@@ -79,14 +80,15 @@ async fn ics20_transfer_no_timeouts() -> anyhow::Result<()> {
     // TODO: some testing of failure cases of the handshake process would be good
     relayer.handshake().await?;
 
-    // Grab the note that will be spent during the transfer.
+    // Grab the staking token note that will be spent during the transfer.
     let chain_a_client = relayer.chain_a_ibc.client().await?;
     let chain_a_note = chain_a_client
         .notes
         .values()
+        .filter(|n| n.asset_id() == *STAKING_TOKEN_ASSET_ID)
         .cloned()
         .next()
-        .ok_or_else(|| anyhow!("mock client had no note"))?;
+        .ok_or_else(|| anyhow!("mock client had no staking token note"))?;
 
     // Get the balance of that asset on chain A
     let pretransfer_balance_a: Amount = chain_a_client
@@ -118,6 +120,17 @@ async fn ics20_transfer_no_timeouts() -> anyhow::Result<()> {
         amount: (chain_a_note.amount().value() / 2).into(),
         asset_id: chain_a_note.asset_id(),
     };
+
+    // Execute compliance setup on chain A before the transfer (which has Spend/Output actions).
+    // The transfer uses the staking token (penumbra) from ADDRESS_0.
+    // Register ADDRESS_0 for the staking token.
+    relayer
+        .chain_a_ibc
+        .execute_compliance_setup(
+            &[test_keys::ADDRESS_0.deref().clone()],
+            &[*STAKING_TOKEN_ASSET_ID],
+        )
+        .await?;
 
     // Tell the relayer to process the transfer.
     // TODO: currently this just transfers 50% of the first note

@@ -1,111 +1,109 @@
 # Key Hierarchy
 
-## Derivation Methods
+## Key Types
 
-Two derivation methods used in the hierarchy:
+| Key | Type | Derivation | Holder | Purpose |
+|-----|------|------------|--------|---------|
+| MK | Scalar | Random | Orbis ring | Master key |
+| UK | Scalar | Hash(MK, user_id) | Orbis | User key (per user) |
+| AK | Point | UK * B_d | Registry (public) | Address key (per address) |
+| DK | Point | AK + T * B_d | Public | Daily key (for encryption) |
+| dk | Scalar | UK + T | Orbis | Daily scalar (for decryption) |
 
-| Method | Formula | Properties |
-|--------|---------|------------|
-| **Hash** | `child = Hash(parent, input)` | One-way, deterministic. Child cannot recover parent. |
-| **Linear** | `child = parent + tweak` | Deterministic, parent can decrypt child's encryptions. **Not one-way** - child with known tweak can recover parent. |
-
-**Trade-off:** Linear derivation enables key delegation (parent decrypts child data) but breaks isolation (child can recover parent).
-
----
-
-## Current Design (Demo)
-
-### Orbis Key Hierarchy
-
-Four-level key hierarchy with Orbis managing upper levels:
+## Derivation Tree
 
 ```
-Asset Master Key (AMK) - Orbis only, SECRET
-       │
-       ▼ Hash(AMK, user_id), one-way
-   User Key (UK) - Orbis only, SECRET
-       │
-       ▼ UK + secret_value - linear (one-way from child's perspective)
-  Address Key (AK) - given to user wallet
-       │
-       ▼ AK + T_date + T_type - linear
-  Daily Type Keys (sk_det, sk_core, sk_ext)
+MK (Orbis ring, scalar)
+ │
+ └── UK = Hash(MK, user_id)     [Orbis only, scalar]
+      │
+      ├── AK = UK * B_d          [Registry, public point]
+      │    │
+      │    └── DK = AK + T * B_d [Public point, for encryption]
+      │
+      └── dk = UK + T            [Orbis only, scalar, for decryption]
 ```
 
-### Key Types
+Where `T = Hash(key_type_domain, date)` is a public tweak.
 
-| Level | Name | Private (Fr) | Public (Element) | Held By |
-|-------|------|--------------|------------------|---------|
-| Master | AMK | Random, per asset | - | Orbis |
-| User | UK | `Hash(AMK, user_id)` | - | Orbis |
-| Address | AK / ACK | `UK + secret_value` | `AK * B_d` | Wallet / Registry |
-| Daily | sk_type | `AK + T_date + T_type` | `ACK + T * B_d` | Derived as needed |
+## Encryption Flow (Client)
 
-Daily keys have 3 variants (detection, core, extension) using different domain separators.
+Client knows: AK (from registry), T (public), B_d (from address)
 
-### Mathematical Properties
-
-**Daily Public Key** (used by sender to encrypt):
 ```
-PK_day_type = ACK + (T_date + T_type) * B_d
-            = (AK * B_d) + ((T_date + T_type) * B_d)
-            = (AK + T_date + T_type) * B_d
-            = sk_type * B_d
+1. Derive daily public key:  DK = AK + T * B_d
+2. Generate ephemeral:       r (random scalar)
+3. Compute EPK:              EPK = r * B_d
+4. Compute shared secret:    S = r * DK
+5. Encrypt with S
 ```
 
-**Hierarchy Security**:
-- AMK → UK: PRF (one-way), UK cannot reveal AMK
-- UK → AK: Linear with secret, AK cannot reveal UK (secret unknown to user)
-- AK → Daily: Linear with public tweaks, daily keys can derive AK
+## Decryption Flow (Orbis)
 
-### Key Type Domains
+Orbis knows: UK (secret)
 
-Three key types for tiered access:
+```
+1. Derive daily scalar:      dk = UK + T
+2. Compute shared secret:    S = dk * EPK
+3. Decrypt with S
+```
+
+## Math Equivalence
+
+```
+DK = AK + T * B_d
+   = UK * B_d + T * B_d
+   = (UK + T) * B_d
+
+Sender:  S = r * DK = r * (UK + T) * B_d
+Orbis:   S = dk * EPK = (UK + T) * r * B_d
+```
+
+Both equal `r * (UK + T) * B_d` ✓
+
+## Key Type Domains
+
+Three separate key types with different domain separators:
 
 | Type | Domain | Encrypts |
 |------|--------|----------|
-| Detection | `"detection"` | asset_id only |
-| Core | `"core"` | amount + self address |
-| Extension | `"extension"` | counterparty address |
+| Detection | `Hash("detection", date)` | Asset ID |
+| Core | `Hash("core", date)` | Amount + self address |
+| Extension | `Hash("extension", date)` | Counterparty address |
 
-### Source Files
+Each produces a different tweak T, resulting in different DK values.
+
+## Multi-Address Support
+
+Single UK decrypts all addresses for that user:
+- Different addresses have different B_d (from diversifier)
+- `AK1 = UK * B_d1`, `AK2 = UK * B_d2`
+- Orbis uses same dk: `S = dk * EPK` works for any address
+
+## Access Tiers
+
+| Tier | Keys Shared | Access |
+|------|-------------|--------|
+| Detection | dk_det | Asset ID only |
+| Core | dk_det + dk_core | + Amount, self address |
+| Full | All dk | + Counterparty address |
+
+## Security
+
+- **UK never shared**: Only Orbis holds UK
+- **AK is public**: Stored in registry, anyone can derive DK
+- **Tree isolation** (future): Detection keys may be derived from a separate UK or MK tree to isolate detection from encryption. This doesn't change the math, only which UK is used for detection vs core/extension.
+
+### Detection Key Scope Issue
+
+Sharing a daily detection scalar (dk_det) currently allows detection of ALL transactions for that user on that day, not just a specific asset. This is because dk_det works across all addresses.
+
+**Mitigation options:**
+1. Rethink detection key design
+2. We get a detection key per asset. Orbis does reencryption on all flagged tx, most of the reencrypted tx will be noise because there are not of the specific user.
+3. Accept full user detection scope - issuer gets dk_det for their registered users only
+
+## Source Files
 
 - Key definitions: `crates/core/keys/src/keys/cvk.rs`
-- Tests: cvk.rs lines 360-616
-
----
-
-## Security Limitations (Demo)
-
-### Linear Derivation
-
-The AK → Daily derivation uses **linear (additive)** operations:
-
-```
-sk_type = AK + T_date + T_type
-```
-
-**Issue:** Given any daily type key and known tweaks:
-- Attacker recovers: `AK = sk_det - T_date - T_detection`
-- Then derives all other type keys for any date
-
-
-### Problem
-
-If detection keys are shared for user-side scanning, linear derivation allows recovery of all key types.
-
-### Solution
-
-**Future:** Dual master key architecture - separate detection tree from data encryption tree.
-
----
-
-## Future Work
-
-| Item | Current | Future |
-|------|---------|--------|
-| Detection key isolation | Linear derivation exposes all keys | Separate key trees for detection vs data |
-| Per-address registration | Single ACK per user | Each address key individually generated by Orbis |
-| Daily key structure | Daily master key + 3 type keys | Evaluate if daily master needed vs just 3 type keys |
-
-This is the easy solution, however will will evaluate other ways to have our detection key, mainly to maybe allow hints or helper for faster scanning.
+- POC: `crates/bench/tests/hierarchical_keys_poc.rs`

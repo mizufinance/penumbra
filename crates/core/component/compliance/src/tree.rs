@@ -1,3 +1,4 @@
+use anyhow::{bail, Result};
 use decaf377::Fq;
 use once_cell::sync::Lazy;
 use penumbra_sdk_tct::StateCommitment;
@@ -107,11 +108,29 @@ impl QuadTree {
     }
 
     /// Create a new Quad Merkle Tree with a custom depth.
+    ///
+    /// # Panics
+    /// Panics if depth > DEFAULT_DEPTH (16), as this would exceed precomputed zero hashes
+    /// and cause overflow in shift operations (depth * 2 must be < 64).
     pub fn with_depth(depth: u8) -> Self {
+        assert!(
+            depth <= DEFAULT_DEPTH,
+            "depth {} exceeds maximum of {}",
+            depth,
+            DEFAULT_DEPTH
+        );
         Self {
             depth,
             nodes: BTreeMap::new(),
         }
+    }
+
+    /// Compute max leaves safely, avoiding overflow in shift operations.
+    /// Requires depth <= 31 (which is guaranteed by with_depth validation).
+    #[inline]
+    fn max_leaves_for_depth(depth: u8) -> u64 {
+        debug_assert!(depth <= 31, "depth must be <= 31 to avoid shift overflow");
+        1u64 << ((depth as u32) * 2)
     }
 
     /// Compute the storage key for a node at a given level and position.
@@ -160,13 +179,18 @@ impl QuadTree {
     /// # Arguments
     /// * `position` - The leaf position (index) to update
     /// * `leaf_hash` - The new hash value for the leaf
-    pub fn update(&mut self, position: u64, leaf_hash: StateCommitment) {
+    ///
+    /// # Errors
+    /// Returns an error if the position exceeds the maximum leaves for the tree depth.
+    pub fn update(&mut self, position: u64, leaf_hash: StateCommitment) -> Result<()> {
         // Check that position is valid for this tree depth
-        let max_leaves = 1u64 << (self.depth * 2); // 4^depth = 2^(2*depth)
+        let max_leaves = Self::max_leaves_for_depth(self.depth);
         if position >= max_leaves {
-            panic!(
+            bail!(
                 "Position {} exceeds maximum leaves {} for depth {}",
-                position, max_leaves, self.depth
+                position,
+                max_leaves,
+                self.depth
             );
         }
 
@@ -198,6 +222,8 @@ impl QuadTree {
             // Move up to the next level
             current_position = parent_position;
         }
+
+        Ok(())
     }
 
     /// Get the root hash of the tree.
@@ -217,12 +243,17 @@ impl QuadTree {
     /// - If path is child 1: siblings are [0, 2, 3]
     /// - If path is child 2: siblings are [0, 1, 3]
     /// - If path is child 3: siblings are [0, 1, 2]
-    pub fn auth_path(&self, position: u64) -> Vec<[StateCommitment; 3]> {
-        let max_leaves = 1u64 << (self.depth * 2);
+    ///
+    /// # Errors
+    /// Returns an error if the position exceeds the maximum leaves for the tree depth.
+    pub fn auth_path(&self, position: u64) -> Result<Vec<[StateCommitment; 3]>> {
+        let max_leaves = Self::max_leaves_for_depth(self.depth);
         if position >= max_leaves {
-            panic!(
+            bail!(
                 "Position {} exceeds maximum leaves {} for depth {}",
-                position, max_leaves, self.depth
+                position,
+                max_leaves,
+                self.depth
             );
         }
 
@@ -259,7 +290,7 @@ impl QuadTree {
             current_position /= 4;
         }
 
-        path
+        Ok(path)
     }
 
     /// Get the depth of the tree.
@@ -357,7 +388,7 @@ mod tests {
 
         // Update a leaf
         let leaf_hash = StateCommitment(Fq::from(42u64));
-        tree.update(0, leaf_hash);
+        tree.update(0, leaf_hash).unwrap();
 
         // Root should have changed
         let new_root = tree.root();
@@ -368,9 +399,9 @@ mod tests {
     fn test_auth_path_length() {
         let mut tree = QuadTree::new();
         let leaf_hash = StateCommitment(Fq::from(123u64));
-        tree.update(5, leaf_hash);
+        tree.update(5, leaf_hash).unwrap();
 
-        let path = tree.auth_path(5);
+        let path = tree.auth_path(5).unwrap();
         assert_eq!(path.len(), DEFAULT_DEPTH as usize);
     }
 
@@ -380,9 +411,9 @@ mod tests {
         let leaf_hash = StateCommitment(Fq::from(999u64));
         let position = 7u64;
 
-        tree.update(position, leaf_hash);
+        tree.update(position, leaf_hash).unwrap();
         let root = tree.root();
-        let path = tree.auth_path(position);
+        let path = tree.auth_path(position).unwrap();
 
         // Verification should succeed
         assert!(QuadTree::verify_auth_path(
@@ -409,17 +440,17 @@ mod tests {
         let mut tree = QuadTree::new();
 
         // Update multiple leaves
-        tree.update(0, StateCommitment(Fq::from(1u64)));
-        tree.update(1, StateCommitment(Fq::from(2u64)));
-        tree.update(2, StateCommitment(Fq::from(3u64)));
-        tree.update(3, StateCommitment(Fq::from(4u64)));
+        tree.update(0, StateCommitment(Fq::from(1u64))).unwrap();
+        tree.update(1, StateCommitment(Fq::from(2u64))).unwrap();
+        tree.update(2, StateCommitment(Fq::from(3u64))).unwrap();
+        tree.update(3, StateCommitment(Fq::from(4u64))).unwrap();
 
         let root = tree.root();
 
         // Verify each path
         for pos in 0..4u64 {
             let leaf = StateCommitment(Fq::from((pos + 1) as u64));
-            let path = tree.auth_path(pos);
+            let path = tree.auth_path(pos).unwrap();
             assert!(QuadTree::verify_auth_path(
                 pos,
                 leaf,
@@ -438,7 +469,7 @@ mod tests {
         assert_eq!(tree.num_stored_nodes(), 0);
 
         // Update one leaf
-        tree.update(0, StateCommitment(Fq::from(1u64)));
+        tree.update(0, StateCommitment(Fq::from(1u64))).unwrap();
 
         // Should have stored nodes only on the path from leaf to root
         // For depth 16, that's 17 nodes (leaf + 16 internal levels)
@@ -448,8 +479,8 @@ mod tests {
     #[test]
     fn test_serialization() {
         let mut tree = QuadTree::new();
-        tree.update(0, StateCommitment(Fq::from(1u64)));
-        tree.update(10, StateCommitment(Fq::from(2u64)));
+        tree.update(0, StateCommitment(Fq::from(1u64))).unwrap();
+        tree.update(10, StateCommitment(Fq::from(2u64))).unwrap();
 
         // Serialize
         let serialized = serde_json::to_string(&tree).expect("serialization failed");
@@ -461,5 +492,19 @@ mod tests {
         // Should have same root
         assert_eq!(tree.root().0, deserialized.root().0);
         assert_eq!(tree.num_stored_nodes(), deserialized.num_stored_nodes());
+    }
+
+    #[test]
+    fn test_update_invalid_position_returns_error() {
+        let mut tree = QuadTree::with_depth(2); // 4^2 = 16 max leaves
+        let result = tree.update(16, StateCommitment(Fq::from(1u64)));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_auth_path_invalid_position_returns_error() {
+        let tree = QuadTree::with_depth(2); // 4^2 = 16 max leaves
+        let result = tree.auth_path(16);
+        assert!(result.is_err());
     }
 }

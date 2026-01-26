@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use cnidarium::StateWrite;
+use penumbra_sdk_compliance::{ComplianceRegistryRead, ComplianceRegistryWrite};
 #[cfg(feature = "component")]
 use penumbra_sdk_dex::component::SwapDataRead;
 use penumbra_sdk_fee::component::StateReadExt as _;
@@ -127,6 +128,14 @@ trait Inner: StateWrite {
             .expect("epoch is always set")
             .index;
 
+        // Fetch compliance anchors (current tree roots)
+        let compliance_user_anchor = self.get_user_tree_root().await.ok();
+        let compliance_asset_anchor = self.get_asset_imt_root().await.ok();
+
+        // Drain pending compliance registrations buffered during TX execution
+        let compliance_user_registrations = self.pending_user_registrations();
+        let compliance_asset_registrations = self.pending_asset_registrations();
+
         let compact_block = CompactBlock {
             height,
             state_payloads,
@@ -140,6 +149,10 @@ trait Inner: StateWrite {
             gas_prices,
             alt_gas_prices,
             epoch_index,
+            compliance_user_anchor,
+            compliance_asset_anchor,
+            compliance_user_registrations,
+            compliance_asset_registrations,
         };
 
         self.nonverifiable_put_raw(

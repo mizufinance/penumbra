@@ -88,27 +88,14 @@ impl ActionHandler for Spend {
             ));
         }
 
-        // 2. Enforce Compliance: Validate anchors match chain state.
+        // 2. Enforce Compliance: Validate anchors are valid historical anchors.
         // The proof was already verified in check_stateless using the anchors from body.
-        // Here we validate that those anchors are valid (i.e., they match or are ancestors of current state).
-        let chain_compliance_anchor = state.get_user_tree_root().await?;
-        let chain_asset_anchor = state.get_asset_tree_root().await?;
-
-        // For now, require exact match. In the future, we could allow historical anchors.
-        if self.body.compliance_anchor != chain_compliance_anchor {
-            return Err(anyhow!(
-                "spend compliance_anchor {:?} does not match chain state {:?}",
-                self.body.compliance_anchor,
-                chain_compliance_anchor
-            ));
-        }
-        if self.body.asset_anchor != chain_asset_anchor {
-            return Err(anyhow!(
-                "spend asset_anchor {:?} does not match chain state {:?}",
-                self.body.asset_anchor,
-                chain_asset_anchor
-            ));
-        }
+        // Here we validate that those anchors exist in the historical anchor records.
+        // This allows proofs to be generated at any past block height (similar to SCT).
+        state
+            .validate_compliance_anchors(&self.body.compliance_anchor, &self.body.asset_anchor)
+            .await
+            .context("invalid compliance anchors")?;
 
         // TODO: Transaction-level validation of blinded leaf hashes
         // After all spend and output proofs are verified individually, the transaction validator

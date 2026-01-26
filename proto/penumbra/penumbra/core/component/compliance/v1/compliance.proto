@@ -65,6 +65,10 @@ service QueryService {
   // Query the Merkle proofs needed for compliance ZK proofs.
   // Returns paths and positions for both user and asset trees.
   rpc ComplianceMerkleProofs(ComplianceMerkleProofsRequest) returns (ComplianceMerkleProofsResponse);
+  // Batch query for multiple (address, asset) pairs.
+  // Returns all proofs in a single call, including anchors.
+  // Use this for multi-spend transactions to avoid multiple round trips.
+  rpc ComplianceBatchMerkleProofs(ComplianceBatchMerkleProofsRequest) returns (ComplianceBatchMerkleProofsResponse);
   // Query a user's registered compliance leaf.
   // Returns the full leaf (including ACK) that was registered on-chain.
   rpc ComplianceUserLeaf(ComplianceUserLeafRequest) returns (ComplianceUserLeafResponse);
@@ -137,6 +141,10 @@ message ComplianceMerkleProofsResponse {
   bytes compliance_anchor = 8;
   // Current asset tree root (StateCommitment, 32 bytes).
   bytes asset_anchor = 9;
+
+  // The indexed leaf data for asset IMT proof verification.
+  // Contains (value, next_index, next_value) needed for membership/non-membership proofs.
+  IndexedLeafData asset_indexed_leaf = 10;
 }
 
 // Request for querying a user's registered compliance leaf.
@@ -153,4 +161,76 @@ message ComplianceUserLeafResponse {
   bool is_registered = 1;
   // The user's compliance leaf (only present if is_registered is true).
   ComplianceLeaf leaf = 2;
+}
+
+// A single query in a batch request.
+message ComplianceBatchQuery {
+  // The address to look up.
+  keys.v1.Address address = 1;
+  // The asset ID to look up.
+  asset.v1.AssetId asset_id = 2;
+}
+
+// Request for batch querying multiple (address, asset) pairs.
+// Use this for multi-spend/multi-output transactions to fetch all proofs in one call.
+message ComplianceBatchMerkleProofsRequest {
+  // The queries to execute. Each query is an (address, asset_id) pair.
+  repeated ComplianceBatchQuery queries = 1;
+}
+
+// Response containing batch Merkle proofs and anchors.
+// Anchors are returned once (they're the same for all queries).
+// Results are returned in the same order as the queries.
+message ComplianceBatchMerkleProofsResponse {
+  // Current compliance tree root (StateCommitment, 32 bytes).
+  bytes compliance_anchor = 1;
+  // Current asset tree root (StateCommitment, 32 bytes).
+  bytes asset_anchor = 2;
+  // Results for each query, in the same order as the request.
+  repeated ComplianceMerkleProofsResponse results = 3;
+}
+
+// Events
+
+// Data for an indexed leaf in the asset IMT (for client sync).
+message IndexedLeafData {
+  bytes value = 1;
+  uint64 next_index = 2;
+  bytes next_value = 3;
+}
+
+// Emitted when a user is registered in the compliance tree.
+message EventUserRegistered {
+  // The position in the user compliance tree.
+  uint64 position = 1;
+  // The commitment of the compliance leaf.
+  bytes commitment = 2;
+  // Full leaf data for client sync.
+  ComplianceLeaf leaf = 3;
+}
+
+// Emitted when an asset is registered in the compliance system.
+message EventAssetRegistered {
+  // The asset ID that was registered.
+  asset.v1.AssetId asset_id = 1;
+  // Whether the asset is regulated (requires compliance).
+  bool is_regulated = 2;
+  // The position in the asset tree (for regulated assets).
+  uint64 position = 3;
+  // The indexed leaf data (for client sync).
+  IndexedLeafData indexed_leaf = 4;
+  // The low leaf that was updated during IMT insertion.
+  uint64 low_leaf_position = 5;
+  // The updated low leaf data.
+  IndexedLeafData updated_low_leaf = 6;
+}
+
+// Emitted at end of block with the current compliance tree roots.
+message EventComplianceAnchor {
+  // The block height.
+  uint64 height = 1;
+  // The user tree root (StateCommitment, 32 bytes).
+  bytes user_anchor = 2;
+  // The asset tree root (StateCommitment, 32 bytes).
+  bytes asset_anchor = 3;
 }

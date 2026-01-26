@@ -11,11 +11,12 @@ export PENUMBRA_NODE_PD_URL
 ALICE_HOME=/tmp/alice-wallet
 BOB_HOME=/tmp/bob-wallet
 OSCAR_HOME=/tmp/oscar-wallet
+UNREGISTERED_HOME=/tmp/unregistered-wallet
 
 echo "=== Compliance Setup ==="
 
 # Cleanup
-rm -rf ~/.penumbra/network_data "$ALICE_HOME" "$BOB_HOME" "$OSCAR_HOME"
+rm -rf ~/.penumbra/network_data "$ALICE_HOME" "$BOB_HOME" "$OSCAR_HOME" "$UNREGISTERED_HOME"
 
 [ ! -f "$PCLI" ] && echo "ERROR: pcli not found" && exit 1
 [ ! -f "$PD" ] && echo "ERROR: pd not found" && exit 1
@@ -49,17 +50,21 @@ read -r
 # Init other wallets
 $PCLI --home "$BOB_HOME" init soft-kms generate
 $PCLI --home "$OSCAR_HOME" init soft-kms generate
+$PCLI --home "$UNREGISTERED_HOME" init soft-kms generate
 
 # Sync
 $PCLI --home "$ALICE_HOME" view sync
 $PCLI --home "$BOB_HOME" view sync
 $PCLI --home "$OSCAR_HOME" view sync
+$PCLI --home "$UNREGISTERED_HOME" view sync
 
 BOB_ADDRESS=$($PCLI --home "$BOB_HOME" view address 0)
 OSCAR_ADDRESS=$($PCLI --home "$OSCAR_HOME" view address 0)
+UNREGISTERED_ADDRESS=$($PCLI --home "$UNREGISTERED_HOME" view address 0)
 
 echo "Bob: $BOB_ADDRESS"
 echo "Oscar: $OSCAR_ADDRESS"
+echo "Unregistered: $UNREGISTERED_ADDRESS"
 
 # Register assets
 echo "=== Registering Assets ==="
@@ -87,14 +92,28 @@ echo "Alice MCK: ${ALICE_MCK:0:16}..."
 echo "Bob MCK: ${BOB_MCK:0:16}..."
 echo "Oscar MCK: ${OSCAR_MCK:0:16}..."
 
+# Final sync to ensure local compliance trees are updated
+echo ""
+echo "=== Syncing Local Compliance Trees ==="
+$PCLI --home "$ALICE_HOME" view sync
+$PCLI --home "$BOB_HOME" view sync
+$PCLI --home "$OSCAR_HOME" view sync
+$PCLI --home "$UNREGISTERED_HOME" view sync
+
+echo "Local compliance trees synced via CompactBlock events."
+echo "  - User tree: 3 registrations (Alice, Bob, Oscar for regulated_usd)"
+echo "  - Asset tree: 1 regulated asset (regulated_usd)"
+
 # Save env
 cat > /tmp/compliance-demo.env << EOF
 export ALICE_HOME="$ALICE_HOME"
 export BOB_HOME="$BOB_HOME"
 export OSCAR_HOME="$OSCAR_HOME"
+export UNREGISTERED_HOME="$UNREGISTERED_HOME"
 export ALICE_ADDRESS="$ALICE_ADDRESS"
 export BOB_ADDRESS="$BOB_ADDRESS"
 export OSCAR_ADDRESS="$OSCAR_ADDRESS"
+export UNREGISTERED_ADDRESS="$UNREGISTERED_ADDRESS"
 export ALICE_MCK="$ALICE_MCK"
 export BOB_MCK="$BOB_MCK"
 export OSCAR_MCK="$OSCAR_MCK"
@@ -105,4 +124,19 @@ EOF
 echo ""
 echo "=== Setup Complete ==="
 echo "Env: /tmp/compliance-demo.env"
-echo "regulated_usd=REGULATED, penumbra=UNREGULATED, test_usd=UNREGULATED"
+echo ""
+echo "Asset status:"
+echo "  - regulated_usd: REGULATED (in asset IMT)"
+echo "  - penumbra: UNREGULATED (not in IMT)"
+echo "  - test_usd: UNREGULATED (not in IMT)"
+echo ""
+echo "User registrations (for regulated_usd):"
+echo "  - Alice: registered"
+echo "  - Bob: registered"
+echo "  - Oscar: registered"
+echo "  - Unregistered: NOT registered (no regulated_usd)"
+echo ""
+echo "Next steps:"
+echo "  - compliance-test-regulated.sh: Test regulated asset transfers with scanning and local sync"
+echo "  - compliance-test-unregulated.sh: Test unregulated assets (BLACK_HOLE encryption)"
+echo "  - compliance-test-unregistered.sh: Test that registered users cannot send regulated assets TO unregistered addresses"

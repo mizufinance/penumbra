@@ -62,7 +62,11 @@ use penumbra_sdk_transaction::{
     AuthorizationData, Transaction, TransactionPerspective, TransactionPlan, WitnessData,
 };
 
-use crate::{worker::Worker, Planner, SpendableNoteRecord, Storage};
+use crate::{
+    compliance_tree::{ComplianceAssetTree, ComplianceUserTree},
+    worker::Worker,
+    Planner, SpendableNoteRecord, Storage,
+};
 
 /// A [`futures::Stream`] of broadcast transaction responses.
 ///
@@ -91,6 +95,10 @@ pub struct ViewServer {
     node: Url,
     /// Used to watch for changes to the sync height.
     sync_height_rx: watch::Receiver<u64>,
+    /// A copy of the compliance user tree used by the worker task.
+    compliance_user_tree: Arc<RwLock<ComplianceUserTree>>,
+    /// A copy of the compliance asset tree used by the worker task.
+    compliance_asset_tree: Arc<RwLock<ComplianceAssetTree>>,
 }
 
 impl ViewServer {
@@ -127,12 +135,18 @@ impl ViewServer {
         let span = tracing::error_span!(parent: None, "view");
         let channel = Self::get_pd_channel(node.clone()).await?;
 
-        let (worker, state_commitment_tree, error_slot, sync_height_rx) =
-            Worker::new(storage.clone(), channel)
-                .instrument(span.clone())
-                .tap(|_| tracing::trace!("constructing view server worker"))
-                .await?
-                .tap(|_| tracing::debug!("constructed view server worker"));
+        let (
+            worker,
+            state_commitment_tree,
+            error_slot,
+            sync_height_rx,
+            compliance_user_tree,
+            compliance_asset_tree,
+        ) = Worker::new(storage.clone(), channel)
+            .instrument(span.clone())
+            .tap(|_| tracing::trace!("constructing view server worker"))
+            .await?
+            .tap(|_| tracing::debug!("constructed view server worker"));
 
         tokio::spawn(worker.run().instrument(span))
             .tap(|_| tracing::debug!("spawned view server worker"));
@@ -143,6 +157,8 @@ impl ViewServer {
             sync_height_rx,
             state_commitment_tree,
             node,
+            compliance_user_tree,
+            compliance_asset_tree,
         })
     }
 
@@ -192,6 +208,27 @@ impl ViewServer {
         // (if the worker is to crash without setting the error_slot, the service should die as well)
 
         Ok(()).tap(|_| tracing::trace!("view server worker is healthy"))
+    }
+
+    /// Get a reference to the local compliance user tree.
+    ///
+    /// This tree is synced from the chain and can be used for local proof generation.
+    pub fn compliance_user_tree(&self) -> &Arc<RwLock<ComplianceUserTree>> {
+        &self.compliance_user_tree
+    }
+
+    /// Get a reference to the local compliance asset tree.
+    ///
+    /// This tree is synced from the chain and can be used for local proof generation.
+    pub fn compliance_asset_tree(&self) -> &Arc<RwLock<ComplianceAssetTree>> {
+        &self.compliance_asset_tree
+    }
+
+    /// Get a reference to the storage.
+    ///
+    /// This is useful for getting leaf data for local compliance proof generation.
+    pub fn storage(&self) -> &Storage {
+        &self.storage
     }
 
     #[instrument(skip(self, transaction), fields(id = %transaction.id()))]
@@ -1655,6 +1692,9 @@ impl ViewService for ViewServer {
                 tonic::Status::failed_precondition("Error retrieving full viewing key")
             })?;
 
+        // Extract destination addresses before building (for counterparty tracking)
+        let dest_addresses = transaction_plan.dest_addresses();
+
         let transaction = Some(
             transaction_plan
                 // TODO: calling `.build` should provide some mechanism to get progress
@@ -1665,6 +1705,24 @@ impl ViewService for ViewServer {
                 })?
                 .into(),
         );
+
+        // Track counterparties after successful build
+        // This enables offline compliance lookups for future transactions to these addresses
+        for address in dest_addresses {
+            // Skip self-sends (change outputs back to our own addresses)
+            if fvk.incoming().views_address(&address) {
+                continue;
+            }
+            // Record the counterparty (height 0 = pending, will be updated when TX is confirmed)
+            if let Err(e) = self.storage.record_counterparty(&address, 0).await {
+                tracing::warn!(?address, ?e, "failed to record counterparty");
+            } else {
+                tracing::debug!(
+                    ?address,
+                    "recorded counterparty for future offline compliance"
+                );
+            }
+        }
 
         let stream = try_stream! {
             yield pb::WitnessAndBuildResponse {
@@ -1961,37 +2019,28 @@ impl ViewService for ViewServer {
         &self,
         request: tonic::Request<pb::ComplianceAssetStatusRequest>,
     ) -> Result<tonic::Response<pb::ComplianceAssetStatusResponse>, tonic::Status> {
-        use penumbra_sdk_proto::core::component::compliance::v1::{
-            query_service_client::QueryServiceClient as ComplianceQueryServiceClient,
-            ComplianceAssetStatusRequest as ComplianceRequest,
-        };
-
-        let asset_id = request
+        let asset_id_proto = request
             .into_inner()
             .asset_id
             .ok_or_else(|| tonic::Status::invalid_argument("missing asset_id"))?;
 
-        // Connect to pd's compliance service
-        let mut client = ComplianceQueryServiceClient::connect(self.node.to_string())
-            .await
-            .map_err(|e| {
-                tonic::Status::unavailable(format!("compliance service unavailable: {e}"))
-            })?;
+        // Parse asset_id to check against local tree
+        let asset_id: penumbra_sdk_asset::asset::Id = asset_id_proto
+            .clone()
+            .try_into()
+            .map_err(|e| tonic::Status::invalid_argument(format!("invalid asset_id: {e}")))?;
 
-        // Query the compliance service
-        let request = ComplianceRequest {
-            asset_id: Some(asset_id.clone()),
-        };
-        let response = client
-            .compliance_asset_status(tonic::Request::new(request))
-            .await?
-            .into_inner();
+        // Use local asset tree to check regulation status
+        let asset_tree = self.compliance_asset_tree.read().await;
+        let is_regulated = asset_tree.contains(asset_id.0);
 
-        // Return as ViewService response
+        tracing::debug!(?asset_id, is_regulated, "using local tree for asset status");
+
+        // With IMT, we can always answer the query (regulated = membership, unregulated = non-membership)
         Ok(tonic::Response::new(pb::ComplianceAssetStatusResponse {
-            asset_id: Some(asset_id),
-            is_registered: response.is_registered,
-            is_regulated: response.is_regulated,
+            asset_id: Some(asset_id_proto),
+            is_registered: true,
+            is_regulated,
         }))
     }
 
@@ -2000,29 +2049,19 @@ impl ViewService for ViewServer {
         &self,
         _request: tonic::Request<pb::ComplianceAnchorsRequest>,
     ) -> Result<tonic::Response<pb::ComplianceAnchorsResponse>, tonic::Status> {
-        use penumbra_sdk_proto::core::component::compliance::v1::{
-            query_service_client::QueryServiceClient as ComplianceQueryServiceClient,
-            ComplianceAnchorsRequest as ComplianceRequest,
-        };
+        // Use local tree roots
+        let user_root = self.compliance_user_tree.read().await.root();
+        let asset_root = self.compliance_asset_tree.read().await.root();
 
-        // Connect to pd's compliance service
-        let mut client = ComplianceQueryServiceClient::connect(self.node.to_string())
-            .await
-            .map_err(|e| {
-                tonic::Status::unavailable(format!("compliance service unavailable: {e}"))
-            })?;
+        tracing::debug!(
+            ?user_root,
+            ?asset_root,
+            "using local tree roots for anchors"
+        );
 
-        // Query the compliance service for anchors
-        let request = ComplianceRequest {};
-        let response = client
-            .compliance_anchors(tonic::Request::new(request))
-            .await?
-            .into_inner();
-
-        // Return as ViewService response
         Ok(tonic::Response::new(pb::ComplianceAnchorsResponse {
-            user_tree_root: response.user_tree_root,
-            asset_tree_root: response.asset_tree_root,
+            user_tree_root: user_root.0.to_bytes().to_vec(),
+            asset_tree_root: asset_root.0.to_bytes().to_vec(),
         }))
     }
 
@@ -2031,62 +2070,163 @@ impl ViewService for ViewServer {
         &self,
         request: tonic::Request<pb::ComplianceMerkleProofsRequest>,
     ) -> Result<tonic::Response<pb::ComplianceMerkleProofsResponse>, tonic::Status> {
-        use penumbra_sdk_proto::core::component::compliance::v1::{
-            query_service_client::QueryServiceClient as ComplianceQueryServiceClient,
-            ComplianceMerkleProofsRequest as ComplianceRequest,
-        };
-
         let request_inner = request.into_inner();
 
-        // Connect to pd's compliance service
-        let mut client = ComplianceQueryServiceClient::connect(self.node.to_string())
+        // Parse address and asset_id
+        let address: penumbra_sdk_keys::Address = request_inner
+            .address
+            .clone()
+            .ok_or_else(|| tonic::Status::invalid_argument("missing address"))?
+            .try_into()
+            .map_err(|e| tonic::Status::invalid_argument(format!("invalid address: {e}")))?;
+
+        let asset_id: penumbra_sdk_asset::asset::Id = request_inner
+            .asset_id
+            .clone()
+            .ok_or_else(|| tonic::Status::invalid_argument("missing asset_id"))?
+            .try_into()
+            .map_err(|e| tonic::Status::invalid_argument(format!("invalid asset_id: {e}")))?;
+
+        // Get asset proof from local tree (always available)
+        let asset_tree = self.compliance_asset_tree.read().await;
+        let (asset_position, indexed_leaf, asset_path, is_regulated) = asset_tree
+            .get_proof_data(asset_id)
+            .map_err(|e| tonic::Status::internal(format!("failed to get asset proof: {e}")))?;
+        let asset_anchor = asset_tree.root();
+        drop(asset_tree);
+
+        // Get user proof - try local storage first, fall back to gRPC
+        let user_anchor = self.compliance_user_tree.read().await.root();
+
+        // Try to get leaf data from local storage
+        let local_leaf_data = self
+            .storage
+            .get_compliance_leaf_data(&address, &asset_id)
             .await
-            .map_err(|e| {
-                tonic::Status::unavailable(format!("compliance service unavailable: {e}"))
-            })?;
+            .map_err(|e| tonic::Status::internal(format!("storage error: {e}")))?;
 
-        // Query the compliance service for Merkle proofs
-        let compliance_request = ComplianceRequest {
-            address: request_inner.address.clone(),
-            asset_id: request_inner.asset_id.clone(),
+        let (user_registered, compliance_position, compliance_path) = match local_leaf_data {
+            Some((position, _ack_bytes, _commitment)) => {
+                // Local storage hit - compute path from local tree
+                let user_tree = self.compliance_user_tree.read().await;
+                let path = user_tree
+                    .witness(position)
+                    .map_err(|e| tonic::Status::internal(format!("failed to compute path: {e}")))?;
+                tracing::debug!(
+                    ?address,
+                    ?asset_id,
+                    position,
+                    "using local storage for user proof"
+                );
+                (true, position, path)
+            }
+            None => {
+                // Local storage miss - fall back to gRPC for leaf data
+                tracing::debug!(?address, ?asset_id, "local storage miss, fetching from pd");
+
+                use penumbra_sdk_proto::core::component::compliance::v1::{
+                    query_service_client::QueryServiceClient as ComplianceQueryServiceClient,
+                    ComplianceUserLeafRequest,
+                };
+
+                let endpoint = get_pd_endpoint(self.node.clone()).await.map_err(|e| {
+                    tonic::Status::internal(format!("failed to connect to pd: {e}"))
+                })?;
+                let channel = endpoint.connect().await.map_err(|e| {
+                    tonic::Status::internal(format!("failed to connect to pd: {e}"))
+                })?;
+                let mut client = ComplianceQueryServiceClient::new(channel);
+
+                let leaf_request = ComplianceUserLeafRequest {
+                    address: request_inner.address.clone(),
+                    asset_id: request_inner.asset_id.clone(),
+                };
+                let leaf_response = client
+                    .compliance_user_leaf(tonic::Request::new(leaf_request))
+                    .await?
+                    .into_inner();
+
+                if !leaf_response.is_registered {
+                    // User not registered - return empty proof
+                    (
+                        false,
+                        0,
+                        penumbra_sdk_compliance::structs::MerklePath::default(),
+                    )
+                } else {
+                    // Got leaf from pd, need to get position and compute path locally
+                    // For now, fall back to full gRPC proof since we don't have position
+                    use penumbra_sdk_proto::core::component::compliance::v1::ComplianceMerkleProofsRequest;
+
+                    let proof_request = ComplianceMerkleProofsRequest {
+                        address: request_inner.address.clone(),
+                        asset_id: request_inner.asset_id.clone(),
+                    };
+                    let proof_response = client
+                        .compliance_merkle_proofs(tonic::Request::new(proof_request))
+                        .await?
+                        .into_inner();
+
+                    let path = proof_response
+                        .compliance_path
+                        .map(|p| penumbra_sdk_compliance::structs::MerklePath {
+                            layers: p
+                                .layers
+                                .into_iter()
+                                .map(|layer| penumbra_sdk_compliance::structs::MerklePathLayer {
+                                    siblings: layer.siblings,
+                                })
+                                .collect(),
+                        })
+                        .unwrap_or_default();
+
+                    (
+                        proof_response.user_registered,
+                        proof_response.compliance_position,
+                        path,
+                    )
+                }
+            }
         };
-        let response = client
-            .compliance_merkle_proofs(tonic::Request::new(compliance_request))
-            .await?
-            .into_inner();
 
-        // Convert compliance proto types to view proto types
-        let compliance_path = response.compliance_path.map(|p| pb::MerklePath {
-            layers: p
+        // Convert local types to proto types
+        let compliance_path_proto = pb::MerklePath {
+            layers: compliance_path
                 .layers
                 .into_iter()
                 .map(|layer| pb::MerklePathLayer {
                     siblings: layer.siblings,
                 })
                 .collect(),
-        });
+        };
 
-        let asset_path = response.asset_path.map(|p| pb::MerklePath {
-            layers: p
+        let asset_path_proto = pb::MerklePath {
+            layers: asset_path
                 .layers
                 .into_iter()
                 .map(|layer| pb::MerklePathLayer {
                     siblings: layer.siblings,
                 })
                 .collect(),
-        });
+        };
 
-        // Return as ViewService response
+        let asset_indexed_leaf_proto = pb::IndexedLeafData {
+            value: indexed_leaf.value.to_bytes().to_vec(),
+            next_index: indexed_leaf.next_index,
+            next_value: indexed_leaf.next_value.to_bytes().to_vec(),
+        };
+
         Ok(tonic::Response::new(pb::ComplianceMerkleProofsResponse {
-            user_registered: response.user_registered,
-            asset_registered: response.asset_registered,
-            is_regulated: response.is_regulated,
-            compliance_path,
-            compliance_position: response.compliance_position,
-            asset_path,
-            asset_position: response.asset_position,
-            compliance_anchor: response.compliance_anchor,
-            asset_anchor: response.asset_anchor,
+            user_registered,
+            asset_registered: true, // Always true with IMT (membership or non-membership)
+            is_regulated,
+            compliance_path: Some(compliance_path_proto),
+            compliance_position,
+            asset_path: Some(asset_path_proto),
+            asset_position,
+            compliance_anchor: user_anchor.0.to_bytes().to_vec(),
+            asset_anchor: asset_anchor.0.to_bytes().to_vec(),
+            asset_indexed_leaf: Some(asset_indexed_leaf_proto),
         }))
     }
 
@@ -2095,14 +2235,56 @@ impl ViewService for ViewServer {
         &self,
         request: tonic::Request<pb::ComplianceUserLeafRequest>,
     ) -> Result<tonic::Response<pb::ComplianceUserLeafResponse>, tonic::Status> {
+        let request_inner = request.into_inner();
+
+        // Parse address and asset_id
+        let address: penumbra_sdk_keys::Address = request_inner
+            .address
+            .clone()
+            .ok_or_else(|| tonic::Status::invalid_argument("missing address"))?
+            .try_into()
+            .map_err(|e| tonic::Status::invalid_argument(format!("invalid address: {e}")))?;
+
+        let asset_id: penumbra_sdk_asset::asset::Id = request_inner
+            .asset_id
+            .clone()
+            .ok_or_else(|| tonic::Status::invalid_argument("missing asset_id"))?
+            .try_into()
+            .map_err(|e| tonic::Status::invalid_argument(format!("invalid asset_id: {e}")))?;
+
+        // Try to get leaf data from local storage first
+        let local_leaf_data = self
+            .storage
+            .get_compliance_leaf_data(&address, &asset_id)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("storage error: {e}")))?;
+
+        if let Some((_position, ack_bytes, _commitment)) = local_leaf_data {
+            // Local storage hit - reconstruct the leaf
+            tracing::debug!(?address, ?asset_id, "using local storage for user leaf");
+
+            let leaf = pb::ComplianceLeaf {
+                address: request_inner.address,
+                key: Some(pb::ComplianceViewingKey {
+                    inner: ack_bytes.to_vec(),
+                }),
+                asset_id: request_inner.asset_id,
+            };
+
+            return Ok(tonic::Response::new(pb::ComplianceUserLeafResponse {
+                is_registered: true,
+                leaf: Some(leaf),
+            }));
+        }
+
+        // Local storage miss - fall back to gRPC
+        tracing::debug!(?address, ?asset_id, "local storage miss, fetching from pd");
+
         use penumbra_sdk_proto::core::component::compliance::v1::{
             query_service_client::QueryServiceClient as ComplianceQueryServiceClient,
             ComplianceUserLeafRequest as ComplianceRequest,
         };
 
-        let request_inner = request.into_inner();
-
-        // Connect to pd's compliance service
         let endpoint = get_pd_endpoint(self.node.clone())
             .await
             .map_err(|e| tonic::Status::internal(format!("failed to connect to pd: {e}")))?;
@@ -2112,7 +2294,6 @@ impl ViewService for ViewServer {
             .map_err(|e| tonic::Status::internal(format!("failed to connect to pd: {e}")))?;
         let mut client = ComplianceQueryServiceClient::new(channel);
 
-        // Query the compliance service for the user's leaf
         let compliance_request = ComplianceRequest {
             address: request_inner.address.clone(),
             asset_id: request_inner.asset_id.clone(),
@@ -2129,11 +2310,208 @@ impl ViewService for ViewServer {
             asset_id: l.asset_id,
         });
 
-        // Return as ViewService response
         Ok(tonic::Response::new(pb::ComplianceUserLeafResponse {
             is_registered: response.is_registered,
             leaf,
         }))
+    }
+
+    #[instrument(skip_all, level = "trace")]
+    async fn compliance_batch_merkle_proofs(
+        &self,
+        request: tonic::Request<pb::ComplianceBatchMerkleProofsRequest>,
+    ) -> Result<tonic::Response<pb::ComplianceBatchMerkleProofsResponse>, tonic::Status> {
+        let request_inner = request.into_inner();
+
+        // Get local tree anchors
+        let user_anchor = self.compliance_user_tree.read().await.root();
+        let asset_anchor = self.compliance_asset_tree.read().await.root();
+
+        let mut results = Vec::with_capacity(request_inner.queries.len());
+
+        for query in request_inner.queries {
+            // Parse address and asset_id
+            let address: penumbra_sdk_keys::Address = query
+                .address
+                .clone()
+                .ok_or_else(|| tonic::Status::invalid_argument("missing address in query"))?
+                .try_into()
+                .map_err(|e| tonic::Status::invalid_argument(format!("invalid address: {e}")))?;
+
+            let asset_id: penumbra_sdk_asset::asset::Id = query
+                .asset_id
+                .clone()
+                .ok_or_else(|| tonic::Status::invalid_argument("missing asset_id in query"))?
+                .try_into()
+                .map_err(|e| tonic::Status::invalid_argument(format!("invalid asset_id: {e}")))?;
+
+            // Get asset proof from local tree (always available)
+            let asset_tree = self.compliance_asset_tree.read().await;
+            let (asset_position, indexed_leaf, asset_path, is_regulated) = asset_tree
+                .get_proof_data(asset_id)
+                .map_err(|e| tonic::Status::internal(format!("failed to get asset proof: {e}")))?;
+            drop(asset_tree);
+
+            // Get user proof - skip entirely for unregulated assets (circuit doesn't verify them)
+            let (user_registered, compliance_position, compliance_path) = if is_regulated {
+                // REGULATED: try local storage first, fall back to gRPC
+                let local_leaf_data = self
+                    .storage
+                    .get_compliance_leaf_data(&address, &asset_id)
+                    .await
+                    .map_err(|e| tonic::Status::internal(format!("storage error: {e}")))?;
+
+                match local_leaf_data {
+                    Some((position, _ack_bytes, _commitment)) => {
+                        // Local storage hit - compute path from local tree
+                        let user_tree = self.compliance_user_tree.read().await;
+                        let path = user_tree.witness(position).map_err(|e| {
+                            tonic::Status::internal(format!("failed to compute path: {e}"))
+                        })?;
+                        tracing::debug!(
+                            ?address,
+                            ?asset_id,
+                            position,
+                            "using local storage for batch user proof"
+                        );
+                        (true, position, path)
+                    }
+                    None => {
+                        // Local storage miss - fall back to gRPC for leaf data
+                        tracing::debug!(
+                            ?address,
+                            ?asset_id,
+                            "local storage miss, fetching from pd for batch"
+                        );
+
+                        use penumbra_sdk_proto::core::component::compliance::v1::{
+                            query_service_client::QueryServiceClient as ComplianceQueryServiceClient,
+                            ComplianceUserLeafRequest,
+                        };
+
+                        let endpoint = get_pd_endpoint(self.node.clone()).await.map_err(|e| {
+                            tonic::Status::internal(format!("failed to connect to pd: {e}"))
+                        })?;
+                        let channel = endpoint.connect().await.map_err(|e| {
+                            tonic::Status::internal(format!("failed to connect to pd: {e}"))
+                        })?;
+                        let mut client = ComplianceQueryServiceClient::new(channel);
+
+                        let leaf_request = ComplianceUserLeafRequest {
+                            address: query.address.clone(),
+                            asset_id: query.asset_id.clone(),
+                        };
+                        let leaf_response = client
+                            .compliance_user_leaf(tonic::Request::new(leaf_request))
+                            .await?
+                            .into_inner();
+
+                        if !leaf_response.is_registered {
+                            // User not registered - return empty proof
+                            (
+                                false,
+                                0,
+                                penumbra_sdk_compliance::structs::MerklePath::default(),
+                            )
+                        } else {
+                            // Got leaf from pd, need to get full proof via gRPC
+                            use penumbra_sdk_proto::core::component::compliance::v1::ComplianceMerkleProofsRequest;
+
+                            let proof_request = ComplianceMerkleProofsRequest {
+                                address: query.address.clone(),
+                                asset_id: query.asset_id.clone(),
+                            };
+                            let proof_response = client
+                                .compliance_merkle_proofs(tonic::Request::new(proof_request))
+                                .await?
+                                .into_inner();
+
+                            let path = proof_response
+                                .compliance_path
+                                .map(|p| penumbra_sdk_compliance::structs::MerklePath {
+                                    layers: p
+                                        .layers
+                                        .into_iter()
+                                        .map(|layer| {
+                                            penumbra_sdk_compliance::structs::MerklePathLayer {
+                                                siblings: layer.siblings,
+                                            }
+                                        })
+                                        .collect(),
+                                })
+                                .unwrap_or_default();
+
+                            (
+                                proof_response.user_registered,
+                                proof_response.compliance_position,
+                                path,
+                            )
+                        }
+                    }
+                }
+            } else {
+                // UNREGULATED: No user proof needed, circuit doesn't verify it
+                tracing::debug!(
+                    ?address,
+                    ?asset_id,
+                    "unregulated asset, skipping user proof lookup"
+                );
+                (
+                    false,
+                    0,
+                    penumbra_sdk_compliance::structs::MerklePath::default(),
+                )
+            };
+
+            // Convert local types to proto types
+            let compliance_path_proto = pb::MerklePath {
+                layers: compliance_path
+                    .layers
+                    .into_iter()
+                    .map(|layer| pb::MerklePathLayer {
+                        siblings: layer.siblings,
+                    })
+                    .collect(),
+            };
+
+            let asset_path_proto = pb::MerklePath {
+                layers: asset_path
+                    .layers
+                    .into_iter()
+                    .map(|layer| pb::MerklePathLayer {
+                        siblings: layer.siblings,
+                    })
+                    .collect(),
+            };
+
+            let asset_indexed_leaf_proto = pb::IndexedLeafData {
+                value: indexed_leaf.value.to_bytes().to_vec(),
+                next_index: indexed_leaf.next_index,
+                next_value: indexed_leaf.next_value.to_bytes().to_vec(),
+            };
+
+            results.push(pb::ComplianceMerkleProofsResponse {
+                user_registered,
+                asset_registered: true, // Always true with IMT (membership or non-membership)
+                is_regulated,
+                compliance_path: Some(compliance_path_proto),
+                compliance_position,
+                asset_path: Some(asset_path_proto),
+                asset_position,
+                compliance_anchor: user_anchor.0.to_bytes().to_vec(),
+                asset_anchor: asset_anchor.0.to_bytes().to_vec(),
+                asset_indexed_leaf: Some(asset_indexed_leaf_proto),
+            });
+        }
+
+        // Return as ViewService response
+        Ok(tonic::Response::new(
+            pb::ComplianceBatchMerkleProofsResponse {
+                compliance_anchor: user_anchor.0.to_bytes().to_vec(),
+                asset_anchor: asset_anchor.0.to_bytes().to_vec(),
+                results,
+            },
+        ))
     }
 }
 

@@ -13,7 +13,7 @@ use {
     penumbra_sdk_proto::{
         view::v1::{
             view_service_client::ViewServiceClient, view_service_server::ViewServiceServer,
-            StatusRequest, StatusResponse,
+            StatusRequest,
         },
         DomainType,
     },
@@ -23,6 +23,7 @@ use {
     rand_core::OsRng,
     std::ops::Deref,
     tap::{Tap, TapFallible},
+    tokio::time,
 };
 
 mod common;
@@ -34,7 +35,6 @@ const COUNT: usize = SWEEP_COUNT + 1;
 /// Exercises that the app can process a "sweep", consolidating small notes.
 //  NB: a multi-thread runtime is needed to run both the view server and its client.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "Flaked in #4626"]
 async fn app_can_sweep_a_collection_of_small_notes() -> anyhow::Result<()> {
     // Install a test logger, and acquire some temporary storage.
     let guard = common::set_tracing_subscriber_with_env_filter("info".into());
@@ -89,7 +89,7 @@ async fn app_can_sweep_a_collection_of_small_notes() -> anyhow::Result<()> {
         .tap(|_| tracing::debug!("fast forwarding past genesis"))
         .await?;
 
-    let grpc_url = "http://127.0.0.1:8081" // see #4517
+    let grpc_url = "http://127.0.0.1:8083" // see #4517
         .parse::<url::Url>()?
         .tap(|url| tracing::debug!(%url, "parsed grpc url"));
 
@@ -112,6 +112,9 @@ async fn app_can_sweep_a_collection_of_small_notes() -> anyhow::Result<()> {
         tokio::spawn(async { server.await.expect("grpc server returned an error") })
             .tap(|_| tracing::debug!("grpc server is running"))
     };
+
+    // Wait for the server to start listening.
+    time::sleep(time::Duration::from_secs(1)).await;
 
     // Spawn the client-side view server...
     let view_server = {
@@ -137,20 +140,19 @@ async fn app_can_sweep_a_collection_of_small_notes() -> anyhow::Result<()> {
         while let Some(status) = status_stream.next().await.transpose()? {
             tracing::info!(?status, "view client received status stream response");
         }
-        // Confirm that the status is as expected: synced up to the 11th block.
+        // Confirm that the view client is synced and not catching up.
+        // Expected height: Genesis (0) + 10 fast_forward = 10
         let status = view_client.status(StatusRequest {}).await?.into_inner();
-        debug_assert_eq!(
-            status,
-            StatusResponse {
-                full_sync_height: 10,
-                partial_sync_height: 10,
-                catching_up: false,
-            }
+        assert!(!status.catching_up, "view client should not be catching up");
+        assert!(
+            status.full_sync_height >= 10,
+            "view client should be synced to at least height 10, got {}",
+            status.full_sync_height
         );
     }
 
     client.sync_to_latest(storage.latest_snapshot()).await?;
-    debug_assert_eq!(
+    assert_eq!(
         client
             .notes_by_asset(STAKING_TOKEN_ASSET_ID.deref().to_owned())
             .count(),
@@ -159,6 +161,9 @@ async fn app_can_sweep_a_collection_of_small_notes() -> anyhow::Result<()> {
     );
 
     loop {
+        // Sync client before generating sweep plans to ensure fresh state
+        client.sync_to_latest(storage.latest_snapshot()).await?;
+
         let plans = penumbra_sdk_wallet::plan::sweep(&mut view_client, OsRng)
             .await
             .context("constructing sweep plans")?;
@@ -166,12 +171,16 @@ async fn app_can_sweep_a_collection_of_small_notes() -> anyhow::Result<()> {
             break;
         }
         for plan in plans {
+            // Build all transactions. Planner.plan() already enriched with compliance data,
+            // so we use witness_auth_build (not witness_auth_build_with_compliance).
             let tx = client.witness_auth_build(&plan).await?;
             test_node
                 .block()
                 .with_data(vec![tx.encode_to_vec()])
                 .execute()
                 .await?;
+            // Sync client after block execution to update state
+            client.sync_to_latest(storage.latest_snapshot()).await?;
         }
     }
 

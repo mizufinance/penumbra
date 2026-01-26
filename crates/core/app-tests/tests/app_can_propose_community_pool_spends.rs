@@ -144,7 +144,7 @@ async fn app_can_propose_community_pool_spends() -> anyhow::Result<()> {
         .try_into()
         .map_err(|validator| anyhow::anyhow!("expected one validator, got: {validator:?}"))?;
 
-    // Sync the mock client, using the test wallet's spend key, to the latest snapshot.
+    // Sync the mock client to the latest state.
     let client = MockClient::new(test_keys::SPEND_KEY.clone())
         .with_sync_to_storage(&storage)
         .await?
@@ -182,7 +182,9 @@ async fn app_can_propose_community_pool_spends() -> anyhow::Result<()> {
         }
     };
     plan.populate_detection_data(OsRng, Default::default());
-    let tx = client.witness_auth_build(&plan).await?;
+    let tx = client
+        .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
+        .await?;
 
     // Execute the transaction, applying it to the chain state.
     test_node
@@ -251,7 +253,9 @@ async fn app_can_propose_community_pool_spends() -> anyhow::Result<()> {
         }
     };
     plan.populate_detection_data(OsRng, Default::default());
-    let tx = client.witness_auth_build(&plan).await?;
+    let tx = client
+        .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
+        .await?;
 
     // Execute the transaction, applying it to the chain state.
     test_node

@@ -246,6 +246,10 @@ pub struct ComplianceMerkleProofsResponse {
     /// Current asset tree root (StateCommitment, 32 bytes).
     #[prost(bytes = "vec", tag = "9")]
     pub asset_anchor: ::prost::alloc::vec::Vec<u8>,
+    /// The indexed leaf data for asset IMT proof verification.
+    /// Contains (value, next_index, next_value) needed for membership/non-membership proofs.
+    #[prost(message, optional, tag = "10")]
+    pub asset_indexed_leaf: ::core::option::Option<IndexedLeafData>,
 }
 impl ::prost::Name for ComplianceMerkleProofsResponse {
     const NAME: &'static str = "ComplianceMerkleProofsResponse";
@@ -295,6 +299,170 @@ impl ::prost::Name for ComplianceUserLeafResponse {
     }
     fn type_url() -> ::prost::alloc::string::String {
         "/penumbra.core.component.compliance.v1.ComplianceUserLeafResponse".into()
+    }
+}
+/// A single query in a batch request.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ComplianceBatchQuery {
+    /// The address to look up.
+    #[prost(message, optional, tag = "1")]
+    pub address: ::core::option::Option<super::super::super::keys::v1::Address>,
+    /// The asset ID to look up.
+    #[prost(message, optional, tag = "2")]
+    pub asset_id: ::core::option::Option<super::super::super::asset::v1::AssetId>,
+}
+impl ::prost::Name for ComplianceBatchQuery {
+    const NAME: &'static str = "ComplianceBatchQuery";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.ComplianceBatchQuery".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.ComplianceBatchQuery".into()
+    }
+}
+/// Request for batch querying multiple (address, asset) pairs.
+/// Use this for multi-spend/multi-output transactions to fetch all proofs in one call.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ComplianceBatchMerkleProofsRequest {
+    /// The queries to execute. Each query is an (address, asset_id) pair.
+    #[prost(message, repeated, tag = "1")]
+    pub queries: ::prost::alloc::vec::Vec<ComplianceBatchQuery>,
+}
+impl ::prost::Name for ComplianceBatchMerkleProofsRequest {
+    const NAME: &'static str = "ComplianceBatchMerkleProofsRequest";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.ComplianceBatchMerkleProofsRequest".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.ComplianceBatchMerkleProofsRequest"
+            .into()
+    }
+}
+/// Response containing batch Merkle proofs and anchors.
+/// Anchors are returned once (they're the same for all queries).
+/// Results are returned in the same order as the queries.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ComplianceBatchMerkleProofsResponse {
+    /// Current compliance tree root (StateCommitment, 32 bytes).
+    #[prost(bytes = "vec", tag = "1")]
+    pub compliance_anchor: ::prost::alloc::vec::Vec<u8>,
+    /// Current asset tree root (StateCommitment, 32 bytes).
+    #[prost(bytes = "vec", tag = "2")]
+    pub asset_anchor: ::prost::alloc::vec::Vec<u8>,
+    /// Results for each query, in the same order as the request.
+    #[prost(message, repeated, tag = "3")]
+    pub results: ::prost::alloc::vec::Vec<ComplianceMerkleProofsResponse>,
+}
+impl ::prost::Name for ComplianceBatchMerkleProofsResponse {
+    const NAME: &'static str = "ComplianceBatchMerkleProofsResponse";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.ComplianceBatchMerkleProofsResponse"
+            .into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.ComplianceBatchMerkleProofsResponse"
+            .into()
+    }
+}
+/// Data for an indexed leaf in the asset IMT (for client sync).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IndexedLeafData {
+    #[prost(bytes = "vec", tag = "1")]
+    pub value: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint64, tag = "2")]
+    pub next_index: u64,
+    #[prost(bytes = "vec", tag = "3")]
+    pub next_value: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for IndexedLeafData {
+    const NAME: &'static str = "IndexedLeafData";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.IndexedLeafData".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.IndexedLeafData".into()
+    }
+}
+/// Emitted when a user is registered in the compliance tree.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EventUserRegistered {
+    /// The position in the user compliance tree.
+    #[prost(uint64, tag = "1")]
+    pub position: u64,
+    /// The commitment of the compliance leaf.
+    #[prost(bytes = "vec", tag = "2")]
+    pub commitment: ::prost::alloc::vec::Vec<u8>,
+    /// Full leaf data for client sync.
+    #[prost(message, optional, tag = "3")]
+    pub leaf: ::core::option::Option<ComplianceLeaf>,
+}
+impl ::prost::Name for EventUserRegistered {
+    const NAME: &'static str = "EventUserRegistered";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.EventUserRegistered".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.EventUserRegistered".into()
+    }
+}
+/// Emitted when an asset is registered in the compliance system.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EventAssetRegistered {
+    /// The asset ID that was registered.
+    #[prost(message, optional, tag = "1")]
+    pub asset_id: ::core::option::Option<super::super::super::asset::v1::AssetId>,
+    /// Whether the asset is regulated (requires compliance).
+    #[prost(bool, tag = "2")]
+    pub is_regulated: bool,
+    /// The position in the asset tree (for regulated assets).
+    #[prost(uint64, tag = "3")]
+    pub position: u64,
+    /// The indexed leaf data (for client sync).
+    #[prost(message, optional, tag = "4")]
+    pub indexed_leaf: ::core::option::Option<IndexedLeafData>,
+    /// The low leaf that was updated during IMT insertion.
+    #[prost(uint64, tag = "5")]
+    pub low_leaf_position: u64,
+    /// The updated low leaf data.
+    #[prost(message, optional, tag = "6")]
+    pub updated_low_leaf: ::core::option::Option<IndexedLeafData>,
+}
+impl ::prost::Name for EventAssetRegistered {
+    const NAME: &'static str = "EventAssetRegistered";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.EventAssetRegistered".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.EventAssetRegistered".into()
+    }
+}
+/// Emitted at end of block with the current compliance tree roots.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EventComplianceAnchor {
+    /// The block height.
+    #[prost(uint64, tag = "1")]
+    pub height: u64,
+    /// The user tree root (StateCommitment, 32 bytes).
+    #[prost(bytes = "vec", tag = "2")]
+    pub user_anchor: ::prost::alloc::vec::Vec<u8>,
+    /// The asset tree root (StateCommitment, 32 bytes).
+    #[prost(bytes = "vec", tag = "3")]
+    pub asset_anchor: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for EventComplianceAnchor {
+    const NAME: &'static str = "EventComplianceAnchor";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.EventComplianceAnchor".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.EventComplianceAnchor".into()
     }
 }
 /// Generated client implementations.
@@ -481,6 +649,38 @@ pub mod query_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /// Batch query for multiple (address, asset) pairs.
+        /// Returns all proofs in a single call, including anchors.
+        /// Use this for multi-spend transactions to avoid multiple round trips.
+        pub async fn compliance_batch_merkle_proofs(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ComplianceBatchMerkleProofsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ComplianceBatchMerkleProofsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/penumbra.core.component.compliance.v1.QueryService/ComplianceBatchMerkleProofs",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "penumbra.core.component.compliance.v1.QueryService",
+                        "ComplianceBatchMerkleProofs",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /// Query a user's registered compliance leaf.
         /// Returns the full leaf (including ACK) that was registered on-chain.
         pub async fn compliance_user_leaf(
@@ -552,6 +752,16 @@ pub mod query_service_server {
             request: tonic::Request<super::ComplianceMerkleProofsRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ComplianceMerkleProofsResponse>,
+            tonic::Status,
+        >;
+        /// Batch query for multiple (address, asset) pairs.
+        /// Returns all proofs in a single call, including anchors.
+        /// Use this for multi-spend transactions to avoid multiple round trips.
+        async fn compliance_batch_merkle_proofs(
+            &self,
+            request: tonic::Request<super::ComplianceBatchMerkleProofsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ComplianceBatchMerkleProofsResponse>,
             tonic::Status,
         >;
         /// Query a user's registered compliance leaf.
@@ -769,6 +979,58 @@ pub mod query_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ComplianceMerkleProofsSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/penumbra.core.component.compliance.v1.QueryService/ComplianceBatchMerkleProofs" => {
+                    #[allow(non_camel_case_types)]
+                    struct ComplianceBatchMerkleProofsSvc<T: QueryService>(pub Arc<T>);
+                    impl<
+                        T: QueryService,
+                    > tonic::server::UnaryService<
+                        super::ComplianceBatchMerkleProofsRequest,
+                    > for ComplianceBatchMerkleProofsSvc<T> {
+                        type Response = super::ComplianceBatchMerkleProofsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::ComplianceBatchMerkleProofsRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as QueryService>::compliance_batch_merkle_proofs(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ComplianceBatchMerkleProofsSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
