@@ -8,7 +8,9 @@
 !.cargo/
 !rust-toolchain.toml
 
-# testnets for 'pd testnet generate' defaults
+# localnet for 'pd testnet generate' defaults
+!deployments/000-localnet/
+# cometbft config template and CI validators
 !testnets/
 # metrics containers
 !deployments/config/

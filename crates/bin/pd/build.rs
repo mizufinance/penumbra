@@ -56,7 +56,7 @@ fn setup_testnet_config() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("could not get parent of current working directory"))?
         .parent()
         .ok_or_else(|| anyhow::anyhow!("could not get parent of current working directory"))?
-        .join("testnets");
+        .join("deployments");
 
     // Get the most recent testnet name and its configuration directory
     let (latest_testnet_name, latest_testnet_dirname) = latest_testnet(&testnets_path)?;
@@ -112,21 +112,14 @@ fn latest_testnet(testnets_path: impl AsRef<Path>) -> anyhow::Result<(String, St
                 .ok_or_else(|| anyhow::anyhow!("testnet path '{:?}' is invalid utf8", path))?
                 .to_string();
             // Split the testnet directory name into (index, name), i.e. `001-valetudo`
-            // becomes (1, "valetudo")
-            let (index, name): (u64, _) = dir_name
-                .split_once('-')
-                .ok_or_else(|| {
-                    anyhow::anyhow!("testnet path '{:?}' is not correctly formatted", path)
-                })
-                .and_then(|(index_str, name)| {
-                    Ok((
-                        index_str.parse().with_context(|| {
-                            format!("could not parse testnet index as a number in path '{path:?}'")
-                        })?,
-                        name.to_string(),
-                    ))
-                })?;
-            testnets.push((index, name, dir_name));
+            // becomes (1, "valetudo"). Skip directories that don't match this pattern.
+            let Some((index_str, name)) = dir_name.split_once('-') else {
+                continue;
+            };
+            let Ok(index) = index_str.parse::<u64>() else {
+                continue;
+            };
+            testnets.push((index, name.to_string(), dir_name));
         }
     }
 
