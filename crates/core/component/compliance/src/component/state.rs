@@ -4,16 +4,15 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cnidarium::StateWrite;
 use cnidarium_component::{ActionHandler, Component};
-use penumbra_sdk_proto::StateWriteProto;
+use penumbra_sdk_proto::{StateReadProto, StateWriteProto};
 use tendermint::v0_37::abci;
 use tracing::instrument;
 
 use crate::{
     event, genesis,
-    indexed_tree::IndexedMerkleTree,
     registry::{ComplianceRegistryRead, ComplianceRegistryWrite},
+    state_key,
     structs::{MsgRegisterAsset, MsgRegisterUser},
-    tree::QuadTree,
 };
 
 // Note: QuadTree is still used for the user tree.
@@ -35,19 +34,43 @@ impl Component for Compliance {
         // Initialize empty trees if they don't exist
         // This ensures the trees are properly set up at genesis
 
-        // Check and initialize user tree
-        if state.get_user_tree().await.ok().is_none() {
-            let user_tree = QuadTree::new();
-            let tree_bytes = bincode::serialize(&user_tree).expect("serialization should not fail");
-            state.put_raw(crate::state_key::user_tree().to_string(), tree_bytes);
-            state.put_proto(crate::state_key::user_count().to_string(), 0u64);
+        // Initialize user tree if not present
+        // Note: get_user_tree() returns a new empty tree if nothing is stored,
+        // so we just need to handle errors and ensure we persist the initial state.
+        match state.get_user_tree().await {
+            Ok(tree) => {
+                // Persist the tree (may be new or existing)
+                let tree_bytes = bincode::serialize(&tree).expect("serialization should not fail");
+                state.put_raw(crate::state_key::user_tree().to_string(), tree_bytes);
+                // Initialize count if not set
+                if state
+                    .get_proto::<u64>(state_key::user_count())
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_none()
+                {
+                    state.put_proto(crate::state_key::user_count().to_string(), 0u64);
+                }
+            }
+            Err(e) => {
+                tracing::error!(?e, "failed to load compliance user tree during init_chain");
+                panic!("compliance user tree initialization failed: {}", e);
+            }
         }
 
-        // Check and initialize asset IMT (Indexed Merkle Tree for regulated assets)
-        if state.get_asset_imt().await.ok().is_none() {
-            let asset_imt = IndexedMerkleTree::new();
-            let tree_bytes = bincode::serialize(&asset_imt).expect("serialization should not fail");
-            state.put_raw(crate::state_key::asset_imt().to_string(), tree_bytes);
+        // Initialize asset IMT if not present
+        // Note: get_asset_imt() returns a new empty tree if nothing is stored.
+        match state.get_asset_imt().await {
+            Ok(tree) => {
+                // Persist the tree (may be new or existing)
+                let tree_bytes = bincode::serialize(&tree).expect("serialization should not fail");
+                state.put_raw(crate::state_key::asset_imt().to_string(), tree_bytes);
+            }
+            Err(e) => {
+                tracing::error!(?e, "failed to load compliance asset IMT during init_chain");
+                panic!("compliance asset IMT initialization failed: {}", e);
+            }
         }
 
         // Register regulated native assets from genesis configuration.
@@ -118,8 +141,22 @@ impl ActionHandler for MsgRegisterUser {
     }
 
     async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        // TODO(compliance): Check if user is already registered (idempotent but wasteful).
-        // Could add check_stateful() to detect and skip duplicate registrations.
+        // Check if user is already registered for this asset (idempotent)
+        if let Some(existing_position) = state
+            .get_user_leaf_position(&self.leaf.address, self.leaf.asset_id)
+            .await?
+        {
+            tracing::debug!(
+                position = existing_position,
+                address = ?self.leaf.address,
+                asset_id = ?self.leaf.asset_id,
+                "user already registered for asset, skipping duplicate registration"
+            );
+            // Return success without modifying state - idempotent behavior
+            return Ok(());
+        }
+
+        // User not registered, proceed with registration
         let position = state.add_compliance_leaf(self.leaf.clone()).await?;
         let commitment = self.leaf.commit();
 

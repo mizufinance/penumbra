@@ -485,7 +485,7 @@ impl From<MerklePathLayer> for pb::MerklePathLayer {
 /// 1. Detection Tag - encrypted with detection key (for scanning)
 /// 2. Core Data - encrypted with encryption key (asset ID, amount)
 /// 3. Extension Data - encrypted with extension key (counterparty address)
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComplianceCiphertext {
     /// The ephemeral public key R = r * B_d (diversified generator).
     /// Used to derive shared secrets with the daily public key.

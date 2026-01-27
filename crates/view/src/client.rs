@@ -19,9 +19,12 @@ use penumbra_sdk_dex::{
 use penumbra_sdk_fee::GasPrices;
 use penumbra_sdk_keys::{keys::AddressIndex, Address};
 use penumbra_sdk_num::Amount;
-use penumbra_sdk_proto::view::v1::{
-    self as pb, view_service_client::ViewServiceClient, BalancesResponse,
-    BroadcastTransactionResponse, WitnessRequest,
+use penumbra_sdk_proto::{
+    core::component::compliance::v1 as compliance_pb,
+    view::v1::{
+        self as pb, view_service_client::ViewServiceClient, BalancesResponse,
+        BroadcastTransactionResponse, WitnessRequest,
+    },
 };
 use penumbra_sdk_sct::Nullifier;
 use penumbra_sdk_shielded_pool::{fmd, note};
@@ -389,7 +392,13 @@ pub trait ViewClient {
         &mut self,
         address: Address,
         asset_id: asset::Id,
-    ) -> Pin<Box<dyn Future<Output = Result<pb::ComplianceMerkleProofsResponse>> + Send + 'static>>;
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<compliance_pb::ComplianceMerkleProofsResponse>>
+                + Send
+                + 'static,
+        >,
+    >;
 
     /// Query a user's registered compliance leaf from the chain.
     ///
@@ -403,7 +412,11 @@ pub trait ViewClient {
         &mut self,
         address: Address,
         asset_id: asset::Id,
-    ) -> Pin<Box<dyn Future<Output = Result<pb::ComplianceUserLeafResponse>> + Send + 'static>>;
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<compliance_pb::ComplianceUserLeafResponse>> + Send + 'static,
+        >,
+    >;
 
     /// Batch query for compliance Merkle proofs for multiple (address, asset) pairs.
     ///
@@ -413,7 +426,11 @@ pub trait ViewClient {
         &mut self,
         queries: Vec<(Address, asset::Id)>,
     ) -> Pin<
-        Box<dyn Future<Output = Result<pb::ComplianceBatchMerkleProofsResponse>> + Send + 'static>,
+        Box<
+            dyn Future<Output = Result<compliance_pb::ComplianceBatchMerkleProofsResponse>>
+                + Send
+                + 'static,
+        >,
     >;
 }
 
@@ -1173,7 +1190,7 @@ where
     ) -> Pin<Box<dyn Future<Output = Result<Option<bool>>> + Send + 'static>> {
         let mut self2 = self.clone();
         async move {
-            let request = pb::ComplianceAssetStatusRequest {
+            let request = compliance_pb::ComplianceAssetStatusRequest {
                 asset_id: Some(asset_id.into()),
             };
 
@@ -1209,7 +1226,7 @@ where
     > {
         let mut self2 = self.clone();
         async move {
-            let request = pb::ComplianceAnchorsRequest {};
+            let request = compliance_pb::ComplianceAnchorsRequest {};
 
             let response =
                 ViewServiceClient::compliance_anchors(&mut self2, tonic::Request::new(request))
@@ -1237,11 +1254,16 @@ where
         &mut self,
         address: Address,
         asset_id: asset::Id,
-    ) -> Pin<Box<dyn Future<Output = Result<pb::ComplianceMerkleProofsResponse>> + Send + 'static>>
-    {
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<compliance_pb::ComplianceMerkleProofsResponse>>
+                + Send
+                + 'static,
+        >,
+    > {
         let mut self2 = self.clone();
         async move {
-            let request = pb::ComplianceMerkleProofsRequest {
+            let request = compliance_pb::ComplianceMerkleProofsRequest {
                 address: Some(address.into()),
                 asset_id: Some(asset_id.into()),
             };
@@ -1262,11 +1284,14 @@ where
         &mut self,
         address: Address,
         asset_id: asset::Id,
-    ) -> Pin<Box<dyn Future<Output = Result<pb::ComplianceUserLeafResponse>> + Send + 'static>>
-    {
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<compliance_pb::ComplianceUserLeafResponse>> + Send + 'static,
+        >,
+    > {
         let mut self2 = self.clone();
         async move {
-            let request = pb::ComplianceUserLeafRequest {
+            let request = compliance_pb::ComplianceUserLeafRequest {
                 address: Some(address.into()),
                 asset_id: Some(asset_id.into()),
             };
@@ -1285,19 +1310,23 @@ where
         &mut self,
         queries: Vec<(Address, asset::Id)>,
     ) -> Pin<
-        Box<dyn Future<Output = Result<pb::ComplianceBatchMerkleProofsResponse>> + Send + 'static>,
+        Box<
+            dyn Future<Output = Result<compliance_pb::ComplianceBatchMerkleProofsResponse>>
+                + Send
+                + 'static,
+        >,
     > {
         let mut self2 = self.clone();
         async move {
             let proto_queries = queries
                 .into_iter()
-                .map(|(address, asset_id)| pb::ComplianceBatchQuery {
+                .map(|(address, asset_id)| compliance_pb::ComplianceBatchQuery {
                     address: Some(address.into()),
                     asset_id: Some(asset_id.into()),
                 })
                 .collect();
 
-            let request = pb::ComplianceBatchMerkleProofsRequest {
+            let request = compliance_pb::ComplianceBatchMerkleProofsRequest {
                 queries: proto_queries,
             };
 

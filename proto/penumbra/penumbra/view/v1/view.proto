@@ -18,6 +18,7 @@ import "penumbra/core/num/v1/num.proto";
 import "penumbra/core/transaction/v1/transaction.proto";
 import "penumbra/core/txhash/v1/txhash.proto";
 import "penumbra/crypto/tct/v1/tct.proto";
+import "penumbra/core/component/compliance/v1/compliance.proto";
 
 // The view RPC is used by a view client, who wants to do some
 // transaction-related actions, to request data from a view service, which is
@@ -167,24 +168,29 @@ service ViewService {
 
   // Query the compliance registry for an asset's regulation status.
   // This proxies to pd's compliance service.
-  rpc ComplianceAssetStatus(ComplianceAssetStatusRequest) returns (ComplianceAssetStatusResponse);
+  rpc ComplianceAssetStatus(core.component.compliance.v1.ComplianceAssetStatusRequest)
+      returns (core.component.compliance.v1.ComplianceAssetStatusResponse);
 
   // Query the compliance tree anchors (roots) from the chain.
   // This proxies to pd's compliance service.
-  rpc ComplianceAnchors(ComplianceAnchorsRequest) returns (ComplianceAnchorsResponse);
+  rpc ComplianceAnchors(core.component.compliance.v1.ComplianceAnchorsRequest)
+      returns (core.component.compliance.v1.ComplianceAnchorsResponse);
 
   // Query the Merkle proofs needed for compliance ZK proofs.
   // This proxies to pd's compliance service.
-  rpc ComplianceMerkleProofs(ComplianceMerkleProofsRequest) returns (ComplianceMerkleProofsResponse);
+  rpc ComplianceMerkleProofs(core.component.compliance.v1.ComplianceMerkleProofsRequest)
+      returns (core.component.compliance.v1.ComplianceMerkleProofsResponse);
 
   // Batch query for multiple (address, asset) pairs.
   // This proxies to pd's compliance service.
   // Use this for multi-spend transactions to avoid multiple round trips.
-  rpc ComplianceBatchMerkleProofs(ComplianceBatchMerkleProofsRequest) returns (ComplianceBatchMerkleProofsResponse);
+  rpc ComplianceBatchMerkleProofs(core.component.compliance.v1.ComplianceBatchMerkleProofsRequest)
+      returns (core.component.compliance.v1.ComplianceBatchMerkleProofsResponse);
 
   // Query a user's registered compliance leaf.
   // This proxies to pd's compliance service.
-  rpc ComplianceUserLeaf(ComplianceUserLeafRequest) returns (ComplianceUserLeafResponse);
+  rpc ComplianceUserLeaf(core.component.compliance.v1.ComplianceUserLeafRequest)
+      returns (core.component.compliance.v1.ComplianceUserLeafResponse);
 }
 
 message LqtVotingNotesRequest {
@@ -962,153 +968,3 @@ message LpStrategyCatalogResponse {
   repeated StrategyEntry strategies = 1;
 }
 
-// Request for querying an asset's compliance regulation status.
-message ComplianceAssetStatusRequest {
-  // The asset ID to query.
-  core.asset.v1.AssetId asset_id = 1;
-}
-
-// Response containing an asset's compliance regulation status.
-message ComplianceAssetStatusResponse {
-  // The asset ID that was queried.
-  core.asset.v1.AssetId asset_id = 1;
-  // Whether the asset is registered in the compliance system.
-  // If false, `is_regulated` should be ignored.
-  bool is_registered = 2;
-  // Whether the asset requires compliance (only meaningful if is_registered is true).
-  bool is_regulated = 3;
-}
-
-// Request for querying the current compliance tree anchors.
-message ComplianceAnchorsRequest {
-  // Empty - no parameters needed, returns current state.
-}
-
-// Response containing the current compliance tree anchors.
-message ComplianceAnchorsResponse {
-  // The root of the user compliance tree (Quad Merkle Tree).
-  // This is a StateCommitment (32 bytes).
-  bytes user_tree_root = 1;
-  // The root of the asset regulation tree (Quad Merkle Tree).
-  // This is a StateCommitment (32 bytes).
-  bytes asset_tree_root = 2;
-}
-
-// Request for querying Merkle proofs needed for compliance ZK proofs.
-// The client provides their address and asset ID, and receives
-// the paths and positions needed to generate valid proofs.
-message ComplianceMerkleProofsRequest {
-  // The address (used to look up user's position in compliance tree).
-  core.keys.v1.Address address = 1;
-  // The asset ID (used to look up asset's position in asset tree).
-  core.asset.v1.AssetId asset_id = 2;
-}
-
-// A single layer in the Quad Merkle Tree path.
-// Since this is a Quad Tree (arity 4), each layer has exactly 3 siblings.
-message MerklePathLayer {
-  // The sibling hashes at this layer (always 3 siblings for a Quad Tree).
-  repeated bytes siblings = 1;
-}
-
-// A Merkle path in the Quad Merkle Tree (arity 4).
-message MerklePath {
-  // The layers of the Merkle path, from leaf to root.
-  repeated MerklePathLayer layers = 1;
-}
-
-// Data for an indexed leaf in the asset IMT (for proof verification).
-message IndexedLeafData {
-  bytes value = 1;
-  uint64 next_index = 2;
-  bytes next_value = 3;
-}
-
-// Response containing Merkle proofs for compliance ZK proofs.
-// This provides all the data needed to populate SpendPlan/OutputPlan compliance fields.
-message ComplianceMerkleProofsResponse {
-  // Whether the user is registered for this asset.
-  // If false, compliance_path and compliance_position will be empty/zero.
-  bool user_registered = 1;
-  // Whether the asset is registered in the compliance system.
-  // If false, asset_path and asset_position will be empty/zero.
-  bool asset_registered = 2;
-  // Whether the asset is regulated (only meaningful if asset_registered is true).
-  bool is_regulated = 3;
-
-  // User's Merkle path in the compliance tree (from leaf to root).
-  MerklePath compliance_path = 4;
-  // User's position in the compliance tree.
-  uint64 compliance_position = 5;
-  // Asset's Merkle path in the asset tree (from leaf to root).
-  MerklePath asset_path = 6;
-  // Asset's position in the asset tree.
-  uint64 asset_position = 7;
-
-  // Current compliance tree root (StateCommitment, 32 bytes).
-  bytes compliance_anchor = 8;
-  // Current asset tree root (StateCommitment, 32 bytes).
-  bytes asset_anchor = 9;
-
-  // The indexed leaf data for asset IMT proof verification.
-  // Contains (value, next_index, next_value) needed for membership/non-membership proofs.
-  IndexedLeafData asset_indexed_leaf = 10;
-}
-
-// Request for querying a user's registered compliance leaf.
-message ComplianceUserLeafRequest {
-  // The address to look up.
-  core.keys.v1.Address address = 1;
-  // The asset ID to look up.
-  core.asset.v1.AssetId asset_id = 2;
-}
-
-// A wrapper around bytes representing a compliance viewing key (32 bytes).
-message ComplianceViewingKey {
-  bytes inner = 1;
-}
-
-// A compliance leaf in the public on-chain registry for regulated assets.
-message ComplianceLeaf {
-  // The registered address for compliance.
-  core.keys.v1.Address address = 1;
-  // The compliance viewing key for this wallet.
-  ComplianceViewingKey key = 2;
-  // The asset ID this compliance leaf applies to.
-  core.asset.v1.AssetId asset_id = 3;
-}
-
-// Response containing a user's registered compliance leaf.
-message ComplianceUserLeafResponse {
-  // Whether the user is registered for this asset.
-  bool is_registered = 1;
-  // The user's compliance leaf (only present if is_registered is true).
-  ComplianceLeaf leaf = 2;
-}
-
-// A single query in a batch request.
-message ComplianceBatchQuery {
-  // The address to look up.
-  core.keys.v1.Address address = 1;
-  // The asset ID to look up.
-  core.asset.v1.AssetId asset_id = 2;
-}
-
-// Request for batch querying multiple (address, asset) pairs.
-// Use this for multi-spend/multi-output transactions to fetch all proofs in one call.
-message ComplianceBatchMerkleProofsRequest {
-  // The queries to execute. Each query is an (address, asset_id) pair.
-  repeated ComplianceBatchQuery queries = 1;
-}
-
-// Response containing batch Merkle proofs and anchors.
-// Anchors are returned once (they're the same for all queries).
-// Results are returned in the same order as the queries.
-message ComplianceBatchMerkleProofsResponse {
-  // Current compliance tree root (StateCommitment, 32 bytes).
-  bytes compliance_anchor = 1;
-  // Current asset tree root (StateCommitment, 32 bytes).
-  bytes asset_anchor = 2;
-  // Results for each query, in the same order as the request.
-  repeated ComplianceMerkleProofsResponse results = 3;
-}

@@ -64,7 +64,13 @@ impl ComplianceWorker {
     ) {
         let storage = Arc::new(storage);
         let error_slot = Arc::new(Mutex::new(None));
-        let last_height = storage.last_sync_height().unwrap_or(0);
+        let last_height = storage.last_sync_height().unwrap_or_else(|e| {
+            warn!(
+                ?e,
+                "failed to read last sync height from storage, starting from 0"
+            );
+            0
+        });
         let (sync_height_tx, sync_height_rx) = watch::channel(last_height);
 
         let worker = Self {
@@ -87,9 +93,16 @@ impl ComplianceWorker {
         info!("starting compliance scanner worker");
 
         if let Err(e) = self.sync().await {
-            // Store error in error slot
-            *self.error_slot.lock().unwrap() = Some(e.context("sync failed"));
-            return Err(anyhow::anyhow!("sync failed"));
+            // Store error in error slot for retrieval by caller
+            let last_height = self.storage.last_sync_height().unwrap_or(0);
+            let context_msg = format!(
+                "compliance sync failed at height {} (check node connection and storage)",
+                last_height
+            );
+            if let Ok(mut slot) = self.error_slot.lock() {
+                *slot = Some(e.context(context_msg.clone()));
+            }
+            return Err(anyhow::anyhow!("{}", context_msg));
         }
 
         Ok(())
@@ -124,9 +137,12 @@ impl ComplianceWorker {
 
         // Process blocks from the stream
         while let Some(response) = stream.message().await? {
-            let compact_block = response
-                .compact_block
-                .ok_or_else(|| anyhow::anyhow!("empty compact block"))?;
+            let compact_block = response.compact_block.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "compliance sync: received empty compact block response from node \
+                     (possible network or node issue)"
+                )
+            })?;
 
             let height = compact_block.height;
 

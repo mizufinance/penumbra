@@ -9,24 +9,8 @@
 | Per-address registration | Each address key from Orbis, Verify Orbis signature |
 | Asset registration | Verify asset registration |
 
-## 2. Security
 
-| Item | Description |
-|------|-------------|
-| BLACK_HOLE_ACK audit | Replace Element::GENERATOR with NUMS point (hash-to-curve) |
-| ZK circuit verification | Formal verification |
-| Randomness | Verify usage of randomness in ciphertext |
-| IMT security review | Non-membership soundness |
-
-## 3. Client UX
-
-| Item | Description |
-|------|-------------|
-| UX review | Analyze registration and TX flows |
-| Clear errors | Descriptive failure messages |
-| Idempotent registration |  Handle duplicate registrations |
-
-## 4. Benchmarks
+## 2. Benchmarks
 
 | Item | Description |
 |------|-------------|
@@ -37,7 +21,16 @@
 | Tree sync | Compliance sync cost |
 | Scanner throughput | Txs per second |
 
-## 5. Future
+## 3. Improvements
+
+| Item | Description |
+|------|-------------|
+| Scanner speedup | Optimize compliance scanning performance |
+| ZK & ciphertext | In depth analysis of security |
+| UX review | Analyze registration and TX flows for improvements |
+
+
+## 4. Future
 
 | Item | Description |
 |------|-------------|
@@ -46,11 +39,3 @@
 | Key rotation | Protocol for rotation |
 | Asset types | RWA, NFT, ERC20 support |
 
-## 6. Code Quality
-
-| Item | Description |
-|------|-------------|
-| Scanner speedup | Optimize compliance scanning performance |
-| Unify providers | Consolidate ComplianceProofProvider implementations |
-| Proto deduplication | Remove duplicate view/compliance proto conversions |
-| Error handling audit | Replace `.ok()` in manager.rs with explicit error handling for compliance anchors |

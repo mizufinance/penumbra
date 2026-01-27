@@ -32,37 +32,10 @@ pub fn asset_registered(
         asset_id: Some(asset_id.into()),
         is_regulated,
         position,
-        indexed_leaf: Some(indexed_leaf_to_proto(&indexed_leaf)),
+        indexed_leaf: Some(indexed_leaf.into()),
         low_leaf_position,
-        updated_low_leaf: Some(indexed_leaf_to_proto(&updated_low_leaf)),
+        updated_low_leaf: Some(updated_low_leaf.into()),
     }
-}
-
-fn indexed_leaf_to_proto(leaf: &IndexedLeaf) -> pb::IndexedLeafData {
-    pb::IndexedLeafData {
-        value: leaf.value.to_bytes().to_vec(),
-        next_index: leaf.next_index,
-        next_value: leaf.next_value.to_bytes().to_vec(),
-    }
-}
-
-fn indexed_leaf_from_proto(proto: pb::IndexedLeafData) -> anyhow::Result<IndexedLeaf> {
-    let value_bytes: [u8; 32] = proto
-        .value
-        .try_into()
-        .map_err(|_| anyhow!("value must be 32 bytes"))?;
-    let next_value_bytes: [u8; 32] = proto
-        .next_value
-        .try_into()
-        .map_err(|_| anyhow!("next_value must be 32 bytes"))?;
-
-    Ok(IndexedLeaf {
-        value: decaf377::Fq::from_bytes_checked(&value_bytes)
-            .map_err(|_| anyhow!("invalid value field element"))?,
-        next_index: proto.next_index,
-        next_value: decaf377::Fq::from_bytes_checked(&next_value_bytes)
-            .map_err(|_| anyhow!("invalid next_value field element"))?,
-    })
 }
 
 /// Create a compliance anchor event proto for emitting via record_proto.
@@ -148,17 +121,15 @@ impl TryFrom<pb::EventAssetRegistered> for EventAssetRegistered {
                     .try_into()?,
                 is_regulated: value.is_regulated,
                 position: value.position,
-                indexed_leaf: indexed_leaf_from_proto(
-                    value
-                        .indexed_leaf
-                        .ok_or(anyhow!("missing `indexed_leaf`"))?,
-                )?,
+                indexed_leaf: value
+                    .indexed_leaf
+                    .ok_or(anyhow!("missing `indexed_leaf`"))?
+                    .try_into()?,
                 low_leaf_position: value.low_leaf_position,
-                updated_low_leaf: indexed_leaf_from_proto(
-                    value
-                        .updated_low_leaf
-                        .ok_or(anyhow!("missing `updated_low_leaf`"))?,
-                )?,
+                updated_low_leaf: value
+                    .updated_low_leaf
+                    .ok_or(anyhow!("missing `updated_low_leaf`"))?
+                    .try_into()?,
             })
         }
         inner(value).context(format!("parsing {}", pb::EventAssetRegistered::NAME))
@@ -171,9 +142,9 @@ impl From<EventAssetRegistered> for pb::EventAssetRegistered {
             asset_id: Some(value.asset_id.into()),
             is_regulated: value.is_regulated,
             position: value.position,
-            indexed_leaf: Some(indexed_leaf_to_proto(&value.indexed_leaf)),
+            indexed_leaf: Some(value.indexed_leaf.into()),
             low_leaf_position: value.low_leaf_position,
-            updated_low_leaf: Some(indexed_leaf_to_proto(&value.updated_low_leaf)),
+            updated_low_leaf: Some(value.updated_low_leaf.into()),
         }
     }
 }

@@ -14,7 +14,6 @@ use penumbra_sdk_keys::keys::AddressComplianceKey;
 use crate::indexed_tree::{IndexedLeaf, IMT_LEAF_DOMAIN_SEP};
 use crate::structs::{ComplianceLeaf, MerklePath};
 use crate::tree::DEFAULT_DEPTH;
-use crate::BLACK_HOLE_ACK;
 
 /// Domain separator for detection key derivation.
 static DETECTION_DOMAIN: Lazy<Fq> = Lazy::new(|| {
@@ -677,7 +676,9 @@ pub fn verify_compliance_integrity(
         &compliance_anchor,
     )?;
 
-    let target_ack = select_compliance_key(cs.clone(), &is_regulated, &user_leaf_var)?;
+    // For regulated assets, use the user's ACK from the compliance leaf.
+    // For unregulated assets, any value works since encryption verification is skipped.
+    let target_ack = user_leaf_var.key.clone();
 
     // Derive all 3 daily public keys (detection, core, extension)
     let (pk_detection, pk_core, pk_extension) = target_ack.derive_all_daily_public_keys(
@@ -699,6 +700,7 @@ pub fn verify_compliance_integrity(
 
     verify_tiered_poseidon_encryption(
         cs.clone(),
+        &is_regulated,
         &ss_detection,
         &ss_core,
         &ss_extension,
@@ -844,22 +846,6 @@ fn verify_compliance_registry_path(
     Ok(())
 }
 
-/// Select compliance key based on regulation status.
-fn select_compliance_key(
-    cs: ConstraintSystemRef<Fq>,
-    is_regulated: &Boolean<Fq>,
-    user_leaf_var: &ComplianceLeafVar,
-) -> Result<AddressComplianceKeyVar, SynthesisError> {
-    let black_hole_ack_var = ElementVar::new_constant(cs, *BLACK_HOLE_ACK)?;
-    let black_hole_ack_wrapped = AddressComplianceKeyVar::new(black_hole_ack_var);
-
-    // Select: regulated -> user's ACK, unregulated -> BLACK_HOLE
-    let target_ack_inner =
-        is_regulated.select(user_leaf_var.key.inner(), black_hole_ack_wrapped.inner())?;
-
-    Ok(AddressComplianceKeyVar::new(target_ack_inner))
-}
-
 /// Derive all 3 shared secrets from the ephemeral secret and 3 daily public keys.
 ///
 /// Also verifies the EPK constraint: EPK = r * B_d
@@ -904,8 +890,13 @@ fn derive_all_shared_secrets(
 /// - encrypted_extension: encrypted with ss_extension (3 Fqs)
 ///
 /// Total: 7 Fq elements in compliance_ciphertext
+///
+/// Encryption verification is conditional on `is_regulated`:
+/// - For regulated assets: encryption is verified (user must encrypt correctly)
+/// - For unregulated assets: enforcement is skipped (IMT proof is sufficient)
 fn verify_tiered_poseidon_encryption(
     cs: ConstraintSystemRef<Fq>,
+    is_regulated: &Boolean<Fq>,
     ss_detection: &ElementVar,
     ss_core: &ElementVar,
     ss_extension: &ElementVar,
@@ -952,7 +943,7 @@ fn verify_tiered_poseidon_encryption(
         (detection_counter, seed_detection.clone()),
     )?;
     let computed_detection = &detection_plaintext + &detection_keystream;
-    computed_detection.enforce_equal(&compliance_ciphertext[0])?;
+    computed_detection.conditional_enforce_equal(&compliance_ciphertext[0], is_regulated)?;
 
     // === CORE: 3 Fq elements (amount + self address) ===
     let seed_core = poseidon377::r1cs::hash_2(
@@ -967,7 +958,7 @@ fn verify_tiered_poseidon_encryption(
         let keystream =
             poseidon377::r1cs::hash_2(cs.clone(), &seed_core, (counter, seed_core.clone()))?;
         let computed_cipher = plain_var + &keystream;
-        computed_cipher.enforce_equal(&compliance_ciphertext[1 + i])?;
+        computed_cipher.conditional_enforce_equal(&compliance_ciphertext[1 + i], is_regulated)?;
     }
 
     // === EXTENSION: 3 Fq elements (counterparty address) ===
@@ -986,7 +977,7 @@ fn verify_tiered_poseidon_encryption(
             (counter, seed_extension.clone()),
         )?;
         let computed_cipher = plain_var + &keystream;
-        computed_cipher.enforce_equal(&compliance_ciphertext[4 + i])?;
+        computed_cipher.conditional_enforce_equal(&compliance_ciphertext[4 + i], is_regulated)?;
     }
 
     Ok(())
@@ -999,6 +990,7 @@ fn verify_tiered_poseidon_encryption(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IndexedMerkleTree;
     use ark_relations::r1cs::ConstraintSystem;
     use decaf377::{Element, Fr};
     use penumbra_sdk_asset::asset;
@@ -1463,6 +1455,124 @@ mod tests {
         assert!(
             satisfied,
             "Circuit should be satisfied for non-membership proof with large asset_id"
+        );
+    }
+
+    /// Test that invalid membership proof (wrong asset_id) fails circuit
+    #[test]
+    fn test_invalid_membership_fails_circuit() {
+        let cs = ConstraintSystem::<Fq>::new_ref();
+
+        let mut tree = IndexedMerkleTree::new();
+        let real_asset = Fq::from(42u64);
+        tree.insert(real_asset).unwrap();
+
+        // Get valid proof for real_asset
+        let (position, indexed_leaf, auth_path) =
+            tree.membership_proof(real_asset).expect("membership proof");
+        let merkle_path = MerklePath::from_auth_path(auth_path);
+
+        // But claim it's for a DIFFERENT asset_id
+        let fake_asset = Fq::from(999u64);
+        let asset_id_var = FqVar::new_witness(cs.clone(), || Ok(fake_asset)).unwrap();
+        let is_regulated = Boolean::new_witness(cs.clone(), || Ok(true)).unwrap();
+        let indexed_leaf_var = IndexedLeafVar::new_witness(cs.clone(), &indexed_leaf).unwrap();
+        let position_var = FqVar::new_witness(cs.clone(), || Ok(Fq::from(position))).unwrap();
+        let anchor_var = FqVar::new_input(cs.clone(), || Ok(tree.root().0)).unwrap();
+
+        verify_asset_registry_imt(
+            cs.clone(),
+            asset_id_var,
+            &is_regulated,
+            &indexed_leaf_var,
+            &merkle_path,
+            &position_var,
+            &anchor_var,
+        )
+        .unwrap();
+
+        assert!(
+            !cs.is_satisfied().unwrap(),
+            "Circuit should FAIL when asset_id doesn't match leaf"
+        );
+    }
+
+    /// Test that invalid non-membership proof (value not in gap) fails circuit
+    #[test]
+    fn test_invalid_non_membership_fails_circuit() {
+        let cs = ConstraintSystem::<Fq>::new_ref();
+
+        let mut tree = IndexedMerkleTree::new();
+        tree.insert(Fq::from(100u64)).unwrap();
+        tree.insert(Fq::from(300u64)).unwrap();
+
+        // Get non-membership proof for value 200 (valid gap: 100 < 200 < 300)
+        let (position, indexed_leaf, auth_path) = tree
+            .non_membership_proof(Fq::from(200u64))
+            .expect("non-membership proof");
+        let merkle_path = MerklePath::from_auth_path(auth_path);
+
+        // But claim it's for value 50 (NOT in this gap: 100 < 50 is false)
+        let fake_value = Fq::from(50u64);
+        let asset_id_var = FqVar::new_witness(cs.clone(), || Ok(fake_value)).unwrap();
+        let is_regulated = Boolean::new_witness(cs.clone(), || Ok(false)).unwrap();
+        let indexed_leaf_var = IndexedLeafVar::new_witness(cs.clone(), &indexed_leaf).unwrap();
+        let position_var = FqVar::new_witness(cs.clone(), || Ok(Fq::from(position))).unwrap();
+        let anchor_var = FqVar::new_input(cs.clone(), || Ok(tree.root().0)).unwrap();
+
+        verify_asset_registry_imt(
+            cs.clone(),
+            asset_id_var,
+            &is_regulated,
+            &indexed_leaf_var,
+            &merkle_path,
+            &position_var,
+            &anchor_var,
+        )
+        .unwrap();
+
+        assert!(
+            !cs.is_satisfied().unwrap(),
+            "Circuit should FAIL when value not in gap"
+        );
+    }
+
+    /// Test that wrong anchor fails circuit
+    #[test]
+    fn test_wrong_anchor_fails_circuit() {
+        let cs = ConstraintSystem::<Fq>::new_ref();
+
+        let mut tree = IndexedMerkleTree::new();
+        tree.insert(Fq::from(42u64)).unwrap();
+
+        let (position, indexed_leaf, auth_path) = tree
+            .membership_proof(Fq::from(42u64))
+            .expect("membership proof");
+        let merkle_path = MerklePath::from_auth_path(auth_path);
+
+        let asset_id_var = FqVar::new_witness(cs.clone(), || Ok(Fq::from(42u64))).unwrap();
+        let is_regulated = Boolean::new_witness(cs.clone(), || Ok(true)).unwrap();
+        let indexed_leaf_var = IndexedLeafVar::new_witness(cs.clone(), &indexed_leaf).unwrap();
+        let position_var = FqVar::new_witness(cs.clone(), || Ok(Fq::from(position))).unwrap();
+
+        // Use WRONG anchor
+        let wrong_anchor = Fq::from(12345u64);
+        let anchor_var = FqVar::new_input(cs.clone(), || Ok(wrong_anchor)).unwrap();
+
+        verify_asset_registry_imt(
+            cs.clone(),
+            asset_id_var,
+            &is_regulated,
+            &indexed_leaf_var,
+            &merkle_path,
+            &position_var,
+            &anchor_var,
+        )
+        .unwrap();
+
+        assert!(
+            !cs.is_satisfied().unwrap(),
+            "Circuit should FAIL with wrong anchor"
         );
     }
 }
