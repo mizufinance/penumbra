@@ -24,7 +24,7 @@ use crate::crypto::COMPLIANCE_STREAM_CIPHER_DOMAIN;
 use crate::structs::ComplianceCiphertext;
 
 /// Decrypted core data: amount and self address.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CoreData {
     pub amount: Amount,
     pub self_diversified_generator: Element,
@@ -32,14 +32,14 @@ pub struct CoreData {
 }
 
 /// Decrypted extension data: counterparty address.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExtensionData {
     pub counterparty_diversified_generator: Element,
     pub counterparty_transmission_key: [u8; 32],
 }
 
 /// Full decrypted compliance data (all tiers).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FullComplianceData {
     pub asset_id: asset::Id,
     pub core: CoreData,

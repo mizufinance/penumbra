@@ -753,6 +753,7 @@ mod tests {
     use penumbra_sdk_compliance::TOTAL_WIRE_BYTES;
     use penumbra_sdk_dex::lp::position;
     use penumbra_sdk_fee::GasPrices;
+    use penumbra_sdk_proto::core::component::compliance::v1 as compliance_pb;
     use penumbra_sdk_proto::view::v1 as pb;
     use penumbra_sdk_sct::Nullifier;
     use penumbra_sdk_shielded_pool::{fmd, note, Note};
@@ -781,7 +782,7 @@ mod tests {
             queries: Vec<(Address, asset::Id)>,
         ) -> Pin<
             Box<
-                dyn Future<Output = Result<pb::ComplianceBatchMerkleProofsResponse>>
+                dyn Future<Output = Result<compliance_pb::ComplianceBatchMerkleProofsResponse>>
                     + Send
                     + 'static,
             >,
@@ -789,7 +790,7 @@ mod tests {
             // Return mock batch proofs indicating all users are registered and assets are regulated
             let results = queries
                 .into_iter()
-                .map(|_| pb::ComplianceMerkleProofsResponse {
+                .map(|_| compliance_pb::ComplianceMerkleProofsResponse {
                     user_registered: true,
                     asset_registered: true,
                     is_regulated: true,
@@ -799,7 +800,7 @@ mod tests {
                     asset_position: 0,
                     compliance_anchor: vec![0u8; 32],
                     asset_anchor: vec![0u8; 32],
-                    asset_indexed_leaf: Some(pb::IndexedLeafData {
+                    asset_indexed_leaf: Some(compliance_pb::IndexedLeafData {
                         value: vec![0u8; 32],
                         next_index: 0,
                         next_value: vec![0u8; 32],
@@ -807,7 +808,7 @@ mod tests {
                 })
                 .collect();
             async move {
-                Ok(pb::ComplianceBatchMerkleProofsResponse {
+                Ok(compliance_pb::ComplianceBatchMerkleProofsResponse {
                     compliance_anchor: vec![0u8; 32],
                     asset_anchor: vec![0u8; 32],
                     results,
@@ -1035,11 +1036,15 @@ mod tests {
             _address: Address,
             _asset_id: asset::Id,
         ) -> Pin<
-            Box<dyn Future<Output = Result<pb::ComplianceMerkleProofsResponse>> + Send + 'static>,
+            Box<
+                dyn Future<Output = Result<compliance_pb::ComplianceMerkleProofsResponse>>
+                    + Send
+                    + 'static,
+            >,
         > {
             // Return mock proofs indicating user is registered and asset is regulated
             async move {
-                Ok(pb::ComplianceMerkleProofsResponse {
+                Ok(compliance_pb::ComplianceMerkleProofsResponse {
                     user_registered: true,
                     asset_registered: true,
                     is_regulated: true,
@@ -1049,7 +1054,7 @@ mod tests {
                     asset_position: 0,
                     compliance_anchor: vec![0u8; 32],
                     asset_anchor: vec![0u8; 32],
-                    asset_indexed_leaf: Some(pb::IndexedLeafData {
+                    asset_indexed_leaf: Some(compliance_pb::IndexedLeafData {
                         value: vec![0u8; 32],
                         next_index: 0,
                         next_value: vec![0u8; 32],
@@ -1062,8 +1067,13 @@ mod tests {
             &mut self,
             address: Address,
             asset_id: asset::Id,
-        ) -> Pin<Box<dyn Future<Output = Result<pb::ComplianceUserLeafResponse>> + Send + 'static>>
-        {
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<compliance_pb::ComplianceUserLeafResponse>>
+                    + Send
+                    + 'static,
+            >,
+        > {
             // Return a mock leaf using demo MCK for consistency with original test behavior
             let leaf = penumbra_sdk_compliance::ComplianceLeaf::new(
                 &penumbra_sdk_keys::keys::MasterComplianceKey::demo(),
@@ -1071,11 +1081,11 @@ mod tests {
                 asset_id,
             );
             async move {
-                Ok(pb::ComplianceUserLeafResponse {
+                Ok(compliance_pb::ComplianceUserLeafResponse {
                     is_registered: true,
-                    leaf: Some(pb::ComplianceLeaf {
+                    leaf: Some(compliance_pb::ComplianceLeaf {
                         address: Some(leaf.address.into()),
-                        key: Some(pb::ComplianceViewingKey {
+                        key: Some(compliance_pb::ComplianceViewingKey {
                             inner: leaf.key.0.vartime_compress().0.to_vec(),
                         }),
                         asset_id: Some(leaf.asset_id.into()),
@@ -1191,7 +1201,7 @@ mod tests {
             queries: Vec<(Address, asset::Id)>,
         ) -> Pin<
             Box<
-                dyn Future<Output = Result<pb::ComplianceBatchMerkleProofsResponse>>
+                dyn Future<Output = Result<compliance_pb::ComplianceBatchMerkleProofsResponse>>
                     + Send
                     + 'static,
             >,
@@ -1199,7 +1209,7 @@ mod tests {
             // Return mock batch proofs indicating all users are registered but assets are unregulated
             let results = queries
                 .into_iter()
-                .map(|_| pb::ComplianceMerkleProofsResponse {
+                .map(|_| compliance_pb::ComplianceMerkleProofsResponse {
                     user_registered: true,
                     asset_registered: true,
                     is_regulated: false,
@@ -1209,7 +1219,7 @@ mod tests {
                     asset_position: 0,
                     compliance_anchor: vec![0u8; 32],
                     asset_anchor: vec![0u8; 32],
-                    asset_indexed_leaf: Some(pb::IndexedLeafData {
+                    asset_indexed_leaf: Some(compliance_pb::IndexedLeafData {
                         value: vec![0u8; 32],
                         next_index: 0,
                         next_value: vec![0u8; 32],
@@ -1217,7 +1227,7 @@ mod tests {
                 })
                 .collect();
             async move {
-                Ok(pb::ComplianceBatchMerkleProofsResponse {
+                Ok(compliance_pb::ComplianceBatchMerkleProofsResponse {
                     compliance_anchor: vec![0u8; 32],
                     asset_anchor: vec![0u8; 32],
                     results,
@@ -1445,11 +1455,15 @@ mod tests {
             _address: Address,
             _asset_id: asset::Id,
         ) -> Pin<
-            Box<dyn Future<Output = Result<pb::ComplianceMerkleProofsResponse>> + Send + 'static>,
+            Box<
+                dyn Future<Output = Result<compliance_pb::ComplianceMerkleProofsResponse>>
+                    + Send
+                    + 'static,
+            >,
         > {
             // Return mock proofs indicating asset is NOT regulated
             async move {
-                Ok(pb::ComplianceMerkleProofsResponse {
+                Ok(compliance_pb::ComplianceMerkleProofsResponse {
                     user_registered: false,
                     asset_registered: true,
                     is_regulated: false, // Key: unregulated
@@ -1459,7 +1473,7 @@ mod tests {
                     asset_position: 0,
                     compliance_anchor: vec![0u8; 32],
                     asset_anchor: vec![0u8; 32],
-                    asset_indexed_leaf: Some(pb::IndexedLeafData {
+                    asset_indexed_leaf: Some(compliance_pb::IndexedLeafData {
                         value: vec![0u8; 32],
                         next_index: 0,
                         next_value: vec![0u8; 32],
@@ -1472,11 +1486,16 @@ mod tests {
             &mut self,
             _address: Address,
             _asset_id: asset::Id,
-        ) -> Pin<Box<dyn Future<Output = Result<pb::ComplianceUserLeafResponse>> + Send + 'static>>
-        {
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<compliance_pb::ComplianceUserLeafResponse>>
+                    + Send
+                    + 'static,
+            >,
+        > {
             // Return not registered for unregulated asset
             async move {
-                Ok(pb::ComplianceUserLeafResponse {
+                Ok(compliance_pb::ComplianceUserLeafResponse {
                     is_registered: false,
                     leaf: None,
                 })

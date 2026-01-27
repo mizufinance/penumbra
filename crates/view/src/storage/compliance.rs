@@ -14,7 +14,12 @@ pub struct IndexedLeafData {
 /// Convert u64 position to i64 for SQLite storage, with overflow check.
 #[inline]
 fn position_to_i64(position: u64) -> anyhow::Result<i64> {
-    i64::try_from(position).map_err(|_| anyhow::anyhow!("position {} exceeds i64::MAX", position))
+    i64::try_from(position).map_err(|_| {
+        anyhow::anyhow!(
+            "compliance tree position {} exceeds i64::MAX (tree too large for SQLite storage)",
+            position
+        )
+    })
 }
 
 /// Storage wrapper for compliance tree operations in SQLite.
@@ -41,7 +46,12 @@ impl ComplianceTreeStore<'_, '_> {
         bytes
             .map(|bytes| {
                 <[u8; 32]>::try_from(bytes)
-                    .map_err(|_| anyhow::anyhow!("commitment must be 32 bytes"))
+                    .map_err(|b: Vec<u8>| {
+                        anyhow::anyhow!(
+                            "user tree commitment must be 32 bytes, got {} (database may be corrupted)",
+                            b.len()
+                        )
+                    })
                     .and_then(|array| StateCommitment::try_from(array).map_err(Into::into))
             })
             .transpose()
@@ -90,7 +100,12 @@ impl ComplianceTreeStore<'_, '_> {
         bytes
             .map(|bytes| {
                 <[u8; 32]>::try_from(bytes)
-                    .map_err(|_| anyhow::anyhow!("hash must be 32 bytes"))
+                    .map_err(|b: Vec<u8>| {
+                        anyhow::anyhow!(
+                            "user tree hash must be 32 bytes, got {} (database may be corrupted)",
+                            b.len()
+                        )
+                    })
                     .and_then(|array| StateCommitment::try_from(array).map_err(Into::into))
             })
             .transpose()
@@ -142,14 +157,26 @@ impl ComplianceTreeStore<'_, '_> {
 
         match result {
             Some((value, next_index, next_value)) => {
-                let value: [u8; 32] = value
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("value must be 32 bytes"))?;
-                let next_value: [u8; 32] = next_value
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("next_value must be 32 bytes"))?;
+                let value: [u8; 32] = value.try_into().map_err(|v: Vec<u8>| {
+                    anyhow::anyhow!(
+                        "asset leaf value must be 32 bytes, got {} at position {} (database may be corrupted)",
+                        v.len(),
+                        position
+                    )
+                })?;
+                let next_value: [u8; 32] = next_value.try_into().map_err(|v: Vec<u8>| {
+                    anyhow::anyhow!(
+                        "asset leaf next_value must be 32 bytes, got {} at position {} (database may be corrupted)",
+                        v.len(),
+                        position
+                    )
+                })?;
                 let next_index = u64::try_from(next_index).map_err(|_| {
-                    anyhow::anyhow!("negative next_index in database: {}", next_index)
+                    anyhow::anyhow!(
+                        "asset leaf next_index is negative ({}) at position {} (database may be corrupted)",
+                        next_index,
+                        position
+                    )
                 })?;
                 Ok(Some(IndexedLeafData {
                     value,
@@ -164,8 +191,12 @@ impl ComplianceTreeStore<'_, '_> {
     /// Add an asset tree indexed leaf.
     pub fn add_asset_leaf(&mut self, position: u64, leaf: IndexedLeafData) -> anyhow::Result<()> {
         let position = position_to_i64(position)?;
-        let next_index = i64::try_from(leaf.next_index)
-            .map_err(|_| anyhow::anyhow!("next_index {} exceeds i64::MAX", leaf.next_index))?;
+        let next_index = i64::try_from(leaf.next_index).map_err(|_| {
+            anyhow::anyhow!(
+                "asset leaf next_index {} exceeds i64::MAX (value too large for SQLite storage)",
+                leaf.next_index
+            )
+        })?;
 
         self.0
             .prepare_cached(
@@ -206,7 +237,12 @@ impl ComplianceTreeStore<'_, '_> {
         bytes
             .map(|bytes| {
                 <[u8; 32]>::try_from(bytes)
-                    .map_err(|_| anyhow::anyhow!("hash must be 32 bytes"))
+                    .map_err(|b: Vec<u8>| {
+                        anyhow::anyhow!(
+                            "asset tree hash must be 32 bytes, got {} (database may be corrupted)",
+                            b.len()
+                        )
+                    })
                     .and_then(|array| StateCommitment::try_from(array).map_err(Into::into))
             })
             .transpose()
@@ -260,12 +296,20 @@ impl ComplianceTreeStore<'_, '_> {
 
         match result {
             Some((user_root, asset_root)) => {
-                let user_root: [u8; 32] = user_root
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("user_root must be 32 bytes"))?;
-                let asset_root: [u8; 32] = asset_root
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("asset_root must be 32 bytes"))?;
+                let user_root: [u8; 32] = user_root.try_into().map_err(|v: Vec<u8>| {
+                    anyhow::anyhow!(
+                        "anchor user_root must be 32 bytes, got {} at height {} (database may be corrupted)",
+                        v.len(),
+                        height
+                    )
+                })?;
+                let asset_root: [u8; 32] = asset_root.try_into().map_err(|v: Vec<u8>| {
+                    anyhow::anyhow!(
+                        "anchor asset_root must be 32 bytes, got {} at height {} (database may be corrupted)",
+                        v.len(),
+                        height
+                    )
+                })?;
                 Ok(Some((
                     StateCommitment::try_from(user_root)?,
                     StateCommitment::try_from(asset_root)?,
@@ -320,12 +364,18 @@ impl ComplianceTreeStore<'_, '_> {
 
         match result {
             Some((height, user_root, asset_root)) => {
-                let user_root: [u8; 32] = user_root
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("user_root must be 32 bytes"))?;
-                let asset_root: [u8; 32] = asset_root
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("asset_root must be 32 bytes"))?;
+                let user_root: [u8; 32] = user_root.try_into().map_err(|v: Vec<u8>| {
+                    anyhow::anyhow!(
+                        "latest anchor user_root must be 32 bytes, got {} (database may be corrupted)",
+                        v.len()
+                    )
+                })?;
+                let asset_root: [u8; 32] = asset_root.try_into().map_err(|v: Vec<u8>| {
+                    anyhow::anyhow!(
+                        "latest anchor asset_root must be 32 bytes, got {} (database may be corrupted)",
+                        v.len()
+                    )
+                })?;
                 Ok(Some((
                     height as u64,
                     StateCommitment::try_from(user_root)?,
@@ -390,9 +440,12 @@ impl ComplianceTreeStore<'_, '_> {
 
         match result {
             Some((position, ack, commitment)) => {
-                let commitment: [u8; 32] = commitment
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("commitment must be 32 bytes"))?;
+                let commitment: [u8; 32] = commitment.try_into().map_err(|v: Vec<u8>| {
+                    anyhow::anyhow!(
+                        "leaf data commitment must be 32 bytes, got {} (database may be corrupted)",
+                        v.len()
+                    )
+                })?;
                 Ok(Some((
                     position as u64,
                     ack,

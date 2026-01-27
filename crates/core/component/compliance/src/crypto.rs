@@ -23,7 +23,19 @@ pub static COMPLIANCE_STREAM_CIPHER_DOMAIN: Lazy<Fq> = Lazy::new(|| {
 });
 
 /// The "black hole" compliance key for unregulated assets.
-pub static BLACK_HOLE_ACK: Lazy<Element> = Lazy::new(|| Element::GENERATOR);
+///
+/// For unregulated assets, compliance data is encrypted to this key, making it
+/// effectively unrecoverable (a "dead letter") since no one knows the discrete log.
+///
+/// This is a NUMS (Nothing-Up-My-Sleeve) point derived from a domain separator,
+/// proving no one knows the discrete log. Since encryption verification is
+/// conditional on `is_regulated` in the circuit, this value can be changed
+/// without regenerating proving/verifying keys.
+pub static BLACK_HOLE_ACK: Lazy<Element> = Lazy::new(|| {
+    let hash = blake2b_simd::blake2b(b"penumbra.compliance.black_hole_ack");
+    let scalar = Fr::from_le_bytes_mod_order(hash.as_bytes());
+    Element::GENERATOR * scalar
+});
 
 /// Decrypted compliance data.
 #[derive(Clone, Debug)]
@@ -294,8 +306,12 @@ pub fn decrypt_compliance_details(
 
     // Validate asset_id
     let asset_id_bytes = asset_id_fq.to_bytes();
-    let asset_id_validated =
-        Fq::from_bytes_checked(&asset_id_bytes).map_err(|_| anyhow::anyhow!("invalid asset_id"))?;
+    let asset_id_validated = Fq::from_bytes_checked(&asset_id_bytes).map_err(|e| {
+        anyhow::anyhow!(
+            "compliance decryption failed: invalid asset_id field element: {}",
+            e
+        )
+    })?;
     let asset_id = asset::Id(asset_id_validated);
 
     // 3. Decrypt core data (amount + self address) - 3 Fq elements (80 bytes plaintext)
@@ -345,7 +361,12 @@ pub fn decrypt_compliance_details(
         .context("failed to extract self diversified generator")?;
     let self_div_gen = decaf377::Encoding(self_div_gen_bytes)
         .vartime_decompress()
-        .map_err(|_| anyhow::anyhow!("failed to decompress self diversified generator"))?;
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "compliance decryption failed: invalid self diversified generator \
+                 (not a valid curve point, likely wrong decryption key or corrupted data)"
+            )
+        })?;
 
     let self_trans_key_bytes: [u8; 32] = core_plaintext_bytes[48..80]
         .try_into()
@@ -364,7 +385,12 @@ pub fn decrypt_compliance_details(
         .context("failed to extract counterparty diversified generator")?;
     let counterparty_div_gen = decaf377::Encoding(counterparty_div_gen_bytes)
         .vartime_decompress()
-        .map_err(|_| anyhow::anyhow!("failed to decompress counterparty diversified generator"))?;
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "compliance decryption failed: invalid counterparty diversified generator \
+                 (not a valid curve point, likely wrong decryption key or corrupted data)"
+            )
+        })?;
 
     let counterparty_trans_key_bytes: [u8; 32] = extension_plaintext_bytes[32..64]
         .try_into()

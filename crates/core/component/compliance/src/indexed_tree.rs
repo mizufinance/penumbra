@@ -1,8 +1,9 @@
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use ark_ff::PrimeField;
 use blake2b_simd::Params;
 use decaf377::Fq;
 use once_cell::sync::Lazy;
+use penumbra_sdk_proto::{core::component::compliance::v1 as pb, DomainType};
 use penumbra_sdk_tct::StateCommitment;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -131,6 +132,46 @@ impl<'de> Deserialize<'de> for IndexedLeaf {
             value,
             next_index: helper.next_index,
             next_value,
+        })
+    }
+}
+
+// Proto conversion implementations for IndexedLeaf
+impl DomainType for IndexedLeaf {
+    type Proto = pb::IndexedLeafData;
+}
+
+impl From<IndexedLeaf> for pb::IndexedLeafData {
+    fn from(leaf: IndexedLeaf) -> Self {
+        pb::IndexedLeafData {
+            value: leaf.value.to_bytes().to_vec(),
+            next_index: leaf.next_index,
+            next_value: leaf.next_value.to_bytes().to_vec(),
+        }
+    }
+}
+
+impl TryFrom<pb::IndexedLeafData> for IndexedLeaf {
+    type Error = anyhow::Error;
+
+    fn try_from(proto: pb::IndexedLeafData) -> Result<Self> {
+        let value_bytes: [u8; 32] = proto.value.try_into().map_err(|v: Vec<u8>| {
+            anyhow!("IndexedLeaf proto: value must be 32 bytes, got {}", v.len())
+        })?;
+        let next_value_bytes: [u8; 32] = proto.next_value.try_into().map_err(|v: Vec<u8>| {
+            anyhow!(
+                "IndexedLeaf proto: next_value must be 32 bytes, got {}",
+                v.len()
+            )
+        })?;
+
+        Ok(IndexedLeaf {
+            value: Fq::from_bytes_checked(&value_bytes)
+                .map_err(|e| anyhow!("IndexedLeaf proto: invalid value field element: {}", e))?,
+            next_index: proto.next_index,
+            next_value: Fq::from_bytes_checked(&next_value_bytes).map_err(|e| {
+                anyhow!("IndexedLeaf proto: invalid next_value field element: {}", e)
+            })?,
         })
     }
 }
@@ -432,28 +473,45 @@ impl IndexedMerkleTree {
     pub fn insert_with_data(&mut self, value: Fq) -> Result<InsertResult> {
         // Check if already exists
         if self.contains(value) {
-            bail!("Value already exists in tree");
+            bail!(
+                "IMT insert failed: value {:?} already exists at position {:?}",
+                value.to_bytes(),
+                self.get_position(value)
+            );
         }
 
         // Don't allow inserting zero (reserved for sentinel)
         if value == Fq::from(0u64) {
-            bail!("Cannot insert zero value (reserved for sentinel)");
+            bail!("IMT insert failed: zero value is reserved for sentinel leaf");
         }
 
         // Find the low leaf
-        let (low_pos, low_leaf) = self
-            .find_low_leaf(value)
-            .ok_or_else(|| anyhow::anyhow!("Could not find low leaf for value"))?;
+        let (low_pos, low_leaf) = self.find_low_leaf(value).ok_or_else(|| {
+            anyhow::anyhow!(
+                "IMT insert failed: could not find low leaf for value {:?} (tree has {} leaves)",
+                value.to_bytes(),
+                self.leaf_count
+            )
+        })?;
 
         // Ensure this is a gap (non-membership)
         if low_leaf.value == value {
-            bail!("Value already exists (exact match found)");
+            bail!(
+                "IMT insert failed: value {:?} already exists (exact match at position {})",
+                value.to_bytes(),
+                low_pos
+            );
         }
 
         // Check tree capacity
         let max_leaves = Self::max_leaves_for_depth(self.depth);
         if self.leaf_count >= max_leaves {
-            bail!("Tree is full");
+            bail!(
+                "IMT insert failed: tree is full ({}/{} leaves, depth {})",
+                self.leaf_count,
+                max_leaves,
+                self.depth
+            );
         }
 
         let new_pos = self.leaf_count;
@@ -541,15 +599,23 @@ impl IndexedMerkleTree {
         &self,
         value: Fq,
     ) -> Result<(u64, IndexedLeaf, Vec<[StateCommitment; 3]>)> {
-        let position = self
-            .value_index
-            .get(&value.to_bytes())
-            .ok_or_else(|| anyhow::anyhow!("Value not found in tree"))?;
+        let position = self.value_index.get(&value.to_bytes()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "IMT membership proof failed: value {:?} not found in tree (tree has {} leaves)",
+                value.to_bytes(),
+                self.leaf_count
+            )
+        })?;
 
         let leaf = self
             .leaves
             .get(position)
-            .ok_or_else(|| anyhow::anyhow!("Leaf not found at position"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                "IMT internal error: leaf not found at position {} (index exists but leaf missing)",
+                position
+            )
+            })?
             .clone();
 
         let path = self.auth_path(*position)?;
@@ -565,17 +631,28 @@ impl IndexedMerkleTree {
         value: Fq,
     ) -> Result<(u64, IndexedLeaf, Vec<[StateCommitment; 3]>)> {
         if self.contains(value) {
-            bail!("Cannot generate non-membership proof: value exists in tree");
+            bail!(
+                "IMT non-membership proof failed: value {:?} exists in tree at position {:?}",
+                value.to_bytes(),
+                self.get_position(value)
+            );
         }
 
-        let (low_pos, low_leaf) = self
-            .find_low_leaf(value)
-            .ok_or_else(|| anyhow::anyhow!("Could not find low leaf for value"))?;
+        let (low_pos, low_leaf) = self.find_low_leaf(value).ok_or_else(|| {
+            anyhow::anyhow!(
+                "IMT non-membership proof failed: could not find gap for value {:?} (tree has {} leaves)",
+                value.to_bytes(),
+                self.leaf_count
+            )
+        })?;
 
         // Verify it's actually a gap
         if low_leaf.value >= value || value >= low_leaf.next_value {
             bail!(
-                "Invalid gap: value does not fall between low_leaf.value and low_leaf.next_value"
+                "IMT non-membership proof failed: value {:?} not in gap [{:?}, {:?})",
+                value.to_bytes(),
+                low_leaf.value.to_bytes(),
+                low_leaf.next_value.to_bytes()
             );
         }
 
@@ -923,5 +1000,150 @@ mod tests {
         // Value exactly 100 (membership case)
         let (_, leaf) = tree.find_low_leaf(Fq::from(100u64)).unwrap();
         assert_eq!(leaf.value, Fq::from(100u64));
+    }
+
+    /// Test FQ_MAX is correctly computed as field modulus - 1
+    #[test]
+    fn test_fq_max_is_field_modulus_minus_one() {
+        // FQ_MAX = 0 - 1 in field arithmetic = p - 1
+        let fq_max = *FQ_MAX;
+
+        // Adding 1 should wrap to 0
+        let fq_max_plus_one = fq_max + Fq::from(1u64);
+        assert_eq!(fq_max_plus_one, Fq::from(0u64));
+
+        // FQ_MAX should be the largest value
+        assert!(fq_less_than(&Fq::from(0u64), &fq_max));
+        assert!(fq_less_than(&Fq::from(u64::MAX), &fq_max));
+    }
+
+    /// Test non-membership proof for value near FQ_MAX boundary
+    #[test]
+    fn test_non_membership_near_fq_max() {
+        let tree = IndexedMerkleTree::new();
+
+        // Value just below FQ_MAX should have valid non-membership proof
+        let near_max = *FQ_MAX - Fq::from(1u64);
+        let (pos, leaf, path) = tree.non_membership_proof(near_max).unwrap();
+
+        // Should use sentinel (only leaf in empty tree)
+        assert_eq!(pos, 0);
+        assert_eq!(leaf.value, Fq::from(0u64));
+        assert_eq!(leaf.next_value, *FQ_MAX);
+
+        // Value must be in gap
+        assert!(fq_less_than(&leaf.value, &near_max));
+        assert!(fq_less_than(&near_max, &leaf.next_value));
+
+        // Verify auth path
+        let root = tree.root();
+        assert!(IndexedMerkleTree::verify_auth_path(
+            pos,
+            &leaf,
+            &path,
+            root,
+            DEFAULT_DEPTH
+        ));
+    }
+
+    /// Test that FQ_MAX itself cannot have a non-membership proof
+    /// (it equals sentinel.next_value, so it's not strictly less than)
+    #[test]
+    fn test_fq_max_no_non_membership_proof() {
+        let tree = IndexedMerkleTree::new();
+
+        // FQ_MAX should fail non-membership proof because value >= next_value
+        let result = tree.non_membership_proof(*FQ_MAX);
+        assert!(result.is_err());
+    }
+
+    /// Test strict inequality: value must be < next_value, not <=
+    #[test]
+    fn test_strict_inequality_in_gap() {
+        let mut tree = IndexedMerkleTree::new();
+        tree.insert(Fq::from(100u64)).unwrap();
+
+        // Get the leaf for value 100
+        let leaf = tree.get_leaf(1).unwrap();
+        // leaf.next_value should be FQ_MAX
+
+        // Trying to get non-membership proof for next_value should fail
+        // because value >= next_value violates strict inequality
+        let result = tree.non_membership_proof(leaf.next_value);
+        assert!(result.is_err());
+    }
+
+    /// Test that fq_less_than works correctly for large values (> (p-1)/2)
+    #[test]
+    fn test_fq_less_than_large_values() {
+        let half_modulus = *FQ_MAX / Fq::from(2u64);
+        let large_a = half_modulus + Fq::from(1u64);
+        let large_b = half_modulus + Fq::from(2u64);
+
+        // Both values are > (p-1)/2
+        assert!(fq_less_than(&half_modulus, &large_a));
+        assert!(fq_less_than(&large_a, &large_b));
+        assert!(fq_less_than(&large_b, &*FQ_MAX));
+
+        // Ensure transitivity
+        assert!(fq_less_than(&Fq::from(0u64), &half_modulus));
+        assert!(fq_less_than(&half_modulus, &*FQ_MAX));
+    }
+
+    /// Test non-membership with values in the upper half of the field
+    #[test]
+    fn test_non_membership_upper_field_half() {
+        let tree = IndexedMerkleTree::new();
+
+        // Value in upper half of field
+        let half_modulus = *FQ_MAX / Fq::from(2u64);
+        let upper_value = half_modulus + Fq::from(1000u64);
+
+        let (pos, leaf, path) = tree.non_membership_proof(upper_value).unwrap();
+
+        // Should be in sentinel's gap
+        assert_eq!(pos, 0);
+        assert!(fq_less_than(&leaf.value, &upper_value));
+        assert!(fq_less_than(&upper_value, &leaf.next_value));
+
+        // Verify path
+        let root = tree.root();
+        assert!(IndexedMerkleTree::verify_auth_path(
+            pos,
+            &leaf,
+            &path,
+            root,
+            DEFAULT_DEPTH
+        ));
+    }
+
+    /// Test that adjacent values don't create invalid gaps
+    #[test]
+    fn test_adjacent_values_no_gap() {
+        let mut tree = IndexedMerkleTree::new();
+        tree.insert(Fq::from(100u64)).unwrap();
+        tree.insert(Fq::from(101u64)).unwrap();
+
+        let leaf_100 = tree.get_leaf(1).unwrap();
+        assert_eq!(leaf_100.value, Fq::from(100u64));
+        assert_eq!(leaf_100.next_value, Fq::from(101u64));
+    }
+
+    /// Test sentinel covers entire range in empty tree
+    #[test]
+    fn test_sentinel_covers_full_range() {
+        let tree = IndexedMerkleTree::new();
+        let sentinel = tree.get_leaf(0).unwrap();
+
+        // Sentinel: value=0, next_value=FQ_MAX
+        assert_eq!(sentinel.value, Fq::from(0u64));
+        assert_eq!(sentinel.next_value, *FQ_MAX);
+
+        // Any value 0 < x < FQ_MAX should have valid non-membership proof
+        for v in [1u64, 1000, u64::MAX / 2, u64::MAX] {
+            let value = Fq::from(v);
+            let result = tree.non_membership_proof(value);
+            assert!(result.is_ok(), "Should have proof for value {}", v);
+        }
     }
 }

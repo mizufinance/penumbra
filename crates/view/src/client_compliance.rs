@@ -104,36 +104,43 @@ pub trait ViewClientComplianceExt: ViewClient {
             let response = leaf_future.await?;
 
             if !response.is_registered {
-                anyhow::bail!("User not registered for this asset in compliance registry");
+                anyhow::bail!(
+                    "user not registered in compliance registry for asset {}",
+                    asset_id
+                );
             }
 
-            let proto_leaf = response
-                .leaf
-                .ok_or_else(|| anyhow::anyhow!("User registered but leaf missing from response"))?;
+            let proto_leaf = response.leaf.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "compliance leaf missing from response for asset {} (server returned is_registered=true but no leaf)",
+                    asset_id
+                )
+            })?;
 
             // Parse the proto leaf into native ComplianceLeaf
-            let address: Address = proto_leaf
-                .address
-                .ok_or_else(|| anyhow::anyhow!("missing address in leaf"))?
-                .try_into()?;
+            let address: Address = proto_leaf.address.ok_or_else(|| {
+                anyhow::anyhow!("compliance leaf proto: missing address field")
+            })?.try_into()?;
 
-            let key_proto = proto_leaf
-                .key
-                .ok_or_else(|| anyhow::anyhow!("missing key in leaf"))?;
-            let key_bytes: [u8; 32] = key_proto
-                .inner
-                .as_slice()
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("invalid key length"))?;
-            let key_element = decaf377::Encoding(key_bytes)
-                .vartime_decompress()
-                .map_err(|_| anyhow::anyhow!("invalid key encoding"))?;
+            let key_proto = proto_leaf.key.ok_or_else(|| {
+                anyhow::anyhow!("compliance leaf proto: missing key field")
+            })?;
+            let key_bytes: [u8; 32] = key_proto.inner.as_slice().try_into().map_err(|_| {
+                anyhow::anyhow!(
+                    "compliance leaf proto: key must be 32 bytes, got {}",
+                    key_proto.inner.len()
+                )
+            })?;
+            let key_element = decaf377::Encoding(key_bytes).vartime_decompress().map_err(|_| {
+                anyhow::anyhow!(
+                    "compliance leaf proto: invalid ACK encoding (not a valid curve point)"
+                )
+            })?;
             let key = AddressComplianceKey::new(key_element);
 
-            let asset_id: penumbra_sdk_asset::asset::Id = proto_leaf
-                .asset_id
-                .ok_or_else(|| anyhow::anyhow!("missing asset_id in leaf"))?
-                .try_into()?;
+            let asset_id: penumbra_sdk_asset::asset::Id = proto_leaf.asset_id.ok_or_else(|| {
+                anyhow::anyhow!("compliance leaf proto: missing asset_id field")
+            })?.try_into()?;
 
             Ok(ComplianceLeaf {
                 address,
@@ -201,7 +208,7 @@ pub struct ComplianceMerkleProofsData {
 impl ComplianceMerkleProofsData {
     /// Convert from the proto response to native types.
     pub fn try_from_proto(
-        response: penumbra_sdk_proto::view::v1::ComplianceMerkleProofsResponse,
+        response: penumbra_sdk_proto::core::component::compliance::v1::ComplianceMerkleProofsResponse,
     ) -> Result<Self> {
         use decaf377::Fq;
         use penumbra_sdk_compliance::structs::MerklePathLayer;
@@ -237,22 +244,25 @@ impl ComplianceMerkleProofsData {
         };
 
         // Parse anchors
-        let compliance_anchor_bytes: [u8; 32] = response
-            .compliance_anchor
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid compliance_anchor length"))?;
+        let compliance_anchor_bytes: [u8; 32] =
+            response
+                .compliance_anchor
+                .try_into()
+                .map_err(|v: Vec<u8>| {
+                    anyhow::anyhow!("compliance_anchor must be 32 bytes, got {}", v.len())
+                })?;
         let compliance_anchor = StateCommitment(
             Fq::from_bytes_checked(&compliance_anchor_bytes)
-                .map_err(|_| anyhow::anyhow!("invalid compliance_anchor Fq"))?,
+                .map_err(|e| anyhow::anyhow!("invalid compliance_anchor field element: {}", e))?,
         );
 
-        let asset_anchor_bytes: [u8; 32] = response
-            .asset_anchor
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid asset_anchor length"))?;
+        let asset_anchor_bytes: [u8; 32] =
+            response.asset_anchor.try_into().map_err(|v: Vec<u8>| {
+                anyhow::anyhow!("asset_anchor must be 32 bytes, got {}", v.len())
+            })?;
         let asset_anchor = StateCommitment(
             Fq::from_bytes_checked(&asset_anchor_bytes)
-                .map_err(|_| anyhow::anyhow!("invalid asset_anchor Fq"))?,
+                .map_err(|e| anyhow::anyhow!("invalid asset_anchor field element: {}", e))?,
         );
 
         Ok(Self {
@@ -424,19 +434,30 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
         let compliance_anchor_bytes: [u8; 32] = batch_response
             .compliance_anchor
             .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid compliance_anchor length"))?;
+            .map_err(|v: Vec<u8>| {
+                anyhow::anyhow!(
+                    "batch response: compliance_anchor must be 32 bytes, got {}",
+                    v.len()
+                )
+            })?;
         let compliance_anchor = StateCommitment(
             decaf377::Fq::from_bytes_checked(&compliance_anchor_bytes)
-                .map_err(|_| anyhow::anyhow!("invalid compliance_anchor Fq"))?,
+                .map_err(|e| anyhow::anyhow!("batch response: invalid compliance_anchor: {}", e))?,
         );
 
-        let asset_anchor_bytes: [u8; 32] = batch_response
-            .asset_anchor
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid asset_anchor length"))?;
+        let asset_anchor_bytes: [u8; 32] =
+            batch_response
+                .asset_anchor
+                .try_into()
+                .map_err(|v: Vec<u8>| {
+                    anyhow::anyhow!(
+                        "batch response: asset_anchor must be 32 bytes, got {}",
+                        v.len()
+                    )
+                })?;
         let asset_anchor = StateCommitment(
             decaf377::Fq::from_bytes_checked(&asset_anchor_bytes)
-                .map_err(|_| anyhow::anyhow!("invalid asset_anchor Fq"))?,
+                .map_err(|e| anyhow::anyhow!("batch response: invalid asset_anchor: {}", e))?,
         );
 
         let mut asset_proofs: BTreeMap<
@@ -486,25 +507,46 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
             if !asset_proofs.contains_key(asset_id) {
                 // Parse indexed_leaf from proto response
                 let indexed_leaf = if let Some(leaf_data) = result.asset_indexed_leaf {
-                    let value_bytes: [u8; 32] = leaf_data
-                        .value
-                        .try_into()
-                        .map_err(|_| anyhow::anyhow!("indexed_leaf.value must be 32 bytes"))?;
-                    let next_value_bytes: [u8; 32] = leaf_data
-                        .next_value
-                        .try_into()
-                        .map_err(|_| anyhow::anyhow!("indexed_leaf.next_value must be 32 bytes"))?;
+                    let value_bytes: [u8; 32] =
+                        leaf_data.value.try_into().map_err(|v: Vec<u8>| {
+                            anyhow::anyhow!(
+                                "indexed_leaf.value must be 32 bytes, got {} (asset {})",
+                                v.len(),
+                                asset_id
+                            )
+                        })?;
+                    let next_value_bytes: [u8; 32] =
+                        leaf_data.next_value.try_into().map_err(|v: Vec<u8>| {
+                            anyhow::anyhow!(
+                                "indexed_leaf.next_value must be 32 bytes, got {} (asset {})",
+                                v.len(),
+                                asset_id
+                            )
+                        })?;
                     penumbra_sdk_compliance::IndexedLeaf {
-                        value: decaf377::Fq::from_bytes_checked(&value_bytes)
-                            .map_err(|e| anyhow::anyhow!("invalid indexed_leaf.value: {}", e))?,
+                        value: decaf377::Fq::from_bytes_checked(&value_bytes).map_err(|e| {
+                            anyhow::anyhow!(
+                                "invalid indexed_leaf.value for asset {}: {}",
+                                asset_id,
+                                e
+                            )
+                        })?,
                         next_index: leaf_data.next_index,
                         next_value: decaf377::Fq::from_bytes_checked(&next_value_bytes).map_err(
-                            |e| anyhow::anyhow!("invalid indexed_leaf.next_value: {}", e),
+                            |e| {
+                                anyhow::anyhow!(
+                                    "invalid indexed_leaf.next_value for asset {}: {}",
+                                    asset_id,
+                                    e
+                                )
+                            },
                         )?,
                     }
                 } else {
                     anyhow::bail!(
-                        "asset_indexed_leaf not provided in response - invalid compliance data"
+                        "asset_indexed_leaf missing in batch response for asset {} \
+                         (server returned incomplete data)",
+                        asset_id
                     );
                 };
 
@@ -640,9 +682,16 @@ impl<'a> ComplianceProofProvider for LocalComplianceProofProvider<'a> {
         match leaf_data {
             Some((position, ack_bytes, commitment)) => {
                 // Reconstruct the leaf from stored data
-                let ack_element = decaf377::Encoding(ack_bytes)
-                    .vartime_decompress()
-                    .map_err(|_| anyhow::anyhow!("invalid ACK encoding in storage"))?;
+                let ack_element =
+                    decaf377::Encoding(ack_bytes)
+                        .vartime_decompress()
+                        .map_err(|_| {
+                            anyhow::anyhow!(
+                                "invalid ACK encoding in local storage for asset {} \
+                             (storage may be corrupted, consider rebuilding)",
+                                asset_id
+                            )
+                        })?;
                 let key = AddressComplianceKey::new(ack_element);
 
                 let leaf = ComplianceLeaf {
@@ -653,7 +702,12 @@ impl<'a> ComplianceProofProvider for LocalComplianceProofProvider<'a> {
 
                 // Verify commitment matches
                 if leaf.commit() != commitment {
-                    anyhow::bail!("stored leaf data does not match commitment");
+                    anyhow::bail!(
+                        "compliance leaf integrity check failed for asset {}: \
+                         stored commitment does not match reconstructed leaf \
+                         (storage may be corrupted, consider rebuilding)",
+                        asset_id
+                    );
                 }
 
                 // Get auth path from tree
@@ -877,8 +931,11 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
             .cloned()
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "missing user proof for spend at index {} (address, asset)",
-                    spend_idx
+                    "missing user proof for spend at index {}: \
+                     user may not be registered for asset {} \
+                     (check compliance registration status)",
+                    spend_idx,
+                    spend_asset_id
                 )
             })?;
 
@@ -887,7 +944,12 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
             .get(&(binding_recipient_address.clone(), binding_asset_id))
             .cloned()
             .ok_or_else(|| {
-                anyhow::anyhow!("missing user proof for counterparty in spend binding")
+                anyhow::anyhow!(
+                    "missing user proof for counterparty in spend binding: \
+                     counterparty may not be registered for asset {} \
+                     (recipient must be registered for regulated assets)",
+                    binding_asset_id
+                )
             })?;
 
         {
@@ -954,8 +1016,11 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
                     .cloned()
                     .ok_or_else(|| {
                         anyhow::anyhow!(
-                            "missing user proof for output at index {} (recipient, asset)",
-                            output_idx
+                            "missing user proof for output at index {}: \
+                             recipient may not be registered for asset {} \
+                             (recipient must be registered for regulated assets)",
+                            output_idx,
+                            output_asset_id
                         )
                     })?;
 
@@ -964,7 +1029,12 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
                 .get(&(sender_address.clone(), spend_binding_asset_id))
                 .cloned()
                 .ok_or_else(|| {
-                    anyhow::anyhow!("missing user proof for sender in output binding")
+                    anyhow::anyhow!(
+                        "missing user proof for sender in output binding: \
+                         sender may not be registered for asset {} \
+                         (sender must be registered for regulated assets)",
+                        spend_binding_asset_id
+                    )
                 })?;
 
             {

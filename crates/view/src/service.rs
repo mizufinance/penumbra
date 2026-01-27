@@ -40,6 +40,7 @@ use penumbra_sdk_keys::{
 };
 use penumbra_sdk_num::Amount;
 use penumbra_sdk_proto::{
+    core::component::compliance::v1 as compliance_pb,
     util::tendermint_proxy::v1::{
         tendermint_proxy_service_client::TendermintProxyServiceClient, BroadcastTxSyncRequest,
         GetStatusRequest, GetStatusResponse, SyncInfo,
@@ -2017,8 +2018,8 @@ impl ViewService for ViewServer {
     #[instrument(skip_all, level = "trace")]
     async fn compliance_asset_status(
         &self,
-        request: tonic::Request<pb::ComplianceAssetStatusRequest>,
-    ) -> Result<tonic::Response<pb::ComplianceAssetStatusResponse>, tonic::Status> {
+        request: tonic::Request<compliance_pb::ComplianceAssetStatusRequest>,
+    ) -> Result<tonic::Response<compliance_pb::ComplianceAssetStatusResponse>, tonic::Status> {
         let asset_id_proto = request
             .into_inner()
             .asset_id
@@ -2037,18 +2038,20 @@ impl ViewService for ViewServer {
         tracing::debug!(?asset_id, is_regulated, "using local tree for asset status");
 
         // With IMT, we can always answer the query (regulated = membership, unregulated = non-membership)
-        Ok(tonic::Response::new(pb::ComplianceAssetStatusResponse {
-            asset_id: Some(asset_id_proto),
-            is_registered: true,
-            is_regulated,
-        }))
+        Ok(tonic::Response::new(
+            compliance_pb::ComplianceAssetStatusResponse {
+                asset_id: Some(asset_id_proto),
+                is_registered: true,
+                is_regulated,
+            },
+        ))
     }
 
     #[instrument(skip_all, level = "trace")]
     async fn compliance_anchors(
         &self,
-        _request: tonic::Request<pb::ComplianceAnchorsRequest>,
-    ) -> Result<tonic::Response<pb::ComplianceAnchorsResponse>, tonic::Status> {
+        _request: tonic::Request<compliance_pb::ComplianceAnchorsRequest>,
+    ) -> Result<tonic::Response<compliance_pb::ComplianceAnchorsResponse>, tonic::Status> {
         // Use local tree roots
         let user_root = self.compliance_user_tree.read().await.root();
         let asset_root = self.compliance_asset_tree.read().await.root();
@@ -2059,17 +2062,19 @@ impl ViewService for ViewServer {
             "using local tree roots for anchors"
         );
 
-        Ok(tonic::Response::new(pb::ComplianceAnchorsResponse {
-            user_tree_root: user_root.0.to_bytes().to_vec(),
-            asset_tree_root: asset_root.0.to_bytes().to_vec(),
-        }))
+        Ok(tonic::Response::new(
+            compliance_pb::ComplianceAnchorsResponse {
+                user_tree_root: user_root.0.to_bytes().to_vec(),
+                asset_tree_root: asset_root.0.to_bytes().to_vec(),
+            },
+        ))
     }
 
     #[instrument(skip_all, level = "trace")]
     async fn compliance_merkle_proofs(
         &self,
-        request: tonic::Request<pb::ComplianceMerkleProofsRequest>,
-    ) -> Result<tonic::Response<pb::ComplianceMerkleProofsResponse>, tonic::Status> {
+        request: tonic::Request<compliance_pb::ComplianceMerkleProofsRequest>,
+    ) -> Result<tonic::Response<compliance_pb::ComplianceMerkleProofsResponse>, tonic::Status> {
         let request_inner = request.into_inner();
 
         // Parse address and asset_id
@@ -2178,7 +2183,9 @@ impl ViewService for ViewServer {
                                 })
                                 .collect(),
                         })
-                        .unwrap_or_default();
+                        .ok_or_else(|| {
+                            tonic::Status::internal("compliance_path missing from pd response")
+                        })?;
 
                     (
                         proof_response.user_registered,
@@ -2190,51 +2197,53 @@ impl ViewService for ViewServer {
         };
 
         // Convert local types to proto types
-        let compliance_path_proto = pb::MerklePath {
+        let compliance_path_proto = compliance_pb::MerklePath {
             layers: compliance_path
                 .layers
                 .into_iter()
-                .map(|layer| pb::MerklePathLayer {
+                .map(|layer| compliance_pb::MerklePathLayer {
                     siblings: layer.siblings,
                 })
                 .collect(),
         };
 
-        let asset_path_proto = pb::MerklePath {
+        let asset_path_proto = compliance_pb::MerklePath {
             layers: asset_path
                 .layers
                 .into_iter()
-                .map(|layer| pb::MerklePathLayer {
+                .map(|layer| compliance_pb::MerklePathLayer {
                     siblings: layer.siblings,
                 })
                 .collect(),
         };
 
-        let asset_indexed_leaf_proto = pb::IndexedLeafData {
+        let asset_indexed_leaf_proto = compliance_pb::IndexedLeafData {
             value: indexed_leaf.value.to_bytes().to_vec(),
             next_index: indexed_leaf.next_index,
             next_value: indexed_leaf.next_value.to_bytes().to_vec(),
         };
 
-        Ok(tonic::Response::new(pb::ComplianceMerkleProofsResponse {
-            user_registered,
-            asset_registered: true, // Always true with IMT (membership or non-membership)
-            is_regulated,
-            compliance_path: Some(compliance_path_proto),
-            compliance_position,
-            asset_path: Some(asset_path_proto),
-            asset_position,
-            compliance_anchor: user_anchor.0.to_bytes().to_vec(),
-            asset_anchor: asset_anchor.0.to_bytes().to_vec(),
-            asset_indexed_leaf: Some(asset_indexed_leaf_proto),
-        }))
+        Ok(tonic::Response::new(
+            compliance_pb::ComplianceMerkleProofsResponse {
+                user_registered,
+                asset_registered: true, // Always true with IMT (membership or non-membership)
+                is_regulated,
+                compliance_path: Some(compliance_path_proto),
+                compliance_position,
+                asset_path: Some(asset_path_proto),
+                asset_position,
+                compliance_anchor: user_anchor.0.to_bytes().to_vec(),
+                asset_anchor: asset_anchor.0.to_bytes().to_vec(),
+                asset_indexed_leaf: Some(asset_indexed_leaf_proto),
+            },
+        ))
     }
 
     #[instrument(skip_all, level = "trace")]
     async fn compliance_user_leaf(
         &self,
-        request: tonic::Request<pb::ComplianceUserLeafRequest>,
-    ) -> Result<tonic::Response<pb::ComplianceUserLeafResponse>, tonic::Status> {
+        request: tonic::Request<compliance_pb::ComplianceUserLeafRequest>,
+    ) -> Result<tonic::Response<compliance_pb::ComplianceUserLeafResponse>, tonic::Status> {
         let request_inner = request.into_inner();
 
         // Parse address and asset_id
@@ -2263,18 +2272,20 @@ impl ViewService for ViewServer {
             // Local storage hit - reconstruct the leaf
             tracing::debug!(?address, ?asset_id, "using local storage for user leaf");
 
-            let leaf = pb::ComplianceLeaf {
+            let leaf = compliance_pb::ComplianceLeaf {
                 address: request_inner.address,
-                key: Some(pb::ComplianceViewingKey {
+                key: Some(compliance_pb::ComplianceViewingKey {
                     inner: ack_bytes.to_vec(),
                 }),
                 asset_id: request_inner.asset_id,
             };
 
-            return Ok(tonic::Response::new(pb::ComplianceUserLeafResponse {
-                is_registered: true,
-                leaf: Some(leaf),
-            }));
+            return Ok(tonic::Response::new(
+                compliance_pb::ComplianceUserLeafResponse {
+                    is_registered: true,
+                    leaf: Some(leaf),
+                },
+            ));
         }
 
         // Local storage miss - fall back to gRPC
@@ -2304,23 +2315,28 @@ impl ViewService for ViewServer {
             .into_inner();
 
         // Convert compliance proto types to view proto types
-        let leaf = response.leaf.map(|l| pb::ComplianceLeaf {
+        let leaf = response.leaf.map(|l| compliance_pb::ComplianceLeaf {
             address: l.address,
-            key: l.key.map(|k| pb::ComplianceViewingKey { inner: k.inner }),
+            key: l
+                .key
+                .map(|k| compliance_pb::ComplianceViewingKey { inner: k.inner }),
             asset_id: l.asset_id,
         });
 
-        Ok(tonic::Response::new(pb::ComplianceUserLeafResponse {
-            is_registered: response.is_registered,
-            leaf,
-        }))
+        Ok(tonic::Response::new(
+            compliance_pb::ComplianceUserLeafResponse {
+                is_registered: response.is_registered,
+                leaf,
+            },
+        ))
     }
 
     #[instrument(skip_all, level = "trace")]
     async fn compliance_batch_merkle_proofs(
         &self,
-        request: tonic::Request<pb::ComplianceBatchMerkleProofsRequest>,
-    ) -> Result<tonic::Response<pb::ComplianceBatchMerkleProofsResponse>, tonic::Status> {
+        request: tonic::Request<compliance_pb::ComplianceBatchMerkleProofsRequest>,
+    ) -> Result<tonic::Response<compliance_pb::ComplianceBatchMerkleProofsResponse>, tonic::Status>
+    {
         let request_inner = request.into_inner();
 
         // Get local tree anchors
@@ -2439,7 +2455,11 @@ impl ViewService for ViewServer {
                                         })
                                         .collect(),
                                 })
-                                .unwrap_or_default();
+                                .ok_or_else(|| {
+                                    tonic::Status::internal(
+                                        "compliance_path missing from pd response",
+                                    )
+                                })?;
 
                             (
                                 proof_response.user_registered,
@@ -2464,33 +2484,33 @@ impl ViewService for ViewServer {
             };
 
             // Convert local types to proto types
-            let compliance_path_proto = pb::MerklePath {
+            let compliance_path_proto = compliance_pb::MerklePath {
                 layers: compliance_path
                     .layers
                     .into_iter()
-                    .map(|layer| pb::MerklePathLayer {
+                    .map(|layer| compliance_pb::MerklePathLayer {
                         siblings: layer.siblings,
                     })
                     .collect(),
             };
 
-            let asset_path_proto = pb::MerklePath {
+            let asset_path_proto = compliance_pb::MerklePath {
                 layers: asset_path
                     .layers
                     .into_iter()
-                    .map(|layer| pb::MerklePathLayer {
+                    .map(|layer| compliance_pb::MerklePathLayer {
                         siblings: layer.siblings,
                     })
                     .collect(),
             };
 
-            let asset_indexed_leaf_proto = pb::IndexedLeafData {
+            let asset_indexed_leaf_proto = compliance_pb::IndexedLeafData {
                 value: indexed_leaf.value.to_bytes().to_vec(),
                 next_index: indexed_leaf.next_index,
                 next_value: indexed_leaf.next_value.to_bytes().to_vec(),
             };
 
-            results.push(pb::ComplianceMerkleProofsResponse {
+            results.push(compliance_pb::ComplianceMerkleProofsResponse {
                 user_registered,
                 asset_registered: true, // Always true with IMT (membership or non-membership)
                 is_regulated,
@@ -2506,7 +2526,7 @@ impl ViewService for ViewServer {
 
         // Return as ViewService response
         Ok(tonic::Response::new(
-            pb::ComplianceBatchMerkleProofsResponse {
+            compliance_pb::ComplianceBatchMerkleProofsResponse {
                 compliance_anchor: user_anchor.0.to_bytes().to_vec(),
                 asset_anchor: asset_anchor.0.to_bytes().to_vec(),
                 results,

@@ -16,12 +16,15 @@ use crate::{
 
 // Note: QuadTree is still used for the user tree. Asset tree has been migrated to IMT.
 
-/// Maximum age of compliance anchors in blocks (~1.7 hours at 6s blocks).
+/// Maximum age of compliance anchors in blocks (~10 minutes at 6s blocks).
 ///
 /// This prevents the "genesis anchor attack" where an attacker uses an old anchor
 /// to falsely prove non-membership for assets that were registered after genesis.
-/// Similar in spirit to the target_timestamp ±1 hour window.
-pub const MAX_ANCHOR_AGE_BLOCKS: u64 = 1000;
+///
+/// SECURITY NOTE: This value is safe because trees are currently append-only.
+/// If leaf modification or removal is ever added, this needs deeper analysis
+/// to prevent retroactive proof attacks.
+pub const MAX_ANCHOR_AGE_BLOCKS: u64 = 100;
 
 // Re-export bincode for serialization
 use bincode;
@@ -436,7 +439,11 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     /// The events are accumulated and drained when building the CompactBlock.
     fn record_pending_user_registration(&mut self, event: event::EventUserRegistered) {
         let key = state_key::pending_user_registrations();
-        let mut pending: Vec<event::EventUserRegistered> = self.object_get(key).unwrap_or_default();
+        let mut pending: Vec<event::EventUserRegistered> =
+            self.object_get(key).unwrap_or_else(|| {
+                // Empty vec is the expected initial state - no need to log
+                Vec::new()
+            });
         pending.push(event);
         self.object_put(key, pending);
     }
@@ -448,7 +455,10 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     fn record_pending_asset_registration(&mut self, event: event::EventAssetRegistered) {
         let key = state_key::pending_asset_registrations();
         let mut pending: Vec<event::EventAssetRegistered> =
-            self.object_get(key).unwrap_or_default();
+            self.object_get(key).unwrap_or_else(|| {
+                // Empty vec is the expected initial state - no need to log
+                Vec::new()
+            });
         pending.push(event);
         self.object_put(key, pending);
     }
@@ -459,7 +469,10 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     /// user registration events for client sync.
     fn pending_user_registrations(&mut self) -> Vec<event::EventUserRegistered> {
         let key = state_key::pending_user_registrations();
-        let result = self.object_get(key).unwrap_or_default();
+        let result = self.object_get(key).unwrap_or_else(|| {
+            // Empty vec is the expected state when no registrations occurred - no need to log
+            Vec::new()
+        });
         self.object_delete(key);
         result
     }
@@ -470,7 +483,10 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     /// asset registration events for client sync.
     fn pending_asset_registrations(&mut self) -> Vec<event::EventAssetRegistered> {
         let key = state_key::pending_asset_registrations();
-        let result = self.object_get(key).unwrap_or_default();
+        let result = self.object_get(key).unwrap_or_else(|| {
+            // Empty vec is the expected state when no registrations occurred - no need to log
+            Vec::new()
+        });
         self.object_delete(key);
         result
     }
