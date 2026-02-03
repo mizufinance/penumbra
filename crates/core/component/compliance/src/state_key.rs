@@ -18,6 +18,12 @@ pub fn asset_count() -> &'static str {
     "compliance/asset_count"
 }
 
+/// State key for asset-specific compliance policy (dk_pub, threshold).
+/// This stores issuer-defined policies for threshold-based flagging.
+pub fn asset_policy(asset_id: &penumbra_sdk_asset::asset::Id) -> String {
+    format!("compliance/asset_policy/{}", asset_id)
+}
+
 /// State key for reverse lookup: (address, asset_id) -> position in user tree
 /// This enables O(1) lookup of a user's leaf position for merkle path generation
 pub fn user_leaf_position(

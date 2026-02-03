@@ -36,6 +36,7 @@ fn output_proving_time(c: &mut Criterion) {
         balance_commitment,
         note_commitment,
         compliance_epk: test_data.compliance_epk,
+        compliance_epk_g: test_data.compliance_epk_g,
         compliance_ciphertext: test_data.compliance_ciphertext,
         asset_anchor: test_data.asset_anchor,
         compliance_anchor: test_data.compliance_anchor,
@@ -57,6 +58,7 @@ fn output_proving_time(c: &mut Criterion) {
         compliance_ephemeral_secret: test_data.ephemeral_secret,
         counterparty_leaf: dummy_leaf,
         tx_blinding_nonce: dummy_nonce,
+        is_flagged: false,
     };
 
     let r = Fq::rand(&mut rng);

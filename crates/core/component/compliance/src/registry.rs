@@ -10,20 +10,15 @@ use crate::{
     event, indexed_tree,
     indexed_tree::{IndexedLeaf, IndexedMerkleTree},
     state_key,
-    structs::{ComplianceLeaf, MerklePath},
+    structs::{AssetPolicy, ComplianceLeaf, MerklePath},
     tree::QuadTree,
 };
 
 // Note: QuadTree is still used for the user tree. Asset tree has been migrated to IMT.
 
 /// Maximum age of compliance anchors in blocks (~10 minutes at 6s blocks).
-///
-/// This prevents the "genesis anchor attack" where an attacker uses an old anchor
-/// to falsely prove non-membership for assets that were registered after genesis.
-///
-/// SECURITY NOTE: This value is safe because trees are currently append-only.
-/// If leaf modification or removal is ever added, this needs deeper analysis
-/// to prevent retroactive proof attacks.
+/// Prevents using stale anchors to falsely prove non-membership.
+/// Safe because trees are append-only.
 pub const MAX_ANCHOR_AGE_BLOCKS: u64 = 100;
 
 // Re-export bincode for serialization
@@ -111,6 +106,18 @@ pub trait ComplianceRegistryRead: StateRead {
             .get_proto(state_key::asset_count())
             .await?
             .unwrap_or(0u64))
+    }
+
+    /// Get the compliance policy for an asset.
+    ///
+    /// Returns the issuer's detection key and threshold for flagged transfers.
+    /// Returns `None` if no policy is set (asset uses default behavior).
+    async fn get_asset_policy(&self, asset_id: asset::Id) -> Result<Option<AssetPolicy>> {
+        let key = state_key::asset_policy(&asset_id);
+        match self.get_raw(&key).await? {
+            Some(bytes) => Ok(Some(AssetPolicy::from_bytes(&bytes)?)),
+            None => Ok(None),
+        }
     }
 
     /// Get the user tree root hash.
@@ -298,11 +305,11 @@ impl<T: StateRead + ?Sized> ComplianceRegistryRead for T {}
 pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     /// Add a compliance leaf for a user.
     ///
-    /// This registers a user's compliance viewing key for a regulated asset.
+    /// This registers a user's address compliance key (ACK) for a regulated asset.
     /// The leaf is committed and added to the user tree at the next available position.
     ///
     /// # Arguments
-    /// * `leaf` - The compliance leaf containing address, CVK, and asset_id
+    /// * `leaf` - The compliance leaf containing address, ACK, and asset_id
     ///
     /// # Returns
     /// The position in the user tree where the leaf was added.
@@ -348,11 +355,16 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     ///
     /// This method is idempotent - if the asset is already registered, returns None.
     ///
+    /// The `dk_pub` is the issuer's detection key - REQUIRED for regulated assets.
+    /// The leaf will have a policy with that detection key and threshold = u64::MAX
+    /// (nothing flagged by default, threshold can be set separately).
+    ///
     /// # Returns
     /// Some(InsertResult) with full insertion data for client sync, or None if already registered.
     async fn register_regulated_asset(
         &mut self,
         asset_id: asset::Id,
+        dk_pub: decaf377::Element,
     ) -> Result<Option<indexed_tree::InsertResult>> {
         let mut tree = self.get_asset_imt().await?;
 
@@ -362,8 +374,8 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
             return Ok(None);
         }
 
-        // Insert into the IMT and get full data
-        let result = tree.insert_with_data(asset_id.0)?;
+        // Insert into the IMT and get full data (policy embedded in leaf)
+        let result = tree.insert_with_data(asset_id.0, dk_pub)?;
 
         // Save the updated tree
         let tree_bytes = bincode::serialize(&tree)?;
@@ -387,6 +399,14 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
         let tree_bytes = bincode::serialize(tree)?;
         self.put_raw(state_key::asset_imt().to_string(), tree_bytes);
         Ok(())
+    }
+
+    /// Set the compliance policy for an asset.
+    ///
+    /// Stores the issuer's detection key and threshold for flagged transfers.
+    fn set_asset_policy(&mut self, asset_id: asset::Id, policy: AssetPolicy) {
+        let key = state_key::asset_policy(&asset_id);
+        self.put_raw(key, policy.to_bytes());
     }
 
     // ========== Historical Anchor Storage ==========
@@ -541,7 +561,10 @@ mod tests {
         assert!(!proof_before.is_regulated);
 
         // Register as regulated
-        state.register_regulated_asset(asset_id).await.unwrap();
+        state
+            .register_regulated_asset(asset_id, decaf377::Element::GENERATOR)
+            .await
+            .unwrap();
 
         // Now asset is regulated (in IMT)
         let proof_after = state.get_asset_proof_data(asset_id).await.unwrap();
@@ -595,7 +618,7 @@ mod tests {
 
         // First registration should succeed
         state
-            .register_regulated_asset(asset_id)
+            .register_regulated_asset(asset_id, decaf377::Element::GENERATOR)
             .await
             .expect("First registration should succeed");
 
@@ -609,7 +632,7 @@ mod tests {
 
         // Second registration of same asset should be idempotent (succeed but no change)
         state
-            .register_regulated_asset(asset_id)
+            .register_regulated_asset(asset_id, decaf377::Element::GENERATOR)
             .await
             .expect("Duplicate registration should be idempotent");
 
@@ -785,7 +808,10 @@ mod tests {
 
         // Bridged asset (USDC) - regulated
         let usdc_asset_id = asset::Id(Fq::from(12345u64));
-        state.register_regulated_asset(usdc_asset_id).await.unwrap();
+        state
+            .register_regulated_asset(usdc_asset_id, decaf377::Element::GENERATOR)
+            .await
+            .unwrap();
 
         let usdc_proof = state.get_asset_proof_data(usdc_asset_id).await.unwrap();
         assert!(usdc_proof.is_regulated);
@@ -861,7 +887,10 @@ mod tests {
 
         // Same wallet registered for multiple assets
         let dai_asset_id = asset::Id(Fq::from(67890u64));
-        state.register_regulated_asset(dai_asset_id).await.unwrap();
+        state
+            .register_regulated_asset(dai_asset_id, decaf377::Element::GENERATOR)
+            .await
+            .unwrap();
         let leaf1_dai = ComplianceLeaf {
             address: wallet1,
             key: AddressComplianceKey::new(
@@ -1006,7 +1035,10 @@ mod tests {
         let asset_id = asset::Id(Fq::from(12345u64));
 
         // Register regulated asset
-        state.register_regulated_asset(asset_id).await.unwrap();
+        state
+            .register_regulated_asset(asset_id, decaf377::Element::GENERATOR)
+            .await
+            .unwrap();
 
         // Check the asset is in the IMT
         let tree = state.get_asset_imt().await.unwrap();
@@ -1032,8 +1064,14 @@ mod tests {
         let asset_id = asset::Id(Fq::from(12345u64));
 
         // Register twice - should be idempotent
-        state.register_regulated_asset(asset_id).await.unwrap();
-        state.register_regulated_asset(asset_id).await.unwrap();
+        state
+            .register_regulated_asset(asset_id, decaf377::Element::GENERATOR)
+            .await
+            .unwrap();
+        state
+            .register_regulated_asset(asset_id, decaf377::Element::GENERATOR)
+            .await
+            .unwrap();
 
         let tree = state.get_asset_imt().await.unwrap();
         assert_eq!(tree.leaf_count(), 2); // sentinel + 1 asset (not 3)
@@ -1046,7 +1084,10 @@ mod tests {
         let mut state = cnidarium::StateDelta::new(snapshot);
 
         let asset_id = asset::Id(Fq::from(12345u64));
-        state.register_regulated_asset(asset_id).await.unwrap();
+        state
+            .register_regulated_asset(asset_id, decaf377::Element::GENERATOR)
+            .await
+            .unwrap();
 
         // Get proof data for regulated asset
         let proof_data = state.get_asset_proof_data(asset_id).await.unwrap();
@@ -1077,7 +1118,7 @@ mod tests {
         // Register one asset
         let regulated_asset = asset::Id(Fq::from(100u64));
         state
-            .register_regulated_asset(regulated_asset)
+            .register_regulated_asset(regulated_asset, decaf377::Element::GENERATOR)
             .await
             .unwrap();
 
@@ -1109,7 +1150,10 @@ mod tests {
         ];
 
         for asset_id in &assets {
-            state.register_regulated_asset(*asset_id).await.unwrap();
+            state
+                .register_regulated_asset(*asset_id, decaf377::Element::GENERATOR)
+                .await
+                .unwrap();
         }
 
         let tree = state.get_asset_imt().await.unwrap();
@@ -1150,7 +1194,7 @@ mod tests {
         };
         state.add_compliance_leaf(leaf).await.unwrap();
         state
-            .register_regulated_asset(asset::Id(Fq::from(200u64)))
+            .register_regulated_asset(asset::Id(Fq::from(200u64)), decaf377::Element::GENERATOR)
             .await
             .unwrap();
 
@@ -1359,7 +1403,10 @@ mod tests {
         // Register USDC as regulated at height 100
         state.put_block_height(100);
         let usdc_id = asset::Id(Fq::from(12345u64));
-        state.register_regulated_asset(usdc_id).await.unwrap();
+        state
+            .register_regulated_asset(usdc_id, decaf377::Element::GENERATOR)
+            .await
+            .unwrap();
         state.record_compliance_anchors(100).await.unwrap();
 
         // The asset IMT root should have changed

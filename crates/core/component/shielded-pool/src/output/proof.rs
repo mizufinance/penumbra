@@ -36,8 +36,10 @@ pub struct OutputProofPublic {
     pub balance_commitment: balance::Commitment,
     /// A hiding commitment to the note.
     pub note_commitment: note::StateCommitment,
-    /// Ephemeral public key from the compliance ciphertext
+    /// Ephemeral public key on diversified curve (r * B_d)
     pub compliance_epk: decaf377::Element,
+    /// Ephemeral public key on standard curve (r * G) for issuer ECDH
+    pub compliance_epk_g: decaf377::Element,
     /// Compliance ciphertext for regulated assets (packed as Fq elements for circuit input)
     pub compliance_ciphertext: Vec<Fq>,
     /// Asset registry Merkle root (asset regulation tree anchor)
@@ -79,6 +81,9 @@ pub struct OutputProofPrivate {
     pub counterparty_leaf: penumbra_sdk_compliance::ComplianceLeaf,
     /// Shared transaction blinding nonce (same for spend and output in one transaction)
     pub tx_blinding_nonce: Fr,
+    /// Whether this output is flagged (amount >= threshold).
+    /// Circuit verifies this matches the threshold comparison.
+    pub is_flagged: bool,
 }
 
 #[cfg(test)]
@@ -196,6 +201,8 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
 
         let public_ciphertext_epk_var =
             ElementVar::new_input(cs.clone(), || Ok(self.public.compliance_epk))?;
+        let public_ciphertext_epk_g_var =
+            ElementVar::new_input(cs.clone(), || Ok(self.public.compliance_epk_g))?;
 
         let mut ciphertext_vars = Vec::new();
         for fq in self.public.compliance_ciphertext.iter() {
@@ -215,6 +222,7 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
             compliance_path: self.private.compliance_path.clone(),
             compliance_position: self.private.compliance_position,
             user_leaf: self.private.user_leaf.clone(),
+            is_flagged: self.private.is_flagged,
         };
 
         verify_compliance_integrity(
@@ -223,6 +231,7 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
             claimed_compliance_anchor.inner().clone(),
             target_date_var,
             public_ciphertext_epk_var,
+            public_ciphertext_epk_g_var,
             ciphertext_vars,
             note_var.asset_id(),
             note_var.amount(),
@@ -303,20 +312,23 @@ impl DummyWitness for OutputCircuit {
         // Generate valid compliance ciphertext that will satisfy circuit constraints
         let mut rng = rand::thread_rng();
         let date = 0u64; // Day index = 0
-        let (compliance_ciphertext_obj, ephemeral_secret) = encrypt_compliance_details(
+        let unregulated_leaf = penumbra_sdk_compliance::IndexedLeaf::unregulated(note.asset_id().0);
+        let encryption_result = encrypt_compliance_details(
             &mut rng,
             &dummy_ack,
             &address,
             date,
             note.asset_id(),
             note.amount(),
-            address.clone(), // Use same address as counterparty for dummy
+            &address, // Use same address as counterparty for dummy
+            &unregulated_leaf,
         )
         .expect("can encrypt compliance details");
 
         // Extract circuit inputs using unified method
-        let (compliance_epk, compliance_ciphertext) =
-            compliance_ciphertext_obj.to_circuit_public_inputs();
+        let (compliance_epk, compliance_epk_g, compliance_ciphertext) =
+            encryption_result.ciphertext.to_circuit_public_inputs();
+        let ephemeral_secret = encryption_result.ephemeral_secret;
 
         let asset_anchor = penumbra_sdk_tct::StateCommitment(Fq::from(0u64));
         let compliance_anchor = penumbra_sdk_tct::StateCommitment(Fq::from(0u64));
@@ -326,8 +338,6 @@ impl DummyWitness for OutputCircuit {
             key: dummy_ack.clone(),
             asset_id: penumbra_sdk_asset::asset::Id(Fq::from(0u64)),
         };
-        // Note: receiver uses COUNTERPARTY domain sep, counterparty uses SENDER domain sep
-        // This matches the circuit constraints in generate_constraints()
         let receiver_leaf_hash =
             penumbra_sdk_compliance::blind_counterparty_leaf(dummy_leaf.commit(), Fr::from(0u64));
         let counterparty_leaf_hash =
@@ -337,10 +347,11 @@ impl DummyWitness for OutputCircuit {
             note_commitment: note.commit(),
             balance_commitment: balance::Commitment(decaf377::Element::GENERATOR),
             compliance_epk,
+            compliance_epk_g,
             compliance_ciphertext,
             asset_anchor,
             compliance_anchor,
-            target_timestamp: 0, // Corresponds to date = 0
+            target_timestamp: 0,
             receiver_leaf_hash,
             counterparty_leaf_hash,
         };
@@ -353,6 +364,7 @@ impl DummyWitness for OutputCircuit {
                 value: Fq::from(0u64),
                 next_index: 0,
                 next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
             },
             is_regulated: false,
             compliance_path: penumbra_sdk_compliance::MerklePath::default(),
@@ -365,6 +377,7 @@ impl DummyWitness for OutputCircuit {
             compliance_ephemeral_secret: ephemeral_secret,
             counterparty_leaf: dummy_leaf,
             tx_blinding_nonce: Fr::from(0u64),
+            is_flagged: false,
         };
         OutputCircuit { public, private }
     }
@@ -460,15 +473,19 @@ impl OutputProof {
                 .ok_or_else(|| anyhow::anyhow!("target timestamp invalid"))?,
         );
 
-        // 2. Compliance EPK - Must follow Target Date
         public_inputs.extend(
             public
                 .compliance_epk
                 .to_field_elements()
                 .ok_or_else(|| anyhow::anyhow!("compliance epk invalid"))?,
         );
+        public_inputs.extend(
+            public
+                .compliance_epk_g
+                .to_field_elements()
+                .ok_or_else(|| anyhow::anyhow!("compliance epk_g invalid"))?,
+        );
 
-        // 3. Add packed compliance_ciphertext to public inputs (already in Fq format)
         public_inputs.extend(public.compliance_ciphertext);
 
         // 4. Add blinded leaf hashes to public inputs
@@ -601,20 +618,21 @@ mod tests {
             let mut rng = rand::thread_rng();
             let timestamp = current_timestamp();
             let date = timestamp / 86400;
-            let (compliance_ciphertext_obj, ephemeral_secret) = encrypt_compliance_details(
+            let encrypt_result = encrypt_compliance_details(
                 &mut rng,
                 &user_ack,
                 &dest,
                 date,
                 note.asset_id(),
                 note.amount(),
-                dest.clone(), // Use same address as counterparty for test
+                &dest, // Use same address as counterparty for test
+                &asset_indexed_leaf,
             ).expect("can encrypt compliance details");
+            let compliance_ciphertext_obj = encrypt_result.ciphertext;
+            let ephemeral_secret = encrypt_result.ephemeral_secret;
 
-            // Extract circuit inputs using unified method
-            let (compliance_epk, packed_ciphertext) = compliance_ciphertext_obj.to_circuit_public_inputs();
+            let (compliance_epk, compliance_epk_g, packed_ciphertext) = compliance_ciphertext_obj.to_circuit_public_inputs();
 
-            // Create dummy leaves for testing
             let dummy_leaf = penumbra_sdk_compliance::ComplianceLeaf {
                 address: dest.clone(),
                 key: user_ack.clone(),
@@ -628,6 +646,7 @@ mod tests {
                 balance_commitment,
                 note_commitment,
                 compliance_epk,
+                compliance_epk_g,
                 compliance_ciphertext: packed_ciphertext,
                 asset_anchor,
                 compliance_anchor,
@@ -648,6 +667,7 @@ mod tests {
                 compliance_ephemeral_secret: ephemeral_secret,
                 counterparty_leaf: dummy_leaf,
                 tx_blinding_nonce: dummy_nonce,
+                is_flagged: false,
             };
 
             (public, private, cvk_sk)
@@ -702,19 +722,21 @@ mod tests {
             let mut rng = rand::thread_rng();
             let timestamp = current_timestamp();
             let date = timestamp / 86400;
-            let (compliance_ciphertext_obj, ephemeral_secret) = encrypt_compliance_details(
+            let encrypt_result = encrypt_compliance_details(
                 &mut rng,
                 &black_hole_ack,
                 &dest,
                 date,
                 note.asset_id(),
                 note.amount(),
-                dest.clone(),
+                &dest,
+                &asset_indexed_leaf,
             ).expect("can encrypt compliance details");
+            let compliance_ciphertext_obj = encrypt_result.ciphertext;
+            let ephemeral_secret = encrypt_result.ephemeral_secret;
 
-            let (compliance_epk, packed_ciphertext) = compliance_ciphertext_obj.to_circuit_public_inputs();
+            let (compliance_epk, compliance_epk_g, packed_ciphertext) = compliance_ciphertext_obj.to_circuit_public_inputs();
 
-            // Create dummy leaves for blinding
             let dummy_leaf = user_leaf.clone();
             let dummy_nonce = Fr::from(0u64);
             let receiver_leaf_hash = penumbra_sdk_compliance::blind_counterparty_leaf(dummy_leaf.commit(), dummy_nonce);
@@ -724,6 +746,7 @@ mod tests {
                 balance_commitment,
                 note_commitment,
                 compliance_epk,
+                compliance_epk_g,
                 compliance_ciphertext: packed_ciphertext,
                 asset_anchor,
                 compliance_anchor,
@@ -744,6 +767,7 @@ mod tests {
                 compliance_ephemeral_secret: ephemeral_secret,
                 counterparty_leaf: dummy_leaf.clone(),
                 tx_blinding_nonce: dummy_nonce,
+                is_flagged: false,
             };
 
             let my_random_sk_scalar = Fr::from_le_bytes_mod_order(&tester_keys_rand);
@@ -829,9 +853,8 @@ mod tests {
 
             let asset_anchor = tct::StateCommitment(Fq::from(0u64));
             let compliance_anchor = tct::StateCommitment(Fq::from(0u64));
-            let (compliance_epk, packed_ciphertext) = mock_compliance_inputs();
+            let (compliance_epk, compliance_epk_g, packed_ciphertext) = mock_compliance_inputs();
 
-            // Create dummy leaves for blinding
             let dummy_leaf = user_leaf.clone();
             let dummy_nonce = Fr::from(0u64);
             let receiver_leaf_hash = penumbra_sdk_compliance::blind_counterparty_leaf(dummy_leaf.commit(), dummy_nonce);
@@ -841,6 +864,7 @@ mod tests {
                 balance_commitment,
                 note_commitment: incorrect_note_commitment,
                 compliance_epk,
+                compliance_epk_g,
                 compliance_ciphertext: packed_ciphertext,
                 asset_anchor,
                 compliance_anchor,
@@ -857,6 +881,7 @@ mod tests {
                     value: Fq::from(0u64),
                     next_index: 0,
                     next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                    policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
                 },
                 is_regulated: false,
                 compliance_path: penumbra_sdk_compliance::MerklePath::default(),
@@ -865,6 +890,7 @@ mod tests {
                 compliance_ephemeral_secret: Fr::from(0u64),
                 counterparty_leaf: dummy_leaf.clone(),
                 tx_blinding_nonce: dummy_nonce,
+                is_flagged: false,
             };
 
             (bad_public, private)
@@ -919,9 +945,8 @@ mod tests {
 
             let asset_anchor = tct::StateCommitment(Fq::from(0u64));
             let compliance_anchor = tct::StateCommitment(Fq::from(0u64));
-            let (compliance_epk, packed_ciphertext) = mock_compliance_inputs();
+            let (compliance_epk, compliance_epk_g, packed_ciphertext) = mock_compliance_inputs();
 
-            // Create dummy leaves for blinding
             let dummy_leaf = user_leaf.clone();
             let dummy_nonce = Fr::from(0u64);
             let receiver_leaf_hash = penumbra_sdk_compliance::blind_counterparty_leaf(dummy_leaf.commit(), dummy_nonce);
@@ -931,6 +956,7 @@ mod tests {
                 balance_commitment: incorrect_balance_commitment,
                 note_commitment,
                 compliance_epk,
+                compliance_epk_g,
                 compliance_ciphertext: packed_ciphertext,
                 asset_anchor,
                 compliance_anchor,
@@ -948,6 +974,7 @@ mod tests {
                     value: Fq::from(0u64),
                     next_index: 0,
                     next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                    policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
                 },
                 is_regulated: false,
                 compliance_path: penumbra_sdk_compliance::MerklePath::default(),
@@ -956,6 +983,7 @@ mod tests {
                 compliance_ephemeral_secret: Fr::from(0u64),
                 counterparty_leaf: dummy_leaf.clone(),
                 tx_blinding_nonce: dummy_nonce,
+                is_flagged: false,
             };
 
             (bad_public, private)

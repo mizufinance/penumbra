@@ -112,8 +112,12 @@ pub mod proof_test_helpers {
     ) -> (tct::StateCommitment, IndexedLeaf, MerklePath, u64) {
         let mut tree = IndexedMerkleTree::new();
 
-        // Insert the asset as regulated
-        tree.insert(asset_id)
+        // Use GENERATOR as dk_pub instead of Element::default() - identity breaks ECDH
+        // Any non-identity point works for valid ECDH shared secrets
+        let dk_pub = decaf377::Element::GENERATOR;
+
+        // Insert the asset as regulated with real dk_pub
+        tree.insert_with_data(asset_id, dk_pub)
             .expect("should be able to insert asset");
 
         // Get membership proof
@@ -164,8 +168,8 @@ pub mod proof_test_helpers {
     }
 
     /// Helper to create mock compliance inputs for testing.
-    /// Returns (compliance_epk, packed_ciphertext) from dummy ciphertext.
-    pub fn mock_compliance_inputs() -> (decaf377::Element, Vec<Fq>) {
+    /// Returns (compliance_epk, compliance_epk_g, packed_ciphertext) from dummy ciphertext.
+    pub fn mock_compliance_inputs() -> (decaf377::Element, decaf377::Element, Vec<Fq>) {
         use penumbra_sdk_compliance::structs::{ComplianceCiphertext, TOTAL_WIRE_BYTES};
 
         let dummy_ciphertext = vec![0u8; TOTAL_WIRE_BYTES];
@@ -195,6 +199,7 @@ pub mod proof_test_helpers {
         pub ack: penumbra_sdk_keys::keys::AddressComplianceKey,
         pub user_leaf: penumbra_sdk_compliance::ComplianceLeaf,
         pub compliance_epk: decaf377::Element,
+        pub compliance_epk_g: decaf377::Element,
         pub compliance_ciphertext: Vec<Fq>,
         pub compliance_ciphertext_bytes: Vec<u8>,
         pub ephemeral_secret: Fr,
@@ -245,6 +250,15 @@ pub mod proof_test_helpers {
 
         let balance_blinding = Fr::rand(&mut *rng);
 
+        // Create valid IMT proof data based on regulation status
+        // IMPORTANT: Create this FIRST so we can use the asset_indexed_leaf for encryption
+        let asset_id_fq = value.asset_id.0;
+        let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) = if is_regulated {
+            create_imt_membership_proof(asset_id_fq)
+        } else {
+            create_imt_non_membership_proof(asset_id_fq)
+        };
+
         // Generate compliance data based on regulation status
         let (ack, user_leaf, compliance_ciphertext_bytes, ephemeral_secret) = if is_regulated {
             // Regulated: use a random ACK
@@ -259,22 +273,24 @@ pub mod proof_test_helpers {
 
             let timestamp = current_timestamp();
             let date = timestamp / 86400;
-            let (ciphertext_obj, ephemeral_secret) = encrypt_compliance_details(
+            // Use the SAME asset_indexed_leaf that the circuit will use
+            let result = encrypt_compliance_details(
                 &mut *rng,
                 &user_ack,
                 &address,
                 date,
                 note.asset_id(),
                 note.amount(),
-                address.clone(),
+                &address,
+                &asset_indexed_leaf,
             )
             .expect("can encrypt");
 
             (
                 user_ack,
                 user_leaf,
-                ciphertext_obj.to_bytes(),
-                ephemeral_secret,
+                result.ciphertext.to_bytes(),
+                result.ephemeral_secret,
             )
         } else {
             // Unregulated: use BLACK_HOLE_ACK
@@ -288,30 +304,31 @@ pub mod proof_test_helpers {
 
             let timestamp = current_timestamp();
             let date = timestamp / 86400;
-            let (ciphertext_obj, ephemeral_secret) = encrypt_compliance_details(
+            let result = encrypt_compliance_details(
                 &mut *rng,
                 &black_hole_ack,
                 &address,
                 date,
                 note.asset_id(),
                 note.amount(),
-                address.clone(),
+                &address,
+                &asset_indexed_leaf,
             )
             .expect("can encrypt");
 
             (
                 black_hole_ack,
                 user_leaf,
-                ciphertext_obj.to_bytes(),
-                ephemeral_secret,
+                result.ciphertext.to_bytes(),
+                result.ephemeral_secret,
             )
         };
 
-        // Use ComplianceCiphertext to deserialize and extract circuit inputs
         use penumbra_sdk_compliance::structs::ComplianceCiphertext;
         let ct = ComplianceCiphertext::from_bytes(&compliance_ciphertext_bytes)
             .expect("can deserialize ciphertext");
-        let (compliance_epk, compliance_ciphertext) = ct.to_circuit_public_inputs();
+        let (compliance_epk, compliance_epk_g, compliance_ciphertext) =
+            ct.to_circuit_public_inputs();
 
         let timestamp = current_timestamp();
 
@@ -319,14 +336,7 @@ pub mod proof_test_helpers {
         let (compliance_anchor, compliance_path, compliance_position) =
             create_user_tree_proof(&user_leaf);
 
-        // Create valid IMT proof data based on regulation status
-        // IMPORTANT: Generate anchor and proof from the SAME tree instance
-        let asset_id_fq = value.asset_id.0;
-        let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) = if is_regulated {
-            create_imt_membership_proof(asset_id_fq)
-        } else {
-            create_imt_non_membership_proof(asset_id_fq)
-        };
+        // Note: IMT proof was already created above so encryption uses the same leaf
 
         TestData {
             note,
@@ -338,6 +348,7 @@ pub mod proof_test_helpers {
             ack,
             user_leaf,
             compliance_epk,
+            compliance_epk_g,
             compliance_ciphertext,
             compliance_ciphertext_bytes,
             ephemeral_secret,
@@ -376,11 +387,11 @@ pub mod proof_test_helpers {
         let counterparty_leaf_hash =
             penumbra_sdk_compliance::blind_sender_leaf(dummy_leaf.commit(), dummy_nonce);
 
-        // Use pre-computed IMT proof data from test_data (anchor and proof from same tree)
         let public = OutputProofPublic {
             balance_commitment,
             note_commitment,
             compliance_epk: test_data.compliance_epk,
+            compliance_epk_g: test_data.compliance_epk_g,
             compliance_ciphertext: test_data.compliance_ciphertext,
             asset_anchor: test_data.asset_anchor,
             compliance_anchor: test_data.compliance_anchor,
@@ -402,6 +413,7 @@ pub mod proof_test_helpers {
             compliance_ephemeral_secret: test_data.ephemeral_secret,
             counterparty_leaf: dummy_leaf.clone(),
             tx_blinding_nonce: dummy_nonce,
+            is_flagged: false,
         };
 
         // Prove
@@ -455,7 +467,6 @@ pub mod proof_test_helpers {
         let counterparty_leaf_hash =
             penumbra_sdk_compliance::blind_counterparty_leaf(dummy_leaf.commit(), dummy_nonce);
 
-        // Use pre-computed IMT proof data from test_data (anchor and proof from same tree)
         let public = SpendProofPublic {
             anchor,
             balance_commitment,
@@ -464,6 +475,7 @@ pub mod proof_test_helpers {
             asset_anchor: test_data.asset_anchor,
             compliance_anchor: test_data.compliance_anchor,
             compliance_epk: test_data.compliance_epk,
+            compliance_epk_g: test_data.compliance_epk_g,
             compliance_ciphertext: test_data.compliance_ciphertext,
             target_timestamp: test_data.timestamp,
             sender_leaf_hash,
@@ -487,6 +499,7 @@ pub mod proof_test_helpers {
             compliance_ephemeral_secret: test_data.ephemeral_secret,
             counterparty_leaf: dummy_leaf.clone(),
             tx_blinding_nonce: dummy_nonce,
+            is_flagged: false,
         };
 
         // Prove

@@ -26,15 +26,19 @@
 | Item | Description |
 |------|-------------|
 | Scanner speedup | Optimize compliance scanning performance |
-| ZK & ciphertext | In depth analysis of security |
-| UX review | Analyze registration and TX flows for improvements |
+| Scanner persistence | Support historical scanning (resume from checkpoint) and live listening mode |
+| ZK & ciphertext | In depth analysis of security and possible optimization |
+| UX review | Analyze registration, TX flows, scanning for improvements  |
+| Comment & Variable review | Look for outdated or inaccurate comments |
+| Private user leaf | Implement private user leaf with calls to fetch leaf info |
+| Update registry | Ability to update leaves in the registries |
 
 
 ## 4. Future
 
 | Item | Description |
 |------|-------------|
-| Threshold/whitelist | Per-asset limits |
+| Whitelist | Whitelist for compliance threshold |
 | Swap support | DEX integration |
 | Key rotation | Protocol for rotation |
 | Asset types | RWA, NFT, ERC20 support |

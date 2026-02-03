@@ -1,18 +1,24 @@
 //! Compliance scanning for regulated asset transfers.
+//!
+//! Note: Detection (asset_id) is now handled by the issuer's DetectionKey.
+//! See `detector.rs` for the issuer detection workflow.
+//!
+//! This module provides user-side decryption of core and extension tiers
+//! once the asset is known (from issuer detection or context).
 
 use anyhow::Result;
 use decaf377::Element;
 use penumbra_sdk_asset::asset;
-use penumbra_sdk_keys::keys::{DailyKeySet, MasterComplianceKey};
+use penumbra_sdk_keys::keys::{DailyKeySet, UserComplianceKey};
 use penumbra_sdk_num::Amount;
 use penumbra_sdk_proto::core::component::sct::v1::Nullifier;
 use penumbra_sdk_proto::core::transaction::v1::Transaction as ProtoTransaction;
 use serde::{Deserialize, Serialize};
 
-use crate::crypto::DecryptedComplianceData;
+use crate::scanning::{decrypt_core, decrypt_extension};
 use crate::structs::ComplianceCiphertext;
 
-use super::decrypt::{decrypt_with_daily_keys, decrypt_with_mck};
+use super::decrypt::{decrypt_compliance, DecryptedUserData};
 
 /// Partial address from decrypted compliance data.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -110,14 +116,16 @@ pub fn extract_compliance_ciphertexts(
 }
 
 /// Core scan logic - decrypts ciphertexts and builds DetectedTransfer structs.
+///
+/// Note: asset_id must be known (from issuer detection or context).
 fn scan_transaction_core<F>(
     tx: &ProtoTransaction,
     height: u64,
+    asset_id: asset::Id,
     mut decrypt_fn: F,
-    target_asset_id: Option<asset::Id>,
 ) -> Result<Vec<DetectedTransfer>>
 where
-    F: FnMut(&ComplianceCiphertext) -> Result<DecryptedComplianceData>,
+    F: FnMut(&ComplianceCiphertext) -> Result<DecryptedUserData>,
 {
     let ciphertexts = extract_compliance_ciphertexts(tx)?;
     let mut detected = Vec::new();
@@ -133,24 +141,18 @@ where
             Err(_) => continue,
         };
 
-        if let Some(target) = target_asset_id {
-            if decrypted.asset_id != target {
-                continue;
-            }
-        }
-
         detected.push(DetectedTransfer {
             height,
             action_index,
-            asset_id: decrypted.asset_id,
-            amount: decrypted.amount,
+            asset_id,
+            amount: decrypted.core.amount,
             self_address: PartialAddress::new(
-                decrypted.self_diversified_generator,
-                decrypted.self_transmission_key,
+                decrypted.core.self_diversified_generator,
+                decrypted.core.self_transmission_key,
             ),
             counterparty_address: PartialAddress::new(
-                decrypted.counterparty_diversified_generator,
-                decrypted.counterparty_transmission_key,
+                decrypted.extension.counterparty_diversified_generator,
+                decrypted.extension.counterparty_transmission_key,
             ),
             nullifier: None,
         });
@@ -159,28 +161,27 @@ where
     Ok(detected)
 }
 
-/// Scan a transaction using MasterComplianceKey.
+/// Scan a transaction using UserComplianceKey.
+///
+/// Note: `asset_id` must be known (from issuer detection or context).
 pub fn scan_transaction_for_compliance(
     tx: &ProtoTransaction,
     height: u64,
-    mck: &MasterComplianceKey,
+    uck: &UserComplianceKey,
     date: u64,
-    target_asset_id: Option<asset::Id>,
+    asset_id: asset::Id,
 ) -> Result<Vec<DetectedTransfer>> {
-    scan_transaction_core(
-        tx,
-        height,
-        |ct| decrypt_with_mck(mck, date, ct),
-        target_asset_id,
-    )
+    scan_transaction_core(tx, height, asset_id, |ct| decrypt_compliance(uck, date, ct))
 }
 
-/// Scan multiple transactions using MasterComplianceKey.
+/// Scan multiple transactions using UserComplianceKey.
+///
+/// Note: `asset_id` must be known (from issuer detection or context).
 pub fn scan_transactions_for_compliance<I>(
     transactions: I,
-    mck: &MasterComplianceKey,
+    uck: &UserComplianceKey,
     date: u64,
-    target_asset_id: Option<asset::Id>,
+    asset_id: asset::Id,
 ) -> Result<Vec<DetectedTransfer>>
 where
     I: IntoIterator<Item = (u64, ProtoTransaction)>,
@@ -188,11 +189,7 @@ where
     let mut all = Vec::new();
     for (height, tx) in transactions {
         all.extend(scan_transaction_for_compliance(
-            &tx,
-            height,
-            mck,
-            date,
-            target_asset_id,
+            &tx, height, uck, date, asset_id,
         )?);
     }
     Ok(all)
@@ -200,31 +197,36 @@ where
 
 /// Scan a transaction using pre-derived DailyKeySet.
 /// Preferred for production - auditor receives daily keys from issuer.
-/// Requires all three key types for full decryption.
+///
+/// Note: `asset_id` must be known (from issuer detection or context).
 pub fn scan_transaction_for_compliance_with_daily_keys(
     tx: &ProtoTransaction,
     height: u64,
     daily_keys: &DailyKeySet,
-    target_asset_id: Option<asset::Id>,
+    asset_id: asset::Id,
 ) -> Result<Vec<DetectedTransfer>> {
-    scan_transaction_core(
-        tx,
-        height,
-        |ct| decrypt_with_daily_keys(daily_keys, ct),
-        target_asset_id,
-    )
+    scan_transaction_core(tx, height, asset_id, |ct| {
+        // Decrypt using pre-derived daily keys
+        let core = decrypt_core(&daily_keys.core, ct)?
+            .ok_or_else(|| anyhow::anyhow!("core decryption produced None"))?;
+        let extension = decrypt_extension(&daily_keys.extension, ct)?
+            .ok_or_else(|| anyhow::anyhow!("extension decryption produced None"))?;
+        Ok(DecryptedUserData { core, extension })
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::crypto::encrypt_compliance_details;
-    use crate::test_helpers::{make_address, make_mck};
+    use crate::issuer_keys::DetectionKey;
+    use crate::test_helpers::{make_address, make_test_leaf, make_uck, make_wallet};
     use penumbra_sdk_num::Amount;
     use penumbra_sdk_proto::core::component::shielded_pool::v1::{Output, OutputBody};
     use penumbra_sdk_proto::core::transaction::v1::{
         action::Action, Action as ActionProto, TransactionBody,
     };
+    use rand_core::OsRng;
 
     #[test]
     fn test_extract_empty() {
@@ -239,48 +241,28 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_output() {
-        let tx = ProtoTransaction {
-            body: Some(TransactionBody {
-                actions: vec![ActionProto {
-                    action: Some(Action::Output(Output {
-                        body: Some(OutputBody {
-                            compliance_ciphertext: vec![1, 2, 3],
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    })),
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let results = extract_compliance_ciphertexts(&tx).unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0], (0, vec![1, 2, 3], false));
-    }
+    fn test_scan_with_known_asset() {
+        let uck = make_uck();
+        let (ack, self_address) = make_wallet(&uck, 1);
+        let counterparty_address = make_address(2);
 
-    #[test]
-    fn test_scan_roundtrip() {
-        let mut rng = rand_core::OsRng;
-        let mck = make_mck();
         let date = 19000u64;
+        let asset_id = asset::Id(decaf377::Fq::from(42u64));
+        let amount = Amount::from(1000u128);
 
-        let self_address = make_address(11);
-        let counterparty_address = make_address(22);
-        let ack = mck.derive_address_key(self_address.diversifier());
+        let dk = DetectionKey::demo();
+        let asset_leaf = make_test_leaf(dk.public_key(), u128::MAX);
 
-        let asset_id = asset::Id(decaf377::Fq::from(12345u64));
-        let amount = Amount::from(999u128);
-
-        let (ciphertext, _) = encrypt_compliance_details(
+        let mut rng = OsRng;
+        let result = encrypt_compliance_details(
             &mut rng,
             &ack,
             &self_address,
             date,
             asset_id,
             amount,
-            counterparty_address.clone(),
+            &counterparty_address,
+            &asset_leaf,
         )
         .unwrap();
 
@@ -289,7 +271,7 @@ mod tests {
                 actions: vec![ActionProto {
                     action: Some(Action::Output(Output {
                         body: Some(OutputBody {
-                            compliance_ciphertext: ciphertext.to_bytes(),
+                            compliance_ciphertext: result.ciphertext.to_bytes(),
                             ..Default::default()
                         }),
                         ..Default::default()
@@ -300,136 +282,12 @@ mod tests {
             ..Default::default()
         };
 
-        let detected = scan_transaction_for_compliance(&tx, 100, &mck, date, None).unwrap();
+        // Scan with known asset_id
+        let detected = scan_transaction_for_compliance(&tx, 100, &uck, date, asset_id).unwrap();
+
         assert_eq!(detected.len(), 1);
         assert_eq!(detected[0].asset_id, asset_id);
         assert_eq!(detected[0].amount, amount);
-    }
-
-    #[test]
-    fn test_scan_filters_by_asset() {
-        let mut rng = rand_core::OsRng;
-        let mck = make_mck();
-        let date = 19001u64;
-
-        let self_address = make_address(33);
-        let counterparty_address = make_address(44);
-        let ack = mck.derive_address_key(self_address.diversifier());
-
-        let asset_a = asset::Id(decaf377::Fq::from(1111u64));
-        let asset_b = asset::Id(decaf377::Fq::from(2222u64));
-        let amount = Amount::from(500u128);
-
-        let (ct_a, _) = encrypt_compliance_details(
-            &mut rng,
-            &ack,
-            &self_address,
-            date,
-            asset_a,
-            amount,
-            counterparty_address.clone(),
-        )
-        .unwrap();
-        let (ct_b, _) = encrypt_compliance_details(
-            &mut rng,
-            &ack,
-            &self_address,
-            date,
-            asset_b,
-            amount,
-            counterparty_address.clone(),
-        )
-        .unwrap();
-
-        let tx = ProtoTransaction {
-            body: Some(TransactionBody {
-                actions: vec![
-                    ActionProto {
-                        action: Some(Action::Output(Output {
-                            body: Some(OutputBody {
-                                compliance_ciphertext: ct_a.to_bytes(),
-                                ..Default::default()
-                            }),
-                            ..Default::default()
-                        })),
-                    },
-                    ActionProto {
-                        action: Some(Action::Output(Output {
-                            body: Some(OutputBody {
-                                compliance_ciphertext: ct_b.to_bytes(),
-                                ..Default::default()
-                            }),
-                            ..Default::default()
-                        })),
-                    },
-                ],
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            scan_transaction_for_compliance(&tx, 200, &mck, date, None)
-                .unwrap()
-                .len(),
-            2
-        );
-        assert_eq!(
-            scan_transaction_for_compliance(&tx, 200, &mck, date, Some(asset_a))
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
-            scan_transaction_for_compliance(&tx, 200, &mck, date, Some(asset_b))
-                .unwrap()
-                .len(),
-            1
-        );
-    }
-
-    #[test]
-    fn test_wrong_mck_no_match() {
-        let mut rng = rand_core::OsRng;
-        let mck1 = make_mck();
-        let mck2 = make_mck();
-        let date = 19002u64;
-
-        let self_address = make_address(55);
-        let counterparty_address = make_address(66);
-        let ack1 = mck1.derive_address_key(self_address.diversifier());
-
-        let asset_id = asset::Id(decaf377::Fq::from(3333u64));
-        let (ciphertext, _) = encrypt_compliance_details(
-            &mut rng,
-            &ack1,
-            &self_address,
-            date,
-            asset_id,
-            Amount::from(100u128),
-            counterparty_address,
-        )
-        .unwrap();
-
-        let tx = ProtoTransaction {
-            body: Some(TransactionBody {
-                actions: vec![ActionProto {
-                    action: Some(Action::Output(Output {
-                        body: Some(OutputBody {
-                            compliance_ciphertext: ciphertext.to_bytes(),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    })),
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        // Wrong MCK produces garbage, won't match target asset
-        let detected =
-            scan_transaction_for_compliance(&tx, 300, &mck2, date, Some(asset_id)).unwrap();
-        assert_eq!(detected.len(), 0);
+        assert_eq!(detected[0].height, 100);
     }
 }

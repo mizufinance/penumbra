@@ -25,11 +25,11 @@ impl ActionHandler for Output {
         let asset_anchor = output.body.asset_anchor;
         let compliance_anchor = output.body.compliance_anchor;
 
-        // Extract compliance ciphertext using unified method
         use penumbra_sdk_compliance::structs::ComplianceCiphertext;
         let ct = ComplianceCiphertext::from_bytes(&output.body.compliance_ciphertext)
             .context("failed to deserialize compliance ciphertext")?;
-        let (compliance_epk, compliance_ciphertext) = ct.to_circuit_public_inputs();
+        let (compliance_epk, compliance_epk_g, compliance_ciphertext) =
+            ct.to_circuit_public_inputs();
 
         output.proof.verify(
             &OUTPUT_PROOF_VERIFICATION_KEY,
@@ -37,6 +37,7 @@ impl ActionHandler for Output {
                 balance_commitment: output.body.balance_commitment,
                 note_commitment: output.body.note_payload.note_commitment,
                 compliance_epk,
+                compliance_epk_g,
                 compliance_ciphertext,
                 asset_anchor,
                 compliance_anchor,
@@ -79,16 +80,6 @@ impl ActionHandler for Output {
             .validate_compliance_anchors(&self.body.compliance_anchor, &self.body.asset_anchor)
             .await
             .context("invalid compliance anchors")?;
-
-        // TODO: Transaction-level validation of blinded leaf hashes
-        // After all spend and output proofs are verified individually, the transaction validator
-        // must verify the cryptographic binding between spend and output circuits:
-        //   - For each spend/output pair in the transaction:
-        //     * spend.counterparty_leaf_hash MUST equal output.receiver_leaf_hash
-        //     * output.counterparty_leaf_hash MUST equal spend.sender_leaf_hash
-        // This ensures that the same tx_blinding_nonce was used in both circuits and that
-        // the counterparty relationship is cryptographically bound without leaking which
-        // compliance leaves are transacting (due to the blinding).
 
         // 3. Execute the Output logic (Minting the note)
         let source = state

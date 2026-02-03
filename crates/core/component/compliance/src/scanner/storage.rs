@@ -241,7 +241,7 @@ impl ComplianceStorage {
                     diversified_generator: counterparty_div_gen_arr,
                     transmission_key: counterparty_trans_key_arr,
                 },
-                nullifier: None, // TODO: Parse nullifier if needed
+                nullifier: None,
             });
         }
 
@@ -301,15 +301,15 @@ impl ComplianceStorage {
 mod tests {
     use super::*;
     use crate::crypto::encrypt_compliance_details;
-    use crate::scanner::decrypt::decrypt_with_mck;
-    use crate::test_helpers::{make_address, make_mck};
+    use crate::issuer_keys::DetectionKey;
+    use crate::scanner::decrypt::decrypt_compliance;
+    use crate::test_helpers::{make_address, make_test_leaf, make_uck};
     use penumbra_sdk_num::Amount;
+    use rand_core::OsRng;
     use tempfile::NamedTempFile;
 
     #[test]
     fn test_storage_create_and_query() {
-        let mut rng = rand_core::OsRng;
-
         // Create temp database
         let temp_file = NamedTempFile::new().unwrap();
         let storage = ComplianceStorage::new(temp_file.path()).unwrap();
@@ -318,43 +318,48 @@ mod tests {
         assert_eq!(storage.last_sync_height().unwrap(), 0);
         assert_eq!(storage.transfer_count().unwrap(), 0);
 
-        // Setup MCK and addresses
-        let mck = make_mck();
+        // Setup UCK and addresses
+        let uck = make_uck();
         let date = 19000u64;
 
         let self_address = make_address(11);
         let counterparty_address = make_address(22);
-        let ack = mck.derive_address_key(self_address.diversifier());
+        let ack = uck.derive_address_key(self_address.diversifier());
 
         let asset_id = asset::Id(decaf377::Fq::from(12345u64));
         let amount = Amount::from(1000u64);
 
+        let dk = DetectionKey::demo();
+        let asset_leaf = make_test_leaf(dk.public_key(), u128::MAX);
+
         // Encrypt and decrypt to get a real DetectedTransfer
-        let (ciphertext, _) = encrypt_compliance_details(
+        let mut rng = OsRng;
+        let result = encrypt_compliance_details(
             &mut rng,
             &ack,
             &self_address,
             date,
             asset_id,
             amount,
-            counterparty_address.clone(),
+            &counterparty_address,
+            &asset_leaf,
         )
         .unwrap();
 
-        let decrypted = decrypt_with_mck(&mck, date, &ciphertext).unwrap();
+        let decrypted = decrypt_compliance(&uck, date, &result.ciphertext).unwrap();
 
         let transfer = DetectedTransfer {
             height: 100,
             action_index: 0,
-            asset_id: decrypted.asset_id,
-            amount: decrypted.amount,
+            asset_id,
+            amount: decrypted.core.amount,
             self_address: PartialAddress::new(
-                decrypted.self_diversified_generator,
-                decrypted.self_transmission_key,
+                decrypted.core.self_diversified_generator,
+                decrypted.core.self_transmission_key,
             ),
             counterparty_address: PartialAddress::new(
-                decrypted.counterparty_diversified_generator,
-                decrypted.counterparty_transmission_key,
+                decrypted.extension.counterparty_diversified_generator,
+                decrypted.extension.counterparty_transmission_key,
             ),
             nullifier: None,
         };
@@ -378,49 +383,52 @@ mod tests {
 
     #[test]
     fn test_query_filters() {
-        let mut rng = rand_core::OsRng;
-
         let temp_file = NamedTempFile::new().unwrap();
         let storage = ComplianceStorage::new(temp_file.path()).unwrap();
 
-        let mck = make_mck();
+        let uck = make_uck();
         let date = 19001u64;
 
         let self_address = make_address(33);
         let counterparty_address = make_address(44);
-        let ack = mck.derive_address_key(self_address.diversifier());
+        let ack = uck.derive_address_key(self_address.diversifier());
 
         let asset_a = asset::Id(decaf377::Fq::from(1111u64));
         let asset_b = asset::Id(decaf377::Fq::from(2222u64));
 
+        let dk = DetectionKey::demo();
+        let asset_leaf = make_test_leaf(dk.public_key(), u128::MAX);
+
         // Create transfers with different assets and heights
         let mut transfers = Vec::new();
         for (i, asset_id) in [(0, asset_a), (1, asset_b), (2, asset_a)].iter() {
-            let (ciphertext, _) = encrypt_compliance_details(
+            let mut rng = OsRng;
+            let result = encrypt_compliance_details(
                 &mut rng,
                 &ack,
                 &self_address,
                 date,
                 *asset_id,
                 Amount::from((100 + i * 100) as u64),
-                counterparty_address.clone(),
+                &counterparty_address,
+                &asset_leaf,
             )
             .unwrap();
 
-            let decrypted = decrypt_with_mck(&mck, date, &ciphertext).unwrap();
+            let decrypted = decrypt_compliance(&uck, date, &result.ciphertext).unwrap();
 
             transfers.push(DetectedTransfer {
                 height: 100 + *i as u64,
                 action_index: 0,
-                asset_id: decrypted.asset_id,
-                amount: decrypted.amount,
+                asset_id: *asset_id,
+                amount: decrypted.core.amount,
                 self_address: PartialAddress::new(
-                    decrypted.self_diversified_generator,
-                    decrypted.self_transmission_key,
+                    decrypted.core.self_diversified_generator,
+                    decrypted.core.self_transmission_key,
                 ),
                 counterparty_address: PartialAddress::new(
-                    decrypted.counterparty_diversified_generator,
-                    decrypted.counterparty_transmission_key,
+                    decrypted.extension.counterparty_diversified_generator,
+                    decrypted.extension.counterparty_transmission_key,
                 ),
                 nullifier: None,
             });

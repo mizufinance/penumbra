@@ -214,6 +214,8 @@ impl TestNodeWithIBC {
             let msg = MsgRegisterAsset {
                 asset_id,
                 is_regulated: false,
+                dk_pub: None,
+                threshold: None,
             };
             actions.push(Action::ComplianceRegisterAsset(msg));
         }

@@ -155,20 +155,20 @@ fn test_client_encrypts_with_daily_keys() {
     let ak2 = uk.derive_address_key(&div2);
 
     let date = 19000u64;
-    let key_type = KeyType::Detection;
+    let key_type = KeyType::Core;
 
     // === CLIENT ENCRYPTION (uses AK + public tweak, NOT UK) ===
     // Client derives daily public key from AK: DK = AK + T * B_d
     let dk1 = ak1.derive_daily_key(&div1, key_type, date);
     let dk2 = ak2.derive_daily_key(&div2, key_type, date);
 
-    let msg1 = b"Hello from address 1 (day 19000, detection)";
+    let msg1 = b"Hello from address 1 (day 19000, core)";
     let r1 = Fr::rand(&mut rng);
     let epk1 = b_d1 * r1;
     let ss_sender1 = dk1 * r1; // S = r * DK = r * (AK + T * B_d)
     let ct1 = encrypt(msg1, &ss_sender1);
 
-    let msg2 = b"Hello from address 2 (day 19000, detection)";
+    let msg2 = b"Hello from address 2 (day 19000, core)";
     let r2 = Fr::rand(&mut rng);
     let epk2 = b_d2 * r2;
     let ss_sender2 = dk2 * r2;

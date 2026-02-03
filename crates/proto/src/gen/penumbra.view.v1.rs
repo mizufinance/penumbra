@@ -2303,6 +2303,263 @@ impl ::prost::Name for LpStrategyCatalogResponse {
         "/penumbra.view.v1.LpStrategyCatalogResponse".into()
     }
 }
+/// Request for querying an asset's regulation status.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ComplianceAssetStatusRequest {
+    /// The asset ID to query.
+    #[prost(message, optional, tag = "1")]
+    pub asset_id: ::core::option::Option<super::super::core::asset::v1::AssetId>,
+}
+impl ::prost::Name for ComplianceAssetStatusRequest {
+    const NAME: &'static str = "ComplianceAssetStatusRequest";
+    const PACKAGE: &'static str = "penumbra.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.view.v1.ComplianceAssetStatusRequest".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.view.v1.ComplianceAssetStatusRequest".into()
+    }
+}
+/// Response containing an asset's regulation status.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ComplianceAssetStatusResponse {
+    /// The asset ID that was queried.
+    #[prost(message, optional, tag = "1")]
+    pub asset_id: ::core::option::Option<super::super::core::asset::v1::AssetId>,
+    /// Whether the asset is registered in the compliance system.
+    #[prost(bool, tag = "2")]
+    pub is_registered: bool,
+    /// Whether the asset requires compliance (only meaningful if is_registered is true).
+    #[prost(bool, tag = "3")]
+    pub is_regulated: bool,
+    /// Issuer's detection key public (32 bytes compressed point).
+    #[prost(bytes = "vec", tag = "4")]
+    pub dk_pub: ::prost::alloc::vec::Vec<u8>,
+    /// Amount threshold for flagging (16 bytes, little-endian u128).
+    #[prost(bytes = "vec", tag = "5")]
+    pub threshold: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for ComplianceAssetStatusResponse {
+    const NAME: &'static str = "ComplianceAssetStatusResponse";
+    const PACKAGE: &'static str = "penumbra.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.view.v1.ComplianceAssetStatusResponse".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.view.v1.ComplianceAssetStatusResponse".into()
+    }
+}
+/// Request for querying the current compliance tree anchors.
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct ComplianceAnchorsRequest {}
+impl ::prost::Name for ComplianceAnchorsRequest {
+    const NAME: &'static str = "ComplianceAnchorsRequest";
+    const PACKAGE: &'static str = "penumbra.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.view.v1.ComplianceAnchorsRequest".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.view.v1.ComplianceAnchorsRequest".into()
+    }
+}
+/// Response containing the current compliance tree anchors.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ComplianceAnchorsResponse {
+    /// The root of the user compliance tree (32 bytes).
+    #[prost(bytes = "vec", tag = "1")]
+    pub user_tree_root: ::prost::alloc::vec::Vec<u8>,
+    /// The root of the asset regulation tree (32 bytes).
+    #[prost(bytes = "vec", tag = "2")]
+    pub asset_tree_root: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for ComplianceAnchorsResponse {
+    const NAME: &'static str = "ComplianceAnchorsResponse";
+    const PACKAGE: &'static str = "penumbra.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.view.v1.ComplianceAnchorsResponse".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.view.v1.ComplianceAnchorsResponse".into()
+    }
+}
+/// Request for querying Merkle proofs needed for compliance ZK proofs.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ComplianceMerkleProofsRequest {
+    /// The address (used to look up user's position in compliance tree).
+    #[prost(message, optional, tag = "1")]
+    pub address: ::core::option::Option<super::super::core::keys::v1::Address>,
+    /// The asset ID (used to look up asset's position in asset tree).
+    #[prost(message, optional, tag = "2")]
+    pub asset_id: ::core::option::Option<super::super::core::asset::v1::AssetId>,
+}
+impl ::prost::Name for ComplianceMerkleProofsRequest {
+    const NAME: &'static str = "ComplianceMerkleProofsRequest";
+    const PACKAGE: &'static str = "penumbra.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.view.v1.ComplianceMerkleProofsRequest".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.view.v1.ComplianceMerkleProofsRequest".into()
+    }
+}
+/// Response containing Merkle proofs for compliance ZK proofs.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ComplianceMerkleProofsResponse {
+    /// Whether the user is registered for this asset.
+    #[prost(bool, tag = "1")]
+    pub user_registered: bool,
+    /// Whether the asset is registered in the compliance system.
+    #[prost(bool, tag = "2")]
+    pub asset_registered: bool,
+    /// Whether the asset is regulated (only meaningful if asset_registered is true).
+    #[prost(bool, tag = "3")]
+    pub is_regulated: bool,
+    /// User's Merkle path in the compliance tree (from leaf to root).
+    #[prost(message, optional, tag = "4")]
+    pub compliance_path: ::core::option::Option<
+        super::super::core::component::compliance::v1::MerklePath,
+    >,
+    /// User's position in the compliance tree.
+    #[prost(uint64, tag = "5")]
+    pub compliance_position: u64,
+    /// Asset's Merkle path in the asset tree (from leaf to root).
+    #[prost(message, optional, tag = "6")]
+    pub asset_path: ::core::option::Option<
+        super::super::core::component::compliance::v1::MerklePath,
+    >,
+    /// Asset's position in the asset tree.
+    #[prost(uint64, tag = "7")]
+    pub asset_position: u64,
+    /// Current compliance tree root (32 bytes).
+    #[prost(bytes = "vec", tag = "8")]
+    pub compliance_anchor: ::prost::alloc::vec::Vec<u8>,
+    /// Current asset tree root (32 bytes).
+    #[prost(bytes = "vec", tag = "9")]
+    pub asset_anchor: ::prost::alloc::vec::Vec<u8>,
+    /// The indexed leaf data for asset IMT proof verification.
+    #[prost(message, optional, tag = "10")]
+    pub asset_indexed_leaf: ::core::option::Option<
+        super::super::core::component::compliance::v1::IndexedLeafData,
+    >,
+    /// The user's compliance leaf (only present if user_registered is true).
+    /// Included to avoid N+1 queries when fetching batch proofs.
+    #[prost(message, optional, tag = "11")]
+    pub compliance_leaf: ::core::option::Option<
+        super::super::core::component::compliance::v1::ComplianceLeaf,
+    >,
+}
+impl ::prost::Name for ComplianceMerkleProofsResponse {
+    const NAME: &'static str = "ComplianceMerkleProofsResponse";
+    const PACKAGE: &'static str = "penumbra.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.view.v1.ComplianceMerkleProofsResponse".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.view.v1.ComplianceMerkleProofsResponse".into()
+    }
+}
+/// Request for querying a user's registered compliance leaf.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ComplianceUserLeafRequest {
+    /// The address to look up.
+    #[prost(message, optional, tag = "1")]
+    pub address: ::core::option::Option<super::super::core::keys::v1::Address>,
+    /// The asset ID to look up.
+    #[prost(message, optional, tag = "2")]
+    pub asset_id: ::core::option::Option<super::super::core::asset::v1::AssetId>,
+}
+impl ::prost::Name for ComplianceUserLeafRequest {
+    const NAME: &'static str = "ComplianceUserLeafRequest";
+    const PACKAGE: &'static str = "penumbra.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.view.v1.ComplianceUserLeafRequest".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.view.v1.ComplianceUserLeafRequest".into()
+    }
+}
+/// Response containing a user's registered compliance leaf.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ComplianceUserLeafResponse {
+    /// Whether the user is registered for this asset.
+    #[prost(bool, tag = "1")]
+    pub is_registered: bool,
+    /// The user's compliance leaf (only present if is_registered is true).
+    #[prost(message, optional, tag = "2")]
+    pub leaf: ::core::option::Option<
+        super::super::core::component::compliance::v1::ComplianceLeaf,
+    >,
+}
+impl ::prost::Name for ComplianceUserLeafResponse {
+    const NAME: &'static str = "ComplianceUserLeafResponse";
+    const PACKAGE: &'static str = "penumbra.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.view.v1.ComplianceUserLeafResponse".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.view.v1.ComplianceUserLeafResponse".into()
+    }
+}
+/// A single query in a batch request.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ComplianceBatchQuery {
+    /// The address to look up.
+    #[prost(message, optional, tag = "1")]
+    pub address: ::core::option::Option<super::super::core::keys::v1::Address>,
+    /// The asset ID to look up.
+    #[prost(message, optional, tag = "2")]
+    pub asset_id: ::core::option::Option<super::super::core::asset::v1::AssetId>,
+}
+impl ::prost::Name for ComplianceBatchQuery {
+    const NAME: &'static str = "ComplianceBatchQuery";
+    const PACKAGE: &'static str = "penumbra.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.view.v1.ComplianceBatchQuery".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.view.v1.ComplianceBatchQuery".into()
+    }
+}
+/// Request for batch querying multiple (address, asset) pairs.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ComplianceBatchMerkleProofsRequest {
+    /// The queries to execute. Each query is an (address, asset_id) pair.
+    #[prost(message, repeated, tag = "1")]
+    pub queries: ::prost::alloc::vec::Vec<ComplianceBatchQuery>,
+}
+impl ::prost::Name for ComplianceBatchMerkleProofsRequest {
+    const NAME: &'static str = "ComplianceBatchMerkleProofsRequest";
+    const PACKAGE: &'static str = "penumbra.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.view.v1.ComplianceBatchMerkleProofsRequest".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.view.v1.ComplianceBatchMerkleProofsRequest".into()
+    }
+}
+/// Response containing batch Merkle proofs and anchors.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ComplianceBatchMerkleProofsResponse {
+    /// Current compliance tree root (32 bytes).
+    #[prost(bytes = "vec", tag = "1")]
+    pub compliance_anchor: ::prost::alloc::vec::Vec<u8>,
+    /// Current asset tree root (32 bytes).
+    #[prost(bytes = "vec", tag = "2")]
+    pub asset_anchor: ::prost::alloc::vec::Vec<u8>,
+    /// Results for each query, in the same order as the request.
+    #[prost(message, repeated, tag = "3")]
+    pub results: ::prost::alloc::vec::Vec<ComplianceMerkleProofsResponse>,
+}
+impl ::prost::Name for ComplianceBatchMerkleProofsResponse {
+    const NAME: &'static str = "ComplianceBatchMerkleProofsResponse";
+    const PACKAGE: &'static str = "penumbra.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.view.v1.ComplianceBatchMerkleProofsResponse".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.view.v1.ComplianceBatchMerkleProofsResponse".into()
+    }
+}
 /// Generated client implementations.
 #[cfg(feature = "rpc")]
 pub mod view_service_client {
@@ -3376,16 +3633,12 @@ pub mod view_service_client {
             self.inner.server_streaming(req, path, codec).await
         }
         /// Query the compliance registry for an asset's regulation status.
-        /// This proxies to pd's compliance service.
+        /// Uses local compliance trees with fallback to pd's compliance service.
         pub async fn compliance_asset_status(
             &mut self,
-            request: impl tonic::IntoRequest<
-                super::super::super::core::component::compliance::v1::ComplianceAssetStatusRequest,
-            >,
+            request: impl tonic::IntoRequest<super::ComplianceAssetStatusRequest>,
         ) -> std::result::Result<
-            tonic::Response<
-                super::super::super::core::component::compliance::v1::ComplianceAssetStatusResponse,
-            >,
+            tonic::Response<super::ComplianceAssetStatusResponse>,
             tonic::Status,
         > {
             self.inner
@@ -3410,17 +3663,12 @@ pub mod view_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /// Query the compliance tree anchors (roots) from the chain.
-        /// This proxies to pd's compliance service.
+        /// Query the compliance tree anchors (roots) from local trees.
         pub async fn compliance_anchors(
             &mut self,
-            request: impl tonic::IntoRequest<
-                super::super::super::core::component::compliance::v1::ComplianceAnchorsRequest,
-            >,
+            request: impl tonic::IntoRequest<super::ComplianceAnchorsRequest>,
         ) -> std::result::Result<
-            tonic::Response<
-                super::super::super::core::component::compliance::v1::ComplianceAnchorsResponse,
-            >,
+            tonic::Response<super::ComplianceAnchorsResponse>,
             tonic::Status,
         > {
             self.inner
@@ -3443,16 +3691,12 @@ pub mod view_service_client {
             self.inner.unary(req, path, codec).await
         }
         /// Query the Merkle proofs needed for compliance ZK proofs.
-        /// This proxies to pd's compliance service.
+        /// Uses local trees with fallback to pd for user registration lookups.
         pub async fn compliance_merkle_proofs(
             &mut self,
-            request: impl tonic::IntoRequest<
-                super::super::super::core::component::compliance::v1::ComplianceMerkleProofsRequest,
-            >,
+            request: impl tonic::IntoRequest<super::ComplianceMerkleProofsRequest>,
         ) -> std::result::Result<
-            tonic::Response<
-                super::super::super::core::component::compliance::v1::ComplianceMerkleProofsResponse,
-            >,
+            tonic::Response<super::ComplianceMerkleProofsResponse>,
             tonic::Status,
         > {
             self.inner
@@ -3478,17 +3722,13 @@ pub mod view_service_client {
             self.inner.unary(req, path, codec).await
         }
         /// Batch query for multiple (address, asset) pairs.
-        /// This proxies to pd's compliance service.
+        /// Uses local trees with fallback to pd for user registration lookups.
         /// Use this for multi-spend transactions to avoid multiple round trips.
         pub async fn compliance_batch_merkle_proofs(
             &mut self,
-            request: impl tonic::IntoRequest<
-                super::super::super::core::component::compliance::v1::ComplianceBatchMerkleProofsRequest,
-            >,
+            request: impl tonic::IntoRequest<super::ComplianceBatchMerkleProofsRequest>,
         ) -> std::result::Result<
-            tonic::Response<
-                super::super::super::core::component::compliance::v1::ComplianceBatchMerkleProofsResponse,
-            >,
+            tonic::Response<super::ComplianceBatchMerkleProofsResponse>,
             tonic::Status,
         > {
             self.inner
@@ -3514,16 +3754,12 @@ pub mod view_service_client {
             self.inner.unary(req, path, codec).await
         }
         /// Query a user's registered compliance leaf.
-        /// This proxies to pd's compliance service.
+        /// Uses local storage with fallback to pd's compliance service.
         pub async fn compliance_user_leaf(
             &mut self,
-            request: impl tonic::IntoRequest<
-                super::super::super::core::component::compliance::v1::ComplianceUserLeafRequest,
-            >,
+            request: impl tonic::IntoRequest<super::ComplianceUserLeafRequest>,
         ) -> std::result::Result<
-            tonic::Response<
-                super::super::super::core::component::compliance::v1::ComplianceUserLeafResponse,
-            >,
+            tonic::Response<super::ComplianceUserLeafResponse>,
             tonic::Status,
         > {
             self.inner
@@ -3995,69 +4231,48 @@ pub mod view_service_server {
             tonic::Status,
         >;
         /// Query the compliance registry for an asset's regulation status.
-        /// This proxies to pd's compliance service.
+        /// Uses local compliance trees with fallback to pd's compliance service.
         async fn compliance_asset_status(
             &self,
-            request: tonic::Request<
-                super::super::super::core::component::compliance::v1::ComplianceAssetStatusRequest,
-            >,
+            request: tonic::Request<super::ComplianceAssetStatusRequest>,
         ) -> std::result::Result<
-            tonic::Response<
-                super::super::super::core::component::compliance::v1::ComplianceAssetStatusResponse,
-            >,
+            tonic::Response<super::ComplianceAssetStatusResponse>,
             tonic::Status,
         >;
-        /// Query the compliance tree anchors (roots) from the chain.
-        /// This proxies to pd's compliance service.
+        /// Query the compliance tree anchors (roots) from local trees.
         async fn compliance_anchors(
             &self,
-            request: tonic::Request<
-                super::super::super::core::component::compliance::v1::ComplianceAnchorsRequest,
-            >,
+            request: tonic::Request<super::ComplianceAnchorsRequest>,
         ) -> std::result::Result<
-            tonic::Response<
-                super::super::super::core::component::compliance::v1::ComplianceAnchorsResponse,
-            >,
+            tonic::Response<super::ComplianceAnchorsResponse>,
             tonic::Status,
         >;
         /// Query the Merkle proofs needed for compliance ZK proofs.
-        /// This proxies to pd's compliance service.
+        /// Uses local trees with fallback to pd for user registration lookups.
         async fn compliance_merkle_proofs(
             &self,
-            request: tonic::Request<
-                super::super::super::core::component::compliance::v1::ComplianceMerkleProofsRequest,
-            >,
+            request: tonic::Request<super::ComplianceMerkleProofsRequest>,
         ) -> std::result::Result<
-            tonic::Response<
-                super::super::super::core::component::compliance::v1::ComplianceMerkleProofsResponse,
-            >,
+            tonic::Response<super::ComplianceMerkleProofsResponse>,
             tonic::Status,
         >;
         /// Batch query for multiple (address, asset) pairs.
-        /// This proxies to pd's compliance service.
+        /// Uses local trees with fallback to pd for user registration lookups.
         /// Use this for multi-spend transactions to avoid multiple round trips.
         async fn compliance_batch_merkle_proofs(
             &self,
-            request: tonic::Request<
-                super::super::super::core::component::compliance::v1::ComplianceBatchMerkleProofsRequest,
-            >,
+            request: tonic::Request<super::ComplianceBatchMerkleProofsRequest>,
         ) -> std::result::Result<
-            tonic::Response<
-                super::super::super::core::component::compliance::v1::ComplianceBatchMerkleProofsResponse,
-            >,
+            tonic::Response<super::ComplianceBatchMerkleProofsResponse>,
             tonic::Status,
         >;
         /// Query a user's registered compliance leaf.
-        /// This proxies to pd's compliance service.
+        /// Uses local storage with fallback to pd's compliance service.
         async fn compliance_user_leaf(
             &self,
-            request: tonic::Request<
-                super::super::super::core::component::compliance::v1::ComplianceUserLeafRequest,
-            >,
+            request: tonic::Request<super::ComplianceUserLeafRequest>,
         ) -> std::result::Result<
-            tonic::Response<
-                super::super::super::core::component::compliance::v1::ComplianceUserLeafResponse,
-            >,
+            tonic::Response<super::ComplianceUserLeafResponse>,
             tonic::Status,
         >;
     }
@@ -5776,19 +5991,16 @@ pub mod view_service_server {
                     struct ComplianceAssetStatusSvc<T: ViewService>(pub Arc<T>);
                     impl<
                         T: ViewService,
-                    > tonic::server::UnaryService<
-                        super::super::super::core::component::compliance::v1::ComplianceAssetStatusRequest,
-                    > for ComplianceAssetStatusSvc<T> {
-                        type Response = super::super::super::core::component::compliance::v1::ComplianceAssetStatusResponse;
+                    > tonic::server::UnaryService<super::ComplianceAssetStatusRequest>
+                    for ComplianceAssetStatusSvc<T> {
+                        type Response = super::ComplianceAssetStatusResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<
-                                super::super::super::core::component::compliance::v1::ComplianceAssetStatusRequest,
-                            >,
+                            request: tonic::Request<super::ComplianceAssetStatusRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -5825,19 +6037,16 @@ pub mod view_service_server {
                     struct ComplianceAnchorsSvc<T: ViewService>(pub Arc<T>);
                     impl<
                         T: ViewService,
-                    > tonic::server::UnaryService<
-                        super::super::super::core::component::compliance::v1::ComplianceAnchorsRequest,
-                    > for ComplianceAnchorsSvc<T> {
-                        type Response = super::super::super::core::component::compliance::v1::ComplianceAnchorsResponse;
+                    > tonic::server::UnaryService<super::ComplianceAnchorsRequest>
+                    for ComplianceAnchorsSvc<T> {
+                        type Response = super::ComplianceAnchorsResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<
-                                super::super::super::core::component::compliance::v1::ComplianceAnchorsRequest,
-                            >,
+                            request: tonic::Request<super::ComplianceAnchorsRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -5874,19 +6083,16 @@ pub mod view_service_server {
                     struct ComplianceMerkleProofsSvc<T: ViewService>(pub Arc<T>);
                     impl<
                         T: ViewService,
-                    > tonic::server::UnaryService<
-                        super::super::super::core::component::compliance::v1::ComplianceMerkleProofsRequest,
-                    > for ComplianceMerkleProofsSvc<T> {
-                        type Response = super::super::super::core::component::compliance::v1::ComplianceMerkleProofsResponse;
+                    > tonic::server::UnaryService<super::ComplianceMerkleProofsRequest>
+                    for ComplianceMerkleProofsSvc<T> {
+                        type Response = super::ComplianceMerkleProofsResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<
-                                super::super::super::core::component::compliance::v1::ComplianceMerkleProofsRequest,
-                            >,
+                            request: tonic::Request<super::ComplianceMerkleProofsRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -5927,9 +6133,9 @@ pub mod view_service_server {
                     impl<
                         T: ViewService,
                     > tonic::server::UnaryService<
-                        super::super::super::core::component::compliance::v1::ComplianceBatchMerkleProofsRequest,
+                        super::ComplianceBatchMerkleProofsRequest,
                     > for ComplianceBatchMerkleProofsSvc<T> {
-                        type Response = super::super::super::core::component::compliance::v1::ComplianceBatchMerkleProofsResponse;
+                        type Response = super::ComplianceBatchMerkleProofsResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
@@ -5937,7 +6143,7 @@ pub mod view_service_server {
                         fn call(
                             &mut self,
                             request: tonic::Request<
-                                super::super::super::core::component::compliance::v1::ComplianceBatchMerkleProofsRequest,
+                                super::ComplianceBatchMerkleProofsRequest,
                             >,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
@@ -5978,19 +6184,16 @@ pub mod view_service_server {
                     struct ComplianceUserLeafSvc<T: ViewService>(pub Arc<T>);
                     impl<
                         T: ViewService,
-                    > tonic::server::UnaryService<
-                        super::super::super::core::component::compliance::v1::ComplianceUserLeafRequest,
-                    > for ComplianceUserLeafSvc<T> {
-                        type Response = super::super::super::core::component::compliance::v1::ComplianceUserLeafResponse;
+                    > tonic::server::UnaryService<super::ComplianceUserLeafRequest>
+                    for ComplianceUserLeafSvc<T> {
+                        type Response = super::ComplianceUserLeafResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<
-                                super::super::super::core::component::compliance::v1::ComplianceUserLeafRequest,
-                            >,
+                            request: tonic::Request<super::ComplianceUserLeafRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {

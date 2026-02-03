@@ -230,6 +230,9 @@ message SpendPlan {
   uint64 asset_position = 20;
   // Indexed leaf data for IMT proof verification (value, next_index, next_value).
   compliance.v1.IndexedLeafData asset_indexed_leaf = 21;
+  // Whether this spend is flagged (amount >= threshold).
+  // Computed from threshold comparison and passed to circuit as witness.
+  bool is_flagged = 22;
 }
 
 // Creates a new shielded note.
@@ -267,6 +270,12 @@ message OutputBody {
   crypto.tct.v1.StateCommitment compliance_anchor = 9;
   // Asset tree anchor used during proof generation.
   crypto.tct.v1.StateCommitment asset_anchor = 10;
+  // Issuer's detection key public (32 bytes, compressed curve point).
+  // For threshold-based flagging. Identity element if no policy exists.
+  bytes dk_pub = 11;
+  // Amount threshold for flagging (16 bytes, little-endian u128).
+  // u128::MAX if no policy exists (never flag).
+  bytes threshold = 12;
 }
 
 message OutputView {

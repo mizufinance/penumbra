@@ -8,77 +8,80 @@ Each transfer creates TWO compliance ciphertexts:
 
 Both contain the same data but encrypted for different parties.
 
-## Wire Format (256 bytes)
+## Wire Format (288 bytes)
 
 | Field | Bytes | Description |
 |-------|-------|-------------|
-| EPK | 32 | Ephemeral public key `EPK = r * B_d` |
-| Detection | 32 | 1 Fq - encrypted asset_id |
+| EPK | 32 | Ephemeral public key `EPK = r * B_d` (for user ECDH) |
+| EPK_G | 32 | Ephemeral public key `EPK_G = r * G` (for issuer ECDH) |
+| Detection | 32 | 1 Fq - encrypted (asset_id + flag bit) to issuer |
 | Core | 96 | 3 Fq - encrypted (amount + self address) |
 | Extension | 96 | 3 Fq - encrypted counterparty address |
 
 ## 3-Tier Encryption
 
-Each segment uses a different daily key (DK):
-
-| Segment | Daily Key | Content |
-|---------|-----------|---------|
-| Detection | DK_det = AK + T_det * B_d | asset_id |
-| Core | DK_core = AK + T_core * B_d | amount + self address |
-| Extension | DK_ext = AK + T_ext * B_d | counterparty address |
+| Segment | Encrypted To | Domain | Content |
+|---------|--------------|--------|---------|
+| Detection | Issuer's DK_pub | ISSUER_DETECTION_DOMAIN | asset_id with flag in bit 252 |
+| Core | User's DCK (unflagged) or DK_pub (flagged) | COMPLIANCE_STREAM_CIPHER_DOMAIN | amount + self address |
+| Extension | User's DCK (unflagged) or DK_pub (flagged) | COMPLIANCE_STREAM_CIPHER_DOMAIN | counterparty address |
 
 ### Encryption (Client)
 
-Client knows: AK (public), T (public tweak), B_d
+Client knows: ACK (user public), DK_pub (issuer public from IMT), B_d, threshold
 
 ```
-1. Generate ephemeral: r, EPK = r * B_d
-2. Derive daily public keys:
-   DK_det = AK + T_det * B_d
-   DK_core = AK + T_core * B_d
-   DK_ext = AK + T_ext * B_d
-3. Compute shared secrets:
-   S_det = r * DK_det
-   S_core = r * DK_core
-   S_ext = r * DK_ext
-4. Derive seeds: seed_X = hash(S_X, EPK)
-5. Encrypt: C[i] = plaintext[i] + hash(seed_X, i)
+1. Generate ephemeral: r
+2. Compute EPKs:
+   EPK = r * B_d (for user)
+   EPK_G = r * G (for issuer)
+3. Compute is_flagged = (amount >= threshold)
+4. Compute shared secrets:
+   S_issuer = r * DK_pub (for detection, and core/ext if flagged)
+   S_core = r * DCK_core (if not flagged)
+   S_ext = r * DCK_ext (if not flagged)
+5. Detection tier: encrypt (asset_id | flag<<252) with S_issuer
+6. Core/Extension: encrypt with S_issuer (flagged) or user keys (unflagged)
 ```
 
-### Decryption (Orbis)
+### Decryption
 
-Orbis knows: UK (secret)
-
+**Issuer (Detection Tier):**
 ```
-1. Derive daily scalars:
-   dk_det = UK + T_det
-   dk_core = UK + T_core
-   dk_ext = UK + T_ext
-2. Compute shared secrets:
-   S_det = dk_det * EPK
-   S_core = dk_core * EPK
-   S_ext = dk_ext * EPK
-3. Derive seeds: seed_X = hash(S_X, EPK)
-4. Decrypt: plaintext[i] = C[i] - hash(seed_X, i)
+S_issuer = DK * EPK_G
+seed = hash(ISSUER_DETECTION_DOMAIN, S_issuer, EPK)
+plaintext = ciphertext - hash(seed, 0)
+asset_id = plaintext & ~(1<<252)
+is_flagged = (plaintext >> 252) & 1
+```
+
+**User (Core/Extension, unflagged):**
+```
+dck = UCK + T_type
+S = dck * EPK
+seed = hash(COMPLIANCE_STREAM_CIPHER_DOMAIN, S, EPK)
+plaintext[i] = ciphertext[i] - hash(seed, i)
 ```
 
 ## Access Tiers
 
-| Tier | Daily Scalar Shared | Access |
-|------|---------------------|--------|
-| Detection | dk_det | Asset ID only |
-| Core | dk_det + dk_core | + Amount, self address |
-| Full | All dk | + Counterparty address |
+| Tier | Who Can Decrypt | Access |
+|------|-----------------|--------|
+| Detection | Issuer only | Asset ID + flag status |
+| Core (unflagged) | User only | + Amount, self address |
+| Core (flagged) | Issuer only | + Amount, self address |
+| Extension (unflagged) | User only | + Counterparty address |
+| Extension (flagged) | Issuer only | + Counterparty address |
 
-## BLACK_HOLE_AK
+## BLACK_HOLE_ACK
 
-For unregulated assets:
+For unregulated assets, encryption uses a NUMS (Nothing-Up-My-Sleeve) point:
 
 ```rust
-BLACK_HOLE_AK = Element::GENERATOR
+BLACK_HOLE_ACK = hash_to_curve("penumbra.compliance.black_hole_ack")
 ```
 
-Ciphertext is valid but nobody can decrypt (no corresponding UK).
+No one knows the discrete log, so ciphertext is effectively a dead letter.
 
 ## Source Files
 

@@ -601,6 +601,10 @@ pub struct SpendPlan {
     pub asset_indexed_leaf: ::core::option::Option<
         super::super::compliance::v1::IndexedLeafData,
     >,
+    /// Whether this spend is flagged (amount >= threshold).
+    /// Computed from threshold comparison and passed to circuit as witness.
+    #[prost(bool, tag = "22")]
+    pub is_flagged: bool,
 }
 impl ::prost::Name for SpendPlan {
     const NAME: &'static str = "SpendPlan";
@@ -680,6 +684,14 @@ pub struct OutputBody {
     pub asset_anchor: ::core::option::Option<
         super::super::super::super::crypto::tct::v1::StateCommitment,
     >,
+    /// Issuer's detection key public (32 bytes, compressed curve point).
+    /// For threshold-based flagging. Identity element if no policy exists.
+    #[prost(bytes = "vec", tag = "11")]
+    pub dk_pub: ::prost::alloc::vec::Vec<u8>,
+    /// Amount threshold for flagging (16 bytes, little-endian u128).
+    /// u128::MAX if no policy exists (never flag).
+    #[prost(bytes = "vec", tag = "12")]
+    pub threshold: ::prost::alloc::vec::Vec<u8>,
 }
 impl ::prost::Name for OutputBody {
     const NAME: &'static str = "OutputBody";

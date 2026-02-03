@@ -1,62 +1,66 @@
 //! Full decryption of compliance ciphertexts.
 //!
-//! With tiered key types, full decryption requires all three daily keys
-//! (Detection, Core, Extension). For selective disclosure, use the
-//! individual decrypt functions in crypto.rs.
+//! With the new key hierarchy, detection is handled by the issuer's DetectionKey.
+//! User daily keys (Core, Extension) decrypt the amount/addresses when available.
+//!
+//! For selective disclosure, use the individual decrypt functions in scanning.rs.
 
 use anyhow::{Context, Result};
-use penumbra_sdk_keys::keys::{DailyKeySet, MasterComplianceKey};
+use penumbra_sdk_keys::keys::UserComplianceKey;
 
-use crate::crypto::{decrypt_compliance_details, DecryptedComplianceData};
+use crate::scanning::{decrypt_core, decrypt_extension, CoreData, ExtensionData};
 use crate::structs::ComplianceCiphertext;
 
-/// Decrypt using MasterComplianceKey (derives all daily keys internally).
-///
-/// This derives all three key types (Detection, Core, Extension) and
-/// decrypts the complete ciphertext.
-pub fn decrypt_with_mck(
-    mck: &MasterComplianceKey,
-    date: u64,
-    ciphertext: &ComplianceCiphertext,
-) -> Result<DecryptedComplianceData> {
-    let daily_keys = mck.derive_daily_keys(date);
-    decrypt_with_daily_keys(&daily_keys, ciphertext)
+/// Decrypted compliance data (without asset_id since detection is issuer-only).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DecryptedUserData {
+    /// Core data (amount + self address)
+    pub core: CoreData,
+    /// Extension data (counterparty address)
+    pub extension: ExtensionData,
 }
 
-/// Decrypt using pre-derived DailyKeySet.
+/// Decrypt core and extension tiers using UserComplianceKey.
 ///
-/// Preferred for production - auditor receives daily keys from issuer.
-/// Requires all three key types for full decryption.
-pub fn decrypt_with_daily_keys(
-    daily_keys: &DailyKeySet,
+/// Derives daily keys internally and decrypts the ciphertext.
+/// Note: This does NOT decrypt the detection tier (asset_id).
+/// Detection is handled by the issuer's DetectionKey.
+pub fn decrypt_compliance(
+    uck: &UserComplianceKey,
+    date: u64,
     ciphertext: &ComplianceCiphertext,
-) -> Result<DecryptedComplianceData> {
-    let epk = ciphertext.epk;
+) -> Result<DecryptedUserData> {
+    let daily_keys = uck.derive_daily_keys(date);
 
-    // Compute shared secrets for each key type
-    let ss_detection = epk * daily_keys.detection.inner();
-    let ss_core = epk * daily_keys.core.inner();
-    let ss_extension = epk * daily_keys.extension.inner();
+    // Decrypt core data
+    let core = decrypt_core(&daily_keys.core, ciphertext)
+        .context("failed to decrypt core data")?
+        .ok_or_else(|| anyhow::anyhow!("core decryption produced None"))?;
 
-    decrypt_compliance_details(&ss_detection, &ss_core, &ss_extension, &epk, ciphertext)
-        .context("failed to decrypt compliance ciphertext with daily keys")
+    // Decrypt extension data
+    let extension = decrypt_extension(&daily_keys.extension, ciphertext)
+        .context("failed to decrypt extension data")?
+        .ok_or_else(|| anyhow::anyhow!("extension decryption produced None"))?;
+
+    Ok(DecryptedUserData { core, extension })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::crypto::encrypt_compliance_details;
-    use crate::test_helpers::{make_address, make_mck, make_wallet};
+    use crate::issuer_keys::DetectionKey;
+    use crate::test_helpers::{make_address, make_test_leaf, make_uck, make_wallet};
     use penumbra_sdk_asset::asset;
     use penumbra_sdk_num::Amount;
 
     #[test]
-    fn test_decrypt_with_mck_roundtrip() {
+    fn test_decrypt_compliance_roundtrip() {
         let mut rng = rand_core::OsRng;
 
-        // Setup: Create a master key and derive a wallet key
-        let mck = make_mck();
-        let (ack, self_address) = make_wallet(&mck, 7);
+        // Setup: Create a user compliance key and derive a wallet key
+        let uck = make_uck();
+        let (ack, self_address) = make_wallet(&uck, 7);
 
         // Counterparty address
         let counterparty_address = make_address(8);
@@ -66,105 +70,100 @@ mod tests {
         let asset_id = asset::Id(decaf377::Fq::from(12345u64));
         let amount = Amount::from(999u128);
 
+        // Create asset leaf with detection key
+        let dk = DetectionKey::demo();
+        let asset_leaf = make_test_leaf(dk.public_key(), u128::MAX);
+
         // Encrypt
-        let (ciphertext, _ephemeral) = encrypt_compliance_details(
+        let result = encrypt_compliance_details(
             &mut rng,
             &ack,
             &self_address,
             date,
             asset_id,
             amount,
-            counterparty_address.clone(),
+            &counterparty_address,
+            &asset_leaf,
         )
         .expect("encryption should succeed");
 
-        // Decrypt using MCK
-        let decrypted = decrypt_with_mck(&mck, date, &ciphertext)
-            .expect("decryption should succeed with correct MCK");
+        // Decrypt using UCK
+        let decrypted = decrypt_compliance(&uck, date, &result.ciphertext)
+            .expect("decryption should succeed with correct UCK");
 
-        // Verify all fields match
-        assert_eq!(decrypted.asset_id, asset_id, "asset_id should match");
-        assert_eq!(decrypted.amount, amount, "amount should match");
+        // Verify core data matches
+        assert_eq!(decrypted.core.amount, amount, "amount should match");
 
         // Verify self address components
         assert_eq!(
-            decrypted.self_diversified_generator,
+            decrypted.core.self_diversified_generator,
             *self_address.diversified_generator(),
             "self diversified generator should match"
         );
         assert_eq!(
-            decrypted.self_transmission_key,
+            decrypted.core.self_transmission_key,
             self_address.transmission_key().0,
             "self transmission key should match"
         );
 
         // Verify counterparty address components
         assert_eq!(
-            decrypted.counterparty_diversified_generator,
+            decrypted.extension.counterparty_diversified_generator,
             *counterparty_address.diversified_generator(),
             "counterparty diversified generator should match"
         );
         assert_eq!(
-            decrypted.counterparty_transmission_key,
+            decrypted.extension.counterparty_transmission_key,
             counterparty_address.transmission_key().0,
             "counterparty transmission key should match"
         );
     }
 
     #[test]
-    fn test_decrypt_with_wrong_mck_fails() {
+    fn test_decrypt_with_wrong_uck_fails() {
         let mut rng = rand_core::OsRng;
 
-        // Create two different MCKs
-        let mck1 = make_mck();
-        let mck2 = make_mck();
+        // Create two different UCKs
+        let uck1 = make_uck();
+        let uck2 = make_uck();
 
-        let (ack1, self_address) = make_wallet(&mck1, 9);
-
-        // Simple counterparty
+        let (ack1, self_address) = make_wallet(&uck1, 9);
         let counterparty_address = self_address.clone();
 
-        // Encrypt with mck1
+        // Encrypt with uck1
         let date = 19001u64;
         let asset_id = asset::Id(decaf377::Fq::from(54321u64));
         let amount = Amount::from(777u128);
 
-        let (ciphertext, _) = encrypt_compliance_details(
+        // Create asset leaf
+        let dk = DetectionKey::demo();
+        let asset_leaf = make_test_leaf(dk.public_key(), u128::MAX);
+
+        let result = encrypt_compliance_details(
             &mut rng,
             &ack1,
             &self_address,
             date,
             asset_id,
             amount,
-            counterparty_address,
+            &counterparty_address,
+            &asset_leaf,
         )
         .expect("encryption should succeed");
 
-        // Try to decrypt with mck2 (wrong key)
-        let result = decrypt_with_mck(&mck2, date, &ciphertext);
+        // Try to decrypt with uck2 (wrong key) - should fail
+        let decrypt_result = decrypt_compliance(&uck2, date, &result.ciphertext);
 
-        // Decryption will succeed but produce garbage data
-        // (Encryption is malleable - any key will "decrypt" to something)
-        if let Ok(decrypted) = result {
-            // The decrypted data should NOT match the original
-            assert_ne!(
-                decrypted.asset_id, asset_id,
-                "wrong MCK should not decrypt to correct asset_id"
-            );
-            assert_ne!(
-                decrypted.amount, amount,
-                "wrong MCK should not decrypt to correct amount"
-            );
-        }
+        // Decryption should fail (point decompression will fail with garbage)
+        assert!(decrypt_result.is_err(), "wrong UCK should fail decryption");
     }
 
     #[test]
     fn test_decrypt_with_wrong_date_fails() {
         let mut rng = rand_core::OsRng;
 
-        let mck = make_mck();
-        let (ack, self_address) = make_wallet(&mck, 10);
-
+        let uck = make_uck();
+        let (ack, self_address) = make_wallet(&uck, 10);
         let counterparty_address = self_address.clone();
 
         // Encrypt for date 19000
@@ -172,31 +171,27 @@ mod tests {
         let asset_id = asset::Id(decaf377::Fq::from(11111u64));
         let amount = Amount::from(555u128);
 
-        let (ciphertext, _) = encrypt_compliance_details(
+        // Create asset leaf
+        let dk = DetectionKey::demo();
+        let asset_leaf = make_test_leaf(dk.public_key(), u128::MAX);
+
+        let result = encrypt_compliance_details(
             &mut rng,
             &ack,
             &self_address,
             encryption_date,
             asset_id,
             amount,
-            counterparty_address,
+            &counterparty_address,
+            &asset_leaf,
         )
         .expect("encryption should succeed");
 
         // Try to decrypt with wrong date (19001 instead of 19000)
         let wrong_date = 19001u64;
-        let result = decrypt_with_mck(&mck, wrong_date, &ciphertext);
+        let decrypt_result = decrypt_compliance(&uck, wrong_date, &result.ciphertext);
 
-        // Decryption will succeed but produce wrong data
-        if let Ok(decrypted) = result {
-            assert_ne!(
-                decrypted.asset_id, asset_id,
-                "wrong date should not decrypt to correct asset_id"
-            );
-            assert_ne!(
-                decrypted.amount, amount,
-                "wrong date should not decrypt to correct amount"
-            );
-        }
+        // Decryption should fail (wrong keys produce garbage)
+        assert!(decrypt_result.is_err(), "wrong date should fail decryption");
     }
 }

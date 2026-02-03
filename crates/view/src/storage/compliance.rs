@@ -3,12 +3,16 @@ use r2d2_sqlite::rusqlite::{OptionalExtension, Transaction};
 
 use penumbra_sdk_tct::StateCommitment;
 
-/// Asset indexed leaf data.
+/// Asset indexed leaf data (mirrors IndexedLeaf struct with policy).
 #[derive(Debug, Clone)]
 pub struct IndexedLeafData {
     pub value: [u8; 32],
     pub next_index: u64,
     pub next_value: [u8; 32],
+    /// Issuer's detection key public point (32 bytes compressed).
+    pub dk_pub: [u8; 32],
+    /// Amount threshold for flagging transfers (u128 to cover full amount range).
+    pub threshold: u128,
 }
 
 /// Convert u64 position to i64 for SQLite storage, with overflow check.
@@ -18,6 +22,17 @@ fn position_to_i64(position: u64) -> anyhow::Result<i64> {
         anyhow::anyhow!(
             "compliance tree position {} exceeds i64::MAX (tree too large for SQLite storage)",
             position
+        )
+    })
+}
+
+/// Convert u64 height to i64 for SQLite storage, with overflow check.
+#[inline]
+fn height_to_i64(height: u64) -> anyhow::Result<i64> {
+    i64::try_from(height).map_err(|_| {
+        anyhow::anyhow!(
+            "block height {} exceeds i64::MAX (chain too long for SQLite storage)",
+            height
         )
     })
 }
@@ -141,7 +156,7 @@ impl ComplianceTreeStore<'_, '_> {
         let mut stmt = self
             .0
             .prepare_cached(
-                "SELECT value, next_index, next_value FROM compliance_asset_leaves WHERE position = ?1",
+                "SELECT value, next_index, next_value, dk_pub, threshold FROM compliance_asset_leaves WHERE position = ?1",
             )
             .context("failed to prepare asset leaf query")?;
 
@@ -150,13 +165,16 @@ impl ComplianceTreeStore<'_, '_> {
                 let value: Vec<u8> = row.get("value")?;
                 let next_index: i64 = row.get("next_index")?;
                 let next_value: Vec<u8> = row.get("next_value")?;
-                Ok((value, next_index, next_value))
+                let dk_pub: Vec<u8> = row.get("dk_pub")?;
+                // Read threshold as BLOB (8 or 16 bytes little-endian)
+                let threshold: Vec<u8> = row.get("threshold")?;
+                Ok((value, next_index, next_value, dk_pub, threshold))
             })
             .optional()
             .context("failed to query asset leaf")?;
 
         match result {
-            Some((value, next_index, next_value)) => {
+            Some((value, next_index, next_value, dk_pub, threshold)) => {
                 let value: [u8; 32] = value.try_into().map_err(|v: Vec<u8>| {
                     anyhow::anyhow!(
                         "asset leaf value must be 32 bytes, got {} at position {} (database may be corrupted)",
@@ -178,17 +196,56 @@ impl ComplianceTreeStore<'_, '_> {
                         position
                     )
                 })?;
+                let dk_pub: [u8; 32] = dk_pub.try_into().map_err(|v: Vec<u8>| {
+                    anyhow::anyhow!(
+                        "asset leaf dk_pub must be 32 bytes, got {} at position {} (database may be corrupted)",
+                        v.len(),
+                        position
+                    )
+                })?;
+                // Support both 8-byte (legacy u64) and 16-byte (u128) threshold storage
+                let threshold = if threshold.len() == 8 {
+                    // Legacy u64 threshold - convert to u128
+                    let bytes: [u8; 8] = threshold.try_into().map_err(|v: Vec<u8>| {
+                        anyhow::anyhow!(
+                            "asset leaf threshold must be 8 bytes, got {} at position {} (database may be corrupted)",
+                            v.len(),
+                            position
+                        )
+                    })?;
+                    u64::from_le_bytes(bytes) as u128
+                } else if threshold.len() == 16 {
+                    let bytes: [u8; 16] = threshold.try_into().map_err(|v: Vec<u8>| {
+                        anyhow::anyhow!(
+                            "asset leaf threshold must be 16 bytes, got {} at position {} (database may be corrupted)",
+                            v.len(),
+                            position
+                        )
+                    })?;
+                    u128::from_le_bytes(bytes)
+                } else {
+                    anyhow::bail!(
+                        "asset leaf threshold must be 8 or 16 bytes, got {} at position {} (database may be corrupted)",
+                        threshold.len(),
+                        position
+                    )
+                };
                 Ok(Some(IndexedLeafData {
                     value,
                     next_index,
                     next_value,
+                    dk_pub,
+                    threshold,
                 }))
             }
             None => Ok(None),
         }
     }
 
-    /// Add an asset tree indexed leaf.
+    /// Add or update an asset tree indexed leaf.
+    ///
+    /// Uses INSERT OR REPLACE to handle both new leaves and updates to existing leaves
+    /// (e.g., when updating a low leaf's next_index/next_value during IMT insertion).
     pub fn add_asset_leaf(&mut self, position: u64, leaf: IndexedLeafData) -> anyhow::Result<()> {
         let position = position_to_i64(position)?;
         let next_index = i64::try_from(leaf.next_index).map_err(|_| {
@@ -197,10 +254,15 @@ impl ComplianceTreeStore<'_, '_> {
                 leaf.next_index
             )
         })?;
+        // Store threshold as BLOB (16 bytes little-endian u128)
+        let threshold_bytes = leaf.threshold.to_le_bytes().to_vec();
 
+        // Use INSERT OR REPLACE to update existing leaves (critical for low leaf updates)
+        // The old ON CONFLICT DO NOTHING silently dropped low leaf updates, causing
+        // stale next_index/next_value data and tree reconstruction failures.
         self.0
             .prepare_cached(
-                "INSERT INTO compliance_asset_leaves (position, value, next_index, next_value) VALUES (?1, ?2, ?3, ?4) ON CONFLICT DO NOTHING",
+                "INSERT OR REPLACE INTO compliance_asset_leaves (position, value, next_index, next_value, dk_pub, threshold) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )
             .context("failed to prepare asset leaf insert")?
             .execute((
@@ -208,6 +270,8 @@ impl ComplianceTreeStore<'_, '_> {
                 &leaf.value.to_vec(),
                 &next_index,
                 &leaf.next_value.to_vec(),
+                &leaf.dk_pub.to_vec(),
+                &threshold_bytes,
             ))
             .context("failed to insert asset leaf")?;
 
@@ -276,7 +340,7 @@ impl ComplianceTreeStore<'_, '_> {
         &mut self,
         height: u64,
     ) -> anyhow::Result<Option<(StateCommitment, StateCommitment)>> {
-        let height = height as i64;
+        let height = height_to_i64(height)?;
 
         let mut stmt = self
             .0
@@ -326,7 +390,7 @@ impl ComplianceTreeStore<'_, '_> {
         user_anchor: StateCommitment,
         asset_anchor: StateCommitment,
     ) -> anyhow::Result<()> {
-        let height = height as i64;
+        let height = height_to_i64(height)?;
         let user_root = <[u8; 32]>::from(user_anchor).to_vec();
         let asset_root = <[u8; 32]>::from(asset_anchor).to_vec();
 
@@ -460,7 +524,7 @@ impl ComplianceTreeStore<'_, '_> {
 
     /// Add a counterparty address to track.
     pub fn add_counterparty(&mut self, address: &[u8], height: u64) -> anyhow::Result<()> {
-        let height = height as i64;
+        let height = height_to_i64(height)?;
 
         self.0
             .prepare_cached(
@@ -522,12 +586,22 @@ impl ComplianceTreeStore<'_, '_> {
             .query_row([], |row| row.get(0))
             .context("failed to query asset tree leaf count")?;
 
-        Ok(count as u64)
+        u64::try_from(count).map_err(|_| {
+            anyhow::anyhow!(
+                "asset tree leaf count {} is negative (database corruption)",
+                count
+            )
+        })
     }
 
     /// Set the asset tree leaf count.
     pub fn set_asset_tree_leaf_count(&mut self, leaf_count: u64) -> anyhow::Result<()> {
-        let count = leaf_count as i64;
+        let count = i64::try_from(leaf_count).map_err(|_| {
+            anyhow::anyhow!(
+                "asset tree leaf count {} exceeds i64::MAX (tree too large for SQLite storage)",
+                leaf_count
+            )
+        })?;
 
         self.0
             .prepare_cached(
@@ -572,12 +646,16 @@ mod tests {
             value: [3u8; 32],
             next_index: 1,
             next_value: [4u8; 32],
+            dk_pub: [7u8; 32],
+            threshold: 1000,
         };
         store.add_asset_leaf(0, leaf).unwrap();
         let retrieved = store.get_asset_leaf(0).unwrap().unwrap();
         assert_eq!(retrieved.value, [3u8; 32]);
         assert_eq!(retrieved.next_index, 1);
         assert_eq!(retrieved.next_value, [4u8; 32]);
+        assert_eq!(retrieved.dk_pub, [7u8; 32]);
+        assert_eq!(retrieved.threshold, 1000);
 
         // Test anchor operations
         let user_anchor = StateCommitment::try_from([5u8; 32]).unwrap();

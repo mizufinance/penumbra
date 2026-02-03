@@ -8,6 +8,7 @@ use penumbra_sdk_tct::StateCommitment;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::structs::AssetPolicy;
 use crate::tree::DEFAULT_DEPTH;
 
 /// Compare two Fq values numerically using their BigInteger representation.
@@ -39,13 +40,20 @@ pub static IMT_ZERO_HASHES: Lazy<Vec<StateCommitment>> = Lazy::new(|| {
     let mut zeros = Vec::with_capacity((DEFAULT_DEPTH + 1) as usize);
 
     // Level 0: empty leaf hash using IMT domain separator
-    let empty_leaf_hash = poseidon377::hash_4(
+    // Must match IndexedLeaf::commit() with AssetPolicy::default_unregulated()
+    // IMPORTANT: The identity element compressed to field is NOT zero!
+    let identity_dk_pub_fq = decaf377::Element::default().vartime_compress_to_field();
+    // u128::MAX converted to Fq via little-endian bytes
+    let default_threshold_fq = Fq::from_le_bytes_mod_order(&u128::MAX.to_le_bytes());
+
+    let empty_leaf_hash = poseidon377::hash_5(
         &*IMT_LEAF_DOMAIN_SEP,
         (
-            Fq::from(0u64),
-            Fq::from(0u64),
-            Fq::from(0u64),
-            Fq::from(0u64),
+            Fq::from(0u64),       // value
+            Fq::from(0u64),       // next_index
+            Fq::from(0u64),       // next_value
+            identity_dk_pub_fq,   // dk_pub_fq (identity element compressed)
+            default_threshold_fq, // threshold_fq
         ),
     );
     zeros.push(StateCommitment(empty_leaf_hash));
@@ -61,6 +69,9 @@ pub static IMT_ZERO_HASHES: Lazy<Vec<StateCommitment>> = Lazy::new(|| {
 });
 
 /// A leaf in the Indexed Merkle Tree forming a sorted linked list.
+///
+/// Each leaf contains the issuer's policy (dk_pub, threshold).
+/// The sentinel leaf uses `AssetPolicy::default_unregulated()`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexedLeaf {
     /// The value stored in this leaf (e.g., asset_id).
@@ -69,6 +80,8 @@ pub struct IndexedLeaf {
     pub next_index: u64,
     /// The value at next_index (for efficient gap verification).
     pub next_value: Fq,
+    /// Asset policy containing issuer's dk_pub and threshold.
+    pub policy: AssetPolicy,
 }
 
 /// Result of an IMT insertion with full data for client sync.
@@ -81,15 +94,37 @@ pub struct InsertResult {
 }
 
 impl IndexedLeaf {
+    /// Create an IndexedLeaf for an unregulated asset.
+    ///
+    /// Uses BLACK_HOLE_ACK as dk_pub and u128::MAX as threshold,
+    /// so the asset will never be flagged and detection is disabled.
+    pub fn unregulated(asset_id: Fq) -> Self {
+        Self {
+            value: asset_id,
+            next_index: 0,
+            next_value: *FQ_MAX,
+            policy: AssetPolicy::default_unregulated(),
+        }
+    }
+
     /// Compute the commitment for this leaf.
+    ///
+    /// Hash: Poseidon_5(domain, (value, next_index, next_value, dk_pub_fq, threshold_fq))
+    /// The policy fields are included so the IMT proof binds the prover to the correct policy.
     pub fn commit(&self) -> StateCommitment {
-        let hash = poseidon377::hash_4(
+        // Compress dk_pub to a single field element for hashing
+        let dk_pub_fq = self.policy.dk_pub.vartime_compress_to_field();
+        // Convert u128 threshold to Fq via little-endian bytes (must match circuit)
+        let threshold_fq = Fq::from_le_bytes_mod_order(&self.policy.threshold.to_le_bytes());
+
+        let hash = poseidon377::hash_5(
             &*IMT_LEAF_DOMAIN_SEP,
             (
                 self.value,
                 Fq::from(self.next_index),
                 self.next_value,
-                Fq::from(0u64),
+                dk_pub_fq,
+                threshold_fq,
             ),
         );
         StateCommitment(hash)
@@ -102,6 +137,8 @@ struct IndexedLeafSerde {
     value: [u8; 32],
     next_index: u64,
     next_value: [u8; 32],
+    dk_pub: [u8; 32],
+    threshold: u128,
 }
 
 impl Serialize for IndexedLeaf {
@@ -113,6 +150,8 @@ impl Serialize for IndexedLeaf {
             value: self.value.to_bytes(),
             next_index: self.next_index,
             next_value: self.next_value.to_bytes(),
+            dk_pub: self.policy.dk_pub.vartime_compress().0,
+            threshold: self.policy.threshold,
         };
         helper.serialize(serializer)
     }
@@ -128,10 +167,14 @@ impl<'de> Deserialize<'de> for IndexedLeaf {
             .map_err(|_| serde::de::Error::custom("invalid value Fq bytes"))?;
         let next_value = Fq::from_bytes_checked(&helper.next_value)
             .map_err(|_| serde::de::Error::custom("invalid next_value Fq bytes"))?;
+        let dk_pub = decaf377::Encoding(helper.dk_pub)
+            .vartime_decompress()
+            .map_err(|_| serde::de::Error::custom("invalid dk_pub encoding"))?;
         Ok(IndexedLeaf {
             value,
             next_index: helper.next_index,
             next_value,
+            policy: AssetPolicy::new(dk_pub, helper.threshold),
         })
     }
 }
@@ -147,6 +190,8 @@ impl From<IndexedLeaf> for pb::IndexedLeafData {
             value: leaf.value.to_bytes().to_vec(),
             next_index: leaf.next_index,
             next_value: leaf.next_value.to_bytes().to_vec(),
+            dk_pub: leaf.policy.dk_pub.vartime_compress().0.to_vec(),
+            threshold: leaf.policy.threshold.to_le_bytes().to_vec(),
         }
     }
 }
@@ -165,6 +210,34 @@ impl TryFrom<pb::IndexedLeafData> for IndexedLeaf {
             )
         })?;
 
+        // Parse dk_pub (default to identity if empty for backwards compatibility)
+        let dk_pub = if proto.dk_pub.is_empty() {
+            decaf377::Element::default()
+        } else {
+            let dk_pub_bytes: [u8; 32] = proto.dk_pub.try_into().map_err(|v: Vec<u8>| {
+                anyhow!(
+                    "IndexedLeaf proto: dk_pub must be 32 bytes, got {}",
+                    v.len()
+                )
+            })?;
+            decaf377::Encoding(dk_pub_bytes)
+                .vartime_decompress()
+                .map_err(|_| anyhow!("IndexedLeaf proto: invalid dk_pub encoding"))?
+        };
+
+        // Parse threshold (default to u128::MAX if empty for backwards compatibility)
+        let threshold = if proto.threshold.is_empty() {
+            u128::MAX
+        } else {
+            let threshold_bytes: [u8; 16] = proto.threshold.try_into().map_err(|v: Vec<u8>| {
+                anyhow!(
+                    "IndexedLeaf proto: threshold must be 16 bytes, got {}",
+                    v.len()
+                )
+            })?;
+            u128::from_le_bytes(threshold_bytes)
+        };
+
         Ok(IndexedLeaf {
             value: Fq::from_bytes_checked(&value_bytes)
                 .map_err(|e| anyhow!("IndexedLeaf proto: invalid value field element: {}", e))?,
@@ -172,6 +245,7 @@ impl TryFrom<pb::IndexedLeafData> for IndexedLeaf {
             next_value: Fq::from_bytes_checked(&next_value_bytes).map_err(|e| {
                 anyhow!("IndexedLeaf proto: invalid next_value field element: {}", e)
             })?,
+            policy: AssetPolicy::new(dk_pub, threshold),
         })
     }
 }
@@ -224,6 +298,8 @@ impl Serialize for IndexedMerkleTree {
                         value: v.value.to_bytes(),
                         next_index: v.next_index,
                         next_value: v.next_value.to_bytes(),
+                        dk_pub: v.policy.dk_pub.vartime_compress().0,
+                        threshold: v.policy.threshold,
                     },
                 )
             })
@@ -250,6 +326,14 @@ impl<'de> Deserialize<'de> for IndexedMerkleTree {
     {
         let helper = IndexedMerkleTreeSerde::deserialize(deserializer)?;
 
+        // Validate depth to prevent OOB access into precomputed zero hashes
+        if helper.depth > DEFAULT_DEPTH {
+            return Err(serde::de::Error::custom(format!(
+                "IndexedMerkleTree depth {} exceeds maximum {}",
+                helper.depth, DEFAULT_DEPTH
+            )));
+        }
+
         let nodes: BTreeMap<u64, StateCommitment> = helper
             .nodes
             .into_iter()
@@ -268,12 +352,16 @@ impl<'de> Deserialize<'de> for IndexedMerkleTree {
                     .map_err(|_| serde::de::Error::custom("invalid leaf value Fq bytes"))?;
                 let next_value = Fq::from_bytes_checked(&v.next_value)
                     .map_err(|_| serde::de::Error::custom("invalid leaf next_value Fq bytes"))?;
+                let dk_pub = decaf377::Encoding(v.dk_pub)
+                    .vartime_decompress()
+                    .map_err(|_| serde::de::Error::custom("invalid dk_pub encoding"))?;
                 Ok((
                     k,
                     IndexedLeaf {
                         value,
                         next_index: v.next_index,
                         next_value,
+                        policy: AssetPolicy::new(dk_pub, v.threshold),
                     },
                 ))
             })
@@ -305,20 +393,21 @@ impl IndexedMerkleTree {
             leaf_count: 0,
         };
 
-        // Create the low sentinel
+        // Create the low sentinel with default unregulated policy
         let sentinel = IndexedLeaf {
             value: Fq::from(0u64),
             next_index: 0, // Points to itself (end of list)
             next_value: *FQ_MAX,
+            policy: AssetPolicy::default_unregulated(),
         };
 
         // Insert sentinel at position 0
-        tree.leaves.insert(0, sentinel.clone());
-        tree.value_index.insert(Fq::from(0u64).to_bytes(), 0);
+        // Don't index the zero sentinel in value_index (consistent with load_leaf behavior)
+        let commitment = sentinel.commit();
+        tree.leaves.insert(0, sentinel);
         tree.leaf_count = 1;
 
         // Update the tree hashes
-        let commitment = tree.leaves.get(&0).unwrap().commit();
         tree.update_path(0, commitment);
 
         tree
@@ -348,13 +437,14 @@ impl IndexedMerkleTree {
             value: Fq::from(0u64),
             next_index: 0,
             next_value: *FQ_MAX,
+            policy: AssetPolicy::default_unregulated(),
         };
 
-        tree.leaves.insert(0, sentinel.clone());
+        let commitment = sentinel.commit();
+        tree.leaves.insert(0, sentinel);
         tree.value_index.insert(Fq::from(0u64).to_bytes(), 0);
         tree.leaf_count = 1;
 
-        let commitment = tree.leaves.get(&0).unwrap().commit();
         tree.update_path(0, commitment);
 
         tree
@@ -461,16 +551,25 @@ impl IndexedMerkleTree {
         self.leaves.get(&position)
     }
 
-    /// Insert a new value into the tree.
+    /// Insert a new value with default unregulated policy.
     ///
-    /// Returns the position of the new leaf.
+    /// This is a convenience method primarily for tests. For production use with
+    /// regulated assets, use `insert_with_data` which requires a detection key.
     pub fn insert(&mut self, value: Fq) -> Result<u64> {
-        let result = self.insert_with_data(value)?;
+        let result = self.insert_with_data(value, decaf377::Element::default())?;
         Ok(result.position)
     }
 
     /// Insert a new value and return full data for client sync.
-    pub fn insert_with_data(&mut self, value: Fq) -> Result<InsertResult> {
+    ///
+    /// The `dk_pub` is the issuer's detection key - required for all regulated assets.
+    /// The leaf will have a policy with that detection key and threshold = u64::MAX
+    /// (nothing flagged by default, threshold can be set separately).
+    pub fn insert_with_data(
+        &mut self,
+        value: Fq,
+        dk_pub: decaf377::Element,
+    ) -> Result<InsertResult> {
         // Check if already exists
         if self.contains(value) {
             bail!(
@@ -516,41 +615,130 @@ impl IndexedMerkleTree {
 
         let new_pos = self.leaf_count;
 
-        // Create new leaf
+        // Create policy with the issuer's detection key
+        // Threshold defaults to u128::MAX (no flagging) - can be set separately
+        let policy = AssetPolicy::new(dk_pub, u128::MAX);
+
         let new_leaf = IndexedLeaf {
             value,
             next_index: low_leaf.next_index,
             next_value: low_leaf.next_value,
+            policy,
         };
 
-        // Update low leaf to point to new leaf
+        // Update low leaf to point to new leaf (preserves existing policy)
         let updated_low_leaf = IndexedLeaf {
             value: low_leaf.value,
             next_index: new_pos,
             next_value: value,
+            policy: low_leaf.policy.clone(),
         };
 
-        // Store the new leaf
-        self.leaves.insert(new_pos, new_leaf.clone());
+        // Compute commitments before moving leaves into storage
+        let new_leaf_commitment = new_leaf.commit();
+        let updated_low_commitment = updated_low_leaf.commit();
+
+        // Clone for return value before inserting (InsertResult needs owned copies)
+        let result_new_leaf = new_leaf.clone();
+        let result_low_leaf = updated_low_leaf.clone();
+
+        // Store the leaves (moves them into BTreeMap)
+        self.leaves.insert(new_pos, new_leaf);
         self.value_index.insert(value.to_bytes(), new_pos);
         self.leaf_count += 1;
-
-        // Update the low leaf
-        self.leaves.insert(low_pos, updated_low_leaf.clone());
+        self.leaves.insert(low_pos, updated_low_leaf);
 
         // Update tree hashes for both modified leaves
-        let new_leaf_commitment = new_leaf.commit();
         self.update_path(new_pos, new_leaf_commitment);
-
-        let updated_low_commitment = updated_low_leaf.commit();
         self.update_path(low_pos, updated_low_commitment);
 
         Ok(InsertResult {
             position: new_pos,
-            indexed_leaf: new_leaf,
+            indexed_leaf: result_new_leaf,
             low_leaf_position: low_pos,
-            updated_low_leaf,
+            updated_low_leaf: result_low_leaf,
         })
+    }
+
+    /// Sync a leaf from an event (for client sync from CompactBlock).
+    ///
+    /// This applies the changes from an `EventAssetRegistered` without recomputing
+    /// the low leaf logic - it trusts the event data from the chain.
+    /// The event provides:
+    /// - The new leaf with its full data (including policy)
+    /// - The updated low leaf with its new next_index/next_value
+    ///
+    /// This preserves the policy data that would otherwise be lost with `insert()`.
+    pub fn sync_from_event(
+        &mut self,
+        new_leaf: IndexedLeaf,
+        new_position: u64,
+        updated_low_leaf: IndexedLeaf,
+        low_leaf_position: u64,
+    ) -> Result<()> {
+        let value = new_leaf.value;
+
+        // Check if already exists
+        if self.contains(value) {
+            // Already synced, skip
+            return Ok(());
+        }
+
+        // Don't allow inserting zero (reserved for sentinel)
+        if value == Fq::from(0u64) {
+            bail!("IMT sync failed: zero value is reserved for sentinel leaf");
+        }
+
+        // Compute commitments before moving leaves into storage
+        let new_leaf_commitment = new_leaf.commit();
+        let updated_low_commitment = updated_low_leaf.commit();
+
+        // Store the new leaf (moves it into BTreeMap)
+        self.leaves.insert(new_position, new_leaf);
+        self.value_index.insert(value.to_bytes(), new_position);
+
+        // Update leaf count if needed
+        if new_position >= self.leaf_count {
+            self.leaf_count = new_position + 1;
+        }
+
+        // Update the low leaf (preserves its policy from the event)
+        self.leaves.insert(low_leaf_position, updated_low_leaf);
+
+        // Update tree hashes for both modified leaves
+        self.update_path(new_position, new_leaf_commitment);
+        self.update_path(low_leaf_position, updated_low_commitment);
+
+        Ok(())
+    }
+
+    /// Load a leaf directly at a position (for tree reconstruction from storage).
+    ///
+    /// This sets the leaf data without validating IMT invariants,
+    /// as the data comes from a trusted source (previously validated storage).
+    /// After all leaves are loaded, call `rebuild_hashes()` to recompute tree hashes.
+    pub fn load_leaf(&mut self, position: u64, leaf: IndexedLeaf) {
+        let value = leaf.value;
+        self.leaves.insert(position, leaf);
+        if value != Fq::from(0u64) {
+            // Don't index the sentinel (position 0)
+            self.value_index.insert(value.to_bytes(), position);
+        }
+        if position >= self.leaf_count {
+            self.leaf_count = position + 1;
+        }
+    }
+
+    /// Rebuild all internal hashes from leaf data.
+    ///
+    /// Call this after loading all leaves via `load_leaf()`.
+    pub fn rebuild_hashes(&mut self) {
+        for position in 0..self.leaf_count {
+            if let Some(leaf) = self.leaves.get(&position) {
+                let commitment = leaf.commit();
+                self.update_path(position, commitment);
+            }
+        }
     }
 
     /// Get the authentication path for a position.
@@ -710,6 +898,54 @@ impl Default for IndexedMerkleTree {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Compute the IMT root from a leaf commitment and authentication path.
+///
+/// This is a standalone helper for debugging - it recomputes the root
+/// natively to verify that the path is valid before circuit execution.
+pub fn compute_imt_root_from_path(
+    leaf_commitment: StateCommitment,
+    path: &crate::structs::MerklePath,
+    position: u64,
+) -> StateCommitment {
+    use crate::tree::DEFAULT_DEPTH;
+
+    let mut current_hash = leaf_commitment;
+    let mut current_position = position;
+
+    for layer in path.layers.iter().take(DEFAULT_DEPTH as usize) {
+        let child_index = (current_position % 4) as usize;
+
+        // Parse siblings from Vec<Vec<u8>> (3 sibling hashes, each 32 bytes)
+        if layer.siblings.len() != 3 {
+            tracing::error!(
+                "Invalid path layer: expected 3 siblings, got {}",
+                layer.siblings.len()
+            );
+            return StateCommitment(Fq::from(0u64)); // Invalid path
+        }
+
+        let siblings: [StateCommitment; 3] = [
+            StateCommitment(Fq::from_le_bytes_mod_order(&layer.siblings[0])),
+            StateCommitment(Fq::from_le_bytes_mod_order(&layer.siblings[1])),
+            StateCommitment(Fq::from_le_bytes_mod_order(&layer.siblings[2])),
+        ];
+
+        let children = match child_index {
+            0 => [current_hash, siblings[0], siblings[1], siblings[2]],
+            1 => [siblings[0], current_hash, siblings[1], siblings[2]],
+            2 => [siblings[0], siblings[1], current_hash, siblings[2]],
+            3 => [siblings[0], siblings[1], siblings[2], current_hash],
+            _ => unreachable!(),
+        };
+
+        current_hash =
+            IndexedMerkleTree::hash_children(children[0], children[1], children[2], children[3]);
+        current_position /= 4;
+    }
+
+    current_hash
 }
 
 #[cfg(test)]
@@ -1145,5 +1381,251 @@ mod tests {
             let result = tree.non_membership_proof(value);
             assert!(result.is_ok(), "Should have proof for value {}", v);
         }
+    }
+
+    #[test]
+    fn test_insert_multiple_assets_neighbor_leaf_updates() {
+        // Test that when inserting multiple assets with real detection keys,
+        // the neighbor leaf pointers (next_index, next_value) are correctly updated.
+        let mut tree = IndexedMerkleTree::with_depth(4);
+
+        // Create distinct detection keys for each asset
+        let dk1 = decaf377::Fr::from(111u64);
+        let dk1_pub = decaf377::Element::GENERATOR * dk1;
+
+        let dk2 = decaf377::Fr::from(222u64);
+        let dk2_pub = decaf377::Element::GENERATOR * dk2;
+
+        let dk3 = decaf377::Fr::from(333u64);
+        let dk3_pub = decaf377::Element::GENERATOR * dk3;
+
+        // Asset values - insert in non-sorted order
+        let asset_a = Fq::from(300u64);
+        let asset_b = Fq::from(100u64);
+        let asset_c = Fq::from(200u64);
+
+        // Initial state: only sentinel at position 0
+        // sentinel: value=0, next_index=0, next_value=FQ_MAX
+        let sentinel = tree.get_leaf(0).unwrap();
+        assert_eq!(sentinel.value, Fq::from(0u64));
+        assert_eq!(sentinel.next_index, 0);
+        assert_eq!(sentinel.next_value, *FQ_MAX);
+
+        // Insert asset_a (300) - goes after sentinel
+        // Expected: sentinel points to asset_a, asset_a points to end (FQ_MAX)
+        let result_a = tree.insert_with_data(asset_a, dk1_pub).unwrap();
+        assert_eq!(result_a.position, 1);
+        assert_eq!(result_a.low_leaf_position, 0); // sentinel was the low leaf
+
+        // Check sentinel updated
+        let sentinel = tree.get_leaf(0).unwrap();
+        assert_eq!(sentinel.next_index, 1);
+        assert_eq!(sentinel.next_value, asset_a);
+
+        // Check asset_a leaf
+        let leaf_a = tree.get_leaf(1).unwrap();
+        assert_eq!(leaf_a.value, asset_a);
+        assert_eq!(leaf_a.next_index, 0); // inherited from sentinel (points to end)
+        assert_eq!(leaf_a.next_value, *FQ_MAX);
+        assert_eq!(leaf_a.policy.dk_pub, dk1_pub);
+
+        // Insert asset_b (100) - goes between sentinel and asset_a
+        // Expected: sentinel points to asset_b, asset_b points to asset_a
+        let result_b = tree.insert_with_data(asset_b, dk2_pub).unwrap();
+        assert_eq!(result_b.position, 2);
+        assert_eq!(result_b.low_leaf_position, 0); // sentinel is still low leaf for 100
+
+        // Check sentinel updated again
+        let sentinel = tree.get_leaf(0).unwrap();
+        assert_eq!(sentinel.next_index, 2); // now points to asset_b
+        assert_eq!(sentinel.next_value, asset_b);
+
+        // Check asset_b leaf
+        let leaf_b = tree.get_leaf(2).unwrap();
+        assert_eq!(leaf_b.value, asset_b);
+        assert_eq!(leaf_b.next_index, 1); // points to asset_a
+        assert_eq!(leaf_b.next_value, asset_a);
+        assert_eq!(leaf_b.policy.dk_pub, dk2_pub);
+
+        // asset_a should be unchanged
+        let leaf_a = tree.get_leaf(1).unwrap();
+        assert_eq!(leaf_a.next_index, 0);
+        assert_eq!(leaf_a.next_value, *FQ_MAX);
+
+        // Insert asset_c (200) - goes between asset_b and asset_a
+        // Expected: asset_b points to asset_c, asset_c points to asset_a
+        let result_c = tree.insert_with_data(asset_c, dk3_pub).unwrap();
+        assert_eq!(result_c.position, 3);
+        assert_eq!(result_c.low_leaf_position, 2); // asset_b is low leaf for 200
+
+        // Check asset_b updated
+        let leaf_b = tree.get_leaf(2).unwrap();
+        assert_eq!(leaf_b.next_index, 3); // now points to asset_c
+        assert_eq!(leaf_b.next_value, asset_c);
+
+        // Check asset_c leaf
+        let leaf_c = tree.get_leaf(3).unwrap();
+        assert_eq!(leaf_c.value, asset_c);
+        assert_eq!(leaf_c.next_index, 1); // points to asset_a
+        assert_eq!(leaf_c.next_value, asset_a);
+        assert_eq!(leaf_c.policy.dk_pub, dk3_pub);
+
+        // sentinel should still point to asset_b
+        let sentinel = tree.get_leaf(0).unwrap();
+        assert_eq!(sentinel.next_index, 2);
+        assert_eq!(sentinel.next_value, asset_b);
+
+        // Verify the full sorted linked list: sentinel -> b -> c -> a -> end
+        let mut chain = Vec::new();
+        let mut pos = 0u64;
+        loop {
+            let leaf = tree.get_leaf(pos).unwrap();
+            if leaf.next_value == *FQ_MAX {
+                chain.push((leaf.value, leaf.policy.dk_pub));
+                break;
+            }
+            chain.push((leaf.value, leaf.policy.dk_pub));
+            pos = leaf.next_index;
+        }
+
+        assert_eq!(chain.len(), 4); // sentinel + 3 assets
+        assert_eq!(chain[0].0, Fq::from(0u64)); // sentinel
+        assert_eq!(chain[1].0, asset_b);
+        assert_eq!(chain[1].1, dk2_pub);
+        assert_eq!(chain[2].0, asset_c);
+        assert_eq!(chain[2].1, dk3_pub);
+        assert_eq!(chain[3].0, asset_a);
+        assert_eq!(chain[3].1, dk1_pub);
+
+        // Verify membership proofs work for all inserted assets
+        for (value, dk_pub) in [(asset_a, dk1_pub), (asset_b, dk2_pub), (asset_c, dk3_pub)] {
+            let (pos, leaf, path) = tree.membership_proof(value).unwrap();
+            assert_eq!(leaf.value, value);
+            assert_eq!(leaf.policy.dk_pub, dk_pub);
+            assert!(IndexedMerkleTree::verify_auth_path(
+                pos,
+                &leaf,
+                &path,
+                tree.root(),
+                4
+            ));
+        }
+
+        // Verify non-membership proofs work for values in gaps
+        // Gap between sentinel (0) and asset_b (100): value 50 should use sentinel
+        let (pos, leaf, path) = tree.non_membership_proof(Fq::from(50u64)).unwrap();
+        assert_eq!(pos, 0); // sentinel
+        assert!(fq_less_than(&leaf.value, &Fq::from(50u64)));
+        assert!(fq_less_than(&Fq::from(50u64), &leaf.next_value));
+        assert!(IndexedMerkleTree::verify_auth_path(
+            pos,
+            &leaf,
+            &path,
+            tree.root(),
+            4
+        ));
+
+        // Gap between asset_b (100) and asset_c (200): value 150 should use asset_b
+        let (pos, leaf, path) = tree.non_membership_proof(Fq::from(150u64)).unwrap();
+        assert_eq!(pos, 2); // asset_b
+        assert!(fq_less_than(&leaf.value, &Fq::from(150u64)));
+        assert!(fq_less_than(&Fq::from(150u64), &leaf.next_value));
+        assert!(IndexedMerkleTree::verify_auth_path(
+            pos,
+            &leaf,
+            &path,
+            tree.root(),
+            4
+        ));
+
+        // Gap between asset_c (200) and asset_a (300): value 250 should use asset_c
+        let (pos, leaf, path) = tree.non_membership_proof(Fq::from(250u64)).unwrap();
+        assert_eq!(pos, 3); // asset_c
+        assert!(fq_less_than(&leaf.value, &Fq::from(250u64)));
+        assert!(fq_less_than(&Fq::from(250u64), &leaf.next_value));
+        assert!(IndexedMerkleTree::verify_auth_path(
+            pos,
+            &leaf,
+            &path,
+            tree.root(),
+            4
+        ));
+    }
+
+    #[test]
+    fn test_leaf_commitment_includes_policy() {
+        // Verify that the leaf commitment changes when policy changes
+        let value = Fq::from(100u64);
+        let next_index = 0u64;
+        let next_value = *FQ_MAX;
+
+        // Two different detection keys
+        let dk1 = decaf377::Fr::from(111u64);
+        let dk1_pub = decaf377::Element::GENERATOR * dk1;
+
+        let dk2 = decaf377::Fr::from(222u64);
+        let dk2_pub = decaf377::Element::GENERATOR * dk2;
+
+        let leaf1 = IndexedLeaf {
+            value,
+            next_index,
+            next_value,
+            policy: AssetPolicy::new(dk1_pub, 1000),
+        };
+
+        let leaf2 = IndexedLeaf {
+            value,
+            next_index,
+            next_value,
+            policy: AssetPolicy::new(dk2_pub, 1000),
+        };
+
+        let leaf3 = IndexedLeaf {
+            value,
+            next_index,
+            next_value,
+            policy: AssetPolicy::new(dk1_pub, 2000), // same dk_pub, different threshold
+        };
+
+        let commit1 = leaf1.commit();
+        let commit2 = leaf2.commit();
+        let commit3 = leaf3.commit();
+
+        // Different dk_pub → different commitment
+        assert_ne!(commit1, commit2);
+
+        // Different threshold → different commitment
+        assert_ne!(commit1, commit3);
+
+        // Same leaf → same commitment
+        let commit1_again = leaf1.commit();
+        assert_eq!(commit1, commit1_again);
+    }
+
+    #[test]
+    fn test_insert_result_contains_updated_low_leaf() {
+        // Verify InsertResult provides accurate data for client sync
+        let mut tree = IndexedMerkleTree::with_depth(4);
+
+        let dk = decaf377::Fr::from(42u64);
+        let dk_pub = decaf377::Element::GENERATOR * dk;
+
+        let result = tree.insert_with_data(Fq::from(100u64), dk_pub).unwrap();
+
+        // The result should contain both the new leaf and the updated low leaf
+        assert_eq!(result.indexed_leaf.value, Fq::from(100u64));
+        assert_eq!(result.indexed_leaf.policy.dk_pub, dk_pub);
+
+        // updated_low_leaf is the sentinel with updated pointers
+        assert_eq!(result.updated_low_leaf.value, Fq::from(0u64));
+        assert_eq!(result.updated_low_leaf.next_index, 1);
+        assert_eq!(result.updated_low_leaf.next_value, Fq::from(100u64));
+
+        // The tree's actual leaves should match what's in the result
+        let stored_new_leaf = tree.get_leaf(result.position).unwrap();
+        assert_eq!(*stored_new_leaf, result.indexed_leaf);
+
+        let stored_low_leaf = tree.get_leaf(result.low_leaf_position).unwrap();
+        assert_eq!(*stored_low_leaf, result.updated_low_leaf);
     }
 }

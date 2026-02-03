@@ -100,6 +100,9 @@ impl From<Body> for pb::OutputBody {
             counterparty_leaf_hash: Some(output.counterparty_leaf_hash.into()),
             compliance_anchor: Some(output.compliance_anchor.into()),
             asset_anchor: Some(output.asset_anchor.into()),
+            // dk_pub and threshold are private witnesses (in IndexedLeaf.policy), not public
+            dk_pub: Vec::new(),
+            threshold: Vec::new(),
         }
     }
 }

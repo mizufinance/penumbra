@@ -29,8 +29,7 @@ mod worker;
 
 pub use crate::client::ViewClient;
 pub use crate::client_compliance::{
-    enrich_plan_with_compliance, LocalComplianceProofProvider, ViewClientComplianceExt,
-    ViewClientComplianceProvider,
+    enrich_plan_with_compliance, ViewClientComplianceExt, ViewClientComplianceProvider,
 };
 pub use crate::compliance_tree::{ComplianceAssetTree, ComplianceUserTree};
 pub use crate::metrics::register_metrics;

@@ -147,9 +147,9 @@ impl Worker {
 
         let height = block.height;
 
-        // Lock both compliance trees
-        let mut user_tree = self.compliance_user_tree.write().await;
+        // Lock both compliance trees (asset_tree first to ensure consistent lock ordering)
         let mut asset_tree = self.compliance_asset_tree.write().await;
+        let mut user_tree = self.compliance_user_tree.write().await;
 
         // Track starting positions for persistence
         let user_start_position = user_tree.position();
@@ -181,15 +181,37 @@ impl Worker {
             }
         }
 
-        // Process asset registrations
+        // Process asset registrations (sync full leaf data including policy)
         for event in &block.compliance_asset_registrations {
-            // For asset tree, we need to replay the insert to get the correct structure
-            // The event contains the full indexed leaf data for verification
-            let value = event.indexed_leaf.value;
-            if !asset_tree.contains(value) {
-                asset_tree.insert(value)?;
-            }
+            // Debug: log each asset registration event
+            tracing::debug!(
+                asset_id = ?event.asset_id,
+                position = event.position,
+                is_regulated = event.is_regulated,
+                threshold = event.indexed_leaf.policy.threshold,
+                dk_pub_first_byte = event.indexed_leaf.policy.dk_pub.vartime_compress().0[0],
+                low_leaf_position = event.low_leaf_position,
+                "worker: syncing asset registration"
+            );
+
+            // Use sync_from_event to preserve policy data (dk_pub, threshold)
+            // This is critical for correct leaf commitments in proofs
+            asset_tree.sync_from_event(
+                event.indexed_leaf.clone(),
+                event.position,
+                event.updated_low_leaf.clone(),
+                event.low_leaf_position,
+            )?;
         }
+
+        // Debug: log tree state after sync
+        let asset_root_after = asset_tree.root();
+        tracing::debug!(
+            asset_leaf_count = asset_tree.leaf_count(),
+            asset_root = ?asset_root_after.0.to_bytes(),
+            asset_start_position,
+            "worker: asset tree state after sync"
+        );
 
         // Persist compliance tree changes
         self.storage

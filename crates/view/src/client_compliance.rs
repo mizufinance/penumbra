@@ -58,10 +58,30 @@ use futures::FutureExt;
 use penumbra_sdk_asset::asset;
 use penumbra_sdk_compliance::ComplianceLeaf;
 use penumbra_sdk_keys::{keys::AddressComplianceKey, Address};
+use penumbra_sdk_proto::view::v1 as view_pb;
 use penumbra_sdk_tct::StateCommitment;
 use std::{future::Future, pin::Pin};
 
-use crate::{Storage, ViewClient};
+use crate::ViewClient;
+
+/// Convert a proto MerklePath to native MerklePath.
+fn parse_proto_merkle_path(
+    path: Option<penumbra_sdk_proto::core::component::compliance::v1::MerklePath>,
+) -> penumbra_sdk_compliance::structs::MerklePath {
+    use penumbra_sdk_compliance::structs::MerklePathLayer;
+    match path {
+        Some(p) => penumbra_sdk_compliance::structs::MerklePath {
+            layers: p
+                .layers
+                .into_iter()
+                .map(|layer| MerklePathLayer {
+                    siblings: layer.siblings,
+                })
+                .collect(),
+        },
+        None => penumbra_sdk_compliance::structs::MerklePath { layers: vec![] },
+    }
+}
 
 /// Compliance extensions for ViewClient.
 ///
@@ -207,41 +227,11 @@ pub struct ComplianceMerkleProofsData {
 
 impl ComplianceMerkleProofsData {
     /// Convert from the proto response to native types.
-    pub fn try_from_proto(
-        response: penumbra_sdk_proto::core::component::compliance::v1::ComplianceMerkleProofsResponse,
-    ) -> Result<Self> {
+    pub fn try_from_proto(response: view_pb::ComplianceMerkleProofsResponse) -> Result<Self> {
         use decaf377::Fq;
-        use penumbra_sdk_compliance::structs::MerklePathLayer;
 
-        // Parse compliance path - siblings are stored as raw bytes
-        let compliance_path = if let Some(path) = response.compliance_path {
-            penumbra_sdk_compliance::structs::MerklePath {
-                layers: path
-                    .layers
-                    .into_iter()
-                    .map(|layer| MerklePathLayer {
-                        siblings: layer.siblings,
-                    })
-                    .collect(),
-            }
-        } else {
-            penumbra_sdk_compliance::structs::MerklePath { layers: vec![] }
-        };
-
-        // Parse asset path - siblings are stored as raw bytes
-        let asset_path = if let Some(path) = response.asset_path {
-            penumbra_sdk_compliance::structs::MerklePath {
-                layers: path
-                    .layers
-                    .into_iter()
-                    .map(|layer| MerklePathLayer {
-                        siblings: layer.siblings,
-                    })
-                    .collect(),
-            }
-        } else {
-            penumbra_sdk_compliance::structs::MerklePath { layers: vec![] }
-        };
+        let compliance_path = parse_proto_merkle_path(response.compliance_path);
+        let asset_path = parse_proto_merkle_path(response.asset_path);
 
         // Parse anchors
         let compliance_anchor_bytes: [u8; 32] =
@@ -273,11 +263,12 @@ impl ComplianceMerkleProofsData {
             compliance_position: response.compliance_position,
             asset_path,
             asset_position: response.asset_position,
-            asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf {
-                value: Fq::from(0u64),
-                next_index: 0,
-                next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
-            },
+            asset_indexed_leaf: response
+                .asset_indexed_leaf
+                .ok_or_else(|| {
+                    anyhow::anyhow!("missing asset_indexed_leaf in compliance proofs response")
+                })?
+                .try_into()?,
             compliance_anchor,
             asset_anchor,
         })
@@ -356,6 +347,7 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
                     value: decaf377::Fq::from(0u64),
                     next_index: 0,
                     next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                    policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
                 },
                 false,
             ));
@@ -410,6 +402,46 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
         let leaf = leaf_future.await?;
 
         Ok((proofs.compliance_path, proofs.compliance_position, leaf))
+    }
+
+    async fn get_asset_policy(
+        &self,
+        asset_id: asset::Id,
+    ) -> Result<Option<penumbra_sdk_compliance::structs::AssetPolicy>> {
+        let future = {
+            let mut view = self.view.lock().await;
+            view.compliance_asset_policy(asset_id)
+        };
+        let response = future.await?;
+
+        // Parse dk_pub from response
+        if response.dk_pub.is_empty() {
+            return Ok(None);
+        }
+
+        let dk_pub_bytes: [u8; 32] = response
+            .dk_pub
+            .try_into()
+            .map_err(|v: Vec<u8>| anyhow::anyhow!("dk_pub must be 32 bytes, got {}", v.len()))?;
+        let dk_pub = decaf377::Encoding(dk_pub_bytes)
+            .vartime_decompress()
+            .map_err(|_| anyhow::anyhow!("invalid dk_pub encoding in policy response"))?;
+
+        // Parse threshold from bytes (16 bytes little-endian u128)
+        let threshold = if response.threshold.is_empty() {
+            u128::MAX // Default to "never flag" if empty
+        } else {
+            let threshold_bytes: [u8; 16] =
+                response.threshold.try_into().map_err(|v: Vec<u8>| {
+                    anyhow::anyhow!("threshold must be 16 bytes, got {}", v.len())
+                })?;
+            u128::from_le_bytes(threshold_bytes)
+        };
+
+        Ok(Some(penumbra_sdk_compliance::structs::AssetPolicy {
+            dk_pub,
+            threshold,
+        }))
     }
 
     async fn get_batch_proofs(
@@ -505,43 +537,11 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
 
             // Cache asset proof
             if !asset_proofs.contains_key(asset_id) {
-                // Parse indexed_leaf from proto response
+                // Parse indexed_leaf from proto response using TryFrom
                 let indexed_leaf = if let Some(leaf_data) = result.asset_indexed_leaf {
-                    let value_bytes: [u8; 32] =
-                        leaf_data.value.try_into().map_err(|v: Vec<u8>| {
-                            anyhow::anyhow!(
-                                "indexed_leaf.value must be 32 bytes, got {} (asset {})",
-                                v.len(),
-                                asset_id
-                            )
-                        })?;
-                    let next_value_bytes: [u8; 32] =
-                        leaf_data.next_value.try_into().map_err(|v: Vec<u8>| {
-                            anyhow::anyhow!(
-                                "indexed_leaf.next_value must be 32 bytes, got {} (asset {})",
-                                v.len(),
-                                asset_id
-                            )
-                        })?;
-                    penumbra_sdk_compliance::IndexedLeaf {
-                        value: decaf377::Fq::from_bytes_checked(&value_bytes).map_err(|e| {
-                            anyhow::anyhow!(
-                                "invalid indexed_leaf.value for asset {}: {}",
-                                asset_id,
-                                e
-                            )
-                        })?,
-                        next_index: leaf_data.next_index,
-                        next_value: decaf377::Fq::from_bytes_checked(&next_value_bytes).map_err(
-                            |e| {
-                                anyhow::anyhow!(
-                                    "invalid indexed_leaf.next_value for asset {}: {}",
-                                    asset_id,
-                                    e
-                                )
-                            },
-                        )?,
-                    }
+                    penumbra_sdk_compliance::IndexedLeaf::try_from(leaf_data).map_err(|e| {
+                        anyhow::anyhow!("invalid indexed_leaf for asset {}: {}", asset_id, e)
+                    })?
                 } else {
                     anyhow::bail!(
                         "asset_indexed_leaf missing in batch response for asset {} \
@@ -576,12 +576,24 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
                             asset_id
                         );
                     }
-                    // For regulated assets, we need to get the leaf from the chain
-                    let leaf_future = {
-                        let mut view = self.view.lock().await;
-                        view.get_compliance_leaf(address.clone(), *asset_id)
+                    // Use the compliance_leaf from batch response (avoids N+1 queries)
+                    let leaf = if let Some(leaf_proto) = result.compliance_leaf {
+                        ComplianceLeaf::try_from(leaf_proto).map_err(|e| {
+                            anyhow::anyhow!(
+                                "invalid compliance_leaf for address {:?} asset {}: {}",
+                                address,
+                                asset_id,
+                                e
+                            )
+                        })?
+                    } else {
+                        // Fallback to separate query if server doesn't include leaf
+                        let leaf_future = {
+                            let mut view = self.view.lock().await;
+                            view.get_compliance_leaf(address.clone(), *asset_id)
+                        };
+                        leaf_future.await?
                     };
-                    let leaf = leaf_future.await?;
                     user_proofs.insert(key, (compliance_path, result.compliance_position, leaf));
                 } else {
                     // For unregulated assets, use synthetic leaf with BLACK_HOLE_ACK
@@ -595,184 +607,12 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
             }
         }
 
-        Ok(penumbra_sdk_compliance::BatchComplianceData {
-            compliance_anchor,
-            asset_anchor,
-            asset_proofs,
-            user_proofs,
-        })
-    }
-}
-
-/// A compliance proof provider backed by local in-memory trees.
-/// Used for offline transaction building when trees are synced locally.
-///
-/// This provider uses the locally synced compliance trees to generate proofs,
-/// avoiding RPC calls to the chain. It requires:
-/// 1. Full tree structure synced (all commitments)
-/// 2. Full leaf data stored for addresses in scope (own + counterparties)
-pub struct LocalComplianceProofProvider<'a> {
-    user_tree: &'a crate::compliance_tree::ComplianceUserTree,
-    asset_tree: &'a crate::compliance_tree::ComplianceAssetTree,
-    storage: &'a Storage,
-}
-
-impl<'a> LocalComplianceProofProvider<'a> {
-    pub fn new(
-        user_tree: &'a crate::compliance_tree::ComplianceUserTree,
-        asset_tree: &'a crate::compliance_tree::ComplianceAssetTree,
-        storage: &'a Storage,
-    ) -> Self {
-        Self {
-            user_tree,
-            asset_tree,
-            storage,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl<'a> ComplianceProofProvider for LocalComplianceProofProvider<'a> {
-    async fn get_compliance_anchor(&self) -> Result<StateCommitment> {
-        Ok(self.user_tree.root())
-    }
-
-    async fn get_asset_anchor(&self) -> Result<StateCommitment> {
-        Ok(self.asset_tree.root())
-    }
-
-    async fn get_asset_proof(
-        &self,
-        asset_id: asset::Id,
-    ) -> Result<(MerklePath, u64, penumbra_sdk_compliance::IndexedLeaf, bool)> {
-        // get_proof_data handles both membership and non-membership proofs
-        let (position, indexed_leaf, path, is_regulated) =
-            self.asset_tree.get_proof_data(asset_id)?;
-        Ok((path, position, indexed_leaf, is_regulated))
-    }
-
-    async fn get_user_proof(
-        &self,
-        address: &Address,
-        asset_id: asset::Id,
-    ) -> Result<(MerklePath, u64, ComplianceLeaf)> {
-        use penumbra_sdk_compliance::BLACK_HOLE_ACK;
-        use penumbra_sdk_keys::keys::AddressComplianceKey;
-
-        // First check if the asset is regulated
-        let asset_value = asset_id.0;
-        let is_regulated = self.asset_tree.contains(asset_value);
-
-        if !is_regulated {
-            // For unregulated assets, return synthetic leaf with BLACK_HOLE_ACK
-            let synthetic_leaf = ComplianceLeaf {
-                address: address.clone(),
-                key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
-                asset_id,
-            };
-            return Ok((MerklePath::default(), 0, synthetic_leaf));
-        }
-
-        // For regulated assets, try to get leaf data from local storage
-        let leaf_data = self
-            .storage
-            .get_compliance_leaf_data(address, &asset_id)
-            .await?;
-
-        match leaf_data {
-            Some((position, ack_bytes, commitment)) => {
-                // Reconstruct the leaf from stored data
-                let ack_element =
-                    decaf377::Encoding(ack_bytes)
-                        .vartime_decompress()
-                        .map_err(|_| {
-                            anyhow::anyhow!(
-                                "invalid ACK encoding in local storage for asset {} \
-                             (storage may be corrupted, consider rebuilding)",
-                                asset_id
-                            )
-                        })?;
-                let key = AddressComplianceKey::new(ack_element);
-
-                let leaf = ComplianceLeaf {
-                    address: address.clone(),
-                    key,
-                    asset_id,
-                };
-
-                // Verify commitment matches
-                if leaf.commit() != commitment {
-                    anyhow::bail!(
-                        "compliance leaf integrity check failed for asset {}: \
-                         stored commitment does not match reconstructed leaf \
-                         (storage may be corrupted, consider rebuilding)",
-                        asset_id
-                    );
-                }
-
-                // Get auth path from tree
-                let path = self.user_tree.witness(position)?;
-
-                Ok((path, position, leaf))
-            }
-            None => {
-                // Leaf data not in local storage - user needs to sync or use RPC
-                anyhow::bail!(
-                    "compliance leaf data not available locally for address {:?} and asset {:?}. \
-                     Sync required or use RPC-based provider.",
-                    address,
-                    asset_id
-                );
-            }
-        }
-    }
-
-    async fn get_batch_proofs(
-        &self,
-        queries: &[(Address, asset::Id)],
-    ) -> Result<penumbra_sdk_compliance::BatchComplianceData> {
-        use penumbra_sdk_compliance::BLACK_HOLE_ACK;
-        use penumbra_sdk_keys::keys::AddressComplianceKey;
-
-        if queries.is_empty() {
-            return Ok(penumbra_sdk_compliance::BatchComplianceData::default());
-        }
-
-        let compliance_anchor = self.user_tree.root();
-        let asset_anchor = self.asset_tree.root();
-
-        let mut asset_proofs: BTreeMap<
-            asset::Id,
-            (MerklePath, u64, penumbra_sdk_compliance::IndexedLeaf, bool),
-        > = BTreeMap::new();
-        let mut user_proofs: BTreeMap<(Address, asset::Id), (MerklePath, u64, ComplianceLeaf)> =
-            BTreeMap::new();
-
-        for (address, asset_id) in queries {
-            // Get asset proof (cached by asset_id)
-            if !asset_proofs.contains_key(asset_id) {
-                let (path, position, indexed_leaf, is_regulated) =
-                    self.get_asset_proof(*asset_id).await?;
-                asset_proofs.insert(*asset_id, (path, position, indexed_leaf, is_regulated));
-            }
-
-            // Get user proof
-            let key = (address.clone(), *asset_id);
-            if !user_proofs.contains_key(&key) {
-                let is_regulated = asset_proofs.get(asset_id).map(|p| p.3).unwrap_or(false);
-
-                if !is_regulated {
-                    // For unregulated assets, use synthetic leaf
-                    let synthetic_leaf = ComplianceLeaf {
-                        address: address.clone(),
-                        key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
-                        asset_id: *asset_id,
-                    };
-                    user_proofs.insert(key, (MerklePath::default(), 0, synthetic_leaf));
-                } else {
-                    // For regulated assets, get from local storage
-                    let (path, position, leaf) = self.get_user_proof(address, *asset_id).await?;
-                    user_proofs.insert(key, (path, position, leaf));
+        // Fetch asset policies for regulated assets
+        let mut asset_policies = std::collections::BTreeMap::new();
+        for (asset_id, (_, _, _, is_regulated)) in &asset_proofs {
+            if *is_regulated {
+                if let Some(policy) = self.get_asset_policy(*asset_id).await? {
+                    asset_policies.insert(*asset_id, policy);
                 }
             }
         }
@@ -782,6 +622,7 @@ impl<'a> ComplianceProofProvider for LocalComplianceProofProvider<'a> {
             asset_anchor,
             asset_proofs,
             user_proofs,
+            asset_policies,
         })
     }
 }
@@ -921,6 +762,7 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
                     value: decaf377::Fq::from(0u64),
                     next_index: 0,
                     next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                    policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
                 };
                 (MerklePath::default(), 0, default_leaf, false)
             });
@@ -956,22 +798,24 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
             let ActionPlan::Spend(spend) = &mut plan.actions[spend_idx] else {
                 unreachable!()
             };
+            // Set asset_indexed_leaf BEFORE set_compliance_details since encryption uses it
+            spend.asset_indexed_leaf = asset_indexed_leaf.clone();
+            spend.asset_path = asset_path;
+            spend.asset_position = asset_position;
+            spend.asset_anchor = asset_anchor;
+            spend.compliance_anchor = compliance_anchor;
+            spend.compliance_path = sender_compliance_path;
+            spend.compliance_position = sender_compliance_position;
+            spend.is_regulated = is_regulated;
+
             // Use this spend's own address to ensure diversifier matches
             spend.set_compliance_details(
                 rng,
                 &sender_leaf.key,
                 &spend_address,
-                is_regulated,
                 &binding_recipient_address,
                 counterparty_leaf,
             )?;
-            spend.compliance_anchor = compliance_anchor;
-            spend.asset_anchor = asset_anchor;
-            spend.compliance_path = sender_compliance_path;
-            spend.compliance_position = sender_compliance_position;
-            spend.asset_path = asset_path;
-            spend.asset_position = asset_position;
-            spend.asset_indexed_leaf = asset_indexed_leaf.clone();
 
             // Unify tx_blinding_nonce across all spends for cross-action binding
             if let Some(nonce) = tx_blinding_nonce {
@@ -1005,6 +849,7 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
                         value: decaf377::Fq::from(0u64),
                         next_index: 0,
                         next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                        policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
                     };
                     (MerklePath::default(), 0, default_leaf, false)
                 });
@@ -1041,21 +886,23 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
                 let ActionPlan::Output(output) = &mut plan.actions[output_idx] else {
                     continue;
                 };
+                // Set asset_indexed_leaf BEFORE set_compliance_details since encryption uses it
+                output.asset_indexed_leaf = asset_indexed_leaf.clone();
+                output.asset_path = asset_path;
+                output.asset_position = asset_position;
+                output.asset_anchor = asset_anchor;
+                output.compliance_anchor = compliance_anchor;
+                output.compliance_path = recipient_compliance_path;
+                output.compliance_position = recipient_compliance_position;
+                output.is_regulated = is_regulated;
+
                 output.set_compliance_details(
                     rng,
                     &recipient_leaf.key,
-                    is_regulated,
                     &sender_address,
                     sender_leaf_for_output,
                     tx_blinding_nonce,
                 )?;
-                output.compliance_anchor = compliance_anchor;
-                output.asset_anchor = asset_anchor;
-                output.compliance_path = recipient_compliance_path;
-                output.compliance_position = recipient_compliance_position;
-                output.asset_path = asset_path;
-                output.asset_position = asset_position;
-                output.asset_indexed_leaf = asset_indexed_leaf.clone();
             }
         }
     }

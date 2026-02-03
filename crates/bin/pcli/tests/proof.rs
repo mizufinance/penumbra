@@ -78,31 +78,40 @@ fn create_imt_non_membership_proof(
 }
 
 /// Generate valid compliance inputs using real encryption.
-/// Returns (compliance_epk, compliance_ciphertext, ephemeral_secret) that satisfy circuit constraints.
+/// Returns (compliance_epk, compliance_epk_g, compliance_ciphertext, ephemeral_secret) that satisfy circuit constraints.
 fn generate_compliance_inputs(
     ack: &AddressComplianceKey,
     address: &penumbra_sdk_keys::Address,
     asset_id: asset::Id,
     amount: penumbra_sdk_num::Amount,
-) -> (decaf377::Element, Vec<Fq>, Fr) {
+) -> (decaf377::Element, decaf377::Element, Vec<Fq>, Fr) {
     use penumbra_sdk_compliance::crypto::encrypt_compliance_details;
 
     let mut rng = OsRng;
     let date = 0u64; // Day index = 0 corresponds to timestamp = 0
 
-    let (ciphertext_obj, ephemeral_secret) = encrypt_compliance_details(
+    // Create default unregulated asset leaf for testing
+    let asset_leaf = penumbra_sdk_compliance::IndexedLeaf {
+        value: decaf377::Fq::from(0u64),
+        next_index: 0,
+        next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+        policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
+    };
+
+    let result = encrypt_compliance_details(
         &mut rng,
         ack,
         address,
         date,
         asset_id,
         amount,
-        address.clone(), // Use same address as counterparty for testing
+        address, // Use same address as counterparty for testing
+        &asset_leaf,
     )
     .expect("can encrypt compliance details");
 
-    let (epk, ciphertext) = ciphertext_obj.to_circuit_public_inputs();
-    (epk, ciphertext, ephemeral_secret)
+    let (epk, epk_g, ciphertext) = result.ciphertext.to_circuit_public_inputs();
+    (epk, epk_g, ciphertext, result.ephemeral_secret)
 }
 
 #[test]
@@ -157,12 +166,13 @@ fn spend_proof_parameters_vs_current_spend_circuit() {
     };
 
     // Generate valid compliance ciphertext using real encryption
-    let (compliance_epk, compliance_ciphertext, ephemeral_secret) = generate_compliance_inputs(
-        &black_hole_ack,
-        &sender,
-        value_to_send.asset_id,
-        value_to_send.amount,
-    );
+    let (compliance_epk, compliance_epk_g, compliance_ciphertext, ephemeral_secret) =
+        generate_compliance_inputs(
+            &black_hole_ack,
+            &sender,
+            value_to_send.asset_id,
+            value_to_send.amount,
+        );
 
     // Create valid IMT proof for unregulated asset
     let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) =
@@ -187,6 +197,7 @@ fn spend_proof_parameters_vs_current_spend_circuit() {
         asset_anchor,
         compliance_anchor,
         compliance_epk,
+        compliance_epk_g,
         compliance_ciphertext,
         target_timestamp: 0, // Corresponds to date = 0 used in encryption
         sender_leaf_hash,
@@ -209,6 +220,7 @@ fn spend_proof_parameters_vs_current_spend_circuit() {
         compliance_ephemeral_secret: ephemeral_secret,
         counterparty_leaf,
         tx_blinding_nonce,
+        is_flagged: false,
     };
     let proof = SpendProof::prove(blinding_r, blinding_s, pk, public.clone(), private)
         .expect("can create proof");
@@ -482,12 +494,13 @@ fn output_proof_parameters_vs_current_output_circuit() {
         };
 
         // Generate valid compliance ciphertext using real encryption
-        let (compliance_epk, compliance_ciphertext, ephemeral_secret) = generate_compliance_inputs(
-            &black_hole_ack,
-            &dest,
-            value_to_send.asset_id,
-            value_to_send.amount,
-        );
+        let (compliance_epk, compliance_epk_g, compliance_ciphertext, ephemeral_secret) =
+            generate_compliance_inputs(
+                &black_hole_ack,
+                &dest,
+                value_to_send.asset_id,
+                value_to_send.amount,
+            );
 
         // Create valid IMT proof for unregulated asset
         let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) =
@@ -508,6 +521,7 @@ fn output_proof_parameters_vs_current_output_circuit() {
             balance_commitment,
             note_commitment,
             compliance_epk,
+            compliance_epk_g,
             compliance_ciphertext,
             asset_anchor,
             compliance_anchor,
@@ -528,6 +542,7 @@ fn output_proof_parameters_vs_current_output_circuit() {
             compliance_ephemeral_secret: ephemeral_secret,
             counterparty_leaf,
             tx_blinding_nonce,
+            is_flagged: false,
         };
 
         (public, private)

@@ -2,10 +2,17 @@ pub mod enrichment;
 pub use enrichment::{BatchComplianceData, ComplianceProofProvider};
 
 pub mod event;
+
+pub mod issuer_keys;
 pub use event::{EventAssetRegistered, EventComplianceAnchor, EventUserRegistered};
+pub use issuer_keys::{
+    DetectionKey, DetectionKeyPublic, DetectionTierPlaintext, MasterComplianceKey,
+    MasterComplianceKeyPublic, DETECTION_TIER_BYTES, FLAG_BIT_MASK,
+};
 
 pub mod structs;
 pub use structs::{
+    AssetPolicy,
     ComplianceCiphertext,
     ComplianceLeaf,
     CompliancePayload,
@@ -21,6 +28,7 @@ pub use structs::{
     ENCRYPTED_CORE_BYTES,
     ENCRYPTED_EXTENSION_BYTES,
     EPK_BYTES,
+    EPK_G_BYTES,
     GENERATOR_BYTES,
     KEY_BYTES,
     NUM_CIPHERTEXT_FQS,
@@ -32,7 +40,10 @@ pub mod tree;
 pub use tree::{QuadTree, DEFAULT_DEPTH, ZERO_HASHES};
 
 pub mod indexed_tree;
-pub use indexed_tree::{IndexedLeaf, IndexedMerkleTree, IMT_LEAF_DOMAIN_SEP, IMT_ZERO_HASHES};
+pub use indexed_tree::{
+    compute_imt_root_from_path, IndexedLeaf, IndexedMerkleTree, IMT_LEAF_DOMAIN_SEP,
+    IMT_ZERO_HASHES,
+};
 
 pub mod state_key;
 
@@ -60,14 +71,15 @@ pub use r1cs::{verify_compliance_integrity, verify_quad_path, ComplianceWitness}
 
 pub mod crypto;
 pub use crypto::{
-    decrypt_compliance_details, encrypt_compliance_details, encrypt_compliance_details_dual,
-    DecryptedComplianceData, BLACK_HOLE_ACK,
+    decrypt_compliance_details_with_dk, decrypt_detection_tier_with_dk,
+    decrypt_with_shared_secrets, encrypt_compliance_details, DecryptedComplianceData,
+    EncryptionResult, BLACK_HOLE_ACK, COMPLIANCE_STREAM_CIPHER_DOMAIN, ISSUER_DETECTION_DOMAIN,
 };
 
 pub mod scanning;
 pub use scanning::{
-    decrypt_core, decrypt_extension, decrypt_full, scan_for_asset, ComplianceScanner, CoreData,
-    ExtensionData, FullComplianceData, ScannerRole,
+    decrypt_core, decrypt_extension, decrypt_full, decrypt_with_role, CoreData, ExtensionData,
+    FullComplianceData, ScannerRole,
 };
 
 // Scanner requires tokio and rusqlite for async storage
@@ -75,10 +87,10 @@ pub use scanning::{
 pub mod scanner;
 #[cfg(feature = "component")]
 pub use scanner::{
-    decrypt_with_daily_keys, decrypt_with_mck, scan_transaction, scan_transaction_for_compliance,
+    decrypt_compliance, scan_transaction, scan_transaction_for_compliance,
     scan_transaction_for_compliance_with_daily_keys, scan_transactions,
-    scan_transactions_for_compliance, ComplianceStorage, ComplianceWorker, DetectedCiphertext,
-    DetectedTransfer, PartialAddress,
+    scan_transactions_for_compliance, ComplianceStorage, DecryptedUserData, DetectedCiphertext,
+    DetectedTransfer, IssuerComplianceWorker, PartialAddress, WorkerHandle,
 };
 
 pub mod leaf_binding;
@@ -129,19 +141,23 @@ pub fn create_default_user_tree_proof(
 /// Test helpers for compliance tests. Re-exported for use in other crates' tests.
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_helpers {
-    use decaf377::Fr;
+    use decaf377::{Fq, Fr};
     use penumbra_sdk_asset::asset;
-    use penumbra_sdk_keys::keys::{AddressComplianceKey, Diversifier, MasterComplianceKey};
+    use penumbra_sdk_keys::keys::{AddressComplianceKey, Diversifier, UserComplianceKey};
     use penumbra_sdk_keys::Address;
     use penumbra_sdk_num::Amount;
     use rand_core::{OsRng, RngCore};
 
-    use crate::crypto::encrypt_compliance_details_dual;
-    use crate::structs::ComplianceCiphertext;
+    use crate::crypto::encrypt_compliance_details;
+    use crate::indexed_tree::{IndexedLeaf, FQ_MAX};
+    use crate::structs::{AssetPolicy, ComplianceCiphertext};
 
-    /// Create a random MasterComplianceKey.
-    pub fn make_mck() -> MasterComplianceKey {
-        MasterComplianceKey::new(Fr::rand(&mut OsRng))
+    // Re-export for convenience
+    pub use crate::crypto::{encrypt_compliance_details as encrypt_single, EncryptionResult};
+
+    /// Create a random UserComplianceKey.
+    pub fn make_uck() -> UserComplianceKey {
+        UserComplianceKey::new(Fr::rand(&mut OsRng))
     }
 
     /// Create an address with a specific diversifier byte pattern.
@@ -157,11 +173,11 @@ pub mod test_helpers {
         Address::from_components(diversifier, pk_d, ck).unwrap()
     }
 
-    /// Create an ACK and matching address from an MCK with a specific diversifier.
-    pub fn make_wallet(mck: &MasterComplianceKey, div_byte: u8) -> (AddressComplianceKey, Address) {
+    /// Create an ACK and matching address from a UCK with a specific diversifier.
+    pub fn make_wallet(uck: &UserComplianceKey, div_byte: u8) -> (AddressComplianceKey, Address) {
         let mut rng = OsRng;
         let diversifier = Diversifier([div_byte; 16]);
-        let ack = mck.derive_address_key(&diversifier);
+        let ack = uck.derive_address_key(&diversifier);
         let scalar = Fr::rand(&mut rng);
         let point = decaf377::Element::GENERATOR * scalar;
         let pk_d = decaf377_ka::Public(point.vartime_compress().0);
@@ -172,30 +188,64 @@ pub mod test_helpers {
         (ack, addr)
     }
 
+    /// Create a test IndexedLeaf with the given detection key and threshold.
+    pub fn make_test_leaf(dk_pub: decaf377::Element, threshold: u128) -> IndexedLeaf {
+        IndexedLeaf {
+            value: Fq::from(42u64), // dummy value
+            next_index: 0,
+            next_value: *FQ_MAX,
+            policy: AssetPolicy::new(dk_pub, threshold),
+        }
+    }
+
+    /// Create a test IndexedLeaf with no threshold (unregulated asset behavior).
+    pub fn make_unregulated_leaf(dk_pub: decaf377::Element) -> IndexedLeaf {
+        make_test_leaf(dk_pub, u128::MAX)
+    }
+
     /// Encrypt compliance details for a sender/receiver pair, returning both ciphertexts.
+    ///
+    /// Calls `encrypt_compliance_details` twice - once for sender, once for receiver.
     pub fn encrypt_dual(
-        mck: &MasterComplianceKey,
+        uck: &UserComplianceKey,
         sender_div: u8,
         receiver_div: u8,
         date: u64,
         asset_id: u64,
         amount: u128,
+        asset_leaf: &IndexedLeaf,
     ) -> (ComplianceCiphertext, ComplianceCiphertext) {
         let mut rng = OsRng;
-        let (ack_s, addr_s) = make_wallet(mck, sender_div);
-        let (ack_r, addr_r) = make_wallet(mck, receiver_div);
-        let (s_ct, _, r_ct, _) = encrypt_compliance_details_dual(
+        let (ack_s, addr_s) = make_wallet(uck, sender_div);
+        let (ack_r, addr_r) = make_wallet(uck, receiver_div);
+
+        // Encrypt for sender (sender's ciphertext, counterparty = receiver)
+        let s_result = encrypt_compliance_details(
             &mut rng,
             &ack_s,
             &addr_s,
+            date,
+            asset::Id(decaf377::Fq::from(asset_id)),
+            Amount::from(amount),
+            &addr_r,
+            asset_leaf,
+        )
+        .unwrap();
+
+        // Encrypt for receiver (receiver's ciphertext, counterparty = sender)
+        let r_result = encrypt_compliance_details(
+            &mut rng,
             &ack_r,
             &addr_r,
             date,
             asset::Id(decaf377::Fq::from(asset_id)),
             Amount::from(amount),
+            &addr_s,
+            asset_leaf,
         )
         .unwrap();
-        (s_ct, r_ct)
+
+        (s_result.ciphertext, r_result.ciphertext)
     }
 }
 
@@ -435,7 +485,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_end_to_end_three_phases() {
-        use penumbra_sdk_keys::keys::MasterComplianceKey;
+        use penumbra_sdk_keys::keys::UserComplianceKey;
         use penumbra_sdk_num::Amount;
 
         // ========== SETUP ==========
@@ -462,7 +512,12 @@ mod tests {
         let usdc_asset_id = asset::Id(Fq::from(1000u64));
 
         // Register asset as regulated (only regulated assets go in IMT)
-        state.register_regulated_asset(usdc_asset_id).await.unwrap();
+        // Requires detection key (issuer's public key for scanning)
+        let issuer_dk_pub = decaf377::Element::GENERATOR;
+        state
+            .register_regulated_asset(usdc_asset_id, issuer_dk_pub)
+            .await
+            .unwrap();
 
         // Verify regulation status via IMT proof
         let proof_data = state.get_asset_proof_data(usdc_asset_id).await.unwrap();
@@ -477,11 +532,11 @@ mod tests {
         let sender_address = Address::dummy(&mut rng);
         let recipient_address = Address::dummy(&mut rng);
 
-        // Use demo MCK to derive compliance leaves (Phase 2)
-        let demo_mck = MasterComplianceKey::demo();
-        let sender_leaf = ComplianceLeaf::new(&demo_mck, sender_address.clone(), usdc_asset_id);
+        // Use demo UCK to derive compliance leaves (Phase 2)
+        let demo_uck = UserComplianceKey::demo();
+        let sender_leaf = ComplianceLeaf::new(&demo_uck, sender_address.clone(), usdc_asset_id);
         let recipient_leaf =
-            ComplianceLeaf::new(&demo_mck, recipient_address.clone(), usdc_asset_id);
+            ComplianceLeaf::new(&demo_uck, recipient_address.clone(), usdc_asset_id);
 
         // Register sender and recipient in registry
         state
@@ -560,19 +615,39 @@ mod tests {
         let amount = Amount::from(100u64);
         let date = 20250101u64; // Example date for key derivation
 
-        // Encrypt compliance details for both sender and receiver
-        let (sender_ciphertext, sender_ephemeral, receiver_ciphertext, receiver_ephemeral) =
-            encrypt_compliance_details_dual(
-                &mut rng,
-                &sender_leaf.key,
-                &sender_address,
-                &recipient_leaf.key,
-                &recipient_address,
-                date,
-                usdc_asset_id,
-                amount,
-            )
-            .unwrap();
+        // Create asset leaf for encryption
+        let asset_leaf = test_helpers::make_test_leaf(issuer_dk_pub, u128::MAX);
+
+        // Encrypt compliance details for sender (counterparty = receiver)
+        let sender_result = encrypt_compliance_details(
+            &mut rng,
+            &sender_leaf.key,
+            &sender_address,
+            date,
+            usdc_asset_id,
+            amount,
+            &recipient_address,
+            &asset_leaf,
+        )
+        .unwrap();
+
+        // Encrypt compliance details for receiver (counterparty = sender)
+        let receiver_result = encrypt_compliance_details(
+            &mut rng,
+            &recipient_leaf.key,
+            &recipient_address,
+            date,
+            usdc_asset_id,
+            amount,
+            &sender_address,
+            &asset_leaf,
+        )
+        .unwrap();
+
+        let sender_ciphertext = sender_result.ciphertext;
+        let sender_ephemeral = sender_result.ephemeral_secret;
+        let receiver_ciphertext = receiver_result.ciphertext;
+        let receiver_ephemeral = receiver_result.ephemeral_secret;
 
         // Verify ciphertexts were generated
         assert_eq!(
@@ -637,10 +712,13 @@ mod tests {
         assert_ne!(sender_ephemeral, receiver_ephemeral);
     }
 
-    /// Tests detection and decryption: Alice's key detects/decrypts, Bob's cannot.
+    /// Tests detection and decryption with issuer-only detection.
+    /// Issuer's DetectionKey detects; users decrypt with UCK.
     #[tokio::test]
     async fn test_end_to_end_detection_and_decryption() {
-        use penumbra_sdk_keys::keys::{Diversifier, MasterComplianceKey};
+        use crate::crypto::encrypt_compliance_details;
+        use crate::issuer_keys::DetectionKey;
+        use penumbra_sdk_keys::keys::{Diversifier, UserComplianceKey};
         use penumbra_sdk_num::Amount;
         use penumbra_sdk_proto::core::component::shielded_pool::v1::{Output, OutputBody};
         use penumbra_sdk_proto::core::transaction::v1::{
@@ -661,28 +739,36 @@ mod tests {
             Address::from_components(Diversifier(div), pk_d, ck).unwrap()
         }
 
-        // Create Alice and Bob with separate MCKs
-        let alice_mck = MasterComplianceKey::new(decaf377::Fr::rand(&mut rng));
+        // Create Alice with UCK
+        let alice_uck = UserComplianceKey::new(decaf377::Fr::rand(&mut rng));
         let alice_diversifier = Diversifier([1u8; 16]);
-        let alice_ack = alice_mck.derive_address_key(&alice_diversifier);
+        let alice_ack = alice_uck.derive_address_key(&alice_diversifier);
         let alice_address = make_address(&mut rng, [1u8; 16]);
 
-        let bob_mck = MasterComplianceKey::new(decaf377::Fr::rand(&mut rng));
+        let bob_uck = UserComplianceKey::new(decaf377::Fr::rand(&mut rng));
         let bob_address = make_address(&mut rng, [2u8; 16]);
+
+        // Setup issuer's DetectionKey
+        let issuer_dk = DetectionKey::demo();
+        let issuer_dk_pub = issuer_dk.public_key();
 
         let usdc_asset_id = asset::Id(decaf377::Fq::from(999999u64));
         let amount = Amount::from(1000u128);
         let date = penumbra_sdk_keys::keys::day_index(1700000000);
 
-        // Encrypt and create mock transaction
-        let (alice_ciphertext, _) = encrypt_compliance_details(
+        // Create asset leaf for encryption
+        let asset_leaf = test_helpers::make_test_leaf(issuer_dk_pub, u128::MAX);
+
+        // Encrypt with issuer's DK_pub (detection is issuer-only)
+        let encrypt_result = encrypt_compliance_details(
             &mut rng,
             &alice_ack,
             &alice_address,
             date,
             usdc_asset_id,
             amount,
-            bob_address.clone(),
+            &bob_address,
+            &asset_leaf,
         )
         .unwrap();
 
@@ -691,7 +777,7 @@ mod tests {
                 actions: vec![ActionProto {
                     action: Some(Action::Output(Output {
                         body: Some(OutputBody {
-                            compliance_ciphertext: alice_ciphertext.to_bytes(),
+                            compliance_ciphertext: encrypt_result.ciphertext.to_bytes(),
                             ..Default::default()
                         }),
                         ..Default::default()
@@ -702,11 +788,9 @@ mod tests {
             ..Default::default()
         };
 
-        // Alice's detection key can scan and detect
-        let alice_detection_key =
-            alice_mck.derive_daily_key(penumbra_sdk_keys::keys::KeyType::Detection, date);
+        // Issuer's DetectionKey can detect the transaction
         let mut detected_ciphertexts = Vec::new();
-        let matches = scan_transaction(&alice_detection_key, usdc_asset_id, &tx, 100, 0, |d| {
+        let matches = scan_transaction(&issuer_dk, Some(usdc_asset_id), &tx, 100, 0, |d| {
             detected_ciphertexts.push(d.ciphertext);
             Ok(())
         })
@@ -714,49 +798,41 @@ mod tests {
         assert_eq!(matches, 1);
         assert_eq!(detected_ciphertexts.len(), 1);
 
-        // Detection key only reveals asset_id
-        let detection_result = alice_detection_key.try_detect_asset(
-            &detected_ciphertexts[0].epk,
-            &detected_ciphertexts[0].detection_tag,
-        );
-        assert_eq!(detection_result.unwrap(), usdc_asset_id);
-
-        // Bob's detection key cannot detect Alice's transaction
-        let bob_detection_key =
-            bob_mck.derive_daily_key(penumbra_sdk_keys::keys::KeyType::Detection, date);
-        let mut bob_detected = 0;
-        scan_transaction(&bob_detection_key, usdc_asset_id, &tx, 100, 0, |_| {
-            bob_detected += 1;
+        // Wrong issuer DK cannot detect (different DK produces garbage asset_id)
+        let wrong_dk = DetectionKey::from_seed(&[99u8; 32]);
+        let mut wrong_detected = 0;
+        scan_transaction(&wrong_dk, Some(usdc_asset_id), &tx, 100, 0, |_| {
+            wrong_detected += 1;
             Ok(())
         })
         .unwrap();
-        assert_eq!(bob_detected, 0);
+        assert_eq!(wrong_detected, 0, "wrong DK should not detect the asset");
 
-        // Full MCK can decrypt all fields
-        let decrypted = decrypt_with_mck(&alice_mck, date, &detected_ciphertexts[0]).unwrap();
-        assert_eq!(decrypted.asset_id, usdc_asset_id);
-        assert_eq!(decrypted.amount, amount);
+        // Alice's UCK can decrypt core+extension (user data)
+        let decrypted = decrypt_compliance(&alice_uck, date, &detected_ciphertexts[0]).unwrap();
+        // Note: DecryptedUserData has nested core/extension, asset_id is issuer-only
+        assert_eq!(decrypted.core.amount, amount);
         assert_eq!(
-            decrypted.self_diversified_generator,
+            decrypted.core.self_diversified_generator,
             *alice_address.diversified_generator()
         );
         assert_eq!(
-            decrypted.self_transmission_key,
+            decrypted.core.self_transmission_key,
             alice_address.transmission_key().0
         );
         assert_eq!(
-            decrypted.counterparty_diversified_generator,
+            decrypted.extension.counterparty_diversified_generator,
             *bob_address.diversified_generator()
         );
         assert_eq!(
-            decrypted.counterparty_transmission_key,
+            decrypted.extension.counterparty_transmission_key,
             bob_address.transmission_key().0
         );
 
-        // Wrong MCK produces garbage
-        if let Ok(wrong_data) = decrypt_with_mck(&bob_mck, date, &detected_ciphertexts[0]) {
-            assert_ne!(wrong_data.asset_id, usdc_asset_id);
-            assert_ne!(wrong_data.amount, amount);
+        // Bob's UCK produces garbage (wrong keys)
+        if let Ok(wrong_data) = decrypt_compliance(&bob_uck, date, &detected_ciphertexts[0]) {
+            // Wrong keys produce garbage amount
+            assert_ne!(wrong_data.core.amount, amount);
         }
     }
 }

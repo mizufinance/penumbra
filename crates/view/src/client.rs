@@ -19,12 +19,9 @@ use penumbra_sdk_dex::{
 use penumbra_sdk_fee::GasPrices;
 use penumbra_sdk_keys::{keys::AddressIndex, Address};
 use penumbra_sdk_num::Amount;
-use penumbra_sdk_proto::{
-    core::component::compliance::v1 as compliance_pb,
-    view::v1::{
-        self as pb, view_service_client::ViewServiceClient, BalancesResponse,
-        BroadcastTransactionResponse, WitnessRequest,
-    },
+use penumbra_sdk_proto::view::v1::{
+    self as pb, view_service_client::ViewServiceClient, BalancesResponse,
+    BroadcastTransactionResponse, WitnessRequest,
 };
 use penumbra_sdk_sct::Nullifier;
 use penumbra_sdk_shielded_pool::{fmd, note};
@@ -359,6 +356,14 @@ pub trait ViewClient {
         asset_id: asset::Id,
     ) -> Pin<Box<dyn Future<Output = Result<Option<bool>>> + Send + 'static>>;
 
+    /// Query the compliance registry for an asset's policy (threshold and DK_pub).
+    ///
+    /// Returns the full ComplianceAssetStatusResponse which includes policy data if present.
+    fn compliance_asset_policy(
+        &mut self,
+        asset_id: asset::Id,
+    ) -> Pin<Box<dyn Future<Output = Result<pb::ComplianceAssetStatusResponse>> + Send + 'static>>;
+
     /// Query the compliance tree anchors (roots) from the chain.
     ///
     /// Returns (compliance_anchor, asset_anchor) - the roots of the user tree
@@ -392,13 +397,7 @@ pub trait ViewClient {
         &mut self,
         address: Address,
         asset_id: asset::Id,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<compliance_pb::ComplianceMerkleProofsResponse>>
-                + Send
-                + 'static,
-        >,
-    >;
+    ) -> Pin<Box<dyn Future<Output = Result<pb::ComplianceMerkleProofsResponse>> + Send + 'static>>;
 
     /// Query a user's registered compliance leaf from the chain.
     ///
@@ -412,11 +411,7 @@ pub trait ViewClient {
         &mut self,
         address: Address,
         asset_id: asset::Id,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<compliance_pb::ComplianceUserLeafResponse>> + Send + 'static,
-        >,
-    >;
+    ) -> Pin<Box<dyn Future<Output = Result<pb::ComplianceUserLeafResponse>> + Send + 'static>>;
 
     /// Batch query for compliance Merkle proofs for multiple (address, asset) pairs.
     ///
@@ -426,11 +421,7 @@ pub trait ViewClient {
         &mut self,
         queries: Vec<(Address, asset::Id)>,
     ) -> Pin<
-        Box<
-            dyn Future<Output = Result<compliance_pb::ComplianceBatchMerkleProofsResponse>>
-                + Send
-                + 'static,
-        >,
+        Box<dyn Future<Output = Result<pb::ComplianceBatchMerkleProofsResponse>> + Send + 'static>,
     >;
 }
 
@@ -1190,7 +1181,7 @@ where
     ) -> Pin<Box<dyn Future<Output = Result<Option<bool>>> + Send + 'static>> {
         let mut self2 = self.clone();
         async move {
-            let request = compliance_pb::ComplianceAssetStatusRequest {
+            let request = pb::ComplianceAssetStatusRequest {
                 asset_id: Some(asset_id.into()),
             };
 
@@ -1211,6 +1202,29 @@ where
         .boxed()
     }
 
+    fn compliance_asset_policy(
+        &mut self,
+        asset_id: asset::Id,
+    ) -> Pin<Box<dyn Future<Output = Result<pb::ComplianceAssetStatusResponse>> + Send + 'static>>
+    {
+        let mut self2 = self.clone();
+        async move {
+            let request = pb::ComplianceAssetStatusRequest {
+                asset_id: Some(asset_id.into()),
+            };
+
+            let response = ViewServiceClient::compliance_asset_status(
+                &mut self2,
+                tonic::Request::new(request),
+            )
+            .await?
+            .into_inner();
+
+            Ok(response)
+        }
+        .boxed()
+    }
+
     fn compliance_anchors(
         &mut self,
     ) -> Pin<
@@ -1226,7 +1240,7 @@ where
     > {
         let mut self2 = self.clone();
         async move {
-            let request = compliance_pb::ComplianceAnchorsRequest {};
+            let request = pb::ComplianceAnchorsRequest {};
 
             let response =
                 ViewServiceClient::compliance_anchors(&mut self2, tonic::Request::new(request))
@@ -1254,16 +1268,11 @@ where
         &mut self,
         address: Address,
         asset_id: asset::Id,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<compliance_pb::ComplianceMerkleProofsResponse>>
-                + Send
-                + 'static,
-        >,
-    > {
+    ) -> Pin<Box<dyn Future<Output = Result<pb::ComplianceMerkleProofsResponse>> + Send + 'static>>
+    {
         let mut self2 = self.clone();
         async move {
-            let request = compliance_pb::ComplianceMerkleProofsRequest {
+            let request = pb::ComplianceMerkleProofsRequest {
                 address: Some(address.into()),
                 asset_id: Some(asset_id.into()),
             };
@@ -1284,14 +1293,11 @@ where
         &mut self,
         address: Address,
         asset_id: asset::Id,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<compliance_pb::ComplianceUserLeafResponse>> + Send + 'static,
-        >,
-    > {
+    ) -> Pin<Box<dyn Future<Output = Result<pb::ComplianceUserLeafResponse>> + Send + 'static>>
+    {
         let mut self2 = self.clone();
         async move {
-            let request = compliance_pb::ComplianceUserLeafRequest {
+            let request = pb::ComplianceUserLeafRequest {
                 address: Some(address.into()),
                 asset_id: Some(asset_id.into()),
             };
@@ -1310,23 +1316,19 @@ where
         &mut self,
         queries: Vec<(Address, asset::Id)>,
     ) -> Pin<
-        Box<
-            dyn Future<Output = Result<compliance_pb::ComplianceBatchMerkleProofsResponse>>
-                + Send
-                + 'static,
-        >,
+        Box<dyn Future<Output = Result<pb::ComplianceBatchMerkleProofsResponse>> + Send + 'static>,
     > {
         let mut self2 = self.clone();
         async move {
             let proto_queries = queries
                 .into_iter()
-                .map(|(address, asset_id)| compliance_pb::ComplianceBatchQuery {
+                .map(|(address, asset_id)| pb::ComplianceBatchQuery {
                     address: Some(address.into()),
                     asset_id: Some(asset_id.into()),
                 })
                 .collect();
 
-            let request = compliance_pb::ComplianceBatchMerkleProofsRequest {
+            let request = pb::ComplianceBatchMerkleProofsRequest {
                 queries: proto_queries,
             };
 
