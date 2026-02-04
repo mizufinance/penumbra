@@ -89,6 +89,18 @@ pub struct SpendPlan {
     /// Position of the user's compliance leaf in the compliance tree
     #[serde(skip)]
     pub compliance_position: u64,
+    /// Issuer's detection key public (for threshold-based flagging).
+    /// Stored here for convenience; circuit gets it from asset_indexed_leaf.policy.
+    #[serde(skip)]
+    pub dk_pub: Option<decaf377::Element>,
+    /// Amount threshold for flagging (u128 to cover full amount range).
+    /// Stored here for convenience; circuit gets it from asset_indexed_leaf.policy.
+    #[serde(skip)]
+    pub threshold: u128,
+    /// Whether this spend is flagged (amount >= threshold).
+    /// Private witness - circuit verifies this matches the threshold comparison.
+    #[serde(skip)]
+    pub is_flagged: bool,
 }
 
 impl SpendPlan {
@@ -102,7 +114,6 @@ impl SpendPlan {
     /// * `rng` - Random number generator
     /// * `sender_ack` - The sender's Wallet Compliance Key (from their registry entry)
     /// * `sender_address` - The sender's address
-    /// * `is_regulated` - Whether the asset is regulated
     /// * `recipient_address` - The recipient's address (counterparty)
     /// * `recipient_leaf` - The recipient's compliance leaf (from registry)
     pub fn set_compliance_details(
@@ -110,31 +121,110 @@ impl SpendPlan {
         rng: &mut (impl rand_core::RngCore + rand_core::CryptoRng),
         sender_ack: &penumbra_sdk_keys::keys::AddressComplianceKey,
         sender_address: &Address,
-        is_regulated: bool,
         recipient_address: &Address,
         recipient_leaf: penumbra_sdk_compliance::ComplianceLeaf,
     ) -> anyhow::Result<()> {
         let date = crate::timestamp_to_day_index(self.target_timestamp);
 
+        // Policy is stored in asset_indexed_leaf (same as OutputPlan)
+        let policy = &self.asset_indexed_leaf.policy;
+        let amount_u128: u128 = self.note.amount().into();
+        let is_flagged = amount_u128 >= policy.threshold;
+
+        tracing::debug!(
+            sender_address = ?sender_address,
+            recipient_address = ?recipient_address,
+            asset_id = ?self.note.asset_id(),
+            amount = self.note.amount().value(),
+            is_regulated = self.is_regulated,
+            is_flagged,
+            threshold = policy.threshold,
+            date,
+            "set_compliance_details: encrypting compliance data"
+        );
+
         let compliance_data = crate::generate_compliance_details(
             rng,
-            is_regulated,
             sender_ack,
             sender_address,
             date,
             self.note.asset_id(),
             self.note.amount(),
-            recipient_address.clone(),
+            recipient_address,
+            &self.asset_indexed_leaf,
         )?;
 
         self.compliance_ciphertext = compliance_data.ciphertext;
         self.compliance_leaf = Some(compliance_data.leaf);
         self.compliance_ephemeral_secret = Some(compliance_data.ephemeral_secret);
-        self.is_regulated = is_regulated;
         self.counterparty_address = Some(recipient_address.clone());
         self.counterparty_leaf = Some(recipient_leaf);
+        self.dk_pub = Some(policy.dk_pub);
+        self.threshold = policy.threshold;
+        self.is_flagged = is_flagged;
 
         Ok(())
+    }
+
+    /// Set compliance details for an unregulated asset.
+    ///
+    /// This is a convenience method that uses BLACK_HOLE_ACK and dummy values,
+    /// since compliance verification is skipped for unregulated assets.
+    ///
+    /// # Arguments
+    /// * `rng` - Random number generator
+    pub fn set_unregulated_compliance(
+        &mut self,
+        rng: &mut (impl rand_core::RngCore + rand_core::CryptoRng),
+    ) -> anyhow::Result<()> {
+        let black_hole_ack = penumbra_sdk_keys::keys::AddressComplianceKey::new(
+            *penumbra_sdk_compliance::BLACK_HOLE_ACK,
+        );
+        // Use a dummy address for counterparty since it's not verified
+        let dummy_address = Address::dummy(rng);
+        // Use a dummy leaf since it's not verified
+        let dummy_leaf = penumbra_sdk_compliance::ComplianceLeaf {
+            address: dummy_address.clone(),
+            key: black_hole_ack.clone(),
+            asset_id: self.note.asset_id(),
+        };
+        // Use the sender's own address as sender_address
+        let sender_address = self.note.address();
+
+        self.set_compliance_details(
+            rng,
+            &black_hole_ack,
+            &sender_address,
+            &dummy_address,
+            dummy_leaf,
+        )
+    }
+
+    /// Set compliance details for a regulated asset.
+    ///
+    /// This method requires all the actual compliance data from the registry.
+    ///
+    /// # Arguments
+    /// * `rng` - Random number generator
+    /// * `sender_ack` - The sender's Address Compliance Key
+    /// * `sender_address` - The sender's address
+    /// * `recipient_address` - The recipient's address (counterparty)
+    /// * `recipient_leaf` - The recipient's compliance leaf from the registry
+    pub fn set_regulated_compliance(
+        &mut self,
+        rng: &mut (impl rand_core::RngCore + rand_core::CryptoRng),
+        sender_ack: &penumbra_sdk_keys::keys::AddressComplianceKey,
+        sender_address: &Address,
+        recipient_address: &Address,
+        recipient_leaf: penumbra_sdk_compliance::ComplianceLeaf,
+    ) -> anyhow::Result<()> {
+        self.set_compliance_details(
+            rng,
+            sender_ack,
+            sender_address,
+            recipient_address,
+            recipient_leaf,
+        )
     }
 
     /// Create a new [`SpendPlan`] that spends the given `position`ed `note`.
@@ -158,19 +248,23 @@ impl SpendPlan {
         let address = note.address();
         let date = target_timestamp / 86400; // Convert timestamp to day index
 
-        let (compliance_ciphertext_obj, ephemeral_secret) =
-            penumbra_sdk_compliance::crypto::encrypt_compliance_details(
-                &mut *rng,
-                &black_hole_ack,
-                &address,
-                date,
-                note.asset_id(),
-                note.amount(),
-                address.clone(), // Use same address as counterparty for default
-            )
-            .expect("can encrypt compliance details");
+        // Create unregulated asset leaf (threshold=u128::MAX means never flagged)
+        let unregulated_leaf = penumbra_sdk_compliance::IndexedLeaf::unregulated(note.asset_id().0);
 
-        let compliance_ciphertext = compliance_ciphertext_obj.to_bytes();
+        let encryption_result = penumbra_sdk_compliance::crypto::encrypt_compliance_details(
+            &mut *rng,
+            &black_hole_ack,
+            &address,
+            date,
+            note.asset_id(),
+            note.amount(),
+            &address, // Use same address as counterparty for default
+            &unregulated_leaf,
+        )
+        .expect("can encrypt compliance details");
+
+        let compliance_ciphertext = encryption_result.ciphertext.to_bytes();
+        let ephemeral_secret = encryption_result.ephemeral_secret;
 
         let compliance_leaf = penumbra_sdk_compliance::ComplianceLeaf {
             address: address.clone(),
@@ -209,6 +303,9 @@ impl SpendPlan {
             asset_position,
             asset_indexed_leaf,
             compliance_position,
+            dk_pub: None,
+            threshold: 0,
+            is_flagged: false,
         }
     }
 
@@ -341,11 +438,12 @@ impl SpendPlan {
             }
         });
 
-        // Extract compliance ciphertext using unified method
         use penumbra_sdk_compliance::structs::ComplianceCiphertext;
-        let ct = ComplianceCiphertext::from_bytes(&self.compliance_ciphertext)
-            .expect("can deserialize ciphertext");
-        let (compliance_epk, compliance_ciphertext) = ct.to_circuit_public_inputs();
+        let ct = ComplianceCiphertext::from_bytes(&self.compliance_ciphertext).map_err(|e| {
+            crate::ProofError::InvalidPublicInput(format!("invalid compliance ciphertext: {}", e))
+        })?;
+        let (compliance_epk, compliance_epk_g, compliance_ciphertext) =
+            ct.to_circuit_public_inputs();
 
         // Compute blinded leaf hashes for privacy-preserving counterparty binding
         let sender_leaf_hash = user_leaf.commit();
@@ -379,6 +477,7 @@ impl SpendPlan {
             asset_anchor,
             compliance_anchor,
             compliance_epk,
+            compliance_epk_g,
             compliance_ciphertext,
             target_timestamp: self.target_timestamp,
             sender_leaf_hash: blinded_sender_leaf,
@@ -411,6 +510,7 @@ impl SpendPlan {
                 }
             }),
             tx_blinding_nonce: self.tx_blinding_nonce,
+            is_flagged: self.is_flagged,
         };
 
         SpendProof::prove(
@@ -437,7 +537,7 @@ impl DomainType for SpendPlan {
 
 impl From<SpendPlan> for pb::SpendPlan {
     fn from(msg: SpendPlan) -> Self {
-        use penumbra_sdk_proto::core::component::compliance::v1 as compliance_pb;
+        use crate::compliance_helpers::{compliance_leaf_to_proto, indexed_leaf_to_proto};
 
         Self {
             note: Some(msg.note.into()),
@@ -451,22 +551,10 @@ impl From<SpendPlan> for pb::SpendPlan {
             is_regulated: msg.is_regulated,
             compliance_leaf: msg
                 .compliance_leaf
-                .map(|leaf| compliance_pb::ComplianceLeaf {
-                    address: Some(leaf.address.into()),
-                    key: Some(compliance_pb::ComplianceViewingKey {
-                        inner: leaf.key.0.vartime_compress().0.to_vec(),
-                    }),
-                    asset_id: Some(leaf.asset_id.into()),
-                }),
+                .map(|leaf| compliance_leaf_to_proto(&leaf)),
             counterparty_leaf: msg
                 .counterparty_leaf
-                .map(|leaf| compliance_pb::ComplianceLeaf {
-                    address: Some(leaf.address.into()),
-                    key: Some(compliance_pb::ComplianceViewingKey {
-                        inner: leaf.key.0.vartime_compress().0.to_vec(),
-                    }),
-                    asset_id: Some(leaf.asset_id.into()),
-                }),
+                .map(|leaf| compliance_leaf_to_proto(&leaf)),
             compliance_ephemeral_secret: msg
                 .compliance_ephemeral_secret
                 .map(|s| s.to_bytes().to_vec())
@@ -479,11 +567,8 @@ impl From<SpendPlan> for pb::SpendPlan {
             compliance_position: msg.compliance_position,
             asset_path: Some(msg.asset_path.into()),
             asset_position: msg.asset_position,
-            asset_indexed_leaf: Some(compliance_pb::IndexedLeafData {
-                value: msg.asset_indexed_leaf.value.to_bytes().to_vec(),
-                next_index: msg.asset_indexed_leaf.next_index,
-                next_value: msg.asset_indexed_leaf.next_value.to_bytes().to_vec(),
-            }),
+            asset_indexed_leaf: Some(indexed_leaf_to_proto(&msg.asset_indexed_leaf)),
+            is_flagged: msg.is_flagged,
         }
     }
 }
@@ -491,150 +576,27 @@ impl From<SpendPlan> for pb::SpendPlan {
 impl TryFrom<pb::SpendPlan> for SpendPlan {
     type Error = anyhow::Error;
     fn try_from(msg: pb::SpendPlan) -> Result<Self, Self::Error> {
-        use penumbra_sdk_keys::keys::AddressComplianceKey;
+        use crate::compliance_helpers::{
+            compliance_leaf_from_proto, parse_ephemeral_secret, parse_indexed_leaf_or_default,
+            parse_merkle_path_or_default, parse_state_commitment_or_default,
+            parse_tx_blinding_nonce,
+        };
 
-        // Parse compliance leaf if present
         let compliance_leaf = msg
             .compliance_leaf
-            .map(
-                |leaf| -> anyhow::Result<penumbra_sdk_compliance::ComplianceLeaf> {
-                    let address = leaf
-                        .address
-                        .ok_or_else(|| anyhow::anyhow!("missing address in compliance leaf"))?
-                        .try_into()?;
-                    let key = leaf
-                        .key
-                        .ok_or_else(|| anyhow::anyhow!("missing key in compliance leaf"))?;
-                    let key_bytes: [u8; 32] = key
-                        .inner
-                        .as_slice()
-                        .try_into()
-                        .map_err(|_| anyhow::anyhow!("invalid compliance key length"))?;
-                    let key_element = decaf377::Encoding(key_bytes)
-                        .vartime_decompress()
-                        .map_err(|_| anyhow::anyhow!("invalid compliance key encoding"))?;
-                    let asset_id = leaf
-                        .asset_id
-                        .ok_or_else(|| anyhow::anyhow!("missing asset_id in compliance leaf"))?
-                        .try_into()?;
-                    Ok(penumbra_sdk_compliance::ComplianceLeaf {
-                        address,
-                        key: AddressComplianceKey::new(key_element),
-                        asset_id,
-                    })
-                },
-            )
+            .map(|leaf| compliance_leaf_from_proto(leaf, "compliance leaf"))
             .transpose()?;
-
-        // Parse counterparty leaf if present
         let counterparty_leaf = msg
             .counterparty_leaf
-            .map(
-                |leaf| -> anyhow::Result<penumbra_sdk_compliance::ComplianceLeaf> {
-                    let address = leaf
-                        .address
-                        .ok_or_else(|| anyhow::anyhow!("missing address in counterparty leaf"))?
-                        .try_into()?;
-                    let key = leaf
-                        .key
-                        .ok_or_else(|| anyhow::anyhow!("missing key in counterparty leaf"))?;
-                    let key_bytes: [u8; 32] = key
-                        .inner
-                        .as_slice()
-                        .try_into()
-                        .map_err(|_| anyhow::anyhow!("invalid counterparty key length"))?;
-                    let key_element = decaf377::Encoding(key_bytes)
-                        .vartime_decompress()
-                        .map_err(|_| anyhow::anyhow!("invalid counterparty key encoding"))?;
-                    let asset_id = leaf
-                        .asset_id
-                        .ok_or_else(|| anyhow::anyhow!("missing asset_id in counterparty leaf"))?
-                        .try_into()?;
-                    Ok(penumbra_sdk_compliance::ComplianceLeaf {
-                        address,
-                        key: AddressComplianceKey::new(key_element),
-                        asset_id,
-                    })
-                },
-            )
+            .map(|leaf| compliance_leaf_from_proto(leaf, "counterparty leaf"))
             .transpose()?;
-
-        // Parse ephemeral secret if present (non-empty bytes)
-        let compliance_ephemeral_secret = if msg.compliance_ephemeral_secret.is_empty() {
-            None
-        } else {
-            let bytes: [u8; 32] = msg
-                .compliance_ephemeral_secret
-                .as_slice()
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("invalid ephemeral secret length"))?;
-            Some(Fr::from_bytes_checked(&bytes).expect("ephemeral secret malformed"))
-        };
-
-        // Parse tx_blinding_nonce (default to zero if empty for backwards compatibility)
-        let tx_blinding_nonce = if msg.tx_blinding_nonce.is_empty() {
-            Fr::from(0u64)
-        } else {
-            let bytes: [u8; 32] = msg
-                .tx_blinding_nonce
-                .as_slice()
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("invalid tx_blinding_nonce length"))?;
-            Fr::from_bytes_checked(&bytes).expect("tx_blinding_nonce malformed")
-        };
-
-        // Parse compliance_anchor if present
-        let compliance_anchor = msg
-            .compliance_anchor
-            .map(|c| c.try_into())
-            .transpose()?
-            .unwrap_or_else(|| tct::StateCommitment(Fq::from(0u64)));
-
-        // Parse asset_anchor if present
-        let asset_anchor = msg
-            .asset_anchor
-            .map(|c| c.try_into())
-            .transpose()?
-            .unwrap_or_else(|| tct::StateCommitment(Fq::from(0u64)));
-
-        // Parse compliance_path if present
-        let compliance_path = msg
-            .compliance_path
-            .map(|p| p.try_into())
-            .transpose()?
-            .unwrap_or_default();
-
-        // Parse asset_path if present
-        let asset_path = msg
-            .asset_path
-            .map(|p| p.try_into())
-            .transpose()?
-            .unwrap_or_default();
-
-        // Parse asset_indexed_leaf if present
-        let asset_indexed_leaf = msg
-            .asset_indexed_leaf
-            .map(
-                |leaf| -> anyhow::Result<penumbra_sdk_compliance::IndexedLeaf> {
-                    let value = Fq::from_bytes_checked(&leaf.value.as_slice().try_into()?)
-                        .map_err(|_| anyhow::anyhow!("invalid asset_indexed_leaf value"))?;
-                    let next_value = Fq::from_bytes_checked(
-                        &leaf.next_value.as_slice().try_into()?,
-                    )
-                    .map_err(|_| anyhow::anyhow!("invalid asset_indexed_leaf next_value"))?;
-                    Ok(penumbra_sdk_compliance::IndexedLeaf {
-                        value,
-                        next_index: leaf.next_index,
-                        next_value,
-                    })
-                },
-            )
-            .transpose()?
-            .unwrap_or_else(|| penumbra_sdk_compliance::IndexedLeaf {
-                value: Fq::from(0u64),
-                next_index: 0,
-                next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
-            });
+        let compliance_ephemeral_secret = parse_ephemeral_secret(&msg.compliance_ephemeral_secret)?;
+        let tx_blinding_nonce = parse_tx_blinding_nonce(&msg.tx_blinding_nonce)?;
+        let compliance_anchor = parse_state_commitment_or_default(msg.compliance_anchor)?;
+        let asset_anchor = parse_state_commitment_or_default(msg.asset_anchor)?;
+        let compliance_path = parse_merkle_path_or_default(msg.compliance_path)?;
+        let asset_path = parse_merkle_path_or_default(msg.asset_path)?;
+        let asset_indexed_leaf = parse_indexed_leaf_or_default(msg.asset_indexed_leaf)?;
 
         Ok(Self {
             note: msg
@@ -665,6 +627,9 @@ impl TryFrom<pb::SpendPlan> for SpendPlan {
             asset_position: msg.asset_position,
             asset_indexed_leaf,
             compliance_position: msg.compliance_position,
+            dk_pub: None,
+            threshold: 0,
+            is_flagged: msg.is_flagged,
         })
     }
 }
@@ -700,12 +665,27 @@ mod test {
 
         let fvk = test_data.sk.full_viewing_key();
 
-        // 3. Create SpendPlan using test data
+        // 3. Create valid IMT proof FIRST (encryption needs the indexed leaf)
+        let asset_id_fq = Fq::from(asset_id_u64);
+        let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) = if is_regulated {
+            create_imt_membership_proof(asset_id_fq)
+        } else {
+            create_imt_non_membership_proof(asset_id_fq)
+        };
+
+        // 4. Create SpendPlan and set IMT proof data BEFORE encryption
         let mut spend_plan = SpendPlan::new(
             &mut rng,
             test_data.note.clone(),
             state_commitment_proof.position(),
         );
+
+        // Set the IMT proof data BEFORE calling set_compliance_details
+        spend_plan.asset_anchor = asset_anchor;
+        spend_plan.asset_path = asset_path;
+        spend_plan.asset_position = asset_position;
+        spend_plan.asset_indexed_leaf = asset_indexed_leaf;
+        spend_plan.is_regulated = is_regulated;
 
         // Create a recipient leaf (using same ACK for simplicity in this test)
         let recipient_leaf = penumbra_sdk_compliance::ComplianceLeaf {
@@ -714,35 +694,23 @@ mod test {
             asset_id: penumbra_sdk_asset::asset::Id(Fq::from(asset_id_u64)),
         };
 
+        // Now set_compliance_details will use the correct asset_indexed_leaf
         spend_plan
             .set_compliance_details(
                 &mut rng,
                 &test_data.ack,
                 &test_data.address,
-                is_regulated,
                 &test_data.address,
                 recipient_leaf,
             )
             .expect("can set compliance details");
-
-        // Create valid IMT proof based on regulation status
-        let asset_id_fq = Fq::from(asset_id_u64);
-        let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) = if is_regulated {
-            create_imt_membership_proof(asset_id_fq)
-        } else {
-            create_imt_non_membership_proof(asset_id_fq)
-        };
 
         // Create valid user tree proof
         let user_leaf = spend_plan.compliance_leaf.clone().unwrap();
         let (compliance_anchor, compliance_path, compliance_position) =
             create_user_tree_proof(&user_leaf);
 
-        // Set the proof data in the plan
-        spend_plan.asset_anchor = asset_anchor;
-        spend_plan.asset_path = asset_path;
-        spend_plan.asset_position = asset_position;
-        spend_plan.asset_indexed_leaf = asset_indexed_leaf;
+        // Set the user tree proof data
         spend_plan.compliance_anchor = compliance_anchor;
         spend_plan.compliance_path = compliance_path;
         spend_plan.compliance_position = compliance_position;
@@ -752,13 +720,11 @@ mod test {
             .spend_proof(&fvk, state_commitment_proof, anchor, &pk, None)
             .expect("proof generation should succeed");
 
-        // Extract ciphertext from spend_plan
         use penumbra_sdk_compliance::structs::ComplianceCiphertext;
         let ct = ComplianceCiphertext::from_bytes(&spend_plan.compliance_ciphertext)
             .expect("can deserialize ciphertext");
-        let (compliance_epk, packed_ciphertext) = ct.to_circuit_public_inputs();
+        let (compliance_epk, compliance_epk_g, packed_ciphertext) = ct.to_circuit_public_inputs();
 
-        // Compute blinded leaf hashes
         let sender_leaf_hash = spend_plan.compliance_leaf.clone().unwrap().commit();
         let counterparty_leaf_hash = spend_plan.counterparty_leaf.clone().unwrap().commit();
 
@@ -771,7 +737,6 @@ mod test {
             spend_plan.tx_blinding_nonce,
         );
 
-        // 6. Verify
         spend_proof
             .verify(
                 &pvk,
@@ -783,6 +748,7 @@ mod test {
                     asset_anchor,
                     compliance_anchor,
                     compliance_epk,
+                    compliance_epk_g,
                     compliance_ciphertext: packed_ciphertext,
                     target_timestamp: spend_plan.target_timestamp,
                     sender_leaf_hash: blinded_sender,
@@ -800,5 +766,95 @@ mod test {
     #[test]
     fn test_unregulated_asset_spend_proof() {
         verify_spend_proof_with_asset(UNREGULATED_ASSET_ID);
+    }
+
+    /// Test that spend is flagged when amount >= threshold
+    #[test]
+    fn test_spend_flagged_above_threshold() {
+        let mut rng = OsRng;
+        let dk_pub = decaf377::Element::GENERATOR;
+        let threshold = 500u128;
+        let indexed_leaf = penumbra_sdk_compliance::test_helpers::make_test_leaf(dk_pub, threshold);
+
+        let seed_phrase = penumbra_sdk_keys::keys::SeedPhrase::generate(&mut rng);
+        let sk = penumbra_sdk_keys::keys::SpendKey::from_seed_phrase_bip44(
+            seed_phrase,
+            &penumbra_sdk_keys::keys::Bip44Path::new(0),
+        );
+        let ivk = sk.full_viewing_key().incoming();
+        let (address, _) = ivk.payment_address(0u32.into());
+
+        // amount=1000 >= threshold=500 => flagged
+        let value = penumbra_sdk_asset::Value {
+            amount: 1000u64.into(),
+            asset_id: penumbra_sdk_asset::asset::Id(Fq::from(1u64)),
+        };
+        let note =
+            crate::Note::from_parts(address.clone(), value, crate::Rseed::generate(&mut rng))
+                .expect("can create note");
+
+        let mut spend_plan = SpendPlan::new(&mut rng, note, 0u64.into());
+        spend_plan.asset_indexed_leaf = indexed_leaf;
+
+        let ack = penumbra_sdk_keys::keys::AddressComplianceKey::new(dk_pub);
+        let recipient_leaf = penumbra_sdk_compliance::ComplianceLeaf {
+            address: address.clone(),
+            key: ack.clone(),
+            asset_id: value.asset_id,
+        };
+
+        spend_plan
+            .set_compliance_details(&mut rng, &ack, &address, &address, recipient_leaf)
+            .expect("can set compliance details");
+
+        assert!(
+            spend_plan.is_flagged,
+            "amount 1000 >= threshold 500 should be flagged"
+        );
+    }
+
+    /// Test that spend is NOT flagged when amount < threshold
+    #[test]
+    fn test_spend_not_flagged_below_threshold() {
+        let mut rng = OsRng;
+        let dk_pub = decaf377::Element::GENERATOR;
+        let threshold = 500u128;
+        let indexed_leaf = penumbra_sdk_compliance::test_helpers::make_test_leaf(dk_pub, threshold);
+
+        let seed_phrase = penumbra_sdk_keys::keys::SeedPhrase::generate(&mut rng);
+        let sk = penumbra_sdk_keys::keys::SpendKey::from_seed_phrase_bip44(
+            seed_phrase,
+            &penumbra_sdk_keys::keys::Bip44Path::new(0),
+        );
+        let ivk = sk.full_viewing_key().incoming();
+        let (address, _) = ivk.payment_address(0u32.into());
+
+        // amount=100 < threshold=500 => NOT flagged
+        let value = penumbra_sdk_asset::Value {
+            amount: 100u64.into(),
+            asset_id: penumbra_sdk_asset::asset::Id(Fq::from(1u64)),
+        };
+        let note =
+            crate::Note::from_parts(address.clone(), value, crate::Rseed::generate(&mut rng))
+                .expect("can create note");
+
+        let mut spend_plan = SpendPlan::new(&mut rng, note, 0u64.into());
+        spend_plan.asset_indexed_leaf = indexed_leaf;
+
+        let ack = penumbra_sdk_keys::keys::AddressComplianceKey::new(dk_pub);
+        let recipient_leaf = penumbra_sdk_compliance::ComplianceLeaf {
+            address: address.clone(),
+            key: ack.clone(),
+            asset_id: value.asset_id,
+        };
+
+        spend_plan
+            .set_compliance_details(&mut rng, &ack, &address, &address, recipient_leaf)
+            .expect("can set compliance details");
+
+        assert!(
+            !spend_plan.is_flagged,
+            "amount 100 < threshold 500 should NOT be flagged"
+        );
     }
 }

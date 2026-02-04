@@ -8,7 +8,7 @@
 //! - Sync full tree STRUCTURE (all commitments) for path computation
 //! - Store full LEAF DATA only for addresses in scope (own + counterparties)
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use penumbra_sdk_compliance::{
     indexed_tree::{IndexedLeaf, IndexedMerkleTree},
     structs::MerklePath,
@@ -142,30 +142,81 @@ impl ComplianceAssetTree {
 
     /// Load tree from SQLite storage.
     ///
-    /// We store and load the raw Fq values of inserted assets, then replay
-    /// the inserts to reconstruct the tree with correct IMT structure.
+    /// Loads full leaf data including policy (dk_pub, threshold) to ensure
+    /// correct tree reconstruction with matching leaf commitments.
     pub fn from_store(store: &mut ComplianceTreeStore<'_, '_>) -> Result<Self> {
+        use penumbra_sdk_compliance::AssetPolicy;
+
+        let leaf_count = store.get_asset_tree_leaf_count()?;
+
+        tracing::debug!(leaf_count, "ComplianceAssetTree::from_store: starting load");
+
+        // Check if sentinel (position 0) exists in storage
+        // If not, this is a fresh database - return a new tree
+        if store.get_asset_leaf(0)?.is_none() {
+            tracing::debug!("ComplianceAssetTree::from_store: fresh database, returning new tree");
+            // Fresh database, no leaves stored yet - return new tree with sentinel
+            return Ok(Self::new());
+        }
+
         let mut tree = IndexedMerkleTree::new();
         let mut inserted_values = Vec::new();
 
-        let position = store.get_asset_tree_leaf_count()?;
-
-        // Load all leaf values and replay inserts
-        // Note: Position 0 is the sentinel, we start from 1
-        for pos in 1..position {
+        // Load all leaves with full data (including policy)
+        // Position 0 is the sentinel, we load it too
+        for pos in 0..leaf_count {
             let leaf_data = store
                 .get_asset_leaf(pos)?
                 .ok_or_else(|| anyhow::anyhow!("missing asset leaf at position {}", pos))?;
-            let value = decaf377::Fq::from_bytes_checked(&leaf_data.value)
-                .map_err(|_| anyhow::anyhow!("invalid Fq bytes for asset leaf value"))?;
-            inserted_values.push(value);
+
+            let value = decaf377::Fq::from_bytes_checked(&leaf_data.value).map_err(|_| {
+                anyhow::anyhow!("invalid Fq bytes for asset leaf value at position {}", pos)
+            })?;
+            let next_value =
+                decaf377::Fq::from_bytes_checked(&leaf_data.next_value).map_err(|_| {
+                    anyhow::anyhow!(
+                        "invalid Fq bytes for asset leaf next_value at position {}",
+                        pos
+                    )
+                })?;
+            let dk_pub = decaf377::Encoding(leaf_data.dk_pub)
+                .vartime_decompress()
+                .map_err(|_| anyhow::anyhow!("invalid dk_pub encoding at position {}", pos))?;
+
+            let leaf = IndexedLeaf {
+                value,
+                next_index: leaf_data.next_index,
+                next_value,
+                policy: AssetPolicy::new(dk_pub, leaf_data.threshold),
+            };
+
+            // Debug: log each loaded leaf
+            tracing::debug!(
+                position = pos,
+                value = ?leaf_data.value,
+                next_index = leaf_data.next_index,
+                threshold = leaf_data.threshold,
+                dk_pub_first_byte = leaf_data.dk_pub[0],
+                "ComplianceAssetTree::from_store: loaded leaf"
+            );
+
+            tree.load_leaf(pos, leaf);
+
+            // Track non-sentinel values for the inserted_values list
+            if pos > 0 {
+                inserted_values.push(value);
+            }
         }
 
-        // Replay all inserts to rebuild the tree with correct structure
-        for value in &inserted_values {
-            tree.insert(*value)
-                .context("failed to replay asset insertion during tree load")?;
-        }
+        // Rebuild all internal hashes from the loaded leaves
+        tree.rebuild_hashes();
+
+        let root = tree.root();
+        tracing::debug!(
+            leaf_count,
+            root = ?root.0.to_bytes(),
+            "ComplianceAssetTree::from_store: completed load"
+        );
 
         Ok(Self {
             inner: tree,
@@ -173,13 +224,25 @@ impl ComplianceAssetTree {
         })
     }
 
-    /// Insert a new asset value into the tree.
+    /// Sync a leaf from an EventAssetRegistered (preserves policy data).
     ///
-    /// Returns the position where the asset was inserted.
-    pub fn insert(&mut self, value: decaf377::Fq) -> Result<u64> {
-        let position = self.inner.insert(value)?;
-        self.inserted_values.push(value);
-        Ok(position)
+    /// This is the correct method to use when syncing from CompactBlock events,
+    /// as it preserves the full IndexedLeaf data including policy (dk_pub, threshold).
+    pub fn sync_from_event(
+        &mut self,
+        new_leaf: IndexedLeaf,
+        new_position: u64,
+        updated_low_leaf: IndexedLeaf,
+        low_leaf_position: u64,
+    ) -> Result<()> {
+        self.inner.sync_from_event(
+            new_leaf.clone(),
+            new_position,
+            updated_low_leaf,
+            low_leaf_position,
+        )?;
+        self.inserted_values.push(new_leaf.value);
+        Ok(())
     }
 
     /// Check if an asset value is in the tree.
@@ -227,18 +290,18 @@ impl ComplianceAssetTree {
 
     /// Persist tree state to SQLite.
     ///
-    /// This saves:
-    /// - All indexed leaves (for reconstruction on load)
-    /// - The current position cursor
+    /// This saves all indexed leaves from position 0 to current leaf_count.
+    /// Uses INSERT OR REPLACE to handle both new and updated leaves.
     pub fn persist(
         &self,
         store: &mut ComplianceTreeStore<'_, '_>,
-        start_position: u64,
+        _start_position: u64,
     ) -> Result<()> {
         let leaf_count = self.inner.leaf_count();
 
-        // Save new leaves (position 0 is the sentinel, always present)
-        for pos in start_position..leaf_count {
+        // Save all leaves (INSERT OR REPLACE handles updates)
+        // This ensures both new leaves AND updated low leaves are persisted correctly.
+        for pos in 0..leaf_count {
             let leaf = self.inner.get_leaf(pos).ok_or_else(|| {
                 anyhow::anyhow!("missing asset leaf at position {} during persist", pos)
             })?;
@@ -246,6 +309,8 @@ impl ComplianceAssetTree {
                 value: leaf.value.to_bytes(),
                 next_index: leaf.next_index,
                 next_value: leaf.next_value.to_bytes(),
+                dk_pub: leaf.policy.dk_pub.vartime_compress().0,
+                threshold: leaf.policy.threshold,
             };
             store.add_asset_leaf(pos, leaf_data)?;
         }
@@ -296,5 +361,52 @@ mod tests {
 
         // Root should be computable
         let _root = tree.root();
+    }
+
+    #[test]
+    fn asset_tree_sync_preserves_policy() {
+        use decaf377::Fq;
+        use penumbra_sdk_compliance::{indexed_tree::FQ_MAX, AssetPolicy};
+
+        let mut tree = ComplianceAssetTree::new();
+
+        // Create a leaf with non-default policy (simulating a regulated asset)
+        let dk_pub = decaf377::Element::GENERATOR; // Non-identity element
+        let threshold = 1000u128;
+        let policy = AssetPolicy::new(dk_pub, threshold);
+
+        let new_leaf = IndexedLeaf {
+            value: Fq::from(12345u64),
+            next_index: 0,
+            next_value: FQ_MAX.clone(),
+            policy: policy.clone(),
+        };
+
+        // The sentinel (low leaf) gets updated to point to the new leaf
+        let updated_sentinel = IndexedLeaf {
+            value: Fq::from(0u64),
+            next_index: 1, // Points to new leaf
+            next_value: Fq::from(12345u64),
+            policy: AssetPolicy::default_unregulated(),
+        };
+
+        // Sync using the event-based method (preserves policy)
+        tree.sync_from_event(
+            new_leaf.clone(),
+            1, // new position
+            updated_sentinel,
+            0, // sentinel position
+        )
+        .unwrap();
+
+        // Verify policy is preserved via membership proof
+        let asset_id = penumbra_sdk_asset::asset::Id(new_leaf.value);
+        let (position, retrieved_leaf, _path, is_regulated) =
+            tree.get_proof_data(asset_id).unwrap();
+
+        assert_eq!(position, 1);
+        assert!(is_regulated);
+        assert_eq!(retrieved_leaf.policy.dk_pub, dk_pub);
+        assert_eq!(retrieved_leaf.policy.threshold, threshold);
     }
 }

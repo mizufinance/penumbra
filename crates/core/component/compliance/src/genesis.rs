@@ -25,6 +25,10 @@ pub struct NativeAssetRegistration {
     pub asset_id: asset::Id,
     /// Whether this asset is regulated (requires compliance proofs).
     pub is_regulated: bool,
+    /// Issuer detection key (required if is_regulated is true).
+    /// Encoded as 32-byte compressed curve point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dk_pub: Option<[u8; 32]>,
 }
 
 #[cfg(test)]

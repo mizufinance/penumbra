@@ -22,8 +22,8 @@ mod ivk;
 mod ovk;
 
 pub use cvk::{
-    day_index, derive_daily_tweak, AddressComplianceKey, DailyKeySet, DailyMasterKey, KeyType,
-    MasterComplianceKey, CVK_LEN_BYTES, SECONDS_PER_DAY,
+    day_index, derive_daily_tweak, AddressComplianceKey, DailyComplianceKey, DailyKeySet, KeyType,
+    UserComplianceKey, CVK_LEN_BYTES, SECONDS_PER_DAY,
 };
 pub(crate) use fvk::IVK_DOMAIN_SEP;
 pub use fvk::{

@@ -81,6 +81,14 @@ impl<'de> Deserialize<'de> for QuadTree {
     {
         let helper = QuadTreeSerde::deserialize(deserializer)?;
 
+        // Validate depth to prevent shift overflow in max_leaves_for_depth (requires depth <= 31)
+        if helper.depth > 31 {
+            return Err(serde::de::Error::custom(format!(
+                "QuadTree depth {} exceeds maximum 31",
+                helper.depth
+            )));
+        }
+
         let nodes: BTreeMap<u64, StateCommitment> = helper
             .nodes
             .into_iter()

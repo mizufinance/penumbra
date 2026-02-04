@@ -15,16 +15,4 @@
 pub use metrics::*;
 
 /// Registers all metrics used by this crate.
-pub fn register_metrics() {
-    /*
-    // Sample code for reference -- delete when adding the first metric
-    register_counter!(MEMPOOL_CHECKTX_TOTAL);
-    describe_counter!(
-        MEMPOOL_CHECKTX_TOTAL,
-        "The total number of checktx requests made to the mempool"
-    );
-     */
-}
-
-// Sample code for reference -- delete when adding the first metric
-// pub const MEMPOOL_CHECKTX_TOTAL: &str = "penumbra_pd_mempool_checktx_total";
+pub fn register_metrics() {}

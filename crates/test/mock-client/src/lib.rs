@@ -440,6 +440,14 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
         Ok((path, position, leaf))
     }
 
+    async fn get_asset_policy(
+        &self,
+        asset_id: penumbra_sdk_asset::asset::Id,
+    ) -> anyhow::Result<Option<penumbra_sdk_compliance::AssetPolicy>> {
+        // For mock client, fetch from state via registry
+        self.state.get_asset_policy(asset_id).await
+    }
+
     /// Override get_batch_proofs to ensure anchor/proof consistency.
     ///
     /// CRITICAL: We read each tree ONCE and use the same instance for both
@@ -571,11 +579,22 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
             }
         }
 
+        // Fetch asset policies for regulated assets
+        let mut asset_policies = BTreeMap::new();
+        for (asset_id, (_, _, _, is_regulated)) in &asset_proofs {
+            if *is_regulated {
+                if let Some(policy) = self.state.get_asset_policy(*asset_id).await? {
+                    asset_policies.insert(*asset_id, policy);
+                }
+            }
+        }
+
         Ok(BatchComplianceData {
             compliance_anchor,
             asset_anchor,
             asset_proofs,
             user_proofs,
+            asset_policies,
         })
     }
 }

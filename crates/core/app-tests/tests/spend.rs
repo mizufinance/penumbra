@@ -221,6 +221,7 @@ async fn invalid_dummy_spend() -> anyhow::Result<()> {
         asset_anchor: dummy_asset_anchor,
         compliance_anchor: dummy_compliance_anchor,
         compliance_epk: decaf377::Element::default(),
+        compliance_epk_g: decaf377::Element::default(),
         compliance_ciphertext: vec![Fq::from(0u64); 11],
         target_timestamp: 0,
         sender_leaf_hash: tct::StateCommitment(Fq::from(0u64)),
@@ -240,6 +241,7 @@ async fn invalid_dummy_spend() -> anyhow::Result<()> {
             value: Fq::from(0u64),
             next_index: 0,
             next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+            policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
         },
         is_regulated: false,
         compliance_path: dummy_merkle_path,
@@ -248,6 +250,7 @@ async fn invalid_dummy_spend() -> anyhow::Result<()> {
         compliance_ephemeral_secret: Fr::from(0u64),
         counterparty_leaf: dummy_compliance_leaf,
         tx_blinding_nonce: Fr::from(0u64),
+        is_flagged: false,
     };
 
     // Attempt to prove - this should fail because the constraints are unsatisfiable

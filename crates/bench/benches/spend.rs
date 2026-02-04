@@ -58,6 +58,7 @@ fn spend_proving_time(c: &mut Criterion) {
         asset_anchor: test_data.asset_anchor,
         compliance_anchor: test_data.compliance_anchor,
         compliance_epk: test_data.compliance_epk,
+        compliance_epk_g: test_data.compliance_epk_g,
         compliance_ciphertext: test_data.compliance_ciphertext,
         target_timestamp: test_data.timestamp,
         sender_leaf_hash,
@@ -77,6 +78,7 @@ fn spend_proving_time(c: &mut Criterion) {
             value: decaf377::Fq::from(0u64),
             next_index: 0,
             next_value: decaf377::Fq::from(0u64),
+            policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
         },
         is_regulated: false,
         compliance_path: penumbra_sdk_compliance::MerklePath::default(),
@@ -85,6 +87,7 @@ fn spend_proving_time(c: &mut Criterion) {
         compliance_ephemeral_secret: test_data.ephemeral_secret,
         counterparty_leaf: dummy_leaf,
         tx_blinding_nonce: dummy_nonce,
+        is_flagged: false,
     };
 
     let r = Fq::rand(&mut rng);

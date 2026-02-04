@@ -210,7 +210,6 @@ mod tests {
                 rng,
                 &AddressComplianceKey::new(*BLACK_HOLE_ACK),
                 sender_address,
-                false, // unregulated
                 recipient_address,
                 counterparty_leaf,
             )
@@ -266,7 +265,6 @@ mod tests {
             .set_compliance_details(
                 rng,
                 &AddressComplianceKey::new(*BLACK_HOLE_ACK),
-                false, // unregulated
                 sender_address,
                 counterparty_leaf,
                 Fr::from(0u64), // tx_blinding_nonce

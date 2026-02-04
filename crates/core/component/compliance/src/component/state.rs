@@ -21,7 +21,7 @@ use crate::{
 /// The Compliance component manages on-chain registries for regulated assets.
 ///
 /// It maintains two Quad Merkle Trees:
-/// - User tree: Maps users to their compliance viewing keys for regulated assets
+/// - User tree: Maps users to their address compliance keys (ACKs) for regulated assets
 /// - Asset tree: Tracks which assets are regulated
 pub struct Compliance {}
 
@@ -78,8 +78,16 @@ impl Component for Compliance {
         if let Some(genesis) = app_state {
             for registration in &genesis.native_assets {
                 if registration.is_regulated {
+                    // Regulated assets MUST have a detection key
+                    let dk_pub_bytes = registration
+                        .dk_pub
+                        .expect("regulated asset in genesis must have dk_pub");
+                    let dk_pub = decaf377::Encoding(dk_pub_bytes)
+                        .vartime_decompress()
+                        .expect("invalid dk_pub encoding in genesis");
+
                     state
-                        .register_regulated_asset(registration.asset_id)
+                        .register_regulated_asset(registration.asset_id, dk_pub)
                         .await
                         .expect("must be able to register regulated asset at genesis");
                     tracing::info!(
@@ -129,7 +137,7 @@ impl Component for Compliance {
 
 /// ActionHandler implementation for MsgRegisterUser.
 ///
-/// This handler registers a user's compliance viewing key for a regulated asset.
+/// This handler registers a user's address compliance key (ACK) for a regulated asset.
 #[async_trait]
 impl ActionHandler for MsgRegisterUser {
     type CheckStatelessContext = ();
@@ -198,7 +206,16 @@ impl ActionHandler for MsgRegisterAsset {
         // Only regulated assets are stored in the IMT.
         // Unregulated status is proven via non-membership proofs.
         if self.is_regulated {
-            if let Some(result) = state.register_regulated_asset(self.asset_id).await? {
+            // Regulated assets MUST have a detection key
+            let dk_pub = self.dk_pub.ok_or_else(|| {
+                anyhow::anyhow!("regulated assets require a detection key (dk_pub)")
+            })?;
+
+            // Pass dk_pub to register_regulated_asset - policy is embedded in the IMT leaf
+            if let Some(result) = state
+                .register_regulated_asset(self.asset_id, dk_pub)
+                .await?
+            {
                 // Create the event
                 let event = crate::event::EventAssetRegistered {
                     asset_id: self.asset_id,
@@ -286,11 +303,13 @@ mod tests {
 
         let custom_asset = asset::Id(Fq::from(999u64));
 
-        // Custom genesis with a regulated asset
+        // Custom genesis with a regulated asset (requires dk_pub)
+        let dk_pub_bytes = decaf377::Element::GENERATOR.vartime_compress().0;
         let genesis = genesis::Content {
             native_assets: vec![NativeAssetRegistration {
                 asset_id: custom_asset,
                 is_regulated: true,
+                dk_pub: Some(dk_pub_bytes),
             }],
         };
 
@@ -344,10 +363,13 @@ mod tests {
         let proof_before = state.get_asset_proof_data(asset_id).await.unwrap();
         assert!(!proof_before.is_regulated, "asset should start unregulated");
 
-        // Create a register asset message (regulated)
+        // Create a register asset message (regulated) - requires dk_pub
+        let dk_pub = Some(decaf377::Element::GENERATOR);
         let msg = MsgRegisterAsset {
             asset_id,
             is_regulated: true,
+            dk_pub,
+            threshold: None,
         };
 
         // Execute the action
@@ -376,6 +398,8 @@ mod tests {
         let msg = MsgRegisterAsset {
             asset_id,
             is_regulated: false,
+            dk_pub: None,
+            threshold: None,
         };
 
         // Execute the action - should be a no-op
@@ -386,6 +410,33 @@ mod tests {
         assert!(
             !proof.is_regulated,
             "unregulated asset should not be added to IMT"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_msg_register_regulated_without_dk_pub_fails() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        // Initialize component
+        Compliance::init_chain(&mut state, None).await;
+
+        let asset_id = asset::Id(Fq::from(789u64));
+
+        // Create a register asset message (regulated but missing dk_pub)
+        let msg = MsgRegisterAsset {
+            asset_id,
+            is_regulated: true,
+            dk_pub: None, // Missing!
+            threshold: None,
+        };
+
+        // Execute the action - should fail
+        let result = msg.check_and_execute(&mut state).await;
+        assert!(
+            result.is_err(),
+            "registering regulated asset without dk_pub should fail"
         );
     }
 }

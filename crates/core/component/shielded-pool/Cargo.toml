@@ -88,4 +88,5 @@ tonic = {workspace = true, optional = true}
 tracing = {workspace = true}
 
 [dev-dependencies]
+penumbra-sdk-compliance = {workspace = true, default-features = false, features = ["test-helpers"]}
 proptest = {workspace = true}

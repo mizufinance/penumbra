@@ -41,7 +41,11 @@ async fn swap_rejects_regulated_asset() -> Result<()> {
     // Register gm as regulated
     {
         let mut state = StateDelta::new(storage.latest_snapshot());
-        state.register_regulated_asset(gm.id()).await?;
+        // Use dummy detection key for test
+        let dummy_dk_pub = decaf377::Element::GENERATOR;
+        state
+            .register_regulated_asset(gm.id(), dummy_dk_pub)
+            .await?;
         storage.commit(state).await?;
     }
 
@@ -124,7 +128,11 @@ async fn position_open_rejects_regulated_asset() -> Result<()> {
     // Register gm as regulated
     {
         let mut state = StateDelta::new(storage.latest_snapshot());
-        state.register_regulated_asset(gm.id()).await?;
+        // Use dummy detection key for test
+        let dummy_dk_pub = decaf377::Element::GENERATOR;
+        state
+            .register_regulated_asset(gm.id(), dummy_dk_pub)
+            .await?;
         storage.commit(state).await?;
     }
 
@@ -219,7 +227,11 @@ async fn community_pool_deposit_rejects_regulated_asset() -> Result<()> {
     // Register gm as regulated
     {
         let mut state = StateDelta::new(storage.latest_snapshot());
-        state.register_regulated_asset(gm.id()).await?;
+        // Use dummy detection key for test
+        let dummy_dk_pub = decaf377::Element::GENERATOR;
+        state
+            .register_regulated_asset(gm.id(), dummy_dk_pub)
+            .await?;
         storage.commit(state).await?;
     }
 

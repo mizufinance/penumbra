@@ -1,10 +1,16 @@
-//! Background worker for continuous compliance scanning.
+//! Background worker for continuous compliance scanning (issuer-side).
 //!
 //! This worker connects to a Penumbra node and continuously scans blocks
-//! for compliance-relevant transfers.
+//! using the issuer's DetectionKey to identify transactions involving
+//! regulated assets.
+//!
+//! Flow:
+//! 1. DetectionKey decrypts detection_tag → gets (asset_id, is_flagged)
+//! 2. If flagged, issuer can decrypt core+extension for full visibility
+//! 3. Results are logged (persistence to be implemented)
 
 use anyhow::{Context, Result};
-use penumbra_sdk_keys::keys::MasterComplianceKey;
+use penumbra_sdk_asset::asset;
 use penumbra_sdk_proto::core::{
     app::v1::{
         query_service_client::QueryServiceClient as AppQueryServiceClient,
@@ -20,17 +26,57 @@ use tokio::sync::watch;
 use tonic::transport::Channel;
 use tracing::{debug, info, instrument, warn};
 
+use super::detector::scan_transaction;
 use super::storage::ComplianceStorage;
-use super::sync::scan_transaction_for_compliance;
+use crate::issuer_keys::DetectionKey;
 
 // Maximum size of a compact block, in bytes (12MB).
 const MAX_CB_SIZE_BYTES: usize = 12 * 1024 * 1024;
 
-/// Background worker that continuously scans blocks for compliance activity.
-pub struct ComplianceWorker {
-    /// The master compliance key used for scanning.
-    mck: MasterComplianceKey,
-    /// Storage for persisting detected transfers.
+/// Handle for monitoring and communicating with an IssuerComplianceWorker.
+///
+/// Provides access to:
+/// - Error state (if the worker encountered an error)
+/// - Sync progress (current synced height)
+pub struct WorkerHandle {
+    /// Shared error slot - contains error if worker failed.
+    pub error_slot: Arc<Mutex<Option<anyhow::Error>>>,
+    /// Watch receiver for sync height updates.
+    pub sync_height: watch::Receiver<u64>,
+}
+
+impl WorkerHandle {
+    /// Check if the worker has encountered an error.
+    pub fn has_error(&self) -> bool {
+        self.error_slot
+            .lock()
+            .map(|slot| slot.is_some())
+            .unwrap_or(true)
+    }
+
+    /// Get the current synced height.
+    pub fn current_height(&self) -> u64 {
+        *self.sync_height.borrow()
+    }
+
+    /// Take the error from the slot (leaves None).
+    pub fn take_error(&self) -> Option<anyhow::Error> {
+        self.error_slot.lock().ok().and_then(|mut slot| slot.take())
+    }
+}
+
+/// Issuer-side compliance worker that uses DetectionKey to scan the blockchain.
+///
+/// This worker continuously streams blocks and detects transactions involving
+/// the issuer's regulated asset. When a flagged transaction is detected,
+/// the issuer has full visibility into the transaction details.
+pub struct IssuerComplianceWorker {
+    /// The issuer's detection key for scanning.
+    detection_key: DetectionKey,
+    /// Optional filter to only scan for a specific asset.
+    /// If None, detects all assets this DetectionKey can decrypt.
+    target_asset_id: Option<asset::Id>,
+    /// Storage for persisting detected transactions.
     storage: Arc<ComplianceStorage>,
     /// gRPC channel to the Penumbra node.
     channel: Channel,
@@ -40,28 +86,25 @@ pub struct ComplianceWorker {
     sync_height_tx: watch::Sender<u64>,
 }
 
-impl ComplianceWorker {
-    /// Create a new compliance worker.
+impl IssuerComplianceWorker {
+    /// Create a new issuer compliance worker.
     ///
     /// # Arguments
-    /// * `mck` - The master compliance key for scanning
+    /// * `detection_key` - The issuer's DetectionKey for scanning
+    /// * `target_asset_id` - Optional filter for specific asset (None = all detectable)
     /// * `storage` - Storage backend for persisting results
     /// * `channel` - gRPC channel to the Penumbra node
     ///
     /// # Returns
     /// A tuple containing:
     /// - The worker instance
-    /// - An error slot for checking worker health
-    /// - A watch receiver for monitoring sync progress
+    /// - A handle for monitoring worker health and progress
     pub fn new(
-        mck: MasterComplianceKey,
+        detection_key: DetectionKey,
+        target_asset_id: Option<asset::Id>,
         storage: ComplianceStorage,
         channel: Channel,
-    ) -> (
-        Self,
-        Arc<Mutex<Option<anyhow::Error>>>,
-        watch::Receiver<u64>,
-    ) {
+    ) -> (Self, WorkerHandle) {
         let storage = Arc::new(storage);
         let error_slot = Arc::new(Mutex::new(None));
         let last_height = storage.last_sync_height().unwrap_or_else(|e| {
@@ -74,14 +117,20 @@ impl ComplianceWorker {
         let (sync_height_tx, sync_height_rx) = watch::channel(last_height);
 
         let worker = Self {
-            mck,
+            detection_key,
+            target_asset_id,
             storage,
             channel,
             error_slot: error_slot.clone(),
             sync_height_tx,
         };
 
-        (worker, error_slot, sync_height_rx)
+        let handle = WorkerHandle {
+            error_slot,
+            sync_height: sync_height_rx,
+        };
+
+        (worker, handle)
     }
 
     /// Run the worker, continuously syncing blocks.
@@ -90,7 +139,7 @@ impl ComplianceWorker {
     /// and scanning them for compliance activity.
     #[instrument(skip(self))]
     pub async fn run(self) -> Result<()> {
-        info!("starting compliance scanner worker");
+        info!("starting issuer compliance scanner worker");
 
         if let Err(e) = self.sync().await {
             // Store error in error slot for retrieval by caller
@@ -115,7 +164,7 @@ impl ComplianceWorker {
 
         info!(
             start_height,
-            "beginning compliance scan from height {}", start_height
+            "beginning issuer compliance scan from height {}", start_height
         );
 
         // Connect to CompactBlock service
@@ -160,31 +209,54 @@ impl ComplianceWorker {
             if !transactions.is_empty() {
                 debug!(height, tx_count = transactions.len(), "scanning block");
 
-                // Compute date from height for key derivation
-                let date = self.height_to_date(height);
+                let mut detection_count = 0;
+                let mut flagged_count = 0;
 
-                // Scan each transaction
-                let mut all_transfers = Vec::new();
-                for tx in transactions {
-                    // Scan for all regulated assets (target_asset_id = None)
-                    match scan_transaction_for_compliance(&tx, height, &self.mck, date, None) {
-                        Ok(transfers) => {
-                            all_transfers.extend(transfers);
-                        }
+                // Scan each transaction using issuer's DetectionKey
+                for (tx_index, tx) in transactions.iter().enumerate() {
+                    match scan_transaction(
+                        &self.detection_key,
+                        self.target_asset_id,
+                        tx,
+                        height,
+                        tx_index,
+                        |detected| {
+                            detection_count += 1;
+                            if detected.is_flagged {
+                                flagged_count += 1;
+                                info!(
+                                    height,
+                                    tx_index,
+                                    action_index = detected.action_index,
+                                    asset_id = %detected.asset_id,
+                                    "detected FLAGGED transaction - issuer has full visibility"
+                                );
+                                // Issuer can decrypt full ciphertext here if needed
+                                // detected.ciphertext contains the full ComplianceCiphertext
+                            } else {
+                                debug!(
+                                    height,
+                                    tx_index,
+                                    action_index = detected.action_index,
+                                    asset_id = %detected.asset_id,
+                                    "detected compliant transaction"
+                                );
+                            }
+                            Ok(())
+                        },
+                    ) {
+                        Ok(_) => {}
                         Err(e) => {
-                            warn!(height, "failed to scan transaction: {}", e);
+                            warn!(height, tx_index, "failed to scan transaction: {}", e);
                         }
                     }
                 }
 
-                // Save detected transfers
-                if !all_transfers.is_empty() {
+                if detection_count > 0 {
                     info!(
                         height,
-                        count = all_transfers.len(),
-                        "detected compliance transfers"
+                        detection_count, flagged_count, "scanned block with detections"
                     );
-                    self.storage.save_transfers(&all_transfers)?;
                 }
             }
 
@@ -218,16 +290,6 @@ impl ComplianceWorker {
 
         Ok(response.transactions)
     }
-
-    /// Convert block height to a date value for scanner key derivation.
-    ///
-    /// This is a simplified implementation for demo purposes.
-    /// In production, this would use the actual block timestamp.
-    fn height_to_date(&self, height: u64) -> u64 {
-        // Simple formula: assume 1 block per 5 seconds, convert to days
-        // 17280 blocks per day (86400 seconds / 5 seconds per block)
-        height / 17280
-    }
 }
 
 #[cfg(test)]
@@ -235,15 +297,26 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_height_to_date() {
-        let mck = MasterComplianceKey::demo();
+    async fn test_worker_creation() {
+        let dk = DetectionKey::demo();
         let storage = ComplianceStorage::new(":memory:").unwrap();
         let channel = Channel::from_static("http://localhost:8080").connect_lazy();
-        let (worker, _, _) = ComplianceWorker::new(mck, storage, channel);
+        let (worker, handle) = IssuerComplianceWorker::new(dk, None, storage, channel);
 
-        // Test date calculation
-        assert_eq!(worker.height_to_date(0), 0);
-        assert_eq!(worker.height_to_date(17280), 1); // 1 day
-        assert_eq!(worker.height_to_date(34560), 2); // 2 days
+        // Verify initial state
+        assert!(!handle.has_error());
+        assert_eq!(handle.current_height(), 0);
+        assert!(worker.target_asset_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_worker_with_target_asset() {
+        let dk = DetectionKey::demo();
+        let target = asset::Id(decaf377::Fq::from(12345u64));
+        let storage = ComplianceStorage::new(":memory:").unwrap();
+        let channel = Channel::from_static("http://localhost:8080").connect_lazy();
+        let (worker, _handle) = IssuerComplianceWorker::new(dk, Some(target), storage, channel);
+
+        assert_eq!(worker.target_asset_id, Some(target));
     }
 }

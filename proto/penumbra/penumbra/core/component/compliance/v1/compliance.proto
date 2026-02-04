@@ -29,6 +29,13 @@ message MsgRegisterAsset {
   asset.v1.AssetId asset_id = 1;
   // Whether this asset is regulated (requires compliance).
   bool is_regulated = 2;
+  // Issuer's detection key public (32 bytes, optional).
+  // When set, enables issuer-side detection and flagged transfer decryption.
+  bytes dk_pub = 3;
+  // Amount threshold for flagging (16 bytes, little-endian u128).
+  // Transfers at or above this amount are encrypted to issuer's DK instead of user's daily key.
+  // u128::MAX means never flag (default for unregulated).
+  bytes threshold = 4;
 }
 
 // Message to register a user's compliance viewing key for a regulated asset.
@@ -89,6 +96,13 @@ message ComplianceAssetStatusResponse {
   bool is_registered = 2;
   // Whether the asset requires compliance (only meaningful if is_registered is true).
   bool is_regulated = 3;
+  // Optional: Issuer's detection key public (32 bytes compressed point).
+  // Present if the asset has a threshold policy.
+  bytes dk_pub = 4;
+  // Amount threshold for flagging (16 bytes, little-endian u128).
+  // Transfers at or above this amount are encrypted to issuer's DK instead of user's daily key.
+  // u128::MAX means never flag.
+  bytes threshold = 5;
 }
 
 // Request for querying the current compliance tree anchors.
@@ -145,6 +159,10 @@ message ComplianceMerkleProofsResponse {
   // The indexed leaf data for asset IMT proof verification.
   // Contains (value, next_index, next_value) needed for membership/non-membership proofs.
   IndexedLeafData asset_indexed_leaf = 10;
+
+  // The user's compliance leaf (only present if user_registered is true).
+  // Included to avoid N+1 queries when fetching batch proofs.
+  ComplianceLeaf compliance_leaf = 11;
 }
 
 // Request for querying a user's registered compliance leaf.
@@ -197,6 +215,10 @@ message IndexedLeafData {
   bytes value = 1;
   uint64 next_index = 2;
   bytes next_value = 3;
+  // Issuer's detection key public (32 bytes compressed point).
+  bytes dk_pub = 4;
+  // Amount threshold for flagging (16 bytes, little-endian u128).
+  bytes threshold = 5;
 }
 
 // Emitted when a user is registered in the compliance tree.

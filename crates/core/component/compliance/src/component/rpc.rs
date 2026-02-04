@@ -4,9 +4,9 @@ use penumbra_sdk_keys::Address;
 use penumbra_sdk_proto::core::component::compliance::v1::{
     query_service_server::QueryService, ComplianceAnchorsRequest, ComplianceAnchorsResponse,
     ComplianceAssetStatusRequest, ComplianceAssetStatusResponse,
-    ComplianceBatchMerkleProofsRequest, ComplianceBatchMerkleProofsResponse,
+    ComplianceBatchMerkleProofsRequest, ComplianceBatchMerkleProofsResponse, ComplianceLeaf,
     ComplianceMerkleProofsRequest, ComplianceMerkleProofsResponse, ComplianceUserLeafRequest,
-    ComplianceUserLeafResponse, IndexedLeafData, MerklePath, MerklePathLayer,
+    ComplianceUserLeafResponse, ComplianceViewingKey, IndexedLeafData, MerklePath, MerklePathLayer,
 };
 use penumbra_sdk_sct::component::clock::EpochRead;
 use tonic::Status;
@@ -99,10 +99,14 @@ impl QueryService for Server {
         );
 
         // With IMT, all assets are always "queryable" - regulated via membership, unregulated via non-membership
+        // Note: dk_pub and threshold are client-side data stored in the view service,
+        // not available on the node. Clients should use the view service for policy data.
         let response = ComplianceAssetStatusResponse {
             asset_id: Some(asset_id.into()),
             is_registered: true, // With IMT, we can always answer the query
             is_regulated: proof_data.is_regulated,
+            dk_pub: vec![],    // Policy data not available from node
+            threshold: vec![], // Policy data not available from node
         };
 
         Ok(tonic::Response::new(response))
@@ -188,26 +192,44 @@ impl QueryService for Server {
             .map_err(|e| Status::internal(format!("failed to look up user position: {e}")))?;
 
         // Build the response based on what was found
-        let (user_registered, compliance_path, compliance_position) = match user_position {
-            Some(pos) => {
-                let path = state
-                    .get_user_auth_path(pos)
-                    .await
-                    .map_err(|e| Status::internal(format!("failed to get user auth path: {e}")))?;
+        // Also fetch the user leaf if registered
+        let (user_registered, compliance_path, compliance_position, compliance_leaf) =
+            match user_position {
+                Some(pos) => {
+                    let path = state.get_user_auth_path(pos).await.map_err(|e| {
+                        Status::internal(format!("failed to get user auth path: {e}"))
+                    })?;
 
-                let proto_path = MerklePath {
-                    layers: path
-                        .into_iter()
-                        .map(|siblings| MerklePathLayer {
-                            siblings: siblings.iter().map(|c| c.0.to_bytes().to_vec()).collect(),
-                        })
-                        .collect(),
-                };
+                    let proto_path = MerklePath {
+                        layers: path
+                            .into_iter()
+                            .map(|siblings| MerklePathLayer {
+                                siblings: siblings
+                                    .iter()
+                                    .map(|c| c.0.to_bytes().to_vec())
+                                    .collect(),
+                            })
+                            .collect(),
+                    };
 
-                (true, Some(proto_path), pos)
-            }
-            None => (false, None, 0),
-        };
+                    // Fetch the user leaf to include in response
+                    let leaf_opt = state
+                        .get_user_leaf(&address, asset_id)
+                        .await
+                        .map_err(|e| Status::internal(format!("failed to get user leaf: {e}")))?;
+
+                    let leaf_proto = leaf_opt.map(|leaf| ComplianceLeaf {
+                        address: Some(leaf.address.into()),
+                        key: Some(ComplianceViewingKey {
+                            inner: leaf.key.0.vartime_compress().0.to_vec(),
+                        }),
+                        asset_id: Some(leaf.asset_id.into()),
+                    });
+
+                    (true, Some(proto_path), pos, leaf_proto)
+                }
+                None => (false, None, 0, None),
+            };
 
         // Build asset proof response from IMT proof data
         // auth_path.layers[].siblings are already Vec<Vec<u8>>
@@ -242,6 +264,19 @@ impl QueryService for Server {
             value: asset_proof_data.indexed_leaf.value.to_bytes().to_vec(),
             next_index: asset_proof_data.indexed_leaf.next_index,
             next_value: asset_proof_data.indexed_leaf.next_value.to_bytes().to_vec(),
+            dk_pub: asset_proof_data
+                .indexed_leaf
+                .policy
+                .dk_pub
+                .vartime_compress()
+                .0
+                .to_vec(),
+            threshold: asset_proof_data
+                .indexed_leaf
+                .policy
+                .threshold
+                .to_le_bytes()
+                .to_vec(),
         });
 
         let response = ComplianceMerkleProofsResponse {
@@ -255,6 +290,7 @@ impl QueryService for Server {
             compliance_anchor: compliance_anchor.0.to_bytes().to_vec(),
             asset_anchor: asset_anchor.0.to_bytes().to_vec(),
             asset_indexed_leaf,
+            compliance_leaf,
         };
 
         Ok(tonic::Response::new(response))
@@ -371,29 +407,44 @@ impl QueryService for Server {
                 .await
                 .map_err(|e| Status::internal(format!("failed to get asset proof data: {e}")))?;
 
-            // Build the result for this query
-            let (user_registered, compliance_path, compliance_position) = match user_position {
-                Some(pos) => {
-                    let path = state.get_user_auth_path(pos).await.map_err(|e| {
-                        Status::internal(format!("failed to get user auth path: {e}"))
-                    })?;
+            // Build the result for this query, including the user leaf if registered
+            let (user_registered, compliance_path, compliance_position, compliance_leaf) =
+                match user_position {
+                    Some(pos) => {
+                        let path = state.get_user_auth_path(pos).await.map_err(|e| {
+                            Status::internal(format!("failed to get user auth path: {e}"))
+                        })?;
 
-                    let proto_path = MerklePath {
-                        layers: path
-                            .into_iter()
-                            .map(|siblings| MerklePathLayer {
-                                siblings: siblings
-                                    .iter()
-                                    .map(|c| c.0.to_bytes().to_vec())
-                                    .collect(),
-                            })
-                            .collect(),
-                    };
+                        let proto_path = MerklePath {
+                            layers: path
+                                .into_iter()
+                                .map(|siblings| MerklePathLayer {
+                                    siblings: siblings
+                                        .iter()
+                                        .map(|c| c.0.to_bytes().to_vec())
+                                        .collect(),
+                                })
+                                .collect(),
+                        };
 
-                    (true, Some(proto_path), pos)
-                }
-                None => (false, None, 0),
-            };
+                        // Fetch the user leaf to include in response
+                        let leaf_opt =
+                            state.get_user_leaf(&address, asset_id).await.map_err(|e| {
+                                Status::internal(format!("failed to get user leaf: {e}"))
+                            })?;
+
+                        let leaf_proto = leaf_opt.map(|leaf| ComplianceLeaf {
+                            address: Some(leaf.address.into()),
+                            key: Some(ComplianceViewingKey {
+                                inner: leaf.key.0.vartime_compress().0.to_vec(),
+                            }),
+                            asset_id: Some(leaf.asset_id.into()),
+                        });
+
+                        (true, Some(proto_path), pos, leaf_proto)
+                    }
+                    None => (false, None, 0, None),
+                };
 
             // Build asset proof from IMT proof data
             // auth_path.layers[].siblings are already Vec<Vec<u8>>
@@ -413,6 +464,19 @@ impl QueryService for Server {
                 value: asset_proof_data.indexed_leaf.value.to_bytes().to_vec(),
                 next_index: asset_proof_data.indexed_leaf.next_index,
                 next_value: asset_proof_data.indexed_leaf.next_value.to_bytes().to_vec(),
+                dk_pub: asset_proof_data
+                    .indexed_leaf
+                    .policy
+                    .dk_pub
+                    .vartime_compress()
+                    .0
+                    .to_vec(),
+                threshold: asset_proof_data
+                    .indexed_leaf
+                    .policy
+                    .threshold
+                    .to_le_bytes()
+                    .to_vec(),
             });
 
             results.push(ComplianceMerkleProofsResponse {
@@ -427,6 +491,7 @@ impl QueryService for Server {
                 compliance_anchor: vec![],
                 asset_anchor: vec![],
                 asset_indexed_leaf,
+                compliance_leaf,
             });
         }
 

@@ -47,6 +47,15 @@ pub struct MsgRegisterAsset {
     /// Whether this asset is regulated (requires compliance).
     #[prost(bool, tag = "2")]
     pub is_regulated: bool,
+    /// Issuer's detection key public (32 bytes, optional).
+    /// When set, enables issuer-side detection and flagged transfer decryption.
+    #[prost(bytes = "vec", tag = "3")]
+    pub dk_pub: ::prost::alloc::vec::Vec<u8>,
+    /// Amount threshold for flagging (16 bytes, little-endian u128).
+    /// Transfers at or above this amount are encrypted to issuer's DK instead of user's daily key.
+    /// u128::MAX means never flag (default for unregulated).
+    #[prost(bytes = "vec", tag = "4")]
+    pub threshold: ::prost::alloc::vec::Vec<u8>,
 }
 impl ::prost::Name for MsgRegisterAsset {
     const NAME: &'static str = "MsgRegisterAsset";
@@ -143,6 +152,15 @@ pub struct ComplianceAssetStatusResponse {
     /// Whether the asset requires compliance (only meaningful if is_registered is true).
     #[prost(bool, tag = "3")]
     pub is_regulated: bool,
+    /// Optional: Issuer's detection key public (32 bytes compressed point).
+    /// Present if the asset has a threshold policy.
+    #[prost(bytes = "vec", tag = "4")]
+    pub dk_pub: ::prost::alloc::vec::Vec<u8>,
+    /// Amount threshold for flagging (16 bytes, little-endian u128).
+    /// Transfers at or above this amount are encrypted to issuer's DK instead of user's daily key.
+    /// u128::MAX means never flag.
+    #[prost(bytes = "vec", tag = "5")]
+    pub threshold: ::prost::alloc::vec::Vec<u8>,
 }
 impl ::prost::Name for ComplianceAssetStatusResponse {
     const NAME: &'static str = "ComplianceAssetStatusResponse";
@@ -250,6 +268,10 @@ pub struct ComplianceMerkleProofsResponse {
     /// Contains (value, next_index, next_value) needed for membership/non-membership proofs.
     #[prost(message, optional, tag = "10")]
     pub asset_indexed_leaf: ::core::option::Option<IndexedLeafData>,
+    /// The user's compliance leaf (only present if user_registered is true).
+    /// Included to avoid N+1 queries when fetching batch proofs.
+    #[prost(message, optional, tag = "11")]
+    pub compliance_leaf: ::core::option::Option<ComplianceLeaf>,
 }
 impl ::prost::Name for ComplianceMerkleProofsResponse {
     const NAME: &'static str = "ComplianceMerkleProofsResponse";
@@ -376,6 +398,12 @@ pub struct IndexedLeafData {
     pub next_index: u64,
     #[prost(bytes = "vec", tag = "3")]
     pub next_value: ::prost::alloc::vec::Vec<u8>,
+    /// Issuer's detection key public (32 bytes compressed point).
+    #[prost(bytes = "vec", tag = "4")]
+    pub dk_pub: ::prost::alloc::vec::Vec<u8>,
+    /// Amount threshold for flagging (16 bytes, little-endian u128).
+    #[prost(bytes = "vec", tag = "5")]
+    pub threshold: ::prost::alloc::vec::Vec<u8>,
 }
 impl ::prost::Name for IndexedLeafData {
     const NAME: &'static str = "IndexedLeafData";

@@ -27,8 +27,8 @@ $PCLI --home "$BOB_HOME" view sync
 
 # Derive daily keys
 DATE=$(python3 -c "import time; print(int(time.time() // 86400))")
-ALICE_DAILY=$($PCLI tx compliance derive-daily-key --mck-hex "$ALICE_MCK" --date "$DATE" 2>&1 | grep "Full Key Set:" | sed 's/.*Full Key Set: *//')
-BOB_DAILY=$($PCLI tx compliance derive-daily-key --mck-hex "$BOB_MCK" --date "$DATE" 2>&1 | grep "Full Key Set:" | sed 's/.*Full Key Set: *//')
+ALICE_DAILY=$($PCLI tx compliance derive-daily-key --uck-hex "$ALICE_UCK" --date "$DATE" 2>&1 | grep "Full Key Set:" | sed 's/.*Full Key Set: *//')
+BOB_DAILY=$($PCLI tx compliance derive-daily-key --uck-hex "$BOB_UCK" --date "$DATE" 2>&1 | grep "Full Key Set:" | sed 's/.*Full Key Set: *//')
 
 # Scan (both should see NOTHING - BLACK_HOLE encryption)
 echo "Alice (should see NOTHING - BLACK_HOLE):"

@@ -55,8 +55,10 @@ pub struct SpendProofPublic {
     pub asset_anchor: tct::StateCommitment,
     /// User compliance registry Merkle root (user tree anchor)
     pub compliance_anchor: tct::StateCommitment,
-    /// Ephemeral public key from the compliance ciphertext
+    /// Ephemeral public key on diversified curve (r * B_d)
     pub compliance_epk: decaf377::Element,
+    /// Ephemeral public key on standard curve (r * G) for issuer ECDH
+    pub compliance_epk_g: decaf377::Element,
     /// Compliance ciphertext for regulated assets (packed as Fq elements for circuit input)
     pub compliance_ciphertext: Vec<Fq>,
     /// Target timestamp for key derivation (Unix timestamp in seconds)
@@ -102,6 +104,8 @@ pub struct SpendProofPrivate {
     pub counterparty_leaf: penumbra_sdk_compliance::ComplianceLeaf,
     /// Shared transaction blinding nonce (same for spend and output in one transaction)
     pub tx_blinding_nonce: Fr,
+    /// Whether this spend is flagged (amount >= threshold)
+    pub is_flagged: bool,
 }
 
 #[cfg(test)]
@@ -241,11 +245,11 @@ impl ConstraintSynthesizer<Fq> for SpendCircuit {
             Ok(Fq::from(self.private.compliance_position))
         })?;
 
-        // Allocate ephemeral public key as a separate public input
         let public_ciphertext_epk_var =
             ElementVar::new_input(cs.clone(), || Ok(self.public.compliance_epk))?;
+        let public_ciphertext_epk_g_var =
+            ElementVar::new_input(cs.clone(), || Ok(self.public.compliance_epk_g))?;
 
-        // Allocate compliance ciphertext as public inputs (packed field elements)
         let mut ciphertext_vars = Vec::new();
         for fq in self.public.compliance_ciphertext.iter() {
             ciphertext_vars.push(FqVar::new_input(cs.clone(), || Ok(*fq))?);
@@ -303,26 +307,23 @@ impl ConstraintSynthesizer<Fq> for SpendCircuit {
             compliance_path: self.private.compliance_path.clone(),
             compliance_position: self.private.compliance_position,
             user_leaf: self.private.user_leaf.clone(),
+            is_flagged: self.private.is_flagged,
         };
 
-        // Call the unified compliance integrity verification gadget
         verify_compliance_integrity(
             cs.clone(),
-            // Public inputs
             claimed_asset_anchor.inner().clone(),
             claimed_compliance_anchor.inner().clone(),
             target_date_var,
             public_ciphertext_epk_var,
+            public_ciphertext_epk_g_var,
             ciphertext_vars,
-            // Note data (individual components from note_var)
             note_var.asset_id(),
             note_var.amount(),
             note_var.diversified_generator(),
             note_var.transmission_key(),
-            // Counterparty address components (from counterparty leaf)
             counterparty_leaf_var.address.diversified_generator.clone(),
             counterparty_leaf_var.address.transmission_key.clone(),
-            // Witness data
             self.private.compliance_ephemeral_secret,
             compliance_witness,
         )?;
@@ -424,20 +425,22 @@ impl DummyWitness for SpendCircuit {
         // Generate valid compliance ciphertext that will satisfy circuit constraints
         let mut rng = rand::thread_rng();
         let date = 0u64; // Day index = 0
-        let (compliance_ciphertext_obj, ephemeral_secret) = encrypt_compliance_details(
+        let unregulated_leaf = penumbra_sdk_compliance::IndexedLeaf::unregulated(note.asset_id().0);
+        let encryption_result = encrypt_compliance_details(
             &mut rng,
             &dummy_ack,
             &address,
             date,
             note.asset_id(),
             note.amount(),
-            address.clone(), // Use same address as counterparty for dummy
+            &address, // Use same address as counterparty for dummy
+            &unregulated_leaf,
         )
         .expect("can encrypt compliance details");
 
-        // Extract circuit inputs using unified method
-        let (compliance_epk, compliance_ciphertext) =
-            compliance_ciphertext_obj.to_circuit_public_inputs();
+        let (compliance_epk, compliance_epk_g, compliance_ciphertext) =
+            encryption_result.ciphertext.to_circuit_public_inputs();
+        let ephemeral_secret = encryption_result.ephemeral_secret;
 
         let dummy_leaf = penumbra_sdk_compliance::ComplianceLeaf {
             address: address.clone(),
@@ -457,8 +460,9 @@ impl DummyWitness for SpendCircuit {
             asset_anchor: tct::StateCommitment(Fq::from(0u64)),
             compliance_anchor: tct::StateCommitment(Fq::from(0u64)),
             compliance_epk,
+            compliance_epk_g,
             compliance_ciphertext,
-            target_timestamp: 0, // Corresponds to date = 0
+            target_timestamp: 0,
             sender_leaf_hash,
             counterparty_leaf_hash,
         };
@@ -475,6 +479,7 @@ impl DummyWitness for SpendCircuit {
                 value: Fq::from(0u64),
                 next_index: 0,
                 next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
             },
             is_regulated: false,
             compliance_path: dummy_path, // Must be length 16
@@ -487,6 +492,7 @@ impl DummyWitness for SpendCircuit {
             compliance_ephemeral_secret: ephemeral_secret,
             counterparty_leaf: dummy_leaf,
             tx_blinding_nonce: Fr::from(0u64),
+            is_flagged: false,
         };
         Self { public, private }
     }
@@ -517,6 +523,8 @@ pub enum VerificationError {
     ComplianceAnchor,
     #[error("compliance epk is a Bls12-377 field member")]
     ComplianceEpk,
+    #[error("compliance epk_g is a Bls12-377 field member")]
+    ComplianceEpkG,
     #[error("target timestamp is a Bls12-377 field member")]
     TargetTimestamp,
     #[error("sender leaf hash is a Bls12-377 field member")]
@@ -539,7 +547,54 @@ impl SpendProof {
         public: SpendProofPublic,
         private: SpendProofPrivate,
     ) -> Result<Self, crate::ProofError> {
-        let circuit = SpendCircuit { public, private };
+        // Debug logging for compliance circuit inputs
+        tracing::debug!(
+            asset_anchor = ?public.asset_anchor.0.to_bytes(),
+            compliance_anchor = ?public.compliance_anchor.0.to_bytes(),
+            asset_position = private.asset_position,
+            compliance_position = private.compliance_position,
+            is_regulated = private.is_regulated,
+            "SpendProof: starting circuit generation"
+        );
+
+        // Log asset indexed leaf details
+        let native_leaf_commitment = private.asset_indexed_leaf.commit();
+        tracing::debug!(
+            note_asset_id = ?private.note.asset_id().0.to_bytes(),
+            leaf_value = ?private.asset_indexed_leaf.value.to_bytes(),
+            leaf_next_index = private.asset_indexed_leaf.next_index,
+            leaf_next_value = ?private.asset_indexed_leaf.next_value.to_bytes(),
+            leaf_threshold = private.asset_indexed_leaf.policy.threshold,
+            leaf_dk_pub = ?private.asset_indexed_leaf.policy.dk_pub.vartime_compress().0,
+            native_leaf_commitment = ?native_leaf_commitment.0.to_bytes(),
+            "SpendProof: asset indexed leaf details"
+        );
+
+        // Verify the Merkle path natively before circuit
+        let native_computed_root = penumbra_sdk_compliance::compute_imt_root_from_path(
+            native_leaf_commitment,
+            &private.asset_path,
+            private.asset_position,
+        );
+        let asset_root_matches = native_computed_root == public.asset_anchor;
+        tracing::debug!(
+            native_computed_root = ?native_computed_root.0.to_bytes(),
+            expected_asset_anchor = ?public.asset_anchor.0.to_bytes(),
+            asset_root_matches,
+            "SpendProof: native asset root verification"
+        );
+
+        if !asset_root_matches {
+            tracing::error!(
+                "MISMATCH: Asset tree root does not match anchor! \
+                 This indicates policy data or path is incorrect."
+            );
+        }
+
+        let circuit = SpendCircuit {
+            public: public.clone(),
+            private: private.clone(),
+        };
 
         // Check constraint satisfaction before proving
         use ark_relations::r1cs::ConstraintSystem;
@@ -547,6 +602,19 @@ impl SpendProof {
         circuit.clone().generate_constraints(cs.clone())?;
 
         if !cs.is_satisfied().unwrap_or(false) {
+            // Log which specific constraint failed
+            if let Ok(Some(unsatisfied)) = cs.which_is_unsatisfied() {
+                tracing::error!(
+                    unsatisfied_constraint = ?unsatisfied,
+                    "SpendProof: SPECIFIC unsatisfied constraint"
+                );
+            }
+            tracing::error!(
+                num_constraints = cs.num_constraints(),
+                num_instance_variables = cs.num_instance_variables(),
+                "SpendProof: circuit constraints not satisfied! \
+                 Check debug logs above for root mismatch details."
+            );
             return Err(crate::ProofError::UnsatisfiedConstraints(
                 "Spend circuit constraints not satisfied. Possible causes: \
                  asset registry verification failed, compliance registry verification failed, \
@@ -583,6 +651,7 @@ impl SpendProof {
             asset_anchor,
             compliance_anchor,
             compliance_epk,
+            compliance_epk_g,
             compliance_ciphertext,
             target_timestamp,
             sender_leaf_hash,
@@ -615,14 +684,14 @@ impl SpendProof {
             to_field_elements!(element_rk, Rk),
             to_field_elements!(asset_anchor.0, AssetAnchor),
             to_field_elements!(compliance_anchor.0, ComplianceAnchor),
-            to_field_elements!(Fq::from(day_index), TargetTimestamp), // Day index, not raw timestamp
+            to_field_elements!(Fq::from(day_index), TargetTimestamp),
             to_field_elements!(compliance_epk, ComplianceEpk),
+            to_field_elements!(compliance_epk_g, ComplianceEpkG),
         ]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
 
-        // Add packed compliance_ciphertext to public inputs (already in Fq format)
         public_inputs.extend(compliance_ciphertext);
 
         // Add blinded leaf hashes to public inputs
@@ -770,17 +839,20 @@ mod tests {
             let mut rng = rand::thread_rng();
             let timestamp = current_timestamp();
             let date = timestamp / 86400;
-            let (compliance_ciphertext_obj, ephemeral_secret) = encrypt_compliance_details(
+            let unregulated_leaf = penumbra_sdk_compliance::IndexedLeaf::unregulated(note.asset_id().0);
+            let encryption_result = encrypt_compliance_details(
                 &mut rng,
                 &black_hole_ack,
                 &sender,
                 date,
                 note.asset_id(),
                 note.amount(),
-                sender.clone(),
+                &sender,
+                &unregulated_leaf,
             ).expect("can encrypt compliance details");
 
-            let (compliance_epk, packed_ciphertext) = compliance_ciphertext_obj.to_circuit_public_inputs();
+            let (compliance_epk, compliance_epk_g, packed_ciphertext) = encryption_result.ciphertext.to_circuit_public_inputs();
+            let ephemeral_secret = encryption_result.ephemeral_secret;
 
             // Use sender as counterparty for testing (self-send scenario)
             let counterparty_leaf = penumbra_sdk_compliance::ComplianceLeaf {
@@ -800,6 +872,7 @@ mod tests {
                 asset_anchor,
                 compliance_anchor,
                 compliance_epk,
+                compliance_epk_g,
                 compliance_ciphertext: packed_ciphertext,
                 target_timestamp: timestamp,
                 sender_leaf_hash,
@@ -823,6 +896,7 @@ mod tests {
                 compliance_ephemeral_secret: ephemeral_secret,
                 counterparty_leaf,
                 tx_blinding_nonce,
+                is_flagged: false,
             };
 
             // Tester random key (not used in circuit, just for test structure)
@@ -902,17 +976,20 @@ mod tests {
             let mut rng = rand::thread_rng();
             let timestamp = current_timestamp();
             let date = timestamp / 86400;
-            let (compliance_ciphertext_obj, ephemeral_secret) = encrypt_compliance_details(
+            // Use the asset_indexed_leaf from the membership proof (it has the actual policy)
+            let encryption_result = encrypt_compliance_details(
                 &mut rng,
                 &user_ack,
                 &sender,
                 date,
                 note.asset_id(),
                 note.amount(),
-                sender.clone(),
+                &sender,
+                &asset_indexed_leaf,
             ).expect("can encrypt compliance details");
 
-            let (compliance_epk, packed_ciphertext) = compliance_ciphertext_obj.to_circuit_public_inputs();
+            let (compliance_epk, compliance_epk_g, packed_ciphertext) = encryption_result.ciphertext.to_circuit_public_inputs();
+            let ephemeral_secret = encryption_result.ephemeral_secret;
 
             // Use sender as counterparty for testing (self-send scenario)
             let counterparty_leaf = penumbra_sdk_compliance::ComplianceLeaf {
@@ -932,6 +1009,7 @@ mod tests {
                 asset_anchor,
                 compliance_anchor,
                 compliance_epk,
+                compliance_epk_g,
                 compliance_ciphertext: packed_ciphertext,
                 target_timestamp: timestamp,
                 sender_leaf_hash,
@@ -954,6 +1032,7 @@ mod tests {
                 compliance_ephemeral_secret: ephemeral_secret,
                 counterparty_leaf,
                 tx_blinding_nonce,
+                is_flagged: false,
             };
             (public, private, cvk_sk)
         }
@@ -1045,17 +1124,20 @@ mod tests {
             let mut rng = rand::thread_rng();
             let timestamp = current_timestamp();
             let date = timestamp / 86400;
-            let (compliance_ciphertext_obj, ephemeral_secret) = encrypt_compliance_details(
+            let unregulated_leaf = penumbra_sdk_compliance::IndexedLeaf::unregulated(note.asset_id().0);
+            let encryption_result = encrypt_compliance_details(
                 &mut rng,
                 &black_hole_ack,
                 &sender,
                 date,
                 note.asset_id(),
                 note.amount(),
-                sender.clone(),
+                &sender,
+                &unregulated_leaf,
             ).expect("can encrypt compliance details");
 
-            let (compliance_epk, packed_ciphertext) = compliance_ciphertext_obj.to_circuit_public_inputs();
+            let (compliance_epk, compliance_epk_g, packed_ciphertext) = encryption_result.ciphertext.to_circuit_public_inputs();
+            let ephemeral_secret = encryption_result.ephemeral_secret;
 
             let counterparty_leaf = penumbra_sdk_compliance::ComplianceLeaf {
                 address: sender.clone(),
@@ -1074,6 +1156,7 @@ mod tests {
                 asset_anchor: tct::StateCommitment(Fq::from(0u64)),
                 compliance_anchor: tct::StateCommitment(Fq::from(0u64)),
                 compliance_epk,
+                compliance_epk_g,
                 compliance_ciphertext: packed_ciphertext,
                 target_timestamp: timestamp,
                 sender_leaf_hash,
@@ -1093,6 +1176,7 @@ mod tests {
                     value: Fq::from(0u64),
                     next_index: 0,
                     next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                    policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
                 },
                 is_regulated: false,
                 compliance_path: penumbra_sdk_compliance::MerklePath::default(),
@@ -1101,6 +1185,7 @@ mod tests {
                 compliance_ephemeral_secret: ephemeral_secret,
                 counterparty_leaf,
                 tx_blinding_nonce,
+                is_flagged: false,
             };
             (public, private)
         }
@@ -1176,17 +1261,20 @@ mod tests {
             let mut rng = rand::thread_rng();
             let timestamp = current_timestamp();
             let date = timestamp / 86400;
-            let (compliance_ciphertext_obj, ephemeral_secret) = encrypt_compliance_details(
+            let unregulated_leaf = penumbra_sdk_compliance::IndexedLeaf::unregulated(note.asset_id().0);
+            let encryption_result = encrypt_compliance_details(
                 &mut rng,
                 &black_hole_ack,
                 &wrong_sender,
                 date,
                 note.asset_id(),
                 note.amount(),
-                wrong_sender.clone(),
+                &wrong_sender,
+                &unregulated_leaf,
             ).expect("can encrypt compliance details");
 
-            let (compliance_epk, packed_ciphertext) = compliance_ciphertext_obj.to_circuit_public_inputs();
+            let (compliance_epk, compliance_epk_g, packed_ciphertext) = encryption_result.ciphertext.to_circuit_public_inputs();
+            let ephemeral_secret = encryption_result.ephemeral_secret;
 
             let counterparty_leaf = penumbra_sdk_compliance::ComplianceLeaf {
                 address: wrong_sender.clone(),
@@ -1205,6 +1293,7 @@ mod tests {
                 asset_anchor: tct::StateCommitment(Fq::from(0u64)),
                 compliance_anchor: tct::StateCommitment(Fq::from(0u64)),
                 compliance_epk,
+                compliance_epk_g,
                 compliance_ciphertext: packed_ciphertext,
                 target_timestamp: timestamp,
                 sender_leaf_hash,
@@ -1224,6 +1313,7 @@ mod tests {
                     value: Fq::from(0u64),
                     next_index: 0,
                     next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                    policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
                 },
                 is_regulated: false,
                 compliance_path: penumbra_sdk_compliance::MerklePath::default(),
@@ -1232,6 +1322,7 @@ mod tests {
                 compliance_ephemeral_secret: ephemeral_secret,
                 counterparty_leaf,
                 tx_blinding_nonce,
+                is_flagged: false,
             };
             (public, private)
         }
@@ -1304,17 +1395,20 @@ mod tests {
             let mut rng = rand::thread_rng();
             let timestamp = current_timestamp();
             let date = timestamp / 86400;
-            let (compliance_ciphertext_obj, ephemeral_secret) = encrypt_compliance_details(
+            let unregulated_leaf = penumbra_sdk_compliance::IndexedLeaf::unregulated(note.asset_id().0);
+            let encryption_result = encrypt_compliance_details(
                 &mut rng,
                 &black_hole_ack,
                 &sender,
                 date,
                 note.asset_id(),
                 note.amount(),
-                sender.clone(),
+                &sender,
+                &unregulated_leaf,
             ).expect("can encrypt compliance details");
 
-            let (compliance_epk, packed_ciphertext) = compliance_ciphertext_obj.to_circuit_public_inputs();
+            let (compliance_epk, compliance_epk_g, packed_ciphertext) = encryption_result.ciphertext.to_circuit_public_inputs();
+            let ephemeral_secret = encryption_result.ephemeral_secret;
 
             let counterparty_leaf = penumbra_sdk_compliance::ComplianceLeaf {
                 address: sender.clone(),
@@ -1333,6 +1427,7 @@ mod tests {
                 asset_anchor: tct::StateCommitment(Fq::from(0u64)),
                 compliance_anchor: tct::StateCommitment(Fq::from(0u64)),
                 compliance_epk,
+                compliance_epk_g,
                 compliance_ciphertext: packed_ciphertext,
                 target_timestamp: timestamp,
                 sender_leaf_hash,
@@ -1352,6 +1447,7 @@ mod tests {
                     value: Fq::from(0u64),
                     next_index: 0,
                     next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                    policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
                 },
                 is_regulated: false,
                 compliance_path: penumbra_sdk_compliance::MerklePath::default(),
@@ -1360,6 +1456,7 @@ mod tests {
                 compliance_ephemeral_secret: ephemeral_secret,
                 counterparty_leaf,
                 tx_blinding_nonce,
+                is_flagged: false,
             };
             (public, private)
         }
@@ -1429,17 +1526,20 @@ mod tests {
             let mut rng = rand::thread_rng();
             let timestamp = current_timestamp();
             let date = timestamp / 86400;
-            let (compliance_ciphertext_obj, ephemeral_secret) = encrypt_compliance_details(
+            let unregulated_leaf = penumbra_sdk_compliance::IndexedLeaf::unregulated(note.asset_id().0);
+            let encryption_result = encrypt_compliance_details(
                 &mut rng,
                 &black_hole_ack,
                 &sender,
                 date,
                 note.asset_id(),
                 note.amount(),
-                sender.clone(),
+                &sender,
+                &unregulated_leaf,
             ).expect("can encrypt compliance details");
 
-            let (compliance_epk, packed_ciphertext) = compliance_ciphertext_obj.to_circuit_public_inputs();
+            let (compliance_epk, compliance_epk_g, packed_ciphertext) = encryption_result.ciphertext.to_circuit_public_inputs();
+            let ephemeral_secret = encryption_result.ephemeral_secret;
 
             let counterparty_leaf = penumbra_sdk_compliance::ComplianceLeaf {
                 address: sender.clone(),
@@ -1458,6 +1558,7 @@ mod tests {
                 asset_anchor: tct::StateCommitment(Fq::from(0u64)),
                 compliance_anchor: tct::StateCommitment(Fq::from(0u64)),
                 compliance_epk,
+                compliance_epk_g,
                 compliance_ciphertext: packed_ciphertext,
                 target_timestamp: timestamp,
                 sender_leaf_hash,
@@ -1476,6 +1577,7 @@ mod tests {
                     value: Fq::from(0u64),
                     next_index: 0,
                     next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                    policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
                 },
                 is_regulated: false,
                 compliance_path: penumbra_sdk_compliance::MerklePath::default(),
@@ -1484,6 +1586,7 @@ mod tests {
                 compliance_ephemeral_secret: ephemeral_secret,
                 counterparty_leaf,
                 tx_blinding_nonce,
+                is_flagged: false,
             };
             (public, private)
         }
@@ -1555,17 +1658,20 @@ mod tests {
             let mut rng = rand::thread_rng();
             let timestamp = current_timestamp();
             let date = timestamp / 86400;
-            let (compliance_ciphertext_obj, ephemeral_secret) = encrypt_compliance_details(
+            let unregulated_leaf = penumbra_sdk_compliance::IndexedLeaf::unregulated(note.asset_id().0);
+            let encryption_result = encrypt_compliance_details(
                 &mut rng,
                 &black_hole_ack,
                 &sender,
                 date,
                 note.asset_id(),
                 note.amount(),
-                sender.clone(),
+                &sender,
+                &unregulated_leaf,
             ).expect("can encrypt compliance details");
 
-            let (compliance_epk, packed_ciphertext) = compliance_ciphertext_obj.to_circuit_public_inputs();
+            let (compliance_epk, compliance_epk_g, packed_ciphertext) = encryption_result.ciphertext.to_circuit_public_inputs();
+            let ephemeral_secret = encryption_result.ephemeral_secret;
 
             let counterparty_leaf = penumbra_sdk_compliance::ComplianceLeaf {
                 address: sender.clone(),
@@ -1584,6 +1690,7 @@ mod tests {
                 asset_anchor: tct::StateCommitment(Fq::from(0u64)),
                 compliance_anchor: tct::StateCommitment(Fq::from(0u64)),
                 compliance_epk,
+                compliance_epk_g,
                 compliance_ciphertext: packed_ciphertext,
                 target_timestamp: timestamp,
                 sender_leaf_hash,
@@ -1603,6 +1710,7 @@ mod tests {
                     value: Fq::from(0u64),
                     next_index: 0,
                     next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                    policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
                 },
                 is_regulated: false,
                 compliance_path: penumbra_sdk_compliance::MerklePath::default(),
@@ -1611,6 +1719,7 @@ mod tests {
                 compliance_ephemeral_secret: ephemeral_secret,
                 counterparty_leaf,
                 tx_blinding_nonce,
+                is_flagged: false,
             };
             (public, private)
         }
@@ -1672,17 +1781,20 @@ mod tests {
             let mut rng = rand::thread_rng();
             let timestamp = current_timestamp();
             let date = timestamp / 86400;
-            let (compliance_ciphertext_obj, ephemeral_secret) = encrypt_compliance_details(
+            let unregulated_leaf = penumbra_sdk_compliance::IndexedLeaf::unregulated(note.asset_id().0);
+            let encryption_result = encrypt_compliance_details(
                 &mut rng,
                 &black_hole_ack,
                 &sender,
                 date,
                 note.asset_id(),
                 note.amount(),
-                sender.clone(),
+                &sender,
+                &unregulated_leaf,
             ).expect("can encrypt compliance details");
 
-            let (compliance_epk, packed_ciphertext) = compliance_ciphertext_obj.to_circuit_public_inputs();
+            let (compliance_epk, compliance_epk_g, packed_ciphertext) = encryption_result.ciphertext.to_circuit_public_inputs();
+            let ephemeral_secret = encryption_result.ephemeral_secret;
 
             // Use sender as counterparty for testing (self-send scenario)
             let counterparty_leaf = penumbra_sdk_compliance::ComplianceLeaf {
@@ -1710,6 +1822,7 @@ mod tests {
                 asset_anchor,
                 compliance_anchor,
                 compliance_epk,
+                compliance_epk_g,
                 compliance_ciphertext: packed_ciphertext,
                 target_timestamp: timestamp,
                 sender_leaf_hash,
@@ -1733,6 +1846,7 @@ mod tests {
                 compliance_ephemeral_secret: ephemeral_secret,
                 counterparty_leaf,
                 tx_blinding_nonce,
+                is_flagged: false,
             };
             (public, private)
         }

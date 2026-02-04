@@ -69,28 +69,46 @@ echo "Unregistered: $UNREGISTERED_ADDRESS"
 # Register assets
 echo "=== Registering Assets ==="
 # penumbra and test_usd are auto-registered as UNREGULATED at genesis
-# We register regulated_usd as REGULATED for compliance testing
-echo "Registering regulated_usd as REGULATED..."
-$PCLI --home "$ALICE_HOME" tx compliance register-asset regulated_usd --regulated
+
+# Generate issuer detection key for regulated_usd
+echo "Generating issuer detection key..."
+REGULATED_DK_OUTPUT=$($PCLI tx compliance generate-dk 2>&1)
+REGULATED_DK=$(echo "$REGULATED_DK_OUTPUT" | grep "DK (hex):" | sed 's/.*DK (hex): //')
+REGULATED_DK_PUB=$(echo "$REGULATED_DK_OUTPUT" | grep "DK_pub (hex):" | sed 's/.*DK_pub (hex): //')
+echo "regulated_usd DK (private): ${REGULATED_DK:0:16}..."
+echo "regulated_usd DK_pub: ${REGULATED_DK_PUB:0:16}..."
+
+# Register regulated_usd as REGULATED with threshold=500 (transfers >= 500 are flagged to issuer)
+echo ""
+echo "Registering regulated_usd as REGULATED with threshold=500..."
+$PCLI --home "$ALICE_HOME" tx compliance register-asset regulated_usd --regulated \
+    --dk-pub-hex "$REGULATED_DK_PUB" --threshold 500
 
 $PCLI --home "$ALICE_HOME" view sync
 $PCLI --home "$BOB_HOME" view sync
 $PCLI --home "$OSCAR_HOME" view sync
 
 # Register users for regulated_usd
-echo "=== Registering Users ==="
+echo "=== Registering Users for regulated_usd ==="
 ALICE_OUTPUT=$($PCLI --home "$ALICE_HOME" tx compliance register-user regulated_usd 2>&1) || true
-ALICE_MCK=$(echo "$ALICE_OUTPUT" | grep "MCK (hex):" | sed 's/.*MCK (hex): //')
+ALICE_UCK=$(echo "$ALICE_OUTPUT" | grep "UCK (hex):" | sed 's/.*UCK (hex): //')
 
 BOB_OUTPUT=$($PCLI --home "$BOB_HOME" tx compliance register-user regulated_usd 2>&1) || true
-BOB_MCK=$(echo "$BOB_OUTPUT" | grep "MCK (hex):" | sed 's/.*MCK (hex): //')
+BOB_UCK=$(echo "$BOB_OUTPUT" | grep "UCK (hex):" | sed 's/.*UCK (hex): //')
 
 OSCAR_OUTPUT=$($PCLI --home "$OSCAR_HOME" tx compliance register-user regulated_usd 2>&1) || true
-OSCAR_MCK=$(echo "$OSCAR_OUTPUT" | grep "MCK (hex):" | sed 's/.*MCK (hex): //')
+OSCAR_UCK=$(echo "$OSCAR_OUTPUT" | grep "UCK (hex):" | sed 's/.*UCK (hex): //')
 
-echo "Alice MCK: ${ALICE_MCK:0:16}..."
-echo "Bob MCK: ${BOB_MCK:0:16}..."
-echo "Oscar MCK: ${OSCAR_MCK:0:16}..."
+echo "Alice UCK: ${ALICE_UCK:0:16}..."
+echo "Bob UCK: ${BOB_UCK:0:16}..."
+echo "Oscar UCK: ${OSCAR_UCK:0:16}..."
+
+# Multi-address registration: Alice registers address index 1 for regulated_usd
+echo ""
+echo "=== Multi-Address Registration (Alice address index 1) ==="
+$PCLI --home "$ALICE_HOME" tx compliance register-user regulated_usd --address-index 1 2>&1 || true
+ALICE_ADDRESS_1=$($PCLI --home "$ALICE_HOME" view address 1)
+echo "Alice Address 1: $ALICE_ADDRESS_1"
 
 # Final sync to ensure local compliance trees are updated
 echo ""
@@ -101,7 +119,7 @@ $PCLI --home "$OSCAR_HOME" view sync
 $PCLI --home "$UNREGISTERED_HOME" view sync
 
 echo "Local compliance trees synced via CompactBlock events."
-echo "  - User tree: 3 registrations (Alice, Bob, Oscar for regulated_usd)"
+echo "  - User tree: 4 registrations (Alice x2, Bob, Oscar for regulated_usd)"
 echo "  - Asset tree: 1 regulated asset (regulated_usd)"
 
 # Save env
@@ -111,12 +129,15 @@ export BOB_HOME="$BOB_HOME"
 export OSCAR_HOME="$OSCAR_HOME"
 export UNREGISTERED_HOME="$UNREGISTERED_HOME"
 export ALICE_ADDRESS="$ALICE_ADDRESS"
+export ALICE_ADDRESS_1="$ALICE_ADDRESS_1"
 export BOB_ADDRESS="$BOB_ADDRESS"
 export OSCAR_ADDRESS="$OSCAR_ADDRESS"
 export UNREGISTERED_ADDRESS="$UNREGISTERED_ADDRESS"
-export ALICE_MCK="$ALICE_MCK"
-export BOB_MCK="$BOB_MCK"
-export OSCAR_MCK="$OSCAR_MCK"
+export ALICE_UCK="$ALICE_UCK"
+export BOB_UCK="$BOB_UCK"
+export OSCAR_UCK="$OSCAR_UCK"
+export REGULATED_DK="$REGULATED_DK"
+export REGULATED_DK_PUB="$REGULATED_DK_PUB"
 export PCLI="$PCLI"
 export PENUMBRA_NODE_PD_URL="$PENUMBRA_NODE_PD_URL"
 EOF
@@ -126,17 +147,22 @@ echo "=== Setup Complete ==="
 echo "Env: /tmp/compliance-demo.env"
 echo ""
 echo "Asset status:"
-echo "  - regulated_usd: REGULATED (in asset IMT)"
+echo "  - regulated_usd: REGULATED with threshold=500 (transfers >= 500 flagged to issuer)"
 echo "  - penumbra: UNREGULATED (not in IMT)"
 echo "  - test_usd: UNREGULATED (not in IMT)"
 echo ""
-echo "User registrations (for regulated_usd):"
-echo "  - Alice: registered"
-echo "  - Bob: registered"
-echo "  - Oscar: registered"
-echo "  - Unregistered: NOT registered (no regulated_usd)"
+echo "User registrations:"
+echo "  regulated_usd:"
+echo "    - Alice: address 0 and address 1 (multi-address)"
+echo "    - Bob: registered"
+echo "    - Oscar: registered"
+echo "    - Unregistered: NOT registered"
+echo ""
+echo "Issuer detection key (regulated_usd, threshold=500):"
+echo "  - DK: ${REGULATED_DK:0:16}... (use to scan flagged transfers)"
+echo "  - DK_pub: ${REGULATED_DK_PUB:0:16}..."
 echo ""
 echo "Next steps:"
-echo "  - compliance-test-regulated.sh: Test regulated asset transfers with scanning and local sync"
+echo "  - compliance-test-regulated.sh: Test regulated asset transfers with scanning, local sync, and threshold"
 echo "  - compliance-test-unregulated.sh: Test unregulated assets (BLACK_HOLE encryption)"
 echo "  - compliance-test-unregistered.sh: Test that registered users cannot send regulated assets TO unregistered addresses"

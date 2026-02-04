@@ -5,22 +5,22 @@ Privacy-preserving compliance for regulated assets.
 ## Key Hierarchy
 
 ```
-MK (Orbis ring) → UK = Hash(MK, user_id) → AK = UK * B_d → DK = AK + T * B_d
+MCK (Orbis ring) → UCK = Hash(MK, user_id) → ACK = UCK * B_d → DCK = ACK + T * B_d
 ```
 
 | Key | Type | Holder | Purpose |
 |-----|------|--------|---------|
-| MK | Scalar | Orbis ring | Master key |
-| UK | Scalar | Orbis | User key (per user) |
-| AK | Point | Registry (public) | Address key (per address) |
-| DK | Point | Public | Daily key (client encryption) |
+| MCK | Scalar | Orbis ring | Master key |
+| UCK | Scalar | Orbis | User Compliance Key (per user) |
+| ACK | Point | Registry (public) | Address key (per address) |
+| DCK | Point | Public | Daily key (client encryption) |
 | dk | Scalar | Orbis | Daily scalar (decryption) |
 
 ## Documentation
 
 | Doc | Content |
 |-----|---------|
-| [Key Hierarchy](architecture/key-hierarchy.md) | MK → UK → AK → DK derivation |
+| [Key Hierarchy](architecture/key-hierarchy.md) | MCK → UCK → ACK → DCK derivation |
 | [Registry Design](architecture/registry-design.md) | User tree (QuadTree) + Asset tree (IMT) |
 | [Ciphertext Design](architecture/ciphertext-design.md) | 3-tier encryption structure |
 | [Roadmap](roadmap/README.md) | Pending work |
@@ -54,8 +54,8 @@ pcli tx compliance register-asset <asset> --unregulated
 # User registration
 pcli tx compliance register-user <asset>
 
-# Key derivation (MCK = MK, the Master Compliance Key from Orbis)
-pcli tx compliance derive-daily-key --mck-hex <hex> --date <day_index>
+# Key derivation (UCK = User Compliance Key, held by Orbis)
+pcli tx compliance derive-daily-key --uck-hex <hex> --date <day_index>
 
 # Scanning
 pcli tx compliance scan --daily-key-hex <hex> --node <url>

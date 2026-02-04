@@ -9,41 +9,44 @@ use {
     decaf377::{Bls12_377, Fq, Fr},
     penumbra_sdk_asset::{asset, Value},
     penumbra_sdk_compliance::{
+        indexed_tree::IndexedLeaf,
         registry::{ComplianceRegistryRead, ComplianceRegistryWrite},
-        scanning::{ComplianceScanner, FullComplianceData, ScannerRole},
+        scanning::{decrypt_with_role, FullComplianceData, ScannerRole},
         structs::{ComplianceCiphertext, ComplianceLeaf, MerklePath},
         BLACK_HOLE_ACK,
     },
     penumbra_sdk_keys::{
         keys::{
-            AddressComplianceKey, Bip44Path, DailyKeySet, MasterComplianceKey, SeedPhrase, SpendKey,
+            AddressComplianceKey, Bip44Path, DailyKeySet, SeedPhrase, SpendKey, UserComplianceKey,
         },
         Address,
     },
+    penumbra_sdk_mock_client::StateReadComplianceProvider,
     penumbra_sdk_num,
     penumbra_sdk_proof_params::DummyWitness,
     penumbra_sdk_shielded_pool::{
         output::OutputCircuit, spend::SpendCircuit, timestamp_to_day_index, Note, Rseed,
     },
     penumbra_sdk_tct as tct,
+    penumbra_sdk_transaction::plan::{ActionPlan, TransactionPlan},
+    penumbra_sdk_view::enrich_plan_with_compliance,
     rand_core::OsRng,
 };
 
 mod common;
 
-/// Scan dual ciphertexts using a ComplianceScanner with specific role.
-fn scan_with_role(
+/// Decrypt dual ciphertexts with a specific role.
+fn try_decrypt_with_role(
     sender_ciphertext_bytes: &[u8],
     receiver_ciphertext_bytes: &[u8],
     daily_keys: &DailyKeySet,
     role: ScannerRole,
+    asset_id: asset::Id,
 ) -> anyhow::Result<Option<FullComplianceData>> {
-    let scanner = ComplianceScanner::new(daily_keys.clone(), role);
-
     let sender_ct = ComplianceCiphertext::from_bytes(sender_ciphertext_bytes)?;
     let receiver_ct = ComplianceCiphertext::from_bytes(receiver_ciphertext_bytes)?;
 
-    scanner.decrypt(&sender_ct, &receiver_ct)
+    decrypt_with_role(daily_keys, &sender_ct, &receiver_ct, role, asset_id)
 }
 
 /// Create dual compliance ciphertexts (sender and receiver).
@@ -57,7 +60,7 @@ fn create_spend_dual_ciphertext(
     amount: penumbra_sdk_num::Amount,
     is_regulated: bool,
 ) -> Result<(Vec<u8>, Vec<u8>, Fr, Fr)> {
-    use penumbra_sdk_compliance::crypto::encrypt_compliance_details_dual;
+    use penumbra_sdk_compliance::crypto::encrypt_compliance_details;
 
     let (ack_s, ack_r) = if is_regulated {
         (sender_ack.clone(), receiver_ack.clone())
@@ -68,18 +71,39 @@ fn create_spend_dual_ciphertext(
         )
     };
 
-    let (s_ct, s_eph, r_ct, r_eph) = encrypt_compliance_details_dual(
+    // Create asset leaf - use unregulated leaf (threshold=MAX, BLACK_HOLE dk_pub)
+    let asset_leaf = IndexedLeaf::unregulated(asset_id.0);
+
+    // Encrypt for sender (sender's ciphertext, counterparty = receiver)
+    let sender_result = encrypt_compliance_details(
         &mut OsRng,
         &ack_s,
         sender_address,
+        date,
+        asset_id,
+        amount,
+        receiver_address,
+        &asset_leaf,
+    )?;
+
+    // Encrypt for receiver (receiver's ciphertext, counterparty = sender)
+    let receiver_result = encrypt_compliance_details(
+        &mut OsRng,
         &ack_r,
         receiver_address,
         date,
         asset_id,
         amount,
+        sender_address,
+        &asset_leaf,
     )?;
 
-    Ok((s_ct.to_bytes(), r_ct.to_bytes(), s_eph, r_eph))
+    Ok((
+        sender_result.ciphertext.to_bytes(),
+        receiver_result.ciphertext.to_bytes(),
+        sender_result.ephemeral_secret,
+        receiver_result.ephemeral_secret,
+    ))
 }
 
 /// Get current Unix timestamp in seconds
@@ -96,8 +120,8 @@ struct ComplianceTestHarness {
     regulated_token_id: asset::Id,
     unregulated_token_id: asset::Id,
 
-    // Alice's Master Key and Wallet 1
-    alice_master_key: MasterComplianceKey,
+    // Alice's User Compliance Key and Wallet 1
+    alice_uck: UserComplianceKey,
     alice_ack: AddressComplianceKey,
     alice_addr: Address,
     _alice_spend_key: SpendKey,
@@ -106,8 +130,8 @@ struct ComplianceTestHarness {
     alice_ack_2: AddressComplianceKey,
     alice_addr_2: Address,
 
-    // Bob's Master Key and Wallet
-    bob_master_key: MasterComplianceKey,
+    // Bob's User Compliance Key and Wallet
+    bob_uck: UserComplianceKey,
     bob_ack: AddressComplianceKey,
     bob_addr: Address,
     _bob_spend_key: SpendKey,
@@ -134,36 +158,40 @@ impl ComplianceTestHarness {
         {
             let mut state = StateDelta::new(storage.latest_snapshot());
             // Only register regulated assets in the IMT
-            state.register_regulated_asset(regulated_token_id).await?;
+            // Use dummy detection key for test
+            let dummy_dk_pub = decaf377::Element::GENERATOR;
+            state
+                .register_regulated_asset(regulated_token_id, dummy_dk_pub)
+                .await?;
             // unregulated_token_id doesn't need registration - proven via non-membership
             storage.commit(state).await?;
         }
 
-        // 4. Create Alice's Master Key and Two Wallets
-        let alice_master_key = MasterComplianceKey::new(Fr::rand(&mut OsRng));
+        // 4. Create Alice's User Compliance Key and Two Wallets
+        let alice_uck = UserComplianceKey::new(Fr::rand(&mut OsRng));
         let (alice_addr, alice_spend_key) = Self::create_wallet("Alice-Wallet-1");
-        let alice_ack = alice_master_key.derive_address_key(alice_addr.diversifier());
+        let alice_ack = alice_uck.derive_address_key(alice_addr.diversifier());
 
-        // Alice's second wallet (different diversifier, same master key)
+        // Alice's second wallet (different diversifier, same user compliance key)
         let (alice_addr_2, _) = Self::create_wallet("Alice-Wallet-2");
-        let alice_ack_2 = alice_master_key.derive_address_key(alice_addr_2.diversifier());
+        let alice_ack_2 = alice_uck.derive_address_key(alice_addr_2.diversifier());
 
-        // 5. Create Bob's Master Key and Wallet (Completely Separate)
-        let bob_master_key = MasterComplianceKey::new(Fr::rand(&mut OsRng));
+        // 5. Create Bob's User Compliance Key and Wallet (Completely Separate)
+        let bob_uck = UserComplianceKey::new(Fr::rand(&mut OsRng));
         let (bob_addr, bob_spend_key) = Self::create_wallet("Bob-Wallet-1");
-        let bob_ack = bob_master_key.derive_address_key(bob_addr.diversifier());
+        let bob_ack = bob_uck.derive_address_key(bob_addr.diversifier());
 
         Ok(Self {
             _storage: storage,
             regulated_token_id,
             unregulated_token_id,
-            alice_master_key,
+            alice_uck,
             alice_ack,
             alice_addr,
             _alice_spend_key: alice_spend_key,
             alice_ack_2,
             alice_addr_2,
-            bob_master_key,
+            bob_uck,
             bob_ack,
             bob_addr,
             _bob_spend_key: bob_spend_key,
@@ -308,12 +336,13 @@ async fn test_user_segregation_alice_cannot_decrypt_bobs_transactions() -> Resul
     )?;
 
     // Alice (Sender) can decrypt her own send
-    let alice_daily_key = harness.alice_master_key.derive_daily_keys(date);
-    let alice_sender_scanner_result = scan_with_role(
+    let alice_daily_key = harness.alice_uck.derive_daily_keys(date);
+    let alice_sender_scanner_result = try_decrypt_with_role(
         &alice_sender_ct,
         &bob_receiver_ct,
         &alice_daily_key,
         ScannerRole::Sender,
+        value.asset_id,
     )?;
     assert!(
         alice_sender_scanner_result.is_some(),
@@ -321,11 +350,12 @@ async fn test_user_segregation_alice_cannot_decrypt_bobs_transactions() -> Resul
     );
 
     // Alice (Receiver) CANNOT decrypt Sender ciphertext (role privacy)
-    let alice_receiver_scanner_result = scan_with_role(
+    let alice_receiver_scanner_result = try_decrypt_with_role(
         &alice_sender_ct,
         &bob_receiver_ct,
         &alice_daily_key,
         ScannerRole::Receiver,
+        value.asset_id,
     )?;
     assert!(
         alice_receiver_scanner_result.is_none(),
@@ -333,12 +363,13 @@ async fn test_user_segregation_alice_cannot_decrypt_bobs_transactions() -> Resul
     );
 
     // Bob (Receiver) can decrypt his own receive
-    let bob_daily_key = harness.bob_master_key.derive_daily_keys(date);
-    let bob_receiver_scanner_result = scan_with_role(
+    let bob_daily_key = harness.bob_uck.derive_daily_keys(date);
+    let bob_receiver_scanner_result = try_decrypt_with_role(
         &alice_sender_ct,
         &bob_receiver_ct,
         &bob_daily_key,
         ScannerRole::Receiver,
+        value.asset_id,
     )?;
     assert!(
         bob_receiver_scanner_result.is_some(),
@@ -346,11 +377,12 @@ async fn test_user_segregation_alice_cannot_decrypt_bobs_transactions() -> Resul
     );
 
     // Bob (Sender) CANNOT decrypt Receiver ciphertext (role privacy)
-    let bob_sender_scanner_result = scan_with_role(
+    let bob_sender_scanner_result = try_decrypt_with_role(
         &alice_sender_ct,
         &bob_receiver_ct,
         &bob_daily_key,
         ScannerRole::Sender,
+        value.asset_id,
     )?;
     assert!(
         bob_sender_scanner_result.is_none(),
@@ -358,11 +390,12 @@ async fn test_user_segregation_alice_cannot_decrypt_bobs_transactions() -> Resul
     );
 
     // Alice CANNOT decrypt Bob's ciphertext (user segregation)
-    let alice_try_bob_receiver = scan_with_role(
+    let alice_try_bob_receiver = try_decrypt_with_role(
         &alice_sender_ct,
         &bob_receiver_ct,
         &alice_daily_key,
         ScannerRole::Receiver, // Alice tries to decrypt Bob's receiver ciphertext
+        value.asset_id,
     )?;
     assert!(
         alice_try_bob_receiver.is_none(),
@@ -370,11 +403,12 @@ async fn test_user_segregation_alice_cannot_decrypt_bobs_transactions() -> Resul
     );
 
     // Bob CANNOT decrypt Alice's ciphertext (user segregation)
-    let bob_try_alice_sender = scan_with_role(
+    let bob_try_alice_sender = try_decrypt_with_role(
         &alice_sender_ct,
         &bob_receiver_ct,
         &bob_daily_key,
         ScannerRole::Sender, // Bob tries to decrypt Alice's sender ciphertext
+        value.asset_id,
     )?;
     assert!(
         bob_try_alice_sender.is_none(),
@@ -423,14 +457,15 @@ async fn test_alice_single_master_key_decrypts_all_her_wallets() -> Result<()> {
     )?;
 
     // Single Master Key decrypts both wallets
-    let alice_daily_key = harness.alice_master_key.derive_daily_keys(date);
+    let alice_daily_key = harness.alice_uck.derive_daily_keys(date);
 
     // Alice's Sender scanner can decrypt Wallet 1's transaction
-    let wallet1_result = scan_with_role(
+    let wallet1_result = try_decrypt_with_role(
         &alice_wallet1_sender_ct,
         &bob_wallet1_receiver_ct,
         &alice_daily_key,
         ScannerRole::Sender,
+        value.asset_id,
     )?;
     assert!(
         wallet1_result.is_some(),
@@ -438,11 +473,12 @@ async fn test_alice_single_master_key_decrypts_all_her_wallets() -> Result<()> {
     );
 
     // Alice's Sender scanner can decrypt Wallet 2's transaction
-    let wallet2_result = scan_with_role(
+    let wallet2_result = try_decrypt_with_role(
         &alice_wallet2_sender_ct,
         &bob_wallet2_receiver_ct,
         &alice_daily_key,
         ScannerRole::Sender,
+        value.asset_id,
     )?;
     assert!(
         wallet2_result.is_some(),
@@ -478,15 +514,16 @@ async fn test_unregulated_asset_black_hole_undecryptable() -> Result<()> {
     )?;
 
     // Nobody can decrypt BLACK_HOLE
-    let alice_daily_key = harness.alice_master_key.derive_daily_keys(date);
-    let bob_daily_key = harness.bob_master_key.derive_daily_keys(date);
+    let alice_daily_key = harness.alice_uck.derive_daily_keys(date);
+    let bob_daily_key = harness.bob_uck.derive_daily_keys(date);
 
     // Alice tries to decrypt with Sender scanner -> FAILURE
-    let alice_sender_result = scan_with_role(
+    let alice_sender_result = try_decrypt_with_role(
         &black_hole_sender_ct,
         &black_hole_receiver_ct,
         &alice_daily_key,
         ScannerRole::Sender,
+        value.asset_id,
     )?;
     assert!(
         alice_sender_result.is_none(),
@@ -494,11 +531,12 @@ async fn test_unregulated_asset_black_hole_undecryptable() -> Result<()> {
     );
 
     // Alice tries to decrypt with Receiver scanner -> FAILURE
-    let alice_receiver_result = scan_with_role(
+    let alice_receiver_result = try_decrypt_with_role(
         &black_hole_sender_ct,
         &black_hole_receiver_ct,
         &alice_daily_key,
         ScannerRole::Receiver,
+        value.asset_id,
     )?;
     assert!(
         alice_receiver_result.is_none(),
@@ -506,11 +544,12 @@ async fn test_unregulated_asset_black_hole_undecryptable() -> Result<()> {
     );
 
     // Bob tries to decrypt with Sender scanner -> FAILURE
-    let bob_sender_result = scan_with_role(
+    let bob_sender_result = try_decrypt_with_role(
         &black_hole_sender_ct,
         &black_hole_receiver_ct,
         &bob_daily_key,
         ScannerRole::Sender,
+        value.asset_id,
     )?;
     assert!(
         bob_sender_result.is_none(),
@@ -518,11 +557,12 @@ async fn test_unregulated_asset_black_hole_undecryptable() -> Result<()> {
     );
 
     // Bob tries to decrypt with Receiver scanner -> FAILURE
-    let bob_receiver_result = scan_with_role(
+    let bob_receiver_result = try_decrypt_with_role(
         &black_hole_sender_ct,
         &black_hole_receiver_ct,
         &bob_daily_key,
         ScannerRole::Receiver,
+        value.asset_id,
     )?;
     assert!(
         bob_receiver_result.is_none(),
@@ -558,13 +598,14 @@ async fn test_key_type_specificity() -> Result<()> {
 
     // Wrong date fails
     let wrong_date = date + 1;
-    let alice_wrong_date_key = harness.alice_master_key.derive_daily_keys(wrong_date);
+    let alice_wrong_date_key = harness.alice_uck.derive_daily_keys(wrong_date);
 
-    let wrong_date_result = scan_with_role(
+    let wrong_date_result = try_decrypt_with_role(
         &alice_sender_ct,
         &bob_receiver_ct,
         &alice_wrong_date_key,
         ScannerRole::Sender,
+        value.asset_id,
     )?;
     assert!(
         wrong_date_result.is_none(),
@@ -572,12 +613,13 @@ async fn test_key_type_specificity() -> Result<()> {
     );
 
     // Correct date → detection succeeds
-    let alice_correct_date_key = harness.alice_master_key.derive_daily_keys(date);
-    let correct_date_result = scan_with_role(
+    let alice_correct_date_key = harness.alice_uck.derive_daily_keys(date);
+    let correct_date_result = try_decrypt_with_role(
         &alice_sender_ct,
         &bob_receiver_ct,
         &alice_correct_date_key,
         ScannerRole::Sender,
+        value.asset_id,
     )?;
     assert!(
         correct_date_result.is_some(),
@@ -585,12 +627,13 @@ async fn test_key_type_specificity() -> Result<()> {
     );
 
     // Wrong issuer fails
-    let bob_daily_key = harness.bob_master_key.derive_daily_keys(date);
-    let wrong_issuer_result = scan_with_role(
+    let bob_daily_key = harness.bob_uck.derive_daily_keys(date);
+    let wrong_issuer_result = try_decrypt_with_role(
         &alice_sender_ct,
         &bob_receiver_ct,
         &bob_daily_key,
         ScannerRole::Sender, // Same role, but wrong issuer
+        value.asset_id,
     )?;
     assert!(
         wrong_issuer_result.is_none(),
@@ -598,11 +641,12 @@ async fn test_key_type_specificity() -> Result<()> {
     );
 
     // Correct issuer → decryption succeeds
-    let correct_issuer_result = scan_with_role(
+    let correct_issuer_result = try_decrypt_with_role(
         &alice_sender_ct,
         &bob_receiver_ct,
         &alice_correct_date_key,
         ScannerRole::Sender,
+        value.asset_id,
     )?;
     assert!(
         correct_issuer_result.is_some(),
@@ -610,11 +654,12 @@ async fn test_key_type_specificity() -> Result<()> {
     );
 
     // Wrong role fails
-    let alice_wrong_role_result = scan_with_role(
+    let alice_wrong_role_result = try_decrypt_with_role(
         &alice_sender_ct,
         &bob_receiver_ct,
         &alice_correct_date_key,
         ScannerRole::Receiver, // WRONG ROLE - Alice is sender, not receiver
+        value.asset_id,
     )?;
     assert!(
         alice_wrong_role_result.is_none(),
@@ -623,11 +668,12 @@ async fn test_key_type_specificity() -> Result<()> {
 
     // Bob tries to decrypt Alice's sender ciphertext with Sender scanner
     // This is the wrong role for Bob (he's the receiver)
-    let bob_wrong_role_result = scan_with_role(
+    let bob_wrong_role_result = try_decrypt_with_role(
         &alice_sender_ct,
         &bob_receiver_ct,
         &bob_daily_key,
         ScannerRole::Sender, // WRONG ROLE - Bob is receiver, not sender
+        value.asset_id,
     )?;
     assert!(
         bob_wrong_role_result.is_none(),
@@ -635,22 +681,24 @@ async fn test_key_type_specificity() -> Result<()> {
     );
 
     // Correct roles → both can decrypt their respective ciphertexts
-    let alice_correct_role_result = scan_with_role(
+    let alice_correct_role_result = try_decrypt_with_role(
         &alice_sender_ct,
         &bob_receiver_ct,
         &alice_correct_date_key,
         ScannerRole::Sender, // CORRECT ROLE - Alice is sender
+        value.asset_id,
     )?;
     assert!(
         alice_correct_role_result.is_some(),
         "Correct sender role SHOULD succeed"
     );
 
-    let bob_correct_role_result = scan_with_role(
+    let bob_correct_role_result = try_decrypt_with_role(
         &alice_sender_ct,
         &bob_receiver_ct,
         &bob_daily_key,
         ScannerRole::Receiver, // CORRECT ROLE - Bob is receiver
+        value.asset_id,
     )?;
     assert!(
         bob_correct_role_result.is_some(),
@@ -658,12 +706,13 @@ async fn test_key_type_specificity() -> Result<()> {
     );
 
     // All wrong keys fails
-    let wrong_date_wrong_issuer_key = harness.bob_master_key.derive_daily_keys(wrong_date);
-    let all_wrong_result = scan_with_role(
+    let wrong_date_wrong_issuer_key = harness.bob_uck.derive_daily_keys(wrong_date);
+    let all_wrong_result = try_decrypt_with_role(
         &alice_sender_ct,
         &bob_receiver_ct,
         &wrong_date_wrong_issuer_key,
         ScannerRole::Receiver, // Also wrong role
+        value.asset_id,
     )?;
     assert!(
         all_wrong_result.is_none(),
@@ -674,7 +723,6 @@ async fn test_key_type_specificity() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Slow - run with --ignored
 async fn test_full_compliance_proof_roundtrip() -> Result<()> {
     use penumbra_sdk_shielded_pool::{OutputPlan, SpendPlan};
 
@@ -688,7 +736,8 @@ async fn test_full_compliance_proof_roundtrip() -> Result<()> {
     let timestamp = current_timestamp();
     let date = timestamp_to_day_index(timestamp);
 
-    let alice_position = harness
+    // Register users in the compliance tree (needed for enrichment to find them)
+    let _alice_position = harness
         .register_user(
             harness.alice_addr.clone(),
             harness.alice_ack.clone(),
@@ -696,7 +745,7 @@ async fn test_full_compliance_proof_roundtrip() -> Result<()> {
         )
         .await?;
 
-    let bob_position = harness
+    let _bob_position = harness
         .register_user(
             harness.bob_addr.clone(),
             harness.bob_ack.clone(),
@@ -704,43 +753,7 @@ async fn test_full_compliance_proof_roundtrip() -> Result<()> {
         )
         .await?;
 
-    let alice_merkle_path = harness.get_user_path(alice_position).await?;
-    let bob_merkle_path = harness.get_user_path(bob_position).await?;
-    let asset_position = harness
-        .get_asset_position(harness.regulated_token_id)
-        .await?;
-    let asset_proof_data = harness
-        .get_asset_proof_data(harness.regulated_token_id)
-        .await?;
-    let asset_merkle_path = MerklePath::from(penumbra_sdk_compliance::structs::MerklePath {
-        layers: asset_proof_data
-            .auth_path
-            .layers
-            .iter()
-            .map(|layer| penumbra_sdk_compliance::structs::MerklePathLayer {
-                siblings: layer.siblings.clone(),
-            })
-            .collect(),
-    });
-
-    // Get compliance and asset anchors from state
-    let snapshot = harness._storage.latest_snapshot();
-    let compliance_anchor = snapshot.get_user_tree_root().await?;
-    let asset_anchor = snapshot.get_asset_imt_root().await?;
-    // STEP 2: Create compliance leaves
-
-    let alice_leaf = ComplianceLeaf {
-        address: harness.alice_addr.clone(),
-        key: harness.alice_ack.clone(),
-        asset_id: harness.regulated_token_id,
-    };
-
-    let bob_leaf = ComplianceLeaf {
-        address: harness.bob_addr.clone(),
-        key: harness.bob_ack.clone(),
-        asset_id: harness.regulated_token_id,
-    };
-    // STEP 3: Create Note and SCT for Spend
+    // STEP 2: Create Note and SCT for Spend
 
     let spend_note = Note::from_parts(
         harness.alice_addr.clone(),
@@ -756,36 +769,51 @@ async fn test_full_compliance_proof_roundtrip() -> Result<()> {
         .expect("note was just inserted");
 
     let fvk = harness._alice_spend_key.full_viewing_key();
-    // STEP 4: Create SpendPlan and set all compliance fields
 
-    let mut spend_plan = SpendPlan::new(
+    // STEP 3: Create SpendPlan and OutputPlan, then enrich with compliance data
+
+    let spend_plan = SpendPlan::new(
         &mut OsRng,
         spend_note.clone(),
         state_commitment_proof.position(),
     );
+
+    let output_plan = OutputPlan::new(&mut OsRng, value, harness.bob_addr.clone());
+
+    // Build a TransactionPlan with both actions
+    let mut plan = TransactionPlan {
+        actions: vec![
+            ActionPlan::Spend(spend_plan),
+            ActionPlan::Output(output_plan),
+        ],
+        ..Default::default()
+    };
+
+    // Use enrich_plan_with_compliance to set ALL compliance fields correctly
+    // This is the same code path used by production (Planner) and mock-client
+    let snapshot = harness._storage.latest_snapshot();
+    let provider = StateReadComplianceProvider::new(snapshot);
+    enrich_plan_with_compliance(&mut plan, &provider, &mut OsRng).await?;
+
+    // Extract the enriched plans back
+    let ActionPlan::Spend(mut spend_plan) = plan.actions[0].clone() else {
+        panic!("expected spend plan");
+    };
+    let ActionPlan::Output(mut output_plan) = plan.actions[1].clone() else {
+        panic!("expected output plan");
+    };
+
+    // Set timestamps (not handled by enrichment)
     spend_plan.target_timestamp = timestamp;
+    output_plan.target_timestamp = timestamp;
 
-    // Set compliance details via the plan method
-    spend_plan.set_compliance_details(
-        &mut OsRng,
-        &harness.alice_ack,
-        &harness.alice_addr,
-        true, // is_regulated
-        &harness.bob_addr,
-        bob_leaf.clone(),
-    )?;
-
-    // Set the compliance fields that would normally come from enrich_with_compliance / gRPC
-    spend_plan.compliance_path = alice_merkle_path.clone();
-    spend_plan.compliance_position = alice_position;
-    spend_plan.compliance_anchor = compliance_anchor;
-    spend_plan.asset_path = asset_merkle_path.clone();
-    spend_plan.asset_position = asset_position;
-    spend_plan.asset_anchor = asset_anchor;
+    // Get anchors from the enriched plan for verification
+    let compliance_anchor = spend_plan.compliance_anchor;
+    let asset_anchor = spend_plan.asset_anchor;
 
     // Get the tx_blinding_nonce from spend_plan to share with output_plan
     let tx_blinding_nonce = spend_plan.tx_blinding_nonce;
-    // STEP 5: Generate Spend Proof via SpendPlan
+    // STEP 4: Generate Spend Proof via SpendPlan
 
     let spend_proof = spend_plan.spend_proof(
         fvk,
@@ -800,7 +828,7 @@ async fn test_full_compliance_proof_roundtrip() -> Result<()> {
     use penumbra_sdk_shielded_pool::spend::SpendProofPublic;
 
     let spend_ct = ComplianceCiphertext::from_bytes(&spend_plan.compliance_ciphertext)?;
-    let (spend_epk, spend_ct_circuit) = spend_ct.to_circuit_public_inputs();
+    let (spend_epk, spend_epk_g, spend_ct_circuit) = spend_ct.to_circuit_public_inputs();
 
     let spend_sender_leaf_hash = spend_plan.compliance_leaf.clone().unwrap().commit();
     let spend_counterparty_leaf_hash = spend_plan.counterparty_leaf.clone().unwrap().commit();
@@ -819,6 +847,7 @@ async fn test_full_compliance_proof_roundtrip() -> Result<()> {
         asset_anchor,
         compliance_anchor,
         compliance_epk: spend_epk,
+        compliance_epk_g: spend_epk_g,
         compliance_ciphertext: spend_ct_circuit,
         target_timestamp: timestamp,
         sender_leaf_hash: spend_sender_blinded,
@@ -827,29 +856,7 @@ async fn test_full_compliance_proof_roundtrip() -> Result<()> {
     // STEP 6: Verify Spend Proof
 
     spend_proof.verify(&harness._spend_vk, spend_public)?;
-    // STEP 7: Create OutputPlan and set all compliance fields
-
-    let mut output_plan = OutputPlan::new(&mut OsRng, value, harness.bob_addr.clone());
-    output_plan.target_timestamp = timestamp;
-
-    // Set compliance details via the plan method
-    output_plan.set_compliance_details(
-        &mut OsRng,
-        &harness.bob_ack,
-        true, // is_regulated
-        &harness.alice_addr,
-        alice_leaf.clone(),
-        tx_blinding_nonce, // Share the same blinding nonce from spend
-    )?;
-
-    // Set the compliance fields that would normally come from enrich_with_compliance / gRPC
-    output_plan.compliance_path = bob_merkle_path.clone();
-    output_plan.compliance_position = bob_position;
-    output_plan.compliance_anchor = compliance_anchor;
-    output_plan.asset_path = asset_merkle_path.clone();
-    output_plan.asset_position = asset_position;
-    output_plan.asset_anchor = asset_anchor;
-    // STEP 8: Generate Output Proof via OutputPlan
+    // STEP 7: Generate Output Proof via OutputPlan (already enriched above)
 
     let output_proof = output_plan.output_proof(&harness._output_pk, None)?;
 
@@ -857,7 +864,7 @@ async fn test_full_compliance_proof_roundtrip() -> Result<()> {
     use penumbra_sdk_shielded_pool::output::OutputProofPublic;
 
     let output_ct = ComplianceCiphertext::from_bytes(&output_plan.compliance_ciphertext)?;
-    let (output_epk, output_ct_circuit) = output_ct.to_circuit_public_inputs();
+    let (output_epk, output_epk_g, output_ct_circuit) = output_ct.to_circuit_public_inputs();
 
     let output_receiver_leaf_hash = output_plan.compliance_leaf.clone().unwrap().commit();
     let output_counterparty_leaf_hash = output_plan.counterparty_leaf.clone().unwrap().commit();
@@ -874,6 +881,7 @@ async fn test_full_compliance_proof_roundtrip() -> Result<()> {
         balance_commitment: output_plan.balance().commit(output_plan.value_blinding),
         note_commitment: output_plan.output_note().commit(),
         compliance_epk: output_epk,
+        compliance_epk_g: output_epk_g,
         compliance_ciphertext: output_ct_circuit,
         asset_anchor,
         compliance_anchor,
@@ -901,15 +909,16 @@ async fn test_full_compliance_proof_roundtrip() -> Result<()> {
     );
     // STEP 11: Scanner Verification
 
-    let alice_daily_key = harness.alice_master_key.derive_daily_keys(date);
-    let bob_daily_key = harness.bob_master_key.derive_daily_keys(date);
+    let alice_daily_key = harness.alice_uck.derive_daily_keys(date);
+    let bob_daily_key = harness.bob_uck.derive_daily_keys(date);
 
     // Alice scans sender ciphertext (from spend_plan)
-    let alice_scan_result = scan_with_role(
+    let alice_scan_result = try_decrypt_with_role(
         &spend_plan.compliance_ciphertext,
         &output_plan.compliance_ciphertext,
         &alice_daily_key,
         ScannerRole::Sender,
+        value.asset_id,
     )?;
     assert!(
         alice_scan_result.is_some(),
@@ -917,11 +926,12 @@ async fn test_full_compliance_proof_roundtrip() -> Result<()> {
     );
 
     // Bob scans receiver ciphertext (from output_plan)
-    let bob_scan_result = scan_with_role(
+    let bob_scan_result = try_decrypt_with_role(
         &spend_plan.compliance_ciphertext,
         &output_plan.compliance_ciphertext,
         &bob_daily_key,
         ScannerRole::Receiver,
+        value.asset_id,
     )?;
     assert!(
         bob_scan_result.is_some(),

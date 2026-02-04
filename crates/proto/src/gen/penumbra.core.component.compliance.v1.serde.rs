@@ -305,6 +305,12 @@ impl serde::Serialize for ComplianceAssetStatusResponse {
         if self.is_regulated {
             len += 1;
         }
+        if !self.dk_pub.is_empty() {
+            len += 1;
+        }
+        if !self.threshold.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.ComplianceAssetStatusResponse", len)?;
         if let Some(v) = self.asset_id.as_ref() {
             struct_ser.serialize_field("assetId", v)?;
@@ -314,6 +320,16 @@ impl serde::Serialize for ComplianceAssetStatusResponse {
         }
         if self.is_regulated {
             struct_ser.serialize_field("isRegulated", &self.is_regulated)?;
+        }
+        if !self.dk_pub.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("dkPub", pbjson::private::base64::encode(&self.dk_pub).as_str())?;
+        }
+        if !self.threshold.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("threshold", pbjson::private::base64::encode(&self.threshold).as_str())?;
         }
         struct_ser.end()
     }
@@ -331,6 +347,9 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
             "isRegistered",
             "is_regulated",
             "isRegulated",
+            "dk_pub",
+            "dkPub",
+            "threshold",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -338,6 +357,8 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
             AssetId,
             IsRegistered,
             IsRegulated,
+            DkPub,
+            Threshold,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -363,6 +384,8 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
                             "assetId" | "asset_id" => Ok(GeneratedField::AssetId),
                             "isRegistered" | "is_registered" => Ok(GeneratedField::IsRegistered),
                             "isRegulated" | "is_regulated" => Ok(GeneratedField::IsRegulated),
+                            "dkPub" | "dk_pub" => Ok(GeneratedField::DkPub),
+                            "threshold" => Ok(GeneratedField::Threshold),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -385,6 +408,8 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
                 let mut asset_id__ = None;
                 let mut is_registered__ = None;
                 let mut is_regulated__ = None;
+                let mut dk_pub__ = None;
+                let mut threshold__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::AssetId => {
@@ -405,6 +430,22 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
                             }
                             is_regulated__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::DkPub => {
+                            if dk_pub__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dkPub"));
+                            }
+                            dk_pub__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Threshold => {
+                            if threshold__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("threshold"));
+                            }
+                            threshold__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -414,6 +455,8 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
                     asset_id: asset_id__,
                     is_registered: is_registered__.unwrap_or_default(),
                     is_regulated: is_regulated__.unwrap_or_default(),
+                    dk_pub: dk_pub__.unwrap_or_default(),
+                    threshold: threshold__.unwrap_or_default(),
                 })
             }
         }
@@ -1048,6 +1091,9 @@ impl serde::Serialize for ComplianceMerkleProofsResponse {
         if self.asset_indexed_leaf.is_some() {
             len += 1;
         }
+        if self.compliance_leaf.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.ComplianceMerkleProofsResponse", len)?;
         if self.user_registered {
             struct_ser.serialize_field("userRegistered", &self.user_registered)?;
@@ -1087,6 +1133,9 @@ impl serde::Serialize for ComplianceMerkleProofsResponse {
         if let Some(v) = self.asset_indexed_leaf.as_ref() {
             struct_ser.serialize_field("assetIndexedLeaf", v)?;
         }
+        if let Some(v) = self.compliance_leaf.as_ref() {
+            struct_ser.serialize_field("complianceLeaf", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -1117,6 +1166,8 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
             "assetAnchor",
             "asset_indexed_leaf",
             "assetIndexedLeaf",
+            "compliance_leaf",
+            "complianceLeaf",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1131,6 +1182,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
             ComplianceAnchor,
             AssetAnchor,
             AssetIndexedLeaf,
+            ComplianceLeaf,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -1163,6 +1215,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
                             "complianceAnchor" | "compliance_anchor" => Ok(GeneratedField::ComplianceAnchor),
                             "assetAnchor" | "asset_anchor" => Ok(GeneratedField::AssetAnchor),
                             "assetIndexedLeaf" | "asset_indexed_leaf" => Ok(GeneratedField::AssetIndexedLeaf),
+                            "complianceLeaf" | "compliance_leaf" => Ok(GeneratedField::ComplianceLeaf),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -1192,6 +1245,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
                 let mut compliance_anchor__ = None;
                 let mut asset_anchor__ = None;
                 let mut asset_indexed_leaf__ = None;
+                let mut compliance_leaf__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::UserRegistered => {
@@ -1262,6 +1316,12 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
                             }
                             asset_indexed_leaf__ = map_.next_value()?;
                         }
+                        GeneratedField::ComplianceLeaf => {
+                            if compliance_leaf__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("complianceLeaf"));
+                            }
+                            compliance_leaf__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -1278,6 +1338,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
                     compliance_anchor: compliance_anchor__.unwrap_or_default(),
                     asset_anchor: asset_anchor__.unwrap_or_default(),
                     asset_indexed_leaf: asset_indexed_leaf__,
+                    compliance_leaf: compliance_leaf__,
                 })
             }
         }
@@ -2099,6 +2160,12 @@ impl serde::Serialize for IndexedLeafData {
         if !self.next_value.is_empty() {
             len += 1;
         }
+        if !self.dk_pub.is_empty() {
+            len += 1;
+        }
+        if !self.threshold.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.IndexedLeafData", len)?;
         if !self.value.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -2115,6 +2182,16 @@ impl serde::Serialize for IndexedLeafData {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("nextValue", pbjson::private::base64::encode(&self.next_value).as_str())?;
         }
+        if !self.dk_pub.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("dkPub", pbjson::private::base64::encode(&self.dk_pub).as_str())?;
+        }
+        if !self.threshold.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("threshold", pbjson::private::base64::encode(&self.threshold).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -2130,6 +2207,9 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
             "nextIndex",
             "next_value",
             "nextValue",
+            "dk_pub",
+            "dkPub",
+            "threshold",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -2137,6 +2217,8 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
             Value,
             NextIndex,
             NextValue,
+            DkPub,
+            Threshold,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -2162,6 +2244,8 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                             "value" => Ok(GeneratedField::Value),
                             "nextIndex" | "next_index" => Ok(GeneratedField::NextIndex),
                             "nextValue" | "next_value" => Ok(GeneratedField::NextValue),
+                            "dkPub" | "dk_pub" => Ok(GeneratedField::DkPub),
+                            "threshold" => Ok(GeneratedField::Threshold),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -2184,6 +2268,8 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                 let mut value__ = None;
                 let mut next_index__ = None;
                 let mut next_value__ = None;
+                let mut dk_pub__ = None;
+                let mut threshold__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Value => {
@@ -2210,6 +2296,22 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::DkPub => {
+                            if dk_pub__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dkPub"));
+                            }
+                            dk_pub__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Threshold => {
+                            if threshold__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("threshold"));
+                            }
+                            threshold__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -2219,6 +2321,8 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                     value: value__.unwrap_or_default(),
                     next_index: next_index__.unwrap_or_default(),
                     next_value: next_value__.unwrap_or_default(),
+                    dk_pub: dk_pub__.unwrap_or_default(),
+                    threshold: threshold__.unwrap_or_default(),
                 })
             }
         }
@@ -2432,12 +2536,28 @@ impl serde::Serialize for MsgRegisterAsset {
         if self.is_regulated {
             len += 1;
         }
+        if !self.dk_pub.is_empty() {
+            len += 1;
+        }
+        if !self.threshold.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.MsgRegisterAsset", len)?;
         if let Some(v) = self.asset_id.as_ref() {
             struct_ser.serialize_field("assetId", v)?;
         }
         if self.is_regulated {
             struct_ser.serialize_field("isRegulated", &self.is_regulated)?;
+        }
+        if !self.dk_pub.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("dkPub", pbjson::private::base64::encode(&self.dk_pub).as_str())?;
+        }
+        if !self.threshold.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("threshold", pbjson::private::base64::encode(&self.threshold).as_str())?;
         }
         struct_ser.end()
     }
@@ -2453,12 +2573,17 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
             "assetId",
             "is_regulated",
             "isRegulated",
+            "dk_pub",
+            "dkPub",
+            "threshold",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             AssetId,
             IsRegulated,
+            DkPub,
+            Threshold,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -2483,6 +2608,8 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                         match value {
                             "assetId" | "asset_id" => Ok(GeneratedField::AssetId),
                             "isRegulated" | "is_regulated" => Ok(GeneratedField::IsRegulated),
+                            "dkPub" | "dk_pub" => Ok(GeneratedField::DkPub),
+                            "threshold" => Ok(GeneratedField::Threshold),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -2504,6 +2631,8 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
             {
                 let mut asset_id__ = None;
                 let mut is_regulated__ = None;
+                let mut dk_pub__ = None;
+                let mut threshold__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::AssetId => {
@@ -2518,6 +2647,22 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                             }
                             is_regulated__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::DkPub => {
+                            if dk_pub__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dkPub"));
+                            }
+                            dk_pub__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Threshold => {
+                            if threshold__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("threshold"));
+                            }
+                            threshold__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -2526,6 +2671,8 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                 Ok(MsgRegisterAsset {
                     asset_id: asset_id__,
                     is_regulated: is_regulated__.unwrap_or_default(),
+                    dk_pub: dk_pub__.unwrap_or_default(),
+                    threshold: threshold__.unwrap_or_default(),
                 })
             }
         }
