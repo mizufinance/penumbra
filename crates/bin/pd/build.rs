@@ -56,7 +56,7 @@ fn setup_testnet_config() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("could not get parent of current working directory"))?
         .parent()
         .ok_or_else(|| anyhow::anyhow!("could not get parent of current working directory"))?
-        .join("testnets");
+        .join("deployments");
 
     // Try to find a numbered testnet subdirectory (old format: 001-valetudo, etc.)
     // If none found, use the testnets directory directly with CI config files (new format)
@@ -150,12 +150,14 @@ fn latest_testnet(testnets_path: impl AsRef<Path>) -> anyhow::Result<(String, St
                 .ok_or_else(|| anyhow::anyhow!("testnet path '{:?}' is invalid utf8", path))?
                 .to_string();
             // Split the testnet directory name into (index, name), i.e. `001-valetudo`
-            // becomes (1, "valetudo")
-            if let Some((index_str, name)) = dir_name.split_once('-') {
-                if let Ok(index) = index_str.parse::<u64>() {
-                    testnets.push((index, name.to_string(), dir_name));
-                }
-            }
+            // becomes (1, "valetudo"). Skip directories that don't match this pattern.
+            let Some((index_str, name)) = dir_name.split_once('-') else {
+                continue;
+            };
+            let Ok(index) = index_str.parse::<u64>() else {
+                continue;
+            };
+            testnets.push((index, name.to_string(), dir_name));
         }
     }
 
