@@ -275,6 +275,16 @@ pub mod tendermint {
     }
 }
 
+pub mod ibc {
+    pub mod lightclients {
+        pub mod bankd {
+            pub mod v1 {
+                include!("gen/ibc.lightclients.bankd.v1.rs");
+            }
+        }
+    }
+}
+
 pub mod noble {
     pub mod forwarding {
         pub mod v1 {

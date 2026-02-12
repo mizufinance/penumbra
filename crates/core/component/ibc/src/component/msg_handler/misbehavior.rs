@@ -14,23 +14,37 @@ use tendermint_light_client_verifier::{
 
 use super::update_client::verify_header_validator_set;
 use super::MsgHandler;
+use crate::client_types::{BANKD_MISBEHAVIOUR_TYPE_URL, TENDERMINT_MISBEHAVIOUR_TYPE_URL};
 use crate::component::client::StateWriteExt as _;
 use crate::component::HostInterface;
-use crate::component::{ics02_validation, ClientStateReadExt as _};
+use crate::component::ClientStateReadExt as _;
 
 #[async_trait]
 impl MsgHandler for MsgSubmitMisbehaviour {
     async fn check_stateless<H>(&self) -> Result<()> {
-        misbehavior_is_tendermint(self)?;
-        let untrusted_misbehavior =
-            ics02_validation::get_tendermint_misbehavior(self.misbehaviour.clone())?;
-        // misbehavior must either contain equivocation or timestamp monotonicity violation
-        if !misbehavior_equivocation_violation(&untrusted_misbehavior)
-            && !misbehavior_timestamp_monotonicity_violation(&untrusted_misbehavior)
-        {
-            anyhow::bail!(
-                "misbehavior must either contain equivocation or timestamp monotonicity violation"
-            );
+        misbehavior_is_known_type(self)?;
+
+        match self.misbehaviour.type_url.as_str() {
+            TENDERMINT_MISBEHAVIOUR_TYPE_URL => {
+                let untrusted_misbehavior =
+                    TendermintMisbehavior::try_from(self.misbehaviour.clone())
+                        .map_err(|e| anyhow::anyhow!("failed to deserialize tendermint misbehavior: {e}"))?;
+                // misbehavior must either contain equivocation or timestamp monotonicity violation
+                if !misbehavior_equivocation_violation(&untrusted_misbehavior)
+                    && !misbehavior_timestamp_monotonicity_violation(&untrusted_misbehavior)
+                {
+                    anyhow::bail!(
+                        "misbehavior must either contain equivocation or timestamp monotonicity violation"
+                    );
+                }
+            }
+            BANKD_MISBEHAVIOUR_TYPE_URL => {
+                // Bankd misbehaviour validation will be implemented in a future PR.
+                anyhow::bail!("bankd misbehaviour is not yet supported");
+            }
+            _ => {
+                anyhow::bail!("unknown misbehaviour type");
+            }
         }
 
         Ok(())
@@ -40,7 +54,8 @@ impl MsgHandler for MsgSubmitMisbehaviour {
         tracing::debug!(msg = ?self);
 
         let untrusted_misbehavior =
-            ics02_validation::get_tendermint_misbehavior(self.misbehaviour.clone())?;
+            TendermintMisbehavior::try_from(self.misbehaviour.clone())
+                .map_err(|e| anyhow::anyhow!("failed to deserialize tendermint misbehavior: {e}"))?;
 
         // misbehavior must either contain equivocation or timestamp monotonicity violation
         if !misbehavior_equivocation_violation(&untrusted_misbehavior)
@@ -180,12 +195,11 @@ fn misbehavior_timestamp_monotonicity_violation(misbehavior: &TendermintMisbehav
             > misbehavior.header2.signed_header.header.time
 }
 
-fn misbehavior_is_tendermint(msg: &MsgSubmitMisbehaviour) -> Result<()> {
-    if ics02_validation::is_tendermint_misbehavior(&msg.misbehaviour) {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!(
-            "MsgSubmitMisbehaviour is not tendermint misbehavior"
-        ))
+fn misbehavior_is_known_type(msg: &MsgSubmitMisbehaviour) -> Result<()> {
+    match msg.misbehaviour.type_url.as_str() {
+        TENDERMINT_MISBEHAVIOUR_TYPE_URL | BANKD_MISBEHAVIOUR_TYPE_URL => Ok(()),
+        other => Err(anyhow::anyhow!(
+            "MsgSubmitMisbehaviour: unknown misbehaviour type: {other}"
+        )),
     }
 }

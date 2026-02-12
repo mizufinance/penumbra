@@ -15,17 +15,19 @@ use tendermint_light_client_verifier::{
     ProdVerifier, Verdict, Verifier,
 };
 
+use crate::client_types::AnyHeader;
 use crate::component::{
     client::{
         ConsensusStateWriteExt as _, Ics2ClientExt as _, StateReadExt as _, StateWriteExt as _,
     },
-    ics02_validation, HostInterface, MsgHandler,
+    HostInterface, MsgHandler,
 };
 
 #[async_trait]
 impl MsgHandler for MsgUpdateClient {
     async fn check_stateless<AH>(&self) -> Result<()> {
-        header_is_tendermint(self)?;
+        AnyHeader::try_from(self.client_message.clone())
+            .context("MsgUpdateClient: unsupported header type")?;
 
         Ok(())
     }
@@ -48,121 +50,121 @@ impl MsgHandler for MsgUpdateClient {
 
         let trusted_client_state = client_state;
 
-        let untrusted_header =
-            ics02_validation::get_tendermint_header(self.client_message.clone())?;
+        let any_header = AnyHeader::try_from(self.client_message.clone())?;
 
-        header_revision_matches_client_state(&trusted_client_state, &untrusted_header)?;
-        header_height_is_consistent(&untrusted_header)?;
+        match any_header {
+            AnyHeader::Tendermint(untrusted_header) => {
+                header_revision_matches_client_state(&trusted_client_state, &untrusted_header)?;
+                header_height_is_consistent(&untrusted_header)?;
 
-        // The (still untrusted) header uses the `trusted_height` field to
-        // specify the trusted anchor data it is extending.
-        let trusted_height = untrusted_header.trusted_height;
+                // The (still untrusted) header uses the `trusted_height` field to
+                // specify the trusted anchor data it is extending.
+                let trusted_height = untrusted_header.trusted_height;
 
-        // We use the specified trusted height to query the trusted
-        // consensus state the update extends.
-        let last_trusted_consensus_state = state
-            .get_verified_consensus_state(&trusted_height, &self.client_id)
-            .await?;
+                // We use the specified trusted height to query the trusted
+                // consensus state the update extends.
+                let last_trusted_consensus_state = state
+                    .get_verified_consensus_state(&trusted_height, &self.client_id)
+                    .await?;
 
-        // We also have to convert from an IBC height, which has two
-        // components, to a Tendermint height, which has only one.
-        let trusted_height = trusted_height
-            .revision_height()
-            .try_into()
-            .context("invalid header height")?;
+                // We also have to convert from an IBC height, which has two
+                // components, to a Tendermint height, which has only one.
+                let trusted_height = trusted_height
+                    .revision_height()
+                    .try_into()
+                    .context("invalid header height")?;
 
-        let trusted_validator_set =
-            verify_header_validator_set(&untrusted_header, &last_trusted_consensus_state)?;
+                let trusted_validator_set =
+                    verify_header_validator_set(&untrusted_header, &last_trusted_consensus_state)?;
 
-        // Now we build the trusted and untrusted states to feed to the Tendermint light client.
+                // Now we build the trusted and untrusted states to feed to the Tendermint light client.
 
-        let trusted_state = TrustedBlockState {
-            // TODO(erwan): do we need an additional check on `chain_id`
-            chain_id: &trusted_client_state.chain_id.clone().into(),
-            header_time: last_trusted_consensus_state.timestamp,
-            height: trusted_height,
-            next_validators: trusted_validator_set,
-            next_validators_hash: last_trusted_consensus_state.next_validators_hash,
-        };
+                let trusted_state = TrustedBlockState {
+                    // TODO(erwan): do we need an additional check on `chain_id`
+                    chain_id: &trusted_client_state.chain_id.clone().into(),
+                    header_time: last_trusted_consensus_state.timestamp,
+                    height: trusted_height,
+                    next_validators: trusted_validator_set,
+                    next_validators_hash: last_trusted_consensus_state.next_validators_hash,
+                };
 
-        let untrusted_state = UntrustedBlockState {
-            signed_header: &untrusted_header.signed_header,
-            validators: &untrusted_header.validator_set,
-            next_validators: None, // TODO: do we need this?
-        };
+                let untrusted_state = UntrustedBlockState {
+                    signed_header: &untrusted_header.signed_header,
+                    validators: &untrusted_header.validator_set,
+                    next_validators: None, // TODO: do we need this?
+                };
 
-        let options = trusted_client_state.as_light_client_options()?;
-        let verifier = ProdVerifier::default();
+                let options = trusted_client_state.as_light_client_options()?;
+                let verifier = ProdVerifier::default();
 
-        let verdict = verifier.verify_update_header(
-            untrusted_state,
-            trusted_state,
-            &options,
-            HI::get_block_timestamp(&state).await?,
-        );
+                let verdict = verifier.verify_update_header(
+                    untrusted_state,
+                    trusted_state,
+                    &options,
+                    HI::get_block_timestamp(&state).await?,
+                );
 
-        match verdict {
-            Verdict::Success => Ok(()),
-            Verdict::NotEnoughTrust(voting_power_tally) => Err(anyhow::anyhow!(
-                "not enough trust, voting power tally: {:?}",
-                voting_power_tally
-            )),
-            Verdict::Invalid(detail) => Err(anyhow::anyhow!(
-                "could not verify tendermint header: invalid: {:?}",
-                detail
-            )),
-        }?;
+                match verdict {
+                    Verdict::Success => Ok(()),
+                    Verdict::NotEnoughTrust(voting_power_tally) => Err(anyhow::anyhow!(
+                        "not enough trust, voting power tally: {:?}",
+                        voting_power_tally
+                    )),
+                    Verdict::Invalid(detail) => Err(anyhow::anyhow!(
+                        "could not verify tendermint header: invalid: {:?}",
+                        detail
+                    )),
+                }?;
 
-        let trusted_header = untrusted_header;
+                let trusted_header = untrusted_header;
 
-        // get the latest client state
-        let client_state = state
-            .get_client_state(&self.client_id)
-            .await
-            .context("unable to get client state")?;
+                // get the latest client state
+                let client_state = state
+                    .get_client_state(&self.client_id)
+                    .await
+                    .context("unable to get client state")?;
 
-        // NOTE: next_tendermint_state will freeze the client on equivocation.
-        let (next_tm_client_state, next_tm_consensus_state) = state
-            .next_tendermint_state(
-                self.client_id.clone(),
-                client_state.clone(),
-                trusted_header.clone(),
-            )
-            .await;
+                // NOTE: next_tendermint_state will freeze the client on equivocation.
+                let (next_tm_client_state, next_tm_consensus_state) = state
+                    .next_tendermint_state(
+                        self.client_id.clone(),
+                        client_state.clone(),
+                        trusted_header.clone(),
+                    )
+                    .await;
 
-        // store the updated client and consensus states
-        state.put_client(&self.client_id, next_tm_client_state);
-        state
-            .put_verified_consensus_state::<HI>(
-                trusted_header.height(),
-                self.client_id.clone(),
-                next_tm_consensus_state,
-            )
-            .await?;
+                // store the updated client and consensus states
+                state.put_client(&self.client_id, next_tm_client_state);
+                state
+                    .put_verified_consensus_state::<HI>(
+                        trusted_header.height(),
+                        self.client_id.clone(),
+                        next_tm_consensus_state,
+                    )
+                    .await?;
 
-        state.record(
-            UpdateClient {
-                client_id: self.client_id.clone(),
-                client_type: ibc_types::core::client::ClientType(
-                    TENDERMINT_CLIENT_TYPE.to_string(),
-                ), // TODO: hardcoded
-                consensus_height: trusted_header.height(),
-                header:
-                    <ibc_types::lightclients::tendermint::header::Header as ibc_proto::Protobuf<
-                        ibc_proto::ibc::lightclients::tendermint::v1::Header,
-                    >>::encode_vec(trusted_header),
+                state.record(
+                    UpdateClient {
+                        client_id: self.client_id.clone(),
+                        client_type: ibc_types::core::client::ClientType(
+                            TENDERMINT_CLIENT_TYPE.to_string(),
+                        ),
+                        consensus_height: trusted_header.height(),
+                        header:
+                            <ibc_types::lightclients::tendermint::header::Header as ibc_proto::Protobuf<
+                                ibc_proto::ibc::lightclients::tendermint::v1::Header,
+                            >>::encode_vec(trusted_header),
+                    }
+                    .into(),
+                );
             }
-            .into(),
-        );
-        Ok(())
-    }
-}
+            AnyHeader::Bankd(_bankd_header) => {
+                // Bankd client update will be implemented in a future PR.
+                anyhow::bail!("bankd client update is not yet supported");
+            }
+        }
 
-fn header_is_tendermint(msg: &MsgUpdateClient) -> anyhow::Result<()> {
-    if ics02_validation::is_tendermint_header_state(&msg.client_message) {
         Ok(())
-    } else {
-        Err(anyhow::anyhow!("MsgUpdateClient: not a tendermint header"))
     }
 }
 
@@ -170,25 +172,29 @@ async fn update_is_already_committed<S: StateRead>(
     state: S,
     msg: &MsgUpdateClient,
 ) -> anyhow::Result<bool> {
-    let untrusted_header = ics02_validation::get_tendermint_header(msg.client_message.clone())?;
+    let any_header = AnyHeader::try_from(msg.client_message.clone())?;
     let client_id = msg.client_id.clone();
 
-    // check if we already have a consensus state for this height, if we do, check that it is
-    // the same as this update, if it is, return early.
-    let height = untrusted_header.height();
-    let untrusted_consensus_state = TendermintConsensusState::from(untrusted_header);
-    if let Ok(stored_consensus_state) = state
-        .get_verified_consensus_state(&height, &client_id)
-        .await
-    {
-        let stored_tm_consensus_state = stored_consensus_state;
-
-        Ok(stored_tm_consensus_state == untrusted_consensus_state)
-    } else {
-        // If we don't have a consensus state for this height for
-        // whatever reason (either missing or a DB error), we don't
-        // consider it an error, it's just not already committed.
-        Ok(false)
+    match any_header {
+        AnyHeader::Tendermint(untrusted_header) => {
+            // check if we already have a consensus state for this height, if we do, check that it is
+            // the same as this update, if it is, return early.
+            let height = untrusted_header.height();
+            let untrusted_consensus_state = TendermintConsensusState::from(untrusted_header);
+            if let Ok(stored_consensus_state) = state
+                .get_verified_consensus_state(&height, &client_id)
+                .await
+            {
+                let stored_tm_consensus_state = stored_consensus_state;
+                Ok(stored_tm_consensus_state == untrusted_consensus_state)
+            } else {
+                Ok(false)
+            }
+        }
+        AnyHeader::Bankd(_) => {
+            // For bankd headers, we don't yet support dedup checking
+            Ok(false)
+        }
     }
 }
 
