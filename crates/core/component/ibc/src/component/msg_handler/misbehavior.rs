@@ -22,6 +22,9 @@ use crate::component::ClientStateReadExt as _;
 #[async_trait]
 impl MsgHandler for MsgSubmitMisbehaviour {
     async fn check_stateless<H>(&self) -> Result<()> {
+        // Accepts any known client type. Bankd arms will be fully
+        // implemented in B06-T3; for now they pass stateless checks
+        // but bail at execution time.
         misbehavior_is_known_type(self)?;
 
         match self.misbehaviour.type_url.as_str() {

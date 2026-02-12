@@ -13,7 +13,9 @@ use crate::component::{
 #[async_trait]
 impl MsgHandler for MsgCreateClient {
     async fn check_stateless<H>(&self) -> Result<()> {
-        // Validate that the client state and consensus state are known types
+        // Accepts any known client type. Bankd arms will be fully
+        // implemented in B06-T3; for now they pass stateless checks
+        // but bail at execution time.
         AnyClientState::try_from(self.client_state.clone())
             .context("MsgCreateClient: unsupported client state type")?;
         AnyConsensusState::try_from(self.consensus_state.clone())

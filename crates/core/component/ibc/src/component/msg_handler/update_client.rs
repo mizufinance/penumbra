@@ -26,6 +26,9 @@ use crate::component::{
 #[async_trait]
 impl MsgHandler for MsgUpdateClient {
     async fn check_stateless<AH>(&self) -> Result<()> {
+        // Accepts any known client type. Bankd arms will be fully
+        // implemented in B06-T3; for now they pass stateless checks
+        // but bail at execution time.
         AnyHeader::try_from(self.client_message.clone())
             .context("MsgUpdateClient: unsupported header type")?;
 

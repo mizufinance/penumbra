@@ -154,13 +154,15 @@ impl AnyClientState {
         }
     }
 
-    pub fn latest_height(&self) -> Height {
+    pub fn latest_height(&self) -> anyhow::Result<Height> {
         match self {
-            AnyClientState::Tendermint(cs) => cs.latest_height(),
+            AnyClientState::Tendermint(cs) => Ok(cs.latest_height()),
             AnyClientState::Bankd(cs) => {
-                let h = cs.latest_height.as_ref().expect("bankd client state missing latest_height");
-                Height::new(h.revision_number, h.revision_height)
-                    .expect("invalid bankd latest height")
+                let h = cs
+                    .latest_height
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("bankd client state missing latest_height"))?;
+                Ok(Height::new(h.revision_number, h.revision_height)?)
             }
         }
     }
@@ -179,6 +181,9 @@ impl AnyClientState {
     pub fn proof_specs(&self) -> Vec<ics23::ProofSpec> {
         match self {
             AnyClientState::Tendermint(cs) => cs.proof_specs.clone(),
+            // TODO: replace manual field-by-field mapping with a proper
+            // From/Into conversion once ics23 exposes one. If ics23 adds
+            // fields, this mapping will silently drop them.
             AnyClientState::Bankd(cs) => {
                 cs.proof_specs.iter().map(|spec| {
                     ics23::ProofSpec {
@@ -241,24 +246,28 @@ impl AnyConsensusState {
 }
 
 impl AnyHeader {
-    pub fn height(&self) -> Height {
+    pub fn height(&self) -> anyhow::Result<Height> {
         match self {
-            AnyHeader::Tendermint(h) => h.height(),
+            AnyHeader::Tendermint(h) => Ok(h.height()),
             AnyHeader::Bankd(h) => {
-                let ht = h.height.as_ref().expect("bankd header missing height");
-                Height::new(ht.revision_number, ht.revision_height)
-                    .expect("invalid bankd header height")
+                let ht = h
+                    .height
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("bankd header missing height"))?;
+                Ok(Height::new(ht.revision_number, ht.revision_height)?)
             }
         }
     }
 
-    pub fn trusted_height(&self) -> Height {
+    pub fn trusted_height(&self) -> anyhow::Result<Height> {
         match self {
-            AnyHeader::Tendermint(h) => h.trusted_height,
+            AnyHeader::Tendermint(h) => Ok(h.trusted_height),
             AnyHeader::Bankd(h) => {
-                let ht = h.trusted_height.as_ref().expect("bankd header missing trusted_height");
-                Height::new(ht.revision_number, ht.revision_height)
-                    .expect("invalid bankd trusted height")
+                let ht = h
+                    .trusted_height
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("bankd header missing trusted_height"))?;
+                Ok(Height::new(ht.revision_number, ht.revision_height)?)
             }
         }
     }

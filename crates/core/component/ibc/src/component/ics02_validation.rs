@@ -24,12 +24,12 @@ pub fn validate_penumbra_sdk_client_state(
     }
 
     // check that the revision number is the same as our chain ID's version
-    if any_client_state.latest_height().revision_number() != expected_chain_id.version() {
+    if any_client_state.latest_height()?.revision_number() != expected_chain_id.version() {
         anyhow::bail!("invalid client state: revision number does not match");
     }
 
     // check that the latest height isn't gte the current block height
-    if any_client_state.latest_height().revision_height() >= current_height {
+    if any_client_state.latest_height()?.revision_height() >= current_height {
         anyhow::bail!(
             "invalid client state: latest height is greater than or equal to the current block height"
         );
