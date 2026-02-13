@@ -97,8 +97,13 @@ impl Ics20Withdrawal {
             );
         }
 
-        // NOTE: we could validate the destination chain address as bech32 to prevent mistyped
-        // addresses, but this would preclude sending to chains that don't use bech32 addresses.
+        // Validate destination chain address format: accept Penumbra bech32 or EVM hex addresses.
+        if !is_valid_ics20_address(&self.destination_chain_address) {
+            anyhow::bail!(
+                "invalid destination chain address '{}': must be a valid bech32 address or EVM hex address (0x + 40 hex chars)",
+                self.destination_chain_address
+            );
+        }
 
         Ok(())
     }
@@ -184,5 +189,95 @@ impl From<Ics20Withdrawal> for pb::FungibleTokenPacketData {
             sender: return_address,
             memo: w.ics20_memo,
         }
+    }
+}
+
+/// Check if the given address is a valid ICS-20 destination address.
+/// Accepts either a valid Penumbra address (bech32) or an EVM hex address (0x + 40 hex chars).
+pub fn is_valid_ics20_address(addr: &str) -> bool {
+    // Try Penumbra bech32 address first
+    if Address::from_str(addr).is_ok() {
+        return true;
+    }
+
+    // Try EVM hex address: 0x + exactly 40 hex characters (20 bytes)
+    is_valid_evm_hex_address(addr)
+}
+
+/// Check if the given string is a valid EVM hex address (0x + 40 hex chars).
+pub fn is_valid_evm_hex_address(addr: &str) -> bool {
+    if let Some(hex_part) = addr.strip_prefix("0x") {
+        hex_part.len() == 40 && hex_part.chars().all(|c| c.is_ascii_hexdigit())
+    } else {
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_evm_hex_address() {
+        assert!(is_valid_evm_hex_address(
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+        ));
+        assert!(is_valid_evm_hex_address(
+            "0x0000000000000000000000000000000000000000"
+        ));
+        assert!(is_valid_evm_hex_address(
+            "0xffffffffffffffffffffffffffffffffffffffff"
+        ));
+        assert!(is_valid_evm_hex_address(
+            "0xABCDEF1234567890abcdef1234567890ABCDEF12"
+        ));
+    }
+
+    #[test]
+    fn test_too_short() {
+        assert!(!is_valid_evm_hex_address(
+            "0x742d35Cc6634C0532925a3b844Bc9e"
+        ));
+    }
+
+    #[test]
+    fn test_too_long() {
+        assert!(!is_valid_evm_hex_address(
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18ff"
+        ));
+    }
+
+    #[test]
+    fn test_non_hex_chars() {
+        assert!(!is_valid_evm_hex_address(
+            "0xZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
+        ));
+        assert!(!is_valid_evm_hex_address(
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f2bDGG"
+        ));
+    }
+
+    #[test]
+    fn test_missing_prefix() {
+        assert!(!is_valid_evm_hex_address(
+            "742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+        ));
+    }
+
+    #[test]
+    fn test_empty_string() {
+        assert!(!is_valid_evm_hex_address(""));
+    }
+
+    #[test]
+    fn test_prefix_only() {
+        assert!(!is_valid_evm_hex_address("0x"));
+    }
+
+    #[test]
+    fn test_uppercase_prefix_rejected() {
+        assert!(!is_valid_evm_hex_address(
+            "0X742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+        ));
     }
 }

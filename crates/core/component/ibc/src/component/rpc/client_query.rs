@@ -92,16 +92,21 @@ impl<HI: HostInterface + Send + Sync + 'static> ClientQuery for IbcQuery<HI> {
             .0;
 
         let mut client_states = vec![];
-        for client_idx in 0..client_counter {
-            // NOTE: currently, we only look up tendermint clients, because we only support tendermint clients.
-            let client_id = ClientId::from_str(format!("07-tendermint-{}", client_idx).as_str())
-                .map_err(|e| tonic::Status::aborted(format!("invalid client id: {e}")))?;
-            let client_state = snapshot.get_client_state(&client_id).await;
-            let id_client = IdentifiedClientState {
-                client_id: client_id.to_string(),
-                client_state: client_state.ok().map(|state| state.into()), // send None if we couldn't find the client state
-            };
-            client_states.push(id_client);
+        // Iterate all known client type prefixes
+        let client_type_prefixes = ["07-tendermint", "08-commonware-bls"];
+        for prefix in &client_type_prefixes {
+            for client_idx in 0..client_counter {
+                let client_id =
+                    ClientId::from_str(format!("{}-{}", prefix, client_idx).as_str())
+                        .map_err(|e| tonic::Status::aborted(format!("invalid client id: {e}")))?;
+                if let Ok(client_state) = snapshot.get_client_state(&client_id).await {
+                    let id_client = IdentifiedClientState {
+                        client_id: client_id.to_string(),
+                        client_state: Some(client_state.into()),
+                    };
+                    client_states.push(id_client);
+                }
+            }
         }
 
         let res = QueryClientStatesResponse {

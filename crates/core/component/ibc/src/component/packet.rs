@@ -134,17 +134,17 @@ pub trait SendPacketRead: StateRead {
             anyhow::bail!("client {} is frozen", &connection.client_id);
         }
 
+        let latest_height = client_state.latest_height()?;
         let latest_consensus_state = self
-            .get_verified_consensus_state(&client_state.latest_height(), &connection.client_id)
+            .get_verified_consensus_state(&latest_height, &connection.client_id)
             .await?;
 
-        let time_elapsed = current_block_time.duration_since(latest_consensus_state.timestamp)?;
+        let consensus_time = latest_consensus_state.timestamp()?;
+        let time_elapsed = current_block_time.duration_since(consensus_time)?;
 
         if client_state.expired(time_elapsed) {
             anyhow::bail!("client {} is expired", &connection.client_id);
         }
-
-        let latest_height = client_state.latest_height();
 
         // check that time timeout height hasn't already passed in the local client tracking the
         // receiving chain
@@ -158,7 +158,7 @@ pub trait SendPacketRead: StateRead {
 
         // check that the timeout timestamp hasn't already passed in the local client tracking
         // the receiving chain
-        let chain_ts = latest_consensus_state.timestamp.unix_timestamp_nanos() as u64;
+        let chain_ts = latest_consensus_state.timestamp_nanos()?;
         if packet.timeout_timestamp <= chain_ts {
             anyhow::bail!(
                 "timeout timestamp {} is less than the latest timestamp on the counterparty {}",

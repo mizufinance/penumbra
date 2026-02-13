@@ -1,3 +1,4 @@
+use crate::client_types::{AnyClientState, AnyConsensusState};
 use crate::component::client::StateReadExt;
 
 use core::time::Duration;
@@ -76,7 +77,7 @@ pub fn calculate_block_delay(
         as u64
 }
 
-fn verify_merkle_absence_proof(
+pub fn verify_merkle_absence_proof(
     proof_specs: &[ics23::ProofSpec],
     prefix: &MerklePrefix,
     proof: &MerkleProof,
@@ -89,7 +90,7 @@ fn verify_merkle_absence_proof(
     Ok(())
 }
 
-fn verify_merkle_proof(
+pub fn verify_merkle_proof(
     proof_specs: &[ics23::ProofSpec],
     prefix: &MerklePrefix,
     proof: &MerkleProof,
@@ -121,8 +122,13 @@ pub trait ClientUpgradeProofVerifier: StateReadExt + Sized {
         // get the stored client state for the counterparty
         let trusted_client_state = self.get_client_state(client_id).await?;
 
+        let trusted_tm_cs = match &trusted_client_state {
+            AnyClientState::Tendermint(cs) => cs,
+            _ => anyhow::bail!("client upgrade is only supported for Tendermint clients"),
+        };
+
         // Check to see if the upgrade path is set
-        let mut upgrade_path = trusted_client_state.upgrade_path.clone();
+        let mut upgrade_path = trusted_tm_cs.upgrade_path.clone();
         if upgrade_path.pop().is_none() {
             anyhow::bail!("upgrade path is not set");
         };
@@ -139,35 +145,45 @@ pub trait ClientUpgradeProofVerifier: StateReadExt + Sized {
 
         // get the stored consensus state for the counterparty
         let trusted_consensus_state = self
-            .get_verified_consensus_state(&trusted_client_state.latest_height(), client_id)
+            .get_verified_consensus_state(
+                &trusted_client_state
+                    .latest_height()
+                    .map_err(|e| anyhow::anyhow!("unable to get latest height: {e}"))?,
+                client_id,
+            )
             .await?;
+
+        let trusted_tm_cons = match &trusted_consensus_state {
+            AnyConsensusState::Tendermint(cs) => cs,
+            _ => anyhow::bail!("expected Tendermint consensus state for upgrade verification"),
+        };
 
         // check that the client is not expired
         let now = HI::get_block_timestamp(&self).await?;
-        let time_elapsed = now.duration_since(trusted_consensus_state.timestamp)?;
+        let time_elapsed = now.duration_since(trusted_tm_cons.timestamp)?;
 
-        if trusted_client_state.expired(time_elapsed) {
+        if trusted_tm_cs.expired(time_elapsed) {
             anyhow::bail!("client is expired");
         }
 
+        let proof_specs = trusted_client_state.proof_specs();
+
         verify_merkle_proof(
-            &trusted_client_state.proof_specs,
+            &proof_specs,
             &upgrade_path_prefix,
             client_state_proof,
-            &trusted_consensus_state.root,
-            ClientUpgradePath::UpgradedClientState(
-                trusted_client_state.latest_height().revision_height(),
-            ),
+            &trusted_tm_cons.root,
+            ClientUpgradePath::UpgradedClientState(trusted_tm_cs.latest_height().revision_height()),
             upgraded_tm_client_state.encode_to_vec(),
         )?;
 
         verify_merkle_proof(
-            &trusted_client_state.proof_specs,
+            &proof_specs,
             &upgrade_path_prefix,
             consensus_state_proof,
-            &trusted_consensus_state.root,
+            &trusted_tm_cons.root,
             ClientUpgradePath::UpgradedClientConsensusState(
-                trusted_client_state.latest_height().revision_height(),
+                trusted_tm_cs.latest_height().revision_height(),
             ),
             upgraded_tm_consensus_state.encode_to_vec(),
         )?;
@@ -205,14 +221,19 @@ pub trait ChannelProofVerifier: StateReadExt {
 
         trusted_client_state.verify_height(*proof_height)?;
 
+        let proof_specs = trusted_client_state.proof_specs();
+        let root = MerkleRoot {
+            hash: trusted_consensus_state.root(),
+        };
+
         // TODO: ok to clone this?
         let value = expected_channel.clone().encode_vec();
 
         verify_merkle_proof(
-            &trusted_client_state.proof_specs,
+            &proof_specs,
             &connection.counterparty.prefix.clone(),
             proof,
-            &trusted_consensus_state.root,
+            &root,
             ChannelEndPath::new(port_id, channel_id),
             value,
         )?;
@@ -224,7 +245,7 @@ pub trait ChannelProofVerifier: StateReadExt {
 impl<T: StateRead> ChannelProofVerifier for T {}
 
 pub fn verify_connection_state(
-    client_state: &TendermintClientState,
+    client_state: &AnyClientState,
     height: Height,
     prefix: &MerklePrefix,
     proof: &MerkleProof,
@@ -237,33 +258,31 @@ pub fn verify_connection_state(
     // TODO: ok to clone this?
     let value = expected_connection_end.clone().encode_vec();
 
-    verify_merkle_proof(
-        &client_state.proof_specs,
-        prefix,
-        proof,
-        root,
-        conn_path.clone(),
-        value,
-    )?;
+    let proof_specs = client_state.proof_specs();
+
+    verify_merkle_proof(&proof_specs, prefix, proof, root, conn_path.clone(), value)?;
 
     Ok(())
 }
 
 pub fn verify_client_full_state(
-    client_state: &TendermintClientState,
+    client_state: &AnyClientState,
     height: Height,
     prefix: &MerklePrefix,
     proof: &MerkleProof,
     root: &MerkleRoot,
     client_state_path: &ClientStatePath,
-    expected_client_state: TendermintClientState,
+    expected_client_state: AnyClientState,
 ) -> anyhow::Result<()> {
     client_state.verify_height(height)?;
 
-    let value: Vec<u8> = expected_client_state.encode_to_vec();
+    let any_proto: ibc_proto::google::protobuf::Any = expected_client_state.into();
+    let value: Vec<u8> = prost::Message::encode_to_vec(&any_proto);
+
+    let proof_specs = client_state.proof_specs();
 
     verify_merkle_proof(
-        &client_state.proof_specs,
+        &proof_specs,
         prefix,
         proof,
         root,
@@ -275,20 +294,23 @@ pub fn verify_client_full_state(
 }
 
 pub fn verify_client_consensus_state(
-    client_state: &TendermintClientState,
+    client_state: &AnyClientState,
     height: Height,
     prefix: &MerklePrefix,
     proof: &MerkleProof,
     root: &MerkleRoot,
     client_cons_state_path: &ClientConsensusStatePath,
-    expected_consenus_state: TendermintConsensusState,
+    expected_consenus_state: AnyConsensusState,
 ) -> anyhow::Result<()> {
     client_state.verify_height(height)?;
 
-    let value: Vec<u8> = expected_consenus_state.encode_to_vec();
+    let any_proto: ibc_proto::google::protobuf::Any = expected_consenus_state.into();
+    let value: Vec<u8> = prost::Message::encode_to_vec(&any_proto);
+
+    let proof_specs = client_state.proof_specs();
 
     verify_merkle_proof(
-        &client_state.proof_specs,
+        &proof_specs,
         prefix,
         proof,
         root,
@@ -322,11 +344,16 @@ pub trait PacketProofVerifier: StateReadExt + inner::Inner {
 
         let commitment_bytes = commit_packet(&msg.packet);
 
+        let proof_specs = trusted_client_state.proof_specs();
+        let root = MerkleRoot {
+            hash: trusted_consensus_state.root(),
+        };
+
         verify_merkle_proof(
-            &trusted_client_state.proof_specs,
+            &proof_specs,
             &connection.counterparty.prefix.clone(),
             &msg.proof_commitment_on_a,
-            &trusted_consensus_state.root,
+            &root,
             commitment_path,
             commitment_bytes,
         )?;
@@ -355,11 +382,16 @@ pub trait PacketProofVerifier: StateReadExt + inner::Inner {
 
         let ack_bytes = commit_acknowledgement(&msg.acknowledgement);
 
+        let proof_specs = trusted_client_state.proof_specs();
+        let root = MerkleRoot {
+            hash: trusted_consensus_state.root(),
+        };
+
         verify_merkle_proof(
-            &trusted_client_state.proof_specs,
+            &proof_specs,
             &connection.counterparty.prefix.clone(),
             &msg.proof_acked_on_b,
-            &trusted_consensus_state.root,
+            &root,
             ack_path,
             ack_bytes,
         )?;
@@ -383,11 +415,16 @@ pub trait PacketProofVerifier: StateReadExt + inner::Inner {
         let seq_bytes = msg.next_seq_recv_on_b.0.to_be_bytes().to_vec();
         let seq_path = SeqRecvPath(msg.packet.port_on_b.clone(), msg.packet.chan_on_b.clone());
 
+        let proof_specs = trusted_client_state.proof_specs();
+        let root = MerkleRoot {
+            hash: trusted_consensus_state.root(),
+        };
+
         verify_merkle_proof(
-            &trusted_client_state.proof_specs,
+            &proof_specs,
             &connection.counterparty.prefix.clone(),
             &msg.proof_unreceived_on_b,
-            &trusted_consensus_state.root,
+            &root,
             seq_path,
             seq_bytes,
         )?;
@@ -414,11 +451,16 @@ pub trait PacketProofVerifier: StateReadExt + inner::Inner {
             sequence: msg.packet.sequence,
         };
 
+        let proof_specs = trusted_client_state.proof_specs();
+        let root = MerkleRoot {
+            hash: trusted_consensus_state.root(),
+        };
+
         verify_merkle_absence_proof(
-            &trusted_client_state.proof_specs,
+            &proof_specs,
             &connection.counterparty.prefix.clone(),
             &msg.proof_unreceived_on_b,
-            &trusted_consensus_state.root,
+            &root,
             receipt_path,
         )?;
 
@@ -429,6 +471,7 @@ pub trait PacketProofVerifier: StateReadExt + inner::Inner {
 impl<T: StateRead> PacketProofVerifier for T {}
 
 mod inner {
+    use crate::client_types::{AnyClientState, AnyConsensusState};
     use crate::component::HostInterface;
 
     use super::*;
@@ -440,7 +483,7 @@ mod inner {
             client_id: &ClientId,
             height: &Height,
             connection: &ConnectionEnd,
-        ) -> anyhow::Result<(TendermintClientState, TendermintConsensusState)> {
+        ) -> anyhow::Result<(AnyClientState, AnyConsensusState)> {
             let trusted_client_state = self.get_client_state(client_id).await?;
 
             // TODO: should we also check if the client is expired here?
@@ -451,9 +494,7 @@ mod inner {
             let trusted_consensus_state =
                 self.get_verified_consensus_state(height, client_id).await?;
 
-            let tm_client_state = trusted_client_state;
-
-            tm_client_state.verify_height(*height)?;
+            trusted_client_state.verify_height(*height)?;
 
             // verify that the delay time has passed (see ICS07 tendermint IBC client spec for
             // more details)
@@ -478,7 +519,7 @@ mod inner {
                 delay_period_blocks,
             )?;
 
-            Ok((tm_client_state, trusted_consensus_state))
+            Ok((trusted_client_state, trusted_consensus_state))
         }
     }
 

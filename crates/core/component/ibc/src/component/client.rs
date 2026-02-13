@@ -18,7 +18,12 @@ use ibc_types::lightclients::tendermint::{
     header::Header as TendermintHeader,
 };
 use penumbra_sdk_proto::{StateReadProto, StateWriteProto};
+use prost::Message as _;
 
+use crate::client_types::{
+    AnyClientState, AnyConsensusState, AnyHeader, BankdClientState, BankdConsensusState,
+    BankdHeader,
+};
 use crate::component::client_counter::{ClientCounter, VerifiedHeights};
 use crate::prefix::MerklePrefixExt;
 use crate::IBC_COMMITMENT_PREFIX;
@@ -57,14 +62,37 @@ impl Display for ClientStatus {
 
 #[async_trait]
 pub(crate) trait Ics2ClientExt: StateWrite {
-    // given an already verified tendermint header, and a trusted tendermint client state, compute
-    // the next client and consensus states.
-    async fn next_tendermint_state(
+    // Given an already verified header and a trusted client state, compute
+    // the next client and consensus states. Dispatches by client type.
+    async fn next_client_state(
+        &self,
+        client_id: ClientId,
+        trusted_client_state: AnyClientState,
+        verified_header: AnyHeader,
+    ) -> Result<(AnyClientState, AnyConsensusState)> {
+        match (trusted_client_state, verified_header) {
+            (AnyClientState::Tendermint(tm_cs), AnyHeader::Tendermint(tm_header)) => {
+                self.next_tendermint_state_inner(client_id, tm_cs, tm_header)
+                    .await
+            }
+            (AnyClientState::Bankd(bankd_cs), AnyHeader::Bankd(bankd_hdr)) => {
+                self.next_bankd_state_inner(client_id, bankd_cs, bankd_hdr)
+                    .await
+            }
+            _ => {
+                anyhow::bail!("mismatched client state and header types");
+            }
+        }
+    }
+
+    // Tendermint-specific state transition logic. Checks for equivocation and
+    // timestamp monotonicity violations, freezing the client if found.
+    async fn next_tendermint_state_inner(
         &self,
         client_id: ClientId,
         trusted_client_state: TendermintClientState,
         verified_header: TendermintHeader,
-    ) -> (TendermintClientState, TendermintConsensusState) {
+    ) -> Result<(AnyClientState, AnyConsensusState)> {
         let verified_consensus_state = TendermintConsensusState::from(verified_header.clone());
 
         // if we have a stored consensus state for this height that conflicts, we need to freeze
@@ -73,19 +101,28 @@ pub(crate) trait Ics2ClientExt: StateWrite {
             .get_verified_consensus_state(&verified_header.height(), &client_id)
             .await
         {
-            if stored_cs_state == verified_consensus_state {
-                return (trusted_client_state, verified_consensus_state);
+            let stored_tm_cs = match stored_cs_state {
+                AnyConsensusState::Tendermint(cs) => cs,
+                _ => anyhow::bail!("expected Tendermint consensus state"),
+            };
+            if stored_tm_cs == verified_consensus_state {
+                return Ok((
+                    AnyClientState::Tendermint(trusted_client_state),
+                    AnyConsensusState::Tendermint(verified_consensus_state),
+                ));
             } else {
-                return (
-                    trusted_client_state
-                        .with_header(verified_header.clone())
-                        .expect("able to add header to client state")
-                        .with_frozen_height(ibc_types::core::client::Height {
-                            revision_number: 0,
-                            revision_height: 1,
-                        }),
-                    verified_consensus_state,
-                );
+                return Ok((
+                    AnyClientState::Tendermint(
+                        trusted_client_state
+                            .with_header(verified_header.clone())
+                            .expect("able to add header to client state")
+                            .with_frozen_height(ibc_types::core::client::Height {
+                                revision_number: 0,
+                                revision_height: 1,
+                            }),
+                    ),
+                    AnyConsensusState::Tendermint(verified_consensus_state),
+                ));
             }
         }
 
@@ -105,42 +142,154 @@ pub(crate) trait Ics2ClientExt: StateWrite {
         // case 1: if we have a verified consensus state previous to this header, verify that this
         // header's timestamp is greater than or equal to the stored consensus state's timestamp
         if let Some(prev_state) = prev_consensus_state {
-            if verified_header.signed_header.header().time < prev_state.timestamp {
-                return (
-                    trusted_client_state
-                        .with_header(verified_header.clone())
-                        .expect("able to add header to client state")
-                        .with_frozen_height(ibc_types::core::client::Height {
-                            revision_number: 0,
-                            revision_height: 1,
-                        }),
-                    verified_consensus_state,
-                );
+            let prev_tm = match prev_state {
+                AnyConsensusState::Tendermint(cs) => cs,
+                _ => anyhow::bail!("expected Tendermint consensus state for prev"),
+            };
+            if verified_header.signed_header.header().time < prev_tm.timestamp {
+                return Ok((
+                    AnyClientState::Tendermint(
+                        trusted_client_state
+                            .with_header(verified_header.clone())
+                            .expect("able to add header to client state")
+                            .with_frozen_height(ibc_types::core::client::Height {
+                                revision_number: 0,
+                                revision_height: 1,
+                            }),
+                    ),
+                    AnyConsensusState::Tendermint(verified_consensus_state),
+                ));
             }
         }
         // case 2: if we have a verified consensus state with higher block height than this header,
         // verify that this header's timestamp is less than or equal to this header's timestamp.
         if let Some(next_state) = next_consensus_state {
-            if verified_header.signed_header.header().time > next_state.timestamp {
-                return (
-                    trusted_client_state
-                        .with_header(verified_header.clone())
-                        .expect("able to add header to client state")
-                        .with_frozen_height(ibc_types::core::client::Height {
-                            revision_number: 0,
-                            revision_height: 1,
-                        }),
-                    verified_consensus_state,
-                );
+            let next_tm = match next_state {
+                AnyConsensusState::Tendermint(cs) => cs,
+                _ => anyhow::bail!("expected Tendermint consensus state for next"),
+            };
+            if verified_header.signed_header.header().time > next_tm.timestamp {
+                return Ok((
+                    AnyClientState::Tendermint(
+                        trusted_client_state
+                            .with_header(verified_header.clone())
+                            .expect("able to add header to client state")
+                            .with_frozen_height(ibc_types::core::client::Height {
+                                revision_number: 0,
+                                revision_height: 1,
+                            }),
+                    ),
+                    AnyConsensusState::Tendermint(verified_consensus_state),
+                ));
             }
         }
 
-        (
-            trusted_client_state
-                .with_header(verified_header.clone())
-                .expect("able to add header to client state"),
-            verified_consensus_state,
-        )
+        Ok((
+            AnyClientState::Tendermint(
+                trusted_client_state
+                    .with_header(verified_header.clone())
+                    .expect("able to add header to client state"),
+            ),
+            AnyConsensusState::Tendermint(verified_consensus_state),
+        ))
+    }
+
+    // Bankd state transition logic. Checks for equivocation and timestamp
+    // monotonicity violations, freezing the client if found.
+    async fn next_bankd_state_inner(
+        &self,
+        client_id: ClientId,
+        trusted_client_state: BankdClientState,
+        verified_header: BankdHeader,
+    ) -> Result<(AnyClientState, AnyConsensusState)> {
+        let verified_consensus_state = BankdConsensusState {
+            root: verified_header.new_root.clone(),
+            timestamp: verified_header.timestamp,
+            group_public_key: trusted_client_state.group_public_key.clone(),
+        };
+
+        let header_height = verified_header
+            .height
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("bankd header missing height"))?;
+        let header_height =
+            Height::new(header_height.revision_number, header_height.revision_height)?;
+
+        // If we have a stored consensus state at this height that conflicts, freeze.
+        if let Ok(stored_cs_state) = self
+            .get_verified_consensus_state(&header_height, &client_id)
+            .await
+        {
+            let stored_bankd = match stored_cs_state {
+                AnyConsensusState::Bankd(cs) => cs,
+                _ => anyhow::bail!("expected bankd consensus state"),
+            };
+            if stored_bankd == verified_consensus_state {
+                return Ok((
+                    AnyClientState::Bankd(trusted_client_state),
+                    AnyConsensusState::Bankd(verified_consensus_state),
+                ));
+            } else {
+                return Ok((
+                    AnyClientState::Bankd(trusted_client_state)
+                        .with_frozen_height(Height::new(0, 1)?),
+                    AnyConsensusState::Bankd(verified_consensus_state),
+                ));
+            }
+        }
+
+        // Check timestamp monotonicity against adjacent heights.
+        let next_consensus_state = self
+            .next_verified_consensus_state(&client_id, &header_height)
+            .await
+            .expect("able to get next verified consensus state");
+        let prev_consensus_state = self
+            .prev_verified_consensus_state(&client_id, &header_height)
+            .await
+            .expect("able to get previous verified consensus state");
+
+        if let Some(prev_state) = prev_consensus_state {
+            let prev_bankd = match prev_state {
+                AnyConsensusState::Bankd(cs) => cs,
+                _ => anyhow::bail!("expected bankd consensus state for prev"),
+            };
+            if verified_header.timestamp < prev_bankd.timestamp {
+                return Ok((
+                    AnyClientState::Bankd(trusted_client_state)
+                        .with_frozen_height(Height::new(0, 1)?),
+                    AnyConsensusState::Bankd(verified_consensus_state),
+                ));
+            }
+        }
+
+        if let Some(next_state) = next_consensus_state {
+            let next_bankd = match next_state {
+                AnyConsensusState::Bankd(cs) => cs,
+                _ => anyhow::bail!("expected bankd consensus state for next"),
+            };
+            if verified_header.timestamp > next_bankd.timestamp {
+                return Ok((
+                    AnyClientState::Bankd(trusted_client_state)
+                        .with_frozen_height(Height::new(0, 1)?),
+                    AnyConsensusState::Bankd(verified_consensus_state),
+                ));
+            }
+        }
+
+        // All good — update latest height if this header advances it
+        let mut updated_cs = trusted_client_state;
+        let latest = updated_cs
+            .latest_height
+            .as_ref()
+            .map_or(0, |h| h.revision_height);
+        if header_height.revision_height > latest {
+            updated_cs.latest_height = verified_header.height.clone();
+        }
+
+        Ok((
+            AnyClientState::Bankd(updated_cs),
+            AnyConsensusState::Bankd(verified_consensus_state),
+        ))
     }
 }
 
@@ -152,12 +301,13 @@ pub trait ConsensusStateWriteExt: StateWrite + Sized {
         &mut self,
         height: Height,
         client_id: ClientId,
-        consensus_state: TendermintConsensusState,
+        consensus_state: AnyConsensusState,
     ) -> Result<()> {
-        self.put(
+        let any_proto: ibc_proto::google::protobuf::Any = consensus_state.into();
+        self.put_raw(
             IBC_COMMITMENT_PREFIX
                 .apply_string(ClientConsensusStatePath::new(&client_id, &height).to_string()),
-            consensus_state,
+            any_proto.encode_to_vec(),
         );
 
         let current_height = HI::get_block_height(&self).await?;
@@ -199,16 +349,17 @@ pub trait StateWriteExt: StateWrite + StateReadExt {
         self.put("ibc_client_counter".into(), counter);
     }
 
-    fn put_client(&mut self, client_id: &ClientId, client_state: TendermintClientState) {
+    fn put_client(&mut self, client_id: &ClientId, client_state: AnyClientState) {
         self.put_proto(
             IBC_COMMITMENT_PREFIX
                 .apply_string(ibc_types::path::ClientTypePath(client_id.clone()).to_string()),
-            ibc_types::lightclients::tendermint::client_type().to_string(),
+            client_state.client_type().to_string(),
         );
 
-        self.put(
+        let any_proto: ibc_proto::google::protobuf::Any = client_state.into();
+        self.put_raw(
             IBC_COMMITMENT_PREFIX.apply_string(ClientStatePath(client_id.clone()).to_string()),
-            client_state,
+            any_proto.encode_to_vec(),
         );
     }
 
@@ -257,14 +408,17 @@ pub trait StateReadExt: StateRead {
         .map(ClientType::new)
     }
 
-    async fn get_client_state(&self, client_id: &ClientId) -> Result<TendermintClientState> {
-        let client_state = self
-            .get(
+    async fn get_client_state(&self, client_id: &ClientId) -> Result<AnyClientState> {
+        let raw_bytes = self
+            .get_raw(
                 &IBC_COMMITMENT_PREFIX.apply_string(ClientStatePath(client_id.clone()).to_string()),
             )
-            .await?;
+            .await?
+            .context(format!("could not find client state for {client_id}"))?;
 
-        client_state.context(format!("could not find client state for {client_id}"))
+        let any = ibc_proto::google::protobuf::Any::decode(raw_bytes.as_slice())
+            .context("failed to decode client state as Any")?;
+        AnyClientState::try_from(any)
     }
 
     async fn get_client_status(
@@ -278,11 +432,6 @@ pub trait StateReadExt: StateRead {
             return ClientStatus::Unknown;
         }
 
-        // let _client_type = client_type.expect("client type is Ok");
-        // IBC-Go has a check here to see if the client type is allowed.
-        // We don't have a similar allowlist in Penumbra, so we skip that check.
-        // https://github.com/cosmos/ibc-go/blob/main/modules/core/02-client/types/params.go#L34
-
         let client_state = self.get_client_state(client_id).await;
 
         if client_state.is_err() {
@@ -295,9 +444,15 @@ pub trait StateReadExt: StateRead {
             return ClientStatus::Frozen;
         }
 
+        // get latest height (may fail for malformed bankd state)
+        let latest_height = match client_state.latest_height() {
+            Ok(h) => h,
+            Err(_) => return ClientStatus::Unknown,
+        };
+
         // get latest consensus state to check for expiry
         let latest_consensus_state = self
-            .get_verified_consensus_state(&client_state.latest_height(), client_id)
+            .get_verified_consensus_state(&latest_height, client_id)
             .await;
 
         if latest_consensus_state.is_err() {
@@ -308,14 +463,26 @@ pub trait StateReadExt: StateRead {
 
         let latest_consensus_state = latest_consensus_state.expect("latest consensus state is Ok");
 
-        let time_elapsed = current_block_time.duration_since(latest_consensus_state.timestamp);
-        if time_elapsed.is_err() {
-            return ClientStatus::Unknown;
-        }
-        let time_elapsed = time_elapsed.expect("time elapsed is Ok");
-
-        if client_state.expired(time_elapsed) {
-            return ClientStatus::Expired;
+        // Dispatch expiry check by client type
+        match (&client_state, &latest_consensus_state) {
+            (AnyClientState::Tendermint(tm_cs), AnyConsensusState::Tendermint(tm_cons)) => {
+                let time_elapsed = current_block_time.duration_since(tm_cons.timestamp);
+                if time_elapsed.is_err() {
+                    return ClientStatus::Unknown;
+                }
+                let time_elapsed = time_elapsed.expect("time elapsed is Ok");
+                if tm_cs.expired(time_elapsed) {
+                    return ClientStatus::Expired;
+                }
+            }
+            (AnyClientState::Bankd(_), AnyConsensusState::Bankd(_)) => {
+                // Bankd has no trusting period — clients don't expire from time alone.
+                // They can only be frozen by misbehaviour evidence.
+            }
+            _ => {
+                // Mismatched client/consensus types
+                return ClientStatus::Unknown;
+            }
         }
 
         ClientStatus::Active
@@ -348,17 +515,22 @@ pub trait StateReadExt: StateRead {
         &self,
         height: &Height,
         client_id: &ClientId,
-    ) -> Result<TendermintConsensusState> {
-        self.get(
-            &IBC_COMMITMENT_PREFIX
-                .apply_string(ClientConsensusStatePath::new(client_id, height).to_string()),
-        )
-        .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "counterparty consensus state not found for client {client_id} at height {height}"
+    ) -> Result<AnyConsensusState> {
+        let raw_bytes = self
+            .get_raw(
+                &IBC_COMMITMENT_PREFIX
+                    .apply_string(ClientConsensusStatePath::new(client_id, height).to_string()),
             )
-        })
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "counterparty consensus state not found for client {client_id} at height {height}"
+                )
+            })?;
+
+        let any = ibc_proto::google::protobuf::Any::decode(raw_bytes.as_slice())
+            .context("failed to decode consensus state as Any")?;
+        AnyConsensusState::try_from(any)
     }
 
     async fn get_client_update_height(
@@ -399,7 +571,7 @@ pub trait StateReadExt: StateRead {
         &self,
         client_id: &ClientId,
         height: &Height,
-    ) -> Result<Option<TendermintConsensusState>> {
+    ) -> Result<Option<AnyConsensusState>> {
         let mut verified_heights =
             self.get_verified_heights(client_id)
                 .await?
@@ -430,7 +602,7 @@ pub trait StateReadExt: StateRead {
         &self,
         client_id: &ClientId,
         height: &Height,
-    ) -> Result<Option<TendermintConsensusState>> {
+    ) -> Result<Option<AnyConsensusState>> {
         let mut verified_heights =
             self.get_verified_heights(client_id)
                 .await?
@@ -475,11 +647,16 @@ mod tests {
     use crate::component::ClientStateReadExt;
     use crate::{IbcRelay, StateWriteExt};
 
+    use crate::client_types::{
+        BankdMisbehaviour, BANKD_CLIENT_STATE_TYPE_URL, BANKD_CONSENSUS_STATE_TYPE_URL,
+        BANKD_HEADER_TYPE_URL, BANKD_MISBEHAVIOUR_TYPE_URL,
+    };
     use crate::component::app_handler::{AppHandler, AppHandlerCheck, AppHandlerExecute};
     use ibc_types::core::channel::msgs::{
         MsgAcknowledgement, MsgChannelCloseConfirm, MsgChannelCloseInit, MsgChannelOpenAck,
         MsgChannelOpenConfirm, MsgChannelOpenInit, MsgChannelOpenTry, MsgRecvPacket, MsgTimeout,
     };
+    use ibc_types::core::client::msgs::MsgSubmitMisbehaviour;
 
     struct MockHost {}
 
@@ -736,6 +913,383 @@ mod tests {
             .check_historical(state.clone())
             .await
             .expect_err("should not be able to create a client");
+
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // Bankd handler integration test helpers
+    // ---------------------------------------------------------------
+
+    fn bankd_test_keypair() -> (blst::min_sig::SecretKey, [u8; 96]) {
+        let ikm = [42u8; 32];
+        let sk = blst::min_sig::SecretKey::key_gen(&ikm, &[]).expect("keygen");
+        let pk = sk.sk_to_pk();
+        let pk_bytes: [u8; 96] = pk.compress();
+        (sk, pk_bytes)
+    }
+
+    fn sign_bankd_header(sk: &blst::min_sig::SecretKey, header: &BankdHeader) -> Vec<u8> {
+        let encoded = crate::bankd_provider::encode_block(header).expect("encode");
+        let block_id = crate::bankd_provider::keccak256(&encoded);
+        let consensus_digest = crate::bankd_provider::sha256(&block_id);
+        let payload = crate::bankd_verification::union_unique(
+            crate::bankd_verification::SIMPLEX_NAMESPACE,
+            &consensus_digest,
+        );
+        let sig = sk.sign(&payload, crate::bankd_verification::BLS_DST, &[]);
+        sig.compress().to_vec()
+    }
+
+    fn make_bankd_client_state(pk_bytes: &[u8; 96], height: u64) -> BankdClientState {
+        BankdClientState {
+            chain_id: "bankd-test-1".to_string(),
+            latest_height: Some(ibc_proto::ibc::core::client::v1::Height {
+                revision_number: 0,
+                revision_height: height,
+            }),
+            frozen_height: None,
+            proof_specs: vec![],
+            group_public_key: pk_bytes.to_vec(),
+            trusting_period_secs: 86_400,
+        }
+    }
+
+    fn make_bankd_consensus_state(pk_bytes: &[u8; 96], timestamp: u64) -> BankdConsensusState {
+        BankdConsensusState {
+            root: vec![0xaa; 32],
+            timestamp,
+            group_public_key: pk_bytes.to_vec(),
+        }
+    }
+
+    fn make_bankd_header(height: u64, timestamp: u64) -> BankdHeader {
+        BankdHeader {
+            height: Some(ibc_proto::ibc::core::client::v1::Height {
+                revision_number: 0,
+                revision_height: height,
+            }),
+            trusted_height: Some(ibc_proto::ibc::core::client::v1::Height {
+                revision_number: 0,
+                revision_height: height - 1,
+            }),
+            timestamp,
+            new_root: vec![0xbb; 32],
+            parent_hash: vec![0x01; 32],
+            prevrandao: vec![0x02; 32],
+            state_root: vec![0x03; 32],
+            ibc_root: vec![0x04; 32],
+            transactions: vec![vec![0x05; 64]],
+            finalization_certificate: vec![], // filled in by sign_bankd_header
+        }
+    }
+
+    /// Set up cnidarium state and create a bankd client via the handler.
+    /// Returns (state, client_id, secret_key, public_key_bytes).
+    async fn setup_bankd_client() -> anyhow::Result<(
+        Arc<StateDelta<()>>,
+        ClientId,
+        blst::min_sig::SecretKey,
+        [u8; 96],
+    )> {
+        use penumbra_sdk_sct::epoch::Epoch;
+
+        let (sk, pk_bytes) = bankd_test_keypair();
+
+        let mut state = Arc::new(StateDelta::new(()));
+        {
+            let mut state_tx = state.try_begin_transaction().unwrap();
+            state_tx.put_block_height(0);
+            state_tx.put_epoch_by_height(
+                0,
+                Epoch {
+                    index: 0,
+                    start_height: 0,
+                },
+            );
+            state_tx.put_epoch_by_height(
+                1,
+                Epoch {
+                    index: 0,
+                    start_height: 0,
+                },
+            );
+            state_tx.apply();
+        }
+
+        // Host time: 1,700,001,000 unix seconds (1000s after consensus state timestamp)
+        let host_timestamp = Time::from_unix_timestamp(1_700_001_000, 0).expect("valid timestamp");
+        {
+            let mut state_tx = state.try_begin_transaction().unwrap();
+            state_tx.put_block_timestamp(1u64, host_timestamp);
+            state_tx.put_block_height(1);
+            state_tx.put_ibc_params(crate::params::IBCParameters {
+                ibc_enabled: true,
+                inbound_ics20_transfers_enabled: true,
+                outbound_ics20_transfers_enabled: true,
+            });
+            state_tx.put_epoch_by_height(
+                1,
+                Epoch {
+                    index: 0,
+                    start_height: 0,
+                },
+            );
+            state_tx.apply();
+        }
+
+        // Client at height 10, consensus timestamp 1,700,000,000
+        let bankd_cs = make_bankd_client_state(&pk_bytes, 10);
+        let bankd_cons = make_bankd_consensus_state(&pk_bytes, 1_700_000_000);
+
+        let msg_create = MsgCreateClient {
+            client_state: ibc_proto::google::protobuf::Any {
+                type_url: BANKD_CLIENT_STATE_TYPE_URL.to_string(),
+                value: bankd_cs.encode_to_vec(),
+            },
+            consensus_state: ibc_proto::google::protobuf::Any {
+                type_url: BANKD_CONSENSUS_STATE_TYPE_URL.to_string(),
+                value: bankd_cons.encode_to_vec(),
+            },
+            signer: "test".to_string(),
+        };
+
+        let create_action = IbcRelayWithHandlers::<MockAppHandler, MockHost>::new(
+            IbcRelay::CreateClient(msg_create),
+        );
+
+        create_action.check_stateless(()).await?;
+        create_action.check_historical(state.clone()).await?;
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        create_action.check_and_execute(&mut state_tx).await?;
+        state_tx.apply();
+
+        let client_id = ClientId::from_str("08-commonware-bls-0")?;
+
+        Ok((state, client_id, sk, pk_bytes))
+    }
+
+    // ---------------------------------------------------------------
+    // Priority 2: Full MsgCreateClient → MsgUpdateClient flow
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_bankd_create_and_update_client() -> anyhow::Result<()> {
+        let (mut state, client_id, sk, _pk_bytes) = setup_bankd_client().await?;
+
+        // Verify client counter incremented
+        assert_eq!(state.client_counter().await?.0, 1);
+
+        // Verify client state stored correctly
+        let stored_cs = state.get_client_state(&client_id).await?;
+        match &stored_cs {
+            AnyClientState::Bankd(cs) => {
+                assert_eq!(cs.chain_id, "bankd-test-1");
+                assert_eq!(cs.latest_height.as_ref().unwrap().revision_height, 10);
+                assert!(!stored_cs.is_frozen());
+            }
+            _ => panic!("expected Bankd client state"),
+        }
+
+        // Verify consensus state stored at height 10
+        let height_10 = Height::new(0, 10)?;
+        let cons_10 = state
+            .get_verified_consensus_state(&height_10, &client_id)
+            .await?;
+        match &cons_10 {
+            AnyConsensusState::Bankd(cs) => {
+                assert_eq!(cs.root, vec![0xaa; 32]);
+                assert_eq!(cs.timestamp, 1_700_000_000);
+            }
+            _ => panic!("expected Bankd consensus state"),
+        }
+
+        // Build a valid bankd header at height 11, sign with BLS key
+        let mut header = make_bankd_header(11, 1_700_000_500);
+        header.finalization_certificate = sign_bankd_header(&sk, &header);
+
+        let msg_update = MsgUpdateClient {
+            client_id: client_id.clone(),
+            client_message: ibc_proto::google::protobuf::Any {
+                type_url: BANKD_HEADER_TYPE_URL.to_string(),
+                value: header.encode_to_vec(),
+            },
+            signer: "test".to_string(),
+        };
+
+        let update_action = IbcRelayWithHandlers::<MockAppHandler, MockHost>::new(
+            IbcRelay::UpdateClient(msg_update),
+        );
+
+        update_action.check_stateless(()).await?;
+        update_action.check_historical(state.clone()).await?;
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        update_action.check_and_execute(&mut state_tx).await?;
+        state_tx.apply();
+
+        // Verify client state updated to height 11
+        let updated_cs = state.get_client_state(&client_id).await?;
+        match &updated_cs {
+            AnyClientState::Bankd(cs) => {
+                assert_eq!(cs.latest_height.as_ref().unwrap().revision_height, 11);
+            }
+            _ => panic!("expected Bankd client state"),
+        }
+
+        // Verify new consensus state stored at height 11
+        let height_11 = Height::new(0, 11)?;
+        let cons_11 = state
+            .get_verified_consensus_state(&height_11, &client_id)
+            .await?;
+        match &cons_11 {
+            AnyConsensusState::Bankd(cs) => {
+                assert_eq!(cs.root, vec![0xbb; 32]); // new_root from header
+                assert_eq!(cs.timestamp, 1_700_000_500);
+            }
+            _ => panic!("expected Bankd consensus state"),
+        }
+
+        // Original consensus state at height 10 should still be there
+        let cons_10_after = state
+            .get_verified_consensus_state(&height_10, &client_id)
+            .await?;
+        match cons_10_after {
+            AnyConsensusState::Bankd(cs) => {
+                assert_eq!(cs.timestamp, 1_700_000_000);
+            }
+            _ => panic!("expected Bankd consensus state"),
+        }
+
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // Priority 3: Client status checks
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_bankd_client_status_active() -> anyhow::Result<()> {
+        let (state, client_id, _sk, _pk) = setup_bankd_client().await?;
+
+        let current_time = Time::from_unix_timestamp(1_700_001_000, 0)?;
+        let status = state.get_client_status(&client_id, current_time).await;
+        assert_eq!(status, ClientStatus::Active);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bankd_client_does_not_expire() -> anyhow::Result<()> {
+        let (state, client_id, _sk, _pk) = setup_bankd_client().await?;
+
+        // Far-future time: 1 year after consensus state timestamp
+        let far_future = Time::from_unix_timestamp(1_700_000_000 + 365 * 86_400, 0)?;
+        let status = state.get_client_status(&client_id, far_future).await;
+        assert_eq!(status, ClientStatus::Active);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bankd_client_status_frozen_after_misbehaviour() -> anyhow::Result<()> {
+        let (mut state, client_id, sk, _pk) = setup_bankd_client().await?;
+
+        // Build two headers at height 11 with different data (equivocation)
+        let mut h1 = make_bankd_header(11, 1_700_000_500);
+        h1.finalization_certificate = sign_bankd_header(&sk, &h1);
+
+        let mut h2 = make_bankd_header(11, 1_700_000_500);
+        h2.state_root = vec![0xff; 32]; // different state_root = different block
+        h2.finalization_certificate = sign_bankd_header(&sk, &h2);
+
+        let mb = BankdMisbehaviour {
+            client_id: client_id.to_string(),
+            header_1: Some(h1),
+            header_2: Some(h2),
+        };
+
+        let msg = MsgSubmitMisbehaviour {
+            client_id: client_id.clone(),
+            misbehaviour: ibc_proto::google::protobuf::Any {
+                type_url: BANKD_MISBEHAVIOUR_TYPE_URL.to_string(),
+                value: prost::Message::encode_to_vec(&mb),
+            },
+            signer: "test".to_string(),
+        };
+
+        let misbehaviour_action =
+            IbcRelayWithHandlers::<MockAppHandler, MockHost>::new(IbcRelay::SubmitMisbehavior(msg));
+
+        misbehaviour_action.check_stateless(()).await?;
+        misbehaviour_action.check_historical(state.clone()).await?;
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        misbehaviour_action.check_and_execute(&mut state_tx).await?;
+        state_tx.apply();
+
+        // Client should now be frozen
+        let current_time = Time::from_unix_timestamp(1_700_001_000, 0)?;
+        let status = state.get_client_status(&client_id, current_time).await;
+        assert_eq!(status, ClientStatus::Frozen);
+
+        // Verify the client state is_frozen flag
+        let cs = state.get_client_state(&client_id).await?;
+        assert!(cs.is_frozen());
+
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // Priority 4: Misbehaviour edge cases
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_bankd_misbehaviour_invalid_signature_rejected() -> anyhow::Result<()> {
+        let (mut state, client_id, sk, _pk) = setup_bankd_client().await?;
+
+        // Sign header_1 with the correct key, header_2 with a different key
+        let mut h1 = make_bankd_header(11, 1_700_000_500);
+        h1.finalization_certificate = sign_bankd_header(&sk, &h1);
+
+        let mut h2 = make_bankd_header(11, 1_700_000_500);
+        h2.state_root = vec![0xff; 32]; // different block
+                                        // Sign with a wrong key
+        let wrong_ikm = [99u8; 32];
+        let wrong_sk = blst::min_sig::SecretKey::key_gen(&wrong_ikm, &[]).expect("keygen");
+        h2.finalization_certificate = sign_bankd_header(&wrong_sk, &h2);
+
+        let mb = BankdMisbehaviour {
+            client_id: client_id.to_string(),
+            header_1: Some(h1),
+            header_2: Some(h2),
+        };
+
+        let msg = MsgSubmitMisbehaviour {
+            client_id: client_id.clone(),
+            misbehaviour: ibc_proto::google::protobuf::Any {
+                type_url: BANKD_MISBEHAVIOUR_TYPE_URL.to_string(),
+                value: prost::Message::encode_to_vec(&mb),
+            },
+            signer: "test".to_string(),
+        };
+
+        let misbehaviour_action =
+            IbcRelayWithHandlers::<MockAppHandler, MockHost>::new(IbcRelay::SubmitMisbehavior(msg));
+
+        // Stateless checks should pass (format is valid)
+        misbehaviour_action.check_stateless(()).await?;
+        misbehaviour_action.check_historical(state.clone()).await?;
+
+        // Execution should fail because header_2's BLS signature is invalid
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        let result = misbehaviour_action.check_and_execute(&mut state_tx).await;
+        assert!(
+            result.is_err(),
+            "should reject misbehaviour with invalid BLS signature"
+        );
+
+        // Client should NOT be frozen (misbehaviour was rejected)
+        let cs = state.get_client_state(&client_id).await?;
+        assert!(!cs.is_frozen());
 
         Ok(())
     }

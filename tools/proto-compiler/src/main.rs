@@ -27,10 +27,17 @@ fn main() -> anyhow::Result<()> {
     // NOTE: we need this because the rust module that defines the IBC types is external, and not
     // part of this crate.
     // See https://docs.rs/prost-build/0.5.0/prost_build/struct.Config.html#method.extern_path
-    config.extern_path(".ibc", "::ibc_proto::ibc");
+    //
+    // We split `.ibc` into more specific paths so that prost generates code for
+    // `ibc.lightclients.bankd.*` instead of redirecting it to ibc_proto.
+    config.extern_path(".ibc.core", "::ibc_proto::ibc::core");
+    config.extern_path(".ibc.applications", "::ibc_proto::ibc::applications");
+    config.extern_path(".ibc.lightclients.tendermint", "::ibc_proto::ibc::lightclients::tendermint");
+    config.extern_path(".ibc.lightclients.localhost", "::ibc_proto::ibc::lightclients::localhost");
+    config.extern_path(".ibc.lightclients.solomachine", "::ibc_proto::ibc::lightclients::solomachine");
     // TODO: which of these is the right path?
     config.extern_path(".ics23", "::ics23");
-    config.extern_path(".cosmos.ics23", "::ics23");
+    config.extern_path(".cosmos.ics23.v1", "::ics23");
 
     config
         .out_dir(&target_dir)
@@ -91,6 +98,7 @@ fn main() -> anyhow::Result<()> {
                 "../../proto/rust-vendored/ibc/core/channel/v1/query.proto",
                 "../../proto/rust-vendored/ibc/core/client/v1/query.proto",
                 "../../proto/rust-vendored/ibc/core/connection/v1/query.proto",
+                "../../proto/rust-vendored/ibc/lightclients/bankd/v1/bankd.proto",
                 "../../proto/rust-vendored/noble/forwarding/v1/account.proto",
                 "../../proto/rust-vendored/noble/forwarding/v1/genesis.proto",
                 "../../proto/rust-vendored/noble/forwarding/v1/packet.proto",

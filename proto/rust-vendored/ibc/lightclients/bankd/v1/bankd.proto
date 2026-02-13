@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package ibc.lightclients.bankd.v1;
+
+import "ibc/core/client/v1/client.proto";
+import "cosmos/ics23/v1/proofs.proto";
+
+// ClientState defines the bankd light client state.
+message ClientState {
+  // the chain ID of the chain this client tracks
+  string chain_id = 1;
+  // latest height the client was updated to
+  ibc.core.client.v1.Height latest_height = 2;
+  // block height when the client was frozen due to misbehaviour (zero means not frozen)
+  ibc.core.client.v1.Height frozen_height = 3;
+  // proof specifications used in verifying counterparty state
+  repeated cosmos.ics23.v1.ProofSpec proof_specs = 4;
+  // BLS12-381 G1Affine compressed group public key (48 bytes)
+  bytes group_public_key = 5;
+  // trusting period in seconds — headers older than this are rejected
+  uint64 trusting_period_secs = 6;
+}
+
+// ConsensusState defines the bankd light client consensus state.
+message ConsensusState {
+  // the commitment root (i.e. app hash)
+  bytes root = 1;
+  // timestamp in unix seconds
+  uint64 timestamp = 2;
+  // BLS12-381 group public key at this height (48 bytes)
+  bytes group_public_key = 3;
+}
+
+// Header defines the bankd light client header.
+message Header {
+  // the new height
+  ibc.core.client.v1.Height height = 1;
+  // the height of the trusted consensus state used to verify this header
+  ibc.core.client.v1.Height trusted_height = 2;
+  // timestamp in unix seconds
+  uint64 timestamp = 3;
+  // the new commitment root
+  bytes new_root = 4;
+  // parent block hash (32 bytes)
+  bytes parent_hash = 5;
+  // randomness beacon value (32 bytes)
+  bytes prevrandao = 6;
+  // EVM state root (32 bytes)
+  bytes state_root = 7;
+  // JMT root for IBC state, separate from state_root (32 bytes)
+  bytes ibc_root = 8;
+  // transaction payloads for BlockId reconstruction
+  repeated bytes transactions = 9;
+  // serialized Finalization certificate (~240 bytes)
+  bytes finalization_certificate = 10;
+}
+
+// Misbehaviour defines bankd light client misbehaviour (two conflicting headers).
+message Misbehaviour {
+  // the client ID
+  string client_id = 1;
+  Header header_1 = 2;
+  Header header_2 = 3;
+}

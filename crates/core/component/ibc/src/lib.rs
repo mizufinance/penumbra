@@ -6,6 +6,11 @@
 // Requires nightly
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
+pub mod bankd_provider;
+pub mod bankd_verification;
+pub mod client_provider;
+pub mod client_types;
+
 #[cfg(feature = "component")]
 pub mod component;
 #[cfg(feature = "component")]

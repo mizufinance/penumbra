@@ -323,7 +323,20 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
         .amount
         .try_into()
         .context("couldnt decode amount in ICS20 transfer")?;
-    let receiver_address = Address::from_str(&packet_data.receiver)?;
+    let receiver_address = Address::from_str(&packet_data.receiver).with_context(|| {
+        if crate::ics20_withdrawal::is_valid_evm_hex_address(&packet_data.receiver) {
+            format!(
+                "receiver '{}' is a valid EVM hex address but not a valid Penumbra address; \
+                     tokens on Penumbra can only be received by Penumbra addresses",
+                &packet_data.receiver
+            )
+        } else {
+            format!(
+                "invalid receiver address '{}': must be a valid Penumbra bech32 address",
+                &packet_data.receiver
+            )
+        }
+    })?;
 
     // NOTE: here we assume we are chain A.
 

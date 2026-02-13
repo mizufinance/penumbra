@@ -7,6 +7,7 @@ use ibc_types::lightclients::tendermint::client_state::ClientState as Tendermint
 use ibc_types::lightclients::tendermint::header::Header as TendermintHeader;
 use ibc_types::lightclients::tendermint::misbehaviour::Misbehaviour as TendermintMisbehavior;
 use ibc_types::lightclients::tendermint::TENDERMINT_CLIENT_TYPE;
+use prost::Message as _;
 use tendermint_light_client_verifier::{
     types::{TrustedBlockState, UntrustedBlockState},
     ProdVerifier, Verdict, Verifier,
@@ -14,23 +15,70 @@ use tendermint_light_client_verifier::{
 
 use super::update_client::verify_header_validator_set;
 use super::MsgHandler;
+use crate::bankd_provider::BankdProvider;
+use crate::client_provider::ClientProvider;
+use crate::client_types::{
+    AnyClientState, AnyConsensusState, BankdMisbehaviour, BANKD_MISBEHAVIOUR_TYPE_URL,
+    TENDERMINT_MISBEHAVIOUR_TYPE_URL,
+};
 use crate::component::client::StateWriteExt as _;
+use crate::component::ClientStateReadExt as _;
 use crate::component::HostInterface;
-use crate::component::{ics02_validation, ClientStateReadExt as _};
 
 #[async_trait]
 impl MsgHandler for MsgSubmitMisbehaviour {
     async fn check_stateless<H>(&self) -> Result<()> {
-        misbehavior_is_tendermint(self)?;
-        let untrusted_misbehavior =
-            ics02_validation::get_tendermint_misbehavior(self.misbehaviour.clone())?;
-        // misbehavior must either contain equivocation or timestamp monotonicity violation
-        if !misbehavior_equivocation_violation(&untrusted_misbehavior)
-            && !misbehavior_timestamp_monotonicity_violation(&untrusted_misbehavior)
-        {
-            anyhow::bail!(
-                "misbehavior must either contain equivocation or timestamp monotonicity violation"
-            );
+        // Accepts any known client type. Bankd arms will be fully
+        // implemented in B06-T3; for now they pass stateless checks
+        // but bail at execution time.
+        misbehavior_is_known_type(self)?;
+
+        match self.misbehaviour.type_url.as_str() {
+            TENDERMINT_MISBEHAVIOUR_TYPE_URL => {
+                let untrusted_misbehavior =
+                    TendermintMisbehavior::try_from(self.misbehaviour.clone()).map_err(|e| {
+                        anyhow::anyhow!("failed to deserialize tendermint misbehavior: {e}")
+                    })?;
+                // misbehavior must either contain equivocation or timestamp monotonicity violation
+                if !misbehavior_equivocation_violation(&untrusted_misbehavior)
+                    && !misbehavior_timestamp_monotonicity_violation(&untrusted_misbehavior)
+                {
+                    anyhow::bail!(
+                        "misbehavior must either contain equivocation or timestamp monotonicity violation"
+                    );
+                }
+            }
+            BANKD_MISBEHAVIOUR_TYPE_URL => {
+                let mb = BankdMisbehaviour::decode(self.misbehaviour.value.as_ref())
+                    .map_err(|e| anyhow::anyhow!("failed to decode bankd misbehaviour: {e}"))?;
+
+                let h1 = mb
+                    .header_1
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("bankd misbehaviour missing header_1"))?;
+                let h2 = mb
+                    .header_2
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("bankd misbehaviour missing header_2"))?;
+
+                let h1_height = h1
+                    .height
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("header_1 missing height"))?;
+                let h2_height = h2
+                    .height
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("header_2 missing height"))?;
+
+                if h1_height.revision_height != h2_height.revision_height
+                    || h1_height.revision_number != h2_height.revision_number
+                {
+                    anyhow::bail!("bankd misbehaviour headers must be for the same height");
+                }
+            }
+            _ => {
+                anyhow::bail!("unknown misbehaviour type");
+            }
         }
 
         Ok(())
@@ -39,57 +87,109 @@ impl MsgHandler for MsgSubmitMisbehaviour {
     async fn try_execute<S: StateWrite, H, HI: HostInterface>(&self, mut state: S) -> Result<()> {
         tracing::debug!(msg = ?self);
 
-        let untrusted_misbehavior =
-            ics02_validation::get_tendermint_misbehavior(self.misbehaviour.clone())?;
+        match self.misbehaviour.type_url.as_str() {
+            TENDERMINT_MISBEHAVIOUR_TYPE_URL => {
+                let untrusted_misbehavior =
+                    TendermintMisbehavior::try_from(self.misbehaviour.clone()).map_err(|e| {
+                        anyhow::anyhow!("failed to deserialize tendermint misbehavior: {e}")
+                    })?;
 
-        // misbehavior must either contain equivocation or timestamp monotonicity violation
-        if !misbehavior_equivocation_violation(&untrusted_misbehavior)
-            && !misbehavior_timestamp_monotonicity_violation(&untrusted_misbehavior)
-        {
-            anyhow::bail!(
-                "misbehavior must either contain equivocation or timestamp monotonicity violation"
-            );
-        }
+                // misbehavior must either contain equivocation or timestamp monotonicity violation
+                if !misbehavior_equivocation_violation(&untrusted_misbehavior)
+                    && !misbehavior_timestamp_monotonicity_violation(&untrusted_misbehavior)
+                {
+                    anyhow::bail!(
+                        "misbehavior must either contain equivocation or timestamp monotonicity violation"
+                    );
+                }
 
-        // verify that both headers verify for an update client on the last trusted header for
-        // client_id
-        let client_state = client_is_present(&state, self).await?;
+                // verify that both headers verify for an update client on the last trusted header for
+                // client_id
+                let client_state = client_is_present(&state, self).await?;
 
-        // NOTE: we are allowing expired clients here. it seems correct to allow expired clients to
-        // be frozen on evidence of misbehavior.
-        client_is_not_frozen(&client_state)?;
+                let trusted_tm_cs = match &client_state {
+                    AnyClientState::Tendermint(cs) => cs.clone(),
+                    _ => anyhow::bail!(
+                        "expected Tendermint client state for Tendermint misbehaviour"
+                    ),
+                };
 
-        let trusted_client_state = client_state;
+                // NOTE: we are allowing expired clients here. it seems correct to allow expired clients to
+                // be frozen on evidence of misbehavior.
+                client_is_not_frozen(&client_state)?;
 
-        verify_misbehavior_header::<&S, HI>(
-            &state,
-            &untrusted_misbehavior.client_id,
-            &untrusted_misbehavior.header1,
-            &trusted_client_state,
-        )
-        .await?;
-        verify_misbehavior_header::<&S, HI>(
-            &state,
-            &untrusted_misbehavior.client_id,
-            &untrusted_misbehavior.header2,
-            &trusted_client_state,
-        )
-        .await?;
+                verify_misbehavior_header::<&S, HI>(
+                    &state,
+                    &untrusted_misbehavior.client_id,
+                    &untrusted_misbehavior.header1,
+                    &trusted_tm_cs,
+                )
+                .await?;
+                verify_misbehavior_header::<&S, HI>(
+                    &state,
+                    &untrusted_misbehavior.client_id,
+                    &untrusted_misbehavior.header2,
+                    &trusted_tm_cs,
+                )
+                .await?;
 
-        tracing::info!(client_id = ?untrusted_misbehavior.client_id, "received valid misbehavior evidence! freezing client");
+                tracing::info!(client_id = ?untrusted_misbehavior.client_id, "received valid misbehavior evidence! freezing client");
 
-        // freeze the client
-        let frozen_client =
-            trusted_client_state.with_frozen_height(untrusted_misbehavior.header1.height());
-        state.put_client(&self.client_id, frozen_client);
+                // freeze the client
+                let frozen_client =
+                    trusted_tm_cs.with_frozen_height(untrusted_misbehavior.header1.height());
+                state.put_client(&self.client_id, AnyClientState::Tendermint(frozen_client));
 
-        state.record(
-            events::ClientMisbehaviour {
-                client_id: self.client_id.clone(),
-                client_type: ClientType::new(TENDERMINT_CLIENT_TYPE.to_string()),
+                state.record(
+                    events::ClientMisbehaviour {
+                        client_id: self.client_id.clone(),
+                        client_type: ClientType::new(TENDERMINT_CLIENT_TYPE.to_string()),
+                    }
+                    .into(),
+                );
             }
-            .into(),
-        );
+            BANKD_MISBEHAVIOUR_TYPE_URL => {
+                let client_state = client_is_present(&state, self).await?;
+                client_is_not_frozen(&client_state)?;
+
+                let provider = BankdProvider;
+                let is_misbehaviour =
+                    provider.check_misbehaviour(&client_state, &self.misbehaviour)?;
+                anyhow::ensure!(is_misbehaviour, "bankd misbehaviour evidence is not valid");
+
+                let mb = BankdMisbehaviour::decode(self.misbehaviour.value.as_ref())
+                    .map_err(|e| anyhow::anyhow!("failed to decode bankd misbehaviour: {e}"))?;
+
+                let h1_height = mb
+                    .header_1
+                    .as_ref()
+                    .and_then(|h| h.height.as_ref())
+                    .ok_or_else(|| anyhow::anyhow!("misbehaviour header_1 missing height"))?;
+                let freeze_height = ibc_types::core::client::Height::new(
+                    h1_height.revision_number,
+                    h1_height.revision_height,
+                )?;
+
+                tracing::info!(
+                    client_id = ?self.client_id,
+                    "received valid bankd misbehaviour evidence! freezing client"
+                );
+
+                let frozen_client = client_state.with_frozen_height(freeze_height);
+                state.put_client(&self.client_id, frozen_client);
+
+                state.record(
+                    events::ClientMisbehaviour {
+                        client_id: self.client_id.clone(),
+                        client_type: ClientType::new("08-commonware-bls".to_string()),
+                    }
+                    .into(),
+                );
+            }
+            other => {
+                anyhow::bail!("unknown misbehaviour type: {other}");
+            }
+        }
 
         Ok(())
     }
@@ -98,13 +198,13 @@ impl MsgHandler for MsgSubmitMisbehaviour {
 async fn client_is_present<S: StateRead>(
     state: S,
     msg: &MsgSubmitMisbehaviour,
-) -> anyhow::Result<TendermintClientState> {
+) -> anyhow::Result<AnyClientState> {
     state.get_client_type(&msg.client_id).await?;
 
     state.get_client_state(&msg.client_id).await
 }
 
-fn client_is_not_frozen(client: &TendermintClientState) -> anyhow::Result<()> {
+fn client_is_not_frozen(client: &AnyClientState) -> anyhow::Result<()> {
     if client.is_frozen() {
         Err(anyhow::anyhow!("client is frozen"))
     } else {
@@ -123,20 +223,24 @@ async fn verify_misbehavior_header<S: StateRead, HI: HostInterface>(
         .get_verified_consensus_state(&trusted_height, &client_id)
         .await?;
 
+    let last_trusted_tm_cons = match &last_trusted_consensus_state {
+        AnyConsensusState::Tendermint(cs) => cs,
+        _ => anyhow::bail!("expected Tendermint consensus state for misbehaviour verification"),
+    };
+
     let trusted_height = trusted_height
         .revision_height()
         .try_into()
         .context("invalid header height")?;
 
-    let trusted_validator_set =
-        verify_header_validator_set(mb_header, &last_trusted_consensus_state)?;
+    let trusted_validator_set = verify_header_validator_set(mb_header, last_trusted_tm_cons)?;
 
     let trusted_state = TrustedBlockState {
         chain_id: &trusted_client_state.chain_id.clone().into(),
-        header_time: last_trusted_consensus_state.timestamp,
+        header_time: last_trusted_tm_cons.timestamp,
         height: trusted_height,
         next_validators: trusted_validator_set,
-        next_validators_hash: last_trusted_consensus_state.next_validators_hash,
+        next_validators_hash: last_trusted_tm_cons.next_validators_hash,
     };
 
     let untrusted_state = UntrustedBlockState {
@@ -180,12 +284,11 @@ fn misbehavior_timestamp_monotonicity_violation(misbehavior: &TendermintMisbehav
             > misbehavior.header2.signed_header.header.time
 }
 
-fn misbehavior_is_tendermint(msg: &MsgSubmitMisbehaviour) -> Result<()> {
-    if ics02_validation::is_tendermint_misbehavior(&msg.misbehaviour) {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!(
-            "MsgSubmitMisbehaviour is not tendermint misbehavior"
-        ))
+fn misbehavior_is_known_type(msg: &MsgSubmitMisbehaviour) -> Result<()> {
+    match msg.misbehaviour.type_url.as_str() {
+        TENDERMINT_MISBEHAVIOUR_TYPE_URL | BANKD_MISBEHAVIOUR_TYPE_URL => Ok(()),
+        other => Err(anyhow::anyhow!(
+            "MsgSubmitMisbehaviour: unknown misbehaviour type: {other}"
+        )),
     }
 }
