@@ -6,6 +6,7 @@
 // Requires nightly
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
+pub mod bankd_verification;
 pub mod client_provider;
 pub mod client_types;
 
