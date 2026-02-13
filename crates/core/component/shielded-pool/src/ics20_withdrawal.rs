@@ -206,9 +206,76 @@ pub fn is_valid_ics20_address(addr: &str) -> bool {
 
 /// Check if the given string is a valid EVM hex address (0x + 40 hex chars).
 pub fn is_valid_evm_hex_address(addr: &str) -> bool {
-    if let Some(hex_part) = addr.strip_prefix("0x").or_else(|| addr.strip_prefix("0X")) {
+    if let Some(hex_part) = addr.strip_prefix("0x") {
         hex_part.len() == 40 && hex_part.chars().all(|c| c.is_ascii_hexdigit())
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_evm_hex_address() {
+        assert!(is_valid_evm_hex_address(
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+        ));
+        assert!(is_valid_evm_hex_address(
+            "0x0000000000000000000000000000000000000000"
+        ));
+        assert!(is_valid_evm_hex_address(
+            "0xffffffffffffffffffffffffffffffffffffffff"
+        ));
+        assert!(is_valid_evm_hex_address(
+            "0xABCDEF1234567890abcdef1234567890ABCDEF12"
+        ));
+    }
+
+    #[test]
+    fn test_too_short() {
+        assert!(!is_valid_evm_hex_address("0x742d35Cc6634C0532925a3b844Bc9e"));
+    }
+
+    #[test]
+    fn test_too_long() {
+        assert!(!is_valid_evm_hex_address(
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18ff"
+        ));
+    }
+
+    #[test]
+    fn test_non_hex_chars() {
+        assert!(!is_valid_evm_hex_address(
+            "0xZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
+        ));
+        assert!(!is_valid_evm_hex_address(
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f2bDGG"
+        ));
+    }
+
+    #[test]
+    fn test_missing_prefix() {
+        assert!(!is_valid_evm_hex_address(
+            "742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+        ));
+    }
+
+    #[test]
+    fn test_empty_string() {
+        assert!(!is_valid_evm_hex_address(""));
+    }
+
+    #[test]
+    fn test_prefix_only() {
+        assert!(!is_valid_evm_hex_address("0x"));
+    }
+
+    #[test]
+    fn test_uppercase_prefix_rejected() {
+        assert!(!is_valid_evm_hex_address(
+            "0X742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+        ));
     }
 }
