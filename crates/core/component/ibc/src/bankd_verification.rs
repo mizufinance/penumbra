@@ -4,11 +4,11 @@
 //! are BLS12-381 threshold signatures over a consensus digest. This module provides
 //! verification of those signatures using the `blst` crate directly.
 //!
-//! # Signature Scheme
+//! # Signature Scheme (MinSig variant)
 //!
-//! - Public keys: G1 (48 bytes compressed)
-//! - Signatures: G2 (96 bytes compressed)
-//! - DST: `BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_` (Proof of Possession scheme)
+//! - Public keys: G2 (96 bytes compressed)
+//! - Signatures: G1 (48 bytes compressed)
+//! - DST: `BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_POP_` (Proof of Possession scheme)
 //! - Message format: `union_unique(namespace, payload)` where union_unique prepends a
 //!   varint-encoded length prefix to the namespace before concatenating with the payload.
 
@@ -17,36 +17,36 @@ use anyhow::{ensure, Result};
 /// Kora's simplex signing namespace. Must match exactly.
 pub const SIMPLEX_NAMESPACE: &[u8] = b"_COMMONWARE_KORA_SIMPLEX";
 
-/// BLS12-381 DST for message signing with MinPk variant (signatures in G2).
+/// BLS12-381 DST for message signing with MinSig variant (signatures in G1).
 ///
-/// This matches commonware-cryptography's `G2_MESSAGE` constant, which is used for
+/// This matches commonware-cryptography's `G1_MESSAGE` constant, which is used for
 /// the Proof of Possession (POP) scheme per draft-irtf-cfrg-bls-signature-05 section 4.2.
-pub const BLS_DST: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
+pub const BLS_DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_POP_";
 
-/// Verify a BLS12-381 threshold signature (MinPk variant).
+/// Verify a BLS12-381 MinSig threshold signature.
 ///
 /// This verifies a single aggregated threshold signature against the group public key,
 /// as produced by Kora's simplex finalization.
 ///
 /// # Arguments
 ///
-/// * `group_public_key` - 48-byte compressed G1Affine (the DKG group key)
+/// * `group_public_key` - 96-byte compressed G2Affine (the DKG group key)
 /// * `message` - the signed message bytes (before namespace prepending)
-/// * `signature` - 96-byte compressed G2Affine
+/// * `signature` - 48-byte compressed G1Affine
 ///
 /// # Returns
 ///
 /// `Ok(true)` if the signature is valid, `Ok(false)` if the pairing check fails,
 /// or `Err` if the public key or signature bytes are malformed.
 pub fn verify_bls_threshold_signature(
-    group_public_key: &[u8; 48],
+    group_public_key: &[u8; 96],
     message: &[u8],
-    signature: &[u8; 96],
+    signature: &[u8; 48],
 ) -> Result<bool> {
-    let pk = blst::min_pk::PublicKey::from_bytes(group_public_key)
+    let pk = blst::min_sig::PublicKey::from_bytes(group_public_key)
         .map_err(|e| anyhow::anyhow!("invalid BLS12-381 public key: {:?}", e))?;
 
-    let sig = blst::min_pk::Signature::from_bytes(signature)
+    let sig = blst::min_sig::Signature::from_bytes(signature)
         .map_err(|e| anyhow::anyhow!("invalid BLS12-381 signature: {:?}", e))?;
 
     // Construct the full signed payload: union_unique(SIMPLEX_NAMESPACE, message)
@@ -57,21 +57,21 @@ pub fn verify_bls_threshold_signature(
     Ok(result == blst::BLST_ERROR::BLST_SUCCESS)
 }
 
-/// Verify a BLS12-381 signature with an explicit namespace and DST.
+/// Verify a BLS12-381 MinSig signature with an explicit namespace and DST.
 ///
 /// Lower-level function for cases where the caller provides the namespace
 /// and DST directly (e.g., for testing or non-simplex contexts).
 pub fn verify_bls_signature_with_namespace(
-    group_public_key: &[u8; 48],
+    group_public_key: &[u8; 96],
     namespace: &[u8],
     message: &[u8],
-    signature: &[u8; 96],
+    signature: &[u8; 48],
     dst: &[u8],
 ) -> Result<bool> {
-    let pk = blst::min_pk::PublicKey::from_bytes(group_public_key)
+    let pk = blst::min_sig::PublicKey::from_bytes(group_public_key)
         .map_err(|e| anyhow::anyhow!("invalid BLS12-381 public key: {:?}", e))?;
 
-    let sig = blst::min_pk::Signature::from_bytes(signature)
+    let sig = blst::min_sig::Signature::from_bytes(signature)
         .map_err(|e| anyhow::anyhow!("invalid BLS12-381 signature: {:?}", e))?;
 
     let payload = union_unique(namespace, message);
@@ -107,10 +107,10 @@ fn write_varint_u32(mut value: u32, buf: &mut Vec<u8>) {
     }
 }
 
-/// Validate that raw bytes are a well-formed BLS12-381 G1 compressed point.
+/// Validate that raw bytes are a well-formed BLS12-381 G2 compressed point.
 pub fn validate_group_public_key(key: &[u8]) -> Result<()> {
-    ensure!(key.len() == 48, "group public key must be 48 bytes, got {}", key.len());
-    let pk = blst::min_pk::PublicKey::from_bytes(key)
+    ensure!(key.len() == 96, "group public key must be 96 bytes, got {}", key.len());
+    let pk = blst::min_sig::PublicKey::from_bytes(key)
         .map_err(|e| anyhow::anyhow!("invalid BLS12-381 public key: {:?}", e))?;
     pk.validate()
         .map_err(|e| anyhow::anyhow!("BLS12-381 public key failed subgroup check: {:?}", e))?;
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_bls_dst_value() {
-        assert_eq!(BLS_DST, b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_");
+        assert_eq!(BLS_DST, b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_POP_");
     }
 
     #[test]
@@ -183,12 +183,11 @@ mod tests {
 
     #[test]
     fn test_invalid_public_key_bytes() {
-        let bad_pk = [0u8; 48];
+        let bad_pk = [0u8; 96];
         let msg = b"hello";
-        let sig = [0u8; 96];
-        // Zero bytes are not a valid G1 point (it's the point at infinity which blst rejects)
+        let sig = [0u8; 48];
+        // Zero bytes are not a valid G2 point (point at infinity rejected by blst)
         let result = verify_bls_threshold_signature(&bad_pk, msg, &sig);
-        // Either error or false — depending on blst's handling of zero bytes
         match result {
             Ok(valid) => assert!(!valid),
             Err(_) => {} // also acceptable
@@ -199,11 +198,11 @@ mod tests {
     fn test_invalid_signature_bytes() {
         // Generate a valid public key via blst to test invalid signature
         let ikm = [42u8; 32];
-        let sk = blst::min_pk::SecretKey::key_gen(&ikm, &[]).expect("keygen");
+        let sk = blst::min_sig::SecretKey::key_gen(&ikm, &[]).expect("keygen");
         let pk = sk.sk_to_pk();
-        let pk_bytes: [u8; 48] = pk.compress();
+        let pk_bytes: [u8; 96] = pk.compress();
 
-        let bad_sig = [0xFFu8; 96]; // not a valid G2 point
+        let bad_sig = [0xFFu8; 48]; // not a valid G1 point
         let result = verify_bls_threshold_signature(&pk_bytes, b"msg", &bad_sig);
         match result {
             Ok(valid) => assert!(!valid),
@@ -215,16 +214,16 @@ mod tests {
     fn test_valid_signature_roundtrip() {
         // Generate a keypair, sign a message, and verify
         let ikm = [99u8; 32];
-        let sk = blst::min_pk::SecretKey::key_gen(&ikm, &[]).expect("keygen");
+        let sk = blst::min_sig::SecretKey::key_gen(&ikm, &[]).expect("keygen");
         let pk = sk.sk_to_pk();
-        let pk_bytes: [u8; 48] = pk.compress();
+        let pk_bytes: [u8; 96] = pk.compress();
 
         let message = b"test consensus digest";
 
         // Sign using the same union_unique + DST that our verification expects
         let payload = union_unique(SIMPLEX_NAMESPACE, message);
         let sig = sk.sign(&payload, BLS_DST, &[]);
-        let sig_bytes: [u8; 96] = sig.compress();
+        let sig_bytes: [u8; 48] = sig.compress();
 
         // Verify via our function
         let valid = verify_bls_threshold_signature(&pk_bytes, message, &sig_bytes)
@@ -235,14 +234,14 @@ mod tests {
     #[test]
     fn test_tampered_message_rejects() {
         let ikm = [99u8; 32];
-        let sk = blst::min_pk::SecretKey::key_gen(&ikm, &[]).expect("keygen");
+        let sk = blst::min_sig::SecretKey::key_gen(&ikm, &[]).expect("keygen");
         let pk = sk.sk_to_pk();
-        let pk_bytes: [u8; 48] = pk.compress();
+        let pk_bytes: [u8; 96] = pk.compress();
 
         let message = b"original message";
         let payload = union_unique(SIMPLEX_NAMESPACE, message);
         let sig = sk.sign(&payload, BLS_DST, &[]);
-        let sig_bytes: [u8; 96] = sig.compress();
+        let sig_bytes: [u8; 48] = sig.compress();
 
         // Verify with tampered message
         let valid = verify_bls_threshold_signature(&pk_bytes, b"tampered message", &sig_bytes)
@@ -253,16 +252,16 @@ mod tests {
     #[test]
     fn test_wrong_namespace_rejects() {
         let ikm = [99u8; 32];
-        let sk = blst::min_pk::SecretKey::key_gen(&ikm, &[]).expect("keygen");
+        let sk = blst::min_sig::SecretKey::key_gen(&ikm, &[]).expect("keygen");
         let pk = sk.sk_to_pk();
-        let pk_bytes: [u8; 48] = pk.compress();
+        let pk_bytes: [u8; 96] = pk.compress();
 
         let message = b"test message";
 
         // Sign with a different namespace
         let wrong_payload = union_unique(b"WRONG_NAMESPACE", message);
         let sig = sk.sign(&wrong_payload, BLS_DST, &[]);
-        let sig_bytes: [u8; 96] = sig.compress();
+        let sig_bytes: [u8; 48] = sig.compress();
 
         // Verify expects SIMPLEX_NAMESPACE, so this should fail
         let valid = verify_bls_threshold_signature(&pk_bytes, message, &sig_bytes)
@@ -273,17 +272,17 @@ mod tests {
     #[test]
     fn test_wrong_key_rejects() {
         let ikm1 = [99u8; 32];
-        let sk1 = blst::min_pk::SecretKey::key_gen(&ikm1, &[]).expect("keygen");
+        let sk1 = blst::min_sig::SecretKey::key_gen(&ikm1, &[]).expect("keygen");
 
         let ikm2 = [77u8; 32];
-        let sk2 = blst::min_pk::SecretKey::key_gen(&ikm2, &[]).expect("keygen");
+        let sk2 = blst::min_sig::SecretKey::key_gen(&ikm2, &[]).expect("keygen");
         let pk2 = sk2.sk_to_pk();
-        let pk2_bytes: [u8; 48] = pk2.compress();
+        let pk2_bytes: [u8; 96] = pk2.compress();
 
         let message = b"test message";
         let payload = union_unique(SIMPLEX_NAMESPACE, message);
         let sig = sk1.sign(&payload, BLS_DST, &[]);
-        let sig_bytes: [u8; 96] = sig.compress();
+        let sig_bytes: [u8; 48] = sig.compress();
 
         // Verify with wrong public key
         let valid = verify_bls_threshold_signature(&pk2_bytes, message, &sig_bytes)
@@ -294,7 +293,7 @@ mod tests {
     #[test]
     fn test_validate_group_public_key_valid() {
         let ikm = [42u8; 32];
-        let sk = blst::min_pk::SecretKey::key_gen(&ikm, &[]).expect("keygen");
+        let sk = blst::min_sig::SecretKey::key_gen(&ikm, &[]).expect("keygen");
         let pk = sk.sk_to_pk();
         let pk_bytes = pk.compress();
         validate_group_public_key(&pk_bytes).expect("valid key should pass validation");
@@ -304,21 +303,21 @@ mod tests {
     fn test_validate_group_public_key_wrong_length() {
         let result = validate_group_public_key(&[0u8; 32]);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("48 bytes"));
+        assert!(result.unwrap_err().to_string().contains("96 bytes"));
     }
 
     #[test]
     fn test_verify_with_explicit_namespace() {
         let ikm = [99u8; 32];
-        let sk = blst::min_pk::SecretKey::key_gen(&ikm, &[]).expect("keygen");
+        let sk = blst::min_sig::SecretKey::key_gen(&ikm, &[]).expect("keygen");
         let pk = sk.sk_to_pk();
-        let pk_bytes: [u8; 48] = pk.compress();
+        let pk_bytes: [u8; 96] = pk.compress();
 
         let namespace = b"CUSTOM_NS";
         let message = b"custom msg";
         let payload = union_unique(namespace, message);
         let sig = sk.sign(&payload, BLS_DST, &[]);
-        let sig_bytes: [u8; 96] = sig.compress();
+        let sig_bytes: [u8; 48] = sig.compress();
 
         let valid = verify_bls_signature_with_namespace(
             &pk_bytes, namespace, message, &sig_bytes, BLS_DST,
