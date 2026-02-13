@@ -173,9 +173,7 @@ pub trait ClientUpgradeProofVerifier: StateReadExt + Sized {
             &upgrade_path_prefix,
             client_state_proof,
             &trusted_tm_cons.root,
-            ClientUpgradePath::UpgradedClientState(
-                trusted_tm_cs.latest_height().revision_height(),
-            ),
+            ClientUpgradePath::UpgradedClientState(trusted_tm_cs.latest_height().revision_height()),
             upgraded_tm_client_state.encode_to_vec(),
         )?;
 
@@ -262,14 +260,7 @@ pub fn verify_connection_state(
 
     let proof_specs = client_state.proof_specs();
 
-    verify_merkle_proof(
-        &proof_specs,
-        prefix,
-        proof,
-        root,
-        conn_path.clone(),
-        value,
-    )?;
+    verify_merkle_proof(&proof_specs, prefix, proof, root, conn_path.clone(), value)?;
 
     Ok(())
 }

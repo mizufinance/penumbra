@@ -15,11 +15,12 @@ use tendermint_light_client_verifier::{
 use super::update_client::verify_header_validator_set;
 use super::MsgHandler;
 use crate::client_types::{
-    AnyClientState, AnyConsensusState, BANKD_MISBEHAVIOUR_TYPE_URL, TENDERMINT_MISBEHAVIOUR_TYPE_URL,
+    AnyClientState, AnyConsensusState, BANKD_MISBEHAVIOUR_TYPE_URL,
+    TENDERMINT_MISBEHAVIOUR_TYPE_URL,
 };
 use crate::component::client::StateWriteExt as _;
-use crate::component::HostInterface;
 use crate::component::ClientStateReadExt as _;
+use crate::component::HostInterface;
 
 #[async_trait]
 impl MsgHandler for MsgSubmitMisbehaviour {
@@ -32,8 +33,9 @@ impl MsgHandler for MsgSubmitMisbehaviour {
         match self.misbehaviour.type_url.as_str() {
             TENDERMINT_MISBEHAVIOUR_TYPE_URL => {
                 let untrusted_misbehavior =
-                    TendermintMisbehavior::try_from(self.misbehaviour.clone())
-                        .map_err(|e| anyhow::anyhow!("failed to deserialize tendermint misbehavior: {e}"))?;
+                    TendermintMisbehavior::try_from(self.misbehaviour.clone()).map_err(|e| {
+                        anyhow::anyhow!("failed to deserialize tendermint misbehavior: {e}")
+                    })?;
                 // misbehavior must either contain equivocation or timestamp monotonicity violation
                 if !misbehavior_equivocation_violation(&untrusted_misbehavior)
                     && !misbehavior_timestamp_monotonicity_violation(&untrusted_misbehavior)
@@ -61,8 +63,9 @@ impl MsgHandler for MsgSubmitMisbehaviour {
         match self.misbehaviour.type_url.as_str() {
             TENDERMINT_MISBEHAVIOUR_TYPE_URL => {
                 let untrusted_misbehavior =
-                    TendermintMisbehavior::try_from(self.misbehaviour.clone())
-                        .map_err(|e| anyhow::anyhow!("failed to deserialize tendermint misbehavior: {e}"))?;
+                    TendermintMisbehavior::try_from(self.misbehaviour.clone()).map_err(|e| {
+                        anyhow::anyhow!("failed to deserialize tendermint misbehavior: {e}")
+                    })?;
 
                 // misbehavior must either contain equivocation or timestamp monotonicity violation
                 if !misbehavior_equivocation_violation(&untrusted_misbehavior)
@@ -79,7 +82,9 @@ impl MsgHandler for MsgSubmitMisbehaviour {
 
                 let trusted_tm_cs = match &client_state {
                     AnyClientState::Tendermint(cs) => cs.clone(),
-                    _ => anyhow::bail!("expected Tendermint client state for Tendermint misbehaviour"),
+                    _ => anyhow::bail!(
+                        "expected Tendermint client state for Tendermint misbehaviour"
+                    ),
                 };
 
                 // NOTE: we are allowing expired clients here. it seems correct to allow expired clients to
@@ -167,8 +172,7 @@ async fn verify_misbehavior_header<S: StateRead, HI: HostInterface>(
         .try_into()
         .context("invalid header height")?;
 
-    let trusted_validator_set =
-        verify_header_validator_set(mb_header, last_trusted_tm_cons)?;
+    let trusted_validator_set = verify_header_validator_set(mb_header, last_trusted_tm_cons)?;
 
     let trusted_state = TrustedBlockState {
         chain_id: &trusted_client_state.chain_id.clone().into(),

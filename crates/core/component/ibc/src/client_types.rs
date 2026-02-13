@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail};
 use ibc_proto::google::protobuf::Any;
+pub use ibc_types::lightclients::tendermint::misbehaviour::TENDERMINT_MISBEHAVIOUR_TYPE_URL;
 use ibc_types::{
     core::client::Height,
     core::connection::ChainId,
@@ -12,7 +13,6 @@ use ibc_types::{
         TrustThreshold,
     },
 };
-pub use ibc_types::lightclients::tendermint::misbehaviour::TENDERMINT_MISBEHAVIOUR_TYPE_URL;
 use prost::Message;
 
 pub const BANKD_CLIENT_STATE_TYPE_URL: &str = "/ibc.lightclients.bankd.v1.ClientState";
@@ -170,11 +170,10 @@ impl AnyClientState {
     pub fn is_frozen(&self) -> bool {
         match self {
             AnyClientState::Tendermint(cs) => cs.is_frozen(),
-            AnyClientState::Bankd(cs) => {
-                cs.frozen_height.as_ref().map_or(false, |h| {
-                    h.revision_number > 0 || h.revision_height > 0
-                })
-            }
+            AnyClientState::Bankd(cs) => cs
+                .frozen_height
+                .as_ref()
+                .map_or(false, |h| h.revision_number > 0 || h.revision_height > 0),
         }
     }
 
@@ -184,30 +183,30 @@ impl AnyClientState {
             // TODO: replace manual field-by-field mapping with a proper
             // From/Into conversion once ics23 exposes one. If ics23 adds
             // fields, this mapping will silently drop them.
-            AnyClientState::Bankd(cs) => {
-                cs.proof_specs.iter().map(|spec| {
-                    ics23::ProofSpec {
-                        leaf_spec: spec.leaf_spec.as_ref().map(|ls| ics23::LeafOp {
-                            hash: ls.hash,
-                            prehash_key: ls.prehash_key,
-                            prehash_value: ls.prehash_value,
-                            length: ls.length,
-                            prefix: ls.prefix.clone(),
-                        }),
-                        inner_spec: spec.inner_spec.as_ref().map(|is| ics23::InnerSpec {
-                            child_order: is.child_order.clone(),
-                            child_size: is.child_size,
-                            min_prefix_length: is.min_prefix_length,
-                            max_prefix_length: is.max_prefix_length,
-                            empty_child: is.empty_child.clone(),
-                            hash: is.hash,
-                        }),
-                        max_depth: spec.max_depth,
-                        min_depth: spec.min_depth,
-                        prehash_key_before_comparison: spec.prehash_key_before_comparison,
-                    }
-                }).collect()
-            }
+            AnyClientState::Bankd(cs) => cs
+                .proof_specs
+                .iter()
+                .map(|spec| ics23::ProofSpec {
+                    leaf_spec: spec.leaf_spec.as_ref().map(|ls| ics23::LeafOp {
+                        hash: ls.hash,
+                        prehash_key: ls.prehash_key,
+                        prehash_value: ls.prehash_value,
+                        length: ls.length,
+                        prefix: ls.prefix.clone(),
+                    }),
+                    inner_spec: spec.inner_spec.as_ref().map(|is| ics23::InnerSpec {
+                        child_order: is.child_order.clone(),
+                        child_size: is.child_size,
+                        min_prefix_length: is.min_prefix_length,
+                        max_prefix_length: is.max_prefix_length,
+                        empty_child: is.empty_child.clone(),
+                        hash: is.hash,
+                    }),
+                    max_depth: spec.max_depth,
+                    min_depth: spec.min_depth,
+                    prehash_key_before_comparison: spec.prehash_key_before_comparison,
+                })
+                .collect(),
         }
     }
 
@@ -292,7 +291,11 @@ impl AnyConsensusState {
         match self {
             AnyConsensusState::Tendermint(cs) => {
                 let unix_ts = cs.timestamp.unix_timestamp();
-                anyhow::ensure!(unix_ts >= 0, "negative consensus state timestamp: {}", unix_ts);
+                anyhow::ensure!(
+                    unix_ts >= 0,
+                    "negative consensus state timestamp: {}",
+                    unix_ts
+                );
                 Ok(unix_ts as u64)
             }
             AnyConsensusState::Bankd(cs) => Ok(cs.timestamp),
@@ -311,13 +314,11 @@ impl AnyConsensusState {
 
     pub fn timestamp_nanos(&self) -> anyhow::Result<u64> {
         match self {
-            AnyConsensusState::Tendermint(cs) => {
-                Ok(cs.timestamp.unix_timestamp_nanos() as u64)
-            }
-            AnyConsensusState::Bankd(cs) => {
-                Ok(cs.timestamp.checked_mul(1_000_000_000)
-                    .ok_or_else(|| anyhow!("bankd timestamp overflow converting to nanos"))?)
-            }
+            AnyConsensusState::Tendermint(cs) => Ok(cs.timestamp.unix_timestamp_nanos() as u64),
+            AnyConsensusState::Bankd(cs) => Ok(cs
+                .timestamp
+                .checked_mul(1_000_000_000)
+                .ok_or_else(|| anyhow!("bankd timestamp overflow converting to nanos"))?),
         }
     }
 }
@@ -358,5 +359,419 @@ impl AnyHeader {
             }
             AnyHeader::Bankd(h) => Ok(h.timestamp),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine as _;
+    use ibc_proto::google::protobuf::Any;
+    use ibc_types::DomainType as _;
+
+    // ---------------------------------------------------------------
+    // Helpers: construct minimal but valid bankd proto types
+    // ---------------------------------------------------------------
+
+    fn bankd_client_state(chain_id: &str, rev_number: u64, rev_height: u64) -> BankdClientState {
+        BankdClientState {
+            chain_id: chain_id.to_string(),
+            latest_height: Some(ibc_proto::ibc::core::client::v1::Height {
+                revision_number: rev_number,
+                revision_height: rev_height,
+            }),
+            frozen_height: None,
+            proof_specs: vec![jmt_ics23_spec()],
+        }
+    }
+
+    fn bankd_consensus_state(root: Vec<u8>, timestamp: u64) -> BankdConsensusState {
+        BankdConsensusState { root, timestamp }
+    }
+
+    fn bankd_header(rev_number: u64, rev_height: u64, timestamp: u64) -> BankdHeader {
+        BankdHeader {
+            height: Some(ibc_proto::ibc::core::client::v1::Height {
+                revision_number: rev_number,
+                revision_height: rev_height,
+            }),
+            trusted_height: Some(ibc_proto::ibc::core::client::v1::Height {
+                revision_number: rev_number,
+                revision_height: rev_height.saturating_sub(1),
+            }),
+            timestamp,
+            new_root: vec![0xab; 32],
+        }
+    }
+
+    /// JMT proof spec matching the vendored spec in prefix.rs (single-spec for bankd).
+    fn jmt_ics23_spec() -> ics23::ProofSpec {
+        ics23::ProofSpec {
+            leaf_spec: Some(ics23::LeafOp {
+                hash: ics23::HashOp::Sha256.into(),
+                prehash_key: ics23::HashOp::Sha256.into(),
+                prehash_value: ics23::HashOp::Sha256.into(),
+                length: ics23::LengthOp::NoPrefix.into(),
+                prefix: b"JMT::LeafNode".to_vec(),
+            }),
+            inner_spec: Some(ics23::InnerSpec {
+                hash: ics23::HashOp::Sha256.into(),
+                child_order: vec![0, 1],
+                min_prefix_length: b"JMT::IntrnalNode".len() as i32,
+                max_prefix_length: b"JMT::IntrnalNode".len() as i32,
+                child_size: 32,
+                empty_child: b"SPARSE_MERKLE_PLACEHOLDER_HASH__".to_vec(),
+            }),
+            min_depth: 0,
+            max_depth: 64,
+            prehash_key_before_comparison: true,
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // AnyClientState round-trip tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn any_client_state_bankd_round_trip() {
+        let cs = bankd_client_state("bankd-testnet-1", 0, 42);
+        let any_cs: Any = AnyClientState::Bankd(cs.clone()).into();
+        assert_eq!(any_cs.type_url, BANKD_CLIENT_STATE_TYPE_URL);
+
+        let recovered = AnyClientState::try_from(any_cs).expect("round-trip should succeed");
+        match recovered {
+            AnyClientState::Bankd(inner) => assert_eq!(inner, cs),
+            _ => panic!("expected Bankd variant"),
+        }
+    }
+
+    #[test]
+    fn any_client_state_tendermint_round_trip() {
+        // Use the real Stargaze create_client fixture to get a valid TendermintClientState
+        let raw = base64::prelude::BASE64_STANDARD
+            .decode(include_str!("component/test/create_client.msg").replace('\n', ""))
+            .expect("valid base64");
+        let msg = ibc_types::core::client::msgs::MsgCreateClient::decode(raw.as_slice())
+            .expect("valid MsgCreateClient");
+
+        let tm_cs = ibc_types::lightclients::tendermint::client_state::ClientState::try_from(
+            msg.client_state,
+        )
+        .expect("valid TendermintClientState");
+
+        let any_cs: Any = AnyClientState::Tendermint(tm_cs.clone()).into();
+        assert_eq!(any_cs.type_url, TENDERMINT_CLIENT_STATE_TYPE_URL);
+
+        let recovered = AnyClientState::try_from(any_cs).expect("round-trip should succeed");
+        match recovered {
+            AnyClientState::Tendermint(inner) => {
+                assert_eq!(inner.chain_id, tm_cs.chain_id);
+                assert_eq!(inner.latest_height(), tm_cs.latest_height());
+            }
+            _ => panic!("expected Tendermint variant"),
+        }
+    }
+
+    #[test]
+    fn any_client_state_unknown_type_url_rejected() {
+        let bad = Any {
+            type_url: "/ibc.lightclients.fake.v1.ClientState".to_string(),
+            value: vec![1, 2, 3],
+        };
+        let err = AnyClientState::try_from(bad).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown client state type URL"),
+            "error should mention unknown type URL, got: {err}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // AnyConsensusState round-trip tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn any_consensus_state_bankd_round_trip() {
+        let cs = bankd_consensus_state(vec![0xaa; 32], 1_700_000_000);
+        let any_cs: Any = AnyConsensusState::Bankd(cs.clone()).into();
+        assert_eq!(any_cs.type_url, BANKD_CONSENSUS_STATE_TYPE_URL);
+
+        let recovered = AnyConsensusState::try_from(any_cs).expect("round-trip should succeed");
+        match recovered {
+            AnyConsensusState::Bankd(inner) => assert_eq!(inner, cs),
+            _ => panic!("expected Bankd variant"),
+        }
+    }
+
+    #[test]
+    fn any_consensus_state_tendermint_round_trip() {
+        let raw = base64::prelude::BASE64_STANDARD
+            .decode(include_str!("component/test/create_client.msg").replace('\n', ""))
+            .expect("valid base64");
+        let msg = ibc_types::core::client::msgs::MsgCreateClient::decode(raw.as_slice())
+            .expect("valid MsgCreateClient");
+
+        let tm_cons =
+            ibc_types::lightclients::tendermint::consensus_state::ConsensusState::try_from(
+                msg.consensus_state,
+            )
+            .expect("valid TendermintConsensusState");
+
+        let any_cs: Any = AnyConsensusState::Tendermint(tm_cons.clone()).into();
+        assert_eq!(any_cs.type_url, TENDERMINT_CONSENSUS_STATE_TYPE_URL);
+
+        let recovered = AnyConsensusState::try_from(any_cs).expect("round-trip should succeed");
+        match recovered {
+            AnyConsensusState::Tendermint(inner) => {
+                assert_eq!(inner.root, tm_cons.root);
+                assert_eq!(inner.timestamp, tm_cons.timestamp);
+            }
+            _ => panic!("expected Tendermint variant"),
+        }
+    }
+
+    #[test]
+    fn any_consensus_state_unknown_type_url_rejected() {
+        let bad = Any {
+            type_url: "/ibc.lightclients.fake.v1.ConsensusState".to_string(),
+            value: vec![1, 2, 3],
+        };
+        let err = AnyConsensusState::try_from(bad).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown consensus state type URL"),
+            "error should mention unknown type URL, got: {err}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // AnyHeader round-trip tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn any_header_bankd_round_trip() {
+        let h = bankd_header(0, 100, 1_700_000_000);
+        let any_h: Any = AnyHeader::Bankd(h.clone()).into();
+        assert_eq!(any_h.type_url, BANKD_HEADER_TYPE_URL);
+
+        let recovered = AnyHeader::try_from(any_h).expect("round-trip should succeed");
+        match recovered {
+            AnyHeader::Bankd(inner) => assert_eq!(inner, h),
+            _ => panic!("expected Bankd variant"),
+        }
+    }
+
+    #[test]
+    fn any_header_unknown_type_url_rejected() {
+        let bad = Any {
+            type_url: "/ibc.lightclients.fake.v1.Header".to_string(),
+            value: vec![1, 2, 3],
+        };
+        let err = AnyHeader::try_from(bad).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown header type URL"),
+            "error should mention unknown type URL, got: {err}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // AnyClientState accessor dispatch tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn bankd_client_state_latest_height() {
+        let cs = AnyClientState::Bankd(bankd_client_state("test-chain", 1, 99));
+        let h = cs.latest_height().expect("should have height");
+        assert_eq!(h.revision_number, 1);
+        assert_eq!(h.revision_height, 99);
+    }
+
+    #[test]
+    fn bankd_client_state_missing_height_errors() {
+        let mut cs = bankd_client_state("test-chain", 0, 1);
+        cs.latest_height = None;
+        let err = AnyClientState::Bankd(cs).latest_height().unwrap_err();
+        assert!(err.to_string().contains("missing latest_height"));
+    }
+
+    #[test]
+    fn bankd_client_state_client_type() {
+        let cs = AnyClientState::Bankd(bankd_client_state("test", 0, 1));
+        assert_eq!(cs.client_type(), "bankd");
+    }
+
+    #[test]
+    fn tendermint_client_state_client_type() {
+        let raw = base64::prelude::BASE64_STANDARD
+            .decode(include_str!("component/test/create_client.msg").replace('\n', ""))
+            .expect("valid base64");
+        let msg = ibc_types::core::client::msgs::MsgCreateClient::decode(raw.as_slice())
+            .expect("valid MsgCreateClient");
+        let tm_cs = ibc_types::lightclients::tendermint::client_state::ClientState::try_from(
+            msg.client_state,
+        )
+        .expect("valid");
+        let cs = AnyClientState::Tendermint(tm_cs);
+        assert_eq!(cs.client_type(), "07-tendermint");
+    }
+
+    #[test]
+    fn bankd_client_state_is_frozen_false() {
+        let cs = AnyClientState::Bankd(bankd_client_state("test", 0, 1));
+        assert!(!cs.is_frozen());
+    }
+
+    #[test]
+    fn bankd_client_state_is_frozen_true() {
+        let mut inner = bankd_client_state("test", 0, 1);
+        inner.frozen_height = Some(ibc_proto::ibc::core::client::v1::Height {
+            revision_number: 0,
+            revision_height: 1,
+        });
+        assert!(AnyClientState::Bankd(inner).is_frozen());
+    }
+
+    #[test]
+    fn bankd_client_state_frozen_zero_height_not_frozen() {
+        let mut inner = bankd_client_state("test", 0, 1);
+        inner.frozen_height = Some(ibc_proto::ibc::core::client::v1::Height {
+            revision_number: 0,
+            revision_height: 0,
+        });
+        assert!(!AnyClientState::Bankd(inner).is_frozen());
+    }
+
+    #[test]
+    fn bankd_client_state_proof_specs_returns_jmt_spec() {
+        let cs = AnyClientState::Bankd(bankd_client_state("test", 0, 1));
+        let specs = cs.proof_specs();
+        assert_eq!(specs.len(), 1, "bankd should have 1 proof spec (JMT only)");
+        assert_eq!(specs[0].max_depth, 64);
+        assert!(specs[0].prehash_key_before_comparison);
+    }
+
+    #[test]
+    fn bankd_client_state_chain_id() {
+        let cs = AnyClientState::Bankd(bankd_client_state("bankd-mainnet-1", 0, 1));
+        assert_eq!(cs.chain_id().as_str(), "bankd-mainnet-1");
+    }
+
+    #[test]
+    fn bankd_client_state_trust_threshold_is_none() {
+        let cs = AnyClientState::Bankd(bankd_client_state("test", 0, 1));
+        assert!(cs.trust_threshold().is_none());
+    }
+
+    #[test]
+    fn bankd_client_state_never_expires() {
+        let cs = AnyClientState::Bankd(bankd_client_state("test", 0, 1));
+        assert!(!cs.expired(std::time::Duration::from_secs(999_999_999)));
+    }
+
+    #[test]
+    fn bankd_client_state_freeze_and_unfreeze() {
+        let cs = AnyClientState::Bankd(bankd_client_state("test", 0, 1));
+        assert!(!cs.is_frozen());
+
+        let frozen = cs.with_frozen_height(Height::new(0, 5).expect("valid height"));
+        assert!(frozen.is_frozen());
+
+        let unfrozen = frozen.unfrozen();
+        assert!(!unfrozen.is_frozen());
+    }
+
+    #[test]
+    fn bankd_client_state_verify_height_ok() {
+        let cs = AnyClientState::Bankd(bankd_client_state("test", 0, 100));
+        assert!(cs.verify_height(Height::new(0, 50).expect("valid")).is_ok());
+        assert!(cs
+            .verify_height(Height::new(0, 100).expect("valid"))
+            .is_ok());
+    }
+
+    #[test]
+    fn bankd_client_state_verify_height_too_high() {
+        let cs = AnyClientState::Bankd(bankd_client_state("test", 0, 100));
+        let err = cs
+            .verify_height(Height::new(0, 101).expect("valid"))
+            .unwrap_err();
+        assert!(err.to_string().contains("less than verification height"));
+    }
+
+    // ---------------------------------------------------------------
+    // AnyConsensusState accessor dispatch tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn bankd_consensus_state_root() {
+        let root_bytes = vec![0xde; 32];
+        let cs = AnyConsensusState::Bankd(bankd_consensus_state(root_bytes.clone(), 100));
+        assert_eq!(cs.root(), root_bytes);
+    }
+
+    #[test]
+    fn bankd_consensus_state_timestamp_as_unix_secs() {
+        let cs = AnyConsensusState::Bankd(bankd_consensus_state(vec![], 1_700_000_000));
+        assert_eq!(
+            cs.timestamp_as_unix_secs().expect("should succeed"),
+            1_700_000_000
+        );
+    }
+
+    #[test]
+    fn bankd_consensus_state_timestamp() {
+        let cs = AnyConsensusState::Bankd(bankd_consensus_state(vec![], 1_700_000_000));
+        let t = cs.timestamp().expect("should succeed");
+        assert_eq!(t.unix_timestamp(), 1_700_000_000);
+    }
+
+    #[test]
+    fn bankd_consensus_state_timestamp_nanos() {
+        let cs = AnyConsensusState::Bankd(bankd_consensus_state(vec![], 100));
+        assert_eq!(
+            cs.timestamp_nanos().expect("should succeed"),
+            100_000_000_000
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // AnyHeader accessor dispatch tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn bankd_header_height() {
+        let h = AnyHeader::Bankd(bankd_header(0, 42, 100));
+        let ht = h.height().expect("should succeed");
+        assert_eq!(ht.revision_height, 42);
+    }
+
+    #[test]
+    fn bankd_header_trusted_height() {
+        let h = AnyHeader::Bankd(bankd_header(0, 42, 100));
+        let ht = h.trusted_height().expect("should succeed");
+        assert_eq!(ht.revision_height, 41);
+    }
+
+    #[test]
+    fn bankd_header_timestamp_as_unix_secs() {
+        let h = AnyHeader::Bankd(bankd_header(0, 1, 1_700_000_000));
+        assert_eq!(
+            h.timestamp_as_unix_secs().expect("should succeed"),
+            1_700_000_000
+        );
+    }
+
+    #[test]
+    fn bankd_header_missing_height_errors() {
+        let mut inner = bankd_header(0, 1, 100);
+        inner.height = None;
+        let err = AnyHeader::Bankd(inner).height().unwrap_err();
+        assert!(err.to_string().contains("missing height"));
+    }
+
+    #[test]
+    fn bankd_header_missing_trusted_height_errors() {
+        let mut inner = bankd_header(0, 1, 100);
+        inner.trusted_height = None;
+        let err = AnyHeader::Bankd(inner).trusted_height().unwrap_err();
+        assert!(err.to_string().contains("missing trusted_height"));
     }
 }

@@ -17,8 +17,8 @@ use ibc_types::lightclients::tendermint::{
     consensus_state::ConsensusState as TendermintConsensusState,
     header::Header as TendermintHeader,
 };
-use prost::Message as _;
 use penumbra_sdk_proto::{StateReadProto, StateWriteProto};
+use prost::Message as _;
 
 use crate::client_types::{AnyClientState, AnyConsensusState, AnyHeader};
 use crate::component::client_counter::{ClientCounter, VerifiedHeights};
@@ -309,8 +309,7 @@ pub trait StateReadExt: StateRead {
     async fn get_client_state(&self, client_id: &ClientId) -> Result<AnyClientState> {
         let raw_bytes = self
             .get_raw(
-                &IBC_COMMITMENT_PREFIX
-                    .apply_string(ClientStatePath(client_id.clone()).to_string()),
+                &IBC_COMMITMENT_PREFIX.apply_string(ClientStatePath(client_id.clone()).to_string()),
             )
             .await?
             .context(format!("could not find client state for {client_id}"))?;

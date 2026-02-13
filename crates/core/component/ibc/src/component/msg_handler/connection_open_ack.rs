@@ -120,8 +120,7 @@ impl MsgHandler for MsgConnectionOpenAck {
         // 2. verify that the counterparty chain committed the correct ClientState (that was
         //    provided in the msg)
         let proof_client_state_of_a_on_b = self.proof_client_state_of_a_on_b.clone();
-        let client_state_of_a_on_b =
-            AnyClientState::try_from(self.client_state_of_a_on_b.clone())?;
+        let client_state_of_a_on_b = AnyClientState::try_from(self.client_state_of_a_on_b.clone())?;
 
         proof_verification::verify_client_full_state(
             &trusted_client_state,

@@ -239,7 +239,135 @@ pub fn check_field_consistency(
             Ok(())
         }
         _ => {
-            anyhow::bail!("client types must match for recovery (subject and substitute are different types)");
+            anyhow::bail!(
+                "client types must match for recovery (subject and substitute are different types)"
+            );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine as _;
+    use ibc_types::DomainType as _;
+    use std::str::FromStr;
+
+    #[test]
+    fn validate_tendermint_client_id() {
+        let id = ClientId::from_str("07-tendermint-0").expect("valid client id");
+        validate_client_id_format(&id).expect("should accept 07-tendermint-0");
+    }
+
+    #[test]
+    fn validate_tendermint_client_id_large_number() {
+        let id = ClientId::from_str("07-tendermint-999").expect("valid client id");
+        validate_client_id_format(&id).expect("should accept 07-tendermint-999");
+    }
+
+    #[test]
+    fn validate_bankd_client_id() {
+        // ClientId requires minimum 9 chars, so "bankd-100" is the shortest valid bankd ID
+        let id = ClientId::from_str("bankd-100").expect("valid client id");
+        validate_client_id_format(&id).expect("should accept bankd-100");
+    }
+
+    #[test]
+    fn validate_bankd_client_id_large_number() {
+        let id = ClientId::from_str("bankd-9999").expect("valid client id");
+        validate_client_id_format(&id).expect("should accept bankd-9999");
+    }
+
+    #[test]
+    fn reject_unknown_client_type() {
+        let id = ClientId::from_str("08-wasm-0").expect("valid client id");
+        let err = validate_client_id_format(&id).unwrap_err();
+        assert!(err.to_string().contains("invalid client ID format"));
+    }
+
+    #[test]
+    fn reject_leading_zeros() {
+        let id = ClientId::from_str("07-tendermint-01").expect("valid client id");
+        let err = validate_client_id_format(&id).unwrap_err();
+        assert!(err.to_string().contains("leading zeros"));
+    }
+
+    #[test]
+    fn reject_bankd_leading_zeros() {
+        let id = ClientId::from_str("bankd-007").expect("valid client id");
+        let err = validate_client_id_format(&id).unwrap_err();
+        assert!(err.to_string().contains("leading zeros"));
+    }
+
+    #[test]
+    fn check_field_consistency_bankd_same_chain() {
+        use crate::client_types::{AnyClientState, BankdClientState};
+
+        let a = AnyClientState::Bankd(BankdClientState {
+            chain_id: "bankd-testnet-1".to_string(),
+            latest_height: Some(ibc_proto::ibc::core::client::v1::Height {
+                revision_number: 0,
+                revision_height: 10,
+            }),
+            frozen_height: None,
+            proof_specs: vec![],
+        });
+        let b = AnyClientState::Bankd(BankdClientState {
+            chain_id: "bankd-testnet-1".to_string(),
+            latest_height: Some(ibc_proto::ibc::core::client::v1::Height {
+                revision_number: 0,
+                revision_height: 20,
+            }),
+            frozen_height: None,
+            proof_specs: vec![],
+        });
+        check_field_consistency(&a, &b).expect("same chain_id should pass");
+    }
+
+    #[test]
+    fn check_field_consistency_bankd_different_chain_rejected() {
+        use crate::client_types::{AnyClientState, BankdClientState};
+
+        let a = AnyClientState::Bankd(BankdClientState {
+            chain_id: "bankd-testnet-1".to_string(),
+            latest_height: None,
+            frozen_height: None,
+            proof_specs: vec![],
+        });
+        let b = AnyClientState::Bankd(BankdClientState {
+            chain_id: "bankd-mainnet-1".to_string(),
+            latest_height: None,
+            frozen_height: None,
+            proof_specs: vec![],
+        });
+        let err = check_field_consistency(&a, &b).unwrap_err();
+        assert!(err.to_string().contains("chain IDs must match"));
+    }
+
+    #[test]
+    fn check_field_consistency_mixed_types_rejected() {
+        use crate::client_types::{AnyClientState, BankdClientState};
+
+        let bankd = AnyClientState::Bankd(BankdClientState {
+            chain_id: "test".to_string(),
+            latest_height: None,
+            frozen_height: None,
+            proof_specs: vec![],
+        });
+
+        // Build a Tendermint client state from the fixture
+        let raw = base64::prelude::BASE64_STANDARD
+            .decode(include_str!("test/create_client.msg").replace('\n', ""))
+            .expect("valid base64");
+        let msg =
+            ibc_types::core::client::msgs::MsgCreateClient::decode(raw.as_slice()).expect("valid");
+        let tm_cs = ibc_types::lightclients::tendermint::client_state::ClientState::try_from(
+            msg.client_state,
+        )
+        .expect("valid");
+        let tm = AnyClientState::Tendermint(tm_cs);
+
+        let err = check_field_consistency(&bankd, &tm).unwrap_err();
+        assert!(err.to_string().contains("client types must match"));
     }
 }

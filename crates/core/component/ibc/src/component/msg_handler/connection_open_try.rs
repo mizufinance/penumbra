@@ -123,8 +123,7 @@ impl MsgHandler for MsgConnectionOpenTry {
         //    provided in the msg)
         let proof_client_state_of_b_on_a = self.proof_client_state_of_b_on_a.clone();
 
-        let client_state_of_b_on_a =
-            AnyClientState::try_from(self.client_state_of_b_on_a.clone())?;
+        let client_state_of_b_on_a = AnyClientState::try_from(self.client_state_of_b_on_a.clone())?;
 
         proof_verification::verify_client_full_state(
             &trusted_client_state,

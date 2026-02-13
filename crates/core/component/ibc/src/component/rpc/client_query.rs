@@ -96,8 +96,9 @@ impl<HI: HostInterface + Send + Sync + 'static> ClientQuery for IbcQuery<HI> {
         let client_type_prefixes = ["07-tendermint", "bankd"];
         for prefix in &client_type_prefixes {
             for client_idx in 0..client_counter {
-                let client_id = ClientId::from_str(format!("{}-{}", prefix, client_idx).as_str())
-                    .map_err(|e| tonic::Status::aborted(format!("invalid client id: {e}")))?;
+                let client_id =
+                    ClientId::from_str(format!("{}-{}", prefix, client_idx).as_str())
+                        .map_err(|e| tonic::Status::aborted(format!("invalid client id: {e}")))?;
                 if let Ok(client_state) = snapshot.get_client_state(&client_id).await {
                     let id_client = IdentifiedClientState {
                         client_id: client_id.to_string(),
