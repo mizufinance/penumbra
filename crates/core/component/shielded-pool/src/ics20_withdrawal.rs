@@ -97,8 +97,13 @@ impl Ics20Withdrawal {
             );
         }
 
-        // NOTE: we could validate the destination chain address as bech32 to prevent mistyped
-        // addresses, but this would preclude sending to chains that don't use bech32 addresses.
+        // Validate destination chain address format: accept Penumbra bech32 or EVM hex addresses.
+        if !is_valid_ics20_address(&self.destination_chain_address) {
+            anyhow::bail!(
+                "invalid destination chain address '{}': must be a valid bech32 address or EVM hex address (0x + 40 hex chars)",
+                self.destination_chain_address
+            );
+        }
 
         Ok(())
     }
@@ -184,5 +189,26 @@ impl From<Ics20Withdrawal> for pb::FungibleTokenPacketData {
             sender: return_address,
             memo: w.ics20_memo,
         }
+    }
+}
+
+/// Check if the given address is a valid ICS-20 destination address.
+/// Accepts either a valid Penumbra address (bech32) or an EVM hex address (0x + 40 hex chars).
+pub fn is_valid_ics20_address(addr: &str) -> bool {
+    // Try Penumbra bech32 address first
+    if Address::from_str(addr).is_ok() {
+        return true;
+    }
+
+    // Try EVM hex address: 0x + exactly 40 hex characters (20 bytes)
+    is_valid_evm_hex_address(addr)
+}
+
+/// Check if the given string is a valid EVM hex address (0x + 40 hex chars).
+pub fn is_valid_evm_hex_address(addr: &str) -> bool {
+    if let Some(hex_part) = addr.strip_prefix("0x").or_else(|| addr.strip_prefix("0X")) {
+        hex_part.len() == 40 && hex_part.chars().all(|c| c.is_ascii_hexdigit())
+    } else {
+        false
     }
 }
