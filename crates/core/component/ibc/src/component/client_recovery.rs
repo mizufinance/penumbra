@@ -2,7 +2,9 @@ use anyhow::{ensure, Context, Result};
 use async_trait::async_trait;
 use cnidarium::StateWrite;
 use ibc_types::core::client::ClientId;
+use once_cell::sync::Lazy;
 use penumbra_sdk_sct::component::clock::EpochRead;
+use regex::Regex;
 
 use crate::client_types::AnyClientState;
 use crate::component::{ConsensusStateWriteExt, HostInterface};
@@ -154,16 +156,14 @@ impl<T: StateWrite + ConsensusStateWriteExt> ClientRecoveryExt for T {}
 
 /// Validate that a client ID matches a known format.
 /// Accepts: 07-tendermint-<NUM> or bankd-<NUM>
-pub fn validate_client_id_format(client_id: &ClientId) -> Result<()> {
-    use regex::Regex;
+static CLIENT_ID_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^(07-tendermint|bankd)-\d+$").expect("valid regex"));
 
+pub fn validate_client_id_format(client_id: &ClientId) -> Result<()> {
     let client_id_str = client_id.as_str();
 
-    // Match: 07-tendermint-<digits> OR bankd-<digits>
-    let re = Regex::new(r"^(07-tendermint|bankd)-\d+$").expect("valid regex");
-
     ensure!(
-        re.is_match(client_id_str),
+        CLIENT_ID_RE.is_match(client_id_str),
         "invalid client ID format: '{}'. Expected format: 07-tendermint-<NUM> or bankd-<NUM>",
         client_id_str
     );
