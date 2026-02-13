@@ -214,7 +214,7 @@ impl ClientProvider for BankdProvider {
 /// 5. state_root: StateRoot (32 raw bytes)
 /// 6. ibc_root:   B256      (32 raw bytes)
 /// 7. txs:        Vec<Tx>   (varint count + each tx varint-length-prefixed)
-fn encode_block(header: &BankdHeader) -> Result<Vec<u8>> {
+pub(crate) fn encode_block(header: &BankdHeader) -> Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(256);
 
     // parent: BlockId (32 raw bytes)
@@ -270,7 +270,7 @@ fn encode_block(header: &BankdHeader) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn keccak256(data: &[u8]) -> [u8; 32] {
+pub(crate) fn keccak256(data: &[u8]) -> [u8; 32] {
     let mut hasher = Keccak::v256();
     hasher.update(data);
     let mut output = [0u8; 32];
@@ -278,7 +278,7 @@ fn keccak256(data: &[u8]) -> [u8; 32] {
     output
 }
 
-fn sha256(data: &[u8]) -> [u8; 32] {
+pub(crate) fn sha256(data: &[u8]) -> [u8; 32] {
     Sha256::digest(data).into()
 }
 

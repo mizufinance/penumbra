@@ -647,11 +647,16 @@ mod tests {
     use crate::component::ClientStateReadExt;
     use crate::{IbcRelay, StateWriteExt};
 
+    use crate::client_types::{
+        BankdMisbehaviour, BANKD_CLIENT_STATE_TYPE_URL, BANKD_CONSENSUS_STATE_TYPE_URL,
+        BANKD_HEADER_TYPE_URL, BANKD_MISBEHAVIOUR_TYPE_URL,
+    };
     use crate::component::app_handler::{AppHandler, AppHandlerCheck, AppHandlerExecute};
     use ibc_types::core::channel::msgs::{
         MsgAcknowledgement, MsgChannelCloseConfirm, MsgChannelCloseInit, MsgChannelOpenAck,
         MsgChannelOpenConfirm, MsgChannelOpenInit, MsgChannelOpenTry, MsgRecvPacket, MsgTimeout,
     };
+    use ibc_types::core::client::msgs::MsgSubmitMisbehaviour;
 
     struct MockHost {}
 
@@ -908,6 +913,383 @@ mod tests {
             .check_historical(state.clone())
             .await
             .expect_err("should not be able to create a client");
+
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // Bankd handler integration test helpers
+    // ---------------------------------------------------------------
+
+    fn bankd_test_keypair() -> (blst::min_sig::SecretKey, [u8; 96]) {
+        let ikm = [42u8; 32];
+        let sk = blst::min_sig::SecretKey::key_gen(&ikm, &[]).expect("keygen");
+        let pk = sk.sk_to_pk();
+        let pk_bytes: [u8; 96] = pk.compress();
+        (sk, pk_bytes)
+    }
+
+    fn sign_bankd_header(sk: &blst::min_sig::SecretKey, header: &BankdHeader) -> Vec<u8> {
+        let encoded = crate::bankd_provider::encode_block(header).expect("encode");
+        let block_id = crate::bankd_provider::keccak256(&encoded);
+        let consensus_digest = crate::bankd_provider::sha256(&block_id);
+        let payload = crate::bankd_verification::union_unique(
+            crate::bankd_verification::SIMPLEX_NAMESPACE,
+            &consensus_digest,
+        );
+        let sig = sk.sign(&payload, crate::bankd_verification::BLS_DST, &[]);
+        sig.compress().to_vec()
+    }
+
+    fn make_bankd_client_state(pk_bytes: &[u8; 96], height: u64) -> BankdClientState {
+        BankdClientState {
+            chain_id: "bankd-test-1".to_string(),
+            latest_height: Some(ibc_proto::ibc::core::client::v1::Height {
+                revision_number: 0,
+                revision_height: height,
+            }),
+            frozen_height: None,
+            proof_specs: vec![],
+            group_public_key: pk_bytes.to_vec(),
+            trusting_period_secs: 86_400,
+        }
+    }
+
+    fn make_bankd_consensus_state(pk_bytes: &[u8; 96], timestamp: u64) -> BankdConsensusState {
+        BankdConsensusState {
+            root: vec![0xaa; 32],
+            timestamp,
+            group_public_key: pk_bytes.to_vec(),
+        }
+    }
+
+    fn make_bankd_header(height: u64, timestamp: u64) -> BankdHeader {
+        BankdHeader {
+            height: Some(ibc_proto::ibc::core::client::v1::Height {
+                revision_number: 0,
+                revision_height: height,
+            }),
+            trusted_height: Some(ibc_proto::ibc::core::client::v1::Height {
+                revision_number: 0,
+                revision_height: height - 1,
+            }),
+            timestamp,
+            new_root: vec![0xbb; 32],
+            parent_hash: vec![0x01; 32],
+            prevrandao: vec![0x02; 32],
+            state_root: vec![0x03; 32],
+            ibc_root: vec![0x04; 32],
+            transactions: vec![vec![0x05; 64]],
+            finalization_certificate: vec![], // filled in by sign_bankd_header
+        }
+    }
+
+    /// Set up cnidarium state and create a bankd client via the handler.
+    /// Returns (state, client_id, secret_key, public_key_bytes).
+    async fn setup_bankd_client() -> anyhow::Result<(
+        Arc<StateDelta<()>>,
+        ClientId,
+        blst::min_sig::SecretKey,
+        [u8; 96],
+    )> {
+        use penumbra_sdk_sct::epoch::Epoch;
+
+        let (sk, pk_bytes) = bankd_test_keypair();
+
+        let mut state = Arc::new(StateDelta::new(()));
+        {
+            let mut state_tx = state.try_begin_transaction().unwrap();
+            state_tx.put_block_height(0);
+            state_tx.put_epoch_by_height(
+                0,
+                Epoch {
+                    index: 0,
+                    start_height: 0,
+                },
+            );
+            state_tx.put_epoch_by_height(
+                1,
+                Epoch {
+                    index: 0,
+                    start_height: 0,
+                },
+            );
+            state_tx.apply();
+        }
+
+        // Host time: 1,700,001,000 unix seconds (1000s after consensus state timestamp)
+        let host_timestamp = Time::from_unix_timestamp(1_700_001_000, 0).expect("valid timestamp");
+        {
+            let mut state_tx = state.try_begin_transaction().unwrap();
+            state_tx.put_block_timestamp(1u64, host_timestamp);
+            state_tx.put_block_height(1);
+            state_tx.put_ibc_params(crate::params::IBCParameters {
+                ibc_enabled: true,
+                inbound_ics20_transfers_enabled: true,
+                outbound_ics20_transfers_enabled: true,
+            });
+            state_tx.put_epoch_by_height(
+                1,
+                Epoch {
+                    index: 0,
+                    start_height: 0,
+                },
+            );
+            state_tx.apply();
+        }
+
+        // Client at height 10, consensus timestamp 1,700,000,000
+        let bankd_cs = make_bankd_client_state(&pk_bytes, 10);
+        let bankd_cons = make_bankd_consensus_state(&pk_bytes, 1_700_000_000);
+
+        let msg_create = MsgCreateClient {
+            client_state: ibc_proto::google::protobuf::Any {
+                type_url: BANKD_CLIENT_STATE_TYPE_URL.to_string(),
+                value: bankd_cs.encode_to_vec(),
+            },
+            consensus_state: ibc_proto::google::protobuf::Any {
+                type_url: BANKD_CONSENSUS_STATE_TYPE_URL.to_string(),
+                value: bankd_cons.encode_to_vec(),
+            },
+            signer: "test".to_string(),
+        };
+
+        let create_action = IbcRelayWithHandlers::<MockAppHandler, MockHost>::new(
+            IbcRelay::CreateClient(msg_create),
+        );
+
+        create_action.check_stateless(()).await?;
+        create_action.check_historical(state.clone()).await?;
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        create_action.check_and_execute(&mut state_tx).await?;
+        state_tx.apply();
+
+        let client_id = ClientId::from_str("08-commonware-bls-0")?;
+
+        Ok((state, client_id, sk, pk_bytes))
+    }
+
+    // ---------------------------------------------------------------
+    // Priority 2: Full MsgCreateClient → MsgUpdateClient flow
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_bankd_create_and_update_client() -> anyhow::Result<()> {
+        let (mut state, client_id, sk, _pk_bytes) = setup_bankd_client().await?;
+
+        // Verify client counter incremented
+        assert_eq!(state.client_counter().await?.0, 1);
+
+        // Verify client state stored correctly
+        let stored_cs = state.get_client_state(&client_id).await?;
+        match &stored_cs {
+            AnyClientState::Bankd(cs) => {
+                assert_eq!(cs.chain_id, "bankd-test-1");
+                assert_eq!(cs.latest_height.as_ref().unwrap().revision_height, 10);
+                assert!(!stored_cs.is_frozen());
+            }
+            _ => panic!("expected Bankd client state"),
+        }
+
+        // Verify consensus state stored at height 10
+        let height_10 = Height::new(0, 10)?;
+        let cons_10 = state
+            .get_verified_consensus_state(&height_10, &client_id)
+            .await?;
+        match &cons_10 {
+            AnyConsensusState::Bankd(cs) => {
+                assert_eq!(cs.root, vec![0xaa; 32]);
+                assert_eq!(cs.timestamp, 1_700_000_000);
+            }
+            _ => panic!("expected Bankd consensus state"),
+        }
+
+        // Build a valid bankd header at height 11, sign with BLS key
+        let mut header = make_bankd_header(11, 1_700_000_500);
+        header.finalization_certificate = sign_bankd_header(&sk, &header);
+
+        let msg_update = MsgUpdateClient {
+            client_id: client_id.clone(),
+            client_message: ibc_proto::google::protobuf::Any {
+                type_url: BANKD_HEADER_TYPE_URL.to_string(),
+                value: header.encode_to_vec(),
+            },
+            signer: "test".to_string(),
+        };
+
+        let update_action = IbcRelayWithHandlers::<MockAppHandler, MockHost>::new(
+            IbcRelay::UpdateClient(msg_update),
+        );
+
+        update_action.check_stateless(()).await?;
+        update_action.check_historical(state.clone()).await?;
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        update_action.check_and_execute(&mut state_tx).await?;
+        state_tx.apply();
+
+        // Verify client state updated to height 11
+        let updated_cs = state.get_client_state(&client_id).await?;
+        match &updated_cs {
+            AnyClientState::Bankd(cs) => {
+                assert_eq!(cs.latest_height.as_ref().unwrap().revision_height, 11);
+            }
+            _ => panic!("expected Bankd client state"),
+        }
+
+        // Verify new consensus state stored at height 11
+        let height_11 = Height::new(0, 11)?;
+        let cons_11 = state
+            .get_verified_consensus_state(&height_11, &client_id)
+            .await?;
+        match &cons_11 {
+            AnyConsensusState::Bankd(cs) => {
+                assert_eq!(cs.root, vec![0xbb; 32]); // new_root from header
+                assert_eq!(cs.timestamp, 1_700_000_500);
+            }
+            _ => panic!("expected Bankd consensus state"),
+        }
+
+        // Original consensus state at height 10 should still be there
+        let cons_10_after = state
+            .get_verified_consensus_state(&height_10, &client_id)
+            .await?;
+        match cons_10_after {
+            AnyConsensusState::Bankd(cs) => {
+                assert_eq!(cs.timestamp, 1_700_000_000);
+            }
+            _ => panic!("expected Bankd consensus state"),
+        }
+
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // Priority 3: Client status checks
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_bankd_client_status_active() -> anyhow::Result<()> {
+        let (state, client_id, _sk, _pk) = setup_bankd_client().await?;
+
+        let current_time = Time::from_unix_timestamp(1_700_001_000, 0)?;
+        let status = state.get_client_status(&client_id, current_time).await;
+        assert_eq!(status, ClientStatus::Active);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bankd_client_does_not_expire() -> anyhow::Result<()> {
+        let (state, client_id, _sk, _pk) = setup_bankd_client().await?;
+
+        // Far-future time: 1 year after consensus state timestamp
+        let far_future = Time::from_unix_timestamp(1_700_000_000 + 365 * 86_400, 0)?;
+        let status = state.get_client_status(&client_id, far_future).await;
+        assert_eq!(status, ClientStatus::Active);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bankd_client_status_frozen_after_misbehaviour() -> anyhow::Result<()> {
+        let (mut state, client_id, sk, _pk) = setup_bankd_client().await?;
+
+        // Build two headers at height 11 with different data (equivocation)
+        let mut h1 = make_bankd_header(11, 1_700_000_500);
+        h1.finalization_certificate = sign_bankd_header(&sk, &h1);
+
+        let mut h2 = make_bankd_header(11, 1_700_000_500);
+        h2.state_root = vec![0xff; 32]; // different state_root = different block
+        h2.finalization_certificate = sign_bankd_header(&sk, &h2);
+
+        let mb = BankdMisbehaviour {
+            client_id: client_id.to_string(),
+            header_1: Some(h1),
+            header_2: Some(h2),
+        };
+
+        let msg = MsgSubmitMisbehaviour {
+            client_id: client_id.clone(),
+            misbehaviour: ibc_proto::google::protobuf::Any {
+                type_url: BANKD_MISBEHAVIOUR_TYPE_URL.to_string(),
+                value: prost::Message::encode_to_vec(&mb),
+            },
+            signer: "test".to_string(),
+        };
+
+        let misbehaviour_action =
+            IbcRelayWithHandlers::<MockAppHandler, MockHost>::new(IbcRelay::SubmitMisbehavior(msg));
+
+        misbehaviour_action.check_stateless(()).await?;
+        misbehaviour_action.check_historical(state.clone()).await?;
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        misbehaviour_action.check_and_execute(&mut state_tx).await?;
+        state_tx.apply();
+
+        // Client should now be frozen
+        let current_time = Time::from_unix_timestamp(1_700_001_000, 0)?;
+        let status = state.get_client_status(&client_id, current_time).await;
+        assert_eq!(status, ClientStatus::Frozen);
+
+        // Verify the client state is_frozen flag
+        let cs = state.get_client_state(&client_id).await?;
+        assert!(cs.is_frozen());
+
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // Priority 4: Misbehaviour edge cases
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_bankd_misbehaviour_invalid_signature_rejected() -> anyhow::Result<()> {
+        let (mut state, client_id, sk, _pk) = setup_bankd_client().await?;
+
+        // Sign header_1 with the correct key, header_2 with a different key
+        let mut h1 = make_bankd_header(11, 1_700_000_500);
+        h1.finalization_certificate = sign_bankd_header(&sk, &h1);
+
+        let mut h2 = make_bankd_header(11, 1_700_000_500);
+        h2.state_root = vec![0xff; 32]; // different block
+                                        // Sign with a wrong key
+        let wrong_ikm = [99u8; 32];
+        let wrong_sk = blst::min_sig::SecretKey::key_gen(&wrong_ikm, &[]).expect("keygen");
+        h2.finalization_certificate = sign_bankd_header(&wrong_sk, &h2);
+
+        let mb = BankdMisbehaviour {
+            client_id: client_id.to_string(),
+            header_1: Some(h1),
+            header_2: Some(h2),
+        };
+
+        let msg = MsgSubmitMisbehaviour {
+            client_id: client_id.clone(),
+            misbehaviour: ibc_proto::google::protobuf::Any {
+                type_url: BANKD_MISBEHAVIOUR_TYPE_URL.to_string(),
+                value: prost::Message::encode_to_vec(&mb),
+            },
+            signer: "test".to_string(),
+        };
+
+        let misbehaviour_action =
+            IbcRelayWithHandlers::<MockAppHandler, MockHost>::new(IbcRelay::SubmitMisbehavior(msg));
+
+        // Stateless checks should pass (format is valid)
+        misbehaviour_action.check_stateless(()).await?;
+        misbehaviour_action.check_historical(state.clone()).await?;
+
+        // Execution should fail because header_2's BLS signature is invalid
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        let result = misbehaviour_action.check_and_execute(&mut state_tx).await;
+        assert!(
+            result.is_err(),
+            "should reject misbehaviour with invalid BLS signature"
+        );
+
+        // Client should NOT be frozen (misbehaviour was rejected)
+        let cs = state.get_client_state(&client_id).await?;
+        assert!(!cs.is_frozen());
 
         Ok(())
     }

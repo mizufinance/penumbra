@@ -157,7 +157,7 @@ impl AnyClientState {
     pub fn client_type(&self) -> &'static str {
         match self {
             AnyClientState::Tendermint(_) => "07-tendermint",
-            AnyClientState::Bankd(_) => "bankd",
+            AnyClientState::Bankd(_) => "08-commonware-bls",
         }
     }
 
@@ -674,7 +674,7 @@ mod tests {
     #[test]
     fn bankd_client_state_client_type() {
         let cs = AnyClientState::Bankd(bankd_client_state("test", 0, 1));
-        assert_eq!(cs.client_type(), "bankd");
+        assert_eq!(cs.client_type(), "08-commonware-bls");
     }
 
     #[test]
@@ -999,5 +999,60 @@ mod tests {
             }
             _ => panic!("expected Bankd variant"),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // BankdMisbehaviour round-trip tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn bankd_misbehaviour_round_trip() {
+        use prost::Message as _;
+
+        let h1 = bankd_header(0, 42, 1_700_000_000);
+        let mut h2 = bankd_header(0, 42, 1_700_000_000);
+        h2.new_root = vec![0xcd; 32]; // equivocation: same height, different data
+
+        let mb = BankdMisbehaviour {
+            client_id: "bankd-0".to_string(),
+            header_1: Some(h1.clone()),
+            header_2: Some(h2.clone()),
+        };
+
+        let encoded = prost::Message::encode_to_vec(&mb);
+        let decoded =
+            BankdMisbehaviour::decode(encoded.as_ref()).expect("round-trip decode should succeed");
+
+        assert_eq!(decoded.client_id, "bankd-0");
+        assert_eq!(decoded.header_1, Some(h1));
+        assert_eq!(decoded.header_2, Some(h2));
+    }
+
+    #[test]
+    fn bankd_misbehaviour_any_round_trip() {
+        use prost::Message as _;
+
+        let h1 = bankd_header(0, 42, 1_700_000_000);
+        let mut h2 = bankd_header(0, 42, 1_700_000_000);
+        h2.new_root = vec![0xcd; 32];
+
+        let mb = BankdMisbehaviour {
+            client_id: "bankd-0".to_string(),
+            header_1: Some(h1.clone()),
+            header_2: Some(h2.clone()),
+        };
+
+        let any = Any {
+            type_url: BANKD_MISBEHAVIOUR_TYPE_URL.to_string(),
+            value: prost::Message::encode_to_vec(&mb),
+        };
+
+        assert_eq!(any.type_url, BANKD_MISBEHAVIOUR_TYPE_URL);
+
+        let decoded = BankdMisbehaviour::decode(any.value.as_ref())
+            .expect("round-trip via Any should succeed");
+        assert_eq!(decoded.client_id, "bankd-0");
+        assert_eq!(decoded.header_1, Some(h1));
+        assert_eq!(decoded.header_2, Some(h2));
     }
 }

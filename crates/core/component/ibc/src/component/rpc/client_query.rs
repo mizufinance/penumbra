@@ -93,7 +93,7 @@ impl<HI: HostInterface + Send + Sync + 'static> ClientQuery for IbcQuery<HI> {
 
         let mut client_states = vec![];
         // Iterate all known client type prefixes
-        let client_type_prefixes = ["07-tendermint", "bankd"];
+        let client_type_prefixes = ["07-tendermint", "08-commonware-bls"];
         for prefix in &client_type_prefixes {
             for client_idx in 0..client_counter {
                 let client_id =

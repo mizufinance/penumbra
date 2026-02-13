@@ -181,7 +181,7 @@ impl MsgHandler for MsgSubmitMisbehaviour {
                 state.record(
                     events::ClientMisbehaviour {
                         client_id: self.client_id.clone(),
-                        client_type: ClientType::new("bankd".to_string()),
+                        client_type: ClientType::new("08-commonware-bls".to_string()),
                     }
                     .into(),
                 );

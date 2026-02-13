@@ -230,7 +230,9 @@ impl MsgHandler for MsgUpdateClient {
                 state.record(
                     UpdateClient {
                         client_id: self.client_id.clone(),
-                        client_type: ibc_types::core::client::ClientType("bankd".to_string()),
+                        client_type: ibc_types::core::client::ClientType(
+                            "08-commonware-bls".to_string(),
+                        ),
                         consensus_height: header_height,
                         header: prost::Message::encode_to_vec(bankd_header),
                     }
