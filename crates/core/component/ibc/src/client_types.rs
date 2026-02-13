@@ -147,6 +147,13 @@ impl From<AnyHeader> for Any {
 // --- Accessor methods ---
 
 impl AnyClientState {
+    pub fn as_bankd(&self) -> anyhow::Result<&BankdClientState> {
+        match self {
+            AnyClientState::Bankd(cs) => Ok(cs),
+            _ => bail!("expected bankd client state, got {}", self.client_type()),
+        }
+    }
+
     pub fn client_type(&self) -> &'static str {
         match self {
             AnyClientState::Tendermint(_) => "07-tendermint",
@@ -306,6 +313,13 @@ impl AnyClientState {
 }
 
 impl AnyConsensusState {
+    pub fn as_bankd(&self) -> anyhow::Result<&BankdConsensusState> {
+        match self {
+            AnyConsensusState::Bankd(cs) => Ok(cs),
+            _ => bail!("expected bankd consensus state"),
+        }
+    }
+
     pub fn root(&self) -> Vec<u8> {
         match self {
             AnyConsensusState::Tendermint(cs) => cs.root.hash.clone(),
@@ -365,6 +379,13 @@ impl AnyConsensusState {
 }
 
 impl AnyHeader {
+    pub fn as_bankd(&self) -> anyhow::Result<&BankdHeader> {
+        match self {
+            AnyHeader::Bankd(h) => Ok(h),
+            _ => bail!("expected bankd header"),
+        }
+    }
+
     pub fn height(&self) -> anyhow::Result<Height> {
         match self {
             AnyHeader::Tendermint(h) => Ok(h.height()),

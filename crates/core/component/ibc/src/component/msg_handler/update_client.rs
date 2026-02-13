@@ -15,6 +15,8 @@ use tendermint_light_client_verifier::{
     ProdVerifier, Verdict, Verifier,
 };
 
+use crate::bankd_provider::BankdProvider;
+use crate::client_provider::ClientProvider;
 use crate::client_types::{AnyClientState, AnyConsensusState, AnyHeader};
 use crate::component::{
     client::{
@@ -171,9 +173,69 @@ impl MsgHandler for MsgUpdateClient {
                     .into(),
                 );
             }
-            AnyHeader::Bankd(_bankd_header) => {
-                // Bankd client update will be implemented in a future PR.
-                anyhow::bail!("bankd client update is not yet supported");
+            AnyHeader::Bankd(ref bankd_header) => {
+                let trusted_height = bankd_header
+                    .trusted_height
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("bankd header missing trusted_height"))?;
+                let trusted_height = ibc_types::core::client::Height::new(
+                    trusted_height.revision_number,
+                    trusted_height.revision_height,
+                )?;
+
+                let trusted_consensus_state = state
+                    .get_verified_consensus_state(&trusted_height, &self.client_id)
+                    .await?;
+
+                // Verify the header (BLS signature, trusting period, height monotonicity)
+                let host_ts = HI::get_block_timestamp(&state).await?;
+                let host_ts_secs = host_ts.unix_timestamp() as u64;
+
+                let provider = BankdProvider;
+                provider.verify_header(
+                    &trusted_client_state,
+                    &trusted_consensus_state,
+                    &any_header,
+                    host_ts_secs,
+                )?;
+
+                // Get latest client state and compute state transition (equivocation checks)
+                let client_state = state
+                    .get_client_state(&self.client_id)
+                    .await
+                    .context("unable to get client state")?;
+
+                let (next_client_state, next_consensus_state) = state
+                    .next_client_state(self.client_id.clone(), client_state, any_header.clone())
+                    .await?;
+
+                let header_height = bankd_header
+                    .height
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("bankd header missing height"))?;
+                let header_height = ibc_types::core::client::Height::new(
+                    header_height.revision_number,
+                    header_height.revision_height,
+                )?;
+
+                state.put_client(&self.client_id, next_client_state);
+                state
+                    .put_verified_consensus_state::<HI>(
+                        header_height,
+                        self.client_id.clone(),
+                        next_consensus_state,
+                    )
+                    .await?;
+
+                state.record(
+                    UpdateClient {
+                        client_id: self.client_id.clone(),
+                        client_type: ibc_types::core::client::ClientType("bankd".to_string()),
+                        consensus_height: header_height,
+                        header: prost::Message::encode_to_vec(bankd_header),
+                    }
+                    .into(),
+                );
             }
         }
 
@@ -208,9 +270,28 @@ async fn update_is_already_committed<S: StateRead>(
                 Ok(false)
             }
         }
-        AnyHeader::Bankd(_) => {
-            // For bankd headers, we don't yet support dedup checking
-            Ok(false)
+        AnyHeader::Bankd(ref bankd_header) => {
+            let height_proto = bankd_header
+                .height
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("bankd header missing height"))?;
+            let height = ibc_types::core::client::Height::new(
+                height_proto.revision_number,
+                height_proto.revision_height,
+            )?;
+            if let Ok(stored_consensus_state) = state
+                .get_verified_consensus_state(&height, &client_id)
+                .await
+            {
+                match stored_consensus_state {
+                    AnyConsensusState::Bankd(stored_bankd) => Ok(stored_bankd.root
+                        == bankd_header.new_root
+                        && stored_bankd.timestamp == bankd_header.timestamp),
+                    _ => Ok(false),
+                }
+            } else {
+                Ok(false)
+            }
         }
     }
 }

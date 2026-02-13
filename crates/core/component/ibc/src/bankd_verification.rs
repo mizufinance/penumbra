@@ -86,7 +86,10 @@ pub fn verify_bls_signature_with_namespace(
 ///
 /// The varint uses protobuf-style encoding (7 data bits per byte, MSB continuation).
 /// This matches `commonware_codec::varint::UInt<u32>::write()`.
-fn union_unique(namespace: &[u8], msg: &[u8]) -> Vec<u8> {
+///
+/// This function is `pub(crate)` so that `bankd_provider` tests can construct
+/// signed payloads using the same encoding.
+pub(crate) fn union_unique(namespace: &[u8], msg: &[u8]) -> Vec<u8> {
     let len = namespace.len() as u32;
     let mut buf = Vec::with_capacity(5 + namespace.len() + msg.len());
     write_varint_u32(len, &mut buf);
@@ -109,7 +112,11 @@ fn write_varint_u32(mut value: u32, buf: &mut Vec<u8>) {
 
 /// Validate that raw bytes are a well-formed BLS12-381 G2 compressed point.
 pub fn validate_group_public_key(key: &[u8]) -> Result<()> {
-    ensure!(key.len() == 96, "group public key must be 96 bytes, got {}", key.len());
+    ensure!(
+        key.len() == 96,
+        "group public key must be 96 bytes, got {}",
+        key.len()
+    );
     let pk = blst::min_sig::PublicKey::from_bytes(key)
         .map_err(|e| anyhow::anyhow!("invalid BLS12-381 public key: {:?}", e))?;
     pk.validate()
@@ -319,10 +326,9 @@ mod tests {
         let sig = sk.sign(&payload, BLS_DST, &[]);
         let sig_bytes: [u8; 48] = sig.compress();
 
-        let valid = verify_bls_signature_with_namespace(
-            &pk_bytes, namespace, message, &sig_bytes, BLS_DST,
-        )
-        .expect("verification should not error");
+        let valid =
+            verify_bls_signature_with_namespace(&pk_bytes, namespace, message, &sig_bytes, BLS_DST)
+                .expect("verification should not error");
         assert!(valid);
     }
 }

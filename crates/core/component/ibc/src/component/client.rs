@@ -20,7 +20,10 @@ use ibc_types::lightclients::tendermint::{
 use penumbra_sdk_proto::{StateReadProto, StateWriteProto};
 use prost::Message as _;
 
-use crate::client_types::{AnyClientState, AnyConsensusState, AnyHeader};
+use crate::client_types::{
+    AnyClientState, AnyConsensusState, AnyHeader, BankdClientState, BankdConsensusState,
+    BankdHeader,
+};
 use crate::component::client_counter::{ClientCounter, VerifiedHeights};
 use crate::prefix::MerklePrefixExt;
 use crate::IBC_COMMITMENT_PREFIX;
@@ -72,8 +75,9 @@ pub(crate) trait Ics2ClientExt: StateWrite {
                 self.next_tendermint_state_inner(client_id, tm_cs, tm_header)
                     .await
             }
-            (AnyClientState::Bankd(_), AnyHeader::Bankd(_)) => {
-                anyhow::bail!("bankd client state transition is not yet supported");
+            (AnyClientState::Bankd(bankd_cs), AnyHeader::Bankd(bankd_hdr)) => {
+                self.next_bankd_state_inner(client_id, bankd_cs, bankd_hdr)
+                    .await
             }
             _ => {
                 anyhow::bail!("mismatched client state and header types");
@@ -187,6 +191,104 @@ pub(crate) trait Ics2ClientExt: StateWrite {
                     .expect("able to add header to client state"),
             ),
             AnyConsensusState::Tendermint(verified_consensus_state),
+        ))
+    }
+
+    // Bankd state transition logic. Checks for equivocation and timestamp
+    // monotonicity violations, freezing the client if found.
+    async fn next_bankd_state_inner(
+        &self,
+        client_id: ClientId,
+        trusted_client_state: BankdClientState,
+        verified_header: BankdHeader,
+    ) -> Result<(AnyClientState, AnyConsensusState)> {
+        let verified_consensus_state = BankdConsensusState {
+            root: verified_header.new_root.clone(),
+            timestamp: verified_header.timestamp,
+            group_public_key: trusted_client_state.group_public_key.clone(),
+        };
+
+        let header_height = verified_header
+            .height
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("bankd header missing height"))?;
+        let header_height =
+            Height::new(header_height.revision_number, header_height.revision_height)?;
+
+        // If we have a stored consensus state at this height that conflicts, freeze.
+        if let Ok(stored_cs_state) = self
+            .get_verified_consensus_state(&header_height, &client_id)
+            .await
+        {
+            let stored_bankd = match stored_cs_state {
+                AnyConsensusState::Bankd(cs) => cs,
+                _ => anyhow::bail!("expected bankd consensus state"),
+            };
+            if stored_bankd == verified_consensus_state {
+                return Ok((
+                    AnyClientState::Bankd(trusted_client_state),
+                    AnyConsensusState::Bankd(verified_consensus_state),
+                ));
+            } else {
+                return Ok((
+                    AnyClientState::Bankd(trusted_client_state)
+                        .with_frozen_height(Height::new(0, 1)?),
+                    AnyConsensusState::Bankd(verified_consensus_state),
+                ));
+            }
+        }
+
+        // Check timestamp monotonicity against adjacent heights.
+        let next_consensus_state = self
+            .next_verified_consensus_state(&client_id, &header_height)
+            .await
+            .expect("able to get next verified consensus state");
+        let prev_consensus_state = self
+            .prev_verified_consensus_state(&client_id, &header_height)
+            .await
+            .expect("able to get previous verified consensus state");
+
+        if let Some(prev_state) = prev_consensus_state {
+            let prev_bankd = match prev_state {
+                AnyConsensusState::Bankd(cs) => cs,
+                _ => anyhow::bail!("expected bankd consensus state for prev"),
+            };
+            if verified_header.timestamp < prev_bankd.timestamp {
+                return Ok((
+                    AnyClientState::Bankd(trusted_client_state)
+                        .with_frozen_height(Height::new(0, 1)?),
+                    AnyConsensusState::Bankd(verified_consensus_state),
+                ));
+            }
+        }
+
+        if let Some(next_state) = next_consensus_state {
+            let next_bankd = match next_state {
+                AnyConsensusState::Bankd(cs) => cs,
+                _ => anyhow::bail!("expected bankd consensus state for next"),
+            };
+            if verified_header.timestamp > next_bankd.timestamp {
+                return Ok((
+                    AnyClientState::Bankd(trusted_client_state)
+                        .with_frozen_height(Height::new(0, 1)?),
+                    AnyConsensusState::Bankd(verified_consensus_state),
+                ));
+            }
+        }
+
+        // All good — update latest height if this header advances it
+        let mut updated_cs = trusted_client_state;
+        let latest = updated_cs
+            .latest_height
+            .as_ref()
+            .map_or(0, |h| h.revision_height);
+        if header_height.revision_height > latest {
+            updated_cs.latest_height = verified_header.height.clone();
+        }
+
+        Ok((
+            AnyClientState::Bankd(updated_cs),
+            AnyConsensusState::Bankd(verified_consensus_state),
         ))
     }
 }

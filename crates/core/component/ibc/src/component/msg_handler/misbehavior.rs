@@ -7,6 +7,7 @@ use ibc_types::lightclients::tendermint::client_state::ClientState as Tendermint
 use ibc_types::lightclients::tendermint::header::Header as TendermintHeader;
 use ibc_types::lightclients::tendermint::misbehaviour::Misbehaviour as TendermintMisbehavior;
 use ibc_types::lightclients::tendermint::TENDERMINT_CLIENT_TYPE;
+use prost::Message as _;
 use tendermint_light_client_verifier::{
     types::{TrustedBlockState, UntrustedBlockState},
     ProdVerifier, Verdict, Verifier,
@@ -14,8 +15,10 @@ use tendermint_light_client_verifier::{
 
 use super::update_client::verify_header_validator_set;
 use super::MsgHandler;
+use crate::bankd_provider::BankdProvider;
+use crate::client_provider::ClientProvider;
 use crate::client_types::{
-    AnyClientState, AnyConsensusState, BANKD_MISBEHAVIOUR_TYPE_URL,
+    AnyClientState, AnyConsensusState, BankdMisbehaviour, BANKD_MISBEHAVIOUR_TYPE_URL,
     TENDERMINT_MISBEHAVIOUR_TYPE_URL,
 };
 use crate::component::client::StateWriteExt as _;
@@ -46,8 +49,32 @@ impl MsgHandler for MsgSubmitMisbehaviour {
                 }
             }
             BANKD_MISBEHAVIOUR_TYPE_URL => {
-                // Bankd misbehaviour validation will be implemented in a future PR.
-                anyhow::bail!("bankd misbehaviour is not yet supported");
+                let mb = BankdMisbehaviour::decode(self.misbehaviour.value.as_ref())
+                    .map_err(|e| anyhow::anyhow!("failed to decode bankd misbehaviour: {e}"))?;
+
+                let h1 = mb
+                    .header_1
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("bankd misbehaviour missing header_1"))?;
+                let h2 = mb
+                    .header_2
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("bankd misbehaviour missing header_2"))?;
+
+                let h1_height = h1
+                    .height
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("header_1 missing height"))?;
+                let h2_height = h2
+                    .height
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("header_2 missing height"))?;
+
+                if h1_height.revision_height != h2_height.revision_height
+                    || h1_height.revision_number != h2_height.revision_number
+                {
+                    anyhow::bail!("bankd misbehaviour headers must be for the same height");
+                }
             }
             _ => {
                 anyhow::bail!("unknown misbehaviour type");
@@ -122,8 +149,42 @@ impl MsgHandler for MsgSubmitMisbehaviour {
                 );
             }
             BANKD_MISBEHAVIOUR_TYPE_URL => {
-                // Bankd misbehaviour execution will be implemented in B06-T3.
-                anyhow::bail!("bankd misbehaviour execution is not yet supported");
+                let client_state = client_is_present(&state, self).await?;
+                client_is_not_frozen(&client_state)?;
+
+                let provider = BankdProvider;
+                let is_misbehaviour =
+                    provider.check_misbehaviour(&client_state, &self.misbehaviour)?;
+                anyhow::ensure!(is_misbehaviour, "bankd misbehaviour evidence is not valid");
+
+                let mb = BankdMisbehaviour::decode(self.misbehaviour.value.as_ref())
+                    .map_err(|e| anyhow::anyhow!("failed to decode bankd misbehaviour: {e}"))?;
+
+                let h1_height = mb
+                    .header_1
+                    .as_ref()
+                    .and_then(|h| h.height.as_ref())
+                    .ok_or_else(|| anyhow::anyhow!("misbehaviour header_1 missing height"))?;
+                let freeze_height = ibc_types::core::client::Height::new(
+                    h1_height.revision_number,
+                    h1_height.revision_height,
+                )?;
+
+                tracing::info!(
+                    client_id = ?self.client_id,
+                    "received valid bankd misbehaviour evidence! freezing client"
+                );
+
+                let frozen_client = client_state.with_frozen_height(freeze_height);
+                state.put_client(&self.client_id, frozen_client);
+
+                state.record(
+                    events::ClientMisbehaviour {
+                        client_id: self.client_id.clone(),
+                        client_type: ClientType::new("bankd".to_string()),
+                    }
+                    .into(),
+                );
             }
             other => {
                 anyhow::bail!("unknown misbehaviour type: {other}");
