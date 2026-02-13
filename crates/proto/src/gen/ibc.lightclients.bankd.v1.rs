@@ -18,6 +18,12 @@ pub struct ClientState {
     /// proof specifications used in verifying counterparty state
     #[prost(message, repeated, tag = "4")]
     pub proof_specs: ::prost::alloc::vec::Vec<::ics23::ProofSpec>,
+    /// BLS12-381 G1Affine compressed group public key (48 bytes)
+    #[prost(bytes = "vec", tag = "5")]
+    pub group_public_key: ::prost::alloc::vec::Vec<u8>,
+    /// trusting period in seconds — headers older than this are rejected
+    #[prost(uint64, tag = "6")]
+    pub trusting_period_secs: u64,
 }
 impl ::prost::Name for ClientState {
     const NAME: &'static str = "ClientState";
@@ -38,6 +44,9 @@ pub struct ConsensusState {
     /// timestamp in unix seconds
     #[prost(uint64, tag = "2")]
     pub timestamp: u64,
+    /// BLS12-381 group public key at this height (48 bytes)
+    #[prost(bytes = "vec", tag = "3")]
+    pub group_public_key: ::prost::alloc::vec::Vec<u8>,
 }
 impl ::prost::Name for ConsensusState {
     const NAME: &'static str = "ConsensusState";
@@ -66,6 +75,24 @@ pub struct Header {
     /// the new commitment root
     #[prost(bytes = "vec", tag = "4")]
     pub new_root: ::prost::alloc::vec::Vec<u8>,
+    /// parent block hash (32 bytes)
+    #[prost(bytes = "vec", tag = "5")]
+    pub parent_hash: ::prost::alloc::vec::Vec<u8>,
+    /// randomness beacon value (32 bytes)
+    #[prost(bytes = "vec", tag = "6")]
+    pub prevrandao: ::prost::alloc::vec::Vec<u8>,
+    /// EVM state root (32 bytes)
+    #[prost(bytes = "vec", tag = "7")]
+    pub state_root: ::prost::alloc::vec::Vec<u8>,
+    /// JMT root for IBC state, separate from state_root (32 bytes)
+    #[prost(bytes = "vec", tag = "8")]
+    pub ibc_root: ::prost::alloc::vec::Vec<u8>,
+    /// transaction payloads for BlockId reconstruction
+    #[prost(bytes = "vec", repeated, tag = "9")]
+    pub transactions: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
+    /// serialized Finalization certificate (~240 bytes)
+    #[prost(bytes = "vec", tag = "10")]
+    pub finalization_certificate: ::prost::alloc::vec::Vec<u8>,
 }
 impl ::prost::Name for Header {
     const NAME: &'static str = "Header";

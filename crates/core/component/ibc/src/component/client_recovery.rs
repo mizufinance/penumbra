@@ -311,6 +311,8 @@ mod tests {
             }),
             frozen_height: None,
             proof_specs: vec![],
+            group_public_key: vec![],
+            trusting_period_secs: 0,
         });
         let b = AnyClientState::Bankd(BankdClientState {
             chain_id: "bankd-testnet-1".to_string(),
@@ -320,6 +322,8 @@ mod tests {
             }),
             frozen_height: None,
             proof_specs: vec![],
+            group_public_key: vec![],
+            trusting_period_secs: 0,
         });
         check_field_consistency(&a, &b).expect("same chain_id should pass");
     }
@@ -333,12 +337,16 @@ mod tests {
             latest_height: None,
             frozen_height: None,
             proof_specs: vec![],
+            group_public_key: vec![],
+            trusting_period_secs: 0,
         });
         let b = AnyClientState::Bankd(BankdClientState {
             chain_id: "bankd-mainnet-1".to_string(),
             latest_height: None,
             frozen_height: None,
             proof_specs: vec![],
+            group_public_key: vec![],
+            trusting_period_secs: 0,
         });
         let err = check_field_consistency(&a, &b).unwrap_err();
         assert!(err.to_string().contains("chain IDs must match"));
@@ -353,6 +361,8 @@ mod tests {
             latest_height: None,
             frozen_height: None,
             proof_specs: vec![],
+            group_public_key: vec![],
+            trusting_period_secs: 0,
         });
 
         // Build a Tendermint client state from the fixture

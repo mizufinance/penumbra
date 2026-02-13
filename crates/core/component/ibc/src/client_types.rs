@@ -225,11 +225,37 @@ impl AnyClientState {
     }
 
     /// Check if the client's trusting period has expired given the elapsed duration.
-    /// Bankd clients have no trusting period and never expire from time alone.
+    /// Bankd clients with `trusting_period_secs == 0` never expire.
     pub fn expired(&self, elapsed: std::time::Duration) -> bool {
         match self {
             AnyClientState::Tendermint(cs) => cs.expired(elapsed),
-            AnyClientState::Bankd(_) => false,
+            AnyClientState::Bankd(cs) => {
+                cs.trusting_period_secs > 0 && elapsed.as_secs() >= cs.trusting_period_secs
+            }
+        }
+    }
+
+    /// Return the BLS12-381 group public key from the client state, if present.
+    /// Tendermint clients do not have a group public key.
+    pub fn group_public_key(&self) -> Option<&[u8]> {
+        match self {
+            AnyClientState::Tendermint(_) => None,
+            AnyClientState::Bankd(cs) => {
+                if cs.group_public_key.is_empty() {
+                    None
+                } else {
+                    Some(&cs.group_public_key)
+                }
+            }
+        }
+    }
+
+    /// Return the trusting period in seconds. Tendermint returns its trusting
+    /// period converted to seconds; bankd returns the proto field directly.
+    pub fn trusting_period_secs(&self) -> u64 {
+        match self {
+            AnyClientState::Tendermint(cs) => cs.trusting_period.as_secs(),
+            AnyClientState::Bankd(cs) => cs.trusting_period_secs,
         }
     }
 
@@ -321,6 +347,21 @@ impl AnyConsensusState {
                 .ok_or_else(|| anyhow!("bankd timestamp overflow converting to nanos"))?),
         }
     }
+
+    /// Return the BLS12-381 group public key from the consensus state, if present.
+    /// Tendermint consensus states do not have a group public key.
+    pub fn group_public_key(&self) -> Option<&[u8]> {
+        match self {
+            AnyConsensusState::Tendermint(_) => None,
+            AnyConsensusState::Bankd(cs) => {
+                if cs.group_public_key.is_empty() {
+                    None
+                } else {
+                    Some(&cs.group_public_key)
+                }
+            }
+        }
+    }
 }
 
 impl AnyHeader {
@@ -373,6 +414,11 @@ mod tests {
     // Helpers: construct minimal but valid bankd proto types
     // ---------------------------------------------------------------
 
+    /// 48-byte fake BLS12-381 G1Affine compressed key for tests.
+    fn fake_group_public_key() -> Vec<u8> {
+        vec![0xBB; 48]
+    }
+
     fn bankd_client_state(chain_id: &str, rev_number: u64, rev_height: u64) -> BankdClientState {
         BankdClientState {
             chain_id: chain_id.to_string(),
@@ -382,11 +428,17 @@ mod tests {
             }),
             frozen_height: None,
             proof_specs: vec![jmt_ics23_spec()],
+            group_public_key: fake_group_public_key(),
+            trusting_period_secs: 86_400, // 1 day
         }
     }
 
     fn bankd_consensus_state(root: Vec<u8>, timestamp: u64) -> BankdConsensusState {
-        BankdConsensusState { root, timestamp }
+        BankdConsensusState {
+            root,
+            timestamp,
+            group_public_key: fake_group_public_key(),
+        }
     }
 
     fn bankd_header(rev_number: u64, rev_height: u64, timestamp: u64) -> BankdHeader {
@@ -401,6 +453,12 @@ mod tests {
             }),
             timestamp,
             new_root: vec![0xab; 32],
+            parent_hash: vec![0x01; 32],
+            prevrandao: vec![0x02; 32],
+            state_root: vec![0x03; 32],
+            ibc_root: vec![0x04; 32],
+            transactions: vec![vec![0x05; 64], vec![0x06; 64]],
+            finalization_certificate: vec![0x07; 240],
         }
     }
 
@@ -661,8 +719,19 @@ mod tests {
     }
 
     #[test]
-    fn bankd_client_state_never_expires() {
+    fn bankd_client_state_expires_after_trusting_period() {
         let cs = AnyClientState::Bankd(bankd_client_state("test", 0, 1));
+        // Default trusting_period_secs is 86_400 (1 day)
+        assert!(!cs.expired(std::time::Duration::from_secs(86_399)));
+        assert!(cs.expired(std::time::Duration::from_secs(86_400)));
+        assert!(cs.expired(std::time::Duration::from_secs(999_999_999)));
+    }
+
+    #[test]
+    fn bankd_client_state_zero_trusting_period_never_expires() {
+        let mut inner = bankd_client_state("test", 0, 1);
+        inner.trusting_period_secs = 0;
+        let cs = AnyClientState::Bankd(inner);
         assert!(!cs.expired(std::time::Duration::from_secs(999_999_999)));
     }
 
@@ -773,5 +842,141 @@ mod tests {
         inner.trusted_height = None;
         let err = AnyHeader::Bankd(inner).trusted_height().unwrap_err();
         assert!(err.to_string().contains("missing trusted_height"));
+    }
+
+    // ---------------------------------------------------------------
+    // New field accessor tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn bankd_client_state_group_public_key() {
+        let cs = AnyClientState::Bankd(bankd_client_state("test", 0, 1));
+        let gpk = cs.group_public_key().expect("should have group public key");
+        assert_eq!(gpk.len(), 48);
+        assert_eq!(gpk, &fake_group_public_key()[..]);
+    }
+
+    #[test]
+    fn bankd_client_state_group_public_key_empty_is_none() {
+        let mut inner = bankd_client_state("test", 0, 1);
+        inner.group_public_key = vec![];
+        let cs = AnyClientState::Bankd(inner);
+        assert!(cs.group_public_key().is_none());
+    }
+
+    #[test]
+    fn tendermint_client_state_group_public_key_is_none() {
+        let raw = base64::prelude::BASE64_STANDARD
+            .decode(include_str!("component/test/create_client.msg").replace('\n', ""))
+            .expect("valid base64");
+        let msg = ibc_types::core::client::msgs::MsgCreateClient::decode(raw.as_slice())
+            .expect("valid MsgCreateClient");
+        let tm_cs = ibc_types::lightclients::tendermint::client_state::ClientState::try_from(
+            msg.client_state,
+        )
+        .expect("valid");
+        assert!(AnyClientState::Tendermint(tm_cs)
+            .group_public_key()
+            .is_none());
+    }
+
+    #[test]
+    fn bankd_client_state_trusting_period_secs() {
+        let cs = AnyClientState::Bankd(bankd_client_state("test", 0, 1));
+        assert_eq!(cs.trusting_period_secs(), 86_400);
+    }
+
+    #[test]
+    fn bankd_consensus_state_group_public_key() {
+        let cs = AnyConsensusState::Bankd(bankd_consensus_state(vec![0xaa; 32], 100));
+        let gpk = cs.group_public_key().expect("should have group public key");
+        assert_eq!(gpk.len(), 48);
+        assert_eq!(gpk, &fake_group_public_key()[..]);
+    }
+
+    #[test]
+    fn bankd_consensus_state_group_public_key_empty_is_none() {
+        let mut inner = bankd_consensus_state(vec![0xaa; 32], 100);
+        inner.group_public_key = vec![];
+        let cs = AnyConsensusState::Bankd(inner);
+        assert!(cs.group_public_key().is_none());
+    }
+
+    #[test]
+    fn tendermint_consensus_state_group_public_key_is_none() {
+        let raw = base64::prelude::BASE64_STANDARD
+            .decode(include_str!("component/test/create_client.msg").replace('\n', ""))
+            .expect("valid base64");
+        let msg = ibc_types::core::client::msgs::MsgCreateClient::decode(raw.as_slice())
+            .expect("valid MsgCreateClient");
+        let tm_cons =
+            ibc_types::lightclients::tendermint::consensus_state::ConsensusState::try_from(
+                msg.consensus_state,
+            )
+            .expect("valid");
+        assert!(AnyConsensusState::Tendermint(tm_cons)
+            .group_public_key()
+            .is_none());
+    }
+
+    // ---------------------------------------------------------------
+    // Round-trip tests for new fields
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn bankd_client_state_new_fields_round_trip() {
+        let cs = bankd_client_state("bankd-testnet-1", 0, 42);
+        assert_eq!(cs.group_public_key.len(), 48);
+        assert_eq!(cs.trusting_period_secs, 86_400);
+
+        let any: Any = AnyClientState::Bankd(cs.clone()).into();
+        let recovered = AnyClientState::try_from(any).expect("round-trip should succeed");
+        match recovered {
+            AnyClientState::Bankd(inner) => {
+                assert_eq!(inner.group_public_key, cs.group_public_key);
+                assert_eq!(inner.trusting_period_secs, cs.trusting_period_secs);
+            }
+            _ => panic!("expected Bankd variant"),
+        }
+    }
+
+    #[test]
+    fn bankd_consensus_state_new_fields_round_trip() {
+        let cs = bankd_consensus_state(vec![0xaa; 32], 1_700_000_000);
+        assert_eq!(cs.group_public_key.len(), 48);
+
+        let any: Any = AnyConsensusState::Bankd(cs.clone()).into();
+        let recovered = AnyConsensusState::try_from(any).expect("round-trip should succeed");
+        match recovered {
+            AnyConsensusState::Bankd(inner) => {
+                assert_eq!(inner.group_public_key, cs.group_public_key);
+            }
+            _ => panic!("expected Bankd variant"),
+        }
+    }
+
+    #[test]
+    fn bankd_header_new_fields_round_trip() {
+        let h = bankd_header(0, 100, 1_700_000_000);
+        assert_eq!(h.parent_hash, vec![0x01; 32]);
+        assert_eq!(h.prevrandao, vec![0x02; 32]);
+        assert_eq!(h.state_root, vec![0x03; 32]);
+        assert_eq!(h.ibc_root, vec![0x04; 32]);
+        assert_eq!(h.transactions.len(), 2);
+        assert_eq!(h.finalization_certificate.len(), 240);
+
+        let any: Any = AnyHeader::Bankd(h.clone()).into();
+        let recovered = AnyHeader::try_from(any).expect("round-trip should succeed");
+        match recovered {
+            AnyHeader::Bankd(inner) => {
+                assert_eq!(inner.parent_hash, h.parent_hash);
+                assert_eq!(inner.prevrandao, h.prevrandao);
+                assert_eq!(inner.state_root, h.state_root);
+                assert_eq!(inner.ibc_root, h.ibc_root);
+                assert_eq!(inner.transactions, h.transactions);
+                assert_eq!(inner.finalization_certificate, h.finalization_certificate);
+            }
+            _ => panic!("expected Bankd variant"),
+        }
     }
 }
