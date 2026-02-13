@@ -224,6 +224,60 @@ impl AnyClientState {
             AnyClientState::Bankd(_) => None,
         }
     }
+
+    /// Check if the client's trusting period has expired given the elapsed duration.
+    /// Bankd clients have no trusting period and never expire from time alone.
+    pub fn expired(&self, elapsed: std::time::Duration) -> bool {
+        match self {
+            AnyClientState::Tendermint(cs) => cs.expired(elapsed),
+            AnyClientState::Bankd(_) => false,
+        }
+    }
+
+    /// Return a copy of the client state with the frozen height cleared.
+    pub fn unfrozen(self) -> Self {
+        match self {
+            AnyClientState::Tendermint(cs) => AnyClientState::Tendermint(cs.unfrozen()),
+            AnyClientState::Bankd(mut cs) => {
+                cs.frozen_height = None;
+                AnyClientState::Bankd(cs)
+            }
+        }
+    }
+
+    /// Return a copy of the client state with the given frozen height set.
+    pub fn with_frozen_height(self, h: Height) -> Self {
+        match self {
+            AnyClientState::Tendermint(cs) => AnyClientState::Tendermint(cs.with_frozen_height(h)),
+            AnyClientState::Bankd(mut cs) => {
+                cs.frozen_height = Some(ibc_proto::ibc::core::client::v1::Height {
+                    revision_number: h.revision_number,
+                    revision_height: h.revision_height,
+                });
+                AnyClientState::Bankd(cs)
+            }
+        }
+    }
+
+    /// Check that the given height is not greater than the client's latest height.
+    pub fn verify_height(&self, height: Height) -> anyhow::Result<()> {
+        match self {
+            AnyClientState::Tendermint(cs) => Ok(cs.verify_height(height)?),
+            AnyClientState::Bankd(_) => {
+                let latest = self
+                    .latest_height()
+                    .map_err(|e| anyhow!("bankd verify_height: {e}"))?;
+                if latest < height {
+                    anyhow::bail!(
+                        "client height {} is less than verification height {}",
+                        latest,
+                        height
+                    );
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
 impl AnyConsensusState {
@@ -242,6 +296,28 @@ impl AnyConsensusState {
                 Ok(unix_ts as u64)
             }
             AnyConsensusState::Bankd(cs) => Ok(cs.timestamp),
+        }
+    }
+
+    pub fn timestamp(&self) -> anyhow::Result<tendermint::Time> {
+        match self {
+            AnyConsensusState::Tendermint(cs) => Ok(cs.timestamp),
+            AnyConsensusState::Bankd(cs) => {
+                tendermint::Time::from_unix_timestamp(cs.timestamp as i64, 0)
+                    .map_err(|e| anyhow!("bankd timestamp to Time: {e}"))
+            }
+        }
+    }
+
+    pub fn timestamp_nanos(&self) -> anyhow::Result<u64> {
+        match self {
+            AnyConsensusState::Tendermint(cs) => {
+                Ok(cs.timestamp.unix_timestamp_nanos() as u64)
+            }
+            AnyConsensusState::Bankd(cs) => {
+                Ok(cs.timestamp.checked_mul(1_000_000_000)
+                    .ok_or_else(|| anyhow!("bankd timestamp overflow converting to nanos"))?)
+            }
         }
     }
 }

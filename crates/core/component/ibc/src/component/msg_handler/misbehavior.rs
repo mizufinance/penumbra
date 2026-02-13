@@ -14,7 +14,9 @@ use tendermint_light_client_verifier::{
 
 use super::update_client::verify_header_validator_set;
 use super::MsgHandler;
-use crate::client_types::{BANKD_MISBEHAVIOUR_TYPE_URL, TENDERMINT_MISBEHAVIOUR_TYPE_URL};
+use crate::client_types::{
+    AnyClientState, AnyConsensusState, BANKD_MISBEHAVIOUR_TYPE_URL, TENDERMINT_MISBEHAVIOUR_TYPE_URL,
+};
 use crate::component::client::StateWriteExt as _;
 use crate::component::HostInterface;
 use crate::component::ClientStateReadExt as _;
@@ -75,24 +77,27 @@ impl MsgHandler for MsgSubmitMisbehaviour {
                 // client_id
                 let client_state = client_is_present(&state, self).await?;
 
+                let trusted_tm_cs = match &client_state {
+                    AnyClientState::Tendermint(cs) => cs.clone(),
+                    _ => anyhow::bail!("expected Tendermint client state for Tendermint misbehaviour"),
+                };
+
                 // NOTE: we are allowing expired clients here. it seems correct to allow expired clients to
                 // be frozen on evidence of misbehavior.
                 client_is_not_frozen(&client_state)?;
-
-                let trusted_client_state = client_state;
 
                 verify_misbehavior_header::<&S, HI>(
                     &state,
                     &untrusted_misbehavior.client_id,
                     &untrusted_misbehavior.header1,
-                    &trusted_client_state,
+                    &trusted_tm_cs,
                 )
                 .await?;
                 verify_misbehavior_header::<&S, HI>(
                     &state,
                     &untrusted_misbehavior.client_id,
                     &untrusted_misbehavior.header2,
-                    &trusted_client_state,
+                    &trusted_tm_cs,
                 )
                 .await?;
 
@@ -100,8 +105,8 @@ impl MsgHandler for MsgSubmitMisbehaviour {
 
                 // freeze the client
                 let frozen_client =
-                    trusted_client_state.with_frozen_height(untrusted_misbehavior.header1.height());
-                state.put_client(&self.client_id, frozen_client);
+                    trusted_tm_cs.with_frozen_height(untrusted_misbehavior.header1.height());
+                state.put_client(&self.client_id, AnyClientState::Tendermint(frozen_client));
 
                 state.record(
                     events::ClientMisbehaviour {
@@ -127,13 +132,13 @@ impl MsgHandler for MsgSubmitMisbehaviour {
 async fn client_is_present<S: StateRead>(
     state: S,
     msg: &MsgSubmitMisbehaviour,
-) -> anyhow::Result<TendermintClientState> {
+) -> anyhow::Result<AnyClientState> {
     state.get_client_type(&msg.client_id).await?;
 
     state.get_client_state(&msg.client_id).await
 }
 
-fn client_is_not_frozen(client: &TendermintClientState) -> anyhow::Result<()> {
+fn client_is_not_frozen(client: &AnyClientState) -> anyhow::Result<()> {
     if client.is_frozen() {
         Err(anyhow::anyhow!("client is frozen"))
     } else {
@@ -152,20 +157,25 @@ async fn verify_misbehavior_header<S: StateRead, HI: HostInterface>(
         .get_verified_consensus_state(&trusted_height, &client_id)
         .await?;
 
+    let last_trusted_tm_cons = match &last_trusted_consensus_state {
+        AnyConsensusState::Tendermint(cs) => cs,
+        _ => anyhow::bail!("expected Tendermint consensus state for misbehaviour verification"),
+    };
+
     let trusted_height = trusted_height
         .revision_height()
         .try_into()
         .context("invalid header height")?;
 
     let trusted_validator_set =
-        verify_header_validator_set(mb_header, &last_trusted_consensus_state)?;
+        verify_header_validator_set(mb_header, last_trusted_tm_cons)?;
 
     let trusted_state = TrustedBlockState {
         chain_id: &trusted_client_state.chain_id.clone().into(),
-        header_time: last_trusted_consensus_state.timestamp,
+        header_time: last_trusted_tm_cons.timestamp,
         height: trusted_height,
         next_validators: trusted_validator_set,
-        next_validators_hash: last_trusted_consensus_state.next_validators_hash,
+        next_validators_hash: last_trusted_tm_cons.next_validators_hash,
     };
 
     let untrusted_state = UntrustedBlockState {

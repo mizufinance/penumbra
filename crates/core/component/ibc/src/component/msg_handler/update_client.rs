@@ -15,7 +15,7 @@ use tendermint_light_client_verifier::{
     ProdVerifier, Verdict, Verifier,
 };
 
-use crate::client_types::AnyHeader;
+use crate::client_types::{AnyClientState, AnyConsensusState, AnyHeader};
 use crate::component::{
     client::{
         ConsensusStateWriteExt as _, Ics2ClientExt as _, StateReadExt as _, StateWriteExt as _,
@@ -56,9 +56,14 @@ impl MsgHandler for MsgUpdateClient {
         let any_header = AnyHeader::try_from(self.client_message.clone())?;
 
         match any_header {
-            AnyHeader::Tendermint(untrusted_header) => {
-                header_revision_matches_client_state(&trusted_client_state, &untrusted_header)?;
-                header_height_is_consistent(&untrusted_header)?;
+            AnyHeader::Tendermint(ref untrusted_header) => {
+                let trusted_tm_cs = match &trusted_client_state {
+                    AnyClientState::Tendermint(cs) => cs,
+                    _ => anyhow::bail!("expected Tendermint client state for Tendermint header"),
+                };
+
+                header_revision_matches_client_state(trusted_tm_cs, untrusted_header)?;
+                header_height_is_consistent(untrusted_header)?;
 
                 // The (still untrusted) header uses the `trusted_height` field to
                 // specify the trusted anchor data it is extending.
@@ -70,6 +75,11 @@ impl MsgHandler for MsgUpdateClient {
                     .get_verified_consensus_state(&trusted_height, &self.client_id)
                     .await?;
 
+                let last_trusted_tm_consensus = match &last_trusted_consensus_state {
+                    AnyConsensusState::Tendermint(cs) => cs,
+                    _ => anyhow::bail!("expected Tendermint consensus state"),
+                };
+
                 // We also have to convert from an IBC height, which has two
                 // components, to a Tendermint height, which has only one.
                 let trusted_height = trusted_height
@@ -78,17 +88,17 @@ impl MsgHandler for MsgUpdateClient {
                     .context("invalid header height")?;
 
                 let trusted_validator_set =
-                    verify_header_validator_set(&untrusted_header, &last_trusted_consensus_state)?;
+                    verify_header_validator_set(untrusted_header, last_trusted_tm_consensus)?;
 
                 // Now we build the trusted and untrusted states to feed to the Tendermint light client.
 
                 let trusted_state = TrustedBlockState {
                     // TODO(erwan): do we need an additional check on `chain_id`
-                    chain_id: &trusted_client_state.chain_id.clone().into(),
-                    header_time: last_trusted_consensus_state.timestamp,
+                    chain_id: &trusted_tm_cs.chain_id.clone().into(),
+                    header_time: last_trusted_tm_consensus.timestamp,
                     height: trusted_height,
                     next_validators: trusted_validator_set,
-                    next_validators_hash: last_trusted_consensus_state.next_validators_hash,
+                    next_validators_hash: last_trusted_tm_consensus.next_validators_hash,
                 };
 
                 let untrusted_state = UntrustedBlockState {
@@ -97,7 +107,7 @@ impl MsgHandler for MsgUpdateClient {
                     next_validators: None, // TODO: do we need this?
                 };
 
-                let options = trusted_client_state.as_light_client_options()?;
+                let options = trusted_tm_cs.as_light_client_options()?;
                 let verifier = ProdVerifier::default();
 
                 let verdict = verifier.verify_update_header(
@@ -119,7 +129,7 @@ impl MsgHandler for MsgUpdateClient {
                     )),
                 }?;
 
-                let trusted_header = untrusted_header;
+                let trusted_header = untrusted_header.clone();
 
                 // get the latest client state
                 let client_state = state
@@ -127,22 +137,22 @@ impl MsgHandler for MsgUpdateClient {
                     .await
                     .context("unable to get client state")?;
 
-                // NOTE: next_tendermint_state will freeze the client on equivocation.
-                let (next_tm_client_state, next_tm_consensus_state) = state
-                    .next_tendermint_state(
+                // NOTE: next_client_state will freeze the client on equivocation.
+                let (next_client_state, next_consensus_state) = state
+                    .next_client_state(
                         self.client_id.clone(),
                         client_state.clone(),
-                        trusted_header.clone(),
+                        AnyHeader::Tendermint(trusted_header.clone()),
                     )
-                    .await;
+                    .await?;
 
                 // store the updated client and consensus states
-                state.put_client(&self.client_id, next_tm_client_state);
+                state.put_client(&self.client_id, next_client_state);
                 state
                     .put_verified_consensus_state::<HI>(
                         trusted_header.height(),
                         self.client_id.clone(),
-                        next_tm_consensus_state,
+                        next_consensus_state,
                     )
                     .await?;
 
@@ -188,8 +198,12 @@ async fn update_is_already_committed<S: StateRead>(
                 .get_verified_consensus_state(&height, &client_id)
                 .await
             {
-                let stored_tm_consensus_state = stored_consensus_state;
-                Ok(stored_tm_consensus_state == untrusted_consensus_state)
+                match stored_consensus_state {
+                    AnyConsensusState::Tendermint(stored_tm) => {
+                        Ok(stored_tm == untrusted_consensus_state)
+                    }
+                    _ => Ok(false),
+                }
             } else {
                 Ok(false)
             }
@@ -204,36 +218,46 @@ async fn update_is_already_committed<S: StateRead>(
 async fn client_is_not_expired<S: StateRead, HI: HostInterface>(
     state: S,
     client_id: &ClientId,
-    client_state: &TendermintClientState,
+    client_state: &AnyClientState,
 ) -> anyhow::Result<()> {
+    let latest_height = client_state
+        .latest_height()
+        .context("unable to get latest height from client state")?;
+
     let latest_consensus_state = state
-        .get_verified_consensus_state(&client_state.latest_height(), client_id)
+        .get_verified_consensus_state(&latest_height, client_id)
         .await?;
 
-    // TODO(erwan): for now there is no casting that needs to happen because `get_verified_consensus_state` does not return an
-    // abstracted consensus state.
-    let latest_consensus_state_tm = latest_consensus_state;
-
-    let now = HI::get_block_timestamp(&state).await?;
-    let time_elapsed = now.duration_since(latest_consensus_state_tm.timestamp)?;
-
-    if client_state.expired(time_elapsed) {
-        Err(anyhow::anyhow!("client is expired"))
-    } else {
-        Ok(())
+    match (client_state, &latest_consensus_state) {
+        (AnyClientState::Tendermint(tm_cs), AnyConsensusState::Tendermint(tm_cons)) => {
+            let now = HI::get_block_timestamp(&state).await?;
+            let time_elapsed = now.duration_since(tm_cons.timestamp)?;
+            if tm_cs.expired(time_elapsed) {
+                Err(anyhow::anyhow!("client is expired"))
+            } else {
+                Ok(())
+            }
+        }
+        (AnyClientState::Bankd(_), AnyConsensusState::Bankd(_)) => {
+            // Bankd clients don't expire from time alone
+            Ok(())
+        }
+        _ => Err(anyhow::anyhow!(
+            "mismatched client state and consensus state types"
+        )),
     }
 }
 
 async fn client_is_present<S: StateRead>(
     state: S,
     msg: &MsgUpdateClient,
-) -> anyhow::Result<TendermintClientState> {
+) -> anyhow::Result<AnyClientState> {
     state.get_client_type(&msg.client_id).await?;
 
     state.get_client_state(&msg.client_id).await
 }
 
-fn client_is_not_frozen(client: &TendermintClientState) -> anyhow::Result<()> {
+fn client_is_not_frozen(client: &AnyClientState) -> anyhow::Result<()> {
     if client.is_frozen() {
         Err(anyhow::anyhow!("client is frozen"))
     } else {

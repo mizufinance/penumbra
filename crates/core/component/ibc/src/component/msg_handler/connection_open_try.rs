@@ -1,10 +1,10 @@
+use crate::client_types::{AnyClientState, AnyConsensusState};
 use crate::component::{proof_verification, HostInterface};
 use crate::version::pick_connection_version;
 use crate::IBC_COMMITMENT_PREFIX;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use cnidarium::{StateRead, StateWrite};
-use ibc_types::lightclients::tendermint::client_state::ClientState as TendermintClientState;
 use ibc_types::path::{ClientConsensusStatePath, ClientStatePath, ConnectionPath};
 use ibc_types::{
     core::client::Height as IBCHeight,
@@ -96,6 +96,10 @@ impl MsgHandler for MsgConnectionOpenTry {
             .get_verified_consensus_state(&self.proofs_height_on_a, &self.client_id_on_b)
             .await?;
 
+        let root = ibc_types::core::commitment::MerkleRoot {
+            hash: trusted_consensus_state.root(),
+        };
+
         // PROOF VERIFICATION
         // 1. verify that the counterparty chain committed the expected_conn to its state
         let proof_conn_end_on_a = self.proof_conn_end_on_a.clone();
@@ -104,7 +108,7 @@ impl MsgHandler for MsgConnectionOpenTry {
             self.proofs_height_on_a,
             &self.counterparty.prefix,
             &proof_conn_end_on_a,
-            &trusted_consensus_state.root,
+            &root,
             &ConnectionPath::new(
                 self.counterparty
                     .connection_id
@@ -119,15 +123,15 @@ impl MsgHandler for MsgConnectionOpenTry {
         //    provided in the msg)
         let proof_client_state_of_b_on_a = self.proof_client_state_of_b_on_a.clone();
 
-        let client_state_of_b_on_a: TendermintClientState =
-            self.client_state_of_b_on_a.clone().try_into()?;
+        let client_state_of_b_on_a =
+            AnyClientState::try_from(self.client_state_of_b_on_a.clone())?;
 
         proof_verification::verify_client_full_state(
             &trusted_client_state,
             self.proofs_height_on_a,
             &self.counterparty.prefix,
             &proof_client_state_of_b_on_a,
-            &trusted_consensus_state.root,
+            &root,
             &ClientStatePath::new(&self.counterparty.client_id),
             client_state_of_b_on_a,
         )
@@ -145,12 +149,12 @@ impl MsgHandler for MsgConnectionOpenTry {
             self.proofs_height_on_a,
             &self.counterparty.prefix,
             &proof_consensus_state_of_b_on_a,
-            &trusted_consensus_state.root,
+            &root,
             &ClientConsensusStatePath::new(
                 &self.counterparty.client_id,
                 &self.consensus_height_of_b_on_a,
             ),
-            expected_consensus,
+            AnyConsensusState::Tendermint(expected_consensus),
         )
         .context("couldn't verify client consensus state")?;
 

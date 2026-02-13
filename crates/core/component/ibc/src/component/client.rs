@@ -17,8 +17,10 @@ use ibc_types::lightclients::tendermint::{
     consensus_state::ConsensusState as TendermintConsensusState,
     header::Header as TendermintHeader,
 };
+use prost::Message as _;
 use penumbra_sdk_proto::{StateReadProto, StateWriteProto};
 
+use crate::client_types::{AnyClientState, AnyConsensusState, AnyHeader};
 use crate::component::client_counter::{ClientCounter, VerifiedHeights};
 use crate::prefix::MerklePrefixExt;
 use crate::IBC_COMMITMENT_PREFIX;
@@ -57,14 +59,36 @@ impl Display for ClientStatus {
 
 #[async_trait]
 pub(crate) trait Ics2ClientExt: StateWrite {
-    // given an already verified tendermint header, and a trusted tendermint client state, compute
-    // the next client and consensus states.
-    async fn next_tendermint_state(
+    // Given an already verified header and a trusted client state, compute
+    // the next client and consensus states. Dispatches by client type.
+    async fn next_client_state(
+        &self,
+        client_id: ClientId,
+        trusted_client_state: AnyClientState,
+        verified_header: AnyHeader,
+    ) -> Result<(AnyClientState, AnyConsensusState)> {
+        match (trusted_client_state, verified_header) {
+            (AnyClientState::Tendermint(tm_cs), AnyHeader::Tendermint(tm_header)) => {
+                self.next_tendermint_state_inner(client_id, tm_cs, tm_header)
+                    .await
+            }
+            (AnyClientState::Bankd(_), AnyHeader::Bankd(_)) => {
+                anyhow::bail!("bankd client state transition is not yet supported");
+            }
+            _ => {
+                anyhow::bail!("mismatched client state and header types");
+            }
+        }
+    }
+
+    // Tendermint-specific state transition logic. Checks for equivocation and
+    // timestamp monotonicity violations, freezing the client if found.
+    async fn next_tendermint_state_inner(
         &self,
         client_id: ClientId,
         trusted_client_state: TendermintClientState,
         verified_header: TendermintHeader,
-    ) -> (TendermintClientState, TendermintConsensusState) {
+    ) -> Result<(AnyClientState, AnyConsensusState)> {
         let verified_consensus_state = TendermintConsensusState::from(verified_header.clone());
 
         // if we have a stored consensus state for this height that conflicts, we need to freeze
@@ -73,19 +97,28 @@ pub(crate) trait Ics2ClientExt: StateWrite {
             .get_verified_consensus_state(&verified_header.height(), &client_id)
             .await
         {
-            if stored_cs_state == verified_consensus_state {
-                return (trusted_client_state, verified_consensus_state);
+            let stored_tm_cs = match stored_cs_state {
+                AnyConsensusState::Tendermint(cs) => cs,
+                _ => anyhow::bail!("expected Tendermint consensus state"),
+            };
+            if stored_tm_cs == verified_consensus_state {
+                return Ok((
+                    AnyClientState::Tendermint(trusted_client_state),
+                    AnyConsensusState::Tendermint(verified_consensus_state),
+                ));
             } else {
-                return (
-                    trusted_client_state
-                        .with_header(verified_header.clone())
-                        .expect("able to add header to client state")
-                        .with_frozen_height(ibc_types::core::client::Height {
-                            revision_number: 0,
-                            revision_height: 1,
-                        }),
-                    verified_consensus_state,
-                );
+                return Ok((
+                    AnyClientState::Tendermint(
+                        trusted_client_state
+                            .with_header(verified_header.clone())
+                            .expect("able to add header to client state")
+                            .with_frozen_height(ibc_types::core::client::Height {
+                                revision_number: 0,
+                                revision_height: 1,
+                            }),
+                    ),
+                    AnyConsensusState::Tendermint(verified_consensus_state),
+                ));
             }
         }
 
@@ -105,42 +138,56 @@ pub(crate) trait Ics2ClientExt: StateWrite {
         // case 1: if we have a verified consensus state previous to this header, verify that this
         // header's timestamp is greater than or equal to the stored consensus state's timestamp
         if let Some(prev_state) = prev_consensus_state {
-            if verified_header.signed_header.header().time < prev_state.timestamp {
-                return (
-                    trusted_client_state
-                        .with_header(verified_header.clone())
-                        .expect("able to add header to client state")
-                        .with_frozen_height(ibc_types::core::client::Height {
-                            revision_number: 0,
-                            revision_height: 1,
-                        }),
-                    verified_consensus_state,
-                );
+            let prev_tm = match prev_state {
+                AnyConsensusState::Tendermint(cs) => cs,
+                _ => anyhow::bail!("expected Tendermint consensus state for prev"),
+            };
+            if verified_header.signed_header.header().time < prev_tm.timestamp {
+                return Ok((
+                    AnyClientState::Tendermint(
+                        trusted_client_state
+                            .with_header(verified_header.clone())
+                            .expect("able to add header to client state")
+                            .with_frozen_height(ibc_types::core::client::Height {
+                                revision_number: 0,
+                                revision_height: 1,
+                            }),
+                    ),
+                    AnyConsensusState::Tendermint(verified_consensus_state),
+                ));
             }
         }
         // case 2: if we have a verified consensus state with higher block height than this header,
         // verify that this header's timestamp is less than or equal to this header's timestamp.
         if let Some(next_state) = next_consensus_state {
-            if verified_header.signed_header.header().time > next_state.timestamp {
-                return (
-                    trusted_client_state
-                        .with_header(verified_header.clone())
-                        .expect("able to add header to client state")
-                        .with_frozen_height(ibc_types::core::client::Height {
-                            revision_number: 0,
-                            revision_height: 1,
-                        }),
-                    verified_consensus_state,
-                );
+            let next_tm = match next_state {
+                AnyConsensusState::Tendermint(cs) => cs,
+                _ => anyhow::bail!("expected Tendermint consensus state for next"),
+            };
+            if verified_header.signed_header.header().time > next_tm.timestamp {
+                return Ok((
+                    AnyClientState::Tendermint(
+                        trusted_client_state
+                            .with_header(verified_header.clone())
+                            .expect("able to add header to client state")
+                            .with_frozen_height(ibc_types::core::client::Height {
+                                revision_number: 0,
+                                revision_height: 1,
+                            }),
+                    ),
+                    AnyConsensusState::Tendermint(verified_consensus_state),
+                ));
             }
         }
 
-        (
-            trusted_client_state
-                .with_header(verified_header.clone())
-                .expect("able to add header to client state"),
-            verified_consensus_state,
-        )
+        Ok((
+            AnyClientState::Tendermint(
+                trusted_client_state
+                    .with_header(verified_header.clone())
+                    .expect("able to add header to client state"),
+            ),
+            AnyConsensusState::Tendermint(verified_consensus_state),
+        ))
     }
 }
 
@@ -152,12 +199,13 @@ pub trait ConsensusStateWriteExt: StateWrite + Sized {
         &mut self,
         height: Height,
         client_id: ClientId,
-        consensus_state: TendermintConsensusState,
+        consensus_state: AnyConsensusState,
     ) -> Result<()> {
-        self.put(
+        let any_proto: ibc_proto::google::protobuf::Any = consensus_state.into();
+        self.put_raw(
             IBC_COMMITMENT_PREFIX
                 .apply_string(ClientConsensusStatePath::new(&client_id, &height).to_string()),
-            consensus_state,
+            any_proto.encode_to_vec(),
         );
 
         let current_height = HI::get_block_height(&self).await?;
@@ -199,16 +247,17 @@ pub trait StateWriteExt: StateWrite + StateReadExt {
         self.put("ibc_client_counter".into(), counter);
     }
 
-    fn put_client(&mut self, client_id: &ClientId, client_state: TendermintClientState) {
+    fn put_client(&mut self, client_id: &ClientId, client_state: AnyClientState) {
         self.put_proto(
             IBC_COMMITMENT_PREFIX
                 .apply_string(ibc_types::path::ClientTypePath(client_id.clone()).to_string()),
-            ibc_types::lightclients::tendermint::client_type().to_string(),
+            client_state.client_type().to_string(),
         );
 
-        self.put(
+        let any_proto: ibc_proto::google::protobuf::Any = client_state.into();
+        self.put_raw(
             IBC_COMMITMENT_PREFIX.apply_string(ClientStatePath(client_id.clone()).to_string()),
-            client_state,
+            any_proto.encode_to_vec(),
         );
     }
 
@@ -257,14 +306,18 @@ pub trait StateReadExt: StateRead {
         .map(ClientType::new)
     }
 
-    async fn get_client_state(&self, client_id: &ClientId) -> Result<TendermintClientState> {
-        let client_state = self
-            .get(
-                &IBC_COMMITMENT_PREFIX.apply_string(ClientStatePath(client_id.clone()).to_string()),
+    async fn get_client_state(&self, client_id: &ClientId) -> Result<AnyClientState> {
+        let raw_bytes = self
+            .get_raw(
+                &IBC_COMMITMENT_PREFIX
+                    .apply_string(ClientStatePath(client_id.clone()).to_string()),
             )
-            .await?;
+            .await?
+            .context(format!("could not find client state for {client_id}"))?;
 
-        client_state.context(format!("could not find client state for {client_id}"))
+        let any = ibc_proto::google::protobuf::Any::decode(raw_bytes.as_slice())
+            .context("failed to decode client state as Any")?;
+        AnyClientState::try_from(any)
     }
 
     async fn get_client_status(
@@ -278,11 +331,6 @@ pub trait StateReadExt: StateRead {
             return ClientStatus::Unknown;
         }
 
-        // let _client_type = client_type.expect("client type is Ok");
-        // IBC-Go has a check here to see if the client type is allowed.
-        // We don't have a similar allowlist in Penumbra, so we skip that check.
-        // https://github.com/cosmos/ibc-go/blob/main/modules/core/02-client/types/params.go#L34
-
         let client_state = self.get_client_state(client_id).await;
 
         if client_state.is_err() {
@@ -295,9 +343,15 @@ pub trait StateReadExt: StateRead {
             return ClientStatus::Frozen;
         }
 
+        // get latest height (may fail for malformed bankd state)
+        let latest_height = match client_state.latest_height() {
+            Ok(h) => h,
+            Err(_) => return ClientStatus::Unknown,
+        };
+
         // get latest consensus state to check for expiry
         let latest_consensus_state = self
-            .get_verified_consensus_state(&client_state.latest_height(), client_id)
+            .get_verified_consensus_state(&latest_height, client_id)
             .await;
 
         if latest_consensus_state.is_err() {
@@ -308,14 +362,26 @@ pub trait StateReadExt: StateRead {
 
         let latest_consensus_state = latest_consensus_state.expect("latest consensus state is Ok");
 
-        let time_elapsed = current_block_time.duration_since(latest_consensus_state.timestamp);
-        if time_elapsed.is_err() {
-            return ClientStatus::Unknown;
-        }
-        let time_elapsed = time_elapsed.expect("time elapsed is Ok");
-
-        if client_state.expired(time_elapsed) {
-            return ClientStatus::Expired;
+        // Dispatch expiry check by client type
+        match (&client_state, &latest_consensus_state) {
+            (AnyClientState::Tendermint(tm_cs), AnyConsensusState::Tendermint(tm_cons)) => {
+                let time_elapsed = current_block_time.duration_since(tm_cons.timestamp);
+                if time_elapsed.is_err() {
+                    return ClientStatus::Unknown;
+                }
+                let time_elapsed = time_elapsed.expect("time elapsed is Ok");
+                if tm_cs.expired(time_elapsed) {
+                    return ClientStatus::Expired;
+                }
+            }
+            (AnyClientState::Bankd(_), AnyConsensusState::Bankd(_)) => {
+                // Bankd has no trusting period — clients don't expire from time alone.
+                // They can only be frozen by misbehaviour evidence.
+            }
+            _ => {
+                // Mismatched client/consensus types
+                return ClientStatus::Unknown;
+            }
         }
 
         ClientStatus::Active
@@ -348,17 +414,22 @@ pub trait StateReadExt: StateRead {
         &self,
         height: &Height,
         client_id: &ClientId,
-    ) -> Result<TendermintConsensusState> {
-        self.get(
-            &IBC_COMMITMENT_PREFIX
-                .apply_string(ClientConsensusStatePath::new(client_id, height).to_string()),
-        )
-        .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "counterparty consensus state not found for client {client_id} at height {height}"
+    ) -> Result<AnyConsensusState> {
+        let raw_bytes = self
+            .get_raw(
+                &IBC_COMMITMENT_PREFIX
+                    .apply_string(ClientConsensusStatePath::new(client_id, height).to_string()),
             )
-        })
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "counterparty consensus state not found for client {client_id} at height {height}"
+                )
+            })?;
+
+        let any = ibc_proto::google::protobuf::Any::decode(raw_bytes.as_slice())
+            .context("failed to decode consensus state as Any")?;
+        AnyConsensusState::try_from(any)
     }
 
     async fn get_client_update_height(
@@ -399,7 +470,7 @@ pub trait StateReadExt: StateRead {
         &self,
         client_id: &ClientId,
         height: &Height,
-    ) -> Result<Option<TendermintConsensusState>> {
+    ) -> Result<Option<AnyConsensusState>> {
         let mut verified_heights =
             self.get_verified_heights(client_id)
                 .await?
@@ -430,7 +501,7 @@ pub trait StateReadExt: StateRead {
         &self,
         client_id: &ClientId,
         height: &Height,
-    ) -> Result<Option<TendermintConsensusState>> {
+    ) -> Result<Option<AnyConsensusState>> {
         let mut verified_heights =
             self.get_verified_heights(client_id)
                 .await?

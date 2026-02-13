@@ -35,6 +35,7 @@ impl MsgHandler for MsgCreateClient {
         tracing::debug!(msg = ?self);
 
         let any_client_state = AnyClientState::try_from(self.client_state.clone())?;
+        let any_consensus_state = AnyConsensusState::try_from(self.consensus_state.clone())?;
 
         // get the current client counter
         let id_counter = state.client_counter().await?;
@@ -44,44 +45,35 @@ impl MsgHandler for MsgCreateClient {
 
         tracing::info!("creating client {:?}", client_id);
 
-        match any_client_state {
-            AnyClientState::Tendermint(ref tm_client_state) => {
-                let consensus_state = ibc_types::lightclients::tendermint::consensus_state::ConsensusState::try_from(
-                    self.consensus_state.clone(),
-                )
-                .context("failed to deserialize tendermint consensus state")?;
+        let latest_height = any_client_state
+            .latest_height()
+            .context("unable to get latest height from client state")?;
 
-                // store the client data
-                state.put_client(&client_id, tm_client_state.clone());
+        // store the client data
+        state.put_client(&client_id, any_client_state);
 
-                // store the genesis consensus state
-                state
-                    .put_verified_consensus_state::<HI>(
-                        tm_client_state.latest_height(),
-                        client_id.clone(),
-                        consensus_state,
-                    )
-                    .await
-                    .context("unable to put verified consensus state")?;
+        // store the genesis consensus state
+        state
+            .put_verified_consensus_state::<HI>(
+                latest_height,
+                client_id.clone(),
+                any_consensus_state,
+            )
+            .await
+            .context("unable to put verified consensus state")?;
 
-                // increment client counter
-                let counter = state.client_counter().await.unwrap_or(ClientCounter(0));
-                state.put_client_counter(ClientCounter(counter.0 + 1));
+        // increment client counter
+        let counter = state.client_counter().await.unwrap_or(ClientCounter(0));
+        state.put_client_counter(ClientCounter(counter.0 + 1));
 
-                state.record(
-                    CreateClient {
-                        client_id: client_id.clone(),
-                        client_type,
-                        consensus_height: tm_client_state.latest_height(),
-                    }
-                    .into(),
-                );
+        state.record(
+            CreateClient {
+                client_id: client_id.clone(),
+                client_type,
+                consensus_height: latest_height,
             }
-            AnyClientState::Bankd(_bankd_client_state) => {
-                // Bankd client creation will be implemented in a future PR (B06-T3).
-                anyhow::bail!("bankd client creation is not yet supported");
-            }
-        }
+            .into(),
+        );
 
         Ok(())
     }

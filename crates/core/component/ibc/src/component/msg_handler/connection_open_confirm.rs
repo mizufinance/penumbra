@@ -73,13 +73,17 @@ impl MsgHandler for MsgConnectionOpenConfirm {
         // in connectionOpenConfirm, only the inclusion of the connection state must be
         // verified, not the client or consensus states.
 
+        let root = ibc_types::core::commitment::MerkleRoot {
+            hash: trusted_consensus_state.root(),
+        };
+
         let proof_conn_end_on_a = self.proof_conn_end_on_a.clone();
         proof_verification::verify_connection_state(
             &trusted_client_state,
             self.proof_height_on_a,
             &connection.counterparty.prefix,
             &proof_conn_end_on_a,
-            &trusted_consensus_state.root,
+            &root,
             &ConnectionPath::new(connection.counterparty.connection_id.as_ref().ok_or_else(
                 || anyhow::anyhow!("missing counterparty in connection open confirm"),
             )?),

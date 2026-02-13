@@ -14,6 +14,7 @@ use ibc_types::{
     timestamp::ZERO_DURATION,
 };
 
+use crate::client_types::{AnyClientState, AnyConsensusState};
 use crate::component::{
     client::{ConsensusStateWriteExt as _, StateReadExt as _, StateWriteExt as _},
     proof_verification::ClientUpgradeProofVerifier,
@@ -95,6 +96,11 @@ impl MsgHandler for MsgUpgradeClient {
 
         let old_client_state = state.get_client_state(&self.client_id).await?;
 
+        let old_tm_cs = match &old_client_state {
+            AnyClientState::Tendermint(cs) => cs,
+            _ => anyhow::bail!("expected Tendermint client state for upgrade"),
+        };
+
         // construct the new client state to be committed to our state. we don't allow the
         // trust_level, trusting_period, clock_drift, allow_update, or frozen_height to change
         // across upgrades.
@@ -104,15 +110,15 @@ impl MsgHandler for MsgUpgradeClient {
         // we would just ignore it here. should we error instead?
         let new_client_state = TendermintClientState::new(
             upgraded_client_state_tm.chain_id,
-            old_client_state.trust_level,
-            old_client_state.trusting_period,
+            old_tm_cs.trust_level,
+            old_tm_cs.trusting_period,
             upgraded_client_state_tm.unbonding_period,
-            old_client_state.max_clock_drift,
+            old_tm_cs.max_clock_drift,
             upgraded_client_state_tm.latest_height,
             upgraded_client_state_tm.proof_specs,
             upgraded_client_state_tm.upgrade_path,
-            old_client_state.allow_update,
-            old_client_state.frozen_height,
+            old_tm_cs.allow_update,
+            old_tm_cs.frozen_height,
         )?;
 
         let new_consensus_state = TendermintConsensusState::new(
@@ -125,12 +131,12 @@ impl MsgHandler for MsgUpgradeClient {
 
         let latest_height = new_client_state.latest_height();
 
-        state.put_client(&self.client_id, new_client_state);
+        state.put_client(&self.client_id, AnyClientState::Tendermint(new_client_state));
         state
             .put_verified_consensus_state::<HI>(
                 latest_height,
                 self.client_id.clone(),
-                new_consensus_state,
+                AnyConsensusState::Tendermint(new_consensus_state),
             )
             .await?;
 

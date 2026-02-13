@@ -62,10 +62,13 @@ impl MsgHandler for MsgTimeout {
             .ok_or_else(|| anyhow::anyhow!("connection not found for channel"))?;
 
         let client_state = state.get_client_state(&connection.client_id).await?;
+        let latest_height = client_state.latest_height()?;
         let last_consensus_state = state
-            .get_verified_consensus_state(&client_state.latest_height(), &connection.client_id)
+            .get_verified_consensus_state(&latest_height, &connection.client_id)
             .await?;
-        let last_update_time = last_consensus_state.timestamp;
+        let last_update_time = last_consensus_state
+            .timestamp()
+            .context("failed to get consensus state timestamp")?;
         let proof_update_height = self.proof_height_on_b;
 
         // check that timeout height or timeout timestamp has passed on the other end
