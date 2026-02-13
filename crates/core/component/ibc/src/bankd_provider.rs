@@ -13,7 +13,7 @@ use prost::Message as _;
 use sha2::{Digest as _, Sha256};
 use tiny_keccak::{Hasher as _, Keccak};
 
-use crate::bankd_verification::verify_bls_threshold_signature;
+use crate::bankd_verification::{validate_group_public_key, verify_bls_threshold_signature};
 use crate::client_provider::ClientProvider;
 use crate::client_types::{
     AnyClientState, AnyConsensusState, AnyHeader, BankdClientState, BankdConsensusState,
@@ -76,6 +76,7 @@ impl ClientProvider for BankdProvider {
         let consensus_digest = sha256(&block_id);
 
         // --- 5. Verify BLS threshold signature ---
+        validate_group_public_key(&cs.group_public_key)?;
         let gpk: &[u8; 96] = cs.group_public_key.as_slice().try_into().map_err(|_| {
             anyhow::anyhow!(
                 "bankd group public key must be 96 bytes, got {}",
@@ -170,6 +171,7 @@ impl ClientProvider for BankdProvider {
         );
 
         // Verify both BLS signatures
+        validate_group_public_key(&cs.group_public_key)?;
         let gpk: &[u8; 96] = cs
             .group_public_key
             .as_slice()
