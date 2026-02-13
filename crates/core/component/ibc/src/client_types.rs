@@ -237,8 +237,9 @@ impl AnyConsensusState {
     pub fn timestamp_as_unix_secs(&self) -> anyhow::Result<u64> {
         match self {
             AnyConsensusState::Tendermint(cs) => {
-                let t = cs.timestamp;
-                Ok(t.unix_timestamp() as u64)
+                let unix_ts = cs.timestamp.unix_timestamp();
+                anyhow::ensure!(unix_ts >= 0, "negative consensus state timestamp: {}", unix_ts);
+                Ok(unix_ts as u64)
             }
             AnyConsensusState::Bankd(cs) => Ok(cs.timestamp),
         }
@@ -275,8 +276,9 @@ impl AnyHeader {
     pub fn timestamp_as_unix_secs(&self) -> anyhow::Result<u64> {
         match self {
             AnyHeader::Tendermint(h) => {
-                let t = h.signed_header.header.time;
-                Ok(t.unix_timestamp() as u64)
+                let unix_ts = h.signed_header.header.time.unix_timestamp();
+                anyhow::ensure!(unix_ts >= 0, "negative header timestamp: {}", unix_ts);
+                Ok(unix_ts as u64)
             }
             AnyHeader::Bankd(h) => Ok(h.timestamp),
         }

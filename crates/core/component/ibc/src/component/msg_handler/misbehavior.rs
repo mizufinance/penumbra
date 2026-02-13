@@ -56,58 +56,69 @@ impl MsgHandler for MsgSubmitMisbehaviour {
     async fn try_execute<S: StateWrite, H, HI: HostInterface>(&self, mut state: S) -> Result<()> {
         tracing::debug!(msg = ?self);
 
-        let untrusted_misbehavior =
-            TendermintMisbehavior::try_from(self.misbehaviour.clone())
-                .map_err(|e| anyhow::anyhow!("failed to deserialize tendermint misbehavior: {e}"))?;
+        match self.misbehaviour.type_url.as_str() {
+            TENDERMINT_MISBEHAVIOUR_TYPE_URL => {
+                let untrusted_misbehavior =
+                    TendermintMisbehavior::try_from(self.misbehaviour.clone())
+                        .map_err(|e| anyhow::anyhow!("failed to deserialize tendermint misbehavior: {e}"))?;
 
-        // misbehavior must either contain equivocation or timestamp monotonicity violation
-        if !misbehavior_equivocation_violation(&untrusted_misbehavior)
-            && !misbehavior_timestamp_monotonicity_violation(&untrusted_misbehavior)
-        {
-            anyhow::bail!(
-                "misbehavior must either contain equivocation or timestamp monotonicity violation"
-            );
-        }
+                // misbehavior must either contain equivocation or timestamp monotonicity violation
+                if !misbehavior_equivocation_violation(&untrusted_misbehavior)
+                    && !misbehavior_timestamp_monotonicity_violation(&untrusted_misbehavior)
+                {
+                    anyhow::bail!(
+                        "misbehavior must either contain equivocation or timestamp monotonicity violation"
+                    );
+                }
 
-        // verify that both headers verify for an update client on the last trusted header for
-        // client_id
-        let client_state = client_is_present(&state, self).await?;
+                // verify that both headers verify for an update client on the last trusted header for
+                // client_id
+                let client_state = client_is_present(&state, self).await?;
 
-        // NOTE: we are allowing expired clients here. it seems correct to allow expired clients to
-        // be frozen on evidence of misbehavior.
-        client_is_not_frozen(&client_state)?;
+                // NOTE: we are allowing expired clients here. it seems correct to allow expired clients to
+                // be frozen on evidence of misbehavior.
+                client_is_not_frozen(&client_state)?;
 
-        let trusted_client_state = client_state;
+                let trusted_client_state = client_state;
 
-        verify_misbehavior_header::<&S, HI>(
-            &state,
-            &untrusted_misbehavior.client_id,
-            &untrusted_misbehavior.header1,
-            &trusted_client_state,
-        )
-        .await?;
-        verify_misbehavior_header::<&S, HI>(
-            &state,
-            &untrusted_misbehavior.client_id,
-            &untrusted_misbehavior.header2,
-            &trusted_client_state,
-        )
-        .await?;
+                verify_misbehavior_header::<&S, HI>(
+                    &state,
+                    &untrusted_misbehavior.client_id,
+                    &untrusted_misbehavior.header1,
+                    &trusted_client_state,
+                )
+                .await?;
+                verify_misbehavior_header::<&S, HI>(
+                    &state,
+                    &untrusted_misbehavior.client_id,
+                    &untrusted_misbehavior.header2,
+                    &trusted_client_state,
+                )
+                .await?;
 
-        tracing::info!(client_id = ?untrusted_misbehavior.client_id, "received valid misbehavior evidence! freezing client");
+                tracing::info!(client_id = ?untrusted_misbehavior.client_id, "received valid misbehavior evidence! freezing client");
 
-        // freeze the client
-        let frozen_client =
-            trusted_client_state.with_frozen_height(untrusted_misbehavior.header1.height());
-        state.put_client(&self.client_id, frozen_client);
+                // freeze the client
+                let frozen_client =
+                    trusted_client_state.with_frozen_height(untrusted_misbehavior.header1.height());
+                state.put_client(&self.client_id, frozen_client);
 
-        state.record(
-            events::ClientMisbehaviour {
-                client_id: self.client_id.clone(),
-                client_type: ClientType::new(TENDERMINT_CLIENT_TYPE.to_string()),
+                state.record(
+                    events::ClientMisbehaviour {
+                        client_id: self.client_id.clone(),
+                        client_type: ClientType::new(TENDERMINT_CLIENT_TYPE.to_string()),
+                    }
+                    .into(),
+                );
             }
-            .into(),
-        );
+            BANKD_MISBEHAVIOUR_TYPE_URL => {
+                // Bankd misbehaviour execution will be implemented in B06-T3.
+                anyhow::bail!("bankd misbehaviour execution is not yet supported");
+            }
+            other => {
+                anyhow::bail!("unknown misbehaviour type: {other}");
+            }
+        }
 
         Ok(())
     }
