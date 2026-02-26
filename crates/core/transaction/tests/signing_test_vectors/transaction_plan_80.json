@@ -1,33 +1,48 @@
 {
   "actions": [
     {
-      "positionClose": {
-        "positionId": {
-          "inner": "5/XM/U20A3d6LCe93AJqv/p74mFIp6jovYn6NdILKik="
+      "communityPoolOutput": {
+        "value": {
+          "amount": {
+            "lo": "297967651401359283"
+          },
+          "assetId": {
+            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+          }
+        },
+        "address": {
+          "inner": "Jcetm5dVWZwzE0qQhFSbd+SMHMKxTigoQxCZ7EaT5u+5ZzJmXp4potoWOqwPS3WYGaH6xqxHcdJvcGbY70zyNEdVMULufV0NWoRPB30jxyo="
         }
       }
     },
     {
       "delegate": {
         "validatorIdentity": {
-          "ik": "GR0z9y27UAYHWKkQgsPK2a451UggfnXBpAqe1q7RpNs="
+          "ik": "SNrO/wo3tVjnJ1UgwLdMnMjQTJkLPeXQQ1wm/yfw9iQ="
         },
-        "epochIndex": "8615",
+        "epochIndex": "9456",
         "unbondedAmount": {
-          "lo": "66800006827530736"
+          "lo": "362907890124141226"
         },
         "delegationAmount": {
-          "lo": "831287646946455918"
+          "lo": "530018095825961673"
+        }
+      }
+    },
+    {
+      "positionClose": {
+        "positionId": {
+          "inner": "2KSUv7ApynTgLcGwH2Fk2Pk7CBhVc7veiMdxzdHaUjY="
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "8043177512",
-    "chainId": "jyomdrylvthwkc-1368113661732666887596",
+    "expiryHeight": "9051043194",
+    "chainId": "simtqkk-862645",
     "fee": {
       "amount": {
-        "lo": "609088739935903601"
+        "lo": "370911609909101350"
       }
     }
   }

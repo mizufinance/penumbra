@@ -2,12 +2,15 @@
 
 resolver = "2"
 
-exclude = ["tools/proto-compiler"]
+exclude = ["tools/proto-compiler", "crates/bin/orbis-test"]
 
 # Also remember to add to deployments/scripts/rust-docs
 members = [
   "crates/bench",
   "crates/bin/elcuity",
+  "crates/bin/orbis-audit",
+  "crates/bin/orbis-ring-test",
+  "crates/bin/orbis-sim",
   "crates/bin/pcli",
   "crates/bin/pclientd",
   "crates/bin/pd",

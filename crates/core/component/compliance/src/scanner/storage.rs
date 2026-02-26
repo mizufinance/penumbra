@@ -300,83 +300,48 @@ impl ComplianceStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::encrypt_compliance_details;
-    use crate::issuer_keys::DetectionKey;
-    use crate::scanner::decrypt::decrypt_compliance;
-    use crate::test_helpers::{make_address, make_test_leaf, make_uck};
     use penumbra_sdk_num::Amount;
-    use rand_core::OsRng;
     use tempfile::NamedTempFile;
+
+    fn make_dummy_transfer(height: u64, asset_id: asset::Id, amount: u64) -> DetectedTransfer {
+        DetectedTransfer {
+            height,
+            action_index: 0,
+            asset_id,
+            amount: Amount::from(amount),
+            self_address: PartialAddress {
+                diversified_generator: [1u8; 32],
+                transmission_key: [2u8; 32],
+            },
+            counterparty_address: PartialAddress {
+                diversified_generator: [3u8; 32],
+                transmission_key: [4u8; 32],
+            },
+            nullifier: None,
+        }
+    }
 
     #[test]
     fn test_storage_create_and_query() {
-        // Create temp database
         let temp_file = NamedTempFile::new().unwrap();
         let storage = ComplianceStorage::new(temp_file.path()).unwrap();
 
-        // Verify initial state
         assert_eq!(storage.last_sync_height().unwrap(), 0);
         assert_eq!(storage.transfer_count().unwrap(), 0);
 
-        // Setup UCK and addresses
-        let uck = make_uck();
-        let date = 19000u64;
-
-        let self_address = make_address(11);
-        let counterparty_address = make_address(22);
-        let ack = uck.derive_address_key(self_address.diversifier());
-
         let asset_id = asset::Id(decaf377::Fq::from(12345u64));
-        let amount = Amount::from(1000u64);
-
-        let dk = DetectionKey::demo();
-        let asset_leaf = make_test_leaf(dk.public_key(), u128::MAX);
-
-        // Encrypt and decrypt to get a real DetectedTransfer
-        let mut rng = OsRng;
-        let result = encrypt_compliance_details(
-            &mut rng,
-            &ack,
-            &self_address,
-            date,
-            asset_id,
-            amount,
-            &counterparty_address,
-            &asset_leaf,
-        )
-        .unwrap();
-
-        let decrypted = decrypt_compliance(&uck, date, &result.ciphertext).unwrap();
-
-        let transfer = DetectedTransfer {
-            height: 100,
-            action_index: 0,
-            asset_id,
-            amount: decrypted.core.amount,
-            self_address: PartialAddress::new(
-                decrypted.core.self_diversified_generator,
-                decrypted.core.self_transmission_key,
-            ),
-            counterparty_address: PartialAddress::new(
-                decrypted.extension.counterparty_diversified_generator,
-                decrypted.extension.counterparty_transmission_key,
-            ),
-            nullifier: None,
-        };
+        let transfer = make_dummy_transfer(100, asset_id, 1000);
 
         storage.save_transfer(&transfer).unwrap();
 
-        // Verify count
         assert_eq!(storage.transfer_count().unwrap(), 1);
 
-        // Query all transfers
         let transfers = storage.query_transfers(None, None, None).unwrap();
         assert_eq!(transfers.len(), 1);
         assert_eq!(transfers[0].height, 100);
         assert_eq!(transfers[0].amount, Amount::from(1000u64));
         assert_eq!(transfers[0].asset_id, asset_id);
 
-        // Update sync height
         storage.update_sync_height(100).unwrap();
         assert_eq!(storage.last_sync_height().unwrap(), 100);
     }
@@ -386,64 +351,23 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let storage = ComplianceStorage::new(temp_file.path()).unwrap();
 
-        let uck = make_uck();
-        let date = 19001u64;
-
-        let self_address = make_address(33);
-        let counterparty_address = make_address(44);
-        let ack = uck.derive_address_key(self_address.diversifier());
-
         let asset_a = asset::Id(decaf377::Fq::from(1111u64));
         let asset_b = asset::Id(decaf377::Fq::from(2222u64));
 
-        let dk = DetectionKey::demo();
-        let asset_leaf = make_test_leaf(dk.public_key(), u128::MAX);
-
-        // Create transfers with different assets and heights
-        let mut transfers = Vec::new();
-        for (i, asset_id) in [(0, asset_a), (1, asset_b), (2, asset_a)].iter() {
-            let mut rng = OsRng;
-            let result = encrypt_compliance_details(
-                &mut rng,
-                &ack,
-                &self_address,
-                date,
-                *asset_id,
-                Amount::from((100 + i * 100) as u64),
-                &counterparty_address,
-                &asset_leaf,
-            )
-            .unwrap();
-
-            let decrypted = decrypt_compliance(&uck, date, &result.ciphertext).unwrap();
-
-            transfers.push(DetectedTransfer {
-                height: 100 + *i as u64,
-                action_index: 0,
-                asset_id: *asset_id,
-                amount: decrypted.core.amount,
-                self_address: PartialAddress::new(
-                    decrypted.core.self_diversified_generator,
-                    decrypted.core.self_transmission_key,
-                ),
-                counterparty_address: PartialAddress::new(
-                    decrypted.extension.counterparty_diversified_generator,
-                    decrypted.extension.counterparty_transmission_key,
-                ),
-                nullifier: None,
-            });
-        }
+        let transfers = vec![
+            make_dummy_transfer(100, asset_a, 100),
+            make_dummy_transfer(101, asset_b, 200),
+            make_dummy_transfer(102, asset_a, 300),
+        ];
 
         storage.save_transfers(&transfers).unwrap();
 
-        // Query by asset
         let results_a = storage.query_transfers(Some(&asset_a), None, None).unwrap();
         assert_eq!(results_a.len(), 2, "Should find 2 transfers with asset_a");
 
         let results_b = storage.query_transfers(Some(&asset_b), None, None).unwrap();
         assert_eq!(results_b.len(), 1, "Should find 1 transfer with asset_b");
 
-        // Query by height range
         let results = storage.query_transfers(None, Some(101), Some(101)).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].height, 101);

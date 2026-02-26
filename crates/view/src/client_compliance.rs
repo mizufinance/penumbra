@@ -57,7 +57,7 @@ use anyhow::Result;
 use futures::FutureExt;
 use penumbra_sdk_asset::asset;
 use penumbra_sdk_compliance::ComplianceLeaf;
-use penumbra_sdk_keys::{keys::AddressComplianceKey, Address};
+use penumbra_sdk_keys::Address;
 use penumbra_sdk_proto::view::v1 as view_pb;
 use penumbra_sdk_tct::StateCommitment;
 use std::{future::Future, pin::Pin};
@@ -142,30 +142,24 @@ pub trait ViewClientComplianceExt: ViewClient {
                 anyhow::anyhow!("compliance leaf proto: missing address field")
             })?.try_into()?;
 
-            let key_proto = proto_leaf.key.ok_or_else(|| {
-                anyhow::anyhow!("compliance leaf proto: missing key field")
-            })?;
-            let key_bytes: [u8; 32] = key_proto.inner.as_slice().try_into().map_err(|_| {
-                anyhow::anyhow!(
-                    "compliance leaf proto: key must be 32 bytes, got {}",
-                    key_proto.inner.len()
-                )
-            })?;
-            let key_element = decaf377::Encoding(key_bytes).vartime_decompress().map_err(|_| {
-                anyhow::anyhow!(
-                    "compliance leaf proto: invalid ACK encoding (not a valid curve point)"
-                )
-            })?;
-            let key = AddressComplianceKey::new(key_element);
-
             let asset_id: penumbra_sdk_asset::asset::Id = proto_leaf.asset_id.ok_or_else(|| {
                 anyhow::anyhow!("compliance leaf proto: missing asset_id field")
             })?.try_into()?;
 
+            let d = if proto_leaf.d.is_empty() {
+                let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+                penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq)
+            } else {
+                let bytes: [u8; 32] = proto_leaf.d.try_into()
+                    .map_err(|_| anyhow::anyhow!("compliance leaf proto: d must be 32 bytes"))?;
+                decaf377::Fq::from_bytes_checked(&bytes)
+                    .map_err(|_| anyhow::anyhow!("compliance leaf proto: invalid d field element"))?
+            };
+
             Ok(ComplianceLeaf {
                 address,
-                key,
                 asset_id,
+                d,
             })
         }
         .boxed()
@@ -343,12 +337,11 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
             return Ok((
                 MerklePath::default(),
                 0,
-                penumbra_sdk_compliance::IndexedLeaf {
-                    value: decaf377::Fq::from(0u64),
-                    next_index: 0,
-                    next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
-                    policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
-                },
+                penumbra_sdk_compliance::IndexedLeaf::with_default_policy(
+                    decaf377::Fq::from(0u64),
+                    0,
+                    penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                ),
                 false,
             ));
         }
@@ -366,21 +359,20 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
         address: &Address,
         asset_id: asset::Id,
     ) -> Result<(MerklePath, u64, ComplianceLeaf)> {
-        use penumbra_sdk_compliance::BLACK_HOLE_ACK;
-        use penumbra_sdk_keys::keys::AddressComplianceKey;
-
         let proofs_future = {
             let mut view = self.view.lock().await;
             view.get_compliance_merkle_proofs(address.clone(), asset_id)
         };
         let proofs = proofs_future.await?;
 
-        // For unregulated assets, return synthetic leaf with BLACK_HOLE_ACK
+        // For unregulated assets, return synthetic leaf
         if !proofs.is_regulated {
+            let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+            let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
             let synthetic_leaf = ComplianceLeaf {
                 address: address.clone(),
-                key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
                 asset_id,
+                d,
             };
             return Ok((MerklePath::default(), 0, synthetic_leaf));
         }
@@ -404,53 +396,10 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
         Ok((proofs.compliance_path, proofs.compliance_position, leaf))
     }
 
-    async fn get_asset_policy(
-        &self,
-        asset_id: asset::Id,
-    ) -> Result<Option<penumbra_sdk_compliance::structs::AssetPolicy>> {
-        let future = {
-            let mut view = self.view.lock().await;
-            view.compliance_asset_policy(asset_id)
-        };
-        let response = future.await?;
-
-        // Parse dk_pub from response
-        if response.dk_pub.is_empty() {
-            return Ok(None);
-        }
-
-        let dk_pub_bytes: [u8; 32] = response
-            .dk_pub
-            .try_into()
-            .map_err(|v: Vec<u8>| anyhow::anyhow!("dk_pub must be 32 bytes, got {}", v.len()))?;
-        let dk_pub = decaf377::Encoding(dk_pub_bytes)
-            .vartime_decompress()
-            .map_err(|_| anyhow::anyhow!("invalid dk_pub encoding in policy response"))?;
-
-        // Parse threshold from bytes (16 bytes little-endian u128)
-        let threshold = if response.threshold.is_empty() {
-            u128::MAX // Default to "never flag" if empty
-        } else {
-            let threshold_bytes: [u8; 16] =
-                response.threshold.try_into().map_err(|v: Vec<u8>| {
-                    anyhow::anyhow!("threshold must be 16 bytes, got {}", v.len())
-                })?;
-            u128::from_le_bytes(threshold_bytes)
-        };
-
-        Ok(Some(penumbra_sdk_compliance::structs::AssetPolicy {
-            dk_pub,
-            threshold,
-        }))
-    }
-
     async fn get_batch_proofs(
         &self,
         queries: &[(Address, asset::Id)],
     ) -> Result<penumbra_sdk_compliance::BatchComplianceData> {
-        use penumbra_sdk_compliance::BLACK_HOLE_ACK;
-        use penumbra_sdk_keys::keys::AddressComplianceKey;
-
         if queries.is_empty() {
             return Ok(penumbra_sdk_compliance::BatchComplianceData::default());
         }
@@ -596,23 +545,15 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
                     };
                     user_proofs.insert(key, (compliance_path, result.compliance_position, leaf));
                 } else {
-                    // For unregulated assets, use synthetic leaf with BLACK_HOLE_ACK
+                    // For unregulated assets, use synthetic leaf
+                    let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+                    let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
                     let synthetic_leaf = ComplianceLeaf {
                         address: address.clone(),
-                        key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
                         asset_id: *asset_id,
+                        d,
                     };
                     user_proofs.insert(key, (MerklePath::default(), 0, synthetic_leaf));
-                }
-            }
-        }
-
-        // Fetch asset policies for regulated assets
-        let mut asset_policies = std::collections::BTreeMap::new();
-        for (asset_id, (_, _, _, is_regulated)) in &asset_proofs {
-            if *is_regulated {
-                if let Some(policy) = self.get_asset_policy(*asset_id).await? {
-                    asset_policies.insert(*asset_id, policy);
                 }
             }
         }
@@ -622,7 +563,6 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
             asset_anchor,
             asset_proofs,
             user_proofs,
-            asset_policies,
         })
     }
 }
@@ -634,18 +574,32 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
 ///
 /// For multi-asset transactions (e.g., delegation where spend is staking token
 /// and output is delegation token), the binding check requires:
-/// - spend.counterparty_leaf_hash == output.receiver_leaf_hash
 /// - output.counterparty_leaf_hash == spend.sender_leaf_hash
 ///
 /// Since ComplianceLeaf includes asset_id, we use canonical binding assets:
-/// - Spend uses first OUTPUT's asset for counterparty lookup
 /// - Output uses first SPEND's asset for counterparty lookup
+///
+/// # Parameters
+/// - `plan`: The transaction plan to enrich
+/// - `provider`: The compliance proof provider
+/// - `rng`: Random number generator
 pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
     plan: &mut TransactionPlan,
     provider: &P,
     rng: &mut (impl rand_core::RngCore + rand_core::CryptoRng),
+    target_timestamp_override: Option<u64>,
 ) -> Result<()> {
     use std::collections::BTreeSet;
+
+    // Unix UTC timestamp for DLEQ metadata binding.
+    // In production, use SystemTime::now(). Tests with fake chain times pass an override.
+    let target_timestamp = match target_timestamp_override {
+        Some(ts) => ts,
+        None => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| anyhow::anyhow!("system clock before Unix epoch: {}", e))?
+            .as_secs(),
+    };
 
     // Collect spend and output indices
     let mut all_spend_indices = Vec::new();
@@ -678,7 +632,7 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
     };
 
     // For cross-action binding in multi-asset transactions, we use "canonical" binding assets.
-    // This ensures spend.counterparty_leaf_hash == output.receiver_leaf_hash when assets differ.
+    // This ensures output.counterparty_leaf_hash == spend.sender_leaf_hash when assets differ.
     let binding_asset_id = if !all_output_indices.is_empty() {
         let ActionPlan::Output(output) = &plan.actions[all_output_indices[0]] else {
             unreachable!()
@@ -689,15 +643,6 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
             unreachable!()
         };
         spend.note.asset_id()
-    };
-
-    let binding_recipient_address = if !all_output_indices.is_empty() {
-        let ActionPlan::Output(output) = &plan.actions[all_output_indices[0]] else {
-            unreachable!()
-        };
-        output.dest_address.clone()
-    } else {
-        sender_address.clone()
     };
 
     // Determine the spend's binding asset for output counterparty lookups
@@ -713,13 +658,12 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
     // PHASE 1: Collect all unique (address, asset) pairs needed for the transaction
     let mut queries: BTreeSet<(Address, asset::Id)> = BTreeSet::new();
 
-    // For each spend: own (address, asset) + counterparty binding
+    // For each spend: own (address, asset)
     for &spend_idx in &all_spend_indices {
         let ActionPlan::Spend(spend) = &plan.actions[spend_idx] else {
             unreachable!()
         };
         queries.insert((spend.note.address(), spend.note.asset_id()));
-        queries.insert((binding_recipient_address.clone(), binding_asset_id));
     }
 
     // For each output: recipient (address, asset) + sender binding
@@ -758,16 +702,15 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
             .get(&spend_asset_id)
             .cloned()
             .unwrap_or_else(|| {
-                let default_leaf = penumbra_sdk_compliance::IndexedLeaf {
-                    value: decaf377::Fq::from(0u64),
-                    next_index: 0,
-                    next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
-                    policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
-                };
+                let default_leaf = penumbra_sdk_compliance::IndexedLeaf::with_default_policy(
+                    decaf377::Fq::from(0u64),
+                    0,
+                    penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                );
                 (MerklePath::default(), 0, default_leaf, false)
             });
 
-        let (sender_compliance_path, sender_compliance_position, sender_leaf) = batch_data
+        let (sender_compliance_path, sender_compliance_position, _) = batch_data
             .user_proofs
             .get(&(spend_address.clone(), spend_asset_id))
             .cloned()
@@ -778,19 +721,6 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
                      (check compliance registration status)",
                     spend_idx,
                     spend_asset_id
-                )
-            })?;
-
-        let (_, _, counterparty_leaf) = batch_data
-            .user_proofs
-            .get(&(binding_recipient_address.clone(), binding_asset_id))
-            .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "missing user proof for counterparty in spend binding: \
-                     counterparty may not be registered for asset {} \
-                     (recipient must be registered for regulated assets)",
-                    binding_asset_id
                 )
             })?;
 
@@ -807,15 +737,9 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
             spend.compliance_path = sender_compliance_path;
             spend.compliance_position = sender_compliance_position;
             spend.is_regulated = is_regulated;
+            spend.target_timestamp = target_timestamp;
 
-            // Use this spend's own address to ensure diversifier matches
-            spend.set_compliance_details(
-                rng,
-                &sender_leaf.key,
-                &spend_address,
-                &binding_recipient_address,
-                counterparty_leaf,
-            )?;
+            spend.set_compliance_details(rng)?;
 
             // Unify tx_blinding_nonce across all spends for cross-action binding
             if let Some(nonce) = tx_blinding_nonce {
@@ -829,8 +753,11 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
     }
 
     // Process all outputs
+    // We need tx_blinding_nonce for outputs and will also compute manifest after
+    let tx_blinding_nonce_for_outputs = tx_blinding_nonce.unwrap_or_else(|| Fr::rand(rng));
+
     if !all_output_indices.is_empty() {
-        let tx_blinding_nonce = tx_blinding_nonce.unwrap_or_else(|| Fr::rand(rng));
+        let tx_blinding_nonce = tx_blinding_nonce_for_outputs;
 
         for &output_idx in &all_output_indices {
             let (output_asset_id, recipient_address) = {
@@ -845,12 +772,11 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
                 .get(&output_asset_id)
                 .cloned()
                 .unwrap_or_else(|| {
-                    let default_leaf = penumbra_sdk_compliance::IndexedLeaf {
-                        value: decaf377::Fq::from(0u64),
-                        next_index: 0,
-                        next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
-                        policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
-                    };
+                    let default_leaf = penumbra_sdk_compliance::IndexedLeaf::with_default_policy(
+                        decaf377::Fq::from(0u64),
+                        0,
+                        penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+                    );
                     (MerklePath::default(), 0, default_leaf, false)
                 });
 
@@ -895,11 +821,11 @@ pub async fn enrich_plan_with_compliance<P: ComplianceProofProvider>(
                 output.compliance_path = recipient_compliance_path;
                 output.compliance_position = recipient_compliance_position;
                 output.is_regulated = is_regulated;
+                output.target_timestamp = target_timestamp;
 
                 output.set_compliance_details(
                     rng,
-                    &recipient_leaf.key,
-                    &sender_address,
+                    &recipient_leaf,
                     sender_leaf_for_output,
                     tx_blinding_nonce,
                 )?;

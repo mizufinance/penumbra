@@ -27,14 +27,14 @@ pub struct Body {
     pub wrapped_memo_key: WrappedMemoKey,
     pub compliance_ciphertext: Vec<u8>,
     pub target_timestamp: u64,
-    /// Blinded receiver leaf hash (for binding with spend circuit)
-    pub receiver_leaf_hash: penumbra_sdk_tct::StateCommitment,
     /// Blinded counterparty (sender) leaf hash (for binding with spend circuit)
     pub counterparty_leaf_hash: penumbra_sdk_tct::StateCommitment,
     /// Compliance tree anchor (user tree root) used during proof generation
     pub compliance_anchor: penumbra_sdk_tct::StateCommitment,
     /// Asset tree anchor used during proof generation
     pub asset_anchor: penumbra_sdk_tct::StateCommitment,
+    /// DLEQ proof bytes (c_1, s_1, c_2, s_2, c_3, s_3) for Orbis policy binding. 192 bytes.
+    pub dleq_proofs: Vec<u8>,
 }
 
 impl EffectingData for Body {
@@ -96,13 +96,14 @@ impl From<Body> for pb::OutputBody {
             ovk_wrapped_key: output.ovk_wrapped_key.0.to_vec(),
             compliance_ciphertext: output.compliance_ciphertext,
             target_timestamp: output.target_timestamp,
-            receiver_leaf_hash: Some(output.receiver_leaf_hash.into()),
             counterparty_leaf_hash: Some(output.counterparty_leaf_hash.into()),
             compliance_anchor: Some(output.compliance_anchor.into()),
             asset_anchor: Some(output.asset_anchor.into()),
             // dk_pub and threshold are private witnesses (in IndexedLeaf.policy), not public
             dk_pub: Vec::new(),
             threshold: Vec::new(),
+            sender_ciphertext: Vec::new(),
+            dleq_proofs: output.dleq_proofs,
         }
     }
 }
@@ -133,12 +134,6 @@ impl TryFrom<pb::OutputBody> for Body {
 
         let target_timestamp = proto.target_timestamp;
 
-        let receiver_leaf_hash = proto
-            .receiver_leaf_hash
-            .ok_or_else(|| anyhow::anyhow!("missing receiver_leaf_hash"))?
-            .try_into()
-            .context("malformed receiver_leaf_hash")?;
-
         let counterparty_leaf_hash = proto
             .counterparty_leaf_hash
             .ok_or_else(|| anyhow::anyhow!("missing counterparty_leaf_hash"))?
@@ -164,10 +159,10 @@ impl TryFrom<pb::OutputBody> for Body {
             balance_commitment,
             compliance_ciphertext: proto.compliance_ciphertext,
             target_timestamp,
-            receiver_leaf_hash,
             counterparty_leaf_hash,
             compliance_anchor,
             asset_anchor,
+            dleq_proofs: proto.dleq_proofs,
         })
     }
 }

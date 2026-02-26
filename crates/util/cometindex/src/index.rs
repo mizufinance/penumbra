@@ -164,6 +164,7 @@ impl EventBatchContext {
 ///
 /// Versions can be compared to assess breaking changes:
 /// ```
+/// use cometindex::index::Version;
 /// assert!(Version::with_major(3) > Version::with_major(2));
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, sqlx::Type)]

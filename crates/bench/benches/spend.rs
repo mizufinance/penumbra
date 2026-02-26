@@ -3,6 +3,7 @@ use ark_relations::r1cs::{
 };
 use decaf377::{Fq, Fr};
 use penumbra_sdk_asset::Balance;
+use penumbra_sdk_compliance::structs::ComplianceCiphertext;
 use penumbra_sdk_proof_params::{DummyWitness, SPEND_PROOF_PROVING_KEY};
 use penumbra_sdk_sct::Nullifier;
 use penumbra_sdk_shielded_pool::test_proof_helpers::proof_test_helpers::generate_test_data;
@@ -16,7 +17,8 @@ fn spend_proving_time(c: &mut Criterion) {
     let mut rng = OsRng;
 
     // Generate valid test data with compliance encryption
-    let test_data = generate_test_data(&mut rng, 1, 100, false); // unregulated for simplicity
+    use penumbra_sdk_shielded_pool::test_proof_helpers::proof_test_helpers::CircuitType;
+    let test_data = generate_test_data(&mut rng, 1, 100, false, CircuitType::Spend);
 
     // Create SCT for spend
     let mut sct = tct::Tree::new();
@@ -38,17 +40,20 @@ fn spend_proving_time(c: &mut Criterion) {
         .spend_verification_key()
         .randomize(&randomizer);
 
-    // Create dummy leaves and blinded hashes
-    let dummy_leaf = penumbra_sdk_compliance::ComplianceLeaf {
-        address: test_data.address.clone(),
-        key: test_data.ack.clone(),
-        asset_id: test_data.note.asset_id(),
-    };
+    // Create dummy leaf and blinded sender hash
+    let dummy_leaf = penumbra_sdk_compliance::ComplianceLeaf::new(
+        test_data.address.clone(),
+        test_data.note.asset_id(),
+        Fq::from(0u64),
+    );
     let dummy_nonce = Fr::from(0u64);
     let sender_leaf_hash =
         penumbra_sdk_compliance::blind_sender_leaf(dummy_leaf.commit(), dummy_nonce);
-    let counterparty_leaf_hash =
-        penumbra_sdk_compliance::blind_counterparty_leaf(dummy_leaf.commit(), dummy_nonce);
+
+    // Spend uses detection + core only (4 Fqs)
+    let ct_obj = ComplianceCiphertext::from_bytes(&test_data.compliance_ciphertext_bytes)
+        .expect("can deserialize ciphertext");
+    let (epk, c2_core, spend_ciphertext) = ct_obj.to_spend_circuit_public_inputs();
 
     let public = SpendProofPublic {
         anchor,
@@ -57,12 +62,13 @@ fn spend_proving_time(c: &mut Criterion) {
         rk,
         asset_anchor: test_data.asset_anchor,
         compliance_anchor: test_data.compliance_anchor,
-        compliance_epk: test_data.compliance_epk,
-        compliance_epk_g: test_data.compliance_epk_g,
-        compliance_ciphertext: test_data.compliance_ciphertext,
-        target_timestamp: test_data.timestamp,
+        epk,
+        c2_core,
+        compliance_ciphertext: spend_ciphertext,
+        target_timestamp: Fq::from(0u64),
+        dleq_c: Fq::from(0u64),
+        dleq_s: Fq::from(0u64),
         sender_leaf_hash,
-        counterparty_leaf_hash,
     };
 
     let private = SpendProofPrivate {
@@ -74,20 +80,19 @@ fn spend_proving_time(c: &mut Criterion) {
         nk: *test_data.fvk.nullifier_key(),
         asset_path: penumbra_sdk_compliance::MerklePath::default(),
         asset_position: 0,
-        asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf {
-            value: decaf377::Fq::from(0u64),
-            next_index: 0,
-            next_value: decaf377::Fq::from(0u64),
-            policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
-        },
+        asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf::with_default_policy(
+            decaf377::Fq::from(0u64),
+            0,
+            decaf377::Fq::from(0u64),
+        ),
         is_regulated: false,
         compliance_path: penumbra_sdk_compliance::MerklePath::default(),
         compliance_position: 0,
         user_leaf: test_data.user_leaf,
         compliance_ephemeral_secret: test_data.ephemeral_secret,
-        counterparty_leaf: dummy_leaf,
         tx_blinding_nonce: dummy_nonce,
         is_flagged: false,
+        salt: decaf377::Fq::from(0u64),
     };
 
     let r = Fq::rand(&mut rng);

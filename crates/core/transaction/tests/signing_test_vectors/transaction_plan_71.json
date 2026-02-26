@@ -1,61 +1,30 @@
 {
   "actions": [
     {
-      "validatorVote": {
-        "body": {
-          "proposal": "719689351",
-          "vote": {
-            "vote": "VOTE_ABSTAIN"
-          },
-          "identityKey": {
-            "ik": "7m7pDA52ChfwT/K1q2BupXaW+0HlsssvBcQpEp5eRI0="
-          },
-          "governanceKey": {
-            "gk": "ELF/GbQgRMeJnsn7qFWtZSGzR2zPi3qt8VBxBKWudQI="
-          },
-          "reason": {
-            "reason": "nIoAYHyNdEp18d3"
-          }
+      "proposalDepositClaim": {
+        "proposal": "682385566",
+        "depositAmount": {
+          "lo": "630974409458521887"
         },
-        "authSig": {
-          "inner": "dgfjw8c4KOPbVb8sr3uK5ajU+EItIn3HbxxvcwuldQpJu2KtEZBW1+cbJT2n5Cp7CcndBuG+IDASWCjqTHotAw=="
+        "outcome": {
+          "passed": {}
         }
       }
     },
     {
-      "actionDutchAuctionSchedule": {
-        "description": {
-          "input": {
-            "amount": {
-              "lo": "330651885061216418"
-            },
-            "assetId": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            }
-          },
-          "outputId": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          },
-          "maxOutput": {
-            "lo": "871392772300072461"
-          },
-          "minOutput": {
-            "lo": "614547353669585967"
-          },
-          "startHeight": "209572639",
-          "endHeight": "209572640",
-          "stepCount": "203575378",
-          "nonce": "/bh8KDMXLtqes3iFz0ncTmCT0NUX4zzrACsnhn93Q+U="
+      "actionDutchAuctionEnd": {
+        "auctionId": {
+          "inner": "GAjzVcHaN2tbEnbYKhZblF+Akaetey638Um4GkIFCws="
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "3014890965",
-    "chainId": "pxlnuclganpxkgseuwgyxzpppvpf-43508",
+    "expiryHeight": "5724337172",
+    "chainId": "rimqcyewvtgoigccdm-4186145220445221389298",
     "fee": {
       "amount": {
-        "lo": "389864566791340041"
+        "lo": "997292860449805471"
       }
     }
   }

@@ -44,7 +44,14 @@ async fn swap_rejects_regulated_asset() -> Result<()> {
         // Use dummy detection key for test
         let dummy_dk_pub = decaf377::Element::GENERATOR;
         state
-            .register_regulated_asset(gm.id(), dummy_dk_pub)
+            .register_regulated_asset(
+                gm.id(),
+                penumbra_sdk_compliance::structs::AssetPolicy::simple(
+                    dummy_dk_pub,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
             .await?;
         storage.commit(state).await?;
     }
@@ -131,7 +138,14 @@ async fn position_open_rejects_regulated_asset() -> Result<()> {
         // Use dummy detection key for test
         let dummy_dk_pub = decaf377::Element::GENERATOR;
         state
-            .register_regulated_asset(gm.id(), dummy_dk_pub)
+            .register_regulated_asset(
+                gm.id(),
+                penumbra_sdk_compliance::structs::AssetPolicy::simple(
+                    dummy_dk_pub,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
             .await?;
         storage.commit(state).await?;
     }
@@ -230,7 +244,14 @@ async fn community_pool_deposit_rejects_regulated_asset() -> Result<()> {
         // Use dummy detection key for test
         let dummy_dk_pub = decaf377::Element::GENERATOR;
         state
-            .register_regulated_asset(gm.id(), dummy_dk_pub)
+            .register_regulated_asset(
+                gm.id(),
+                penumbra_sdk_compliance::structs::AssetPolicy::simple(
+                    dummy_dk_pub,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
             .await?;
         storage.commit(state).await?;
     }

@@ -43,7 +43,7 @@ pub(crate) trait AssetByLiquidityIndex: StateWrite {
     ///
     ///
     /// # Diagram
-    ///                                                                     
+    /// ```text
     ///    Liquidity index:                                                 
     ///    For an asset `A`, surface asset                                  
     ///    `B` with the best liquidity                                      
@@ -73,7 +73,8 @@ pub(crate) trait AssetByLiquidityIndex: StateWrite {
     ///     │     ├──┤       └───────┘                                      
     ///     │     │  │                                                      
     ///     │     │  │                                                      
-    ///     │     └──┘                                                      
+    ///     │     └──┘
+    /// ```
     async fn update_asset_by_base_liquidity_index(
         &mut self,
         id: &position::Id,

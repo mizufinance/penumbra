@@ -64,7 +64,10 @@ async fn view_server_can_be_served_on_localhost() -> anyhow::Result<()> {
         .tap(|_| tracing::debug!("fast forwarding past genesis"))
         .await?;
 
-    let grpc_url = "http://127.0.0.1:8080" // see #4517
+    // Bind to port 0 so the OS assigns a free port, avoiding conflicts in CI.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let local_addr = listener.local_addr()?;
+    let grpc_url = format!("http://{local_addr}")
         .parse::<url::Url>()?
         .tap(|url| tracing::debug!(%url, "parsed grpc url"));
 
@@ -79,14 +82,13 @@ async fn view_server_can_be_served_on_localhost() -> anyhow::Result<()> {
         .layer(tower_http::cors::CorsLayer::permissive())
         .into_make_service()
         .tap(|_| tracing::debug!("initialized rpc service"));
-        let [addr] = grpc_url
-            .socket_addrs(|| None)?
-            .try_into()
-            .expect("grpc url can be turned into a socket address");
-        let server = axum_server::bind(addr).serve(make_svc);
+        listener.set_nonblocking(true)?;
+        let server = axum_server::from_tcp(listener).serve(make_svc);
         tokio::spawn(async { server.await.expect("grpc server returned an error") })
             .tap(|_| tracing::debug!("grpc server is running"))
     };
+    // Brief yield to let the server task start accepting connections.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Spawn the client-side view server...
     let view_server = {

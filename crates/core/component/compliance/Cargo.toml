@@ -24,6 +24,7 @@ test-helpers = ["decaf377-fmd", "decaf377-ka"]
 [dependencies]
 anyhow = {workspace = true}
 ark-ff = {workspace = true}
+base64 = {workspace = true}
 ark-groth16 = {workspace = true}
 ark-r1cs-std = {workspace = true}
 ark-relations = {workspace = true}
@@ -47,6 +48,7 @@ penumbra-sdk-txhash = {workspace = true, default-features = false}
 poseidon377 = {workspace = true, features = ["r1cs"]}
 serde = {workspace = true, features = ["derive"]}
 serde_json = {workspace = true}
+sha2 = {workspace = true}
 blake2b_simd = {workspace = true}
 chacha20poly1305 = {workspace = true}
 rand_core = {workspace = true}

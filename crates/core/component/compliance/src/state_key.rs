@@ -58,6 +58,13 @@ pub fn pending_asset_registrations() -> &'static str {
     "compliance/pending_asset_registrations"
 }
 
+/// State key for IBC compliance metadata keyed by ICS-20 transfer identifiers.
+/// Stores the compliance metadata from the sending chain for IBC-bridged regulated assets.
+/// Keyed by (channel_id, packet_seq) which matches CommitmentSource::Ics20Transfer.
+pub fn ibc_compliance_metadata(channel_id: &str, packet_seq: u64) -> String {
+    format!("compliance/ibc/{}/{}", channel_id, packet_seq)
+}
+
 /// State keys for historical anchor storage (following SCT pattern).
 ///
 /// Anchors are stored bidirectionally:

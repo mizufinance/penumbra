@@ -35,6 +35,7 @@ pub fn asset_registered(
         indexed_leaf: Some(indexed_leaf.into()),
         low_leaf_position,
         updated_low_leaf: Some(updated_low_leaf.into()),
+        asset_policy: None,
     }
 }
 
@@ -145,6 +146,7 @@ impl From<EventAssetRegistered> for pb::EventAssetRegistered {
             indexed_leaf: Some(value.indexed_leaf.into()),
             low_leaf_position: value.low_leaf_position,
             updated_low_leaf: Some(value.updated_low_leaf.into()),
+            asset_policy: None,
         }
     }
 }

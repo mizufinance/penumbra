@@ -22,6 +22,7 @@ use ibc_types::{
     transfer::acknowledgement::TokenTransferAcknowledgement,
 };
 use penumbra_sdk_asset::{asset, asset::Metadata, Value};
+use penumbra_sdk_compliance::ComplianceRegistryRead as _;
 use penumbra_sdk_ibc::component::ChannelStateReadExt;
 use penumbra_sdk_keys::Address;
 use penumbra_sdk_num::Amount;
@@ -82,6 +83,23 @@ pub trait Ics20TransferReadExt: StateRead {
 
         // send packet
         self.send_packet_check(packet, current_block_time).await?;
+
+        // Enforce channel whitelist for regulated assets.
+        // No policy = unregulated asset, IBC allowed without restriction.
+        let asset_id = withdrawal.denom.id();
+        if let Some(policy) = self.get_asset_policy(asset_id).await? {
+            let channel = withdrawal.source_channel.to_string();
+            if policy.params.allowed_channels.is_empty() {
+                anyhow::bail!("IBC transfers blocked for regulated asset {}", asset_id);
+            }
+            if !policy.params.allowed_channels.contains(&channel) {
+                anyhow::bail!(
+                    "IBC channel {} not allowed for regulated asset {}",
+                    channel,
+                    asset_id
+                );
+            }
+        }
 
         Ok(())
     }
@@ -325,6 +343,14 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
         .context("couldnt decode amount in ICS20 transfer")?;
     let receiver_address = Address::from_str(&packet_data.receiver)?;
 
+    // Parse compliance metadata from memo (if present).
+    let compliance_metadata =
+        penumbra_sdk_compliance::IbcComplianceMetadata::from_memo(&packet_data.memo)
+            .unwrap_or_else(|e| {
+                tracing::debug!(?e, "failed to parse compliance metadata from ICS-20 memo");
+                None
+            });
+
     // NOTE: here we assume we are chain A.
 
     // 2. check if we are the source chain for the denom.
@@ -469,6 +495,16 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
                 },
             }
             .to_proto(),
+        );
+    }
+
+    // Store compliance metadata if present in memo.
+    if let Some(metadata) = compliance_metadata {
+        use penumbra_sdk_compliance::ComplianceRegistryWrite as _;
+        state.store_ibc_compliance_metadata(
+            &msg.packet.chan_on_a.0,
+            msg.packet.sequence.0,
+            &metadata,
         );
     }
 

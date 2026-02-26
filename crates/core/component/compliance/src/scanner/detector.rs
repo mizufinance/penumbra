@@ -17,7 +17,7 @@ use anyhow::Result;
 use penumbra_sdk_asset::asset;
 use penumbra_sdk_proto::core::transaction::v1::Transaction as ProtoTransaction;
 
-use super::sync::extract_compliance_ciphertexts;
+use super::sync::extract_ciphertexts_full;
 use crate::issuer_keys::DetectionKey;
 use crate::structs::ComplianceCiphertext;
 
@@ -36,6 +36,9 @@ pub struct DetectedCiphertext {
     /// The action index within the transaction.
     pub action_index: usize,
 
+    /// Salt from the detection tier, needed for DLEQ metadata hash recomputation.
+    pub salt: decaf377::Fq,
+
     /// The compliance ciphertext (not fully decrypted, just detection tier).
     pub ciphertext: ComplianceCiphertext,
 
@@ -44,6 +47,10 @@ pub struct DetectedCiphertext {
 
     /// Whether this transaction is flagged (threshold exceeded).
     pub is_flagged: bool,
+
+    /// The sender-encrypted ciphertext (96 bytes, only present on outputs).
+    /// Contains (gd_fq, pk_fq, amount_fq) encrypted to sender's ack_orbis.
+    pub sender_ciphertext: Vec<u8>,
 }
 
 /// Scan a transaction for ciphertexts matching a specific asset.
@@ -51,9 +58,13 @@ pub struct DetectedCiphertext {
 /// Uses the issuer's DetectionKey to decrypt only the detection_tag (32 bytes)
 /// to extract asset_id and is_flagged. Calls the callback for each match.
 ///
+/// The `target_asset_id` is required because the Fq sentinel approach needs the
+/// expected asset_id to determine the flag. This is correct semantically: DK is
+/// per-asset, so the caller always knows which asset they're scanning for.
+///
 /// # Arguments
 /// * `detection_key` - The issuer's DetectionKey for this asset
-/// * `target_asset_id` - If Some, only match this asset; if None, match all detectable assets
+/// * `target_asset_id` - The asset this DK corresponds to
 /// * `tx` - The transaction to scan
 /// * `height` - Block height for metadata
 /// * `tx_index` - Transaction index for metadata
@@ -63,7 +74,7 @@ pub struct DetectedCiphertext {
 /// The number of matches found.
 pub fn scan_transaction<F>(
     detection_key: &DetectionKey,
-    target_asset_id: Option<asset::Id>,
+    target_asset_id: asset::Id,
     tx: &ProtoTransaction,
     height: u64,
     tx_index: usize,
@@ -73,46 +84,42 @@ where
     F: FnMut(DetectedCiphertext) -> Result<()>,
 {
     // Use shared extraction logic
-    let ciphertexts = extract_compliance_ciphertexts(tx)?;
+    let ciphertexts = extract_ciphertexts_full(tx)?;
 
     let mut matches = 0;
 
-    for (action_index, ciphertext_bytes, _) in ciphertexts {
+    for extracted in ciphertexts {
         // Parse ciphertext
-        let ciphertext = match ComplianceCiphertext::from_bytes(&ciphertext_bytes) {
+        let ciphertext = match ComplianceCiphertext::from_bytes(&extracted.compliance_ciphertext) {
             Ok(ct) => ct,
             Err(_) => continue, // Skip malformed ciphertexts
         };
 
-        // Try to decrypt the detection tier using the issuer's detection key
-        // epk (diversified curve) is used for seed derivation, epk_g (standard curve) for shared secret
-        let (detected_asset_id, is_flagged) = match detection_key.try_decrypt_detection(
-            &ciphertext.epk,
-            &ciphertext.epk_g,
+        // Try to decrypt the detection tier using the issuer's detection key.
+        // epk_1 is used for both the curve point and the shared secret derivation.
+        let (detected_asset_id, is_flagged, salt) = match detection_key.try_decrypt_detection(
+            &ciphertext.epk_1,
+            &ciphertext.epk_1,
             &ciphertext.detection_tag,
+            &target_asset_id,
         ) {
             Ok(result) => result,
-            Err(_) => continue, // Detection failed (wrong key or corrupted data)
+            Err(_) => continue, // Detection failed (wrong key or not this asset)
         };
 
-        // Check if this matches our target asset (if specified)
-        let matches_target = target_asset_id
-            .map(|target| detected_asset_id == target)
-            .unwrap_or(true);
+        matches += 1;
 
-        if matches_target {
-            matches += 1;
-
-            // Call the user's callback with the detected ciphertext
-            callback(DetectedCiphertext {
-                height,
-                tx_index,
-                action_index,
-                ciphertext,
-                asset_id: detected_asset_id,
-                is_flagged,
-            })?;
-        }
+        // Call the user's callback with the detected ciphertext
+        callback(DetectedCiphertext {
+            height,
+            tx_index,
+            action_index: extracted.action_index,
+            salt,
+            ciphertext,
+            asset_id: detected_asset_id,
+            is_flagged,
+            sender_ciphertext: extracted.sender_ciphertext,
+        })?;
     }
 
     Ok(matches)
@@ -122,12 +129,12 @@ where
 ///
 /// # Arguments
 /// * `detection_key` - The issuer's DetectionKey for this asset
-/// * `target_asset_id` - If Some, only match this asset; if None, match all detectable assets
+/// * `target_asset_id` - The asset this DK corresponds to
 /// * `transactions` - Iterator of (height, tx_index, transaction) tuples
 /// * `callback` - Called for each detected ciphertext
 pub fn scan_transactions<F, I>(
     detection_key: &DetectionKey,
-    target_asset_id: Option<asset::Id>,
+    target_asset_id: asset::Id,
     transactions: I,
     mut callback: F,
 ) -> Result<usize>
@@ -155,9 +162,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::encrypt_compliance_details;
     use crate::issuer_keys::DetectionKey;
-    use crate::test_helpers::{make_test_leaf, make_uck, make_wallet};
+    use crate::test_helpers::{encrypt_test_output, make_address};
     use penumbra_sdk_num::Amount;
     use penumbra_sdk_proto::core::component::shielded_pool::v1::{Output, OutputBody};
     use penumbra_sdk_proto::core::transaction::v1::{
@@ -165,43 +171,13 @@ mod tests {
     };
     use rand_core::OsRng;
 
-    #[test]
-    fn test_scan_transaction_finds_matching_asset() {
-        // Setup: Create issuer's detection key for this asset
-        let dk = DetectionKey::demo();
-        let dk_pub = dk.public_key();
-
-        // Create user wallet
-        let uck = make_uck();
-        let date = 19000u64;
-        let (ack, address) = make_wallet(&uck, 11);
-
-        // Create test asset and encrypt with issuer's DK_pub
-        let target_asset = asset::Id(decaf377::Fq::from(9999u64));
-        let amount = Amount::from(123u128);
-
-        // High threshold = not flagged
-        let asset_leaf = make_test_leaf(dk_pub, u128::MAX);
-        let mut rng = OsRng;
-        let result = encrypt_compliance_details(
-            &mut rng,
-            &ack,
-            &address,
-            date,
-            target_asset,
-            amount,
-            &address,
-            &asset_leaf,
-        )
-        .unwrap();
-
-        // Create a transaction with this ciphertext
-        let tx = ProtoTransaction {
+    fn make_output_tx(ciphertext_bytes: Vec<u8>) -> ProtoTransaction {
+        ProtoTransaction {
             body: Some(TransactionBody {
                 actions: vec![ActionProto {
                     action: Some(Action::Output(Output {
                         body: Some(OutputBody {
-                            compliance_ciphertext: result.ciphertext.to_bytes(),
+                            compliance_ciphertext: ciphertext_bytes,
                             ..Default::default()
                         }),
                         ..Default::default()
@@ -210,11 +186,34 @@ mod tests {
                 ..Default::default()
             }),
             ..Default::default()
-        };
+        }
+    }
 
-        // Scan the transaction using issuer's DetectionKey
+    #[test]
+    fn test_scan_transaction_finds_matching_asset() {
+        let dk = DetectionKey::demo();
+        let dk_pub = dk.public_key();
+
+        let sk_ring = decaf377::Fr::rand(&mut OsRng);
+        let ring_pk = decaf377::Element::GENERATOR * sk_ring;
+
+        let address = make_address(11);
+        let target_asset = asset::Id(decaf377::Fq::from(9999u64));
+        let amount = Amount::from(123u128);
+
+        let result = encrypt_test_output(
+            &ring_pk,
+            &dk_pub,
+            &address,
+            &address,
+            target_asset,
+            amount,
+            false,
+        );
+        let tx = make_output_tx(result.ciphertext.to_bytes());
+
         let mut detected_count = 0;
-        let scan_result = scan_transaction(&dk, Some(target_asset), &tx, 100, 0, |detected| {
+        let scan_result = scan_transaction(&dk, target_asset, &tx, 100, 0, |detected| {
             detected_count += 1;
             assert_eq!(detected.height, 100);
             assert_eq!(detected.tx_index, 0);
@@ -231,54 +230,30 @@ mod tests {
 
     #[test]
     fn test_scan_transaction_detects_flagged() {
-        // Setup: Create issuer's detection key
         let dk = DetectionKey::demo();
         let dk_pub = dk.public_key();
 
-        // Create user wallet
-        let uck = make_uck();
-        let date = 19000u64;
-        let (ack, address) = make_wallet(&uck, 11);
+        let sk_ring = decaf377::Fr::rand(&mut OsRng);
+        let ring_pk = decaf377::Element::GENERATOR * sk_ring;
 
-        // Create test asset and encrypt as FLAGGED
+        let address = make_address(11);
+        let counterparty_address = make_address(22);
         let target_asset = asset::Id(decaf377::Fq::from(8888u64));
-        let amount = Amount::from(1_000_000u128); // Large amount
+        let amount = Amount::from(1_000_000u128);
 
-        // Low threshold = flagged (amount >= threshold)
-        let asset_leaf = make_test_leaf(dk_pub, 500_000);
-        let mut rng = OsRng;
-        let result = encrypt_compliance_details(
-            &mut rng,
-            &ack,
+        let result = encrypt_test_output(
+            &ring_pk,
+            &dk_pub,
             &address,
-            date,
+            &counterparty_address,
             target_asset,
             amount,
-            &address,
-            &asset_leaf,
-        )
-        .unwrap();
+            true,
+        );
+        let tx = make_output_tx(result.ciphertext.to_bytes());
 
-        // Create a transaction with this ciphertext
-        let tx = ProtoTransaction {
-            body: Some(TransactionBody {
-                actions: vec![ActionProto {
-                    action: Some(Action::Output(Output {
-                        body: Some(OutputBody {
-                            compliance_ciphertext: result.ciphertext.to_bytes(),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    })),
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        // Scan and verify flagged status is detected
         let mut detected_flagged = false;
-        let scan_result = scan_transaction(&dk, Some(target_asset), &tx, 100, 0, |detected| {
+        let scan_result = scan_transaction(&dk, target_asset, &tx, 100, 0, |detected| {
             assert!(detected.is_flagged, "Transaction should be flagged");
             detected_flagged = true;
             Ok(())
@@ -290,55 +265,32 @@ mod tests {
 
     #[test]
     fn test_scan_transaction_ignores_different_asset() {
-        // Setup: Create issuer's detection key
         let dk = DetectionKey::demo();
         let dk_pub = dk.public_key();
 
-        // Create user wallet
-        let uck = make_uck();
-        let date = 19001u64;
-        let (ack, address) = make_wallet(&uck, 12);
+        let sk_ring = decaf377::Fr::rand(&mut OsRng);
+        let ring_pk = decaf377::Element::GENERATOR * sk_ring;
 
-        // Encrypt with asset_id = 5555
+        let address = make_address(12);
         let encrypted_asset = asset::Id(decaf377::Fq::from(5555u64));
         let amount = Amount::from(999u128);
 
-        let asset_leaf = make_test_leaf(dk_pub, u128::MAX);
-        let mut rng = OsRng;
-        let result = encrypt_compliance_details(
-            &mut rng,
-            &ack,
+        let result = encrypt_test_output(
+            &ring_pk,
+            &dk_pub,
             &address,
-            date,
+            &address,
             encrypted_asset,
             amount,
-            &address,
-            &asset_leaf,
-        )
-        .unwrap();
-
-        // Create transaction
-        let tx = ProtoTransaction {
-            body: Some(TransactionBody {
-                actions: vec![ActionProto {
-                    action: Some(Action::Output(Output {
-                        body: Some(OutputBody {
-                            compliance_ciphertext: result.ciphertext.to_bytes(),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    })),
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
+            false,
+        );
+        let tx = make_output_tx(result.ciphertext.to_bytes());
 
         // Scan for different asset (7777)
         let target_asset = asset::Id(decaf377::Fq::from(7777u64));
         let mut callback_called = false;
 
-        let scan_result = scan_transaction(&dk, Some(target_asset), &tx, 200, 0, |_| {
+        let scan_result = scan_transaction(&dk, target_asset, &tx, 200, 0, |_| {
             callback_called = true;
             Ok(())
         });
@@ -350,61 +302,37 @@ mod tests {
 
     #[test]
     fn test_scan_transaction_with_wrong_detection_key() {
-        // Create two different detection keys (different issuers/assets)
         let dk1 = DetectionKey::demo();
         let dk1_pub = dk1.public_key();
-        let dk2 = DetectionKey::from_seed(&[99u8; 32]); // Different key
+        let dk2 = DetectionKey::from_seed(&[99u8; 32]);
 
-        // Create user wallet
-        let uck = make_uck();
-        let date = 19002u64;
-        let (ack, address) = make_wallet(&uck, 13);
+        let sk_ring = decaf377::Fr::rand(&mut OsRng);
+        let ring_pk = decaf377::Element::GENERATOR * sk_ring;
 
+        let address = make_address(13);
         let target_asset = asset::Id(decaf377::Fq::from(1111u64));
         let amount = Amount::from(456u128);
 
         // Encrypt with dk1's public key
-        let asset_leaf = make_test_leaf(dk1_pub, u128::MAX);
-        let mut rng = OsRng;
-        let result = encrypt_compliance_details(
-            &mut rng,
-            &ack,
+        let result = encrypt_test_output(
+            &ring_pk,
+            &dk1_pub,
             &address,
-            date,
+            &address,
             target_asset,
             amount,
-            &address,
-            &asset_leaf,
-        )
-        .unwrap();
+            false,
+        );
+        let tx = make_output_tx(result.ciphertext.to_bytes());
 
-        // Create transaction
-        let tx = ProtoTransaction {
-            body: Some(TransactionBody {
-                actions: vec![ActionProto {
-                    action: Some(Action::Output(Output {
-                        body: Some(OutputBody {
-                            compliance_ciphertext: result.ciphertext.to_bytes(),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    })),
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        // Try to detect with wrong key (dk2) - will produce garbage that doesn't match
+        // Try to detect with wrong key (dk2)
         let mut callback_called = false;
-
-        let scan_result = scan_transaction(&dk2, Some(target_asset), &tx, 300, 0, |_| {
+        let scan_result = scan_transaction(&dk2, target_asset, &tx, 300, 0, |_| {
             callback_called = true;
             Ok(())
         });
 
         assert!(scan_result.is_ok());
-        // Wrong key produces garbage asset_id, so it won't match target
         assert_eq!(scan_result.unwrap(), 0, "Wrong key should find no matches");
         assert!(
             !callback_called,
@@ -414,63 +342,39 @@ mod tests {
 
     #[test]
     fn test_scan_transactions_batch() {
-        // Setup: Create issuer's detection key
         let dk = DetectionKey::demo();
         let dk_pub = dk.public_key();
 
-        // Create user wallet
-        let uck = make_uck();
-        let date = 19003u64;
-        let (ack, address) = make_wallet(&uck, 14);
+        let sk_ring = decaf377::Fr::rand(&mut OsRng);
+        let ring_pk = decaf377::Element::GENERATOR * sk_ring;
 
+        let address = make_address(14);
         let target_asset = asset::Id(decaf377::Fq::from(3333u64));
-        let asset_leaf = make_test_leaf(dk_pub, u128::MAX);
 
         // Create 3 transactions, 2 with target asset, 1 with different asset
         let mut txs = Vec::new();
-
         for i in 0..3 {
             let asset_id = if i == 1 {
-                asset::Id(decaf377::Fq::from(4444u64)) // Different asset
+                asset::Id(decaf377::Fq::from(4444u64))
             } else {
                 target_asset
             };
 
-            let mut rng = OsRng;
-            let result = encrypt_compliance_details(
-                &mut rng,
-                &ack,
+            let result = encrypt_test_output(
+                &ring_pk,
+                &dk_pub,
                 &address,
-                date,
+                &address,
                 asset_id,
                 Amount::from((100 + i) as u128),
-                &address,
-                &asset_leaf,
-            )
-            .unwrap();
-
-            let tx = ProtoTransaction {
-                body: Some(TransactionBody {
-                    actions: vec![ActionProto {
-                        action: Some(Action::Output(Output {
-                            body: Some(OutputBody {
-                                compliance_ciphertext: result.ciphertext.to_bytes(),
-                                ..Default::default()
-                            }),
-                            ..Default::default()
-                        })),
-                    }],
-                    ..Default::default()
-                }),
-                ..Default::default()
-            };
-
+                false,
+            );
+            let tx = make_output_tx(result.ciphertext.to_bytes());
             txs.push((1000 + i as u64, i, tx));
         }
 
-        // Scan all transactions
         let mut detected = Vec::new();
-        let scan_result = scan_transactions(&dk, Some(target_asset), txs, |d| {
+        let scan_result = scan_transactions(&dk, target_asset, txs, |d| {
             detected.push(d);
             Ok(())
         });
@@ -487,63 +391,30 @@ mod tests {
     }
 
     #[test]
-    fn test_scan_without_target_filter() {
-        // Setup: Create issuer's detection key
+    fn test_scan_with_known_asset_id() {
         let dk = DetectionKey::demo();
         let dk_pub = dk.public_key();
 
-        // Create user wallet
-        let uck = make_uck();
-        let date = 19004u64;
-        let (ack, address) = make_wallet(&uck, 15);
+        let sk_ring = decaf377::Fr::rand(&mut OsRng);
+        let ring_pk = decaf377::Element::GENERATOR * sk_ring;
 
-        // Encrypt with some asset
+        let address = make_address(15);
         let asset_id = asset::Id(decaf377::Fq::from(5555u64));
         let amount = Amount::from(100u128);
 
-        let asset_leaf = make_test_leaf(dk_pub, u128::MAX);
-        let mut rng = OsRng;
-        let result = encrypt_compliance_details(
-            &mut rng,
-            &ack,
-            &address,
-            date,
-            asset_id,
-            amount,
-            &address,
-            &asset_leaf,
-        )
-        .unwrap();
+        let result = encrypt_test_output(
+            &ring_pk, &dk_pub, &address, &address, asset_id, amount, false,
+        );
+        let tx = make_output_tx(result.ciphertext.to_bytes());
 
-        let tx = ProtoTransaction {
-            body: Some(TransactionBody {
-                actions: vec![ActionProto {
-                    action: Some(Action::Output(Output {
-                        body: Some(OutputBody {
-                            compliance_ciphertext: result.ciphertext.to_bytes(),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    })),
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        // Scan without target filter (None) - should match any asset
         let mut detected_asset = None;
-        let scan_result = scan_transaction(&dk, None, &tx, 100, 0, |detected| {
+        let scan_result = scan_transaction(&dk, asset_id, &tx, 100, 0, |detected| {
             detected_asset = Some(detected.asset_id);
             Ok(())
         });
 
         assert!(scan_result.is_ok());
-        assert_eq!(
-            scan_result.unwrap(),
-            1,
-            "Should find 1 match without filter"
-        );
+        assert_eq!(scan_result.unwrap(), 1, "Should find 1 match");
         assert_eq!(
             detected_asset,
             Some(asset_id),

@@ -17,10 +17,7 @@ use crate::{Note, Rseed};
 
 /// A planned [`Output`](Output).
 ///
-/// # Compliance Data Architecture Decision
-///
-/// See [`SpendPlan`](crate::SpendPlan) for the rationale on storing compliance data
-/// directly in plans rather than in a separate WitnessData-like structure.
+/// Compliance data is stored directly in the plan so it is available for proof generation.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(try_from = "pb::OutputPlan", into = "pb::OutputPlan")]
 pub struct OutputPlan {
@@ -32,17 +29,21 @@ pub struct OutputPlan {
     pub proof_blinding_s: Fq,
     /// Compliance Merkle path for proving user is in the compliance registry
     pub compliance_path: MerklePath,
-    /// Target timestamp for compliance key derivation (Unix timestamp in seconds)
-    pub target_timestamp: u64,
     /// Precomputed compliance ciphertext (or placeholder if not yet generated)
     #[serde(skip)]
     pub compliance_ciphertext: Vec<u8>,
     /// Compliance leaf for ZK proof
     #[serde(skip)]
     pub compliance_leaf: Option<penumbra_sdk_compliance::ComplianceLeaf>,
-    /// Ephemeral secret used in compliance ciphertext encryption (needed by circuit)
+    /// Ephemeral secret r_1 used in compliance ciphertext encryption (core tier)
     #[serde(skip)]
     pub compliance_ephemeral_secret: Option<Fr>,
+    /// Second ephemeral secret r_2 (ext tier)
+    #[serde(skip)]
+    pub r_2: Option<Fr>,
+    /// Third ephemeral secret r_3 (sext tier)
+    #[serde(skip)]
+    pub r_3: Option<Fr>,
     /// Whether the asset is regulated (requires compliance)
     #[serde(skip)]
     pub is_regulated: bool,
@@ -73,137 +74,196 @@ pub struct OutputPlan {
     /// Position of the user's compliance leaf in the compliance tree
     #[serde(skip)]
     pub compliance_position: u64,
-    /// Issuer's detection key public (for threshold-based flagging).
-    /// Stored here for convenience; circuit gets it from asset_indexed_leaf.policy.
+    /// Ring public key (for ACK derivation in the circuit)
     #[serde(skip)]
-    pub dk_pub: Option<decaf377::Element>,
-    /// Amount threshold for flagging (u128 to cover full amount range).
-    /// Stored here for convenience; circuit gets it from asset_indexed_leaf.policy.
+    pub ring_pk: decaf377::Element,
+    /// Issuer's detection key public (for threshold-based flagging)
+    #[serde(skip)]
+    pub dk_pub: decaf377::Element,
+    /// Amount threshold for flagging (u128 to cover full amount range)
     #[serde(skip)]
     pub threshold: u128,
-    /// Whether this output is flagged (amount >= threshold).
-    /// Private witness - circuit verifies this matches the threshold comparison.
+    /// Whether this output is flagged (amount >= threshold)
     #[serde(skip)]
     pub is_flagged: bool,
+    /// Random salt for DLEQ metadata hash (encrypted in detection tier).
+    #[serde(skip)]
+    pub salt: Fq,
+    /// DLEQ nonce k_1 (core tier).
+    #[serde(skip)]
+    pub dleq_k_1: Fr,
+    /// DLEQ nonce k_2 (ext tier).
+    #[serde(skip)]
+    pub dleq_k_2: Option<Fr>,
+    /// DLEQ nonce k_3 (sext tier).
+    #[serde(skip)]
+    pub dleq_k_3: Option<Fr>,
+    /// DLEQ challenge/response for core tier (stored as Fq but canonical Fr).
+    #[serde(skip)]
+    pub dleq_c_1: Fq,
+    #[serde(skip)]
+    pub dleq_s_1: Fq,
+    /// DLEQ challenge/response for ext tier.
+    #[serde(skip)]
+    pub dleq_c_2: Fq,
+    #[serde(skip)]
+    pub dleq_s_2: Fq,
+    /// DLEQ challenge/response for sext tier.
+    #[serde(skip)]
+    pub dleq_c_3: Fq,
+    #[serde(skip)]
+    pub dleq_s_3: Fq,
+    /// Target timestamp for DLEQ metadata binding (Unix UTC seconds).
+    #[serde(skip)]
+    pub target_timestamp: u64,
 }
 
 impl OutputPlan {
     /// Set compliance details for this output plan.
     ///
-    /// This should be called after constructing the plan to properly encrypt
-    /// the compliance ciphertext using the asset_indexed_leaf (which contains policy).
-    ///
-    /// # Arguments
-    ///
-    /// * `rng` - Random number generator
-    /// * `recipient_ack` - The recipient's Wallet Compliance Key (from their registry entry)
-    /// * `sender_address` - The sender's address (counterparty)
-    /// * `sender_leaf` - The sender's compliance leaf (from registry)
-    /// * `tx_blinding_nonce` - Shared transaction blinding nonce (from spend)
+    /// Extracts dk_pub, ring_pk, and threshold from `self.asset_indexed_leaf`.
+    /// Must be called after `asset_indexed_leaf` has been set.
     pub fn set_compliance_details(
         &mut self,
         rng: &mut (impl rand_core::RngCore + rand_core::CryptoRng),
-        recipient_ack: &penumbra_sdk_keys::keys::AddressComplianceKey,
-        sender_address: &Address,
+        _recipient_leaf: &penumbra_sdk_compliance::ComplianceLeaf,
         sender_leaf: penumbra_sdk_compliance::ComplianceLeaf,
         tx_blinding_nonce: Fr,
     ) -> anyhow::Result<()> {
-        let date = crate::timestamp_to_day_index(self.target_timestamp);
+        // For unregulated assets, encrypt to BLACK_HOLE_ACK (NUMS point with unknown
+        // discrete log) so ciphertext is undecryptable. The low leaf from the IMT
+        // non-membership proof stays intact for the circuit proof.
+        let (ring_pk, dk_pub) = if self.is_regulated {
+            (
+                self.asset_indexed_leaf.ring.ring_pk,
+                self.asset_indexed_leaf.params.dk_pub,
+            )
+        } else {
+            (
+                *penumbra_sdk_compliance::BLACK_HOLE_ACK,
+                decaf377::Element::GENERATOR,
+            )
+        };
+        let threshold = self.asset_indexed_leaf.params.threshold;
+
         let note = self.output_note();
-
-        // Policy is stored in asset_indexed_leaf
-        let policy = &self.asset_indexed_leaf.policy;
         let amount_u128: u128 = note.amount().into();
-        let is_flagged = amount_u128 >= policy.threshold;
+        let is_flagged = amount_u128 >= threshold;
 
-        // Generate compliance data (encrypt_compliance_details computes is_flagged internally)
-        let compliance_data = crate::generate_compliance_details(
+        let sender_address = sender_leaf.address.clone();
+
+        let compliance_data = crate::generate_compliance_details_output(
             rng,
-            recipient_ack,
+            &ring_pk,
+            &dk_pub,
             &self.dest_address,
-            date,
+            &sender_address,
             note.asset_id(),
             note.amount(),
-            sender_address,
-            &self.asset_indexed_leaf,
+            is_flagged,
         )?;
 
         self.compliance_ciphertext = compliance_data.ciphertext;
         self.compliance_leaf = Some(compliance_data.leaf);
         self.compliance_ephemeral_secret = Some(compliance_data.ephemeral_secret);
-        self.is_regulated = self.is_regulated; // Keep existing value
+        self.r_2 = compliance_data.r_2;
+        self.r_3 = compliance_data.r_3;
+        self.salt = compliance_data.salt;
+        self.dleq_k_1 = compliance_data.dleq_k;
+        self.dleq_k_2 = compliance_data.dleq_k_2;
+        self.dleq_k_3 = compliance_data.dleq_k_3;
         self.counterparty_address = Some(sender_address.clone());
-        self.counterparty_leaf = Some(sender_leaf);
         self.tx_blinding_nonce = tx_blinding_nonce;
-        self.dk_pub = Some(policy.dk_pub);
-        self.threshold = policy.threshold;
+        self.ring_pk = ring_pk;
+        self.dk_pub = dk_pub;
+        self.threshold = threshold;
         self.is_flagged = is_flagged;
+        self.counterparty_leaf = Some(sender_leaf);
+
+        // Compute DLEQ proofs using policy fields from asset_indexed_leaf
+        let metadata_hash_core = penumbra_sdk_compliance::compute_metadata_hash(
+            self.asset_indexed_leaf.ring.policy_id_hash,
+            self.asset_indexed_leaf.ring.resource_hash,
+            self.asset_indexed_leaf.ring.permission_hash,
+            Fq::from(1u64), // tier=1 (core)
+            Fq::from(self.target_timestamp),
+            self.salt,
+        );
+        let metadata_hash_ext = penumbra_sdk_compliance::compute_metadata_hash(
+            self.asset_indexed_leaf.ring.policy_id_hash,
+            self.asset_indexed_leaf.ring.resource_hash,
+            self.asset_indexed_leaf.ring.permission_hash,
+            Fq::from(2u64), // tier=2 (ext)
+            Fq::from(self.target_timestamp),
+            self.salt,
+        );
+        let metadata_hash_sext = penumbra_sdk_compliance::compute_metadata_hash(
+            self.asset_indexed_leaf.ring.policy_id_hash,
+            self.asset_indexed_leaf.ring.resource_hash,
+            self.asset_indexed_leaf.ring.permission_hash,
+            Fq::from(3u64), // tier=3 (sext)
+            Fq::from(self.target_timestamp),
+            self.salt,
+        );
+
+        // Receiver ACK for core/ext tiers
+        let recv_b_d_fq = self
+            .dest_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let recv_d = penumbra_sdk_compliance::derive_compliance_scalar(recv_b_d_fq);
+        let recv_d_fr = Fr::from_le_bytes_mod_order(&recv_d.to_bytes());
+        let ack_receiver = ring_pk * recv_d_fr;
+
+        // Sender ACK for sext tier (counterparty disclosure)
+        let sender_b_d_fq = sender_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let sender_d = penumbra_sdk_compliance::derive_compliance_scalar(sender_b_d_fq);
+        let sender_d_fr = Fr::from_le_bytes_mod_order(&sender_d.to_bytes());
+        let ack_sender = ring_pk * sender_d_fr;
+
+        let r_1 = self.compliance_ephemeral_secret.unwrap();
+        let r_2 = self.r_2.unwrap();
+        let r_3 = self.r_3.unwrap();
+
+        let epk_1 = decaf377::Element::GENERATOR * r_1;
+        let epk_2 = decaf377::Element::GENERATOR * r_2;
+        let epk_3 = decaf377::Element::GENERATOR * r_3;
+
+        let dleq_1 = penumbra_sdk_compliance::compute_dleq_native(
+            r_1,
+            self.dleq_k_1,
+            &ack_receiver,
+            &epk_1,
+            metadata_hash_core,
+        );
+        let dleq_2 = penumbra_sdk_compliance::compute_dleq_native(
+            r_2,
+            self.dleq_k_2.unwrap(),
+            &ack_receiver,
+            &epk_2,
+            metadata_hash_ext,
+        );
+        let dleq_3 = penumbra_sdk_compliance::compute_dleq_native(
+            r_3,
+            self.dleq_k_3.unwrap(),
+            &ack_sender,
+            &epk_3,
+            metadata_hash_sext,
+        );
+
+        self.dleq_c_1 = dleq_1.c;
+        self.dleq_s_1 = Fq::from_le_bytes_mod_order(&dleq_1.s.to_bytes());
+        self.dleq_c_2 = dleq_2.c;
+        self.dleq_s_2 = Fq::from_le_bytes_mod_order(&dleq_2.s.to_bytes());
+        self.dleq_c_3 = dleq_3.c;
+        self.dleq_s_3 = Fq::from_le_bytes_mod_order(&dleq_3.s.to_bytes());
 
         Ok(())
     }
 
-    /// Set compliance details for an unregulated asset.
-    ///
-    /// This is a convenience method that uses BLACK_HOLE_ACK and dummy values,
-    /// since compliance verification is skipped for unregulated assets.
-    ///
-    /// # Arguments
-    /// * `rng` - Random number generator
-    pub fn set_unregulated_compliance(
-        &mut self,
-        rng: &mut (impl rand_core::RngCore + rand_core::CryptoRng),
-    ) -> anyhow::Result<()> {
-        let black_hole_ack = penumbra_sdk_keys::keys::AddressComplianceKey::new(
-            *penumbra_sdk_compliance::BLACK_HOLE_ACK,
-        );
-        // Use a dummy address for counterparty since it's not verified
-        let dummy_address = Address::dummy(rng);
-        // Use a dummy leaf since it's not verified
-        let dummy_leaf = penumbra_sdk_compliance::ComplianceLeaf {
-            address: dummy_address.clone(),
-            key: black_hole_ack.clone(),
-            asset_id: self.value.asset_id,
-        };
-
-        self.set_compliance_details(
-            rng,
-            &black_hole_ack,
-            &dummy_address,
-            dummy_leaf,
-            Fr::from(0u64), // no binding needed
-        )
-    }
-
-    /// Set compliance details for a regulated asset.
-    ///
-    /// This method requires all the actual compliance data from the registry.
-    ///
-    /// # Arguments
-    /// * `rng` - Random number generator
-    /// * `recipient_ack` - The recipient's Address Compliance Key
-    /// * `sender_address` - The sender's address (counterparty)
-    /// * `sender_leaf` - The sender's compliance leaf from the registry
-    /// * `tx_blinding_nonce` - Shared transaction blinding nonce
-    pub fn set_regulated_compliance(
-        &mut self,
-        rng: &mut (impl rand_core::RngCore + rand_core::CryptoRng),
-        recipient_ack: &penumbra_sdk_keys::keys::AddressComplianceKey,
-        sender_address: &Address,
-        sender_leaf: penumbra_sdk_compliance::ComplianceLeaf,
-        tx_blinding_nonce: Fr,
-    ) -> anyhow::Result<()> {
-        self.set_compliance_details(
-            rng,
-            recipient_ack,
-            sender_address,
-            sender_leaf,
-            tx_blinding_nonce,
-        )
-    }
-
     /// Create a new [`OutputPlan`] that sends `value` to `dest_address`.
-    ///
-    /// Uses the current system time as the target timestamp.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         value: Value,
@@ -211,47 +271,39 @@ impl OutputPlan {
     ) -> OutputPlan {
         let rseed = Rseed::generate(rng);
         let value_blinding = Fr::rand(rng);
-        let target_timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time should be after Unix epoch")
-            .as_secs();
 
-        // Generate valid compliance data using BLACK_HOLE_ACK for unregulated assets.
-        // This ensures circuit constraints are satisfied even without explicit compliance setup.
-        let black_hole_ack = penumbra_sdk_keys::keys::AddressComplianceKey::new(
-            *penumbra_sdk_compliance::BLACK_HOLE_ACK,
-        );
-        let date = target_timestamp / 86400; // Convert timestamp to day index
+        let ring_pk = *penumbra_sdk_compliance::BLACK_HOLE_ACK;
+        let dk_pub = decaf377::Element::GENERATOR;
 
-        // Create unregulated asset leaf (threshold=u128::MAX means never flagged)
-        let unregulated_leaf = penumbra_sdk_compliance::IndexedLeaf::unregulated(value.asset_id.0);
+        let b_d_fq = dest_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
+        let d_fr = Fr::from_le_bytes_mod_order(&d.to_bytes());
+        let ack = ring_pk * d_fr;
 
-        let encryption_result = penumbra_sdk_compliance::crypto::encrypt_compliance_details(
+        let encryption_result = penumbra_sdk_compliance::crypto::encrypt_output(
             &mut *rng,
-            &black_hole_ack,
+            &ack,
+            &ack,
+            &dk_pub,
             &dest_address,
-            date,
+            &dest_address,
             value.asset_id,
             value.amount,
-            &dest_address, // Use same address as counterparty for default
-            &unregulated_leaf,
+            false,
+            Fq::from(0u64),
         )
         .expect("can encrypt compliance details");
 
         let compliance_ciphertext = encryption_result.ciphertext.to_bytes();
-        let ephemeral_secret = encryption_result.ephemeral_secret;
 
-        let compliance_leaf = penumbra_sdk_compliance::ComplianceLeaf {
-            address: dest_address.clone(),
-            key: black_hole_ack.clone(),
-            asset_id: value.asset_id,
-        };
+        let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
+        let compliance_leaf =
+            penumbra_sdk_compliance::ComplianceLeaf::new(dest_address.clone(), value.asset_id, d);
 
-        // Generate valid compliance tree proofs.
-        // These satisfy circuit constraints by default.
-        // Production code will overwrite with real chain data via enrich_plan_with_compliance().
         let (compliance_anchor, compliance_path, compliance_position) =
-            penumbra_sdk_compliance::create_default_user_tree_proof(&compliance_leaf);
+            penumbra_sdk_compliance::default_user_proof(&compliance_leaf);
 
         let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) =
             penumbra_sdk_compliance::create_default_imt_proof(value.asset_id.0);
@@ -266,10 +318,11 @@ impl OutputPlan {
             proof_blinding_r: Fq::rand(rng),
             proof_blinding_s: Fq::rand(rng),
             compliance_path,
-            target_timestamp,
             compliance_ciphertext,
             compliance_leaf: Some(compliance_leaf.clone()),
-            compliance_ephemeral_secret: Some(ephemeral_secret),
+            compliance_ephemeral_secret: Some(encryption_result.r_1),
+            r_2: Some(encryption_result.r_2),
+            r_3: Some(encryption_result.r_3),
             is_regulated: false,
             counterparty_address: None,
             counterparty_leaf: Some(compliance_leaf),
@@ -280,9 +333,21 @@ impl OutputPlan {
             asset_position,
             asset_indexed_leaf,
             compliance_position,
-            dk_pub: None,
-            threshold: 0,
+            ring_pk,
+            dk_pub,
+            threshold: u128::MAX,
             is_flagged: false,
+            salt: Fq::from(0u64),
+            dleq_k_1: Fr::from(0u64),
+            dleq_k_2: None,
+            dleq_k_3: None,
+            dleq_c_1: Fq::from(0u64),
+            dleq_s_1: Fq::from(0u64),
+            dleq_c_2: Fq::from(0u64),
+            dleq_s_2: Fq::from(0u64),
+            dleq_c_3: Fq::from(0u64),
+            dleq_s_3: Fq::from(0u64),
+            target_timestamp: 0u64,
         }
     }
 
@@ -300,10 +365,6 @@ impl OutputPlan {
     }
 
     /// Convenience method to construct the [`Output`] described by this plan.
-    ///
-    /// `compliance_keys` is an optional tuple of (Issuer PK, Clue Key).
-    /// If provided, the output will be encrypted for compliance.
-    /// If None, it will use the "Black Hole" key (unregulated).
     pub fn output(
         &self,
         ovk: &OutgoingViewingKey,
@@ -332,50 +393,41 @@ impl OutputPlan {
         let balance_commitment = self.balance().commit(self.value_blinding);
         let note_commitment = note.commit();
 
-        // Use the anchors from the plan (set via enrich_with_compliance)
         let asset_anchor = self.asset_anchor;
         let compliance_anchor = self.compliance_anchor;
 
-        // Use the precomputed compliance ciphertext and leaf
-        // (should be set via set_compliance_details() before calling this method)
         let user_leaf = self.compliance_leaf.clone().unwrap_or_else(|| {
-            // Fallback to BLACK_HOLE for backwards compatibility
-            penumbra_sdk_compliance::ComplianceLeaf {
-                address: note.address().clone(),
-                key: penumbra_sdk_keys::keys::AddressComplianceKey::new(
-                    *penumbra_sdk_compliance::BLACK_HOLE_ACK,
-                ),
-                asset_id: note.asset_id(),
-            }
+            let b_d_fq = note
+                .address()
+                .diversified_generator()
+                .vartime_compress_to_field();
+            let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
+            penumbra_sdk_compliance::ComplianceLeaf::new(note.address().clone(), note.asset_id(), d)
         });
 
         use penumbra_sdk_compliance::structs::ComplianceCiphertext;
-        let ct = ComplianceCiphertext::from_bytes(&self.compliance_ciphertext)
+        let ct_obj = ComplianceCiphertext::from_bytes(&self.compliance_ciphertext)
             .expect("can deserialize ciphertext");
-        let (compliance_epk, compliance_epk_g, compliance_ciphertext) =
-            ct.to_circuit_public_inputs();
+        let (epk_1, epk_2, epk_3, c2_core, c2_ext, c2_sext, compliance_ciphertext) =
+            ct_obj.to_output_circuit_public_inputs();
 
-        // Compute blinded leaf hashes for privacy-preserving counterparty binding
-        let receiver_leaf_hash = user_leaf.commit();
         let counterparty_leaf_hash = self
             .counterparty_leaf
             .clone()
             .unwrap_or_else(|| {
-                // Fallback to BLACK_HOLE for unregulated assets
-                penumbra_sdk_compliance::ComplianceLeaf {
-                    address: note.address().clone(),
-                    key: penumbra_sdk_keys::keys::AddressComplianceKey::new(
-                        *penumbra_sdk_compliance::BLACK_HOLE_ACK,
-                    ),
-                    asset_id: note.asset_id(),
-                }
+                let b_d_fq = note
+                    .address()
+                    .diversified_generator()
+                    .vartime_compress_to_field();
+                let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
+                penumbra_sdk_compliance::ComplianceLeaf::new(
+                    note.address().clone(),
+                    note.asset_id(),
+                    d,
+                )
             })
             .commit();
 
-        let blinded_receiver_leaf = penumbra_sdk_compliance::blind_counterparty_leaf(
-            receiver_leaf_hash,
-            self.tx_blinding_nonce,
-        );
         let blinded_counterparty_leaf = penumbra_sdk_compliance::blind_sender_leaf(
             counterparty_leaf_hash,
             self.tx_blinding_nonce,
@@ -388,13 +440,22 @@ impl OutputPlan {
             OutputProofPublic {
                 balance_commitment,
                 note_commitment,
-                compliance_epk,
-                compliance_epk_g,
+                epk_1,
+                epk_2,
+                epk_3,
+                c2_core,
+                c2_ext,
+                c2_sext,
                 compliance_ciphertext,
+                target_timestamp: Fq::from(self.target_timestamp),
+                dleq_c_1: self.dleq_c_1,
+                dleq_s_1: self.dleq_s_1,
+                dleq_c_2: self.dleq_c_2,
+                dleq_s_2: self.dleq_s_2,
+                dleq_c_3: self.dleq_c_3,
+                dleq_s_3: self.dleq_s_3,
                 asset_anchor,
                 compliance_anchor,
-                target_timestamp: self.target_timestamp,
-                receiver_leaf_hash: blinded_receiver_leaf,
                 counterparty_leaf_hash: blinded_counterparty_leaf,
             },
             OutputProofPrivate {
@@ -410,18 +471,23 @@ impl OutputPlan {
                 compliance_ephemeral_secret: self
                     .compliance_ephemeral_secret
                     .unwrap_or(Fr::from(0u64)),
+                r_2: self.r_2.unwrap_or(Fr::from(0u64)),
+                r_3: self.r_3.unwrap_or(Fr::from(0u64)),
                 counterparty_leaf: self.counterparty_leaf.clone().unwrap_or_else(|| {
-                    // Fallback to BLACK_HOLE for unregulated assets
-                    penumbra_sdk_compliance::ComplianceLeaf {
-                        address: note.address().clone(),
-                        key: penumbra_sdk_keys::keys::AddressComplianceKey::new(
-                            *penumbra_sdk_compliance::BLACK_HOLE_ACK,
-                        ),
-                        asset_id: note.asset_id(),
-                    }
+                    let b_d_fq = note
+                        .address()
+                        .diversified_generator()
+                        .vartime_compress_to_field();
+                    let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
+                    penumbra_sdk_compliance::ComplianceLeaf::new(
+                        note.address().clone(),
+                        note.asset_id(),
+                        d,
+                    )
                 }),
                 tx_blinding_nonce: self.tx_blinding_nonce,
                 is_flagged: self.is_flagged,
+                salt: self.salt,
             },
         )
     }
@@ -445,41 +511,37 @@ impl OutputPlan {
             &note.diversified_generator(),
         );
 
-        // Compute blinded leaf hashes for privacy-preserving counterparty binding
-        let user_leaf = self.compliance_leaf.clone().unwrap_or_else(|| {
-            penumbra_sdk_compliance::ComplianceLeaf {
-                address: note.address().clone(),
-                key: penumbra_sdk_keys::keys::AddressComplianceKey::new(
-                    *penumbra_sdk_compliance::BLACK_HOLE_ACK,
-                ),
-                asset_id: note.asset_id(),
-            }
-        });
-        let receiver_leaf_hash = user_leaf.commit();
-
         let counterparty_leaf_hash = self
             .counterparty_leaf
             .clone()
-            .unwrap_or_else(|| penumbra_sdk_compliance::ComplianceLeaf {
-                address: note.address().clone(),
-                key: penumbra_sdk_keys::keys::AddressComplianceKey::new(
-                    *penumbra_sdk_compliance::BLACK_HOLE_ACK,
-                ),
-                asset_id: note.asset_id(),
+            .unwrap_or_else(|| {
+                let b_d_fq = note
+                    .address()
+                    .diversified_generator()
+                    .vartime_compress_to_field();
+                let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
+                penumbra_sdk_compliance::ComplianceLeaf::new(
+                    note.address().clone(),
+                    note.asset_id(),
+                    d,
+                )
             })
             .commit();
 
-        let blinded_receiver_leaf = penumbra_sdk_compliance::blind_counterparty_leaf(
-            receiver_leaf_hash,
-            self.tx_blinding_nonce,
-        );
         let blinded_counterparty_leaf = penumbra_sdk_compliance::blind_sender_leaf(
             counterparty_leaf_hash,
             self.tx_blinding_nonce,
         );
 
-        // Use the precomputed compliance ciphertext
-        // (should be set via set_compliance_details() before calling this method)
+        // Serialize DLEQ proofs: (c_1, s_1, c_2, s_2, c_3, s_3) × 32 bytes = 192 bytes
+        let mut dleq_proofs = Vec::with_capacity(192);
+        dleq_proofs.extend_from_slice(&self.dleq_c_1.to_bytes());
+        dleq_proofs.extend_from_slice(&self.dleq_s_1.to_bytes());
+        dleq_proofs.extend_from_slice(&self.dleq_c_2.to_bytes());
+        dleq_proofs.extend_from_slice(&self.dleq_s_2.to_bytes());
+        dleq_proofs.extend_from_slice(&self.dleq_c_3.to_bytes());
+        dleq_proofs.extend_from_slice(&self.dleq_s_3.to_bytes());
+
         Body {
             note_payload: note.payload(),
             balance_commitment,
@@ -487,10 +549,10 @@ impl OutputPlan {
             wrapped_memo_key,
             compliance_ciphertext: self.compliance_ciphertext.clone(),
             target_timestamp: self.target_timestamp,
-            receiver_leaf_hash: blinded_receiver_leaf,
             counterparty_leaf_hash: blinded_counterparty_leaf,
             compliance_anchor: self.compliance_anchor,
             asset_anchor: self.asset_anchor,
+            dleq_proofs,
         }
     }
 
@@ -540,6 +602,29 @@ impl From<OutputPlan> for pb::OutputPlan {
             asset_path: Some(msg.asset_path.into()),
             asset_position: msg.asset_position,
             asset_indexed_leaf: Some(indexed_leaf_to_proto(&msg.asset_indexed_leaf)),
+            sender_ciphertext: Vec::new(),
+            salt: msg.salt.to_bytes().to_vec(),
+            dleq_k_1: msg.dleq_k_1.to_bytes().to_vec(),
+            dleq_k_2: msg
+                .dleq_k_2
+                .map(|k| k.to_bytes().to_vec())
+                .unwrap_or_default(),
+            dleq_k_3: msg
+                .dleq_k_3
+                .map(|k| k.to_bytes().to_vec())
+                .unwrap_or_default(),
+            dleq_c_1: msg.dleq_c_1.to_bytes().to_vec(),
+            dleq_s_1: msg.dleq_s_1.to_bytes().to_vec(),
+            dleq_c_2: msg.dleq_c_2.to_bytes().to_vec(),
+            dleq_s_2: msg.dleq_s_2.to_bytes().to_vec(),
+            dleq_c_3: msg.dleq_c_3.to_bytes().to_vec(),
+            dleq_s_3: msg.dleq_s_3.to_bytes().to_vec(),
+            ring_pk: msg.ring_pk.vartime_compress().0.to_vec(),
+            dk_pub: msg.dk_pub.vartime_compress().0.to_vec(),
+            threshold_bytes: msg.threshold.to_le_bytes().to_vec(),
+            is_flagged: msg.is_flagged,
+            r_2: msg.r_2.map(|r| r.to_bytes().to_vec()).unwrap_or_default(),
+            r_3: msg.r_3.map(|r| r.to_bytes().to_vec()).unwrap_or_default(),
         }
     }
 }
@@ -586,10 +671,25 @@ impl TryFrom<pb::OutputPlan> for OutputPlan {
             proof_blinding_s: Fq::from_bytes_checked(msg.proof_blinding_s.as_slice().try_into()?)
                 .expect("proof_blinding_s malformed"),
             compliance_path,
-            target_timestamp: msg.target_timestamp,
             compliance_ciphertext: msg.compliance_ciphertext,
             compliance_leaf,
             compliance_ephemeral_secret,
+            r_2: if msg.r_2.len() == 32 {
+                Some(
+                    Fr::from_bytes_checked(msg.r_2.as_slice().try_into()?)
+                        .unwrap_or(Fr::from(0u64)),
+                )
+            } else {
+                None
+            },
+            r_3: if msg.r_3.len() == 32 {
+                Some(
+                    Fr::from_bytes_checked(msg.r_3.as_slice().try_into()?)
+                        .unwrap_or(Fr::from(0u64)),
+                )
+            } else {
+                None
+            },
             is_regulated: msg.is_regulated,
             counterparty_address: msg.counterparty_address.map(|a| a.try_into()).transpose()?,
             counterparty_leaf,
@@ -600,10 +700,90 @@ impl TryFrom<pb::OutputPlan> for OutputPlan {
             asset_position: msg.asset_position,
             asset_indexed_leaf,
             compliance_position: msg.compliance_position,
-            // Policy fields - not serialized in proto, will be set by enrich_plan
-            dk_pub: None,
-            threshold: 0,
-            is_flagged: false,
+            ring_pk: if msg.ring_pk.len() == 32 {
+                decaf377::Encoding(msg.ring_pk.as_slice().try_into()?)
+                    .vartime_decompress()
+                    .unwrap_or(*penumbra_sdk_compliance::BLACK_HOLE_ACK)
+            } else {
+                *penumbra_sdk_compliance::BLACK_HOLE_ACK
+            },
+            dk_pub: if msg.dk_pub.len() == 32 {
+                decaf377::Encoding(msg.dk_pub.as_slice().try_into()?)
+                    .vartime_decompress()
+                    .unwrap_or(decaf377::Element::GENERATOR)
+            } else {
+                decaf377::Element::GENERATOR
+            },
+            threshold: if msg.threshold_bytes.len() == 16 {
+                u128::from_le_bytes(msg.threshold_bytes.as_slice().try_into()?)
+            } else {
+                u128::MAX
+            },
+            is_flagged: msg.is_flagged,
+            salt: if msg.salt.len() == 32 {
+                Fq::from_bytes_checked(msg.salt.as_slice().try_into()?).unwrap_or(Fq::from(0u64))
+            } else {
+                Fq::from(0u64)
+            },
+            dleq_k_1: if msg.dleq_k_1.len() == 32 {
+                Fr::from_bytes_checked(msg.dleq_k_1.as_slice().try_into()?)
+                    .unwrap_or(Fr::from(0u64))
+            } else {
+                Fr::from(0u64)
+            },
+            dleq_k_2: if msg.dleq_k_2.len() == 32 {
+                Some(
+                    Fr::from_bytes_checked(msg.dleq_k_2.as_slice().try_into()?)
+                        .unwrap_or(Fr::from(0u64)),
+                )
+            } else {
+                None
+            },
+            dleq_k_3: if msg.dleq_k_3.len() == 32 {
+                Some(
+                    Fr::from_bytes_checked(msg.dleq_k_3.as_slice().try_into()?)
+                        .unwrap_or(Fr::from(0u64)),
+                )
+            } else {
+                None
+            },
+            dleq_c_1: if msg.dleq_c_1.len() == 32 {
+                Fq::from_bytes_checked(msg.dleq_c_1.as_slice().try_into()?)
+                    .unwrap_or(Fq::from(0u64))
+            } else {
+                Fq::from(0u64)
+            },
+            dleq_s_1: if msg.dleq_s_1.len() == 32 {
+                Fq::from_bytes_checked(msg.dleq_s_1.as_slice().try_into()?)
+                    .unwrap_or(Fq::from(0u64))
+            } else {
+                Fq::from(0u64)
+            },
+            dleq_c_2: if msg.dleq_c_2.len() == 32 {
+                Fq::from_bytes_checked(msg.dleq_c_2.as_slice().try_into()?)
+                    .unwrap_or(Fq::from(0u64))
+            } else {
+                Fq::from(0u64)
+            },
+            dleq_s_2: if msg.dleq_s_2.len() == 32 {
+                Fq::from_bytes_checked(msg.dleq_s_2.as_slice().try_into()?)
+                    .unwrap_or(Fq::from(0u64))
+            } else {
+                Fq::from(0u64)
+            },
+            dleq_c_3: if msg.dleq_c_3.len() == 32 {
+                Fq::from_bytes_checked(msg.dleq_c_3.as_slice().try_into()?)
+                    .unwrap_or(Fq::from(0u64))
+            } else {
+                Fq::from(0u64)
+            },
+            dleq_s_3: if msg.dleq_s_3.len() == 32 {
+                Fq::from_bytes_checked(msg.dleq_s_3.as_slice().try_into()?)
+                    .unwrap_or(Fq::from(0u64))
+            } else {
+                Fq::from(0u64)
+            },
+            target_timestamp: msg.target_timestamp,
         })
     }
 }
@@ -623,14 +803,20 @@ mod test {
     fn verify_output_proof_with_asset(asset_id_u64: u64) {
         use crate::test_proof_helpers::proof_test_helpers::{
             create_imt_membership_proof, create_imt_non_membership_proof, create_user_tree_proof,
-            generate_test_data,
+            generate_test_data, CircuitType,
         };
 
         let mut rng = OsRng;
 
         // 1. Generate unified test data
         let is_regulated = asset_id_u64 == REGULATED_ASSET_ID;
-        let test_data = generate_test_data(&mut rng, asset_id_u64, 100, is_regulated);
+        let test_data = generate_test_data(
+            &mut rng,
+            asset_id_u64,
+            100,
+            is_regulated,
+            CircuitType::Output,
+        );
 
         // 2. Setup circuit keys
         let (pk, pvk, _blinding_r, _blinding_s) = setup_groth16_keys::<OutputCircuit>();
@@ -641,7 +827,7 @@ mod test {
         // 3. Create valid IMT proof FIRST (encryption needs the indexed leaf)
         let asset_id_fq = Fq::from(asset_id_u64);
         let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) = if is_regulated {
-            create_imt_membership_proof(asset_id_fq)
+            create_imt_membership_proof(asset_id_fq, test_data.ring_pk, test_data.dk_pub)
         } else {
             create_imt_non_membership_proof(asset_id_fq)
         };
@@ -657,23 +843,32 @@ mod test {
         output_plan.asset_indexed_leaf = asset_indexed_leaf;
         output_plan.is_regulated = is_regulated;
 
-        // Create sender leaf (using same data as receiver for simplicity in test)
-        let sender_leaf = penumbra_sdk_compliance::ComplianceLeaf {
-            address: test_data.address.clone(),
-            key: test_data.ack.clone(),
-            asset_id: test_data.note.asset_id(),
-        };
         let tx_blinding_nonce = Fr::rand(&mut rng);
 
-        // Now set_compliance_details will use the correct asset_indexed_leaf
+        // Derive proper d scalars for sender and receiver
+        let recv_b_d_fq = output_plan
+            .dest_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let recv_d = penumbra_sdk_compliance::derive_compliance_scalar(recv_b_d_fq);
+        let recipient_leaf = penumbra_sdk_compliance::ComplianceLeaf::new(
+            output_plan.dest_address.clone(),
+            output_plan.value.asset_id,
+            recv_d,
+        );
+
+        let sender_b_d_fq = test_data
+            .sender_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let sender_d = penumbra_sdk_compliance::derive_compliance_scalar(sender_b_d_fq);
+        let sender_leaf = penumbra_sdk_compliance::ComplianceLeaf::new(
+            test_data.sender_address.clone(),
+            output_plan.value.asset_id,
+            sender_d,
+        );
         output_plan
-            .set_compliance_details(
-                &mut rng,
-                &test_data.ack,
-                &test_data.address,
-                sender_leaf,
-                tx_blinding_nonce,
-            )
+            .set_compliance_details(&mut rng, &recipient_leaf, sender_leaf, tx_blinding_nonce)
             .expect("can set compliance details");
 
         // Create valid user tree proof
@@ -699,15 +894,11 @@ mod test {
         use penumbra_sdk_compliance::structs::ComplianceCiphertext;
         let ct = ComplianceCiphertext::from_bytes(&output_plan.compliance_ciphertext)
             .expect("can deserialize ciphertext");
-        let (compliance_epk, compliance_epk_g, packed_ciphertext) = ct.to_circuit_public_inputs();
+        let (epk_1, epk_2, epk_3, c2_core, c2_ext, c2_sext, packed_ciphertext) =
+            ct.to_output_circuit_public_inputs();
 
-        let receiver_leaf_hash = output_plan.compliance_leaf.clone().unwrap().commit();
         let counterparty_leaf_hash = output_plan.counterparty_leaf.clone().unwrap().commit();
 
-        let blinded_receiver = penumbra_sdk_compliance::blind_counterparty_leaf(
-            receiver_leaf_hash,
-            output_plan.tx_blinding_nonce,
-        );
         let blinded_counterparty = penumbra_sdk_compliance::blind_sender_leaf(
             counterparty_leaf_hash,
             output_plan.tx_blinding_nonce,
@@ -719,13 +910,22 @@ mod test {
                 OutputProofPublic {
                     balance_commitment,
                     note_commitment,
-                    compliance_epk,
-                    compliance_epk_g,
+                    epk_1,
+                    epk_2,
+                    epk_3,
+                    c2_core,
+                    c2_ext,
+                    c2_sext,
                     compliance_ciphertext: packed_ciphertext,
                     asset_anchor,
                     compliance_anchor,
-                    target_timestamp: output_plan.target_timestamp,
-                    receiver_leaf_hash: blinded_receiver,
+                    target_timestamp: Fq::from(output_plan.target_timestamp),
+                    dleq_c_1: output_plan.dleq_c_1,
+                    dleq_s_1: output_plan.dleq_s_1,
+                    dleq_c_2: output_plan.dleq_c_2,
+                    dleq_s_2: output_plan.dleq_s_2,
+                    dleq_c_3: output_plan.dleq_c_3,
+                    dleq_s_3: output_plan.dleq_s_3,
                     counterparty_leaf_hash: blinded_counterparty,
                 },
             )
@@ -742,14 +942,13 @@ mod test {
         verify_output_proof_with_asset(UNREGULATED_ASSET_ID);
     }
 
-    /// Test that output is flagged when amount >= threshold
+    /// Test that output is flagged when amount >= threshold (with distinct sender/receiver)
     #[test]
     fn test_output_flagged_above_threshold() {
         let mut rng = OsRng;
-        let dk_pub = decaf377::Element::GENERATOR;
         let threshold = 500u128;
-        let indexed_leaf = penumbra_sdk_compliance::test_helpers::make_test_leaf(dk_pub, threshold);
 
+        // Receiver
         let seed_phrase = penumbra_sdk_keys::keys::SeedPhrase::generate(&mut rng);
         let sk = penumbra_sdk_keys::keys::SpendKey::from_seed_phrase_bip44(
             seed_phrase,
@@ -757,6 +956,15 @@ mod test {
         );
         let ivk = sk.full_viewing_key().incoming();
         let (address, _) = ivk.payment_address(0u32.into());
+
+        // Distinct sender
+        let sender_seed = penumbra_sdk_keys::keys::SeedPhrase::generate(&mut rng);
+        let sender_sk = penumbra_sdk_keys::keys::SpendKey::from_seed_phrase_bip44(
+            sender_seed,
+            &penumbra_sdk_keys::keys::Bip44Path::new(0),
+        );
+        let sender_ivk = sender_sk.full_viewing_key().incoming();
+        let (sender_address, _) = sender_ivk.payment_address(0u32.into());
 
         // amount=1000 >= threshold=500 => flagged
         let value = penumbra_sdk_asset::Value {
@@ -765,17 +973,28 @@ mod test {
         };
 
         let mut output_plan = OutputPlan::new(&mut rng, value, address.clone());
-        output_plan.asset_indexed_leaf = indexed_leaf;
+        output_plan.asset_indexed_leaf.params.threshold = threshold;
 
-        let ack = penumbra_sdk_keys::keys::AddressComplianceKey::new(dk_pub);
-        let sender_leaf = penumbra_sdk_compliance::ComplianceLeaf {
-            address: address.clone(),
-            key: ack.clone(),
-            asset_id: value.asset_id,
-        };
+        let recv_b_d_fq = address.diversified_generator().vartime_compress_to_field();
+        let recv_d = penumbra_sdk_compliance::derive_compliance_scalar(recv_b_d_fq);
+        let recipient_leaf = penumbra_sdk_compliance::ComplianceLeaf::new(
+            address.clone(),
+            output_plan.value.asset_id,
+            recv_d,
+        );
+
+        let sender_b_d_fq = sender_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let sender_d = penumbra_sdk_compliance::derive_compliance_scalar(sender_b_d_fq);
+        let sender_leaf = penumbra_sdk_compliance::ComplianceLeaf::new(
+            sender_address,
+            output_plan.value.asset_id,
+            sender_d,
+        );
 
         output_plan
-            .set_compliance_details(&mut rng, &ack, &address, sender_leaf, Fr::from(0u64))
+            .set_compliance_details(&mut rng, &recipient_leaf, sender_leaf, Fr::from(0u64))
             .expect("can set compliance details");
 
         assert!(
@@ -784,14 +1003,13 @@ mod test {
         );
     }
 
-    /// Test that output is NOT flagged when amount < threshold
+    /// Test that output is NOT flagged when amount < threshold (with distinct sender/receiver)
     #[test]
     fn test_output_not_flagged_below_threshold() {
         let mut rng = OsRng;
-        let dk_pub = decaf377::Element::GENERATOR;
         let threshold = 500u128;
-        let indexed_leaf = penumbra_sdk_compliance::test_helpers::make_test_leaf(dk_pub, threshold);
 
+        // Receiver
         let seed_phrase = penumbra_sdk_keys::keys::SeedPhrase::generate(&mut rng);
         let sk = penumbra_sdk_keys::keys::SpendKey::from_seed_phrase_bip44(
             seed_phrase,
@@ -800,6 +1018,15 @@ mod test {
         let ivk = sk.full_viewing_key().incoming();
         let (address, _) = ivk.payment_address(0u32.into());
 
+        // Distinct sender
+        let sender_seed = penumbra_sdk_keys::keys::SeedPhrase::generate(&mut rng);
+        let sender_sk = penumbra_sdk_keys::keys::SpendKey::from_seed_phrase_bip44(
+            sender_seed,
+            &penumbra_sdk_keys::keys::Bip44Path::new(0),
+        );
+        let sender_ivk = sender_sk.full_viewing_key().incoming();
+        let (sender_address, _) = sender_ivk.payment_address(0u32.into());
+
         // amount=100 < threshold=500 => NOT flagged
         let value = penumbra_sdk_asset::Value {
             amount: 100u64.into(),
@@ -807,22 +1034,99 @@ mod test {
         };
 
         let mut output_plan = OutputPlan::new(&mut rng, value, address.clone());
-        output_plan.asset_indexed_leaf = indexed_leaf;
+        output_plan.asset_indexed_leaf.params.threshold = threshold;
 
-        let ack = penumbra_sdk_keys::keys::AddressComplianceKey::new(dk_pub);
-        let sender_leaf = penumbra_sdk_compliance::ComplianceLeaf {
-            address: address.clone(),
-            key: ack.clone(),
-            asset_id: value.asset_id,
-        };
+        let recv_b_d_fq = address.diversified_generator().vartime_compress_to_field();
+        let recv_d = penumbra_sdk_compliance::derive_compliance_scalar(recv_b_d_fq);
+        let recipient_leaf = penumbra_sdk_compliance::ComplianceLeaf::new(
+            address.clone(),
+            output_plan.value.asset_id,
+            recv_d,
+        );
+
+        let sender_b_d_fq = sender_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let sender_d = penumbra_sdk_compliance::derive_compliance_scalar(sender_b_d_fq);
+        let sender_leaf = penumbra_sdk_compliance::ComplianceLeaf::new(
+            sender_address,
+            output_plan.value.asset_id,
+            sender_d,
+        );
 
         output_plan
-            .set_compliance_details(&mut rng, &ack, &address, sender_leaf, Fr::from(0u64))
+            .set_compliance_details(&mut rng, &recipient_leaf, sender_leaf, Fr::from(0u64))
             .expect("can set compliance details");
 
         assert!(
             !output_plan.is_flagged,
             "amount 100 < threshold 500 should NOT be flagged"
+        );
+    }
+
+    /// Unregulated assets must use BLACK_HOLE_ACK for encryption even when
+    /// the IMT low leaf carries a regulated asset's policy keys.
+    #[test]
+    fn test_unregulated_overrides_low_leaf_keys_to_black_hole() {
+        let mut rng = OsRng;
+
+        // Receiver
+        let seed_phrase = penumbra_sdk_keys::keys::SeedPhrase::generate(&mut rng);
+        let sk = penumbra_sdk_keys::keys::SpendKey::from_seed_phrase_bip44(
+            seed_phrase,
+            &penumbra_sdk_keys::keys::Bip44Path::new(0),
+        );
+        let ivk = sk.full_viewing_key().incoming();
+        let (address, _) = ivk.payment_address(0u32.into());
+
+        // Distinct sender
+        let sender_seed = penumbra_sdk_keys::keys::SeedPhrase::generate(&mut rng);
+        let sender_sk = penumbra_sdk_keys::keys::SpendKey::from_seed_phrase_bip44(
+            sender_seed,
+            &penumbra_sdk_keys::keys::Bip44Path::new(0),
+        );
+        let sender_ivk = sender_sk.full_viewing_key().incoming();
+        let (sender_address, _) = sender_ivk.payment_address(0u32.into());
+
+        let value = penumbra_sdk_asset::Value {
+            amount: 100u64.into(),
+            asset_id: penumbra_sdk_asset::asset::Id(Fq::from(999u64)),
+        };
+
+        let mut output_plan = OutputPlan::new(&mut rng, value, address.clone());
+
+        // Simulate a low leaf from a regulated asset's non-membership proof
+        let fake_ring_sk = Fr::rand(&mut rng);
+        let fake_ring_pk = decaf377::Element::GENERATOR * fake_ring_sk;
+        output_plan.asset_indexed_leaf.ring.ring_pk = fake_ring_pk;
+        output_plan.asset_indexed_leaf.params.dk_pub = decaf377::Element::GENERATOR;
+        output_plan.is_regulated = false;
+
+        let recv_b_d_fq = address.diversified_generator().vartime_compress_to_field();
+        let recv_d = penumbra_sdk_compliance::derive_compliance_scalar(recv_b_d_fq);
+        let recipient_leaf =
+            penumbra_sdk_compliance::ComplianceLeaf::new(address.clone(), value.asset_id, recv_d);
+
+        let sender_b_d_fq = sender_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let sender_d = penumbra_sdk_compliance::derive_compliance_scalar(sender_b_d_fq);
+        let sender_leaf =
+            penumbra_sdk_compliance::ComplianceLeaf::new(sender_address, value.asset_id, sender_d);
+
+        output_plan
+            .set_compliance_details(&mut rng, &recipient_leaf, sender_leaf, Fr::from(0u64))
+            .expect("can set compliance details");
+
+        assert_eq!(
+            output_plan.ring_pk,
+            *penumbra_sdk_compliance::BLACK_HOLE_ACK,
+            "Unregulated output must override low leaf ring_pk to BLACK_HOLE_ACK"
+        );
+        assert_eq!(
+            output_plan.dk_pub,
+            decaf377::Element::GENERATOR,
+            "Unregulated output must use GENERATOR as dk_pub"
         );
     }
 }

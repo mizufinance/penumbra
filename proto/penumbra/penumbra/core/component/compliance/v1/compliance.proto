@@ -15,10 +15,10 @@ message ComplianceViewingKey {
 message ComplianceLeaf {
   // The registered address for compliance.
   keys.v1.Address address = 1;
-  // The compliance viewing key for this wallet.
-  ComplianceViewingKey key = 2;
   // The asset ID this compliance leaf applies to.
   asset.v1.AssetId asset_id = 3;
+  // Derivation scalar: d = SHA256_derive(b_d_fq). Verified at registration.
+  bytes d = 4;
 }
 
 // Registry Actions (State Transitions)
@@ -30,12 +30,21 @@ message MsgRegisterAsset {
   // Whether this asset is regulated (requires compliance).
   bool is_regulated = 2;
   // Issuer's detection key public (32 bytes, optional).
-  // When set, enables issuer-side detection and flagged transfer decryption.
   bytes dk_pub = 3;
   // Amount threshold for flagging (16 bytes, little-endian u128).
-  // Transfers at or above this amount are encrypted to issuer's DK instead of user's daily key.
-  // u128::MAX means never flag (default for unregulated).
   bytes threshold = 4;
+  // IBC channels allowed for this regulated asset. Empty = IBC blocked.
+  repeated string allowed_channels = 5;
+  // Orbis ring public key (32 bytes compressed point).
+  bytes ring_pk = 6;
+  // Orbis DKG ring identifier.
+  string ring_id = 7;
+  // SourceHub policy ID.
+  string policy_id = 8;
+  // ACP permission name.
+  string permission = 9;
+  // ACP resource type.
+  string resource = 10;
 }
 
 // Message to register a user's compliance viewing key for a regulated asset.
@@ -211,14 +220,35 @@ message ComplianceBatchMerkleProofsResponse {
 // Events
 
 // Data for an indexed leaf in the asset IMT (for client sync).
+// All policy fields are bound into the leaf commitment hash.
 message IndexedLeafData {
   bytes value = 1;
   uint64 next_index = 2;
   bytes next_value = 3;
-  // Issuer's detection key public (32 bytes compressed point).
+  // Penumbra-decided policy (AssetParams)
   bytes dk_pub = 4;
-  // Amount threshold for flagging (16 bytes, little-endian u128).
   bytes threshold = 5;
+  bytes channels_hash = 6;
+  // Orbis-decided policy (RingData)
+  bytes ring_pk = 7;
+  bytes ring_id_hash = 8;
+  bytes policy_id_hash = 9;
+  bytes permission_hash = 10;
+  bytes resource_hash = 11;
+}
+
+// Full asset compliance policy (state-only, not in Merkle commitment).
+message AssetPolicy {
+  // AssetParams
+  bytes dk_pub = 1;
+  bytes threshold = 2;
+  repeated string allowed_channels = 3;
+  // RingData
+  string ring_id = 4;
+  bytes ring_pk = 5;
+  string policy_id = 6;
+  string permission = 7;
+  string resource = 8;
 }
 
 // Emitted when a user is registered in the compliance tree.
@@ -239,12 +269,23 @@ message EventAssetRegistered {
   bool is_regulated = 2;
   // The position in the asset tree (for regulated assets).
   uint64 position = 3;
-  // The indexed leaf data (for client sync).
+  // The indexed leaf data (for client sync, includes policy fields).
   IndexedLeafData indexed_leaf = 4;
   // The low leaf that was updated during IMT insertion.
   uint64 low_leaf_position = 5;
   // The updated low leaf data.
   IndexedLeafData updated_low_leaf = 6;
+  // Full policy for client storage/reference.
+  AssetPolicy asset_policy = 7;
+}
+
+// Compliance metadata embedded in ICS-20 transfer memo field.
+// Carries the spend ciphertext so the issuer can track regulated assets across IBC.
+message IbcComplianceMetadata {
+  // The compliance ciphertext from the funding spend.
+  bytes compliance_ciphertext = 1;
+  // The asset ID being transferred.
+  asset.v1.AssetId asset_id = 7;
 }
 
 // Emitted at end of block with the current compliance tree roots.

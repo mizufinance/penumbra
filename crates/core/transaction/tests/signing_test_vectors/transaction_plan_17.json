@@ -1,83 +1,30 @@
 {
   "actions": [
     {
-      "undelegate": {
-        "validatorIdentity": {
-          "ik": "Q/TxQ83PKzcQbXRmRmfS6ttaF5k+6rpWFVF2JBLijUc="
-        },
-        "unbondedAmount": {
-          "lo": "818162638380605974"
-        },
-        "delegationAmount": {
-          "lo": "538321733613293887"
-        },
-        "fromEpoch": {
-          "index": "387",
-          "startHeight": "387"
+      "positionClose": {
+        "positionId": {
+          "inner": "6SN1Zw+yIIQRmIMj+v7/E0XL0X/gJewRuLUiZ6qmzGU="
         }
       }
     },
     {
-      "undelegate": {
-        "validatorIdentity": {
-          "ik": "9Bcc79txRnZBL2YzewV/deh4zMwWwyjcyfTNGMDEN+A="
+      "proposalDepositClaim": {
+        "proposal": "319758335",
+        "depositAmount": {
+          "lo": "961482547752765934"
         },
-        "unbondedAmount": {
-          "lo": "711068872609166184"
-        },
-        "delegationAmount": {
-          "lo": "24857626616047110"
-        },
-        "fromEpoch": {
-          "index": "4164",
-          "startHeight": "4164"
-        }
-      }
-    },
-    {
-      "positionOpenPlan": {
-        "position": {
-          "phi": {
-            "component": {
-              "p": {
-                "lo": "291806478106505422"
-              },
-              "q": {
-                "lo": "223700962135599212"
-              }
-            },
-            "pair": {
-              "asset1": {
-                "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-              },
-              "asset2": {
-                "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-              }
-            }
-          },
-          "nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-          "state": {
-            "state": "POSITION_STATE_ENUM_CLOSED"
-          },
-          "reserves": {
-            "r1": {
-              "lo": "767455326788617541"
-            },
-            "r2": {
-              "lo": "26878444820998922"
-            }
-          },
-          "closeOnFill": true
+        "outcome": {
+          "passed": {}
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "4544744019",
-    "chainId": "dfkvdjgviuamsnvegl-83525075109",
+    "expiryHeight": "1298918606",
+    "chainId": "piqeihhrj-6454356684938351",
     "fee": {
       "amount": {
-        "lo": "232284636925347136"
+        "lo": "930970699252170446"
       }
     }
   }

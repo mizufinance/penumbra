@@ -21,7 +21,7 @@ pd network unsafe-reset-all
 
 | Command | Scope | When to Use |
 |---------|-------|-------------|
-| `cargo test -p <crate> --lib` | Single crate | Active development |
+| `cargo test --release -p <crate> --lib` | Single crate | Active development |
 | `just test` | All unit tests (nextest) | Before commit |
 | `just smoke` | End-to-end | Before PR (transaction changes) |
 | `just integration-pcli` | pcli tests | Before PR (CLI changes) |
@@ -35,13 +35,13 @@ Run tests for the specific crate you're modifying:
 
 ```bash
 # Unit tests for a crate
-cargo test -p penumbra-sdk-compliance --lib
+cargo test --release -p penumbra-sdk-compliance --lib
 
 # Specific test
-cargo test -p penumbra-sdk-compliance --lib test_name
+cargo test --release -p penumbra-sdk-compliance --lib test_name
 
 # With output
-cargo test -p penumbra-sdk-compliance --lib -- --nocapture
+cargo test --release -p penumbra-sdk-compliance --lib -- --nocapture
 ```
 
 ### 2. Before Commit
@@ -125,31 +125,114 @@ The smoke test:
 
 ```bash
 # Unit tests
-cargo test -p penumbra-sdk-compliance --lib
+cargo test --release -p penumbra-sdk-compliance --lib
 
 # Integration tests
-cargo test -p penumbra-sdk-app-tests --test compliance_full_flow
+cargo test --release -p penumbra-sdk-app-tests --test compliance_full_flow
 
 # Planner tests
-cargo test -p penumbra-sdk-view --lib planner::tests
+cargo test --release -p penumbra-sdk-view --lib planner::tests
 ```
 
-### Local Devnet Tests
+### Demo Scripts (Local Devnet)
 
-End-to-end tests on a local devnet:
+End-to-end demos on a local devnet with real Orbis nodes.
+
+#### Prerequisites
 
 ```bash
-# Prerequisites
-cargo build --release -p pd -p pcli
-chmod +x scripts/compliance-*.sh
+# Build Penumbra binaries
+cargo build --release -p pcli -p pd -p orbis-audit
 
-# Setup (creates wallets, registers assets/users)
-./scripts/compliance-setup.sh
+# Install external tools (from orbis-rs repo)
+#   orbis-node, cli-tool  — with decaf377 feature
+#   sourcehubd            — from sourcehub repo
+```
 
-# Test scenarios
-./scripts/compliance-test-regulated.sh      # Regulated transfers with scanner + local sync
-./scripts/compliance-test-unregulated.sh    # Unregulated transfers (BLACK_HOLE)
-./scripts/compliance-test-unregistered.sh   # Unregistered user sending regulated asset (should FAIL)
+#### Scripts Overview
+
+| Command | Requires | Description |
+|---------|----------|-------------|
+| `./scripts/setup-penumbra.sh` | — | Penumbra devnet: pd + cometbft + wallets (Terminal 1, stays running) |
+| `./scripts/setup-orbis.sh` | — | Orbis network: SourceHub + 3 MPC nodes (Terminal 2, stays running) |
+| `./scripts/setup-tx.sh` | Both setups running | DKG + registrations + transfers (run once) |
+| `./scripts/test-orbis-primitives.sh` | setup-orbis.sh | Orbis crypto tests (DKG, FROST, DLEQ, PRE) |
+| `./scripts/test-orbis-scanning.sh` | setup-tx.sh completed | Progressive disclosure demo (rerunnable) |
+
+All artifacts (logs, wallets, keys, scan data) go to `tmp/`.
+
+#### Infrastructure Setup
+
+Start each in a separate terminal:
+
+```bash
+# Terminal 1: Penumbra devnet (pd + cometbft + wallets)
+./scripts/setup-penumbra.sh
+
+# Terminal 2: Orbis network (SourceHub + 3 MPC nodes)
+./scripts/setup-orbis.sh
+```
+
+Both scripts stay in the foreground and clean up on Ctrl+C.
+
+#### Transaction Setup (run once)
+
+After both setups are ready:
+
+```bash
+./scripts/setup-tx.sh
+```
+
+This runs all chain-writing operations once:
+1. DKG to establish Orbis ring (threshold 2-of-3)
+2. Generates issuer detection key (DK)
+3. Registers regulated asset (threshold: 500 display units)
+4. Registers users (Alice, Bob, Charlie)
+5. Executes regulated transfers (including 1 flagged above threshold)
+6. Tests edge cases (unregistered user rejection, unregulated asset transfer)
+
+Keys are saved to `tmp/` so the scanning demo can reuse them.
+
+#### Scanning Demo (rerunnable)
+
+```bash
+./scripts/test-orbis-scanning.sh
+```
+
+Read-only analysis that can be re-run any number of times against the same chain:
+1. Scans chain and populates issuer database
+2. Shows **STATE 1**: detection-only (flagged transactions auto-decrypted via DK)
+3. Performs Orbis PRE for Alice & Bob (core tier) → **STATE 2**: amounts + self-addresses
+4. Performs Orbis PRE for Alice & Bob (extension tier) → **STATE 3**: counterparty addresses
+
+Charlie is deliberately not audited — his non-flagged transactions stay encrypted,
+demonstrating that PRE is selective per-user access.
+
+#### Orbis Crypto Tests
+
+```bash
+./scripts/test-orbis-primitives.sh
+```
+
+Runs the `orbis-test` binary against real Orbis nodes:
+- DKG, FROST threshold signatures, DLEQ proofs, 3-tier PRE
+- Includes negative tests (unauthorized users, invalid proofs)
+
+#### Quick Start
+
+```bash
+# Terminal 1
+./scripts/setup-penumbra.sh
+
+# Terminal 2
+./scripts/setup-orbis.sh
+
+# Terminal 3 (after both setups are ready)
+./scripts/setup-tx.sh
+./scripts/test-orbis-scanning.sh
+
+# Re-run scanning demo as many times as needed
+./scripts/test-orbis-scanning.sh
 ```
 
 ## Troubleshooting
@@ -244,6 +327,21 @@ The full smoke test suite requires:
 - `postgresql` - event indexing (optional, will warn)
 
 All provided by `nix develop`. Without nix, install manually or use the manual pd+cometbft method above.
+
+## orbis-sim (Test Harness)
+
+`orbis-sim` holds `sk_ring` directly for testing without a real Orbis network.
+
+```bash
+# Print ring_pk derived from the hardcoded sk_ring
+cargo run --release -p orbis-sim -- --derive-ring-pk
+
+# Pass sk_ring explicitly
+cargo run --release -p orbis-sim -- --sk-ring-hex <hex>
+
+# Derive b_d from a sender address
+cargo run --release -p orbis-sim -- --sender-address <address>
+```
 
 ## Tips
 

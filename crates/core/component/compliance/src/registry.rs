@@ -21,6 +21,19 @@ use crate::{
 /// Safe because trees are append-only.
 pub const MAX_ANCHOR_AGE_BLOCKS: u64 = 100;
 
+/// Maximum allowed drift between target_timestamp and block timestamp (±1 hour).
+pub const MAX_TIMESTAMP_DRIFT_SECS: u64 = 3600;
+
+/// Verify target_timestamp is within ±MAX_TIMESTAMP_DRIFT_SECS of block timestamp.
+pub fn check_timestamp_freshness(target_timestamp: u64, block_timestamp: u64) -> Result<()> {
+    let diff = target_timestamp.abs_diff(block_timestamp);
+    anyhow::ensure!(
+        diff <= MAX_TIMESTAMP_DRIFT_SECS,
+        "target_timestamp {target_timestamp} is {diff}s from block time {block_timestamp}, exceeds ±{MAX_TIMESTAMP_DRIFT_SECS}s"
+    );
+    Ok(())
+}
+
 // Re-export bincode for serialization
 use bincode;
 
@@ -214,6 +227,31 @@ pub trait ComplianceRegistryRead: StateRead {
         Ok(false)
     }
 
+    // ========== IBC Compliance Metadata ==========
+
+    /// Retrieve IBC compliance metadata for an ICS-20 transfer.
+    ///
+    /// Returns the compliance metadata that was bridged via ICS-20 from the sending chain.
+    async fn get_ibc_compliance_metadata(
+        &self,
+        channel_id: &str,
+        packet_seq: u64,
+    ) -> Result<Option<crate::ibc::IbcComplianceMetadata>> {
+        use penumbra_sdk_proto::core::component::compliance::v1 as pb;
+        let key = state_key::ibc_compliance_metadata(channel_id, packet_seq);
+        match self.get_raw(&key).await? {
+            Some(bytes) => {
+                let proto: pb::IbcComplianceMetadata =
+                    penumbra_sdk_proto::Message::decode(bytes.as_slice()).map_err(|e| {
+                        anyhow::anyhow!("failed to decode IBC compliance metadata: {e}")
+                    })?;
+                let meta = crate::ibc::IbcComplianceMetadata::from_proto_public(proto)?;
+                Ok(Some(meta))
+            }
+            None => Ok(None),
+        }
+    }
+
     // ========== Historical Anchor Validation ==========
 
     /// Check if a user tree anchor is valid (exists in historical records).
@@ -364,7 +402,7 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     async fn register_regulated_asset(
         &mut self,
         asset_id: asset::Id,
-        dk_pub: decaf377::Element,
+        policy: AssetPolicy,
     ) -> Result<Option<indexed_tree::InsertResult>> {
         let mut tree = self.get_asset_imt().await?;
 
@@ -374,12 +412,15 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
             return Ok(None);
         }
 
-        // Insert into the IMT and get full data (policy embedded in leaf)
-        let result = tree.insert_with_data(asset_id.0, dk_pub)?;
+        // Insert into the IMT with policy bound into the leaf
+        let result = tree.insert(asset_id.0, &policy)?;
 
         // Save the updated tree
         let tree_bytes = bincode::serialize(&tree)?;
         self.put_raw(state_key::asset_imt().to_string(), tree_bytes);
+
+        // Also store the full policy separately for reference/display
+        self.set_asset_policy(asset_id, policy);
 
         // Update the persisted asset count
         let new_count = tree.leaf_count();
@@ -451,6 +492,25 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
         Ok(())
     }
 
+    // ========== IBC Compliance Metadata Storage ==========
+
+    /// Store IBC compliance metadata for an ICS-20 transfer.
+    ///
+    /// Called during ICS-20 packet receive when the memo contains compliance data.
+    fn store_ibc_compliance_metadata(
+        &mut self,
+        channel_id: &str,
+        packet_seq: u64,
+        metadata: &crate::ibc::IbcComplianceMetadata,
+    ) {
+        use penumbra_sdk_proto::Message as _;
+        let key = state_key::ibc_compliance_metadata(channel_id, packet_seq);
+        let proto = metadata.to_proto_public();
+        let bytes = proto.encode_to_vec();
+        self.put_raw(key, bytes);
+        tracing::debug!(channel_id, packet_seq, "stored IBC compliance metadata");
+    }
+
     // ========== Pending Registrations for CompactBlock ==========
 
     /// Buffer a user registration event for inclusion in the CompactBlock.
@@ -520,7 +580,7 @@ mod tests {
     use crate::tree::QuadTree;
     use cnidarium::TempStorage;
     use decaf377::Fq;
-    use penumbra_sdk_keys::{keys::AddressComplianceKey, Address};
+    use penumbra_sdk_keys::Address;
     use penumbra_sdk_sct::component::clock::EpochManager;
 
     #[tokio::test]
@@ -530,11 +590,11 @@ mod tests {
         let mut state = cnidarium::StateDelta::new(snapshot);
 
         // Create a dummy compliance leaf
-        let leaf = ComplianceLeaf {
-            address: Address::dummy(&mut rand::thread_rng()),
-            key: AddressComplianceKey::new(decaf377::Element::GENERATOR),
-            asset_id: asset::Id(Fq::from(1u64)),
-        };
+        let leaf = ComplianceLeaf::new(
+            Address::dummy(&mut rand::thread_rng()),
+            asset::Id(Fq::from(1u64)),
+            Fq::from(0u64),
+        );
 
         // Add the leaf
         state.add_compliance_leaf(leaf.clone()).await.unwrap();
@@ -562,7 +622,14 @@ mod tests {
 
         // Register as regulated
         state
-            .register_regulated_asset(asset_id, decaf377::Element::GENERATOR)
+            .register_regulated_asset(
+                asset_id,
+                AssetPolicy::simple(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
             .await
             .unwrap();
 
@@ -587,13 +654,11 @@ mod tests {
 
         // Add multiple leaves
         for i in 0..5 {
-            let leaf = ComplianceLeaf {
-                address: Address::dummy(&mut rng),
-                key: AddressComplianceKey::new(
-                    decaf377::Element::GENERATOR * decaf377::Fr::from(i as u64 + 1),
-                ),
-                asset_id: asset::Id(Fq::from(i as u64)),
-            };
+            let leaf = ComplianceLeaf::new(
+                Address::dummy(&mut rng),
+                asset::Id(Fq::from(i as u64)),
+                Fq::from(0u64),
+            );
             state.add_compliance_leaf(leaf).await.unwrap();
         }
 
@@ -618,7 +683,14 @@ mod tests {
 
         // First registration should succeed
         state
-            .register_regulated_asset(asset_id, decaf377::Element::GENERATOR)
+            .register_regulated_asset(
+                asset_id,
+                AssetPolicy::simple(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
             .await
             .expect("First registration should succeed");
 
@@ -632,7 +704,14 @@ mod tests {
 
         // Second registration of same asset should be idempotent (succeed but no change)
         state
-            .register_regulated_asset(asset_id, decaf377::Element::GENERATOR)
+            .register_regulated_asset(
+                asset_id,
+                AssetPolicy::simple(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
             .await
             .expect("Duplicate registration should be idempotent");
 
@@ -654,11 +733,11 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Create a compliance leaf
-        let leaf = ComplianceLeaf {
-            address: Address::dummy(&mut rng),
-            key: AddressComplianceKey::new(decaf377::Element::GENERATOR),
-            asset_id: asset::Id(Fq::from(100u64)),
-        };
+        let leaf = ComplianceLeaf::new(
+            Address::dummy(&mut rng),
+            asset::Id(Fq::from(100u64)),
+            Fq::from(0u64),
+        );
 
         // Before adding, verification should fail
         let verified = state.verify_compliance_leaf(&leaf).await.unwrap();
@@ -672,11 +751,11 @@ mod tests {
         assert!(verified, "Leaf should be verified after being added");
 
         // Create a different leaf with same asset but different wallet
-        let different_leaf = ComplianceLeaf {
-            address: Address::dummy(&mut rng),
-            key: AddressComplianceKey::new(decaf377::Element::GENERATOR * decaf377::Fr::from(2u64)),
-            asset_id: asset::Id(Fq::from(100u64)),
-        };
+        let different_leaf = ComplianceLeaf::new(
+            Address::dummy(&mut rng),
+            asset::Id(Fq::from(100u64)),
+            Fq::from(0u64),
+        );
 
         // Different leaf should not verify
         let verified = state.verify_compliance_leaf(&different_leaf).await.unwrap();
@@ -688,11 +767,11 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Create a compliance leaf
-        let original_leaf = ComplianceLeaf {
-            address: Address::dummy(&mut rng),
-            key: AddressComplianceKey::new(decaf377::Element::GENERATOR),
-            asset_id: asset::Id(Fq::from(200u64)),
-        };
+        let original_leaf = ComplianceLeaf::new(
+            Address::dummy(&mut rng),
+            asset::Id(Fq::from(200u64)),
+            Fq::from(0u64),
+        );
 
         // Export to JSON
         let json = original_leaf
@@ -729,11 +808,11 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // User creates their compliance leaf (private)
-        let user_leaf = ComplianceLeaf {
-            address: Address::dummy(&mut rng),
-            key: AddressComplianceKey::new(decaf377::Element::GENERATOR),
-            asset_id: asset::Id(Fq::from(300u64)),
-        };
+        let user_leaf = ComplianceLeaf::new(
+            Address::dummy(&mut rng),
+            asset::Id(Fq::from(300u64)),
+            Fq::from(0u64),
+        );
 
         // User registers on-chain
         state.add_compliance_leaf(user_leaf.clone()).await.unwrap();
@@ -751,12 +830,9 @@ mod tests {
             "Issuer should be able to verify the shared leaf exists on-chain"
         );
 
-        // Issuer can now use the received_leaf.key (ACK) to encrypt compliance data
-        assert_eq!(
-            user_leaf.key.inner(),
-            received_leaf.key.inner(),
-            "ACK should be preserved through sharing"
-        );
+        // Leaf fields are preserved through sharing
+        assert_eq!(user_leaf.address, received_leaf.address);
+        assert_eq!(user_leaf.asset_id, received_leaf.asset_id);
     }
 
     #[tokio::test]
@@ -770,13 +846,11 @@ mod tests {
         // Add multiple leaves
         let mut leaves = Vec::new();
         for i in 0..5u64 {
-            let leaf = ComplianceLeaf {
-                address: Address::dummy(&mut rng),
-                key: AddressComplianceKey::new(
-                    decaf377::Element::GENERATOR * decaf377::Fr::from(i + 1),
-                ),
-                asset_id: asset::Id(Fq::from(i)),
-            };
+            let leaf = ComplianceLeaf::new(
+                Address::dummy(&mut rng),
+                asset::Id(Fq::from(i)),
+                Fq::from(0u64),
+            );
             state.add_compliance_leaf(leaf.clone()).await.unwrap();
             leaves.push(leaf);
         }
@@ -788,13 +862,11 @@ mod tests {
         }
 
         // A new leaf not in the tree should not verify
-        let new_leaf = ComplianceLeaf {
-            address: Address::dummy(&mut rng),
-            key: AddressComplianceKey::new(
-                decaf377::Element::GENERATOR * decaf377::Fr::from(999u64),
-            ),
-            asset_id: asset::Id(Fq::from(999u64)),
-        };
+        let new_leaf = ComplianceLeaf::new(
+            Address::dummy(&mut rng),
+            asset::Id(Fq::from(999u64)),
+            Fq::from(0u64),
+        );
         let verified = state.verify_compliance_leaf(&new_leaf).await.unwrap();
         assert!(!verified, "Non-registered leaf should not verify");
     }
@@ -809,7 +881,14 @@ mod tests {
         // Bridged asset (USDC) - regulated
         let usdc_asset_id = asset::Id(Fq::from(12345u64));
         state
-            .register_regulated_asset(usdc_asset_id, decaf377::Element::GENERATOR)
+            .register_regulated_asset(
+                usdc_asset_id,
+                AssetPolicy::simple(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
             .await
             .unwrap();
 
@@ -830,28 +909,9 @@ mod tests {
 
         // Multiple wallets for same user
         let wallet1 = Address::dummy(&mut rng);
-        let ack1 =
-            AddressComplianceKey::new(decaf377::Element::GENERATOR * decaf377::Fr::from(101u64));
-        let leaf1 = ComplianceLeaf {
-            address: wallet1.clone(),
-            key: ack1,
-            asset_id: usdc_asset_id,
-        };
-
-        let leaf2 = ComplianceLeaf {
-            address: Address::dummy(&mut rng),
-            key: AddressComplianceKey::new(
-                decaf377::Element::GENERATOR * decaf377::Fr::from(102u64),
-            ),
-            asset_id: usdc_asset_id,
-        };
-        let leaf3 = ComplianceLeaf {
-            address: Address::dummy(&mut rng),
-            key: AddressComplianceKey::new(
-                decaf377::Element::GENERATOR * decaf377::Fr::from(103u64),
-            ),
-            asset_id: usdc_asset_id,
-        };
+        let leaf1 = ComplianceLeaf::new(wallet1.clone(), usdc_asset_id, Fq::from(0u64));
+        let leaf2 = ComplianceLeaf::new(Address::dummy(&mut rng), usdc_asset_id, Fq::from(0u64));
+        let leaf3 = ComplianceLeaf::new(Address::dummy(&mut rng), usdc_asset_id, Fq::from(0u64));
 
         state.add_compliance_leaf(leaf1.clone()).await.unwrap();
         state.add_compliance_leaf(leaf2.clone()).await.unwrap();
@@ -865,7 +925,7 @@ mod tests {
         let shared_json = leaf1.to_json().unwrap();
         let received_leaf = ComplianceLeaf::from_json(&shared_json).unwrap();
         assert!(state.verify_compliance_leaf(&received_leaf).await.unwrap());
-        assert_eq!(received_leaf.key.inner(), ack1.inner());
+        assert_eq!(received_leaf.address, leaf1.address);
 
         // Query unregistered asset - should get non-membership proof
         let unknown_asset = asset::Id(Fq::from(99999u64));
@@ -888,16 +948,17 @@ mod tests {
         // Same wallet registered for multiple assets
         let dai_asset_id = asset::Id(Fq::from(67890u64));
         state
-            .register_regulated_asset(dai_asset_id, decaf377::Element::GENERATOR)
+            .register_regulated_asset(
+                dai_asset_id,
+                AssetPolicy::simple(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
             .await
             .unwrap();
-        let leaf1_dai = ComplianceLeaf {
-            address: wallet1,
-            key: AddressComplianceKey::new(
-                decaf377::Element::GENERATOR * decaf377::Fr::from(201u64),
-            ),
-            asset_id: dai_asset_id,
-        };
+        let leaf1_dai = ComplianceLeaf::new(wallet1, dai_asset_id, Fq::from(0u64));
         state.add_compliance_leaf(leaf1_dai.clone()).await.unwrap();
         assert!(state.verify_compliance_leaf(&leaf1).await.unwrap());
         assert!(state.verify_compliance_leaf(&leaf1_dai).await.unwrap());
@@ -916,27 +977,9 @@ mod tests {
         let usdc = asset::Id(Fq::from(12345u64));
         let dai = asset::Id(Fq::from(67890u64));
 
-        let leaf1 = ComplianceLeaf {
-            address: wallet1.clone(),
-            key: AddressComplianceKey::new(
-                decaf377::Element::GENERATOR * decaf377::Fr::from(101u64),
-            ),
-            asset_id: usdc,
-        };
-        let leaf2 = ComplianceLeaf {
-            address: wallet1.clone(),
-            key: AddressComplianceKey::new(
-                decaf377::Element::GENERATOR * decaf377::Fr::from(102u64),
-            ),
-            asset_id: dai,
-        };
-        let leaf3 = ComplianceLeaf {
-            address: wallet2.clone(),
-            key: AddressComplianceKey::new(
-                decaf377::Element::GENERATOR * decaf377::Fr::from(103u64),
-            ),
-            asset_id: usdc,
-        };
+        let leaf1 = ComplianceLeaf::new(wallet1.clone(), usdc, Fq::from(0u64));
+        let leaf2 = ComplianceLeaf::new(wallet1.clone(), dai, Fq::from(0u64));
+        let leaf3 = ComplianceLeaf::new(wallet2.clone(), usdc, Fq::from(0u64));
 
         state.add_compliance_leaf(leaf1.clone()).await.unwrap();
         state.add_compliance_leaf(leaf2.clone()).await.unwrap();
@@ -994,15 +1037,9 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         let wallet = Address::dummy(&mut rng);
-        let ack =
-            AddressComplianceKey::new(decaf377::Element::GENERATOR * decaf377::Fr::from(42u64));
         let asset_id = asset::Id(Fq::from(12345u64));
 
-        let original_leaf = ComplianceLeaf {
-            address: wallet.clone(),
-            key: ack,
-            asset_id,
-        };
+        let original_leaf = ComplianceLeaf::new(wallet.clone(), asset_id, Fq::from(0u64));
         state
             .add_compliance_leaf(original_leaf.clone())
             .await
@@ -1013,7 +1050,6 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(original_leaf.key.inner(), fetched_leaf.key.inner());
         assert_eq!(original_leaf.address, fetched_leaf.address);
         assert_eq!(original_leaf.asset_id, fetched_leaf.asset_id);
         assert_eq!(original_leaf.commit().0, fetched_leaf.commit().0);
@@ -1036,7 +1072,14 @@ mod tests {
 
         // Register regulated asset
         state
-            .register_regulated_asset(asset_id, decaf377::Element::GENERATOR)
+            .register_regulated_asset(
+                asset_id,
+                AssetPolicy::simple(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
             .await
             .unwrap();
 
@@ -1065,11 +1108,25 @@ mod tests {
 
         // Register twice - should be idempotent
         state
-            .register_regulated_asset(asset_id, decaf377::Element::GENERATOR)
+            .register_regulated_asset(
+                asset_id,
+                AssetPolicy::simple(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
             .await
             .unwrap();
         state
-            .register_regulated_asset(asset_id, decaf377::Element::GENERATOR)
+            .register_regulated_asset(
+                asset_id,
+                AssetPolicy::simple(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
             .await
             .unwrap();
 
@@ -1085,7 +1142,14 @@ mod tests {
 
         let asset_id = asset::Id(Fq::from(12345u64));
         state
-            .register_regulated_asset(asset_id, decaf377::Element::GENERATOR)
+            .register_regulated_asset(
+                asset_id,
+                AssetPolicy::simple(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
             .await
             .unwrap();
 
@@ -1118,7 +1182,14 @@ mod tests {
         // Register one asset
         let regulated_asset = asset::Id(Fq::from(100u64));
         state
-            .register_regulated_asset(regulated_asset, decaf377::Element::GENERATOR)
+            .register_regulated_asset(
+                regulated_asset,
+                AssetPolicy::simple(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
             .await
             .unwrap();
 
@@ -1151,7 +1222,14 @@ mod tests {
 
         for asset_id in &assets {
             state
-                .register_regulated_asset(*asset_id, decaf377::Element::GENERATOR)
+                .register_regulated_asset(
+                    *asset_id,
+                    AssetPolicy::simple(
+                        decaf377::Element::GENERATOR,
+                        u128::MAX,
+                        decaf377::Element::GENERATOR,
+                    ),
+                )
                 .await
                 .unwrap();
         }
@@ -1187,14 +1265,21 @@ mod tests {
         state.put_block_height(1);
 
         // Add a user and asset
-        let leaf = ComplianceLeaf {
-            address: Address::dummy(&mut rng),
-            key: AddressComplianceKey::new(decaf377::Element::GENERATOR),
-            asset_id: asset::Id(Fq::from(100u64)),
-        };
+        let leaf = ComplianceLeaf::new(
+            Address::dummy(&mut rng),
+            asset::Id(Fq::from(100u64)),
+            Fq::from(0u64),
+        );
         state.add_compliance_leaf(leaf).await.unwrap();
         state
-            .register_regulated_asset(asset::Id(Fq::from(200u64)), decaf377::Element::GENERATOR)
+            .register_regulated_asset(
+                asset::Id(Fq::from(200u64)),
+                AssetPolicy::simple(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
             .await
             .unwrap();
 
@@ -1276,11 +1361,11 @@ mod tests {
 
         // Add a user and record at height 2
         state.put_block_height(2);
-        let leaf = ComplianceLeaf {
-            address: Address::dummy(&mut rng),
-            key: AddressComplianceKey::new(decaf377::Element::GENERATOR),
-            asset_id: asset::Id(Fq::from(100u64)),
-        };
+        let leaf = ComplianceLeaf::new(
+            Address::dummy(&mut rng),
+            asset::Id(Fq::from(100u64)),
+            Fq::from(0u64),
+        );
         state.add_compliance_leaf(leaf).await.unwrap();
         state.record_compliance_anchors(2).await.unwrap();
         let anchor_at_2 = state.get_user_tree_root().await.unwrap();
@@ -1326,11 +1411,11 @@ mod tests {
         let old_asset_anchor = state.get_asset_imt_root().await.unwrap();
 
         // Add something to change the tree roots (so old anchors remain distinct)
-        let leaf = ComplianceLeaf {
-            address: Address::dummy(&mut rng),
-            key: AddressComplianceKey::new(decaf377::Element::GENERATOR),
-            asset_id: asset::Id(Fq::from(9999u64)),
-        };
+        let leaf = ComplianceLeaf::new(
+            Address::dummy(&mut rng),
+            asset::Id(Fq::from(9999u64)),
+            Fq::from(0u64),
+        );
         state.add_compliance_leaf(leaf).await.unwrap();
 
         // Advance to height just past the window (MAX_ANCHOR_AGE_BLOCKS + 2)
@@ -1404,7 +1489,14 @@ mod tests {
         state.put_block_height(100);
         let usdc_id = asset::Id(Fq::from(12345u64));
         state
-            .register_regulated_asset(usdc_id, decaf377::Element::GENERATOR)
+            .register_regulated_asset(
+                usdc_id,
+                AssetPolicy::simple(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
             .await
             .unwrap();
         state.record_compliance_anchors(100).await.unwrap();
@@ -1446,5 +1538,62 @@ mod tests {
             .validate_compliance_anchors(&recent_user_anchor, &recent_asset_anchor)
             .await
             .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_register_asset_with_custom_threshold() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        let asset_id = asset::Id(Fq::from(555u64));
+        let dk_pub = decaf377::Element::GENERATOR;
+
+        // Register with threshold=500
+        state
+            .register_regulated_asset(
+                asset_id,
+                AssetPolicy::simple(dk_pub, 500u128, decaf377::Element::GENERATOR),
+            )
+            .await
+            .unwrap();
+
+        // Read back proof data - asset must be regulated
+        let proof = state.get_asset_proof_data(asset_id).await.unwrap();
+        assert!(proof.is_regulated);
+
+        // Policy is stored separately via set_asset_policy
+        let policy = state
+            .get_asset_policy(asset_id)
+            .await
+            .unwrap()
+            .expect("policy should be set after registration");
+        assert_eq!(
+            policy.params.threshold, 500u128,
+            "threshold should survive round-trip"
+        );
+        assert_eq!(policy.params.dk_pub, dk_pub);
+    }
+
+    #[test]
+    fn timestamp_freshness_exact_boundary() {
+        assert!(check_timestamp_freshness(1000, 1000 + 3600).is_ok());
+        assert!(check_timestamp_freshness(1000 + 3600, 1000).is_ok());
+    }
+
+    #[test]
+    fn timestamp_freshness_inside_window() {
+        assert!(check_timestamp_freshness(1000, 1000 + 3599).is_ok());
+    }
+
+    #[test]
+    fn timestamp_freshness_outside_window() {
+        assert!(check_timestamp_freshness(1000, 1000 + 3601).is_err());
+        assert!(check_timestamp_freshness(1000 + 3601, 1000).is_err());
+    }
+
+    #[test]
+    fn timestamp_freshness_equal() {
+        assert!(check_timestamp_freshness(1000, 1000).is_ok());
     }
 }

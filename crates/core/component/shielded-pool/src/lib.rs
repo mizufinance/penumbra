@@ -31,7 +31,7 @@ pub use backref::{Backref, EncryptedBackref};
 
 pub mod compliance_helpers;
 pub use compliance_helpers::{
-    generate_compliance_details, timestamp_to_day_index, GeneratedComplianceData,
+    generate_compliance_details_output, generate_compliance_details_spend, GeneratedComplianceData,
 };
 
 pub mod proof_error;

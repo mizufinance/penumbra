@@ -431,17 +431,12 @@ pub struct SpendBody {
     /// Packed in the circuit as 5 field elements of 31 bytes each.
     #[prost(bytes = "vec", tag = "8")]
     pub compliance_ciphertext: ::prost::alloc::vec::Vec<u8>,
-    /// Target timestamp for compliance verification (Unix timestamp in seconds).
+    /// Target timestamp for compliance verification (Unix UTC seconds).
     #[prost(uint64, tag = "9")]
     pub target_timestamp: u64,
     /// Blinded sender leaf hash (for binding with output circuit).
     #[prost(message, optional, tag = "10")]
     pub sender_leaf_hash: ::core::option::Option<
-        super::super::super::super::crypto::tct::v1::StateCommitment,
-    >,
-    /// Blinded counterparty (receiver) leaf hash (for binding with output circuit).
-    #[prost(message, optional, tag = "11")]
-    pub counterparty_leaf_hash: ::core::option::Option<
         super::super::super::super::crypto::tct::v1::StateCommitment,
     >,
     /// Compliance tree anchor (user tree root) used during proof generation.
@@ -454,6 +449,9 @@ pub struct SpendBody {
     pub asset_anchor: ::core::option::Option<
         super::super::super::super::crypto::tct::v1::StateCommitment,
     >,
+    /// DLEQ proof (c, s) for Orbis policy binding. 64 bytes (2 × 32-byte LE Fr scalars).
+    #[prost(bytes = "vec", tag = "14")]
+    pub dleq_proof: ::prost::alloc::vec::Vec<u8>,
 }
 impl ::prost::Name for SpendBody {
     const NAME: &'static str = "SpendBody";
@@ -542,10 +540,11 @@ pub struct SpendPlan {
     /// The second blinding factor to use for the ZK spend proof.
     #[prost(bytes = "vec", tag = "6")]
     pub proof_blinding_s: ::prost::alloc::vec::Vec<u8>,
-    /// Target timestamp for compliance key derivation (Unix timestamp in seconds).
+    /// Target timestamp for compliance verification (Unix UTC seconds).
     #[prost(uint64, tag = "7")]
     pub target_timestamp: u64,
-    /// Precomputed compliance ciphertext (256 bytes: 32 EPK + 224 payload, empty when not yet generated).
+    /// Precomputed compliance ciphertext (352 bytes: 32 EPK + 32 EPK_G + 32 C2_core + 32 C2_ext + 224 payload).
+    /// Empty when not yet generated. C2 fields are encrypted seeds for Orbis PRE.
     #[prost(bytes = "vec", tag = "8")]
     pub compliance_ciphertext: ::prost::alloc::vec::Vec<u8>,
     /// Whether the asset is regulated (requires compliance).
@@ -556,19 +555,9 @@ pub struct SpendPlan {
     pub compliance_leaf: ::core::option::Option<
         super::super::compliance::v1::ComplianceLeaf,
     >,
-    /// Counterparty compliance leaf (recipient's registry entry).
-    #[prost(message, optional, tag = "11")]
-    pub counterparty_leaf: ::core::option::Option<
-        super::super::compliance::v1::ComplianceLeaf,
-    >,
     /// Ephemeral secret used in compliance ciphertext encryption (needed by circuit).
     #[prost(bytes = "vec", tag = "12")]
     pub compliance_ephemeral_secret: ::prost::alloc::vec::Vec<u8>,
-    /// Counterparty address (the recipient of this spend).
-    #[prost(message, optional, tag = "13")]
-    pub counterparty_address: ::core::option::Option<
-        super::super::super::keys::v1::Address,
-    >,
     /// Shared transaction blinding nonce (same for spend and output in one transaction).
     #[prost(bytes = "vec", tag = "14")]
     pub tx_blinding_nonce: ::prost::alloc::vec::Vec<u8>,
@@ -605,6 +594,27 @@ pub struct SpendPlan {
     /// Computed from threshold comparison and passed to circuit as witness.
     #[prost(bool, tag = "22")]
     pub is_flagged: bool,
+    /// DLEQ proof salt (random Fq used in metadata hash).
+    #[prost(bytes = "vec", tag = "23")]
+    pub salt: ::prost::alloc::vec::Vec<u8>,
+    /// DLEQ proof blinding factor (random Fr).
+    #[prost(bytes = "vec", tag = "24")]
+    pub dleq_k: ::prost::alloc::vec::Vec<u8>,
+    /// DLEQ proof challenge (Fq).
+    #[prost(bytes = "vec", tag = "25")]
+    pub dleq_c: ::prost::alloc::vec::Vec<u8>,
+    /// DLEQ proof response (Fq).
+    #[prost(bytes = "vec", tag = "26")]
+    pub dleq_s: ::prost::alloc::vec::Vec<u8>,
+    /// Ring public key used for compliance encryption.
+    #[prost(bytes = "vec", tag = "27")]
+    pub ring_pk: ::prost::alloc::vec::Vec<u8>,
+    /// Issuer detection key public component.
+    #[prost(bytes = "vec", tag = "28")]
+    pub dk_pub: ::prost::alloc::vec::Vec<u8>,
+    /// Threshold for flagging (in base units).
+    #[prost(bytes = "vec", tag = "29")]
+    pub threshold: ::prost::alloc::vec::Vec<u8>,
 }
 impl ::prost::Name for SpendPlan {
     const NAME: &'static str = "SpendPlan";
@@ -661,14 +671,9 @@ pub struct OutputBody {
     /// Sender address is captured in the Spend circuit.
     #[prost(bytes = "vec", tag = "5")]
     pub compliance_ciphertext: ::prost::alloc::vec::Vec<u8>,
-    /// Target timestamp for compliance verification (Unix timestamp in seconds).
+    /// Target timestamp for compliance verification (Unix UTC seconds).
     #[prost(uint64, tag = "6")]
     pub target_timestamp: u64,
-    /// Blinded receiver leaf hash (for binding with spend circuit).
-    #[prost(message, optional, tag = "7")]
-    pub receiver_leaf_hash: ::core::option::Option<
-        super::super::super::super::crypto::tct::v1::StateCommitment,
-    >,
     /// Blinded counterparty (sender) leaf hash (for binding with spend circuit).
     #[prost(message, optional, tag = "8")]
     pub counterparty_leaf_hash: ::core::option::Option<
@@ -692,6 +697,15 @@ pub struct OutputBody {
     /// u128::MAX if no policy exists (never flag).
     #[prost(bytes = "vec", tag = "12")]
     pub threshold: ::prost::alloc::vec::Vec<u8>,
+    /// Sender-encrypted field: recipient (gd, pk) and amount encrypted to sender's ack_orbis.
+    /// 96 bytes = 3 × 32 (3 Fq elements). Enables sender to verify output details.
+    /// Uses deterministic seed from ECDH with sender's ack_orbis (same r as compliance EPK).
+    #[prost(bytes = "vec", tag = "13")]
+    pub sender_ciphertext: ::prost::alloc::vec::Vec<u8>,
+    /// DLEQ proofs (c_1, s_1, c_2, s_2, c_3, s_3) for Orbis policy binding.
+    /// 192 bytes (6 × 32-byte LE Fr scalars, one (c,s) pair per tier).
+    #[prost(bytes = "vec", tag = "14")]
+    pub dleq_proofs: ::prost::alloc::vec::Vec<u8>,
 }
 impl ::prost::Name for OutputBody {
     const NAME: &'static str = "OutputBody";
@@ -784,10 +798,11 @@ pub struct OutputPlan {
     /// The second blinding factor to use for the ZK output proof.
     #[prost(bytes = "vec", tag = "6")]
     pub proof_blinding_s: ::prost::alloc::vec::Vec<u8>,
-    /// Target timestamp for compliance key derivation (Unix timestamp in seconds).
+    /// Target timestamp for compliance verification (Unix UTC seconds).
     #[prost(uint64, tag = "7")]
     pub target_timestamp: u64,
-    /// Precomputed compliance ciphertext (256 bytes: 32 EPK + 224 payload, empty when not yet generated).
+    /// Precomputed compliance ciphertext (352 bytes: 32 EPK + 32 EPK_G + 32 C2_core + 32 C2_ext + 224 payload).
+    /// Empty when not yet generated. C2 fields are encrypted seeds for Orbis PRE.
     #[prost(bytes = "vec", tag = "8")]
     pub compliance_ciphertext: ::prost::alloc::vec::Vec<u8>,
     /// Whether the asset is regulated (requires compliance).
@@ -843,6 +858,51 @@ pub struct OutputPlan {
     pub asset_indexed_leaf: ::core::option::Option<
         super::super::compliance::v1::IndexedLeafData,
     >,
+    /// Sender-encrypted ciphertext (96 bytes = 3 × 32, 3 Fq elements).
+    /// Encrypts (recipient_gd, recipient_pk, amount) to sender's ack_orbis.
+    #[prost(bytes = "vec", tag = "22")]
+    pub sender_ciphertext: ::prost::alloc::vec::Vec<u8>,
+    /// DLEQ proof salt (random Fq used in metadata hash).
+    #[prost(bytes = "vec", tag = "23")]
+    pub salt: ::prost::alloc::vec::Vec<u8>,
+    /// DLEQ proof blinding factors (random Fr, one per EPK tier).
+    #[prost(bytes = "vec", tag = "24")]
+    pub dleq_k_1: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "25")]
+    pub dleq_k_2: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "26")]
+    pub dleq_k_3: ::prost::alloc::vec::Vec<u8>,
+    /// DLEQ proof challenges and responses (Fq pairs, one per tier).
+    #[prost(bytes = "vec", tag = "27")]
+    pub dleq_c_1: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "28")]
+    pub dleq_s_1: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "29")]
+    pub dleq_c_2: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "30")]
+    pub dleq_s_2: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "31")]
+    pub dleq_c_3: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "32")]
+    pub dleq_s_3: ::prost::alloc::vec::Vec<u8>,
+    /// Ring public key used for compliance encryption.
+    #[prost(bytes = "vec", tag = "33")]
+    pub ring_pk: ::prost::alloc::vec::Vec<u8>,
+    /// Issuer detection key public component.
+    #[prost(bytes = "vec", tag = "34")]
+    pub dk_pub: ::prost::alloc::vec::Vec<u8>,
+    /// Threshold for flagging (in base units).
+    #[prost(bytes = "vec", tag = "35")]
+    pub threshold_bytes: ::prost::alloc::vec::Vec<u8>,
+    /// Whether this output is flagged (amount >= threshold).
+    #[prost(bool, tag = "36")]
+    pub is_flagged: bool,
+    /// Ephemeral secret for extension tier (r_2, needed by circuit).
+    #[prost(bytes = "vec", tag = "37")]
+    pub r_2: ::prost::alloc::vec::Vec<u8>,
+    /// Ephemeral secret for spend extension tier (r_3, needed by circuit).
+    #[prost(bytes = "vec", tag = "38")]
+    pub r_3: ::prost::alloc::vec::Vec<u8>,
 }
 impl ::prost::Name for OutputPlan {
     const NAME: &'static str = "OutputPlan";

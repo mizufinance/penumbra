@@ -1,57 +1,113 @@
 {
   "actions": [
     {
-      "validatorDefinition": {
-        "validator": {
-          "identityKey": {
-            "ik": "vkIWqsNseZR7axKCHnd0fMzuFKFmU5/weBAay0/VXwM="
+      "actionDutchAuctionSchedule": {
+        "description": {
+          "input": {
+            "amount": {
+              "lo": "240510322104177350"
+            },
+            "assetId": {
+              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+            }
           },
-          "consensusKey": "+yyXbuBNramKEEbwT7pAOCrDLO70U75tGW54JPvco38=",
-          "name": "test validator",
-          "enabled": true,
-          "governanceKey": {
-            "gk": "vkIWqsNseZR7axKCHnd0fMzuFKFmU5/weBAay0/VXwM="
-          }
-        },
-        "authSig": "/OxwqDr+GEw3cqYhqDwKqPwRpgEJS6UqLSV2Ry8pEATUouTBvjENe7MrBNq8JrMdfK2pyuH53D1++5NGo5bYAg=="
-      }
-    },
-    {
-      "validatorVote": {
-        "body": {
-          "proposal": "341219418",
-          "vote": {
-            "vote": "VOTE_NO"
+          "outputId": {
+            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
           },
-          "identityKey": {
-            "ik": "+9WiIN5g1KAIB46giCshcphmNwe4S0df192ON1Gx/iI="
+          "maxOutput": {
+            "lo": "41317412134554143"
           },
-          "governanceKey": {
-            "gk": "qiHaQ/dFHTvq5MDa99fx++4+463RpLRJRjq7CSICHgw="
+          "minOutput": {
+            "lo": "800525159463132802"
           },
-          "reason": {
-            "reason": "fA90b2O7o"
-          }
-        },
-        "authSig": {
-          "inner": "jMyGTpGZqIPuGUUys+xQLfrx/TUqJE2bqckJAaSadAhjel5d0cy2h4unXsohMhLf4RXPpqNp2N9iFjF9eK5IAg=="
+          "startHeight": "505778540",
+          "endHeight": "505778541",
+          "stepCount": "379954253",
+          "nonce": "TP5IVBJqlNgYGiQc/Nfd13r9sej+t8BksUAqIsWSxP4="
         }
       }
     },
     {
-      "actionDutchAuctionEnd": {
-        "auctionId": {
-          "inner": "S6iysTHYJT0XYpB9lp4+A7W0Qtj0jxxwzdoIeagnvq8="
+      "positionOpenPlan": {
+        "position": {
+          "phi": {
+            "component": {
+              "p": {
+                "lo": "348917565097860607"
+              },
+              "q": {
+                "lo": "944342336692337878"
+              }
+            },
+            "pair": {
+              "asset1": {
+                "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+              },
+              "asset2": {
+                "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+              }
+            }
+          },
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "state": {
+            "state": "POSITION_STATE_ENUM_OPENED"
+          },
+          "reserves": {
+            "r1": {
+              "lo": "111164846750076306"
+            },
+            "r2": {
+              "lo": "890412371415303187"
+            }
+          },
+          "closeOnFill": true
+        }
+      }
+    },
+    {
+      "positionOpenPlan": {
+        "position": {
+          "phi": {
+            "component": {
+              "p": {
+                "lo": "121789357630809783"
+              },
+              "q": {
+                "lo": "366905072653927269"
+              }
+            },
+            "pair": {
+              "asset1": {
+                "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+              },
+              "asset2": {
+                "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+              }
+            }
+          },
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "state": {
+            "state": "POSITION_STATE_ENUM_CLOSED"
+          },
+          "reserves": {
+            "r1": {
+              "lo": "708334806470508579"
+            },
+            "r2": {
+              "lo": "50806151373392202"
+            }
+          },
+          "closeOnFill": true
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "6266089704",
-    "chainId": "btrsgobvhjhzmxfyquvs-566567614142829265402",
+    "expiryHeight": "9685238818",
+    "chainId": "ijioh-066787593553714181557607624",
     "fee": {
       "amount": {
-        "lo": "963615733470452442"
+        "lo": "610056452234349368"
       }
     }
   }

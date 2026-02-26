@@ -134,7 +134,9 @@ tracing-subscriber               = { workspace = true }
 url                              = { workspace = true }
 poseidon377                      = { workspace = true }
 ark-groth16                      = { workspace = true }
+ark-serialize                    = { workspace = true }
 ark-snark                        = { workspace = true }
+sha2                             = { workspace = true }
 
 # Enable the feature flags to get proving keys when running tests.
 [dev-dependencies.penumbra-sdk-proof-params]

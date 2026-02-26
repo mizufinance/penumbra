@@ -41,7 +41,7 @@ pub(crate) trait EvictionManager: StateWrite {
     /// of positions per pair is 2*N_max.
     ///
     /// ## Diagram
-    ///
+    /// ```text
     ///                                                      Q_1: A -> B
     ///    ╔════════════╦━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
     ///    ║  Bottom M  ┃  M+1  │  M+2  │    . . .       │  N-1  │   N   ┃
@@ -60,7 +60,7 @@ pub(crate) trait EvictionManager: StateWrite {
     ///           ▲▲▲▲△△△▲▲▲▲▲ bottom M positions overlap
     ///                        k times where 0 <= k <= M
     ///                        for N < 2*N_max
-    ///
+    /// ```
     #[instrument(skip_all, err, level = "trace")]
     async fn evict_positions(&mut self) -> Result<()> {
         let hot_pairs: BTreeSet<TradingPair> = self.get_active_trading_pairs_in_block();

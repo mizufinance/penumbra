@@ -98,8 +98,8 @@ impl<T: StateWrite + ?Sized> StateWriteExt for T {}
 /// Internal trait implementing value flow tracking.
 /// # Overview
 ///
-///                                                               
-///                                                  ║            
+/// ```text
+///                                                  ║
 ///                                                  ║            
 ///                                           User initiated      
 ///      Auction                                     ║            
@@ -129,7 +129,8 @@ impl<T: StateWrite + ?Sized> StateWriteExt for T {}
 ///                                              withdraw        
 ///                                                  ║            
 ///                                                  ║            
-///                                                  ║            
+///                                                  ║
+/// ```
 ///
 pub(crate) trait AuctionCircuitBreaker: StateWrite {
     /// Credit a deposit into the auction component.

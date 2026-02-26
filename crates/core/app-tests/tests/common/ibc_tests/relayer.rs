@@ -1491,27 +1491,21 @@ impl MockRelayer {
         };
         // There will need to be `Spend` and `Output` actions
         // within the transaction in order for it to balance
-        let mut spend_plan = SpendPlan::new(
+        let spend_plan = SpendPlan::new(
             &mut rand_chacha::ChaChaRng::seed_from_u64(1312),
             chain_a_note.clone(),
             chain_a_client
                 .position(chain_a_note.commit())
                 .expect("note should be in mock client's tree"),
         );
-        // Override target_timestamp to match the test chain's timestamp
-        // (SpendPlan::new uses SystemTime::now() which is wrong for historical test chains)
-        let chain_timestamp_secs = self.chain_a_ibc.node.timestamp().unix_timestamp() as u64;
-        spend_plan.target_timestamp = chain_timestamp_secs;
 
-        let mut output_plan = OutputPlan::new(
+        let output_plan = OutputPlan::new(
             &mut rand_chacha::ChaChaRng::seed_from_u64(1312),
             // half the note is being withdrawn, so we can use `transfer_value` both for the withdrawal action
             // and the change output
             transfer_value.clone(),
             chain_a_client.fvk.payment_address(AddressIndex::new(0)).0,
         );
-        // Override target_timestamp to match the test chain's timestamp
-        output_plan.target_timestamp = chain_timestamp_secs;
 
         let mut plan = {
             let ics20_msg = withdrawal.into();

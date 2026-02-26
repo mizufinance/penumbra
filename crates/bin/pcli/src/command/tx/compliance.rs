@@ -4,10 +4,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use penumbra_sdk_asset::asset;
-use penumbra_sdk_compliance::decrypt_full;
 use penumbra_sdk_compliance::structs::{ComplianceCiphertext, MsgRegisterAsset, MsgRegisterUser};
-use penumbra_sdk_custody::soft_kms::Config as SoftKmsConfig;
-use penumbra_sdk_keys::keys::{DailyComplianceKey, DailyKeySet, KeyType, UserComplianceKey};
+use penumbra_sdk_keys::Address;
 use penumbra_sdk_proto::core::app::v1::{
     query_service_client::QueryServiceClient as AppQueryServiceClient, TransactionsByHeightRequest,
 };
@@ -21,7 +19,6 @@ use tracing::info;
 use url::Url;
 
 use super::FeeTier;
-use crate::config::CustodyConfig;
 
 /// A detected transaction reference from the scan command.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -36,6 +33,9 @@ pub struct DetectedTxRef {
     pub asset_id: String,
     /// Whether the transfer is flagged (threshold exceeded).
     pub is_flagged: bool,
+    /// Whether this is a spend action (true) or output action (false).
+    #[serde(default)]
+    pub is_spend: bool,
 }
 
 /// Scan output format for JSON serialization.
@@ -80,10 +80,16 @@ pub enum ComplianceCmd {
         /// When set with --threshold, enables issuer-side flagged transfer decryption.
         #[clap(long)]
         dk_pub_hex: Option<String>,
-        /// Amount threshold for flagging (in smallest unit, u128).
-        /// Transfers at or above this amount are encrypted to issuer's DK instead of user's daily key.
+        /// Amount threshold for flagging, in BASE units (u128).
+        /// Transfers at or above this amount are encrypted to the issuer's DK.
+        /// For an asset with exponent 6 (like USDC), 500 display units = 500_000_000 base units.
+        /// For an asset with exponent 18, 500 display units = 500_000_000_000_000_000_000 base units.
         #[clap(long)]
         threshold: Option<u128>,
+        /// Orbis ring public key (hex, 64 chars = 32 bytes compressed).
+        /// In production, this comes from the Orbis DKG ceremony.
+        #[clap(long)]
+        ring_pk_hex: Option<String>,
         /// The selected fee tier to multiply the fee amount by.
         #[clap(short, long, default_value_t)]
         fee_tier: FeeTier,
@@ -105,37 +111,12 @@ pub enum ComplianceCmd {
         fee_tier: FeeTier,
     },
 
-    /// Derive a daily key from a User Compliance Key for a specific date.
-    ///
-    /// This command is used by Orbis to create time-limited keys that can be
-    /// shared with auditors. The auditor can then use the daily key to scan
-    /// transactions for that specific date, without having access to the full
-    /// User Compliance Key.
-    ///
-    /// Example workflow:
-    /// 1. Orbis runs: pcli tx compliance derive-daily-key --uck-hex <UCK> --date <DAY>
-    /// 2. Orbis shares the daily_key_hex with the auditor
-    /// 3. Auditor runs: pcli tx compliance scan --daily-key-hex <KEY> --node <URL>
-    DeriveDailyKey {
-        /// User Compliance Key as hex string (64 hex chars = 32 bytes).
-        #[clap(long = "uck-hex")]
-        uck_hex: String,
-
-        /// The day index to derive the key for (e.g., 20459 for a specific day).
-        /// This is typically computed as: unix_timestamp / 86400
-        #[clap(long)]
-        date: u64,
-    },
-
     /// Scan the chain for regulated asset transfers (detection-only).
     ///
     /// This command performs detection-only scanning, identifying which transactions
     /// contain compliance ciphertexts that can be decrypted with the provided key.
     /// It outputs a list of transaction references that can be passed to the
-    /// `decrypt` command for full decryption.
-    ///
-    /// For user scanning: provide a daily key set from derive-daily-key.
-    /// For issuer scanning: provide the issuer's DK (detection key).
+    /// `decrypt` command for full decryption. Provide the issuer's DK (detection key).
     Scan {
         /// The URL of the pd gRPC endpoint (e.g., http://localhost:8080).
         #[clap(long, env = "PENUMBRA_NODE_PD_URL")]
@@ -149,15 +130,15 @@ pub enum ComplianceCmd {
         #[clap(long)]
         end_height: Option<u64>,
 
-        /// User's daily key set (192 hex chars = 96 bytes).
-        /// Use for scanning non-threshold assets or below-threshold transfers.
-        #[clap(long, group = "key")]
-        daily_key_hex: Option<String>,
-
         /// Issuer's detection key (64 hex chars = 32 bytes).
         /// Use for scanning all transfers of a threshold asset.
-        #[clap(long, group = "key")]
+        #[clap(long)]
         dk_hex: Option<String>,
+
+        /// The asset ID this DK corresponds to (required when using --dk-hex).
+        /// The detection key is per-asset, so the scanner needs to know which asset.
+        #[clap(long)]
+        scan_asset_id: Option<String>,
 
         /// Output file for detected TX list (JSON format).
         #[clap(long, default_value = "/tmp/detected_txs.json")]
@@ -166,9 +147,8 @@ pub enum ComplianceCmd {
 
     /// Decrypt previously detected transactions.
     ///
-    /// This command takes a list of transaction references (from the scan command)
-    /// and decrypts them using the provided key. Use daily-key-hex for user
-    /// decryption or dk-hex for issuer decryption of flagged transfers.
+    /// Takes a list of transaction references (from the scan command) and decrypts
+    /// them using the issuer's DK for flagged transfers.
     Decrypt {
         /// Path to detected TX list from scan command (JSON format).
         #[clap(long)]
@@ -178,12 +158,8 @@ pub enum ComplianceCmd {
         #[clap(long, env = "PENUMBRA_NODE_PD_URL")]
         node: Url,
 
-        /// User's full daily key set (192 hex chars = 96 bytes).
-        #[clap(long, group = "key")]
-        daily_key_hex: Option<String>,
-
         /// Issuer's detection key for flagged transfers (64 hex chars = 32 bytes).
-        #[clap(long, group = "key")]
+        #[clap(long)]
         dk_hex: Option<String>,
     },
 
@@ -198,6 +174,84 @@ pub enum ComplianceCmd {
     /// 2. Issuer registers asset: pcli tx compliance register-asset USDC --regulated --dk-pub-hex <DK_PUB> --threshold 10000
     /// 3. Issuer can later scan flagged transfers using their private DK
     GenerateDk,
+
+    /// Issuer surveillance ledger management.
+    ///
+    /// Manage a SQLite database that tracks detected compliance transfers and their
+    /// progressive decryption state. Flagged transfers are decrypted immediately on
+    /// import; non-flagged transfers require Orbis PRE audit to decrypt.
+    #[clap(subcommand)]
+    IssuerDb(IssuerDbCmd),
+}
+
+/// Issuer database management subcommands.
+#[derive(Debug, clap::Subcommand)]
+pub enum IssuerDbCmd {
+    /// Initialize a new issuer ledger database.
+    Init {
+        /// Path to the SQLite database file.
+        #[clap(long, default_value = "/tmp/issuer-ledger.db")]
+        db: PathBuf,
+    },
+
+    /// Import detected transactions from scan output into the ledger.
+    ///
+    /// Inserts each detected transfer as a row. Flagged transfers are automatically
+    /// decrypted using the provided DK and node connection.
+    Import {
+        /// Path to the SQLite database file.
+        #[clap(long, default_value = "/tmp/issuer-ledger.db")]
+        db: PathBuf,
+
+        /// Path to scan output JSON (from `pcli tx compliance scan`).
+        #[clap(long)]
+        scan_output: PathBuf,
+
+        /// Issuer's detection key (64 hex chars = 32 bytes) for decrypting flagged transfers.
+        #[clap(long)]
+        dk_hex: String,
+
+        /// The URL of the pd gRPC endpoint (for fetching flagged tx ciphertexts).
+        #[clap(long, env = "PENUMBRA_NODE_PD_URL")]
+        node: Url,
+    },
+
+    /// Display the issuer ledger as a table.
+    Show {
+        /// Path to the SQLite database file.
+        #[clap(long, default_value = "/tmp/issuer-ledger.db")]
+        db: PathBuf,
+    },
+
+    /// Update ledger rows with decrypted data from an Orbis PRE audit.
+    Update {
+        /// Path to the SQLite database file.
+        #[clap(long, default_value = "/tmp/issuer-ledger.db")]
+        db: PathBuf,
+
+        /// Path to audit output JSON (from orbis-sim).
+        #[clap(long)]
+        audit_output: PathBuf,
+
+        /// Name of the audited user (prefixed to Via column, e.g. "Alice core").
+        #[clap(long)]
+        audit_subject: Option<String>,
+    },
+
+    /// Register an address alias (maps a Penumbra address to a human-readable name).
+    Alias {
+        /// Path to the SQLite database file.
+        #[clap(long, default_value = "/tmp/issuer-ledger.db")]
+        db: PathBuf,
+
+        /// The Penumbra bech32 address to alias.
+        #[clap(long)]
+        address: String,
+
+        /// Human-readable name for this address.
+        #[clap(long)]
+        name: String,
+    },
 }
 
 impl ComplianceCmd {
@@ -206,10 +260,10 @@ impl ComplianceCmd {
         match self {
             ComplianceCmd::RegisterAsset { .. } => false,
             ComplianceCmd::RegisterUser { .. } => false,
-            ComplianceCmd::DeriveDailyKey { .. } => true, // No network needed
-            ComplianceCmd::Scan { .. } => true,           // Scanner doesn't need wallet sync
-            ComplianceCmd::Decrypt { .. } => true,        // Decrypt doesn't need wallet sync
-            ComplianceCmd::GenerateDk => true,            // Pure computation
+            ComplianceCmd::Scan { .. } => true,
+            ComplianceCmd::Decrypt { .. } => true,
+            ComplianceCmd::GenerateDk => true,
+            ComplianceCmd::IssuerDb(_) => true,
         }
     }
 
@@ -223,14 +277,14 @@ impl ComplianceCmd {
         matches!(self, ComplianceCmd::Decrypt { .. })
     }
 
-    /// Check if this command is a derive-daily-key command (doesn't create a transaction).
-    pub fn is_derive_daily_key(&self) -> bool {
-        matches!(self, ComplianceCmd::DeriveDailyKey { .. })
-    }
-
     /// Check if this command is a generate-dk command (doesn't create a transaction).
     pub fn is_generate_dk(&self) -> bool {
         matches!(self, ComplianceCmd::GenerateDk)
+    }
+
+    /// Check if this command is an issuer-db command (doesn't create a transaction).
+    pub fn is_issuer_db(&self) -> bool {
+        matches!(self, ComplianceCmd::IssuerDb(_))
     }
 
     /// Execute the generate-dk command (pure computation, no network).
@@ -267,46 +321,6 @@ impl ComplianceCmd {
         }
     }
 
-    /// Execute the derive-daily-key command (pure computation, no network).
-    pub fn exec_derive_daily_key(&self) -> Result<()> {
-        match self {
-            ComplianceCmd::DeriveDailyKey { uck_hex, date } => {
-                // Parse the UCK (User Compliance Key) from hex
-                let uck = parse_uck_from_hex(uck_hex)?;
-
-                // Derive all three daily keys
-                let daily_keys = uck.derive_daily_keys(*date);
-
-                // Output each key type (detection is issuer-only, not user-derivable)
-                let core_hex = hex::encode(daily_keys.core.to_bytes());
-                let extension_hex = hex::encode(daily_keys.extension.to_bytes());
-
-                // Combined format for decryption (core + extension keys)
-                let full_hex = format!("{}{}", core_hex, extension_hex);
-
-                println!("=== Daily Key Derivation ===");
-                println!("Date (day index): {}", date);
-                println!();
-                println!("Individual keys (for selective disclosure):");
-                println!("  Core Key:      {}", core_hex);
-                println!("  Extension Key: {}", extension_hex);
-                println!();
-                println!("Combined key (for decryption):");
-                println!("  Full Key Set:  {}", full_hex);
-                println!();
-                println!("Note: Detection is issuer-only (use --issuer-dk-hex for scanning)");
-                println!("To decrypt with known asset:");
-                println!(
-                    "  pcli tx compliance decrypt --daily-key-hex {} --input <file>",
-                    full_hex
-                );
-
-                Ok(())
-            }
-            _ => anyhow::bail!("exec_derive_daily_key called on wrong command"),
-        }
-    }
-
     /// Execute the scan command directly (detection-only, doesn't create a transaction).
     /// This command doesn't require wallet initialization - only a gRPC connection.
     pub async fn exec_scan(&self) -> Result<()> {
@@ -315,25 +329,29 @@ impl ComplianceCmd {
                 node,
                 start_height,
                 end_height,
-                daily_key_hex,
                 dk_hex,
+                scan_asset_id,
                 output,
             } => {
                 // Determine key type and parse key
-                let (key_type_str, detection_key, issuer_dk) = if let Some(hex) = daily_key_hex {
-                    // Warn user that daily keys cannot detect - this is issuer-only
-                    eprintln!("Warning: --daily-key-hex cannot detect transactions (detection is issuer-only)");
-                    eprintln!("         Use --dk-hex with issuer detection key for scanning.");
-                    eprintln!("         Daily keys are for decryption only (use 'decrypt' command instead).");
-                    eprintln!();
-                    let keys = parse_daily_keys_from_hex(hex)?;
-                    ("user_daily_key".to_string(), Some(keys), None)
-                } else if let Some(hex) = dk_hex {
+                let (key_type_str, issuer_dk) = if let Some(hex) = dk_hex {
                     let dk = parse_dk_from_hex(hex)?;
-                    ("issuer_dk".to_string(), None, Some(dk))
+                    ("issuer_dk".to_string(), Some(dk))
                 } else {
-                    anyhow::bail!("Must provide either --daily-key-hex or --dk-hex");
+                    anyhow::bail!("Must provide --dk-hex (issuer detection key)");
                 };
+
+                // Parse scan_asset_id (required when using --dk-hex)
+                let expected_asset_id: Option<asset::Id> = if let Some(ref id_str) = scan_asset_id {
+                    Some(Self::parse_asset_id(id_str)?)
+                } else {
+                    None
+                };
+                if issuer_dk.is_some() && expected_asset_id.is_none() {
+                    anyhow::bail!(
+                        "--scan-asset-id is required when using --dk-hex (DK is per-asset)"
+                    );
+                }
 
                 // Connect to node directly (no wallet required)
                 let channel = connect_to_node(node).await?;
@@ -343,13 +361,12 @@ impl ComplianceCmd {
                     get_latest_height(channel.clone()).await?
                 };
 
-                println!(
-                    "Scanning blocks {} to {} for regulated transfers (detection-only)...",
-                    start_height, end
-                );
-                println!("Key type: {}", key_type_str);
+                eprintln!("Scanning blocks {} to {} ...", start_height, end);
 
                 let mut detected_txs: Vec<DetectedTxRef> = Vec::new();
+                let mut total_outputs = 0u64;
+                let mut total_detected = 0u64;
+                let mut total_flagged = 0u64;
 
                 // Scan each block
                 for height in *start_height..=end {
@@ -357,43 +374,52 @@ impl ComplianceCmd {
                     let transactions = fetch_transactions(channel.clone(), height).await?;
 
                     for (tx_idx, tx) in transactions.iter().enumerate() {
-                        // Try to detect compliance ciphertexts in this transaction
-                        let tx_hash = format!("block{}tx{}", height, tx_idx); // Simplified hash
+                        let tx_hash = format!("tx{}", tx_idx);
 
-                        // Extract compliance ciphertexts from actions
                         if let Some(ref body) = tx.body {
                             for (action_idx, action) in body.actions.iter().enumerate() {
-                                if let Some(ciphertext) = extract_compliance_ciphertext(action) {
-                                    // Detection is issuer-only via DetectionKey
+                                // Count all output actions
+                                {
+                                    use penumbra_sdk_proto::core::transaction::v1::action::Action as AE;
+                                    if let Some(AE::Output(_)) = action.action.as_ref() {
+                                        total_outputs += 1;
+                                    }
+                                }
+
+                                if let Some((ciphertext, is_spend)) =
+                                    extract_compliance_ciphertext(action)
+                                {
                                     let detection_result = if let Some(ref dk) = issuer_dk {
-                                        // Issuer detection with DK
                                         use penumbra_sdk_compliance::issuer_keys::DetectionKey;
-                                        let detection_key = DetectionKey::new(*dk);
-                                        match detection_key.try_decrypt_detection(
-                                            &ciphertext.epk,
-                                            &ciphertext.epk_g,
+                                        let dk_obj = DetectionKey::new(*dk);
+                                        let expected = expected_asset_id.as_ref().unwrap();
+                                        match dk_obj.try_decrypt_detection(
+                                            &ciphertext.epk_1,
+                                            &ciphertext.epk_1,
                                             &ciphertext.detection_tag,
+                                            expected,
                                         ) {
-                                            Ok((asset_id, is_flagged)) => {
+                                            Ok((asset_id, is_flagged, _salt)) => {
                                                 Some((asset_id, is_flagged))
                                             }
-                                            Err(_) => None, // Not encrypted to this DK
+                                            Err(_) => None,
                                         }
-                                    } else if detection_key.is_some() {
-                                        // User daily keys cannot detect - detection is issuer-only
-                                        // Skip detection, user must use --issuer-dk-hex for scanning
-                                        None
                                     } else {
                                         None
                                     };
 
                                     if let Some((asset_id, is_flagged)) = detection_result {
+                                        total_detected += 1;
+                                        if is_flagged {
+                                            total_flagged += 1;
+                                        }
                                         detected_txs.push(DetectedTxRef {
                                             height,
                                             tx_hash: tx_hash.clone(),
                                             action_index: action_idx,
                                             asset_id: asset_id.to_string(),
                                             is_flagged,
+                                            is_spend,
                                         });
                                     }
                                 }
@@ -406,6 +432,11 @@ impl ComplianceCmd {
                         info!(height, "scanning progress...");
                     }
                 }
+
+                eprintln!(
+                    "Scanned {} outputs, {} detected.",
+                    total_outputs, total_detected
+                );
 
                 // Build output
                 let scan_output = ScanOutput {
@@ -429,19 +460,14 @@ impl ComplianceCmd {
                 let mut file = File::create(output)?;
                 file.write_all(json.as_bytes())?;
 
+                let non_flagged = total_detected - total_flagged;
                 println!(
-                    "\nScan complete. Detected {} transfers.",
-                    detected_txs.len()
+                    "\nDetected {} transfers ({} flagged, {} normal).",
+                    detected_txs.len(),
+                    total_flagged,
+                    non_flagged
                 );
                 println!("Results saved to: {}", output.display());
-
-                // Print summary
-                for tx_ref in &detected_txs {
-                    println!(
-                        "  Height {}, action {}: {} (flagged: {})",
-                        tx_ref.height, tx_ref.action_index, tx_ref.asset_id, tx_ref.is_flagged
-                    );
-                }
 
                 Ok(())
             }
@@ -455,7 +481,6 @@ impl ComplianceCmd {
             ComplianceCmd::Decrypt {
                 input,
                 node,
-                daily_key_hex,
                 dk_hex,
             } => {
                 // Load detected transactions from file
@@ -471,14 +496,11 @@ impl ComplianceCmd {
                 );
 
                 // Determine key type and parse key
-                let (key_type, daily_keys, issuer_dk) = if let Some(hex) = daily_key_hex {
-                    let keys = parse_daily_keys_from_hex(hex)?;
-                    ("user_daily_key", Some(keys), None)
-                } else if let Some(hex) = dk_hex {
+                let (key_type, issuer_dk) = if let Some(hex) = dk_hex {
                     let dk = parse_dk_from_hex(hex)?;
-                    ("issuer_dk", None, Some(dk))
+                    ("issuer_dk", Some(dk))
                 } else {
-                    anyhow::bail!("Must provide either --daily-key-hex or --dk-hex");
+                    anyhow::bail!("Must provide --dk-hex (issuer detection key)");
                 };
 
                 println!("Decrypting with key type: {}", key_type);
@@ -506,7 +528,9 @@ impl ComplianceCmd {
                         if let Some(ref body) = tx.body {
                             if tx_ref.action_index < body.actions.len() {
                                 let action = &body.actions[tx_ref.action_index];
-                                if let Some(ciphertext) = extract_compliance_ciphertext(action) {
+                                if let Some((ciphertext, _is_spend)) =
+                                    extract_compliance_ciphertext(action)
+                                {
                                     // Parse asset_id from the scan output
                                     let asset_id: asset::Id = tx_ref
                                         .asset_id
@@ -514,24 +538,12 @@ impl ComplianceCmd {
                                         .context("invalid asset_id in scan output")?;
 
                                     // Decrypt based on key type
-                                    let result = if let Some(ref keys) = daily_keys {
-                                        decrypt_full(keys, &ciphertext, asset_id)
-                                    } else if let Some(ref dk) = issuer_dk {
-                                        // Use issuer decryption
-                                        use penumbra_sdk_compliance::decrypt_compliance_details_with_dk;
-                                        decrypt_compliance_details_with_dk(dk, &ciphertext)
-                                            .map(|data| Some(penumbra_sdk_compliance::FullComplianceData {
-                                                asset_id: data.asset_id,
-                                                core: penumbra_sdk_compliance::CoreData {
-                                                    amount: data.amount,
-                                                    self_diversified_generator: data.self_diversified_generator,
-                                                    self_transmission_key: data.self_transmission_key,
-                                                },
-                                                extension: penumbra_sdk_compliance::ExtensionData {
-                                                    counterparty_diversified_generator: data.counterparty_diversified_generator,
-                                                    counterparty_transmission_key: data.counterparty_transmission_key,
-                                                },
-                                            }))
+                                    let result = if let Some(ref dk) = issuer_dk {
+                                        penumbra_sdk_compliance::decrypt_full_flagged(
+                                            dk,
+                                            &ciphertext,
+                                            asset_id,
+                                        )
                                     } else {
                                         Ok(None)
                                     };
@@ -579,6 +591,14 @@ impl ComplianceCmd {
         }
     }
 
+    /// Execute an issuer-db subcommand.
+    pub async fn exec_issuer_db(&self) -> Result<()> {
+        match self {
+            ComplianceCmd::IssuerDb(cmd) => cmd.exec().await,
+            _ => anyhow::bail!("exec_issuer_db called on non-issuer-db command"),
+        }
+    }
+
     /// Create the transaction plan for this compliance command.
     pub async fn plan(
         &self,
@@ -592,6 +612,7 @@ impl ComplianceCmd {
                 unregulated,
                 dk_pub_hex,
                 threshold,
+                ring_pk_hex,
                 fee_tier,
             } => {
                 // Determine regulation status
@@ -628,12 +649,35 @@ impl ComplianceCmd {
                     None
                 };
 
+                // Parse ring_pk (from Orbis DKG)
+                let ring_pk = if let Some(hex_str) = ring_pk_hex {
+                    let bytes =
+                        hex::decode(hex_str).context("invalid ring_pk_hex: must be valid hex")?;
+                    if bytes.len() != 32 {
+                        anyhow::bail!("ring_pk_hex must be exactly 64 hex chars (32 bytes)");
+                    }
+                    let arr: [u8; 32] = bytes.try_into().unwrap();
+                    Some(
+                        decaf377::Encoding(arr)
+                            .vartime_decompress()
+                            .map_err(|_| anyhow::anyhow!("invalid ring_pk encoding"))?,
+                    )
+                } else {
+                    None
+                };
+
                 // Create the registration message
                 let msg = MsgRegisterAsset {
                     asset_id,
                     is_regulated,
                     dk_pub,
                     threshold: *threshold,
+                    allowed_channels: vec![],
+                    ring_pk,
+                    ring_id: String::new(),
+                    policy_id: String::new(),
+                    permission: String::new(),
+                    resource: String::new(),
                 };
 
                 // Build transaction plan
@@ -665,28 +709,11 @@ impl ComplianceCmd {
                 let address_index = penumbra_sdk_keys::keys::AddressIndex::new(*address_index);
                 let (address, _detection_key) = fvk.payment_address(address_index);
 
-                // Derive user-specific UCK from spend key seed
-                // This ensures each user has their own unique UCK for per-user isolation
-                let user_uck = match &app.config.custody {
-                    CustodyConfig::SoftKms(SoftKmsConfig { spend_key, .. }) => {
-                        let seed = spend_key.to_bytes().0;
-                        let uck = UserComplianceKey::from_spend_seed(&seed);
-                        println!("Derived user-specific UCK from wallet seed");
-                        println!("   UCK (hex): {}", hex::encode(uck.to_bytes()));
-                        uck
-                    }
-                    _ => {
-                        // Non-SoftKms custody (view-only, threshold, etc.) cannot derive UCK
-                        anyhow::bail!(
-                            "Cannot derive compliance key: custody type doesn't have spend key. \
-                             Compliance registration requires a SoftKms custody configuration."
-                        );
-                    }
-                };
-
-                // Derive ACK for this specific address (maximum privacy - one ACK per address)
-                use penumbra_sdk_compliance::ComplianceLeaf;
-                let leaf = ComplianceLeaf::new(&user_uck, address, asset_id);
+                // Create compliance leaf for this address and asset
+                use penumbra_sdk_compliance::{derive_compliance_scalar, ComplianceLeaf};
+                let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+                let d = derive_compliance_scalar(b_d_fq);
+                let leaf = ComplianceLeaf::new(address, asset_id, d);
 
                 // Create registration message (signature is empty for now - filled during tx build)
                 let msg = MsgRegisterUser {
@@ -708,10 +735,6 @@ impl ComplianceCmd {
                     .context("can't build transaction")?)
             }
 
-            ComplianceCmd::DeriveDailyKey { .. } => {
-                anyhow::bail!("DeriveDailyKey command doesn't create a transaction - use exec_derive_daily_key instead")
-            }
-
             ComplianceCmd::Scan { .. } => {
                 anyhow::bail!("Scan command doesn't create a transaction - use exec_scan instead")
             }
@@ -723,6 +746,12 @@ impl ComplianceCmd {
             ComplianceCmd::Decrypt { .. } => {
                 anyhow::bail!(
                     "Decrypt command doesn't create a transaction - use exec_decrypt instead"
+                )
+            }
+
+            ComplianceCmd::IssuerDb(_) => {
+                anyhow::bail!(
+                    "IssuerDb command doesn't create a transaction - use exec_issuer_db instead"
                 )
             }
         }
@@ -740,44 +769,6 @@ impl ComplianceCmd {
     }
 }
 
-/// Parse User Compliance Key from hex string.
-fn parse_uck_from_hex(hex: &str) -> Result<UserComplianceKey> {
-    let bytes = hex::decode(hex).context("invalid hex string for UCK")?;
-    if bytes.len() != 32 {
-        anyhow::bail!(
-            "UCK must be exactly 32 bytes (64 hex chars), got {}",
-            bytes.len()
-        );
-    }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    let fr = decaf377::Fr::from_le_bytes_mod_order(&arr);
-    Ok(UserComplianceKey::new(fr))
-}
-
-/// Parse DailyKeySet from hex string (64 bytes = 2 keys × 32 bytes each: core + extension).
-/// Note: Detection is issuer-only and not part of user daily keys.
-fn parse_daily_keys_from_hex(hex: &str) -> Result<DailyKeySet> {
-    let bytes = hex::decode(hex).context("invalid hex string for daily key set")?;
-    if bytes.len() != 64 {
-        anyhow::bail!(
-            "Daily key set must be exactly 64 bytes (128 hex chars = 2 keys × 32 bytes), got {} bytes",
-            bytes.len()
-        );
-    }
-
-    let mut core_arr = [0u8; 32];
-    let mut extension_arr = [0u8; 32];
-
-    core_arr.copy_from_slice(&bytes[0..32]);
-    extension_arr.copy_from_slice(&bytes[32..64]);
-
-    Ok(DailyKeySet {
-        core: DailyComplianceKey::from_bytes(&core_arr, KeyType::Core),
-        extension: DailyComplianceKey::from_bytes(&extension_arr, KeyType::Extension),
-    })
-}
-
 /// Parse issuer Detection Key (DK) from hex string (32 bytes).
 fn parse_dk_from_hex(hex: &str) -> Result<decaf377::Fr> {
     let bytes = hex::decode(hex).context("invalid hex string for DK")?;
@@ -792,26 +783,41 @@ fn parse_dk_from_hex(hex: &str) -> Result<decaf377::Fr> {
     Ok(decaf377::Fr::from_le_bytes_mod_order(&arr))
 }
 
-/// Extract ComplianceCiphertext from a protobuf Action if present.
+/// Extract compliance ciphertext from an action. Returns (ciphertext, is_spend).
 fn extract_compliance_ciphertext(
     action: &penumbra_sdk_proto::core::transaction::v1::Action,
-) -> Option<ComplianceCiphertext> {
+) -> Option<(ComplianceCiphertext, bool)> {
     use penumbra_sdk_proto::core::transaction::v1::action::Action as ActionEnum;
 
     let action_inner = action.action.as_ref()?;
 
-    // Extract compliance ciphertext from Output actions
-    if let ActionEnum::Output(output) = action_inner {
-        if let Some(body) = &output.body {
-            let cc_bytes = &body.compliance_ciphertext;
-            if !cc_bytes.is_empty() {
-                // Parse the compliance ciphertext from bytes
-                return ComplianceCiphertext::from_bytes(cc_bytes).ok();
-            }
+    let (cc_bytes, is_spend) = match action_inner {
+        ActionEnum::Output(output) => {
+            let body = output.body.as_ref()?;
+            (&body.compliance_ciphertext, false)
         }
+        ActionEnum::Spend(spend) => {
+            let body = spend.body.as_ref()?;
+            (&body.compliance_ciphertext, true)
+        }
+        _ => return None,
+    };
+
+    if cc_bytes.is_empty() {
+        return None;
     }
 
-    None
+    match ComplianceCiphertext::from_bytes(cc_bytes) {
+        Ok(ct) => Some((ct, is_spend)),
+        Err(e) => {
+            eprintln!(
+                "scan: ciphertext deserialization failed ({} bytes): {}",
+                cc_bytes.len(),
+                e
+            );
+            None
+        }
+    }
 }
 
 /// Connect to a Penumbra node directly (no wallet required).
@@ -861,4 +867,572 @@ async fn fetch_transactions(
 
     // TransactionsByHeightResponse contains Transaction proto messages directly
     Ok(response.into_inner().transactions)
+}
+
+/// A single decrypted entry from an Orbis PRE audit (output by orbis-sim).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuditEntry {
+    pub height: u64,
+    pub action_index: usize,
+    pub amount: String,
+    pub self_address: String,
+    pub counterparty: String,
+    pub decrypted_via: String,
+}
+
+impl IssuerDbCmd {
+    pub async fn exec(&self) -> Result<()> {
+        match self {
+            IssuerDbCmd::Init { db } => {
+                let conn = rusqlite::Connection::open(db)
+                    .context("failed to create issuer ledger database")?;
+
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS compliance_ledger (
+                        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                        height          INTEGER NOT NULL,
+                        tx_hash         TEXT NOT NULL,
+                        action_index    INTEGER NOT NULL,
+                        asset_id        TEXT NOT NULL,
+                        is_flagged      BOOLEAN NOT NULL,
+                        is_spend        BOOLEAN NOT NULL DEFAULT 0,
+                        amount          TEXT,
+                        self_address    TEXT,
+                        counterparty    TEXT,
+                        decrypted_at    TEXT,
+                        decrypted_via   TEXT,
+                        UNIQUE(height, action_index)
+                    );
+                    CREATE TABLE IF NOT EXISTS address_aliases (
+                        transmission_key_hex TEXT PRIMARY KEY,
+                        name                 TEXT NOT NULL
+                    );",
+                )
+                .context("failed to create tables")?;
+
+                println!("Issuer ledger initialized at: {}", db.display());
+                Ok(())
+            }
+
+            IssuerDbCmd::Import {
+                db,
+                scan_output,
+                dk_hex,
+                node,
+            } => {
+                // Parse DK for flagged tx decryption
+                let dk = parse_dk_from_hex(dk_hex)?;
+
+                // Load scan output
+                let file = File::open(scan_output).context("failed to open scan output file")?;
+                let reader = BufReader::new(file);
+                let scan: ScanOutput =
+                    serde_json::from_reader(reader).context("failed to parse scan output JSON")?;
+
+                let conn = rusqlite::Connection::open(db)
+                    .context("failed to open issuer ledger database")?;
+
+                // Connect to node for fetching flagged tx ciphertexts
+                let channel = connect_to_node(node).await?;
+
+                let mut inserted = 0u64;
+                let mut decrypted = 0u64;
+
+                for tx_ref in &scan.detected {
+                    // Insert the row with NULLs for undecrypted fields
+                    conn.execute(
+                        "INSERT OR IGNORE INTO compliance_ledger \
+                         (height, tx_hash, action_index, asset_id, is_flagged, is_spend) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        rusqlite::params![
+                            tx_ref.height as i64,
+                            tx_ref.tx_hash,
+                            tx_ref.action_index as i64,
+                            tx_ref.asset_id,
+                            tx_ref.is_flagged,
+                            tx_ref.is_spend,
+                        ],
+                    )?;
+                    inserted += 1;
+
+                    // Auto-decrypt flagged transactions
+                    if tx_ref.is_flagged {
+                        let transactions =
+                            fetch_transactions(channel.clone(), tx_ref.height).await?;
+
+                        for tx in &transactions {
+                            if let Some(ref body) = tx.body {
+                                if tx_ref.action_index < body.actions.len() {
+                                    let action = &body.actions[tx_ref.action_index];
+                                    if let Some((ct, _is_spend)) =
+                                        extract_compliance_ciphertext(action)
+                                    {
+                                        // Decrypt core (amount + self address)
+                                        let core = penumbra_sdk_compliance::decrypt_core_flagged(
+                                            &dk, &ct,
+                                        )?;
+                                        // Decrypt extension (counterparty)
+                                        let ext =
+                                            penumbra_sdk_compliance::decrypt_extension_flagged(
+                                                &dk, &ct,
+                                            )?;
+
+                                        if let Some(core) = core {
+                                            let now = chrono_now();
+                                            let counterparty_hex = ext
+                                                .map(|e| {
+                                                    hex::encode(e.counterparty_transmission_key)
+                                                })
+                                                .unwrap_or_default();
+                                            conn.execute(
+                                                "UPDATE compliance_ledger SET \
+                                                 amount = ?1, self_address = ?2, \
+                                                 counterparty = ?3, decrypted_at = ?4, \
+                                                 decrypted_via = 'flagged' \
+                                                 WHERE height = ?5 AND action_index = ?6",
+                                                rusqlite::params![
+                                                    core.amount.value().to_string(),
+                                                    hex::encode(core.self_transmission_key),
+                                                    counterparty_hex,
+                                                    now,
+                                                    tx_ref.height as i64,
+                                                    tx_ref.action_index as i64,
+                                                ],
+                                            )?;
+                                            decrypted += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                println!(
+                    "Imported {} transfers ({} flagged auto-decrypted).",
+                    inserted, decrypted
+                );
+                Ok(())
+            }
+
+            IssuerDbCmd::Show { db } => {
+                let conn = rusqlite::Connection::open(db)
+                    .context("failed to open issuer ledger database")?;
+
+                // Load address aliases for display
+                let aliases: std::collections::HashMap<String, String> = {
+                    let mut map = std::collections::HashMap::new();
+                    if let Ok(mut alias_stmt) =
+                        conn.prepare("SELECT transmission_key_hex, name FROM address_aliases")
+                    {
+                        if let Ok(rows) = alias_stmt.query_map([], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                        }) {
+                            for row in rows.flatten() {
+                                map.insert(row.0, row.1);
+                            }
+                        }
+                    }
+                    map
+                };
+
+                let resolve_alias = |hex: &str| -> String {
+                    if let Some(name) = aliases.get(hex) {
+                        name.clone()
+                    } else {
+                        truncate_hex(hex, 12)
+                    }
+                };
+
+                let mut stmt = conn.prepare(
+                    "SELECT height, tx_hash, action_index, asset_id, is_flagged, \
+                     amount, self_address, counterparty, decrypted_at, decrypted_via, \
+                     is_spend \
+                     FROM compliance_ledger ORDER BY height, action_index",
+                )?;
+
+                let rows = stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, bool>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                        row.get::<_, bool>(10).unwrap_or(false),
+                    ))
+                })?;
+
+                // Header
+                println!(
+                    "{:<8} {:<5} {:<7} {:<8} {:>10} {:<12} {:<12} {:<10} {:<16}",
+                    "Height", "Act#", "Type", "Flag", "Amount", "From", "To", "Via", "Decrypted"
+                );
+                println!("{}", "-".repeat(90));
+
+                // Collect all rows for two-pass display (spend→output inference)
+                struct DisplayRow {
+                    height: i64,
+                    action_idx: i64,
+                    is_flagged: bool,
+                    has_amount: bool,
+                    is_spend: bool,
+                    amount_str: String,
+                    self_str: String,
+                    cp_str: String,
+                    via_str: String,
+                    when_str: String,
+                }
+
+                let mut display_rows: Vec<DisplayRow> = Vec::new();
+                for row in rows {
+                    let (
+                        height,
+                        _tx_hash,
+                        action_idx,
+                        _asset_id,
+                        is_flagged,
+                        amount,
+                        self_addr,
+                        counterparty,
+                        decrypted_at,
+                        decrypted_via,
+                        is_spend,
+                    ) = row?;
+                    let dash = "---".to_string();
+                    display_rows.push(DisplayRow {
+                        height,
+                        action_idx,
+                        is_flagged,
+                        has_amount: amount.is_some(),
+                        is_spend,
+                        amount_str: amount
+                            .as_deref()
+                            .map(|s| format_display_amount(s))
+                            .unwrap_or_else(|| dash.clone()),
+                        self_str: self_addr
+                            .as_deref()
+                            .filter(|s| !s.is_empty())
+                            .map(|s| resolve_alias(s))
+                            .unwrap_or_else(|| dash.clone()),
+                        cp_str: counterparty
+                            .as_deref()
+                            .filter(|s| !s.is_empty())
+                            .map(|s| resolve_alias(s))
+                            .unwrap_or_else(|| dash.clone()),
+                        via_str: decrypted_via.unwrap_or_else(|| dash.clone()),
+                        when_str: decrypted_at
+                            .as_deref()
+                            .map(|s| format_timestamp(s))
+                            .unwrap_or_else(|| dash.clone()),
+                    });
+                }
+
+                // Build spender map: height → spender name (from SPEND rows)
+                let mut spender_at: std::collections::HashMap<i64, String> =
+                    std::collections::HashMap::new();
+                for r in &display_rows {
+                    if r.is_spend && r.self_str != "---" {
+                        spender_at
+                            .entry(r.height)
+                            .or_insert_with(|| r.self_str.clone());
+                    }
+                }
+
+                let mut count = 0u64;
+                let mut decrypted_count = 0u64;
+                let mut flagged_count = 0u64;
+                for r in &display_rows {
+                    if r.is_flagged {
+                        flagged_count += 1;
+                    }
+                    if r.has_amount {
+                        decrypted_count += 1;
+                    }
+
+                    let type_str = if r.is_spend { "SPEND" } else { "OUTPUT" };
+
+                    // Spend: self_address = spender → FROM, no TO.
+                    // Output: self_address = recipient → TO, counterparty = sender → FROM.
+                    let (mut from_str, to_str) = if r.is_spend {
+                        (r.self_str.clone(), "---".to_string())
+                    } else {
+                        (r.cp_str.clone(), r.self_str.clone())
+                    };
+
+                    // Infer FROM on output rows from spend rows at the same height
+                    if !r.is_spend && from_str == "---" {
+                        if let Some(spender) = spender_at.get(&r.height) {
+                            from_str = format!("{}*", spender);
+                        }
+                    }
+
+                    println!(
+                        "{:<8} {:<5} {:<7} {:<8} {:>10} {:<12} {:<12} {:<10} {:<16}",
+                        r.height,
+                        r.action_idx,
+                        type_str,
+                        if r.is_flagged { "FLAGGED" } else { "" },
+                        r.amount_str,
+                        from_str,
+                        to_str,
+                        r.via_str,
+                        r.when_str,
+                    );
+                    count += 1;
+                }
+
+                println!("{}", "-".repeat(90));
+                println!(
+                    "Total: {} transfers | {} decrypted | {} flagged | {} encrypted",
+                    count,
+                    decrypted_count,
+                    flagged_count,
+                    count - decrypted_count
+                );
+                Ok(())
+            }
+
+            IssuerDbCmd::Update {
+                db,
+                audit_output,
+                audit_subject,
+            } => {
+                // Load audit output from orbis-sim
+                let file = File::open(audit_output).context("failed to open audit output file")?;
+                let reader = BufReader::new(file);
+                let entries: Vec<AuditEntry> =
+                    serde_json::from_reader(reader).context("failed to parse audit output JSON")?;
+
+                let conn = rusqlite::Connection::open(db)
+                    .context("failed to open issuer ledger database")?;
+
+                // Build set of known addresses from alias table for extension validation.
+                // Sender-side PRE has no auth tag, so ~50% of wrong-key decryptions produce
+                // valid curve points but garbage addresses. Reject unknown addresses.
+                let known_addresses: std::collections::HashSet<String> = {
+                    let mut set = std::collections::HashSet::new();
+                    if let Ok(mut stmt) =
+                        conn.prepare("SELECT transmission_key_hex FROM address_aliases")
+                    {
+                        if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                            for row in rows.flatten() {
+                                set.insert(row);
+                            }
+                        }
+                    }
+                    set
+                };
+
+                let mut updated = 0u64;
+                let mut skipped = 0u64;
+                let now = chrono_now();
+
+                for entry in &entries {
+                    // Validate extension entries: sender-side PRE has no auth tag,
+                    // so ~50% of wrong-key decryptions produce garbage addresses.
+                    // Skip entries where self_address is unknown (likely false positive).
+                    if entry.decrypted_via.ends_with("extension")
+                        && !entry.counterparty.is_empty()
+                        && !known_addresses.contains(&entry.self_address)
+                    {
+                        skipped += 1;
+                        continue;
+                    }
+
+                    // Prefix via with audit subject name (e.g. "core" → "Alice core")
+                    let via = match &audit_subject {
+                        Some(subject) => format!("{} {}", subject, entry.decrypted_via),
+                        None => entry.decrypted_via.clone(),
+                    };
+
+                    let is_core_only = entry.counterparty.is_empty();
+
+                    if is_core_only {
+                        // Core-only audit: set amount + self_address on rows not yet decrypted
+                        let changes = conn.execute(
+                            "UPDATE compliance_ledger SET \
+                             amount = ?1, self_address = ?2, \
+                             decrypted_at = ?3, decrypted_via = ?4 \
+                             WHERE height = ?5 AND action_index = ?6 AND amount IS NULL",
+                            rusqlite::params![
+                                entry.amount,
+                                entry.self_address,
+                                now,
+                                via,
+                                entry.height as i64,
+                                entry.action_index as i64,
+                            ],
+                        )?;
+                        updated += changes as u64;
+                    } else {
+                        // Full audit: try upgrading a core-only row (add counterparty)
+                        // Only update via when counterparty is actually being set.
+                        let changes = conn.execute(
+                            "UPDATE compliance_ledger SET \
+                             self_address = ?1, counterparty = ?2, decrypted_at = ?3, decrypted_via = ?4 \
+                             WHERE height = ?5 AND action_index = ?6 \
+                             AND amount IS NOT NULL AND (counterparty IS NULL OR counterparty = '')",
+                            rusqlite::params![
+                                entry.self_address,
+                                entry.counterparty,
+                                now,
+                                via,
+                                entry.height as i64,
+                                entry.action_index as i64,
+                            ],
+                        )?;
+
+                        if changes == 0 {
+                            // No prior core-only row; do a first-time full insert
+                            let changes = conn.execute(
+                                "UPDATE compliance_ledger SET \
+                                 amount = ?1, self_address = ?2, counterparty = ?3, \
+                                 decrypted_at = ?4, decrypted_via = ?5 \
+                                 WHERE height = ?6 AND action_index = ?7 AND amount IS NULL",
+                                rusqlite::params![
+                                    entry.amount,
+                                    entry.self_address,
+                                    entry.counterparty,
+                                    now,
+                                    via,
+                                    entry.height as i64,
+                                    entry.action_index as i64,
+                                ],
+                            )?;
+                            updated += changes as u64;
+                        } else {
+                            updated += changes as u64;
+                        }
+                    }
+                }
+
+                println!(
+                    "Updated {} rows from audit ({} entries, {} false positives skipped).",
+                    updated,
+                    entries.len(),
+                    skipped
+                );
+                Ok(())
+            }
+
+            IssuerDbCmd::Alias { db, address, name } => {
+                let addr: Address = address.parse().context("invalid Penumbra address")?;
+                let tk_hex = hex::encode(addr.transmission_key().0);
+
+                let conn = rusqlite::Connection::open(db)
+                    .context("failed to open issuer ledger database")?;
+
+                conn.execute(
+                    "INSERT OR REPLACE INTO address_aliases (transmission_key_hex, name) \
+                     VALUES (?1, ?2)",
+                    rusqlite::params![tk_hex, name],
+                )?;
+
+                println!("Alias set: {} -> {}...", name, &tk_hex[..16]);
+                Ok(())
+            }
+        }
+    }
+}
+
+fn truncate_hex(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len - 3])
+    }
+}
+
+fn chrono_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("{}", secs)
+}
+
+/// Convert a base-unit amount string to display units (exponent 18).
+fn format_display_amount(raw: &str) -> String {
+    let val: u128 = match raw.parse() {
+        Ok(v) => v,
+        Err(_) => return raw.to_string(),
+    };
+    let exp: u128 = 1_000_000_000_000_000_000; // 10^18
+    let whole = val / exp;
+    let frac = val % exp;
+    if frac == 0 {
+        format!("{}", whole)
+    } else {
+        // Show up to 6 decimal places, trimming trailing zeros
+        let frac_scaled = frac / 1_000_000_000_000; // keep 6 digits
+        let s = format!("{}.{:06}", whole, frac_scaled);
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
+/// Format a Unix epoch-seconds timestamp into "YYYY-MM-DD HH:MM".
+fn format_timestamp(epoch_str: &str) -> String {
+    let secs: u64 = match epoch_str.parse() {
+        Ok(v) => v,
+        Err(_) => return epoch_str.to_string(),
+    };
+    // Manual UTC conversion (no chrono dependency needed)
+    let s = secs;
+    let days = s / 86400;
+    let time_of_day = s % 86400;
+    let hours = time_of_day / 3600;
+    let minutes = (time_of_day % 3600) / 60;
+
+    // Days since 1970-01-01 to Y-M-D
+    let (year, month, day) = days_to_ymd(days);
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        year, month, day, hours, minutes
+    )
+}
+
+fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
+    let mut year = 1970u64;
+    loop {
+        let days_in_year = if is_leap(year) { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+    let leap = is_leap(year);
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut month = 1u64;
+    for &md in &month_days {
+        if days < md {
+            break;
+        }
+        days -= md;
+        month += 1;
+    }
+    (year, month, days + 1)
+}
+
+fn is_leap(y: u64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }

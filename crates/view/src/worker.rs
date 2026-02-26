@@ -166,15 +166,15 @@ impl Worker {
                 .is_address_in_compliance_scope(&self.fvk, &event.leaf.address)
                 .await?;
 
-            // If in scope, store full leaf data for offline proof generation
+            // If in scope, store leaf data for offline proof generation
             if is_in_scope {
-                let ack_bytes: [u8; 32] = event.leaf.key.inner().vartime_compress().0;
                 self.storage
                     .record_compliance_leaf_data(
                         &event.leaf.address,
                         &event.leaf.asset_id,
                         position,
-                        &ack_bytes,
+                        &[0u8; 32],
+                        &[0u8; 32],
                         event.commitment,
                     )
                     .await?;
@@ -188,8 +188,8 @@ impl Worker {
                 asset_id = ?event.asset_id,
                 position = event.position,
                 is_regulated = event.is_regulated,
-                threshold = event.indexed_leaf.policy.threshold,
-                dk_pub_first_byte = event.indexed_leaf.policy.dk_pub.vartime_compress().0[0],
+                threshold = event.indexed_leaf.params.threshold,
+                dk_pub_first_byte = event.indexed_leaf.params.dk_pub.vartime_compress().0[0],
                 low_leaf_position = event.low_leaf_position,
                 "worker: syncing asset registration"
             );
@@ -202,6 +202,17 @@ impl Worker {
                 event.updated_low_leaf.clone(),
                 event.low_leaf_position,
             )?;
+
+            // Also store the asset policy in SQLite for direct lookups
+            if event.is_regulated {
+                self.storage
+                    .store_asset_policy(
+                        &event.asset_id,
+                        &event.indexed_leaf.params.dk_pub,
+                        event.indexed_leaf.params.threshold,
+                    )
+                    .await?;
+            }
         }
 
         // Debug: log tree state after sync

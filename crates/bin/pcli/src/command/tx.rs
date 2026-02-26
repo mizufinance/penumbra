@@ -147,6 +147,25 @@ pub enum TxCmd {
         #[clap(short, long, default_value_t)]
         fee_tier: FeeTier,
     },
+    /// Send funds to multiple recipients in a single transaction.
+    ///
+    /// Each --output flag specifies a "VALUE:ADDRESS" pair, e.g.
+    /// `pcli tx send-multi --output "100regulated_usd:penumbra1abc..." --output "200regulated_usd:penumbra1def..."`
+    #[clap(display_order = 101)]
+    SendMulti {
+        /// Outputs as "VALUE:ADDRESS" pairs.
+        #[clap(long = "output", min_values = 1, required = true)]
+        outputs: Vec<String>,
+        /// Only spend funds originally received by the given account.
+        #[clap(long, default_value = "0", display_order = 300)]
+        source: u32,
+        /// Optional. Set the transaction's memo field to the provided text.
+        #[clap(long)]
+        memo: Option<String>,
+        /// The selected fee tier to multiply the fee amount by.
+        #[clap(short, long, default_value_t)]
+        fee_tier: FeeTier,
+    },
     /// Deposit stake into a validator's delegation pool.
     #[clap(display_order = 200)]
     Delegate {
@@ -376,6 +395,7 @@ impl TxCmd {
     pub fn offline(&self) -> bool {
         match self {
             TxCmd::Send { .. } => false,
+            TxCmd::SendMulti { .. } => false,
             TxCmd::Sweep { .. } => false,
             TxCmd::Swap { .. } => false,
             TxCmd::Delegate { .. } => false,
@@ -404,11 +424,11 @@ impl TxCmd {
             if compliance_cmd.is_decrypt() {
                 return compliance_cmd.exec_decrypt().await;
             }
-            if compliance_cmd.is_derive_daily_key() {
-                return compliance_cmd.exec_derive_daily_key();
-            }
             if compliance_cmd.is_generate_dk() {
                 return compliance_cmd.exec_generate_dk();
+            }
+            if compliance_cmd.is_issuer_db() {
+                return compliance_cmd.exec_issuer_db().await;
             }
         }
 
@@ -463,6 +483,53 @@ impl TxCmd {
                     )
                     .await
                     .context("can't build send transaction")?;
+                app.build_and_submit_transaction(plan).await?;
+            }
+            TxCmd::SendMulti {
+                outputs,
+                source: from,
+                memo,
+                fee_tier,
+            } => {
+                // Parse each "VALUE:ADDRESS" pair.
+                let parsed_outputs = outputs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| {
+                        let (value_str, addr_str) = s.split_once(':').ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "output #{} is not in VALUE:ADDRESS format: {:?}",
+                                i + 1,
+                                s
+                            )
+                        })?;
+                        let value = value_str
+                            .parse::<Value>()
+                            .with_context(|| format!("invalid value in output #{}", i + 1))?;
+                        let address = addr_str
+                            .parse::<Address>()
+                            .map_err(|_| anyhow::anyhow!("invalid address in output #{}", i + 1))?;
+                        Ok((value, address))
+                    })
+                    .collect::<Result<Vec<(Value, Address)>>>()?;
+
+                let mut planner = Planner::new(OsRng);
+                planner
+                    .set_gas_prices(gas_prices)
+                    .set_fee_tier((*fee_tier).into());
+                for (value, address) in parsed_outputs {
+                    planner.output(value, address);
+                }
+                let plan = planner
+                    .memo(memo.clone().unwrap_or_default())
+                    .plan(
+                        app.view
+                            .as_mut()
+                            .context("view service must be initialized")?,
+                        AddressIndex::new(*from),
+                    )
+                    .await
+                    .context("can't build multi-send transaction")?;
                 app.build_and_submit_transaction(plan).await?;
             }
             TxCmd::CommunityPoolDeposit {

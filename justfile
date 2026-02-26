@@ -27,6 +27,18 @@ check:
   # fmt dry-run, failing on any suggestions
   cargo fmt --all -- --check
 
+# Run Orbis crypto integration tests (DKG, DLEQ, PRE against real nodes).
+orbis-test:
+    ./scripts/test-orbis-primitives.sh
+
+# Run compliance transaction setup (DKG, registrations, transfers — run once).
+compliance-setup-tx:
+    ./scripts/setup-tx.sh
+
+# Run scanning + progressive disclosure demo (rerunnable).
+compliance-scanning:
+    ./scripts/test-orbis-scanning.sh
+
 # Render livereload environment for editing the Protocol documentation.
 protocol-docs:
     # Access local docs at http://127.0.0.1:3002

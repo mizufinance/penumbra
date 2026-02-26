@@ -6,7 +6,7 @@ use penumbra_sdk_proto::core::component::compliance::v1::{
     ComplianceAssetStatusRequest, ComplianceAssetStatusResponse,
     ComplianceBatchMerkleProofsRequest, ComplianceBatchMerkleProofsResponse, ComplianceLeaf,
     ComplianceMerkleProofsRequest, ComplianceMerkleProofsResponse, ComplianceUserLeafRequest,
-    ComplianceUserLeafResponse, ComplianceViewingKey, IndexedLeafData, MerklePath, MerklePathLayer,
+    ComplianceUserLeafResponse, IndexedLeafData, MerklePath, MerklePathLayer,
 };
 use penumbra_sdk_sct::component::clock::EpochRead;
 use tonic::Status;
@@ -220,10 +220,8 @@ impl QueryService for Server {
 
                     let leaf_proto = leaf_opt.map(|leaf| ComplianceLeaf {
                         address: Some(leaf.address.into()),
-                        key: Some(ComplianceViewingKey {
-                            inner: leaf.key.0.vartime_compress().0.to_vec(),
-                        }),
                         asset_id: Some(leaf.asset_id.into()),
+                        d: leaf.d.to_bytes().to_vec(),
                     });
 
                     (true, Some(proto_path), pos, leaf_proto)
@@ -260,24 +258,8 @@ impl QueryService for Server {
         );
 
         // Convert indexed_leaf to proto
-        let asset_indexed_leaf = Some(IndexedLeafData {
-            value: asset_proof_data.indexed_leaf.value.to_bytes().to_vec(),
-            next_index: asset_proof_data.indexed_leaf.next_index,
-            next_value: asset_proof_data.indexed_leaf.next_value.to_bytes().to_vec(),
-            dk_pub: asset_proof_data
-                .indexed_leaf
-                .policy
-                .dk_pub
-                .vartime_compress()
-                .0
-                .to_vec(),
-            threshold: asset_proof_data
-                .indexed_leaf
-                .policy
-                .threshold
-                .to_le_bytes()
-                .to_vec(),
-        });
+        let asset_indexed_leaf: IndexedLeafData = asset_proof_data.indexed_leaf.clone().into();
+        let asset_indexed_leaf = Some(asset_indexed_leaf);
 
         let response = ComplianceMerkleProofsResponse {
             user_registered,
@@ -327,15 +309,12 @@ impl QueryService for Server {
         let response = match leaf_opt {
             Some(leaf) => {
                 tracing::debug!(?address, ?asset_id, "found user leaf");
-                use penumbra_sdk_proto::core::component::compliance::v1 as pb;
                 ComplianceUserLeafResponse {
                     is_registered: true,
-                    leaf: Some(pb::ComplianceLeaf {
+                    leaf: Some(ComplianceLeaf {
                         address: Some(leaf.address.into()),
-                        key: Some(pb::ComplianceViewingKey {
-                            inner: leaf.key.0.vartime_compress().0.to_vec(),
-                        }),
                         asset_id: Some(leaf.asset_id.into()),
+                        d: leaf.d.to_bytes().to_vec(),
                     }),
                 }
             }
@@ -435,10 +414,8 @@ impl QueryService for Server {
 
                         let leaf_proto = leaf_opt.map(|leaf| ComplianceLeaf {
                             address: Some(leaf.address.into()),
-                            key: Some(ComplianceViewingKey {
-                                inner: leaf.key.0.vartime_compress().0.to_vec(),
-                            }),
                             asset_id: Some(leaf.asset_id.into()),
+                            d: leaf.d.to_bytes().to_vec(),
                         });
 
                         (true, Some(proto_path), pos, leaf_proto)
@@ -460,24 +437,8 @@ impl QueryService for Server {
             });
 
             // Convert indexed_leaf to proto
-            let asset_indexed_leaf = Some(IndexedLeafData {
-                value: asset_proof_data.indexed_leaf.value.to_bytes().to_vec(),
-                next_index: asset_proof_data.indexed_leaf.next_index,
-                next_value: asset_proof_data.indexed_leaf.next_value.to_bytes().to_vec(),
-                dk_pub: asset_proof_data
-                    .indexed_leaf
-                    .policy
-                    .dk_pub
-                    .vartime_compress()
-                    .0
-                    .to_vec(),
-                threshold: asset_proof_data
-                    .indexed_leaf
-                    .policy
-                    .threshold
-                    .to_le_bytes()
-                    .to_vec(),
-            });
+            let asset_indexed_leaf: IndexedLeafData = asset_proof_data.indexed_leaf.clone().into();
+            let asset_indexed_leaf = Some(asset_indexed_leaf);
 
             results.push(ComplianceMerkleProofsResponse {
                 user_registered,

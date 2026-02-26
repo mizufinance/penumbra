@@ -164,14 +164,20 @@ CREATE TABLE compliance_user_hashes (
     PRIMARY KEY (position, height)
 );
 
--- Asset tree (IMT) indexed leaves (includes policy for correct tree reconstruction)
+-- Asset tree (IMT) indexed leaves (full policy for correct tree reconstruction)
 CREATE TABLE compliance_asset_leaves (
     position BIGINT PRIMARY KEY,
     value BLOB NOT NULL,
     next_index BIGINT NOT NULL,
     next_value BLOB NOT NULL,
-    dk_pub BLOB NOT NULL,        -- 32 bytes compressed curve point (policy)
-    threshold BLOB NOT NULL       -- 8 bytes little-endian u64 (allows u64::MAX for sentinel)
+    dk_pub BLOB NOT NULL,          -- 32 bytes compressed curve point
+    threshold BLOB NOT NULL,       -- 16 bytes little-endian u128
+    channels_hash BLOB NOT NULL,   -- 32 bytes Fq
+    ring_pk BLOB NOT NULL,         -- 32 bytes compressed curve point
+    ring_id_hash BLOB NOT NULL,    -- 32 bytes Fq
+    policy_id_hash BLOB NOT NULL,  -- 32 bytes Fq
+    permission_hash BLOB NOT NULL, -- 32 bytes Fq
+    resource_hash BLOB NOT NULL    -- 32 bytes Fq
 );
 
 -- Internal hashes for asset tree auth paths
@@ -197,6 +203,7 @@ CREATE TABLE compliance_user_leaf_data (
     asset_id BLOB NOT NULL,
     position BIGINT NOT NULL,
     address_compliance_key BLOB NOT NULL,
+    ack_orbis BLOB NOT NULL,           -- ACK on standard generator G (32 bytes)
     commitment BLOB NOT NULL,
     PRIMARY KEY (address, asset_id)
 );

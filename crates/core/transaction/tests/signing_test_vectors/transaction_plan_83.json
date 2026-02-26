@@ -1,67 +1,66 @@
 {
   "actions": [
     {
-      "ics20Withdrawal": {
-        "amount": {
-          "lo": "295302314675594530"
-        },
-        "denom": {
-          "denom": "nDCGe"
-        },
-        "destinationChainAddress": "penumbra146c9t0pcw556hmktd9sgppr3u875jvhyzpkg8z2430dcfp5ftsms459sujfvp2rx655yefwzp69mgkkugu4uzxlp2vgmzt7vtzdtw6du6vx66m9dhn4d43lx7s9js42nf5hstu",
-        "returnAddress": {
-          "inner": "o2lwjGj2GHbkogfAjmAQuj8uuNqxeFR/fZwPVP+dUiE2h3soTf/XhcI9Vf4+4AsoTY4E4hwhVuyjM5DcLcEkxZJyLfyZtekVaFZ+acXc2qA="
-        },
-        "timeoutHeight": {
-          "revisionNumber": "295797477",
-          "revisionHeight": "877054884"
-        },
-        "sourceChannel": "channel-0"
-      }
-    },
-    {
-      "communityPoolDeposit": {
+      "communityPoolOutput": {
         "value": {
           "amount": {
-            "lo": "783965284498228456"
+            "lo": "971626248275214179"
           },
           "assetId": {
             "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
           }
+        },
+        "address": {
+          "inner": "IflanWNGKDPjg3LFuTL/qdR7mdDhSXnP9O5JUSkXFP3opfHXxoy2KeNimGxgfo243YBK0iLEoEgDDzbNM9LkwWuxqR1qHyKPTU+wbi1PHuk="
         }
+      }
+    },
+    {
+      "proposalDepositClaim": {
+        "proposal": "297470756",
+        "depositAmount": {
+          "lo": "587846732245243718"
+        },
+        "outcome": {
+          "passed": {}
+        }
+      }
+    },
+    {
+      "validatorDefinition": {
+        "validator": {
+          "identityKey": {
+            "ik": "9hKvbPku99NXApAhY+bKMPLd3vssgQTJnYRezJMhuAM="
+          },
+          "consensusKey": "5h5r3HpZNzLtcmUyJfwcJyt2Xfu7f+ip4dROwu+6vqE=",
+          "name": "test validator",
+          "enabled": true,
+          "governanceKey": {
+            "gk": "9hKvbPku99NXApAhY+bKMPLd3vssgQTJnYRezJMhuAM="
+          }
+        },
+        "authSig": "eLkVld7piR7u3osokl+JX3u8wGpRTAUGC70Xe1KPJA1sRcWuWxXNoAl06almJTRAk3/LCVVjoB//pKe9CwTkAA=="
       }
     },
     {
       "proposalSubmit": {
         "proposal": {
-          "title": "nzclbsan-9343612134998750",
-          "description": "jvnsgplicwdzohmycmuh-7269190743501",
+          "title": "tcedr-391903902794572074009864621",
+          "description": "iruvfwchvhubsnrat-053049529047823",
           "signaling": {}
         },
         "depositAmount": {
-          "lo": "851562561661808456"
-        }
-      }
-    },
-    {
-      "proposalSubmit": {
-        "proposal": {
-          "title": "txaifkkfzpsnzklqs-4541029268834221686579383",
-          "description": "ni-084035",
-          "signaling": {}
-        },
-        "depositAmount": {
-          "lo": "711766138849818478"
+          "lo": "837090449725515992"
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "9966936598",
-    "chainId": "rcuuwxsimrnuwnygtghzsnlcftr-021520799",
+    "expiryHeight": "9418043815",
+    "chainId": "fxqmgfdxbnq-4947",
     "fee": {
       "amount": {
-        "lo": "645284070437435798"
+        "lo": "466255777987251474"
       }
     }
   }

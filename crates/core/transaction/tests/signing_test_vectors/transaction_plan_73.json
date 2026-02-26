@@ -1,74 +1,45 @@
 {
   "actions": [
     {
-      "actionDutchAuctionWithdraw": {
-        "auctionId": {
-          "inner": "OasocZmLRwYnjt0QBzzYY5l12S6ry3vEmfb5calXVmM="
-        },
-        "seq": "512386849",
-        "reservesInput": {
-          "amount": {
-            "lo": "802493979926855665"
+      "validatorVote": {
+        "body": {
+          "proposal": "232355935",
+          "vote": {
+            "vote": "VOTE_NO"
           },
-          "assetId": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+          "identityKey": {
+            "ik": "xzRLE+JdbguqKKN78Rkhf7QS8If/R3J3zLQeZPVt6Y0="
+          },
+          "governanceKey": {
+            "gk": "iIj4LTD/50uvW/VoDmqpmfvzLqxx9i9vHT+Mdyo4vw8="
+          },
+          "reason": {
+            "reason": "SB2Mn7Pg"
           }
         },
-        "reservesOutput": {
-          "amount": {
-            "lo": "596187676438725679"
-          },
-          "assetId": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          }
+        "authSig": {
+          "inner": "2hSuvM5ttTUlFQcfp1Rq0rpT+j6z+FCnfeR4jdqYygUoybUTUHDJXoWOWkCqu5y9YtS+FHZCCBPOY8D1/WiqAw=="
         }
       }
     },
     {
       "proposalDepositClaim": {
-        "proposal": "188946803",
+        "proposal": "164051554",
         "depositAmount": {
-          "lo": "533623261517729362"
+          "lo": "824043981319365924"
         },
         "outcome": {
           "failed": {}
         }
       }
-    },
-    {
-      "actionDutchAuctionSchedule": {
-        "description": {
-          "input": {
-            "amount": {
-              "lo": "144742277882810602"
-            },
-            "assetId": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            }
-          },
-          "outputId": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          },
-          "maxOutput": {
-            "lo": "929151376976320542"
-          },
-          "minOutput": {
-            "lo": "414395594334254009"
-          },
-          "startHeight": "806151720",
-          "endHeight": "806151721",
-          "stepCount": "636303788",
-          "nonce": "Ike/7gWLGcwNV0qsYDQIt+NEZ7qelKHHIw5OaqqfRgI="
-        }
-      }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "8033860816",
-    "chainId": "gwtwikmw-23131627782667279979998477",
+    "expiryHeight": "4649060038",
+    "chainId": "bqimpn-1971994483389",
     "fee": {
       "amount": {
-        "lo": "514647146872737332"
+        "lo": "632208388077727166"
       }
     }
   }
