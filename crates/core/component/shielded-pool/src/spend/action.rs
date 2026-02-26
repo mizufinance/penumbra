@@ -29,12 +29,12 @@ pub struct Body {
     pub target_timestamp: u64,
     /// Blinded sender leaf hash (for binding with output circuit)
     pub sender_leaf_hash: penumbra_sdk_tct::StateCommitment,
-    /// Blinded counterparty (receiver) leaf hash (for binding with output circuit)
-    pub counterparty_leaf_hash: penumbra_sdk_tct::StateCommitment,
     /// Compliance tree anchor (user tree root) used during proof generation
     pub compliance_anchor: penumbra_sdk_tct::StateCommitment,
     /// Asset tree anchor used during proof generation
     pub asset_anchor: penumbra_sdk_tct::StateCommitment,
+    /// DLEQ proof bytes (c, s) for Orbis policy binding. 64 bytes.
+    pub dleq_proof: Vec<u8>,
 }
 
 impl EffectingData for Body {
@@ -107,9 +107,9 @@ impl From<Body> for pb::SpendBody {
             compliance_ciphertext: msg.compliance_ciphertext,
             target_timestamp: msg.target_timestamp,
             sender_leaf_hash: Some(msg.sender_leaf_hash.into()),
-            counterparty_leaf_hash: Some(msg.counterparty_leaf_hash.into()),
             compliance_anchor: Some(msg.compliance_anchor.into()),
             asset_anchor: Some(msg.asset_anchor.into()),
+            dleq_proof: msg.dleq_proof,
         }
     }
 }
@@ -160,12 +160,6 @@ impl TryFrom<pb::SpendBody> for Body {
             .try_into()
             .context("malformed sender_leaf_hash")?;
 
-        let counterparty_leaf_hash = proto
-            .counterparty_leaf_hash
-            .ok_or_else(|| anyhow::anyhow!("missing counterparty_leaf_hash"))?
-            .try_into()
-            .context("malformed counterparty_leaf_hash")?;
-
         let compliance_anchor = proto
             .compliance_anchor
             .ok_or_else(|| anyhow::anyhow!("missing compliance_anchor"))?
@@ -186,9 +180,9 @@ impl TryFrom<pb::SpendBody> for Body {
             compliance_ciphertext,
             target_timestamp,
             sender_leaf_hash,
-            counterparty_leaf_hash,
             compliance_anchor,
             asset_anchor,
+            dleq_proof: proto.dleq_proof,
         })
     }
 }

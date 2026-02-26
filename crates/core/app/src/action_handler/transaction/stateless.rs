@@ -62,13 +62,9 @@ pub fn check_non_empty_transaction(tx: &Transaction) -> anyhow::Result<()> {
 
 /// Validates the cryptographic binding between spend and output actions.
 ///
-/// For compliance, spends and outputs must be bound through their blinded leaf hashes:
-/// - Each spend's `counterparty_leaf_hash` must match some output's `receiver_leaf_hash`
-/// - Each output's `counterparty_leaf_hash` must match some spend's `sender_leaf_hash`
-///
-/// This ensures the same `tx_blinding_nonce` was used and that sender/receiver
-/// relationships are cryptographically bound without revealing which compliance
-/// leaves are transacting.
+/// For compliance, each output's `counterparty_leaf_hash` must match some spend's
+/// `sender_leaf_hash`. This ensures the sender/receiver relationship is cryptographically
+/// bound without revealing which compliance leaves are transacting.
 pub fn validate_spend_output_binding(tx: &Transaction) -> anyhow::Result<()> {
     // Collect spend and output bodies
     let spends: Vec<_> = tx
@@ -96,18 +92,6 @@ pub fn validate_spend_output_binding(tx: &Transaction) -> anyhow::Result<()> {
     // If no spends or outputs, nothing to validate
     if spends.is_empty() || outputs.is_empty() {
         return Ok(());
-    }
-
-    // For each spend, verify binding with outputs:
-    // spend.counterparty_leaf_hash must match some output.receiver_leaf_hash
-    for spend in &spends {
-        let has_matching_output = outputs
-            .iter()
-            .any(|output| spend.counterparty_leaf_hash.0 == output.receiver_leaf_hash.0);
-
-        if !has_matching_output {
-            anyhow::bail!("spend counterparty_leaf_hash has no matching output receiver_leaf_hash");
-        }
     }
 
     // For each output, verify binding with spends:

@@ -1,22 +1,24 @@
 {
   "actions": [
     {
-      "proposalSubmit": {
-        "proposal": {
-          "title": "nromfiijuktxpogek-90609009768903635618",
-          "description": "hugutytbcfvugqebknzrwhabkk-32506429951843931145",
-          "signaling": {}
+      "delegate": {
+        "validatorIdentity": {
+          "ik": "APc5lpkLP9G8zDQfMeIsV/p6cOPX6Sy3KamrnlciPkw="
         },
-        "depositAmount": {
-          "lo": "7141268564647823"
+        "epochIndex": "6168",
+        "unbondedAmount": {
+          "lo": "710634275336405244"
+        },
+        "delegationAmount": {
+          "lo": "37376863418277559"
         }
       }
     },
     {
-      "communityPoolSpend": {
+      "communityPoolDeposit": {
         "value": {
           "amount": {
-            "lo": "312492793201610958"
+            "lo": "698137808704324127"
           },
           "assetId": {
             "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
@@ -25,29 +27,32 @@
       }
     },
     {
-      "undelegate": {
-        "validatorIdentity": {
-          "ik": "Ou0iVm2PqOL+vNeSDA/lSVvqHqs82cUtXhRXWOMJNGk="
-        },
-        "unbondedAmount": {
-          "lo": "401412443223654898"
-        },
-        "delegationAmount": {
-          "lo": "685231580481298752"
-        },
-        "fromEpoch": {
-          "index": "8272",
-          "startHeight": "8272"
+      "ibcRelayAction": {
+        "rawAction": {
+          "typeUrl": "/ibc.core.channel.v1.MsgRecvPacket",
+          "value": "CrMBCLK0++UFEgtkZWZhdWx0UG9ydBoJY2hhbm5lbC0wIgtkZWZhdWx0UG9ydCoJY2hhbm5lbC0wMmQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOgsIqaCOlQMQx4DRLkDQkfXIjpKAyxgSAgoAGgsIqaCOlQMQx4DRLiKPAXBlbnVtYnJhMTVmdjhybnF6MnNxczZ3eTRqNDlkY3ZrOGV5ZHVndHIwNXMyd3NrNXZwaHVydDJtOWNkY3ZqYW1nMDQ0dXF0Mm45eWNoMzh4OHdlcXg2YXkyMDU5dTlxNDVoZnVnNG16Z2NrNnZtaGRsZndnd241M25kZ3V0bmRjYzllYzAyZWFtYXluZ2x2"
+        }
+      }
+    },
+    {
+      "communityPoolDeposit": {
+        "value": {
+          "amount": {
+            "lo": "83556436508091368"
+          },
+          "assetId": {
+            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+          }
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "7051137460",
-    "chainId": "rba-0870628",
+    "expiryHeight": "6733013527",
+    "chainId": "bpmqaqihqgtarwratghqstrwiajh-5977587927",
     "fee": {
       "amount": {
-        "lo": "590466669813173281"
+        "lo": "653208365276772279"
       }
     }
   }

@@ -11,7 +11,7 @@ use penumbra_sdk_keys::Address;
 use penumbra_sdk_tct::StateCommitment;
 use std::collections::BTreeMap;
 
-use crate::{indexed_tree::IndexedLeaf, structs::AssetPolicy, ComplianceLeaf, MerklePath};
+use crate::{indexed_tree::IndexedLeaf, ComplianceLeaf, MerklePath};
 
 /// Result of a batch compliance query, containing all data needed for enrichment.
 #[derive(Debug, Clone)]
@@ -24,8 +24,6 @@ pub struct BatchComplianceData {
     pub asset_proofs: BTreeMap<asset::Id, (MerklePath, u64, IndexedLeaf, bool)>,
     /// Per-(address, asset) user proof data: (merkle_path, position, leaf)
     pub user_proofs: BTreeMap<(Address, asset::Id), (MerklePath, u64, ComplianceLeaf)>,
-    /// Per-asset policy data (threshold and issuer DK_pub)
-    pub asset_policies: BTreeMap<asset::Id, AssetPolicy>,
 }
 
 impl Default for BatchComplianceData {
@@ -36,7 +34,6 @@ impl Default for BatchComplianceData {
             asset_anchor: StateCommitment(Fq::from(0u64)),
             asset_proofs: BTreeMap::new(),
             user_proofs: BTreeMap::new(),
-            asset_policies: BTreeMap::new(),
         }
     }
 }
@@ -98,26 +95,11 @@ pub trait ComplianceProofProvider: Send + Sync {
             }
         }
 
-        // Fetch asset policies for regulated assets
-        let mut asset_policies = BTreeMap::new();
-        for (asset_id, (_, _, _, is_regulated)) in &asset_proofs {
-            if *is_regulated {
-                if let Some(policy) = self.get_asset_policy(*asset_id).await? {
-                    asset_policies.insert(*asset_id, policy);
-                }
-            }
-        }
-
         Ok(BatchComplianceData {
             compliance_anchor,
             asset_anchor,
             asset_proofs,
             user_proofs,
-            asset_policies,
         })
     }
-
-    /// Get the asset policy (threshold and DK_pub) for a regulated asset.
-    /// Returns None if the asset has no policy set.
-    async fn get_asset_policy(&self, asset_id: asset::Id) -> Result<Option<AssetPolicy>>;
 }

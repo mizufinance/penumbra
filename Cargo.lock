@@ -4668,6 +4668,63 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbis-audit"
+version = "2.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "decaf377",
+ "hex",
+ "penumbra-sdk-asset",
+ "penumbra-sdk-compliance",
+ "penumbra-sdk-keys",
+ "penumbra-sdk-num",
+ "penumbra-sdk-proto",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tonic",
+ "url",
+]
+
+[[package]]
+name = "orbis-ring-test"
+version = "2.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "decaf377",
+ "hex",
+ "penumbra-sdk-asset",
+ "penumbra-sdk-compliance",
+ "penumbra-sdk-keys",
+ "penumbra-sdk-num",
+ "poseidon377",
+ "rand_core",
+ "serde_json",
+]
+
+[[package]]
+name = "orbis-sim"
+version = "2.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "decaf377",
+ "hex",
+ "penumbra-sdk-asset",
+ "penumbra-sdk-compliance",
+ "penumbra-sdk-keys",
+ "penumbra-sdk-num",
+ "penumbra-sdk-proto",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tonic",
+ "url",
+]
+
+[[package]]
 name = "ordered-float"
 version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4895,6 +4952,7 @@ dependencies = [
  "rand_core",
  "regex",
  "rpassword",
+ "rusqlite",
  "rustls 0.23.21",
  "serde",
  "serde_json",
@@ -5216,6 +5274,7 @@ dependencies = [
  "anyhow",
  "ark-ff",
  "ark-groth16",
+ "ark-serialize",
  "ark-snark",
  "async-trait",
  "axum-server",
@@ -5540,6 +5599,7 @@ dependencies = [
  "ark-serialize",
  "ark-snark",
  "async-trait",
+ "base64 0.21.7",
  "bincode",
  "blake2b_simd 1.0.2",
  "chacha20poly1305",
@@ -5562,6 +5622,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.10.8",
  "tempfile",
  "tendermint 0.40.3",
  "tokio",

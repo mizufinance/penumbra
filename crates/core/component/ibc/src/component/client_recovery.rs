@@ -185,7 +185,7 @@ pub fn validate_client_id_format_ics07(client_id: &ClientId) -> Result<()> {
 /// healthy state.
 ///
 /// The Tendermint ClientState contains:
-/// ```
+/// ```text
 /// ClientState {
 ///     // IMMUTABLE
 ///     chain_id,          

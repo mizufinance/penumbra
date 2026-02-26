@@ -21,12 +21,12 @@ pub struct ComplianceLeaf {
     /// The registered address for compliance.
     #[prost(message, optional, tag = "1")]
     pub address: ::core::option::Option<super::super::super::keys::v1::Address>,
-    /// The compliance viewing key for this wallet.
-    #[prost(message, optional, tag = "2")]
-    pub key: ::core::option::Option<ComplianceViewingKey>,
     /// The asset ID this compliance leaf applies to.
     #[prost(message, optional, tag = "3")]
     pub asset_id: ::core::option::Option<super::super::super::asset::v1::AssetId>,
+    /// Derivation scalar: d = SHA256_derive(b_d_fq). Verified at registration.
+    #[prost(bytes = "vec", tag = "4")]
+    pub d: ::prost::alloc::vec::Vec<u8>,
 }
 impl ::prost::Name for ComplianceLeaf {
     const NAME: &'static str = "ComplianceLeaf";
@@ -48,14 +48,29 @@ pub struct MsgRegisterAsset {
     #[prost(bool, tag = "2")]
     pub is_regulated: bool,
     /// Issuer's detection key public (32 bytes, optional).
-    /// When set, enables issuer-side detection and flagged transfer decryption.
     #[prost(bytes = "vec", tag = "3")]
     pub dk_pub: ::prost::alloc::vec::Vec<u8>,
     /// Amount threshold for flagging (16 bytes, little-endian u128).
-    /// Transfers at or above this amount are encrypted to issuer's DK instead of user's daily key.
-    /// u128::MAX means never flag (default for unregulated).
     #[prost(bytes = "vec", tag = "4")]
     pub threshold: ::prost::alloc::vec::Vec<u8>,
+    /// IBC channels allowed for this regulated asset. Empty = IBC blocked.
+    #[prost(string, repeated, tag = "5")]
+    pub allowed_channels: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Orbis ring public key (32 bytes compressed point).
+    #[prost(bytes = "vec", tag = "6")]
+    pub ring_pk: ::prost::alloc::vec::Vec<u8>,
+    /// Orbis DKG ring identifier.
+    #[prost(string, tag = "7")]
+    pub ring_id: ::prost::alloc::string::String,
+    /// SourceHub policy ID.
+    #[prost(string, tag = "8")]
+    pub policy_id: ::prost::alloc::string::String,
+    /// ACP permission name.
+    #[prost(string, tag = "9")]
+    pub permission: ::prost::alloc::string::String,
+    /// ACP resource type.
+    #[prost(string, tag = "10")]
+    pub resource: ::prost::alloc::string::String,
 }
 impl ::prost::Name for MsgRegisterAsset {
     const NAME: &'static str = "MsgRegisterAsset";
@@ -390,6 +405,7 @@ impl ::prost::Name for ComplianceBatchMerkleProofsResponse {
     }
 }
 /// Data for an indexed leaf in the asset IMT (for client sync).
+/// All policy fields are bound into the leaf commitment hash.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct IndexedLeafData {
     #[prost(bytes = "vec", tag = "1")]
@@ -398,12 +414,24 @@ pub struct IndexedLeafData {
     pub next_index: u64,
     #[prost(bytes = "vec", tag = "3")]
     pub next_value: ::prost::alloc::vec::Vec<u8>,
-    /// Issuer's detection key public (32 bytes compressed point).
+    /// Penumbra-decided policy (AssetParams)
     #[prost(bytes = "vec", tag = "4")]
     pub dk_pub: ::prost::alloc::vec::Vec<u8>,
-    /// Amount threshold for flagging (16 bytes, little-endian u128).
     #[prost(bytes = "vec", tag = "5")]
     pub threshold: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "6")]
+    pub channels_hash: ::prost::alloc::vec::Vec<u8>,
+    /// Orbis-decided policy (RingData)
+    #[prost(bytes = "vec", tag = "7")]
+    pub ring_pk: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "8")]
+    pub ring_id_hash: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "9")]
+    pub policy_id_hash: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "10")]
+    pub permission_hash: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "11")]
+    pub resource_hash: ::prost::alloc::vec::Vec<u8>,
 }
 impl ::prost::Name for IndexedLeafData {
     const NAME: &'static str = "IndexedLeafData";
@@ -413,6 +441,38 @@ impl ::prost::Name for IndexedLeafData {
     }
     fn type_url() -> ::prost::alloc::string::String {
         "/penumbra.core.component.compliance.v1.IndexedLeafData".into()
+    }
+}
+/// Full asset compliance policy (state-only, not in Merkle commitment).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AssetPolicy {
+    /// AssetParams
+    #[prost(bytes = "vec", tag = "1")]
+    pub dk_pub: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub threshold: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, repeated, tag = "3")]
+    pub allowed_channels: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// RingData
+    #[prost(string, tag = "4")]
+    pub ring_id: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "5")]
+    pub ring_pk: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "6")]
+    pub policy_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "7")]
+    pub permission: ::prost::alloc::string::String,
+    #[prost(string, tag = "8")]
+    pub resource: ::prost::alloc::string::String,
+}
+impl ::prost::Name for AssetPolicy {
+    const NAME: &'static str = "AssetPolicy";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.AssetPolicy".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.AssetPolicy".into()
     }
 }
 /// Emitted when a user is registered in the compliance tree.
@@ -450,7 +510,7 @@ pub struct EventAssetRegistered {
     /// The position in the asset tree (for regulated assets).
     #[prost(uint64, tag = "3")]
     pub position: u64,
-    /// The indexed leaf data (for client sync).
+    /// The indexed leaf data (for client sync, includes policy fields).
     #[prost(message, optional, tag = "4")]
     pub indexed_leaf: ::core::option::Option<IndexedLeafData>,
     /// The low leaf that was updated during IMT insertion.
@@ -459,6 +519,9 @@ pub struct EventAssetRegistered {
     /// The updated low leaf data.
     #[prost(message, optional, tag = "6")]
     pub updated_low_leaf: ::core::option::Option<IndexedLeafData>,
+    /// Full policy for client storage/reference.
+    #[prost(message, optional, tag = "7")]
+    pub asset_policy: ::core::option::Option<AssetPolicy>,
 }
 impl ::prost::Name for EventAssetRegistered {
     const NAME: &'static str = "EventAssetRegistered";
@@ -468,6 +531,27 @@ impl ::prost::Name for EventAssetRegistered {
     }
     fn type_url() -> ::prost::alloc::string::String {
         "/penumbra.core.component.compliance.v1.EventAssetRegistered".into()
+    }
+}
+/// Compliance metadata embedded in ICS-20 transfer memo field.
+/// Carries the spend ciphertext so the issuer can track regulated assets across IBC.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IbcComplianceMetadata {
+    /// The compliance ciphertext from the funding spend.
+    #[prost(bytes = "vec", tag = "1")]
+    pub compliance_ciphertext: ::prost::alloc::vec::Vec<u8>,
+    /// The asset ID being transferred.
+    #[prost(message, optional, tag = "7")]
+    pub asset_id: ::core::option::Option<super::super::super::asset::v1::AssetId>,
+}
+impl ::prost::Name for IbcComplianceMetadata {
+    const NAME: &'static str = "IbcComplianceMetadata";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.IbcComplianceMetadata".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.IbcComplianceMetadata".into()
     }
 }
 /// Emitted at end of block with the current compliance tree roots.

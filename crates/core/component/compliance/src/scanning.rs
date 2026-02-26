@@ -1,28 +1,23 @@
 //! Compliance decryption with tiered access control.
 //!
-//! This module provides separate functions for decrypting different tiers of compliance data,
+//! Provides separate functions for decrypting different tiers of compliance data,
 //! enabling selective disclosure:
 //!
-//! - **Core Decryption**: Uses the core key to decrypt amount + self address.
-//! - **Extension Decryption**: Uses the extension key to decrypt counterparty address.
+//! - **Core**: amount + self address
+//! - **Extension**: counterparty address (Output only)
+//! - **Sender-extension**: sender's copy of amount + recipient address (Output only)
 //!
-//! Note: Detection (asset_id scanning) is now handled by the issuer's DetectionKey.
-//! See `issuer_keys.rs::DetectionKey::try_decrypt_detection()` for detection functionality.
+//! ## Access Paths
 //!
-//! # Access Tiers
-//!
-//! | Role | Keys Available | Can See |
-//! |------|----------------|---------|
-//! | Issuer | DetectionKey | asset_id + is_flagged (for filtering) |
-//! | Auditor | Core key | amount + self address |
-//! | Full Access | All keys (UCK) | Everything including counterparty |
+//! 1. **Orbis path** (non-flagged): Orbis provides xnc_cmt per tier, issuer recovers seed.
+//! 2. **Flagged path**: issuer decrypts directly via dk × epk_i (no Orbis needed).
+//! 3. **Shared-secret path**: caller provides pre-computed shared secret per tier.
 
-use decaf377::{Element, Fq};
+use decaf377::{Element, Fq, Fr};
 use penumbra_sdk_asset::asset;
-use penumbra_sdk_keys::keys::{DailyComplianceKey, DailyKeySet, KeyType};
 use penumbra_sdk_num::Amount;
 
-use crate::crypto::COMPLIANCE_STREAM_CIPHER_DOMAIN;
+use crate::orbis::recover_seed;
 use crate::structs::ComplianceCiphertext;
 
 /// Decrypted core data: amount and self address.
@@ -40,6 +35,16 @@ pub struct ExtensionData {
     pub counterparty_transmission_key: [u8; 32],
 }
 
+/// Decrypted sender-extension data from an Output ciphertext.
+///
+/// Contains amount + recipient address, encrypted to the sender's ACK_sext.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpendExtData {
+    pub amount: Amount,
+    pub recipient_diversified_generator: Element,
+    pub recipient_transmission_key: [u8; 32],
+}
+
 /// Full decrypted compliance data (all tiers).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FullComplianceData {
@@ -48,39 +53,279 @@ pub struct FullComplianceData {
     pub extension: ExtensionData,
 }
 
-/// Decrypt the core data (amount + self address).
+/// Scanner role for dual-ciphertext transactions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScannerRole {
+    Sender,
+    Receiver,
+}
+
+// ============================================================================
+// Shared-secret-based decryption
+// ============================================================================
+
+/// Decrypt core tier using a pre-computed shared secret.
 ///
-/// Requires the core key. Does NOT decrypt the counterparty address.
-///
-/// # Arguments
-/// * `core_key` - The daily core key (must be KeyType::Core)
-/// * `ciphertext` - The compliance ciphertext
-///
-/// # Returns
-/// * `Ok(Some(CoreData))` on successful decryption
-/// * `Ok(None)` if decryption failed (wrong key)
-/// * `Err(_)` on unexpected errors
+/// seed = c2_core - ss_core.compress()
 pub fn decrypt_core(
-    core_key: &DailyComplianceKey,
+    ss_core: &Element,
     ciphertext: &ComplianceCiphertext,
 ) -> anyhow::Result<Option<CoreData>> {
-    assert_eq!(
-        core_key.key_type(),
-        KeyType::Core,
-        "decrypt_core requires a Core key"
-    );
+    let shared_fq = ss_core.vartime_compress_to_field();
+    let seed_core = ciphertext.c2_core - shared_fq;
+    decrypt_core_with_seed(seed_core, ciphertext)
+}
 
-    // Compute shared secret using core key
-    let ss_core = ciphertext.epk * core_key.inner();
+/// Decrypt extension tier using a pre-computed shared secret.
+///
+/// seed = c2_ext - ss_ext.compress()
+pub fn decrypt_extension(
+    ss_ext: &Element,
+    ciphertext: &ComplianceCiphertext,
+) -> anyhow::Result<Option<ExtensionData>> {
+    let c2_ext = match ciphertext.c2_ext {
+        Some(c2) => c2,
+        None => return Ok(None),
+    };
+    let shared_fq = ss_ext.vartime_compress_to_field();
+    let seed_ext = c2_ext - shared_fq;
+    decrypt_extension_with_seed(seed_ext, ciphertext)
+}
 
-    // Derive seed for core
-    let epk_fq = ciphertext.epk.vartime_compress_to_field();
-    let seed_core = poseidon377::hash_2(
-        &COMPLIANCE_STREAM_CIPHER_DOMAIN,
-        (ss_core.vartime_compress_to_field(), epk_fq),
-    );
+/// Decrypt sender-extension tier using a pre-computed shared secret.
+pub fn decrypt_spend_ext(
+    ss_sext: &Element,
+    ciphertext: &ComplianceCiphertext,
+) -> anyhow::Result<Option<SpendExtData>> {
+    let c2_sext = match ciphertext.c2_sext {
+        Some(c2) => c2,
+        None => return Ok(None),
+    };
+    let shared_fq = ss_sext.vartime_compress_to_field();
+    let seed_sext = c2_sext - shared_fq;
+    decrypt_spend_ext_with_seed(seed_sext, ciphertext)
+}
 
-    // Decrypt core data - 3 Fq elements (80 bytes plaintext, 31-byte chunks)
+/// Decrypt core + extension using pre-computed shared secrets.
+pub fn decrypt_full(
+    ss_core: &Element,
+    ss_ext: &Element,
+    ciphertext: &ComplianceCiphertext,
+    asset_id: asset::Id,
+) -> anyhow::Result<Option<FullComplianceData>> {
+    let core = match decrypt_core(ss_core, ciphertext)? {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    let extension = match decrypt_extension(ss_ext, ciphertext)? {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    Ok(Some(FullComplianceData {
+        asset_id,
+        core,
+        extension,
+    }))
+}
+
+/// Decrypt compliance data for a specific role.
+///
+/// - **Receiver**: core + ext from receiver ciphertext.
+/// - **Sender**: core from spend ciphertext + sext from output ciphertext.
+pub fn decrypt_with_role(
+    ss_core: &Element,
+    ss_ext: &Element,
+    ss_sext: &Element,
+    sender_ciphertext: &ComplianceCiphertext,
+    receiver_ciphertext: &ComplianceCiphertext,
+    role: ScannerRole,
+    asset_id: asset::Id,
+) -> anyhow::Result<Option<FullComplianceData>> {
+    match role {
+        ScannerRole::Receiver => decrypt_full(ss_core, ss_ext, receiver_ciphertext, asset_id),
+        ScannerRole::Sender => {
+            // Core from the spend ciphertext
+            let core = match decrypt_core(ss_core, sender_ciphertext)? {
+                Some(c) => c,
+                None => return Ok(None),
+            };
+
+            // Try ext from sender CT (sender CT uses Output format)
+            if let Some(ext) = decrypt_extension(ss_ext, sender_ciphertext)? {
+                return Ok(Some(FullComplianceData {
+                    asset_id,
+                    core,
+                    extension: ext,
+                }));
+            }
+
+            // Production: Spend CT has no ext. Get counterparty from
+            // the Output CT's sext tier (encrypted to sender's ACK_sext).
+            if let Some(spend_ext) = decrypt_spend_ext(ss_sext, receiver_ciphertext)? {
+                return Ok(Some(FullComplianceData {
+                    asset_id,
+                    core,
+                    extension: ExtensionData {
+                        counterparty_diversified_generator: spend_ext
+                            .recipient_diversified_generator,
+                        counterparty_transmission_key: spend_ext.recipient_transmission_key,
+                    },
+                }));
+            }
+
+            Ok(None)
+        }
+    }
+}
+
+// ============================================================================
+// Orbis PRE decryption
+// ============================================================================
+
+/// Decrypt core tier using Orbis re-encryption commitment.
+///
+/// Issuer receives xnc_cmt from Orbis, recovers seed via:
+/// P = xnc_cmt - sk_issuer × ack_core, seed = c2_core - P.compress()
+pub fn decrypt_core_via_orbis(
+    xnc_cmt: &Element,
+    sk_issuer: &Fr,
+    ack_core: &Element,
+    ciphertext: &ComplianceCiphertext,
+) -> anyhow::Result<Option<CoreData>> {
+    let seed_core = recover_seed(xnc_cmt, sk_issuer, ack_core, &ciphertext.c2_core);
+    decrypt_core_with_seed(seed_core, ciphertext)
+}
+
+/// Decrypt extension tier using Orbis re-encryption commitment.
+pub fn decrypt_extension_via_orbis(
+    xnc_cmt: &Element,
+    sk_issuer: &Fr,
+    ack_ext: &Element,
+    ciphertext: &ComplianceCiphertext,
+) -> anyhow::Result<Option<ExtensionData>> {
+    let c2_ext = match ciphertext.c2_ext {
+        Some(c2) => c2,
+        None => return Ok(None),
+    };
+    let seed_ext = recover_seed(xnc_cmt, sk_issuer, ack_ext, &c2_ext);
+    decrypt_extension_with_seed(seed_ext, ciphertext)
+}
+
+/// Decrypt sender-extension tier using Orbis re-encryption commitment.
+pub fn decrypt_spend_ext_via_orbis(
+    xnc_cmt: &Element,
+    sk_issuer: &Fr,
+    ack_sext: &Element,
+    ciphertext: &ComplianceCiphertext,
+) -> anyhow::Result<Option<SpendExtData>> {
+    let c2_sext = match ciphertext.c2_sext {
+        Some(c2) => c2,
+        None => return Ok(None),
+    };
+    let seed_sext = recover_seed(xnc_cmt, sk_issuer, ack_sext, &c2_sext);
+    decrypt_spend_ext_with_seed(seed_sext, ciphertext)
+}
+
+/// Decrypt all tiers using Orbis re-encryption commitments.
+pub fn decrypt_full_via_orbis(
+    xnc_cmt_core: &Element,
+    xnc_cmt_ext: &Element,
+    sk_issuer: &Fr,
+    ack_core: &Element,
+    ack_ext: &Element,
+    ciphertext: &ComplianceCiphertext,
+    asset_id: asset::Id,
+) -> anyhow::Result<Option<FullComplianceData>> {
+    let core = match decrypt_core_via_orbis(xnc_cmt_core, sk_issuer, ack_core, ciphertext)? {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    let extension = match decrypt_extension_via_orbis(xnc_cmt_ext, sk_issuer, ack_ext, ciphertext)?
+    {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    Ok(Some(FullComplianceData {
+        asset_id,
+        core,
+        extension,
+    }))
+}
+
+// ============================================================================
+// Flagged transaction decryption (direct ECDH, no Orbis)
+// ============================================================================
+
+/// Decrypt core tier from a flagged transaction (dk × epk_1).
+pub fn decrypt_core_flagged(
+    dk_secret: &Fr,
+    ciphertext: &ComplianceCiphertext,
+) -> anyhow::Result<Option<CoreData>> {
+    let shared_point = ciphertext.epk_1 * *dk_secret;
+    let shared_fq = shared_point.vartime_compress_to_field();
+    let seed_core = ciphertext.c2_core - shared_fq;
+    decrypt_core_with_seed(seed_core, ciphertext)
+}
+
+/// Decrypt extension tier from a flagged transaction (dk × epk_2).
+pub fn decrypt_extension_flagged(
+    dk_secret: &Fr,
+    ciphertext: &ComplianceCiphertext,
+) -> anyhow::Result<Option<ExtensionData>> {
+    let (c2_ext, epk_2) = match (ciphertext.c2_ext, ciphertext.epk_2) {
+        (Some(c2), Some(epk)) => (c2, epk),
+        _ => return Ok(None),
+    };
+    let shared_point = epk_2 * *dk_secret;
+    let shared_fq = shared_point.vartime_compress_to_field();
+    let seed_ext = c2_ext - shared_fq;
+    decrypt_extension_with_seed(seed_ext, ciphertext)
+}
+
+/// Decrypt sender-extension from a flagged transaction (dk × epk_3).
+pub fn decrypt_spend_ext_flagged(
+    dk_secret: &Fr,
+    ciphertext: &ComplianceCiphertext,
+) -> anyhow::Result<Option<SpendExtData>> {
+    let (c2_sext, epk_3) = match (ciphertext.c2_sext, ciphertext.epk_3) {
+        (Some(c2), Some(epk)) => (c2, epk),
+        _ => return Ok(None),
+    };
+    let shared_point = epk_3 * *dk_secret;
+    let shared_fq = shared_point.vartime_compress_to_field();
+    let seed_sext = c2_sext - shared_fq;
+    decrypt_spend_ext_with_seed(seed_sext, ciphertext)
+}
+
+/// Decrypt all tiers from a flagged transaction.
+pub fn decrypt_full_flagged(
+    dk_secret: &Fr,
+    ciphertext: &ComplianceCiphertext,
+    asset_id: asset::Id,
+) -> anyhow::Result<Option<FullComplianceData>> {
+    let core = match decrypt_core_flagged(dk_secret, ciphertext)? {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    let extension = match decrypt_extension_flagged(dk_secret, ciphertext)? {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    Ok(Some(FullComplianceData {
+        asset_id,
+        core,
+        extension,
+    }))
+}
+
+// ============================================================================
+// Internal helpers — seed-based decryption
+// ============================================================================
+
+pub fn decrypt_core_with_seed(
+    seed_core: Fq,
+    ciphertext: &ComplianceCiphertext,
+) -> anyhow::Result<Option<CoreData>> {
     let mut core_plaintext_bytes = Vec::new();
     for (i, chunk) in ciphertext.encrypted_core.chunks(32).enumerate() {
         let mut buf = [0u8; 32];
@@ -90,7 +335,6 @@ pub fn decrypt_core(
         let keystream = poseidon377::hash_2(&seed_core, (counter, seed_core));
         let plaintext_fq = ciphertext_fq - keystream;
         let fq_bytes = plaintext_fq.to_bytes();
-        // Take 31 bytes per Fq (to match 31-byte chunk encoding)
         let bytes_to_take = 31.min(80 - core_plaintext_bytes.len());
         core_plaintext_bytes.extend_from_slice(&fq_bytes[0..bytes_to_take]);
     }
@@ -99,7 +343,6 @@ pub fn decrypt_core(
         return Ok(None);
     }
 
-    // Parse: amount (16) || self_div_gen (32) || self_trans_key (32)
     let amount_bytes: [u8; 16] = match core_plaintext_bytes[0..16].try_into() {
         Ok(b) => b,
         Err(_) => return Ok(None),
@@ -127,49 +370,24 @@ pub fn decrypt_core(
     }))
 }
 
-/// Decrypt the extension data (counterparty address).
-///
-/// Requires the extension key.
-///
-/// # Arguments
-/// * `extension_key` - The daily extension key (must be KeyType::Extension)
-/// * `ciphertext` - The compliance ciphertext
-///
-/// # Returns
-/// * `Ok(Some(ExtensionData))` on successful decryption
-/// * `Ok(None)` if decryption failed (wrong key)
-/// * `Err(_)` on unexpected errors
-pub fn decrypt_extension(
-    extension_key: &DailyComplianceKey,
+pub fn decrypt_extension_with_seed(
+    seed_ext: Fq,
     ciphertext: &ComplianceCiphertext,
 ) -> anyhow::Result<Option<ExtensionData>> {
-    assert_eq!(
-        extension_key.key_type(),
-        KeyType::Extension,
-        "decrypt_extension requires an Extension key"
-    );
+    let encrypted_ext = match &ciphertext.encrypted_ext {
+        Some(data) => data,
+        None => return Ok(None),
+    };
 
-    // Compute shared secret using extension key
-    let ss_extension = ciphertext.epk * extension_key.inner();
-
-    // Derive seed for extension
-    let epk_fq = ciphertext.epk.vartime_compress_to_field();
-    let seed_extension = poseidon377::hash_2(
-        &COMPLIANCE_STREAM_CIPHER_DOMAIN,
-        (ss_extension.vartime_compress_to_field(), epk_fq),
-    );
-
-    // Decrypt extension data - 3 Fq elements (64 bytes plaintext, 31-byte chunks)
     let mut extension_plaintext_bytes = Vec::new();
-    for (i, chunk) in ciphertext.encrypted_extension.chunks(32).enumerate() {
+    for (i, chunk) in encrypted_ext.chunks(32).enumerate() {
         let mut buf = [0u8; 32];
         buf[0..chunk.len()].copy_from_slice(chunk);
         let ciphertext_fq = Fq::from_le_bytes_mod_order(&buf);
         let counter = Fq::from(i as u64);
-        let keystream = poseidon377::hash_2(&seed_extension, (counter, seed_extension));
+        let keystream = poseidon377::hash_2(&seed_ext, (counter, seed_ext));
         let plaintext_fq = ciphertext_fq - keystream;
         let fq_bytes = plaintext_fq.to_bytes();
-        // Take 31 bytes per Fq (to match 31-byte chunk encoding)
         let bytes_to_take = 31.min(64 - extension_plaintext_bytes.len());
         extension_plaintext_bytes.extend_from_slice(&fq_bytes[0..bytes_to_take]);
     }
@@ -178,7 +396,6 @@ pub fn decrypt_extension(
         return Ok(None);
     }
 
-    // Parse: counterparty_div_gen (32) || counterparty_trans_key (32)
     let counterparty_div_gen_bytes: [u8; 32] = match extension_plaintext_bytes[0..32].try_into() {
         Ok(b) => b,
         Err(_) => return Ok(None),
@@ -201,204 +418,219 @@ pub fn decrypt_extension(
     }))
 }
 
-/// Decrypt core and extension data using a full key set.
-///
-/// This is a convenience function for full-access scenarios.
-/// Note: asset_id must be provided externally (from issuer detection or context).
-///
-/// # Arguments
-/// * `daily_keys` - The daily key set (core + extension)
-/// * `ciphertext` - The compliance ciphertext
-/// * `asset_id` - The asset ID (from issuer detection or known context)
-///
-/// # Returns
-/// * `Ok(Some(FullComplianceData))` on successful full decryption
-/// * `Ok(None)` if decryption failed
-/// * `Err(_)` on unexpected errors
-pub fn decrypt_full(
-    daily_keys: &DailyKeySet,
+pub fn decrypt_spend_ext_with_seed(
+    seed: Fq,
     ciphertext: &ComplianceCiphertext,
-    asset_id: asset::Id,
-) -> anyhow::Result<Option<FullComplianceData>> {
-    // Decrypt core
-    let core = match decrypt_core(&daily_keys.core, ciphertext)? {
-        Some(c) => c,
+) -> anyhow::Result<Option<SpendExtData>> {
+    let encrypted_sext = match &ciphertext.encrypted_sext {
+        Some(data) => data,
         None => return Ok(None),
     };
 
-    // Decrypt extension
-    let extension = match decrypt_extension(&daily_keys.extension, ciphertext)? {
-        Some(e) => e,
-        None => return Ok(None),
+    let mut plaintext_bytes = Vec::new();
+    for (i, chunk) in encrypted_sext.chunks(32).enumerate() {
+        let mut buf = [0u8; 32];
+        buf[0..chunk.len()].copy_from_slice(chunk);
+        let ciphertext_fq = Fq::from_le_bytes_mod_order(&buf);
+        let counter = Fq::from(i as u64);
+        let keystream = poseidon377::hash_2(&seed, (counter, seed));
+        let plaintext_fq = ciphertext_fq - keystream;
+        let fq_bytes = plaintext_fq.to_bytes();
+        let bytes_to_take = 31.min(80 - plaintext_bytes.len());
+        plaintext_bytes.extend_from_slice(&fq_bytes[0..bytes_to_take]);
+    }
+
+    if plaintext_bytes.len() < 80 {
+        return Ok(None);
+    }
+
+    let amount_bytes: [u8; 16] = match plaintext_bytes[0..16].try_into() {
+        Ok(b) => b,
+        Err(_) => return Ok(None),
+    };
+    let amount = Amount::from_le_bytes(amount_bytes);
+
+    let div_gen_bytes: [u8; 32] = match plaintext_bytes[16..48].try_into() {
+        Ok(b) => b,
+        Err(_) => return Ok(None),
+    };
+    let div_gen = match decaf377::Encoding(div_gen_bytes).vartime_decompress() {
+        Ok(p) => p,
+        Err(_) => return Ok(None),
     };
 
-    Ok(Some(FullComplianceData {
-        asset_id,
-        core,
-        extension,
+    let trans_key_bytes: [u8; 32] = match plaintext_bytes[48..80].try_into() {
+        Ok(b) => b,
+        Err(_) => return Ok(None),
+    };
+
+    Ok(Some(SpendExtData {
+        amount,
+        recipient_diversified_generator: div_gen,
+        recipient_transmission_key: trans_key_bytes,
     }))
-}
-
-/// Scanner role - determines which ciphertext to process in dual-ciphertext transactions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScannerRole {
-    Sender,
-    Receiver,
-}
-
-/// Decrypt compliance data for a specific role in a dual-ciphertext transaction.
-///
-/// Selects the appropriate ciphertext (sender or receiver) based on role, then decrypts.
-///
-/// # Arguments
-/// * `daily_keys` - The daily key set (core + extension)
-/// * `sender_ciphertext` - The sender's ciphertext
-/// * `receiver_ciphertext` - The receiver's ciphertext
-/// * `role` - Which party's ciphertext to decrypt
-/// * `asset_id` - The asset ID (from issuer detection or known context)
-pub fn decrypt_with_role(
-    daily_keys: &DailyKeySet,
-    sender_ciphertext: &ComplianceCiphertext,
-    receiver_ciphertext: &ComplianceCiphertext,
-    role: ScannerRole,
-    asset_id: asset::Id,
-) -> anyhow::Result<Option<FullComplianceData>> {
-    let ciphertext = match role {
-        ScannerRole::Sender => sender_ciphertext,
-        ScannerRole::Receiver => receiver_ciphertext,
-    };
-    decrypt_full(daily_keys, ciphertext, asset_id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::{derive_compliance_scalar, encrypt_output, encrypt_spend};
     use crate::issuer_keys::DetectionKey;
-    use crate::test_helpers::{encrypt_dual, make_test_leaf, make_uck};
+    use penumbra_sdk_keys::Address;
+    use rand_core::OsRng;
 
-    fn test_leaf() -> crate::indexed_tree::IndexedLeaf {
-        let dk = DetectionKey::demo();
-        make_test_leaf(dk.public_key(), u128::MAX)
+    fn derive_ack(ring_pk: &Element, b_d_fq: Fq) -> Element {
+        let d = derive_compliance_scalar(b_d_fq);
+        let d_fr = Fr::from_le_bytes_mod_order(&d.to_bytes());
+        *ring_pk * d_fr
     }
 
     #[test]
-    fn test_core_and_extension_decryption() {
-        let uck = make_uck();
-        let date = 19000u64;
-        let asset_leaf = test_leaf();
-        let (sender_ct, _receiver_ct) = encrypt_dual(&uck, 1, 2, date, 42, 1000, &asset_leaf);
+    fn test_core_and_extension_decryption_flagged() {
+        let mut rng = OsRng;
+        let dk = DetectionKey::demo();
+        let dk_pub = dk.public_key();
 
-        let daily_keys = uck.derive_daily_keys(date);
+        let sk_ring = Fr::rand(&mut rng);
+        let ring_pk = Element::GENERATOR * sk_ring;
+        let self_address = Address::dummy(&mut rng);
+        let counterparty_address = Address::dummy(&mut rng);
+        let asset_id = asset::Id(Fq::from(42u64));
+        let amount = Amount::from(1000u128);
 
-        // Core decryption (amount + self address)
-        let core = decrypt_core(&daily_keys.core, &sender_ct)
+        let b_d_fq = self_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
+
+        let result = encrypt_output(
+            &mut rng,
+            &ack,
+            &ack,
+            &dk_pub,
+            &self_address,
+            &counterparty_address,
+            asset_id,
+            amount,
+            true,
+            Fq::from(0u64),
+        )
+        .unwrap();
+
+        // Core decryption (flagged)
+        let core = decrypt_core_flagged(dk.inner(), &result.ciphertext)
             .unwrap()
             .expect("core decryption should succeed");
         assert_eq!(core.amount, Amount::from(1000u128));
 
-        // Extension decryption (counterparty address)
-        let extension = decrypt_extension(&daily_keys.extension, &sender_ct)
+        // Extension decryption (flagged)
+        let ext = decrypt_extension_flagged(dk.inner(), &result.ciphertext)
             .unwrap()
             .expect("extension decryption should succeed");
-        // Just verify it returns something
-        assert!(extension.counterparty_transmission_key != [0u8; 32]);
+        assert!(ext.counterparty_transmission_key != [0u8; 32]);
     }
 
     #[test]
-    fn test_wrong_key_type_panics() {
-        let uck = make_uck();
-        let date = 19000u64;
-        let asset_leaf = test_leaf();
-        let (sender_ct, _) = encrypt_dual(&uck, 1, 2, date, 42, 1000, &asset_leaf);
+    fn test_orbis_pre_decrypt_roundtrip() {
+        use crate::orbis::{OrbisReencryptor, SimulatedOrbis};
 
-        let extension_key = uck.derive_daily_key(KeyType::Extension, date);
+        let mut rng = OsRng;
+        let dk = DetectionKey::demo();
+        let dk_pub = dk.public_key();
+        let dk_secret = *dk.inner();
 
-        // Using extension key for decrypt_core should panic
-        let result = std::panic::catch_unwind(|| {
-            let _ = decrypt_core(&extension_key, &sender_ct);
-        });
-        assert!(result.is_err(), "wrong key type should panic");
-    }
+        let sk_ring = Fr::rand(&mut rng);
+        let ring_pk = Element::GENERATOR * sk_ring;
+        let orbis = SimulatedOrbis::new(sk_ring);
 
-    #[test]
-    fn test_full_decryption_with_known_asset() {
-        let uck = make_uck();
-        let date = 19000u64;
+        let self_address = Address::dummy(&mut rng);
+        let counterparty_address = Address::dummy(&mut rng);
         let asset_id = asset::Id(Fq::from(42u64));
-        let asset_leaf = test_leaf();
-        let (sender_ct, receiver_ct) = encrypt_dual(&uck, 1, 2, date, 42, 1000, &asset_leaf);
+        let amount = Amount::from(1000u128);
 
-        let daily_keys = uck.derive_daily_keys(date);
+        let receiver_b_d_fq = self_address
+            .diversified_generator()
+            .vartime_compress_to_field();
 
-        // Full decryption with known asset_id
-        let full = decrypt_with_role(
-            &daily_keys,
-            &sender_ct,
-            &receiver_ct,
-            ScannerRole::Sender,
+        let ack = derive_ack(&ring_pk, receiver_b_d_fq);
+
+        let result = encrypt_output(
+            &mut rng,
+            &ack,
+            &ack,
+            &dk_pub,
+            &self_address,
+            &counterparty_address,
             asset_id,
+            amount,
+            false,
+            Fq::from(0u64),
         )
-        .unwrap()
-        .expect("full decryption should succeed");
+        .unwrap();
 
-        assert_eq!(full.asset_id, asset_id);
-        assert_eq!(full.core.amount, Amount::from(1000u128));
+        let ct = &result.ciphertext;
+        let b_d_bytes = receiver_b_d_fq.to_bytes();
+
+        // Orbis re-encryption for core and ext tiers
+        let xnc_core = orbis.reencrypt(&ct.epk_1, &dk_pub, &b_d_bytes);
+        let xnc_ext = orbis.reencrypt(&ct.epk_2.unwrap(), &dk_pub, &b_d_bytes);
+
+        // Issuer decrypts core
+        let core = decrypt_core_via_orbis(&xnc_core, &dk_secret, &ack, ct)
+            .unwrap()
+            .expect("core decryption should succeed");
+        assert_eq!(core.amount, Amount::from(1000u128));
+
+        // Issuer decrypts extension
+        let ext = decrypt_extension_via_orbis(&xnc_ext, &dk_secret, &ack, ct)
+            .unwrap()
+            .expect("extension decryption should succeed");
+        assert!(ext.counterparty_transmission_key != [0u8; 32]);
     }
 
     #[test]
-    fn test_wrong_date_fails() {
-        let uck = make_uck();
-        let asset_leaf = test_leaf();
-        let (s_ct, _r_ct) = encrypt_dual(&uck, 1, 2, 19000, 42, 1000, &asset_leaf);
+    fn test_wrong_ring_key_fails() {
+        use crate::orbis::{OrbisReencryptor, SimulatedOrbis};
 
-        // Wrong date keys
-        let wrong_keys = uck.derive_daily_keys(19001);
+        let mut rng = OsRng;
+        let dk = DetectionKey::demo();
+        let dk_pub = dk.public_key();
+        let dk_secret = *dk.inner();
 
-        // Core decryption should fail (produces garbage)
-        let core = decrypt_core(&wrong_keys.core, &s_ct).unwrap();
-        // May return Some with garbage data or None
+        let sk_ring = Fr::rand(&mut rng);
+        let ring_pk = Element::GENERATOR * sk_ring;
+
+        // Wrong ring key for Orbis
+        let wrong_sk_ring = Fr::rand(&mut rng);
+        let wrong_orbis = SimulatedOrbis::new(wrong_sk_ring);
+
+        let self_address = Address::dummy(&mut rng);
+        let b_d_fq = self_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
+
+        let result = encrypt_spend(
+            &mut rng,
+            &ack,
+            &dk_pub,
+            &self_address,
+            asset::Id(Fq::from(42u64)),
+            Amount::from(1000u128),
+            false,
+            Fq::from(0u64),
+        )
+        .unwrap();
+
+        let ct = &result.ciphertext;
+        let b_d_bytes = b_d_fq.to_bytes();
+
+        let xnc = wrong_orbis.reencrypt(&ct.epk_1, &dk_pub, &b_d_bytes);
+        let core = decrypt_core_via_orbis(&xnc, &dk_secret, &ack, ct).unwrap();
+
+        // Should return None (garbage decompression fails) or garbage amount
         if let Some(core_data) = core {
-            // The amount will be garbage if decryption with wrong key
-            // This is expected - wrong keys produce garbage
-            let _ = core_data;
+            assert_ne!(core_data.amount, Amount::from(1000u128));
         }
-    }
-
-    #[test]
-    fn test_wrong_uck_fails() {
-        let uck_a = make_uck();
-        let uck_b = make_uck();
-
-        let asset_id = asset::Id(Fq::from(42u64));
-        let asset_leaf = test_leaf();
-        let (s_ct, r_ct) = encrypt_dual(&uck_a, 1, 2, 19000, 42, 1000, &asset_leaf);
-
-        // Different UCK
-        let wrong_keys = uck_b.derive_daily_keys(19000);
-
-        // Full decryption should fail (produce None or garbage)
-        let result =
-            decrypt_with_role(&wrong_keys, &s_ct, &r_ct, ScannerRole::Sender, asset_id).unwrap();
-        // With wrong keys, the point decompression will likely fail
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_role_separation() {
-        let uck = make_uck();
-        let asset_id = asset::Id(Fq::from(42u64));
-        let asset_leaf = test_leaf();
-        let (s_ct, r_ct) = encrypt_dual(&uck, 1, 2, 19000, 42, 1000, &asset_leaf);
-
-        let daily_keys = uck.derive_daily_keys(19000);
-
-        // Both roles can decrypt their respective ciphertexts
-        let sender_result =
-            decrypt_with_role(&daily_keys, &s_ct, &r_ct, ScannerRole::Sender, asset_id);
-        let receiver_result =
-            decrypt_with_role(&daily_keys, &s_ct, &r_ct, ScannerRole::Receiver, asset_id);
-
-        assert!(sender_result.unwrap().is_some());
-        assert!(receiver_result.unwrap().is_some());
     }
 }

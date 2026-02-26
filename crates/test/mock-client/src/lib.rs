@@ -284,8 +284,18 @@ impl MockClient {
         plan: &mut TransactionPlan,
         state: S,
     ) -> Result<Transaction, Error> {
+        // Read block timestamp from state before enrichment.
+        // Tests use fake chain times (e.g. 2022), but SystemTime::now() returns
+        // real time. Pass the block timestamp so DLEQ proofs and on-chain freshness
+        // checks are consistent.
+        let block_ts = state
+            .get_current_block_timestamp()
+            .await
+            .ok()
+            .map(|t| t.unix_timestamp() as u64);
+
         // Enrich the plan with compliance data
-        self.enrich_plan_with_compliance_internal(plan, state)
+        self.enrich_plan_with_compliance_internal(plan, state, block_ts)
             .await?;
         // Then build normally
         let witness_data = self.witness_plan(plan)?;
@@ -302,9 +312,10 @@ impl MockClient {
         &self,
         plan: &mut TransactionPlan,
         state: S,
+        target_timestamp: Option<u64>,
     ) -> Result<(), Error> {
         let provider = StateReadComplianceProvider::new(state);
-        enrich_plan_with_compliance(plan, &provider, &mut OsRng).await
+        enrich_plan_with_compliance(plan, &provider, &mut OsRng, target_timestamp).await
     }
 
     pub fn notes_by_asset(
@@ -386,18 +397,18 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
         address: &penumbra_sdk_keys::Address,
         asset_id: penumbra_sdk_asset::asset::Id,
     ) -> anyhow::Result<(MerklePath, u64, ComplianceLeaf)> {
-        use penumbra_sdk_compliance::BLACK_HOLE_ACK;
-        use penumbra_sdk_keys::keys::AddressComplianceKey;
-
         // First check if asset is regulated
         let (_, _, _, is_regulated) = self.get_asset_proof(asset_id).await?;
 
-        // For unregulated assets, return synthetic leaf (circuit skips user tree check)
+        // For unregulated assets, return synthetic leaf (circuit skips user tree check).
+        // Use real d so leaf commitment matches what generate_compliance_details creates.
         if !is_regulated {
+            let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+            let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
             let synthetic_leaf = ComplianceLeaf {
                 address: address.clone(),
-                key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
                 asset_id,
+                d,
             };
             return Ok((MerklePath::default(), 0, synthetic_leaf));
         }
@@ -440,14 +451,6 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
         Ok((path, position, leaf))
     }
 
-    async fn get_asset_policy(
-        &self,
-        asset_id: penumbra_sdk_asset::asset::Id,
-    ) -> anyhow::Result<Option<penumbra_sdk_compliance::AssetPolicy>> {
-        // For mock client, fetch from state via registry
-        self.state.get_asset_policy(asset_id).await
-    }
-
     /// Override get_batch_proofs to ensure anchor/proof consistency.
     ///
     /// CRITICAL: We read each tree ONCE and use the same instance for both
@@ -458,8 +461,7 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
         &self,
         queries: &[(penumbra_sdk_keys::Address, penumbra_sdk_asset::asset::Id)],
     ) -> anyhow::Result<penumbra_sdk_compliance::BatchComplianceData> {
-        use penumbra_sdk_compliance::{BatchComplianceData, IndexedMerkleTree, BLACK_HOLE_ACK};
-        use penumbra_sdk_keys::keys::AddressComplianceKey;
+        use penumbra_sdk_compliance::{BatchComplianceData, IndexedMerkleTree};
         use std::collections::BTreeMap;
 
         // Read trees ONCE to ensure consistency between anchors and proofs
@@ -469,13 +471,6 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
         // Get anchors from the same tree instances used for proofs
         let asset_anchor = tct::StateCommitment(asset_tree.root().0);
         let compliance_anchor = tct::StateCommitment(user_tree.root().0);
-
-        eprintln!(
-            "[DEBUG] get_batch_proofs: asset_anchor={:?}, compliance_anchor={:?}, leaf_count={}",
-            asset_anchor,
-            compliance_anchor,
-            asset_tree.leaf_count()
-        );
 
         let mut asset_proofs = BTreeMap::new();
         let mut user_proofs = BTreeMap::new();
@@ -526,11 +521,14 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
                 let (_, _, _, is_regulated) = asset_proofs.get(asset_id).unwrap();
 
                 let user_proof = if !is_regulated {
-                    // Unregulated: synthetic leaf (circuit skips user tree check)
+                    // Unregulated: synthetic leaf with real d so leaf commitment
+                    // matches what generate_compliance_details creates.
+                    let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+                    let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
                     let synthetic_leaf = ComplianceLeaf {
                         address: address.clone(),
-                        key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
                         asset_id: *asset_id,
+                        d,
                     };
                     (MerklePath::default(), 0u64, synthetic_leaf)
                 } else {
@@ -579,22 +577,11 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
             }
         }
 
-        // Fetch asset policies for regulated assets
-        let mut asset_policies = BTreeMap::new();
-        for (asset_id, (_, _, _, is_regulated)) in &asset_proofs {
-            if *is_regulated {
-                if let Some(policy) = self.state.get_asset_policy(*asset_id).await? {
-                    asset_policies.insert(*asset_id, policy);
-                }
-            }
-        }
-
         Ok(BatchComplianceData {
             compliance_anchor,
             asset_anchor,
             asset_proofs,
             user_proofs,
-            asset_policies,
         })
     }
 }

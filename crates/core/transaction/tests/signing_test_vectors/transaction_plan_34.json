@@ -1,46 +1,82 @@
 {
   "actions": [
     {
-      "communityPoolSpend": {
-        "value": {
-          "amount": {
-            "lo": "753098740309500245"
+      "positionWithdraw": {
+        "reserves": {
+          "r1": {
+            "lo": "855491082173294485"
           },
-          "assetId": {
+          "r2": {
+            "lo": "773945911933243340"
+          }
+        },
+        "positionId": {
+          "inner": "5zXfMTLKJsMFH6ROhOATICyd9mBik07dqEmCzRKieSY="
+        },
+        "pair": {
+          "asset1": {
+            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+          },
+          "asset2": {
             "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
           }
+        },
+        "sequence": "1"
+      }
+    },
+    {
+      "actionDutchAuctionSchedule": {
+        "description": {
+          "input": {
+            "amount": {
+              "lo": "173538865600489449"
+            },
+            "assetId": {
+              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+            }
+          },
+          "outputId": {
+            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+          },
+          "maxOutput": {
+            "lo": "579806761544003479"
+          },
+          "minOutput": {
+            "lo": "269642180092509859"
+          },
+          "startHeight": "960205061",
+          "endHeight": "960205062",
+          "stepCount": "192596686",
+          "nonce": "jhmCVZfwUo3aZjI7u3xiQ+aO7AZxuYHTFJX/5B1DLIQ="
         }
       }
     },
     {
-      "validatorVote": {
-        "body": {
-          "proposal": "881559374",
-          "vote": {
-            "vote": "VOTE_NO"
-          },
-          "identityKey": {
-            "ik": "htuIzZqNQ8uDJcTrhCDea3ehwKPJD6VUbfxq0QqMsIo="
-          },
-          "governanceKey": {
-            "gk": "QNwX8tUsP00+jWkM5E/yR1oo2URyhBP9NgfHuFtRsww="
-          },
-          "reason": {
-            "reason": "NodToPsNqSWqzJ3R8g911i2mf5Goay"
-          }
+      "proposalSubmit": {
+        "proposal": {
+          "title": "ndlyrwkudcubnjmjbpyaqnlcdoeqbod-13",
+          "description": "rwgnumjxespp-04854793457",
+          "signaling": {}
         },
-        "authSig": {
-          "inner": "JCpNllJPc3OFyp4XFH10aPShmAgrQWt2f9l0rZEfhgSgZ0NzJW+3TNzP0kcfJEy8NsTw7gQN4QlLPl/B/EfuAA=="
+        "depositAmount": {
+          "lo": "200935273072248965"
+        }
+      }
+    },
+    {
+      "actionDutchAuctionEnd": {
+        "auctionId": {
+          "inner": "MiL+FXy9fTelJR9HAtDWAYlvJa1Sl3FDQXGvoroq5Sg="
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "5999598707",
-    "chainId": "xfmvvd-634327",
+    "expiryHeight": "3885607671",
+    "chainId": "dj-8883586195373903848801695261",
     "fee": {
       "amount": {
-        "lo": "877627595429719663"
+        "lo": "610223202400046593"
       }
     }
   }

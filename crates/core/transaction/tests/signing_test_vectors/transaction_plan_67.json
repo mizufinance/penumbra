@@ -1,48 +1,31 @@
 {
   "actions": [
     {
-      "communityPoolDeposit": {
+      "actionDutchAuctionEnd": {
+        "auctionId": {
+          "inner": "isP4+Ub94TIfOwuRqCPFtxvh1l403kg+IfdWNF5M8UQ="
+        }
+      }
+    },
+    {
+      "communityPoolSpend": {
         "value": {
           "amount": {
-            "lo": "581206209774569274"
+            "lo": "89988471743247505"
           },
           "assetId": {
             "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
           }
         }
       }
-    },
-    {
-      "positionWithdraw": {
-        "reserves": {
-          "r1": {
-            "lo": "427593711000621991"
-          },
-          "r2": {
-            "lo": "445659199302061558"
-          }
-        },
-        "positionId": {
-          "inner": "eBmo5DddkiYE5D3QgDWAV1Dm9mBeR5478BwxON0cI24="
-        },
-        "pair": {
-          "asset1": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          },
-          "asset2": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          }
-        },
-        "sequence": "1"
-      }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "6644551743",
-    "chainId": "heumjvjbykwuqho-3947253117947228704184388",
+    "expiryHeight": "9897165551",
+    "chainId": "qdhharjmeuxzgx-9933136311099",
     "fee": {
       "amount": {
-        "lo": "542503123644287941"
+        "lo": "806707362593787547"
       }
     }
   }

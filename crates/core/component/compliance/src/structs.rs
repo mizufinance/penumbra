@@ -1,7 +1,7 @@
-use decaf377::Fq;
+use decaf377::{Fq, Fr};
 use once_cell::sync::Lazy;
 use penumbra_sdk_asset::asset;
-use penumbra_sdk_keys::{keys::AddressComplianceKey, Address};
+use penumbra_sdk_keys::Address;
 use penumbra_sdk_proto::penumbra::core::component::compliance::v1 as pb;
 use penumbra_sdk_proto::DomainType;
 use penumbra_sdk_tct::StateCommitment;
@@ -19,59 +19,64 @@ pub const TOTAL_PLAINTEXT_BYTES: usize =
     AMOUNT_BYTES + ASSET_ID_BYTES + ADDRESS_BYTES + ADDRESS_BYTES; // 176 bytes (self + counterparty)
 
 /// Compliance ciphertext wire format constants.
-/// These define the byte layout of the serialized ciphertext with tiered encryption.
 ///
-/// Format:
-/// - EPK: 32 bytes (ephemeral public key on diversified curve, r * B_d)
-/// - EPK_G: 32 bytes (ephemeral public key on standard curve, r * G, for issuer ECDH)
-/// - detection_tag: 32 bytes (1 Fq - encrypted asset_id)
-/// - encrypted_core: 96 bytes (3 Fq - encrypted amount + self_address, 80 bytes plaintext)
-/// - encrypted_extension: 96 bytes (3 Fq - encrypted counterparty_address, 64 bytes plaintext)
+/// **Spend format (192 bytes):** EPK_1(32) + c2_core(32) + detection(32) + core(96)
 ///
-/// We use 31-byte chunks because Fq field order is ~2^252.
-/// This means 80 bytes → ceil(80/31) = 3 Fq, and 64 bytes → ceil(64/31) = 3 Fq.
-pub const EPK_BYTES: usize = 32; // Ephemeral public key (compressed curve point)
-pub const EPK_G_BYTES: usize = 32; // Secondary EPK for issuer ECDH (r * G)
-pub const DETECTION_TAG_BYTES: usize = 32; // 1 Fq element
-pub const ENCRYPTED_CORE_BYTES: usize = 96; // 3 Fq elements (80 bytes plaintext → ceil(80/31) = 3)
-pub const ENCRYPTED_EXTENSION_BYTES: usize = 96; // 3 Fq elements (64 bytes plaintext → ceil(64/31) = 3)
-pub const CIPHERTEXT_PAYLOAD_BYTES: usize =
-    DETECTION_TAG_BYTES + ENCRYPTED_CORE_BYTES + ENCRYPTED_EXTENSION_BYTES; // 224 bytes
-pub const TOTAL_WIRE_BYTES: usize = EPK_BYTES + EPK_G_BYTES + CIPHERTEXT_PAYLOAD_BYTES; // Total: 288 bytes
-pub const NUM_CIPHERTEXT_FQS: usize = CIPHERTEXT_PAYLOAD_BYTES / 32; // Number of Fq elements: 7
+/// **Output format (512 bytes):** EPK_1(32) + EPK_2(32) + EPK_3(32)
+///   + c2_core(32) + c2_ext(32) + c2_sext(32) + detection(32) + core(96) + ext(96) + sext(96)
+pub const EPK_BYTES: usize = 32;
+pub const C2_BYTES: usize = 32;
+pub const DETECTION_TAG_BYTES: usize = 64; // 2 Fq elements: asset_id+flag, salt
+pub const ENCRYPTED_TIER_BYTES: usize = 96; // 3 Fq elements per tier
 
-// ============================================================================
-// Compile-Time Consistency Checks
-// ============================================================================
+/// Spend ciphertext: 1 EPK + 1 c2 + detection + core.
+pub const SPEND_WIRE_BYTES: usize =
+    EPK_BYTES + C2_BYTES + DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES; // 224 bytes
+pub const SPEND_CIPHERTEXT_FQS: usize = (DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES) / 32; // 5
 
-/// Compile-time assertion to ensure wire format constants are consistent.
+/// Output ciphertext: 3 EPKs + 3 c2s + detection + 3 tiers.
+pub const OUTPUT_WIRE_BYTES: usize =
+    EPK_BYTES * 3 + C2_BYTES * 3 + DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES * 3; // 544 bytes
+pub const OUTPUT_CIPHERTEXT_FQS: usize = (DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES * 3) / 32; // 11
+
+// Compile-time consistency checks.
 const _: () = {
+    assert!(SPEND_WIRE_BYTES == 224, "SPEND_WIRE_BYTES must be 224");
+    assert!(OUTPUT_WIRE_BYTES == 544, "OUTPUT_WIRE_BYTES must be 544");
+    assert!(SPEND_CIPHERTEXT_FQS == 5, "SPEND_CIPHERTEXT_FQS must be 5");
     assert!(
-        TOTAL_PLAINTEXT_BYTES == 176,
-        "TOTAL_PLAINTEXT_BYTES must be 176 (amount + asset + 2 addresses)"
-    );
-    assert!(TOTAL_WIRE_BYTES == 288, "TOTAL_WIRE_BYTES must be 288");
-    assert!(EPK_BYTES == 32, "EPK_BYTES must be 32");
-    assert!(EPK_G_BYTES == 32, "EPK_G_BYTES must be 32");
-    assert!(DETECTION_TAG_BYTES == 32, "DETECTION_TAG_BYTES must be 32");
-    assert!(
-        ENCRYPTED_CORE_BYTES == 96,
-        "ENCRYPTED_CORE_BYTES must be 96"
-    );
-    assert!(
-        ENCRYPTED_EXTENSION_BYTES == 96,
-        "ENCRYPTED_EXTENSION_BYTES must be 96"
-    );
-    assert!(
-        CIPHERTEXT_PAYLOAD_BYTES == 224,
-        "CIPHERTEXT_PAYLOAD_BYTES must be 224"
-    );
-    assert!(NUM_CIPHERTEXT_FQS == 7, "NUM_CIPHERTEXT_FQS must be 7");
-    assert!(
-        EPK_BYTES + EPK_G_BYTES + CIPHERTEXT_PAYLOAD_BYTES == TOTAL_WIRE_BYTES,
-        "EPK_BYTES + EPK_G_BYTES + CIPHERTEXT_PAYLOAD_BYTES must equal TOTAL_WIRE_BYTES"
+        OUTPUT_CIPHERTEXT_FQS == 11,
+        "OUTPUT_CIPHERTEXT_FQS must be 11"
     );
 };
+
+/// A single DLEQ proof: (challenge, response).
+///
+/// Proves EPK = r×G and S = r×ACK use the same r, bound to metadata M.
+/// Challenge c is the truncated Poseidon output (high bits zeroed via `fq_to_challenge_scalar`).
+/// Stored as Fq for circuit compatibility; high 4 bits of byte 31 are always zero.
+#[derive(Clone, Debug)]
+pub struct DleqProof {
+    pub c: Fq, // Fiat-Shamir challenge (truncated, high bits zero)
+    pub s: Fr, // Response: k + c_truncated × r
+}
+
+impl DleqProof {
+    /// Serialize to 64 bytes: c (32 LE) || s (32 LE).
+    pub fn to_bytes(&self) -> [u8; 64] {
+        let mut bytes = [0u8; 64];
+        bytes[..32].copy_from_slice(&self.c.to_bytes());
+        bytes[32..].copy_from_slice(&self.s.to_bytes());
+        bytes
+    }
+
+    /// Deserialize from 64 bytes.
+    pub fn from_bytes(bytes: &[u8; 64]) -> Self {
+        let c = Fq::from_le_bytes_mod_order(&bytes[..32]);
+        let s = Fr::from_le_bytes_mod_order(&bytes[32..]);
+        Self { c, s }
+    }
+}
 
 /// The domain separator used to generate compliance leaf commitments.
 pub(crate) static COMPLIANCE_LEAF_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
@@ -79,58 +84,48 @@ pub(crate) static COMPLIANCE_LEAF_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
 });
 
 /// A compliance leaf in the public on-chain registry for regulated assets.
+///
+/// Contains address, asset_id, and derivation scalar `d`.
+/// `d = SHA256("elgamal-derivation-v1\0\0" || b_d_fq_bytes)` — matches Orbis derivation.
+/// ACK = d × ring_pk, computed in-circuit from the leaf's `d` value.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "pb::ComplianceLeaf", into = "pb::ComplianceLeaf")]
 pub struct ComplianceLeaf {
     /// The registered address for compliance.
     pub address: Address,
-    /// The address compliance key (public key derived as MCK * B_d).
-    pub key: AddressComplianceKey,
     /// The asset ID this compliance leaf applies to.
     pub asset_id: asset::Id,
+    /// Derivation scalar: d = SHA256_derive(b_d_fq). Verified at registration.
+    pub d: Fq,
 }
 
 impl ComplianceLeaf {
-    /// Create a ComplianceLeaf, deriving ACK as `UCK * B_d` from the address diversifier.
-    pub fn new(
-        uck: &penumbra_sdk_keys::keys::UserComplianceKey,
-        address: Address,
-        asset_id: asset::Id,
-    ) -> Self {
-        let diversifier = address.diversifier();
-        let ack = uck.derive_address_key(diversifier);
-
+    /// Create a ComplianceLeaf.
+    pub fn new(address: Address, asset_id: asset::Id, d: Fq) -> Self {
         Self {
-            address: address,
-            key: ack,
+            address,
             asset_id,
+            d,
         }
     }
 
-    /// Create the Poseidon commitment: hash_4(domain_sep, (g_d, transmission_key, ack, asset_id)).
+    /// Create the Poseidon commitment: hash_4(domain_sep, (g_d, pk_d, asset_id, d)).
     pub fn commit(&self) -> StateCommitment {
-        // Decompose the address into field elements, matching Note::commit pattern
         let diversified_generator = self
             .address
             .diversified_generator()
             .vartime_compress_to_field();
         let transmission_key_s = Fq::from_bytes_checked(&self.address.transmission_key().0)
             .expect("transmission key is valid");
-
-        // Convert AddressComplianceKey (curve point) to field element by compressing
-        let ack_field = self.key.inner().vartime_compress_to_field();
-
-        // Convert asset ID to field element
         let asset_id_field = self.asset_id.0;
 
-        // Hash all components using poseidon377::hash_4
         let commit = poseidon377::hash_4(
             &COMPLIANCE_LEAF_DOMAIN_SEP,
             (
                 diversified_generator,
                 transmission_key_s,
-                ack_field,
                 asset_id_field,
+                self.d,
             ),
         );
 
@@ -156,19 +151,26 @@ impl TryFrom<pb::ComplianceLeaf> for ComplianceLeaf {
     type Error = anyhow::Error;
 
     fn try_from(value: pb::ComplianceLeaf) -> Result<Self, Self::Error> {
+        let d = if value.d.is_empty() {
+            Fq::from(0u64)
+        } else {
+            let bytes: [u8; 32] = value
+                .d
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("d must be 32 bytes"))?;
+            Fq::from_bytes_checked(&bytes)
+                .map_err(|_| anyhow::anyhow!("invalid d field element"))?
+        };
         Ok(ComplianceLeaf {
             address: value
                 .address
                 .ok_or_else(|| anyhow::anyhow!("missing address"))?
                 .try_into()?,
-            key: value
-                .key
-                .ok_or_else(|| anyhow::anyhow!("missing key"))?
-                .try_into()?,
             asset_id: value
                 .asset_id
                 .ok_or_else(|| anyhow::anyhow!("missing asset_id"))?
                 .try_into()?,
+            d,
         })
     }
 }
@@ -177,8 +179,314 @@ impl From<ComplianceLeaf> for pb::ComplianceLeaf {
     fn from(value: ComplianceLeaf) -> pb::ComplianceLeaf {
         pb::ComplianceLeaf {
             address: Some(value.address.into()),
-            key: Some(value.key.into()),
             asset_id: Some(value.asset_id.into()),
+            d: value.d.to_bytes().to_vec(),
+        }
+    }
+}
+
+/// Per-asset issuer parameters.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssetParams {
+    /// Issuer's detection key public (curve point).
+    pub dk_pub: decaf377::Element,
+    /// Amount threshold for flagging (u128 to cover full amount range).
+    pub threshold: u128,
+    /// IBC channels allowed for this asset. Empty = IBC blocked entirely.
+    pub allowed_channels: Vec<String>,
+}
+
+/// Orbis ring binding data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RingData {
+    /// Orbis DKG ring identifier.
+    pub ring_id: String,
+    /// Aggregate ring public key (sk_ring × G).
+    pub ring_pk: decaf377::Element,
+    /// SourceHub policy ID.
+    pub policy_id: String,
+    /// ACP permission name.
+    pub permission: String,
+    /// ACP resource type.
+    pub resource: String,
+}
+
+/// Asset-specific compliance policy stored on-chain.
+///
+/// Contains issuer parameters (detection key, threshold, channel whitelist)
+/// and Orbis ring binding (ring_pk, policy identifiers).
+/// This is state-only data — NOT included in the IMT Merkle commitment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssetPolicy {
+    pub params: AssetParams,
+    pub ring: RingData,
+}
+
+impl AssetPolicy {
+    /// Create a new asset policy.
+    pub fn new(
+        dk_pub: decaf377::Element,
+        threshold: u128,
+        allowed_channels: Vec<String>,
+        ring_id: String,
+        ring_pk: decaf377::Element,
+        policy_id: String,
+        permission: String,
+        resource: String,
+    ) -> Self {
+        Self {
+            params: AssetParams {
+                dk_pub,
+                threshold,
+                allowed_channels,
+            },
+            ring: RingData {
+                ring_id,
+                ring_pk,
+                policy_id,
+                permission,
+                resource,
+            },
+        }
+    }
+
+    /// Create a simple policy with just dk_pub, threshold, and ring_pk.
+    /// Uses empty strings for ring_id, policy_id, permission, resource.
+    pub fn simple(dk_pub: decaf377::Element, threshold: u128, ring_pk: decaf377::Element) -> Self {
+        Self::new(
+            dk_pub,
+            threshold,
+            vec![],
+            String::new(),
+            ring_pk,
+            String::new(),
+            String::new(),
+            String::new(),
+        )
+    }
+
+    /// Create a default policy for unregulated assets.
+    ///
+    /// Uses identity element for dk_pub/ring_pk and u128::MAX for threshold.
+    pub fn default_unregulated() -> Self {
+        Self {
+            params: AssetParams {
+                dk_pub: decaf377::Element::default(),
+                threshold: u128::MAX,
+                allowed_channels: vec![],
+            },
+            ring: RingData {
+                ring_id: String::new(),
+                ring_pk: decaf377::Element::default(),
+                policy_id: String::new(),
+                permission: String::new(),
+                resource: String::new(),
+            },
+        }
+    }
+
+    /// Convenience accessors for backwards compatibility.
+    pub fn dk_pub(&self) -> &decaf377::Element {
+        &self.params.dk_pub
+    }
+
+    pub fn threshold(&self) -> u128 {
+        self.params.threshold
+    }
+
+    pub fn ring_pk(&self) -> &decaf377::Element {
+        &self.ring.ring_pk
+    }
+
+    /// Serialize to bytes for storage.
+    ///
+    /// Format: [dk_pub: 32] [threshold: 16] [ring_pk: 32]
+    ///         [channel_count: 2] [for each: len: 1, utf8 bytes]
+    ///         [ring_id_len: 2] [ring_id bytes]
+    ///         [policy_id_len: 2] [policy_id bytes]
+    ///         [permission_len: 2] [permission bytes]
+    ///         [resource_len: 2] [resource bytes]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(128);
+        // AssetParams
+        bytes.extend_from_slice(&self.params.dk_pub.vartime_compress().0);
+        bytes.extend_from_slice(&self.params.threshold.to_le_bytes());
+        // RingData - ring_pk
+        bytes.extend_from_slice(&self.ring.ring_pk.vartime_compress().0);
+        // Channels
+        let count = self.params.allowed_channels.len() as u16;
+        bytes.extend_from_slice(&count.to_le_bytes());
+        for channel in &self.params.allowed_channels {
+            let len = channel.len() as u8;
+            bytes.push(len);
+            bytes.extend_from_slice(channel.as_bytes());
+        }
+        // String fields
+        fn write_string(bytes: &mut Vec<u8>, s: &str) {
+            let len = s.len() as u16;
+            bytes.extend_from_slice(&len.to_le_bytes());
+            bytes.extend_from_slice(s.as_bytes());
+        }
+        write_string(&mut bytes, &self.ring.ring_id);
+        write_string(&mut bytes, &self.ring.policy_id);
+        write_string(&mut bytes, &self.ring.permission);
+        write_string(&mut bytes, &self.ring.resource);
+        bytes
+    }
+
+    /// Deserialize from bytes.
+    pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
+        if bytes.len() < 80 {
+            // 32 (dk_pub) + 16 (threshold) + 32 (ring_pk)
+            anyhow::bail!(
+                "invalid AssetPolicy length: expected >= 80 bytes, got {}",
+                bytes.len()
+            );
+        }
+        let dk_pub_bytes: [u8; 32] = bytes[0..32].try_into()?;
+        let dk_pub = decaf377::Encoding(dk_pub_bytes)
+            .vartime_decompress()
+            .map_err(|_| anyhow::anyhow!("invalid dk_pub encoding"))?;
+        let threshold = u128::from_le_bytes(bytes[32..48].try_into()?);
+        let ring_pk_bytes: [u8; 32] = bytes[48..80].try_into()?;
+        let ring_pk = decaf377::Encoding(ring_pk_bytes)
+            .vartime_decompress()
+            .map_err(|_| anyhow::anyhow!("invalid ring_pk encoding"))?;
+
+        let mut offset = 80;
+
+        // Parse channels
+        let allowed_channels = if offset + 2 <= bytes.len() {
+            let count = u16::from_le_bytes(bytes[offset..offset + 2].try_into()?) as usize;
+            offset += 2;
+            let mut channels = Vec::with_capacity(count);
+            for _ in 0..count {
+                if offset >= bytes.len() {
+                    anyhow::bail!("truncated allowed_channels data");
+                }
+                let len = bytes[offset] as usize;
+                offset += 1;
+                if offset + len > bytes.len() {
+                    anyhow::bail!("truncated channel string");
+                }
+                let channel = std::str::from_utf8(&bytes[offset..offset + len])
+                    .map_err(|_| anyhow::anyhow!("invalid UTF-8 in channel name"))?;
+                channels.push(channel.to_string());
+                offset += len;
+            }
+            channels
+        } else {
+            vec![]
+        };
+
+        // Parse string fields
+        fn read_string(bytes: &[u8], offset: &mut usize) -> anyhow::Result<String> {
+            if *offset + 2 > bytes.len() {
+                return Ok(String::new());
+            }
+            let len = u16::from_le_bytes(bytes[*offset..*offset + 2].try_into()?) as usize;
+            *offset += 2;
+            if *offset + len > bytes.len() {
+                anyhow::bail!("truncated string field");
+            }
+            let s = std::str::from_utf8(&bytes[*offset..*offset + len])
+                .map_err(|_| anyhow::anyhow!("invalid UTF-8 in string field"))?;
+            *offset += len;
+            Ok(s.to_string())
+        }
+
+        let ring_id = read_string(bytes, &mut offset)?;
+        let policy_id = read_string(bytes, &mut offset)?;
+        let permission = read_string(bytes, &mut offset)?;
+        let resource = read_string(bytes, &mut offset)?;
+
+        Ok(Self {
+            params: AssetParams {
+                dk_pub,
+                threshold,
+                allowed_channels,
+            },
+            ring: RingData {
+                ring_id,
+                ring_pk,
+                policy_id,
+                permission,
+                resource,
+            },
+        })
+    }
+}
+
+// Proto conversion for AssetPolicy
+impl DomainType for AssetPolicy {
+    type Proto = pb::AssetPolicy;
+}
+
+impl TryFrom<pb::AssetPolicy> for AssetPolicy {
+    type Error = anyhow::Error;
+
+    fn try_from(value: pb::AssetPolicy) -> Result<Self, Self::Error> {
+        let dk_pub = if value.dk_pub.is_empty() {
+            decaf377::Element::default()
+        } else {
+            let bytes: [u8; 32] = value
+                .dk_pub
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("dk_pub must be 32 bytes"))?;
+            decaf377::Encoding(bytes)
+                .vartime_decompress()
+                .map_err(|_| anyhow::anyhow!("invalid dk_pub encoding"))?
+        };
+
+        let threshold = if value.threshold.is_empty() {
+            u128::MAX
+        } else {
+            let bytes: [u8; 16] = value.threshold.try_into().map_err(|v: Vec<u8>| {
+                anyhow::anyhow!("threshold must be 16 bytes, got {}", v.len())
+            })?;
+            u128::from_le_bytes(bytes)
+        };
+
+        let ring_pk = if value.ring_pk.is_empty() {
+            decaf377::Element::default()
+        } else {
+            let bytes: [u8; 32] = value
+                .ring_pk
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("ring_pk must be 32 bytes"))?;
+            decaf377::Encoding(bytes)
+                .vartime_decompress()
+                .map_err(|_| anyhow::anyhow!("invalid ring_pk encoding"))?
+        };
+
+        Ok(AssetPolicy {
+            params: AssetParams {
+                dk_pub,
+                threshold,
+                allowed_channels: value.allowed_channels,
+            },
+            ring: RingData {
+                ring_id: value.ring_id,
+                ring_pk,
+                policy_id: value.policy_id,
+                permission: value.permission,
+                resource: value.resource,
+            },
+        })
+    }
+}
+
+impl From<AssetPolicy> for pb::AssetPolicy {
+    fn from(value: AssetPolicy) -> pb::AssetPolicy {
+        pb::AssetPolicy {
+            dk_pub: value.params.dk_pub.vartime_compress().0.to_vec(),
+            threshold: value.params.threshold.to_le_bytes().to_vec(),
+            allowed_channels: value.params.allowed_channels,
+            ring_id: value.ring.ring_id,
+            ring_pk: value.ring.ring_pk.vartime_compress().0.to_vec(),
+            policy_id: value.ring.policy_id,
+            permission: value.ring.permission,
+            resource: value.ring.resource,
         }
     }
 }
@@ -192,12 +500,21 @@ pub struct MsgRegisterAsset {
     /// Whether this asset is regulated (requires compliance).
     pub is_regulated: bool,
     /// Issuer's detection key public (optional).
-    /// When set, enables issuer-side detection and flagged transfer decryption.
     pub dk_pub: Option<decaf377::Element>,
-    /// Amount threshold for flagging (optional, u128 to cover full amount range).
-    /// Transfers at or above this amount are encrypted to issuer's DK instead of user's daily key.
-    /// None means no threshold (never flag, uses u128::MAX internally).
+    /// Amount threshold for flagging (optional).
     pub threshold: Option<u128>,
+    /// IBC channels allowed for this regulated asset. Empty = IBC blocked.
+    pub allowed_channels: Vec<String>,
+    /// Orbis ring public key (optional).
+    pub ring_pk: Option<decaf377::Element>,
+    /// Orbis DKG ring identifier.
+    pub ring_id: String,
+    /// SourceHub policy ID.
+    pub policy_id: String,
+    /// ACP permission name.
+    pub permission: String,
+    /// ACP resource type.
+    pub resource: String,
 }
 
 impl DomainType for MsgRegisterAsset {
@@ -208,7 +525,6 @@ impl TryFrom<pb::MsgRegisterAsset> for MsgRegisterAsset {
     type Error = anyhow::Error;
 
     fn try_from(value: pb::MsgRegisterAsset) -> Result<Self, Self::Error> {
-        // Parse dk_pub if present (32 bytes -> Element)
         let dk_pub = if value.dk_pub.is_empty() {
             None
         } else {
@@ -223,7 +539,6 @@ impl TryFrom<pb::MsgRegisterAsset> for MsgRegisterAsset {
             )
         };
 
-        // Parse threshold (empty bytes means not set)
         let threshold = if value.threshold.is_empty() {
             None
         } else {
@@ -231,6 +546,20 @@ impl TryFrom<pb::MsgRegisterAsset> for MsgRegisterAsset {
                 anyhow::anyhow!("threshold must be 16 bytes, got {}", v.len())
             })?;
             Some(u128::from_le_bytes(threshold_bytes))
+        };
+
+        let ring_pk = if value.ring_pk.is_empty() {
+            None
+        } else {
+            let bytes: [u8; 32] = value
+                .ring_pk
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("ring_pk must be exactly 32 bytes"))?;
+            Some(
+                decaf377::Encoding(bytes)
+                    .vartime_decompress()
+                    .map_err(|_| anyhow::anyhow!("invalid ring_pk encoding"))?,
+            )
         };
 
         Ok(MsgRegisterAsset {
@@ -241,6 +570,12 @@ impl TryFrom<pb::MsgRegisterAsset> for MsgRegisterAsset {
             is_regulated: value.is_regulated,
             dk_pub,
             threshold,
+            allowed_channels: value.allowed_channels,
+            ring_pk,
+            ring_id: value.ring_id,
+            policy_id: value.policy_id,
+            permission: value.permission,
+            resource: value.resource,
         })
     }
 }
@@ -258,6 +593,15 @@ impl From<MsgRegisterAsset> for pb::MsgRegisterAsset {
                 .threshold
                 .map(|t| t.to_le_bytes().to_vec())
                 .unwrap_or_default(),
+            allowed_channels: value.allowed_channels,
+            ring_pk: value
+                .ring_pk
+                .map(|e| e.vartime_compress().0.to_vec())
+                .unwrap_or_default(),
+            ring_id: value.ring_id,
+            policy_id: value.policy_id,
+            permission: value.permission,
+            resource: value.resource,
         }
     }
 }
@@ -270,65 +614,7 @@ impl penumbra_sdk_txhash::EffectingData for MsgRegisterAsset {
     }
 }
 
-/// Asset-specific compliance policy stored on-chain.
-///
-/// Contains issuer-defined threshold and detection key for flagged transfer handling.
-/// When a transfer exceeds the threshold, the detection tier is encrypted to the
-/// issuer's DK_pub instead of the user's daily detection key.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AssetPolicy {
-    /// Issuer's detection key public (curve point).
-    /// Used to compute shared secrets for detection tier when flagging.
-    pub dk_pub: decaf377::Element,
-    /// Amount threshold for flagging (u128 to cover full amount range).
-    /// Transfers at or above this amount are encrypted to issuer's DK instead of user's daily key.
-    pub threshold: u128,
-}
-
-impl AssetPolicy {
-    /// Create a new asset policy.
-    pub fn new(dk_pub: decaf377::Element, threshold: u128) -> Self {
-        Self { dk_pub, threshold }
-    }
-
-    /// Create a default policy for unregulated assets.
-    ///
-    /// Uses identity element for dk_pub and u128::MAX for threshold.
-    /// This ensures `is_flagged = (amount >= threshold)` is always false
-    /// for any real transaction amount, so unregulated transfers are never flagged.
-    pub fn default_unregulated() -> Self {
-        Self {
-            dk_pub: decaf377::Element::default(), // Identity element
-            threshold: u128::MAX,                 // Amount can never exceed this
-        }
-    }
-
-    /// Serialize to bytes for storage.
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(48); // 32 bytes dk_pub + 16 bytes threshold
-        bytes.extend_from_slice(&self.dk_pub.vartime_compress().0);
-        bytes.extend_from_slice(&self.threshold.to_le_bytes());
-        bytes
-    }
-
-    /// Deserialize from bytes.
-    pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
-        if bytes.len() != 48 {
-            anyhow::bail!(
-                "invalid AssetPolicy length: expected 48 bytes, got {}",
-                bytes.len()
-            );
-        }
-        let dk_pub_bytes: [u8; 32] = bytes[0..32].try_into()?;
-        let dk_pub = decaf377::Encoding(dk_pub_bytes)
-            .vartime_decompress()
-            .map_err(|_| anyhow::anyhow!("invalid dk_pub encoding"))?;
-        let threshold = u128::from_le_bytes(bytes[32..48].try_into()?);
-        Ok(Self { dk_pub, threshold })
-    }
-}
-
-/// Message to register a user's address compliance key (ACK) for a regulated asset.
+/// Message to register a user's address for a regulated asset.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "pb::MsgRegisterUser", into = "pb::MsgRegisterUser")]
 pub struct MsgRegisterUser {
@@ -376,120 +662,112 @@ impl penumbra_sdk_txhash::EffectingData for MsgRegisterUser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use penumbra_sdk_keys::keys::UserComplianceKey;
 
     #[test]
-    fn test_compliance_leaf_new_with_demo_uck() {
+    fn test_compliance_leaf_new() {
         let mut rng = rand::thread_rng();
-        let demo_uck = UserComplianceKey::demo();
-
-        // Create dummy address and asset
         let address = Address::dummy(&mut rng);
         let asset_id = asset::Id(decaf377::Fq::from(100u64));
+        let d = decaf377::Fq::from(42u64);
 
-        // Create leaf using new() method
-        let leaf = ComplianceLeaf::new(&demo_uck, address.clone(), asset_id);
+        let leaf = ComplianceLeaf::new(address.clone(), asset_id, d);
 
-        // Verify fields
         assert_eq!(leaf.address, address);
         assert_eq!(leaf.asset_id, asset_id);
-
-        // Verify ACK was derived correctly (should be deterministic)
-        let expected_ack = demo_uck.derive_address_key(address.diversifier());
-        assert_eq!(leaf.key, expected_ack);
+        assert_eq!(leaf.d, d);
     }
 
     #[test]
-    fn test_compliance_leaf_different_addresses_different_ack() {
+    fn test_compliance_leaf_different_addresses_different_commits() {
         let mut rng = rand::thread_rng();
-        let demo_uck = UserComplianceKey::demo();
         let asset_id = asset::Id(decaf377::Fq::from(100u64));
+        let d = decaf377::Fq::from(42u64);
 
-        // Create two different addresses
         let address1 = Address::dummy(&mut rng);
         let address2 = Address::dummy(&mut rng);
 
-        // Create leaves
-        let leaf1 = ComplianceLeaf::new(&demo_uck, address1, asset_id);
-        let leaf2 = ComplianceLeaf::new(&demo_uck, address2, asset_id);
+        let leaf1 = ComplianceLeaf::new(address1, asset_id, d);
+        let leaf2 = ComplianceLeaf::new(address2, asset_id, d);
 
-        // ACKs should be different (privacy!)
         assert_ne!(
-            leaf1.key, leaf2.key,
-            "Different addresses must have different ACKs"
+            leaf1.commit(),
+            leaf2.commit(),
+            "Different addresses must have different commitments"
         );
     }
 
-    #[test]
-    fn test_compliance_leaf_same_address_different_assets() {
-        let mut rng = rand::thread_rng();
-        let demo_uck = UserComplianceKey::demo();
-        let address = Address::dummy(&mut rng);
-
-        // Same address, different assets
-        let usdc = asset::Id(decaf377::Fq::from(1u64));
-        let dai = asset::Id(decaf377::Fq::from(2u64));
-
-        let leaf_usdc = ComplianceLeaf::new(&demo_uck, address.clone(), usdc);
-        let leaf_dai = ComplianceLeaf::new(&demo_uck, address.clone(), dai);
-
-        // ACKs should be the same (derived from same address diversifier)
-        assert_eq!(
-            leaf_usdc.key, leaf_dai.key,
-            "Same address should have same ACK across different assets"
-        );
-
-        // But asset IDs should differ
-        assert_ne!(leaf_usdc.asset_id, leaf_dai.asset_id);
-    }
-
-    /// Test proto round-trip for ComplianceLeaf.
-    /// This mimics what happens over gRPC: rpc.rs serializes to proto, client parses it back.
-    /// This test would catch serialization bugs in the ACK encoding.
     #[test]
     fn test_compliance_leaf_proto_roundtrip() {
-        use penumbra_sdk_keys::keys::AddressComplianceKey;
-
         let mut rng = rand::thread_rng();
-
-        // Create a leaf with a specific ACK
         let wallet = Address::dummy(&mut rng);
-        let ack =
-            AddressComplianceKey::new(decaf377::Element::GENERATOR * decaf377::Fr::from(12345u64));
         let asset_id = asset::Id(decaf377::Fq::from(999u64));
+        let d = decaf377::Fq::from(123u64);
 
-        let original = ComplianceLeaf {
-            address: wallet,
-            key: ack,
-            asset_id,
-        };
+        let original = ComplianceLeaf::new(wallet, asset_id, d);
 
-        // Convert to proto (what rpc.rs does)
         let proto: pb::ComplianceLeaf = original.clone().into();
-
-        // Verify proto has the ACK bytes (what goes over the wire)
-        let key_proto = proto.key.as_ref().expect("key should be present");
-        assert_eq!(key_proto.inner.len(), 32, "ACK should be 32 bytes");
-
-        // Convert back from proto (what client_compliance_demo.rs does)
         let recovered: ComplianceLeaf = proto.try_into().expect("should parse");
 
-        assert_eq!(
-            original.key.inner(),
-            recovered.key.inner(),
-            "ACK must survive proto round-trip"
-        );
-
-        // All fields should match
         assert_eq!(original.address, recovered.address);
         assert_eq!(original.asset_id, recovered.asset_id);
+        assert_eq!(original.d, recovered.d);
+        assert_eq!(original.commit().0, recovered.commit().0);
+    }
 
-        // Commitment must match (this is what the circuit uses)
-        assert_eq!(
-            original.commit().0,
-            recovered.commit().0,
-            "Commitment must match after round-trip"
+    #[test]
+    fn test_asset_policy_bytes_roundtrip() {
+        let dk = decaf377::Fr::from(42u64);
+        let dk_pub = decaf377::Element::GENERATOR * dk;
+        let rk = decaf377::Fr::from(999u64);
+        let ring_pk = decaf377::Element::GENERATOR * rk;
+
+        let policy = AssetPolicy::new(
+            dk_pub,
+            1000,
+            vec!["channel-0".to_string()],
+            "ring-123".to_string(),
+            ring_pk,
+            "policy-abc".to_string(),
+            "reader".to_string(),
+            "document".to_string(),
         );
+
+        let bytes = policy.to_bytes();
+        let recovered = AssetPolicy::from_bytes(&bytes).unwrap();
+
+        assert_eq!(policy.params.dk_pub, recovered.params.dk_pub);
+        assert_eq!(policy.params.threshold, recovered.params.threshold);
+        assert_eq!(
+            policy.params.allowed_channels,
+            recovered.params.allowed_channels
+        );
+        assert_eq!(policy.ring.ring_id, recovered.ring.ring_id);
+        assert_eq!(policy.ring.ring_pk, recovered.ring.ring_pk);
+        assert_eq!(policy.ring.policy_id, recovered.ring.policy_id);
+        assert_eq!(policy.ring.permission, recovered.ring.permission);
+        assert_eq!(policy.ring.resource, recovered.ring.resource);
+    }
+
+    #[test]
+    fn test_asset_policy_proto_roundtrip() {
+        let dk_pub = decaf377::Element::GENERATOR * decaf377::Fr::from(42u64);
+        let ring_pk = decaf377::Element::GENERATOR * decaf377::Fr::from(999u64);
+
+        let policy = AssetPolicy::new(
+            dk_pub,
+            500,
+            vec!["ch-1".to_string(), "ch-2".to_string()],
+            "ring-id".to_string(),
+            ring_pk,
+            "pol-id".to_string(),
+            "perm".to_string(),
+            "res".to_string(),
+        );
+
+        let proto: pb::AssetPolicy = policy.clone().into();
+        let recovered = AssetPolicy::try_from(proto).unwrap();
+
+        assert_eq!(policy, recovered);
     }
 }
 
@@ -503,9 +781,6 @@ pub struct MerklePath {
 
 impl MerklePath {
     /// Create a MerklePath from the output of registry auth_path functions.
-    ///
-    /// Converts `Vec<[StateCommitment; 3]>` into the MerklePath format by
-    /// serializing each StateCommitment to bytes.
     pub fn from_auth_path(auth_path: Vec<[StateCommitment; 3]>) -> Self {
         let layers = auth_path
             .into_iter()
@@ -581,184 +856,275 @@ impl From<MerklePathLayer> for pb::MerklePathLayer {
     }
 }
 
-/// Compliance ciphertext for a single party (sender or receiver).
+/// Compliance ciphertext with tiered encryption.
 ///
-/// This structure supports triple-layer encryption:
-/// 1. Detection Tag - encrypted with detection key (for scanning)
-/// 2. Core Data - encrypted with encryption key (asset ID, amount)
-/// 3. Extension Data - encrypted with extension key (counterparty address)
-///
-/// ## Dual EPK Design
-///
-/// ECDH requires both parties to use the same base point. Penumbra uses:
-/// - **User keys**: On diversified curve `B_d` (per-address privacy)
-/// - **Issuer keys**: On standard generator `G` (global, stored in asset leaf)
-///
-/// Since `B_d ≠ G`, we need two EPKs with the same ephemeral scalar `r`:
-/// - `epk = r × B_d` — for user decryption (diversified curve)
-/// - `epk_g = r × G` — for issuer decryption (standard curve)
-///
-/// Both are cryptographically linked via the same `r`.
+/// Supports two formats:
+/// - **Spend** (192 bytes): 1 EPK + c2_core + detection + core
+/// - **Output** (512 bytes): 3 EPKs + 3 c2s + detection + core + ext + sext
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComplianceCiphertext {
-    /// The ephemeral public key R = r * B_d (diversified generator).
-    /// Used to derive shared secrets with user's daily public keys.
-    pub epk: decaf377::Element,
+    /// Ephemeral public key EPK_1 = r_1 × G (all actions).
+    pub epk_1: decaf377::Element,
 
-    /// The ephemeral public key R_g = r * G (standard generator).
-    /// Used for issuer ECDH when decrypting detection tier or flagged transfers.
-    /// This enables issuers to compute: `ss = dk × epk_g = dk × r × G = r × dk × G`
-    /// which matches encryption's `ss = r × DK_pub = r × (dk × G)`.
-    pub epk_g: decaf377::Element,
+    /// Ephemeral public key EPK_2 = r_2 × G (Output only).
+    pub epk_2: Option<decaf377::Element>,
 
-    /// Encrypted detection tier (asset_id, 32 bytes).
-    pub detection_tag: [u8; 32],
+    /// Ephemeral public key EPK_3 = r_3 × G (Output only).
+    pub epk_3: Option<decaf377::Element>,
 
-    /// Encrypted core compliance data (AssetID + Amount).
-    /// Decryptable by the issuer's daily encryption key.
+    /// Encrypted seed for core tier (ElGamal envelope).
+    pub c2_core: Fq,
+
+    /// Encrypted seed for extension tier (Output only).
+    pub c2_ext: Option<Fq>,
+
+    /// Encrypted seed for sender-extension tier (Output only).
+    pub c2_sext: Option<Fq>,
+
+    /// Encrypted detection tier: [asset_id+flag (32 bytes), salt (32 bytes)].
+    pub detection_tag: [u8; DETECTION_TAG_BYTES],
+
+    /// Encrypted core data: amount + self address (96 bytes).
     pub encrypted_core: Vec<u8>,
 
-    /// Encrypted extension data (counterparty address).
-    /// Decryptable by the issuer's daily extension key.
-    pub encrypted_extension: Vec<u8>,
+    /// Encrypted extension: counterparty address for receiver (96 bytes, Output only).
+    pub encrypted_ext: Option<Vec<u8>>,
+
+    /// Encrypted sender-extension: counterparty data for sender (96 bytes, Output only).
+    pub encrypted_sext: Option<Vec<u8>>,
 }
 
 impl ComplianceCiphertext {
-    /// Serialize the ephemeral public key to bytes.
-    pub fn epk_bytes(&self) -> [u8; 32] {
-        self.epk.vartime_compress().0
+    /// Serialize EPK_1 to bytes.
+    pub fn epk_1_bytes(&self) -> [u8; 32] {
+        self.epk_1.vartime_compress().0
     }
 
-    /// Serialize the issuer ephemeral public key to bytes.
-    pub fn epk_g_bytes(&self) -> [u8; 32] {
-        self.epk_g.vartime_compress().0
-    }
-
-    /// Create from ephemeral public keys and encrypted data.
-    ///
-    /// # Arguments
-    /// * `epk` - Ephemeral public key on diversified curve (r * B_d)
-    /// * `epk_g` - Ephemeral public key on standard curve (r * G) for issuer ECDH
-    /// * `detection_tag` - Encrypted detection tier
-    /// * `encrypted_core` - Encrypted core data
-    /// * `encrypted_extension` - Encrypted extension data
-    pub fn new(
-        epk: decaf377::Element,
-        epk_g: decaf377::Element,
-        detection_tag: [u8; 32],
+    /// Create a Spend ciphertext (detection + core only, 224 bytes).
+    pub fn new_spend(
+        epk_1: decaf377::Element,
+        c2_core: Fq,
+        detection_tag: [u8; DETECTION_TAG_BYTES],
         encrypted_core: Vec<u8>,
-        encrypted_extension: Vec<u8>,
     ) -> Self {
         Self {
-            epk,
-            epk_g,
+            epk_1,
+            epk_2: None,
+            epk_3: None,
+            c2_core,
+            c2_ext: None,
+            c2_sext: None,
             detection_tag,
             encrypted_core,
-            encrypted_extension,
+            encrypted_ext: None,
+            encrypted_sext: None,
         }
     }
 
-    /// Serialize the entire compliance ciphertext to bytes.
+    /// Create an Output ciphertext (all tiers, 544 bytes).
+    pub fn new_output(
+        epk_1: decaf377::Element,
+        epk_2: decaf377::Element,
+        epk_3: decaf377::Element,
+        c2_core: Fq,
+        c2_ext: Fq,
+        c2_sext: Fq,
+        detection_tag: [u8; DETECTION_TAG_BYTES],
+        encrypted_core: Vec<u8>,
+        encrypted_ext: Vec<u8>,
+        encrypted_sext: Vec<u8>,
+    ) -> Self {
+        Self {
+            epk_1,
+            epk_2: Some(epk_2),
+            epk_3: Some(epk_3),
+            c2_core,
+            c2_ext: Some(c2_ext),
+            c2_sext: Some(c2_sext),
+            detection_tag,
+            encrypted_core,
+            encrypted_ext: Some(encrypted_ext),
+            encrypted_sext: Some(encrypted_sext),
+        }
+    }
+
+    /// Whether this is a Spend ciphertext (no extension tiers).
+    pub fn is_spend(&self) -> bool {
+        self.epk_2.is_none()
+    }
+
+    /// Serialize to bytes.
     ///
-    /// Format:
-    /// - 32 bytes: ephemeral public key (r * B_d, compressed)
-    /// - 32 bytes: issuer ephemeral public key (r * G, compressed)
-    /// - 32 bytes: detection tag (encrypted magic bytes)
-    /// - 96 bytes: encrypted_core (amount + self_address)
-    /// - 96 bytes: encrypted_extension (counterparty address)
-    ///
-    /// Total: 288 bytes
+    /// Spend (192): EPK_1 + c2_core + detection + core
+    /// Output (512): EPK_1 + EPK_2 + EPK_3 + c2_core + c2_ext + c2_sext + detection + core + ext + sext
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(&self.epk_bytes());
-        bytes.extend_from_slice(&self.epk_g_bytes());
+        bytes.extend_from_slice(&self.epk_1_bytes());
+        if let Some(epk_2) = &self.epk_2 {
+            bytes.extend_from_slice(&epk_2.vartime_compress().0);
+        }
+        if let Some(epk_3) = &self.epk_3 {
+            bytes.extend_from_slice(&epk_3.vartime_compress().0);
+        }
+        bytes.extend_from_slice(&self.c2_core.to_bytes());
+        if let Some(c2_ext) = &self.c2_ext {
+            bytes.extend_from_slice(&c2_ext.to_bytes());
+        }
+        if let Some(c2_sext) = &self.c2_sext {
+            bytes.extend_from_slice(&c2_sext.to_bytes());
+        }
         bytes.extend_from_slice(&self.detection_tag);
         bytes.extend_from_slice(&self.encrypted_core);
-        bytes.extend_from_slice(&self.encrypted_extension);
+        if let Some(ext) = &self.encrypted_ext {
+            bytes.extend_from_slice(ext);
+        }
+        if let Some(sext) = &self.encrypted_sext {
+            bytes.extend_from_slice(sext);
+        }
         bytes
     }
 
-    /// Deserialize a compliance ciphertext from bytes.
-    ///
-    /// Format (matching crypto.rs encryption output with tiered encryption):
-    /// - EPK_BYTES (32): ephemeral public key (r * B_d, compressed)
-    /// - EPK_G_BYTES (32): issuer ephemeral public key (r * G, compressed)
-    /// - DETECTION_TAG_BYTES (32): detection tag (encrypted asset_id)
-    /// - ENCRYPTED_CORE_BYTES (96): encrypted amount + self_address
-    /// - ENCRYPTED_EXTENSION_BYTES (96): encrypted counterparty_address
-    ///
-    /// Total: TOTAL_WIRE_BYTES (288 bytes)
+    /// Deserialize from bytes. Accepts Spend (192 bytes) or Output (512 bytes) format.
     pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
-        use crate::{
-            DETECTION_TAG_BYTES, ENCRYPTED_CORE_BYTES, ENCRYPTED_EXTENSION_BYTES, EPK_BYTES,
-            EPK_G_BYTES, TOTAL_WIRE_BYTES,
+        let is_output = match bytes.len() {
+            SPEND_WIRE_BYTES => false,
+            OUTPUT_WIRE_BYTES => true,
+            n => anyhow::bail!(
+                "invalid ciphertext length: expected {} (spend) or {} (output), got {}",
+                SPEND_WIRE_BYTES,
+                OUTPUT_WIRE_BYTES,
+                n
+            ),
         };
-
-        if bytes.len() != TOTAL_WIRE_BYTES {
-            anyhow::bail!(
-                "invalid ciphertext length: expected {} bytes, got {}",
-                TOTAL_WIRE_BYTES,
-                bytes.len()
-            );
-        }
 
         let mut offset = 0;
 
-        // Parse ephemeral public key (32 bytes) - r * B_d
-        let epk_bytes: [u8; EPK_BYTES] = bytes[offset..offset + EPK_BYTES].try_into()?;
-        let epk = decaf377::Encoding(epk_bytes)
+        // EPK_1
+        let epk_1_bytes: [u8; EPK_BYTES] = bytes[offset..offset + EPK_BYTES].try_into()?;
+        let epk_1 = decaf377::Encoding(epk_1_bytes)
             .vartime_decompress()
-            .map_err(|_| anyhow::anyhow!("failed to decompress ephemeral public key"))?;
+            .map_err(|_| anyhow::anyhow!("failed to decompress epk_1"))?;
         offset += EPK_BYTES;
 
-        // Parse issuer ephemeral public key (32 bytes) - r * G
-        let epk_g_bytes: [u8; EPK_G_BYTES] = bytes[offset..offset + EPK_G_BYTES].try_into()?;
-        let epk_g = decaf377::Encoding(epk_g_bytes)
-            .vartime_decompress()
-            .map_err(|_| anyhow::anyhow!("failed to decompress issuer ephemeral public key"))?;
-        offset += EPK_G_BYTES;
+        // EPK_2 and EPK_3 (output only)
+        let (epk_2, epk_3) = if is_output {
+            let epk_2_bytes: [u8; EPK_BYTES] = bytes[offset..offset + EPK_BYTES].try_into()?;
+            let epk_2 = decaf377::Encoding(epk_2_bytes)
+                .vartime_decompress()
+                .map_err(|_| anyhow::anyhow!("failed to decompress epk_2"))?;
+            offset += EPK_BYTES;
 
-        // Parse detection tag (32 bytes)
-        let detection_tag: [u8; 32] = bytes[offset..offset + DETECTION_TAG_BYTES].try_into()?;
+            let epk_3_bytes: [u8; EPK_BYTES] = bytes[offset..offset + EPK_BYTES].try_into()?;
+            let epk_3 = decaf377::Encoding(epk_3_bytes)
+                .vartime_decompress()
+                .map_err(|_| anyhow::anyhow!("failed to decompress epk_3"))?;
+            offset += EPK_BYTES;
+
+            (Some(epk_2), Some(epk_3))
+        } else {
+            (None, None)
+        };
+
+        // c2_core
+        let c2_core_bytes: [u8; C2_BYTES] = bytes[offset..offset + C2_BYTES].try_into()?;
+        let c2_core = Fq::from_bytes_checked(&c2_core_bytes)
+            .map_err(|_| anyhow::anyhow!("invalid c2_core field element"))?;
+        offset += C2_BYTES;
+
+        // c2_ext and c2_sext (output only)
+        let (c2_ext, c2_sext) = if is_output {
+            let ext_bytes: [u8; C2_BYTES] = bytes[offset..offset + C2_BYTES].try_into()?;
+            let c2_ext = Fq::from_bytes_checked(&ext_bytes)
+                .map_err(|_| anyhow::anyhow!("invalid c2_ext field element"))?;
+            offset += C2_BYTES;
+
+            let sext_bytes: [u8; C2_BYTES] = bytes[offset..offset + C2_BYTES].try_into()?;
+            let c2_sext = Fq::from_bytes_checked(&sext_bytes)
+                .map_err(|_| anyhow::anyhow!("invalid c2_sext field element"))?;
+            offset += C2_BYTES;
+
+            (Some(c2_ext), Some(c2_sext))
+        } else {
+            (None, None)
+        };
+
+        let detection_tag: [u8; DETECTION_TAG_BYTES] =
+            bytes[offset..offset + DETECTION_TAG_BYTES].try_into()?;
         offset += DETECTION_TAG_BYTES;
 
-        // Parse encrypted core (96 bytes)
-        let encrypted_core = bytes[offset..offset + ENCRYPTED_CORE_BYTES].to_vec();
-        offset += ENCRYPTED_CORE_BYTES;
+        let encrypted_core = bytes[offset..offset + ENCRYPTED_TIER_BYTES].to_vec();
+        offset += ENCRYPTED_TIER_BYTES;
 
-        // Parse encrypted extension (96 bytes)
-        let encrypted_extension = bytes[offset..offset + ENCRYPTED_EXTENSION_BYTES].to_vec();
+        let (encrypted_ext, encrypted_sext) = if is_output {
+            let ext = bytes[offset..offset + ENCRYPTED_TIER_BYTES].to_vec();
+            offset += ENCRYPTED_TIER_BYTES;
+            let sext = bytes[offset..offset + ENCRYPTED_TIER_BYTES].to_vec();
+            (Some(ext), Some(sext))
+        } else {
+            (None, None)
+        };
 
         Ok(Self {
-            epk,
-            epk_g,
+            epk_1,
+            epk_2,
+            epk_3,
+            c2_core,
+            c2_ext,
+            c2_sext,
             detection_tag,
             encrypted_core,
-            encrypted_extension,
+            encrypted_ext,
+            encrypted_sext,
         })
     }
 
-    /// Convert to circuit public inputs format.
+    /// Convert to Output circuit public inputs (11 Fq).
     ///
-    /// Returns (epk, epk_g, ciphertext_fqs) for use in ZK circuit verification.
-    pub fn to_circuit_public_inputs(
+    /// Returns `(epk_1, epk_2, epk_3, c2_core, c2_ext, c2_sext, ciphertext_fqs)`
+    /// where ciphertext_fqs = [detection:2][core:3][ext:3][sext:3] = 11 Fq.
+    pub fn to_output_circuit_public_inputs(
         &self,
-    ) -> (decaf377::Element, decaf377::Element, Vec<decaf377::Fq>) {
-        use crate::{CIPHERTEXT_PAYLOAD_BYTES, NUM_CIPHERTEXT_FQS};
+    ) -> (
+        decaf377::Element,
+        decaf377::Element,
+        decaf377::Element,
+        decaf377::Fq,
+        decaf377::Fq,
+        decaf377::Fq,
+        Vec<decaf377::Fq>,
+    ) {
         use decaf377::Fq;
 
-        let epk = self.epk;
-        let epk_g = self.epk_g;
+        let epk_2 = self
+            .epk_2
+            .expect("to_output_circuit_public_inputs called on Spend ciphertext");
+        let epk_3 = self
+            .epk_3
+            .expect("to_output_circuit_public_inputs called on Spend ciphertext");
+        let c2_ext = self
+            .c2_ext
+            .expect("to_output_circuit_public_inputs called on Spend ciphertext");
+        let c2_sext = self
+            .c2_sext
+            .expect("to_output_circuit_public_inputs called on Spend ciphertext");
+        let encrypted_ext = self
+            .encrypted_ext
+            .as_ref()
+            .expect("to_output_circuit_public_inputs called on Spend ciphertext");
+        let encrypted_sext = self
+            .encrypted_sext
+            .as_ref()
+            .expect("to_output_circuit_public_inputs called on Spend ciphertext");
 
-        // Reconstruct the ciphertext payload in the same order as encryption
-        let mut ciphertext_bytes = Vec::with_capacity(CIPHERTEXT_PAYLOAD_BYTES);
-        ciphertext_bytes.extend_from_slice(&self.detection_tag); // 32 bytes
-        ciphertext_bytes.extend_from_slice(&self.encrypted_core); // 96 bytes
-        ciphertext_bytes.extend_from_slice(&self.encrypted_extension); // 96 bytes
+        let payload_bytes = DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES * 3;
+        let mut ciphertext_bytes = Vec::with_capacity(payload_bytes);
+        ciphertext_bytes.extend_from_slice(&self.detection_tag);
+        ciphertext_bytes.extend_from_slice(&self.encrypted_core);
+        ciphertext_bytes.extend_from_slice(encrypted_ext);
+        ciphertext_bytes.extend_from_slice(encrypted_sext);
 
-        debug_assert_eq!(ciphertext_bytes.len(), CIPHERTEXT_PAYLOAD_BYTES);
+        debug_assert_eq!(ciphertext_bytes.len(), payload_bytes);
 
-        // Convert to Fq elements (matching encryption output)
         let ciphertext_fqs: Vec<Fq> = ciphertext_bytes
             .chunks_exact(32)
             .map(|chunk| {
@@ -767,27 +1133,54 @@ impl ComplianceCiphertext {
             })
             .collect();
 
-        debug_assert_eq!(ciphertext_fqs.len(), NUM_CIPHERTEXT_FQS);
+        debug_assert_eq!(ciphertext_fqs.len(), OUTPUT_CIPHERTEXT_FQS);
 
-        (epk, epk_g, ciphertext_fqs)
+        (
+            self.epk_1,
+            epk_2,
+            epk_3,
+            self.c2_core,
+            c2_ext,
+            c2_sext,
+            ciphertext_fqs,
+        )
+    }
+
+    /// Convert to Spend circuit public inputs (5 Fq).
+    ///
+    /// Returns `(epk_1, c2_core, ciphertext_fqs)` where ciphertext_fqs
+    /// = [detection:2][core:3] = 5 Fq.
+    pub fn to_spend_circuit_public_inputs(
+        &self,
+    ) -> (decaf377::Element, decaf377::Fq, Vec<decaf377::Fq>) {
+        use decaf377::Fq;
+
+        let mut ciphertext_bytes = Vec::with_capacity(128);
+        ciphertext_bytes.extend_from_slice(&self.detection_tag);
+        ciphertext_bytes.extend_from_slice(&self.encrypted_core);
+
+        let ciphertext_fqs: Vec<Fq> = ciphertext_bytes
+            .chunks_exact(32)
+            .map(|chunk| {
+                let buf: [u8; 32] = chunk.try_into().expect("chunk should be exactly 32 bytes");
+                Fq::from_le_bytes_mod_order(&buf)
+            })
+            .collect();
+
+        debug_assert_eq!(ciphertext_fqs.len(), SPEND_CIPHERTEXT_FQS);
+
+        (self.epk_1, self.c2_core, ciphertext_fqs)
     }
 }
 
 /// Complete compliance payload containing both sender and receiver ciphertexts.
-///
-/// This structure goes into the transaction body and allows the issuer to
-/// decrypt both sides of a transaction using their daily master key.
 #[derive(Clone, Debug)]
 pub struct CompliancePayload {
-    /// Compliance ciphertext for the sender's side of the transaction.
     pub sender_compliance: ComplianceCiphertext,
-
-    /// Compliance ciphertext for the receiver's side of the transaction.
     pub receiver_compliance: ComplianceCiphertext,
 }
 
 impl CompliancePayload {
-    /// Create a new compliance payload from sender and receiver ciphertexts.
     pub fn new(
         sender_compliance: ComplianceCiphertext,
         receiver_compliance: ComplianceCiphertext,

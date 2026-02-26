@@ -2044,8 +2044,8 @@ impl ViewService for ViewServer {
 
         let (dk_pub, threshold, has_policy) = match policy {
             Some(p) => (
-                p.dk_pub.vartime_compress().0.to_vec(),
-                p.threshold.to_le_bytes().to_vec(),
+                p.dk_pub().vartime_compress().0.to_vec(),
+                p.threshold().to_le_bytes().to_vec(),
                 true,
             ),
             None => (vec![], vec![], false),
@@ -2133,7 +2133,7 @@ impl ViewService for ViewServer {
         // Returns (user_registered, compliance_position, compliance_path, compliance_leaf)
         let (user_registered, compliance_position, compliance_path, compliance_leaf) =
             match local_leaf_data {
-                Some((position, ack_bytes, _commitment)) => {
+                Some((position, _ack_bytes, _ack_orbis_bytes, _commitment)) => {
                     // Local storage hit - compute path from held user_tree reference
                     let path = user_tree.witness(position).map_err(|e| {
                         tonic::Status::internal(format!("failed to compute path: {e}"))
@@ -2142,10 +2142,8 @@ impl ViewService for ViewServer {
                     // Build proto leaf from local storage
                     let leaf_proto = compliance_pb::ComplianceLeaf {
                         address: Some(address.clone().into()),
-                        key: Some(compliance_pb::ComplianceViewingKey {
-                            inner: ack_bytes.to_vec(),
-                        }),
                         asset_id: Some(asset_id.into()),
+                        d: vec![],
                     };
 
                     tracing::debug!(
@@ -2255,13 +2253,7 @@ impl ViewService for ViewServer {
                 .collect(),
         };
 
-        let asset_indexed_leaf_proto = compliance_pb::IndexedLeafData {
-            value: indexed_leaf.value.to_bytes().to_vec(),
-            next_index: indexed_leaf.next_index,
-            next_value: indexed_leaf.next_value.to_bytes().to_vec(),
-            dk_pub: indexed_leaf.policy.dk_pub.vartime_compress().0.to_vec(),
-            threshold: indexed_leaf.policy.threshold.to_le_bytes().to_vec(),
-        };
+        let asset_indexed_leaf_proto: compliance_pb::IndexedLeafData = indexed_leaf.clone().into();
 
         // Release read locks (allows worker to sync)
         drop(user_tree);
@@ -2311,16 +2303,16 @@ impl ViewService for ViewServer {
             .await
             .map_err(|e| tonic::Status::internal(format!("storage error: {e}")))?;
 
-        if let Some((_position, ack_bytes, _commitment)) = local_leaf_data {
-            // Local storage hit - reconstruct the leaf
+        if let Some((_position, _ack_bytes, _ack_orbis_bytes, _commitment)) = local_leaf_data {
+            // Local storage hit - reconstruct the leaf, re-deriving d from address
             tracing::debug!(?address, ?asset_id, "using local storage for user leaf");
 
+            let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+            let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
             let leaf = compliance_pb::ComplianceLeaf {
                 address: request_inner.address,
-                key: Some(compliance_pb::ComplianceViewingKey {
-                    inner: ack_bytes.to_vec(),
-                }),
                 asset_id: request_inner.asset_id,
+                d: d.to_bytes().to_vec(),
             };
 
             return Ok(tonic::Response::new(pb::ComplianceUserLeafResponse {
@@ -2358,10 +2350,8 @@ impl ViewService for ViewServer {
         // Convert compliance proto types to view proto types
         let leaf = response.leaf.map(|l| compliance_pb::ComplianceLeaf {
             address: l.address,
-            key: l
-                .key
-                .map(|k| compliance_pb::ComplianceViewingKey { inner: k.inner }),
             asset_id: l.asset_id,
+            d: l.d,
         });
 
         Ok(tonic::Response::new(pb::ComplianceUserLeafResponse {
@@ -2431,8 +2421,8 @@ impl ViewService for ViewServer {
                 is_regulated,
                 leaf_value = ?indexed_leaf.value.to_bytes(),
                 leaf_next_index = indexed_leaf.next_index,
-                leaf_threshold = indexed_leaf.policy.threshold,
-                leaf_dk_pub_first_byte = indexed_leaf.policy.dk_pub.vartime_compress().0[0],
+                leaf_threshold = indexed_leaf.params.threshold,
+                leaf_dk_pub_first_byte = indexed_leaf.params.dk_pub.vartime_compress().0[0],
                 leaf_commitment = ?leaf_commitment.0.to_bytes(),
                 "compliance_batch_merkle_proofs: asset proof data"
             );
@@ -2449,19 +2439,20 @@ impl ViewService for ViewServer {
                         .map_err(|e| tonic::Status::internal(format!("storage error: {e}")))?;
 
                     match local_leaf_data {
-                        Some((position, ack_bytes, _commitment)) => {
+                        Some((position, _ack_bytes, _ack_orbis_bytes, _commitment)) => {
                             // Local storage hit - compute path from held user_tree reference
                             let path = user_tree.witness(position).map_err(|e| {
                                 tonic::Status::internal(format!("failed to compute path: {e}"))
                             })?;
 
-                            // Build proto leaf from local storage
+                            // Build proto leaf from local storage, re-deriving d from address
+                            let b_d_fq =
+                                address.diversified_generator().vartime_compress_to_field();
+                            let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
                             let leaf_proto = compliance_pb::ComplianceLeaf {
                                 address: Some(address.clone().into()),
-                                key: Some(compliance_pb::ComplianceViewingKey {
-                                    inner: ack_bytes.to_vec(),
-                                }),
                                 asset_id: Some(asset_id.into()),
+                                d: d.to_bytes().to_vec(),
                             };
 
                             tracing::debug!(
@@ -2590,13 +2581,8 @@ impl ViewService for ViewServer {
                     .collect(),
             };
 
-            let asset_indexed_leaf_proto = compliance_pb::IndexedLeafData {
-                value: indexed_leaf.value.to_bytes().to_vec(),
-                next_index: indexed_leaf.next_index,
-                next_value: indexed_leaf.next_value.to_bytes().to_vec(),
-                dk_pub: indexed_leaf.policy.dk_pub.vartime_compress().0.to_vec(),
-                threshold: indexed_leaf.policy.threshold.to_le_bytes().to_vec(),
-            };
+            let asset_indexed_leaf_proto: compliance_pb::IndexedLeafData =
+                indexed_leaf.clone().into();
 
             results.push(pb::ComplianceMerkleProofsResponse {
                 user_registered,

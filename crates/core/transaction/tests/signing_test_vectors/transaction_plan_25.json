@@ -1,83 +1,59 @@
 {
   "actions": [
     {
-      "proposalDepositClaim": {
-        "proposal": "750530027",
-        "depositAmount": {
-          "lo": "407345332938172135"
+      "ics20Withdrawal": {
+        "amount": {
+          "lo": "676831218499821832"
         },
-        "outcome": {
-          "failed": {}
+        "denom": {
+          "denom": "ly64uay"
+        },
+        "destinationChainAddress": "penumbra1w569u82q70rp02vc4wr5kug92a289mm2cmqn2tack5dwnvg22yq3t9dz8qq8275zef9mmlrhc2zsxl2ymmqe83z9ypxw40upftxu75wx2078keyw3twu6chxuc5s85ur8sjvrk",
+        "returnAddress": {
+          "inner": "40VObIMpQyhw0tfXb0GzYB11gBBJthY/yZIvXmb6ldKMGOGnq141n/AXa7BCzdl8mXSwbkEwfGZCGU0DFrl4VbJKFE9x8kqCkOfxytpp75k="
+        },
+        "timeoutHeight": {
+          "revisionNumber": "411717879",
+          "revisionHeight": "330524850"
+        },
+        "sourceChannel": "channel-0"
+      }
+    },
+    {
+      "communityPoolSpend": {
+        "value": {
+          "amount": {
+            "lo": "742237377032941208"
+          },
+          "assetId": {
+            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+          }
         }
       }
     },
     {
-      "positionOpenPlan": {
-        "position": {
-          "phi": {
-            "component": {
-              "p": {
-                "lo": "131252903093428830"
-              },
-              "q": {
-                "lo": "702500625665020152"
-              }
-            },
-            "pair": {
-              "asset1": {
-                "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-              },
-              "asset2": {
-                "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-              }
-            }
+      "validatorDefinition": {
+        "validator": {
+          "identityKey": {
+            "ik": "xg3YUA/H6dBzvkuljRRBmhbPc9ubr6fQRjugjqY5EQ4="
           },
-          "nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-          "state": {
-            "state": "POSITION_STATE_ENUM_OPENED"
-          },
-          "reserves": {
-            "r1": {
-              "lo": "170396054393100326"
-            },
-            "r2": {
-              "lo": "421131490843275338"
-            }
-          },
-          "closeOnFill": true
-        }
-      }
-    },
-    {
-      "proposalSubmit": {
-        "proposal": {
-          "title": "pbjkcbzqoshbhteaqxjhw-227593160131981917",
-          "description": "szymklsmccleoo-4431649871144141",
-          "signaling": {}
+          "consensusKey": "38k4BnsNOaI1BOt7lY1VsKW7L8S5giz7GixYYBKLTTU=",
+          "name": "test validator",
+          "enabled": true,
+          "governanceKey": {
+            "gk": "xg3YUA/H6dBzvkuljRRBmhbPc9ubr6fQRjugjqY5EQ4="
+          }
         },
-        "depositAmount": {
-          "lo": "659361058037943560"
-        }
-      }
-    },
-    {
-      "proposalDepositClaim": {
-        "proposal": "37700991",
-        "depositAmount": {
-          "lo": "780757640004641469"
-        },
-        "outcome": {
-          "passed": {}
-        }
+        "authSig": "mEr7AR/+1NoOtc1TVYQwNkBDTi7ocwXLNc8SmgrbGgzhMWLMH1ymxRbUltKYQJQUzISmYf4zIgggvEJL1R5mAw=="
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "9651269073",
-    "chainId": "hlvfxytxzpidcsohzpv-253685134865638",
+    "expiryHeight": "9721771968",
+    "chainId": "dkvdjrqaxqmmeqfodkcc-5443125949635053485492052",
     "fee": {
       "amount": {
-        "lo": "94658186236715563"
+        "lo": "734905397248219224"
       }
     }
   }

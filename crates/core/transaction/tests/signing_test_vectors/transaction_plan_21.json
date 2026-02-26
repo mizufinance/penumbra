@@ -1,68 +1,51 @@
 {
   "actions": [
     {
-      "proposalDepositClaim": {
-        "proposal": "170893248",
-        "depositAmount": {
-          "lo": "668757710355584436"
+      "communityPoolOutput": {
+        "value": {
+          "amount": {
+            "lo": "712099694586710147"
+          },
+          "assetId": {
+            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+          }
         },
-        "outcome": {
-          "passed": {}
+        "address": {
+          "inner": "Tm2rBPOYpFW2CLE9B6KPLTyGdUc6PfJV4LmnXPGTfI8dIdY796ukjOHkUwnCt8fstxsFLcMc8g2Rxco3JsbCETCbzy4opIQfbTJfBdY5y1c="
         }
       }
     },
     {
-      "undelegateClaim": {
-        "validatorIdentity": {
-          "ik": "AaklyZfsnwtlLc1F3ivUvd7pIJevBIqA1xUWUA2S6gE="
-        },
-        "penalty": {
-          "inner": "AAAAAAAAAAAAAAAAAAAAAP+XJHRTjvNNahYeT3Zf2K4="
-        },
-        "unbondingAmount": {
-          "lo": "390675851785342982"
-        },
-        "balanceBlinding": "FFzLwTHg3SuYszNtk55LNQ1SGKI3jdkiPo9Ihs/HeQI=",
-        "proofBlindingR": "gommnmIr4eyf1wN0CXL+O3KzhRYpKiNNxqccztoPKQw=",
-        "proofBlindingS": "tEOTDwgCMkv8KFUMlMrzuDFpfVJiNBNOvQFiJrsZwAY=",
-        "unbondingStartHeight": "38777"
-      }
-    },
-    {
-      "delegatorVote": {
-        "proposal": "307647026",
-        "vote": {
-          "vote": "VOTE_ABSTAIN"
-        },
-        "stakedNote": {
-          "value": {
-            "amount": {
-              "lo": "542293344779706743"
-            },
-            "assetId": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            }
+      "positionWithdraw": {
+        "reserves": {
+          "r1": {
+            "lo": "247508319787471057"
           },
-          "rseed": "207BkYql3IUex6UEcIQW3w4g3bEvhHqlA7YmaBLbLuQ=",
-          "address": {
-            "inner": "TPYXqjRzivzm8Mm1oGJuaLHk1ILgoKstgf6IJFKFMdeAZMKMADZmQ+3YlM69nH4VpaowBouLaDz4x2U/HPoOyCL5QB4h5E+HyzuP6tlk/Z4="
+          "r2": {
+            "lo": "114694080530884377"
           }
         },
-        "unbondedAmount": {
-          "lo": "201458573443455418"
+        "positionId": {
+          "inner": "9v1igf0nprB5wk+3cn5Z+nin3Cev+ZAmwRksGLytd7w="
         },
-        "randomizer": "GCbGg6JFQjRbGNITzVzL6HhyiesABk4LIGwiqAW54wE=",
-        "proofBlindingR": "BhOSVvvxObPYv95iTzML3+B8ZslWV2izqSA7gRq/rAs=",
-        "proofBlindingS": "OlMXH2sJ7pycQe0pjBcLZ0xO7p9xPzHFwbJlS+s6nwg="
+        "pair": {
+          "asset1": {
+            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+          },
+          "asset2": {
+            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+          }
+        },
+        "sequence": "1"
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "415370402",
-    "chainId": "ouqydempydmhezaoqz-054",
+    "expiryHeight": "8529472275",
+    "chainId": "toshihssfheg-03135770992860569234333807401742",
     "fee": {
       "amount": {
-        "lo": "335640220384042935"
+        "lo": "792681549408059150"
       }
     }
   }

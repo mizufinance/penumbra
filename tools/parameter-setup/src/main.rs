@@ -8,8 +8,6 @@ use std::{
 use ark_groth16::{ProvingKey, VerifyingKey};
 use ark_serialize::CanonicalSerialize;
 use decaf377::Bls12_377;
-use penumbra_sdk_dex::{swap::proof::SwapCircuit, swap_claim::proof::SwapClaimCircuit};
-use penumbra_sdk_governance::DelegatorVoteCircuit;
 use penumbra_sdk_proof_params::{
     generate_constraint_matrices, DummyWitness, ProvingKeyExt, VerifyingKeyExt,
 };
@@ -17,9 +15,7 @@ use penumbra_sdk_proof_setup::single::{
     circuit_degree, combine, log::Hashable, transition, Phase1CRSElements, Phase1Contribution,
     Phase2Contribution,
 };
-use penumbra_sdk_shielded_pool::{
-    ConvertCircuit, NullifierDerivationCircuit, OutputCircuit, SpendCircuit,
-};
+use penumbra_sdk_shielded_pool::{OutputCircuit, SpendCircuit};
 use rand_core::OsRng;
 
 fn generate_parameters<D: DummyWitness>() -> (ProvingKey<Bls12_377>, VerifyingKey<Bls12_377>) {
@@ -79,27 +75,27 @@ fn main() -> Result<()> {
     write_params(&target_dir, "spend", &spend_pk, &spend_vk)?;
     let (output_pk, output_vk) = generate_parameters::<OutputCircuit>();
     write_params(&target_dir, "output", &output_pk, &output_vk)?;
-    let (swap_pk, swap_vk) = generate_parameters::<SwapCircuit>();
-    write_params(&target_dir, "swap", &swap_pk, &swap_vk)?;
-    let (swapclaim_pk, swapclaim_vk) = generate_parameters::<SwapClaimCircuit>();
-    write_params(&target_dir, "swapclaim", &swapclaim_pk, &swapclaim_vk)?;
-    let (convert_pk, convert_vk) = generate_parameters::<ConvertCircuit>();
-    write_params(&target_dir, "convert", &convert_pk, &convert_vk)?;
-    let (delegator_vote_pk, delegator_vote_vk) = generate_parameters::<DelegatorVoteCircuit>();
-    write_params(
-        &target_dir,
-        "delegator_vote",
-        &delegator_vote_pk,
-        &delegator_vote_vk,
-    )?;
-    let (nullifier_derivation_pk, nullifier_derivation_vk) =
-        generate_parameters::<NullifierDerivationCircuit>();
-    write_params(
-        &target_dir,
-        "nullifier_derivation",
-        &nullifier_derivation_pk,
-        &nullifier_derivation_vk,
-    )?;
+    // let (swap_pk, swap_vk) = generate_parameters::<SwapCircuit>();
+    // write_params(&target_dir, "swap", &swap_pk, &swap_vk)?;
+    // let (swapclaim_pk, swapclaim_vk) = generate_parameters::<SwapClaimCircuit>();
+    // write_params(&target_dir, "swapclaim", &swapclaim_pk, &swapclaim_vk)?;
+    // let (convert_pk, convert_vk) = generate_parameters::<ConvertCircuit>();
+    // write_params(&target_dir, "convert", &convert_pk, &convert_vk)?;
+    // let (delegator_vote_pk, delegator_vote_vk) = generate_parameters::<DelegatorVoteCircuit>();
+    // write_params(
+    //     &target_dir,
+    //     "delegator_vote",
+    //     &delegator_vote_pk,
+    //     &delegator_vote_vk,
+    // )?;
+    // let (nullifier_derivation_pk, nullifier_derivation_vk) =
+    //     generate_parameters::<NullifierDerivationCircuit>();
+    // write_params(
+    //     &target_dir,
+    //     "nullifier_derivation",
+    //     &nullifier_derivation_pk,
+    //     &nullifier_derivation_vk,
+    // )?;
     // NOTE: New proofs go here following the approach above.
 
     Ok(())

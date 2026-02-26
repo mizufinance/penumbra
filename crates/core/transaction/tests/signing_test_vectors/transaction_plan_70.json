@@ -1,48 +1,24 @@
 {
   "actions": [
     {
-      "validatorVote": {
-        "body": {
-          "proposal": "548450464",
-          "vote": {
-            "vote": "VOTE_NO"
-          },
-          "identityKey": {
-            "ik": "8/K83bfmK99ewIJhKrnssVMrdYt02He4rIaoALJoGVE="
-          },
-          "governanceKey": {
-            "gk": "kGGbuQLAXUU649wGUZl273KGAlSKUmurmNLO5pZW7Qs="
-          },
-          "reason": {
-            "reason": "Gc4AfoHbiXu50y32a83TU"
-          }
-        },
-        "authSig": {
-          "inner": "kG4sNcKrVgY91S2DWCuzS0P6wS3Wj762qCVigbbmQgMsmwkzR1194LOnySDxVaCTTR3S4imUAyPcdUXSdjsnAQ=="
+      "positionClose": {
+        "positionId": {
+          "inner": "JATYMQC5bBfN+TWGV8HEG4wBaMXJhbfKO1Wv7MGtF1M="
         }
       }
     },
     {
-      "delegate": {
-        "validatorIdentity": {
-          "ik": "soQWTvCXJXXn7aAx47zsGRkTMXn/6tBqkDSlrcyZhsA="
-        },
-        "epochIndex": "9624",
-        "unbondedAmount": {
-          "lo": "315657499921008752"
-        },
-        "delegationAmount": {
-          "lo": "287228909499277636"
-        }
+      "proposalWithdraw": {
+        "proposal": "203398044"
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "5096224830",
-    "chainId": "vfmrcwdooedllsbmymar-29476",
+    "expiryHeight": "8277504349",
+    "chainId": "ajbwf-312754658683108528354206",
     "fee": {
       "amount": {
-        "lo": "123310200310681106"
+        "lo": "694548666047953350"
       }
     }
   }

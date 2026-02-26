@@ -1,37 +1,49 @@
-//! Cryptographic primitives for compliance encryption/decryption.
+//! Hybrid KEM/DEM encryption for compliance data, compatible with Orbis PRE.
 //!
-//! This module implements ECDH-based encryption for compliance data using:
-//! - Elliptic curve Diffie-Hellman for shared secret derivation
-//! - Poseidon stream cipher (ZK-friendly, circuit-compatible)
+//! Random seeds are encrypted in ElGamal envelopes (C2 fields) and key a Poseidon
+//! stream cipher. Three tiers: detection (issuer-only, always), core (amount + self
+//! address), extension (counterparty), sender-extension (sender's copy).
 //!
-//! ## Encryption
+//! Unflagged transactions encrypt core/ext/sext to per-tier ACKs derived from ring_pk.
+//! Flagged transactions encrypt all tiers to issuer DK_pub.
 //!
-//! The transaction builder encrypts compliance data for BOTH sender and receiver
-//! in a single call to `encrypt_compliance_details`. Each party gets their own
-//! ciphertext that they can decrypt with their daily keys.
-//!
-//! For regulated assets with threshold policies:
-//! - **Detection tier (32 bytes)**: Always encrypted to issuer's DK_pub
-//!   - Contains: `asset_id` with flag packed in high bits (bit 252)
-//!   - Fq order is < 2^252, so bit 252 is always 0 for valid asset IDs
-//!   - Issuer can scan all transfers of their asset and see if flagged
-//! - **Core + Extension**: Encrypted based on flag:
-//!   - If NOT flagged: encrypted to user's daily keys (user can decrypt)
-//!   - If flagged: encrypted to issuer's DK_pub (issuer can decrypt full details)
+//! ## Abbreviations
+//! ss = shared secret, ct = ciphertext, pt = plaintext, esk = ephemeral secret key,
+//! epk = ephemeral public key, fq = field element (Fq), dk = detection key
 
 use anyhow::Context;
 use ark_ff::Zero;
 use decaf377::{Element, Fq, Fr};
 use once_cell::sync::Lazy;
 use penumbra_sdk_asset::asset;
-use penumbra_sdk_keys::keys::{AddressComplianceKey, KeyType};
 use penumbra_sdk_keys::Address;
 use penumbra_sdk_num::Amount;
 use rand_core::{CryptoRng, RngCore};
 
-use crate::indexed_tree::IndexedLeaf;
-use crate::issuer_keys::{DetectionTierPlaintext, DETECTION_TIER_BYTES};
-use crate::structs::ComplianceCiphertext;
+use sha2::{Digest, Sha256};
+
+use crate::issuer_keys::DETECTION_TIER_BYTES;
+use crate::structs::{ComplianceCiphertext, DleqProof};
+
+/// Domain separator for SHA256 derivation — matches Orbis `DERIVATION_DOMAIN` exactly.
+const DERIVATION_DOMAIN: &[u8; 23] = b"elgamal-derivation-v1\0\0";
+
+/// Derive the compliance scalar `d` from the diversified basepoint field element.
+///
+/// `d = Fr::from_le_bytes_mod_order(SHA256(DERIVATION_DOMAIN || b_d_fq.to_bytes()))`
+///
+/// This MUST match Orbis's `derive_capability_scalar()` so PRE math cancels correctly.
+/// The result is stored as Fq in the compliance leaf (Fr fits losslessly in Fq for decaf377).
+pub fn derive_compliance_scalar(b_d_fq: Fq) -> Fq {
+    let mut hasher = Sha256::new();
+    hasher.update(DERIVATION_DOMAIN);
+    hasher.update(b_d_fq.to_bytes());
+    let hash = hasher.finalize();
+    // Reduce mod r first (matching Orbis's Fr::from_le_bytes_mod_order), then embed into Fq.
+    // r < q for decaf377, so this conversion is lossless.
+    let fr = Fr::from_le_bytes_mod_order(&hash);
+    Fq::from_le_bytes_mod_order(&fr.to_bytes())
+}
 
 /// Domain separator for Poseidon stream cipher seed derivation.
 pub static COMPLIANCE_STREAM_CIPHER_DOMAIN: Lazy<Fq> = Lazy::new(|| {
@@ -43,12 +55,8 @@ pub static COMPLIANCE_STREAM_CIPHER_DOMAIN: Lazy<Fq> = Lazy::new(|| {
 /// The "black hole" compliance key for unregulated assets.
 ///
 /// For unregulated assets, compliance data is encrypted to this key, making it
-/// effectively unrecoverable (a "dead letter") since no one knows the discrete log.
-///
-/// This is a NUMS (Nothing-Up-My-Sleeve) point derived from a domain separator,
-/// proving no one knows the discrete log. Since encryption verification is
-/// conditional on `is_regulated` in the circuit, this value can be changed
-/// without regenerating proving/verifying keys.
+/// effectively unrecoverable since no one knows the discrete log.
+/// This is a NUMS point derived from a domain separator.
 pub static BLACK_HOLE_ACK: Lazy<Element> = Lazy::new(|| {
     let hash = blake2b_simd::blake2b(b"penumbra.compliance.black_hole_ack");
     let scalar = Fr::from_le_bytes_mod_order(hash.as_bytes());
@@ -58,17 +66,11 @@ pub static BLACK_HOLE_ACK: Lazy<Element> = Lazy::new(|| {
 /// Decrypted compliance data.
 #[derive(Clone, Debug)]
 pub struct DecryptedComplianceData {
-    /// The asset ID being transacted.
     pub asset_id: asset::Id,
-    /// The amount being transacted.
     pub amount: Amount,
-    /// The "self" diversified generator (the party who can decrypt this ciphertext).
     pub self_diversified_generator: Element,
-    /// The "self" transmission key.
     pub self_transmission_key: [u8; 32],
-    /// The counterparty diversified generator (the other party in the transaction).
     pub counterparty_diversified_generator: Element,
-    /// The counterparty transmission key.
     pub counterparty_transmission_key: [u8; 32],
 }
 
@@ -79,439 +81,452 @@ pub static ISSUER_DETECTION_DOMAIN: Lazy<Fq> = Lazy::new(|| {
     )
 });
 
-/// Result from encryption, containing all data needed for decryption.
+/// Domain separator for DLEQ metadata hash: M = Poseidon_6(domain, fields...).
+pub static DLEQ_METADATA_DOMAIN: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"penumbra.compliance.dleq_metadata").as_bytes(),
+    )
+});
+
+/// Domain separator for DLEQ Fiat-Shamir challenge: c = Poseidon_6(domain, points...).
+pub static DLEQ_CHALLENGE_DOMAIN: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"penumbra.compliance.dleq_challenge").as_bytes(),
+    )
+});
+
+/// Orbis-compatible domain separator for encryption proof challenge hash.
+/// Must match Orbis `ENCRYPT_PROOF_DOMAIN` exactly (commit 4b61fa4).
+pub const ENCRYPT_PROOF_DOMAIN: &[u8; 24] = b"elgamal-encrypt-proof-v1";
+
+/// Truncate a Poseidon Fq output to a challenge scalar.
+///
+/// Masks the top bits so the result is in [0, 2^{MODULUS_BIT_SIZE-1}),
+/// strictly less than Fr modulus. Avoids in-circuit modular reduction.
+/// Must match Orbis `fq_to_challenge_scalar` (commit 4b61fa4).
+pub fn fq_to_challenge_scalar(fq: Fq) -> Fr {
+    use ark_ff::{BigInteger, PrimeField};
+    let mut bytes = fq.into_bigint().to_bytes_le();
+    let keep_bits = Fr::MODULUS_BIT_SIZE - 1;
+    let keep_bytes = (keep_bits as usize + 7) / 8;
+    let spare_bits = keep_bytes * 8 - keep_bits as usize;
+    bytes[keep_bytes - 1] &= 0xFF >> spare_bits;
+    Fr::from_le_bytes_mod_order(&bytes)
+}
+
+/// Compute the salted metadata hash: M = Poseidon_6(domain, (policy_id_hash, resource_hash, permission_hash, tier, target_timestamp, salt)).
+pub fn compute_metadata_hash(
+    policy_id_hash: Fq,
+    resource_hash: Fq,
+    permission_hash: Fq,
+    tier: Fq,
+    target_timestamp: Fq,
+    salt: Fq,
+) -> Fq {
+    poseidon377::hash_6(
+        &DLEQ_METADATA_DOMAIN,
+        (
+            policy_id_hash,
+            resource_hash,
+            permission_hash,
+            tier,
+            target_timestamp,
+            salt,
+        ),
+    )
+}
+
+/// Compute a single DLEQ proof natively (prover side).
+///
+/// Proves that EPK = r×G and S = r×ACK share the same scalar r, bound to metadata M.
+/// Uses Orbis-compatible hash_7 with ENCRYPT_PROOF_DOMAIN and truncated challenge.
+/// Returns (c, s) where c is the truncated Poseidon output (high bits zeroed).
+pub fn compute_dleq_native(
+    r: Fr,
+    k: Fr,
+    ack: &Element,
+    epk: &Element,
+    metadata_hash: Fq,
+) -> DleqProof {
+    let s_point = *ack * r; // S = r × ACK
+    let r_point = Element::GENERATOR * k; // R = k × G
+    let rp_point = *ack * k; // R' = k × ACK
+
+    // Compress points to Fq for hashing (matches Orbis point_to_fq)
+    let g_fq = Element::GENERATOR.vartime_compress_to_field();
+    let ack_fq = ack.vartime_compress_to_field();
+    let epk_fq = epk.vartime_compress_to_field();
+    let s_fq = s_point.vartime_compress_to_field();
+    let r_fq = r_point.vartime_compress_to_field();
+    let rp_fq = rp_point.vartime_compress_to_field();
+
+    // Fiat-Shamir challenge via hash_7 (Orbis-compatible ordering: M, G, ACK, EPK, S, R, R')
+    let domain = Fq::from_le_bytes_mod_order(ENCRYPT_PROOF_DOMAIN);
+    let c_fq_full = poseidon377::hash_7(
+        &domain,
+        (metadata_hash, g_fq, ack_fq, epk_fq, s_fq, r_fq, rp_fq),
+    );
+
+    // Truncate to 252 bits (matches Orbis fq_to_challenge_scalar)
+    let c_truncated = fq_to_challenge_scalar(c_fq_full);
+    let s = k + c_truncated * r;
+
+    // Store c as Fq with high bits zero
+    DleqProof {
+        c: Fq::from_le_bytes_mod_order(&c_truncated.to_bytes()),
+        s,
+    }
+}
+
+/// Verify a DLEQ proof given only public inputs (no secret key needed).
+///
+/// S = r × ACK is provided by the prover alongside the proof.
+pub fn verify_dleq_native(
+    ack: &Element,
+    epk: &Element,
+    s_point: &Element,
+    dleq_c: &Fq,
+    dleq_s: &Fr,
+    metadata_hash: Fq,
+) -> anyhow::Result<()> {
+    let c_fr = Fr::from_le_bytes_mod_order(&dleq_c.to_bytes());
+
+    // Reconstruct R and R' from the DLEQ response
+    let r_rec = Element::GENERATOR * *dleq_s - *epk * c_fr;
+    let rp_rec = *ack * *dleq_s - *s_point * c_fr;
+
+    // Recompute challenge via hash_7 with Orbis-compatible ordering
+    let domain = Fq::from_le_bytes_mod_order(ENCRYPT_PROOF_DOMAIN);
+    let g_fq = Element::GENERATOR.vartime_compress_to_field();
+    let c_check = poseidon377::hash_7(
+        &domain,
+        (
+            metadata_hash,
+            g_fq,
+            ack.vartime_compress_to_field(),
+            epk.vartime_compress_to_field(),
+            s_point.vartime_compress_to_field(),
+            r_rec.vartime_compress_to_field(),
+            rp_rec.vartime_compress_to_field(),
+        ),
+    );
+    let c_check_trunc = Fq::from_le_bytes_mod_order(&fq_to_challenge_scalar(c_check).to_bytes());
+
+    if c_check_trunc != *dleq_c {
+        return Err(anyhow::anyhow!(
+            "DLEQ verification failed: challenge mismatch"
+        ));
+    }
+    Ok(())
+}
+
+/// Compute DLEQ proof for a Spend action (1 tier: core, tier=1).
+pub fn compute_spend_dleq(r_s: Fr, k: Fr, ack: &Element, metadata_hash: Fq) -> DleqProof {
+    let epk = Element::GENERATOR * r_s;
+    compute_dleq_native(r_s, k, ack, &epk, metadata_hash)
+}
+
+/// Compute DLEQ proofs for an Output action (3 tiers: core=1, ext=2, sext=3).
+///
+/// Returns (core_proof, ext_proof, sext_proof).
+pub fn compute_output_dleqs(
+    r_1: Fr,
+    r_2: Fr,
+    r_3: Fr,
+    k_1: Fr,
+    k_2: Fr,
+    k_3: Fr,
+    ack_receiver: &Element,
+    ack_sender: &Element,
+    metadata_hash: Fq,
+) -> (DleqProof, DleqProof, DleqProof) {
+    let epk_1 = Element::GENERATOR * r_1;
+    let epk_2 = Element::GENERATOR * r_2;
+    let epk_3 = Element::GENERATOR * r_3;
+
+    let core_proof = compute_dleq_native(r_1, k_1, ack_receiver, &epk_1, metadata_hash);
+    let ext_proof = compute_dleq_native(r_2, k_2, ack_receiver, &epk_2, metadata_hash);
+    let sext_proof = compute_dleq_native(r_3, k_3, ack_sender, &epk_3, metadata_hash);
+
+    (core_proof, ext_proof, sext_proof)
+}
+
+/// Encryption result for a Spend action.
 #[derive(Clone, Debug)]
-pub struct EncryptionResult {
-    /// The compliance ciphertext.
+pub struct SpendEncryptionResult {
     pub ciphertext: ComplianceCiphertext,
-    /// The ephemeral secret (for circuit witness).
-    pub ephemeral_secret: Fr,
-    /// The issuer shared secret (for issuer decryption).
-    /// This is r * DK_pub where r is the ephemeral secret.
+    /// Ephemeral secret r_s (circuit witness).
+    pub r_s: Fr,
+    /// r_s × DK_pub (for issuer detection).
     pub issuer_shared_secret: Element,
 }
 
-/// Encrypt compliance details for a single party.
+/// Encryption result for an Output action.
+#[derive(Clone, Debug)]
+pub struct OutputEncryptionResult {
+    pub ciphertext: ComplianceCiphertext,
+    /// Ephemeral secrets (circuit witnesses).
+    pub r_1: Fr,
+    pub r_2: Fr,
+    pub r_3: Fr,
+    /// r_1 × DK_pub (for issuer detection).
+    pub issuer_shared_secret: Element,
+}
+
+/// Encrypt compliance details for a Spend action (detection + core).
 ///
-/// This function implements the per-asset threshold system where:
-/// - Detection tier (32 bytes) is ALWAYS encrypted to the issuer's DK_pub
-/// - Core + Extension are encrypted to user's DCK when NOT flagged
-/// - Core + Extension are encrypted to issuer's DK_pub when flagged
-///
-/// The flag is computed deterministically: `is_flagged = amount >= threshold`
-///
-/// This allows issuers to:
-/// 1. Scan all transfers of their asset (via detection tier)
-/// 2. See full details only for flagged transfers (large amounts)
-///
-/// # Arguments
-/// * `rng` - Random number generator
-/// * `self_ack` - The "self" party's wallet compliance key
-/// * `self_address` - The "self" party's address
-/// * `date` - Day index for user key derivation
-/// * `asset_id` - The asset being transacted
-/// * `amount` - The amount being transacted
-/// * `counterparty_address` - The other party
-/// * `asset_leaf` - The asset's IMT leaf (contains dk_pub and threshold)
-///
-/// # Returns
-/// An `EncryptionResult` containing ciphertext and shared secrets
-pub fn encrypt_compliance_details(
+/// EPK_1 = r_s × G. Detection via r_s × DK_pub.
+/// Core C2: seed + (r_s × ACK_core).compress(). Flagged: seed + (r_s × DK_pub).compress().
+pub fn encrypt_spend(
     mut rng: impl RngCore + CryptoRng,
-    self_ack: &AddressComplianceKey,
+    ack_core: &Element,
+    dk_pub: &Element,
     self_address: &Address,
-    date: u64,
     asset_id: asset::Id,
     amount: Amount,
-    counterparty_address: &Address,
-    asset_leaf: &IndexedLeaf,
-) -> anyhow::Result<EncryptionResult> {
-    // Extract policy from asset leaf
-    let dk_pub = &asset_leaf.policy.dk_pub;
-    let threshold = asset_leaf.policy.threshold;
+    is_flagged: bool,
+    salt: Fq,
+) -> anyhow::Result<SpendEncryptionResult> {
+    let r_s = Fr::rand(&mut rng);
+    let epk_1 = Element::GENERATOR * r_s;
+    let ss_issuer = *dk_pub * r_s;
 
-    // Compute is_flagged deterministically from amount vs threshold
-    let is_flagged = u128::from(amount) >= threshold;
+    let seed_core = Fq::rand(&mut rng);
 
-    // 1. Extract diversified generator and diversifier
-    let diversified_generator = self_address.diversified_generator();
-    let diversifier = self_address.diversifier();
-
-    // 2. Generate ephemeral secret r (shared for all tiers)
-    let ephemeral_secret = Fr::rand(&mut rng);
-
-    // 3. Compute BOTH ephemeral public keys (same r, different base points)
-    //
-    // ECDH requires both parties to use the same base point. Penumbra uses:
-    // - User keys: on diversified curve B_d (per-address privacy)
-    // - Issuer keys: on standard generator G (global, stored in asset leaf)
-    //
-    // Since B_d ≠ G, we need two EPKs:
-    // - epk = r × B_d (for user decryption via diversified keys)
-    // - epk_g = r × G (for issuer decryption via standard keys)
-    //
-    // Issuer ECDH:
-    //   Encryption: ss = r × DK_pub = r × (dk × G) = r × dk × G
-    //   Decryption: ss = dk × epk_g = dk × (r × G) = r × dk × G  ✓ (matches!)
-    let epk = diversified_generator * ephemeral_secret;
-    let epk_g = Element::GENERATOR * ephemeral_secret;
-
-    // 4. Compute issuer shared secret using epk_g (correct ECDH)
-    //    ss_issuer = r × DK_pub = r × dk × G
-    //    Issuer computes: dk × epk_g = dk × r × G (same result!)
-    let ss_issuer = *dk_pub * ephemeral_secret;
-
-    // 5. Derive user's daily public keys for core+extension (only used if not flagged)
-    let pk_core = self_ack.derive_daily_public_key(KeyType::Core, date, &diversifier);
-    let pk_extension = self_ack.derive_daily_public_key(KeyType::Extension, date, &diversifier);
-
-    // 6. Compute shared secrets for core+extension based on flag
-    let (ss_core, ss_extension) = if is_flagged {
-        // Flagged: encrypt to issuer's DK_pub using same shared secret computation
-        (ss_issuer, ss_issuer)
+    let c2_core = if is_flagged {
+        seed_core + ss_issuer.vartime_compress_to_field()
     } else {
-        // Not flagged: encrypt to user's daily keys
-        let ss_core = pk_core * ephemeral_secret;
-        let ss_extension = pk_extension * ephemeral_secret;
-        (ss_core, ss_extension)
+        let ss_core = *ack_core * r_s;
+        seed_core + ss_core.vartime_compress_to_field()
     };
 
-    // 7. Derive Poseidon seeds
-    let epk_fq = epk.vartime_compress_to_field();
-    let seed_issuer = poseidon377::hash_2(
-        &ISSUER_DETECTION_DOMAIN,
-        (ss_issuer.vartime_compress_to_field(), epk_fq),
-    );
-    let seed_core = poseidon377::hash_2(
-        &COMPLIANCE_STREAM_CIPHER_DOMAIN,
-        (ss_core.vartime_compress_to_field(), epk_fq),
-    );
-    let seed_extension = poseidon377::hash_2(
-        &COMPLIANCE_STREAM_CIPHER_DOMAIN,
-        (ss_extension.vartime_compress_to_field(), epk_fq),
-    );
+    let detection_tag = compute_detection_tier(&ss_issuer, &epk_1, &asset_id, is_flagged, salt);
 
-    // 8. Build detection tier plaintext (32 bytes: asset_id with flag in high bits)
-    let detection_plaintext = DetectionTierPlaintext::new(asset_id, is_flagged);
-    let detection_bytes = detection_plaintext.to_bytes();
+    let encrypted_core =
+        encrypt_tier_bytes(&amount_and_address_bytes(&amount, self_address), seed_core);
 
-    // 9. Encrypt detection tier (single Fq element)
-    let pt_fq = Fq::from_le_bytes_mod_order(&detection_bytes);
-    let keystream = poseidon377::hash_2(&seed_issuer, (Fq::zero(), seed_issuer));
-    let ct_fq = pt_fq + keystream;
-    let detection_tag: [u8; 32] = ct_fq.to_bytes();
-
-    // 10. Encrypt core data (amount + self address)
-    let mut core_bytes = Vec::with_capacity(80);
-    core_bytes.extend_from_slice(&amount.to_le_bytes());
-    core_bytes.extend_from_slice(&self_address.diversified_generator().vartime_compress().0);
-    core_bytes.extend_from_slice(&self_address.transmission_key().0);
-
-    let mut encrypted_core = Vec::new();
-    for (i, chunk) in core_bytes.chunks(31).enumerate() {
-        let mut buf = [0u8; 32];
-        buf[0..chunk.len()].copy_from_slice(chunk);
-        let plaintext_fq = Fq::from_le_bytes_mod_order(&buf);
-        let counter = Fq::from(i as u64);
-        let keystream = poseidon377::hash_2(&seed_core, (counter, seed_core));
-        let ciphertext_fq = plaintext_fq + keystream;
-        encrypted_core.extend_from_slice(&ciphertext_fq.to_bytes());
-    }
-
-    // 11. Encrypt extension data (counterparty address)
-    let mut extension_bytes = Vec::with_capacity(64);
-    extension_bytes.extend_from_slice(
-        &counterparty_address
-            .diversified_generator()
-            .vartime_compress()
-            .0,
-    );
-    extension_bytes.extend_from_slice(&counterparty_address.transmission_key().0);
-
-    let mut encrypted_extension = Vec::new();
-    for (i, chunk) in extension_bytes.chunks(31).enumerate() {
-        let mut buf = [0u8; 32];
-        buf[0..chunk.len()].copy_from_slice(chunk);
-        let plaintext_fq = Fq::from_le_bytes_mod_order(&buf);
-        let counter = Fq::from(i as u64);
-        let keystream = poseidon377::hash_2(&seed_extension, (counter, seed_extension));
-        let ciphertext_fq = plaintext_fq + keystream;
-        encrypted_extension.extend_from_slice(&ciphertext_fq.to_bytes());
-    }
-
-    Ok(EncryptionResult {
-        ciphertext: ComplianceCiphertext::new(
-            epk,
-            epk_g,
-            detection_tag,
-            encrypted_core,
-            encrypted_extension,
-        ),
-        ephemeral_secret,
+    Ok(SpendEncryptionResult {
+        ciphertext: ComplianceCiphertext::new_spend(epk_1, c2_core, detection_tag, encrypted_core),
+        r_s,
         issuer_shared_secret: ss_issuer,
     })
 }
 
+/// Encrypt compliance details for an Output action (detection + core + ext + sext).
+///
+/// Three independent r_1, r_2, r_3. Detection via r_1 × DK_pub.
+/// Core/ext use `ack_receiver`, sext uses `ack_sender`. Flagged: all use r_i × DK_pub.
+pub fn encrypt_output(
+    mut rng: impl RngCore + CryptoRng,
+    ack_receiver: &Element,
+    ack_sender: &Element,
+    dk_pub: &Element,
+    self_address: &Address,
+    counterparty_address: &Address,
+    asset_id: asset::Id,
+    amount: Amount,
+    is_flagged: bool,
+    salt: Fq,
+) -> anyhow::Result<OutputEncryptionResult> {
+    let r_1 = Fr::rand(&mut rng);
+    let r_2 = Fr::rand(&mut rng);
+    let r_3 = Fr::rand(&mut rng);
+
+    let epk_1 = Element::GENERATOR * r_1;
+    let epk_2 = Element::GENERATOR * r_2;
+    let epk_3 = Element::GENERATOR * r_3;
+
+    let ss_issuer = *dk_pub * r_1;
+
+    let seed_core = Fq::rand(&mut rng);
+    let seed_ext = Fq::rand(&mut rng);
+    let seed_sext = Fq::rand(&mut rng);
+
+    let (c2_core, c2_ext, c2_sext) = if is_flagged {
+        let ss_1 = ss_issuer.vartime_compress_to_field();
+        let ss_2 = (*dk_pub * r_2).vartime_compress_to_field();
+        let ss_3 = (*dk_pub * r_3).vartime_compress_to_field();
+        (seed_core + ss_1, seed_ext + ss_2, seed_sext + ss_3)
+    } else {
+        let ss_core = (*ack_receiver * r_1).vartime_compress_to_field();
+        let ss_ext_v = (*ack_receiver * r_2).vartime_compress_to_field();
+        let ss_sext_v = (*ack_sender * r_3).vartime_compress_to_field();
+        (
+            seed_core + ss_core,
+            seed_ext + ss_ext_v,
+            seed_sext + ss_sext_v,
+        )
+    };
+
+    let detection_tag = compute_detection_tier(&ss_issuer, &epk_1, &asset_id, is_flagged, salt);
+
+    // Core: amount + self address (80 bytes → 3 Fq)
+    let encrypted_core =
+        encrypt_tier_bytes(&amount_and_address_bytes(&amount, self_address), seed_core);
+
+    // Extension: counterparty address (64 bytes → 3 Fq)
+    let encrypted_ext = encrypt_tier_bytes(&address_bytes(counterparty_address), seed_ext);
+
+    // Sender-extension: amount + self address (80 bytes → 3 Fq)
+    let encrypted_sext =
+        encrypt_tier_bytes(&amount_and_address_bytes(&amount, self_address), seed_sext);
+
+    Ok(OutputEncryptionResult {
+        ciphertext: ComplianceCiphertext::new_output(
+            epk_1,
+            epk_2,
+            epk_3,
+            c2_core,
+            c2_ext,
+            c2_sext,
+            detection_tag,
+            encrypted_core,
+            encrypted_ext,
+            encrypted_sext,
+        ),
+        r_1,
+        r_2,
+        r_3,
+        issuer_shared_secret: ss_issuer,
+    })
+}
+
+/// Compute the detection tier for a compliance ciphertext.
+///
+/// Derives the Poseidon seed from `ss_issuer` and `epk_1`, then encrypts
+/// the detection plaintext (asset_id with optional flag bit) and salt.
+/// Returns [asset_id+flag (32 bytes), salt (32 bytes)] = 64 bytes.
+fn compute_detection_tier(
+    ss_issuer: &Element,
+    epk_1: &Element,
+    asset_id: &asset::Id,
+    is_flagged: bool,
+    salt: Fq,
+) -> [u8; DETECTION_TIER_BYTES] {
+    let epk_1_fq = epk_1.vartime_compress_to_field();
+    let seed_detection = poseidon377::hash_2(
+        &ISSUER_DETECTION_DOMAIN,
+        (ss_issuer.vartime_compress_to_field(), epk_1_fq),
+    );
+    // ct[0]: asset_id + flag + keystream_0
+    let pt_fq = crate::issuer_keys::detection_plaintext_fq(asset_id, is_flagged);
+    let keystream_0 = poseidon377::hash_2(&seed_detection, (Fq::zero(), seed_detection));
+    let ct_0 = (pt_fq + keystream_0).to_bytes();
+
+    // ct[1]: salt + keystream_1
+    let keystream_1 = poseidon377::hash_2(&seed_detection, (Fq::from(1u64), seed_detection));
+    let ct_1 = (salt + keystream_1).to_bytes();
+
+    let mut result = [0u8; DETECTION_TIER_BYTES];
+    result[..32].copy_from_slice(&ct_0);
+    result[32..].copy_from_slice(&ct_1);
+    result
+}
+
+/// Serialize amount + address as 80 bytes for Poseidon encryption.
+fn amount_and_address_bytes(amount: &Amount, address: &Address) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(80);
+    bytes.extend_from_slice(&amount.to_le_bytes());
+    bytes.extend_from_slice(&address.diversified_generator().vartime_compress().0);
+    bytes.extend_from_slice(&address.transmission_key().0);
+    bytes
+}
+
+/// Serialize address as 64 bytes for Poseidon encryption.
+fn address_bytes(address: &Address) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(64);
+    bytes.extend_from_slice(&address.diversified_generator().vartime_compress().0);
+    bytes.extend_from_slice(&address.transmission_key().0);
+    bytes
+}
+
+/// Encrypt a byte slice using Poseidon stream cipher with the given seed.
+pub fn encrypt_tier_bytes(plaintext: &[u8], seed: Fq) -> Vec<u8> {
+    let mut encrypted = Vec::new();
+    for (i, chunk) in plaintext.chunks(31).enumerate() {
+        let mut buf = [0u8; 32];
+        buf[0..chunk.len()].copy_from_slice(chunk);
+        let plaintext_fq = Fq::from_le_bytes_mod_order(&buf);
+        let counter = Fq::from(i as u64);
+        let keystream = poseidon377::hash_2(&seed, (counter, seed));
+        let ciphertext_fq = plaintext_fq + keystream;
+        encrypted.extend_from_slice(&ciphertext_fq.to_bytes());
+    }
+    encrypted
+}
+
 /// Decrypt the 32-byte detection tier using issuer's DK.
 ///
-/// This allows the issuer to:
-/// 1. Identify that this ciphertext involves their asset
-/// 2. Determine if the transfer was flagged (flag is packed in bit 252)
-///
-/// # Arguments
-/// * `dk` - Issuer's detection key (scalar)
-/// * `epk` - User's ephemeral public key (r * B_d) - used for seed derivation
-/// * `epk_g` - Issuer's ephemeral public key (r * G) - used for ECDH shared secret
-/// * `detection_ciphertext` - The 32-byte detection tier ciphertext
-///
-/// # Returns
-/// Tuple of (asset_id, is_flagged) if decryption succeeds
-pub fn decrypt_detection_tier_with_dk(
+/// Computes ss = dk × epk_1, then verifies the detection tag against expected_asset_id.
+pub fn decrypt_detection_tier(
     dk: &Fr,
-    epk: &Element,
-    epk_g: &Element,
+    epk_1: &Element,
     detection_ciphertext: &[u8; DETECTION_TIER_BYTES],
-) -> anyhow::Result<(asset::Id, bool)> {
-    // Compute shared secret using epk_g (standard generator):
-    // ss = dk × epk_g = dk × (r × G) = r × dk × G
-    // This matches encryption's: r × DK_pub = r × (dk × G)
-    let ss = *epk_g * *dk;
+    expected_asset_id: &asset::Id,
+) -> anyhow::Result<(asset::Id, bool, Fq)> {
+    let ss = *epk_1 * *dk;
 
-    // Derive seed (uses epk for consistency with encryption's seed derivation)
-    let epk_fq = epk.vartime_compress_to_field();
+    let epk_1_fq = epk_1.vartime_compress_to_field();
     let seed = poseidon377::hash_2(
         &ISSUER_DETECTION_DOMAIN,
-        (ss.vartime_compress_to_field(), epk_fq),
+        (ss.vartime_compress_to_field(), epk_1_fq),
     );
 
-    // Decrypt the single Fq element (asset_id with flag in high bits)
-    let ct_fq = Fq::from_le_bytes_mod_order(detection_ciphertext);
-    let keystream = poseidon377::hash_2(&seed, (Fq::zero(), seed));
-    let plaintext_fq = ct_fq - keystream;
+    // Decrypt slot 0: asset_id + flag
+    let ct_fq = Fq::from_le_bytes_mod_order(&detection_ciphertext[..32]);
+    let keystream_0 = poseidon377::hash_2(&seed, (Fq::zero(), seed));
+    let pt_fq = ct_fq - keystream_0;
 
-    // Convert to bytes and extract using DetectionTierPlaintext
-    let plaintext_bytes = plaintext_fq.to_bytes();
-    let detection_plaintext = DetectionTierPlaintext::from_bytes(&plaintext_bytes)?;
+    // Decrypt slot 1: salt
+    let ct_salt = Fq::from_le_bytes_mod_order(&detection_ciphertext[32..64]);
+    let keystream_1 = poseidon377::hash_2(&seed, (Fq::from(1u64), seed));
+    let salt = ct_salt - keystream_1;
 
-    Ok((detection_plaintext.asset_id, detection_plaintext.is_flagged))
+    if pt_fq == expected_asset_id.0 {
+        Ok((*expected_asset_id, false, salt))
+    } else if pt_fq == expected_asset_id.0 + *crate::issuer_keys::FLAG_SENTINEL {
+        Ok((*expected_asset_id, true, salt))
+    } else {
+        anyhow::bail!("detection tier does not match expected asset")
+    }
 }
 
-/// Decrypt core+extension using issuer's DK (for flagged transfers).
+/// Decrypt compliance data using pre-computed shared secrets.
 ///
-/// When a transfer is flagged, the issuer can decrypt the full details
-/// using their DK instead of the user's daily key.
-///
-/// # Arguments
-/// * `dk` - Issuer's detection key (scalar)
-/// * `ciphertext` - The full compliance ciphertext (contains both epk and epk_g)
-///
-/// # Returns
-/// Decrypted compliance data
-pub fn decrypt_compliance_details_with_dk(
-    dk: &Fr,
-    ciphertext: &ComplianceCiphertext,
-) -> anyhow::Result<DecryptedComplianceData> {
-    // Compute shared secret using epk_g (standard generator):
-    // ss = dk × epk_g = dk × (r × G) = r × dk × G
-    let ss = ciphertext.epk_g * *dk;
-
-    // Decrypt detection tier using ISSUER_DETECTION_DOMAIN
-    let epk_fq = ciphertext.epk.vartime_compress_to_field();
-    let seed_detection = poseidon377::hash_2(
-        &ISSUER_DETECTION_DOMAIN,
-        (ss.vartime_compress_to_field(), epk_fq),
-    );
-
-    // Decrypt detection_tag (asset_id with flag in high bits)
-    let detection_ciphertext_fq = Fq::from_le_bytes_mod_order(&ciphertext.detection_tag);
-    let detection_keystream = poseidon377::hash_2(&seed_detection, (Fq::zero(), seed_detection));
-    let detection_plaintext_fq = detection_ciphertext_fq - detection_keystream;
-
-    // Extract asset_id and flag from detection tier
-    let detection_bytes = detection_plaintext_fq.to_bytes();
-    let detection_plaintext = DetectionTierPlaintext::from_bytes(&detection_bytes)
-        .context("failed to parse detection tier")?;
-    let asset_id = detection_plaintext.asset_id;
-
-    // Decrypt core and extension tiers using COMPLIANCE_STREAM_CIPHER_DOMAIN
-    let seed_core = poseidon377::hash_2(
-        &COMPLIANCE_STREAM_CIPHER_DOMAIN,
-        (ss.vartime_compress_to_field(), epk_fq),
-    );
-    let seed_extension = poseidon377::hash_2(
-        &COMPLIANCE_STREAM_CIPHER_DOMAIN,
-        (ss.vartime_compress_to_field(), epk_fq),
-    );
-
-    // Decrypt core data (amount + self address) - 3 Fq elements (80 bytes plaintext)
-    let mut core_plaintext_bytes = Vec::new();
-    for (i, chunk) in ciphertext.encrypted_core.chunks(32).enumerate() {
-        let mut buf = [0u8; 32];
-        buf[0..chunk.len()].copy_from_slice(chunk);
-        let ciphertext_fq = Fq::from_le_bytes_mod_order(&buf);
-        let counter = Fq::from(i as u64);
-        let keystream = poseidon377::hash_2(&seed_core, (counter, seed_core));
-        let plaintext_fq = ciphertext_fq - keystream;
-        let fq_bytes = plaintext_fq.to_bytes();
-        let bytes_to_take = 31.min(80 - core_plaintext_bytes.len());
-        core_plaintext_bytes.extend_from_slice(&fq_bytes[0..bytes_to_take]);
-    }
-
-    // Decrypt extension data (counterparty address) - 3 Fq elements (64 bytes plaintext)
-    let mut extension_plaintext_bytes = Vec::new();
-    for (i, chunk) in ciphertext.encrypted_extension.chunks(32).enumerate() {
-        let mut buf = [0u8; 32];
-        buf[0..chunk.len()].copy_from_slice(chunk);
-        let ciphertext_fq = Fq::from_le_bytes_mod_order(&buf);
-        let counter = Fq::from(i as u64);
-        let keystream = poseidon377::hash_2(&seed_extension, (counter, seed_extension));
-        let plaintext_fq = ciphertext_fq - keystream;
-        let fq_bytes = plaintext_fq.to_bytes();
-        let bytes_to_take = 31.min(64 - extension_plaintext_bytes.len());
-        extension_plaintext_bytes.extend_from_slice(&fq_bytes[0..bytes_to_take]);
-    }
-
-    // Parse core plaintext: amount (16) || self_div_gen (32) || self_trans_key (32)
-    if core_plaintext_bytes.len() < 80 {
-        anyhow::bail!(
-            "core plaintext too short: expected 80 bytes, got {}",
-            core_plaintext_bytes.len()
-        );
-    }
-
-    let amount_bytes: [u8; 16] = core_plaintext_bytes[0..16]
-        .try_into()
-        .context("failed to extract amount")?;
-    let amount = Amount::from_le_bytes(amount_bytes);
-
-    let self_div_gen_bytes: [u8; 32] = core_plaintext_bytes[16..48]
-        .try_into()
-        .context("failed to extract self diversified generator")?;
-    let self_div_gen = decaf377::Encoding(self_div_gen_bytes)
-        .vartime_decompress()
-        .map_err(|_| {
-            anyhow::anyhow!("compliance decryption failed: invalid self diversified generator")
-        })?;
-
-    let self_trans_key_bytes: [u8; 32] = core_plaintext_bytes[48..80]
-        .try_into()
-        .context("failed to extract self transmission key")?;
-
-    // Parse extension plaintext: counterparty_div_gen (32) || counterparty_trans_key (32)
-    if extension_plaintext_bytes.len() < 64 {
-        anyhow::bail!(
-            "extension plaintext too short: expected 64 bytes, got {}",
-            extension_plaintext_bytes.len()
-        );
-    }
-
-    let counterparty_div_gen_bytes: [u8; 32] = extension_plaintext_bytes[0..32]
-        .try_into()
-        .context("failed to extract counterparty diversified generator")?;
-    let counterparty_div_gen = decaf377::Encoding(counterparty_div_gen_bytes)
-        .vartime_decompress()
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "compliance decryption failed: invalid counterparty diversified generator"
-            )
-        })?;
-
-    let counterparty_trans_key_bytes: [u8; 32] = extension_plaintext_bytes[32..64]
-        .try_into()
-        .context("failed to extract counterparty transmission key")?;
-
-    Ok(DecryptedComplianceData {
-        asset_id,
-        amount,
-        self_diversified_generator: self_div_gen,
-        self_transmission_key: self_trans_key_bytes,
-        counterparty_diversified_generator: counterparty_div_gen,
-        counterparty_transmission_key: counterparty_trans_key_bytes,
-    })
-}
-
-/// Decrypt compliance details using Poseidon stream cipher with tiered keys.
-///
-/// This function reverses the encryption process to recover the original data.
-/// Each ciphertext part requires its corresponding shared secret:
-/// - detection_tag: decrypted with ss_detection
-/// - encrypted_core: decrypted with ss_core
-/// - encrypted_extension: decrypted with ss_extension
-///
-/// # Arguments
-/// * `ss_detection` - Shared secret for detection key: `dmk_detection * EPK`
-/// * `ss_core` - Shared secret for core key: `dmk_core * EPK`
-/// * `ss_extension` - Shared secret for extension key: `dmk_extension * EPK`
-/// * `epk` - The ephemeral public key from the ciphertext
-/// * `ciphertext` - The compliance ciphertext to decrypt
-///
-/// # Returns
-/// The decrypted compliance data, or an error if decryption fails
-pub fn decrypt_with_shared_secrets(
+/// For Spend ciphertexts, `ss_ext` should be None.
+/// For flagged Spend: ss_detection = ss_core = dk × epk_1.
+/// For flagged Output: ss_detection = ss_core = dk × epk_1, ss_ext = dk × epk_2.
+/// For Orbis path: shared secrets are derived from re-encryption commitments.
+pub fn decrypt(
     ss_detection: &Element,
     ss_core: &Element,
-    ss_extension: &Element,
-    epk: &Element,
+    ss_ext: Option<&Element>,
+    epk_1: &Element,
     ciphertext: &ComplianceCiphertext,
+    expected_asset_id: &asset::Id,
 ) -> anyhow::Result<DecryptedComplianceData> {
-    // 1. Derive seeds for each key type
-    let epk_fq = epk.vartime_compress_to_field();
-
+    let epk_1_fq = epk_1.vartime_compress_to_field();
     let seed_detection = poseidon377::hash_2(
         &ISSUER_DETECTION_DOMAIN,
-        (ss_detection.vartime_compress_to_field(), epk_fq),
-    );
-    let seed_core = poseidon377::hash_2(
-        &COMPLIANCE_STREAM_CIPHER_DOMAIN,
-        (ss_core.vartime_compress_to_field(), epk_fq),
-    );
-    let seed_extension = poseidon377::hash_2(
-        &COMPLIANCE_STREAM_CIPHER_DOMAIN,
-        (ss_extension.vartime_compress_to_field(), epk_fq),
+        (ss_detection.vartime_compress_to_field(), epk_1_fq),
     );
 
-    // 2. Decrypt detection_tag (asset_id + flag) - 1 Fq element
-    let detection_ciphertext_fq = Fq::from_le_bytes_mod_order(&ciphertext.detection_tag);
-    let detection_keystream =
-        poseidon377::hash_2(&seed_detection, (Fq::from(0u64), seed_detection));
-    let detection_plaintext_fq = detection_ciphertext_fq - detection_keystream;
+    let detection_keystream = poseidon377::hash_2(&seed_detection, (Fq::zero(), seed_detection));
+    let ct_fq = Fq::from_le_bytes_mod_order(&ciphertext.detection_tag[..32]);
+    let pt_fq = ct_fq - detection_keystream;
 
-    // Parse detection tier using DetectionTierPlaintext (handles flag bit extraction)
-    let detection_bytes = detection_plaintext_fq.to_bytes();
-    let detection_plaintext = DetectionTierPlaintext::from_bytes(&detection_bytes)
-        .map_err(|e| anyhow::anyhow!("compliance decryption failed: {}", e))?;
-    let asset_id = detection_plaintext.asset_id;
+    let asset_id = if pt_fq == expected_asset_id.0
+        || pt_fq == expected_asset_id.0 + *crate::issuer_keys::FLAG_SENTINEL
+    {
+        *expected_asset_id
+    } else {
+        anyhow::bail!("compliance decryption failed: detection tier does not match expected asset")
+    };
 
-    // 3. Decrypt core data (amount + self address) - 3 Fq elements (80 bytes plaintext)
-    let mut core_plaintext_bytes = Vec::new();
-    for (i, chunk) in ciphertext.encrypted_core.chunks(32).enumerate() {
-        let mut buf = [0u8; 32];
-        buf[0..chunk.len()].copy_from_slice(chunk);
-        let ciphertext_fq = Fq::from_le_bytes_mod_order(&buf);
-        let counter = Fq::from(i as u64);
-        let keystream = poseidon377::hash_2(&seed_core, (counter, seed_core));
-        let plaintext_fq = ciphertext_fq - keystream;
-        // Take 31 bytes from each Fq (to match 31-byte chunk encoding)
-        let fq_bytes = plaintext_fq.to_bytes();
-        let bytes_to_take = 31.min(80 - core_plaintext_bytes.len());
-        core_plaintext_bytes.extend_from_slice(&fq_bytes[0..bytes_to_take]);
-    }
+    // Decrypt core
+    let seed_core = ciphertext.c2_core - ss_core.vartime_compress_to_field();
+    let core_plaintext_bytes = decrypt_tier_bytes(&ciphertext.encrypted_core, seed_core, 80);
 
-    // 4. Decrypt extension data (counterparty address) - 3 Fq elements (64 bytes plaintext)
-    let mut extension_plaintext_bytes = Vec::new();
-    for (i, chunk) in ciphertext.encrypted_extension.chunks(32).enumerate() {
-        let mut buf = [0u8; 32];
-        buf[0..chunk.len()].copy_from_slice(chunk);
-        let ciphertext_fq = Fq::from_le_bytes_mod_order(&buf);
-        let counter = Fq::from(i as u64);
-        let keystream = poseidon377::hash_2(&seed_extension, (counter, seed_extension));
-        let plaintext_fq = ciphertext_fq - keystream;
-        let fq_bytes = plaintext_fq.to_bytes();
-        let bytes_to_take = 31.min(64 - extension_plaintext_bytes.len());
-        extension_plaintext_bytes.extend_from_slice(&fq_bytes[0..bytes_to_take]);
-    }
-
-    // 5. Parse core plaintext: amount (16) || self_div_gen (32) || self_trans_key (32)
     if core_plaintext_bytes.len() < 80 {
         anyhow::bail!(
             "core plaintext too short: expected 80 bytes, got {}",
@@ -519,52 +534,36 @@ pub fn decrypt_with_shared_secrets(
         );
     }
 
-    let amount_bytes: [u8; 16] = core_plaintext_bytes[0..16]
-        .try_into()
-        .context("failed to extract amount")?;
+    let amount_bytes: [u8; 16] = core_plaintext_bytes[0..16].try_into().context("amount")?;
     let amount = Amount::from_le_bytes(amount_bytes);
-
-    let self_div_gen_bytes: [u8; 32] = core_plaintext_bytes[16..48]
-        .try_into()
-        .context("failed to extract self diversified generator")?;
+    let self_div_gen_bytes: [u8; 32] =
+        core_plaintext_bytes[16..48].try_into().context("self gd")?;
     let self_div_gen = decaf377::Encoding(self_div_gen_bytes)
         .vartime_decompress()
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "compliance decryption failed: invalid self diversified generator \
-                 (not a valid curve point, likely wrong decryption key or corrupted data)"
-            )
-        })?;
+        .map_err(|_| anyhow::anyhow!("invalid self diversified generator"))?;
+    let self_trans_key_bytes: [u8; 32] =
+        core_plaintext_bytes[48..80].try_into().context("self pk")?;
 
-    let self_trans_key_bytes: [u8; 32] = core_plaintext_bytes[48..80]
-        .try_into()
-        .context("failed to extract self transmission key")?;
+    // Decrypt ext if present (Output ciphertext)
+    let (counterparty_div_gen, counterparty_trans_key_bytes) =
+        if let (Some(c2_ext), Some(encrypted_ext), Some(ss_ext)) =
+            (&ciphertext.c2_ext, &ciphertext.encrypted_ext, ss_ext)
+        {
+            let seed_ext = *c2_ext - ss_ext.vartime_compress_to_field();
+            let ext_bytes = decrypt_tier_bytes(encrypted_ext, seed_ext, 64);
+            if ext_bytes.len() < 64 {
+                anyhow::bail!("ext plaintext too short");
+            }
+            let gd_bytes: [u8; 32] = ext_bytes[0..32].try_into().context("counterparty gd")?;
+            let gd = decaf377::Encoding(gd_bytes)
+                .vartime_decompress()
+                .map_err(|_| anyhow::anyhow!("invalid counterparty diversified generator"))?;
+            let pk_bytes: [u8; 32] = ext_bytes[32..64].try_into().context("counterparty pk")?;
+            (gd, pk_bytes)
+        } else {
+            (Element::default(), [0u8; 32])
+        };
 
-    // 6. Parse extension plaintext: counterparty_div_gen (32) || counterparty_trans_key (32)
-    if extension_plaintext_bytes.len() < 64 {
-        anyhow::bail!(
-            "extension plaintext too short: expected 64 bytes, got {}",
-            extension_plaintext_bytes.len()
-        );
-    }
-
-    let counterparty_div_gen_bytes: [u8; 32] = extension_plaintext_bytes[0..32]
-        .try_into()
-        .context("failed to extract counterparty diversified generator")?;
-    let counterparty_div_gen = decaf377::Encoding(counterparty_div_gen_bytes)
-        .vartime_decompress()
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "compliance decryption failed: invalid counterparty diversified generator \
-                 (not a valid curve point, likely wrong decryption key or corrupted data)"
-            )
-        })?;
-
-    let counterparty_trans_key_bytes: [u8; 32] = extension_plaintext_bytes[32..64]
-        .try_into()
-        .context("failed to extract counterparty transmission key")?;
-
-    // 7. Return the decrypted data
     Ok(DecryptedComplianceData {
         asset_id,
         amount,
@@ -573,443 +572,333 @@ pub fn decrypt_with_shared_secrets(
         counterparty_diversified_generator: counterparty_div_gen,
         counterparty_transmission_key: counterparty_trans_key_bytes,
     })
+}
+
+/// Decrypt a flagged Spend ciphertext using issuer's detection key.
+pub fn decrypt_flagged_spend(
+    dk: &Fr,
+    ciphertext: &ComplianceCiphertext,
+    expected_asset_id: &asset::Id,
+) -> anyhow::Result<DecryptedComplianceData> {
+    let ss = ciphertext.epk_1 * *dk;
+    decrypt(
+        &ss,
+        &ss,
+        None,
+        &ciphertext.epk_1,
+        ciphertext,
+        expected_asset_id,
+    )
+}
+
+/// Decrypt a flagged Output ciphertext using issuer's detection key.
+pub fn decrypt_flagged_output(
+    dk: &Fr,
+    ciphertext: &ComplianceCiphertext,
+    expected_asset_id: &asset::Id,
+) -> anyhow::Result<DecryptedComplianceData> {
+    let ss_1 = ciphertext.epk_1 * *dk;
+    let epk_2 = ciphertext
+        .epk_2
+        .ok_or_else(|| anyhow::anyhow!("not an output ciphertext"))?;
+    let ss_2 = epk_2 * *dk;
+    decrypt(
+        &ss_1,
+        &ss_1,
+        Some(&ss_2),
+        &ciphertext.epk_1,
+        ciphertext,
+        expected_asset_id,
+    )
+}
+
+/// Decrypt an encrypted tier using Poseidon stream cipher.
+pub fn decrypt_tier_bytes(encrypted: &[u8], seed: Fq, expected_plaintext_len: usize) -> Vec<u8> {
+    let mut plaintext_bytes = Vec::new();
+    for (i, chunk) in encrypted.chunks(32).enumerate() {
+        let mut buf = [0u8; 32];
+        buf[0..chunk.len()].copy_from_slice(chunk);
+        let ciphertext_fq = Fq::from_le_bytes_mod_order(&buf);
+        let counter = Fq::from(i as u64);
+        let keystream = poseidon377::hash_2(&seed, (counter, seed));
+        let plaintext_fq = ciphertext_fq - keystream;
+        let fq_bytes = plaintext_fq.to_bytes();
+        let bytes_to_take = 31.min(expected_plaintext_len - plaintext_bytes.len());
+        plaintext_bytes.extend_from_slice(&fq_bytes[0..bytes_to_take]);
+    }
+    plaintext_bytes
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::indexed_tree::FQ_MAX;
-    use crate::structs::AssetPolicy;
-    use penumbra_sdk_keys::keys::{Diversifier, UserComplianceKey};
+    use crate::issuer_keys::DetectionKey;
+    use crate::structs::{OUTPUT_WIRE_BYTES, SPEND_WIRE_BYTES};
     use rand_core::OsRng;
 
-    /// Helper to create an IndexedLeaf for tests.
-    fn make_test_leaf(dk_pub: Element, threshold: u128) -> IndexedLeaf {
-        IndexedLeaf {
-            value: Fq::from(42u64),
-            next_index: 0,
-            next_value: *FQ_MAX,
-            policy: AssetPolicy::new(dk_pub, threshold),
-        }
+    fn make_ring_keys(rng: &mut (impl RngCore + rand_core::CryptoRng)) -> (Fr, Element) {
+        let sk_ring = Fr::rand(rng);
+        let ring_pk = Element::GENERATOR * sk_ring;
+        (sk_ring, ring_pk)
+    }
+
+    /// Derive the single ACK for a user from ring_pk and their diversified basepoint.
+    fn derive_ack(ring_pk: &Element, b_d_fq: Fq) -> Element {
+        let d = derive_compliance_scalar(b_d_fq);
+        let d_fr = Fr::from_le_bytes_mod_order(&d.to_bytes());
+        *ring_pk * d_fr
     }
 
     #[test]
-    fn test_encrypt_decrypt_roundtrip() {
-        use crate::issuer_keys::DetectionKey;
-
+    fn test_encrypt_decrypt_spend_flagged() {
         let mut rng = OsRng;
+        let dk = DetectionKey::demo();
+        let dk_pub = dk.public_key();
 
-        // Setup: Create a master key and derive a wallet key
-        let uck_scalar = Fr::rand(&mut rng);
-        let uck = UserComplianceKey::new(uck_scalar);
-
-        let diversifier = Diversifier([1u8; 16]);
-        let address_key = uck.derive_address_key(&diversifier);
-
-        // Create a test address using the SAME diversifier (crucial for ECDH to work)
-        let random_scalar = Fr::rand(&mut rng);
-        let random_point = decaf377::Element::GENERATOR * random_scalar;
-        let pk_d = decaf377_ka::Public(random_point.vartime_compress().0);
-
-        let mut ck_d_bytes = [0u8; 32];
-        rng.fill_bytes(&mut ck_d_bytes);
-        let ck_d = decaf377_fmd::ClueKey(ck_d_bytes);
-
-        let recipient_address =
-            Address::from_components(diversifier, pk_d, ck_d).expect("valid address components");
-
-        // Encryption parameters
-        let date = 19000u64;
+        let (_, ring_pk) = make_ring_keys(&mut rng);
+        let self_address = Address::dummy(&mut rng);
         let asset_id = asset::Id(Fq::from(42u64));
         let amount = Amount::from(1000u128);
-        let counterparty_address = Address::dummy(&mut rng);
 
-        // Setup issuer detection key
-        let dk = DetectionKey::demo();
-        let dk_pub = dk.public_key();
+        let b_d_fq = self_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
 
-        // Create asset leaf with low threshold so amount is flagged
-        let asset_leaf = make_test_leaf(dk_pub, 500); // threshold=500, amount=1000 => flagged
-
-        // Encrypt (flagged because amount >= threshold)
-        let result = encrypt_compliance_details(
+        let result = encrypt_spend(
             &mut rng,
-            &address_key,
-            &recipient_address,
-            date,
+            &ack,
+            &dk_pub,
+            &self_address,
             asset_id,
             amount,
-            &counterparty_address,
-            &asset_leaf,
+            true,
+            Fq::zero(),
         )
         .expect("encryption should succeed");
 
-        // Issuer decrypts using their detection key (flagged = full access)
-        let decrypted = decrypt_compliance_details_with_dk(dk.inner(), &result.ciphertext)
+        assert_eq!(result.ciphertext.to_bytes().len(), SPEND_WIRE_BYTES);
+
+        let decrypted = decrypt_flagged_spend(dk.inner(), &result.ciphertext, &asset_id)
             .expect("decryption should succeed");
 
-        // Verify
-        assert_eq!(decrypted.asset_id, asset_id, "asset_id should match");
-        assert_eq!(decrypted.amount, amount, "amount should match");
+        assert_eq!(decrypted.asset_id, asset_id);
+        assert_eq!(decrypted.amount, amount);
     }
 
     #[test]
-    fn test_decrypt_with_wrong_key_fails() {
-        use crate::issuer_keys::DetectionKey;
-
+    fn test_encrypt_decrypt_output_flagged() {
         let mut rng = OsRng;
-
-        // Setup: Create a master key and derive a wallet key
-        let uck_scalar = Fr::rand(&mut rng);
-        let uck = UserComplianceKey::new(uck_scalar);
-
-        let diversifier = Diversifier([1u8; 16]);
-        let address_key = uck.derive_address_key(&diversifier);
-
-        let recipient_address = Address::dummy(&mut rng);
-        let counterparty_address = Address::dummy(&mut rng);
-
-        // Setup issuer
         let dk = DetectionKey::demo();
         let dk_pub = dk.public_key();
 
-        // Create asset leaf with high threshold (not flagged)
-        let asset_leaf = make_test_leaf(dk_pub, u128::MAX);
-
-        // Encrypt
-        let date = 19000u64;
-        let result = encrypt_compliance_details(
-            &mut rng,
-            &address_key,
-            &recipient_address,
-            date,
-            asset::Id(Fq::from(42u64)),
-            Amount::from(1000u128),
-            &counterparty_address,
-            &asset_leaf,
-        )
-        .expect("encryption should succeed");
-
-        // Try to decrypt with a DIFFERENT user compliance key
-        let wrong_uck_scalar = Fr::rand(&mut rng);
-        let wrong_uck = UserComplianceKey::new(wrong_uck_scalar);
-        let wrong_daily_keys = wrong_uck.derive_daily_keys(date);
-        let wrong_ss_core = result.ciphertext.epk * wrong_daily_keys.core.inner();
-        let wrong_ss_extension = result.ciphertext.epk * wrong_daily_keys.extension.inner();
-
-        // Use correct detection (issuer), but wrong core/extension
-        let ss_detection = &result.issuer_shared_secret;
-
-        // Decryption should fail (wrong shared secret will produce garbage plaintext)
-        let decryption_result = decrypt_with_shared_secrets(
-            ss_detection,
-            &wrong_ss_core,
-            &wrong_ss_extension,
-            &result.ciphertext.epk,
-            &result.ciphertext,
-        );
-        assert!(
-            decryption_result.is_err(),
-            "decryption with wrong key should fail"
-        );
-    }
-
-    #[test]
-    fn test_decrypt_with_wrong_date_fails() {
-        use crate::issuer_keys::DetectionKey;
-
-        let mut rng = OsRng;
-
-        let uck_scalar = Fr::rand(&mut rng);
-        let uck = UserComplianceKey::new(uck_scalar);
-
-        let diversifier = Diversifier([1u8; 16]);
-        let address_key = uck.derive_address_key(&diversifier);
-
-        let recipient_address = Address::dummy(&mut rng);
+        let (_, ring_pk) = make_ring_keys(&mut rng);
+        let self_address = Address::dummy(&mut rng);
         let counterparty_address = Address::dummy(&mut rng);
-
-        // Setup issuer
-        let dk = DetectionKey::demo();
-        let dk_pub = dk.public_key();
-
-        // Create asset leaf with high threshold (not flagged)
-        let asset_leaf = make_test_leaf(dk_pub, u128::MAX);
-
-        // Encrypt for date 19000
-        let date = 19000u64;
-        let result = encrypt_compliance_details(
-            &mut rng,
-            &address_key,
-            &recipient_address,
-            date,
-            asset::Id(Fq::from(42u64)),
-            Amount::from(1000u128),
-            &counterparty_address,
-            &asset_leaf,
-        )
-        .expect("encryption should succeed");
-
-        // Try to decrypt with a DIFFERENT date (wrong core/extension keys)
-        let wrong_date = 19001u64;
-        let wrong_daily_keys = uck.derive_daily_keys(wrong_date);
-        let wrong_ss_core = result.ciphertext.epk * wrong_daily_keys.core.inner();
-        let wrong_ss_extension = result.ciphertext.epk * wrong_daily_keys.extension.inner();
-
-        // Use correct detection (issuer), but wrong date for core/extension
-        let ss_detection = &result.issuer_shared_secret;
-
-        // Decryption with wrong date should either fail OR return garbage data
-        let decryption_result = decrypt_with_shared_secrets(
-            ss_detection,
-            &wrong_ss_core,
-            &wrong_ss_extension,
-            &result.ciphertext.epk,
-            &result.ciphertext,
-        );
-        match decryption_result {
-            Err(_) => {
-                // Expected: decryption failed (random bytes didn't form valid field elements)
-            }
-            Ok(decrypted) => {
-                // Also valid: decryption succeeded but produced garbage data
-                assert!(
-                    decrypted.asset_id != asset::Id(Fq::from(42u64))
-                        || decrypted.amount != Amount::from(1000u128),
-                    "decryption with wrong date should not produce correct data"
-                );
-            }
-        }
-    }
-
-    // ========== Threshold Encryption Tests ==========
-
-    #[test]
-    fn test_issuer_encryption_not_flagged() {
-        use crate::issuer_keys::DetectionKey;
-
-        let mut rng = OsRng;
-
-        // Setup user
-        let uck = UserComplianceKey::new(Fr::rand(&mut rng));
-        let diversifier = Diversifier([1u8; 16]);
-        let address_key = uck.derive_address_key(&diversifier);
-
-        // Create test addresses
-        let random_scalar = Fr::rand(&mut rng);
-        let random_point = decaf377::Element::GENERATOR * random_scalar;
-        let pk_d = decaf377_ka::Public(random_point.vartime_compress().0);
-        let mut ck_d_bytes = [0u8; 32];
-        rng.fill_bytes(&mut ck_d_bytes);
-        let ck_d = decaf377_fmd::ClueKey(ck_d_bytes);
-        let self_address =
-            Address::from_components(diversifier, pk_d, ck_d).expect("valid address");
-
-        let counterparty_address = Address::dummy(&mut rng);
-
-        // Setup issuer
-        let dk = DetectionKey::demo();
-        let dk_pub = dk.public_key();
-
-        // Encrypt (not flagged: amount < threshold)
-        let date = 19000u64;
         let asset_id = asset::Id(Fq::from(42u64));
-        let amount = Amount::from(5000u128);
+        let amount = Amount::from(1000u128);
 
-        // Threshold is 10000, amount is 5000 => NOT flagged
-        let asset_leaf = make_test_leaf(dk_pub, 10000);
+        let receiver_b_d_fq = self_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let sender_b_d_fq = counterparty_address
+            .diversified_generator()
+            .vartime_compress_to_field();
 
-        let result = encrypt_compliance_details(
+        let ack_receiver = derive_ack(&ring_pk, receiver_b_d_fq);
+        let ack_sender = derive_ack(&ring_pk, sender_b_d_fq);
+
+        let result = encrypt_output(
             &mut rng,
-            &address_key,
+            &ack_receiver,
+            &ack_sender,
+            &dk_pub,
             &self_address,
-            date,
+            &counterparty_address,
             asset_id,
             amount,
-            &counterparty_address,
-            &asset_leaf,
+            true,
+            Fq::zero(),
         )
         .expect("encryption should succeed");
 
-        // User should be able to decrypt core+extension (not flagged)
-        let daily_keys = uck.derive_daily_keys(date);
-        let ss_core = result.ciphertext.epk * daily_keys.core.inner();
-        let ss_extension = result.ciphertext.epk * daily_keys.extension.inner();
+        assert_eq!(result.ciphertext.to_bytes().len(), OUTPUT_WIRE_BYTES);
 
-        // Detection is issuer-only, use issuer's shared secret
-        let ss_detection = &result.issuer_shared_secret;
+        let decrypted = decrypt_flagged_output(dk.inner(), &result.ciphertext, &asset_id)
+            .expect("decryption should succeed");
 
-        let decrypted = decrypt_with_shared_secrets(
-            ss_detection,
-            &ss_core,
-            &ss_extension,
-            &result.ciphertext.epk,
-            &result.ciphertext,
-        )
-        .expect("user decryption should succeed for non-flagged TX");
-
-        assert_eq!(decrypted.amount, amount);
         assert_eq!(decrypted.asset_id, asset_id);
+        assert_eq!(decrypted.amount, amount);
     }
 
     #[test]
-    fn test_issuer_encryption_flagged() {
-        use crate::issuer_keys::DetectionKey;
-
+    fn test_encrypt_decrypt_spend_non_flagged() {
         let mut rng = OsRng;
-
-        // Setup user
-        let uck = UserComplianceKey::new(Fr::rand(&mut rng));
-        let diversifier = Diversifier([1u8; 16]);
-        let address_key = uck.derive_address_key(&diversifier);
-
-        // Create test addresses
-        let random_scalar = Fr::rand(&mut rng);
-        let random_point = decaf377::Element::GENERATOR * random_scalar;
-        let pk_d = decaf377_ka::Public(random_point.vartime_compress().0);
-        let mut ck_d_bytes = [0u8; 32];
-        rng.fill_bytes(&mut ck_d_bytes);
-        let ck_d = decaf377_fmd::ClueKey(ck_d_bytes);
-        let self_address =
-            Address::from_components(diversifier, pk_d, ck_d).expect("valid address");
-
-        let counterparty_address = Address::dummy(&mut rng);
-
-        // Setup issuer
         let dk = DetectionKey::demo();
         let dk_pub = dk.public_key();
 
-        // Encrypt (flagged: amount >= threshold)
-        let date = 19000u64;
+        let (sk_ring, ring_pk) = make_ring_keys(&mut rng);
+        let self_address = Address::dummy(&mut rng);
         let asset_id = asset::Id(Fq::from(42u64));
-        let amount = Amount::from(100000u128); // Large amount
+        let amount = Amount::from(1000u128);
 
-        // Threshold is 50000, amount is 100000 => FLAGGED
-        let asset_leaf = make_test_leaf(dk_pub, 50000);
+        let b_d_fq = self_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
 
-        let result = encrypt_compliance_details(
+        let result = encrypt_spend(
             &mut rng,
-            &address_key,
+            &ack,
+            &dk_pub,
             &self_address,
-            date,
             asset_id,
             amount,
-            &counterparty_address,
-            &asset_leaf,
+            false,
+            Fq::zero(),
         )
         .expect("encryption should succeed");
 
-        // Issuer should be able to decrypt core+extension (flagged)
-        // Note: We use the issuer_shared_secret from the encryption result
-        // because standard ECDH (dk * epk) doesn't work when epk uses diversified generator
-        // and dk_pub uses the standard generator G.
-        let ss_issuer = &result.issuer_shared_secret;
+        // Simulate Orbis decryption: effective_sk = d_fr * sk_ring
+        let d = derive_compliance_scalar(b_d_fq);
+        let d_fr = Fr::from_le_bytes_mod_order(&d.to_bytes());
+        let effective_sk = d_fr * sk_ring;
+        let ss_core = result.ciphertext.epk_1 * effective_sk;
+        let ss_detection = result.ciphertext.epk_1 * *dk.inner();
 
-        let decrypted = decrypt_with_shared_secrets(
-            ss_issuer,
-            ss_issuer,
-            ss_issuer,
-            &result.ciphertext.epk,
-            &result.ciphertext,
-        )
-        .expect("issuer decryption should succeed for flagged TX");
-
-        assert_eq!(decrypted.amount, amount);
-        assert_eq!(decrypted.asset_id, asset_id);
-
-        // User should NOT be able to decrypt core/extension (encrypted to issuer's key)
-        let daily_keys = uck.derive_daily_keys(date);
-        let ss_core = result.ciphertext.epk * daily_keys.core.inner();
-        let ss_extension = result.ciphertext.epk * daily_keys.extension.inner();
-
-        // Even with correct detection, user core/extension keys won't work on flagged TX
-        let user_result = decrypt_with_shared_secrets(
-            ss_issuer, // Use issuer detection (detection is issuer-only)
+        let decrypted = decrypt(
+            &ss_detection,
             &ss_core,
-            &ss_extension,
-            &result.ciphertext.epk,
+            None,
+            &result.ciphertext.epk_1,
             &result.ciphertext,
-        );
+            &asset_id,
+        )
+        .expect("decryption should succeed");
 
-        // User decryption should fail or return garbage (core/extension encrypted to issuer)
-        match user_result {
-            Err(_) => {
-                // Expected: decryption failed
-            }
-            Ok(decrypted) => {
-                // Also valid: decryption succeeded but produced garbage
-                assert_ne!(
-                    decrypted.amount, amount,
-                    "user should not be able to decrypt flagged TX"
-                );
-            }
-        }
+        assert_eq!(decrypted.asset_id, asset_id);
+        assert_eq!(decrypted.amount, amount);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_output_non_flagged() {
+        let mut rng = OsRng;
+        let dk = DetectionKey::demo();
+        let dk_pub = dk.public_key();
+
+        let (sk_ring, ring_pk) = make_ring_keys(&mut rng);
+        let self_address = Address::dummy(&mut rng);
+        let counterparty_address = Address::dummy(&mut rng);
+        let asset_id = asset::Id(Fq::from(42u64));
+        let amount = Amount::from(1000u128);
+
+        let receiver_b_d_fq = self_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let sender_b_d_fq = counterparty_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+
+        let ack_receiver = derive_ack(&ring_pk, receiver_b_d_fq);
+        let ack_sender = derive_ack(&ring_pk, sender_b_d_fq);
+
+        let result = encrypt_output(
+            &mut rng,
+            &ack_receiver,
+            &ack_sender,
+            &dk_pub,
+            &self_address,
+            &counterparty_address,
+            asset_id,
+            amount,
+            false,
+            Fq::zero(),
+        )
+        .expect("encryption should succeed");
+
+        // Simulate Orbis decryption path (single derivation scalar)
+        let d_receiver = derive_compliance_scalar(receiver_b_d_fq);
+        let d_receiver_fr = Fr::from_le_bytes_mod_order(&d_receiver.to_bytes());
+
+        let ss_core = result.ciphertext.epk_1 * (d_receiver_fr * sk_ring);
+        let ss_ext = result.ciphertext.epk_2.unwrap() * (d_receiver_fr * sk_ring);
+        let ss_detection = result.ciphertext.epk_1 * *dk.inner();
+
+        let decrypted = decrypt(
+            &ss_detection,
+            &ss_core,
+            Some(&ss_ext),
+            &result.ciphertext.epk_1,
+            &result.ciphertext,
+            &asset_id,
+        )
+        .expect("decryption should succeed");
+
+        assert_eq!(decrypted.asset_id, asset_id);
+        assert_eq!(decrypted.amount, amount);
     }
 
     #[test]
     fn test_detection_tier_roundtrip() {
-        use crate::issuer_keys::{DetectionKey, DetectionTierPlaintext};
-
         let mut rng = OsRng;
-
         let dk = DetectionKey::demo();
         let dk_pub = dk.public_key();
-        let ephemeral_secret = Fr::rand(&mut rng);
-        let epk = decaf377::Element::GENERATOR * ephemeral_secret;
-
         let asset_id = asset::Id(Fq::from(12345u64));
 
-        // Test not flagged
+        let (_, ring_pk) = make_ring_keys(&mut rng);
+        let self_address = Address::dummy(&mut rng);
+        let b_d_fq = self_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
+
+        // Not flagged
         {
-            let plaintext = DetectionTierPlaintext::new(asset_id, false);
-            let plaintext_bytes = plaintext.to_bytes();
+            let result = encrypt_spend(
+                &mut rng,
+                &ack,
+                &dk_pub,
+                &self_address,
+                asset_id,
+                Amount::from(100u128),
+                false,
+                Fq::zero(),
+            )
+            .unwrap();
 
-            // Compute shared secret and seed
-            let ss = dk_pub * ephemeral_secret;
-            let epk_fq = epk.vartime_compress_to_field();
-            let seed = poseidon377::hash_2(
-                &super::ISSUER_DETECTION_DOMAIN,
-                (ss.vartime_compress_to_field(), epk_fq),
-            );
-
-            // Encrypt (single Fq element)
-            let pt_fq = Fq::from_le_bytes_mod_order(&plaintext_bytes);
-            let keystream = poseidon377::hash_2(&seed, (Fq::zero(), seed));
-            let ct_fq = pt_fq + keystream;
-            let ciphertext = ct_fq.to_bytes();
-
-            // Decrypt
-            // In this test, epk = epk_g since we used GENERATOR for both
-            let (decrypted_asset, is_flagged) =
-                decrypt_detection_tier_with_dk(dk.inner(), &epk, &epk, &ciphertext)
-                    .expect("decryption should succeed");
+            let (decrypted_asset, is_flagged, _salt) = decrypt_detection_tier(
+                dk.inner(),
+                &result.ciphertext.epk_1,
+                &result.ciphertext.detection_tag,
+                &asset_id,
+            )
+            .unwrap();
 
             assert_eq!(decrypted_asset, asset_id);
             assert!(!is_flagged);
         }
 
-        // Test flagged
+        // Flagged
         {
-            let plaintext = DetectionTierPlaintext::new(asset_id, true);
-            let plaintext_bytes = plaintext.to_bytes();
+            let result = encrypt_spend(
+                &mut rng,
+                &ack,
+                &dk_pub,
+                &self_address,
+                asset_id,
+                Amount::from(100u128),
+                true,
+                Fq::zero(),
+            )
+            .unwrap();
 
-            let ss = dk_pub * ephemeral_secret;
-            let epk_fq = epk.vartime_compress_to_field();
-            let seed = poseidon377::hash_2(
-                &super::ISSUER_DETECTION_DOMAIN,
-                (ss.vartime_compress_to_field(), epk_fq),
-            );
-
-            // Encrypt (single Fq element)
-            let pt_fq = Fq::from_le_bytes_mod_order(&plaintext_bytes);
-            let keystream = poseidon377::hash_2(&seed, (Fq::zero(), seed));
-            let ct_fq = pt_fq + keystream;
-            let ciphertext = ct_fq.to_bytes();
-
-            // In this test, epk = epk_g since we used GENERATOR for both
-            let (decrypted_asset, is_flagged) =
-                decrypt_detection_tier_with_dk(dk.inner(), &epk, &epk, &ciphertext)
-                    .expect("decryption should succeed");
+            let (decrypted_asset, is_flagged, _salt) = decrypt_detection_tier(
+                dk.inner(),
+                &result.ciphertext.epk_1,
+                &result.ciphertext.detection_tag,
+                &asset_id,
+            )
+            .unwrap();
 
             assert_eq!(decrypted_asset, asset_id);
             assert!(is_flagged);
@@ -1017,50 +906,543 @@ mod tests {
     }
 
     #[test]
-    fn test_wrong_dk_cannot_decrypt_detection_tier() {
-        use crate::issuer_keys::{DetectionKey, DetectionTierPlaintext};
-
+    fn test_wrong_dk_cannot_decrypt() {
         let mut rng = OsRng;
-
         let dk1 = DetectionKey::demo();
-        let dk2 = DetectionKey::from_seed(&[1u8; 32]); // Different key
-        let dk1_pub = dk1.public_key();
+        let dk2 = DetectionKey::from_seed(&[1u8; 32]);
+        let dk_pub = dk1.public_key();
+        let asset_id = asset::Id(Fq::from(42u64));
 
-        let ephemeral_secret = Fr::rand(&mut rng);
-        let epk = decaf377::Element::GENERATOR * ephemeral_secret;
+        let (_, ring_pk) = make_ring_keys(&mut rng);
+        let self_address = Address::dummy(&mut rng);
+        let b_d_fq = self_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
 
-        let asset_id = asset::Id(Fq::from(12345u64));
-        let plaintext = DetectionTierPlaintext::new(asset_id, false);
-        let plaintext_bytes = plaintext.to_bytes();
+        let result = encrypt_spend(
+            &mut rng,
+            &ack,
+            &dk_pub,
+            &self_address,
+            asset_id,
+            Amount::from(100u128),
+            true,
+            Fq::zero(),
+        )
+        .unwrap();
 
-        // Encrypt with dk1's public key (single Fq element)
-        let ss = dk1_pub * ephemeral_secret;
-        let epk_fq = epk.vartime_compress_to_field();
-        let seed = poseidon377::hash_2(
-            &super::ISSUER_DETECTION_DOMAIN,
-            (ss.vartime_compress_to_field(), epk_fq),
+        let detection_result = decrypt_detection_tier(
+            dk2.inner(),
+            &result.ciphertext.epk_1,
+            &result.ciphertext.detection_tag,
+            &asset_id,
+        );
+        assert!(detection_result.is_err());
+    }
+
+    #[test]
+    fn test_ciphertext_sizes() {
+        let mut rng = OsRng;
+        let dk = DetectionKey::demo();
+        let dk_pub = dk.public_key();
+
+        let (_, ring_pk) = make_ring_keys(&mut rng);
+        let self_address = Address::dummy(&mut rng);
+        let counterparty_address = Address::dummy(&mut rng);
+        let asset_id = asset::Id(Fq::from(42u64));
+        let amount = Amount::from(1000u128);
+
+        let b_d_fq = self_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let cp_b_d_fq = counterparty_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let ack_receiver = derive_ack(&ring_pk, b_d_fq);
+        let ack_sender = derive_ack(&ring_pk, cp_b_d_fq);
+
+        let spend_result = encrypt_spend(
+            &mut rng,
+            &ack_receiver,
+            &dk_pub,
+            &self_address,
+            asset_id,
+            amount,
+            false,
+            Fq::zero(),
+        )
+        .unwrap();
+        assert_eq!(spend_result.ciphertext.to_bytes().len(), SPEND_WIRE_BYTES);
+
+        let output_result = encrypt_output(
+            &mut rng,
+            &ack_receiver,
+            &ack_sender,
+            &dk_pub,
+            &self_address,
+            &counterparty_address,
+            asset_id,
+            amount,
+            false,
+            Fq::zero(),
+        )
+        .unwrap();
+        assert_eq!(output_result.ciphertext.to_bytes().len(), OUTPUT_WIRE_BYTES);
+    }
+
+    #[test]
+    fn test_dleq_native_roundtrip() {
+        let mut rng = OsRng;
+        let (_, ring_pk) = make_ring_keys(&mut rng);
+        let address = Address::dummy(&mut rng);
+        let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
+
+        let r = Fr::rand(&mut rng);
+        let k = Fr::rand(&mut rng);
+        let epk = Element::GENERATOR * r;
+        let salt = Fq::rand(&mut rng);
+
+        let metadata_hash = compute_metadata_hash(
+            Fq::from(1u64),
+            Fq::from(2u64),
+            Fq::from(3u64),
+            Fq::from(1u64),
+            Fq::from(1_700_000_000u64),
+            salt,
         );
 
-        let pt_fq = Fq::from_le_bytes_mod_order(&plaintext_bytes);
-        let keystream = poseidon377::hash_2(&seed, (Fq::zero(), seed));
-        let ct_fq = pt_fq + keystream;
-        let ciphertext = ct_fq.to_bytes();
+        let proof = compute_dleq_native(r, k, &ack, &epk, metadata_hash);
 
-        // Try to decrypt with dk2 - should produce garbage
-        // In this test, epk = epk_g since we used GENERATOR for both
-        let result = decrypt_detection_tier_with_dk(dk2.inner(), &epk, &epk, &ciphertext);
+        // Verify with reconstruction: R_rec = s*G - c_fr*EPK, R'_rec = s*ACK - c_fr*S
+        // c is stored as truncated Fq; use directly as Fr for scalar arithmetic
+        let c_fr = Fr::from_le_bytes_mod_order(&proof.c.to_bytes());
+        let s_point = ack * r;
+        let r_rec = Element::GENERATOR * proof.s - epk * c_fr;
+        let rp_rec = ack * proof.s - s_point * c_fr;
 
-        // Decryption might succeed but produce wrong data, or fail on validation
-        match result {
-            Err(_) => {
-                // Expected: validation failed
-            }
-            Ok((wrong_asset, _)) => {
+        // Recompute challenge from reconstructed points (Orbis-compatible)
+        let g_fq = Element::GENERATOR.vartime_compress_to_field();
+        let ack_fq = ack.vartime_compress_to_field();
+        let epk_fq = epk.vartime_compress_to_field();
+        let s_fq = s_point.vartime_compress_to_field();
+        let r_fq = r_rec.vartime_compress_to_field();
+        let rp_fq = rp_rec.vartime_compress_to_field();
+
+        let domain = Fq::from_le_bytes_mod_order(ENCRYPT_PROOF_DOMAIN);
+        let c_check_fq = poseidon377::hash_7(
+            &domain,
+            (metadata_hash, g_fq, ack_fq, epk_fq, s_fq, r_fq, rp_fq),
+        );
+        let c_check_truncated =
+            Fq::from_le_bytes_mod_order(&fq_to_challenge_scalar(c_check_fq).to_bytes());
+
+        assert_eq!(
+            proof.c, c_check_truncated,
+            "DLEQ challenge should match after reconstruction"
+        );
+    }
+
+    #[test]
+    fn test_dleq_c_truncated() {
+        use ark_ff::{BigInteger, PrimeField};
+
+        // Verify that DleqProof.c has high bits zeroed (truncated challenge)
+        let mut rng = OsRng;
+        let (_, ring_pk) = make_ring_keys(&mut rng);
+        let address = Address::dummy(&mut rng);
+        let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
+
+        let r = Fr::rand(&mut rng);
+        let k = Fr::rand(&mut rng);
+        let epk = Element::GENERATOR * r;
+
+        let metadata_hash = compute_metadata_hash(
+            Fq::from(1u64),
+            Fq::from(2u64),
+            Fq::from(3u64),
+            Fq::from(1u64),
+            Fq::from(1_700_000_000u64),
+            Fq::rand(&mut rng),
+        );
+
+        let proof = compute_dleq_native(r, k, &ack, &epk, metadata_hash);
+
+        // c should be a valid Fq with high bits zero
+        let c_bytes = proof.c.into_bigint().to_bytes_le();
+        let keep_bits = Fr::MODULUS_BIT_SIZE - 1; // 250
+        let keep_bytes = (keep_bits as usize + 7) / 8; // 32
+        let spare_bits = keep_bytes * 8 - keep_bits as usize; // 6
+        assert_eq!(
+            c_bytes[keep_bytes - 1] & (0xFF << (8 - spare_bits)),
+            0,
+            "high bits of c should be zeroed (truncated)"
+        );
+    }
+
+    /// End-to-end: compute metadata hash → DLEQ proof → native verify roundtrip.
+    #[test]
+    fn test_metadata_to_dleq_native_roundtrip() {
+        let mut rng = OsRng;
+        let (_, ring_pk) = make_ring_keys(&mut rng);
+        let address = Address::dummy(&mut rng);
+        let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
+
+        let r = Fr::rand(&mut rng);
+        let k = Fr::rand(&mut rng);
+        let epk = Element::GENERATOR * r;
+
+        // Compute metadata hash (unchanged from before DLEQ refactor)
+        let metadata_hash = compute_metadata_hash(
+            Fq::from(1u64),
+            Fq::from(2u64),
+            Fq::from(3u64),
+            Fq::from(1u64),
+            Fq::from(1_700_000_000u64),
+            Fq::rand(&mut rng),
+        );
+
+        // Generate DLEQ proof
+        let proof = compute_dleq_native(r, k, &ack, &epk, metadata_hash);
+
+        // Verify: reconstruct R and R', recompute challenge
+        let s_point = ack * r;
+        let c_fr = Fr::from_le_bytes_mod_order(&proof.c.to_bytes());
+        let r_rec = Element::GENERATOR * proof.s - epk * c_fr;
+        let rp_rec = ack * proof.s - s_point * c_fr;
+
+        let domain = Fq::from_le_bytes_mod_order(ENCRYPT_PROOF_DOMAIN);
+        let g_fq = Element::GENERATOR.vartime_compress_to_field();
+        let c_check = poseidon377::hash_7(
+            &domain,
+            (
+                metadata_hash,
+                g_fq,
+                ack.vartime_compress_to_field(),
+                epk.vartime_compress_to_field(),
+                s_point.vartime_compress_to_field(),
+                r_rec.vartime_compress_to_field(),
+                rp_rec.vartime_compress_to_field(),
+            ),
+        );
+        let c_check_trunc =
+            Fq::from_le_bytes_mod_order(&fq_to_challenge_scalar(c_check).to_bytes());
+        assert_eq!(proof.c, c_check_trunc, "metadata → DLEQ → verify roundtrip");
+    }
+
+    #[test]
+    fn test_metadata_hash_consistency() {
+        let h1 = compute_metadata_hash(
+            Fq::from(1u64),
+            Fq::from(2u64),
+            Fq::from(3u64),
+            Fq::from(1u64),
+            Fq::from(100u64),
+            Fq::from(42u64),
+        );
+        let h2 = compute_metadata_hash(
+            Fq::from(1u64),
+            Fq::from(2u64),
+            Fq::from(3u64),
+            Fq::from(1u64),
+            Fq::from(100u64),
+            Fq::from(42u64),
+        );
+        assert_eq!(h1, h2, "same inputs should produce same hash");
+
+        // Different salt should produce different hash
+        let h3 = compute_metadata_hash(
+            Fq::from(1u64),
+            Fq::from(2u64),
+            Fq::from(3u64),
+            Fq::from(1u64),
+            Fq::from(100u64),
+            Fq::from(43u64),
+        );
+        assert_ne!(h1, h3, "different salt should produce different hash");
+
+        // Different tier should produce different hash
+        let h4 = compute_metadata_hash(
+            Fq::from(1u64),
+            Fq::from(2u64),
+            Fq::from(3u64),
+            Fq::from(2u64),
+            Fq::from(100u64),
+            Fq::from(42u64),
+        );
+        assert_ne!(h1, h4, "different tier should produce different hash");
+    }
+
+    /// Deterministic cross-verification fixture: fixed inputs → DLEQ proof → native verify.
+    #[test]
+    fn test_dleq_cross_verify_fixture() {
+        let r = Fr::from(42u64);
+        let ring_sk = Fr::from(99u64);
+        let ring_pk = Element::GENERATOR * ring_sk;
+        let d_fr = Fr::from(7u64);
+        let ack = ring_pk * d_fr;
+        let epk = Element::GENERATOR * r;
+        let k = Fr::from(123u64);
+
+        let metadata_hash = compute_metadata_hash(
+            Fq::from(1u64),
+            Fq::from(2u64),
+            Fq::from(3u64),
+            Fq::from(1u64),
+            Fq::from(1_700_000_000u64),
+            Fq::from(55u64),
+        );
+
+        let proof = compute_dleq_native(r, k, &ack, &epk, metadata_hash);
+
+        // Verify: same deterministic inputs must produce same proof every time
+        let proof2 = compute_dleq_native(r, k, &ack, &epk, metadata_hash);
+        assert_eq!(proof.c, proof2.c, "deterministic c");
+        assert_eq!(proof.s, proof2.s, "deterministic s");
+
+        // Native verification
+        let s_point = ack * r;
+        let c_fr = Fr::from_le_bytes_mod_order(&proof.c.to_bytes());
+        let r_rec = Element::GENERATOR * proof.s - epk * c_fr;
+        let rp_rec = ack * proof.s - s_point * c_fr;
+
+        let domain = Fq::from_le_bytes_mod_order(ENCRYPT_PROOF_DOMAIN);
+        let g_fq = Element::GENERATOR.vartime_compress_to_field();
+        let c_check = poseidon377::hash_7(
+            &domain,
+            (
+                metadata_hash,
+                g_fq,
+                ack.vartime_compress_to_field(),
+                epk.vartime_compress_to_field(),
+                s_point.vartime_compress_to_field(),
+                r_rec.vartime_compress_to_field(),
+                rp_rec.vartime_compress_to_field(),
+            ),
+        );
+        let c_check_trunc =
+            Fq::from_le_bytes_mod_order(&fq_to_challenge_scalar(c_check).to_bytes());
+        assert_eq!(proof.c, c_check_trunc, "cross-verify fixture");
+    }
+
+    #[test]
+    fn test_detection_tier_salt_roundtrip() {
+        let mut rng = OsRng;
+        let dk = DetectionKey::demo();
+        let dk_pub = dk.public_key();
+
+        let (_, ring_pk) = make_ring_keys(&mut rng);
+        let address = Address::dummy(&mut rng);
+        let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
+
+        let asset_id = asset::Id(Fq::from(42u64));
+        let salt = Fq::rand(&mut rng);
+
+        let result = encrypt_spend(
+            &mut rng,
+            &ack,
+            &dk_pub,
+            &address,
+            asset_id,
+            Amount::from(100u128),
+            false,
+            salt,
+        )
+        .unwrap();
+
+        // Decrypt detection tier and verify salt roundtrips
+        let epk_1 = Element::GENERATOR * result.r_s;
+        let (decrypted_asset_id, _flagged, decrypted_salt) = decrypt_detection_tier(
+            dk.inner(),
+            &epk_1,
+            &result.ciphertext.detection_tag,
+            &asset_id,
+        )
+        .expect("can decrypt detection tier");
+        assert_eq!(decrypted_asset_id, asset_id);
+        assert_eq!(
+            decrypted_salt, salt,
+            "salt should roundtrip through detection tier"
+        );
+    }
+
+    #[test]
+    fn test_fq_to_challenge_scalar_high_bits_zeroed() {
+        use ark_ff::{BigInteger, PrimeField};
+
+        // Test with multiple random Fq values
+        let mut rng = OsRng;
+        for _ in 0..100 {
+            let fq = Fq::rand(&mut rng);
+            let fr = fq_to_challenge_scalar(fq);
+
+            // Convert back to bytes and check high bits are zero
+            let fr_bytes = fr.into_bigint().to_bytes_le();
+            let keep_bits = Fr::MODULUS_BIT_SIZE - 1; // 250
+            let keep_bytes = (keep_bits as usize + 7) / 8; // 32
+            let spare_bits = keep_bytes * 8 - keep_bits as usize; // 6
+
+            // Top spare_bits of byte[keep_bytes-1] must be zero
+            assert_eq!(
+                fr_bytes[keep_bytes - 1] & (0xFF << (8 - spare_bits)),
+                0,
+                "high bits should be zeroed after truncation"
+            );
+        }
+    }
+
+    #[test]
+    fn test_point_encoding_equivalence() {
+        use ark_serialize::CanonicalSerialize;
+
+        // Verify that vartime_compress_to_field() matches Orbis point_to_fq()
+        // (serialize_compressed + from_le_bytes_mod_order)
+        let mut rng = OsRng;
+        for _ in 0..100 {
+            let scalar = Fr::rand(&mut rng);
+            let point = Element::GENERATOR * scalar;
+
+            // Penumbra method
+            let fq_penumbra = point.vartime_compress_to_field();
+
+            // Orbis method: serialize_compressed → from_le_bytes_mod_order
+            let mut bytes = Vec::with_capacity(32);
+            point
+                .serialize_compressed(&mut bytes)
+                .expect("compression should succeed");
+            let fq_orbis = Fq::from_le_bytes_mod_order(&bytes);
+
+            assert_eq!(
+                fq_penumbra, fq_orbis,
+                "Penumbra and Orbis point→Fq encoding must match"
+            );
+        }
+    }
+
+    #[test]
+    fn test_hash7_domain_and_ordering() {
+        // Determinism test: hash_7 with known inputs produces stable output.
+        // This locks the input ordering to match Orbis (metadata first, then G).
+        let domain = Fq::from_le_bytes_mod_order(ENCRYPT_PROOF_DOMAIN);
+
+        let metadata = Fq::from(42u64);
+        let g_fq = Element::GENERATOR.vartime_compress_to_field();
+        let ack_fq = Fq::from(1u64);
+        let epk_fq = Fq::from(2u64);
+        let s_fq = Fq::from(3u64);
+        let r_fq = Fq::from(4u64);
+        let rp_fq = Fq::from(5u64);
+
+        let h1 = poseidon377::hash_7(&domain, (metadata, g_fq, ack_fq, epk_fq, s_fq, r_fq, rp_fq));
+        let h2 = poseidon377::hash_7(&domain, (metadata, g_fq, ack_fq, epk_fq, s_fq, r_fq, rp_fq));
+        assert_eq!(h1, h2, "hash_7 must be deterministic");
+
+        // Different ordering produces different hash
+        let h3 = poseidon377::hash_7(&domain, (g_fq, metadata, ack_fq, epk_fq, s_fq, r_fq, rp_fq));
+        assert_ne!(
+            h1, h3,
+            "different input ordering must produce different hash"
+        );
+    }
+
+    /// Verify all 3 tiers of an output ciphertext are independently decryptable
+    /// with distinct ACKs: core/ext use ack_receiver, sext uses ack_sender.
+    #[test]
+    fn test_output_three_tier_ack_isolation() {
+        use crate::scanning::{decrypt_extension, decrypt_spend_ext};
+
+        let mut rng = OsRng;
+        let dk = DetectionKey::demo();
+        let dk_pub = dk.public_key();
+
+        let (sk_ring, ring_pk) = make_ring_keys(&mut rng);
+        let receiver_address = Address::dummy(&mut rng);
+        let sender_address = Address::dummy(&mut rng);
+        let asset_id = asset::Id(Fq::from(42u64));
+        let amount = Amount::from(1000u128);
+
+        let receiver_b_d_fq = receiver_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let sender_b_d_fq = sender_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+
+        let ack_receiver = derive_ack(&ring_pk, receiver_b_d_fq);
+        let ack_sender = derive_ack(&ring_pk, sender_b_d_fq);
+
+        let result = encrypt_output(
+            &mut rng,
+            &ack_receiver,
+            &ack_sender,
+            &dk_pub,
+            &receiver_address,
+            &sender_address,
+            asset_id,
+            amount,
+            false,
+            Fq::zero(),
+        )
+        .expect("encryption should succeed");
+
+        let ct = &result.ciphertext;
+        assert_eq!(ct.to_bytes().len(), OUTPUT_WIRE_BYTES);
+
+        // Derive effective secret keys for each party
+        let d_receiver = derive_compliance_scalar(receiver_b_d_fq);
+        let d_receiver_fr = Fr::from_le_bytes_mod_order(&d_receiver.to_bytes());
+        let d_sender = derive_compliance_scalar(sender_b_d_fq);
+        let d_sender_fr = Fr::from_le_bytes_mod_order(&d_sender.to_bytes());
+
+        // Core tier: epk_1 × (d_receiver × sk_ring)
+        let ss_core = ct.epk_1 * (d_receiver_fr * sk_ring);
+        let seed_core = ct.c2_core - ss_core.vartime_compress_to_field();
+        let core_pt = decrypt_tier_bytes(&ct.encrypted_core, seed_core, 80);
+        let decrypted_amount = Amount::from_le_bytes(core_pt[0..16].try_into().unwrap());
+        assert_eq!(
+            decrypted_amount, amount,
+            "core tier should decrypt with ack_receiver"
+        );
+
+        // Ext tier: epk_2 × (d_receiver × sk_ring)
+        let ss_ext = ct.epk_2.unwrap() * (d_receiver_fr * sk_ring);
+        let ext_data = decrypt_extension(&ss_ext, ct)
+            .expect("ext decryption should succeed")
+            .expect("ext data should be present");
+        assert_eq!(
+            ext_data.counterparty_diversified_generator,
+            *sender_address.diversified_generator(),
+            "ext tier should contain sender address"
+        );
+
+        // Sext tier: epk_3 × (d_sender × sk_ring) — uses ack_sender
+        let ss_sext = ct.epk_3.unwrap() * (d_sender_fr * sk_ring);
+        let sext_data = decrypt_spend_ext(&ss_sext, ct)
+            .expect("sext decryption should succeed")
+            .expect("sext data should be present");
+        assert_eq!(sext_data.amount, amount, "sext tier should contain amount");
+        assert_eq!(
+            sext_data.recipient_diversified_generator,
+            *receiver_address.diversified_generator(),
+            "sext tier should contain receiver address"
+        );
+
+        // Cross-ACK isolation: ack_receiver key cannot decrypt sext tier
+        let ss_sext_wrong = ct.epk_3.unwrap() * (d_receiver_fr * sk_ring);
+        let wrong_sext = decrypt_spend_ext(&ss_sext_wrong, ct);
+        // Should either fail or return wrong data
+        match wrong_sext {
+            Ok(Some(data)) => {
                 assert_ne!(
-                    wrong_asset, asset_id,
-                    "wrong DK should not produce correct asset_id"
+                    data.amount, amount,
+                    "wrong ACK should not recover correct sext data"
                 );
             }
+            _ => {} // Error or None is also acceptable
         }
     }
 }

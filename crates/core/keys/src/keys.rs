@@ -21,10 +21,7 @@ mod fvk;
 mod ivk;
 mod ovk;
 
-pub use cvk::{
-    day_index, derive_daily_tweak, AddressComplianceKey, DailyComplianceKey, DailyKeySet, KeyType,
-    UserComplianceKey, CVK_LEN_BYTES, SECONDS_PER_DAY,
-};
+pub use cvk::{AddressComplianceKey, CVK_LEN_BYTES};
 pub(crate) use fvk::IVK_DOMAIN_SEP;
 pub use fvk::{
     r1cs::{AuthorizationKeyVar, RandomizedVerificationKey, SpendAuthRandomizerVar},

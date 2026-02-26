@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use cnidarium::StateWrite;
 use cnidarium_component::ActionHandler;
@@ -9,10 +9,6 @@ use penumbra_sdk_sct::component::{clock::EpochRead, source::SourceContext};
 
 use crate::{component::NoteManager, event, output::OutputProofPublic, Output};
 
-/// Maximum allowed time difference (in seconds) between block timestamp and target_timestamp.
-/// Transactions outside this window will be rejected.
-const MAX_TIMESTAMP_DELTA_SECONDS: u64 = 3600; // 1 hour
-
 #[async_trait]
 impl ActionHandler for Output {
     type CheckStatelessContext = ();
@@ -20,29 +16,71 @@ impl ActionHandler for Output {
     async fn check_stateless(&self, _context: ()) -> Result<()> {
         let output = self;
 
-        // Use anchors from the action body (set during proof generation).
-        // The stateful check will validate these anchors against chain state.
         let asset_anchor = output.body.asset_anchor;
         let compliance_anchor = output.body.compliance_anchor;
 
-        use penumbra_sdk_compliance::structs::ComplianceCiphertext;
+        use penumbra_sdk_compliance::structs::{ComplianceCiphertext, OUTPUT_WIRE_BYTES};
+        anyhow::ensure!(
+            output.body.compliance_ciphertext.len() == OUTPUT_WIRE_BYTES,
+            "output compliance ciphertext must be {OUTPUT_WIRE_BYTES} bytes, got {}",
+            output.body.compliance_ciphertext.len()
+        );
         let ct = ComplianceCiphertext::from_bytes(&output.body.compliance_ciphertext)
             .context("failed to deserialize compliance ciphertext")?;
-        let (compliance_epk, compliance_epk_g, compliance_ciphertext) =
-            ct.to_circuit_public_inputs();
+        let (epk_1, epk_2, epk_3, c2_core, c2_ext, c2_sext, compliance_ciphertext) =
+            ct.to_output_circuit_public_inputs();
+
+        // Deserialize DLEQ proofs from body (c_1||s_1||c_2||s_2||c_3||s_3, 192 bytes)
+        let (dleq_c_1, dleq_s_1, dleq_c_2, dleq_s_2, dleq_c_3, dleq_s_3) =
+            if output.body.dleq_proofs.len() == 192 {
+                let parse = |offset: usize| -> anyhow::Result<decaf377::Fq> {
+                    let bytes: [u8; 32] = output.body.dleq_proofs[offset..offset + 32]
+                        .try_into()
+                        .context("dleq field must be 32 bytes")?;
+                    decaf377::Fq::from_bytes_checked(&bytes)
+                        .map_err(|_| anyhow::anyhow!("invalid dleq field element"))
+                };
+                (
+                    parse(0)?,
+                    parse(32)?,
+                    parse(64)?,
+                    parse(96)?,
+                    parse(128)?,
+                    parse(160)?,
+                )
+            } else {
+                (
+                    decaf377::Fq::from(0u64),
+                    decaf377::Fq::from(0u64),
+                    decaf377::Fq::from(0u64),
+                    decaf377::Fq::from(0u64),
+                    decaf377::Fq::from(0u64),
+                    decaf377::Fq::from(0u64),
+                )
+            };
+        let target_timestamp = decaf377::Fq::from(output.body.target_timestamp);
 
         output.proof.verify(
             &OUTPUT_PROOF_VERIFICATION_KEY,
             OutputProofPublic {
                 balance_commitment: output.body.balance_commitment,
                 note_commitment: output.body.note_payload.note_commitment,
-                compliance_epk,
-                compliance_epk_g,
+                epk_1,
+                epk_2,
+                epk_3,
+                c2_core,
+                c2_ext,
+                c2_sext,
                 compliance_ciphertext,
+                target_timestamp,
+                dleq_c_1,
+                dleq_s_1,
+                dleq_c_2,
+                dleq_s_2,
+                dleq_c_3,
+                dleq_s_3,
                 asset_anchor,
                 compliance_anchor,
-                target_timestamp: output.body.target_timestamp,
-                receiver_leaf_hash: output.body.receiver_leaf_hash,
                 counterparty_leaf_hash: output.body.counterparty_leaf_hash,
             },
         )?;
@@ -51,35 +89,21 @@ impl ActionHandler for Output {
     }
 
     async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        // 1. Validate target_timestamp is within acceptable window
-        let block_time = state.get_current_block_timestamp().await?;
-        let block_timestamp = block_time.unix_timestamp() as u64;
-        let target_timestamp = self.body.target_timestamp;
-
-        let delta = if block_timestamp >= target_timestamp {
-            block_timestamp - target_timestamp
-        } else {
-            target_timestamp - block_timestamp
-        };
-
-        if delta > MAX_TIMESTAMP_DELTA_SECONDS {
-            return Err(anyhow!(
-                "target_timestamp {} is outside acceptable window (block time: {}, delta: {} seconds, max: {} seconds)",
-                target_timestamp,
-                block_timestamp,
-                delta,
-                MAX_TIMESTAMP_DELTA_SECONDS
-            ));
-        }
-
-        // 2. Enforce Compliance: Validate anchors are valid historical anchors.
-        // The proof was already verified in check_stateless using the anchors from body.
-        // Here we validate that those anchors exist in the historical anchor records.
-        // This allows proofs to be generated at any past block height (similar to SCT).
+        // 1. Enforce Compliance: Validate anchors are valid historical anchors.
         state
             .validate_compliance_anchors(&self.body.compliance_anchor, &self.body.asset_anchor)
             .await
             .context("invalid compliance anchors")?;
+
+        // 2. Enforce timestamp freshness (±1hr of block time).
+        let block_time = state.get_current_block_timestamp().await?;
+        let block_unix = block_time.unix_timestamp();
+        anyhow::ensure!(block_unix >= 0, "block timestamp is negative");
+        let block_timestamp = block_unix as u64;
+        penumbra_sdk_compliance::registry::check_timestamp_freshness(
+            self.body.target_timestamp,
+            block_timestamp,
+        )?;
 
         // 3. Execute the Output logic (Minting the note)
         let source = state

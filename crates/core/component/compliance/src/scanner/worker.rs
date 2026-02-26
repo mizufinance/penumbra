@@ -73,9 +73,8 @@ impl WorkerHandle {
 pub struct IssuerComplianceWorker {
     /// The issuer's detection key for scanning.
     detection_key: DetectionKey,
-    /// Optional filter to only scan for a specific asset.
-    /// If None, detects all assets this DetectionKey can decrypt.
-    target_asset_id: Option<asset::Id>,
+    /// The asset this DK corresponds to (DK is per-asset).
+    target_asset_id: asset::Id,
     /// Storage for persisting detected transactions.
     storage: Arc<ComplianceStorage>,
     /// gRPC channel to the Penumbra node.
@@ -91,7 +90,7 @@ impl IssuerComplianceWorker {
     ///
     /// # Arguments
     /// * `detection_key` - The issuer's DetectionKey for scanning
-    /// * `target_asset_id` - Optional filter for specific asset (None = all detectable)
+    /// * `target_asset_id` - The asset this DK corresponds to
     /// * `storage` - Storage backend for persisting results
     /// * `channel` - gRPC channel to the Penumbra node
     ///
@@ -101,7 +100,7 @@ impl IssuerComplianceWorker {
     /// - A handle for monitoring worker health and progress
     pub fn new(
         detection_key: DetectionKey,
-        target_asset_id: Option<asset::Id>,
+        target_asset_id: asset::Id,
         storage: ComplianceStorage,
         channel: Channel,
     ) -> (Self, WorkerHandle) {
@@ -299,24 +298,14 @@ mod tests {
     #[tokio::test]
     async fn test_worker_creation() {
         let dk = DetectionKey::demo();
+        let target = asset::Id(decaf377::Fq::from(12345u64));
         let storage = ComplianceStorage::new(":memory:").unwrap();
         let channel = Channel::from_static("http://localhost:8080").connect_lazy();
-        let (worker, handle) = IssuerComplianceWorker::new(dk, None, storage, channel);
+        let (worker, handle) = IssuerComplianceWorker::new(dk, target, storage, channel);
 
         // Verify initial state
         assert!(!handle.has_error());
         assert_eq!(handle.current_height(), 0);
-        assert!(worker.target_asset_id.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_worker_with_target_asset() {
-        let dk = DetectionKey::demo();
-        let target = asset::Id(decaf377::Fq::from(12345u64));
-        let storage = ComplianceStorage::new(":memory:").unwrap();
-        let channel = Channel::from_static("http://localhost:8080").connect_lazy();
-        let (worker, _handle) = IssuerComplianceWorker::new(dk, Some(target), storage, channel);
-
-        assert_eq!(worker.target_asset_id, Some(target));
+        assert_eq!(worker.target_asset_id, target);
     }
 }

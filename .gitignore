@@ -66,3 +66,12 @@ build
 # psql
 .data
 logfile
+
+# Claude Code local task tracking
+tasks/
+
+#script logs
+tmp/
+
+# Development artifacts
+deployments/.smoke-test-state/

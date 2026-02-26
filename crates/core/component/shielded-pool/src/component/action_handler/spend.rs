@@ -1,7 +1,8 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use cnidarium::StateWrite;
 use cnidarium_component::ActionHandler;
+use decaf377::Fq;
 use penumbra_sdk_compliance::registry::ComplianceRegistryRead;
 use penumbra_sdk_proof_params::SPEND_PROOF_VERIFICATION_KEY;
 use penumbra_sdk_proto::{DomainType, StateWriteProto as _};
@@ -13,10 +14,6 @@ use penumbra_sdk_sct::component::{
 use penumbra_sdk_txhash::TransactionContext;
 
 use crate::{event, Spend, SpendProofPublic};
-
-/// Maximum allowed time difference (in seconds) between block timestamp and target_timestamp.
-/// Transactions outside this window will be rejected.
-const MAX_TIMESTAMP_DELTA_SECONDS: u64 = 3600; // 1 hour
 
 #[async_trait]
 impl ActionHandler for Spend {
@@ -33,16 +30,31 @@ impl ActionHandler for Spend {
             .context("spend auth signature failed to verify")?;
 
         // 2. Check that the proof verifies.
-        // Use anchors from the action body (set during proof generation).
-        // The stateful check will validate these anchors against chain state.
         let asset_anchor = spend.body.asset_anchor;
         let compliance_anchor = spend.body.compliance_anchor;
 
         use penumbra_sdk_compliance::structs::ComplianceCiphertext;
         let ct = ComplianceCiphertext::from_bytes(&spend.body.compliance_ciphertext)
             .context("failed to deserialize compliance ciphertext")?;
-        let (compliance_epk, compliance_epk_g, compliance_ciphertext) =
-            ct.to_circuit_public_inputs();
+        let (epk, c2_core, compliance_ciphertext) = ct.to_spend_circuit_public_inputs();
+
+        // Deserialize DLEQ proof from body (c || s, 64 bytes)
+        let (dleq_c, dleq_s) = if spend.body.dleq_proof.len() == 64 {
+            let c_bytes: [u8; 32] = spend.body.dleq_proof[..32]
+                .try_into()
+                .context("dleq_c must be 32 bytes")?;
+            let c = Fq::from_bytes_checked(&c_bytes)
+                .map_err(|_| anyhow::anyhow!("invalid dleq_c field element"))?;
+            let s_bytes: [u8; 32] = spend.body.dleq_proof[32..64]
+                .try_into()
+                .context("dleq_s must be 32 bytes")?;
+            let s = Fq::from_bytes_checked(&s_bytes)
+                .map_err(|_| anyhow::anyhow!("invalid dleq_s field element"))?;
+            (c, s)
+        } else {
+            (Fq::from(0u64), Fq::from(0u64))
+        };
+        let target_timestamp = Fq::from(spend.body.target_timestamp);
 
         let public = SpendProofPublic {
             anchor: context.anchor,
@@ -51,12 +63,13 @@ impl ActionHandler for Spend {
             rk: spend.body.rk,
             asset_anchor,
             compliance_anchor,
-            compliance_epk,
-            compliance_epk_g,
+            epk,
+            c2_core,
             compliance_ciphertext,
-            target_timestamp: spend.body.target_timestamp,
+            target_timestamp,
+            dleq_c,
+            dleq_s,
             sender_leaf_hash: spend.body.sender_leaf_hash,
-            counterparty_leaf_hash: spend.body.counterparty_leaf_hash,
         };
 
         spend
@@ -68,35 +81,21 @@ impl ActionHandler for Spend {
     }
 
     async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        // 1. Validate target_timestamp is within acceptable window
-        let block_time = state.get_current_block_timestamp().await?;
-        let block_timestamp = block_time.unix_timestamp() as u64;
-        let target_timestamp = self.body.target_timestamp;
-
-        let delta = if block_timestamp >= target_timestamp {
-            block_timestamp - target_timestamp
-        } else {
-            target_timestamp - block_timestamp
-        };
-
-        if delta > MAX_TIMESTAMP_DELTA_SECONDS {
-            return Err(anyhow!(
-                "target_timestamp {} is outside acceptable window (block time: {}, delta: {} seconds, max: {} seconds)",
-                target_timestamp,
-                block_timestamp,
-                delta,
-                MAX_TIMESTAMP_DELTA_SECONDS
-            ));
-        }
-
-        // 2. Enforce Compliance: Validate anchors are valid historical anchors.
-        // The proof was already verified in check_stateless using the anchors from body.
-        // Here we validate that those anchors exist in the historical anchor records.
-        // This allows proofs to be generated at any past block height (similar to SCT).
+        // 1. Enforce Compliance: Validate anchors are valid historical anchors.
         state
             .validate_compliance_anchors(&self.body.compliance_anchor, &self.body.asset_anchor)
             .await
             .context("invalid compliance anchors")?;
+
+        // 2. Enforce timestamp freshness (±1hr of block time).
+        let block_time = state.get_current_block_timestamp().await?;
+        let block_unix = block_time.unix_timestamp();
+        anyhow::ensure!(block_unix >= 0, "block timestamp is negative");
+        let block_timestamp = block_unix as u64;
+        penumbra_sdk_compliance::registry::check_timestamp_freshness(
+            self.body.target_timestamp,
+            block_timestamp,
+        )?;
 
         // 3. Check that the `Nullifier` has not been spent before.
         let spent_nullifier = self.body.nullifier;

@@ -151,11 +151,9 @@ mod tests {
     use anyhow::Result;
     use decaf377::Fr;
     use penumbra_sdk_asset::{asset, Value, STAKING_TOKEN_ASSET_ID};
-    use penumbra_sdk_compliance::{
-        ComplianceLeaf, IndexedMerkleTree, MerklePath, QuadTree, BLACK_HOLE_ACK,
-    };
+    use penumbra_sdk_compliance::{ComplianceLeaf, IndexedMerkleTree, MerklePath, QuadTree};
     use penumbra_sdk_fee::Fee;
-    use penumbra_sdk_keys::{keys::AddressComplianceKey, test_keys, Address};
+    use penumbra_sdk_keys::{test_keys, Address};
     use penumbra_sdk_shielded_pool::{Note, OutputPlan, SpendPlan};
     use penumbra_sdk_tct as tct;
     use penumbra_sdk_transaction::{
@@ -171,8 +169,7 @@ mod tests {
     fn enrich_spend_for_test<R: rand_core::RngCore + rand_core::CryptoRng>(
         rng: &mut R,
         spend: &mut SpendPlan,
-        sender_address: &Address,
-        recipient_address: &Address,
+        _sender_address: &Address,
     ) {
         let asset_id = spend.note.asset_id();
 
@@ -184,12 +181,19 @@ mod tests {
         let asset_anchor = tct::StateCommitment(imt.root().0);
         let asset_path = MerklePath::from_auth_path(auth_path);
 
-        // Create user tree proof
-        let user_leaf = ComplianceLeaf {
-            address: sender_address.clone(),
-            key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
-            asset_id,
-        };
+        // Set IMT data BEFORE set_compliance_details (it reads asset_indexed_leaf for DLEQ)
+        spend.asset_anchor = asset_anchor;
+        spend.asset_path = asset_path;
+        spend.asset_position = position;
+        spend.asset_indexed_leaf = indexed_leaf;
+
+        spend
+            .set_compliance_details(rng)
+            .expect("can set compliance details");
+
+        // Build user tree from the compliance_leaf that set_compliance_details created
+        // (has real d derived from address, matching what the circuit will use)
+        let user_leaf = spend.compliance_leaf.clone().unwrap();
         let mut user_tree = QuadTree::new();
         user_tree
             .update(0, user_leaf.commit())
@@ -198,27 +202,6 @@ mod tests {
         let user_auth_path = user_tree.auth_path(0).expect("can get auth path");
         let compliance_path = MerklePath::from_auth_path(user_auth_path);
 
-        // Counterparty leaf (also BLACK_HOLE for simplicity)
-        let counterparty_leaf = ComplianceLeaf {
-            address: recipient_address.clone(),
-            key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
-            asset_id,
-        };
-
-        spend
-            .set_compliance_details(
-                rng,
-                &AddressComplianceKey::new(*BLACK_HOLE_ACK),
-                sender_address,
-                recipient_address,
-                counterparty_leaf,
-            )
-            .expect("can set compliance details");
-
-        spend.asset_anchor = asset_anchor;
-        spend.asset_path = asset_path;
-        spend.asset_position = position;
-        spend.asset_indexed_leaf = indexed_leaf;
         spend.compliance_anchor = compliance_anchor;
         spend.compliance_path = compliance_path;
         spend.compliance_position = 0;
@@ -240,12 +223,46 @@ mod tests {
         let asset_anchor = tct::StateCommitment(imt.root().0);
         let asset_path = MerklePath::from_auth_path(auth_path);
 
-        // Create user tree proof for recipient
-        let user_leaf = ComplianceLeaf {
+        // Set IMT data BEFORE set_compliance_details (it reads asset_indexed_leaf for DLEQ)
+        output.asset_anchor = asset_anchor;
+        output.asset_path = asset_path;
+        output.asset_position = position;
+        output.asset_indexed_leaf = indexed_leaf;
+
+        // Create leaves with real d (matching what the circuit derives)
+        let recv_b_d_fq = output
+            .dest_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let recv_d = penumbra_sdk_compliance::derive_compliance_scalar(recv_b_d_fq);
+        let recipient_leaf = ComplianceLeaf {
             address: output.dest_address.clone(),
-            key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
             asset_id,
+            d: recv_d,
         };
+
+        let send_b_d_fq = sender_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let send_d = penumbra_sdk_compliance::derive_compliance_scalar(send_b_d_fq);
+        let sender_leaf = ComplianceLeaf {
+            address: sender_address.clone(),
+            asset_id,
+            d: send_d,
+        };
+
+        output
+            .set_compliance_details(
+                rng,
+                &recipient_leaf,
+                sender_leaf,
+                Fr::from(0u64), // tx_blinding_nonce
+            )
+            .expect("can set compliance details");
+
+        // Build user tree from the compliance_leaf that set_compliance_details created
+        // (has real d derived from address, matching what the circuit will use)
+        let user_leaf = output.compliance_leaf.clone().unwrap();
         let mut user_tree = QuadTree::new();
         user_tree
             .update(0, user_leaf.commit())
@@ -254,27 +271,6 @@ mod tests {
         let user_auth_path = user_tree.auth_path(0).expect("can get auth path");
         let compliance_path = MerklePath::from_auth_path(user_auth_path);
 
-        // Counterparty leaf (sender, also BLACK_HOLE for simplicity)
-        let counterparty_leaf = ComplianceLeaf {
-            address: sender_address.clone(),
-            key: AddressComplianceKey::new(*BLACK_HOLE_ACK),
-            asset_id,
-        };
-
-        output
-            .set_compliance_details(
-                rng,
-                &AddressComplianceKey::new(*BLACK_HOLE_ACK),
-                sender_address,
-                counterparty_leaf,
-                Fr::from(0u64), // tx_blinding_nonce
-            )
-            .expect("can set compliance details");
-
-        output.asset_anchor = asset_anchor;
-        output.asset_path = asset_path;
-        output.asset_position = position;
-        output.asset_indexed_leaf = indexed_leaf;
         output.compliance_anchor = compliance_anchor;
         output.compliance_path = compliance_path;
         output.compliance_position = 0;
@@ -313,18 +309,8 @@ mod tests {
         let mut spend2 = SpendPlan::new(&mut OsRng, note2, auth_path2.position());
         let mut output1 = OutputPlan::new(&mut OsRng, value, test_keys::ADDRESS_1.deref().clone());
 
-        enrich_spend_for_test(
-            &mut OsRng,
-            &mut spend1,
-            &test_keys::ADDRESS_0,
-            &test_keys::ADDRESS_1,
-        );
-        enrich_spend_for_test(
-            &mut OsRng,
-            &mut spend2,
-            &test_keys::ADDRESS_0,
-            &test_keys::ADDRESS_1,
-        );
+        enrich_spend_for_test(&mut OsRng, &mut spend1, &test_keys::ADDRESS_0);
+        enrich_spend_for_test(&mut OsRng, &mut spend2, &test_keys::ADDRESS_0);
         enrich_output_for_test(
             &mut OsRng,
             &mut output1,
@@ -402,12 +388,7 @@ mod tests {
         let mut spend1 = SpendPlan::new(&mut OsRng, note, auth_path.position());
         let mut output1 = OutputPlan::new(&mut OsRng, value, test_keys::ADDRESS_1.deref().clone());
 
-        enrich_spend_for_test(
-            &mut OsRng,
-            &mut spend1,
-            &test_keys::ADDRESS_0,
-            &test_keys::ADDRESS_1,
-        );
+        enrich_spend_for_test(&mut OsRng, &mut spend1, &test_keys::ADDRESS_0);
         enrich_output_for_test(
             &mut OsRng,
             &mut output1,

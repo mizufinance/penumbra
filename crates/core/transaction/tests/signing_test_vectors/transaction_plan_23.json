@@ -3,56 +3,22 @@
     {
       "validatorVote": {
         "body": {
-          "proposal": "418237639",
+          "proposal": "538322858",
           "vote": {
             "vote": "VOTE_YES"
           },
           "identityKey": {
-            "ik": "gkWEQ5XYQgjzjPJCq9d7M2HUnl5Grz7pm65BNRbLB0I="
+            "ik": "KelfLj72j9cSBL7rT7s1sX/kVdh5AELZxqvkL5z7/yM="
           },
           "governanceKey": {
-            "gk": "dIkHqqijtZ+ylmi1AOeymfNkIxEpbSagxEmZaBpfPQw="
+            "gk": "eg6kxFV48JtXJk/bbZBDFvwwuAuyWU3IR7kY7iasMw4="
           },
           "reason": {
-            "reason": "kj8Ha1Vj"
+            "reason": "2lC6pXP8Ds5269XKw1viXfFURh"
           }
         },
         "authSig": {
-          "inner": "/FJCSvDZ3PSQGDB21emdXZphQYgiTX3oH1CoOXSHTBCacZ+nhqUfbrR9SyYiSep1dHQtR+i1Hh0KLKXrF5uNAw=="
-        }
-      }
-    },
-    {
-      "validatorVote": {
-        "body": {
-          "proposal": "363468050",
-          "vote": {
-            "vote": "VOTE_NO"
-          },
-          "identityKey": {
-            "ik": "w6d19665RrIa3sgr+Fa82rMd3U/qVs6uWZfhE7UnPdQ="
-          },
-          "governanceKey": {
-            "gk": "3Nplzf1wScIVIQgVIl0GLjFTX8+Nr2YIBGgX9p9Hiw8="
-          },
-          "reason": {
-            "reason": "d5E"
-          }
-        },
-        "authSig": {
-          "inner": "+kIwAlB71zOnxanMauTOw6MorMR35eWyrNIV759W6wfCoFyS1yaFjJ1yKjQuY5osDlRcKYO7hjzwpVZZDRGqAQ=="
-        }
-      }
-    },
-    {
-      "communityPoolDeposit": {
-        "value": {
-          "amount": {
-            "lo": "973706224748493709"
-          },
-          "assetId": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          }
+          "inner": "jA6kK7Jc/VSBeO1SqAhQBttLUorJE/shdfJa8iNRQga7PPeNrc5aJucsgPiXiP2t1SMlGHenA0BY3lnjiFVJAQ=="
         }
       }
     },
@@ -60,24 +26,41 @@
       "communityPoolOutput": {
         "value": {
           "amount": {
-            "lo": "937506138206862101"
+            "lo": "100601003357817778"
           },
           "assetId": {
             "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
           }
         },
         "address": {
-          "inner": "rLyw7omw+DJcuvHo5Fa0KKS0BZ9dToCNyc7FQENJWBIEDOXtpeUnSSJlvEn7LCKRz/kQ1gwUWDt7M8nfV5DC36vWY2ZbYXj+3zv6YHUDAlU="
+          "inner": "QSGW9mv6POVhelX7Ce3zQaipW7GJLw+H4zriceHCkmkXbLVXZnjAjywr8yrALM1ZU3OQTRT3/KeCu0K+WK3Up7wx1HK9cQStxHBKXDz9eU0="
         }
+      }
+    },
+    {
+      "undelegateClaim": {
+        "validatorIdentity": {
+          "ik": "8GQnZHlo9XhUW6mTCtsycRU3vso2+WqnP8MvPUbsZII="
+        },
+        "penalty": {
+          "inner": "AAAAAAAAAAAAAAAAAAAAAP4A0bcXWOIZZSvTw2ETQE8="
+        },
+        "unbondingAmount": {
+          "lo": "162310435236117009"
+        },
+        "balanceBlinding": "uqdjj9pIR9TEtNBj74G87Ek3Bu2Ez4q4KDC7p1L1qAA=",
+        "proofBlindingR": "3QrPbNJ6uUJ6C3Ey9qFx+2QPlYG6BxfrV1YAVuYf8go=",
+        "proofBlindingS": "CeB7b9hyKa+50pOZJVQ3DJLUF1MYdk4d9Rowdv6tjQA=",
+        "unbondingStartHeight": "63380"
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "6979900500",
-    "chainId": "unwlaefi-119234921474",
+    "expiryHeight": "6566596711",
+    "chainId": "ecubc-6173518467162129",
     "fee": {
       "amount": {
-        "lo": "5861255085087584"
+        "lo": "889664408819230319"
       }
     }
   }

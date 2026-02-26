@@ -14,10 +14,8 @@ pub use {
 
 use cnidarium::StateWrite;
 use penumbra_sdk_asset::asset;
-use penumbra_sdk_compliance::{
-    ComplianceLeaf, ComplianceRegistryRead, ComplianceRegistryWrite, BLACK_HOLE_ACK,
-};
-use penumbra_sdk_keys::{keys::AddressComplianceKey, Address};
+use penumbra_sdk_compliance::{ComplianceLeaf, ComplianceRegistryRead, ComplianceRegistryWrite};
+use penumbra_sdk_keys::Address;
 
 /// Register assets as unregulated in the compliance registry.
 ///
@@ -56,14 +54,14 @@ pub async fn register_test_users_for_compliance<S: StateWrite>(
     addresses: &[Address],
     asset_ids: &[asset::Id],
 ) -> anyhow::Result<()> {
-    let black_hole_ack = AddressComplianceKey::new(*BLACK_HOLE_ACK);
-
     for address in addresses {
         for &asset_id in asset_ids {
+            let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+            let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
             let leaf = ComplianceLeaf {
                 address: address.clone(),
-                key: black_hole_ack.clone(),
                 asset_id,
+                d,
             };
             state.add_compliance_leaf(leaf).await?;
         }
@@ -90,14 +88,15 @@ pub async fn state_with_compliance_for_build(
 
     let mut delta = StateDelta::new(storage.latest_snapshot());
 
-    // Register users
-    let black_hole_ack = AddressComplianceKey::new(*BLACK_HOLE_ACK);
+    // Register users with real d (matching what the circuit derives from the address)
     for address in addresses {
         for &asset_id in asset_ids {
+            let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+            let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
             let leaf = ComplianceLeaf {
                 address: address.clone(),
-                key: black_hole_ack.clone(),
                 asset_id,
+                d,
             };
             delta.add_compliance_leaf(leaf).await?;
         }

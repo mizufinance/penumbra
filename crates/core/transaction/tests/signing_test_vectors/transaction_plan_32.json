@@ -1,89 +1,36 @@
 {
   "actions": [
     {
-      "delegatorVote": {
-        "proposal": "988559642",
-        "vote": {
-          "vote": "VOTE_YES"
-        },
-        "stakedNote": {
-          "value": {
-            "amount": {
-              "lo": "426910308213562684"
-            },
-            "assetId": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            }
-          },
-          "rseed": "3ZPHkt7uhO0APQXuFsNRko9PDXOqh1r5+Y3e/0QnD6A=",
-          "address": {
-            "inner": "tYxH8q+nMWQWstLkjc7pvhRBxFgBkv82BYZbKdMxupR7ufC8zIH1JYrHfNis9Ddp/ZosJX/ElPyjawfNbSih9Cr2BMB7tqiz8gjS9tbBIkc="
-          }
-        },
-        "unbondedAmount": {
-          "lo": "147153503784546782"
-        },
-        "randomizer": "j0vIypwkMu/ds+gsM6XDLihkbN42qhVbBwRIdMRTjwQ=",
-        "proofBlindingR": "3riZI3wmcFd4TahaC6C+m9adP9pIjHG4SXEUvY9SHwE=",
-        "proofBlindingS": "Qb9PbSB8FsYq7J+umYjv02uqHy+I4S4ehCf4sDLwWA8="
-      }
-    },
-    {
-      "communityPoolSpend": {
-        "value": {
-          "amount": {
-            "lo": "810820784409432575"
-          },
-          "assetId": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          }
+      "actionDutchAuctionEnd": {
+        "auctionId": {
+          "inner": "Lyze1ybqVFpirku48Ho+3014kfydnrYiv9mTBQ+QAZc="
         }
       }
     },
     {
-      "positionOpenPlan": {
-        "position": {
-          "phi": {
-            "component": {
-              "p": {
-                "lo": "385781934880341338"
-              },
-              "q": {
-                "lo": "581890766421102001"
-              }
-            },
-            "pair": {
-              "asset1": {
-                "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-              },
-              "asset2": {
-                "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-              }
-            }
-          },
-          "nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-          "state": {
-            "state": "POSITION_STATE_ENUM_OPENED"
-          },
-          "reserves": {
-            "r1": {
-              "lo": "721390653193077034"
-            },
-            "r2": {
-              "lo": "410317978444506527"
-            }
-          },
-          "closeOnFill": true
+      "undelegate": {
+        "validatorIdentity": {
+          "ik": "VmFcJ9SPV5+SqCTjrFqysmtQaH3giBhskzqCHtlp8Qk="
+        },
+        "unbondedAmount": {
+          "lo": "225780706598150563"
+        },
+        "delegationAmount": {
+          "lo": "819356762484970615"
+        },
+        "fromEpoch": {
+          "index": "9933",
+          "startHeight": "9933"
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "3465017920",
-    "chainId": "rayesxsfisqgo-9184541538",
+    "expiryHeight": "6829581236",
+    "chainId": "dxgroamnplqcgekgowdhy-57044181578711",
     "fee": {
       "amount": {
-        "lo": "788639832485536872"
+        "lo": "692173751527850730"
       }
     }
   }

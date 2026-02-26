@@ -197,10 +197,8 @@ async fn invalid_dummy_spend() -> anyhow::Result<()> {
     let dummy_asset_anchor = tct::StateCommitment(Fq::from(0u64));
     let dummy_compliance_leaf = penumbra_sdk_compliance::ComplianceLeaf {
         address: note.address(),
-        key: penumbra_sdk_keys::keys::AddressComplianceKey::new(
-            *penumbra_sdk_compliance::BLACK_HOLE_ACK,
-        ),
         asset_id: note.asset_id(),
+        d: Fq::from(0u64),
     };
     let dummy_merkle_path = MerklePath { layers: vec![] };
 
@@ -220,12 +218,13 @@ async fn invalid_dummy_spend() -> anyhow::Result<()> {
         rk: ak.clone(),
         asset_anchor: dummy_asset_anchor,
         compliance_anchor: dummy_compliance_anchor,
-        compliance_epk: decaf377::Element::default(),
-        compliance_epk_g: decaf377::Element::default(),
-        compliance_ciphertext: vec![Fq::from(0u64); 11],
-        target_timestamp: 0,
+        epk: decaf377::Element::default(),
+        c2_core: Fq::from(0u64),
+        compliance_ciphertext: vec![Fq::from(0u64); 5],
+        target_timestamp: Fq::from(0u64),
+        dleq_c: Fq::from(0u64),
+        dleq_s: Fq::from(0u64),
         sender_leaf_hash: tct::StateCommitment(Fq::from(0u64)),
-        counterparty_leaf_hash: tct::StateCommitment(Fq::from(0u64)),
     };
 
     let private = SpendProofPrivate {
@@ -237,20 +236,19 @@ async fn invalid_dummy_spend() -> anyhow::Result<()> {
         nk,
         asset_path: dummy_merkle_path.clone(),
         asset_position: 0,
-        asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf {
-            value: Fq::from(0u64),
-            next_index: 0,
-            next_value: penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
-            policy: penumbra_sdk_compliance::AssetPolicy::default_unregulated(),
-        },
+        asset_indexed_leaf: penumbra_sdk_compliance::IndexedLeaf::with_default_policy(
+            Fq::from(0u64),
+            0,
+            *penumbra_sdk_compliance::indexed_tree::FQ_MAX,
+        ),
         is_regulated: false,
         compliance_path: dummy_merkle_path,
         compliance_position: 0,
         user_leaf: dummy_compliance_leaf.clone(),
         compliance_ephemeral_secret: Fr::from(0u64),
-        counterparty_leaf: dummy_compliance_leaf,
         tx_blinding_nonce: Fr::from(0u64),
         is_flagged: false,
+        salt: Fq::from(0u64),
     };
 
     // Attempt to prove - this should fail because the constraints are unsatisfiable
@@ -270,7 +268,9 @@ async fn invalid_dummy_spend() -> anyhow::Result<()> {
     );
     let err_msg = format!("{:?}", proof_result.unwrap_err());
     assert!(
-        err_msg.contains("Unsatisfiable") || err_msg.contains("SynthesisError"),
+        err_msg.contains("Unsatisfiable")
+            || err_msg.contains("UnsatisfiedConstraints")
+            || err_msg.contains("SynthesisError"),
         "error should be about unsatisfiable constraints, got: {}",
         err_msg
     );

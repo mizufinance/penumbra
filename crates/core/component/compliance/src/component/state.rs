@@ -86,8 +86,13 @@ impl Component for Compliance {
                         .vartime_decompress()
                         .expect("invalid dk_pub encoding in genesis");
 
+                    let policy = crate::structs::AssetPolicy::simple(
+                        dk_pub,
+                        u128::MAX,
+                        decaf377::Element::GENERATOR,
+                    );
                     state
-                        .register_regulated_asset(registration.asset_id, dk_pub)
+                        .register_regulated_asset(registration.asset_id, policy)
                         .await
                         .expect("must be able to register regulated asset at genesis");
                     tracing::info!(
@@ -206,17 +211,26 @@ impl ActionHandler for MsgRegisterAsset {
         // Only regulated assets are stored in the IMT.
         // Unregulated status is proven via non-membership proofs.
         if self.is_regulated {
-            // Regulated assets MUST have a detection key
             let dk_pub = self.dk_pub.ok_or_else(|| {
                 anyhow::anyhow!("regulated assets require a detection key (dk_pub)")
             })?;
 
-            // Pass dk_pub to register_regulated_asset - policy is embedded in the IMT leaf
+            let threshold = self.threshold.unwrap_or(u128::MAX);
+            let ring_pk = self.ring_pk.unwrap_or(decaf377::Element::GENERATOR);
+            let policy = crate::structs::AssetPolicy::new(
+                dk_pub,
+                threshold,
+                self.allowed_channels.clone(),
+                self.ring_id.clone(),
+                ring_pk,
+                self.policy_id.clone(),
+                self.permission.clone(),
+                self.resource.clone(),
+            );
             if let Some(result) = state
-                .register_regulated_asset(self.asset_id, dk_pub)
+                .register_regulated_asset(self.asset_id, policy)
                 .await?
             {
-                // Create the event
                 let event = crate::event::EventAssetRegistered {
                     asset_id: self.asset_id,
                     is_regulated: self.is_regulated,
@@ -226,8 +240,6 @@ impl ActionHandler for MsgRegisterAsset {
                     updated_low_leaf: result.updated_low_leaf,
                 };
 
-                // Also emit as ABCI event (for existing event listeners)
-                // We need to convert from the domain type to the proto type
                 state.record_proto(event::asset_registered(
                     event.asset_id,
                     event.is_regulated,
@@ -237,12 +249,10 @@ impl ActionHandler for MsgRegisterAsset {
                     event.updated_low_leaf.clone(),
                 ));
 
-                // Buffer the event for CompactBlock inclusion
                 state.record_pending_asset_registration(event);
             }
-            // If None, asset was already registered - skip event
+            // If None, asset was already registered — policy is immutable, skip
         }
-        // Unregulated assets don't emit events (no state change)
 
         Ok(())
     }
@@ -254,7 +264,7 @@ mod tests {
     use cnidarium::TempStorage;
     use decaf377::Fq;
     use penumbra_sdk_asset::asset;
-    use penumbra_sdk_keys::{keys::AddressComplianceKey, Address};
+    use penumbra_sdk_keys::Address;
 
     use crate::genesis::NativeAssetRegistration;
     use crate::structs::ComplianceLeaf;
@@ -334,8 +344,8 @@ mod tests {
         let msg = MsgRegisterUser {
             leaf: ComplianceLeaf {
                 address: Address::dummy(&mut rand::thread_rng()),
-                key: AddressComplianceKey::new(decaf377::Element::GENERATOR),
                 asset_id: asset::Id(Fq::from(1u64)),
+                d: Fq::from(0u64),
             },
             signature: vec![0u8; 64], // Dummy signature
         };
@@ -370,6 +380,12 @@ mod tests {
             is_regulated: true,
             dk_pub,
             threshold: None,
+            allowed_channels: vec![],
+            ring_pk: None,
+            ring_id: String::new(),
+            policy_id: String::new(),
+            permission: String::new(),
+            resource: String::new(),
         };
 
         // Execute the action
@@ -400,6 +416,12 @@ mod tests {
             is_regulated: false,
             dk_pub: None,
             threshold: None,
+            allowed_channels: vec![],
+            ring_pk: None,
+            ring_id: String::new(),
+            policy_id: String::new(),
+            permission: String::new(),
+            resource: String::new(),
         };
 
         // Execute the action - should be a no-op
@@ -430,6 +452,12 @@ mod tests {
             is_regulated: true,
             dk_pub: None, // Missing!
             threshold: None,
+            allowed_channels: vec![],
+            ring_pk: None,
+            ring_id: String::new(),
+            policy_id: String::new(),
+            permission: String::new(),
+            resource: String::new(),
         };
 
         // Execute the action - should fail

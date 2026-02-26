@@ -1945,12 +1945,14 @@ impl Storage {
         asset_id: &asset::Id,
         position: u64,
         ack: &[u8],
+        ack_orbis: &[u8],
         commitment: StateCommitment,
     ) -> anyhow::Result<()> {
         let pool = self.pool.clone();
         let address_bytes = address.to_vec();
         let asset_bytes = asset_id.to_bytes().to_vec();
         let ack_bytes = ack.to_vec();
+        let ack_orbis_bytes = ack_orbis.to_vec();
 
         spawn_blocking(move || {
             let mut conn = pool.get()?;
@@ -1962,6 +1964,7 @@ impl Storage {
                     &asset_bytes,
                     position,
                     &ack_bytes,
+                    &ack_orbis_bytes,
                     commitment,
                 )?;
             }
@@ -2026,12 +2029,12 @@ impl Storage {
 
     /// Get compliance leaf data for an address and asset from local storage.
     ///
-    /// Returns (position, ack_bytes, commitment) if available, None if not in scope.
+    /// Returns (position, ack_bytes, ack_orbis_bytes, commitment) if available, None if not in scope.
     pub async fn get_compliance_leaf_data(
         &self,
         address: &penumbra_sdk_keys::Address,
         asset_id: &asset::Id,
-    ) -> anyhow::Result<Option<(u64, [u8; 32], StateCommitment)>> {
+    ) -> anyhow::Result<Option<(u64, [u8; 32], [u8; 32], StateCommitment)>> {
         let pool = self.pool.clone();
         let address_bytes = address.to_vec();
         let asset_bytes = asset_id.to_bytes().to_vec();
@@ -2045,14 +2048,20 @@ impl Storage {
             };
             // Convert Vec<u8> to [u8; 32] if present
             let converted = result
-                .map(|(pos, ack_vec, commitment)| -> anyhow::Result<_> {
-                    let ack_bytes: [u8; 32] = ack_vec.try_into().map_err(|v: Vec<u8>| {
-                        anyhow::anyhow!("ACK must be 32 bytes, got {}", v.len())
-                    })?;
-                    Ok((pos, ack_bytes, commitment))
-                })
+                .map(
+                    |(pos, ack_vec, ack_orbis_vec, commitment)| -> anyhow::Result<_> {
+                        let ack_bytes: [u8; 32] = ack_vec.try_into().map_err(|v: Vec<u8>| {
+                            anyhow::anyhow!("ACK must be 32 bytes, got {}", v.len())
+                        })?;
+                        let ack_orbis_bytes: [u8; 32] =
+                            ack_orbis_vec.try_into().map_err(|v: Vec<u8>| {
+                                anyhow::anyhow!("ACK_orbis must be 32 bytes, got {}", v.len())
+                            })?;
+                        Ok((pos, ack_bytes, ack_orbis_bytes, commitment))
+                    },
+                )
                 .transpose()?;
-            Ok::<Option<(u64, [u8; 32], StateCommitment)>, anyhow::Error>(converted)
+            Ok::<Option<(u64, [u8; 32], [u8; 32], StateCommitment)>, anyhow::Error>(converted)
         })
         .await?
     }
@@ -2112,7 +2121,14 @@ impl Storage {
                         })?;
                     let threshold = u128::from_le_bytes(threshold_arr);
                     Ok(Some(penumbra_sdk_compliance::structs::AssetPolicy::new(
-                        dk_pub, threshold,
+                        dk_pub,
+                        threshold,
+                        vec![],
+                        String::new(),
+                        decaf377::Element::default(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
                     )))
                 }
                 None => Ok(None),

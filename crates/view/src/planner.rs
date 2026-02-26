@@ -586,7 +586,7 @@ impl<R: RngCore + CryptoRng> Planner<R> {
         plan: &mut TransactionPlan,
     ) -> Result<()> {
         let provider = ViewClientComplianceProvider::new(view);
-        enrich_plan_with_compliance(plan, &provider, &mut self.rng).await
+        enrich_plan_with_compliance(plan, &provider, &mut self.rng, None).await
     }
 
     /// Add spends and change outputs as required to balance the transaction, using the view service
@@ -725,6 +725,9 @@ impl<R: RngCore + CryptoRng> Planner<R> {
         // Automatically enrich with compliance details if needed
         self.enrich_with_compliance(view, &mut plan).await?;
 
+        // Inject IBC compliance metadata into ICS-20 withdrawal memos for regulated assets
+        inject_ibc_compliance_metadata(&mut plan);
+
         // Reset the planner in case it were reused. We don't want people to do that
         // but otherwise we can't do builder method chaining with &mut self, and forcing
         // the builder to move between calls is annoying for callers who are building up
@@ -742,6 +745,61 @@ impl<R: RngCore + CryptoRng> Planner<R> {
     }
 }
 
+/// Inject IBC compliance metadata into ICS-20 withdrawal memos for regulated assets.
+///
+/// For regulated ICS-20 withdrawals, we extract the spend ciphertext from the
+/// funding SpendPlan and encode it into the withdrawal's memo field so the
+/// issuer can track its asset across IBC channels.
+fn inject_ibc_compliance_metadata(plan: &mut TransactionPlan) {
+    use penumbra_sdk_compliance::IbcComplianceMetadata;
+
+    // Collect compliance metadata from SpendPlans for regulated assets.
+    let mut spend_compliance: BTreeMap<asset::Id, IbcComplianceMetadata> = BTreeMap::new();
+
+    for action in &plan.actions {
+        if let ActionPlan::Spend(spend) = action {
+            if spend.is_regulated && !spend.compliance_ciphertext.is_empty() {
+                let asset_id = spend.note.asset_id();
+                spend_compliance
+                    .entry(asset_id)
+                    .or_insert_with(|| IbcComplianceMetadata {
+                        compliance_ciphertext: spend.compliance_ciphertext.clone(),
+                        asset_id,
+                    });
+            }
+        }
+    }
+
+    if spend_compliance.is_empty() {
+        return;
+    }
+
+    // Inject compliance metadata into matching ICS-20 withdrawals.
+    for action in &mut plan.actions {
+        if let ActionPlan::Ics20Withdrawal(withdrawal) = action {
+            let withdrawal_asset_id = withdrawal.denom.id();
+            if let Some(metadata) = spend_compliance.get(&withdrawal_asset_id) {
+                match metadata.encode_to_memo(&withdrawal.ics20_memo) {
+                    Ok(memo) => {
+                        tracing::debug!(
+                            ?withdrawal_asset_id,
+                            "injected compliance metadata into ICS-20 withdrawal memo"
+                        );
+                        withdrawal.ics20_memo = memo;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            ?withdrawal_asset_id,
+                            ?e,
+                            "failed to encode compliance metadata for ICS-20 withdrawal"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -750,7 +808,7 @@ mod tests {
     use penumbra_sdk_app::params::AppParameters;
     use penumbra_sdk_asset::Value;
     use penumbra_sdk_auction::auction::AuctionId;
-    use penumbra_sdk_compliance::TOTAL_WIRE_BYTES;
+    use penumbra_sdk_compliance::structs::OUTPUT_WIRE_BYTES;
     use penumbra_sdk_dex::lp::position;
     use penumbra_sdk_fee::GasPrices;
     use penumbra_sdk_proto::core::component::compliance::v1 as compliance_pb;
@@ -806,6 +864,12 @@ mod tests {
                         next_value: vec![0u8; 32],
                         dk_pub: vec![0u8; 32],
                         threshold: u128::MAX.to_le_bytes().to_vec(),
+                        channels_hash: vec![],
+                        ring_pk: vec![0u8; 32],
+                        ring_id_hash: vec![],
+                        policy_id_hash: vec![],
+                        permission_hash: vec![],
+                        resource_hash: vec![],
                     }),
                     compliance_leaf: None,
                 })
@@ -1077,6 +1141,12 @@ mod tests {
                         next_value: vec![0u8; 32],
                         dk_pub: vec![0u8; 32],
                         threshold: u128::MAX.to_le_bytes().to_vec(),
+                        channels_hash: vec![],
+                        ring_pk: vec![0u8; 32],
+                        ring_id_hash: vec![],
+                        policy_id_hash: vec![],
+                        permission_hash: vec![],
+                        resource_hash: vec![],
                     }),
                     compliance_leaf: None,
                 })
@@ -1089,21 +1159,16 @@ mod tests {
             asset_id: asset::Id,
         ) -> Pin<Box<dyn Future<Output = Result<pb::ComplianceUserLeafResponse>> + Send + 'static>>
         {
-            // Return a mock leaf using demo UCK for consistency with original test behavior
-            let leaf = penumbra_sdk_compliance::ComplianceLeaf::new(
-                &penumbra_sdk_keys::keys::UserComplianceKey::demo(),
-                address,
-                asset_id,
-            );
+            let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+            let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
+            let leaf = penumbra_sdk_compliance::ComplianceLeaf::new(address, asset_id, d);
             async move {
                 Ok(pb::ComplianceUserLeafResponse {
                     is_registered: true,
                     leaf: Some(compliance_pb::ComplianceLeaf {
                         address: Some(leaf.address.into()),
-                        key: Some(compliance_pb::ComplianceViewingKey {
-                            inner: leaf.key.0.vartime_compress().0.to_vec(),
-                        }),
                         asset_id: Some(leaf.asset_id.into()),
+                        d: leaf.d.to_bytes().to_vec(),
                     }),
                 })
             }
@@ -1174,10 +1239,6 @@ mod tests {
                         sp.compliance_ephemeral_secret.is_some(),
                         "Spend should have ephemeral secret"
                     );
-                    assert!(
-                        sp.counterparty_leaf.is_some(),
-                        "Spend should have counterparty leaf"
-                    );
                     assert_eq!(sp.is_regulated, true, "Asset should be marked as regulated");
                 }
                 ActionPlan::Output(op) => {
@@ -1240,6 +1301,12 @@ mod tests {
                         next_value: vec![0u8; 32],
                         dk_pub: vec![0u8; 32],
                         threshold: u128::MAX.to_le_bytes().to_vec(),
+                        channels_hash: vec![],
+                        ring_pk: vec![0u8; 32],
+                        ring_id_hash: vec![],
+                        policy_id_hash: vec![],
+                        permission_hash: vec![],
+                        resource_hash: vec![],
                     }),
                     compliance_leaf: None,
                 })
@@ -1511,6 +1578,12 @@ mod tests {
                         next_value: vec![0u8; 32],
                         dk_pub: vec![0u8; 32],
                         threshold: u128::MAX.to_le_bytes().to_vec(),
+                        channels_hash: vec![],
+                        ring_pk: vec![0u8; 32],
+                        ring_id_hash: vec![],
+                        policy_id_hash: vec![],
+                        permission_hash: vec![],
+                        resource_hash: vec![],
                     }),
                     compliance_leaf: None,
                 })
@@ -1591,21 +1664,25 @@ mod tests {
                 ActionPlan::Spend(sp) => {
                     assert!(
                         sp.compliance_leaf.is_some(),
-                        "Spend should have compliance leaf (with BLACK_HOLE_ACK for unregulated)"
+                        "Spend should have compliance leaf"
                     );
+                    assert!(!sp.is_regulated, "Asset should be marked as unregulated");
                     assert_eq!(
-                        sp.is_regulated, false,
-                        "Asset should be marked as unregulated"
+                        sp.ring_pk,
+                        *penumbra_sdk_compliance::BLACK_HOLE_ACK,
+                        "Unregulated spend must encrypt to BLACK_HOLE_ACK"
                     );
                 }
                 ActionPlan::Output(op) => {
                     assert!(
                         op.compliance_leaf.is_some(),
-                        "Output should have compliance leaf (with BLACK_HOLE_ACK for unregulated)"
+                        "Output should have compliance leaf"
                     );
+                    assert!(!op.is_regulated, "Asset should be marked as unregulated");
                     assert_eq!(
-                        op.is_regulated, false,
-                        "Asset should be marked as unregulated"
+                        op.ring_pk,
+                        *penumbra_sdk_compliance::BLACK_HOLE_ACK,
+                        "Unregulated output must encrypt to BLACK_HOLE_ACK"
                     );
                 }
                 _ => {}
@@ -1694,10 +1771,6 @@ mod tests {
                         sp.compliance_ephemeral_secret.is_some(),
                         "Spend should have ephemeral secret"
                     );
-                    assert!(
-                        sp.counterparty_leaf.is_some(),
-                        "Spend should have counterparty leaf"
-                    );
                     assert_eq!(sp.is_regulated, true, "Asset should be marked as regulated");
                     spend_enriched = true;
                 }
@@ -1715,11 +1788,11 @@ mod tests {
                         "Output should have counterparty leaf"
                     );
                     assert_eq!(op.is_regulated, true, "Asset should be marked as regulated");
-                    // Verify ciphertext is TOTAL_WIRE_BYTES (not placeholder)
+                    // Verify ciphertext has correct length (not placeholder)
                     assert_eq!(
                         op.compliance_ciphertext.len(),
-                        TOTAL_WIRE_BYTES,
-                        "Compliance ciphertext should be TOTAL_WIRE_BYTES"
+                        OUTPUT_WIRE_BYTES,
+                        "Output compliance ciphertext should be OUTPUT_WIRE_BYTES"
                     );
                     outputs_enriched += 1;
                 }

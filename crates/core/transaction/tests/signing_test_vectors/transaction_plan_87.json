@@ -1,69 +1,11 @@
 {
   "actions": [
     {
-      "swapClaim": {
-        "swapPlaintext": {
-          "tradingPair": {
-            "asset1": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            },
-            "asset2": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            }
-          },
-          "delta1I": {
-            "lo": "76776667898636242"
-          },
-          "delta2I": {
-            "lo": "853006805667894104"
-          },
-          "claimFee": {
-            "amount": {}
-          },
-          "claimAddress": {
-            "inner": "ISpkEa1rInMQQj/Manq6PGVtoDZkbapmPHvDOGtILTRtMmZGSdqYRBobxBvrEslJ8E6Drum7nixTnkJHQ6H+z8cpEzS6L2krGrnHYbSrpQw="
-          },
-          "rseed": "jBbw8XlJJvVdH148cDfGgUFMaZHR36DWVZuhdsJAy8s="
-        },
-        "outputData": {
-          "delta1": {
-            "lo": "446618850"
-          },
-          "delta2": {
-            "lo": "1967630860"
-          },
-          "lambda1": {
-            "lo": "1214"
-          },
-          "lambda2": {
-            "lo": "1163"
-          },
-          "unfilled1": {
-            "lo": "1817"
-          },
-          "unfilled2": {
-            "lo": "1855"
-          },
-          "tradingPair": {
-            "asset1": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            },
-            "asset2": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            }
-          }
-        },
-        "epochDuration": "1000",
-        "proofBlindingR": "9+nFzwPgJWYh7mveXo4OvKJJTNyWSBNImpbhpq5x8QU=",
-        "proofBlindingS": "vpzcdZlHbN45pFSTl7Gw6BcKcPtZCkPGjhAzdmpqLwc="
-      }
-    },
-    {
       "actionDutchAuctionSchedule": {
         "description": {
           "input": {
             "amount": {
-              "lo": "411844650162668413"
+              "lo": "340341194111223989"
             },
             "assetId": {
               "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
@@ -73,25 +15,30 @@
             "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
           },
           "maxOutput": {
-            "lo": "643072412705902011"
+            "lo": "311495027566771706"
           },
           "minOutput": {
-            "lo": "680280438262914989"
+            "lo": "161990996287093571"
           },
-          "startHeight": "685063285",
-          "endHeight": "685063286",
-          "stepCount": "953884237",
-          "nonce": "YcGI6xnE9j2KM2JYtVu1tk8ByvbMQZziUOwWznlpYnc="
+          "startHeight": "22134785",
+          "endHeight": "22134786",
+          "stepCount": "606605195",
+          "nonce": "7Y7mO1X6zxCbZuFxiszkHmBv/2WPgQC4ywngjZTXKQk="
         }
+      }
+    },
+    {
+      "proposalWithdraw": {
+        "proposal": "499992514"
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "5210372627",
-    "chainId": "hpvjmapuusvwyiaocf-02851703804586997482361678",
+    "expiryHeight": "9305274440",
+    "chainId": "ubs-2909369176396025198",
     "fee": {
       "amount": {
-        "lo": "830244111659112170"
+        "lo": "998285003208604325"
       }
     }
   }

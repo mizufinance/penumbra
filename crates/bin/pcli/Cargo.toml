@@ -92,6 +92,7 @@ rand = {workspace = true}
 rand_chacha = {workspace = true}
 rand_core = {workspace = true, features = ["getrandom"]}
 regex = {workspace = true}
+rusqlite = {version = "0.32", features = ["bundled"]}
 rpassword = {workspace = true}
 rustls = {workspace = true}
 serde = {workspace = true, features = ["derive"]}

@@ -1,40 +1,29 @@
 //! R1CS gadgets for compliance verification.
 //!
-//! This module implements zero-knowledge constraint gadgets for proving compliance
-//! properties without revealing sensitive transaction details.
+//! Proves compliance properties in zero-knowledge: asset registry inclusion,
+//! user registry inclusion, threshold flagging, leaf↔note binding, and ciphertext integrity.
+//!
+//! ACK = d × ring_pk where `d` is stored in the compliance leaf (SHA256-derived, matching Orbis).
+//! Single ACK per party; tier isolation via distinct EPKs.
 
 use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{ConstraintSystemRef, SynthesisError};
 use decaf377::r1cs::{ElementVar, FqVar};
 use decaf377::{Fq, Fr};
-use once_cell::sync::Lazy;
 
-use penumbra_sdk_keys::keys::AddressComplianceKey;
-
-use crate::indexed_tree::{IndexedLeaf, IMT_LEAF_DOMAIN_SEP};
+use crate::indexed_tree::{IndexedLeaf, IMT_LEAF_DOMAIN_SEP, PARAMS_DOMAIN_SEP, RING_DOMAIN_SEP};
 use crate::structs::{ComplianceLeaf, MerklePath};
 use crate::tree::DEFAULT_DEPTH;
 
-/// Domain separator for detection key derivation.
-static DETECTION_DOMAIN: Lazy<Fq> = Lazy::new(|| {
-    Fq::from_le_bytes_mod_order(
-        blake2b_simd::blake2b(b"penumbra.compliance.keytype.detection").as_bytes(),
-    )
-});
-
-/// Domain separator for core key derivation.
-static CORE_DOMAIN: Lazy<Fq> = Lazy::new(|| {
-    Fq::from_le_bytes_mod_order(
-        blake2b_simd::blake2b(b"penumbra.compliance.keytype.core").as_bytes(),
-    )
-});
-
-/// Domain separator for extension key derivation.
-static EXTENSION_DOMAIN: Lazy<Fq> = Lazy::new(|| {
-    Fq::from_le_bytes_mod_order(
-        blake2b_simd::blake2b(b"penumbra.compliance.keytype.extension").as_bytes(),
-    )
-});
+/// 1 << 253 as an Fq constant, used as the flag sentinel bit in detection ciphertext.
+fn flag_bit_fq() -> Fq {
+    use ark_ff::{BigInteger, BigInteger256};
+    let mut big = BigInteger256::from(1u64);
+    for _ in 0..253 {
+        big.mul2();
+    }
+    Fq::from(big)
+}
 
 /// Verify a QuadTree Merkle authentication path in R1CS.
 pub fn verify_quad_path(
@@ -128,146 +117,24 @@ pub fn verify_quad_path(
 }
 
 // ============================================================================
-// Compliance Key R1CS Gadgets
-// ============================================================================
-
-/// R1CS variable representing a Address Compliance Key (ACK).
-///
-/// The ACK is a public curve point `ACK = msk * B_d` stored in the compliance registry.
-/// In the circuit, we work with its variable representation to prove key derivation.
-#[derive(Clone)]
-pub struct AddressComplianceKeyVar {
-    /// The elliptic curve point representing the address compliance key.
-    pub inner: ElementVar,
-}
-
-impl AddressComplianceKeyVar {
-    /// Create a new AddressComplianceKeyVar from an ElementVar.
-    pub fn new(inner: ElementVar) -> Self {
-        Self { inner }
-    }
-
-    /// Derive the daily public key for a specific key type and date in-circuit.
-    ///
-    /// # Algorithm (Circuit Version)
-    ///
-    /// Given:
-    /// - `self.inner`: ACK (point) = msk * B_d
-    /// - `date`: Unix day index (field element)
-    /// - `diversified_generator`: B_d (point)
-    /// - `domain`: Key type domain separator (detection, core, or extension)
-    ///
-    /// Compute:
-    /// 1. `T = Poseidon(domain, (date, 0))`
-    /// 2. `Q = T * B_d` (scalar multiplication)
-    /// 3. `PK_day = ACK + Q` (point addition)
-    ///
-    /// Returns: `PK_day` as ElementVar
-    pub fn derive_daily_public_key_with_domain(
-        &self,
-        cs: ConstraintSystemRef<Fq>,
-        date: &FqVar,
-        diversified_generator: &ElementVar,
-        domain: &Fq,
-    ) -> Result<ElementVar, SynthesisError> {
-        let domain_sep = FqVar::new_constant(cs.clone(), *domain)?;
-        let zero = FqVar::new_constant(cs.clone(), Fq::from(0u64))?;
-        let tweak_fq = poseidon377::r1cs::hash_2(cs.clone(), &domain_sep, (date.clone(), zero))?;
-
-        let q_point = diversified_generator.scalar_mul_le(tweak_fq.to_bits_le()?.iter())?;
-        let pk_day = self.inner.clone() + q_point;
-
-        Ok(pk_day)
-    }
-
-    /// Derive all three daily public keys (detection, core, extension) for a date.
-    ///
-    /// Returns: (pk_detection, pk_core, pk_extension)
-    pub fn derive_all_daily_public_keys(
-        &self,
-        cs: ConstraintSystemRef<Fq>,
-        date: &FqVar,
-        diversified_generator: &ElementVar,
-    ) -> Result<(ElementVar, ElementVar, ElementVar), SynthesisError> {
-        let pk_detection = self.derive_daily_public_key_with_domain(
-            cs.clone(),
-            date,
-            diversified_generator,
-            &DETECTION_DOMAIN,
-        )?;
-        let pk_core = self.derive_daily_public_key_with_domain(
-            cs.clone(),
-            date,
-            diversified_generator,
-            &CORE_DOMAIN,
-        )?;
-        let pk_extension = self.derive_daily_public_key_with_domain(
-            cs,
-            date,
-            diversified_generator,
-            &EXTENSION_DOMAIN,
-        )?;
-
-        Ok((pk_detection, pk_core, pk_extension))
-    }
-
-    /// Get the inner ElementVar.
-    pub fn inner(&self) -> &ElementVar {
-        &self.inner
-    }
-}
-
-impl AllocVar<AddressComplianceKey, Fq> for AddressComplianceKeyVar {
-    fn new_variable<T: std::borrow::Borrow<AddressComplianceKey>>(
-        cs: impl Into<ark_relations::r1cs::Namespace<Fq>>,
-        f: impl FnOnce() -> Result<T, SynthesisError>,
-        mode: ark_r1cs_std::prelude::AllocationMode,
-    ) -> Result<Self, SynthesisError> {
-        let ns = cs.into();
-        let cs = ns.cs();
-
-        let ack = f()?;
-        let ack_point = ack.borrow().inner();
-
-        // Allocate the curve point as an ElementVar
-        //  Need to explicitly specify type parameter for Element
-        let inner = ElementVar::new_variable(cs, || Ok(*ack_point), mode)?;
-
-        Ok(Self { inner })
-    }
-}
-
-// ============================================================================
 // Compliance Leaf R1CS Gadgets
 // ============================================================================
 
 /// R1CS variable representing a Compliance Leaf.
 ///
-/// This structure must match `structs::ComplianceLeaf` exactly so that
-/// the commitment computed in-circuit matches the commitment in the registry.
+/// Contains address, asset_id, and derivation scalar `d`.
+/// ACK = d × ring_pk, computed in-circuit.
 pub struct ComplianceLeafVar {
-    /// The wallet address (contains diversifier and transmission key).
     pub address: penumbra_sdk_keys::AddressVar,
-    /// The address compliance key (public curve point).
-    pub key: AddressComplianceKeyVar,
-    /// The asset ID being regulated.
     pub asset_id: FqVar,
+    pub d: FqVar,
 }
 
 impl ComplianceLeafVar {
-    /// Compute the Poseidon commitment of this leaf.
+    /// Compute the Poseidon commitment: hash_4(domain, (g_d_fq, pk_d_fq, asset_id, d)).
     ///
-    /// This MUST match the logic in `structs::ComplianceLeaf::commit()` exactly!
-    ///
-    /// # Algorithm
-    ///
-    /// 1. Extract field elements from the address (diversified generator, transmission key, clue key)
-    /// 2. Compress ACK curve point to field element
-    /// 3. Hash all fields: `Hash(0, (ack_field, div_gen_x, div_gen_y, tx_key, clue_key, asset_id))`
-    ///
-    /// Returns: FqVar representing the leaf commitment
+    /// Must match `structs::ComplianceLeaf::commit()` exactly.
     pub fn commit(&self, cs: ConstraintSystemRef<Fq>) -> Result<FqVar, SynthesisError> {
-        // Domain separator (must match structs::ComplianceLeaf::commit and COMPLIANCE_LEAF_DOMAIN_SEP)
         let domain_sep = FqVar::new_constant(
             cs.clone(),
             Fq::from_le_bytes_mod_order(
@@ -275,32 +142,14 @@ impl ComplianceLeafVar {
             ),
         )?;
 
-        // 1. Get diversified generator from address and compress to field element
-        let div_gen = self.address.diversified_generator();
-        let div_gen_compressed = div_gen.compress_to_field()?;
+        let div_gen_fq = self.address.diversified_generator().compress_to_field()?;
+        let pk_d_fq = self.address.transmission_key().compress_to_field()?;
 
-        // 2. Get transmission key from address and compress to field element
-        let transmission_key = self.address.transmission_key();
-        let transmission_key_s = transmission_key.compress_to_field()?;
-
-        // 3. Compress ACK point to field element
-        let ack_field = self.key.inner().compress_to_field()?;
-
-        // 4. Hash: Poseidon_4(domain, (div_gen, tx_key, ack, asset_id))
-        //    This MUST match the native structs::ComplianceLeaf::commit() logic exactly!
-        //    Order: diversified_generator, transmission_key_s, ack_field, asset_id_field
-        let commitment = poseidon377::r1cs::hash_4(
+        poseidon377::r1cs::hash_4(
             cs,
             &domain_sep,
-            (
-                div_gen_compressed,
-                transmission_key_s,
-                ack_field,
-                self.asset_id.clone(),
-            ),
-        )?;
-
-        Ok(commitment)
+            (div_gen_fq, pk_d_fq, self.asset_id.clone(), self.d.clone()),
+        )
     }
 }
 
@@ -316,72 +165,21 @@ impl AllocVar<ComplianceLeaf, Fq> for ComplianceLeafVar {
         let leaf = f()?;
         let leaf_ref = leaf.borrow();
 
-        // Allocate each field
         let address = penumbra_sdk_keys::AddressVar::new_variable(
             cs.clone(),
             || Ok(&leaf_ref.address),
             mode,
         )?;
-        let key = AddressComplianceKeyVar::new_variable(cs.clone(), || Ok(&leaf_ref.key), mode)?;
-
-        // Convert asset::Id to Fq
         let asset_id_fq = leaf_ref.asset_id.0;
-        let asset_id = FqVar::new_variable(cs, || Ok(asset_id_fq), mode)?;
+        let asset_id = FqVar::new_variable(cs.clone(), || Ok(asset_id_fq), mode)?;
+        let d = FqVar::new_variable(cs, || Ok(leaf_ref.d), mode)?;
 
         Ok(Self {
             address,
-            key,
             asset_id,
+            d,
         })
     }
-}
-
-// ============================================================================
-// Compliance Encryption Verification Gadgets
-// ============================================================================
-
-/// Verify that compliance ciphertext was correctly generated using ECDH.
-///
-/// This gadget proves the following in zero-knowledge:
-/// 1. The ephemeral public key `R` was correctly computed: `R = r * B_d`
-/// 2. The shared secret `S` was correctly computed: `S = r * PK_day`
-///
-/// # Inputs
-///
-/// - `ephemeral_secret` (r): Private witness - the random scalar used for ECDH
-/// - `pk_day`: Public/witness - the daily public key derived from ACK
-/// - `diversified_generator` (B_d): Public input - from the recipient's address
-/// - `published_epk` (R): Public input - from the ciphertext (ephemeral public key)
-/// - `published_shared_secret` (S): Witness - the ECDH shared secret
-///
-/// # Constraints
-///
-/// 1. `published_epk == ephemeral_secret * diversified_generator`
-/// 2. `published_shared_secret == ephemeral_secret * pk_day`
-///
-/// # Returns
-///
-/// `Ok(())` if all constraints are satisfied, error otherwise.
-pub fn verify_compliance_encryption(
-    _cs: ConstraintSystemRef<Fq>,
-    ephemeral_secret: &FqVar,             // r (witness)
-    pk_day: &ElementVar,                  // PK_day = ACK + (T * B_d) (witness/public)
-    diversified_generator: &ElementVar,   // B_d (public from address)
-    published_epk: &ElementVar,           // R (public from ciphertext)
-    published_shared_secret: &ElementVar, // S (witness)
-) -> Result<(), SynthesisError> {
-    // Convert ephemeral_secret to bits for scalar multiplication
-    let r_bits = ephemeral_secret.to_bits_le()?;
-
-    // Constraint 1: R = r * B_d
-    let computed_epk = diversified_generator.scalar_mul_le(r_bits.iter())?;
-    computed_epk.enforce_equal(published_epk)?;
-
-    // Constraint 2: S = r * PK_day
-    let computed_shared_secret = pk_day.scalar_mul_le(r_bits.iter())?;
-    computed_shared_secret.enforce_equal(published_shared_secret)?;
-
-    Ok(())
 }
 
 // ============================================================================
@@ -389,56 +187,43 @@ pub fn verify_compliance_encryption(
 // ============================================================================
 
 /// Witness data for compliance verification.
-///
-/// This struct groups all the private witness data needed to prove compliance
-/// without revealing sensitive information. It's used by the `verify_compliance_integrity`
-/// function to verify both asset registry and user registry inclusion.
 #[derive(Clone)]
 pub struct ComplianceWitness {
-    /// Whether the asset is regulated (requires compliance checks).
     pub is_regulated: bool,
-    /// Indexed Merkle Tree leaf for asset registry (membership or non-membership proof).
     pub asset_indexed_leaf: IndexedLeaf,
-    /// Merkle path proving asset's regulatory status in the Asset Registry IMT.
     pub asset_path: MerklePath,
-    /// Position of the leaf in the Asset Registry IMT.
     pub asset_position: u64,
-    /// Merkle path proving user authorization in the Compliance Registry.
     pub compliance_path: MerklePath,
-    /// Position of the user in the Compliance Registry tree.
     pub compliance_position: u64,
-    /// The compliance leaf containing address, ACK, and asset_id.
     pub user_leaf: ComplianceLeaf,
-    /// Whether this transaction is flagged (amount >= threshold).
-    /// Circuit verifies this matches the threshold comparison.
     pub is_flagged: bool,
-}
-
-/// Circuit variable for asset policy (dk_pub and threshold).
-pub struct AssetPolicyVar {
-    /// Issuer's detection key public (for threshold-based flagging).
-    pub dk_pub: ElementVar,
-    /// Amount threshold (transfers >= threshold are flagged).
-    pub threshold: FqVar,
+    /// Random salt for DLEQ metadata hash, encrypted in detection tier.
+    pub salt: Fq,
 }
 
 /// Circuit variable for an Indexed Merkle Tree leaf.
 ///
-/// Used for asset registry membership and non-membership proofs.
-/// The policy fields are bound by the IMT membership proof.
+/// All policy fields are private witnesses bound by the IMT Merkle proof.
+/// Sub-structured Poseidon commitment matches native IndexedLeaf::commit().
 pub struct IndexedLeafVar {
-    /// The value stored in this leaf (asset_id for membership proofs).
+    // Structural fields
     pub value: FqVar,
-    /// Position in tree of the next-higher value leaf.
     pub next_index: FqVar,
-    /// Value at next_index (for gap verification in non-membership proofs).
     pub next_value: FqVar,
-    /// Asset policy containing dk_pub and threshold.
-    pub policy: AssetPolicyVar,
+    // Penumbra-decided policy (bound by IMT proof)
+    pub dk_pub: ElementVar,
+    pub threshold: FqVar,
+    pub channels_hash: FqVar,
+    // Orbis-decided policy (bound by IMT proof)
+    pub ring_pk: ElementVar,
+    pub ring_id_hash: FqVar,
+    pub policy_id_hash: FqVar,
+    pub permission_hash: FqVar,
+    pub resource_hash: FqVar,
 }
 
 impl IndexedLeafVar {
-    /// Allocate as witness variables.
+    /// Allocate all fields as witness variables.
     pub fn new_witness(
         cs: ConstraintSystemRef<Fq>,
         leaf: &IndexedLeaf,
@@ -446,41 +231,84 @@ impl IndexedLeafVar {
         let value = FqVar::new_witness(cs.clone(), || Ok(leaf.value))?;
         let next_index = FqVar::new_witness(cs.clone(), || Ok(Fq::from(leaf.next_index)))?;
         let next_value = FqVar::new_witness(cs.clone(), || Ok(leaf.next_value))?;
-        let dk_pub = ElementVar::new_witness(cs.clone(), || Ok(leaf.policy.dk_pub))?;
-        let threshold = FqVar::new_witness(cs, || {
-            // Convert u128 threshold to Fq via its byte representation
-            Ok(Fq::from_le_bytes_mod_order(
-                &leaf.policy.threshold.to_le_bytes(),
-            ))
-        })?;
+        let dk_pub = ElementVar::new_witness(cs.clone(), || Ok(leaf.params.dk_pub))?;
+        let threshold = FqVar::new_witness(cs.clone(), || Ok(Fq::from(leaf.params.threshold)))?;
+        let channels_hash = FqVar::new_witness(cs.clone(), || Ok(leaf.params.channels_hash))?;
+        let ring_pk = ElementVar::new_witness(cs.clone(), || Ok(leaf.ring.ring_pk))?;
+        let ring_id_hash = FqVar::new_witness(cs.clone(), || Ok(leaf.ring.ring_id_hash))?;
+        let policy_id_hash = FqVar::new_witness(cs.clone(), || Ok(leaf.ring.policy_id_hash))?;
+        let permission_hash = FqVar::new_witness(cs.clone(), || Ok(leaf.ring.permission_hash))?;
+        let resource_hash = FqVar::new_witness(cs, || Ok(leaf.ring.resource_hash))?;
         Ok(Self {
             value,
             next_index,
             next_value,
-            policy: AssetPolicyVar { dk_pub, threshold },
+            dk_pub,
+            threshold,
+            channels_hash,
+            ring_pk,
+            ring_id_hash,
+            policy_id_hash,
+            permission_hash,
+            resource_hash,
         })
     }
 
-    /// Compute the leaf commitment in-circuit.
+    /// Compute the leaf commitment matching native IndexedLeaf::commit().
     ///
-    /// Uses hash_5 to match native IndexedLeaf::commit():
-    /// Poseidon_5(domain, (value, next_index, next_value, dk_pub_fq, threshold))
+    /// params_hash = hash_3(PARAMS_DOMAIN, dk_pub_fq, threshold, channels_hash)
+    /// ring_hash   = hash_5(RING_DOMAIN, ring_pk_fq, ring_id_hash, policy_id_hash, permission_hash, resource_hash)
+    /// leaf_commit = hash_5(LEAF_DOMAIN, value, next_index, next_value, params_hash, ring_hash)
     pub fn commit(&self, cs: ConstraintSystemRef<Fq>) -> Result<FqVar, SynthesisError> {
-        let domain_sep = FqVar::new_constant(cs.clone(), *IMT_LEAF_DOMAIN_SEP)?;
-        // Compress dk_pub to a single field element (must match native vartime_compress_to_field)
-        let dk_pub_fq = self.policy.dk_pub.compress_to_field()?;
+        let leaf_domain = FqVar::new_constant(cs.clone(), *IMT_LEAF_DOMAIN_SEP)?;
+        let params_domain = FqVar::new_constant(cs.clone(), *PARAMS_DOMAIN_SEP)?;
+        let ring_domain = FqVar::new_constant(cs.clone(), *RING_DOMAIN_SEP)?;
+
+        // Sub-hash 1: Penumbra-decided params
+        let dk_pub_fq = self.dk_pub.compress_to_field()?;
+        let params_hash = poseidon377::r1cs::hash_3(
+            cs.clone(),
+            &params_domain,
+            (
+                dk_pub_fq,
+                self.threshold.clone(),
+                self.channels_hash.clone(),
+            ),
+        )?;
+
+        // Sub-hash 2: Orbis-decided ring
+        let ring_pk_fq = self.ring_pk.compress_to_field()?;
+        let ring_hash = poseidon377::r1cs::hash_5(
+            cs.clone(),
+            &ring_domain,
+            (
+                ring_pk_fq,
+                self.ring_id_hash.clone(),
+                self.policy_id_hash.clone(),
+                self.permission_hash.clone(),
+                self.resource_hash.clone(),
+            ),
+        )?;
+
+        // Final leaf commitment
         poseidon377::r1cs::hash_5(
             cs,
-            &domain_sep,
+            &leaf_domain,
             (
                 self.value.clone(),
                 self.next_index.clone(),
                 self.next_value.clone(),
-                dk_pub_fq,
-                self.policy.threshold.clone(),
+                params_hash,
+                ring_hash,
             ),
         )
     }
+}
+
+/// Derive ACK from the leaf's `d` scalar and ring_pk: `ACK = d × ring_pk`.
+fn derive_ack_from_leaf_d(ring_pk: &ElementVar, d: &FqVar) -> Result<ElementVar, SynthesisError> {
+    let d_bits = d.to_bits_le()?;
+    ring_pk.scalar_mul_le(d_bits.iter())
 }
 
 /// Circuit variable representation of compliance plaintext.
@@ -603,53 +431,46 @@ impl CompliancePlaintextVar {
 // Unified Compliance Integrity Verification
 // ============================================================================
 
-/// Verify compliance integrity for a transaction action.
+/// Verify compliance integrity for an output action.
 ///
-/// Verifies asset registry inclusion, user registry inclusion, and ciphertext integrity.
-/// Both regulated and unregulated paths use identical constraint counts.
-///
-/// For threshold-based flagging:
-/// - If `threshold > 0` and `amount >= threshold`, the output is "flagged"
-/// - Flagged outputs encrypt core+extension tiers to issuer's DK_pub
-/// - The circuit verifies `is_flagged == (amount >= threshold)`
-///
-/// dk_pub and threshold are extracted from the asset_indexed_leaf (private witness).
-/// The IMT membership proof binds the leaf to the public asset_anchor, so the
-/// prover cannot lie about policy without breaking the Merkle proof.
+/// Three independent ephemeral scalars (r_1, r_2, r_3) with EPKs on standard generator G.
+/// Core/ext tiers use receiver's ACK, sext tier uses sender's ACK (counterparty disclosure).
+/// Policy fields (dk_pub, threshold, ring_pk) are private witnesses bound by the IMT proof.
 pub fn verify_compliance_integrity(
     cs: ConstraintSystemRef<Fq>,
     // Public Inputs
     asset_anchor: FqVar,
     compliance_anchor: FqVar,
-    target_date: FqVar,
-    compliance_epk: ElementVar,
-    compliance_epk_g: ElementVar,
-    compliance_ciphertext: Vec<FqVar>,
-    // Note data (to ensure binding)
+    epk_1: ElementVar,
+    epk_2: ElementVar,
+    epk_3: ElementVar,
+    c2_core: FqVar,
+    c2_ext: FqVar,
+    c2_sext: FqVar,
+    compliance_ciphertext: Vec<FqVar>, // 11 Fqs: detection(2) + core(3) + ext(3) + sext(3)
+    // DLEQ public inputs (3 tiers × 2 = 6 Fq values, stored as Fq but canonical Fr)
+    target_timestamp: FqVar,
+    dleq_c_1: FqVar,
+    dleq_s_1: FqVar,
+    dleq_c_2: FqVar,
+    dleq_s_2: FqVar,
+    dleq_c_3: FqVar,
+    dleq_s_3: FqVar,
+    // Note data
     note_asset_id: FqVar,
     note_amount: FqVar,
     note_diversified_generator: ElementVar,
     note_transmission_key: ElementVar,
     counterparty_diversified_generator: ElementVar,
     counterparty_transmission_key: ElementVar,
-    // Witness data
-    compliance_ephemeral_secret: Fr,
+    // Witness scalars
+    r_1: Fr,
+    r_2: Fr,
+    r_3: Fr,
+    // Counterparty's d scalar (already allocated from counterparty_leaf_var)
+    counterparty_d: FqVar,
     witness: ComplianceWitness,
-) -> Result<(), SynthesisError> {
-    tracing::debug!(
-        constraints_before_alloc = cs.num_constraints(),
-        "verify_compliance_integrity: start"
-    );
-
-    // Debug: log note_asset_id and note_amount values
-    if let (Ok(asset_id), Ok(amount)) = (note_asset_id.value(), note_amount.value()) {
-        tracing::debug!(
-            note_asset_id = ?asset_id.to_bytes(),
-            note_amount = ?amount.to_bytes(),
-            "verify_compliance_integrity: note values"
-        );
-    }
-
+) -> Result<Vec<Boolean<Fq>>, SynthesisError> {
     let (
         is_regulated,
         asset_indexed_leaf,
@@ -658,11 +479,6 @@ pub fn verify_compliance_integrity(
         user_leaf_var,
         is_flagged,
     ) = allocate_compliance_witnesses(cs.clone(), &witness)?;
-
-    tracing::debug!(
-        constraints_after_alloc = cs.num_constraints(),
-        "verify_compliance_integrity: after allocate_compliance_witnesses"
-    );
 
     verify_asset_registry_imt(
         cs.clone(),
@@ -674,12 +490,7 @@ pub fn verify_compliance_integrity(
         &asset_anchor,
     )?;
 
-    tracing::debug!(
-        constraints_after_asset_imt = cs.num_constraints(),
-        "verify_compliance_integrity: after verify_asset_registry_imt"
-    );
-
-    verify_compliance_registry_path(
+    verify_path(
         cs.clone(),
         &user_leaf_var,
         &is_regulated,
@@ -688,68 +499,57 @@ pub fn verify_compliance_integrity(
         &compliance_anchor,
     )?;
 
-    tracing::debug!(
-        constraints_after_compliance_path = cs.num_constraints(),
-        "verify_compliance_integrity: after verify_compliance_registry_path"
-    );
+    // Leaf↔note binding: the Merkle-proven leaf must match the note's address and asset.
+    let leaf_g_d = user_leaf_var.address.diversified_generator();
+    let leaf_pk_d = user_leaf_var.address.transmission_key();
+    leaf_g_d.enforce_equal(&note_diversified_generator)?;
+    leaf_pk_d.enforce_equal(&note_transmission_key)?;
+    user_leaf_var.asset_id.enforce_equal(&note_asset_id)?;
 
-    // Extract dk_pub and threshold from the IndexedLeaf (bound by IMT proof)
-    let dk_pub = asset_indexed_leaf.policy.dk_pub.clone();
-    let threshold = asset_indexed_leaf.policy.threshold.clone();
-
-    // Verify threshold flagging: is_flagged == (amount >= threshold)
-    // This ensures the prover correctly computed the flag
-    verify_threshold_flag(cs.clone(), &note_amount, &threshold, &is_flagged)?;
-
-    tracing::debug!(
-        constraints_after_threshold = cs.num_constraints(),
-        "verify_compliance_integrity: after verify_threshold_flag"
-    );
-
-    // For regulated assets, use the user's ACK from the compliance leaf.
-    // For unregulated assets, any value works since encryption verification is skipped.
-    let target_ack = user_leaf_var.key.clone();
-
-    // Derive daily public keys (detection key unused - detection uses issuer's dk_pub)
-    let (_pk_detection, pk_core, pk_extension) = target_ack.derive_all_daily_public_keys(
+    // Policy fields extracted from IndexedLeafVar (bound by IMT proof)
+    verify_threshold_flag_simple(
         cs.clone(),
-        &target_date,
-        &note_diversified_generator,
-    )?;
-
-    tracing::debug!(
-        constraints_after_derive_daily = cs.num_constraints(),
-        "verify_compliance_integrity: after derive_all_daily_public_keys"
-    );
-
-    // Derive shared secrets with conditional encryption based on flagging:
-    // - Detection tier: always to issuer (allows issuer to scan)
-    // - Core+Extension tiers: to issuer if flagged, to user if not flagged
-    let (ss_detection, ss_core, ss_extension) = derive_all_shared_secrets_with_flagging(
-        cs.clone(),
-        compliance_ephemeral_secret,
-        &pk_core,
-        &pk_extension,
-        &dk_pub,
+        &note_amount,
+        &asset_indexed_leaf.threshold,
         &is_flagged,
-        &note_diversified_generator,
-        &compliance_epk,
-        &compliance_epk_g,
     )?;
 
-    tracing::debug!(
-        constraints_after_shared_secrets = cs.num_constraints(),
-        "verify_compliance_integrity: after derive_all_shared_secrets_with_flagging"
-    );
+    // ACK per party from leaf's `d` scalar: ACK = d × ring_pk
+    let ack_receiver = derive_ack_from_leaf_d(&asset_indexed_leaf.ring_pk, &user_leaf_var.d)?;
+    let ack_sender = derive_ack_from_leaf_d(&asset_indexed_leaf.ring_pk, &counterparty_d)?;
 
-    verify_tiered_poseidon_encryption(
+    // Derive shared secrets with 3 independent ephemeral scalars
+    let (ss_detection, ss_core, ss_ext, ss_sext, r1_bits, r2_bits, r3_bits) =
+        derive_shared_secrets_output(
+            cs.clone(),
+            r_1,
+            r_2,
+            r_3,
+            &ack_receiver,
+            &ack_sender,
+            &asset_indexed_leaf.dk_pub,
+            &is_flagged,
+            &epk_1,
+            &epk_2,
+            &epk_3,
+        )?;
+
+    // Salt witness for detection tier
+    let salt_var = FqVar::new_witness(cs.clone(), || Ok(witness.salt))?;
+
+    verify_poseidon_encryption(
         cs.clone(),
         &is_regulated,
         &is_flagged,
         &ss_detection,
         &ss_core,
-        &ss_extension,
-        &compliance_epk,
+        &ss_ext,
+        &ss_sext,
+        &c2_core,
+        &c2_ext,
+        &c2_sext,
+        &epk_1,
+        &salt_var,
         note_amount,
         note_asset_id,
         note_diversified_generator,
@@ -759,12 +559,80 @@ pub fn verify_compliance_integrity(
         &compliance_ciphertext,
     )?;
 
-    tracing::debug!(
-        constraints_after_encryption = cs.num_constraints(),
-        "verify_compliance_integrity: after verify_tiered_poseidon_encryption"
-    );
+    // DLEQ verification: metadata hash + 3 tier proofs
+    // M = Poseidon_6(policy_id_hash, resource_hash, permission_hash, tier, target_timestamp, salt)
+    // All 3 tiers share the same metadata hash (same policy fields, same target_timestamp, same salt)
+    // but with different tier constants.
 
-    Ok(())
+    let tier_core = FqVar::new_constant(cs.clone(), Fq::from(1u64))?;
+    let tier_ext = FqVar::new_constant(cs.clone(), Fq::from(2u64))?;
+    let tier_sext = FqVar::new_constant(cs.clone(), Fq::from(3u64))?;
+
+    let m_core = compute_metadata_hash_r1cs(
+        cs.clone(),
+        &asset_indexed_leaf.policy_id_hash,
+        &asset_indexed_leaf.resource_hash,
+        &asset_indexed_leaf.permission_hash,
+        &tier_core,
+        &target_timestamp,
+        &salt_var,
+    )?;
+    let m_ext = compute_metadata_hash_r1cs(
+        cs.clone(),
+        &asset_indexed_leaf.policy_id_hash,
+        &asset_indexed_leaf.resource_hash,
+        &asset_indexed_leaf.permission_hash,
+        &tier_ext,
+        &target_timestamp,
+        &salt_var,
+    )?;
+    let m_sext = compute_metadata_hash_r1cs(
+        cs.clone(),
+        &asset_indexed_leaf.policy_id_hash,
+        &asset_indexed_leaf.resource_hash,
+        &asset_indexed_leaf.permission_hash,
+        &tier_sext,
+        &target_timestamp,
+        &salt_var,
+    )?;
+
+    // Core DLEQ (r_1, ACK_receiver)
+    verify_dleq_r1cs(
+        cs.clone(),
+        &r1_bits,
+        &ack_receiver,
+        &epk_1,
+        &m_core,
+        &dleq_c_1,
+        &dleq_s_1,
+        &is_regulated,
+    )?;
+
+    // Ext DLEQ (r_2, ACK_receiver)
+    verify_dleq_r1cs(
+        cs.clone(),
+        &r2_bits,
+        &ack_receiver,
+        &epk_2,
+        &m_ext,
+        &dleq_c_2,
+        &dleq_s_2,
+        &is_regulated,
+    )?;
+
+    // Sext DLEQ (r_3, ACK_sender — counterparty disclosure tier)
+    verify_dleq_r1cs(
+        cs,
+        &r3_bits,
+        &ack_sender,
+        &epk_3,
+        &m_sext,
+        &dleq_c_3,
+        &dleq_s_3,
+        &is_regulated,
+    )?;
+
+    Ok(r1_bits)
 }
 
 /// Allocate witness variables for compliance verification.
@@ -801,6 +669,30 @@ fn allocate_compliance_witnesses(
     ))
 }
 
+/// Convert an Fr scalar to circuit bit variables and verify EPK = r × G.
+fn alloc_esk_and_verify_epk(
+    cs: ConstraintSystemRef<Fq>,
+    esk: Fr,
+    published_epk: &ElementVar,
+) -> Result<Vec<Boolean<Fq>>, SynthesisError> {
+    use ark_ff::{BigInteger, PrimeField};
+
+    let esk_bigint = esk.into_bigint();
+    let esk_bits: Vec<bool> = (0..Fr::MODULUS_BIT_SIZE)
+        .map(|i| esk_bigint.get_bit(i as usize))
+        .collect();
+    let esk_bits_vars: Vec<Boolean<Fq>> = esk_bits
+        .iter()
+        .map(|bit| Boolean::new_witness(cs.clone(), || Ok(*bit)))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let generator_var = ElementVar::new_constant(cs, decaf377::Element::GENERATOR)?;
+    let computed_epk = generator_var.scalar_mul_le(esk_bits_vars.iter())?;
+    computed_epk.enforce_equal(published_epk)?;
+
+    Ok(esk_bits_vars)
+}
+
 /// Compare two FqVar values using bit decomposition.
 /// Returns `Boolean<Fq>` that is true if `a < b`.
 ///
@@ -831,103 +723,6 @@ fn fq_is_less_than(a: &FqVar, b: &FqVar) -> Result<Boolean<Fq>, SynthesisError> 
     }
 
     Ok(lt)
-}
-
-/// Verify that `is_flagged` witness matches the threshold comparison.
-///
-/// Enforces: `is_flagged == (amount >= threshold)`
-/// This is equivalent to: `is_flagged == !(amount < threshold)`
-fn verify_threshold_flag(
-    _cs: ConstraintSystemRef<Fq>,
-    amount: &FqVar,
-    threshold: &FqVar,
-    is_flagged: &Boolean<Fq>,
-) -> Result<(), SynthesisError> {
-    // Debug: log the values being compared
-    if let (Ok(amt), Ok(thresh), Ok(flagged)) =
-        (amount.value(), threshold.value(), is_flagged.value())
-    {
-        tracing::debug!(
-            amount = ?amt.to_bytes(),
-            threshold = ?thresh.to_bytes(),
-            is_flagged_witness = flagged,
-            "verify_threshold_flag: comparing amount vs threshold"
-        );
-    }
-
-    // Compute: amount < threshold
-    let amount_lt_threshold = fq_is_less_than(amount, threshold)?;
-
-    // Debug: log computed comparison result
-    if let Ok(lt) = amount_lt_threshold.value() {
-        tracing::debug!(
-            amount_lt_threshold = lt,
-            computed_is_flagged = !lt,
-            "verify_threshold_flag: computed comparison"
-        );
-    }
-
-    // Compute: amount >= threshold = !(amount < threshold)
-    let computed_is_flagged = amount_lt_threshold.not();
-    // Enforce: witness is_flagged matches computed value
-    is_flagged.enforce_equal(&computed_is_flagged)?;
-    Ok(())
-}
-
-/// Derive shared secrets with conditional encryption based on flagging.
-///
-/// - Detection tier: always to issuer's DK_pub (allows issuer to scan for their asset)
-/// - Core+Extension tiers: to issuer's DK_pub if flagged, to user's daily keys if not
-fn derive_all_shared_secrets_with_flagging(
-    cs: ConstraintSystemRef<Fq>,
-    compliance_ephemeral_secret: Fr,
-    pk_core: &ElementVar,
-    pk_extension: &ElementVar,
-    dk_pub: &ElementVar,
-    is_flagged: &Boolean<Fq>,
-    note_diversified_generator: &ElementVar,
-    compliance_epk: &ElementVar,
-    compliance_epk_g: &ElementVar,
-) -> Result<(ElementVar, ElementVar, ElementVar), SynthesisError> {
-    use ark_ff::{BigInteger, PrimeField};
-
-    // Convert ephemeral secret to bits for scalar multiplication
-    let esk_bigint = compliance_ephemeral_secret.into_bigint();
-    let esk_bits: Vec<bool> = (0..Fr::MODULUS_BIT_SIZE)
-        .map(|i| esk_bigint.get_bit(i as usize))
-        .collect();
-    let esk_bits_vars: Vec<Boolean<Fq>> = esk_bits
-        .iter()
-        .map(|bit| Boolean::new_witness(cs.clone(), || Ok(*bit)))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Verify EPK = r * B_d
-    let computed_epk = note_diversified_generator.scalar_mul_le(esk_bits_vars.iter())?;
-    computed_epk.enforce_equal(compliance_epk)?;
-
-    // Verify EPK_G = r * G
-    let generator_var = ElementVar::new_constant(cs.clone(), decaf377::Element::GENERATOR)?;
-    let computed_epk_g = generator_var.scalar_mul_le(esk_bits_vars.iter())?;
-    computed_epk_g.enforce_equal(compliance_epk_g)?;
-
-    // Compute user shared secrets: S_type = r * PK_type
-    let ss_core_user = pk_core.scalar_mul_le(esk_bits_vars.iter())?;
-    let ss_extension_user = pk_extension.scalar_mul_le(esk_bits_vars.iter())?;
-
-    // Compute issuer shared secret: S_issuer = r * DK_pub
-    let ss_issuer = dk_pub.scalar_mul_le(esk_bits_vars.iter())?;
-
-    // Detection tier always uses issuer's key (allows issuer to scan for their asset)
-    let ss_detection = ss_issuer.clone();
-
-    // Core+Extension tiers: conditionally select based on is_flagged
-    // If flagged: use issuer's shared secret
-    // If not flagged: use user's shared secret
-    let ss_core = ElementVar::conditionally_select(is_flagged, &ss_issuer, &ss_core_user)?;
-    let ss_extension =
-        ElementVar::conditionally_select(is_flagged, &ss_issuer, &ss_extension_user)?;
-
-    Ok((ss_detection, ss_core, ss_extension))
 }
 
 /// Verify asset registry using Indexed Merkle Tree (IMT).
@@ -1001,7 +796,7 @@ fn verify_asset_registry_imt(
 ///
 /// For regulated assets: enforces the user is registered in the compliance tree.
 /// For unregulated assets: enforcement is skipped (any witness accepted).
-fn verify_compliance_registry_path(
+fn verify_path(
     cs: ConstraintSystemRef<Fq>,
     user_leaf_var: &ComplianceLeafVar,
     is_regulated: &Boolean<Fq>,
@@ -1018,33 +813,31 @@ fn verify_compliance_registry_path(
         compliance_position.clone(),
     )?;
 
-    // Conditional enforcement: only if regulated
-    // Note: Removed redundant anchor != 0 check - validators reject invalid anchors
     calculated_user_root.conditional_enforce_equal(compliance_anchor, is_regulated)?;
 
     Ok(())
 }
 
-/// Verify tiered Poseidon stream cipher encryption with 3 different keys.
+/// Verify 4-tier Poseidon stream cipher encryption with hybrid KEM/DEM.
 ///
-/// Each ciphertext segment is encrypted with its own shared secret:
-/// - detection_tag: encrypted with ss_detection (1 Fq)
-/// - encrypted_core: encrypted with ss_core (3 Fqs)
-/// - encrypted_extension: encrypted with ss_extension (3 Fqs)
+/// Ciphertext layout: [detection:2] [core:3] [ext:3] [sext:3] = 11 Fqs.
+/// Detection slot 0: asset_id+flag. Detection slot 1: salt.
 ///
-/// Total: 7 Fq elements in compliance_ciphertext
-///
-/// Encryption verification is conditional on `is_regulated`:
-/// - For regulated assets: encryption is verified (user must encrypt correctly)
-/// - For unregulated assets: enforcement is skipped (IMT proof is sufficient)
-fn verify_tiered_poseidon_encryption(
+/// Detection uses epk_1. Core/ext/sext use seeds from C2 ElGamal envelopes.
+/// Conditional on `is_regulated` — unregulated assets skip enforcement.
+fn verify_poseidon_encryption(
     cs: ConstraintSystemRef<Fq>,
     is_regulated: &Boolean<Fq>,
     is_flagged: &Boolean<Fq>,
     ss_detection: &ElementVar,
     ss_core: &ElementVar,
-    ss_extension: &ElementVar,
-    compliance_epk: &ElementVar,
+    ss_ext: &ElementVar,
+    ss_sext: &ElementVar,
+    c2_core: &FqVar,
+    c2_ext: &FqVar,
+    c2_sext: &FqVar,
+    epk_1: &ElementVar,
+    salt: &FqVar,
     note_amount: FqVar,
     note_asset_id: FqVar,
     self_diversified_generator: ElementVar,
@@ -1053,18 +846,14 @@ fn verify_tiered_poseidon_encryption(
     counterparty_transmission_key: ElementVar,
     compliance_ciphertext: &[FqVar],
 ) -> Result<(), SynthesisError> {
-    // Expected ciphertext layout: [detection: 1] [core: 3] [extension: 3] = 7 Fqs
-    if compliance_ciphertext.len() != 7 {
+    if compliance_ciphertext.len() != 11 {
         return Err(SynthesisError::Unsatisfiable);
     }
 
-    let epk_fq = compliance_epk.compress_to_field()?;
-    let domain_sep =
-        FqVar::new_constant(cs.clone(), *crate::crypto::COMPLIANCE_STREAM_CIPHER_DOMAIN)?;
+    let epk_1_fq = epk_1.compress_to_field()?;
     let issuer_domain_sep =
         FqVar::new_constant(cs.clone(), *crate::crypto::ISSUER_DETECTION_DOMAIN)?;
 
-    // Build plaintext structure
     let plaintext_var = CompliancePlaintextVar {
         amount: note_amount,
         asset_id: note_asset_id,
@@ -1074,43 +863,40 @@ fn verify_tiered_poseidon_encryption(
         counterparty_transmission_key,
     };
 
-    // === DETECTION: 1 Fq element (asset_id with flag) ===
-    // Detection tier uses ISSUER_DETECTION_DOMAIN and ss_issuer (via ss_detection)
+    // === DETECTION: 2 Fq elements ===
     let seed_detection = poseidon377::r1cs::hash_2(
         cs.clone(),
         &issuer_domain_sep,
-        (ss_detection.compress_to_field()?, epk_fq.clone()),
+        (ss_detection.compress_to_field()?, epk_1_fq),
     )?;
 
-    // Detection plaintext = asset_id + (is_flagged ? 2^252 : 0)
-    // This packs the flag into bit 252 like the native code does
-    let flag_bit_value = {
-        use ark_ff::{BigInteger, BigInteger256};
-        let mut big = BigInteger256::from(1u64);
-        for _ in 0..252 {
-            big.mul2();
-        }
-        Fq::from(big)
-    };
-    let flag_bit_var = FqVar::new_constant(cs.clone(), flag_bit_value)?;
+    // Slot 0: asset_id + flag
+    let flag_bit_var = FqVar::new_constant(cs.clone(), flag_bit_fq())?;
     let flag_contribution = FqVar::conditionally_select(is_flagged, &flag_bit_var, &FqVar::zero())?;
     let detection_plaintext = &plaintext_var.detection_plaintext() + &flag_contribution;
 
-    let detection_counter = FqVar::new_constant(cs.clone(), Fq::from(0u64))?;
-    let detection_keystream = poseidon377::r1cs::hash_2(
+    let counter_0 = FqVar::new_constant(cs.clone(), Fq::from(0u64))?;
+    let keystream_0 = poseidon377::r1cs::hash_2(
         cs.clone(),
         &seed_detection,
-        (detection_counter, seed_detection.clone()),
+        (counter_0, seed_detection.clone()),
     )?;
-    let computed_detection = &detection_plaintext + &detection_keystream;
-    computed_detection.conditional_enforce_equal(&compliance_ciphertext[0], is_regulated)?;
+    let computed_detection_0 = &detection_plaintext + &keystream_0;
+    computed_detection_0.conditional_enforce_equal(&compliance_ciphertext[0], is_regulated)?;
 
-    // === CORE: 3 Fq elements (amount + self address) ===
-    let seed_core = poseidon377::r1cs::hash_2(
+    // Slot 1: salt
+    let counter_1 = FqVar::new_constant(cs.clone(), Fq::from(1u64))?;
+    let keystream_1 = poseidon377::r1cs::hash_2(
         cs.clone(),
-        &domain_sep,
-        (ss_core.compress_to_field()?, epk_fq.clone()),
+        &seed_detection,
+        (counter_1, seed_detection.clone()),
     )?;
+    let computed_detection_1 = salt + &keystream_1;
+    computed_detection_1.conditional_enforce_equal(&compliance_ciphertext[1], is_regulated)?;
+
+    // === CORE: 3 Fq elements (amount + self address), starting at index 2 ===
+    let ss_core_fq = ss_core.compress_to_field()?;
+    let seed_core = c2_core - &ss_core_fq;
 
     let core_plaintexts = plaintext_var.core_plaintext_fqs()?;
     for (i, plain_var) in core_plaintexts.iter().enumerate() {
@@ -1118,27 +904,468 @@ fn verify_tiered_poseidon_encryption(
         let keystream =
             poseidon377::r1cs::hash_2(cs.clone(), &seed_core, (counter, seed_core.clone()))?;
         let computed_cipher = plain_var + &keystream;
-        computed_cipher.conditional_enforce_equal(&compliance_ciphertext[1 + i], is_regulated)?;
+        computed_cipher.conditional_enforce_equal(&compliance_ciphertext[2 + i], is_regulated)?;
     }
 
-    // === EXTENSION: 3 Fq elements (counterparty address) ===
-    let seed_extension = poseidon377::r1cs::hash_2(
-        cs.clone(),
-        &domain_sep,
-        (ss_extension.compress_to_field()?, epk_fq),
-    )?;
+    // === EXT: 3 Fq elements (counterparty address), starting at index 5 ===
+    let ss_ext_fq = ss_ext.compress_to_field()?;
+    let seed_ext = c2_ext - &ss_ext_fq;
 
     let extension_plaintexts = plaintext_var.extension_plaintext_fqs()?;
     for (i, plain_var) in extension_plaintexts.iter().enumerate() {
         let counter = FqVar::new_constant(cs.clone(), Fq::from(i as u64))?;
-        let keystream = poseidon377::r1cs::hash_2(
-            cs.clone(),
-            &seed_extension,
-            (counter, seed_extension.clone()),
-        )?;
+        let keystream =
+            poseidon377::r1cs::hash_2(cs.clone(), &seed_ext, (counter, seed_ext.clone()))?;
         let computed_cipher = plain_var + &keystream;
-        computed_cipher.conditional_enforce_equal(&compliance_ciphertext[4 + i], is_regulated)?;
+        computed_cipher.conditional_enforce_equal(&compliance_ciphertext[5 + i], is_regulated)?;
     }
+
+    // === SEXT: 3 Fq elements (same plaintext as core), starting at index 8 ===
+    let ss_sext_fq = ss_sext.compress_to_field()?;
+    let seed_sext = c2_sext - &ss_sext_fq;
+
+    for (i, plain_var) in core_plaintexts.iter().enumerate() {
+        let counter = FqVar::new_constant(cs.clone(), Fq::from(i as u64))?;
+        let keystream =
+            poseidon377::r1cs::hash_2(cs.clone(), &seed_sext, (counter, seed_sext.clone()))?;
+        let computed_cipher = plain_var + &keystream;
+        computed_cipher.conditional_enforce_equal(&compliance_ciphertext[8 + i], is_regulated)?;
+    }
+
+    Ok(())
+}
+
+/// Compute the salted metadata hash in-circuit (mirrors native `compute_metadata_hash`).
+///
+/// M = Poseidon_6(DLEQ_METADATA_DOMAIN, (policy_id_hash, resource_hash, permission_hash, tier, target_timestamp, salt))
+pub fn compute_metadata_hash_r1cs(
+    cs: ConstraintSystemRef<Fq>,
+    policy_id_hash: &FqVar,
+    resource_hash: &FqVar,
+    permission_hash: &FqVar,
+    tier: &FqVar,
+    target_timestamp: &FqVar,
+    salt: &FqVar,
+) -> Result<FqVar, SynthesisError> {
+    let domain = FqVar::new_constant(cs.clone(), *crate::crypto::DLEQ_METADATA_DOMAIN)?;
+    poseidon377::r1cs::hash_6(
+        cs,
+        &domain,
+        (
+            policy_id_hash.clone(),
+            resource_hash.clone(),
+            permission_hash.clone(),
+            tier.clone(),
+            target_timestamp.clone(),
+            salt.clone(),
+        ),
+    )
+}
+
+/// Verify a DLEQ proof in-circuit (pure verifier — no k witness).
+///
+/// Reconstructs R and R' from published (c, s), recomputes the Fiat-Shamir challenge
+/// via Orbis-compatible hash_7, and compares the truncated (252-bit) challenge.
+///
+/// Conditional on `is_regulated` — unregulated assets skip enforcement.
+pub fn verify_dleq_r1cs(
+    cs: ConstraintSystemRef<Fq>,
+    r_bits: &[Boolean<Fq>],
+    ack: &ElementVar,
+    epk: &ElementVar,
+    metadata_hash: &FqVar,
+    published_c: &FqVar,
+    published_s: &FqVar,
+    is_regulated: &Boolean<Fq>,
+) -> Result<(), SynthesisError> {
+    // S = r × ACK (reuses r_bits already allocated for EPK verification)
+    let s_point = ack.scalar_mul_le(r_bits.iter())?;
+
+    // Reconstruct R and R' from verification equations:
+    // R_rec  = s × G - c × EPK
+    // R'_rec = s × ACK - c × S
+
+    // Decompose published_s to bits for scalar mul
+    let s_bits = published_s.to_bits_le()?;
+    // Decompose published_c to bits for scalar mul
+    let c_bits = published_c.to_bits_le()?;
+
+    // s × G (fixed-base)
+    let generator = ElementVar::new_constant(cs.clone(), decaf377::Element::GENERATOR)?;
+    let s_times_g = generator.scalar_mul_le(s_bits.iter())?;
+    // c × EPK (variable-base)
+    let c_times_epk = epk.scalar_mul_le(c_bits.iter())?;
+    // R_rec = s × G - c × EPK
+    let r_rec = s_times_g - &c_times_epk;
+
+    // s × ACK (variable-base)
+    let s_times_ack = ack.scalar_mul_le(s_bits.iter())?;
+    // c × S (variable-base)
+    let c_times_s = s_point.scalar_mul_le(c_bits.iter())?;
+    // R'_rec = s × ACK - c × S
+    let rp_rec = s_times_ack - &c_times_s;
+
+    // Compress all points for the challenge hash (Orbis-compatible ordering: M, G, ACK, EPK, S, R, R')
+    // G is a known constant — pre-compute its Fq value to avoid compress_to_field on constant ElementVar
+    let g_fq = FqVar::new_constant(
+        cs.clone(),
+        decaf377::Element::GENERATOR.vartime_compress_to_field(),
+    )?;
+    let ack_fq = ack.compress_to_field()?;
+    let epk_fq = epk.compress_to_field()?;
+    let s_fq = s_point.compress_to_field()?;
+    let r_fq = r_rec.compress_to_field()?;
+    let rp_fq = rp_rec.compress_to_field()?;
+
+    // Recompute challenge: c = hash_7(ENCRYPT_PROOF_DOMAIN, (M, G, ACK, EPK, S, R, R'))
+    let challenge_domain = FqVar::new_constant(
+        cs.clone(),
+        Fq::from_le_bytes_mod_order(crate::crypto::ENCRYPT_PROOF_DOMAIN),
+    )?;
+    let c_computed = poseidon377::r1cs::hash_7(
+        cs.clone(),
+        &challenge_domain,
+        (
+            metadata_hash.clone(),
+            g_fq,
+            ack_fq,
+            epk_fq,
+            s_fq,
+            r_fq,
+            rp_fq,
+        ),
+    )?;
+
+    // Truncation: compare only the low Fr::MODULUS_BIT_SIZE-1 (=250) bits,
+    // matching fq_to_challenge_scalar. The hash output is a full Fq; the published c
+    // stores the truncated value (high bits zero). We enforce published c's high bits
+    // are zero to prevent malleability.
+    // Reuse c_bits (from published_c.to_bits_le() above) to avoid double decomposition.
+    let keep_bits = (Fr::MODULUS_BIT_SIZE as usize) - 1;
+    let c_computed_bits = c_computed.to_bits_le()?;
+
+    // Enforce published c high bits are zero (prevents malleability)
+    for bit in c_bits.iter().skip(keep_bits) {
+        bit.conditional_enforce_equal(&Boolean::FALSE, is_regulated)?;
+    }
+
+    // Compare only the low keep_bits between hash output and published c
+    for i in 0..keep_bits {
+        c_computed_bits[i].conditional_enforce_equal(&c_bits[i], is_regulated)?;
+    }
+
+    Ok(())
+}
+
+/// Simplified threshold flag verification for spend circuit.
+///
+/// Unlike `verify_threshold_flag` (used by outputs), this version has NO self-transfer check.
+/// The spend no longer knows the counterparty, so it always flags if `amount >= threshold`.
+pub fn verify_threshold_flag_simple(
+    _cs: ConstraintSystemRef<Fq>,
+    amount: &FqVar,
+    threshold: &FqVar,
+    is_flagged: &Boolean<Fq>,
+) -> Result<(), SynthesisError> {
+    let amount_lt_threshold = fq_is_less_than(amount, threshold)?;
+    let amount_gte_threshold = amount_lt_threshold.not();
+    is_flagged.enforce_equal(&amount_gte_threshold)?;
+    Ok(())
+}
+
+/// Derive shared secrets for spend circuit.
+///
+/// Single r_s: EPK = r_s × G. Detection: r_s × dk_pub. Core: r_s × ack_core (or dk_pub if flagged).
+/// Returns `(ss_detection, ss_core, r_s_bits)`.
+pub fn derive_shared_secrets_spend(
+    cs: ConstraintSystemRef<Fq>,
+    r_s: Fr,
+    ack_core: &ElementVar,
+    dk_pub: &ElementVar,
+    is_flagged: &Boolean<Fq>,
+    published_epk: &ElementVar,
+) -> Result<(ElementVar, ElementVar, Vec<Boolean<Fq>>), SynthesisError> {
+    let r_s_bits = alloc_esk_and_verify_epk(cs.clone(), r_s, published_epk)?;
+
+    // ss_core_user = r_s × ACK_core
+    let ss_core_user = ack_core.scalar_mul_le(r_s_bits.iter())?;
+    // ss_issuer = r_s × dk_pub (used for detection always, core if flagged)
+    let ss_issuer = dk_pub.scalar_mul_le(r_s_bits.iter())?;
+
+    let ss_detection = ss_issuer.clone();
+    let ss_core = ElementVar::conditionally_select(is_flagged, &ss_issuer, &ss_core_user)?;
+
+    Ok((ss_detection, ss_core, r_s_bits))
+}
+
+/// Derive shared secrets for output circuit with 3 independent ephemeral scalars.
+///
+/// r_1 → detection + core, r_2 → ext, r_3 → sext. All EPKs on G.
+/// Core/ext use `ack_receiver`, sext uses `ack_sender` for counterparty disclosure.
+/// Returns `(ss_detection, ss_core, ss_ext, ss_sext, r1_bits, r2_bits, r3_bits)`.
+pub fn derive_shared_secrets_output(
+    cs: ConstraintSystemRef<Fq>,
+    r_1: Fr,
+    r_2: Fr,
+    r_3: Fr,
+    ack_receiver: &ElementVar,
+    ack_sender: &ElementVar,
+    dk_pub: &ElementVar,
+    is_flagged: &Boolean<Fq>,
+    epk_1: &ElementVar,
+    epk_2: &ElementVar,
+    epk_3: &ElementVar,
+) -> Result<
+    (
+        ElementVar,
+        ElementVar,
+        ElementVar,
+        ElementVar,
+        Vec<Boolean<Fq>>,
+        Vec<Boolean<Fq>>,
+        Vec<Boolean<Fq>>,
+    ),
+    SynthesisError,
+> {
+    // Alloc and verify EPK_i = r_i × G for each scalar
+    let r1_bits = alloc_esk_and_verify_epk(cs.clone(), r_1, epk_1)?;
+    let r2_bits = alloc_esk_and_verify_epk(cs.clone(), r_2, epk_2)?;
+    let r3_bits = alloc_esk_and_verify_epk(cs.clone(), r_3, epk_3)?;
+
+    // User shared secrets: core/ext use ack_receiver, sext uses ack_sender
+    let ss_core_user = ack_receiver.scalar_mul_le(r1_bits.iter())?;
+    let ss_ext_user = ack_receiver.scalar_mul_le(r2_bits.iter())?;
+    let ss_sext_user = ack_sender.scalar_mul_le(r3_bits.iter())?;
+
+    // Issuer shared secrets: r_i × dk_pub
+    let ss_issuer_1 = dk_pub.scalar_mul_le(r1_bits.iter())?;
+    let ss_issuer_2 = dk_pub.scalar_mul_le(r2_bits.iter())?;
+    let ss_issuer_3 = dk_pub.scalar_mul_le(r3_bits.iter())?;
+
+    // Detection always uses issuer (r_1 × dk_pub)
+    let ss_detection = ss_issuer_1.clone();
+
+    // Conditional selection based on flagging
+    let ss_core = ElementVar::conditionally_select(is_flagged, &ss_issuer_1, &ss_core_user)?;
+    let ss_ext = ElementVar::conditionally_select(is_flagged, &ss_issuer_2, &ss_ext_user)?;
+    let ss_sext = ElementVar::conditionally_select(is_flagged, &ss_issuer_3, &ss_sext_user)?;
+
+    Ok((
+        ss_detection,
+        ss_core,
+        ss_ext,
+        ss_sext,
+        r1_bits,
+        r2_bits,
+        r3_bits,
+    ))
+}
+
+/// Verify Poseidon encryption for spend circuit (detection + core only).
+///
+/// Expected ciphertext layout: [detection: 2] [core: 3] = 5 Fq elements.
+/// Detection slot 0: asset_id+flag. Detection slot 1: salt.
+fn verify_poseidon_encryption_spend(
+    cs: ConstraintSystemRef<Fq>,
+    is_regulated: &Boolean<Fq>,
+    is_flagged: &Boolean<Fq>,
+    ss_detection: &ElementVar,
+    ss_core: &ElementVar,
+    c2_core: &FqVar,
+    epk: &ElementVar,
+    salt: &FqVar,
+    note_amount: FqVar,
+    note_asset_id: FqVar,
+    self_diversified_generator: ElementVar,
+    self_transmission_key: ElementVar,
+    compliance_ciphertext: &[FqVar],
+) -> Result<(), SynthesisError> {
+    if compliance_ciphertext.len() != 5 {
+        return Err(SynthesisError::Unsatisfiable);
+    }
+
+    let epk_fq = epk.compress_to_field()?;
+    let issuer_domain_sep =
+        FqVar::new_constant(cs.clone(), *crate::crypto::ISSUER_DETECTION_DOMAIN)?;
+
+    // Counterparty fields unused in spend — set to self
+    let plaintext_var = CompliancePlaintextVar {
+        amount: note_amount,
+        asset_id: note_asset_id,
+        self_diversified_generator: self_diversified_generator.clone(),
+        self_transmission_key: self_transmission_key.clone(),
+        counterparty_diversified_generator: self_diversified_generator,
+        counterparty_transmission_key: self_transmission_key,
+    };
+
+    // Detection seed from issuer shared secret + epk_1 compressed
+    let seed_detection = poseidon377::r1cs::hash_2(
+        cs.clone(),
+        &issuer_domain_sep,
+        (ss_detection.compress_to_field()?, epk_fq),
+    )?;
+
+    // Detection slot 0: asset_id + flag
+    let flag_bit_var = FqVar::new_constant(cs.clone(), flag_bit_fq())?;
+    let flag_contribution = FqVar::conditionally_select(is_flagged, &flag_bit_var, &FqVar::zero())?;
+    let detection_plaintext = &plaintext_var.detection_plaintext() + &flag_contribution;
+
+    let counter_0 = FqVar::new_constant(cs.clone(), Fq::from(0u64))?;
+    let keystream_0 = poseidon377::r1cs::hash_2(
+        cs.clone(),
+        &seed_detection,
+        (counter_0, seed_detection.clone()),
+    )?;
+    let computed_detection_0 = &detection_plaintext + &keystream_0;
+    computed_detection_0.conditional_enforce_equal(&compliance_ciphertext[0], is_regulated)?;
+
+    // Detection slot 1: salt
+    let counter_1 = FqVar::new_constant(cs.clone(), Fq::from(1u64))?;
+    let keystream_1 = poseidon377::r1cs::hash_2(
+        cs.clone(),
+        &seed_detection,
+        (counter_1, seed_detection.clone()),
+    )?;
+    let computed_detection_1 = salt + &keystream_1;
+    computed_detection_1.conditional_enforce_equal(&compliance_ciphertext[1], is_regulated)?;
+
+    // Core: seed from C2 envelope (indices shifted by +1 for the extra detection slot)
+    let ss_core_fq = ss_core.compress_to_field()?;
+    let seed_core = c2_core - &ss_core_fq;
+
+    let core_plaintexts = plaintext_var.core_plaintext_fqs()?;
+    for (i, plain_var) in core_plaintexts.iter().enumerate() {
+        let counter = FqVar::new_constant(cs.clone(), Fq::from(i as u64))?;
+        let keystream =
+            poseidon377::r1cs::hash_2(cs.clone(), &seed_core, (counter, seed_core.clone()))?;
+        let computed_cipher = plain_var + &keystream;
+        computed_cipher.conditional_enforce_equal(&compliance_ciphertext[2 + i], is_regulated)?;
+    }
+
+    Ok(())
+}
+
+/// Spend-only compliance verification (detection + core, no extension).
+///
+/// Single r_s: EPK = r_s × G. ACK_core derived in-circuit from ring_pk.
+/// Policy fields (dk_pub, threshold, ring_pk) are private witnesses bound by IMT proof.
+pub fn verify_compliance_spend(
+    cs: ConstraintSystemRef<Fq>,
+    // Public Inputs
+    asset_anchor: FqVar,
+    compliance_anchor: FqVar,
+    epk: ElementVar,
+    c2_core: FqVar,
+    compliance_ciphertext: Vec<FqVar>, // 5 Fqs: detection(2) + core(3)
+    // DLEQ public inputs (1 tier × 2 = 2 Fq values)
+    target_timestamp: FqVar,
+    dleq_c: FqVar,
+    dleq_s: FqVar,
+    // Note data
+    note_asset_id: FqVar,
+    note_amount: FqVar,
+    note_diversified_generator: ElementVar,
+    note_transmission_key: ElementVar,
+    // Witness
+    r_s: Fr,
+    witness: ComplianceWitness,
+) -> Result<(), SynthesisError> {
+    let (
+        is_regulated,
+        asset_indexed_leaf,
+        asset_position,
+        compliance_position,
+        user_leaf_var,
+        is_flagged,
+    ) = allocate_compliance_witnesses(cs.clone(), &witness)?;
+
+    verify_asset_registry_imt(
+        cs.clone(),
+        note_asset_id.clone(),
+        &is_regulated,
+        &asset_indexed_leaf,
+        &witness.asset_path,
+        &asset_position,
+        &asset_anchor,
+    )?;
+
+    verify_path(
+        cs.clone(),
+        &user_leaf_var,
+        &is_regulated,
+        &witness.compliance_path,
+        &compliance_position,
+        &compliance_anchor,
+    )?;
+
+    // Leaf↔note binding: the Merkle-proven leaf must match the note's address and asset.
+    let leaf_g_d = user_leaf_var.address.diversified_generator();
+    let leaf_pk_d = user_leaf_var.address.transmission_key();
+    leaf_g_d.enforce_equal(&note_diversified_generator)?;
+    leaf_pk_d.enforce_equal(&note_transmission_key)?;
+    user_leaf_var.asset_id.enforce_equal(&note_asset_id)?;
+
+    // Policy fields extracted from IndexedLeafVar (bound by IMT proof)
+    verify_threshold_flag_simple(
+        cs.clone(),
+        &note_amount,
+        &asset_indexed_leaf.threshold,
+        &is_flagged,
+    )?;
+
+    // Single ACK from leaf's `d` scalar: ACK = d × ring_pk
+    let ack = derive_ack_from_leaf_d(&asset_indexed_leaf.ring_pk, &user_leaf_var.d)?;
+
+    let (ss_detection, ss_core, r_s_bits) = derive_shared_secrets_spend(
+        cs.clone(),
+        r_s,
+        &ack,
+        &asset_indexed_leaf.dk_pub,
+        &is_flagged,
+        &epk,
+    )?;
+
+    // Salt witness for detection tier
+    let salt_var = FqVar::new_witness(cs.clone(), || Ok(witness.salt))?;
+
+    verify_poseidon_encryption_spend(
+        cs.clone(),
+        &is_regulated,
+        &is_flagged,
+        &ss_detection,
+        &ss_core,
+        &c2_core,
+        &epk,
+        &salt_var,
+        note_amount,
+        note_asset_id,
+        note_diversified_generator,
+        note_transmission_key,
+        &compliance_ciphertext,
+    )?;
+
+    // DLEQ verification: metadata hash + 1 tier proof (core, tier=1)
+    let tier_core = FqVar::new_constant(cs.clone(), Fq::from(1u64))?;
+    let m_core = compute_metadata_hash_r1cs(
+        cs.clone(),
+        &asset_indexed_leaf.policy_id_hash,
+        &asset_indexed_leaf.resource_hash,
+        &asset_indexed_leaf.permission_hash,
+        &tier_core,
+        &target_timestamp,
+        &salt_var,
+    )?;
+
+    verify_dleq_r1cs(
+        cs,
+        &r_s_bits,
+        &ack,
+        &epk,
+        &m_core,
+        &dleq_c,
+        &dleq_s,
+        &is_regulated,
+    )?;
 
     Ok(())
 }
@@ -1150,61 +1377,40 @@ fn verify_tiered_poseidon_encryption(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::structs::AssetPolicy;
     use crate::IndexedMerkleTree;
     use ark_relations::r1cs::ConstraintSystem;
     use decaf377::{Element, Fr};
     use penumbra_sdk_asset::asset;
-    use penumbra_sdk_keys::keys::{Diversifier, UserComplianceKey};
+    use penumbra_sdk_keys::keys::Diversifier;
     use penumbra_sdk_keys::Address;
     use rand_core::OsRng;
 
-    /// Test: AddressComplianceKeyVar allocation and daily key derivation
+    fn test_policy() -> AssetPolicy {
+        AssetPolicy::default_unregulated()
+    }
+
+    /// Test: derive_ack_from_leaf_d matches native d × ring_pk
     #[test]
-    fn test_wallet_compliance_key_var_derivation() {
+    fn test_ack_derivation_circuit_vs_native() {
         let mut rng = OsRng;
         let cs = ConstraintSystem::<Fq>::new_ref();
 
-        // Create a master key and derive a wallet key
-        let uck_scalar = Fr::rand(&mut rng);
-        let uck = UserComplianceKey::new(uck_scalar);
-        let diversifier = Diversifier([7u8; 16]);
-        let ack = uck.derive_address_key(&diversifier);
+        let sk_ring = Fr::rand(&mut rng);
+        let ring_pk = Element::GENERATOR * sk_ring;
+        let d = Fq::from(42u64);
 
-        // Allocate ACK in the circuit
-        let ack_var =
-            AddressComplianceKeyVar::new_variable(cs.clone(), || Ok(&ack), AllocationMode::Witness)
-                .expect("allocation should succeed");
+        // Native: ACK = d × ring_pk (d interpreted as scalar via from_le_bytes_mod_order)
+        let d_fr = Fr::from_le_bytes_mod_order(&d.to_bytes());
+        let ack_native = ring_pk * d_fr;
 
-        // Allocate date
-        let date = 19000u64;
-        let date_var = FqVar::new_witness(cs.clone(), || Ok(Fq::from(date)))
-            .expect("date allocation should succeed");
+        // Circuit derivation
+        let ring_pk_var = ElementVar::new_witness(cs.clone(), || Ok(ring_pk)).unwrap();
+        let d_var = FqVar::new_witness(cs.clone(), || Ok(d)).unwrap();
+        let ack_circuit = derive_ack_from_leaf_d(&ring_pk_var, &d_var).unwrap();
 
-        // Get diversified generator
-        let div_gen = diversifier.diversified_generator();
-        let div_gen_var = ElementVar::new_witness(cs.clone(), || Ok(div_gen))
-            .expect("div gen allocation should succeed");
-
-        // Derive daily public key in circuit using Core domain
-        let pk_day_var = ack_var
-            .derive_daily_public_key_with_domain(cs.clone(), &date_var, &div_gen_var, &CORE_DOMAIN)
-            .expect("derivation should succeed");
-
-        // Verify the circuit is satisfied
-        assert!(cs.is_satisfied().unwrap(), "Circuit should be satisfied");
-
-        // Compute the expected value natively using Core key type
-        let pk_day_native =
-            ack.derive_daily_public_key(penumbra_sdk_keys::keys::KeyType::Core, date, &diversifier);
-
-        // Get the value from the circuit variable
-        let pk_day_circuit = pk_day_var.value().expect("should have value");
-
-        // They should match!
-        assert_eq!(
-            pk_day_circuit, pk_day_native,
-            "Circuit and native derivation should match"
-        );
+        assert!(cs.is_satisfied().unwrap());
+        assert_eq!(ack_circuit.value().unwrap(), ack_native);
     }
 
     /// Test: ComplianceLeafVar commitment matches native implementation
@@ -1213,13 +1419,6 @@ mod tests {
         let mut rng = OsRng;
         let cs = ConstraintSystem::<Fq>::new_ref();
 
-        // Create a compliance leaf
-        let uck_scalar = Fr::rand(&mut rng);
-        let uck = UserComplianceKey::new(uck_scalar);
-        let diversifier = Diversifier([1u8; 16]);
-        let ack = uck.derive_address_key(&diversifier);
-
-        // Create a test address
         let scalar = Fr::rand(&mut rng);
         let point = Element::GENERATOR * scalar;
         let pk_d = decaf377_ka::Public(point.vartime_compress().0);
@@ -1227,92 +1426,27 @@ mod tests {
         use rand_core::RngCore;
         rng.fill_bytes(&mut ck_d_bytes);
         let ck_d = decaf377_fmd::ClueKey(ck_d_bytes);
+        let diversifier = Diversifier([1u8; 16]);
         let address = Address::from_components(diversifier, pk_d, ck_d).expect("valid address");
 
         let leaf = ComplianceLeaf {
-            address: address,
-            key: ack,
+            address,
             asset_id: asset::Id(Fq::from(42u64)),
+            d: Fq::from(123u64),
         };
 
-        // Compute native commitment
         let native_commitment = leaf.commit();
 
-        // Allocate leaf in circuit
         let leaf_var =
             ComplianceLeafVar::new_variable(cs.clone(), || Ok(&leaf), AllocationMode::Witness)
                 .expect("leaf allocation should succeed");
 
-        // Compute commitment in circuit
         let circuit_commitment = leaf_var
             .commit(cs.clone())
             .expect("commitment should succeed");
 
-        // Verify circuit is satisfied
-        assert!(cs.is_satisfied().unwrap(), "Circuit should be satisfied");
-
-        // Get the value from the circuit
-        let circuit_commitment_value = circuit_commitment.value().expect("should have value");
-
-        // They should match!
-        assert_eq!(
-            circuit_commitment_value, native_commitment.0,
-            "Circuit and native commitments should match"
-        );
-    }
-
-    /// Test: verify_compliance_encryption gadget
-    #[test]
-    fn test_verify_compliance_encryption() {
-        let mut rng = OsRng;
-        let cs = ConstraintSystem::<Fq>::new_ref();
-
-        // Setup: Create keys and derive daily public key
-        let uck_scalar = Fr::rand(&mut rng);
-        let uck = UserComplianceKey::new(uck_scalar);
-        let diversifier = Diversifier([3u8; 16]);
-        let ack = uck.derive_address_key(&diversifier);
-
-        let date = 19000u64;
-        let pk_day =
-            ack.derive_daily_public_key(penumbra_sdk_keys::keys::KeyType::Core, date, &diversifier);
-
-        // Generate ephemeral secret and compute ECDH
-        let ephemeral_secret = Fr::rand(&mut rng);
-        let div_gen = diversifier.diversified_generator();
-        let epk = div_gen * ephemeral_secret; // R = r * B_d
-        let shared_secret = pk_day * ephemeral_secret; // S = r * PK_day
-
-        // Allocate everything in the circuit
-        let ephemeral_secret_var = FqVar::new_witness(cs.clone(), || {
-            Ok(Fq::from_le_bytes_mod_order(&ephemeral_secret.to_bytes()))
-        })
-        .expect("ephemeral secret allocation");
-
-        let pk_day_var =
-            ElementVar::new_input(cs.clone(), || Ok(pk_day)).expect("pk_day allocation");
-
-        let div_gen_var =
-            ElementVar::new_input(cs.clone(), || Ok(div_gen)).expect("div gen allocation");
-
-        let epk_var = ElementVar::new_input(cs.clone(), || Ok(epk)).expect("epk allocation");
-
-        let shared_secret_var = ElementVar::new_witness(cs.clone(), || Ok(shared_secret))
-            .expect("shared secret allocation");
-
-        // Run the verification gadget
-        verify_compliance_encryption(
-            cs.clone(),
-            &ephemeral_secret_var,
-            &pk_day_var,
-            &div_gen_var,
-            &epk_var,
-            &shared_secret_var,
-        )
-        .expect("verification should succeed");
-
-        // Verify the circuit is satisfied
-        assert!(cs.is_satisfied().unwrap(), "Circuit should be satisfied");
+        assert!(cs.is_satisfied().unwrap());
+        assert_eq!(circuit_commitment.value().unwrap(), native_commitment.0,);
     }
 
     /// Test: verify_quad_path alone with IMT hashing
@@ -1370,13 +1504,8 @@ mod tests {
 
         let cs = ConstraintSystem::<Fq>::new_ref();
 
-        // Create a test leaf (sentinel)
-        let leaf = IndexedLeaf {
-            value: Fq::from(0u64),
-            next_index: 0,
-            next_value: *FQ_MAX,
-            policy: crate::AssetPolicy::default_unregulated(),
-        };
+        // Create a test leaf (sentinel with default policy)
+        let leaf = IndexedLeaf::with_default_policy(Fq::from(0u64), 0, *FQ_MAX);
 
         // Compute native commitment
         let native_commit = leaf.commit();
@@ -1449,7 +1578,8 @@ mod tests {
         // Create an IMT and insert a regulated asset
         let mut tree = IndexedMerkleTree::new();
         let asset_id = Fq::from(42u64);
-        tree.insert(asset_id).expect("insert should succeed");
+        tree.insert(asset_id, &test_policy())
+            .expect("insert should succeed");
 
         // Get membership proof
         let (position, indexed_leaf, auth_path) = tree
@@ -1551,18 +1681,11 @@ mod tests {
         let tree = IndexedMerkleTree::new();
         let asset_id = STAKING_TOKEN_ASSET_ID.0; // Real 256-bit hash value
 
-        eprintln!("Testing with STAKING_TOKEN_ASSET_ID: {:?}", asset_id);
-
         // Get non-membership proof (sentinel proves the gap)
         let (position, indexed_leaf, auth_path) = tree
             .non_membership_proof(asset_id)
             .expect("non-membership proof should succeed");
         let anchor = tree.root();
-
-        eprintln!(
-            "Proof: position={}, leaf.value={:?}, leaf.next_value={:?}",
-            position, indexed_leaf.value, indexed_leaf.next_value
-        );
 
         // Verify the native proof is valid first
         assert!(
@@ -1593,17 +1716,8 @@ mod tests {
         )
         .expect("verification should succeed");
 
-        let satisfied = cs.is_satisfied().unwrap();
-        eprintln!("Circuit satisfied: {}", satisfied);
-        if !satisfied {
-            eprintln!("Unsatisfied constraints:");
-            for (i, constraint) in cs.which_is_unsatisfied().unwrap().iter().enumerate() {
-                eprintln!("  {}: {:?}", i, constraint);
-            }
-        }
-
         assert!(
-            satisfied,
+            cs.is_satisfied().unwrap(),
             "Circuit should be satisfied for non-membership proof with large asset_id"
         );
     }
@@ -1615,7 +1729,7 @@ mod tests {
 
         let mut tree = IndexedMerkleTree::new();
         let real_asset = Fq::from(42u64);
-        tree.insert(real_asset).unwrap();
+        tree.insert(real_asset, &test_policy()).unwrap();
 
         // Get valid proof for real_asset
         let (position, indexed_leaf, auth_path) =
@@ -1653,8 +1767,8 @@ mod tests {
         let cs = ConstraintSystem::<Fq>::new_ref();
 
         let mut tree = IndexedMerkleTree::new();
-        tree.insert(Fq::from(100u64)).unwrap();
-        tree.insert(Fq::from(300u64)).unwrap();
+        tree.insert(Fq::from(100u64), &test_policy()).unwrap();
+        tree.insert(Fq::from(300u64), &test_policy()).unwrap();
 
         // Get non-membership proof for value 200 (valid gap: 100 < 200 < 300)
         let (position, indexed_leaf, auth_path) = tree
@@ -1693,7 +1807,7 @@ mod tests {
         let cs = ConstraintSystem::<Fq>::new_ref();
 
         let mut tree = IndexedMerkleTree::new();
-        tree.insert(Fq::from(42u64)).unwrap();
+        tree.insert(Fq::from(42u64), &test_policy()).unwrap();
 
         let (position, indexed_leaf, auth_path) = tree
             .membership_proof(Fq::from(42u64))
@@ -1723,6 +1837,221 @@ mod tests {
         assert!(
             !cs.is_satisfied().unwrap(),
             "Circuit should FAIL with wrong anchor"
+        );
+    }
+
+    #[test]
+    fn test_dleq_circuit_satisfied() {
+        use crate::crypto::{compute_dleq_native, compute_metadata_hash};
+        use ark_ff::{BigInteger, PrimeField};
+
+        // Run multiple iterations with different derived scalars
+        for i in 1u64..20 {
+            let cs = ConstraintSystem::<Fq>::new_ref();
+
+            // Deterministic scalars derived from loop index
+            let r = Fr::from(100 + i);
+            let ring_sk = Fr::from(200 + i);
+            let ring_pk = decaf377::Element::GENERATOR * ring_sk;
+
+            let d_fr = Fr::from(300 + i);
+            let ack = ring_pk * d_fr;
+            let epk = decaf377::Element::GENERATOR * r;
+
+            let k = Fr::from(400 + i);
+            let salt = Fq::from(500 + i);
+            let target_timestamp = Fq::from(1_700_000_000u64);
+
+            let metadata_hash = compute_metadata_hash(
+                Fq::from(1u64),
+                Fq::from(2u64),
+                Fq::from(3u64),
+                Fq::from(1u64),
+                target_timestamp,
+                salt,
+            );
+
+            let dleq = compute_dleq_native(r, k, &ack, &epk, metadata_hash);
+
+            let c_fq = dleq.c;
+            let s_fq = Fq::from_le_bytes_mod_order(&dleq.s.to_bytes());
+
+            let ack_var = ElementVar::new_witness(cs.clone(), || Ok(ack)).unwrap();
+            let epk_var = ElementVar::new_witness(cs.clone(), || Ok(epk)).unwrap();
+            let metadata_var = FqVar::new_witness(cs.clone(), || Ok(metadata_hash)).unwrap();
+            let published_c_var = FqVar::new_input(cs.clone(), || Ok(c_fq)).unwrap();
+            let published_s_var = FqVar::new_input(cs.clone(), || Ok(s_fq)).unwrap();
+            let is_regulated = Boolean::new_witness(cs.clone(), || Ok(true)).unwrap();
+
+            let r_bigint = r.into_bigint();
+            let r_bits: Vec<Boolean<Fq>> = (0..Fr::MODULUS_BIT_SIZE)
+                .map(|j| {
+                    Boolean::new_witness(cs.clone(), || Ok(r_bigint.get_bit(j as usize))).unwrap()
+                })
+                .collect();
+
+            verify_dleq_r1cs(
+                cs.clone(),
+                &r_bits,
+                &ack_var,
+                &epk_var,
+                &metadata_var,
+                &published_c_var,
+                &published_s_var,
+                &is_regulated,
+            )
+            .unwrap();
+
+            assert!(
+                cs.is_satisfied().unwrap(),
+                "DLEQ circuit should be satisfied with valid proof (i={i})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dleq_wrong_metadata_fails() {
+        use crate::crypto::{compute_dleq_native, compute_metadata_hash};
+        use ark_ff::{BigInteger, PrimeField};
+
+        let mut rng = rand::thread_rng();
+        let cs = ConstraintSystem::<Fq>::new_ref();
+
+        let r = Fr::rand(&mut rng);
+        let ring_sk = Fr::rand(&mut rng);
+        let ring_pk = decaf377::Element::GENERATOR * ring_sk;
+        let d_fr = Fr::rand(&mut rng);
+        let ack = ring_pk * d_fr;
+        let epk = decaf377::Element::GENERATOR * r;
+        let k = Fr::rand(&mut rng);
+
+        let metadata_hash = compute_metadata_hash(
+            Fq::from(1u64),
+            Fq::from(2u64),
+            Fq::from(3u64),
+            Fq::from(1u64),
+            Fq::from(1_700_000_000u64),
+            Fq::rand(&mut rng),
+        );
+
+        let dleq = compute_dleq_native(r, k, &ack, &epk, metadata_hash);
+        let c_fq = dleq.c;
+        let s_fq = Fq::from_le_bytes_mod_order(&dleq.s.to_bytes());
+
+        // Use WRONG metadata in circuit
+        let wrong_metadata = compute_metadata_hash(
+            Fq::from(99u64),
+            Fq::from(2u64),
+            Fq::from(3u64),
+            Fq::from(1u64),
+            Fq::from(1_700_000_000u64),
+            Fq::rand(&mut rng),
+        );
+
+        let ack_var = ElementVar::new_witness(cs.clone(), || Ok(ack)).unwrap();
+        let epk_var = ElementVar::new_witness(cs.clone(), || Ok(epk)).unwrap();
+        let metadata_var = FqVar::new_witness(cs.clone(), || Ok(wrong_metadata)).unwrap();
+        let published_c_var = FqVar::new_input(cs.clone(), || Ok(c_fq)).unwrap();
+        let published_s_var = FqVar::new_input(cs.clone(), || Ok(s_fq)).unwrap();
+        let is_regulated = Boolean::new_witness(cs.clone(), || Ok(true)).unwrap();
+
+        let r_bigint = r.into_bigint();
+        let r_bits: Vec<Boolean<Fq>> = (0..Fr::MODULUS_BIT_SIZE)
+            .map(|i| Boolean::new_witness(cs.clone(), || Ok(r_bigint.get_bit(i as usize))).unwrap())
+            .collect();
+
+        verify_dleq_r1cs(
+            cs.clone(),
+            &r_bits,
+            &ack_var,
+            &epk_var,
+            &metadata_var,
+            &published_c_var,
+            &published_s_var,
+            &is_regulated,
+        )
+        .unwrap();
+
+        assert!(
+            !cs.is_satisfied().unwrap(),
+            "DLEQ circuit should FAIL with wrong metadata"
+        );
+    }
+
+    /// Minimal test: hash_7 in R1CS matches native hash_7
+    #[test]
+    fn test_hash7_r1cs_matches_native() {
+        let cs = ConstraintSystem::<Fq>::new_ref();
+
+        // Known inputs
+        let domain = Fq::from_le_bytes_mod_order(crate::crypto::ENCRYPT_PROOF_DOMAIN);
+        let a = Fq::from(1u64);
+        let b = Fq::from(2u64);
+        let c = Fq::from(3u64);
+        let d = Fq::from(4u64);
+        let e = Fq::from(5u64);
+        let f = Fq::from(6u64);
+        let g = Fq::from(7u64);
+
+        // Native hash
+        let expected = poseidon377::hash_7(&domain, (a, b, c, d, e, f, g));
+
+        // Circuit hash
+        let domain_var = FqVar::new_constant(cs.clone(), domain).unwrap();
+        let a_var = FqVar::new_witness(cs.clone(), || Ok(a)).unwrap();
+        let b_var = FqVar::new_witness(cs.clone(), || Ok(b)).unwrap();
+        let c_var = FqVar::new_witness(cs.clone(), || Ok(c)).unwrap();
+        let d_var = FqVar::new_witness(cs.clone(), || Ok(d)).unwrap();
+        let e_var = FqVar::new_witness(cs.clone(), || Ok(e)).unwrap();
+        let f_var = FqVar::new_witness(cs.clone(), || Ok(f)).unwrap();
+        let g_var = FqVar::new_witness(cs.clone(), || Ok(g)).unwrap();
+
+        let result_var = poseidon377::r1cs::hash_7(
+            cs.clone(),
+            &domain_var,
+            (a_var, b_var, c_var, d_var, e_var, f_var, g_var),
+        )
+        .unwrap();
+
+        // Compare output
+        let expected_var = FqVar::new_input(cs.clone(), || Ok(expected)).unwrap();
+        result_var.enforce_equal(&expected_var).unwrap();
+
+        assert!(
+            cs.is_satisfied().unwrap(),
+            "hash_7 R1CS should match native"
+        );
+    }
+
+    /// Minimal test: scalar_mul_le with truncated Fq value
+    #[test]
+    fn test_scalar_mul_with_truncated_fq() {
+        let mut rng = rand::thread_rng();
+        let cs = ConstraintSystem::<Fq>::new_ref();
+
+        // Create a truncated c value (< 2^252)
+        let c_fr = Fr::rand(&mut rng);
+        let c_truncated =
+            crate::crypto::fq_to_challenge_scalar(Fq::from_le_bytes_mod_order(&c_fr.to_bytes()));
+        let c_fq = Fq::from_le_bytes_mod_order(&c_truncated.to_bytes());
+
+        let point = decaf377::Element::GENERATOR * Fr::rand(&mut rng);
+
+        // Native: c_truncated × point
+        let expected = point * c_truncated;
+
+        // Circuit: scalar_mul_le with Fq bits
+        let c_var = FqVar::new_input(cs.clone(), || Ok(c_fq)).unwrap();
+        let c_bits = c_var.to_bits_le().unwrap();
+        let point_var = ElementVar::new_witness(cs.clone(), || Ok(point)).unwrap();
+        let result_var = point_var.scalar_mul_le(c_bits.iter()).unwrap();
+
+        let expected_var = ElementVar::new_witness(cs.clone(), || Ok(expected)).unwrap();
+        result_var.enforce_equal(&expected_var).unwrap();
+
+        assert!(
+            cs.is_satisfied().unwrap(),
+            "scalar_mul with truncated Fq should work"
         );
     }
 }

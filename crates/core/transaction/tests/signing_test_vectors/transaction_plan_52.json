@@ -1,72 +1,80 @@
 {
   "actions": [
     {
-      "undelegate": {
-        "validatorIdentity": {
-          "ik": "gKtFAQ0wIC3yrrgTTCw6evstvvJor6BTGeT4PAbrhgg="
+      "proposalWithdraw": {
+        "proposal": "56952520"
+      }
+    },
+    {
+      "proposalDepositClaim": {
+        "proposal": "514885457",
+        "depositAmount": {
+          "lo": "297270398167656464"
         },
-        "unbondedAmount": {
-          "lo": "426748673252520719"
-        },
-        "delegationAmount": {
-          "lo": "600174670634532207"
-        },
-        "fromEpoch": {
-          "index": "8890",
-          "startHeight": "8890"
+        "outcome": {
+          "passed": {}
         }
       }
     },
     {
-      "ics20Withdrawal": {
-        "amount": {
-          "lo": "225677531889761708"
+      "actionDutchAuctionWithdraw": {
+        "auctionId": {
+          "inner": "obkp7IoEYi4azAs/ELxW+lMHS9R+2ERIexw9baoWCvg="
         },
-        "denom": {
-          "denom": "ahUzKNd"
+        "seq": "957419144",
+        "reservesInput": {
+          "amount": {
+            "lo": "418261335467262438"
+          },
+          "assetId": {
+            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+          }
         },
-        "destinationChainAddress": "penumbra15qlu2hu0fpelzdzfpc0pmx4kdkfp5dht7ky5t5fem6mfq8tnur4yn8hzhdexs9nfalrr8j5ypxyxc4yzud53dy9qnkkrm7qxj6dt7kgfahtld672kv8l2greupzer0zvtkapxt",
-        "returnAddress": {
-          "inner": "Re8lx8fL4xDSX1aMfWFO6Ht0GO+tAvdoM2WMD+sXHv63YZ1KPBhnjWjFisYOZuOVIFUK0ayMHnQwpHXWJRFrDGZvLX7sqI7S0BsEp5vDbrU="
-        },
-        "timeoutHeight": {
-          "revisionNumber": "323861967",
-          "revisionHeight": "909332520"
-        },
-        "sourceChannel": "channel-0"
+        "reservesOutput": {
+          "amount": {
+            "lo": "734555936015932451"
+          },
+          "assetId": {
+            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+          }
+        }
       }
     },
     {
-      "positionWithdraw": {
-        "reserves": {
-          "r1": {
-            "lo": "604119946743848732"
+      "delegatorVote": {
+        "proposal": "684879355",
+        "vote": {
+          "vote": "VOTE_NO"
+        },
+        "stakedNote": {
+          "value": {
+            "amount": {
+              "lo": "588557723274778951"
+            },
+            "assetId": {
+              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+            }
           },
-          "r2": {
-            "lo": "307367717514673126"
+          "rseed": "c7/CgAmvOj9ocgfV4QYzIgfaefOvaJ8AYVNisNp3C6Q=",
+          "address": {
+            "inner": "qqi4+zVOExvUl62fvLnL+vPN55Yn7s2LIo/dcAy7AA1hYrfvoSkcbSF9F4Xjyj8rQWyFtmQ+qM3zfUa55YHXUg4WqywNYtkgb6qRt06MJlk="
           }
         },
-        "positionId": {
-          "inner": "G2PSoQtsgAqS1LiDNXzKxDlotSVnl4bmRem/SuWQtsQ="
+        "unbondedAmount": {
+          "lo": "500065454336288132"
         },
-        "pair": {
-          "asset1": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          },
-          "asset2": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          }
-        },
-        "sequence": "1"
+        "randomizer": "quI1LIFMsKJwtb84lji1C2mj8XO4Qo8K3M3yrL3sfgQ=",
+        "proofBlindingR": "BCZwxszuNSSNIxB90+nT6QwZiJ5lNkvUpG3kMQC0OwQ=",
+        "proofBlindingS": "eEo5F8j1NSVLpMe2xAn6DB4wXnCMcX8KHfML94vLHgg="
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "6297389426",
-    "chainId": "rouujyizhgqawukdoqja-785",
+    "expiryHeight": "5865226002",
+    "chainId": "tnaflmtfmvzkxmnppilrdbnudhmn-826417968",
     "fee": {
       "amount": {
-        "lo": "227117557459138057"
+        "lo": "241652706544507318"
       }
     }
   }

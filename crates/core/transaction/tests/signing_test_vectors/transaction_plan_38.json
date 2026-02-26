@@ -1,56 +1,105 @@
 {
   "actions": [
     {
-      "validatorDefinition": {
-        "validator": {
-          "identityKey": {
-            "ik": "8ARwUimF9oqRY6Fdh+uiT300tX9jK4HyxWNKO/ce9g0="
-          },
-          "consensusKey": "5McHQADDrmQO/zDp+4g2fYebCwwUZFvVwhEEjHOf59E=",
-          "name": "test validator",
-          "enabled": true,
-          "governanceKey": {
-            "gk": "8ARwUimF9oqRY6Fdh+uiT300tX9jK4HyxWNKO/ce9g0="
-          }
+      "proposalDepositClaim": {
+        "proposal": "823546084",
+        "depositAmount": {
+          "lo": "964685697886321074"
         },
-        "authSig": "mKe4iA+BYIaEFx/I4Hm3nPLWj5EmV3D53WW+A1QpfgxpmwVI8pGkSGUwNB3frjFE2BpIsh4p/ScLMaMmrAWoAw=="
-      }
-    },
-    {
-      "delegate": {
-        "validatorIdentity": {
-          "ik": "hGatA863VIbVc1q4efJ2DFrOjg2m42DGfcZePeBPWQU="
-        },
-        "epochIndex": "1778",
-        "unbondedAmount": {
-          "lo": "52490242871766241"
-        },
-        "delegationAmount": {
-          "lo": "851380798966275777"
+        "outcome": {
+          "passed": {}
         }
       }
     },
     {
-      "delegate": {
-        "validatorIdentity": {
-          "ik": "9oRbkG1tgCTjUq7oLiz68VU7hCZgza4fPwl87syYq9o="
+      "positionOpenPlan": {
+        "position": {
+          "phi": {
+            "component": {
+              "p": {
+                "lo": "736519264236451519"
+              },
+              "q": {
+                "lo": "170682325687420063"
+              }
+            },
+            "pair": {
+              "asset1": {
+                "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+              },
+              "asset2": {
+                "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+              }
+            }
+          },
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "state": {
+            "state": "POSITION_STATE_ENUM_CLOSED"
+          },
+          "reserves": {
+            "r1": {
+              "lo": "22892773585414622"
+            },
+            "r2": {
+              "lo": "488081323708850488"
+            }
+          },
+          "closeOnFill": true
+        }
+      }
+    },
+    {
+      "delegatorVote": {
+        "proposal": "826458181",
+        "vote": {
+          "vote": "VOTE_ABSTAIN"
         },
-        "epochIndex": "8888",
+        "stakedNote": {
+          "value": {
+            "amount": {
+              "lo": "566604512015517759"
+            },
+            "assetId": {
+              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+            }
+          },
+          "rseed": "2p5l1DMVoBTHMANr7VrKs5rLfkDmCq5lrG2rtaFVrqE=",
+          "address": {
+            "inner": "dY+NQrPF8uuhDQbG4km3lBD/bD8pzD+ftj765OgZIFyN6uQjlDXbOHt5sN4MH3BChMVCUJjFcPMULhPdLtkcvDufMGklJRsSHrnWkGB5C5M="
+          }
+        },
         "unbondedAmount": {
-          "lo": "273441886489156685"
+          "lo": "649929285657793835"
+        },
+        "randomizer": "ulkpB7rqObRQXD02dbZk0v68nWg7uPLbPMtapVGY7wI=",
+        "proofBlindingR": "04YS1AnchKsLvj82Vv3wBDF0ttwZPykQaKFCOild/g8=",
+        "proofBlindingS": "3wULc0mAmtKdl/WHGAiGRuLP4NzldzxCIdOxQqzEjQQ="
+      }
+    },
+    {
+      "undelegate": {
+        "validatorIdentity": {
+          "ik": "fda/QSQX1O/RPAX5T2+glHhDm7CJHhtB3UEoxBy6O5E="
+        },
+        "unbondedAmount": {
+          "lo": "103225925027897055"
         },
         "delegationAmount": {
-          "lo": "189138366134369300"
+          "lo": "76083187568750637"
+        },
+        "fromEpoch": {
+          "index": "3307",
+          "startHeight": "3307"
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "7255036855",
-    "chainId": "glllayzfflsjxksyxitqbtvminbc-155998572",
+    "expiryHeight": "3542295879",
+    "chainId": "womtvqnsukalsbnz-7596560500373450907988",
     "fee": {
       "amount": {
-        "lo": "27408445207474567"
+        "lo": "344703772651961764"
       }
     }
   }

@@ -3,16 +3,23 @@ use r2d2_sqlite::rusqlite::{OptionalExtension, Transaction};
 
 use penumbra_sdk_tct::StateCommitment;
 
-/// Asset indexed leaf data (mirrors IndexedLeaf struct with policy).
+/// Asset indexed leaf data (mirrors IndexedLeaf struct with full policy).
+///
+/// All fields must be persisted for correct tree reconstruction — the leaf
+/// commitment hash depends on every policy field.
 #[derive(Debug, Clone)]
 pub struct IndexedLeafData {
     pub value: [u8; 32],
     pub next_index: u64,
     pub next_value: [u8; 32],
-    /// Issuer's detection key public point (32 bytes compressed).
     pub dk_pub: [u8; 32],
-    /// Amount threshold for flagging transfers (u128 to cover full amount range).
     pub threshold: u128,
+    pub channels_hash: [u8; 32],
+    pub ring_pk: [u8; 32],
+    pub ring_id_hash: [u8; 32],
+    pub policy_id_hash: [u8; 32],
+    pub permission_hash: [u8; 32],
+    pub resource_hash: [u8; 32],
 }
 
 /// Convert u64 position to i64 for SQLite storage, with overflow check.
@@ -156,59 +163,76 @@ impl ComplianceTreeStore<'_, '_> {
         let mut stmt = self
             .0
             .prepare_cached(
-                "SELECT value, next_index, next_value, dk_pub, threshold FROM compliance_asset_leaves WHERE position = ?1",
+                "SELECT value, next_index, next_value, dk_pub, threshold, \
+                 channels_hash, ring_pk, ring_id_hash, policy_id_hash, permission_hash, resource_hash \
+                 FROM compliance_asset_leaves WHERE position = ?1",
             )
             .context("failed to prepare asset leaf query")?;
 
         let result = stmt
             .query_row((&position,), |row| {
-                let value: Vec<u8> = row.get("value")?;
-                let next_index: i64 = row.get("next_index")?;
-                let next_value: Vec<u8> = row.get("next_value")?;
-                let dk_pub: Vec<u8> = row.get("dk_pub")?;
-                // Read threshold as BLOB (8 or 16 bytes little-endian)
-                let threshold: Vec<u8> = row.get("threshold")?;
-                Ok((value, next_index, next_value, dk_pub, threshold))
+                Ok((
+                    row.get::<_, Vec<u8>>("value")?,
+                    row.get::<_, i64>("next_index")?,
+                    row.get::<_, Vec<u8>>("next_value")?,
+                    row.get::<_, Vec<u8>>("dk_pub")?,
+                    row.get::<_, Vec<u8>>("threshold")?,
+                    row.get::<_, Vec<u8>>("channels_hash")?,
+                    row.get::<_, Vec<u8>>("ring_pk")?,
+                    row.get::<_, Vec<u8>>("ring_id_hash")?,
+                    row.get::<_, Vec<u8>>("policy_id_hash")?,
+                    row.get::<_, Vec<u8>>("permission_hash")?,
+                    row.get::<_, Vec<u8>>("resource_hash")?,
+                ))
             })
             .optional()
             .context("failed to query asset leaf")?;
 
         match result {
-            Some((value, next_index, next_value, dk_pub, threshold)) => {
-                let value: [u8; 32] = value.try_into().map_err(|v: Vec<u8>| {
-                    anyhow::anyhow!(
-                        "asset leaf value must be 32 bytes, got {} at position {} (database may be corrupted)",
-                        v.len(),
-                        position
-                    )
-                })?;
-                let next_value: [u8; 32] = next_value.try_into().map_err(|v: Vec<u8>| {
-                    anyhow::anyhow!(
-                        "asset leaf next_value must be 32 bytes, got {} at position {} (database may be corrupted)",
-                        v.len(),
-                        position
-                    )
-                })?;
+            Some((
+                value,
+                next_index,
+                next_value,
+                dk_pub,
+                threshold,
+                channels_hash,
+                ring_pk,
+                ring_id_hash,
+                policy_id_hash,
+                permission_hash,
+                resource_hash,
+            )) => {
+                let to_arr = |v: Vec<u8>, name: &str| -> anyhow::Result<[u8; 32]> {
+                    v.try_into().map_err(|v: Vec<u8>| {
+                        anyhow::anyhow!(
+                            "asset leaf {} must be 32 bytes, got {} at position {}",
+                            name,
+                            v.len(),
+                            position
+                        )
+                    })
+                };
+                let value = to_arr(value, "value")?;
+                let next_value = to_arr(next_value, "next_value")?;
+                let dk_pub = to_arr(dk_pub, "dk_pub")?;
+                let channels_hash = to_arr(channels_hash, "channels_hash")?;
+                let ring_pk = to_arr(ring_pk, "ring_pk")?;
+                let ring_id_hash = to_arr(ring_id_hash, "ring_id_hash")?;
+                let policy_id_hash = to_arr(policy_id_hash, "policy_id_hash")?;
+                let permission_hash = to_arr(permission_hash, "permission_hash")?;
+                let resource_hash = to_arr(resource_hash, "resource_hash")?;
                 let next_index = u64::try_from(next_index).map_err(|_| {
                     anyhow::anyhow!(
-                        "asset leaf next_index is negative ({}) at position {} (database may be corrupted)",
+                        "asset leaf next_index is negative ({}) at position {}",
                         next_index,
-                        position
-                    )
-                })?;
-                let dk_pub: [u8; 32] = dk_pub.try_into().map_err(|v: Vec<u8>| {
-                    anyhow::anyhow!(
-                        "asset leaf dk_pub must be 32 bytes, got {} at position {} (database may be corrupted)",
-                        v.len(),
                         position
                     )
                 })?;
                 // Support both 8-byte (legacy u64) and 16-byte (u128) threshold storage
                 let threshold = if threshold.len() == 8 {
-                    // Legacy u64 threshold - convert to u128
                     let bytes: [u8; 8] = threshold.try_into().map_err(|v: Vec<u8>| {
                         anyhow::anyhow!(
-                            "asset leaf threshold must be 8 bytes, got {} at position {} (database may be corrupted)",
+                            "asset leaf threshold must be 8 bytes, got {} at position {}",
                             v.len(),
                             position
                         )
@@ -217,7 +241,7 @@ impl ComplianceTreeStore<'_, '_> {
                 } else if threshold.len() == 16 {
                     let bytes: [u8; 16] = threshold.try_into().map_err(|v: Vec<u8>| {
                         anyhow::anyhow!(
-                            "asset leaf threshold must be 16 bytes, got {} at position {} (database may be corrupted)",
+                            "asset leaf threshold must be 16 bytes, got {} at position {}",
                             v.len(),
                             position
                         )
@@ -225,7 +249,7 @@ impl ComplianceTreeStore<'_, '_> {
                     u128::from_le_bytes(bytes)
                 } else {
                     anyhow::bail!(
-                        "asset leaf threshold must be 8 or 16 bytes, got {} at position {} (database may be corrupted)",
+                        "asset leaf threshold must be 8 or 16 bytes, got {} at position {}",
                         threshold.len(),
                         position
                     )
@@ -236,6 +260,12 @@ impl ComplianceTreeStore<'_, '_> {
                     next_value,
                     dk_pub,
                     threshold,
+                    channels_hash,
+                    ring_pk,
+                    ring_id_hash,
+                    policy_id_hash,
+                    permission_hash,
+                    resource_hash,
                 }))
             }
             None => Ok(None),
@@ -258,11 +288,12 @@ impl ComplianceTreeStore<'_, '_> {
         let threshold_bytes = leaf.threshold.to_le_bytes().to_vec();
 
         // Use INSERT OR REPLACE to update existing leaves (critical for low leaf updates)
-        // The old ON CONFLICT DO NOTHING silently dropped low leaf updates, causing
-        // stale next_index/next_value data and tree reconstruction failures.
         self.0
             .prepare_cached(
-                "INSERT OR REPLACE INTO compliance_asset_leaves (position, value, next_index, next_value, dk_pub, threshold) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT OR REPLACE INTO compliance_asset_leaves \
+                 (position, value, next_index, next_value, dk_pub, threshold, \
+                  channels_hash, ring_pk, ring_id_hash, policy_id_hash, permission_hash, resource_hash) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             )
             .context("failed to prepare asset leaf insert")?
             .execute((
@@ -272,6 +303,12 @@ impl ComplianceTreeStore<'_, '_> {
                 &leaf.next_value.to_vec(),
                 &leaf.dk_pub.to_vec(),
                 &threshold_bytes,
+                &leaf.channels_hash.to_vec(),
+                &leaf.ring_pk.to_vec(),
+                &leaf.ring_id_hash.to_vec(),
+                &leaf.policy_id_hash.to_vec(),
+                &leaf.permission_hash.to_vec(),
+                &leaf.resource_hash.to_vec(),
             ))
             .context("failed to insert asset leaf")?;
 
@@ -459,6 +496,7 @@ impl ComplianceTreeStore<'_, '_> {
         asset_id: &[u8],
         position: u64,
         ack: &[u8],
+        ack_orbis: &[u8],
         commitment: StateCommitment,
     ) -> anyhow::Result<()> {
         let position = position_to_i64(position)?;
@@ -467,26 +505,27 @@ impl ComplianceTreeStore<'_, '_> {
         self.0
             .prepare_cached(
                 "INSERT OR REPLACE INTO compliance_user_leaf_data \
-                 (address, asset_id, position, address_compliance_key, commitment) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                 (address, asset_id, position, address_compliance_key, ack_orbis, commitment) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )
             .context("failed to prepare leaf data insert")?
-            .execute((address, asset_id, &position, ack, &commitment))
+            .execute((address, asset_id, &position, ack, ack_orbis, &commitment))
             .context("failed to insert leaf data")?;
 
         Ok(())
     }
 
     /// Get full compliance leaf data for an address/asset pair.
+    /// Returns (position, ack_bytes, ack_orbis_bytes, commitment) if found.
     pub fn get_leaf_data(
         &mut self,
         address: &[u8],
         asset_id: &[u8],
-    ) -> anyhow::Result<Option<(u64, Vec<u8>, StateCommitment)>> {
+    ) -> anyhow::Result<Option<(u64, Vec<u8>, Vec<u8>, StateCommitment)>> {
         let mut stmt = self
             .0
             .prepare_cached(
-                "SELECT position, address_compliance_key, commitment \
+                "SELECT position, address_compliance_key, ack_orbis, commitment \
                  FROM compliance_user_leaf_data \
                  WHERE address = ?1 AND asset_id = ?2",
             )
@@ -496,14 +535,15 @@ impl ComplianceTreeStore<'_, '_> {
             .query_row((address, asset_id), |row| {
                 let position: i64 = row.get("position")?;
                 let ack: Vec<u8> = row.get("address_compliance_key")?;
+                let ack_orbis: Vec<u8> = row.get("ack_orbis")?;
                 let commitment: Vec<u8> = row.get("commitment")?;
-                Ok((position, ack, commitment))
+                Ok((position, ack, ack_orbis, commitment))
             })
             .optional()
             .context("failed to query leaf data")?;
 
         match result {
-            Some((position, ack, commitment)) => {
+            Some((position, ack, ack_orbis, commitment)) => {
                 let commitment: [u8; 32] = commitment.try_into().map_err(|v: Vec<u8>| {
                     anyhow::anyhow!(
                         "leaf data commitment must be 32 bytes, got {} (database may be corrupted)",
@@ -513,6 +553,7 @@ impl ComplianceTreeStore<'_, '_> {
                 Ok(Some((
                     position as u64,
                     ack,
+                    ack_orbis,
                     StateCommitment::try_from(commitment)?,
                 )))
             }
@@ -648,6 +689,12 @@ mod tests {
             next_value: [4u8; 32],
             dk_pub: [7u8; 32],
             threshold: 1000,
+            channels_hash: [10u8; 32],
+            ring_pk: [11u8; 32],
+            ring_id_hash: [12u8; 32],
+            policy_id_hash: [13u8; 32],
+            permission_hash: [14u8; 32],
+            resource_hash: [15u8; 32],
         };
         store.add_asset_leaf(0, leaf).unwrap();
         let retrieved = store.get_asset_leaf(0).unwrap().unwrap();
@@ -656,6 +703,12 @@ mod tests {
         assert_eq!(retrieved.next_value, [4u8; 32]);
         assert_eq!(retrieved.dk_pub, [7u8; 32]);
         assert_eq!(retrieved.threshold, 1000);
+        assert_eq!(retrieved.channels_hash, [10u8; 32]);
+        assert_eq!(retrieved.ring_pk, [11u8; 32]);
+        assert_eq!(retrieved.ring_id_hash, [12u8; 32]);
+        assert_eq!(retrieved.policy_id_hash, [13u8; 32]);
+        assert_eq!(retrieved.permission_hash, [14u8; 32]);
+        assert_eq!(retrieved.resource_hash, [15u8; 32]);
 
         // Test anchor operations
         let user_anchor = StateCommitment::try_from([5u8; 32]).unwrap();

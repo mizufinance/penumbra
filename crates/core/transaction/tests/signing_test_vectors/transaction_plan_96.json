@@ -1,77 +1,87 @@
 {
   "actions": [
     {
-      "swapClaim": {
-        "swapPlaintext": {
-          "tradingPair": {
-            "asset1": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            },
-            "asset2": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            }
-          },
-          "delta1I": {
-            "lo": "394749098042111091"
-          },
-          "delta2I": {
-            "lo": "409188152809057828"
-          },
-          "claimFee": {
-            "amount": {}
-          },
-          "claimAddress": {
-            "inner": "AEjgmwRXLK/V1QfqGNGtxDmjM7aMBOukI2189Fk0cvMho8wivP8V/Bf6UiHyZukrPaivq2HctYQLsphHAD9YCpeQACsuO4UUVr5AgMMWEjw="
-          },
-          "rseed": "fUXj9Dqdpp0Q588A6Vlf4m2xw362d/AIJv8HX45IDQA="
+      "proposalSubmit": {
+        "proposal": {
+          "title": "rp-76",
+          "description": "xnggpesdiohaxfzozocyqdedlb-2173541430870345202",
+          "signaling": {}
         },
-        "outputData": {
-          "delta1": {
-            "lo": "1912995383"
-          },
-          "delta2": {
-            "lo": "1635315597"
-          },
-          "lambda1": {
-            "lo": "1943"
-          },
-          "lambda2": {
-            "lo": "944"
-          },
-          "unfilled1": {
-            "lo": "277"
-          },
-          "unfilled2": {
-            "lo": "844"
-          },
-          "tradingPair": {
-            "asset1": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            },
-            "asset2": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            }
-          }
-        },
-        "epochDuration": "1000",
-        "proofBlindingR": "81OQBnBeB5ZHIQAmu2xo1KCViOl7539EgLDZkx/KGQE=",
-        "proofBlindingS": "9haDXt/o0P5VyWjSwoKRuK9cs+3vCGbQ3i7Xuw5uJQ0="
+        "depositAmount": {
+          "lo": "3012881399851441"
+        }
       }
     },
     {
-      "actionDutchAuctionEnd": {
-        "auctionId": {
-          "inner": "8KJEFnnmZLEl6+S+MeBIVcBPHgS1trFJyc2NvpyBw1w="
+      "delegate": {
+        "validatorIdentity": {
+          "ik": "aVOAjB2TxQ+HIFAEX8rWEApghaGBRJGvj3m385N3jqM="
+        },
+        "epochIndex": "1915",
+        "unbondedAmount": {
+          "lo": "633046006527072683"
+        },
+        "delegationAmount": {
+          "lo": "822181078500810089"
+        }
+      }
+    },
+    {
+      "validatorVote": {
+        "body": {
+          "proposal": "577613771",
+          "vote": {
+            "vote": "VOTE_YES"
+          },
+          "identityKey": {
+            "ik": "EODC+xf+Yp/BcJBy2O6H5lM8LR3mCfFoDD+nYhlXtug="
+          },
+          "governanceKey": {
+            "gk": "jLyytoS1CzYWPt31jau/qoG7mYBkKMAkcFDQJuB4XwI="
+          },
+          "reason": {
+            "reason": "Zq5DMlMb3yXju1D"
+          }
+        },
+        "authSig": {
+          "inner": "OAudVJVbIcoNwoSbfhyU1emyN3c5LMBynj7IxVFH7AY/YHyaS6E3uWwCZ3DD3gkg4z+iO0mNEz1enUr0OoWlAw=="
+        }
+      }
+    },
+    {
+      "actionDutchAuctionSchedule": {
+        "description": {
+          "input": {
+            "amount": {
+              "lo": "132230952194617986"
+            },
+            "assetId": {
+              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+            }
+          },
+          "outputId": {
+            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+          },
+          "maxOutput": {
+            "lo": "366206805716995796"
+          },
+          "minOutput": {
+            "lo": "25866134368940314"
+          },
+          "startHeight": "490548655",
+          "endHeight": "490548656",
+          "stepCount": "715283323",
+          "nonce": "8BylWQm/3n3bO+ms4vXtvaP0VvHBS4MGupr33SaOUwY="
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "4394594342",
-    "chainId": "rqwvkjnxuqyqmbgqouwvveib-7376",
+    "expiryHeight": "3253481001",
+    "chainId": "mepjudgchscndcqgu-9703618021",
     "fee": {
       "amount": {
-        "lo": "586986584040858203"
+        "lo": "849384214210633554"
       }
     }
   }

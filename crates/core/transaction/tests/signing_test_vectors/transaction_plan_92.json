@@ -1,93 +1,45 @@
 {
   "actions": [
     {
-      "proposalDepositClaim": {
-        "proposal": "489643337",
-        "depositAmount": {
-          "lo": "264149023144096049"
+      "ics20Withdrawal": {
+        "amount": {
+          "lo": "947997520560920718"
         },
-        "outcome": {
-          "passed": {}
-        }
+        "denom": {
+          "denom": "9Lt8r8HtA3x57lx4"
+        },
+        "destinationChainAddress": "penumbra1tvqnkr9g4c3fthnx4xnz3k99wtlcxtu0y30hwj2pjvlzw3xgajpt2c62zdn6r5xvncv7rllfsd22p0a78e93n08e7dd786zpzwpg0uekg76e6w80mzup7cdhnljhnazk8hvcpl",
+        "returnAddress": {
+          "inner": "gr32bBzEP3JNGICWDgVNvnroBWIy8fh3swC35JB3WDJNopNcQvx2eh5+I33EiFsHhHh3rYYcvOdf52KfZ8n0KjimU0wKEeW6VaYxfXNVd7w="
+        },
+        "timeoutHeight": {
+          "revisionNumber": "265137986",
+          "revisionHeight": "97546752"
+        },
+        "sourceChannel": "channel-0"
       }
     },
     {
-      "swapClaim": {
-        "swapPlaintext": {
-          "tradingPair": {
-            "asset1": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            },
-            "asset2": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            }
-          },
-          "delta1I": {
-            "lo": "25221929586810450"
-          },
-          "delta2I": {
-            "lo": "424772535073809649"
-          },
-          "claimFee": {
-            "amount": {}
-          },
-          "claimAddress": {
-            "inner": "lXx1DvzvIKyO01HocM0rOThK7sPttTGYaPPQyGDLj8YwTdgjxYsFeVy5+xiQ7Atsx8+xt1wHZ3nXGR/rsIBDyi+zZZMzvRwsPsWfd82eSR4="
-          },
-          "rseed": "iThG5Pb4ipN+8sqMNjUBWReN4ZIczg1Zh5rVM/f1KAE="
+      "delegate": {
+        "validatorIdentity": {
+          "ik": "pWPcZ+Cp+nZhk21MExpDBiMSGUtFlfSX8oVfFgBt2Dc="
         },
-        "outputData": {
-          "delta1": {
-            "lo": "1854375118"
-          },
-          "delta2": {
-            "lo": "769345400"
-          },
-          "lambda1": {
-            "lo": "165"
-          },
-          "lambda2": {
-            "lo": "5"
-          },
-          "unfilled1": {
-            "lo": "1163"
-          },
-          "unfilled2": {
-            "lo": "1075"
-          },
-          "tradingPair": {
-            "asset1": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            },
-            "asset2": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            }
-          }
+        "epochIndex": "8634",
+        "unbondedAmount": {
+          "lo": "336831760780203157"
         },
-        "epochDuration": "1000",
-        "proofBlindingR": "KYTBeTxxkT0V9gsVfoWc9Zi+om2YKbq596XlmrQMuAE=",
-        "proofBlindingS": "5eMaI41cyclAMwjbbpMpyXNebsml5LA7pIaNqccp1wg="
-      }
-    },
-    {
-      "communityPoolDeposit": {
-        "value": {
-          "amount": {
-            "lo": "79986231343477296"
-          },
-          "assetId": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          }
+        "delegationAmount": {
+          "lo": "925806017140026048"
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "841272388",
-    "chainId": "llmxxoxsajtllqnjpzeruohwchqu-14407",
+    "expiryHeight": "2298363246",
+    "chainId": "okticoqarqiscglqynlnhpbuonh-9197970",
     "fee": {
       "amount": {
-        "lo": "647606407646836954"
+        "lo": "915997410106196847"
       }
     }
   }

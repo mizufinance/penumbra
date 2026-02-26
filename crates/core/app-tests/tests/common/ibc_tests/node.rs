@@ -25,9 +25,9 @@ use {
         server::consensus::Consensus,
     },
     penumbra_sdk_asset::asset,
-    penumbra_sdk_compliance::{ComplianceLeaf, MsgRegisterAsset, MsgRegisterUser, BLACK_HOLE_ACK},
+    penumbra_sdk_compliance::{ComplianceLeaf, MsgRegisterAsset, MsgRegisterUser},
     penumbra_sdk_ibc::{component::ClientStateReadExt as _, IBC_COMMITMENT_PREFIX},
-    penumbra_sdk_keys::{keys::AddressComplianceKey, test_keys, Address},
+    penumbra_sdk_keys::{test_keys, Address},
     penumbra_sdk_mock_client::MockClient,
     penumbra_sdk_mock_consensus::TestNode,
     penumbra_sdk_proto::{
@@ -206,7 +206,6 @@ impl TestNodeWithIBC {
         addresses: &[Address],
         asset_ids: &[asset::Id],
     ) -> Result<()> {
-        let black_hole_ack = AddressComplianceKey::new(*BLACK_HOLE_ACK);
         let mut actions: Vec<Action> = Vec::new();
 
         // Create MsgRegisterAsset for each asset (unregulated)
@@ -216,6 +215,12 @@ impl TestNodeWithIBC {
                 is_regulated: false,
                 dk_pub: None,
                 threshold: None,
+                allowed_channels: vec![],
+                ring_pk: None,
+                ring_id: String::new(),
+                policy_id: String::new(),
+                permission: String::new(),
+                resource: String::new(),
             };
             actions.push(Action::ComplianceRegisterAsset(msg));
         }
@@ -223,10 +228,12 @@ impl TestNodeWithIBC {
         // Create MsgRegisterUser for each (address, asset) pair
         for address in addresses {
             for &asset_id in asset_ids {
+                let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+                let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
                 let leaf = ComplianceLeaf {
                     address: address.clone(),
-                    key: black_hole_ack.clone(),
                     asset_id,
+                    d,
                 };
                 let msg = MsgRegisterUser {
                     leaf,

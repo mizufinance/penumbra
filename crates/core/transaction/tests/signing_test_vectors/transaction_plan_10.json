@@ -1,33 +1,46 @@
 {
   "actions": [
     {
-      "positionClose": {
-        "positionId": {
-          "inner": "MdTXzFZ5K6Ru+f0+nE4h6e+DKSHkyPOwKm9O8MD+krs="
+      "validatorVote": {
+        "body": {
+          "proposal": "799376818",
+          "vote": {
+            "vote": "VOTE_ABSTAIN"
+          },
+          "identityKey": {
+            "ik": "9xOi8yHkDuHynWOAsQTC572U0uTQe+UW5NhrQtJE1bQ="
+          },
+          "governanceKey": {
+            "gk": "SDZaa+c83xa2q8LAK83nmljPRalieULqaOkBzCgO/gM="
+          },
+          "reason": {
+            "reason": "4wo3oHDnp"
+          }
+        },
+        "authSig": {
+          "inner": "EjE+vcRkRQMvsc1QYdh51ZG7xd0Nw2wbQEi9zlStmglwng8LTu1Cke1s/mj8T9kUCRt5Pu40kbnwzPHJFKcmAg=="
         }
       }
     },
     {
-      "delegate": {
-        "validatorIdentity": {
-          "ik": "1Jp8xuy9gul0LOlJS1ESLDcHsPu4x/vLhIKpJiUGsfo="
-        },
-        "epochIndex": "3186",
-        "unbondedAmount": {
-          "lo": "13375141534166412"
-        },
-        "delegationAmount": {
-          "lo": "922862625555379587"
+      "proposalWithdraw": {
+        "proposal": "575433749"
+      }
+    },
+    {
+      "positionClose": {
+        "positionId": {
+          "inner": "MAHtZY+xswCfMvHh1VY2c4DfcthJv2bZnvdTNSyDCvU="
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "9746532493",
-    "chainId": "jdyijguscmtaqlbnevcmwyqv-49523078301137980640582864218",
+    "expiryHeight": "3612302085",
+    "chainId": "vaemcrbfslsc-5417",
     "fee": {
       "amount": {
-        "lo": "231770235663771431"
+        "lo": "782148940233382534"
       }
     }
   }

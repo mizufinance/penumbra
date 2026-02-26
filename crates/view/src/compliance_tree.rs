@@ -145,7 +145,7 @@ impl ComplianceAssetTree {
     /// Loads full leaf data including policy (dk_pub, threshold) to ensure
     /// correct tree reconstruction with matching leaf commitments.
     pub fn from_store(store: &mut ComplianceTreeStore<'_, '_>) -> Result<Self> {
-        use penumbra_sdk_compliance::AssetPolicy;
+        use penumbra_sdk_compliance::indexed_tree::{LeafParams, LeafRing};
 
         let leaf_count = store.get_asset_tree_leaf_count()?;
 
@@ -183,11 +183,36 @@ impl ComplianceAssetTree {
                 .vartime_decompress()
                 .map_err(|_| anyhow::anyhow!("invalid dk_pub encoding at position {}", pos))?;
 
+            let channels_hash = decaf377::Fq::from_bytes_checked(&leaf_data.channels_hash)
+                .map_err(|_| anyhow::anyhow!("invalid channels_hash at position {}", pos))?;
+            let ring_pk = decaf377::Encoding(leaf_data.ring_pk)
+                .vartime_decompress()
+                .map_err(|_| anyhow::anyhow!("invalid ring_pk encoding at position {}", pos))?;
+            let ring_id_hash = decaf377::Fq::from_bytes_checked(&leaf_data.ring_id_hash)
+                .map_err(|_| anyhow::anyhow!("invalid ring_id_hash at position {}", pos))?;
+            let policy_id_hash = decaf377::Fq::from_bytes_checked(&leaf_data.policy_id_hash)
+                .map_err(|_| anyhow::anyhow!("invalid policy_id_hash at position {}", pos))?;
+            let permission_hash = decaf377::Fq::from_bytes_checked(&leaf_data.permission_hash)
+                .map_err(|_| anyhow::anyhow!("invalid permission_hash at position {}", pos))?;
+            let resource_hash = decaf377::Fq::from_bytes_checked(&leaf_data.resource_hash)
+                .map_err(|_| anyhow::anyhow!("invalid resource_hash at position {}", pos))?;
+
             let leaf = IndexedLeaf {
                 value,
                 next_index: leaf_data.next_index,
                 next_value,
-                policy: AssetPolicy::new(dk_pub, leaf_data.threshold),
+                params: LeafParams {
+                    dk_pub,
+                    threshold: leaf_data.threshold,
+                    channels_hash,
+                },
+                ring: LeafRing {
+                    ring_pk,
+                    ring_id_hash,
+                    policy_id_hash,
+                    permission_hash,
+                    resource_hash,
+                },
             };
 
             // Debug: log each loaded leaf
@@ -309,8 +334,14 @@ impl ComplianceAssetTree {
                 value: leaf.value.to_bytes(),
                 next_index: leaf.next_index,
                 next_value: leaf.next_value.to_bytes(),
-                dk_pub: leaf.policy.dk_pub.vartime_compress().0,
-                threshold: leaf.policy.threshold,
+                dk_pub: leaf.params.dk_pub.vartime_compress().0,
+                threshold: leaf.params.threshold,
+                channels_hash: leaf.params.channels_hash.to_bytes(),
+                ring_pk: leaf.ring.ring_pk.vartime_compress().0,
+                ring_id_hash: leaf.ring.ring_id_hash.to_bytes(),
+                policy_id_hash: leaf.ring.policy_id_hash.to_bytes(),
+                permission_hash: leaf.ring.permission_hash.to_bytes(),
+                resource_hash: leaf.ring.resource_hash.to_bytes(),
             };
             store.add_asset_leaf(pos, leaf_data)?;
         }
@@ -366,29 +397,32 @@ mod tests {
     #[test]
     fn asset_tree_sync_preserves_policy() {
         use decaf377::Fq;
-        use penumbra_sdk_compliance::{indexed_tree::FQ_MAX, AssetPolicy};
+        use penumbra_sdk_compliance::indexed_tree::{LeafParams, LeafRing, FQ_MAX};
 
         let mut tree = ComplianceAssetTree::new();
 
         // Create a leaf with non-default policy (simulating a regulated asset)
         let dk_pub = decaf377::Element::GENERATOR; // Non-identity element
         let threshold = 1000u128;
-        let policy = AssetPolicy::new(dk_pub, threshold);
 
         let new_leaf = IndexedLeaf {
             value: Fq::from(12345u64),
             next_index: 0,
             next_value: FQ_MAX.clone(),
-            policy: policy.clone(),
+            params: LeafParams {
+                dk_pub,
+                threshold,
+                channels_hash: penumbra_sdk_compliance::indexed_tree::string_to_fq(""),
+            },
+            ring: LeafRing::default(),
         };
 
         // The sentinel (low leaf) gets updated to point to the new leaf
-        let updated_sentinel = IndexedLeaf {
-            value: Fq::from(0u64),
-            next_index: 1, // Points to new leaf
-            next_value: Fq::from(12345u64),
-            policy: AssetPolicy::default_unregulated(),
-        };
+        let updated_sentinel = IndexedLeaf::with_default_policy(
+            Fq::from(0u64),
+            1, // Points to new leaf
+            Fq::from(12345u64),
+        );
 
         // Sync using the event-based method (preserves policy)
         tree.sync_from_event(
@@ -406,7 +440,7 @@ mod tests {
 
         assert_eq!(position, 1);
         assert!(is_regulated);
-        assert_eq!(retrieved_leaf.policy.dk_pub, dk_pub);
-        assert_eq!(retrieved_leaf.policy.threshold, threshold);
+        assert_eq!(retrieved_leaf.params.dk_pub, dk_pub);
+        assert_eq!(retrieved_leaf.params.threshold, threshold);
     }
 }
