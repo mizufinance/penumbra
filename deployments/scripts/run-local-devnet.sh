@@ -24,9 +24,9 @@ else
     # The default generates 2 validators, requiring 2/3+ voting power (i.e., both nodes).
     cargo run --release --bin pd -- network generate \
         --chain-id penumbra-local-devnet \
-        --unbonding-delay 50 \
-        --epoch-duration 50 \
-        --proposal-voting-blocks 50 \
+        --unbonding-delay 201 \
+        --epoch-duration 100 \
+        --proposal-voting-blocks 100 \
         --gas-price-simple 0 \
         --timeout-commit 500ms \
         --allocations-input-file "${repo_root}/deployments/compose/devnet-allocations.csv" \

@@ -137,10 +137,9 @@ impl Worker {
     /// 3. All asset registrations into the asset tree
     /// 4. Compliance anchors for the block
     async fn process_compliance_block(&self, block: &CompactBlock) -> anyhow::Result<()> {
-        // Early return if no compliance data in this block
+        // Early return if no compliance registration events in this block.
         if block.compliance_user_registrations.is_empty()
             && block.compliance_asset_registrations.is_empty()
-            && block.compliance_user_anchor.is_none()
         {
             return Ok(());
         }
