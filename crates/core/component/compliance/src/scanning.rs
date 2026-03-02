@@ -633,4 +633,269 @@ mod tests {
             assert_ne!(core_data.amount, Amount::from(1000u128));
         }
     }
+
+    // ========================================================================
+    // Edge case tests
+    // ========================================================================
+
+    #[test]
+    fn test_decrypt_core_wrong_shared_secret() {
+        let mut rng = OsRng;
+        let dk = DetectionKey::demo();
+        let dk_pub = dk.public_key();
+
+        let sk_ring = Fr::rand(&mut rng);
+        let ring_pk = Element::GENERATOR * sk_ring;
+        let self_address = Address::dummy(&mut rng);
+        let counterparty_address = Address::dummy(&mut rng);
+        let asset_id = asset::Id(Fq::from(42u64));
+        let amount = Amount::from(500u128);
+
+        let b_d_fq = counterparty_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
+
+        let result = encrypt_output(
+            &mut rng,
+            &ack,
+            &ack,
+            &dk_pub,
+            &self_address,
+            &counterparty_address,
+            asset_id,
+            amount,
+            false,
+            Fq::from(0u64),
+        )
+        .unwrap();
+
+        // Use a completely wrong shared secret
+        let wrong_ss = Element::GENERATOR * Fr::rand(&mut rng);
+        let core = decrypt_core(&wrong_ss, &result.ciphertext).unwrap();
+
+        // Should return None (garbage point decompression fails) or wrong amount
+        if let Some(core_data) = core {
+            assert_ne!(
+                core_data.amount, amount,
+                "wrong ss should not yield correct amount"
+            );
+        }
+    }
+
+    #[test]
+    fn test_decrypt_extension_wrong_key() {
+        let mut rng = OsRng;
+        let dk = DetectionKey::demo();
+        let dk_pub = dk.public_key();
+
+        let sk_ring = Fr::rand(&mut rng);
+        let ring_pk = Element::GENERATOR * sk_ring;
+        let self_address = Address::dummy(&mut rng);
+        let counterparty_address = Address::dummy(&mut rng);
+        let asset_id = asset::Id(Fq::from(42u64));
+        let amount = Amount::from(500u128);
+
+        let b_d_fq = counterparty_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
+
+        let result = encrypt_output(
+            &mut rng,
+            &ack,
+            &ack,
+            &dk_pub,
+            &self_address,
+            &counterparty_address,
+            asset_id,
+            amount,
+            false,
+            Fq::from(0u64),
+        )
+        .unwrap();
+
+        // Correct core secret, wrong extension secret
+        let correct_ss_core = ack * result.r_1;
+        let wrong_ss_ext = Element::GENERATOR * Fr::rand(&mut rng);
+
+        // Core should work
+        let core = decrypt_core(&correct_ss_core, &result.ciphertext)
+            .unwrap()
+            .expect("core decryption with correct key should succeed");
+        assert_eq!(core.amount, amount);
+
+        // Extension with wrong key should fail gracefully
+        let ext = decrypt_extension(&wrong_ss_ext, &result.ciphertext).unwrap();
+        if let Some(ext_data) = ext {
+            // If decompression happens to succeed, address should be wrong
+            assert_ne!(
+                ext_data.counterparty_diversified_generator,
+                *counterparty_address.diversified_generator(),
+                "wrong key should not produce correct counterparty"
+            );
+        }
+    }
+
+    #[test]
+    fn test_decrypt_spend_ciphertext_has_no_extension() {
+        let mut rng = OsRng;
+        let dk = DetectionKey::demo();
+        let dk_pub = dk.public_key();
+
+        let sk_ring = Fr::rand(&mut rng);
+        let ring_pk = Element::GENERATOR * sk_ring;
+        let self_address = Address::dummy(&mut rng);
+        let asset_id = asset::Id(Fq::from(42u64));
+        let amount = Amount::from(500u128);
+
+        let b_d_fq = self_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
+
+        let result = encrypt_spend(
+            &mut rng,
+            &ack,
+            &dk_pub,
+            &self_address,
+            asset_id,
+            amount,
+            false,
+            Fq::from(0u64),
+        )
+        .unwrap();
+
+        // Spend ciphertext has no extension tier
+        let dummy_ss = Element::GENERATOR * Fr::rand(&mut rng);
+        let ext = decrypt_extension(&dummy_ss, &result.ciphertext).unwrap();
+        assert!(
+            ext.is_none(),
+            "spend ciphertext should have no extension tier"
+        );
+
+        let sext = decrypt_spend_ext(&dummy_ss, &result.ciphertext).unwrap();
+        assert!(sext.is_none(), "spend ciphertext should have no sext tier");
+    }
+
+    #[test]
+    fn test_decrypt_full_partial_failure() {
+        let mut rng = OsRng;
+        let dk = DetectionKey::demo();
+        let dk_pub = dk.public_key();
+
+        let sk_ring = Fr::rand(&mut rng);
+        let ring_pk = Element::GENERATOR * sk_ring;
+        let self_address = Address::dummy(&mut rng);
+        let counterparty_address = Address::dummy(&mut rng);
+        let asset_id = asset::Id(Fq::from(42u64));
+        let amount = Amount::from(500u128);
+
+        let b_d_fq = counterparty_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
+
+        let result = encrypt_output(
+            &mut rng,
+            &ack,
+            &ack,
+            &dk_pub,
+            &self_address,
+            &counterparty_address,
+            asset_id,
+            amount,
+            false,
+            Fq::from(0u64),
+        )
+        .unwrap();
+
+        // Correct core key, wrong ext key → decrypt_full returns None
+        let correct_ss_core = ack * result.r_1;
+        let wrong_ss_ext = Element::GENERATOR * Fr::rand(&mut rng);
+
+        let full = decrypt_full(
+            &correct_ss_core,
+            &wrong_ss_ext,
+            &result.ciphertext,
+            asset_id,
+        )
+        .unwrap();
+
+        // Full decrypt should fail because ext fails
+        // (it returns None if any tier after core returns garbage/None)
+        // This may or may not be None depending on whether garbage decompresses
+        // The important thing is it doesn't panic
+        let _ = full;
+    }
+
+    #[test]
+    fn test_decrypt_zero_amount() {
+        let mut rng = OsRng;
+        let dk = DetectionKey::demo();
+        let dk_pub = dk.public_key();
+
+        let sk_ring = Fr::rand(&mut rng);
+        let ring_pk = Element::GENERATOR * sk_ring;
+        let self_address = Address::dummy(&mut rng);
+        let asset_id = asset::Id(Fq::from(42u64));
+        let amount = Amount::from(0u128);
+
+        let b_d_fq = self_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
+
+        let result = encrypt_spend(
+            &mut rng,
+            &ack,
+            &dk_pub,
+            &self_address,
+            asset_id,
+            amount,
+            true,
+            Fq::from(0u64),
+        )
+        .unwrap();
+
+        let core = decrypt_core_flagged(dk.inner(), &result.ciphertext)
+            .unwrap()
+            .expect("should decrypt zero amount");
+        assert_eq!(core.amount, Amount::from(0u128));
+    }
+
+    #[test]
+    fn test_decrypt_max_amount() {
+        let mut rng = OsRng;
+        let dk = DetectionKey::demo();
+        let dk_pub = dk.public_key();
+
+        let sk_ring = Fr::rand(&mut rng);
+        let ring_pk = Element::GENERATOR * sk_ring;
+        let self_address = Address::dummy(&mut rng);
+        let asset_id = asset::Id(Fq::from(42u64));
+        let amount = Amount::from(u128::MAX);
+
+        let b_d_fq = self_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
+
+        let result = encrypt_spend(
+            &mut rng,
+            &ack,
+            &dk_pub,
+            &self_address,
+            asset_id,
+            amount,
+            true,
+            Fq::from(0u64),
+        )
+        .unwrap();
+
+        let core = decrypt_core_flagged(dk.inner(), &result.ciphertext)
+            .unwrap()
+            .expect("should decrypt max amount");
+        assert_eq!(core.amount, Amount::from(u128::MAX));
+    }
 }

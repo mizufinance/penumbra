@@ -1324,6 +1324,173 @@ mod tests {
     }
 
     #[test]
+    fn test_verify_dleq_native_valid() {
+        let mut rng = OsRng;
+        let (_, ring_pk) = make_ring_keys(&mut rng);
+        let address = Address::dummy(&mut rng);
+        let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
+
+        let r = Fr::rand(&mut rng);
+        let k = Fr::rand(&mut rng);
+        let epk = Element::GENERATOR * r;
+        let s_point = ack * r;
+
+        let metadata_hash = compute_metadata_hash(
+            Fq::from(1u64),
+            Fq::from(2u64),
+            Fq::from(3u64),
+            Fq::from(1u64),
+            Fq::from(1_700_000_000u64),
+            Fq::rand(&mut rng),
+        );
+
+        let proof = compute_dleq_native(r, k, &ack, &epk, metadata_hash);
+
+        verify_dleq_native(&ack, &epk, &s_point, &proof.c, &proof.s, metadata_hash)
+            .expect("valid DLEQ proof should verify");
+    }
+
+    #[test]
+    fn test_verify_dleq_native_wrong_metadata() {
+        let mut rng = OsRng;
+        let (_, ring_pk) = make_ring_keys(&mut rng);
+        let address = Address::dummy(&mut rng);
+        let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+        let ack = derive_ack(&ring_pk, b_d_fq);
+
+        let r = Fr::rand(&mut rng);
+        let k = Fr::rand(&mut rng);
+        let epk = Element::GENERATOR * r;
+        let s_point = ack * r;
+
+        let original_timestamp = Fq::from(1_700_000_000u64);
+        let wrong_timestamp = Fq::from(1_600_000_000u64);
+
+        let metadata_hash = compute_metadata_hash(
+            Fq::from(1u64),
+            Fq::from(2u64),
+            Fq::from(3u64),
+            Fq::from(1u64),
+            original_timestamp,
+            Fq::from(42u64),
+        );
+
+        let proof = compute_dleq_native(r, k, &ack, &epk, metadata_hash);
+
+        // Verify with wrong timestamp → different metadata → should fail
+        let wrong_metadata = compute_metadata_hash(
+            Fq::from(1u64),
+            Fq::from(2u64),
+            Fq::from(3u64),
+            Fq::from(1u64),
+            wrong_timestamp,
+            Fq::from(42u64),
+        );
+
+        let result = verify_dleq_native(&ack, &epk, &s_point, &proof.c, &proof.s, wrong_metadata);
+        assert!(
+            result.is_err(),
+            "DLEQ verification with wrong timestamp/metadata should fail"
+        );
+    }
+
+    #[test]
+    fn test_verify_dleq_native_wrong_ack() {
+        let mut rng = OsRng;
+        let (_, ring_pk) = make_ring_keys(&mut rng);
+        let addr1 = Address::dummy(&mut rng);
+        let addr2 = Address::dummy(&mut rng);
+        let b_d_fq1 = addr1.diversified_generator().vartime_compress_to_field();
+        let b_d_fq2 = addr2.diversified_generator().vartime_compress_to_field();
+        let ack_correct = derive_ack(&ring_pk, b_d_fq1);
+        let ack_wrong = derive_ack(&ring_pk, b_d_fq2);
+
+        let r = Fr::rand(&mut rng);
+        let k = Fr::rand(&mut rng);
+        let epk = Element::GENERATOR * r;
+        let s_point = ack_correct * r;
+
+        let metadata_hash = compute_metadata_hash(
+            Fq::from(1u64),
+            Fq::from(2u64),
+            Fq::from(3u64),
+            Fq::from(1u64),
+            Fq::from(1_700_000_000u64),
+            Fq::rand(&mut rng),
+        );
+
+        let proof = compute_dleq_native(r, k, &ack_correct, &epk, metadata_hash);
+
+        // Verify with wrong ACK should fail
+        let result = verify_dleq_native(
+            &ack_wrong,
+            &epk,
+            &s_point,
+            &proof.c,
+            &proof.s,
+            metadata_hash,
+        );
+        assert!(
+            result.is_err(),
+            "DLEQ verification with wrong ACK should fail"
+        );
+    }
+
+    #[test]
+    fn test_derive_compliance_scalar_deterministic() {
+        let fq1 = Fq::from(12345u64);
+        let fq2 = Fq::from(12345u64);
+        let fq3 = Fq::from(99999u64);
+
+        assert_eq!(
+            derive_compliance_scalar(fq1),
+            derive_compliance_scalar(fq2),
+            "same input must produce same scalar"
+        );
+        assert_ne!(
+            derive_compliance_scalar(fq1),
+            derive_compliance_scalar(fq3),
+            "different inputs must produce different scalars"
+        );
+    }
+
+    #[test]
+    fn test_black_hole_ack_not_identity() {
+        assert_ne!(
+            *BLACK_HOLE_ACK,
+            Element::default(),
+            "BLACK_HOLE_ACK must not be the identity element"
+        );
+    }
+
+    #[test]
+    fn test_metadata_hash_timestamp_sensitivity() {
+        // Adjacent timestamps produce different hashes — this is how
+        // the DLEQ proof binds to a specific time window.
+        let salt = Fq::from(42u64);
+        let base = (
+            Fq::from(1u64),
+            Fq::from(2u64),
+            Fq::from(3u64),
+            Fq::from(1u64),
+        );
+
+        let t1 = Fq::from(1_700_000_000u64);
+        let t2 = Fq::from(1_700_000_001u64); // 1 second later
+        let t_zero = Fq::zero();
+
+        let h1 = compute_metadata_hash(base.0, base.1, base.2, base.3, t1, salt);
+        let h2 = compute_metadata_hash(base.0, base.1, base.2, base.3, t2, salt);
+        let h_zero = compute_metadata_hash(base.0, base.1, base.2, base.3, t_zero, salt);
+
+        assert_ne!(h1, h2, "1-second difference must change hash");
+        assert_ne!(h1, h_zero, "non-zero vs zero timestamp must differ");
+        // Zero timestamp is valid (used for unregulated assets)
+        let _ = h_zero;
+    }
+
+    #[test]
     fn test_hash7_domain_and_ordering() {
         // Determinism test: hash_7 with known inputs produces stable output.
         // This locks the input ordering to match Orbis (metadata first, then G).

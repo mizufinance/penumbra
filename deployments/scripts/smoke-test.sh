@@ -96,6 +96,41 @@ echo "comfort ten front cycle churn burger oak absent rice ice urge result art c
 cargo run --release --bin pcli -- --home "$pcli_test_home" tx compliance register-user test_usd
 >&2 echo "User registration complete."
 
+# --- Compliance smoke test setup ---
+# Generate a detection key for compliance tests
+>&2 echo "Setting up compliance smoke test environment..."
+dk_output=$(cargo run --release --bin pcli -- --home "$pcli_test_home" tx compliance generate-dk 2>&1) || true
+dk_hex=$(echo "$dk_output" | grep "DK (hex):" | awk '{print $NF}')
+dk_pub_hex=$(echo "$dk_output" | grep "DK_pub (hex):" | awk '{print $NF}')
+
+if [ -n "$dk_hex" ] && [ -n "$dk_pub_hex" ]; then
+    >&2 echo "  DK generated successfully."
+
+    # Register a compliance smoke test asset
+    cargo run --release --bin pcli -- --home "$pcli_test_home" \
+        tx compliance register-asset smoke_compliance_token \
+        --regulated --dk-pub-hex "$dk_pub_hex" --threshold 1000000000000000000000
+    >&2 echo "  Smoke compliance asset registered."
+
+    # Register the test user for the smoke compliance asset
+    cargo run --release --bin pcli -- --home "$pcli_test_home" \
+        tx compliance register-user smoke_compliance_token
+    >&2 echo "  User registered for smoke compliance asset."
+
+    # Export env vars for integration tests
+    export COMPLIANCE_DK_HEX="$dk_hex"
+    export COMPLIANCE_DK_PUB_HEX="$dk_pub_hex"
+    export COMPLIANCE_SMOKE_ASSET="smoke_compliance_token"
+    >&2 echo "  Compliance env vars exported."
+else
+    >&2 echo "  WARNING: DK generation failed, skipping compliance smoke setup."
+fi
+>&2 echo "Compliance smoke test setup complete."
+
+# Export devnet parameters for integration tests.
+# Must match values in run-local-devnet.sh.
+export UNBONDING_DELAY=201
+
 # Run the integration tests. Using `just` targets so that the exact
 # invocations are easily reusable on the CLI in dev loops.
 just integration-pclientd

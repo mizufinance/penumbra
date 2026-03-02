@@ -21,29 +21,13 @@
 
 ---
 
-## 3. Testing & Benchmarks
+## 3. Benchmarks
 
-Validates correctness and performance of everything above.
 
-### 3.1 Smoke Tests
 
 | Item | Description |
 |------|-------------|
-| Registration smoke tests | Asset + user registration flows in end-to-end smoke test suite |
-| Transfer smoke tests | Regulated + unregulated asset transfers through full devnet |
-| Scanning smoke tests | Issuer scanning, detection, flagging validation end-to-end |
-| Edge case smoke tests | Unregistered users, stale timestamps, invalid anchors, blocked action types |
-
-### 3.2 Benchmarks
-
-| Item | Description |
-|------|-------------|
-| Action overhead | Compliance cost per action type (Spend, Output) vs vanilla |
-| Simple tx baseline | Spend + Output baseline transaction timing |
-| Proof verification | Validator overhead for compliance proof verification |
-| Proof generation | Client overhead for compliance proof generation |
 | Registry sync | Compliance tree sync cost (events, local storage) |
-| Scanner throughput | Transactions scanned per second, ECDH operations per block |
 | Load testing | Scale testing with millions of registrations, high tx throughput scanning |
 | Orbis throughput | How many ACK per user can it handle? |
 

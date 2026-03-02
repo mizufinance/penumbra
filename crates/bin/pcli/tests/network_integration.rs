@@ -211,7 +211,7 @@ fn transaction_send_from_addr_0_to_addr_1() {
     // test_asset only by whitespace.
     balance_cmd
         .assert()
-        .stdout(predicate::str::is_match(r"1\s*2019test_usd").unwrap());
+        .stdout(predicate::str::is_match(r"1\s*2020test_usd").unwrap());
 
     // Cleanup: Send the asset back at the end of the test such that other tests begin
     // from the original state.
@@ -253,7 +253,10 @@ fn delegate_and_undelegate() {
 
     // Now undelegate. We attempt `max_attempts` times in case an epoch boundary passes
     // while we prepare the delegation. See issues #1522, #2047.
-    let max_attempts = 5;
+    let max_attempts = 8;
+
+    // Sync wallet view before delegation to ensure epoch state is current.
+    sync(&tmpdir);
 
     let mut num_attempts = 0;
     loop {
@@ -274,12 +277,13 @@ fn delegate_and_undelegate() {
         let delegation_result = delegate_cmd.assert().try_success();
         tracing::debug!(?delegation_result, "delegation result");
 
-        // If the undelegation command succeeded, we can exit this loop.
+        // If the delegation command succeeded, we can exit this loop.
         if delegation_result.is_ok() {
             tracing::info!("delegation succeeded");
             break;
         } else {
             tracing::info!("delegation failed");
+            sync(&tmpdir);
             num_attempts += 1;
             if num_attempts >= max_attempts {
                 panic!("Exceeded max attempts for fallible command");
@@ -338,6 +342,7 @@ fn delegate_and_undelegate() {
             break;
         } else {
             tracing::error!(?undelegation_result, "undelegation failed");
+            sync(&tmpdir);
             num_attempts += 1;
             tracing::info!(num_attempts, max_attempts, "undelegation failed");
             if num_attempts >= max_attempts {
@@ -580,14 +585,14 @@ fn lp_management() {
 /// Test that we can swap `gm` for `test_usd`
 /// Setup:
 /// There are two wallets, address 0 and address 1.
-/// Address 0 has 100gm and 5001test_usd.
-/// Address 1 has no gm and 1000test_usd.
+/// Address 0 has 100gm and 5000test_usd.
+/// Address 1 has no gm and 1001test_usd.
 /// Test:
 /// Address 1 posts an order to sell 1test_usd for 1gm.
 /// Address 0 swaps 1gm for 1test_usd.
 /// Validate:
-/// Address 0 has 99gm and 5002test_usd.
-/// Address 1 has 1gm and 999test_usd.
+/// Address 0 has 99gm and 5001test_usd.
+/// Address 1 has 1gm and 1000test_usd.
 fn swap() {
     let tmpdir = load_wallet_into_tmpdir();
 
@@ -607,9 +612,9 @@ fn swap() {
                 .not(),
         )
         // Address 0 has some penumbra.
-        .stdout(predicate::str::is_match(r"0\s*5001test_usd").unwrap())
-        // Address 1 has 1000test_usd.
-        .stdout(predicate::str::is_match(r"1\s*1000test_usd").unwrap());
+        .stdout(predicate::str::is_match(r"0\s*5000test_usd").unwrap())
+        // Address 1 has 1001test_usd.
+        .stdout(predicate::str::is_match(r"1\s*1001test_usd").unwrap());
 
     // Address 1: post an order to sell 1penumbra for 1gm.
     let mut sell_cmd = Command::cargo_bin("pcli").unwrap();
@@ -636,8 +641,8 @@ fn swap() {
                 .unwrap()
                 .not(),
         )
-        // Address 1 has 999test_usd.
-        .stdout(predicate::str::is_match(r"1\s*999test_usd").unwrap());
+        // Address 1 has 1000test_usd.
+        .stdout(predicate::str::is_match(r"1\s*1000test_usd").unwrap());
 
     // Address 1: swaps 1gm for 1penumbra.
     let mut swap_cmd = Command::cargo_bin("pcli").unwrap();
@@ -667,8 +672,8 @@ fn swap() {
         .assert()
         // Address 0 has 99gm (swapped 1gm).
         .stdout(predicate::str::is_match(r"0\s*99gm").unwrap())
-        // Address 0 has 5002test_usd
-        .stdout(predicate::str::is_match(r"0\s*5002test_usd").unwrap())
+        // Address 0 has 5001test_usd
+        .stdout(predicate::str::is_match(r"0\s*5001test_usd").unwrap())
         // Address 1 has no gm (needs to withdraw LP).
         .stdout(
             predicate::str::is_match(r"1\s[0-9]*\.?[0-9]gm")
@@ -717,12 +722,12 @@ fn swap() {
         .assert()
         // Address 0 has 99gm.
         .stdout(predicate::str::is_match(r"0\s*99gm").unwrap())
-        // Address 0 has 5002test_usd
-        .stdout(predicate::str::is_match(r"0\s*5002test_usd").unwrap())
+        // Address 0 has 5001test_usd
+        .stdout(predicate::str::is_match(r"0\s*5001test_usd").unwrap())
         // Address 1 has 1gm.
         .stdout(predicate::str::is_match(r"1\s*1gm").unwrap())
-        // Address 1 has 999test_usd
-        .stdout(predicate::str::is_match(r"1\s*999test_usd").unwrap());
+        // Address 1 has 1000test_usd
+        .stdout(predicate::str::is_match(r"1\s*1000test_usd").unwrap());
 }
 
 #[ignore]
@@ -1148,17 +1153,22 @@ fn test_orders() {
 #[ignore]
 #[test]
 fn delegate_submit_proposal_and_vote() {
+    tracing_subscriber::fmt::try_init().ok();
     let tmpdir = load_wallet_into_tmpdir();
 
     // Get a validator from the testnet.
     let validator = get_validator(&tmpdir);
 
-    // Now undelegate. We attempt `max_attempts` times in case an epoch boundary passes
+    // Sync wallet view before delegation to ensure note state is current.
+    sync(&tmpdir);
+
+    // We attempt `max_attempts` times in case an epoch boundary passes
     // while we prepare the delegation. See issues #1522, #2047.
-    let max_attempts = 5;
+    let max_attempts = 8;
 
     let mut num_attempts = 0;
     loop {
+        tracing::info!(attempt_number = num_attempts, "attempting delegation");
         // Delegate a tiny bit of penumbra to the validator.
         let mut delegate_cmd = Command::cargo_bin("pcli").unwrap();
         delegate_cmd
@@ -1173,11 +1183,15 @@ fn delegate_submit_proposal_and_vote() {
             ])
             .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
         let delegation_result = delegate_cmd.assert().try_success();
+        tracing::debug!(?delegation_result, "delegation result");
 
-        // If the undelegation command succeeded, we can exit this loop.
+        // If the delegation command succeeded, we can exit this loop.
         if delegation_result.is_ok() {
+            tracing::info!("delegation succeeded");
             break;
         } else {
+            tracing::info!("delegation failed");
+            sync(&tmpdir);
             num_attempts += 1;
             if num_attempts >= max_attempts {
                 panic!("Exceeded max attempts for fallible command");

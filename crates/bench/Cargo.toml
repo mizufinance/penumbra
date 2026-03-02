@@ -29,44 +29,102 @@ parallel = [
     "ark-r1cs-std/parallel",
 ]
 
-[[bench]]
-name = "nullifier_derivation"
-harness = false
+# --- Vanilla benchmarks ---
 
 [[bench]]
-name = "output"
+name = "nullifier_derivation"
+path = "benches/vanilla/nullifier_derivation.rs"
 harness = false
 
 [[bench]]
 name = "delegator_vote"
-harness = false
-
-[[bench]]
-name = "spend"
+path = "benches/vanilla/delegator_vote.rs"
 harness = false
 
 [[bench]]
 name = "swap"
+path = "benches/vanilla/swap.rs"
 harness = false
 
 [[bench]]
 name = "swap_claim"
+path = "benches/vanilla/swap_claim.rs"
 harness = false
 
 [[bench]]
 name = "convert"
+path = "benches/vanilla/convert.rs"
 harness = false
 
 [[bench]]
 name = "decaf377"
+path = "benches/vanilla/decaf377.rs"
 harness = false
 
 [[bench]]
 name = "arkworks"
+path = "benches/vanilla/arkworks.rs"
 harness = false
 
 [[bench]]
 name = "bls_threshold"
+path = "benches/vanilla/bls_threshold.rs"
+harness = false
+
+# --- Compliance: client ---
+
+[[bench]]
+name = "client_crypto"
+path = "benches/compliance/client/crypto.rs"
+harness = false
+
+[[bench]]
+name = "client_enrichment"
+path = "benches/compliance/client/enrichment.rs"
+harness = false
+
+[[bench]]
+name = "client_flow"
+path = "benches/compliance/client/flow.rs"
+harness = false
+
+# --- Compliance: validator ---
+
+[[bench]]
+name = "validator_proofs"
+path = "benches/compliance/validator/proofs.rs"
+harness = false
+
+[[bench]]
+name = "validator_verification"
+path = "benches/compliance/validator/verification.rs"
+harness = false
+
+[[bench]]
+name = "validator_flow"
+path = "benches/compliance/validator/flow.rs"
+harness = false
+
+[[bench]]
+name = "validator_block"
+path = "benches/compliance/validator/block.rs"
+harness = false
+
+# --- Compliance: scanner ---
+
+[[bench]]
+name = "scanner_decryption"
+path = "benches/compliance/scanner/decryption.rs"
+harness = false
+
+[[bench]]
+name = "scanner_trees"
+path = "benches/compliance/scanner/trees.rs"
+harness = false
+
+[[bench]]
+name = "scanner_flow"
+path = "benches/compliance/scanner/flow.rs"
 harness = false
 
 [dependencies]
@@ -94,18 +152,27 @@ sha2 = {workspace = true}
 tracing = {workspace = true}
 
 [dev-dependencies]
+anyhow = {workspace = true}
+cnidarium = {workspace = true, features = ["migration"], default-features = true}
 criterion = {workspace = true, features = ["html_reports"]}
 decaf377-fmd = {workspace = true}
 decaf377-ka = {workspace = true}
 decaf377-rdsa = {workspace = true}
-penumbra-sdk-compliance = {workspace = true, default-features = true}
+penumbra-sdk-app = {workspace = true, default-features = true}
+penumbra-sdk-compliance = {workspace = true, default-features = true, features = ["test-helpers"]}
 penumbra-sdk-dex = {workspace = true, default-features = true}
 penumbra-sdk-fee = {workspace = true, default-features = true}
 penumbra-sdk-governance = {workspace = true, default-features = true}
+penumbra-sdk-mock-client = {workspace = true}
+penumbra-sdk-mock-consensus = {workspace = true}
+penumbra-sdk-proto = {workspace = true, default-features = true}
 penumbra-sdk-sct = {workspace = true, default-features = true}
 penumbra-sdk-shielded-pool = {workspace = true, default-features = true, features = ["benchmark-helpers"]}
 penumbra-sdk-stake = {workspace = true, default-features = true}
 penumbra-sdk-tct = {workspace = true, features = ["r1cs"], default-features = true}
+penumbra-sdk-transaction = {workspace = true, default-features = true}
+serde_json = {workspace = true}
+tokio = {workspace = true, features = ["rt-multi-thread"]}
 
 [dev-dependencies.penumbra-sdk-proof-params]
 workspace = true

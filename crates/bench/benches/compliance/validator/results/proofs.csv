@@ -1,0 +1,9 @@
+version,circuit,operation,mean_ms,median_ms,std_dev_ms,samples,constraints
+v0,spend,prove,794.01,685.24,374.89,5,35978
+v0.1,spend,prove,1731.70,1688.55,284.78,5,121622
+v0,spend,verify,3.23,1.95,2.02,5,35978
+v0.1,spend,verify,3.67,3.57,0.32,5,121622
+v0,output,prove,329.62,193.13,197.64,5,13875
+v0.1,output,prove,2154.60,2147.35,154.44,5,175465
+v0,output,verify,1.75,1.75,0.03,5,13875
+v0.1,output,verify,5.08,4.68,0.85,5,175465
