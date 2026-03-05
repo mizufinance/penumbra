@@ -1,9 +1,9 @@
-//! Compliance crypto primitive benchmarks (v0.1 only).
+//! Compliance crypto primitive benchmarks (dev only).
 //!
 //! Measures all compliance-specific cryptographic operations.
 //! No vanilla counterpart — these operations didn't exist before compliance.
 //!
-//! Outputs: `benches/compliance/client/results/crypto.csv`
+//! Outputs: `benches/compliance/client/crypto.csv`
 
 use std::path::PathBuf;
 
@@ -36,7 +36,7 @@ fn main() {
         let _d = derive_compliance_scalar(b_d_fq);
     });
     results.push(bench_runner::make_result(
-        "v0.1",
+        "dev",
         &[("operation", "derive_compliance_scalar")],
         &times,
         None,
@@ -48,7 +48,7 @@ fn main() {
         let _cs = fq_to_challenge_scalar(fq);
     });
     results.push(bench_runner::make_result(
-        "v0.1",
+        "dev",
         &[("operation", "fq_to_challenge_scalar")],
         &times,
         None,
@@ -67,7 +67,7 @@ fn main() {
         );
     });
     results.push(bench_runner::make_result(
-        "v0.1",
+        "dev",
         &[("operation", "metadata_hash")],
         &times,
         None,
@@ -88,7 +88,7 @@ fn main() {
             let _proof = compute_dleq_native(r, k, &ack, &epk, metadata_hash);
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "dleq_compute")],
             &times,
             None,
@@ -111,7 +111,7 @@ fn main() {
             verify_dleq_native(&ack, &epk, &s_point, &proof.c, &proof.s, metadata_hash).unwrap();
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "dleq_verify")],
             &times,
             None,
@@ -131,7 +131,7 @@ fn main() {
             let _proof = compute_spend_dleq(r_s, k, &ack, metadata_hash);
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "spend_dleq")],
             &times,
             None,
@@ -167,7 +167,7 @@ fn main() {
             );
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "output_dleqs")],
             &times,
             None,
@@ -186,7 +186,7 @@ fn main() {
             let _ss = ack * r;
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "ecdh_shared_secret")],
             &times,
             None,
@@ -207,7 +207,7 @@ fn main() {
                 test_helpers::encrypt_test_spend(&ring_pk, &dk_pub, &addr, asset_id, amount, false);
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "encrypt_spend")],
             &times,
             None,
@@ -227,7 +227,7 @@ fn main() {
                 test_helpers::encrypt_test_spend(&ring_pk, &dk_pub, &addr, asset_id, amount, true);
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "encrypt_spend_flagged")],
             &times,
             None,
@@ -255,7 +255,7 @@ fn main() {
             );
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "encrypt_output")],
             &times,
             None,
@@ -283,7 +283,7 @@ fn main() {
             );
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "encrypt_output_flagged")],
             &times,
             None,
@@ -318,7 +318,7 @@ fn main() {
             let _result = decrypt_detection_tier(dk.inner(), &epk_1, &detection_tag, &asset_id);
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "decrypt_detection")],
             &times,
             None,
@@ -341,7 +341,7 @@ fn main() {
             let _result = decrypt_flagged_spend(dk.inner(), &spend_result.ciphertext, &asset_id);
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "decrypt_flagged_spend")],
             &times,
             None,
@@ -372,7 +372,7 @@ fn main() {
             let _result = decrypt_flagged_output(dk.inner(), &output_result.ciphertext, &asset_id);
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "decrypt_flagged_output")],
             &times,
             None,
@@ -393,7 +393,7 @@ fn main() {
             let _c = leaf.commit();
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "leaf_commit")],
             &times,
             None,
@@ -414,7 +414,7 @@ fn main() {
             let _c = leaf.commit();
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "indexed_leaf_commit")],
             &times,
             None,
@@ -448,7 +448,7 @@ fn main() {
             let _bytes = spend_result.ciphertext.to_bytes();
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "serialize_spend")],
             &times,
             None,
@@ -459,7 +459,7 @@ fn main() {
             let _ct = ComplianceCiphertext::from_bytes(&spend_bytes).unwrap();
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "deserialize_spend")],
             &times,
             None,
@@ -469,7 +469,7 @@ fn main() {
             let _bytes = output_result.ciphertext.to_bytes();
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "serialize_output")],
             &times,
             None,
@@ -480,7 +480,7 @@ fn main() {
             let _ct = ComplianceCiphertext::from_bytes(&output_bytes).unwrap();
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "deserialize_output")],
             &times,
             None,
@@ -488,8 +488,8 @@ fn main() {
     }
 
     // --- Output ---
-    bench_runner::print_table(&results);
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("benches/compliance/client/results/crypto.csv");
+    bench_runner::output_results(&results);
+    let csv_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("benches/compliance/client/crypto.csv");
     bench_runner::write_csv(&csv_path, &results);
 }

@@ -3,7 +3,7 @@
 //! Measures decryption tiers, batch scanning throughput, and detection scanning.
 //! No vanilla counterpart — scanning is entirely new with compliance.
 //!
-//! Outputs: `benches/compliance/scanner/results/decryption.csv`
+//! Outputs: `benches/compliance/scanner/decryption.csv`
 
 use std::path::PathBuf;
 
@@ -61,7 +61,7 @@ fn main() {
             let _data = decrypt_core(&ss_core, ct);
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "decrypt_core")],
             &times,
             None,
@@ -71,7 +71,7 @@ fn main() {
             let _data = decrypt_extension(&ss_ext, ct);
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "decrypt_extension")],
             &times,
             None,
@@ -81,7 +81,7 @@ fn main() {
             let _data = decrypt_full(&ss_core, &ss_ext, ct, asset_id);
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "decrypt_full")],
             &times,
             None,
@@ -102,7 +102,7 @@ fn main() {
             let _data = decrypt_core(&ss_core, ct);
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "spend_decrypt_core")],
             &times,
             None,
@@ -127,7 +127,7 @@ fn main() {
             let _data = decrypt_core_flagged(dk.inner(), ct);
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "flagged_decrypt_core")],
             &times,
             None,
@@ -137,7 +137,7 @@ fn main() {
             let _data = decrypt_extension_flagged(dk.inner(), ct);
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "flagged_decrypt_extension")],
             &times,
             None,
@@ -147,7 +147,7 @@ fn main() {
             let _data = decrypt_full_flagged(dk.inner(), ct, asset_id);
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "flagged_decrypt_full")],
             &times,
             None,
@@ -185,7 +185,7 @@ fn main() {
             }
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[
                 ("operation", "decrypt"),
                 ("batch_size", &batch_size.to_string()),
@@ -214,7 +214,7 @@ fn main() {
                 decrypt_detection_tier(dk.inner(), &ct.epk_1, &ct.detection_tag, &asset_id);
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[("operation", "detection_decrypt")],
             &times,
             None,
@@ -260,7 +260,7 @@ fn main() {
             }
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[
                 ("operation", "detection"),
                 ("batch_size", &batch_size.to_string()),
@@ -271,8 +271,8 @@ fn main() {
     }
 
     // --- Output ---
-    bench_runner::print_table(&results);
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("benches/compliance/scanner/results/decryption.csv");
+    bench_runner::output_results(&results);
+    let csv_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("benches/compliance/scanner/decryption.csv");
     bench_runner::write_csv(&csv_path, &results);
 }

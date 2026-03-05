@@ -1,74 +1,59 @@
 # Validator Benchmarks
 
-Measures validator-side TX verification performance: proof verification, ciphertext parsing, and block-level throughput.
+Validator category focuses on kernel-level stateless verification costs.
 
-## Benchmarks
+## Environment Variables
 
-| Bench name | Command | CSV output |
-|------------|---------|------------|
-| `validator_proofs` | `cargo bench --bench validator_proofs` | `results/proofs.csv` |
-| `validator_verification` | `cargo bench --bench validator_verification` | `results/verification.csv` |
-| `validator_flow` | `cargo bench --bench validator_flow` | `results/flow.csv` |
-| `validator_block` | `cargo bench --bench validator_block` | `results/block_tps.csv` |
+| Variable | Values | Default |
+|---|---|---|
+| `BENCH_VERSION` | `base`, `dev`, `local` | N/A |
+| `BENCH_PROFILE` | `quick`, `deep` | `quick` |
+| `BENCH_SUITE` | `complete`, `regression` | `complete` |
+| `BENCH_WARMUP` | integer | profile default |
+| `BENCH_SAMPLES` | integer | profile default |
+| `BENCH_OUTPUT` | `human`, `json` | `human` |
 
-## Result Files
+Note: `BENCH_VERSION` is required and must be explicitly set.
 
-### proofs.csv
+Profile defaults (W=warmup, S=samples):
+- `quick`: `W1 S5`
+- `deep`: `W3 S20`
 
-Proof generation and verification with circuit constraint counts. Compares v0 vs v0.1 circuit sizes and their impact on prove/verify time.
+## Benches
 
-| Column | Values | Description |
-|--------|--------|-------------|
-| `circuit` | `spend`, `output` | Which ZK circuit |
-| `operation` | `prove`, `verify` | Proof generation or verification |
+| Bench name | Command | Output |
+|---|---|---|
+| `validator_flow` | `cargo bench --bench validator_flow` | `validator/validator.csv` + `validator/sections.csv` + `validator/sections/{binding_sig,spend_path,output_path}.csv` |
 
-The `constraints` column shows circuit size:
-- v0 spend: ~36K, v0.1 spend: ~122K (3.4x larger)
-- v0 output: ~14K, v0.1 output: ~175K (12.6x larger)
+TPS ownership is in `node_abci_flow`; `validator_flow` tracks verification kernel behavior.
 
-Proving time scales roughly with constraint count. Verification time scales weakly (pairing-dominated).
+## Flow Outputs
 
-### verification.csv
+`BENCH_SUITE=complete` flow KPIs:
+- `100/serial`
+- `100/parallel`
+- `per_tx/serial`
+- `per_tx/parallel`
+- `1/serial`
+- `1/parallel`
+- `prove_kpi/single`
+- `ratio/parallel_over_serial`
 
-Validator verification pipeline broken into stages. Isolates how much time each step adds.
+`BENCH_SUITE=regression` flow KPIs:
+- `100/parallel`
+- `per_tx/parallel`
 
-| Column | Values | Description |
-|--------|--------|-------------|
-| `circuit` | `spend`, `output`, *(empty)* | Action type |
-| `stage` | `verify`, `ct_deserialize`, `full_verify`, `dleq_parse` | Pipeline stage |
+Flow file:
+- `validator/validator.csv`
+- `validator/sections.csv` (section overview)
 
-- `verify`: Groth16 proof verification only (`ark_groth16::verify_with_processed_vk`)
-- `ct_deserialize`: parse compliance ciphertext bytes into struct + extract circuit public inputs
-- `full_verify`: complete pipeline (ciphertext parse + proof verify)
-- `dleq_parse`: parse DLEQ proof field elements from bytes
+Sections file:
+- `validator/sections/binding_sig.csv`
+- `validator/sections/spend_path.csv`
+- `validator/sections/output_path.csv`
 
-### flow.csv
+Cross-category flow overview:
+- `flows.csv` (contains `category=validator` rows from this bench)
 
-Batch verification of 100 transactions, matching the production `ProcessProposal` pattern: transactions processed sequentially, actions within each TX verified in parallel.
-
-| Column | Values | Description |
-|--------|--------|-------------|
-| `batch_size` | `100`, `per_tx` | Batch total or per-TX average |
-| `mode` | `serial`, `parallel` | Execution strategy |
-
-- `serial`: all actions verified sequentially (total CPU cost baseline)
-- `parallel`: actions within each TX verified via `JoinSet` + `spawn_blocking` (matches production `check_stateless`)
-- `per_tx`: batch time / 100 (amortized per-TX cost)
-- Each TX is 1 spend + 1 output (1S1O)
-- Only measures `check_stateless` (proof + sig + DLEQ). No state I/O.
-
-### block_tps.csv
-
-Full block-level throughput through the real `App::deliver_tx` pipeline. Uses `TestNode` with `TempStorage` to run N transactions through `begin_block` -> N x `deliver_tx` -> `end_block` -> `commit`.
-
-| Column | Values | Description |
-|--------|--------|-------------|
-| `block_size` | `1`, `5`, `10`, `25` | Number of TXs in the block |
-| `metric` | `block_total_ms`, `per_tx_ms`, `tps` | What the value represents |
-
-- `block_total_ms`: wall-clock time for the entire block
-- `per_tx_ms`: block time / N
-- `tps`: N / (block_time_seconds)
-- v0.1 is measured directly. v0 rows are labeled "estimated" -- for real v0 numbers, run on `release/v2.1.x`
-- Single sample per block size (each run consumes nullifiers, requiring full re-setup)
-- Includes everything: Groth16 verify, stateful checks (nullifier, anchor), state writes, JMT commit
+Rows include run metadata:
+- `profile`, `run_id`, `timestamp`, `git_rev`, `host_label`

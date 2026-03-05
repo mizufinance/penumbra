@@ -1,9 +1,0 @@
-version,scenario,mean_ms,median_ms,std_dev_ms,samples,constraints
-v0,spend_crypto,0.00,0.00,0.00,30,
-v0.1,spend_crypto,0.65,0.66,0.03,30,
-v0,output_crypto,0.00,0.00,0.00,30,
-v0.1,output_crypto,1.52,1.51,0.11,30,
-v0,1S1O,0.00,0.00,0.00,30,
-v0.1,1S1O,2.08,2.09,0.04,30,
-v0,4S1O,0.00,0.00,0.00,30,
-v0.1,4S1O,3.75,3.80,0.15,30,

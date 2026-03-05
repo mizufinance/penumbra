@@ -3,16 +3,12 @@
 //! Measures total wall-clock time for a validator to verify a batch of
 //! transactions (100 TXs), replicating the check_stateless pipeline.
 //!
-//! v0 (vanilla): proof verification only (no ciphertext, no DLEQ).
-//! v0.1 (compliance): full pipeline (binding sig + ciphertext deser + DLEQ + proof verify).
-//!
-//! Outputs: `benches/compliance/validator/results/flow.csv`
+//! Emits:
+//! - top-level overview: `benches/compliance/flows.csv`
+//! - category KPIs: `benches/compliance/validator/validator.csv`
+//! - section overview: `benches/compliance/validator/sections.csv`
+//! - section KPIs: `benches/compliance/validator/sections/<section>.csv`
 
-use std::path::PathBuf;
-
-use ark_groth16::{r1cs_to_qap::LibsnarkReduction, Groth16, PreparedVerifyingKey, Proof};
-use ark_snark::SNARK;
-use decaf377::{Bls12_377, Fq};
 use penumbra_sdk_bench::bench_runner;
 use penumbra_sdk_compliance::structs::ComplianceCiphertext;
 use penumbra_sdk_keys::test_keys;
@@ -20,19 +16,11 @@ use penumbra_sdk_proof_params::{OUTPUT_PROOF_VERIFICATION_KEY, SPEND_PROOF_VERIF
 use penumbra_sdk_shielded_pool::{output::OutputProofPublic, Output, Spend, SpendProofPublic};
 use penumbra_sdk_transaction::txhash::{AuthorizingData, EffectingData};
 use penumbra_sdk_transaction::{Action, Transaction};
-use rand_core::OsRng;
 
 #[path = "../helpers/flow.rs"]
 mod flow_helpers;
 use flow_helpers::*;
 
-#[allow(unused_imports)]
-#[path = "../helpers/vanilla_circuits.rs"]
-mod vanilla_circuits;
-use vanilla_circuits::*;
-
-const WARMUP: usize = 1;
-const SAMPLES: usize = 3;
 const BATCH_SIZE: usize = 100;
 
 // ===========================================================================
@@ -59,12 +47,12 @@ fn verify_spend(spend: &Spend, anchor: penumbra_sdk_tct::Root, effect_hash: &[u8
 
     let (dleq_c, dleq_s) = if spend.body.dleq_proof.len() == 64 {
         let c_bytes: [u8; 32] = spend.body.dleq_proof[..32].try_into().unwrap();
-        let c = Fq::from_bytes_checked(&c_bytes).expect("valid dleq_c");
+        let c = decaf377::Fq::from_bytes_checked(&c_bytes).expect("valid dleq_c");
         let s_bytes: [u8; 32] = spend.body.dleq_proof[32..64].try_into().unwrap();
-        let s = Fq::from_bytes_checked(&s_bytes).expect("valid dleq_s");
+        let s = decaf377::Fq::from_bytes_checked(&s_bytes).expect("valid dleq_s");
         (c, s)
     } else {
-        (Fq::from(0u64), Fq::from(0u64))
+        (decaf377::Fq::from(0u64), decaf377::Fq::from(0u64))
     };
 
     spend
@@ -81,7 +69,7 @@ fn verify_spend(spend: &Spend, anchor: penumbra_sdk_tct::Root, effect_hash: &[u8
                 epk,
                 c2_core,
                 compliance_ciphertext,
-                target_timestamp: Fq::from(spend.body.target_timestamp),
+                target_timestamp: decaf377::Fq::from(spend.body.target_timestamp),
                 dleq_c,
                 dleq_s,
                 sender_leaf_hash: spend.body.sender_leaf_hash,
@@ -98,11 +86,11 @@ fn verify_output(output: &Output) {
 
     let (dleq_c_1, dleq_s_1, dleq_c_2, dleq_s_2, dleq_c_3, dleq_s_3) =
         if output.body.dleq_proofs.len() == 192 {
-            let parse = |offset: usize| -> Fq {
+            let parse = |offset: usize| -> decaf377::Fq {
                 let bytes: [u8; 32] = output.body.dleq_proofs[offset..offset + 32]
                     .try_into()
                     .unwrap();
-                Fq::from_bytes_checked(&bytes).expect("valid dleq field")
+                decaf377::Fq::from_bytes_checked(&bytes).expect("valid dleq field")
             };
             (
                 parse(0),
@@ -114,12 +102,12 @@ fn verify_output(output: &Output) {
             )
         } else {
             (
-                Fq::from(0u64),
-                Fq::from(0u64),
-                Fq::from(0u64),
-                Fq::from(0u64),
-                Fq::from(0u64),
-                Fq::from(0u64),
+                decaf377::Fq::from(0u64),
+                decaf377::Fq::from(0u64),
+                decaf377::Fq::from(0u64),
+                decaf377::Fq::from(0u64),
+                decaf377::Fq::from(0u64),
+                decaf377::Fq::from(0u64),
             )
         };
 
@@ -137,7 +125,7 @@ fn verify_output(output: &Output) {
                 c2_ext,
                 c2_sext,
                 compliance_ciphertext,
-                target_timestamp: Fq::from(output.body.target_timestamp),
+                target_timestamp: decaf377::Fq::from(output.body.target_timestamp),
                 dleq_c_1,
                 dleq_s_1,
                 dleq_c_2,
@@ -166,6 +154,26 @@ fn verify_full_tx_serial(tx: &Transaction) {
     }
 }
 
+/// Serial section benchmark: only spend verification path.
+fn verify_spend_only_serial(tx: &Transaction) {
+    let anchor = tx.anchor;
+    let effect_hash = tx.effect_hash();
+    for action in tx.actions() {
+        if let Action::Spend(spend) = action {
+            verify_spend(spend, anchor, effect_hash.as_ref());
+        }
+    }
+}
+
+/// Serial section benchmark: only output verification path.
+fn verify_output_only_serial(tx: &Transaction) {
+    for action in tx.actions() {
+        if let Action::Output(output) = action {
+            verify_output(output);
+        }
+    }
+}
+
 /// Production flow: binding sig first, then actions in parallel via JoinSet.
 /// Matches check_stateless in transaction.rs.
 async fn verify_full_tx_parallel(tx: &Transaction) {
@@ -189,66 +197,6 @@ async fn verify_full_tx_parallel(tx: &Transaction) {
 }
 
 // ===========================================================================
-// Vanilla verification helpers
-// ===========================================================================
-
-struct VanillaProofSet {
-    spend_proof: Proof<Bls12_377>,
-    spend_public_inputs: Vec<Fq>,
-    output_proof: Proof<Bls12_377>,
-    output_public_inputs: Vec<Fq>,
-}
-
-fn build_vanilla_proof_set() -> VanillaProofSet {
-    let vanilla_spend_pk = &VANILLA_SPEND_KEYS.0;
-    let vanilla_output_pk = &VANILLA_OUTPUT_KEYS.0;
-
-    let (spend_circuit, spend_inputs) = make_vanilla_spend_circuit();
-    let spend_proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
-        spend_circuit,
-        vanilla_spend_pk,
-        Fq::rand(&mut OsRng),
-        Fq::rand(&mut OsRng),
-    )
-    .expect("vanilla spend proof");
-
-    let (output_circuit, output_inputs) = make_vanilla_output_circuit();
-    let output_proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
-        output_circuit,
-        vanilla_output_pk,
-        Fq::rand(&mut OsRng),
-        Fq::rand(&mut OsRng),
-    )
-    .expect("vanilla output proof");
-
-    VanillaProofSet {
-        spend_proof,
-        spend_public_inputs: spend_inputs,
-        output_proof,
-        output_public_inputs: output_inputs,
-    }
-}
-
-fn verify_vanilla_proof_set(
-    proofs: &VanillaProofSet,
-    spend_pvk: &PreparedVerifyingKey<Bls12_377>,
-    output_pvk: &PreparedVerifyingKey<Bls12_377>,
-) {
-    Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(
-        spend_pvk,
-        &proofs.spend_public_inputs,
-        &proofs.spend_proof,
-    )
-    .expect("valid vanilla spend proof");
-    Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(
-        output_pvk,
-        &proofs.output_public_inputs,
-        &proofs.output_proof,
-    )
-    .expect("valid vanilla output proof");
-}
-
-// ===========================================================================
 // Transaction builder
 // ===========================================================================
 
@@ -256,7 +204,10 @@ fn build_transaction(prepared: &PreparedPlan) -> Transaction {
     let rt = tokio::runtime::Runtime::new().expect("can create runtime");
     let fvk = &test_keys::FULL_VIEWING_KEY;
     let sk = &test_keys::SPEND_KEY;
-    let auth_data = prepared.plan.authorize(OsRng, sk).expect("can authorize");
+    let auth_data = prepared
+        .plan
+        .authorize(rand_core::OsRng, sk)
+        .expect("can authorize");
     rt.block_on(async {
         prepared
             .plan
@@ -267,188 +218,266 @@ fn build_transaction(prepared: &PreparedPlan) -> Transaction {
     })
 }
 
-// ===========================================================================
-// Main
-// ===========================================================================
+fn pick_kpi(
+    raw: &[bench_runner::BenchResult],
+    version: &str,
+    batch_size: &str,
+    mode: &str,
+) -> bench_runner::BenchResult {
+    raw.iter()
+        .find(|r| {
+            r.version == version
+                && r.dimensions
+                    .iter()
+                    .any(|(k, v)| k == "batch_size" && v == batch_size)
+                && r.dimensions.iter().any(|(k, v)| k == "mode" && v == mode)
+        })
+        .cloned()
+        .unwrap_or_else(|| {
+            panic!("missing KPI row for version={version}, batch_size={batch_size}, mode={mode}")
+        })
+}
 
-/// Vanilla parallel: spawn spend + output verification concurrently.
-async fn verify_vanilla_proof_set_parallel(
-    proofs: &VanillaProofSet,
-    spend_pvk: &'static PreparedVerifyingKey<Bls12_377>,
-    output_pvk: &'static PreparedVerifyingKey<Bls12_377>,
-) {
-    let sp = proofs.spend_proof.clone();
-    let si = proofs.spend_public_inputs.clone();
-    let op = proofs.output_proof.clone();
-    let oi = proofs.output_public_inputs.clone();
+fn flow_rows_for_version(
+    raw: &[bench_runner::BenchResult],
+    version: &str,
+    regression: bool,
+) -> Vec<bench_runner::BenchResult> {
+    let mut rows = Vec::new();
+    // Complete suite: full flow matrix. Regression suite: canonical flow rows.
+    let kpis = if regression {
+        vec![("100", "parallel"), ("per_tx", "parallel")]
+    } else {
+        vec![
+            ("100", "serial"),
+            ("100", "parallel"),
+            ("per_tx", "serial"),
+            ("per_tx", "parallel"),
+            ("1", "serial"),
+            ("1", "parallel"),
+            ("prove_kpi", "single"),
+            ("ratio", "parallel_over_serial"),
+        ]
+    };
+    for (batch_size, mode) in kpis {
+        rows.push(pick_kpi(raw, version, batch_size, mode));
+    }
+    rows
+}
 
-    let spend_handle = tokio::task::spawn_blocking(move || {
-        Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(spend_pvk, &si, &sp)
-            .expect("valid vanilla spend proof");
-    });
-    let output_handle = tokio::task::spawn_blocking(move || {
-        Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(output_pvk, &oi, &op)
-            .expect("valid vanilla output proof");
-    });
+fn pick_section_kpi(
+    raw: &[bench_runner::BenchResult],
+    version: &str,
+    batch_size: &str,
+    section: &str,
+) -> bench_runner::BenchResult {
+    raw.iter()
+        .find(|r| {
+            r.version == version
+                && r.dimensions
+                    .iter()
+                    .any(|(k, v)| k == "batch_size" && v == batch_size)
+                && r.dimensions
+                    .iter()
+                    .any(|(k, v)| k == "section" && v == section)
+        })
+        .cloned()
+        .unwrap_or_else(|| {
+            panic!(
+                "missing section row for version={version}, batch_size={batch_size}, section={section}"
+            )
+        })
+}
 
-    spend_handle.await.expect("spend task ok");
-    output_handle.await.expect("output task ok");
+fn section_rows_for_version(
+    raw: &[bench_runner::BenchResult],
+    version: &str,
+) -> Vec<bench_runner::BenchResult> {
+    let mut rows = Vec::new();
+    for section in ["binding_sig", "spend_path", "output_path"] {
+        rows.push(pick_section_kpi(raw, version, "100", section));
+    }
+    rows
 }
 
 fn main() {
     let rt = tokio::runtime::Runtime::new().expect("can create runtime");
-    let mut results = Vec::new();
+    let version = bench_runner::bench_version();
+    let warmup = bench_runner::warmup_count();
+    let samples = bench_runner::sample_count();
+    let regression = bench_runner::is_regression_suite();
 
-    // --- Generate vanilla proving keys ---
-    eprintln!("Generating vanilla proving keys...");
-    let _ = &*VANILLA_SPEND_KEYS;
-    let _ = &*VANILLA_OUTPUT_KEYS;
-    let vanilla_spend_pvk = &VANILLA_SPEND_KEYS.1;
-    let vanilla_output_pvk = &VANILLA_OUTPUT_KEYS.1;
-
-    // ===== Build proof/TX pools =====
-    eprintln!("Building {} vanilla proof sets...", BATCH_SIZE);
-    let vanilla_proofs: Vec<_> = (0..BATCH_SIZE).map(|_| build_vanilla_proof_set()).collect();
-
-    eprintln!("Building {} compliance transactions...", BATCH_SIZE);
-    let compliance_txs: Vec<_> = (0..BATCH_SIZE)
+    let txs: Vec<_> = (0..BATCH_SIZE)
         .map(|_| {
             let prepared = build_simple_transfer();
             build_transaction(&prepared)
         })
         .collect();
 
-    // ===== Serial batch (total CPU cost) =====
-    eprintln!("\n=== Serial Batch {} TXs (1S + 1O each) ===", BATCH_SIZE);
+    let mut raw_results = Vec::new();
 
-    eprintln!("Benchmarking v0 batch_{}_serial...", BATCH_SIZE);
-    let times = bench_runner::run_bench(WARMUP, SAMPLES, || {
-        for proofs in &vanilla_proofs {
-            verify_vanilla_proof_set(proofs, vanilla_spend_pvk, vanilla_output_pvk);
-        }
-    });
-    results.push(bench_runner::make_result(
-        "v0",
-        &[("batch_size", "100"), ("mode", "serial")],
-        &times,
-        None,
-    ));
-
-    eprintln!("Benchmarking v0.1 batch_{}_serial...", BATCH_SIZE);
-    let times = bench_runner::run_bench(WARMUP, SAMPLES, || {
-        for tx in &compliance_txs {
-            verify_full_tx_serial(tx);
-        }
-    });
-    results.push(bench_runner::make_result(
-        "v0.1",
-        &[("batch_size", "100"), ("mode", "serial")],
-        &times,
-        None,
-    ));
-
-    // ===== Production flow: TXs sequential, actions parallel within each TX =====
-    // Matches ProcessProposal: for tx in block { deliver_tx(tx).await }
-    // Inside deliver_tx: check_stateless uses JoinSet for actions
-    eprintln!(
-        "\n=== Production Flow: {} TXs sequential, actions parallel ===",
-        BATCH_SIZE
-    );
-
-    eprintln!("Benchmarking v0 batch_{}_parallel...", BATCH_SIZE);
-    let times = bench_runner::run_bench(WARMUP, SAMPLES, || {
+    let parallel_times = bench_runner::run_bench(warmup, samples, || {
         rt.block_on(async {
-            for proofs in &vanilla_proofs {
-                verify_vanilla_proof_set_parallel(proofs, vanilla_spend_pvk, vanilla_output_pvk)
-                    .await;
-            }
-        });
-    });
-    results.push(bench_runner::make_result(
-        "v0",
-        &[("batch_size", "100"), ("mode", "parallel")],
-        &times,
-        None,
-    ));
-
-    eprintln!("Benchmarking v0.1 batch_{}_parallel...", BATCH_SIZE);
-    let times = bench_runner::run_bench(WARMUP, SAMPLES, || {
-        rt.block_on(async {
-            for tx in &compliance_txs {
+            for tx in &txs {
                 verify_full_tx_parallel(tx).await;
             }
         });
     });
-    results.push(bench_runner::make_result(
-        "v0.1",
+    raw_results.push(bench_runner::make_result(
+        &version,
         &[("batch_size", "100"), ("mode", "parallel")],
-        &times,
+        &parallel_times,
         None,
     ));
 
-    // --- Per-TX averages from both modes ---
-    eprintln!("\n=== Per-TX Averages ===");
+    let per_tx_parallel: Vec<f64> = parallel_times
+        .iter()
+        .map(|t| t / BATCH_SIZE as f64)
+        .collect();
+    raw_results.push(bench_runner::make_result(
+        &version,
+        &[("batch_size", "per_tx"), ("mode", "parallel")],
+        &per_tx_parallel,
+        None,
+    ));
 
-    let v0_serial = bench_runner::run_bench(WARMUP, SAMPLES, || {
-        for proofs in &vanilla_proofs {
-            verify_vanilla_proof_set(proofs, vanilla_spend_pvk, vanilla_output_pvk);
+    // Section breakdown rows.
+    let binding_only = bench_runner::run_bench(warmup, samples, || {
+        for tx in &txs {
+            verify_binding_sig(tx);
         }
     });
-    let v0_per_tx: Vec<f64> = v0_serial.iter().map(|t| t / BATCH_SIZE as f64).collect();
-    results.push(bench_runner::make_result(
-        "v0",
-        &[("batch_size", "per_tx"), ("mode", "serial")],
-        &v0_per_tx,
+    raw_results.push(bench_runner::make_result(
+        &version,
+        &[("batch_size", "100"), ("section", "binding_sig")],
+        &binding_only,
         None,
     ));
 
-    let v01_serial = bench_runner::run_bench(WARMUP, SAMPLES, || {
-        for tx in &compliance_txs {
-            verify_full_tx_serial(tx);
+    let spend_only = bench_runner::run_bench(warmup, samples, || {
+        for tx in &txs {
+            verify_spend_only_serial(tx);
         }
     });
-    let v01_per_tx: Vec<f64> = v01_serial.iter().map(|t| t / BATCH_SIZE as f64).collect();
-    results.push(bench_runner::make_result(
-        "v0.1",
-        &[("batch_size", "per_tx"), ("mode", "serial")],
-        &v01_per_tx,
+    raw_results.push(bench_runner::make_result(
+        &version,
+        &[("batch_size", "100"), ("section", "spend_path")],
+        &spend_only,
         None,
     ));
 
-    let v0_parallel = bench_runner::run_bench(WARMUP, SAMPLES, || {
-        rt.block_on(async {
-            for proofs in &vanilla_proofs {
-                verify_vanilla_proof_set_parallel(proofs, vanilla_spend_pvk, vanilla_output_pvk)
-                    .await;
+    let output_only = bench_runner::run_bench(warmup, samples, || {
+        for tx in &txs {
+            verify_output_only_serial(tx);
+        }
+    });
+    raw_results.push(bench_runner::make_result(
+        &version,
+        &[("batch_size", "100"), ("section", "output_path")],
+        &output_only,
+        None,
+    ));
+
+    if !regression {
+        let serial_times = bench_runner::run_bench(warmup, samples, || {
+            for tx in &txs {
+                verify_full_tx_serial(tx);
             }
         });
-    });
-    let v0_per_tx_p: Vec<f64> = v0_parallel.iter().map(|t| t / BATCH_SIZE as f64).collect();
-    results.push(bench_runner::make_result(
-        "v0",
-        &[("batch_size", "per_tx"), ("mode", "parallel")],
-        &v0_per_tx_p,
-        None,
-    ));
+        raw_results.push(bench_runner::make_result(
+            &version,
+            &[("batch_size", "100"), ("mode", "serial")],
+            &serial_times,
+            None,
+        ));
 
-    let v01_parallel = bench_runner::run_bench(WARMUP, SAMPLES, || {
-        rt.block_on(async {
-            for tx in &compliance_txs {
-                verify_full_tx_parallel(tx).await;
-            }
+        let per_tx_serial: Vec<f64> = serial_times.iter().map(|t| t / BATCH_SIZE as f64).collect();
+        raw_results.push(bench_runner::make_result(
+            &version,
+            &[("batch_size", "per_tx"), ("mode", "serial")],
+            &per_tx_serial,
+            None,
+        ));
+
+        let single_serial = bench_runner::run_bench(warmup, samples, || {
+            verify_full_tx_serial(&txs[0]);
         });
-    });
-    let v01_per_tx_p: Vec<f64> = v01_parallel.iter().map(|t| t / BATCH_SIZE as f64).collect();
-    results.push(bench_runner::make_result(
-        "v0.1",
-        &[("batch_size", "per_tx"), ("mode", "parallel")],
-        &v01_per_tx_p,
-        None,
-    ));
+        raw_results.push(bench_runner::make_result(
+            &version,
+            &[("batch_size", "1"), ("mode", "serial")],
+            &single_serial,
+            None,
+        ));
 
-    // --- Output ---
-    bench_runner::print_table(&results);
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("benches/compliance/validator/results/flow.csv");
-    bench_runner::write_csv(&csv_path, &results);
+        let single_parallel = bench_runner::run_bench(warmup, samples, || {
+            rt.block_on(async {
+                verify_full_tx_parallel(&txs[0]).await;
+            });
+        });
+        raw_results.push(bench_runner::make_result(
+            &version,
+            &[("batch_size", "1"), ("mode", "parallel")],
+            &single_parallel,
+            None,
+        ));
+
+        let ratio: Vec<f64> = parallel_times
+            .iter()
+            .zip(serial_times.iter())
+            .map(|(p, s)| if *s > 0.0 { p / s } else { 0.0 })
+            .collect();
+        raw_results.push(bench_runner::make_result(
+            &version,
+            &[("batch_size", "ratio"), ("mode", "parallel_over_serial")],
+            &ratio,
+            None,
+        ));
+
+        // One proving KPI for startup runs.
+        let prove_times = bench_runner::run_bench(warmup, samples, || {
+            let prepared = build_simple_transfer();
+            let _ = build_transaction(&prepared);
+        });
+        raw_results.push(bench_runner::make_result(
+            &version,
+            &[("batch_size", "prove_kpi"), ("mode", "single")],
+            &prove_times,
+            None,
+        ));
+    }
+
+    let flow_rows = flow_rows_for_version(&raw_results, &version, regression);
+    let section_rows = section_rows_for_version(&raw_results, &version);
+    let mut flow_with_meta = flow_rows.clone();
+    bench_runner::annotate_raw_results(&mut flow_with_meta);
+    let mut sections_with_meta = section_rows.clone();
+    bench_runner::annotate_raw_results(&mut sections_with_meta);
+    bench_runner::output_results(&flow_with_meta);
+
+    let flow_path = bench_runner::category_csv_path("validator");
+    bench_runner::append_csv(&flow_path, &flow_with_meta);
+
+    let sections_overview_path = bench_runner::category_sections_csv_path("validator");
+    bench_runner::append_csv(&sections_overview_path, &sections_with_meta);
+
+    let flows_overview = bench_runner::to_flow_overview_rows("validator", &flow_with_meta);
+    let flows_overview_path = bench_runner::flows_overview_csv_path();
+    bench_runner::append_csv_scoped(&flows_overview_path, &flows_overview, &["category", "kpi"]);
+
+    for section in ["binding_sig", "spend_path", "output_path"] {
+        let mut rows: Vec<_> = sections_with_meta
+            .iter()
+            .filter(|r| {
+                r.dimensions
+                    .iter()
+                    .any(|(k, v)| k == "section" && v == section)
+            })
+            .cloned()
+            .collect();
+        for r in &mut rows {
+            r.dimensions.retain(|(k, _)| k != "section");
+        }
+        let section_path = bench_runner::section_csv_path("validator", section);
+        bench_runner::append_csv(&section_path, &rows);
+    }
 }

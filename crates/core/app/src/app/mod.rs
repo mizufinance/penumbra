@@ -1,5 +1,5 @@
 use std::process;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -28,7 +28,10 @@ use penumbra_sdk_sct::component::clock::EpochRead;
 use penumbra_sdk_sct::component::sct::Sct;
 use penumbra_sdk_sct::component::{StateReadExt as _, StateWriteExt as _};
 use penumbra_sdk_sct::epoch::Epoch;
-use penumbra_sdk_shielded_pool::component::{ShieldedPool, StateReadExt as _, StateWriteExt as _};
+use penumbra_sdk_shielded_pool::component::{
+    output_check_stateless_and_extract, spend_check_stateless_and_extract, ShieldedPool,
+    StateReadExt as _, StateWriteExt as _,
+};
 use penumbra_sdk_stake::component::{
     stake::ConsensusUpdateRead, Staking, StateReadExt as _, StateWriteExt as _,
 };
@@ -38,6 +41,7 @@ use tendermint::abci::{self, Event};
 
 use tendermint::v0_37::abci::{request, response};
 use tendermint::validator::Update;
+use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tracing::{instrument, Instrument};
 
@@ -46,7 +50,9 @@ use crate::event::EventAppParametersChange;
 use crate::genesis::AppState;
 use crate::params::change::ParameterChangeExt as _;
 use crate::params::AppParameters;
+use crate::stateless_cache::{CacheEntry, StatelessCache};
 use crate::{CommunityPoolStateReadExt, PenumbraHost};
+use sha2::Digest as _;
 
 pub mod state_key;
 
@@ -61,6 +67,9 @@ pub const MAX_TRANSACTION_SIZE_BYTES: usize = 96 * 1024;
 
 /// The maximum size of the evidence portion of a block (30KB).
 pub const MAX_EVIDENCE_SIZE_BYTES: usize = 30 * 1024;
+/// Maximum number of in-flight block-level stateless checks in `process_proposal`.
+pub const MAX_PROCESS_PROPOSAL_STATELESS_CHECKS: usize = 16;
+static BATCH_VERIFY_SHADOW_ENABLED: OnceLock<bool> = OnceLock::new();
 
 /// The Penumbra application, written as a bundle of [`Component`]s.
 ///
@@ -72,6 +81,197 @@ pub struct App {
 }
 
 impl App {
+    fn batch_verify_shadow_enabled() -> bool {
+        *BATCH_VERIFY_SHADOW_ENABLED
+            .get_or_init(|| std::env::var("PENUMBRA_BATCH_VERIFY_SHADOW").is_ok())
+    }
+
+    fn ensure_user_tx_has_no_community_pool_actions(tx: &Transaction) -> Result<()> {
+        anyhow::ensure!(
+            tx.community_pool_spends().peekable().peek().is_none(),
+            "Community Pool spends are not permitted in user-submitted transactions"
+        );
+        anyhow::ensure!(
+            tx.community_pool_outputs().peekable().peek().is_none(),
+            "Community Pool outputs are not permitted in user-submitted transactions"
+        );
+
+        Ok(())
+    }
+
+    async fn check_transactions_stateless_concurrently(txs: &[Arc<Transaction>]) -> Result<()> {
+        if txs.is_empty() {
+            return Ok(());
+        }
+
+        let max_in_flight = std::thread::available_parallelism()
+            .map(usize::from)
+            .unwrap_or(1)
+            .clamp(1, MAX_PROCESS_PROPOSAL_STATELESS_CHECKS);
+
+        let mut tx_iter = txs.iter();
+        let mut stateless_checks: JoinSet<Result<()>> = JoinSet::new();
+
+        fn spawn_next(
+            tx_iter: &mut std::slice::Iter<'_, Arc<Transaction>>,
+            stateless_checks: &mut JoinSet<Result<()>>,
+        ) -> bool {
+            if let Some(tx) = tx_iter.next() {
+                let tx = tx.clone();
+                stateless_checks.spawn(
+                    async move { tx.check_stateless(()).await }
+                        .instrument(tracing::Span::current()),
+                );
+                true
+            } else {
+                false
+            }
+        }
+
+        for _ in 0..max_in_flight {
+            if !spawn_next(&mut tx_iter, &mut stateless_checks) {
+                break;
+            }
+        }
+
+        while let Some(check) = stateless_checks.join_next().await {
+            check
+                .context("waiting for block-level check_stateless check tasks")?
+                .context("check_stateless failed")?;
+            let _ = spawn_next(&mut tx_iter, &mut stateless_checks);
+        }
+
+        Ok(())
+    }
+
+    /// Batch-aware stateless check for all transactions in a block.
+    ///
+    /// Runs all transaction-level and per-action stateless checks, but defers
+    /// Groth16 proof verification for Spend and Output actions into a batch.
+    /// All other proof types are verified individually.
+    ///
+    /// This is consensus-critical: a false-accept bug here would allow invalid
+    /// proofs into consensus state via `deliver_tx_..._with_verified_stateless`.
+    async fn check_transactions_stateless_batch(txs: &[Arc<Transaction>]) -> Result<()> {
+        use crate::action_handler::transaction::stateless::{
+            check_memo_exists_if_outputs_absent_if_not, check_non_empty_transaction,
+            num_clues_equal_to_num_outputs, valid_binding_signature, validate_spend_output_binding,
+        };
+        use cnidarium_component::ActionHandler as _;
+        use penumbra_sdk_proof_params::batch::{self, BatchItem};
+        use penumbra_sdk_proof_params::{
+            OUTPUT_PROOF_VERIFICATION_KEY, SPEND_PROOF_VERIFICATION_KEY,
+        };
+        use penumbra_sdk_shielded_pool::component::Ics20Transfer;
+        use penumbra_sdk_transaction::Action;
+
+        if txs.is_empty() {
+            return Ok(());
+        }
+
+        let mut spend_items: Vec<BatchItem> = Vec::new();
+        let mut output_items: Vec<BatchItem> = Vec::new();
+
+        // Phase 1: Run all stateless checks, collecting batch items for spend/output.
+        for tx in txs {
+            // Transaction-level checks (binding sig, clues, memo, non-empty, spend-output binding)
+            valid_binding_signature(tx)?;
+            num_clues_equal_to_num_outputs(tx)?;
+            check_memo_exists_if_outputs_absent_if_not(tx)?;
+            check_non_empty_transaction(tx)?;
+            validate_spend_output_binding(tx)?;
+
+            let context = tx.context();
+
+            // Per-action checks — exhaustive match, no wildcard.
+            for action in tx.actions() {
+                match action {
+                    // Spend: auth sig check + extract batch item (skip proof)
+                    Action::Spend(spend) => {
+                        let item = spend_check_stateless_and_extract(spend, &context)
+                            .context("spend stateless check failed")?;
+                        spend_items.push(item);
+                    }
+                    // Output: ciphertext check + extract batch item (skip proof)
+                    Action::Output(output) => {
+                        let item = output_check_stateless_and_extract(output)
+                            .context("output stateless check failed")?;
+                        output_items.push(item);
+                    }
+                    // All other action types: full individual check_stateless.
+                    Action::SwapClaim(action) => action.check_stateless(context.clone()).await?,
+                    Action::DelegatorVote(action) => {
+                        action.check_stateless(context.clone()).await?
+                    }
+                    Action::Delegate(action) => action.check_stateless(()).await?,
+                    Action::Undelegate(action) => action.check_stateless(()).await?,
+                    Action::UndelegateClaim(action) => action.check_stateless(()).await?,
+                    Action::ValidatorDefinition(action) => action.check_stateless(()).await?,
+                    Action::ValidatorVote(action) => action.check_stateless(()).await?,
+                    Action::PositionClose(action) => action.check_stateless(()).await?,
+                    Action::PositionOpen(action) => action.check_stateless(()).await?,
+                    Action::PositionWithdraw(action) => action.check_stateless(()).await?,
+                    Action::ProposalSubmit(action) => action.check_stateless(()).await?,
+                    Action::ProposalWithdraw(action) => action.check_stateless(()).await?,
+                    Action::ProposalDepositClaim(action) => action.check_stateless(()).await?,
+                    Action::Swap(action) => action.check_stateless(()).await?,
+                    Action::IbcRelay(action) => {
+                        action
+                            .clone()
+                            .with_handler::<Ics20Transfer, PenumbraHost>()
+                            .check_stateless(())
+                            .await?
+                    }
+                    Action::Ics20Withdrawal(action) => {
+                        action
+                            .clone()
+                            .with_handler::<PenumbraHost>()
+                            .check_stateless(())
+                            .await?
+                    }
+                    Action::CommunityPoolSpend(action) => action.check_stateless(()).await?,
+                    Action::CommunityPoolOutput(action) => action.check_stateless(()).await?,
+                    Action::CommunityPoolDeposit(action) => action.check_stateless(()).await?,
+                    Action::ActionDutchAuctionSchedule(action) => {
+                        action.check_stateless(()).await?
+                    }
+                    Action::ActionDutchAuctionEnd(action) => action.check_stateless(()).await?,
+                    Action::ActionDutchAuctionWithdraw(action) => {
+                        action.check_stateless(()).await?
+                    }
+                    Action::ActionLiquidityTournamentVote(action) => {
+                        action.check_stateless(context.clone()).await?
+                    }
+                    Action::ComplianceRegisterAsset(action) => action.check_stateless(()).await?,
+                    Action::ComplianceRegisterUser(action) => action.check_stateless(()).await?,
+                }
+            }
+        }
+
+        // Phase 2: Batch-verify all spend and output proofs in parallel.
+        let spend_result = tokio::task::spawn_blocking(move || {
+            batch::batch_verify(&SPEND_PROOF_VERIFICATION_KEY, &spend_items)
+        });
+        let output_result = tokio::task::spawn_blocking(move || {
+            batch::batch_verify(&OUTPUT_PROOF_VERIFICATION_KEY, &output_items)
+        });
+
+        let (s, o) = tokio::join!(spend_result, output_result);
+        s.context("spend batch verify task panicked")?
+            .map_err(|e| anyhow::anyhow!("spend batch verification failed: {e}"))?;
+        o.context("output batch verify task panicked")?
+            .map_err(|e| anyhow::anyhow!("output batch verification failed: {e}"))?;
+
+        // Optional shadow-compare mode for devnet/testnet debugging.
+        // When enabled, also runs individual verification and rejects on mismatch.
+        if Self::batch_verify_shadow_enabled() {
+            tracing::info!("shadow-compare mode: running individual verification for comparison");
+            Self::check_transactions_stateless_concurrently(txs).await?;
+        }
+
+        Ok(())
+    }
+
     /// Constructs a new application, using the provided [`Snapshot`].
     /// Callers should ensure that [`App::is_ready`]) returns `true`, but this is not enforced.
     #[instrument(skip_all)]
@@ -185,6 +385,7 @@ impl App {
     pub async fn prepare_proposal(
         &mut self,
         proposal: request::PrepareProposal,
+        stateless_cache: Option<&StatelessCache>,
     ) -> response::PrepareProposal {
         if self.state.is_chain_halted().await {
             // If we find ourselves preparing a proposal for a halted chain
@@ -226,7 +427,7 @@ impl App {
             }
 
             // Then, we make sure to only include successful transactions.
-            match self.deliver_tx_bytes(&tx).await {
+            match self.deliver_tx_bytes(&tx, stateless_cache).await {
                 Ok(_) => {
                     proposal_size_bytes = total_with_tx;
                     included_txs.push(tx)
@@ -287,6 +488,7 @@ impl App {
         // payload: they MUST be below the tx size limit, and apply cleanly on
         // state fork.
         let mut total_txs_payload_size = 0usize;
+        let mut txs = Vec::with_capacity(proposal.txs.len());
         for tx in proposal.txs {
             let tx_size = tx.len();
             if tx_size > MAX_TRANSACTION_SIZE_BYTES {
@@ -298,7 +500,32 @@ impl App {
                 return response::ProcessProposal::Reject;
             }
 
-            match self.deliver_tx_bytes(&tx).await {
+            let tx = match Transaction::decode(tx.as_ref()) {
+                Ok(tx) => Arc::new(tx),
+                Err(_) => return response::ProcessProposal::Reject,
+            };
+            if Self::ensure_user_tx_has_no_community_pool_actions(&tx).is_err() {
+                return response::ProcessProposal::Reject;
+            }
+
+            txs.push(tx);
+        }
+
+        // Run all stateless checks first so proof verification can be parallelized
+        // across transactions in the block.
+        if Self::check_transactions_stateless_batch(&txs)
+            .await
+            .is_err()
+        {
+            return response::ProcessProposal::Reject;
+        }
+
+        // Then apply each transaction in order, preserving stateful semantics.
+        for tx in txs {
+            match self
+                .deliver_tx_allowing_community_pool_spends_with_verified_stateless(tx)
+                .await
+            {
                 Ok(_) => continue,
                 Err(_) => return response::ProcessProposal::Reject,
             }
@@ -399,29 +626,79 @@ impl App {
         events
     }
 
-    /// Wrapper function for [`Self::deliver_tx`]  that decodes from bytes.
-    pub async fn deliver_tx_bytes(&mut self, tx_bytes: &[u8]) -> Result<Vec<abci::Event>> {
+    /// Wrapper function for [`Self::deliver_tx`] that decodes from bytes.
+    ///
+    /// When a `StatelessCache` is provided, stateless verification results are
+    /// cached by SHA-256 of the raw tx bytes. Cache hits skip proof verification
+    /// entirely; misses run stateless + historical in parallel and cache the result.
+    pub async fn deliver_tx_bytes(
+        &mut self,
+        tx_bytes: &[u8],
+        stateless_cache: Option<&StatelessCache>,
+    ) -> Result<Vec<abci::Event>> {
         let tx = Arc::new(Transaction::decode(tx_bytes).context("decoding transaction")?);
-        self.deliver_tx(tx)
-            .await
-            .context("failed to deliver transaction")
+        Self::ensure_user_tx_has_no_community_pool_actions(&tx)?;
+
+        if let Some(cache) = stateless_cache {
+            let hash: [u8; 32] = sha2::Sha256::digest(tx_bytes).into();
+            match cache.get(&hash) {
+                Some(CacheEntry::Valid) => {
+                    tracing::debug!("stateless cache hit (valid)");
+                    return self
+                        .deliver_tx_allowing_community_pool_spends_with_verified_stateless(tx)
+                        .await;
+                }
+                Some(CacheEntry::Invalid) => {
+                    anyhow::bail!("transaction previously failed stateless checks");
+                }
+                None => {
+                    return self
+                        .deliver_tx_with_stateless_caching(tx, cache, hash)
+                        .await;
+                }
+            }
+        }
+
+        self.deliver_tx_allowing_community_pool_spends(tx).await
     }
 
-    pub async fn deliver_tx(&mut self, tx: Arc<Transaction>) -> Result<Vec<abci::Event>> {
-        // Ensure that any normally-delivered transaction (originating from a user) does not contain
-        // any Community Pool spends or outputs; the only place those are permitted is transactions originating
-        // from the chain itself:
-        anyhow::ensure!(
-            tx.community_pool_spends().peekable().peek().is_none(),
-            "Community Pool spends are not permitted in user-submitted transactions"
-        );
-        anyhow::ensure!(
-            tx.community_pool_outputs().peekable().peek().is_none(),
-            "Community Pool outputs are not permitted in user-submitted transactions"
+    /// Run stateless + historical in parallel, caching the stateless result.
+    async fn deliver_tx_with_stateless_caching(
+        &mut self,
+        tx: Arc<Transaction>,
+        cache: &StatelessCache,
+        hash: [u8; 32],
+    ) -> Result<Vec<abci::Event>> {
+        let tx2 = tx.clone();
+        let handle = tokio::runtime::Handle::current();
+        let span = tracing::Span::current();
+        let stateless = tokio::task::spawn_blocking(move || {
+            span.in_scope(|| handle.block_on(async move { tx2.check_stateless(()).await }))
+        });
+        let tx2 = tx.clone();
+        let state2 = self.state.clone();
+        let stateful = tokio::spawn(
+            async move { tx2.check_historical(state2).await }.instrument(tracing::Span::current()),
         );
 
-        // Now that we've ensured that there are not any Community Pool spends or outputs, we can deliver the transaction:
-        self.deliver_tx_allowing_community_pool_spends(tx).await
+        let stateless_result = stateless
+            .await
+            .context("waiting for check_stateless task")?;
+        cache.insert(
+            hash,
+            if stateless_result.is_ok() {
+                CacheEntry::Valid
+            } else {
+                CacheEntry::Invalid
+            },
+        );
+        stateless_result.context("check_stateless failed")?;
+        stateful
+            .await
+            .context("waiting for check_stateful task")?
+            .context("check_stateful failed")?;
+
+        self.execute_tx_checked_historical(tx).await
     }
 
     async fn deliver_tx_allowing_community_pool_spends(
@@ -435,9 +712,11 @@ impl App {
         // We spawn tasks for each set of checks, to do CPU-bound stateless checks
         // and I/O-bound stateful checks at the same time.
         let tx2 = tx.clone();
-        let stateless = tokio::spawn(
-            async move { tx2.check_stateless(()).await }.instrument(tracing::Span::current()),
-        );
+        let handle = tokio::runtime::Handle::current();
+        let span = tracing::Span::current();
+        let stateless = tokio::task::spawn_blocking(move || {
+            span.in_scope(|| handle.block_on(async move { tx2.check_stateless(()).await }))
+        });
         let tx2 = tx.clone();
         let state2 = self.state.clone();
         let stateful = tokio::spawn(
@@ -453,6 +732,24 @@ impl App {
             .context("waiting for check_stateful tasks")?
             .context("check_stateful failed")?;
 
+        self.execute_tx_checked_historical(tx).await
+    }
+
+    async fn deliver_tx_allowing_community_pool_spends_with_verified_stateless(
+        &mut self,
+        tx: Arc<Transaction>,
+    ) -> Result<Vec<abci::Event>> {
+        tx.check_historical(self.state.clone())
+            .await
+            .context("check_stateful failed")?;
+
+        self.execute_tx_checked_historical(tx).await
+    }
+
+    async fn execute_tx_checked_historical(
+        &mut self,
+        tx: Arc<Transaction>,
+    ) -> Result<Vec<abci::Event>> {
         // At this point, the stateful checks should have completed,
         // leaving us with exclusive access to the Arc<State>.
         let mut state_tx = self

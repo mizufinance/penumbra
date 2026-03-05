@@ -13,7 +13,7 @@ use tracing::{instrument, Instrument};
 use super::AppActionHandler;
 
 mod stateful;
-mod stateless;
+pub(crate) mod stateless;
 
 use self::stateful::{
     claimed_anchor_is_valid, fmd_parameters_valid, tx_parameters_historical_check,

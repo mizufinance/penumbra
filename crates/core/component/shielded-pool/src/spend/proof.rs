@@ -582,13 +582,11 @@ impl SpendProof {
         Ok(Self(proof_bytes))
     }
 
-    /// Called to verify the proof using the provided public inputs.
-    // For debugging proof verification failures,
-    // to check that the proof data and verification keys are consistent.
-    #[tracing::instrument(level="debug", skip(self, vk), fields(self = ?BASE64_STANDARD.encode(self.clone().encode_to_vec()), vk = ?vk.debug_id()))]
-    pub fn verify(
+    /// Construct a `BatchItem` from this proof and its public inputs.
+    /// Deserializes the proof and builds the public input vector without verifying.
+    /// This is the single source of truth for public input ordering.
+    pub fn to_batch_item(
         &self,
-        vk: &PreparedVerifyingKey<Bls12_377>,
         SpendProofPublic {
             anchor: Root(anchor),
             balance_commitment: Commitment(balance_commitment),
@@ -604,7 +602,7 @@ impl SpendProof {
             dleq_s,
             sender_leaf_hash,
         }: SpendProofPublic,
-    ) -> Result<(), VerificationError> {
+    ) -> Result<penumbra_sdk_proof_params::batch::BatchItem, VerificationError> {
         let proof = Proof::deserialize_compressed_unchecked(&self.0[..])
             .map_err(VerificationError::ProofDeserialize)?;
         let element_rk = decaf377::Encoding(rk.to_bytes())
@@ -646,13 +644,30 @@ impl SpendProof {
         // Blinded sender leaf hash
         public_inputs.extend(to_field_elements!(sender_leaf_hash.0, SenderLeafHash));
 
-        tracing::trace!(?public_inputs);
+        Ok(penumbra_sdk_proof_params::batch::BatchItem {
+            proof,
+            public_inputs,
+        })
+    }
+
+    /// Called to verify the proof using the provided public inputs.
+    // For debugging proof verification failures,
+    // to check that the proof data and verification keys are consistent.
+    #[tracing::instrument(level="debug", skip(self, vk), fields(self = ?BASE64_STANDARD.encode(self.clone().encode_to_vec()), vk = ?vk.debug_id()))]
+    pub fn verify(
+        &self,
+        vk: &PreparedVerifyingKey<Bls12_377>,
+        public: SpendProofPublic,
+    ) -> Result<(), VerificationError> {
+        let item = self.to_batch_item(public)?;
+
+        tracing::trace!(public_inputs = ?item.public_inputs);
 
         let start = std::time::Instant::now();
         Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(
             vk,
-            public_inputs.as_slice(),
-            &proof,
+            item.public_inputs.as_slice(),
+            &item.proof,
         )
         .map_err(VerificationError::SynthesisError)?
         .tap(|proof_result| tracing::debug!(?proof_result, elapsed = ?start.elapsed()))

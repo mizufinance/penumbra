@@ -56,6 +56,10 @@ pub struct AssetProofData {
 pub trait ComplianceRegistryRead: StateRead {
     /// Get the user compliance tree from state.
     async fn get_user_tree(&self) -> Result<QuadTree> {
+        if let Some(tree) = self.object_get(state_key::cache::cached_user_tree()) {
+            return Ok(tree);
+        }
+
         match self.get_raw(state_key::user_tree()).await? {
             Some(bytes) => Ok(bincode::deserialize(&bytes)?),
             None => Ok(QuadTree::new()),
@@ -64,6 +68,10 @@ pub trait ComplianceRegistryRead: StateRead {
 
     /// Get the asset Indexed Merkle Tree (IMT) from state.
     async fn get_asset_imt(&self) -> Result<IndexedMerkleTree> {
+        if let Some(tree) = self.object_get(state_key::cache::cached_asset_imt()) {
+            return Ok(tree);
+        }
+
         match self.get_raw(state_key::asset_imt()).await? {
             Some(bytes) => Ok(bincode::deserialize(&bytes)?),
             None => Ok(IndexedMerkleTree::new()),
@@ -72,6 +80,9 @@ pub trait ComplianceRegistryRead: StateRead {
 
     /// Get the asset IMT root hash.
     async fn get_asset_imt_root(&self) -> Result<StateCommitment> {
+        if let Some(root) = self.get(state_key::asset_imt_root()).await? {
+            return Ok(root);
+        }
         let tree = self.get_asset_imt().await?;
         Ok(tree.root())
     }
@@ -133,8 +144,21 @@ pub trait ComplianceRegistryRead: StateRead {
         }
     }
 
+    /// Fast regulated-asset check for action gating.
+    ///
+    /// This is intentionally cheaper than `get_asset_proof_data`: it avoids IMT
+    /// deserialization and path construction, and relies on the invariant that
+    /// every regulated asset has an `asset_policy` entry.
+    async fn is_asset_regulated(&self, asset_id: asset::Id) -> Result<bool> {
+        let key = state_key::asset_policy(&asset_id);
+        Ok(self.get_raw(&key).await?.is_some())
+    }
+
     /// Get the user tree root hash.
     async fn get_user_tree_root(&self) -> Result<StateCommitment> {
+        if let Some(root) = self.get(state_key::user_tree_root()).await? {
+            return Ok(root);
+        }
         let tree = self.get_user_tree().await?;
         Ok(tree.root())
     }
@@ -341,6 +365,52 @@ impl<T: StateRead + ?Sized> ComplianceRegistryRead for T {}
 /// Extension trait for writing compliance registry state.
 #[async_trait]
 pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
+    /// Track that compliance trees were modified in this block.
+    fn mark_compliance_trees_modified(&mut self) {
+        self.object_put(state_key::cache::trees_modified(), true);
+    }
+
+    /// Clear the in-block compliance tree dirty flag.
+    fn clear_compliance_trees_modified(&mut self) {
+        self.object_put(state_key::cache::trees_modified(), false);
+    }
+
+    /// Whether compliance trees were modified in this block.
+    fn compliance_trees_modified(&self) -> bool {
+        self.object_get(state_key::cache::trees_modified())
+            .unwrap_or(false)
+    }
+
+    /// Update the in-block cache for the user tree.
+    fn write_user_tree_cache(&mut self, tree: QuadTree) {
+        self.object_put(state_key::cache::cached_user_tree(), tree);
+    }
+
+    /// Update the in-block cache for the asset IMT.
+    fn write_asset_imt_cache(&mut self, tree: IndexedMerkleTree) {
+        self.object_put(state_key::cache::cached_asset_imt(), tree);
+    }
+
+    /// Load user tree and seed in-block cache on miss.
+    async fn get_user_tree_for_write(&mut self) -> Result<QuadTree> {
+        if let Some(tree) = self.object_get(state_key::cache::cached_user_tree()) {
+            return Ok(tree);
+        }
+        let tree = self.get_user_tree().await?;
+        self.write_user_tree_cache(tree.clone());
+        Ok(tree)
+    }
+
+    /// Load asset IMT and seed in-block cache on miss.
+    async fn get_asset_imt_for_write(&mut self) -> Result<IndexedMerkleTree> {
+        if let Some(tree) = self.object_get(state_key::cache::cached_asset_imt()) {
+            return Ok(tree);
+        }
+        let tree = self.get_asset_imt().await?;
+        self.write_asset_imt_cache(tree.clone());
+        Ok(tree)
+    }
+
     /// Add a compliance leaf for a user.
     ///
     /// This registers a user's address compliance key (ACK) for a regulated asset.
@@ -353,7 +423,7 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     /// The position in the user tree where the leaf was added.
     async fn add_compliance_leaf(&mut self, leaf: ComplianceLeaf) -> Result<u64> {
         // Load the current user tree (or create new)
-        let mut tree = self.get_user_tree().await?;
+        let mut tree = self.get_user_tree_for_write().await?;
 
         // Load the current user count (this will be our position)
         let position = self.get_user_count().await?;
@@ -371,6 +441,9 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
         let tree_bytes = bincode::serialize(&tree)?;
         self.put_raw(state_key::user_tree().to_string(), tree_bytes);
         self.put_proto(state_key::user_count().to_string(), new_count);
+        self.put(state_key::user_tree_root().to_string(), tree.root());
+        self.write_user_tree_cache(tree);
+        self.mark_compliance_trees_modified();
 
         // Store the reverse lookup index for O(1) position retrieval
         let lookup_key = state_key::user_leaf_position(&leaf.address, &leaf.asset_id);
@@ -404,7 +477,7 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
         asset_id: asset::Id,
         policy: AssetPolicy,
     ) -> Result<Option<indexed_tree::InsertResult>> {
-        let mut tree = self.get_asset_imt().await?;
+        let mut tree = self.get_asset_imt_for_write().await?;
 
         // Check if already exists - be idempotent
         if let Some(position) = tree.get_position(asset_id.0) {
@@ -418,6 +491,9 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
         // Save the updated tree
         let tree_bytes = bincode::serialize(&tree)?;
         self.put_raw(state_key::asset_imt().to_string(), tree_bytes);
+        self.put(state_key::asset_imt_root().to_string(), tree.root());
+        self.write_asset_imt_cache(tree.clone());
+        self.mark_compliance_trees_modified();
 
         // Also store the full policy separately for reference/display
         self.set_asset_policy(asset_id, policy);
@@ -439,6 +515,9 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     async fn put_asset_imt(&mut self, tree: &IndexedMerkleTree) -> Result<()> {
         let tree_bytes = bincode::serialize(tree)?;
         self.put_raw(state_key::asset_imt().to_string(), tree_bytes);
+        self.put(state_key::asset_imt_root().to_string(), tree.root());
+        self.write_asset_imt_cache(tree.clone());
+        self.mark_compliance_trees_modified();
         Ok(())
     }
 
@@ -458,6 +537,8 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     /// mappings for both user tree and asset IMT anchors. These mappings enable
     /// validation of historical anchors in compliance proofs.
     async fn record_compliance_anchors(&mut self, height: u64) -> Result<()> {
+        let trees_modified = self.compliance_trees_modified();
+
         // Get current anchors
         let user_anchor = self.get_user_tree_root().await?;
         let asset_anchor = self.get_asset_imt_root().await?;
@@ -484,10 +565,13 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
 
         tracing::debug!(
             height,
+            trees_modified,
             ?user_anchor,
             ?asset_anchor,
             "recorded compliance anchors"
         );
+
+        self.clear_compliance_trees_modified();
 
         Ok(())
     }

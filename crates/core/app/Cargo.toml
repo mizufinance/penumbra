@@ -32,6 +32,10 @@ component = [
   "dep:tonic-reflection",
   "dep:tonic-web"
 ]
+parallel = [
+  "ark-ff/parallel",
+  "penumbra-sdk-proof-params/parallel",
+]
 default = ["std", "component"]
 std     = ["ark-ff/std", "ibc-types/std"]
 

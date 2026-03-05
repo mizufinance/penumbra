@@ -79,11 +79,6 @@ path = "benches/compliance/client/crypto.rs"
 harness = false
 
 [[bench]]
-name = "client_enrichment"
-path = "benches/compliance/client/enrichment.rs"
-harness = false
-
-[[bench]]
 name = "client_flow"
 path = "benches/compliance/client/flow.rs"
 harness = false
@@ -91,23 +86,8 @@ harness = false
 # --- Compliance: validator ---
 
 [[bench]]
-name = "validator_proofs"
-path = "benches/compliance/validator/proofs.rs"
-harness = false
-
-[[bench]]
-name = "validator_verification"
-path = "benches/compliance/validator/verification.rs"
-harness = false
-
-[[bench]]
 name = "validator_flow"
 path = "benches/compliance/validator/flow.rs"
-harness = false
-
-[[bench]]
-name = "validator_block"
-path = "benches/compliance/validator/block.rs"
 harness = false
 
 # --- Compliance: scanner ---
@@ -127,7 +107,16 @@ name = "scanner_flow"
 path = "benches/compliance/scanner/flow.rs"
 harness = false
 
+# --- Compliance: node/ABCI ---
+
+[[bench]]
+name = "node_abci_flow"
+path = "benches/compliance/node_abci/flow.rs"
+harness = false
+
 [dependencies]
+anyhow = {workspace = true}
+clap = {workspace = true, features = ["derive"]}
 ark-bls12-377 = "0.4.0"
 ark-bw6-761 = "0.4.0"
 ark-ec = {workspace = true}
@@ -139,16 +128,24 @@ ark-serialize = {workspace = true}
 ark-snark = {workspace = true}
 ark-std = {workspace = true, default-features = false}
 bech32 = {workspace = true}
+csv = "1"
 decaf377 = {workspace = true, features = ["r1cs"], default-features = true}
+hex = {workspace = true}
 num-bigint = {workspace = true}
 once_cell = {workspace = true}
 penumbra-sdk-asset = {workspace = true, default-features = true}
 penumbra-sdk-keys = {workspace = true, default-features = true}
+penumbra-sdk-proto = {workspace = true, default-features = true, features = ["rpc"]}
+penumbra-sdk-transaction = {workspace = true, default-features = true}
 penumbra-sdk-num = {workspace = true, default-features = true}
 rand = {workspace = true}
 rand_core = {workspace = true, features = ["getrandom"]}
 serde = {workspace = true, features = ["derive"]}
+serde_json = {workspace = true}
+serde_yaml = "0.9"
 sha2 = {workspace = true}
+tokio = {workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"]}
+tonic = {workspace = true, features = ["transport"]}
 tracing = {workspace = true}
 
 [dev-dependencies]
@@ -165,14 +162,12 @@ penumbra-sdk-fee = {workspace = true, default-features = true}
 penumbra-sdk-governance = {workspace = true, default-features = true}
 penumbra-sdk-mock-client = {workspace = true}
 penumbra-sdk-mock-consensus = {workspace = true}
-penumbra-sdk-proto = {workspace = true, default-features = true}
+rand_chacha = {workspace = true}
 penumbra-sdk-sct = {workspace = true, default-features = true}
 penumbra-sdk-shielded-pool = {workspace = true, default-features = true, features = ["benchmark-helpers"]}
 penumbra-sdk-stake = {workspace = true, default-features = true}
 penumbra-sdk-tct = {workspace = true, features = ["r1cs"], default-features = true}
-penumbra-sdk-transaction = {workspace = true, default-features = true}
-serde_json = {workspace = true}
-tokio = {workspace = true, features = ["rt-multi-thread"]}
+tendermint = {workspace = true}
 
 [dev-dependencies.penumbra-sdk-proof-params]
 workspace = true

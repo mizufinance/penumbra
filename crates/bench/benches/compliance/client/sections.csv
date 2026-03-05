@@ -1,0 +1,10 @@
+version,scenario,stage,mode,mean_ms,median_ms,samples,profile,run_id,timestamp,git_rev,host_label
+base,1S1O,authorize,,0.00,0.00,10,quick,run-1772631850-77509,1772631850,unknown-rev,unknown-host
+dev,1S1O,authorize,,1.24,1.24,10,quick,run-1772576892-56799,1772576892,unknown-rev,unknown-host
+local,1S1O,authorize,,1.24,1.23,10,quick,run-1772574420-37965,1772574420,unknown-rev,unknown-host
+base,1S1O,tx_build,concurrent,417.97,418.53,10,quick,run-1772631850-77509,1772631850,unknown-rev,unknown-host
+dev,1S1O,tx_build,concurrent,1615.80,1622.12,10,quick,run-1772576892-56799,1772576892,unknown-rev,unknown-host
+local,1S1O,tx_build,concurrent,1648.11,1647.91,10,quick,run-1772574420-37965,1772574420,unknown-rev,unknown-host
+base,1S1O,enrich,,0.00,0.00,10,quick,run-1772631850-77509,1772631850,unknown-rev,unknown-host
+dev,1S1O,enrich,,8.18,8.15,10,quick,run-1772576892-56799,1772576892,unknown-rev,unknown-host
+local,1S1O,enrich,,8.37,8.38,10,quick,run-1772574420-37965,1772574420,unknown-rev,unknown-host

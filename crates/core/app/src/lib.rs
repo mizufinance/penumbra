@@ -26,6 +26,7 @@ cfg_if::cfg_if! {
         pub mod metrics;
         pub mod rpc;
         pub mod server;
+        pub mod stateless_cache;
 
         mod action_handler;
         mod community_pool_ext;

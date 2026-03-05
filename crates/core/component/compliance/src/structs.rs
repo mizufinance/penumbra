@@ -39,10 +39,17 @@ pub const OUTPUT_WIRE_BYTES: usize =
     EPK_BYTES * 3 + C2_BYTES * 3 + DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES * 3; // 544 bytes
 pub const OUTPUT_CIPHERTEXT_FQS: usize = (DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES * 3) / 32; // 11
 
+/// DLEQ proof wire format: (c, s) per tier. Spend has 1 tier, Output has 3.
+pub const FQ_BYTES: usize = 32;
+pub const SPEND_DLEQ_BYTES: usize = FQ_BYTES * 2; // 64 bytes: c || s
+pub const OUTPUT_DLEQ_BYTES: usize = FQ_BYTES * 6; // 192 bytes: c1||s1||c2||s2||c3||s3
+
 // Compile-time consistency checks.
 const _: () = {
     assert!(SPEND_WIRE_BYTES == 224, "SPEND_WIRE_BYTES must be 224");
     assert!(OUTPUT_WIRE_BYTES == 544, "OUTPUT_WIRE_BYTES must be 544");
+    assert!(SPEND_DLEQ_BYTES == 64, "SPEND_DLEQ_BYTES must be 64");
+    assert!(OUTPUT_DLEQ_BYTES == 192, "OUTPUT_DLEQ_BYTES must be 192");
     assert!(SPEND_CIPHERTEXT_FQS == 5, "SPEND_CIPHERTEXT_FQS must be 5");
     assert!(
         OUTPUT_CIPHERTEXT_FQS == 11,

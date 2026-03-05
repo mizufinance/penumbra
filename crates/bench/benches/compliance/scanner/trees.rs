@@ -3,7 +3,7 @@
 //! Measures QuadTree (user registrations) and IMT (asset registrations) operations.
 //! No vanilla counterpart — these tree structures are new with compliance.
 //!
-//! Outputs: `benches/compliance/scanner/results/trees.csv`
+//! Outputs: `benches/compliance/scanner/trees.csv`
 
 use std::path::PathBuf;
 
@@ -71,7 +71,7 @@ fn main() {
             tree.update(next_pos, commitment).unwrap();
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[
                 ("tree", "quad"),
                 ("operation", "insert"),
@@ -93,7 +93,7 @@ fn main() {
             let _path = tree.auth_path(mid).unwrap();
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[
                 ("tree", "quad"),
                 ("operation", "auth_path"),
@@ -126,7 +126,7 @@ fn main() {
             let _ok = QuadTree::verify_auth_path(pos, commitment, &path, root, DEFAULT_DEPTH);
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[
                 ("tree", "quad"),
                 ("operation", "verify"),
@@ -147,7 +147,7 @@ fn main() {
             let _root = tree.root();
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[
                 ("tree", "quad"),
                 ("operation", "root"),
@@ -174,7 +174,7 @@ fn main() {
             t.insert(new_val, &policy).unwrap();
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[
                 ("tree", "imt"),
                 ("operation", "insert"),
@@ -195,7 +195,7 @@ fn main() {
             let _proof = tree.membership_proof(mid_val).unwrap();
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[
                 ("tree", "imt"),
                 ("operation", "membership"),
@@ -216,7 +216,7 @@ fn main() {
             let _proof = tree.non_membership_proof(gap_val).unwrap();
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[
                 ("tree", "imt"),
                 ("operation", "non_membership"),
@@ -236,7 +236,7 @@ fn main() {
             let _root = tree.root();
         });
         results.push(bench_runner::make_result(
-            "v0.1",
+            "dev",
             &[
                 ("tree", "imt"),
                 ("operation", "root"),
@@ -248,8 +248,8 @@ fn main() {
     }
 
     // --- Output ---
-    bench_runner::print_table(&results);
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("benches/compliance/scanner/results/trees.csv");
+    bench_runner::output_results(&results);
+    let csv_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("benches/compliance/scanner/trees.csv");
     bench_runner::write_csv(&csv_path, &results);
 }

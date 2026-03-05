@@ -42,6 +42,8 @@ impl Component for Compliance {
                 // Persist the tree (may be new or existing)
                 let tree_bytes = bincode::serialize(&tree).expect("serialization should not fail");
                 state.put_raw(crate::state_key::user_tree().to_string(), tree_bytes);
+                state.put(crate::state_key::user_tree_root().to_string(), tree.root());
+                state.write_user_tree_cache(tree);
                 // Initialize count if not set
                 if state
                     .get_proto::<u64>(state_key::user_count())
@@ -66,12 +68,17 @@ impl Component for Compliance {
                 // Persist the tree (may be new or existing)
                 let tree_bytes = bincode::serialize(&tree).expect("serialization should not fail");
                 state.put_raw(crate::state_key::asset_imt().to_string(), tree_bytes);
+                state.put(crate::state_key::asset_imt_root().to_string(), tree.root());
+                state.write_asset_imt_cache(tree);
             }
             Err(e) => {
                 tracing::error!(?e, "failed to load compliance asset IMT during init_chain");
                 panic!("compliance asset IMT initialization failed: {}", e);
             }
         }
+
+        // Genesis starts clean; modifications during init/register calls will set this.
+        state.clear_compliance_trees_modified();
 
         // Register regulated native assets from genesis configuration.
         // Unregulated assets are NOT stored - they're proven via IMT non-membership.
