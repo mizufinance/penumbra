@@ -204,6 +204,7 @@ Enforced by ZK circuit. Issuer cannot derive one tier from another.
 | R1CS circuits | `compliance/src/r1cs.rs` |
 | Data structures | `compliance/src/structs.rs` |
 | Registry / trees | `compliance/src/registry.rs`, `tree.rs`, `indexed_tree.rs` |
+| Statement hash helpers | `shielded-pool/src/public_input_hash.rs` |
 | Spend proof | `shielded-pool/src/spend/proof.rs`, `plan.rs`, `action.rs` |
 | Output proof | `shielded-pool/src/output/proof.rs`, `plan.rs`, `action.rs` |
 | View service | `crates/view/src/service.rs` |

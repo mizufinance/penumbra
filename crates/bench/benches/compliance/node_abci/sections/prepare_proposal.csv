@@ -1,4 +1,4 @@
 version,metric,variant,mean_ms,median_ms,samples,profile,run_id,timestamp,git_rev,host_label
 base,latency_ms,default,265.12,264.52,10,quick,run-1772632001-77620,1772632001,unknown-rev,unknown-host
 dev,latency_ms,default,523.64,523.09,10,quick,run-1772577459-57005,1772577459,unknown-rev,unknown-host
-local,latency_ms,default,533.39,532.77,10,quick,run-1772574994-38621,1772574994,unknown-rev,unknown-host
+local,latency_ms,default,423.17,421.38,10,quick,run-1772721823-25958,1772721823,unknown-rev,unknown-host

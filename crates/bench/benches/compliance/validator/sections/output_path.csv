@@ -1,4 +1,4 @@
 version,batch_size,mean_ms,median_ms,samples,profile,run_id,timestamp,git_rev,host_label
 base,100,0.00,0.00,10,quick,run-1772631910-77547,1772631910,unknown-rev,unknown-host
 dev,100,453.17,451.05,10,quick,run-1772577087-56893,1772577087,unknown-rev,unknown-host
-local,100,451.45,450.77,10,quick,run-1772574619-38174,1772574619,unknown-rev,unknown-host
+local,100,207.59,207.09,10,quick,run-1772721387-25745,1772721387,unknown-rev,unknown-host

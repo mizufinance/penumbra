@@ -480,6 +480,10 @@ pub mod proof_test_helpers {
 
         let proof = OutputProof::prove(blinding_r, blinding_s, &pk, public.clone(), private)
             .expect("can generate proof");
+        let item = proof
+            .to_batch_item(public.clone())
+            .expect("can build output batch item");
+        assert_eq!(item.public_inputs.len(), 1);
         proof.verify(&pvk, public).expect("proof should verify");
     }
 
@@ -553,6 +557,10 @@ pub mod proof_test_helpers {
 
         let proof = SpendProof::prove(blinding_r, blinding_s, &pk, public.clone(), private)
             .expect("can generate proof");
+        let item = proof
+            .to_batch_item(public.clone())
+            .expect("can build spend batch item");
+        assert_eq!(item.public_inputs.len(), 1);
         proof.verify(&pvk, public).expect("proof should verify");
     }
 

@@ -1,13 +1,13 @@
 version,section,metric,variant,mean_ms,median_ms,samples,profile,run_id,timestamp,git_rev,host_label
 base,checktx,latency_ms,warm,2.54,2.54,10,quick,run-1772632001-77620,1772632001,unknown-rev,unknown-host
 dev,checktx,latency_ms,warm,5.18,5.02,10,quick,run-1772577459-57005,1772577459,unknown-rev,unknown-host
-local,checktx,latency_ms,warm,0.44,0.37,10,quick,run-1772574994-38621,1772574994,unknown-rev,unknown-host
+local,checktx,latency_ms,warm,0.43,0.39,10,quick,run-1772721823-25958,1772721823,unknown-rev,unknown-host
 base,deliver_tx,latency_ms,warm,2.48,2.47,10,quick,run-1772632001-77620,1772632001,unknown-rev,unknown-host
 dev,deliver_tx,latency_ms,warm,5.05,4.99,10,quick,run-1772577459-57005,1772577459,unknown-rev,unknown-host
-local,deliver_tx,latency_ms,warm,0.36,0.36,10,quick,run-1772574994-38621,1772574994,unknown-rev,unknown-host
+local,deliver_tx,latency_ms,warm,0.46,0.38,10,quick,run-1772721823-25958,1772721823,unknown-rev,unknown-host
 base,prepare_proposal,latency_ms,default,265.12,264.52,10,quick,run-1772632001-77620,1772632001,unknown-rev,unknown-host
 dev,prepare_proposal,latency_ms,default,523.64,523.09,10,quick,run-1772577459-57005,1772577459,unknown-rev,unknown-host
-local,prepare_proposal,latency_ms,default,533.39,532.77,10,quick,run-1772574994-38621,1772574994,unknown-rev,unknown-host
+local,prepare_proposal,latency_ms,default,423.17,421.38,10,quick,run-1772721823-25958,1772721823,unknown-rev,unknown-host
 base,process_proposal,latency_ms,default,265.35,265.55,10,quick,run-1772632001-77620,1772632001,unknown-rev,unknown-host
 dev,process_proposal,latency_ms,default,530.17,527.91,10,quick,run-1772577459-57005,1772577459,unknown-rev,unknown-host
-local,process_proposal,latency_ms,default,423.62,423.37,10,quick,run-1772574994-38621,1772574994,unknown-rev,unknown-host
+local,process_proposal,latency_ms,default,188.06,188.01,10,quick,run-1772721823-25958,1772721823,unknown-rev,unknown-host

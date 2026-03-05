@@ -1,4 +1,4 @@
 version,metric,mean_ms,median_ms,samples,profile,run_id,timestamp,git_rev,host_label
 base,check_stateless_ms,2.27,2.26,10,quick,run-1772632001-77620,1772632001,unknown-rev,unknown-host
 dev,check_stateless_ms,4.82,4.81,10,quick,run-1772577459-57005,1772577459,unknown-rev,unknown-host
-local,check_stateless_ms,4.76,4.70,10,quick,run-1772574994-38621,1772574994,unknown-rev,unknown-host
+local,check_stateless_ms,3.74,3.70,10,quick,run-1772721823-25958,1772721823,unknown-rev,unknown-host

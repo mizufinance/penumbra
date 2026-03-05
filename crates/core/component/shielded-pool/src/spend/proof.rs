@@ -1,6 +1,5 @@
 use base64::prelude::*;
 use std::str::FromStr;
-use tct::Root;
 
 use anyhow::Result;
 use ark_r1cs_std::{
@@ -11,7 +10,6 @@ use ark_r1cs_std::{
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use decaf377::{r1cs::FqVar, Bls12_377, Fq, Fr};
 
-use ark_ff::ToConstraintField;
 use ark_groth16::{
     r1cs_to_qap::LibsnarkReduction, Groth16, PreparedVerifyingKey, Proof, ProvingKey,
 };
@@ -25,19 +23,19 @@ use penumbra_sdk_tct::r1cs::StateCommitmentVar;
 
 use crate::{note, Note, Rseed};
 use decaf377::r1cs::ElementVar;
-use penumbra_sdk_asset::{
-    balance::commitment::BalanceCommitmentVar,
-    balance::{self, Commitment},
-    Value,
-};
+use penumbra_sdk_asset::{balance, Value};
 use penumbra_sdk_compliance::r1cs::{verify_compliance_spend, ComplianceWitness};
 use penumbra_sdk_keys::keys::{
     AuthorizationKeyVar, Bip44Path, IncomingViewingKeyVar, NullifierKey, NullifierKeyVar,
-    RandomizedVerificationKey, SeedPhrase, SpendAuthRandomizerVar, SpendKey,
+    SeedPhrase, SpendAuthRandomizerVar, SpendKey,
 };
 use penumbra_sdk_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_sdk_sct::{Nullifier, NullifierVar};
 use tap::Tap;
+
+use crate::public_input_hash::{
+    spend_statement_hash_from_public, spend_statement_hash_var, SPEND_STATEMENT_FIELD_COUNT,
+};
 
 /// The public input for a [`SpendProof`].
 #[derive(Clone, Debug)]
@@ -164,7 +162,13 @@ fn check_circuit_satisfaction(public: SpendProofPublic, private: SpendProofPriva
     use ark_relations::r1cs::{self, ConstraintSystem};
 
     let cs = ConstraintSystem::new_ref();
-    let circuit = SpendCircuit { public, private };
+    let claimed_statement_hash = spend_statement_hash_from_public(&public)
+        .map_err(|e| anyhow::anyhow!("failed to compute spend statement hash: {e}"))?;
+    let circuit = SpendCircuit {
+        public,
+        private,
+        claimed_statement_hash,
+    };
     cs.set_optimization_goal(r1cs::OptimizationGoal::Constraints);
     circuit
         .generate_constraints(cs.clone())
@@ -181,11 +185,12 @@ fn check_circuit_satisfaction(public: SpendProofPublic, private: SpendProofPriva
 pub struct SpendCircuit {
     public: SpendProofPublic,
     private: SpendProofPrivate,
+    claimed_statement_hash: Fq,
 }
 
 impl SpendCircuit {
-    pub fn into_parts(self) -> (SpendProofPublic, SpendProofPrivate) {
-        (self.public, self.private)
+    pub fn into_parts(self) -> (SpendProofPublic, SpendProofPrivate, Fq) {
+        (self.public, self.private, self.claimed_statement_hash)
     }
 }
 
@@ -217,35 +222,37 @@ impl ConstraintSynthesizer<Fq> for SpendCircuit {
             AuthorizationKeyVar::new_witness(cs.clone(), || Ok(self.private.ak))?;
         let nk_var = NullifierKeyVar::new_witness(cs.clone(), || Ok(self.private.nk))?;
 
-        // === Public Input Allocation ===
-        let anchor_var = FqVar::new_input(cs.clone(), || Ok(Fq::from(self.public.anchor)))?;
+        // Witness statement fields (single public input is the statement hash).
+        let anchor_var = FqVar::new_witness(cs.clone(), || Ok(Fq::from(self.public.anchor)))?;
         let claimed_balance_commitment_var =
-            BalanceCommitmentVar::new_input(cs.clone(), || Ok(self.public.balance_commitment))?;
-        let claimed_nullifier_var =
-            NullifierVar::new_input(cs.clone(), || Ok(self.public.nullifier))?;
-        let rk_var = RandomizedVerificationKey::new_input(cs.clone(), || Ok(self.public.rk))?;
+            ElementVar::new_witness(cs.clone(), || Ok(self.public.balance_commitment.0))?;
+        let claimed_nullifier_var = FqVar::new_witness(cs.clone(), || Ok(self.public.nullifier.0))?;
+        let rk_var = ElementVar::new_witness(cs.clone(), || {
+            decaf377::Encoding(self.public.rk.to_bytes())
+                .vartime_decompress()
+                .map_err(|_| ark_relations::r1cs::SynthesisError::MalformedVerifyingKey)
+        })?;
         let claimed_asset_anchor =
-            StateCommitmentVar::new_input(cs.clone(), || Ok(self.public.asset_anchor))?;
+            StateCommitmentVar::new_witness(cs.clone(), || Ok(self.public.asset_anchor))?;
         let claimed_compliance_anchor =
-            StateCommitmentVar::new_input(cs.clone(), || Ok(self.public.compliance_anchor))?;
+            StateCommitmentVar::new_witness(cs.clone(), || Ok(self.public.compliance_anchor))?;
+        let epk_var = ElementVar::new_witness(cs.clone(), || Ok(self.public.epk))?;
+        let c2_core_var = FqVar::new_witness(cs.clone(), || Ok(self.public.c2_core))?;
 
-        // Allocate EPK as public input (r_s × G)
-        let epk_var = ElementVar::new_input(cs.clone(), || Ok(self.public.epk))?;
-
-        // Allocate C2 core as public input (ElGamal envelope for Poseidon seed)
-        let c2_core_var = FqVar::new_input(cs.clone(), || Ok(self.public.c2_core))?;
-
-        // Spend ciphertext: detection(2) + core(3) = 5 Fq elements (no extension)
+        // Spend ciphertext: detection(2) + core(3) = 5 Fq elements.
         let mut ciphertext_vars = Vec::new();
         for fq in self.public.compliance_ciphertext.iter() {
-            ciphertext_vars.push(FqVar::new_input(cs.clone(), || Ok(*fq))?);
+            ciphertext_vars.push(FqVar::new_witness(cs.clone(), || Ok(*fq))?);
         }
 
-        // Allocate DLEQ public inputs
+        // DLEQ values are witness data bound by the statement hash.
         let target_timestamp_var =
-            FqVar::new_input(cs.clone(), || Ok(self.public.target_timestamp))?;
-        let dleq_c_var = FqVar::new_input(cs.clone(), || Ok(self.public.dleq_c))?;
-        let dleq_s_var = FqVar::new_input(cs.clone(), || Ok(self.public.dleq_s))?;
+            FqVar::new_witness(cs.clone(), || Ok(self.public.target_timestamp))?;
+        let dleq_c_var = FqVar::new_witness(cs.clone(), || Ok(self.public.dleq_c))?;
+        let dleq_s_var = FqVar::new_witness(cs.clone(), || Ok(self.public.dleq_s))?;
+
+        let claimed_statement_hash_var =
+            FqVar::new_input(cs.clone(), || Ok(self.claimed_statement_hash))?;
 
         // === Spend-Specific Integrity Checks ===
         let note_commitment_var = note_var.commit()?;
@@ -253,7 +260,7 @@ impl ConstraintSynthesizer<Fq> for SpendCircuit {
 
         // Nullifier integrity.
         let nullifier_var = NullifierVar::derive(&nk_var, &position_var, &claimed_note_commitment)?;
-        nullifier_var.enforce_equal(&claimed_nullifier_var)?;
+        nullifier_var.inner.enforce_equal(&claimed_nullifier_var)?;
 
         // Merkle auth path verification against the provided anchor.
         //
@@ -264,13 +271,13 @@ impl ConstraintSynthesizer<Fq> for SpendCircuit {
             cs.clone(),
             &is_not_dummy,
             &position_bits,
-            anchor_var,
+            anchor_var.clone(),
             claimed_note_commitment.inner(),
         )?;
 
         // Check integrity of randomized verification key.
         let computed_rk_var = ak_element_var.randomize(&spend_auth_randomizer_var)?;
-        computed_rk_var.enforce_equal(&rk_var)?;
+        computed_rk_var.inner.enforce_equal(&rk_var)?;
 
         // Check integrity of diversified address.
         let ivk = IncomingViewingKeyVar::derive(&nk_var, &ak_element_var)?;
@@ -280,7 +287,9 @@ impl ConstraintSynthesizer<Fq> for SpendCircuit {
 
         // Check integrity of balance commitment.
         let balance_commitment = note_var.value().commit(v_blinding_vars)?;
-        balance_commitment.enforce_equal(&claimed_balance_commitment_var)?;
+        balance_commitment
+            .inner
+            .enforce_equal(&claimed_balance_commitment_var)?;
 
         // === Spend Compliance Verification (base only — no extension tier) ===
 
@@ -300,12 +309,12 @@ impl ConstraintSynthesizer<Fq> for SpendCircuit {
             cs.clone(),
             claimed_asset_anchor.inner().clone(),
             claimed_compliance_anchor.inner().clone(),
-            epk_var,
-            c2_core_var,
-            ciphertext_vars,
-            target_timestamp_var,
-            dleq_c_var,
-            dleq_s_var,
+            epk_var.clone(),
+            c2_core_var.clone(),
+            ciphertext_vars.clone(),
+            target_timestamp_var.clone(),
+            dleq_c_var.clone(),
+            dleq_s_var.clone(),
             note_var.asset_id(),
             note_var.amount(),
             note_var.diversified_generator(),
@@ -336,8 +345,27 @@ impl ConstraintSynthesizer<Fq> for SpendCircuit {
             )?;
 
         let claimed_blinded_sender =
-            FqVar::new_input(cs.clone(), || Ok(self.public.sender_leaf_hash.0))?;
+            FqVar::new_witness(cs.clone(), || Ok(self.public.sender_leaf_hash.0))?;
         computed_blinded_sender.enforce_equal(&claimed_blinded_sender)?;
+
+        // Bind all statement fields to a single public input hash.
+        let mut statement_fields = Vec::with_capacity(SPEND_STATEMENT_FIELD_COUNT);
+        statement_fields.push(anchor_var);
+        statement_fields.push(claimed_balance_commitment_var.compress_to_field()?);
+        statement_fields.push(claimed_nullifier_var);
+        statement_fields.push(rk_var.compress_to_field()?);
+        statement_fields.push(claimed_asset_anchor.inner());
+        statement_fields.push(claimed_compliance_anchor.inner());
+        statement_fields.push(epk_var.compress_to_field()?);
+        statement_fields.push(c2_core_var);
+        statement_fields.extend(ciphertext_vars);
+        statement_fields.push(target_timestamp_var);
+        statement_fields.push(dleq_c_var);
+        statement_fields.push(dleq_s_var);
+        statement_fields.push(claimed_blinded_sender);
+
+        let computed_statement_hash = spend_statement_hash_var(cs.clone(), &statement_fields)?;
+        computed_statement_hash.enforce_equal(&claimed_statement_hash_var)?;
 
         Ok(())
     }
@@ -446,7 +474,13 @@ impl DummyWitness for SpendCircuit {
             is_flagged: false,
             salt: decaf377::Fq::from(0u64),
         };
-        Self { public, private }
+        let claimed_statement_hash = spend_statement_hash_from_public(&public)
+            .expect("dummy spend statement hash should compute");
+        Self {
+            public,
+            private,
+            claimed_statement_hash,
+        }
     }
 }
 
@@ -479,6 +513,8 @@ pub enum VerificationError {
     C2Core,
     #[error("sender leaf hash is a Bls12-377 field member")]
     SenderLeafHash,
+    #[error("failed computing spend statement hash: {0}")]
+    StatementHash(String),
     #[error("error verifying proof: {0:?}")]
     SynthesisError(ark_relations::r1cs::SynthesisError),
     #[error("spend proof did not verify")]
@@ -495,78 +531,86 @@ impl SpendProof {
         public: SpendProofPublic,
         private: SpendProofPrivate,
     ) -> Result<Self, crate::ProofError> {
-        // Debug logging for compliance circuit inputs
-        tracing::debug!(
-            asset_anchor = ?public.asset_anchor.0.to_bytes(),
-            compliance_anchor = ?public.compliance_anchor.0.to_bytes(),
-            asset_position = private.asset_position,
-            compliance_position = private.compliance_position,
-            is_regulated = private.is_regulated,
-            "SpendProof: starting circuit generation"
-        );
-
-        // Log asset indexed leaf details
-        let native_leaf_commitment = private.asset_indexed_leaf.commit();
-        tracing::debug!(
-            note_asset_id = ?private.note.asset_id().0.to_bytes(),
-            leaf_value = ?private.asset_indexed_leaf.value.to_bytes(),
-            leaf_next_index = private.asset_indexed_leaf.next_index,
-            leaf_next_value = ?private.asset_indexed_leaf.next_value.to_bytes(),
-            native_leaf_commitment = ?native_leaf_commitment.0.to_bytes(),
-            "SpendProof: asset indexed leaf details"
-        );
-
-        // Verify the Merkle path natively before circuit
-        let native_computed_root = penumbra_sdk_compliance::recompute_root(
-            native_leaf_commitment,
-            &private.asset_path,
-            private.asset_position,
-        );
-        let asset_root_matches = native_computed_root == public.asset_anchor;
-        tracing::debug!(
-            native_computed_root = ?native_computed_root.0.to_bytes(),
-            expected_asset_anchor = ?public.asset_anchor.0.to_bytes(),
-            asset_root_matches,
-            "SpendProof: native asset root verification"
-        );
-
-        if !asset_root_matches {
-            tracing::error!(
-                "MISMATCH: Asset tree root does not match anchor! \
-                 This indicates policy data or path is incorrect."
+        #[cfg(debug_assertions)]
+        {
+            // Debug logging for compliance circuit inputs.
+            tracing::debug!(
+                asset_anchor = ?public.asset_anchor.0.to_bytes(),
+                compliance_anchor = ?public.compliance_anchor.0.to_bytes(),
+                asset_position = private.asset_position,
+                compliance_position = private.compliance_position,
+                is_regulated = private.is_regulated,
+                "SpendProof: starting circuit generation"
             );
+
+            // Log asset indexed leaf details.
+            let native_leaf_commitment = private.asset_indexed_leaf.commit();
+            tracing::debug!(
+                note_asset_id = ?private.note.asset_id().0.to_bytes(),
+                leaf_value = ?private.asset_indexed_leaf.value.to_bytes(),
+                leaf_next_index = private.asset_indexed_leaf.next_index,
+                leaf_next_value = ?private.asset_indexed_leaf.next_value.to_bytes(),
+                native_leaf_commitment = ?native_leaf_commitment.0.to_bytes(),
+                "SpendProof: asset indexed leaf details"
+            );
+
+            // Verify the Merkle path natively before proving.
+            let native_computed_root = penumbra_sdk_compliance::recompute_root(
+                native_leaf_commitment,
+                &private.asset_path,
+                private.asset_position,
+            );
+            let asset_root_matches = native_computed_root == public.asset_anchor;
+            tracing::debug!(
+                native_computed_root = ?native_computed_root.0.to_bytes(),
+                expected_asset_anchor = ?public.asset_anchor.0.to_bytes(),
+                asset_root_matches,
+                "SpendProof: native asset root verification"
+            );
+
+            if !asset_root_matches {
+                tracing::error!(
+                    "MISMATCH: Asset tree root does not match anchor! \
+                     This indicates policy data or path is incorrect."
+                );
+            }
         }
+
+        let claimed_statement_hash = spend_statement_hash_from_public(&public)
+            .map_err(|e| crate::ProofError::InvalidPublicInput(format!("statement hash: {e}")))?;
 
         let circuit = SpendCircuit {
             public: public.clone(),
             private: private.clone(),
+            claimed_statement_hash,
         };
 
-        // Check constraint satisfaction before proving
-        use ark_relations::r1cs::ConstraintSystem;
-        let cs = ConstraintSystem::<Fq>::new_ref();
-        circuit.clone().generate_constraints(cs.clone())?;
+        #[cfg(debug_assertions)]
+        {
+            // In debug builds, preflight constraint satisfaction to aid diagnosis.
+            use ark_relations::r1cs::ConstraintSystem;
+            let cs = ConstraintSystem::<Fq>::new_ref();
+            circuit.clone().generate_constraints(cs.clone())?;
 
-        if !cs.is_satisfied().unwrap_or(false) {
-            // Log which specific constraint failed
-            if let Ok(Some(unsatisfied)) = cs.which_is_unsatisfied() {
+            if !cs.is_satisfied().unwrap_or(false) {
+                if let Ok(Some(unsatisfied)) = cs.which_is_unsatisfied() {
+                    tracing::error!(
+                        unsatisfied_constraint = ?unsatisfied,
+                        "SpendProof: specific unsatisfied constraint"
+                    );
+                }
                 tracing::error!(
-                    unsatisfied_constraint = ?unsatisfied,
-                    "SpendProof: SPECIFIC unsatisfied constraint"
+                    num_constraints = cs.num_constraints(),
+                    num_instance_variables = cs.num_instance_variables(),
+                    "SpendProof: circuit constraints not satisfied"
                 );
+                return Err(crate::ProofError::UnsatisfiedConstraints(
+                    "Spend circuit constraints not satisfied. Possible causes: \
+                     asset registry verification failed, compliance registry verification failed, \
+                     or ciphertext binding failed"
+                        .to_string(),
+                ));
             }
-            tracing::error!(
-                num_constraints = cs.num_constraints(),
-                num_instance_variables = cs.num_instance_variables(),
-                "SpendProof: circuit constraints not satisfied! \
-                 Check debug logs above for root mismatch details."
-            );
-            return Err(crate::ProofError::UnsatisfiedConstraints(
-                "Spend circuit constraints not satisfied. Possible causes: \
-                 asset registry verification failed, compliance registry verification failed, \
-                 or ciphertext binding failed"
-                    .to_string(),
-            ));
         }
 
         let proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
@@ -587,66 +631,16 @@ impl SpendProof {
     /// This is the single source of truth for public input ordering.
     pub fn to_batch_item(
         &self,
-        SpendProofPublic {
-            anchor: Root(anchor),
-            balance_commitment: Commitment(balance_commitment),
-            nullifier: Nullifier(nullifier),
-            rk,
-            asset_anchor,
-            compliance_anchor,
-            epk,
-            c2_core,
-            compliance_ciphertext,
-            target_timestamp,
-            dleq_c,
-            dleq_s,
-            sender_leaf_hash,
-        }: SpendProofPublic,
+        public: SpendProofPublic,
     ) -> Result<penumbra_sdk_proof_params::batch::BatchItem, VerificationError> {
         let proof = Proof::deserialize_compressed_unchecked(&self.0[..])
             .map_err(VerificationError::ProofDeserialize)?;
-        let element_rk = decaf377::Encoding(rk.to_bytes())
-            .vartime_decompress()
-            .map_err(VerificationError::DecompressRk)?;
-
-        /// Shorthand helper, convert expressions into field elements.
-        macro_rules! to_field_elements {
-            ($fe:expr, $err:expr) => {
-                $fe.to_field_elements().ok_or($err)?
-            };
-        }
-
-        use VerificationError::*;
-
-        // Public inputs must match circuit allocation order exactly
-        let mut public_inputs = [
-            to_field_elements!(Fq::from(anchor), Anchor),
-            to_field_elements!(balance_commitment, BalanceCommitment),
-            to_field_elements!(nullifier, Nullifier),
-            to_field_elements!(element_rk, Rk),
-            to_field_elements!(asset_anchor.0, AssetAnchor),
-            to_field_elements!(compliance_anchor.0, ComplianceAnchor),
-            to_field_elements!(epk, Epk),
-            to_field_elements!(c2_core, C2Core),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-
-        // 5 Fqs: detection(2) + core(3)
-        public_inputs.extend(compliance_ciphertext);
-
-        // DLEQ public inputs: target_timestamp, challenge, response
-        public_inputs.push(target_timestamp);
-        public_inputs.push(dleq_c);
-        public_inputs.push(dleq_s);
-
-        // Blinded sender leaf hash
-        public_inputs.extend(to_field_elements!(sender_leaf_hash.0, SenderLeafHash));
+        let statement_hash = spend_statement_hash_from_public(&public)
+            .map_err(|e| VerificationError::StatementHash(e.to_string()))?;
 
         Ok(penumbra_sdk_proof_params::batch::BatchItem {
             proof,
-            public_inputs,
+            public_inputs: vec![statement_hash],
         })
     }
 

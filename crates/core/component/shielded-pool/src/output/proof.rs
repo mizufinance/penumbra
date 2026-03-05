@@ -9,7 +9,6 @@ use decaf377::{Bls12_377, Fq, Fr};
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
 
-use ark_ff::ToConstraintField;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
@@ -21,13 +20,13 @@ use penumbra_sdk_tct::StateCommitment;
 
 use crate::{note, Note, Rseed};
 use decaf377::r1cs::{ElementVar, FqVar};
-use penumbra_sdk_asset::{
-    balance,
-    balance::{commitment::BalanceCommitmentVar, BalanceVar},
-    Value,
-};
+use penumbra_sdk_asset::{balance, balance::BalanceVar, Value};
 use penumbra_sdk_compliance::r1cs::{verify_compliance_integrity, ComplianceWitness};
 use penumbra_sdk_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
+
+use crate::public_input_hash::{
+    output_statement_hash_from_public, output_statement_hash_var, OUTPUT_STATEMENT_FIELD_COUNT,
+};
 
 /// The public input for an [`OutputProof`].
 #[derive(Clone, Debug)]
@@ -48,7 +47,7 @@ pub struct OutputProofPublic {
     pub c2_ext: Fq,
     /// ElGamal C2 for sext tier
     pub c2_sext: Fq,
-    /// Packed ciphertext: 10 Fqs [detection:1, core:3, ext:3, sext:3]
+    /// Packed ciphertext: 11 Fqs [detection:2, core:3, ext:3, sext:3]
     pub compliance_ciphertext: Vec<Fq>,
     /// DLEQ target timestamp (Unix UTC seconds, encoded as Fq for circuit)
     pub target_timestamp: Fq,
@@ -134,7 +133,13 @@ fn check_circuit_satisfaction(
     use ark_relations::r1cs::{self, ConstraintSystem};
 
     let cs = ConstraintSystem::new_ref();
-    let circuit = OutputCircuit { public, private };
+    let claimed_statement_hash = output_statement_hash_from_public(&public)
+        .map_err(|e| anyhow::anyhow!("failed to compute output statement hash: {e}"))?;
+    let circuit = OutputCircuit {
+        public,
+        private,
+        claimed_statement_hash,
+    };
     cs.set_optimization_goal(r1cs::OptimizationGoal::Constraints);
     circuit
         .generate_constraints(cs.clone())
@@ -151,15 +156,24 @@ fn check_circuit_satisfaction(
 pub struct OutputCircuit {
     public: OutputProofPublic,
     private: OutputProofPrivate,
+    claimed_statement_hash: Fq,
 }
 
 impl OutputCircuit {
-    fn new(public: OutputProofPublic, private: OutputProofPrivate) -> Self {
-        Self { public, private }
+    fn new(
+        public: OutputProofPublic,
+        private: OutputProofPrivate,
+        claimed_statement_hash: Fq,
+    ) -> Self {
+        Self {
+            public,
+            private,
+            claimed_statement_hash,
+        }
     }
 
-    pub fn into_parts(self) -> (OutputProofPublic, OutputProofPrivate) {
-        (self.public, self.private)
+    pub fn into_parts(self) -> (OutputProofPublic, OutputProofPrivate, Fq) {
+        (self.public, self.private, self.claimed_statement_hash)
     }
 }
 
@@ -171,46 +185,51 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
         let balance_blinding_arr: [u8; 32] = self.private.balance_blinding.to_bytes();
         let balance_blinding_vars = UInt8::new_witness_vec(cs.clone(), &balance_blinding_arr)?;
 
-        // Public inputs
+        // Witness statement fields (single public input is the statement hash).
         let claimed_note_commitment =
-            StateCommitmentVar::new_input(cs.clone(), || Ok(self.public.note_commitment))?;
+            StateCommitmentVar::new_witness(cs.clone(), || Ok(self.public.note_commitment))?;
         let claimed_balance_commitment =
-            BalanceCommitmentVar::new_input(cs.clone(), || Ok(self.public.balance_commitment))?;
+            ElementVar::new_witness(cs.clone(), || Ok(self.public.balance_commitment.0))?;
         let claimed_asset_anchor =
-            StateCommitmentVar::new_input(cs.clone(), || Ok(self.public.asset_anchor))?;
+            StateCommitmentVar::new_witness(cs.clone(), || Ok(self.public.asset_anchor))?;
         let claimed_compliance_anchor =
-            StateCommitmentVar::new_input(cs.clone(), || Ok(self.public.compliance_anchor))?;
+            StateCommitmentVar::new_witness(cs.clone(), || Ok(self.public.compliance_anchor))?;
 
         // Check integrity of balance commitment (negative for outputs).
         let balance_commitment =
             BalanceVar::from_negative_value_var(note_var.value()).commit(balance_blinding_vars)?;
-        balance_commitment.enforce_equal(&claimed_balance_commitment)?;
+        balance_commitment
+            .inner
+            .enforce_equal(&claimed_balance_commitment)?;
 
         // Check note commitment integrity.
         let note_commitment = note_var.commit()?;
         note_commitment.enforce_equal(&claimed_note_commitment)?;
 
-        let epk_1_var = ElementVar::new_input(cs.clone(), || Ok(self.public.epk_1))?;
-        let epk_2_var = ElementVar::new_input(cs.clone(), || Ok(self.public.epk_2))?;
-        let epk_3_var = ElementVar::new_input(cs.clone(), || Ok(self.public.epk_3))?;
+        let epk_1_var = ElementVar::new_witness(cs.clone(), || Ok(self.public.epk_1))?;
+        let epk_2_var = ElementVar::new_witness(cs.clone(), || Ok(self.public.epk_2))?;
+        let epk_3_var = ElementVar::new_witness(cs.clone(), || Ok(self.public.epk_3))?;
 
-        let c2_core_var = FqVar::new_input(cs.clone(), || Ok(self.public.c2_core))?;
-        let c2_ext_var = FqVar::new_input(cs.clone(), || Ok(self.public.c2_ext))?;
-        let c2_sext_var = FqVar::new_input(cs.clone(), || Ok(self.public.c2_sext))?;
+        let c2_core_var = FqVar::new_witness(cs.clone(), || Ok(self.public.c2_core))?;
+        let c2_ext_var = FqVar::new_witness(cs.clone(), || Ok(self.public.c2_ext))?;
+        let c2_sext_var = FqVar::new_witness(cs.clone(), || Ok(self.public.c2_sext))?;
 
         let mut ciphertext_vars = Vec::new();
         for fq in self.public.compliance_ciphertext.iter() {
-            ciphertext_vars.push(FqVar::new_input(cs.clone(), || Ok(*fq))?);
+            ciphertext_vars.push(FqVar::new_witness(cs.clone(), || Ok(*fq))?);
         }
 
         let target_timestamp_var =
-            FqVar::new_input(cs.clone(), || Ok(self.public.target_timestamp))?;
-        let dleq_c_1_var = FqVar::new_input(cs.clone(), || Ok(self.public.dleq_c_1))?;
-        let dleq_s_1_var = FqVar::new_input(cs.clone(), || Ok(self.public.dleq_s_1))?;
-        let dleq_c_2_var = FqVar::new_input(cs.clone(), || Ok(self.public.dleq_c_2))?;
-        let dleq_s_2_var = FqVar::new_input(cs.clone(), || Ok(self.public.dleq_s_2))?;
-        let dleq_c_3_var = FqVar::new_input(cs.clone(), || Ok(self.public.dleq_c_3))?;
-        let dleq_s_3_var = FqVar::new_input(cs.clone(), || Ok(self.public.dleq_s_3))?;
+            FqVar::new_witness(cs.clone(), || Ok(self.public.target_timestamp))?;
+        let dleq_c_1_var = FqVar::new_witness(cs.clone(), || Ok(self.public.dleq_c_1))?;
+        let dleq_s_1_var = FqVar::new_witness(cs.clone(), || Ok(self.public.dleq_s_1))?;
+        let dleq_c_2_var = FqVar::new_witness(cs.clone(), || Ok(self.public.dleq_c_2))?;
+        let dleq_s_2_var = FqVar::new_witness(cs.clone(), || Ok(self.public.dleq_s_2))?;
+        let dleq_c_3_var = FqVar::new_witness(cs.clone(), || Ok(self.public.dleq_c_3))?;
+        let dleq_s_3_var = FqVar::new_witness(cs.clone(), || Ok(self.public.dleq_s_3))?;
+
+        let claimed_statement_hash_var =
+            FqVar::new_input(cs.clone(), || Ok(self.claimed_statement_hash))?;
 
         let counterparty_leaf_var =
             penumbra_sdk_compliance::r1cs::ComplianceLeafVar::new_witness(cs.clone(), || {
@@ -234,19 +253,19 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
             claimed_asset_anchor.inner().clone(),
             claimed_compliance_anchor.inner().clone(),
             epk_1_var.clone(),
-            epk_2_var,
-            epk_3_var,
-            c2_core_var,
-            c2_ext_var,
-            c2_sext_var,
-            ciphertext_vars,
-            target_timestamp_var,
-            dleq_c_1_var,
-            dleq_s_1_var,
-            dleq_c_2_var,
-            dleq_s_2_var,
-            dleq_c_3_var,
-            dleq_s_3_var,
+            epk_2_var.clone(),
+            epk_3_var.clone(),
+            c2_core_var.clone(),
+            c2_ext_var.clone(),
+            c2_sext_var.clone(),
+            ciphertext_vars.clone(),
+            target_timestamp_var.clone(),
+            dleq_c_1_var.clone(),
+            dleq_s_1_var.clone(),
+            dleq_c_2_var.clone(),
+            dleq_s_2_var.clone(),
+            dleq_c_3_var.clone(),
+            dleq_s_3_var.clone(),
             note_var.asset_id(),
             note_var.amount(),
             note_var.diversified_generator(),
@@ -276,8 +295,33 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
                 tx_blinding_nonce_var,
             )?;
         let claimed_blinded_counterparty =
-            FqVar::new_input(cs.clone(), || Ok(self.public.counterparty_leaf_hash.0))?;
+            FqVar::new_witness(cs.clone(), || Ok(self.public.counterparty_leaf_hash.0))?;
         computed_blinded_counterparty.enforce_equal(&claimed_blinded_counterparty)?;
+
+        // Bind all statement fields to a single public input hash.
+        let mut statement_fields = Vec::with_capacity(OUTPUT_STATEMENT_FIELD_COUNT);
+        statement_fields.push(claimed_note_commitment.inner());
+        statement_fields.push(claimed_balance_commitment.compress_to_field()?);
+        statement_fields.push(claimed_asset_anchor.inner());
+        statement_fields.push(claimed_compliance_anchor.inner());
+        statement_fields.push(epk_1_var.compress_to_field()?);
+        statement_fields.push(epk_2_var.compress_to_field()?);
+        statement_fields.push(epk_3_var.compress_to_field()?);
+        statement_fields.push(c2_core_var);
+        statement_fields.push(c2_ext_var);
+        statement_fields.push(c2_sext_var);
+        statement_fields.extend(ciphertext_vars);
+        statement_fields.push(target_timestamp_var);
+        statement_fields.push(dleq_c_1_var);
+        statement_fields.push(dleq_s_1_var);
+        statement_fields.push(dleq_c_2_var);
+        statement_fields.push(dleq_s_2_var);
+        statement_fields.push(dleq_c_3_var);
+        statement_fields.push(dleq_s_3_var);
+        statement_fields.push(claimed_blinded_counterparty);
+
+        let computed_statement_hash = output_statement_hash_var(cs.clone(), &statement_fields)?;
+        computed_statement_hash.enforce_equal(&claimed_statement_hash_var)?;
 
         Ok(())
     }
@@ -388,7 +432,13 @@ impl DummyWitness for OutputCircuit {
             is_flagged: false,
             salt: decaf377::Fq::from(0u64),
         };
-        OutputCircuit { public, private }
+        let claimed_statement_hash = output_statement_hash_from_public(&public)
+            .expect("dummy output statement hash should compute");
+        OutputCircuit {
+            public,
+            private,
+            claimed_statement_hash,
+        }
     }
 }
 
@@ -404,32 +454,37 @@ impl OutputProof {
         public: OutputProofPublic,
         private: OutputProofPrivate,
     ) -> Result<Self, crate::ProofError> {
-        let circuit = OutputCircuit::new(public, private);
+        let claimed_statement_hash = output_statement_hash_from_public(&public)
+            .map_err(|e| crate::ProofError::InvalidPublicInput(format!("statement hash: {e}")))?;
+        let circuit = OutputCircuit::new(public, private, claimed_statement_hash);
 
-        // Check constraint satisfaction before proving
-        use ark_relations::r1cs::ConstraintSystem;
-        let cs = ConstraintSystem::<Fq>::new_ref();
-        circuit.clone().generate_constraints(cs.clone())?;
+        #[cfg(debug_assertions)]
+        {
+            // In debug builds, preflight constraint satisfaction to aid diagnosis.
+            use ark_relations::r1cs::ConstraintSystem;
+            let cs = ConstraintSystem::<Fq>::new_ref();
+            circuit.clone().generate_constraints(cs.clone())?;
 
-        if !cs.is_satisfied().unwrap_or(false) {
-            let unsatisfied = cs
-                .which_is_unsatisfied()
-                .map(|opt| {
-                    opt.map(|s| format!(" Failing constraint: {}", s))
-                        .unwrap_or_default()
-                })
-                .unwrap_or_default();
-            tracing::error!(
-                "Output circuit: {} constraints, {} instance vars, {} witness vars.{}",
-                cs.num_constraints(),
-                cs.num_instance_variables(),
-                cs.num_witness_variables(),
-                unsatisfied,
-            );
-            return Err(crate::ProofError::UnsatisfiedConstraints(format!(
-                "Output circuit constraints not satisfied.{}",
-                unsatisfied,
-            )));
+            if !cs.is_satisfied().unwrap_or(false) {
+                let unsatisfied = cs
+                    .which_is_unsatisfied()
+                    .map(|opt| {
+                        opt.map(|s| format!(" Failing constraint: {}", s))
+                            .unwrap_or_default()
+                    })
+                    .unwrap_or_default();
+                tracing::error!(
+                    "Output circuit: {} constraints, {} instance vars, {} witness vars.{}",
+                    cs.num_constraints(),
+                    cs.num_instance_variables(),
+                    cs.num_witness_variables(),
+                    unsatisfied,
+                );
+                return Err(crate::ProofError::UnsatisfiedConstraints(format!(
+                    "Output circuit constraints not satisfied.{}",
+                    unsatisfied,
+                )));
+            }
         }
 
         let proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
@@ -454,137 +509,12 @@ impl OutputProof {
     ) -> anyhow::Result<penumbra_sdk_proof_params::batch::BatchItem> {
         let proof =
             Proof::deserialize_compressed_unchecked(&self.0[..]).map_err(|e| anyhow::anyhow!(e))?;
-        let mut public_inputs = Vec::new();
-
-        // Must match circuit allocation order exactly
-        public_inputs.extend(
-            public
-                .note_commitment
-                .0
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("note commitment invalid"))?,
-        );
-        public_inputs.extend(
-            public
-                .balance_commitment
-                .0
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("balance commitment invalid"))?,
-        );
-        public_inputs.extend(
-            public
-                .asset_anchor
-                .0
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("asset anchor invalid"))?,
-        );
-        public_inputs.extend(
-            public
-                .compliance_anchor
-                .0
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("compliance anchor invalid"))?,
-        );
-
-        // 3 EPKs
-        public_inputs.extend(
-            public
-                .epk_1
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("epk_1 invalid"))?,
-        );
-        public_inputs.extend(
-            public
-                .epk_2
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("epk_2 invalid"))?,
-        );
-        public_inputs.extend(
-            public
-                .epk_3
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("epk_3 invalid"))?,
-        );
-
-        // 3 C2s
-        public_inputs.extend(
-            public
-                .c2_core
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("c2_core invalid"))?,
-        );
-        public_inputs.extend(
-            public
-                .c2_ext
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("c2_ext invalid"))?,
-        );
-        public_inputs.extend(
-            public
-                .c2_sext
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("c2_sext invalid"))?,
-        );
-
-        // Packed ciphertext
-        public_inputs.extend(public.compliance_ciphertext);
-
-        // DLEQ fields
-        public_inputs.extend(
-            public
-                .target_timestamp
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("target_timestamp invalid"))?,
-        );
-        public_inputs.extend(
-            public
-                .dleq_c_1
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("dleq_c_1 invalid"))?,
-        );
-        public_inputs.extend(
-            public
-                .dleq_s_1
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("dleq_s_1 invalid"))?,
-        );
-        public_inputs.extend(
-            public
-                .dleq_c_2
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("dleq_c_2 invalid"))?,
-        );
-        public_inputs.extend(
-            public
-                .dleq_s_2
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("dleq_s_2 invalid"))?,
-        );
-        public_inputs.extend(
-            public
-                .dleq_c_3
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("dleq_c_3 invalid"))?,
-        );
-        public_inputs.extend(
-            public
-                .dleq_s_3
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("dleq_s_3 invalid"))?,
-        );
-
-        // Blinded leaf hashes
-        public_inputs.extend(
-            public
-                .counterparty_leaf_hash
-                .0
-                .to_field_elements()
-                .ok_or_else(|| anyhow::anyhow!("counterparty leaf hash invalid"))?,
-        );
+        let statement_hash = output_statement_hash_from_public(&public)
+            .map_err(|e| anyhow::anyhow!("failed computing output statement hash: {e}"))?;
 
         Ok(penumbra_sdk_proof_params::batch::BatchItem {
             proof,
-            public_inputs,
+            public_inputs: vec![statement_hash],
         })
     }
 

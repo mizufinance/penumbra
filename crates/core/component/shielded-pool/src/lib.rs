@@ -23,6 +23,7 @@ pub use rseed::Rseed;
 pub mod convert;
 pub mod nullifier_derivation;
 pub mod output;
+pub mod public_input_hash;
 pub mod r1cs;
 pub mod spend;
 

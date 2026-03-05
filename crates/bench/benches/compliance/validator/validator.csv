@@ -1,7 +1,7 @@
 version,batch_size,mode,mean_ms,median_ms,samples,profile,run_id,timestamp,git_rev,host_label
 base,100,parallel,189.48,189.42,10,quick,run-1772631910-77547,1772631910,unknown-rev,unknown-host
 dev,100,parallel,471.30,471.18,10,quick,run-1772577087-56893,1772577087,unknown-rev,unknown-host
-local,100,parallel,482.15,479.31,10,quick,run-1772574619-38174,1772574619,unknown-rev,unknown-host
+local,100,parallel,225.96,225.91,10,quick,run-1772721387-25745,1772721387,unknown-rev,unknown-host
 base,per_tx,parallel,1.89,1.89,10,quick,run-1772631910-77547,1772631910,unknown-rev,unknown-host
 dev,per_tx,parallel,4.71,4.71,10,quick,run-1772577087-56893,1772577087,unknown-rev,unknown-host
-local,per_tx,parallel,4.82,4.79,10,quick,run-1772574619-38174,1772574619,unknown-rev,unknown-host
+local,per_tx,parallel,2.26,2.26,10,quick,run-1772721387-25745,1772721387,unknown-rev,unknown-host
