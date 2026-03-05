@@ -13,6 +13,7 @@ use std::ops::Deref;
 /// The length of our Groth16 proofs in bytes.
 pub const GROTH16_PROOF_LENGTH_BYTES: usize = 192;
 
+pub mod batch;
 mod traits;
 
 pub use traits::{

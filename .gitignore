@@ -75,3 +75,11 @@ tmp/
 
 # Development artifacts
 deployments/.smoke-test-state/
+
+# TPS benchmark generated artifacts
+crates/bench/benches/compliance/tps/runs/
+crates/bench/benches/compliance/tps/snapshots/
+crates/bench/benches/compliance/tps/corpus/
+crates/bench/benches/compliance/tps/tps.csv
+crates/bench/benches/compliance/tps/run_summary.csv
+crates/bench/benches/compliance/tps/profiles.csv

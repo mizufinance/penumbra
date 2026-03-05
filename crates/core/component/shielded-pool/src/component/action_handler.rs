@@ -1,3 +1,3 @@
 mod ics20_withdrawal;
-mod output;
-mod spend;
+pub(crate) mod output;
+pub(crate) mod spend;

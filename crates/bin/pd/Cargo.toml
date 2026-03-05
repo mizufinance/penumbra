@@ -59,7 +59,7 @@ metrics-util                     = "0.18.0"
 mime_guess                       = "2"
 once_cell                        = { workspace = true }
 pbjson-types                     = { workspace = true }
-penumbra-sdk-app                     = { workspace = true, default-features = true }
+penumbra-sdk-app                     = { workspace = true, features = ["parallel"], default-features = true }
 penumbra-sdk-asset                   = { workspace = true, default-features = true }
 penumbra-sdk-auto-https              = { version = "2.1.0", path = "../../util/auto-https" }
 penumbra-sdk-compact-block           = { workspace = true, default-features = true }

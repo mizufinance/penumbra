@@ -1,11 +1,10 @@
 //! Scanning flow benchmark: block-level scanning throughput.
 //!
-//! Simulates processing a block of transactions with varying sizes
-//! and match rates. Measures detection-only and full scan pipelines.
-//!
-//! Outputs: `benches/compliance/scanner/results/flow.csv`
-
-use std::path::PathBuf;
+//! Emits:
+//! - top-level overview: `benches/compliance/flows.csv`
+//! - category KPIs: `benches/compliance/scanner/scanner.csv`
+//! - section overview: `benches/compliance/scanner/sections.csv`
+//! - section KPIs: `benches/compliance/scanner/sections/<section>.csv`
 
 use decaf377::{Fq, Fr};
 use penumbra_sdk_asset::asset;
@@ -16,9 +15,6 @@ use penumbra_sdk_compliance::{
     test_helpers::{self, make_address, OutputEncryptionResult, SpendEncryptionResult},
 };
 use penumbra_sdk_num::Amount;
-
-const WARMUP: usize = 1;
-const SAMPLES: usize = 10;
 
 fn derive_ack(ring_pk: &decaf377::Element, addr: &penumbra_sdk_keys::Address) -> decaf377::Element {
     let b_d_fq = addr.diversified_generator().vartime_compress_to_field();
@@ -57,7 +53,6 @@ fn generate_block(
         .map(|i| {
             let is_match = i < match_count;
 
-            // For matching TXs, the wallet is the counterparty (recipient)
             let sender = make_address((i % 200) as u8);
             let recipient = if is_match {
                 wallet_addr.clone()
@@ -74,19 +69,15 @@ fn generate_block(
             );
 
             let spend_ss = if is_match {
-                // Wallet is counterparty on spend — not directly relevant
-                // but we compute it for completeness
                 ack_wallet * spend_result.r_s
             } else {
                 decaf377::Element::default()
             };
-
             let output_ss_core = if is_match {
                 ack_wallet * output_result.r_1
             } else {
                 decaf377::Element::default()
             };
-
             let output_ss_ext = if is_match {
                 ack_wallet * output_result.r_2
             } else {
@@ -105,20 +96,124 @@ fn generate_block(
         .collect()
 }
 
-fn main() {
-    let mut results = Vec::new();
+fn pick_kpi(
+    raw: &[bench_runner::BenchResult],
+    version: &str,
+    block_size: usize,
+    match_rate: usize,
+    stage: &str,
+) -> bench_runner::BenchResult {
+    raw.iter()
+        .find(|r| {
+            r.version == version
+                && r.dimensions
+                    .iter()
+                    .any(|(k, v)| k == "block_size" && v == &block_size.to_string())
+                && r.dimensions
+                    .iter()
+                    .any(|(k, v)| k == "match_rate" && v == &format!("{match_rate}%"))
+                && r.dimensions.iter().any(|(k, v)| k == "stage" && v == stage)
+        })
+        .cloned()
+        .unwrap_or_else(|| {
+            panic!(
+                "missing KPI row for version={version}, block_size={block_size}, match_rate={match_rate}, stage={stage}"
+            )
+        })
+}
 
-    // --- Shared setup ---
+fn flow_rows_for_version(
+    raw: &[bench_runner::BenchResult],
+    version: &str,
+    regression: bool,
+) -> Vec<bench_runner::BenchResult> {
+    let mut rows = Vec::new();
+    let kpis = if regression {
+        vec![(10usize, "full")]
+    } else {
+        vec![
+            (10usize, "full"),
+            (10usize, "full_per_tx"),
+            (100usize, "full"),
+            (100usize, "full_per_tx"),
+        ]
+    };
+    for (match_rate, stage) in kpis {
+        rows.push(pick_kpi(raw, version, 100, match_rate, stage));
+    }
+    rows
+}
+
+fn pick_section_kpi(
+    raw: &[bench_runner::BenchResult],
+    version: &str,
+    block_size: usize,
+    match_rate: usize,
+    section: &str,
+) -> bench_runner::BenchResult {
+    raw.iter()
+        .find(|r| {
+            r.version == version
+                && r.dimensions
+                    .iter()
+                    .any(|(k, v)| k == "block_size" && v == &block_size.to_string())
+                && r.dimensions
+                    .iter()
+                    .any(|(k, v)| k == "match_rate" && v == &format!("{match_rate}%"))
+                && r.dimensions
+                    .iter()
+                    .any(|(k, v)| k == "section" && v == section)
+        })
+        .cloned()
+        .unwrap_or_else(|| {
+            panic!(
+                "missing section KPI row for version={version}, block_size={block_size}, match_rate={match_rate}, section={section}"
+            )
+        })
+}
+
+fn section_rows_for_version(
+    raw: &[bench_runner::BenchResult],
+    version: &str,
+    regression: bool,
+) -> Vec<bench_runner::BenchResult> {
+    let mut rows = Vec::new();
+    for (match_rate, section) in [(10usize, "detect"), (10usize, "decrypt")] {
+        rows.push(pick_section_kpi(raw, version, 100, match_rate, section));
+        if !regression {
+            rows.push(pick_section_kpi(raw, version, 100, 100usize, section));
+        }
+    }
+    rows
+}
+
+fn main() {
+    let version = bench_runner::bench_version();
+    let warmup = bench_runner::warmup_count();
+    let samples = bench_runner::sample_count();
+    let regression = bench_runner::is_regression_suite();
+    let quick = bench_runner::is_quick_profile();
+
+    let block_sizes: Vec<usize> = if regression || quick {
+        vec![100]
+    } else {
+        vec![10, 100]
+    };
+    let match_rates: Vec<usize> = if regression { vec![10] } else { vec![10, 100] };
+
+    let mut raw_results = Vec::new();
+
+    // Shared setup for measured version.
     let dk = DetectionKey::demo();
     let ring_pk = decaf377::Element::GENERATOR * Fr::from(999u64);
     let dk_pub = dk.public_key();
     let wallet_addr = make_address(42);
     let asset_id = asset::Id(Fq::from(1000u64));
 
-    for &block_size in &[10usize, 100] {
-        for &match_pct in &[10usize, 100] {
-            let label = format!("block_{}_{}pct", block_size, match_pct);
-            eprintln!("=== {} ===", label);
+    for &block_size in &block_sizes {
+        for &match_pct in &match_rates {
+            let label = format!("{version}_block_{block_size}_{match_pct}pct");
+            eprintln!("=== {label} ===");
 
             let block = generate_block(
                 block_size,
@@ -129,13 +224,10 @@ fn main() {
                 asset_id,
             );
 
-            // --- Detection-only scan ---
-            // Try detection tier on every ciphertext in the block
-            eprintln!("  Benchmarking {}_detect...", label);
-            let times = bench_runner::run_bench(WARMUP, SAMPLES, || {
-                let mut _matches = 0u32;
+            // Detection-only scan.
+            let detect_times = bench_runner::run_bench(warmup, samples, || {
+                let mut matches_count = 0u32;
                 for tx in &block {
-                    // Detection on spend ciphertext
                     if decrypt_detection_tier(
                         dk.inner(),
                         &tx.spend.ciphertext.epk_1,
@@ -144,9 +236,8 @@ fn main() {
                     )
                     .is_ok()
                     {
-                        _matches += 1;
+                        matches_count += 1;
                     }
-                    // Detection on output ciphertext
                     if decrypt_detection_tier(
                         dk.inner(),
                         &tx.output.ciphertext.epk_1,
@@ -155,26 +246,37 @@ fn main() {
                     )
                     .is_ok()
                     {
-                        _matches += 1;
+                        matches_count += 1;
                     }
                 }
+                std::hint::black_box(matches_count);
             });
-            results.push(bench_runner::make_result(
-                "v0.1",
+            raw_results.push(bench_runner::make_result(
+                &version,
                 &[
                     ("block_size", &block_size.to_string()),
-                    ("match_rate", &format!("{}%", match_pct)),
+                    ("match_rate", &format!("{match_pct}%")),
                     ("stage", "detect"),
                 ],
-                &times,
+                &detect_times,
+                None,
+            ));
+            let detect_per_tx: Vec<f64> =
+                detect_times.iter().map(|t| t / block_size as f64).collect();
+            raw_results.push(bench_runner::make_result(
+                &version,
+                &[
+                    ("block_size", &block_size.to_string()),
+                    ("match_rate", &format!("{match_pct}%")),
+                    ("stage", "detect_per_tx"),
+                ],
+                &detect_per_tx,
                 None,
             ));
 
-            // --- Full scan (detection + core + extension for matches) ---
-            eprintln!("  Benchmarking {}_full...", label);
-            let times = bench_runner::run_bench(WARMUP, SAMPLES, || {
+            // Full scan (detection + decrypt matched txs).
+            let full_times = bench_runner::run_bench(warmup, samples, || {
                 for tx in &block {
-                    // Detection on both ciphertexts
                     let spend_detected = decrypt_detection_tier(
                         dk.inner(),
                         &tx.spend.ciphertext.epk_1,
@@ -191,32 +293,98 @@ fn main() {
                     )
                     .is_ok();
 
-                    // For matches: decrypt core + extension
                     if tx.is_match && output_detected {
-                        let _core = decrypt_core(&tx.output_ss_core, &tx.output.ciphertext);
-                        let _ext = decrypt_extension(&tx.output_ss_ext, &tx.output.ciphertext);
+                        let _ = decrypt_core(&tx.output_ss_core, &tx.output.ciphertext);
+                        let _ = decrypt_extension(&tx.output_ss_ext, &tx.output.ciphertext);
                     }
                     if tx.is_match && spend_detected {
-                        let _core = decrypt_core(&tx.spend_ss, &tx.spend.ciphertext);
+                        let _ = decrypt_core(&tx.spend_ss, &tx.spend.ciphertext);
                     }
                 }
             });
-            results.push(bench_runner::make_result(
-                "v0.1",
+            raw_results.push(bench_runner::make_result(
+                &version,
                 &[
                     ("block_size", &block_size.to_string()),
-                    ("match_rate", &format!("{}%", match_pct)),
+                    ("match_rate", &format!("{match_pct}%")),
                     ("stage", "full"),
                 ],
-                &times,
+                &full_times,
                 None,
             ));
+            let full_per_tx: Vec<f64> = full_times.iter().map(|t| t / block_size as f64).collect();
+            raw_results.push(bench_runner::make_result(
+                &version,
+                &[
+                    ("block_size", &block_size.to_string()),
+                    ("match_rate", &format!("{match_pct}%")),
+                    ("section", "detect"),
+                ],
+                &detect_times,
+                None,
+            ));
+            let decrypt_extra: Vec<f64> = full_times
+                .iter()
+                .zip(detect_times.iter())
+                .map(|(full, detect)| (full - detect).max(0.0))
+                .collect();
+            raw_results.push(bench_runner::make_result(
+                &version,
+                &[
+                    ("block_size", &block_size.to_string()),
+                    ("match_rate", &format!("{match_pct}%")),
+                    ("section", "decrypt"),
+                ],
+                &decrypt_extra,
+                None,
+            ));
+            if !regression {
+                raw_results.push(bench_runner::make_result(
+                    &version,
+                    &[
+                        ("block_size", &block_size.to_string()),
+                        ("match_rate", &format!("{match_pct}%")),
+                        ("stage", "full_per_tx"),
+                    ],
+                    &full_per_tx,
+                    None,
+                ));
+            }
         }
     }
 
-    // --- Output ---
-    bench_runner::print_table(&results);
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("benches/compliance/scanner/results/flow.csv");
-    bench_runner::write_csv(&csv_path, &results);
+    let flow_rows = flow_rows_for_version(&raw_results, &version, regression);
+    let section_rows = section_rows_for_version(&raw_results, &version, regression);
+    let mut flow_with_meta = flow_rows.clone();
+    bench_runner::annotate_raw_results(&mut flow_with_meta);
+    let mut sections_with_meta = section_rows.clone();
+    bench_runner::annotate_raw_results(&mut sections_with_meta);
+    bench_runner::output_results(&flow_with_meta);
+
+    let flow_path = bench_runner::category_csv_path("scanner");
+    bench_runner::append_csv(&flow_path, &flow_with_meta);
+
+    let sections_overview_path = bench_runner::category_sections_csv_path("scanner");
+    bench_runner::append_csv(&sections_overview_path, &sections_with_meta);
+
+    let flows_overview = bench_runner::to_flow_overview_rows("scanner", &flow_with_meta);
+    let flows_overview_path = bench_runner::flows_overview_csv_path();
+    bench_runner::append_csv_scoped(&flows_overview_path, &flows_overview, &["category", "kpi"]);
+
+    for section in ["detect", "decrypt"] {
+        let mut rows: Vec<_> = sections_with_meta
+            .iter()
+            .filter(|r| {
+                r.dimensions
+                    .iter()
+                    .any(|(k, v)| k == "section" && v == section)
+            })
+            .cloned()
+            .collect();
+        for r in &mut rows {
+            r.dimensions.retain(|(k, _)| k != "section");
+        }
+        let section_path = bench_runner::section_csv_path("scanner", section);
+        bench_runner::append_csv(&section_path, &rows);
+    }
 }

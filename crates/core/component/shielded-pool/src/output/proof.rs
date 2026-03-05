@@ -445,12 +445,13 @@ impl OutputProof {
         Ok(Self(proof_bytes))
     }
 
-    #[tracing::instrument(level="debug", skip(self, vk), fields(self = ?BASE64_STANDARD.encode(self.clone().encode_to_vec()), vk = ?vk.debug_id()))]
-    pub fn verify(
+    /// Construct a `BatchItem` from this proof and its public inputs.
+    /// Deserializes the proof and builds the public input vector without verifying.
+    /// This is the single source of truth for public input ordering.
+    pub fn to_batch_item(
         &self,
-        vk: &PreparedVerifyingKey<Bls12_377>,
         public: OutputProofPublic,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<penumbra_sdk_proof_params::batch::BatchItem> {
         let proof =
             Proof::deserialize_compressed_unchecked(&self.0[..]).map_err(|e| anyhow::anyhow!(e))?;
         let mut public_inputs = Vec::new();
@@ -581,10 +582,24 @@ impl OutputProof {
                 .ok_or_else(|| anyhow::anyhow!("counterparty leaf hash invalid"))?,
         );
 
+        Ok(penumbra_sdk_proof_params::batch::BatchItem {
+            proof,
+            public_inputs,
+        })
+    }
+
+    #[tracing::instrument(level="debug", skip(self, vk), fields(self = ?BASE64_STANDARD.encode(self.clone().encode_to_vec()), vk = ?vk.debug_id()))]
+    pub fn verify(
+        &self,
+        vk: &PreparedVerifyingKey<Bls12_377>,
+        public: OutputProofPublic,
+    ) -> anyhow::Result<()> {
+        let item = self.to_batch_item(public)?;
+
         let proof_result = Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(
             vk,
-            public_inputs.as_slice(),
-            &proof,
+            item.public_inputs.as_slice(),
+            &item.proof,
         )
         .map_err(|err| anyhow::anyhow!(err))?;
 

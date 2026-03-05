@@ -1,0 +1,29 @@
+label: "current"
+pd_endpoints:
+  - "http://fullnode-a:8080"
+  - "http://fullnode-b:8080"
+observer_endpoint: "http://fullnode-a:8080"
+profile: "regression" # regression|ceiling|soak
+target_block_time_ms: 6000
+scenarios:
+  - name: "unregulated"
+    corpus_dir: "corpus/unregulated"
+    offered_tps: [80, 120, 160, 200]
+    repeats: 3
+    warmup_blocks: 20
+    steady_blocks: 120
+    submit_workers: 64
+    max_inflight: 20000
+  - name: "regulated"
+    corpus_dir: "corpus/regulated"
+    offered_tps: [40, 80, 120, 160]
+    repeats: 3
+    warmup_blocks: 20
+    steady_blocks: 120
+    submit_workers: 64
+    max_inflight: 20000
+stability:
+  max_reject_rate_pct: 1.0
+  max_p95_latency_ms: 30000
+  max_backlog_growth_pct: 10.0
+  min_steady_commits: 1

@@ -10,20 +10,28 @@ use tokio::sync::mpsc;
 use tower_actor::Message;
 use tracing::Instrument;
 
-use crate::{app::App, metrics};
+use std::sync::Arc;
+
+use crate::{app::App, metrics, stateless_cache::StatelessCache};
 
 /// A mempool service that applies transaction checks against an isolated application fork.
 pub struct Mempool {
     queue: mpsc::Receiver<Message<Request, Response, tower::BoxError>>,
     storage: Storage,
+    stateless_cache: Arc<StatelessCache>,
 }
 
 impl Mempool {
     pub fn new(
         storage: Storage,
+        stateless_cache: Arc<StatelessCache>,
         queue: mpsc::Receiver<Message<Request, Response, tower::BoxError>>,
     ) -> Self {
-        Self { queue, storage }
+        Self {
+            queue,
+            storage,
+            stateless_cache,
+        }
     }
 
     pub async fn check_tx(&mut self, req: Request) -> Result<Response, tower::BoxError> {
@@ -39,7 +47,10 @@ impl Mempool {
 
         let mut app = App::new(self.storage.latest_snapshot());
 
-        match app.deliver_tx_bytes(tx_bytes.as_ref()).await {
+        match app
+            .deliver_tx_bytes(tx_bytes.as_ref(), Some(&self.stateless_cache))
+            .await
+        {
             Ok(events) => {
                 let elapsed = start.elapsed();
                 tracing::info!(?elapsed, "tx accepted");

@@ -8,8 +8,7 @@ use crate::registry::ComplianceRegistryRead;
 #[async_trait]
 pub trait RegulatedAssetCheck: StateRead {
     async fn ensure_not_regulated(&self, asset_id: asset::Id, action_name: &str) -> Result<()> {
-        let proof_data = self.get_asset_proof_data(asset_id).await?;
-        if proof_data.is_regulated {
+        if self.is_asset_regulated(asset_id).await? {
             anyhow::bail!(
                 "Regulated assets cannot be used in {} actions. Asset {} is regulated.",
                 action_name,

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 
 use cnidarium::Storage;
@@ -11,11 +13,13 @@ use tower_actor::Message;
 use tracing::Instrument;
 
 use crate::app::App;
+use crate::stateless_cache::StatelessCache;
 
 pub struct Consensus {
     queue: mpsc::Receiver<Message<Request, Response, tower::BoxError>>,
     storage: Storage,
     app: App,
+    stateless_cache: Arc<StatelessCache>,
 }
 
 pub type ConsensusService = tower_actor::Actor<Request, Response, BoxError>;
@@ -38,13 +42,21 @@ impl Consensus {
     const QUEUE_SIZE: usize = 10;
 
     pub fn new(storage: Storage) -> ConsensusService {
+        Self::new_with_cache(storage, Arc::new(StatelessCache::new()))
+    }
+
+    pub fn new_with_cache(
+        storage: Storage,
+        stateless_cache: Arc<StatelessCache>,
+    ) -> ConsensusService {
         tower_actor::Actor::new(Self::QUEUE_SIZE, |queue: _| {
-            Consensus::new_inner(storage, queue).run()
+            Consensus::new_inner(storage, stateless_cache, queue).run()
         })
     }
 
     fn new_inner(
         storage: Storage,
+        stateless_cache: Arc<StatelessCache>,
         queue: mpsc::Receiver<Message<Request, Response, tower::BoxError>>,
     ) -> Self {
         let app = App::new(storage.latest_snapshot());
@@ -53,6 +65,7 @@ impl Consensus {
             queue,
             storage,
             app,
+            stateless_cache,
         }
     }
 
@@ -74,16 +87,25 @@ impl Consensus {
                         .expect("init_chain must succeed"),
                 ),
                 Request::PrepareProposal(proposal) => Response::PrepareProposal(
-                    self.prepare_proposal(proposal)
-                        .instrument(span)
-                        .await
-                        .expect("prepare proposal must succeed"),
+                    match self.prepare_proposal(proposal).instrument(span).await {
+                        Ok(rsp) => rsp,
+                        Err(e) => {
+                            tracing::error!(
+                                ?e,
+                                "prepare_proposal failed; returning empty proposal"
+                            );
+                            response::PrepareProposal { txs: vec![] }
+                        }
+                    },
                 ),
                 Request::ProcessProposal(proposal) => Response::ProcessProposal(
-                    self.process_proposal(proposal)
-                        .instrument(span)
-                        .await
-                        .expect("process proposal must succeed"),
+                    match self.process_proposal(proposal).instrument(span).await {
+                        Ok(rsp) => rsp,
+                        Err(e) => {
+                            tracing::error!(?e, "process_proposal failed; rejecting proposal");
+                            response::ProcessProposal::Reject
+                        }
+                    },
                 ),
                 Request::BeginBlock(begin_block) => Response::BeginBlock(
                     self.begin_block(begin_block)
@@ -169,7 +191,9 @@ impl Consensus {
         let mut tmp_app = App::new(self.storage.latest_snapshot());
         // Once we are done, we discard it so that the application state doesn't get corrupted
         // if another round of consensus is required because the proposal fails to finalize.
-        Ok(tmp_app.prepare_proposal(proposal).await)
+        Ok(tmp_app
+            .prepare_proposal(proposal, Some(self.stateless_cache.as_ref()))
+            .await)
     }
 
     async fn process_proposal(
@@ -199,7 +223,10 @@ impl Consensus {
     async fn deliver_tx(&mut self, deliver_tx: request::DeliverTx) -> response::DeliverTx {
         // Unlike the other messages, DeliverTx is fallible, so
         // inspect the response to report errors.
-        let rsp = self.app.deliver_tx_bytes(deliver_tx.tx.as_ref()).await;
+        let rsp = self
+            .app
+            .deliver_tx_bytes(deliver_tx.tx.as_ref(), Some(self.stateless_cache.as_ref()))
+            .await;
 
         match rsp {
             Ok(events) => {

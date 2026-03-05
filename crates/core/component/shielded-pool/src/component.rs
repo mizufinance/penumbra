@@ -17,4 +17,8 @@ pub use note_manager::NoteManager;
 pub use shielded_pool::{ShieldedPool, StateReadExt, StateWriteExt};
 pub use transfer::Ics20Transfer;
 
+// Batch verification helpers for process_proposal
+pub use action_handler::output::output_check_stateless_and_extract;
+pub use action_handler::spend::spend_check_stateless_and_extract;
+
 pub mod rpc;

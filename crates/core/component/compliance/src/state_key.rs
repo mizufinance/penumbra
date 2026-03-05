@@ -8,6 +8,16 @@ pub fn user_tree() -> &'static str {
     "compliance/user_tree"
 }
 
+/// State key for the user compliance tree root.
+pub fn user_tree_root() -> &'static str {
+    "compliance/user_tree_root"
+}
+
+/// State key for the asset IMT root.
+pub fn asset_imt_root() -> &'static str {
+    "compliance/asset_imt_root"
+}
+
 /// State key for the user count (number of registered users)
 pub fn user_count() -> &'static str {
     "compliance/user_count"
@@ -16,6 +26,24 @@ pub fn user_count() -> &'static str {
 /// State key for the asset count (number of registered assets)
 pub fn asset_count() -> &'static str {
     "compliance/asset_count"
+}
+
+/// Object-store keys for compliance in-block caches.
+pub mod cache {
+    /// Cached deserialized user tree for this state delta.
+    pub fn cached_user_tree() -> &'static str {
+        "compliance/cache/user_tree"
+    }
+
+    /// Cached deserialized asset IMT for this state delta.
+    pub fn cached_asset_imt() -> &'static str {
+        "compliance/cache/asset_imt"
+    }
+
+    /// Dirty flag indicating whether either compliance tree was modified in this block.
+    pub fn trees_modified() -> &'static str {
+        "compliance/cache/trees_modified"
+    }
 }
 
 /// State key for asset-specific compliance policy (dk_pub, threshold).

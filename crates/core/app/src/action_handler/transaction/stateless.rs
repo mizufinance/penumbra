@@ -3,7 +3,7 @@ use penumbra_sdk_transaction::{Action, Transaction};
 use penumbra_sdk_txhash::AuthorizingData;
 
 #[tracing::instrument(skip(tx))]
-pub(super) fn valid_binding_signature(tx: &Transaction) -> Result<()> {
+pub(crate) fn valid_binding_signature(tx: &Transaction) -> Result<()> {
     let auth_hash = tx.auth_hash();
 
     tracing::debug!(bvk = ?tx.binding_verification_key(), ?auth_hash);

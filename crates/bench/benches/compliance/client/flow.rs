@@ -1,19 +1,13 @@
 //! Client flow benchmark: end-to-end transaction building.
 //!
-//! Measures total wall-clock time for a client to build a transaction,
-//! including compliance enrichment, authorization, and proof generation
-//! (serial vs parallel).
-//!
-//! v0 (vanilla): just proof generation (no enrichment, simpler circuits).
-//! v0.1 (compliance): enrichment + auth + proof generation.
-//!
-//! Outputs: `benches/compliance/client/results/flow.csv`
+//! Emits:
+//! - top-level overview: `benches/compliance/flows.csv`
+//! - category KPIs: `benches/compliance/client/client.csv`
+//! - section overview: `benches/compliance/client/sections.csv`
+//! - section KPIs: `benches/compliance/client/sections/<section>.csv`
 
-use std::path::PathBuf;
 use std::time::Instant;
 
-use ark_groth16::{r1cs_to_qap::LibsnarkReduction, Groth16};
-use decaf377::{Bls12_377, Fq};
 use penumbra_sdk_bench::bench_runner;
 use penumbra_sdk_keys::test_keys;
 use rand_core::OsRng;
@@ -22,61 +16,105 @@ use rand_core::OsRng;
 mod flow_helpers;
 use flow_helpers::*;
 
-#[allow(unused_imports)]
-#[path = "../helpers/vanilla_circuits.rs"]
-mod vanilla_circuits;
-use vanilla_circuits::*;
+fn timed_total(warmup: usize, samples: usize, mut f: impl FnMut()) -> Vec<f64> {
+    for _ in 0..warmup {
+        f();
+    }
+    let mut out = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        let start = Instant::now();
+        f();
+        out.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    out
+}
 
-const WARMUP: usize = 1;
-const SAMPLES: usize = 3;
+fn pick_kpi(
+    raw: &[bench_runner::BenchResult],
+    version: &str,
+    scenario: &str,
+    stage: &str,
+    mode: &str,
+) -> bench_runner::BenchResult {
+    raw.iter()
+        .find(|r| {
+            r.version == version
+                && r.dimensions
+                    .iter()
+                    .any(|(k, v)| k == "scenario" && v == scenario)
+                && r.dimensions.iter().any(|(k, v)| k == "stage" && v == stage)
+                && r.dimensions.iter().any(|(k, v)| k == "mode" && v == mode)
+        })
+        .cloned()
+        .unwrap_or_else(|| {
+            panic!(
+                "missing KPI row for version={version}, scenario={scenario}, stage={stage}, mode={mode}"
+            )
+        })
+}
 
-fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("can create tokio runtime");
-    let mut results = Vec::new();
+fn flow_rows_for_version(
+    raw: &[bench_runner::BenchResult],
+    version: &str,
+    regression: bool,
+) -> Vec<bench_runner::BenchResult> {
+    let mut rows = Vec::new();
+    let kpis = if regression {
+        vec![("1S1O", "total", "concurrent"), ("1S1O", "prove", "serial")]
+    } else {
+        vec![
+            ("1S1O", "total", "serial"),
+            ("1S1O", "total", "concurrent"),
+            ("1S1O", "prove", "serial"),
+            ("4S1O", "total", "serial"),
+        ]
+    };
+    for (scenario, stage, mode) in kpis {
+        rows.push(pick_kpi(raw, version, scenario, stage, mode));
+    }
+    rows
+}
 
+fn section_rows_for_version(
+    raw: &[bench_runner::BenchResult],
+    version: &str,
+    regression: bool,
+) -> Vec<bench_runner::BenchResult> {
+    let mut rows = Vec::new();
+    let kpis = if regression {
+        vec![
+            ("1S1O", "enrich", ""),
+            ("1S1O", "authorize", ""),
+            ("1S1O", "tx_build", "concurrent"),
+        ]
+    } else {
+        vec![
+            ("1S1O", "enrich", ""),
+            ("1S1O", "authorize", ""),
+            ("1S1O", "tx_build", "serial"),
+            ("1S1O", "tx_build", "concurrent"),
+        ]
+    };
+    for (scenario, stage, mode) in kpis {
+        rows.push(pick_kpi(raw, version, scenario, stage, mode));
+    }
+    rows
+}
+
+fn push_version_rows(
+    out: &mut Vec<bench_runner::BenchResult>,
+    version: &str,
+    warmup: usize,
+    samples: usize,
+    include_concurrent: bool,
+    include_multi: bool,
+    rt: &tokio::runtime::Runtime,
+) {
     let fvk = &test_keys::FULL_VIEWING_KEY;
     let sk = &test_keys::SPEND_KEY;
 
-    // --- Generate vanilla proving keys (one-time cost) ---
-    eprintln!("Generating vanilla proving keys...");
-    let _ = &*VANILLA_SPEND_KEYS;
-    let _ = &*VANILLA_OUTPUT_KEYS;
-
-    // ===== Simple Transfer (1S + 1O) =====
-    eprintln!("\n=== Simple Transfer (1S + 1O) ===");
-
-    // --- v0: vanilla build (1 spend proof + 1 output proof, serial) ---
-    eprintln!("Benchmarking v0 simple_build_serial...");
-    let (vanilla_spend, _) = make_vanilla_spend_circuit();
-    let (vanilla_output, _) = make_vanilla_output_circuit();
-    let vanilla_spend_pk = &VANILLA_SPEND_KEYS.0;
-    let vanilla_output_pk = &VANILLA_OUTPUT_KEYS.0;
-    let times = bench_runner::run_bench(WARMUP, SAMPLES, || {
-        let _spend_proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
-            vanilla_spend.clone(),
-            vanilla_spend_pk,
-            Fq::rand(&mut OsRng),
-            Fq::rand(&mut OsRng),
-        )
-        .expect("vanilla spend proof");
-        let _output_proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
-            vanilla_output.clone(),
-            vanilla_output_pk,
-            Fq::rand(&mut OsRng),
-            Fq::rand(&mut OsRng),
-        )
-        .expect("vanilla output proof");
-    });
-    results.push(bench_runner::make_result(
-        "v0",
-        &[("scenario", "1S1O"), ("stage", "build"), ("mode", "serial")],
-        &times,
-        None,
-    ));
-
-    // --- v0.1: compliance enrichment only ---
-    eprintln!("Benchmarking v0.1 simple_enrich...");
-    let times = bench_runner::run_bench(WARMUP, SAMPLES, || {
+    // 1S1O enrich
+    let enrich_times = bench_runner::run_bench(warmup, samples, || {
         let (mut spend, mut output, _sct) = build_simple_transfer_unenriched();
         enrich_spend_for_test(&mut OsRng, &mut spend, &test_keys::ADDRESS_0);
         enrich_output_for_test(
@@ -86,327 +124,194 @@ fn main() {
             spend.note.asset_id(),
         );
     });
-    results.push(bench_runner::make_result(
-        "v0.1",
+    out.push(bench_runner::make_result(
+        version,
         &[("scenario", "1S1O"), ("stage", "enrich"), ("mode", "")],
-        &times,
+        &enrich_times,
         None,
     ));
 
-    // --- v0.1: compliance build serial ---
-    eprintln!("Benchmarking v0.1 simple_build_serial...");
+    // 1S1O authorize
+    let prepared_auth = build_simple_transfer();
+    let authorize_times = bench_runner::run_bench(warmup, samples, || {
+        let _ = prepared_auth
+            .plan
+            .clone()
+            .authorize(OsRng, sk)
+            .expect("authorize");
+    });
+    out.push(bench_runner::make_result(
+        version,
+        &[("scenario", "1S1O"), ("stage", "authorize"), ("mode", "")],
+        &authorize_times,
+        None,
+    ));
+
+    // 1S1O build serial / prove serial
     let prepared = build_simple_transfer();
-    let auth_data = prepared.plan.authorize(OsRng, sk).expect("can authorize");
-    let times = bench_runner::run_bench(WARMUP, SAMPLES, || {
-        let _tx = prepared
+    let auth_data = prepared.plan.authorize(OsRng, sk).expect("authorize");
+    let build_serial = bench_runner::run_bench(warmup, samples, || {
+        let _ = prepared
             .plan
             .clone()
             .build(fvk, &prepared.witness_data, &auth_data)
-            .expect("can build serial");
+            .expect("build serial");
     });
-    results.push(bench_runner::make_result(
-        "v0.1",
-        &[("scenario", "1S1O"), ("stage", "build"), ("mode", "serial")],
-        &times,
-        None,
-    ));
-
-    // --- v0.1: compliance build concurrent ---
-    eprintln!("Benchmarking v0.1 simple_build_concurrent...");
-    let prepared = build_simple_transfer();
-    let auth_data = prepared.plan.authorize(OsRng, sk).expect("can authorize");
-    let times = bench_runner::run_bench(WARMUP, SAMPLES, || {
-        rt.block_on(async {
-            let _tx = prepared
-                .plan
-                .clone()
-                .build_concurrent(fvk, &prepared.witness_data, &auth_data)
-                .await
-                .expect("can build concurrent");
-        });
-    });
-    results.push(bench_runner::make_result(
-        "v0.1",
+    out.push(bench_runner::make_result(
+        version,
         &[
             ("scenario", "1S1O"),
-            ("stage", "build"),
-            ("mode", "concurrent"),
+            ("stage", "tx_build"),
+            ("mode", "serial"),
         ],
-        &times,
+        &build_serial,
+        None,
+    ));
+    out.push(bench_runner::make_result(
+        version,
+        &[("scenario", "1S1O"), ("stage", "prove"), ("mode", "serial")],
+        &build_serial,
         None,
     ));
 
-    // --- v0: vanilla total (just proof gen) ---
-    eprintln!("Benchmarking v0 simple_total...");
-    let (vanilla_spend, _) = make_vanilla_spend_circuit();
-    let (vanilla_output, _) = make_vanilla_output_circuit();
-    let times = bench_runner::run_bench(WARMUP, SAMPLES, || {
-        let _spend_proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
-            vanilla_spend.clone(),
-            vanilla_spend_pk,
-            Fq::rand(&mut OsRng),
-            Fq::rand(&mut OsRng),
-        )
-        .expect("vanilla spend proof");
-        let _output_proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
-            vanilla_output.clone(),
-            vanilla_output_pk,
-            Fq::rand(&mut OsRng),
-            Fq::rand(&mut OsRng),
-        )
-        .expect("vanilla output proof");
-    });
-    results.push(bench_runner::make_result(
-        "v0",
-        &[("scenario", "1S1O"), ("stage", "total"), ("mode", "serial")],
-        &times,
-        None,
-    ));
-
-    // --- v0.1: compliance total serial ---
-    eprintln!("Benchmarking v0.1 simple_total_serial...");
-    let mut total_times = Vec::with_capacity(SAMPLES);
-    for _ in 0..WARMUP {
-        let p = build_simple_transfer();
-        let ad = p.plan.authorize(OsRng, sk).unwrap();
-        let _tx = p.plan.build(fvk, &p.witness_data, &ad).unwrap();
-    }
-    for _ in 0..SAMPLES {
-        let start = Instant::now();
-        let p = build_simple_transfer();
-        let ad = p.plan.authorize(OsRng, sk).unwrap();
-        let _tx = p.plan.build(fvk, &p.witness_data, &ad).unwrap();
-        total_times.push(start.elapsed().as_secs_f64() * 1000.0);
-    }
-    results.push(bench_runner::make_result(
-        "v0.1",
-        &[("scenario", "1S1O"), ("stage", "total"), ("mode", "serial")],
-        &total_times,
-        None,
-    ));
-
-    // --- v0.1: compliance total concurrent ---
-    eprintln!("Benchmarking v0.1 simple_total_concurrent...");
-    let mut total_times = Vec::with_capacity(SAMPLES);
-    for _ in 0..WARMUP {
-        let p = build_simple_transfer();
-        let ad = p.plan.authorize(OsRng, sk).unwrap();
-        rt.block_on(async {
-            let _tx = p
-                .plan
-                .build_concurrent(fvk, &p.witness_data, &ad)
-                .await
-                .unwrap();
+    if include_concurrent {
+        // 1S1O build concurrent
+        let prepared = build_simple_transfer();
+        let auth_data = prepared.plan.authorize(OsRng, sk).expect("authorize");
+        let times = bench_runner::run_bench(warmup, samples, || {
+            rt.block_on(async {
+                let _ = prepared
+                    .plan
+                    .clone()
+                    .build_concurrent(fvk, &prepared.witness_data, &auth_data)
+                    .await
+                    .expect("build concurrent");
+            });
         });
+        out.push(bench_runner::make_result(
+            version,
+            &[
+                ("scenario", "1S1O"),
+                ("stage", "tx_build"),
+                ("mode", "concurrent"),
+            ],
+            &times,
+            None,
+        ));
     }
-    for _ in 0..SAMPLES {
-        let start = Instant::now();
+
+    // 1S1O total serial / concurrent
+    let total_serial = timed_total(warmup, samples, || {
         let p = build_simple_transfer();
-        let ad = p.plan.authorize(OsRng, sk).unwrap();
-        rt.block_on(async {
-            let _tx = p
-                .plan
-                .build_concurrent(fvk, &p.witness_data, &ad)
-                .await
-                .unwrap();
-        });
-        total_times.push(start.elapsed().as_secs_f64() * 1000.0);
-    }
-    results.push(bench_runner::make_result(
-        "v0.1",
-        &[
-            ("scenario", "1S1O"),
-            ("stage", "total"),
-            ("mode", "concurrent"),
-        ],
-        &total_times,
-        None,
-    ));
-
-    // ===== Multi-Spend (4S + 1O) =====
-    eprintln!("\n=== Multi-Spend (4S + 1O) ===");
-
-    // --- v0: vanilla build (4 spend proofs + 1 output proof, serial) ---
-    eprintln!("Benchmarking v0 multi4_build_serial...");
-    let times = bench_runner::run_bench(WARMUP, SAMPLES, || {
-        for _ in 0..4 {
-            let (circuit, _) = make_vanilla_spend_circuit();
-            let _proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
-                circuit,
-                vanilla_spend_pk,
-                Fq::rand(&mut OsRng),
-                Fq::rand(&mut OsRng),
-            )
-            .expect("vanilla spend proof");
-        }
-        let (circuit, _) = make_vanilla_output_circuit();
-        let _proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
-            circuit,
-            vanilla_output_pk,
-            Fq::rand(&mut OsRng),
-            Fq::rand(&mut OsRng),
-        )
-        .expect("vanilla output proof");
-    });
-    results.push(bench_runner::make_result(
-        "v0",
-        &[("scenario", "4S1O"), ("stage", "build"), ("mode", "serial")],
-        &times,
-        None,
-    ));
-
-    // --- v0.1: compliance enrichment only ---
-    eprintln!("Benchmarking v0.1 multi4_enrich...");
-    let times = bench_runner::run_bench(WARMUP, SAMPLES, || {
-        let (mut spends, mut output, _sct) = build_multi_spend_4x1_unenriched();
-        for spend in &mut spends {
-            enrich_spend_for_test(&mut OsRng, spend, &test_keys::ADDRESS_0);
-        }
-        let asset_id = output.value.asset_id;
-        enrich_output_for_test(&mut OsRng, &mut output, &test_keys::ADDRESS_0, asset_id);
-    });
-    results.push(bench_runner::make_result(
-        "v0.1",
-        &[("scenario", "4S1O"), ("stage", "enrich"), ("mode", "")],
-        &times,
-        None,
-    ));
-
-    // --- v0.1: compliance build serial ---
-    eprintln!("Benchmarking v0.1 multi4_build_serial...");
-    let prepared = build_multi_spend_4x1();
-    let auth_data = prepared.plan.authorize(OsRng, sk).expect("can authorize");
-    let times = bench_runner::run_bench(WARMUP, SAMPLES, || {
-        let _tx = prepared
+        let ad = p.plan.authorize(OsRng, sk).expect("authorize");
+        let _ = p
             .plan
-            .clone()
-            .build(fvk, &prepared.witness_data, &auth_data)
-            .expect("can build serial");
+            .build(fvk, &p.witness_data, &ad)
+            .expect("build serial");
     });
-    results.push(bench_runner::make_result(
-        "v0.1",
-        &[("scenario", "4S1O"), ("stage", "build"), ("mode", "serial")],
-        &times,
+    out.push(bench_runner::make_result(
+        version,
+        &[("scenario", "1S1O"), ("stage", "total"), ("mode", "serial")],
+        &total_serial,
         None,
     ));
 
-    // --- v0.1: compliance build concurrent ---
-    eprintln!("Benchmarking v0.1 multi4_build_concurrent...");
-    let prepared = build_multi_spend_4x1();
-    let auth_data = prepared.plan.authorize(OsRng, sk).expect("can authorize");
-    let times = bench_runner::run_bench(WARMUP, SAMPLES, || {
-        rt.block_on(async {
-            let _tx = prepared
-                .plan
-                .clone()
-                .build_concurrent(fvk, &prepared.witness_data, &auth_data)
-                .await
-                .expect("can build concurrent");
+    if include_concurrent {
+        let total_concurrent = timed_total(warmup, samples, || {
+            let p = build_simple_transfer();
+            let ad = p.plan.authorize(OsRng, sk).expect("authorize");
+            rt.block_on(async {
+                let _ = p
+                    .plan
+                    .build_concurrent(fvk, &p.witness_data, &ad)
+                    .await
+                    .expect("build concurrent");
+            });
         });
-    });
-    results.push(bench_runner::make_result(
-        "v0.1",
-        &[
-            ("scenario", "4S1O"),
-            ("stage", "build"),
-            ("mode", "concurrent"),
-        ],
-        &times,
-        None,
-    ));
+        out.push(bench_runner::make_result(
+            version,
+            &[
+                ("scenario", "1S1O"),
+                ("stage", "total"),
+                ("mode", "concurrent"),
+            ],
+            &total_concurrent,
+            None,
+        ));
+    }
 
-    // --- v0: vanilla total (same as build, no enrichment) ---
-    eprintln!("Benchmarking v0 multi4_total...");
-    let times = bench_runner::run_bench(WARMUP, SAMPLES, || {
-        for _ in 0..4 {
-            let (circuit, _) = make_vanilla_spend_circuit();
-            let _proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
-                circuit,
-                vanilla_spend_pk,
-                Fq::rand(&mut OsRng),
-                Fq::rand(&mut OsRng),
-            )
-            .expect("vanilla spend proof");
+    if include_multi {
+        let total_multi = timed_total(warmup, samples, || {
+            let p = build_multi_spend_4x1();
+            let ad = p.plan.authorize(OsRng, sk).expect("authorize");
+            let _ = p
+                .plan
+                .build(fvk, &p.witness_data, &ad)
+                .expect("build serial");
+        });
+        out.push(bench_runner::make_result(
+            version,
+            &[("scenario", "4S1O"), ("stage", "total"), ("mode", "serial")],
+            &total_multi,
+            None,
+        ));
+    }
+}
+
+fn main() {
+    let rt = tokio::runtime::Runtime::new().expect("can create tokio runtime");
+    let version = bench_runner::bench_version();
+    let warmup = bench_runner::warmup_count();
+    let samples = bench_runner::sample_count();
+    let regression = bench_runner::is_regression_suite();
+    let quick = bench_runner::is_quick_profile();
+    let include_multi = !quick && !regression;
+    let include_concurrent = true;
+
+    let mut raw_results = Vec::new();
+    push_version_rows(
+        &mut raw_results,
+        &version,
+        warmup,
+        samples,
+        include_concurrent,
+        include_multi,
+        &rt,
+    );
+
+    let flow_rows = flow_rows_for_version(&raw_results, &version, regression);
+    let section_rows = section_rows_for_version(&raw_results, &version, regression);
+    let mut flow_with_meta = flow_rows.clone();
+    bench_runner::annotate_raw_results(&mut flow_with_meta);
+    let mut sections_with_meta = section_rows.clone();
+    bench_runner::annotate_raw_results(&mut sections_with_meta);
+    bench_runner::output_results(&flow_with_meta);
+
+    let flow_path = bench_runner::category_csv_path("client");
+    bench_runner::append_csv(&flow_path, &flow_with_meta);
+
+    let sections_overview_path = bench_runner::category_sections_csv_path("client");
+    bench_runner::append_csv(&sections_overview_path, &sections_with_meta);
+
+    let flows_overview = bench_runner::to_flow_overview_rows("client", &flow_with_meta);
+    let flows_overview_path = bench_runner::flows_overview_csv_path();
+    bench_runner::append_csv_scoped(&flows_overview_path, &flows_overview, &["category", "kpi"]);
+
+    for section in ["enrich", "authorize", "tx_build"] {
+        let mut rows: Vec<_> = sections_with_meta
+            .iter()
+            .filter(|r| {
+                r.dimensions
+                    .iter()
+                    .any(|(k, v)| k == "stage" && v == section)
+            })
+            .cloned()
+            .collect();
+        for r in &mut rows {
+            r.dimensions
+                .retain(|(k, v)| k != "stage" && !(k == "mode" && v.is_empty()));
         }
-        let (circuit, _) = make_vanilla_output_circuit();
-        let _proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
-            circuit,
-            vanilla_output_pk,
-            Fq::rand(&mut OsRng),
-            Fq::rand(&mut OsRng),
-        )
-        .expect("vanilla output proof");
-    });
-    results.push(bench_runner::make_result(
-        "v0",
-        &[("scenario", "4S1O"), ("stage", "total"), ("mode", "serial")],
-        &times,
-        None,
-    ));
-
-    // --- v0.1: compliance total serial ---
-    eprintln!("Benchmarking v0.1 multi4_total_serial...");
-    let mut total_times = Vec::with_capacity(SAMPLES);
-    for _ in 0..WARMUP {
-        let p = build_multi_spend_4x1();
-        let ad = p.plan.authorize(OsRng, sk).unwrap();
-        let _tx = p.plan.build(fvk, &p.witness_data, &ad).unwrap();
+        let section_path = bench_runner::section_csv_path("client", section);
+        bench_runner::append_csv(&section_path, &rows);
     }
-    for _ in 0..SAMPLES {
-        let start = Instant::now();
-        let p = build_multi_spend_4x1();
-        let ad = p.plan.authorize(OsRng, sk).unwrap();
-        let _tx = p.plan.build(fvk, &p.witness_data, &ad).unwrap();
-        total_times.push(start.elapsed().as_secs_f64() * 1000.0);
-    }
-    results.push(bench_runner::make_result(
-        "v0.1",
-        &[("scenario", "4S1O"), ("stage", "total"), ("mode", "serial")],
-        &total_times,
-        None,
-    ));
-
-    // --- v0.1: compliance total concurrent ---
-    eprintln!("Benchmarking v0.1 multi4_total_concurrent...");
-    let mut total_times = Vec::with_capacity(SAMPLES);
-    for _ in 0..WARMUP {
-        let p = build_multi_spend_4x1();
-        let ad = p.plan.authorize(OsRng, sk).unwrap();
-        rt.block_on(async {
-            let _tx = p
-                .plan
-                .build_concurrent(fvk, &p.witness_data, &ad)
-                .await
-                .unwrap();
-        });
-    }
-    for _ in 0..SAMPLES {
-        let start = Instant::now();
-        let p = build_multi_spend_4x1();
-        let ad = p.plan.authorize(OsRng, sk).unwrap();
-        rt.block_on(async {
-            let _tx = p
-                .plan
-                .build_concurrent(fvk, &p.witness_data, &ad)
-                .await
-                .unwrap();
-        });
-        total_times.push(start.elapsed().as_secs_f64() * 1000.0);
-    }
-    results.push(bench_runner::make_result(
-        "v0.1",
-        &[
-            ("scenario", "4S1O"),
-            ("stage", "total"),
-            ("mode", "concurrent"),
-        ],
-        &total_times,
-        None,
-    ));
-
-    // --- Output ---
-    bench_runner::print_table(&results);
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("benches/compliance/client/results/flow.csv");
-    bench_runner::write_csv(&csv_path, &results);
 }

@@ -34,6 +34,7 @@ download-proving-keys = [
     "bundled-proving-keys",
 ]
 parallel = [
+    "dep:rayon",
     "ark-ff/parallel",
     "decaf377/parallel",
     "ark-groth16/parallel",
@@ -57,9 +58,13 @@ num-bigint = {workspace = true}
 once_cell = {workspace = true}
 rand = {workspace = true}
 rand_core = {workspace = true, features = ["getrandom"]}
+rayon = { version = "1.10", optional = true }
 serde = {workspace = true, features = ["derive"]}
 sha2 = {workspace = true}
 tracing = {workspace = true}
+
+[dev-dependencies]
+rand_chacha = {workspace = true}
 
 [package.metadata.docs.rs]
 features = [] # docs.rs

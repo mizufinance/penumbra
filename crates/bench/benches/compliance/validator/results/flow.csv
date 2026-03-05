@@ -1,9 +1,0 @@
-version,batch_size,mode,mean_ms,median_ms,std_dev_ms,samples,constraints
-v0,100,serial,382.19,381.65,3.33,3,
-v0.1,100,serial,860.30,861.00,2.28,3,
-v0,100,parallel,203.94,204.58,1.50,3,
-v0.1,100,parallel,501.18,500.74,1.73,3,
-v0,per_tx,serial,3.83,3.83,0.01,3,
-v0.1,per_tx,serial,8.53,8.52,0.06,3,
-v0,per_tx,parallel,2.03,2.04,0.00,3,
-v0.1,per_tx,parallel,5.06,5.05,0.01,3,
