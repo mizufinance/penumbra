@@ -84,7 +84,7 @@ pub fn verify_compliance_registry(
 ) -> Result<(), SynthesisError> {
     let is_dummy_anchor =
         claimed_anchor.is_eq(&FqVar::new_constant(cs.clone(), Fq::from(0u64))?)?;
-    let should_enforce = is_regulated.and(&is_dummy_anchor.not())?;
+    let should_enforce = Boolean::kary_and(&[is_regulated, !is_dummy_anchor.clone()])?;
 
     let leaf_domain_sep = FqVar::new_constant(
         cs.clone(),

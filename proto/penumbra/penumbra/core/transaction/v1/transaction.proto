@@ -72,6 +72,29 @@ message DetectionData {
   repeated crypto.decaf377_fmd.v1.Clue fmd_clues = 4;
 }
 
+enum ProofFamilyId {
+  PROOF_FAMILY_ID_UNSPECIFIED = 0;
+  PROOF_FAMILY_ID_SPEND = 1;
+  PROOF_FAMILY_ID_OUTPUT = 2;
+  PROOF_FAMILY_ID_SWAP = 3;
+  PROOF_FAMILY_ID_SWAP_CLAIM = 4;
+  PROOF_FAMILY_ID_CONVERT = 5;
+  PROOF_FAMILY_ID_DELEGATOR_VOTE = 6;
+}
+
+message FamilyAggregate {
+  ProofFamilyId family_id = 1;
+  uint32 real_count = 2;
+  uint32 padded_count = 3;
+  bytes aggregate_proof = 4;
+}
+
+message AggregateBundle {
+  uint32 version = 1;
+  bytes srs_id = 2;
+  repeated FamilyAggregate families = 3;
+}
+
 // A state change performed by a transaction.
 message Action {
   oneof action {
@@ -120,6 +143,7 @@ message Action {
     // Compliance
     component.compliance.v1.MsgRegisterAsset compliance_register_asset = 80;
     component.compliance.v1.MsgRegisterUser compliance_register_user = 81;
+    AggregateBundle aggregate_bundle = 82;
 
     component.ibc.v1.Ics20Withdrawal ics20_withdrawal = 200;
   }
@@ -260,6 +284,7 @@ message ActionView {
     // Compliance
     component.compliance.v1.MsgRegisterAsset compliance_register_asset = 80;
     component.compliance.v1.MsgRegisterUser compliance_register_user = 81;
+    AggregateBundle aggregate_bundle = 82;
 
     component.ibc.v1.Ics20Withdrawal ics20_withdrawal = 200;
   }

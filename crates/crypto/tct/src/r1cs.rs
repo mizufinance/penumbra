@@ -44,11 +44,11 @@ impl AllocVar<Position, Fq> for PositionVar {
         let inner: Position = *f()?.borrow();
 
         let position = UInt64::new_variable(cs, || Ok(u64::from(inner)), mode)?;
-        let bits = position.to_bits_le();
+        let bits = position.to_bits_le()?;
         for bit in &bits[48..] {
             bit.enforce_equal(&Boolean::Constant(false))?;
         }
-        let inner = Boolean::<Fq>::le_bits_to_fp_var(&bits[0..48])?;
+        let inner = Boolean::<Fq>::le_bits_to_fp(&bits[0..48])?;
 
         Ok(Self {
             bits: bits[0..48]
@@ -69,17 +69,17 @@ impl ToBitsGadget<Fq> for PositionVar {
 impl PositionVar {
     /// Witness the commitment index by taking the last 16 bits of the position.
     pub fn commitment(&self) -> Result<FqVar, SynthesisError> {
-        Boolean::<Fq>::le_bits_to_fp_var(&self.bits[0..16])
+        Boolean::<Fq>::le_bits_to_fp(&self.bits[0..16])
     }
 
     /// Witness the block.
     pub fn block(&self) -> Result<FqVar, SynthesisError> {
-        Boolean::<Fq>::le_bits_to_fp_var(&self.bits[16..32])
+        Boolean::<Fq>::le_bits_to_fp(&self.bits[16..32])
     }
 
     /// Witness the epoch by taking the first 16 bits of the position.
     pub fn epoch(&self) -> Result<FqVar, SynthesisError> {
-        Boolean::<Fq>::le_bits_to_fp_var(&self.bits[32..48])
+        Boolean::<Fq>::le_bits_to_fp(&self.bits[32..48])
     }
 }
 
@@ -241,7 +241,7 @@ impl WhichWayVar {
         // * `is_left`: the left should be the node
         // * `is_right`: the left should be the second sibling (`siblings[1]`)
         // * `is_rightmost`: the left should be the second sibling (`siblings[1]`)
-        let is_left_or_leftmost_case = is_leftmost.or(&is_left)?;
+        let is_left_or_leftmost_case = Boolean::kary_or(&[is_leftmost.clone(), is_left.clone()])?;
         let left_first_two_cases = FqVar::conditionally_select(&is_left, &node, &siblings[0])?;
         let left = FqVar::conditionally_select(
             &is_left_or_leftmost_case,
@@ -254,7 +254,8 @@ impl WhichWayVar {
         // * `is_left`: the right should be the second sibling (`siblings[1]`)
         // * `is_right`: the right should be the node
         // * `is_rightmost`: the right should be the last sibling (`siblings[2]`)
-        let is_right_or_rightmost_case = is_right.or(&is_rightmost)?;
+        let is_right_or_rightmost_case =
+            Boolean::kary_or(&[is_right.clone(), is_rightmost.clone()])?;
         let right_last_two_cases = FqVar::conditionally_select(&is_right, &node, &siblings[2])?;
         let right = FqVar::conditionally_select(
             &is_right_or_rightmost_case,

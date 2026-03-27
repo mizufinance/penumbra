@@ -11,7 +11,7 @@ use penumbra_sdk_proto::{
 use penumbra_sdk_transaction::Transaction;
 use tap::TapFallible;
 use tendermint::{abci::Code, block::Height};
-use tendermint_rpc::{Client, HttpClient};
+use tendermint_rpc::Client;
 use tonic::Status;
 use tracing::instrument;
 
@@ -31,10 +31,7 @@ impl TendermintProxyService for TendermintProxy {
         &self,
         req: tonic::Request<GetTxRequest>,
     ) -> Result<tonic::Response<GetTxResponse>, Status> {
-        // Create an HTTP client, connecting to tendermint.
-        let client = HttpClient::new(self.tendermint_url.as_ref()).map_err(|e| {
-            Status::unavailable(format!("error creating tendermint http client: {e:#?}"))
-        })?;
+        let client = self.client.clone();
 
         // Parse the inbound transaction hash from the client request.
         let GetTxRequest { hash, prove } = req.into_inner();
@@ -67,10 +64,7 @@ impl TendermintProxyService for TendermintProxy {
         &self,
         req: tonic::Request<BroadcastTxAsyncRequest>,
     ) -> Result<tonic::Response<BroadcastTxAsyncResponse>, Status> {
-        // Create an HTTP client, connecting to tendermint.
-        let client = HttpClient::new(self.tendermint_url.as_ref()).map_err(|e| {
-            Status::unavailable(format!("error creating tendermint http client: {e:#?}"))
-        })?;
+        let client = self.client.clone();
 
         // Process the inbound request, recording the request ID in the tracing span.
         let BroadcastTxAsyncRequest { req_id, params } = req.into_inner();
@@ -95,10 +89,7 @@ impl TendermintProxyService for TendermintProxy {
         &self,
         req: tonic::Request<BroadcastTxSyncRequest>,
     ) -> Result<tonic::Response<BroadcastTxSyncResponse>, Status> {
-        // Create an HTTP client, connecting to tendermint.
-        let client = HttpClient::new(self.tendermint_url.as_ref()).map_err(|e| {
-            Status::unavailable(format!("error creating tendermint http client: {e:#?}"))
-        })?;
+        let client = self.client.clone();
 
         // Process the inbound request, recording the request ID in the tracing span.
         let BroadcastTxSyncRequest { req_id, params } = req.into_inner();
@@ -120,11 +111,7 @@ impl TendermintProxyService for TendermintProxy {
         &self,
         _req: tonic::Request<GetStatusRequest>,
     ) -> Result<tonic::Response<GetStatusResponse>, Status> {
-        // generic bounds on HttpClient::new are not well-constructed, so we have to
-        // render the URL as a String, then borrow it, then re-parse the borrowed &str
-        let client = HttpClient::new(self.tendermint_url.as_ref()).map_err(|e| {
-            tonic::Status::unavailable(format!("error creating tendermint http client: {e:#?}"))
-        })?;
+        let client = self.client.clone();
 
         // Send the status request.
         client
@@ -140,11 +127,7 @@ impl TendermintProxyService for TendermintProxy {
         &self,
         req: tonic::Request<AbciQueryRequest>,
     ) -> Result<tonic::Response<AbciQueryResponse>, Status> {
-        // generic bounds on HttpClient::new are not well-constructed, so we have to
-        // render the URL as a String, then borrow it, then re-parse the borrowed &str
-        let client = HttpClient::new(self.tendermint_url.to_string().as_ref()).map_err(|e| {
-            tonic::Status::unavailable(format!("error creating tendermint http client: {e:#?}"))
-        })?;
+        let client = self.client.clone();
 
         // Parse the inbound request, confirm that the height provided is valid.
         // TODO: how does path validation work on tendermint-rs@29
@@ -181,11 +164,7 @@ impl TendermintProxyService for TendermintProxy {
         &self,
         req: tonic::Request<GetBlockByHeightRequest>,
     ) -> Result<tonic::Response<GetBlockByHeightResponse>, Status> {
-        // generic bounds on HttpClient::new are not well-constructed, so we have to
-        // render the URL as a String, then borrow it, then re-parse the borrowed &str
-        let client = HttpClient::new(self.tendermint_url.to_string().as_ref()).map_err(|e| {
-            tonic::Status::unavailable(format!("error creating tendermint http client: {e:#?}"))
-        })?;
+        let client = self.client.clone();
 
         // Parse the height from the inbound client request.
         let GetBlockByHeightRequest { height } = req.into_inner();

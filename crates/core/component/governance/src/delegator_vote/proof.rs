@@ -10,14 +10,17 @@ use ark_snark::SNARK;
 use base64::{engine::general_purpose, Engine as _};
 use decaf377::{r1cs::FqVar, Bls12_377, Fq, Fr};
 use decaf377_rdsa::{SpendAuth, VerificationKey};
+use once_cell::sync::Lazy;
 use penumbra_sdk_asset::{
-    balance::{self, commitment::BalanceCommitmentVar, Commitment},
+    balance::{self},
     Value,
 };
 use penumbra_sdk_keys::keys::{
     AuthorizationKeyVar, Bip44Path, IncomingViewingKeyVar, NullifierKey, NullifierKeyVar,
-    RandomizedVerificationKey, SeedPhrase, SpendAuthRandomizerVar, SpendKey,
+    SeedPhrase, SpendAuthRandomizerVar, SpendKey,
 };
+use penumbra_sdk_proof_params::batch::BatchItem;
+use penumbra_sdk_proof_params::statement_hash::{hash_statement_fields, hash_statement_fields_var};
 use penumbra_sdk_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
 use penumbra_sdk_proto::{core::component::governance::v1 as pb, DomainType};
 use penumbra_sdk_sct::{Nullifier, NullifierVar};
@@ -25,10 +28,102 @@ use penumbra_sdk_shielded_pool::{note, Note, Rseed};
 use penumbra_sdk_tct::{
     self as tct,
     r1cs::{PositionVar, StateCommitmentVar},
-    Root,
 };
 use std::str::FromStr;
 use tap::Tap;
+
+const DELEGATOR_VOTE_STATEMENT_FIELD_COUNT: usize = 5;
+
+static DELEGATOR_VOTE_STATEMENT_HASH_DOMAIN: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"penumbra.governance.delegator_vote.public_input_hash.v1")
+            .as_bytes(),
+    )
+});
+static DELEGATOR_VOTE_STATEMENT_PAD_0: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"penumbra.governance.delegator_vote.public_input_hash.pad0")
+            .as_bytes(),
+    )
+});
+static DELEGATOR_VOTE_STATEMENT_PAD_1: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"penumbra.governance.delegator_vote.public_input_hash.pad1")
+            .as_bytes(),
+    )
+});
+
+fn delegator_vote_statement_hash(
+    public: &DelegatorVoteProofPublic,
+) -> Result<Fq, VerificationError> {
+    let rk_element = decaf377::Encoding(public.rk.to_bytes())
+        .vartime_decompress()
+        .map_err(VerificationError::DecompressRk)?;
+    let start_position_fq = Fq::from(u64::from(public.start_position));
+    let mut fields = Vec::new();
+    fields.extend(
+        Fq::from(public.anchor.0)
+            .to_field_elements()
+            .ok_or(VerificationError::Anchor)?,
+    );
+    fields.extend(
+        public
+            .balance_commitment
+            .0
+            .to_field_elements()
+            .ok_or(VerificationError::BalanceCommitment)?,
+    );
+    fields.extend(
+        public
+            .nullifier
+            .0
+            .to_field_elements()
+            .ok_or(VerificationError::Nullifier)?,
+    );
+    fields.extend(
+        rk_element
+            .to_field_elements()
+            .ok_or(VerificationError::Rk)?,
+    );
+    fields.extend(
+        start_position_fq
+            .to_field_elements()
+            .ok_or(VerificationError::StartPosition)?,
+    );
+    if fields.len() != DELEGATOR_VOTE_STATEMENT_FIELD_COUNT {
+        return Err(VerificationError::StatementHash(format!(
+            "invalid field length: expected {DELEGATOR_VOTE_STATEMENT_FIELD_COUNT}, got {}",
+            fields.len()
+        )));
+    }
+
+    hash_statement_fields(
+        &DELEGATOR_VOTE_STATEMENT_HASH_DOMAIN,
+        *DELEGATOR_VOTE_STATEMENT_PAD_0,
+        *DELEGATOR_VOTE_STATEMENT_PAD_1,
+        &fields,
+        DELEGATOR_VOTE_STATEMENT_FIELD_COUNT,
+        |expected, got| {
+            VerificationError::StatementHash(format!(
+                "invalid field length: expected {expected}, got {got}"
+            ))
+        },
+    )
+}
+
+fn delegator_vote_statement_hash_var(
+    cs: ConstraintSystemRef<Fq>,
+    fields: &[FqVar],
+) -> ark_relations::r1cs::Result<FqVar> {
+    hash_statement_fields_var(
+        cs,
+        &DELEGATOR_VOTE_STATEMENT_HASH_DOMAIN,
+        *DELEGATOR_VOTE_STATEMENT_PAD_0,
+        *DELEGATOR_VOTE_STATEMENT_PAD_1,
+        fields,
+        DELEGATOR_VOTE_STATEMENT_FIELD_COUNT,
+    )
+}
 
 /// The public input for a [`DelegatorVoteProof`].
 #[derive(Clone, Debug)]
@@ -128,7 +223,13 @@ fn check_circuit_satisfaction(
     use ark_relations::r1cs::{self, ConstraintSystem};
 
     let cs = ConstraintSystem::new_ref();
-    let circuit = DelegatorVoteCircuit { public, private };
+    let claimed_statement_hash = delegator_vote_statement_hash(&public)
+        .map_err(|e| anyhow::anyhow!("failed computing delegator vote statement hash: {e}"))?;
+    let circuit = DelegatorVoteCircuit {
+        public,
+        private,
+        claimed_statement_hash,
+    };
     cs.set_optimization_goal(r1cs::OptimizationGoal::Constraints);
     circuit
         .generate_constraints(cs.clone())
@@ -145,6 +246,7 @@ fn check_circuit_satisfaction(
 pub struct DelegatorVoteCircuit {
     public: DelegatorVoteProofPublic,
     private: DelegatorVoteProofPrivate,
+    claimed_statement_hash: Fq,
 }
 
 impl ConstraintSynthesizer<Fq> for DelegatorVoteCircuit {
@@ -175,14 +277,24 @@ impl ConstraintSynthesizer<Fq> for DelegatorVoteCircuit {
             AuthorizationKeyVar::new_witness(cs.clone(), || Ok(self.private.ak))?;
         let nk_var = NullifierKeyVar::new_witness(cs.clone(), || Ok(self.private.nk))?;
 
-        // Public inputs
-        let anchor_var = FqVar::new_input(cs.clone(), || Ok(Fq::from(self.public.anchor)))?;
+        // Witnesses containing the claimed statement data.
+        let anchor_var = FqVar::new_witness(cs.clone(), || Ok(Fq::from(self.public.anchor.0)))?;
         let claimed_balance_commitment_var =
-            BalanceCommitmentVar::new_input(cs.clone(), || Ok(self.public.balance_commitment))?;
-        let claimed_nullifier_var =
-            NullifierVar::new_input(cs.clone(), || Ok(self.public.nullifier))?;
-        let rk_var = RandomizedVerificationKey::new_input(cs.clone(), || Ok(self.public.rk))?;
-        let start_position = PositionVar::new_input(cs.clone(), || Ok(self.public.start_position))?;
+            decaf377::r1cs::ElementVar::new_witness(cs.clone(), || {
+                Ok(self.public.balance_commitment.0)
+            })?;
+        let claimed_nullifier_var = FqVar::new_witness(cs.clone(), || Ok(self.public.nullifier.0))?;
+        let claimed_rk_var = decaf377::r1cs::ElementVar::new_witness(cs.clone(), || {
+            decaf377::Encoding(self.public.rk.to_bytes())
+                .vartime_decompress()
+                .map_err(|_| ark_relations::r1cs::SynthesisError::MalformedVerifyingKey)
+        })?;
+        let start_position =
+            PositionVar::new_witness(cs.clone(), || Ok(self.public.start_position))?;
+
+        // Public input
+        let claimed_statement_hash_var =
+            FqVar::new_input(cs.clone(), || Ok(self.claimed_statement_hash))?;
 
         // Note commitment integrity.
         let note_commitment_var = note_var.commit()?;
@@ -191,20 +303,20 @@ impl ConstraintSynthesizer<Fq> for DelegatorVoteCircuit {
         // Nullifier integrity.
         let nullifier_var =
             NullifierVar::derive(&nk_var, &delegator_position_var, &claimed_note_commitment)?;
-        nullifier_var.enforce_equal(&claimed_nullifier_var)?;
+        nullifier_var.inner.enforce_equal(&claimed_nullifier_var)?;
 
         // Merkle auth path verification against the provided anchor.
         merkle_path_var.verify(
             cs.clone(),
             &Boolean::TRUE,
             &delegator_position_bits,
-            anchor_var,
+            anchor_var.clone(),
             claimed_note_commitment.inner(),
         )?;
 
         // Check integrity of randomized verification key.
         let computed_rk_var = ak_element_var.randomize(&spend_auth_randomizer_var)?;
-        computed_rk_var.enforce_equal(&rk_var)?;
+        computed_rk_var.inner.enforce_equal(&claimed_rk_var)?;
 
         // Check integrity of diversified address.
         let ivk = IncomingViewingKeyVar::derive(&nk_var, &ak_element_var)?;
@@ -214,7 +326,9 @@ impl ConstraintSynthesizer<Fq> for DelegatorVoteCircuit {
 
         // Check integrity of balance commitment.
         let balance_commitment = note_var.value().commit(v_blinding_vars)?;
-        balance_commitment.enforce_equal(&claimed_balance_commitment_var)?;
+        balance_commitment
+            .inner
+            .enforce_equal(&claimed_balance_commitment_var)?;
 
         // Additionally, check that the start position has a zero commitment index, since this is
         // the only sensible start time for a vote.
@@ -236,6 +350,17 @@ impl ConstraintSynthesizer<Fq> for DelegatorVoteCircuit {
             core::cmp::Ordering::Less,
             false,
         )?;
+
+        // Statement hash integrity check.
+        let statement_fields = vec![
+            anchor_var,
+            claimed_balance_commitment_var.compress_to_field()?,
+            claimed_nullifier_var,
+            claimed_rk_var.compress_to_field()?,
+            start_position.position.clone(),
+        ];
+        let computed_statement_hash = delegator_vote_statement_hash_var(cs, &statement_fields)?;
+        computed_statement_hash.enforce_equal(&claimed_statement_hash_var)?;
 
         Ok(())
     }
@@ -288,7 +413,14 @@ impl DummyWitness for DelegatorVoteCircuit {
             nk,
         };
 
-        Self { public, private }
+        let claimed_statement_hash = delegator_vote_statement_hash(&public)
+            .expect("dummy delegator vote statement hash should compute");
+
+        Self {
+            public,
+            private,
+            claimed_statement_hash,
+        }
     }
 }
 
@@ -308,6 +440,8 @@ pub enum VerificationError {
     Rk,
     #[error("start position is a Bls12-377 field member")]
     StartPosition,
+    #[error("statement hash error: {0}")]
+    StatementHash(String),
     #[error("error verifying proof: {0:?}")]
     SynthesisError(ark_relations::r1cs::SynthesisError),
     #[error("delegator vote proof did not verify")]
@@ -325,7 +459,13 @@ impl DelegatorVoteProof {
         public: DelegatorVoteProofPublic,
         private: DelegatorVoteProofPrivate,
     ) -> anyhow::Result<Self> {
-        let circuit = DelegatorVoteCircuit { public, private };
+        let claimed_statement_hash = delegator_vote_statement_hash(&public)
+            .map_err(|e| anyhow::anyhow!("failed computing delegator vote statement hash: {e}"))?;
+        let circuit = DelegatorVoteCircuit {
+            public,
+            private,
+            claimed_statement_hash,
+        };
         let proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
             circuit, pk, blinding_r, blinding_s,
         )
@@ -333,6 +473,19 @@ impl DelegatorVoteProof {
         let mut proof_bytes = [0u8; GROTH16_PROOF_LENGTH_BYTES];
         Proof::serialize_compressed(&proof, &mut proof_bytes[..]).expect("can serialize Proof");
         Ok(Self(proof_bytes))
+    }
+
+    pub fn to_batch_item(
+        &self,
+        public: DelegatorVoteProofPublic,
+    ) -> Result<BatchItem, VerificationError> {
+        let proof = Proof::deserialize_compressed_unchecked(&self.0[..])
+            .map_err(VerificationError::ProofDeserialize)?;
+        let statement_hash = delegator_vote_statement_hash(&public)?;
+        Ok(BatchItem {
+            proof,
+            public_inputs: vec![statement_hash],
+        })
     }
 
     /// Called to verify the proof using the provided public inputs.
@@ -349,45 +502,16 @@ impl DelegatorVoteProof {
     pub fn verify(
         &self,
         vk: &PreparedVerifyingKey<Bls12_377>,
-        DelegatorVoteProofPublic {
-            anchor: Root(anchor),
-            balance_commitment: Commitment(balance_commitment),
-            nullifier: Nullifier(nullifier),
-            rk,
-            start_position,
-        }: DelegatorVoteProofPublic,
+        public: DelegatorVoteProofPublic,
     ) -> Result<(), VerificationError> {
-        let proof = Proof::deserialize_compressed_unchecked(&self.0[..])
-            .map_err(VerificationError::ProofDeserialize)?;
-        let element_rk = decaf377::Encoding(rk.to_bytes())
-            .vartime_decompress()
-            .map_err(VerificationError::DecompressRk)?;
-
-        /// Shorthand helper, convert expressions into field elements.
-        macro_rules! to_field_elements {
-            ($fe:expr, $err:expr) => {
-                $fe.to_field_elements().ok_or($err)?
-            };
-        }
-
-        use VerificationError::*;
-        let public_inputs = [
-            to_field_elements!(Fq::from(anchor), Anchor),
-            to_field_elements!(balance_commitment, BalanceCommitment),
-            to_field_elements!(nullifier, Nullifier),
-            to_field_elements!(element_rk, Rk),
-            to_field_elements!(start_position, StartPosition),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .tap(|public_inputs| tracing::trace!(?public_inputs));
+        let item = self.to_batch_item(public)?;
+        tracing::trace!(public_inputs = ?item.public_inputs);
 
         let start = std::time::Instant::now();
         Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(
             vk,
-            public_inputs.as_slice(),
-            &proof,
+            item.public_inputs.as_slice(),
+            &item.proof,
         )
         .map_err(VerificationError::SynthesisError)?
         .tap(|proof_result| tracing::debug!(?proof_result, elapsed = ?start.elapsed()))
@@ -436,8 +560,11 @@ mod tests {
     use penumbra_sdk_asset::{asset, Value};
     use penumbra_sdk_keys::keys::{SeedPhrase, SpendKey};
     use penumbra_sdk_num::Amount;
+    use penumbra_sdk_proof_params::generate_prepared_test_parameters;
     use penumbra_sdk_sct::Nullifier;
     use proptest::prelude::*;
+    use proptest::strategy::ValueTree;
+    use rand_core::OsRng;
 
     fn fr_strategy() -> BoxedStrategy<Fr> {
         any::<[u8; 32]>()
@@ -517,6 +644,29 @@ mod tests {
             assert!(check_satisfaction(&public, &private).is_ok());
             assert!(check_circuit_satisfaction(public, private).is_ok());
         }
+    }
+
+    #[test]
+    fn delegator_vote_to_batch_item_has_single_public_input() {
+        let mut runner = proptest::test_runner::TestRunner::default();
+        let (public, private) = arb_valid_delegator_vote_statement()
+            .new_tree(&mut runner)
+            .expect("can generate valid delegator vote statement")
+            .current();
+        let mut rng = OsRng;
+        let (pk, _vk) = generate_prepared_test_parameters::<DelegatorVoteCircuit>(&mut rng);
+        let proof = DelegatorVoteProof::prove(
+            Fq::rand(&mut rng),
+            Fq::rand(&mut rng),
+            &pk,
+            public.clone(),
+            private,
+        )
+        .expect("can create delegator vote proof");
+        let item = proof
+            .to_batch_item(public)
+            .expect("can extract delegator vote batch item");
+        assert_eq!(item.public_inputs.len(), 1);
     }
 
     prop_compose! {

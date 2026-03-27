@@ -441,6 +441,12 @@ impl GasCost for Action {
                 verification: 0,
                 execution: 10,
             },
+            Action::AggregateBundle(_) => Gas {
+                block_space: 0,
+                compact_block_space: 0,
+                verification: 0,
+                execution: 0,
+            },
         }
     }
 }

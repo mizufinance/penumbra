@@ -53,25 +53,26 @@ use {
                 stake::v1::query_service_server::QueryServiceServer as StakeQueryServiceServer,
             },
         },
-        util::tendermint_proxy::v1::tendermint_proxy_service_server::{
-            TendermintProxyService, TendermintProxyServiceServer,
+        util::{
+            node::v1::node_service_server::{NodeService, NodeServiceServer},
+            tendermint_proxy::v1::tendermint_proxy_service_server::{
+                TendermintProxyService, TendermintProxyServiceServer,
+            },
         },
     },
     penumbra_sdk_sct::component::rpc::Server as SctServer,
     penumbra_sdk_shielded_pool::component::rpc::Server as ShieldedPoolServer,
     penumbra_sdk_stake::component::rpc::Server as StakeServer,
-    tonic::service::Routes,
+    tonic::service::{Routes, RoutesBuilder},
     tonic_web::enable as we,
 };
 
-pub fn routes(
+fn add_common_routes(
+    builder: &mut RoutesBuilder,
     storage: &cnidarium::Storage,
-    tm_proxy: impl TendermintProxyService,
-    _enable_expensive_rpc: bool,
-) -> anyhow::Result<tonic::service::Routes> {
+) -> anyhow::Result<()> {
     let ibc = penumbra_sdk_ibc::component::rpc::IbcQuery::<PenumbraHost>::new(storage.clone());
 
-    let mut builder = Routes::builder();
     builder
         // As part of #2932, we are disabling all timeouts until we circle back to our
         // performance story.
@@ -126,7 +127,6 @@ pub fn routes(
         .add_service(we(ClientQueryServer::new(ibc.clone())))
         .add_service(we(ChannelQueryServer::new(ibc.clone())))
         .add_service(we(ConnectionQueryServer::new(ibc.clone())))
-        .add_service(we(TendermintProxyServiceServer::new(tm_proxy)))
         .add_service(we(SimulationServiceServer::new(DexServer::new(
             storage.clone(),
         ))))
@@ -137,5 +137,27 @@ pub fn routes(
             .register_encoded_file_descriptor_set(penumbra_sdk_proto::FILE_DESCRIPTOR_SET)
             .build_v1()
             .with_context(|| "could not configure grpc reflection service")?));
+    Ok(())
+}
+
+pub fn routes(
+    storage: &cnidarium::Storage,
+    tm_proxy: impl TendermintProxyService,
+    _enable_expensive_rpc: bool,
+) -> anyhow::Result<tonic::service::Routes> {
+    let mut builder = Routes::builder();
+    add_common_routes(&mut builder, storage)?;
+    builder.add_service(we(TendermintProxyServiceServer::new(tm_proxy)));
+    Ok(builder.routes().prepare())
+}
+
+pub fn gordian_routes(
+    storage: &cnidarium::Storage,
+    node_service: impl NodeService,
+    _enable_expensive_rpc: bool,
+) -> anyhow::Result<tonic::service::Routes> {
+    let mut builder = Routes::builder();
+    add_common_routes(&mut builder, storage)?;
+    builder.add_service(we(NodeServiceServer::new(node_service)));
     Ok(builder.routes().prepare())
 }

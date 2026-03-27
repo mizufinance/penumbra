@@ -11,6 +11,8 @@ use tracing::Instrument;
 
 use crate::{SpendableNoteRecord, Storage, SwapRecord};
 
+const SCT_BLOCK_CAPACITY: usize = u16::MAX as usize + 1;
+
 /// Contains the results of scanning a single block.
 #[derive(Debug, Clone)]
 pub struct FilteredBlock {
@@ -118,8 +120,16 @@ pub async fn scan_block(
         // If we found at least one note for us in this block, we have to explicitly construct the
         // whole block in the SCT by inserting each commitment one at a time
         tracing::debug!("found at least one relevant SCT entry, reconstructing block subtree");
+        let mut commitments_in_reconstructed_block = 0usize;
 
         for payload in state_payloads.into_iter() {
+            if commitments_in_reconstructed_block == SCT_BLOCK_CAPACITY {
+                state_commitment_tree
+                    .end_block()
+                    .expect("ending a reconstructed SCT block must succeed");
+                commitments_in_reconstructed_block = 0;
+            }
+
             // We need to insert each commitment, so use a match statement to ensure we
             // exhaustively cover all possible cases.
             match (
@@ -200,12 +210,15 @@ pub async fn scan_block(
                 }
                 (Some(_), Some(_)) => unreachable!("swap and note commitments are distinct"),
             }
+
+            commitments_in_reconstructed_block += 1;
         }
 
-        // End the block in the commitment tree
-        state_commitment_tree
-            .end_block()
-            .expect("ending the block must succeed");
+        if commitments_in_reconstructed_block > 0 {
+            state_commitment_tree
+                .end_block()
+                .expect("ending the block must succeed");
+        }
     }
 
     // If we've also reached the end of the epoch, end the epoch in the commitment tree

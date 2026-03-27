@@ -29,6 +29,7 @@ type G2Prepared = <Bls12_377 as Pairing>::G2Prepared;
 type TargetField = <Bls12_377 as Pairing>::TargetField;
 
 /// A single Groth16 proof bundled with its public inputs, ready for batch verification.
+#[derive(Clone)]
 pub struct BatchItem {
     pub proof: Proof<Bls12_377>,
     pub public_inputs: Vec<<Bls12_377 as Pairing>::ScalarField>,
@@ -161,7 +162,7 @@ pub fn batch_verify(
 }
 
 /// Diagnostic function: individually verify each proof and return indices of failures.
-/// Only for tests and shadow-compare mode — never called in production consensus.
+/// Only for tests and offline diagnostics — never called in production consensus.
 pub fn identify_failing_proofs(
     pvk: &PreparedVerifyingKey<Bls12_377>,
     items: &[BatchItem],

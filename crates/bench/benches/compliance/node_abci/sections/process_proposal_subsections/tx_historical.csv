@@ -1,4 +1,0 @@
-version,metric,mean_ms,median_ms,samples,profile,run_id,timestamp,git_rev,host_label
-base,check_historical_ms,0.10,0.10,10,quick,run-1772632001-77620,1772632001,unknown-rev,unknown-host
-dev,check_historical_ms,0.10,0.11,10,quick,run-1772577459-57005,1772577459,unknown-rev,unknown-host
-local,check_historical_ms,0.10,0.10,10,quick,run-1772721823-25958,1772721823,unknown-rev,unknown-host

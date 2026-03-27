@@ -30,6 +30,11 @@ pub fn asset_count() -> &'static str {
 
 /// Object-store keys for compliance in-block caches.
 pub mod cache {
+    /// Cached asset policies for this state delta.
+    pub fn cached_asset_policies() -> &'static str {
+        "compliance/cache/asset_policies"
+    }
+
     /// Cached deserialized user tree for this state delta.
     pub fn cached_user_tree() -> &'static str {
         "compliance/cache/user_tree"

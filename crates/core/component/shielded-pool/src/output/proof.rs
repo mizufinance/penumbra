@@ -160,6 +160,19 @@ pub struct OutputCircuit {
 }
 
 impl OutputCircuit {
+    #[cfg(feature = "benchmark-helpers")]
+    pub fn from_parts(
+        public: OutputProofPublic,
+        private: OutputProofPrivate,
+        claimed_statement_hash: Fq,
+    ) -> Self {
+        Self {
+            public,
+            private,
+            claimed_statement_hash,
+        }
+    }
+
     fn new(
         public: OutputProofPublic,
         private: OutputProofPrivate,

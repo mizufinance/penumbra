@@ -158,9 +158,33 @@ impl Transaction {
                 Action::SwapClaim(_) => 1,
                 Action::UndelegateClaim(_) => 1,
                 Action::DelegatorVote(_) => 1,
+                Action::ActionLiquidityTournamentVote(_) => 1,
                 _ => 0,
             })
             .sum()
+    }
+
+    pub fn is_aggregate_bundle_tx(&self) -> bool {
+        matches!(
+            self.transaction_body.actions.as_slice(),
+            [Action::AggregateBundle(_)]
+        )
+    }
+
+    pub fn aggregate_bundle_action(
+        &self,
+    ) -> Option<&penumbra_sdk_proof_aggregation::AggregateBundle> {
+        self.actions().find_map(|action| {
+            if let Action::AggregateBundle(bundle) = action {
+                Some(bundle)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn contains_aggregate_bundle_action(&self) -> bool {
+        self.aggregate_bundle_action().is_some()
     }
 
     /// Helper function for decrypting the memo on the transaction given an FVK.
@@ -278,7 +302,8 @@ impl Transaction {
                 | Action::ActionDutchAuctionWithdraw(_)
                 | Action::ActionLiquidityTournamentVote(_)
                 | Action::ComplianceRegisterAsset(_)
-                | Action::ComplianceRegisterUser(_) => {}
+                | Action::ComplianceRegisterUser(_)
+                | Action::AggregateBundle(_) => {}
             }
         }
 

@@ -5,6 +5,7 @@ use cnidarium_component::ActionHandler;
 use penumbra_sdk_asset::asset::Denom;
 use penumbra_sdk_governance::StateReadExt as _;
 use penumbra_sdk_num::Amount;
+use penumbra_sdk_proof_params::batch::{self, BatchItem};
 use penumbra_sdk_proof_params::DELEGATOR_VOTE_PROOF_VERIFICATION_KEY;
 use penumbra_sdk_proto::{DomainType, StateWriteProto};
 use penumbra_sdk_sct::component::{clock::EpochRead as _, source::SourceContext as _};
@@ -21,7 +22,7 @@ use crate::component::liquidity_tournament::{
 use crate::event;
 use crate::liquidity_tournament::{
     proof::LiquidityTournamentVoteProofPublic, ActionLiquidityTournamentVote,
-    LiquidityTournamentVoteBody, LIQUIDITY_TOURNAMENT_VOTE_DENOM_MAX_BYTES,
+    LIQUIDITY_TOURNAMENT_VOTE_DENOM_MAX_BYTES,
 };
 
 fn is_valid_denom(denom: &Denom) -> anyhow::Result<()> {
@@ -63,46 +64,49 @@ fn voting_power(amount: Amount) -> u64 {
         .expect("someone acquired {amount:?} > u64::MAX worth of delegation tokens!")
 }
 
+pub fn liquidity_tournament_vote_check_stateless_and_extract(
+    action: &ActionLiquidityTournamentVote,
+    context: &TransactionContext,
+) -> anyhow::Result<BatchItem> {
+    // 1. Is it ok to vote on this denom?
+    is_valid_denom(&action.body.incentivized)?;
+    // 2. Check spend auth signature using provided spend auth key.
+    action
+        .body
+        .rk
+        .verify(context.effect_hash.as_ref(), &action.auth_sig)
+        .with_context(|| {
+            format!(
+                "{} auth signature failed to verify",
+                std::any::type_name::<ActionLiquidityTournamentVote>()
+            )
+        })?;
+
+    // 3. Build batch item for deferred proof verification.
+    let public = LiquidityTournamentVoteProofPublic {
+        anchor: context.anchor,
+        value: action.body.value,
+        nullifier: action.body.nullifier,
+        rk: action.body.rk,
+        start_position: action.body.start_position,
+    };
+    action
+        .proof
+        .to_batch_item(public)
+        .context("a LiquidityTournamentVote proof did not verify")
+}
+
 #[async_trait]
 impl ActionHandler for ActionLiquidityTournamentVote {
     type CheckStatelessContext = TransactionContext;
 
     async fn check_stateless(&self, context: TransactionContext) -> anyhow::Result<()> {
-        let Self {
-            auth_sig,
-            proof,
-            body:
-                LiquidityTournamentVoteBody {
-                    start_position,
-                    nullifier,
-                    rk,
-                    value,
-                    incentivized,
-                    ..
-                },
-        } = self;
-        // 1. Is it ok to vote on this denom?
-        is_valid_denom(incentivized)?;
-        // 2. Check spend auth signature using provided spend auth key.
-        rk.verify(context.effect_hash.as_ref(), auth_sig)
-            .with_context(|| {
-                format!(
-                    "{} auth signature failed to verify",
-                    std::any::type_name::<Self>()
-                )
-            })?;
-
-        // 3. Verify the proof against the provided anchor and start position:
-        let public = LiquidityTournamentVoteProofPublic {
-            anchor: context.anchor,
-            value: *value,
-            nullifier: *nullifier,
-            rk: *rk,
-            start_position: *start_position,
-        };
-        proof
-            .verify(&DELEGATOR_VOTE_PROOF_VERIFICATION_KEY, public)
-            .context("a LiquidityTournamentVote proof did not verify")?;
+        let item = liquidity_tournament_vote_check_stateless_and_extract(self, &context)?;
+        batch::batch_verify(
+            &DELEGATOR_VOTE_PROOF_VERIFICATION_KEY,
+            std::slice::from_ref(&item),
+        )
+        .map_err(|e| anyhow::anyhow!("a LiquidityTournamentVote proof did not verify: {e}"))?;
 
         Ok(())
     }

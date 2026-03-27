@@ -14,6 +14,7 @@ use std::ops::Deref;
 pub const GROTH16_PROOF_LENGTH_BYTES: usize = 192;
 
 pub mod batch;
+pub mod statement_hash;
 mod traits;
 
 pub use traits::{
@@ -281,4 +282,28 @@ fn nullifier_derivation_verification_parameters() -> VerifyingKey<Bls12_377> {
     let vk_params = include_bytes!("gen/nullifier_derivation_vk.param");
     VerifyingKey::deserialize_uncompressed_unchecked(&vk_params[..])
         .expect("can deserialize VerifyingKey")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_keys_smoke_load() {
+        let _ = &*SPEND_PROOF_PROVING_KEY;
+        let _ = &*OUTPUT_PROOF_PROVING_KEY;
+        let _ = &*SWAP_PROOF_PROVING_KEY;
+        let _ = &*SWAPCLAIM_PROOF_PROVING_KEY;
+        let _ = &*CONVERT_PROOF_PROVING_KEY;
+        let _ = &*DELEGATOR_VOTE_PROOF_PROVING_KEY;
+        let _ = &*NULLIFIER_DERIVATION_PROOF_PROVING_KEY;
+
+        let _ = &*SPEND_PROOF_VERIFICATION_KEY;
+        let _ = &*OUTPUT_PROOF_VERIFICATION_KEY;
+        let _ = &*SWAP_PROOF_VERIFICATION_KEY;
+        let _ = &*SWAPCLAIM_PROOF_VERIFICATION_KEY;
+        let _ = &*CONVERT_PROOF_VERIFICATION_KEY;
+        let _ = &*DELEGATOR_VOTE_PROOF_VERIFICATION_KEY;
+        let _ = &*NULLIFIER_DERIVATION_PROOF_VERIFICATION_KEY;
+    }
 }

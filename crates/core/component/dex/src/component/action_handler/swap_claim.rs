@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use cnidarium_component::ActionHandler;
 use penumbra_sdk_compliance::RegulatedAssetCheck;
+use penumbra_sdk_proof_params::batch::{self, BatchItem};
 use penumbra_sdk_txhash::TransactionContext;
 
 use cnidarium::{StateRead, StateWrite};
@@ -22,23 +23,33 @@ use crate::{
     swap_claim::{SwapClaim, SwapClaimProofPublic},
 };
 
+pub fn swap_claim_check_stateless_and_extract(
+    action: &SwapClaim,
+    context: &TransactionContext,
+) -> Result<BatchItem> {
+    action
+        .proof
+        .to_batch_item(SwapClaimProofPublic {
+            anchor: context.anchor,
+            nullifier: action.body.nullifier,
+            claim_fee: action.body.fee.clone(),
+            output_data: action.body.output_data,
+            note_commitment_1: action.body.output_1_commitment,
+            note_commitment_2: action.body.output_2_commitment,
+        })
+        .context("a swap claim proof did not verify")
+}
+
 #[async_trait]
 impl ActionHandler for SwapClaim {
     type CheckStatelessContext = TransactionContext;
     async fn check_stateless(&self, context: TransactionContext) -> Result<()> {
-        self.proof
-            .verify(
-                &SWAPCLAIM_PROOF_VERIFICATION_KEY,
-                SwapClaimProofPublic {
-                    anchor: context.anchor,
-                    nullifier: self.body.nullifier,
-                    claim_fee: self.body.fee.clone(),
-                    output_data: self.body.output_data,
-                    note_commitment_1: self.body.output_1_commitment,
-                    note_commitment_2: self.body.output_2_commitment,
-                },
-            )
-            .context("a swap claim proof did not verify")?;
+        let item = swap_claim_check_stateless_and_extract(self, &context)?;
+        batch::batch_verify(
+            &SWAPCLAIM_PROOF_VERIFICATION_KEY,
+            std::slice::from_ref(&item),
+        )
+        .map_err(|e| anyhow::anyhow!("a swap claim proof did not verify: {e}"))?;
 
         Ok(())
     }

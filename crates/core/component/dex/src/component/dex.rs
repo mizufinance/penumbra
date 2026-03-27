@@ -317,7 +317,8 @@ impl<T: StateWrite + ?Sized> StateWriteExt for T {}
 const RECENTLY_ACCESSED_ASSET_LIMIT: usize = 10;
 
 /// Provide write access to internal dex data.
-pub(crate) trait InternalDexWrite: StateWrite {
+#[allow(async_fn_in_trait)]
+pub trait InternalDexWrite: StateWrite {
     /// Adds an asset ID to the list of recently accessed assets,
     /// making it a candidate for the current block's arbitrage routing.
     ///

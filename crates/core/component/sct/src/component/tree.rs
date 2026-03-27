@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, ensure, Result};
 use async_trait::async_trait;
 use cnidarium::{StateRead, StateWrite};
 use penumbra_sdk_proto::{DomainType as _, StateReadProto, StateWriteProto};
@@ -9,6 +9,12 @@ use tracing::instrument;
 use crate::{
     component::clock::EpochRead, event, state_key, CommitmentSource, NullificationInfo, Nullifier,
 };
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProposalNullifierBatchProfile {
+    pub lookup_write_ms: f64,
+    pub pending_stage_ms: f64,
+}
 
 #[async_trait]
 /// Provides read access to the state commitment tree and related data.
@@ -132,30 +138,111 @@ pub trait SctManager: StateWrite {
         Ok(position)
     }
 
+    /// Add a state commitment into the SCT at a pre-reserved position, without emitting an
+    /// `EventCommitment`. Used by the app-level deferred SCT staging path.
+    async fn add_sct_commitment_at_position(
+        &mut self,
+        commitment: tct::StateCommitment,
+        expected_position: tct::Position,
+    ) -> Result<()> {
+        let mut tree = self.get_sct().await;
+        let position = tree.insert(tct::Witness::Forget, commitment)?;
+        ensure!(
+            position == expected_position,
+            "deferred SCT append position drifted: expected {expected_position:?}, got {position:?}"
+        );
+        self.write_sct_cache(tree);
+
+        Ok(())
+    }
+
     #[instrument(skip(self, source))]
     /// Record a nullifier as spent in the verifiable storage.
     async fn nullify(&mut self, nullifier: Nullifier, source: CommitmentSource) {
         tracing::debug!("marking as spent");
+        self.nullify_all(std::slice::from_ref(&nullifier), source)
+            .await;
+    }
 
-        // We need to record the nullifier as spent in the JMT (to prevent
-        // double spends), as well as in the CompactBlock (so that clients
-        // can learn that their note was spent).
-        self.put(
-            state_key::nullifier_set::spent_nullifier_lookup(&nullifier),
-            // We don't use the value for validity checks, but writing the source
-            // here lets us find out what transaction spent the nullifier.
-            NullificationInfo {
+    #[instrument(skip(self, source, nullifiers))]
+    /// Record a batch of nullifiers as spent in the verifiable storage.
+    async fn nullify_all(&mut self, nullifiers: &[Nullifier], source: CommitmentSource) {
+        if nullifiers.is_empty() {
+            return;
+        }
+
+        tracing::debug!(count = nullifiers.len(), "marking batch as spent");
+
+        let spend_info = NullificationInfo {
+            id: source
+                .id()
+                .expect("nullifiers are only consumed by transactions"),
+            spend_height: self.get_block_height().await.expect("block height is set"),
+        };
+
+        // Record each nullifier as spent in the JMT (to prevent double spends).
+        for nullifier in nullifiers {
+            self.put(
+                state_key::nullifier_set::spent_nullifier_lookup(nullifier),
+                spend_info.clone(),
+            );
+        }
+
+        // Record the nullifiers to be inserted into the compact block in one object-store rewrite.
+        let mut pending_nullifiers = self.pending_nullifiers();
+        pending_nullifiers.extend(nullifiers.iter().copied());
+        self.object_put(
+            state_key::nullifier_set::pending_nullifiers(),
+            pending_nullifiers,
+        );
+    }
+
+    #[instrument(skip(self, entries))]
+    /// Record a proposal-ordered batch of nullifiers as spent in verifiable storage.
+    ///
+    /// This method is intentionally blind to same-block conflicts. Proposal-order conflict
+    /// resolution must happen before this batch is applied.
+    async fn nullify_proposal_batch(
+        &mut self,
+        entries: &[(Nullifier, CommitmentSource)],
+    ) -> ProposalNullifierBatchProfile {
+        if entries.is_empty() {
+            return ProposalNullifierBatchProfile::default();
+        }
+
+        tracing::debug!(
+            count = entries.len(),
+            "marking proposal nullifier batch as spent"
+        );
+
+        let spend_height = self.get_block_height().await.expect("block height is set");
+        let mut profile = ProposalNullifierBatchProfile::default();
+
+        let lookup_write_start = std::time::Instant::now();
+        for (nullifier, source) in entries {
+            let spend_info = NullificationInfo {
                 id: source
                     .id()
                     .expect("nullifiers are only consumed by transactions"),
-                spend_height: self.get_block_height().await.expect("block height is set"),
-            },
-        );
+                spend_height,
+            };
+            self.put(
+                state_key::nullifier_set::spent_nullifier_lookup(nullifier),
+                spend_info,
+            );
+        }
+        profile.lookup_write_ms = lookup_write_start.elapsed().as_secs_f64() * 1000.0;
 
-        // Record the nullifier to be inserted into the compact block
-        let mut nullifiers = self.pending_nullifiers();
-        nullifiers.push_back(nullifier);
-        self.object_put(state_key::nullifier_set::pending_nullifiers(), nullifiers);
+        let pending_stage_start = std::time::Instant::now();
+        let mut pending_nullifiers = self.pending_nullifiers();
+        pending_nullifiers.extend(entries.iter().map(|(nullifier, _)| *nullifier));
+        self.object_put(
+            state_key::nullifier_set::pending_nullifiers(),
+            pending_nullifiers,
+        );
+        profile.pending_stage_ms = pending_stage_start.elapsed().as_secs_f64() * 1000.0;
+
+        profile
     }
 
     /// Seal the current block in the SCT, and produce an epoch root if

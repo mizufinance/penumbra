@@ -1,6 +1,11 @@
 #![allow(clippy::clone_on_copy)]
 #![deny(clippy::unwrap_used)]
 #![recursion_limit = "512"]
+
+#[cfg(not(feature = "benchmark-system-allocator"))]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::io::IsTerminal as _;
 use std::{error::Error, process::exit};
 
@@ -32,6 +37,24 @@ use tower_http::trace::TraceLayer;
 use tracing::Instrument as _;
 use tracing_subscriber::{prelude::*, EnvFilter};
 use url::Url;
+
+fn default_grpc_bind(
+    grpc_bind: Option<std::net::SocketAddr>,
+    grpc_auto_https: Option<&str>,
+) -> std::net::SocketAddr {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    const HTTP_DEFAULT: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+    const HTTPS_DEFAULT: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 443);
+
+    grpc_bind.unwrap_or_else(|| {
+        if grpc_auto_https.is_some() {
+            HTTPS_DEFAULT
+        } else {
+            HTTP_DEFAULT
+        }
+    })
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -73,24 +96,7 @@ async fn main() -> anyhow::Result<()> {
             cometbft_addr,
             enable_expensive_rpc,
         } => {
-            // Use the given `grpc_bind` address if one was specified. If not, we will choose a
-            // default depending on whether or not `grpc_auto_https` was set. See the
-            // `RootCommand::Start::grpc_bind` documentation above.
-            let grpc_bind = {
-                use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-                const HTTP_DEFAULT: SocketAddr =
-                    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-                const HTTPS_DEFAULT: SocketAddr =
-                    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 443);
-                let default = || {
-                    if grpc_auto_https.is_some() {
-                        HTTPS_DEFAULT
-                    } else {
-                        HTTP_DEFAULT
-                    }
-                };
-                grpc_bind.unwrap_or_else(default)
-            };
+            let grpc_bind = default_grpc_bind(grpc_bind, grpc_auto_https.as_deref());
 
             // Ensure we have all necessary parts in the URL
             if !url_has_necessary_parts(&cometbft_addr) {

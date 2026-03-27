@@ -2,10 +2,11 @@
 
 resolver = "2"
 
-exclude = ["tools/proto-compiler", "crates/bin/orbis-test"]
+exclude = ["tools/proto-compiler", "crates/bin/orbis-test", "poc"]
 
 # Also remember to add to deployments/scripts/rust-docs
 members = [
+  "crates/bench-support",
   "crates/bench",
   "crates/bin/elcuity",
   "crates/bin/orbis-audit",
@@ -41,6 +42,7 @@ members = [
   "crates/crypto/decaf377-frost",
   "crates/crypto/decaf377-ka",
   "crates/crypto/eddy",
+  "crates/crypto/proof-aggregation",
   "crates/crypto/proof-params",
   "crates/crypto/proof-setup",
   "crates/crypto/tct",
@@ -63,11 +65,16 @@ members = [
   "tools/summonerd",
   "tools/parameter-setup",
   "tools/picturesque",
-]
+  ]
 
 # The profile that 'cargo dist' will build with
 [profile.dist]
 inherits = "release"
+
+[profile.android-prof]
+inherits = "release"
+debug = 1
+strip = "none"
 
 # config for 'cargo release'
 [workspace.metadata.release]
@@ -102,14 +109,18 @@ license    = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 anyhow                           = { version = "1.0.75" }
-ark-ec                           = { default-features = false, version = "0.4.2" }
-ark-ff                           = { default-features = false, version = "0.4.2" }
-ark-groth16                      = { default-features = false, version = "0.4.0" }
-ark-r1cs-std                     = { default-features = false, version = "0.4.0" }
-ark-relations                    = { version = "0.4" }
-ark-serialize                    = { version = "0.4.2" }
-ark-snark                        = { version = "0.4.0" }
-ark-std                          = { default-features = false, version = "0.4" }
+ark-bls12-377                    = { default-features = false, version = "0.5.0" }
+ark-bw6-761                      = { default-features = false, version = "0.5.0" }
+ark-ec                           = { default-features = false, version = "0.5.0" }
+ark-ed-on-bls12-377              = { default-features = false, version = "0.5.0" }
+ark-ff                           = { default-features = false, version = "0.5.0" }
+ark-groth16                      = { default-features = false, version = "0.5.0" }
+ark-poly                         = { default-features = false, version = "0.5.0" }
+ark-r1cs-std                     = { default-features = false, version = "0.5.0" }
+ark-relations                    = { version = "0.5.0" }
+ark-serialize                    = { version = "0.5.0" }
+ark-snark                        = { version = "0.5.0" }
+ark-std                          = { default-features = false, version = "0.5.0" }
 assert_cmd                       = { version = "2.0" }
 async-stream                     = { version = "0.3.5" }
 async-trait                      = { version = "0.1.52" }
@@ -182,6 +193,7 @@ penumbra-sdk-mock-consensus          = { version = "2.1.0", path = "crates/test/
 penumbra-sdk-mock-tendermint-proxy   = { version = "2.1.0", path = "crates/test/mock-tendermint-proxy" }
 penumbra-sdk-num                     = { default-features = false, version = "2.1.0", path = "crates/core/num" }
 penumbra-sdk-proof-params            = { default-features = false, version = "2.1.0", path = "crates/crypto/proof-params" }
+penumbra-sdk-proof-aggregation       = { default-features = false, version = "2.1.0", path = "crates/crypto/proof-aggregation" }
 penumbra-sdk-proof-setup             = { version = "2.1.0", path = "crates/crypto/proof-setup" }
 penumbra-sdk-proto                   = { default-features = false, version = "2.1.0", path = "crates/proto" }
 penumbra-sdk-sct                     = { default-features = false, version = "2.1.0", path = "crates/core/component/sct" }
@@ -212,11 +224,12 @@ rocksdb                          = { version = "0.21.0" }
 rpassword                        = { version = "7" }
 rstest                           = { version = "0.24.0" }
 rustls                           = { version = "0.23.21" }
-serde                            = { version = "1.0.186" }
+serde                            = { version = "1.0.219" }
 serde_json                       = { version = "1.0.96" }
 serde_unit_struct                = { version = "0.1" }
 serde_with                       = { version = "3.5.1" }
 sha2                             = { version = "0.10" }
+smallvec                         = { version = "1.13.2" }
 sqlx                             = { version = "0.8", features = ["bigdecimal", "postgres", "runtime-tokio", "tls-rustls"] }
 tap                              = "1.0.1"
 tempfile                         = { version = "3.3.0" }
@@ -244,6 +257,11 @@ url                              = { version = "2.2" }
 getrandom                        = { version = "0.2", default-features = false }
 
 [patch.crates-io]
+decaf377 = { git = "https://github.com/mizufinance/decaf377", branch = "main" }
+decaf377-rdsa = { git = "https://github.com/mizufinance/decaf377-rdsa", branch = "main" }
+poseidon377 = { git = "https://github.com/mizufinance/poseidon377", branch = "main" }
+poseidon-permutation = { git = "https://github.com/mizufinance/poseidon377", branch = "main" }
+poseidon-parameters = { git = "https://github.com/mizufinance/poseidon377", branch = "main" }
 # Without this, the git dependency for ledger-lib will depend on the crates.io v0.1 version,
 # and will fail to build.
 ledger-proto = { git = "https://github.com/ledger-community/rust-ledger", rev = "510bb3ca30639af4bdb12a918b6bbbdb75fa5f52" }

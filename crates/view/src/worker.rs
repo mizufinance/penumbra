@@ -38,8 +38,8 @@ use crate::{
     Storage,
 };
 
-// The maximum size of a compact block, in bytes (12MB).
-const MAX_CB_SIZE_BYTES: usize = 12 * 1024 * 1024;
+// Large local benchmark genesis states can emit compact blocks well above the historic 12MB cap.
+const MAX_CB_SIZE_BYTES: usize = 64 * 1024 * 1024;
 
 pub struct Worker {
     storage: Storage,

@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use cnidarium::StateWrite;
 use penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID;
 use penumbra_sdk_compliance::RegulatedAssetCheck;
+use penumbra_sdk_proof_params::batch::{self, BatchItem};
 use penumbra_sdk_proof_params::CONVERT_PROOF_VERIFICATION_KEY;
 use penumbra_sdk_sct::component::clock::EpochRead;
 
@@ -12,24 +13,26 @@ use crate::undelegate_claim::UndelegateClaimProofPublic;
 use crate::UndelegateClaim;
 use crate::{component::action_handler::ActionHandler, UnbondingToken};
 
+pub fn undelegate_claim_check_stateless_and_extract(action: &UndelegateClaim) -> Result<BatchItem> {
+    let unbonding_id = UnbondingToken::new(
+        action.body.validator_identity,
+        action.body.unbonding_start_height,
+    )
+    .id();
+    action.proof.to_batch_item(UndelegateClaimProofPublic {
+        balance_commitment: action.body.balance_commitment,
+        unbonding_id,
+        penalty: action.body.penalty,
+    })
+}
+
 #[async_trait]
 impl ActionHandler for UndelegateClaim {
     type CheckStatelessContext = ();
     async fn check_stateless(&self, _context: ()) -> Result<()> {
-        let unbonding_id = UnbondingToken::new(
-            self.body.validator_identity,
-            self.body.unbonding_start_height,
-        )
-        .id();
-
-        self.proof.verify(
-            &CONVERT_PROOF_VERIFICATION_KEY,
-            UndelegateClaimProofPublic {
-                balance_commitment: self.body.balance_commitment,
-                unbonding_id,
-                penalty: self.body.penalty,
-            },
-        )?;
+        let item = undelegate_claim_check_stateless_and_extract(self)?;
+        batch::batch_verify(&CONVERT_PROOF_VERIFICATION_KEY, std::slice::from_ref(&item))
+            .map_err(|e| anyhow::anyhow!("undelegate claim proof did not verify: {e}"))?;
 
         Ok(())
     }

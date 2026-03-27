@@ -5,6 +5,7 @@ use penumbra_sdk_asset::asset;
 use penumbra_sdk_proto::{StateReadProto, StateWriteProto};
 use penumbra_sdk_sct::component::clock::EpochRead;
 use penumbra_sdk_tct::StateCommitment;
+use std::collections::BTreeMap;
 
 use crate::{
     event, indexed_tree,
@@ -16,10 +17,19 @@ use crate::{
 
 // Note: QuadTree is still used for the user tree. Asset tree has been migrated to IMT.
 
-/// Maximum age of compliance anchors in blocks (~10 minutes at 6s blocks).
+/// Maximum age of compliance anchors in blocks (~14 hours at 0.5s blocks).
 /// Prevents using stale anchors to falsely prove non-membership.
 /// Safe because trees are append-only.
-pub const MAX_ANCHOR_AGE_BLOCKS: u64 = 100;
+pub const MAX_ANCHOR_AGE_BLOCKS: u64 = 100_000;
+
+/// Maximum number of blocks the RPC will search backwards for a recorded anchor.
+pub const MAX_ANCHOR_SEARCH_DEPTH_BLOCKS: u64 = 10;
+
+/// Retention window for historical compliance anchors.
+///
+/// Anchors older than this window are outside both proof validation and recent RPC lookup.
+pub const COMPLIANCE_ANCHOR_RETENTION_BLOCKS: u64 =
+    MAX_ANCHOR_AGE_BLOCKS + MAX_ANCHOR_SEARCH_DEPTH_BLOCKS;
 
 /// Maximum allowed drift between target_timestamp and block timestamp (±1 hour).
 pub const MAX_TIMESTAMP_DRIFT_SECS: u64 = 3600;
@@ -391,6 +401,25 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
         self.object_put(state_key::cache::cached_asset_imt(), tree);
     }
 
+    /// Read and cache an asset policy for this state delta.
+    async fn get_asset_policy_cached(
+        &mut self,
+        asset_id: asset::Id,
+    ) -> Result<Option<AssetPolicy>> {
+        let mut policies: BTreeMap<asset::Id, Option<AssetPolicy>> = self
+            .object_get(state_key::cache::cached_asset_policies())
+            .unwrap_or_default();
+
+        if let Some(policy) = policies.get(&asset_id) {
+            return Ok(policy.clone());
+        }
+
+        let policy = self.get_asset_policy(asset_id).await?;
+        policies.insert(asset_id, policy.clone());
+        self.object_put(state_key::cache::cached_asset_policies(), policies);
+        Ok(policy)
+    }
+
     /// Load user tree and seed in-block cache on miss.
     async fn get_user_tree_for_write(&mut self) -> Result<QuadTree> {
         if let Some(tree) = self.object_get(state_key::cache::cached_user_tree()) {
@@ -571,6 +600,28 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
             "recorded compliance anchors"
         );
 
+        if let Some(expired_height) = height.checked_sub(COMPLIANCE_ANCHOR_RETENTION_BLOCKS + 1) {
+            if let Some(expired_user_anchor) =
+                self.get_user_anchor_by_height(expired_height).await?
+            {
+                self.delete(state_key::anchor::user_anchor_by_height(expired_height));
+                if self.check_user_anchor(&expired_user_anchor).await? == Some(expired_height) {
+                    self.delete(state_key::anchor::user_anchor_lookup(&expired_user_anchor));
+                }
+            }
+
+            if let Some(expired_asset_anchor) =
+                self.get_asset_anchor_by_height(expired_height).await?
+            {
+                self.delete(state_key::anchor::asset_anchor_by_height(expired_height));
+                if self.check_asset_anchor(&expired_asset_anchor).await? == Some(expired_height) {
+                    self.delete(state_key::anchor::asset_anchor_lookup(
+                        &expired_asset_anchor,
+                    ));
+                }
+            }
+        }
+
         self.clear_compliance_trees_modified();
 
         Ok(())
@@ -666,6 +717,7 @@ mod tests {
     use decaf377::Fq;
     use penumbra_sdk_keys::Address;
     use penumbra_sdk_sct::component::clock::EpochManager;
+    use std::collections::BTreeMap;
 
     #[tokio::test]
     async fn test_add_compliance_leaf() {
@@ -1657,6 +1709,132 @@ mod tests {
             "threshold should survive round-trip"
         );
         assert_eq!(policy.params.dk_pub, dk_pub);
+    }
+
+    #[tokio::test]
+    async fn test_get_asset_policy_cached_matches_uncached() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        let present_asset = asset::Id(Fq::from(77u64));
+        let missing_asset = asset::Id(Fq::from(88u64));
+        let policy = AssetPolicy::simple(
+            decaf377::Element::GENERATOR,
+            u128::MAX,
+            decaf377::Element::GENERATOR,
+        );
+
+        state
+            .register_regulated_asset(present_asset, policy.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            state.get_asset_policy(present_asset).await.unwrap(),
+            state.get_asset_policy_cached(present_asset).await.unwrap()
+        );
+        assert_eq!(
+            state.get_asset_policy_cached(present_asset).await.unwrap(),
+            Some(policy.clone())
+        );
+
+        assert_eq!(
+            state.get_asset_policy(missing_asset).await.unwrap(),
+            state.get_asset_policy_cached(missing_asset).await.unwrap()
+        );
+        assert_eq!(
+            state.get_asset_policy_cached(missing_asset).await.unwrap(),
+            None
+        );
+
+        let cached: BTreeMap<asset::Id, Option<AssetPolicy>> = state
+            .object_get(state_key::cache::cached_asset_policies())
+            .unwrap();
+        assert_eq!(cached.get(&present_asset), Some(&Some(policy)));
+        assert_eq!(cached.get(&missing_asset), Some(&None));
+    }
+
+    #[tokio::test]
+    async fn test_anchor_pruning_removes_expired_entries() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+        let mut rng = rand::thread_rng();
+
+        state.put_block_height(1);
+        state.record_compliance_anchors(1).await.unwrap();
+        let expired_user_anchor = state.get_user_tree_root().await.unwrap();
+        let expired_asset_anchor = state.get_asset_imt_root().await.unwrap();
+
+        state.put_block_height(2);
+        state
+            .add_compliance_leaf(ComplianceLeaf::new(
+                Address::dummy(&mut rng),
+                asset::Id(Fq::from(4242u64)),
+                Fq::from(0u64),
+            ))
+            .await
+            .unwrap();
+        state
+            .register_regulated_asset(
+                asset::Id(Fq::from(4343u64)),
+                AssetPolicy::simple(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
+            .await
+            .unwrap();
+
+        let prune_height = COMPLIANCE_ANCHOR_RETENTION_BLOCKS + 2;
+        state.put_block_height(prune_height);
+        state.record_compliance_anchors(prune_height).await.unwrap();
+
+        assert_eq!(state.get_user_anchor_by_height(1).await.unwrap(), None);
+        assert_eq!(state.get_asset_anchor_by_height(1).await.unwrap(), None);
+        assert_eq!(
+            state.check_user_anchor(&expired_user_anchor).await.unwrap(),
+            None
+        );
+        assert_eq!(
+            state
+                .check_asset_anchor(&expired_asset_anchor)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn test_anchor_pruning_preserves_latest_lookup_for_reused_anchor() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        state.put_block_height(1);
+        state.record_compliance_anchors(1).await.unwrap();
+        let reused_user_anchor = state.get_user_tree_root().await.unwrap();
+        let reused_asset_anchor = state.get_asset_imt_root().await.unwrap();
+
+        let prune_height = COMPLIANCE_ANCHOR_RETENTION_BLOCKS + 2;
+        state.put_block_height(prune_height);
+        state.record_compliance_anchors(prune_height).await.unwrap();
+
+        assert_eq!(state.get_user_anchor_by_height(1).await.unwrap(), None);
+        assert_eq!(state.get_asset_anchor_by_height(1).await.unwrap(), None);
+        assert_eq!(
+            state.check_user_anchor(&reused_user_anchor).await.unwrap(),
+            Some(prune_height)
+        );
+        assert_eq!(
+            state
+                .check_asset_anchor(&reused_asset_anchor)
+                .await
+                .unwrap(),
+            Some(prune_height)
+        );
     }
 
     #[test]

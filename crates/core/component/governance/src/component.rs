@@ -17,6 +17,8 @@ use crate::{
     tally,
 };
 
+pub use crate::action_handler::delegator_vote::delegator_vote_check_stateless_and_extract;
+
 mod view;
 
 pub mod rpc;

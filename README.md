@@ -21,6 +21,25 @@ To participate in our test network, use Penumbra command line client [`pcli`][pc
 
 To join the test network as a full node, follow setup instructions for Penumbra node implementation [`pd`][pd].
 
+## Workspace layout
+
+The root Cargo workspace is production-oriented.
+
+- shipped crates, including the recursive verification / SnarkPack integration, build from the repo root
+- non-production runtime experiments, stage/TPS labs, and prototype tooling live under [`poc/`](/Users/antoinecyr/Documents/Source/penumbra/poc/README.md) as a separate nested workspace
+
+Build the production workspace from the repo root:
+
+```bash
+cargo build --workspace
+```
+
+Build the POC workspace separately:
+
+```bash
+cargo build --workspace --manifest-path poc/Cargo.toml
+```
+
 ## Current work and roadmap
 
 For a high-level view of current work-in-progress and future items, check out our:

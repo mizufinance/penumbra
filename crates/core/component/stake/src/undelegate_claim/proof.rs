@@ -7,6 +7,7 @@ use penumbra_sdk_proto::{core::component::stake::v1 as pb, DomainType};
 use decaf377::{Fq, Fr};
 use penumbra_sdk_asset::{asset, balance, STAKING_TOKEN_ASSET_ID};
 use penumbra_sdk_num::Amount;
+use penumbra_sdk_proof_params::batch::BatchItem;
 use penumbra_sdk_proof_params::VerifyingKeyExt;
 use penumbra_sdk_shielded_pool::{ConvertProof, ConvertProofPrivate, ConvertProofPublic};
 
@@ -73,6 +74,10 @@ impl UndelegateClaimProof {
         public: UndelegateClaimProofPublic,
     ) -> anyhow::Result<()> {
         self.0.verify(vk, public.into())
+    }
+
+    pub fn to_batch_item(&self, public: UndelegateClaimProofPublic) -> anyhow::Result<BatchItem> {
+        self.0.to_batch_item(public.into())
     }
 }
 
@@ -151,6 +156,43 @@ mod tests {
             let proof_result = proof.verify(&vk, public);
 
             assert!(proof_result.is_ok());
+        }
+    }
+
+    proptest! {
+    #![proptest_config(ProptestConfig::with_cases(2))]
+    #[test]
+    fn undelegate_claim_to_batch_item_has_single_public_input(validator_randomness in fr_strategy(), balance_blinding in fr_strategy(), value1_amount in 2..200u64, penalty_amount in 0..100u64) {
+            let mut rng = OsRng;
+            let (pk, _vk) = generate_prepared_test_parameters::<ConvertCircuit>(&mut rng);
+
+            let sk = rdsa::SigningKey::new_from_field(validator_randomness);
+            let validator_identity = IdentityKey(VerificationKey::from(&sk).into());
+            let unbonding_amount = Amount::from(value1_amount);
+
+            let start_epoch_index = 1;
+            let unbonding_token = UnbondingToken::new(validator_identity, start_epoch_index);
+            let unbonding_id = unbonding_token.id();
+            let penalty = Penalty::from_percent(penalty_amount);
+            let balance = penalty.balance_for_claim(unbonding_id, unbonding_amount);
+            let balance_commitment = balance.commit(balance_blinding);
+
+            let public = UndelegateClaimProofPublic { balance_commitment, unbonding_id, penalty };
+            let private = UndelegateClaimProofPrivate { unbonding_amount, balance_blinding };
+
+            let proof = UndelegateClaimProof::prove(
+                Fq::rand(&mut rng),
+                Fq::rand(&mut rng),
+                &pk,
+                public.clone(),
+                private
+            )
+            .expect("can create proof");
+
+            let item = proof
+                .to_batch_item(public)
+                .expect("can extract undelegate claim batch item");
+            assert_eq!(item.public_inputs.len(), 1);
         }
     }
 }

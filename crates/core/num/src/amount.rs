@@ -123,8 +123,8 @@ pub fn is_bit_constrained(
     }
 
     // Construct an FqVar from those n Boolean constraints
-    let constructed_fqvar = Boolean::<Fq>::le_bits_to_fp_var(&boolean_constraints.to_bits_le()?)
-        .expect("can convert to bits");
+    let constructed_fqvar =
+        Boolean::<Fq>::le_bits_to_fp(&boolean_constraints).expect("can convert to bits");
     constructed_fqvar.is_eq(&value)
 }
 
@@ -161,7 +161,7 @@ impl AmountVar {
         // Constrain either quo_var or divisor_var to be 64 bits to guard against overflow
         let q_is_64_bits = is_bit_constrained(self.cs(), quo_var.amount.clone(), 64)?;
         let d_is_64_bits = is_bit_constrained(self.cs(), divisor_var.amount.clone(), 64)?;
-        let q_or_d_is_64_bits = q_is_64_bits.or(&d_is_64_bits)?;
+        let q_or_d_is_64_bits = Boolean::kary_or(&[q_is_64_bits, d_is_64_bits])?;
         q_or_d_is_64_bits.enforce_equal(&Boolean::constant(true))?;
 
         // Constrain: numerator = quo * divisor + rem
@@ -528,10 +528,18 @@ impl U128x128Var {
 impl From<U128x128Var> for AmountVar {
     fn from(value: U128x128Var) -> Self {
         let mut le_bits = Vec::new();
-        le_bits.extend_from_slice(&value.limbs[2].to_bits_le()[..]);
-        le_bits.extend_from_slice(&value.limbs[3].to_bits_le()[..]);
+        le_bits.extend(
+            value.limbs[2]
+                .to_bits_le()
+                .expect("limb bits are available"),
+        );
+        le_bits.extend(
+            value.limbs[3]
+                .to_bits_le()
+                .expect("limb bits are available"),
+        );
         Self {
-            amount: Boolean::<Fq>::le_bits_to_fp_var(&le_bits[..]).expect("can convert to bits"),
+            amount: Boolean::<Fq>::le_bits_to_fp(&le_bits).expect("can convert to bits"),
         }
     }
 }

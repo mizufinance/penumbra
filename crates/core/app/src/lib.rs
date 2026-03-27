@@ -23,6 +23,7 @@ pub mod params;
 cfg_if::cfg_if! {
     if #[cfg(feature="component")] {
         pub mod app;
+        pub mod block_tx_indexing;
         pub mod metrics;
         pub mod rpc;
         pub mod server;

@@ -1,6 +1,6 @@
 use ark_bls12_377::{Config, Fq, Fr, G1Projective, G2Projective};
 use ark_bw6_761::BW6_761;
-use ark_ec::Group;
+use ark_ec::PrimeGroup;
 use ark_ff::UniformRand;
 use ark_groth16::{r1cs_to_qap::LibsnarkReduction, Groth16};
 use ark_r1cs_std::groups::bls12::{G1Var, G2Var};

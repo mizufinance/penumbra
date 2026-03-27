@@ -31,7 +31,7 @@ use super::storage::ComplianceStorage;
 use crate::issuer_keys::DetectionKey;
 
 // Maximum size of a compact block, in bytes (12MB).
-const MAX_CB_SIZE_BYTES: usize = 12 * 1024 * 1024;
+const MAX_CB_SIZE_BYTES: usize = 64 * 1024 * 1024;
 
 /// Handle for monitoring and communicating with an IssuerComplianceWorker.
 ///

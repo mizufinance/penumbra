@@ -4,6 +4,7 @@ wallet-next/pwalletd-db.sqlite-shm
 wallet-next/pwalletd-db.sqlite-wal
 
 *.DS_STORE
+.DS_Store
 
 # mdbook docs builds
 docs/*/book/*
@@ -25,6 +26,7 @@ result
 # will have compiled files and executables
 debug/
 target/
+poc/target/
 
 # We can't trust the ecosystem to use semver properly, so we have to check in a lockfile.
 # Cargo.lock
@@ -76,10 +78,22 @@ tmp/
 # Development artifacts
 deployments/.smoke-test-state/
 
-# TPS benchmark generated artifacts
-crates/bench/benches/compliance/tps/runs/
-crates/bench/benches/compliance/tps/snapshots/
-crates/bench/benches/compliance/tps/corpus/
-crates/bench/benches/compliance/tps/tps.csv
-crates/bench/benches/compliance/tps/run_summary.csv
-crates/bench/benches/compliance/tps/profiles.csv
+# Benchmark-generated artifacts
+crates/bench/benches/**/*.csv
+poc/crates/*-bench/benches/**/*.csv
+crates/bench/benches/**/*.log
+poc/crates/*-bench/benches/**/*.log
+crates/bench/benches/**/sections/
+poc/crates/*-bench/benches/**/sections/
+
+# Stage-bench TPS working trees
+poc/crates/stage-bench/benches/compliance/tps/{runs,microscope,admission,incremental}/
+crates/bench/benches/compliance/tps/{runs,microscope,admission,incremental}/
+
+# Android proof lab build artifacts
+**/android-proof-lab/target/
+
+# POC tool caches
+poc/tools/gnark-spend-prototype/.gocache/
+poc/tools/gnark-spend-prototype/.tmp/
+**/__pycache__/

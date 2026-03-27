@@ -1,0 +1,10 @@
+{
+  "name": "local-unreg-1000-seed",
+  "kind": "seed",
+  "scenario": "unregulated",
+  "count": 1000,
+  "timestamp": 1773113106,
+  "network_data": "network_data.tgz",
+  "wallets": "wallets.tgz",
+  "corpora": []
+}

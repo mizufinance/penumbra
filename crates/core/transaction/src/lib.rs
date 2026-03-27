@@ -39,6 +39,7 @@ pub use detection_data::DetectionData;
 pub use error::Error;
 pub use is_action::IsAction;
 pub use parameters::TransactionParameters;
+pub use penumbra_sdk_proof_aggregation::{AggregateBundle, FamilyAggregate, ProofFamilyId};
 pub use penumbra_sdk_txhash as txhash;
 pub use plan::{ActionPlan, TransactionPlan};
 pub use transaction::{Transaction, TransactionBody, TransactionSummary};

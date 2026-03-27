@@ -9,27 +9,29 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
 use decaf377::{r1cs::FqVar, Bls12_377, Fq};
 use decaf377_rdsa::{SpendAuth, VerificationKey};
+use once_cell::sync::Lazy;
 use penumbra_sdk_fee::Fee;
+use penumbra_sdk_proof_params::batch::BatchItem;
 use penumbra_sdk_proto::{core::component::dex::v1 as pb, DomainType};
 use penumbra_sdk_tct as tct;
 use penumbra_sdk_tct::r1cs::StateCommitmentVar;
 
 use penumbra_sdk_asset::{
-    asset::{self, Id},
+    asset::{self},
     Value, ValueVar,
 };
 use penumbra_sdk_keys::keys::{
     AuthorizationKeyVar, Bip44Path, IncomingViewingKeyVar, NullifierKey, NullifierKeyVar,
     SeedPhrase, SpendKey,
 };
-use penumbra_sdk_num::{Amount, AmountVar};
+use penumbra_sdk_num::{fixpoint::U128x128Var, Amount, AmountVar};
+use penumbra_sdk_proof_params::statement_hash::{hash_statement_fields, hash_statement_fields_var};
 use penumbra_sdk_sct::{Nullifier, NullifierVar};
 use penumbra_sdk_shielded_pool::{
     note::{self, NoteVar},
     Rseed,
 };
 use tap::Tap;
-use tct::{Root, StateCommitment};
 
 use crate::{
     batch_swap_output_data::BatchSwapOutputDataVar,
@@ -38,6 +40,121 @@ use crate::{
 };
 
 use penumbra_sdk_proof_params::{DummyWitness, GROTH16_PROOF_LENGTH_BYTES};
+
+const SWAPCLAIM_STATEMENT_FIELD_COUNT: usize = 22;
+
+static SWAPCLAIM_STATEMENT_HASH_DOMAIN: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"penumbra.dex.swap_claim.public_input_hash.v1").as_bytes(),
+    )
+});
+static SWAPCLAIM_STATEMENT_PAD_0: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"penumbra.dex.swap_claim.public_input_hash.pad0").as_bytes(),
+    )
+});
+static SWAPCLAIM_STATEMENT_PAD_1: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"penumbra.dex.swap_claim.public_input_hash.pad1").as_bytes(),
+    )
+});
+
+fn swapclaim_statement_hash_fields(fields: &[Fq]) -> Result<Fq, VerificationError> {
+    hash_statement_fields(
+        &SWAPCLAIM_STATEMENT_HASH_DOMAIN,
+        *SWAPCLAIM_STATEMENT_PAD_0,
+        *SWAPCLAIM_STATEMENT_PAD_1,
+        fields,
+        SWAPCLAIM_STATEMENT_FIELD_COUNT,
+        |expected, got| {
+            VerificationError::StatementHash(format!(
+                "invalid field length: expected {expected}, got {got}"
+            ))
+        },
+    )
+}
+
+fn swapclaim_statement_hash_fields_var(
+    cs: ConstraintSystemRef<Fq>,
+    fields: &[FqVar],
+) -> ark_relations::r1cs::Result<FqVar> {
+    hash_statement_fields_var(
+        cs,
+        &SWAPCLAIM_STATEMENT_HASH_DOMAIN,
+        *SWAPCLAIM_STATEMENT_PAD_0,
+        *SWAPCLAIM_STATEMENT_PAD_1,
+        fields,
+        SWAPCLAIM_STATEMENT_FIELD_COUNT,
+    )
+}
+
+fn u128x128_var_to_fields(var: &U128x128Var) -> ark_relations::r1cs::Result<[FqVar; 2]> {
+    let lo_bits = var.limbs[0]
+        .to_bits_le()?
+        .into_iter()
+        .chain(var.limbs[1].to_bits_le()?)
+        .collect::<Vec<_>>();
+    let hi_bits = var.limbs[2]
+        .to_bits_le()?
+        .into_iter()
+        .chain(var.limbs[3].to_bits_le()?)
+        .collect::<Vec<_>>();
+    let hi = Boolean::<Fq>::le_bits_to_fp(&hi_bits)?;
+    let lo = Boolean::<Fq>::le_bits_to_fp(&lo_bits)?;
+    Ok([hi, lo])
+}
+
+fn swapclaim_statement_hash(public: &SwapClaimProofPublic) -> Result<Fq, VerificationError> {
+    let mut fields = Vec::new();
+
+    fields.extend(
+        Fq::from(public.anchor.0)
+            .to_field_elements()
+            .ok_or(VerificationError::Anchor)?,
+    );
+    fields.extend(
+        public
+            .nullifier
+            .0
+            .to_field_elements()
+            .ok_or(VerificationError::Nullifier)?,
+    );
+    fields.extend(
+        Fq::from(public.claim_fee.amount())
+            .to_field_elements()
+            .ok_or(VerificationError::ClaimFeeAmount)?,
+    );
+    fields.extend(
+        public
+            .claim_fee
+            .asset_id()
+            .0
+            .to_field_elements()
+            .ok_or(VerificationError::ClaimFeeAssetId)?,
+    );
+    fields.extend(
+        public
+            .output_data
+            .to_field_elements()
+            .ok_or(VerificationError::OutputData)?,
+    );
+    fields.extend(
+        public
+            .note_commitment_1
+            .0
+            .to_field_elements()
+            .ok_or(VerificationError::NoteCommitment1)?,
+    );
+    fields.extend(
+        public
+            .note_commitment_2
+            .0
+            .to_field_elements()
+            .ok_or(VerificationError::NoteCommitment2)?,
+    );
+
+    swapclaim_statement_hash_fields(&fields)
+}
 
 /// The public inputs to a [`SwapProofPublic`].
 #[derive(Clone, Debug)]
@@ -167,7 +284,13 @@ fn check_circuit_satisfaction(
     use ark_relations::r1cs::{self, ConstraintSystem};
 
     let cs: ConstraintSystemRef<_> = ConstraintSystem::new_ref();
-    let circuit = SwapClaimCircuit { public, private };
+    let claimed_statement_hash = swapclaim_statement_hash(&public)
+        .map_err(|e| anyhow::anyhow!("failed computing swapclaim statement hash: {e}"))?;
+    let circuit = SwapClaimCircuit {
+        public,
+        private,
+        claimed_statement_hash,
+    };
     cs.set_optimization_goal(r1cs::OptimizationGoal::Constraints);
     circuit
         .generate_constraints(cs.clone())
@@ -184,6 +307,7 @@ fn check_circuit_satisfaction(
 pub struct SwapClaimCircuit {
     public: SwapClaimProofPublic,
     private: SwapClaimProofPrivate,
+    claimed_statement_hash: Fq,
 }
 
 impl ConstraintSynthesizer<Fq> for SwapClaimCircuit {
@@ -213,17 +337,20 @@ impl ConstraintSynthesizer<Fq> for SwapClaimCircuit {
         let note_blinding_1 = FqVar::new_witness(cs.clone(), || Ok(self.private.note_blinding_1))?;
         let note_blinding_2 = FqVar::new_witness(cs.clone(), || Ok(self.private.note_blinding_2))?;
 
-        // Inputs
-        let anchor_var = FqVar::new_input(cs.clone(), || Ok(Fq::from(self.public.anchor)))?;
-        let claimed_nullifier_var =
-            NullifierVar::new_input(cs.clone(), || Ok(self.public.nullifier))?;
-        let claimed_fee_var = ValueVar::new_input(cs.clone(), || Ok(self.public.claim_fee.0))?;
+        // Witnesses containing the claimed statement data.
+        let anchor_var = FqVar::new_witness(cs.clone(), || Ok(Fq::from(self.public.anchor.0)))?;
+        let claimed_nullifier_var = FqVar::new_witness(cs.clone(), || Ok(self.public.nullifier.0))?;
+        let claimed_fee_var = ValueVar::new_witness(cs.clone(), || Ok(self.public.claim_fee.0))?;
         let output_data_var =
-            BatchSwapOutputDataVar::new_input(cs.clone(), || Ok(self.public.output_data))?;
+            BatchSwapOutputDataVar::new_witness(cs.clone(), || Ok(self.public.output_data))?;
         let claimed_note_commitment_1 =
-            StateCommitmentVar::new_input(cs.clone(), || Ok(self.public.note_commitment_1))?;
+            StateCommitmentVar::new_witness(cs.clone(), || Ok(self.public.note_commitment_1))?;
         let claimed_note_commitment_2 =
-            StateCommitmentVar::new_input(cs.clone(), || Ok(self.public.note_commitment_2))?;
+            StateCommitmentVar::new_witness(cs.clone(), || Ok(self.public.note_commitment_2))?;
+
+        // Inputs
+        let claimed_statement_hash_var =
+            FqVar::new_input(cs.clone(), || Ok(self.claimed_statement_hash))?;
 
         // Swap commitment integrity check.
         let swap_commitment = swap_plaintext_var.commit()?;
@@ -234,13 +361,13 @@ impl ConstraintSynthesizer<Fq> for SwapClaimCircuit {
             cs.clone(),
             &Boolean::TRUE,
             &position_bits,
-            anchor_var,
+            anchor_var.clone(),
             claimed_swap_commitment.inner(),
         )?;
 
         // Nullifier integrity.
         let nullifier_var = NullifierVar::derive(&nk_var, &position_var, &claimed_swap_commitment)?;
-        nullifier_var.enforce_equal(&claimed_nullifier_var)?;
+        nullifier_var.inner.enforce_equal(&claimed_nullifier_var)?;
 
         // Connection between nullifier key and address
         let ivk = IncomingViewingKeyVar::derive(&nk_var, &ak_var)?;
@@ -269,7 +396,7 @@ impl ConstraintSynthesizer<Fq> for SwapClaimCircuit {
         let (computed_lambda_1_i, computed_lambda_2_i) = output_data_var.pro_rata_outputs(
             swap_plaintext_var.delta_1_i,
             swap_plaintext_var.delta_2_i,
-            cs,
+            cs.clone(),
         )?;
         computed_lambda_1_i.enforce_equal(&lambda_1_i_var)?;
         computed_lambda_2_i.enforce_equal(&lambda_2_i_var)?;
@@ -296,6 +423,40 @@ impl ConstraintSynthesizer<Fq> for SwapClaimCircuit {
 
         claimed_note_commitment_1.enforce_equal(&output_1_commitment)?;
         claimed_note_commitment_2.enforce_equal(&output_2_commitment)?;
+
+        // Statement hash integrity check.
+        let delta_1_fields = u128x128_var_to_fields(&output_data_var.delta_1)?;
+        let delta_2_fields = u128x128_var_to_fields(&output_data_var.delta_2)?;
+        let lambda_1_fields = u128x128_var_to_fields(&output_data_var.lambda_1)?;
+        let lambda_2_fields = u128x128_var_to_fields(&output_data_var.lambda_2)?;
+        let unfilled_1_fields = u128x128_var_to_fields(&output_data_var.unfilled_1)?;
+        let unfilled_2_fields = u128x128_var_to_fields(&output_data_var.unfilled_2)?;
+        let statement_fields = vec![
+            anchor_var,
+            claimed_nullifier_var,
+            claimed_fee_var.amount.amount.clone(),
+            claimed_fee_var.asset_id.asset_id.clone(),
+            delta_1_fields[0].clone(),
+            delta_1_fields[1].clone(),
+            delta_2_fields[0].clone(),
+            delta_2_fields[1].clone(),
+            lambda_1_fields[0].clone(),
+            lambda_1_fields[1].clone(),
+            lambda_2_fields[0].clone(),
+            lambda_2_fields[1].clone(),
+            unfilled_1_fields[0].clone(),
+            unfilled_1_fields[1].clone(),
+            unfilled_2_fields[0].clone(),
+            unfilled_2_fields[1].clone(),
+            output_data_var.trading_pair.asset_1.asset_id.clone(),
+            output_data_var.trading_pair.asset_2.asset_id.clone(),
+            output_data_var.epoch.clone(),
+            output_data_var.block_within_epoch.clone(),
+            claimed_note_commitment_1.inner().clone(),
+            claimed_note_commitment_2.inner().clone(),
+        ];
+        let computed_statement_hash = swapclaim_statement_hash_fields_var(cs, &statement_fields)?;
+        computed_statement_hash.enforce_equal(&claimed_statement_hash_var)?;
 
         Ok(())
     }
@@ -384,7 +545,14 @@ impl DummyWitness for SwapClaimCircuit {
             note_blinding_2,
         };
 
-        Self { public, private }
+        let claimed_statement_hash = swapclaim_statement_hash(&public)
+            .expect("dummy swapclaim statement hash should compute");
+
+        Self {
+            public,
+            private,
+            claimed_statement_hash,
+        }
     }
 }
 
@@ -409,6 +577,8 @@ pub enum VerificationError {
     NoteCommitment1,
     #[error("note_commitment_2 is a Bls12-377 field member")]
     NoteCommitment2,
+    #[error("statement hash error: {0}")]
+    StatementHash(String),
     #[error("error verifying proof: {0:?}")]
     SynthesisError(ark_relations::r1cs::SynthesisError),
     #[error("proof did not verify")]
@@ -426,7 +596,13 @@ impl SwapClaimProof {
         public: SwapClaimProofPublic,
         private: SwapClaimProofPrivate,
     ) -> anyhow::Result<Self> {
-        let circuit = SwapClaimCircuit { public, private };
+        let claimed_statement_hash = swapclaim_statement_hash(&public)
+            .map_err(|e| anyhow::anyhow!("failed computing swapclaim statement hash: {e}"))?;
+        let circuit = SwapClaimCircuit {
+            public,
+            private,
+            claimed_statement_hash,
+        };
 
         let proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
             circuit, pk, blinding_r, blinding_s,
@@ -438,6 +614,19 @@ impl SwapClaimProof {
         Ok(Self(proof_bytes))
     }
 
+    pub fn to_batch_item(
+        &self,
+        public: SwapClaimProofPublic,
+    ) -> Result<BatchItem, VerificationError> {
+        let proof = Proof::deserialize_compressed_unchecked(&self.0[..])
+            .map_err(VerificationError::ProofDeserialize)?;
+        let statement_hash = swapclaim_statement_hash(&public)?;
+        Ok(BatchItem {
+            proof,
+            public_inputs: vec![statement_hash],
+        })
+    }
+
     /// Called to verify the proof using the provided public inputs.
     //#[tracing::instrument(skip(self, vk), fields(self = ?base64::encode(&self.clone().encode_to_vec()), vk = ?vk.debug_id()))]
     #[tracing::instrument(skip(self, vk))]
@@ -446,66 +635,13 @@ impl SwapClaimProof {
         vk: &PreparedVerifyingKey<Bls12_377>,
         public: SwapClaimProofPublic,
     ) -> Result<(), VerificationError> {
-        let proof = Proof::deserialize_compressed_unchecked(&self.0[..])
-            .map_err(VerificationError::ProofDeserialize)?;
-
-        let mut public_inputs = Vec::new();
-
-        let SwapClaimProofPublic {
-            anchor: Root(anchor),
-            nullifier: Nullifier(nullifier),
-            claim_fee:
-                Fee(Value {
-                    amount,
-                    asset_id: Id(asset_id),
-                }),
-            output_data,
-            note_commitment_1: StateCommitment(note_commitment_1),
-            note_commitment_2: StateCommitment(note_commitment_2),
-        } = public;
-
-        public_inputs.extend(
-            Fq::from(anchor)
-                .to_field_elements()
-                .ok_or(VerificationError::Anchor)?,
-        );
-        public_inputs.extend(
-            nullifier
-                .to_field_elements()
-                .ok_or(VerificationError::Nullifier)?,
-        );
-        public_inputs.extend(
-            Fq::from(amount)
-                .to_field_elements()
-                .ok_or(VerificationError::ClaimFeeAmount)?,
-        );
-        public_inputs.extend(
-            asset_id
-                .to_field_elements()
-                .ok_or(VerificationError::ClaimFeeAssetId)?,
-        );
-        public_inputs.extend(
-            output_data
-                .to_field_elements()
-                .ok_or(VerificationError::OutputData)?,
-        );
-        public_inputs.extend(
-            note_commitment_1
-                .to_field_elements()
-                .ok_or(VerificationError::NoteCommitment1)?,
-        );
-        public_inputs.extend(
-            note_commitment_2
-                .to_field_elements()
-                .ok_or(VerificationError::NoteCommitment2)?,
-        );
-
-        tracing::trace!(?public_inputs);
+        let item = self.to_batch_item(public)?;
+        tracing::trace!(public_inputs = ?item.public_inputs);
         let start = std::time::Instant::now();
         Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(
             vk,
-            public_inputs.as_slice(),
-            &proof,
+            item.public_inputs.as_slice(),
+            &item.proof,
         )
         .map_err(VerificationError::SynthesisError)?
         .tap(|proof_result| tracing::debug!(?proof_result, elapsed = ?start.elapsed()))
@@ -539,7 +675,10 @@ mod tests {
     use super::*;
     use penumbra_sdk_keys::keys::{SeedPhrase, SpendKey};
     use penumbra_sdk_num::Amount;
+    use penumbra_sdk_proof_params::generate_prepared_test_parameters;
     use proptest::prelude::*;
+    use proptest::strategy::ValueTree;
+    use rand_core::OsRng;
 
     #[derive(Debug)]
     struct TestBatchSwapOutputData {
@@ -685,6 +824,29 @@ mod tests {
             assert!(check_satisfaction(&public, &private).is_ok());
             assert!(check_circuit_satisfaction(public, private).is_ok());
         }
+    }
+
+    #[test]
+    fn swapclaim_to_batch_item_has_single_public_input() {
+        let mut runner = proptest::test_runner::TestRunner::default();
+        let (public, private) = arb_valid_swapclaim_statement_filled()
+            .new_tree(&mut runner)
+            .expect("can generate valid swap claim statement")
+            .current();
+        let mut rng = OsRng;
+        let (pk, _vk) = generate_prepared_test_parameters::<SwapClaimCircuit>(&mut rng);
+        let proof = SwapClaimProof::prove(
+            Fq::rand(&mut rng),
+            Fq::rand(&mut rng),
+            &pk,
+            public.clone(),
+            private,
+        )
+        .expect("can create swap claim proof");
+        let item = proof
+            .to_batch_item(public)
+            .expect("can extract swap claim batch item");
+        assert_eq!(item.public_inputs.len(), 1);
     }
 
     fn unfilled_bsod_strategy() -> BoxedStrategy<TestBatchSwapOutputData> {
