@@ -3,21 +3,124 @@ use ark_ff::ToConstraintField;
 use ark_groth16::{
     r1cs_to_qap::LibsnarkReduction, Groth16, PreparedVerifyingKey, Proof, ProvingKey,
 };
+use ark_r1cs_std::prelude::ToBitsGadget;
 use ark_relations::r1cs;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
 use base64::prelude::*;
+use decaf377::r1cs::{ElementVar, FqVar};
 use decaf377::{Bls12_377, Fq, Fr};
+use once_cell::sync::Lazy;
 use penumbra_sdk_asset::{
     asset::{self, AssetIdVar},
-    balance::{self, commitment::BalanceCommitmentVar, BalanceVar},
+    balance::{self, BalanceVar},
     Balance, Value, ValueVar, STAKING_TOKEN_ASSET_ID,
 };
 use penumbra_sdk_num::{
     fixpoint::{U128x128, U128x128Var},
     Amount, AmountVar,
 };
+use penumbra_sdk_proof_params::batch::BatchItem;
+use penumbra_sdk_proof_params::statement_hash::{hash_statement_fields, hash_statement_fields_var};
 use penumbra_sdk_proof_params::{DummyWitness, VerifyingKeyExt, GROTH16_PROOF_LENGTH_BYTES};
+
+const CONVERT_STATEMENT_FIELD_COUNT: usize = 5;
+
+static CONVERT_STATEMENT_HASH_DOMAIN: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"penumbra.shielded_pool.convert.public_input_hash.v1").as_bytes(),
+    )
+});
+static CONVERT_STATEMENT_PAD_0: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"penumbra.shielded_pool.convert.public_input_hash.pad0").as_bytes(),
+    )
+});
+static CONVERT_STATEMENT_PAD_1: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"penumbra.shielded_pool.convert.public_input_hash.pad1").as_bytes(),
+    )
+});
+
+fn convert_statement_hash(public: &ConvertProofPublic) -> Result<Fq> {
+    let mut fields = Vec::new();
+    fields.extend(
+        public
+            .from
+            .to_field_elements()
+            .ok_or_else(|| anyhow!("could not convert `from` asset ID to field elements"))?,
+    );
+    fields.extend(
+        public
+            .to
+            .to_field_elements()
+            .ok_or_else(|| anyhow!("could not convert `to` asset ID to field elements"))?,
+    );
+    fields.extend(
+        public
+            .rate
+            .to_field_elements()
+            .ok_or_else(|| anyhow!("could not convert exchange rate to field elements"))?,
+    );
+    fields.extend(
+        public
+            .balance_commitment
+            .0
+            .to_field_elements()
+            .ok_or_else(|| anyhow!("could not convert balance commitment to field elements"))?,
+    );
+    anyhow::ensure!(
+        fields.len() == CONVERT_STATEMENT_FIELD_COUNT,
+        "invalid convert statement field length: expected {}, got {}",
+        CONVERT_STATEMENT_FIELD_COUNT,
+        fields.len()
+    );
+
+    hash_statement_fields(
+        &CONVERT_STATEMENT_HASH_DOMAIN,
+        *CONVERT_STATEMENT_PAD_0,
+        *CONVERT_STATEMENT_PAD_1,
+        &fields,
+        CONVERT_STATEMENT_FIELD_COUNT,
+        |expected, got| {
+            anyhow!("invalid convert statement field length: expected {expected}, got {got}")
+        },
+    )
+}
+
+fn u128x128_var_to_fields(var: &U128x128Var) -> r1cs::Result<[FqVar; 2]> {
+    use ark_r1cs_std::prelude::Boolean;
+    let lo_bits = var.limbs[0]
+        .to_bits_le()?
+        .into_iter()
+        .chain(var.limbs[1].to_bits_le()?)
+        .collect::<Vec<_>>();
+    let hi_bits = var.limbs[2]
+        .to_bits_le()?
+        .into_iter()
+        .chain(var.limbs[3].to_bits_le()?)
+        .collect::<Vec<_>>();
+    let hi = Boolean::<Fq>::le_bits_to_fp(&hi_bits)?;
+    let lo = Boolean::<Fq>::le_bits_to_fp(&lo_bits)?;
+    Ok([hi, lo])
+}
+
+fn convert_statement_hash_var(
+    cs: r1cs::ConstraintSystemRef<Fq>,
+    fields: &[FqVar],
+) -> r1cs::Result<FqVar> {
+    if fields.len() != CONVERT_STATEMENT_FIELD_COUNT {
+        return Err(r1cs::SynthesisError::Unsatisfiable);
+    }
+    hash_statement_fields_var(
+        cs,
+        &CONVERT_STATEMENT_HASH_DOMAIN,
+        *CONVERT_STATEMENT_PAD_0,
+        *CONVERT_STATEMENT_PAD_1,
+        fields,
+        CONVERT_STATEMENT_FIELD_COUNT,
+    )
+}
 
 /// The public input for a [`ConvertProof`].
 #[derive(Clone, Debug)]
@@ -67,7 +170,8 @@ fn check_circuit_satisfaction(
     use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystem};
 
     let cs = ConstraintSystem::new_ref();
-    let circuit = ConvertCircuit::new(public, private);
+    let claimed_statement_hash = convert_statement_hash(&public)?;
+    let circuit = ConvertCircuit::new(public, private, claimed_statement_hash);
     cs.set_optimization_goal(r1cs::OptimizationGoal::Constraints);
     // For why this is ok, see `generate_test_parameters`.
     circuit
@@ -95,6 +199,8 @@ pub struct ConvertCircuit {
     rate: U128x128,
     /// A commitment to a balance of `-amount[from] + (rate * amount)[to]`.
     balance_commitment: balance::Commitment,
+    /// Poseidon hash over all claimed statement fields.
+    claimed_statement_hash: Fq,
 }
 
 impl ConvertCircuit {
@@ -109,6 +215,7 @@ impl ConvertCircuit {
             amount,
             balance_blinding,
         }: ConvertProofPrivate,
+        claimed_statement_hash: Fq,
     ) -> Self {
         Self {
             amount,
@@ -117,6 +224,7 @@ impl ConvertCircuit {
             from,
             to,
             rate,
+            claimed_statement_hash,
         }
     }
 }
@@ -132,29 +240,47 @@ impl r1cs::ConstraintSynthesizer<Fq> for ConvertCircuit {
             UInt8::new_witness_vec(cs.clone(), &balance_blinding_arr)?
         };
 
-        // Public Inputs
-        let from = AssetIdVar::new_input(cs.clone(), || Ok(self.from))?;
-        let to = AssetIdVar::new_input(cs.clone(), || Ok(self.to))?;
-        let rate = U128x128Var::new_input(cs.clone(), || Ok(self.rate))?;
-        let balance_commitment =
-            BalanceCommitmentVar::new_input(cs.clone(), || Ok(self.balance_commitment))?;
+        // Witnesses containing the claimed statement data.
+        let from = AssetIdVar::new_witness(cs.clone(), || Ok(self.from))?;
+        let to = AssetIdVar::new_witness(cs.clone(), || Ok(self.to))?;
+        let rate = U128x128Var::new_witness(cs.clone(), || Ok(self.rate))?;
+        let claimed_balance_commitment =
+            ElementVar::new_witness(cs.clone(), || Ok(self.balance_commitment.0))?;
+
+        // Inputs
+        let claimed_statement_hash =
+            FqVar::new_input(cs.clone(), || Ok(self.claimed_statement_hash))?;
 
         // Constraints
         let expected_balance = {
             let taken = BalanceVar::from_negative_value_var(ValueVar {
                 amount: amount_var.clone(),
-                asset_id: from,
+                asset_id: from.clone(),
             });
 
             let produced = BalanceVar::from_positive_value_var(ValueVar {
-                amount: rate.apply_to_amount(amount_var)?,
-                asset_id: to,
+                amount: rate.clone().apply_to_amount(amount_var)?,
+                asset_id: to.clone(),
             });
 
             taken + produced
         };
         let expected_commitment = expected_balance.commit(balance_blinding_var)?;
-        expected_commitment.enforce_equal(&balance_commitment)?;
+        expected_commitment
+            .inner
+            .enforce_equal(&claimed_balance_commitment)?;
+
+        // Statement hash integrity check.
+        let rate_fields = u128x128_var_to_fields(&rate)?;
+        let statement_fields = vec![
+            from.asset_id.clone(),
+            to.asset_id.clone(),
+            rate_fields[0].clone(),
+            rate_fields[1].clone(),
+            claimed_balance_commitment.compress_to_field()?,
+        ];
+        let computed_statement_hash = convert_statement_hash_var(cs, &statement_fields)?;
+        computed_statement_hash.enforce_equal(&claimed_statement_hash)?;
 
         Ok(())
     }
@@ -175,13 +301,27 @@ impl DummyWitness for ConvertCircuit {
             amount,
         });
         let balance_commitment = balance.commit(balance_blinding);
-        Self {
-            amount,
-            balance_blinding,
+        let public = ConvertProofPublic {
             from,
             to,
             rate,
             balance_commitment,
+        };
+        let private = ConvertProofPrivate {
+            amount,
+            balance_blinding,
+        };
+        let claimed_statement_hash =
+            convert_statement_hash(&public).expect("dummy convert statement hash should compute");
+
+        Self {
+            amount: private.amount,
+            balance_blinding: private.balance_blinding,
+            from: public.from,
+            to: public.to,
+            rate: public.rate,
+            balance_commitment: public.balance_commitment,
+            claimed_statement_hash,
         }
     }
 }
@@ -202,7 +342,8 @@ impl ConvertProof {
         public: ConvertProofPublic,
         private: ConvertProofPrivate,
     ) -> Result<Self> {
-        let circuit = ConvertCircuit::new(public, private);
+        let claimed_statement_hash = convert_statement_hash(&public)?;
+        let circuit = ConvertCircuit::new(public, private, claimed_statement_hash);
         let proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
             circuit, pk, blinding_r, blinding_s,
         )?;
@@ -211,47 +352,29 @@ impl ConvertProof {
         Ok(Self(proof_bytes))
     }
 
+    pub fn to_batch_item(&self, public: ConvertProofPublic) -> Result<BatchItem> {
+        let proof = Proof::deserialize_compressed_unchecked(&self.0[..]).map_err(|e| anyhow!(e))?;
+        let statement_hash = convert_statement_hash(&public)?;
+        Ok(BatchItem {
+            proof,
+            public_inputs: vec![statement_hash],
+        })
+    }
+
     #[tracing::instrument(level="debug", skip(self, vk), fields(self = ?BASE64_STANDARD.encode(&self.0), vk = ?vk.debug_id()))]
     pub fn verify(
         &self,
         vk: &PreparedVerifyingKey<Bls12_377>,
         public: ConvertProofPublic,
     ) -> Result<()> {
-        let proof = Proof::deserialize_compressed_unchecked(&self.0[..]).map_err(|e| anyhow!(e))?;
+        let item = self.to_batch_item(public)?;
 
-        let mut public_inputs = Vec::new();
-        public_inputs.extend(
-            public
-                .from
-                .to_field_elements()
-                .ok_or_else(|| anyhow!("could not convert `from` asset ID to field elements"))?,
-        );
-        public_inputs.extend(
-            public
-                .to
-                .to_field_elements()
-                .ok_or_else(|| anyhow!("could not convert `to` asset ID to field elements"))?,
-        );
-        public_inputs.extend(
-            public
-                .rate
-                .to_field_elements()
-                .ok_or_else(|| anyhow!("could not convert exchange rate to field elements"))?,
-        );
-        public_inputs.extend(
-            public
-                .balance_commitment
-                .0
-                .to_field_elements()
-                .ok_or_else(|| anyhow!("could not convert balance commitment to field elements"))?,
-        );
-
-        tracing::trace!(?public_inputs);
+        tracing::trace!(public_inputs = ?item.public_inputs);
         let start = std::time::Instant::now();
         let proof_result = Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(
             vk,
-            public_inputs.as_slice(),
-            &proof,
+            item.public_inputs.as_slice(),
+            &item.proof,
         )?;
         tracing::debug!(?proof_result, elapsed = ?start.elapsed());
         proof_result

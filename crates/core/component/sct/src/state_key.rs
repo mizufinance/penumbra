@@ -35,8 +35,12 @@ pub mod epoch_manager {
 pub mod nullifier_set {
     use crate::Nullifier;
 
+    pub fn spent_nullifier_lookup_prefix() -> &'static str {
+        "sct/nullifier_set/spent_nullifier_lookup/"
+    }
+
     pub fn spent_nullifier_lookup(nullifier: &Nullifier) -> String {
-        format!("sct/nullifier_set/spent_nullifier_lookup/{}", nullifier)
+        format!("{}{}", spent_nullifier_lookup_prefix(), nullifier)
     }
 
     pub fn pending_nullifiers() -> &'static str {

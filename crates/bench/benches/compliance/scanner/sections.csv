@@ -1,5 +1,0 @@
-version,block_size,match_rate,section,mean_ms,median_ms,samples,profile,run_id,timestamp,git_rev,host_label
-dev,100,10%,decrypt,2.87,2.95,10,quick,run-1772576898-56873,1772576898,unknown-rev,unknown-host
-local,100,10%,decrypt,2.28,2.30,10,quick,run-1772574424-38134,1772574424,unknown-rev,unknown-host
-dev,100,10%,detect,19.45,19.65,10,quick,run-1772576898-56873,1772576898,unknown-rev,unknown-host
-local,100,10%,detect,16.99,16.96,10,quick,run-1772574424-38134,1772574424,unknown-rev,unknown-host

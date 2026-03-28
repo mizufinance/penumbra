@@ -364,6 +364,7 @@ impl TransactionPlan {
                 ActionPlan::SwapClaim(_) => 1,
                 ActionPlan::UndelegateClaim(_) => 1,
                 ActionPlan::DelegatorVote(_) => 1,
+                ActionPlan::ActionLiquidityTournamentVote(_) => 1,
                 _ => 0,
             })
             .sum()

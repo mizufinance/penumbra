@@ -12,15 +12,12 @@ use penumbra_sdk_sct::component::clock::EpochRead;
 use tonic::Status;
 use tracing::instrument;
 
-use crate::registry::ComplianceRegistryRead;
+use crate::registry::{ComplianceRegistryRead, MAX_ANCHOR_SEARCH_DEPTH_BLOCKS};
 use penumbra_sdk_tct::StateCommitment;
 
 /// Maximum number of queries allowed in a batch compliance request.
 /// This prevents resource exhaustion from excessively large batch requests.
 const MAX_BATCH_SIZE: usize = 100;
-
-/// Maximum number of blocks to search backwards for a recorded anchor.
-const MAX_ANCHOR_SEARCH_DEPTH: u64 = 10;
 
 /// Find the most recent recorded compliance anchors by searching backwards from current height.
 ///
@@ -31,7 +28,7 @@ async fn find_most_recent_anchors<S: cnidarium::StateRead + ComplianceRegistryRe
 ) -> Result<(StateCommitment, StateCommitment), Status> {
     // Search backwards from current height to find recorded anchors
     let search_start = current_height;
-    let search_end = current_height.saturating_sub(MAX_ANCHOR_SEARCH_DEPTH);
+    let search_end = current_height.saturating_sub(MAX_ANCHOR_SEARCH_DEPTH_BLOCKS);
 
     for height in (search_end..=search_start).rev() {
         let user_anchor = state.get_user_anchor_by_height(height).await.map_err(|e| {
@@ -55,7 +52,7 @@ async fn find_most_recent_anchors<S: cnidarium::StateRead + ComplianceRegistryRe
 
     Err(Status::not_found(format!(
         "no compliance anchors found in last {} blocks (current height: {})",
-        MAX_ANCHOR_SEARCH_DEPTH, current_height
+        MAX_ANCHOR_SEARCH_DEPTH_BLOCKS, current_height
     )))
 }
 
@@ -465,5 +462,30 @@ impl QueryService for Server {
         };
 
         Ok(tonic::Response::new(response))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::ComplianceRegistryWrite as _;
+    use cnidarium::TempStorage;
+    use penumbra_sdk_sct::component::clock::EpochManager as _;
+
+    #[tokio::test]
+    async fn find_most_recent_anchors_searches_within_recent_window() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        state.put_block_height(5);
+        state.record_compliance_anchors(5).await.unwrap();
+        let expected = (
+            state.get_user_tree_root().await.unwrap(),
+            state.get_asset_imt_root().await.unwrap(),
+        );
+
+        let found = find_most_recent_anchors(&state, 8).await.unwrap();
+        assert_eq!(found, expected);
     }
 }

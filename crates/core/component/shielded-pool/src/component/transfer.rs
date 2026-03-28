@@ -22,6 +22,7 @@ use ibc_types::{
     transfer::acknowledgement::TokenTransferAcknowledgement,
 };
 use penumbra_sdk_asset::{asset, asset::Metadata, Value};
+use penumbra_sdk_compliance::registry::ComplianceRegistryWrite as _;
 use penumbra_sdk_compliance::ComplianceRegistryRead as _;
 use penumbra_sdk_ibc::component::ChannelStateReadExt;
 use penumbra_sdk_keys::Address;
@@ -72,6 +73,7 @@ fn is_source(
 pub struct Ics20Transfer {}
 
 #[async_trait]
+#[allow(dead_code)]
 pub trait Ics20TransferReadExt: StateRead {
     async fn withdrawal_check(
         &self,
@@ -106,6 +108,37 @@ pub trait Ics20TransferReadExt: StateRead {
 }
 
 impl<T: StateRead + ?Sized> Ics20TransferReadExt for T {}
+
+#[async_trait]
+pub trait Ics20TransferExecutionExt: StateWrite {
+    async fn withdrawal_check_cached(
+        &mut self,
+        withdrawal: &Ics20Withdrawal,
+        current_block_time: Time,
+    ) -> Result<()> {
+        let packet: IBCPacket<Unchecked> = withdrawal.clone().into();
+        self.send_packet_check(packet, current_block_time).await?;
+
+        let asset_id = withdrawal.denom.id();
+        if let Some(policy) = self.get_asset_policy_cached(asset_id).await? {
+            let channel = withdrawal.source_channel.to_string();
+            if policy.params.allowed_channels.is_empty() {
+                anyhow::bail!("IBC transfers blocked for regulated asset {}", asset_id);
+            }
+            if !policy.params.allowed_channels.contains(&channel) {
+                anyhow::bail!(
+                    "IBC channel {} not allowed for regulated asset {}",
+                    channel,
+                    asset_id
+                );
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl<T: StateWrite + ?Sized> Ics20TransferExecutionExt for T {}
 
 #[async_trait]
 pub trait Ics20TransferWriteExt: StateWrite {

@@ -85,10 +85,10 @@ pub fn verify_quad_path(
         //   index=1: [siblings[0], current_hash, siblings[1], siblings[2]]
         //   index=2: [siblings[0], siblings[1], current_hash, siblings[2]]
         //   index=3: [siblings[0], siblings[1], siblings[2], current_hash]
-        let is_index_0 = bit_0.not().and(&bit_1.not())?; // !b0 && !b1
-        let is_index_1 = bit_0.clone().and(&bit_1.not())?; // b0 && !b1
-        let is_index_2 = bit_0.not().and(&bit_1.clone())?; // !b0 && b1
-        let is_index_3 = bit_0.clone().and(&bit_1.clone())?; // b0 && b1
+        let is_index_0 = Boolean::kary_and(&[!bit_0.clone(), !bit_1.clone()])?; // !b0 && !b1
+        let is_index_1 = Boolean::kary_and(&[bit_0.clone(), !bit_1.clone()])?; // b0 && !b1
+        let is_index_2 = Boolean::kary_and(&[!bit_0.clone(), bit_1.clone()])?; // !b0 && b1
+        let is_index_3 = Boolean::kary_and(&[bit_0.clone(), bit_1.clone()])?; // b0 && b1
 
         // child_0: current_hash if index=0, else siblings[0]
         let child_0 = is_index_0.select(&current_hash, &siblings[0])?;
@@ -377,9 +377,7 @@ impl CompliancePlaintextVar {
         let chunk_size_bits = 31 * 8;
         let mut fqs = Vec::new();
         for chunk in bits.chunks(chunk_size_bits) {
-            let mut padded_chunk = chunk.to_vec();
-            padded_chunk.resize(256, Boolean::FALSE);
-            let fq_var = Boolean::le_bits_to_fp_var(&padded_chunk)?;
+            let fq_var = Boolean::le_bits_to_fp(chunk)?;
             fqs.push(fq_var);
         }
 
@@ -417,9 +415,7 @@ impl CompliancePlaintextVar {
         let chunk_size_bits = 31 * 8;
         let mut fqs = Vec::new();
         for chunk in bits.chunks(chunk_size_bits) {
-            let mut padded_chunk = chunk.to_vec();
-            padded_chunk.resize(256, Boolean::FALSE);
-            let fq_var = Boolean::le_bits_to_fp_var(&padded_chunk)?;
+            let fq_var = Boolean::le_bits_to_fp(chunk)?;
             fqs.push(fq_var);
         }
 
@@ -717,9 +713,15 @@ fn fq_is_less_than(a: &FqVar, b: &FqVar) -> Result<Boolean<Fq>, SynthesisError> 
 
     for (p, q) in zip(a_bits, b_bits) {
         // If we see a=1, b=0 and haven't determined lt yet, then a > b
-        gt = gt.or(&lt.not().and(&p)?.and(&q.not())?)?;
+        gt = Boolean::kary_or(&[
+            gt,
+            Boolean::kary_and(&[!lt.clone(), p.clone(), !q.clone()])?,
+        ])?;
         // If we see a=0, b=1 and haven't determined gt yet, then a < b
-        lt = lt.or(&gt.not().and(&q)?.and(&p.not())?)?;
+        lt = Boolean::kary_or(&[
+            lt,
+            Boolean::kary_and(&[!gt.clone(), q.clone(), !p.clone()])?,
+        ])?;
     }
 
     Ok(lt)
@@ -781,7 +783,7 @@ fn verify_asset_registry_imt(
     // unlike is_cmp which only works for values < (p-1)/2.
     let gt_low = fq_is_less_than(&indexed_leaf.value, &note_asset_id)?; // leaf.value < asset_id
     let lt_high = fq_is_less_than(&note_asset_id, &indexed_leaf.next_value)?; // asset_id < leaf.next_value
-    let is_in_gap = gt_low.and(&lt_high)?;
+    let is_in_gap = Boolean::kary_and(&[gt_low, lt_high])?;
 
     // 5. Select based on regulation status:
     // - Regulated (is_regulated=true): must have exact match (membership)
@@ -1068,7 +1070,7 @@ pub fn verify_threshold_flag_simple(
     is_flagged: &Boolean<Fq>,
 ) -> Result<(), SynthesisError> {
     let amount_lt_threshold = fq_is_less_than(amount, threshold)?;
-    let amount_gte_threshold = amount_lt_threshold.not();
+    let amount_gte_threshold = !amount_lt_threshold;
     is_flagged.enforce_equal(&amount_gte_threshold)?;
     Ok(())
 }

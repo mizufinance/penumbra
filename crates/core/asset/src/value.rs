@@ -319,7 +319,7 @@ impl EqGadget<Fq> for ValueVar {
     fn is_eq(&self, other: &Self) -> Result<Boolean<Fq>, SynthesisError> {
         let amount_eq = self.amount.is_eq(&other.amount)?;
         let asset_id_eq = self.asset_id.is_eq(&other.asset_id)?;
-        amount_eq.and(&asset_id_eq)
+        Boolean::kary_and(&[amount_eq, asset_id_eq])
     }
 }
 

@@ -59,6 +59,7 @@ impl AppActionHandler for Action {
             Action::ActionLiquidityTournamentVote(action) => action.check_stateless(context).await,
             Action::ComplianceRegisterAsset(action) => action.check_stateless(()).await,
             Action::ComplianceRegisterUser(action) => action.check_stateless(()).await,
+            Action::AggregateBundle(_) => Ok(()),
         }
     }
 
@@ -103,6 +104,7 @@ impl AppActionHandler for Action {
             Action::ActionLiquidityTournamentVote(action) => action.check_historical(state).await,
             Action::ComplianceRegisterAsset(action) => action.check_historical(state).await,
             Action::ComplianceRegisterUser(action) => action.check_historical(state).await,
+            Action::AggregateBundle(_) => Ok(()),
         }
     }
 
@@ -147,6 +149,7 @@ impl AppActionHandler for Action {
             Action::ActionLiquidityTournamentVote(action) => action.check_and_execute(state).await,
             Action::ComplianceRegisterAsset(action) => action.check_and_execute(state).await,
             Action::ComplianceRegisterUser(action) => action.check_and_execute(state).await,
+            Action::AggregateBundle(_) => Ok(()),
         }
     }
 }

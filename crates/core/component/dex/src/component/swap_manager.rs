@@ -60,7 +60,8 @@ pub trait SwapDataRead: StateRead {
 
 impl<T: StateRead + ?Sized> SwapDataRead for T {}
 
-pub(crate) trait SwapDataWrite: StateWrite {
+#[allow(async_fn_in_trait)]
+pub trait SwapDataWrite: StateWrite {
     async fn accumulate_swap_flow(
         &mut self,
         trading_pair: &TradingPair,

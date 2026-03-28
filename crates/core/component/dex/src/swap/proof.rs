@@ -7,18 +7,22 @@ use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
+use decaf377::r1cs::{ElementVar, FqVar};
 use decaf377::Bls12_377;
 use decaf377::{Fq, Fr};
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
+use once_cell::sync::Lazy;
 use penumbra_sdk_fee::Fee;
+use penumbra_sdk_proof_params::batch::BatchItem;
+use penumbra_sdk_proof_params::statement_hash::{hash_statement_fields, hash_statement_fields_var};
 use penumbra_sdk_proto::{core::component::dex::v1 as pb, DomainType};
 use penumbra_sdk_tct as tct;
 use penumbra_sdk_tct::r1cs::StateCommitmentVar;
 
 use penumbra_sdk_asset::{
     asset,
-    balance::{self, commitment::BalanceCommitmentVar, BalanceVar},
+    balance::{self, BalanceVar},
     Value,
 };
 use penumbra_sdk_keys::{keys::Diversifier, Address};
@@ -30,6 +34,87 @@ use crate::{
 };
 
 use penumbra_sdk_proof_params::{DummyWitness, GROTH16_PROOF_LENGTH_BYTES};
+
+const SWAP_STATEMENT_FIELD_COUNT: usize = 3;
+
+static SWAP_STATEMENT_HASH_DOMAIN: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"penumbra.dex.swap.public_input_hash.v1").as_bytes(),
+    )
+});
+static SWAP_STATEMENT_PAD_0: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"penumbra.dex.swap.public_input_hash.pad0").as_bytes(),
+    )
+});
+static SWAP_STATEMENT_PAD_1: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"penumbra.dex.swap.public_input_hash.pad1").as_bytes(),
+    )
+});
+
+fn swap_statement_fields(public: &SwapProofPublic) -> Result<Vec<Fq>> {
+    let mut fields = Vec::new();
+    fields.extend(
+        public
+            .balance_commitment
+            .0
+            .to_field_elements()
+            .context("balance_commitment should be a Bls12-377 field member")?,
+    );
+    fields.extend(
+        public
+            .swap_commitment
+            .0
+            .to_field_elements()
+            .context("swap_commitment should be a Bls12-377 field member")?,
+    );
+    fields.extend(
+        public
+            .fee_commitment
+            .0
+            .to_field_elements()
+            .context("fee_commitment should be a Bls12-377 field member")?,
+    );
+    anyhow::ensure!(
+        fields.len() == SWAP_STATEMENT_FIELD_COUNT,
+        "invalid swap statement field length: expected {}, got {}",
+        SWAP_STATEMENT_FIELD_COUNT,
+        fields.len()
+    );
+    Ok(fields)
+}
+
+fn swap_statement_hash(public: &SwapProofPublic) -> Result<Fq> {
+    let fields = swap_statement_fields(public)?;
+    hash_statement_fields(
+        &SWAP_STATEMENT_HASH_DOMAIN,
+        *SWAP_STATEMENT_PAD_0,
+        *SWAP_STATEMENT_PAD_1,
+        &fields,
+        SWAP_STATEMENT_FIELD_COUNT,
+        |expected, got| {
+            anyhow::anyhow!("invalid swap statement field length: expected {expected}, got {got}")
+        },
+    )
+}
+
+fn swap_statement_hash_var(
+    cs: ConstraintSystemRef<Fq>,
+    fields: &[FqVar],
+) -> ark_relations::r1cs::Result<FqVar> {
+    if fields.len() != SWAP_STATEMENT_FIELD_COUNT {
+        return Err(ark_relations::r1cs::SynthesisError::Unsatisfiable);
+    }
+    hash_statement_fields_var(
+        cs,
+        &SWAP_STATEMENT_HASH_DOMAIN,
+        *SWAP_STATEMENT_PAD_0,
+        *SWAP_STATEMENT_PAD_1,
+        fields,
+        SWAP_STATEMENT_FIELD_COUNT,
+    )
+}
 
 /// The public inputs to a [`SwapProof`].
 #[derive(Clone, Debug)]
@@ -85,7 +170,12 @@ fn check_circuit_satisfaction(public: SwapProofPublic, private: SwapProofPrivate
     use ark_relations::r1cs::{self, ConstraintSystem};
 
     let cs: ConstraintSystemRef<_> = ConstraintSystem::new_ref();
-    let circuit = SwapCircuit { public, private };
+    let claimed_statement_hash = swap_statement_hash(&public)?;
+    let circuit = SwapCircuit {
+        public,
+        private,
+        claimed_statement_hash,
+    };
     cs.set_optimization_goal(r1cs::OptimizationGoal::Constraints);
     circuit
         .generate_constraints(cs.clone())
@@ -100,6 +190,7 @@ fn check_circuit_satisfaction(public: SwapProofPublic, private: SwapProofPrivate
 pub struct SwapCircuit {
     public: SwapProofPublic,
     private: SwapProofPrivate,
+    claimed_statement_hash: Fq,
 }
 
 impl ConstraintSynthesizer<Fq> for SwapCircuit {
@@ -109,14 +200,16 @@ impl ConstraintSynthesizer<Fq> for SwapCircuit {
             SwapPlaintextVar::new_witness(cs.clone(), || Ok(self.private.swap_plaintext.clone()))?;
         let fee_blinding_var =
             UInt8::new_witness_vec(cs.clone(), &self.private.fee_blinding.to_bytes())?;
+        let claimed_balance_commitment_var =
+            ElementVar::new_witness(cs.clone(), || Ok(self.public.balance_commitment.0))?;
+        let claimed_swap_commitment =
+            StateCommitmentVar::new_witness(cs.clone(), || Ok(self.public.swap_commitment))?;
+        let claimed_fee_commitment_var =
+            ElementVar::new_witness(cs.clone(), || Ok(self.public.fee_commitment.0))?;
 
         // Inputs
-        let claimed_balance_commitment =
-            BalanceCommitmentVar::new_input(cs.clone(), || Ok(self.public.balance_commitment))?;
-        let claimed_swap_commitment =
-            StateCommitmentVar::new_input(cs.clone(), || Ok(self.public.swap_commitment))?;
-        let claimed_fee_commitment =
-            BalanceCommitmentVar::new_input(cs, || Ok(self.public.fee_commitment))?;
+        let claimed_statement_hash_var =
+            FqVar::new_input(cs.clone(), || Ok(self.claimed_statement_hash))?;
 
         // Swap commitment integrity check
         let swap_commitment = swap_plaintext_var.commit()?;
@@ -125,7 +218,7 @@ impl ConstraintSynthesizer<Fq> for SwapCircuit {
         // Fee commitment integrity check
         let fee_balance = BalanceVar::from_negative_value_var(swap_plaintext_var.claim_fee.clone());
         let fee_commitment = fee_balance.commit(fee_blinding_var)?;
-        claimed_fee_commitment.enforce_equal(&fee_commitment)?;
+        claimed_fee_commitment_var.enforce_equal(&fee_commitment.inner)?;
 
         // Reconstruct swap action balance commitment
         let transparent_blinding_var = UInt8::constant_vec(&[0u8; 32]);
@@ -137,7 +230,16 @@ impl ConstraintSynthesizer<Fq> for SwapCircuit {
         let total_balance_commitment = transparent_balance_commitment + fee_commitment;
 
         // Balance commitment integrity check
-        claimed_balance_commitment.enforce_equal(&total_balance_commitment)?;
+        claimed_balance_commitment_var.enforce_equal(&total_balance_commitment.inner)?;
+
+        // Statement hash integrity check.
+        let statement_fields = vec![
+            claimed_balance_commitment_var.compress_to_field()?,
+            claimed_swap_commitment.inner().clone(),
+            claimed_fee_commitment_var.compress_to_field()?,
+        ];
+        let computed_statement_hash = swap_statement_hash_var(cs, &statement_fields)?;
+        computed_statement_hash.enforce_equal(&claimed_statement_hash_var)?;
 
         Ok(())
     }
@@ -176,17 +278,32 @@ impl DummyWitness for SwapCircuit {
             claim_address: address,
             rseed: Rseed([1u8; 32]),
         };
+        let fee_blinding = Fr::from(1u64);
+        let fee_commitment = swap_plaintext.claim_fee.commit(fee_blinding);
+        let value_1 = swap_plaintext.delta_1_value();
+        let value_2 = swap_plaintext.delta_2_value();
+        let value_fee = swap_plaintext.claim_fee.0;
+        let mut balance = penumbra_sdk_asset::Balance::default();
+        balance -= value_1;
+        balance -= value_2;
+        balance -= value_fee;
+        let balance_commitment = balance.commit(fee_blinding);
+        let public = SwapProofPublic {
+            swap_commitment: swap_plaintext.swap_commitment(),
+            fee_commitment,
+            balance_commitment,
+        };
+        let private = SwapProofPrivate {
+            swap_plaintext: swap_plaintext.clone(),
+            fee_blinding,
+        };
+        let claimed_statement_hash =
+            swap_statement_hash(&public).expect("dummy swap statement hash should compute");
 
         Self {
-            private: SwapProofPrivate {
-                swap_plaintext: swap_plaintext.clone(),
-                fee_blinding: Fr::from(1u64),
-            },
-            public: SwapProofPublic {
-                swap_commitment: swap_plaintext.swap_commitment(),
-                fee_commitment: balance::Commitment(decaf377::Element::GENERATOR),
-                balance_commitment: balance::Commitment(decaf377::Element::GENERATOR),
-            },
+            private,
+            public,
+            claimed_statement_hash,
         }
     }
 }
@@ -203,7 +320,12 @@ impl SwapProof {
         public: SwapProofPublic,
         private: SwapProofPrivate,
     ) -> anyhow::Result<Self> {
-        let circuit = SwapCircuit { public, private };
+        let claimed_statement_hash = swap_statement_hash(&public)?;
+        let circuit = SwapCircuit {
+            public,
+            private,
+            claimed_statement_hash,
+        };
         let proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
             circuit, pk, blinding_r, blinding_s,
         )
@@ -213,13 +335,18 @@ impl SwapProof {
         Ok(Self(proof_bytes))
     }
 
+    /// Construct a batch item for deferred Groth16 verification.
+    pub fn to_batch_item(&self, public: SwapProofPublic) -> anyhow::Result<BatchItem> {
+        let proof =
+            Proof::deserialize_compressed_unchecked(&self.0[..]).map_err(|e| anyhow::anyhow!(e))?;
+        let statement_hash = swap_statement_hash(&public)?;
+        Ok(BatchItem {
+            proof,
+            public_inputs: vec![statement_hash],
+        })
+    }
+
     /// Called to verify the proof using the provided public inputs.
-    ///
-    /// The public inputs are:
-    /// * balance commitment,
-    /// * swap commitment,
-    /// * fee commimtment,
-    ///
     // Commented out, but this may be useful when debugging proof verification failures,
     // to check that the proof data and verification keys are consistent.
     //#[tracing::instrument(skip(self, vk), fields(self = ?base64::encode(&self.clone().encode_to_vec()), vk = ?vk.debug_id()))]
@@ -229,38 +356,14 @@ impl SwapProof {
         vk: &PreparedVerifyingKey<Bls12_377>,
         public: SwapProofPublic,
     ) -> anyhow::Result<()> {
-        let proof =
-            Proof::deserialize_compressed_unchecked(&self.0[..]).map_err(|e| anyhow::anyhow!(e))?;
+        let item = self.to_batch_item(public)?;
 
-        let mut public_inputs = Vec::new();
-        public_inputs.extend(
-            public
-                .balance_commitment
-                .0
-                .to_field_elements()
-                .context("balance_commitment should be a Bls12-377 field member")?,
-        );
-        public_inputs.extend(
-            public
-                .swap_commitment
-                .0
-                .to_field_elements()
-                .context("swap_commitment should be a Bls12-377 field member")?,
-        );
-        public_inputs.extend(
-            public
-                .fee_commitment
-                .0
-                .to_field_elements()
-                .context("fee_commitment should be a Bls12-377 field member")?,
-        );
-
-        tracing::trace!(?public_inputs);
+        tracing::trace!(public_inputs = ?item.public_inputs);
         let start = std::time::Instant::now();
         let proof_result = Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(
             vk,
-            public_inputs.as_slice(),
-            &proof,
+            item.public_inputs.as_slice(),
+            &item.proof,
         )
         .map_err(|err| anyhow::anyhow!(err))?;
         tracing::debug!(?proof_result, elapsed = ?start.elapsed());
@@ -296,7 +399,10 @@ mod tests {
     use penumbra_sdk_asset::{Balance, Value};
     use penumbra_sdk_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
     use penumbra_sdk_num::Amount;
+    use penumbra_sdk_proof_params::generate_prepared_test_parameters;
     use proptest::prelude::*;
+    use proptest::strategy::ValueTree;
+    use rand_core::OsRng;
 
     fn fr_strategy() -> BoxedStrategy<Fr> {
         any::<[u8; 32]>()
@@ -363,6 +469,29 @@ mod tests {
             assert!(check_satisfaction(&public, &private).is_ok());
             assert!(check_circuit_satisfaction(public, private).is_ok());
         }
+    }
+
+    #[test]
+    fn swap_to_batch_item_has_single_public_input() {
+        let mut runner = proptest::test_runner::TestRunner::default();
+        let (public, private) = arb_valid_swap_statement()
+            .new_tree(&mut runner)
+            .expect("can generate valid swap statement")
+            .current();
+        let mut rng = OsRng;
+        let (pk, _vk) = generate_prepared_test_parameters::<SwapCircuit>(&mut rng);
+        let proof = SwapProof::prove(
+            Fq::rand(&mut rng),
+            Fq::rand(&mut rng),
+            &pk,
+            public.clone(),
+            private,
+        )
+        .expect("can create swap proof");
+        let item = proof
+            .to_batch_item(public)
+            .expect("can extract swap batch item");
+        assert_eq!(item.public_inputs.len(), 1);
     }
 
     prop_compose! {

@@ -134,12 +134,52 @@ impl ::prost::Name for DetectionData {
         "/penumbra.core.transaction.v1.DetectionData".into()
     }
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FamilyAggregate {
+    #[prost(enumeration = "ProofFamilyId", tag = "1")]
+    pub family_id: i32,
+    #[prost(uint32, tag = "2")]
+    pub real_count: u32,
+    #[prost(uint32, tag = "3")]
+    pub padded_count: u32,
+    #[prost(bytes = "vec", tag = "4")]
+    pub aggregate_proof: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for FamilyAggregate {
+    const NAME: &'static str = "FamilyAggregate";
+    const PACKAGE: &'static str = "penumbra.core.transaction.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.transaction.v1.FamilyAggregate".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.transaction.v1.FamilyAggregate".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AggregateBundle {
+    #[prost(uint32, tag = "1")]
+    pub version: u32,
+    #[prost(bytes = "vec", tag = "2")]
+    pub srs_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, repeated, tag = "3")]
+    pub families: ::prost::alloc::vec::Vec<FamilyAggregate>,
+}
+impl ::prost::Name for AggregateBundle {
+    const NAME: &'static str = "AggregateBundle";
+    const PACKAGE: &'static str = "penumbra.core.transaction.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.transaction.v1.AggregateBundle".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.transaction.v1.AggregateBundle".into()
+    }
+}
 /// A state change performed by a transaction.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Action {
     #[prost(
         oneof = "action::Action",
-        tags = "1, 2, 3, 4, 16, 17, 18, 19, 20, 21, 22, 30, 31, 32, 34, 40, 41, 42, 50, 51, 52, 53, 54, 55, 70, 80, 81, 200"
+        tags = "1, 2, 3, 4, 16, 17, 18, 19, 20, 21, 22, 30, 31, 32, 34, 40, 41, 42, 50, 51, 52, 53, 54, 55, 70, 80, 81, 82, 200"
     )]
     pub action: ::core::option::Option<action::Action>,
 }
@@ -235,6 +275,8 @@ pub mod action {
         ComplianceRegisterUser(
             super::super::super::component::compliance::v1::MsgRegisterUser,
         ),
+        #[prost(message, tag = "82")]
+        AggregateBundle(super::AggregateBundle),
         #[prost(message, tag = "200")]
         Ics20Withdrawal(super::super::super::component::ibc::v1::Ics20Withdrawal),
     }
@@ -480,7 +522,7 @@ impl ::prost::Name for TransactionBodyView {
 pub struct ActionView {
     #[prost(
         oneof = "action_view::ActionView",
-        tags = "1, 2, 3, 4, 21, 35, 16, 17, 18, 19, 20, 22, 30, 31, 32, 34, 41, 42, 50, 51, 52, 53, 54, 55, 43, 70, 80, 81, 200"
+        tags = "1, 2, 3, 4, 21, 35, 16, 17, 18, 19, 20, 22, 30, 31, 32, 34, 41, 42, 50, 51, 52, 53, 54, 55, 43, 70, 80, 81, 82, 200"
     )]
     pub action_view: ::core::option::Option<action_view::ActionView>,
 }
@@ -580,6 +622,8 @@ pub mod action_view {
         ComplianceRegisterUser(
             super::super::super::component::compliance::v1::MsgRegisterUser,
         ),
+        #[prost(message, tag = "82")]
+        AggregateBundle(super::AggregateBundle),
         #[prost(message, tag = "200")]
         Ics20Withdrawal(super::super::super::component::ibc::v1::Ics20Withdrawal),
     }
@@ -975,5 +1019,46 @@ impl ::prost::Name for MemoView {
     }
     fn type_url() -> ::prost::alloc::string::String {
         "/penumbra.core.transaction.v1.MemoView".into()
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ProofFamilyId {
+    Unspecified = 0,
+    Spend = 1,
+    Output = 2,
+    Swap = 3,
+    SwapClaim = 4,
+    Convert = 5,
+    DelegatorVote = 6,
+}
+impl ProofFamilyId {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "PROOF_FAMILY_ID_UNSPECIFIED",
+            Self::Spend => "PROOF_FAMILY_ID_SPEND",
+            Self::Output => "PROOF_FAMILY_ID_OUTPUT",
+            Self::Swap => "PROOF_FAMILY_ID_SWAP",
+            Self::SwapClaim => "PROOF_FAMILY_ID_SWAP_CLAIM",
+            Self::Convert => "PROOF_FAMILY_ID_CONVERT",
+            Self::DelegatorVote => "PROOF_FAMILY_ID_DELEGATOR_VOTE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "PROOF_FAMILY_ID_UNSPECIFIED" => Some(Self::Unspecified),
+            "PROOF_FAMILY_ID_SPEND" => Some(Self::Spend),
+            "PROOF_FAMILY_ID_OUTPUT" => Some(Self::Output),
+            "PROOF_FAMILY_ID_SWAP" => Some(Self::Swap),
+            "PROOF_FAMILY_ID_SWAP_CLAIM" => Some(Self::SwapClaim),
+            "PROOF_FAMILY_ID_CONVERT" => Some(Self::Convert),
+            "PROOF_FAMILY_ID_DELEGATOR_VOTE" => Some(Self::DelegatorVote),
+            _ => None,
+        }
     }
 }

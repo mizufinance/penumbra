@@ -4,7 +4,7 @@ use anyhow::{ensure, Result};
 use cnidarium::{StateRead, StateWrite};
 use penumbra_sdk_ibc::{component::HostInterface, StateReadExt as _};
 
-use crate::component::transfer::{Ics20TransferReadExt as _, Ics20TransferWriteExt as _};
+use crate::component::transfer::{Ics20TransferExecutionExt as _, Ics20TransferWriteExt as _};
 use crate::component::Ics20WithdrawalWithHandler;
 
 impl<HI: HostInterface> Ics20WithdrawalWithHandler<HI> {
@@ -26,7 +26,7 @@ impl<HI: HostInterface> Ics20WithdrawalWithHandler<HI> {
     pub async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
         let current_block_time = HI::get_block_timestamp(&state).await?;
         state
-            .withdrawal_check(self.action(), current_block_time)
+            .withdrawal_check_cached(self.action(), current_block_time)
             .await?;
         state.withdrawal_execute(self.action()).await
     }

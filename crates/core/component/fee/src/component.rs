@@ -13,7 +13,7 @@ use penumbra_sdk_proto::DomainType as _;
 use tendermint::abci;
 use tracing::instrument;
 
-pub use fee_pay::FeePay;
+pub use fee_pay::{clear_block_fee_price_cache, FeePay};
 pub use view::{StateReadExt, StateWriteExt};
 
 // Fee component

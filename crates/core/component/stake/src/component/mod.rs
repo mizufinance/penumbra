@@ -10,6 +10,7 @@ pub use self::{
     stake::{ConsensusIndexRead, SlashingData, Staking, StateReadExt, StateWriteExt},
     validator_handler::validator_store::ValidatorPoolDeposit,
 };
+pub use action_handler::undelegate_claim::undelegate_claim_check_stateless_and_extract;
 
 // Max validator power is 1152921504606846975 (i64::MAX / 8)
 // https://github.com/tendermint/tendermint/blob/master/types/validator_set.go#L25

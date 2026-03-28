@@ -476,6 +476,9 @@ impl TransactionViewExt for TransactionView {
                     action = format!("Register user for asset {}", x.leaf.asset_id);
                     ["Compliance: Register User", &action]
                 }
+                penumbra_sdk_transaction::ActionView::AggregateBundle(_) => {
+                    ["Aggregate Bundle", ""]
+                }
             };
 
             actions_table.add_row(row);

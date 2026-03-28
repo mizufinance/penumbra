@@ -27,7 +27,6 @@ mod events;
 pub fn new(
     storage: Storage,
 ) -> Server<
-    // These bounds ensure that the server can be bound to a TCP port, or a Unix socket.
     impl tower_service::Service<
             ConsensusRequest,
             Response = ConsensusResponse,
@@ -65,8 +64,23 @@ pub fn new(
             req.create_span()
         }))
         .service(tower_actor::Actor::new(10, {
+            let storage = storage.clone();
             let stateless_cache = stateless_cache.clone();
-            |queue: _| Mempool::new(storage.clone(), stateless_cache, queue).run()
+            move |queue: _| {
+                let storage = storage.clone();
+                let stateless_cache = stateless_cache.clone();
+                async move {
+                    tracing::info!("mempool actor future starting");
+                    let result = Mempool::new(storage, stateless_cache, queue).run().await;
+                    match &result {
+                        Ok(()) => tracing::warn!("mempool actor future exited cleanly"),
+                        Err(error) => {
+                            tracing::error!(?error, "mempool actor future exited with error")
+                        }
+                    }
+                    result
+                }
+            }
         }));
     let info = Info::new(storage.clone());
     let snapshot = Snapshot {};

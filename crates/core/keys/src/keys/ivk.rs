@@ -1,4 +1,4 @@
-use ark_ff::{PrimeField, Zero};
+use ark_ff::{BigInteger, PrimeField, Zero};
 use rand_core::{CryptoRng, RngCore};
 
 use ark_r1cs_std::prelude::*;
@@ -116,6 +116,28 @@ pub struct IncomingViewingKeyVar {
 }
 
 impl IncomingViewingKeyVar {
+    fn is_less_than_constant(value: &FqVar, constant: Fq) -> Result<Boolean<Fq>, SynthesisError> {
+        let value_bits = value.to_bits_le()?;
+        let mut constant_bits = constant.into_bigint().to_bits_le();
+        constant_bits.resize(value_bits.len(), false);
+
+        let mut prefix_equal = Boolean::TRUE;
+        let mut is_less = Boolean::FALSE;
+
+        for (value_bit, constant_bit) in value_bits.iter().rev().zip(constant_bits.iter().rev()) {
+            if *constant_bit {
+                let this_bit_proves_less =
+                    Boolean::kary_and(&[prefix_equal.clone(), !value_bit.clone()])?;
+                is_less = Boolean::kary_or(&[is_less, this_bit_proves_less])?;
+                prefix_equal = Boolean::kary_and(&[prefix_equal, value_bit.clone()])?;
+            } else {
+                prefix_equal = Boolean::kary_and(&[prefix_equal, !value_bit.clone()])?;
+            }
+        }
+
+        Ok(is_less)
+    }
+
     /// Derive the incoming viewing key from the nk and the ak.
     pub fn derive(nk: &NullifierKeyVar, ak: &AuthorizationKeyVar) -> Result<Self, SynthesisError> {
         let cs = nk.inner.cs();
@@ -164,24 +186,20 @@ impl IncomingViewingKeyVar {
         mul.enforce_equal(&zero)?;
 
         // Constrain: ivk_mod_r < r
-        // Here we can use the existing `enforce_cmp` method on FqVar as r <= (q-1)/2.
-        ivk_mod_r.enforce_cmp(&mod_r_var, core::cmp::Ordering::Less, false)?;
+        Self::is_less_than_constant(&ivk_mod_r, r_modulus)?.enforce_equal(&Boolean::TRUE)?;
 
         // Constraint: a = 4 => ivk_mod_r < q - 4 * mod_r
-        let is_less_than_q_minus_4_mod_r = ivk_mod_r.is_cmp(
-            &FqVar::new_constant(
-                cs.clone(),
-                -Fq::from(MOD_R_QUOTIENT as u64) * Fq::from(r_modulus),
-            )?,
-            core::cmp::Ordering::Less,
-            false,
+        let is_less_than_q_minus_4_mod_r = Self::is_less_than_constant(
+            &ivk_mod_r,
+            -Fq::from(MOD_R_QUOTIENT as u64) * Fq::from(r_modulus),
         )?;
-        let overflows = a_var
-            .is_eq(&FqVar::new_constant(
+        let overflows = Boolean::kary_and(&[
+            a_var.is_eq(&FqVar::new_constant(
                 cs.clone(),
                 &Fq::from(MOD_R_QUOTIENT as u64),
-            )?)?
-            .and(&is_less_than_q_minus_4_mod_r.not())?;
+            )?)?,
+            !is_less_than_q_minus_4_mod_r.clone(),
+        ])?;
         overflows.enforce_equal(&Boolean::FALSE)?;
 
         Ok(IncomingViewingKeyVar { inner: ivk_mod_r })

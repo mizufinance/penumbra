@@ -76,6 +76,7 @@ fn main() -> anyhow::Result<()> {
                 "../../proto/penumbra/penumbra/custody/v1/custody.proto",
                 "../../proto/penumbra/penumbra/custody/threshold/v1/threshold.proto",
                 "../../proto/penumbra/penumbra/tools/summoning/v1/summoning.proto",
+                "../../proto/penumbra/penumbra/util/node/v1/node.proto",
                 "../../proto/penumbra/penumbra/util/tendermint_proxy/v1/tendermint_proxy.proto",
                 "../../proto/penumbra/penumbra/view/v1/view.proto",
                 "../../proto/rust-vendored/tendermint/abci/types.proto",

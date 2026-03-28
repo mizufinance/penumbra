@@ -251,7 +251,11 @@ async fn invalid_dummy_spend() -> anyhow::Result<()> {
         salt: Fq::from(0u64),
     };
 
-    // Attempt to prove - this should fail because the constraints are unsatisfiable
+    // Attempt to prove - this should fail because the constraints are unsatisfiable.
+    // In debug builds the preflight constraint check catches it at prove() time.
+    // In release builds the preflight is skipped; proof generation "succeeds" but
+    // the resulting proof must fail verification.
+    let public_for_verify = public.clone();
     let proof_result = SpendProof::prove(
         Fq::rand(&mut OsRng),
         Fq::rand(&mut OsRng),
@@ -260,20 +264,28 @@ async fn invalid_dummy_spend() -> anyhow::Result<()> {
         private,
     );
 
-    // The proof should fail to generate because the constraint system catches the invalid inputs.
-    // This is good security - we catch forgery attempts at proof generation time.
-    assert!(
-        proof_result.is_err(),
-        "proof generation should fail for invalid dummy spend inputs"
-    );
-    let err_msg = format!("{:?}", proof_result.unwrap_err());
-    assert!(
-        err_msg.contains("Unsatisfiable")
-            || err_msg.contains("UnsatisfiedConstraints")
-            || err_msg.contains("SynthesisError"),
-        "error should be about unsatisfiable constraints, got: {}",
-        err_msg
-    );
+    match proof_result {
+        Err(e) => {
+            let err_msg = format!("{:?}", e);
+            assert!(
+                err_msg.contains("Unsatisfiable")
+                    || err_msg.contains("UnsatisfiedConstraints")
+                    || err_msg.contains("SynthesisError"),
+                "error should be about unsatisfiable constraints, got: {}",
+                err_msg
+            );
+        }
+        Ok(proof) => {
+            let verify_result = proof.verify(
+                &penumbra_sdk_proof_params::SPEND_PROOF_VERIFICATION_KEY,
+                public_for_verify,
+            );
+            assert!(
+                verify_result.is_err(),
+                "invalid proof should fail verification"
+            );
+        }
+    }
 
     Ok(())
 }

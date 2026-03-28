@@ -1,0 +1,44 @@
+[package]
+name = "android_proof_lab"
+authors = { workspace = true }
+repository = { workspace = true }
+version = { workspace = true }
+license = { workspace = true }
+edition = { workspace = true }
+publish = false
+
+[features]
+default = []
+icicle-cpu-spike = ["dep:icicle-bls12-377", "dep:icicle-core", "dep:icicle-runtime"]
+
+[dependencies]
+anyhow = { workspace = true }
+ark-ec = { workspace = true, default-features = false }
+ark-ff = { workspace = true, default-features = false }
+ark-groth16 = { workspace = true, default-features = false }
+ark-relations = { workspace = true }
+ark-serialize = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+csv = "1"
+decaf377 = { workspace = true, features = ["r1cs"], default-features = true }
+hex = { workspace = true }
+libloading = "0.8"
+penumbra-sdk-asset = { workspace = true, default-features = true }
+penumbra-sdk-compliance = { workspace = true, default-features = false, features = ["test-helpers"] }
+penumbra-sdk-proof-params = { workspace = true, default-features = false, features = ["bundled-proving-keys", "parallel"] }
+penumbra-sdk-proto = { workspace = true, default-features = false }
+penumbra-sdk-sct = { workspace = true, default-features = false }
+penumbra-sdk-shielded-pool = { workspace = true, default-features = false, features = ["benchmark-helpers", "parallel"] }
+penumbra-sdk-tct = { workspace = true, default-features = true, features = ["r1cs"] }
+rand_core = { workspace = true, features = ["getrandom"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+icicle-bls12-377 = { git = "https://github.com/ingonyama-zk/icicle.git", tag = "v4.0.0", package = "icicle-bls12-377", default-features = false, features = ["msm"], optional = true }
+icicle-core = { git = "https://github.com/ingonyama-zk/icicle.git", tag = "v4.0.0", package = "icicle-core", optional = true }
+icicle-runtime = { git = "https://github.com/ingonyama-zk/icicle.git", tag = "v4.0.0", package = "icicle-runtime", optional = true }
+
+[[bin]]
+name = "icicle_cpu_spike"
+path = "src/bin/icicle_cpu_spike.rs"
+required-features = ["icicle-cpu-spike"]

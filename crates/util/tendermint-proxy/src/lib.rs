@@ -10,19 +10,36 @@
 
 mod tendermint_proxy;
 
+use tendermint_rpc::HttpClient;
+
 /// Implements service traits for Tonic gRPC services.
 ///
 /// The fields of this struct are the configuration and data
 /// necessary to the gRPC services.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct TendermintProxy {
     /// Address of upstream Tendermint server to proxy requests to.
     tendermint_url: url::Url,
+    /// Reused Tendermint RPC client for front-door proxy requests.
+    client: HttpClient,
 }
 
 impl TendermintProxy {
     /// Returns a new [`TendermintProxy`].
     pub fn new(tendermint_url: url::Url) -> Self {
-        Self { tendermint_url }
+        let client = HttpClient::new(tendermint_url.as_ref())
+            .expect("tendermint rpc URL should be validated before proxy creation");
+        Self {
+            tendermint_url,
+            client,
+        }
+    }
+}
+
+impl std::fmt::Debug for TendermintProxy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TendermintProxy")
+            .field("tendermint_url", &self.tendermint_url)
+            .finish()
     }
 }

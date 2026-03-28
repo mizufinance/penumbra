@@ -1,0 +1,10 @@
+{
+  "name": "local-unreg-1000-ready",
+  "kind": "ready",
+  "scenario": "unregulated",
+  "count": 1000,
+  "timestamp": 1773114073,
+  "network_data": "network_data.tgz",
+  "wallets": "wallets.tgz",
+  "corpora": ["unregulated"]
+}

@@ -17,6 +17,7 @@ dist = true
 default = ["download-proving-keys"]
 std = ["ibc-types/std"]
 download-proving-keys = ["penumbra-sdk-proof-params/download-proving-keys"]
+benchmark-system-allocator = []
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -57,6 +58,7 @@ metrics-process                  = "2.4.0"
 metrics-tracing-context          = { workspace = true }
 metrics-util                     = "0.18.0"
 mime_guess                       = "2"
+mimalloc                         = "0.1"
 once_cell                        = { workspace = true }
 pbjson-types                     = { workspace = true }
 penumbra-sdk-app                     = { workspace = true, features = ["parallel"], default-features = true }

@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package penumbra.util.node.v1;
+
+service NodeService {
+  rpc SubmitTx(SubmitTxRequest) returns (SubmitTxResponse) {}
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse) {}
+  rpc GetBlockByHeight(GetBlockByHeightRequest) returns (GetBlockByHeightResponse) {}
+}
+
+message SubmitTxRequest {
+  bytes tx = 1;
+}
+
+message SubmitTxResponse {
+  bytes tx_hash = 1;
+  uint32 code = 2;
+  string log = 3;
+}
+
+message GetStatusRequest {}
+
+message GetStatusResponse {
+  uint64 height = 1;
+  string chain_id = 2;
+  bytes app_hash = 3;
+  string timestamp = 4;
+}
+
+message GetBlockByHeightRequest {
+  uint64 height = 1;
+}
+
+message GetBlockByHeightResponse {
+  uint64 height = 1;
+  string chain_id = 2;
+  bytes app_hash = 3;
+  string timestamp = 4;
+  repeated bytes txs = 5;
+}

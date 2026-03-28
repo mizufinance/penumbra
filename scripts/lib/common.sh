@@ -77,7 +77,11 @@ wait_for_grpc() {
     local max_attempts="${2:-30}"
     local interval="${3:-2}"
     for attempt in $(seq 1 "$max_attempts"); do
-        if nc -z -w1 127.0.0.1 "$port" 2>/dev/null; then
+        if command -v nc >/dev/null 2>&1; then
+            if nc -z -w1 127.0.0.1 "$port" 2>/dev/null; then
+                return 0
+            fi
+        elif (echo > /dev/tcp/127.0.0.1/"$port") >/dev/null 2>&1; then
             return 0
         fi
         if [ "$attempt" -eq "$max_attempts" ]; then

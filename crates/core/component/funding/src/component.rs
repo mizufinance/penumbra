@@ -23,6 +23,8 @@ use tracing::instrument;
 
 use crate::{event::EventFundingStreamReward, genesis};
 
+pub use crate::action_handler::liquidity_tournament::liquidity_tournament_vote_check_stateless_and_extract;
+
 pub struct Funding {}
 
 #[async_trait]

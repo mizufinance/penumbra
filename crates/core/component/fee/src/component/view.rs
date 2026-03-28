@@ -105,6 +105,20 @@ pub trait StateWriteExt: StateWrite {
         );
         self.object_put(state_key::fee_accumulator(), new);
     }
+
+    fn raw_accumulate_base_fee_and_tip(&mut self, base_fee: Fee, tip_fee: Fee) {
+        debug_assert_eq!(base_fee.asset_id(), tip_fee.asset_id());
+
+        let old = self.accumulated_base_fees_and_tips();
+        let new = old.alter(
+            |maybe_amounts| match maybe_amounts {
+                Some((base, tip)) => Some((base + base_fee.amount(), tip + tip_fee.amount())),
+                None => Some((base_fee.amount(), tip_fee.amount())),
+            },
+            base_fee.asset_id(),
+        );
+        self.object_put(state_key::fee_accumulator(), new);
+    }
 }
 
 impl<T: StateWrite + ?Sized> StateWriteExt for T {}

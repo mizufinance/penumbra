@@ -1,7 +1,0 @@
-version,scenario,stage,mode,mean_ms,median_ms,samples,profile,run_id,timestamp,git_rev,host_label
-base,1S1O,prove,serial,417.97,418.53,10,quick,run-1772631850-77509,1772631850,unknown-rev,unknown-host
-dev,1S1O,prove,serial,2239.26,2241.76,10,quick,run-1772576892-56799,1772576892,unknown-rev,unknown-host
-local,1S1O,prove,serial,2306.48,2298.94,10,quick,run-1772574420-37965,1772574420,unknown-rev,unknown-host
-base,1S1O,total,concurrent,417.97,418.53,10,quick,run-1772631850-77509,1772631850,unknown-rev,unknown-host
-dev,1S1O,total,concurrent,1673.42,1663.01,10,quick,run-1772576892-56799,1772576892,unknown-rev,unknown-host
-local,1S1O,total,concurrent,1673.43,1678.78,10,quick,run-1772574420-37965,1772574420,unknown-rev,unknown-host

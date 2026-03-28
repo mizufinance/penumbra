@@ -1,27 +1,1385 @@
-use std::sync::Arc;
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
-use cnidarium::{StateRead, StateWrite};
+use bitvec::vec::BitVec;
+use cnidarium::{Snapshot, StateRead, StateWrite};
+use futures::{pin_mut, StreamExt};
+use penumbra_sdk_compact_block::StatePayload;
+use penumbra_sdk_compliance::registry::{check_timestamp_freshness, ComplianceRegistryRead as _};
+use penumbra_sdk_compliance::RegulatedAssetCheck;
+use penumbra_sdk_dex::component::{InternalDexWrite as _, StateReadExt as _, SwapDataWrite as _};
+use penumbra_sdk_dex::event::EventSwap;
+use penumbra_sdk_dex::event::EventSwapClaim;
 use penumbra_sdk_fee::component::FeePay as _;
+use penumbra_sdk_proto::{DomainType as _, StateWriteProto as _};
+use penumbra_sdk_sct::component::clock::EpochRead;
 use penumbra_sdk_sct::component::source::SourceContext;
-use penumbra_sdk_shielded_pool::component::ClueManager;
-use penumbra_sdk_transaction::{gas::GasCost as _, Transaction};
+use penumbra_sdk_sct::component::tree::{SctManager, VerificationExt as _};
+use penumbra_sdk_sct::Nullifier;
+use penumbra_sdk_shielded_pool::component::{ClueManager, StateReadExt as _};
+use penumbra_sdk_shielded_pool::event::{EventOutput, EventSpend};
+use penumbra_sdk_shielded_pool::fmd;
+use penumbra_sdk_tct::StateCommitment;
+use penumbra_sdk_transaction::{gas::GasCost as _, Action, Transaction};
+use penumbra_sdk_txhash::TransactionId;
+use sha2::{Digest as _, Sha256};
+use tokio::sync::OnceCell;
 use tokio::task::JoinSet;
 use tracing::{instrument, Instrument};
 
 use super::AppActionHandler;
+use crate::app::StateReadExt as _;
 
 mod stateful;
 pub(crate) mod stateless;
 
 use self::stateful::{
-    claimed_anchor_is_valid, fmd_parameters_valid, tx_parameters_historical_check,
+    claimed_anchor_is_valid, fmd_parameters_valid_with_context,
+    tx_parameters_historical_check_with_context,
 };
 use stateless::{
     check_memo_exists_if_outputs_absent_if_not, check_non_empty_transaction,
     num_clues_equal_to_num_outputs, valid_binding_signature, validate_spend_output_binding,
 };
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct TransactionExecutionProfile {
+    pub set_source_ms: f64,
+    pub pay_fee_ms: f64,
+    pub action_execute_ms: f64,
+    pub read_local_precheck_ms: f64,
+    pub read_lookup_wait_or_join_ms: f64,
+    pub read_historical_check_ms: f64,
+    pub read_nullifier_wait_ms: f64,
+    pub read_anchor_cache_wait_ms: f64,
+    pub read_anchor_validation_ms: f64,
+    pub read_committed_nullifier_ms: f64,
+    pub read_effects_build_ms: f64,
+    pub nullifier_lookup_count: usize,
+    pub spend_action_execute_ms: f64,
+    pub spend_nullifier_check_ms: f64,
+    pub spend_nullifier_tx_local_scan_ms: f64,
+    pub spend_nullifier_block_log_lookup_ms: f64,
+    pub spend_nullifier_committed_check_ms: f64,
+    pub spend_nullifier_enqueue_ms: f64,
+    pub spend_nullifier_stage_ms: f64,
+    pub spend_nullifier_merge_ms: f64,
+    pub output_action_execute_ms: f64,
+    pub output_add_note_payload_ms: f64,
+    pub other_action_execute_ms: f64,
+    pub record_clues_ms: f64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TxExecutionEffects {
+    pub sct_payloads: Vec<StatePayload>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PreparedCandidateEffects {
+    pub spend_nullifiers: Vec<Nullifier>,
+    pub sct_payloads: Vec<StatePayload>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PreparedCandidateRead {
+    pub check_historical_ms: f64,
+    pub read_wall_ms: f64,
+    pub checktx_fast_context_load_ms: f64,
+    pub checktx_fast_read_queue_wait_ms: f64,
+    pub checktx_fast_read_blocking_total_ms: f64,
+    pub execution_profile: TransactionExecutionProfile,
+    pub effects: PreparedCandidateEffects,
+}
+
+type AnchorPair = (StateCommitment, StateCommitment);
+type ClaimedAnchorKey = penumbra_sdk_tct::Root;
+const NULLIFIER_FILTER_BITS_PER_ENTRY: usize = 12;
+const NULLIFIER_FILTER_HASH_FUNCTIONS: usize = 8;
+const NULLIFIER_FILTER_MIN_BITS: usize = 1024;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct HistoricalCheckProfile {
+    pub total_ms: f64,
+    pub await_ms: f64,
+}
+
+#[derive(Clone, Debug)]
+struct CommittedNullifierFilter {
+    bits: BitVec,
+    hash_function_count: usize,
+}
+
+impl CommittedNullifierFilter {
+    async fn load<S: StateRead>(state: &S) -> Result<Self> {
+        let prefix = penumbra_sdk_sct::state_key::nullifier_set::spent_nullifier_lookup_prefix();
+        let key_stream = state.prefix_keys(prefix);
+        pin_mut!(key_stream);
+        let mut hashes = Vec::new();
+
+        while let Some(entry) = key_stream.next().await {
+            let key = entry?;
+            let suffix = key
+                .strip_prefix(prefix)
+                .with_context(|| format!("spent nullifier key {key} missing expected prefix"))?;
+            let nullifier = Nullifier::parse_hex(suffix)
+                .with_context(|| format!("failed to parse nullifier from state key {key}"))?;
+            hashes.push(Self::hash_pair(&nullifier));
+        }
+
+        let bit_len = (hashes.len() * NULLIFIER_FILTER_BITS_PER_ENTRY)
+            .max(NULLIFIER_FILTER_MIN_BITS)
+            .max(1);
+        let mut filter = Self {
+            bits: BitVec::repeat(false, bit_len),
+            hash_function_count: NULLIFIER_FILTER_HASH_FUNCTIONS,
+        };
+
+        for (hash1, hash2) in hashes {
+            filter.insert_hashes(hash1, hash2);
+        }
+
+        Ok(filter)
+    }
+
+    fn might_contain(&self, nullifier: &Nullifier) -> bool {
+        let (hash1, hash2) = Self::hash_pair(nullifier);
+        self.contains_hashes(hash1, hash2)
+    }
+
+    fn insert_hashes(&mut self, hash1: u64, hash2: u64) {
+        let bit_len = self.bits.len() as u64;
+        for i in 0..self.hash_function_count {
+            let combined = hash1.wrapping_add((i as u64).wrapping_mul(hash2));
+            let index = (combined % bit_len) as usize;
+            self.bits.set(index, true);
+        }
+    }
+
+    fn contains_hashes(&self, hash1: u64, hash2: u64) -> bool {
+        self.positions(hash1, hash2)
+            .all(|index| self.bits.get(index).map(|bit| *bit).unwrap_or(false))
+    }
+
+    fn positions(&self, hash1: u64, hash2: u64) -> impl Iterator<Item = usize> + '_ {
+        let bit_len = self.bits.len() as u64;
+        (0..self.hash_function_count).map(move |i| {
+            let combined = hash1.wrapping_add((i as u64).wrapping_mul(hash2));
+            (combined % bit_len) as usize
+        })
+    }
+
+    fn hash_pair(nullifier: &Nullifier) -> (u64, u64) {
+        let digest = Sha256::digest(nullifier.to_bytes());
+        let hash1 = u64::from_le_bytes(digest[0..8].try_into().expect("digest slice length"));
+        let mut hash2 = u64::from_le_bytes(digest[8..16].try_into().expect("digest slice length"));
+        if hash2 == 0 {
+            hash2 = 1;
+        }
+        (hash1, hash2)
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct AnchorValidationCache {
+    entries: RwLock<HashMap<AnchorPair, Arc<OnceCell<std::result::Result<(), String>>>>>,
+    hits: AtomicUsize,
+    misses: AtomicUsize,
+}
+
+impl AnchorValidationCache {
+    fn entry(
+        &self,
+        pair: AnchorPair,
+    ) -> (Arc<OnceCell<std::result::Result<(), String>>>, bool, f64) {
+        let read_wait_start = Instant::now();
+        let existing = self
+            .entries
+            .read()
+            .expect("anchor cache poisoned")
+            .get(&pair)
+            .cloned();
+        let mut wait_ms = read_wait_start.elapsed().as_secs_f64() * 1000.0;
+        if let Some(cell) = existing {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            return (cell, true, wait_ms);
+        }
+
+        let write_wait_start = Instant::now();
+        let mut entries = self.entries.write().expect("anchor cache poisoned");
+        wait_ms += write_wait_start.elapsed().as_secs_f64() * 1000.0;
+        if let Some(cell) = entries.get(&pair).cloned() {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            return (cell, true, wait_ms);
+        }
+
+        let cell = Arc::new(OnceCell::new());
+        entries.insert(pair, cell.clone());
+        self.misses.fetch_add(1, Ordering::Relaxed);
+        (cell, false, wait_ms)
+    }
+
+    pub(crate) fn stats(&self) -> (usize, usize, usize) {
+        (
+            self.hits.load(Ordering::Relaxed),
+            self.misses.load(Ordering::Relaxed),
+            self.entries.read().expect("anchor cache poisoned").len(),
+        )
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ClaimedAnchorValidationCache {
+    entries: RwLock<HashMap<ClaimedAnchorKey, Arc<OnceCell<std::result::Result<(), String>>>>>,
+    hits: AtomicUsize,
+    misses: AtomicUsize,
+}
+
+impl ClaimedAnchorValidationCache {
+    fn entry(
+        &self,
+        anchor: ClaimedAnchorKey,
+    ) -> (Arc<OnceCell<std::result::Result<(), String>>>, bool) {
+        if let Some(cell) = self
+            .entries
+            .read()
+            .expect("claimed anchor cache poisoned")
+            .get(&anchor)
+            .cloned()
+        {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            return (cell, true);
+        }
+
+        let mut entries = self.entries.write().expect("claimed anchor cache poisoned");
+        if let Some(cell) = entries.get(&anchor).cloned() {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            return (cell, true);
+        }
+
+        let cell = Arc::new(OnceCell::new());
+        entries.insert(anchor, cell.clone());
+        self.misses.fetch_add(1, Ordering::Relaxed);
+        (cell, false)
+    }
+
+    pub(crate) fn stats(&self) -> (usize, usize, usize) {
+        (
+            self.hits.load(Ordering::Relaxed),
+            self.misses.load(Ordering::Relaxed),
+            self.entries
+                .read()
+                .expect("claimed anchor cache poisoned")
+                .len(),
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+struct TxExecutionContext {
+    block_timestamp: u64,
+    source: TransactionId,
+}
+
+#[derive(Clone, Debug)]
+struct BlockExecutionCache {
+    block_height: u64,
+    block_timestamp: u64,
+    validated_anchor_pairs: BTreeSet<(StateCommitment, StateCommitment)>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct HistoricalCheckContext {
+    pub chain_id: String,
+    pub block_height: u64,
+    pub block_timestamp: u64,
+    pub fmd_meta_params: fmd::MetaParameters,
+    pub previous_fmd_parameters: fmd::Parameters,
+    pub current_fmd_parameters: fmd::Parameters,
+    pub anchor_cache: Arc<AnchorValidationCache>,
+    pub claimed_anchor_cache: Arc<ClaimedAnchorValidationCache>,
+    committed_nullifier_filter: Option<Arc<CommittedNullifierFilter>>,
+}
+
+impl HistoricalCheckContext {
+    pub(crate) async fn load<S: StateRead>(state: &S) -> Result<Self> {
+        Self::load_inner(state, false).await
+    }
+
+    pub(crate) async fn load_for_checktx<S: StateRead>(state: &S) -> Result<Self> {
+        Self::load_inner(state, true).await
+    }
+
+    async fn load_inner<S: StateRead>(
+        state: &S,
+        load_committed_nullifier_filter: bool,
+    ) -> Result<Self> {
+        let shielded_pool_params = state
+            .get_shielded_pool_params()
+            .await
+            .expect("chain params request must succeed");
+        let committed_nullifier_filter = if load_committed_nullifier_filter {
+            Some(Arc::new(CommittedNullifierFilter::load(state).await?))
+        } else {
+            None
+        };
+
+        Ok(Self {
+            chain_id: state.get_chain_id().await?,
+            block_height: state.get_block_height().await?,
+            block_timestamp: state.get_current_block_timestamp().await?.unix_timestamp() as u64,
+            fmd_meta_params: shielded_pool_params.fmd_meta_params,
+            previous_fmd_parameters: state
+                .get_previous_fmd_parameters()
+                .await
+                .expect("chain params request must succeed"),
+            current_fmd_parameters: state
+                .get_current_fmd_parameters()
+                .await
+                .expect("chain params request must succeed"),
+            anchor_cache: Arc::new(AnchorValidationCache::default()),
+            claimed_anchor_cache: Arc::new(ClaimedAnchorValidationCache::default()),
+            committed_nullifier_filter,
+        })
+    }
+}
+
+const BLOCK_EXECUTION_CACHE_KEY: &str = "penumbra.app.block_execution_cache";
+
+pub(crate) fn clear_block_execution_cache<S: StateWrite>(state: &mut S) {
+    state.object_delete(BLOCK_EXECUTION_CACHE_KEY);
+}
+
+async fn load_block_execution_cache<S: StateWrite>(state: &mut S) -> Result<BlockExecutionCache> {
+    if let Some(cache) = state.object_get(BLOCK_EXECUTION_CACHE_KEY) {
+        return Ok(cache);
+    }
+
+    let block_time = state.get_current_block_timestamp().await?;
+    let block_unix = block_time.unix_timestamp();
+    anyhow::ensure!(block_unix >= 0, "block timestamp is negative");
+
+    let cache = BlockExecutionCache {
+        block_height: state.get_block_height().await?,
+        block_timestamp: block_unix as u64,
+        validated_anchor_pairs: BTreeSet::new(),
+    };
+    state.object_put(BLOCK_EXECUTION_CACHE_KEY, cache.clone());
+    Ok(cache)
+}
+
+async fn validate_compliance_anchors_with_cache<S: StateWrite>(
+    state: &mut S,
+    user_anchor: &StateCommitment,
+    asset_anchor: &StateCommitment,
+    block_cache: &mut BlockExecutionCache,
+) -> Result<()> {
+    let anchor_pair = (*user_anchor, *asset_anchor);
+    if block_cache.validated_anchor_pairs.contains(&anchor_pair) {
+        return Ok(());
+    }
+
+    let user_anchor_height = state
+        .check_user_anchor(user_anchor)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("invalid user compliance anchor: not found in history"))?;
+    if block_cache.block_height
+        > user_anchor_height + penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS
+    {
+        anyhow::bail!(
+            "user compliance anchor too old: height {} is more than {} blocks behind current height {}",
+            user_anchor_height,
+            penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS,
+            block_cache.block_height
+        );
+    }
+
+    let asset_anchor_height = state
+        .check_asset_anchor(asset_anchor)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("invalid asset compliance anchor: not found in history"))?;
+    if block_cache.block_height
+        > asset_anchor_height + penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS
+    {
+        anyhow::bail!(
+            "asset compliance anchor too old: height {} is more than {} blocks behind current height {}",
+            asset_anchor_height,
+            penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS,
+            block_cache.block_height
+        );
+    }
+
+    block_cache.validated_anchor_pairs.insert(anchor_pair);
+    Ok(())
+}
+
+async fn check_nullifier_with_context<S>(
+    state: &mut S,
+    nullifier: penumbra_sdk_sct::Nullifier,
+) -> Result<f64>
+where
+    S: StateWrite,
+{
+    let committed_check_start = Instant::now();
+    state.check_nullifier_unspent(nullifier).await?;
+    Ok(committed_check_start.elapsed().as_secs_f64() * 1000.0)
+}
+
+async fn check_nullifier_read_only<S>(
+    state: &S,
+    context: &HistoricalCheckContext,
+    nullifier: penumbra_sdk_sct::Nullifier,
+) -> Result<f64>
+where
+    S: StateRead,
+{
+    let committed_check_start = Instant::now();
+    if let Some(filter) = &context.committed_nullifier_filter {
+        if !filter.might_contain(&nullifier) {
+            return Ok(committed_check_start.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+    state.check_nullifier_unspent(nullifier).await?;
+    Ok(committed_check_start.elapsed().as_secs_f64() * 1000.0)
+}
+
+async fn validate_compliance_anchors_read_only<S: StateRead>(
+    state: &S,
+    user_anchor: &StateCommitment,
+    asset_anchor: &StateCommitment,
+    block_height: u64,
+    anchor_cache: Arc<AnchorValidationCache>,
+) -> Result<(f64, f64)> {
+    let anchor_pair = (*user_anchor, *asset_anchor);
+    let validate_start = Instant::now();
+    let (cell, _, cache_wait_ms) = anchor_cache.entry(anchor_pair);
+
+    let result = cell
+        .get_or_init(|| async move {
+            let user_anchor_height = state
+                .check_user_anchor(user_anchor)
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "invalid user compliance anchor: not found in history".to_string())?;
+            if block_height
+                > user_anchor_height + penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS
+            {
+                return Err(format!(
+                    "user compliance anchor too old: height {} is more than {} blocks behind current height {}",
+                    user_anchor_height,
+                    penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS,
+                    block_height
+                ));
+            }
+
+            let asset_anchor_height = state
+                .check_asset_anchor(asset_anchor)
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "invalid asset compliance anchor: not found in history".to_string())?;
+            if block_height
+                > asset_anchor_height + penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS
+            {
+                return Err(format!(
+                    "asset compliance anchor too old: height {} is more than {} blocks behind current height {}",
+                    asset_anchor_height,
+                    penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS,
+                    block_height
+                ));
+            }
+
+            Ok(())
+        })
+        .await;
+
+    match result {
+        Ok(()) => Ok((
+            validate_start.elapsed().as_secs_f64() * 1000.0,
+            cache_wait_ms,
+        )),
+        Err(error) => anyhow::bail!(error.clone()),
+    }
+}
+
+async fn validate_claimed_anchor_read_only<S: StateRead>(
+    state: Arc<S>,
+    tx: Arc<Transaction>,
+    claimed_anchor_cache: Arc<ClaimedAnchorValidationCache>,
+) -> Result<f64> {
+    let anchor = tx.anchor;
+    let wait_start = Instant::now();
+    let (cell, _) = claimed_anchor_cache.entry(anchor);
+    let result = cell
+        .get_or_init(|| async move {
+            claimed_anchor_is_valid(state, Arc::as_ref(&tx))
+                .await
+                .map_err(|e| e.to_string())
+        })
+        .await;
+    let elapsed_ms = wait_start.elapsed().as_secs_f64() * 1000.0;
+
+    match result {
+        Ok(()) => Ok(elapsed_ms),
+        Err(error) => anyhow::bail!(error.clone()),
+    }
+}
+
+pub(crate) fn supports_parallel_prepare(tx: &Transaction) -> bool {
+    tx.actions()
+        .all(|action| matches!(action, Action::Spend(_) | Action::Output(_)))
+}
+
+fn action_requires_historical_check(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::SwapClaim(_) | Action::IbcRelay(_) | Action::Ics20Withdrawal(_)
+    )
+}
+
+fn check_nullifier_read_only_sync(
+    handle: &tokio::runtime::Handle,
+    snapshot: &Snapshot,
+    context: &HistoricalCheckContext,
+    nullifier: penumbra_sdk_sct::Nullifier,
+) -> Result<f64> {
+    let committed_check_start = Instant::now();
+    if let Some(filter) = &context.committed_nullifier_filter {
+        if !filter.might_contain(&nullifier) {
+            return Ok(committed_check_start.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+    if handle
+        .block_on(snapshot.get_raw(
+            &penumbra_sdk_sct::state_key::nullifier_set::spent_nullifier_lookup(&nullifier),
+        ))?
+        .is_some()
+    {
+        anyhow::bail!("nullifier {} was already spent", nullifier);
+    }
+    Ok(committed_check_start.elapsed().as_secs_f64() * 1000.0)
+}
+
+fn validate_compliance_anchors_read_only_sync(
+    handle: &tokio::runtime::Handle,
+    snapshot: &Snapshot,
+    user_anchor: &StateCommitment,
+    asset_anchor: &StateCommitment,
+    block_height: u64,
+    anchor_cache: Arc<AnchorValidationCache>,
+) -> Result<(f64, f64)> {
+    let anchor_pair = (*user_anchor, *asset_anchor);
+    let validate_start = Instant::now();
+    let (cell, _, cache_wait_ms) = anchor_cache.entry(anchor_pair);
+    let snapshot = snapshot.clone();
+    let user_anchor = *user_anchor;
+    let asset_anchor = *asset_anchor;
+
+    let result = handle
+        .clone()
+        .block_on(cell.get_or_init(|| async move {
+            let user_anchor_height = snapshot
+                .get_raw(&penumbra_sdk_compliance::state_key::anchor::user_anchor_lookup(
+                    &user_anchor,
+                ))
+                .await
+                .map_err(|e| e.to_string())?
+                .map(|bytes| {
+                    <u64 as penumbra_sdk_proto::Message>::decode(bytes.as_slice())
+                        .map_err(|e| anyhow::anyhow!(e).to_string())
+                })
+                .transpose()?
+                .ok_or_else(|| "invalid user compliance anchor: not found in history".to_string())?;
+            if block_height
+                > user_anchor_height + penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS
+            {
+                return Err(format!(
+                    "user compliance anchor too old: height {} is more than {} blocks behind current height {}",
+                    user_anchor_height,
+                    penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS,
+                    block_height
+                ));
+            }
+
+            let asset_anchor_height = snapshot
+                .get_raw(&penumbra_sdk_compliance::state_key::anchor::asset_anchor_lookup(
+                    &asset_anchor,
+                ))
+                .await
+                .map_err(|e| e.to_string())?
+                .map(|bytes| {
+                    <u64 as penumbra_sdk_proto::Message>::decode(bytes.as_slice())
+                        .map_err(|e| anyhow::anyhow!(e).to_string())
+                })
+                .transpose()?
+                .ok_or_else(|| "invalid asset compliance anchor: not found in history".to_string())?;
+            if block_height
+                > asset_anchor_height + penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS
+            {
+                return Err(format!(
+                    "asset compliance anchor too old: height {} is more than {} blocks behind current height {}",
+                    asset_anchor_height,
+                    penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS,
+                    block_height
+                ));
+            }
+
+            Ok(())
+        }))
+        .clone();
+
+    match result {
+        Ok(()) => Ok((
+            validate_start.elapsed().as_secs_f64() * 1000.0,
+            cache_wait_ms,
+        )),
+        Err(error) => anyhow::bail!(error),
+    }
+}
+
+fn validate_claimed_anchor_read_only_sync(
+    handle: &tokio::runtime::Handle,
+    snapshot: &Snapshot,
+    tx: &Transaction,
+    claimed_anchor_cache: Arc<ClaimedAnchorValidationCache>,
+) -> Result<f64> {
+    let anchor = tx.anchor;
+    let wait_start = Instant::now();
+    let (cell, _) = claimed_anchor_cache.entry(anchor);
+    let snapshot = snapshot.clone();
+
+    let result = handle
+        .clone()
+        .block_on(cell.get_or_init(|| async move {
+            if anchor.is_empty() {
+                return Ok(());
+            }
+            if snapshot
+                .get_raw(&penumbra_sdk_sct::state_key::tree::anchor_lookup(anchor))
+                .await
+                .map_err(|e| e.to_string())?
+                .map(|bytes| {
+                    <u64 as penumbra_sdk_proto::Message>::decode(bytes.as_slice())
+                        .map_err(|e| anyhow::anyhow!(e).to_string())
+                })
+                .transpose()?
+                .is_some()
+            {
+                Ok(())
+            } else {
+                Err(format!(
+                    "provided anchor {} is not a valid SCT root",
+                    anchor
+                ))
+            }
+        }))
+        .clone();
+    let elapsed_ms = wait_start.elapsed().as_secs_f64() * 1000.0;
+
+    match result {
+        Ok(()) => Ok(elapsed_ms),
+        Err(error) => anyhow::bail!(error),
+    }
+}
+
+pub(crate) async fn check_historical_with_context_profiled<S: StateRead + 'static>(
+    tx: &Transaction,
+    state: Arc<S>,
+    context: &HistoricalCheckContext,
+) -> Result<HistoricalCheckProfile> {
+    let total_start = Instant::now();
+    let mut await_ms = 0.0;
+    let mut action_checks = JoinSet::new();
+
+    tx_parameters_historical_check_with_context(tx, context)?;
+    fmd_parameters_valid_with_context(tx, context)?;
+
+    let claimed_anchor_tx = Arc::new(tx.clone());
+    let claimed_anchor_wait_start = Instant::now();
+    validate_claimed_anchor_read_only(
+        state.clone(),
+        claimed_anchor_tx,
+        context.claimed_anchor_cache.clone(),
+    )
+    .await?;
+    await_ms += claimed_anchor_wait_start.elapsed().as_secs_f64() * 1000.0;
+
+    for (i, action) in tx.actions().cloned().enumerate() {
+        if !action_requires_historical_check(&action) {
+            continue;
+        }
+
+        let state2 = state.clone();
+        let span = action.create_span(i);
+        action_checks.spawn(async move { action.check_historical(state2).await }.instrument(span));
+    }
+
+    while !action_checks.is_empty() {
+        let join_wait_start = Instant::now();
+        let check = action_checks
+            .join_next()
+            .await
+            .expect("join set must yield while not empty");
+        await_ms += join_wait_start.elapsed().as_secs_f64() * 1000.0;
+        check??;
+    }
+
+    Ok(HistoricalCheckProfile {
+        total_ms: total_start.elapsed().as_secs_f64() * 1000.0,
+        await_ms,
+    })
+}
+
+pub(crate) async fn check_historical_with_context<S: StateRead + 'static>(
+    tx: &Transaction,
+    state: Arc<S>,
+    context: &HistoricalCheckContext,
+) -> Result<()> {
+    check_historical_with_context_profiled(tx, state, context)
+        .await
+        .map(|_| ())
+}
+
+pub(crate) fn check_historical_with_context_sync_profiled(
+    tx: &Transaction,
+    snapshot: &Snapshot,
+    context: &HistoricalCheckContext,
+    handle: &tokio::runtime::Handle,
+) -> Result<HistoricalCheckProfile> {
+    let total_start = Instant::now();
+
+    tx_parameters_historical_check_with_context(tx, context)?;
+    fmd_parameters_valid_with_context(tx, context)?;
+
+    let await_ms = validate_claimed_anchor_read_only_sync(
+        handle,
+        snapshot,
+        tx,
+        context.claimed_anchor_cache.clone(),
+    )?;
+
+    Ok(HistoricalCheckProfile {
+        total_ms: total_start.elapsed().as_secs_f64() * 1000.0,
+        await_ms,
+    })
+}
+
+pub(crate) async fn check_and_execute_profiled<S>(
+    tx: &Transaction,
+    mut state: S,
+    record_clues: bool,
+) -> Result<(TransactionExecutionProfile, TxExecutionEffects)>
+where
+    S: StateWrite,
+{
+    let mut profile = TransactionExecutionProfile::default();
+    let mut effects = TxExecutionEffects::default();
+    let tx_id = tx.id();
+    let action_spans_enabled = tracing::enabled!(tracing::Level::INFO);
+    let mut block_cache = load_block_execution_cache(&mut state).await?;
+
+    let set_source_start = Instant::now();
+    state.put_current_source(Some(tx_id.clone()));
+    profile.set_source_ms = set_source_start.elapsed().as_secs_f64() * 1000.0;
+
+    let pay_fee_start = Instant::now();
+    let gas_used = tx.gas_cost();
+    let fee = tx.transaction_body.transaction_parameters.fee;
+    state.pay_fee(gas_used, fee).await?;
+    profile.pay_fee_ms = pay_fee_start.elapsed().as_secs_f64() * 1000.0;
+
+    let execution_context = TxExecutionContext {
+        block_timestamp: block_cache.block_timestamp,
+        source: tx_id.clone(),
+    };
+
+    let action_execute_start = Instant::now();
+    let mut validated_anchor_pairs: BTreeSet<(StateCommitment, StateCommitment)> = BTreeSet::new();
+    for (i, action) in tx.actions().enumerate() {
+        let action_start = Instant::now();
+        match action {
+            Action::Spend(spend) => {
+                let anchor_pair = (spend.body.compliance_anchor, spend.body.asset_anchor);
+                let anchors_prevalidated = validated_anchor_pairs.contains(&anchor_pair)
+                    || block_cache.validated_anchor_pairs.contains(&anchor_pair);
+                if action_spans_enabled {
+                    let span = action.create_span(i);
+                    let (committed_check_ms, enqueue_ms) = execute_spend_with_context(
+                        spend,
+                        &mut state,
+                        &execution_context,
+                        &mut block_cache,
+                        anchors_prevalidated,
+                    )
+                    .instrument(span)
+                    .await?;
+                    profile.spend_nullifier_committed_check_ms += committed_check_ms;
+                    profile.spend_nullifier_check_ms += committed_check_ms;
+                    profile.spend_nullifier_enqueue_ms += enqueue_ms;
+                    profile.nullifier_lookup_count += 1;
+                } else {
+                    let (committed_check_ms, enqueue_ms) = execute_spend_with_context(
+                        spend,
+                        &mut state,
+                        &execution_context,
+                        &mut block_cache,
+                        anchors_prevalidated,
+                    )
+                    .await?;
+                    profile.spend_nullifier_committed_check_ms += committed_check_ms;
+                    profile.spend_nullifier_check_ms += committed_check_ms;
+                    profile.spend_nullifier_enqueue_ms += enqueue_ms;
+                    profile.nullifier_lookup_count += 1;
+                }
+                if !anchors_prevalidated {
+                    validated_anchor_pairs.insert(anchor_pair);
+                }
+                profile.spend_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
+            }
+            Action::Output(output) => {
+                let anchor_pair = (output.body.compliance_anchor, output.body.asset_anchor);
+                let anchors_prevalidated = validated_anchor_pairs.contains(&anchor_pair)
+                    || block_cache.validated_anchor_pairs.contains(&anchor_pair);
+                if action_spans_enabled {
+                    let span = action.create_span(i);
+                    let add_note_payload_ms = execute_output_with_context(
+                        output,
+                        &mut state,
+                        &execution_context,
+                        &mut block_cache,
+                        anchors_prevalidated,
+                        &mut effects,
+                    )
+                    .instrument(span)
+                    .await?;
+                    profile.output_add_note_payload_ms += add_note_payload_ms;
+                } else {
+                    let add_note_payload_ms = execute_output_with_context(
+                        output,
+                        &mut state,
+                        &execution_context,
+                        &mut block_cache,
+                        anchors_prevalidated,
+                        &mut effects,
+                    )
+                    .await?;
+                    profile.output_add_note_payload_ms += add_note_payload_ms;
+                }
+                if !anchors_prevalidated {
+                    validated_anchor_pairs.insert(anchor_pair);
+                }
+                profile.output_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
+            }
+            Action::Swap(swap) => {
+                if action_spans_enabled {
+                    let span = action.create_span(i);
+                    execute_swap_with_context(swap, &mut state, &execution_context, &mut effects)
+                        .instrument(span)
+                        .await?;
+                } else {
+                    execute_swap_with_context(swap, &mut state, &execution_context, &mut effects)
+                        .await?;
+                }
+                profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
+            }
+            Action::SwapClaim(swap_claim) => {
+                if action_spans_enabled {
+                    let span = action.create_span(i);
+                    execute_swap_claim_with_context(
+                        swap_claim,
+                        &mut state,
+                        &execution_context,
+                        &mut effects,
+                        &mut profile,
+                    )
+                    .instrument(span)
+                    .await?;
+                } else {
+                    execute_swap_claim_with_context(
+                        swap_claim,
+                        &mut state,
+                        &execution_context,
+                        &mut effects,
+                        &mut profile,
+                    )
+                    .await?;
+                }
+                profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
+            }
+            _ => {
+                if action_spans_enabled {
+                    let span = action.create_span(i);
+                    action
+                        .check_and_execute(&mut state)
+                        .instrument(span)
+                        .await?;
+                } else {
+                    action.check_and_execute(&mut state).await?;
+                }
+                profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
+            }
+        }
+    }
+    profile.action_execute_ms = action_execute_start.elapsed().as_secs_f64() * 1000.0;
+    state.object_put(BLOCK_EXECUTION_CACHE_KEY, block_cache);
+
+    if record_clues {
+        let record_clues_start = Instant::now();
+        state.put_current_source(None);
+        for clue in tx
+            .transaction_body
+            .detection_data
+            .iter()
+            .flat_map(|x| x.fmd_clues.iter())
+        {
+            state.record_clue(clue.clone(), tx_id.clone()).await?;
+        }
+        profile.record_clues_ms = record_clues_start.elapsed().as_secs_f64() * 1000.0;
+    }
+
+    Ok((profile, effects))
+}
+
+pub(crate) async fn prepare_candidate_read_profiled<S: StateRead + 'static>(
+    tx: Arc<Transaction>,
+    state: Arc<S>,
+    context: HistoricalCheckContext,
+    skip_historical: bool,
+) -> Result<PreparedCandidateRead> {
+    let read_start = Instant::now();
+    let mut prepared = PreparedCandidateRead::default();
+
+    let execution_context = TxExecutionContext {
+        block_timestamp: context.block_timestamp,
+        source: tx.id(),
+    };
+    let mut anchor_pairs = BTreeSet::new();
+    let mut output_payloads = Vec::new();
+    let mut spend_nullifiers = Vec::new();
+    let mut tx_nullifiers = HashSet::new();
+    let action_execute_start = Instant::now();
+    let local_precheck_start = Instant::now();
+
+    for (i, action) in tx.actions().enumerate() {
+        match action {
+            Action::Spend(spend) => {
+                check_action_timestamp_freshness(
+                    spend.body.target_timestamp,
+                    execution_context.block_timestamp,
+                )?;
+
+                anyhow::ensure!(
+                    tx_nullifiers.insert(spend.body.nullifier),
+                    "transaction contains duplicate spend nullifier {}",
+                    spend.body.nullifier
+                );
+                anchor_pairs.insert((spend.body.compliance_anchor, spend.body.asset_anchor));
+                spend_nullifiers.push(spend.body.nullifier);
+            }
+            Action::Output(output) => {
+                check_action_timestamp_freshness(
+                    output.body.target_timestamp,
+                    execution_context.block_timestamp,
+                )?;
+                anchor_pairs.insert((output.body.compliance_anchor, output.body.asset_anchor));
+                output_payloads.push(output.body.note_payload.clone());
+            }
+            _ => anyhow::bail!(
+                "parallel prepare only supports spend/output actions, found unsupported action {:?} at index {}",
+                action,
+                i
+            ),
+        }
+    }
+    prepared.execution_profile.read_local_precheck_ms =
+        local_precheck_start.elapsed().as_secs_f64() * 1000.0;
+
+    enum ReadTaskResult {
+        Anchor { elapsed_ms: f64, cache_wait_ms: f64 },
+        Nullifier(f64),
+    }
+
+    let historical_future = async {
+        if skip_historical {
+            Ok(HistoricalCheckProfile::default())
+        } else {
+            check_historical_with_context_profiled(Arc::as_ref(&tx), state.clone(), &context).await
+        }
+    };
+
+    let mut read_tasks = JoinSet::new();
+    for (user_anchor, asset_anchor) in anchor_pairs {
+        let state = state.clone();
+        let anchor_cache = context.anchor_cache.clone();
+        read_tasks.spawn(async move {
+            validate_compliance_anchors_read_only(
+                Arc::as_ref(&state),
+                &user_anchor,
+                &asset_anchor,
+                context.block_height,
+                anchor_cache,
+            )
+            .await
+            .map(|(elapsed_ms, cache_wait_ms)| ReadTaskResult::Anchor {
+                elapsed_ms,
+                cache_wait_ms,
+            })
+        });
+    }
+    for nullifier in &spend_nullifiers {
+        let state = state.clone();
+        let nullifier = *nullifier;
+        let context = context.clone();
+        read_tasks.spawn(async move {
+            check_nullifier_read_only(Arc::as_ref(&state), &context, nullifier)
+                .await
+                .map(ReadTaskResult::Nullifier)
+        });
+    }
+
+    let read_task_future = async {
+        let mut execution_profile = TransactionExecutionProfile::default();
+        while let Some(result) = read_tasks.join_next().await {
+            match result?? {
+                ReadTaskResult::Anchor {
+                    elapsed_ms,
+                    cache_wait_ms,
+                } => {
+                    execution_profile.read_anchor_validation_ms += elapsed_ms;
+                    execution_profile.read_anchor_cache_wait_ms += cache_wait_ms;
+                }
+                ReadTaskResult::Nullifier(elapsed_ms) => {
+                    execution_profile.read_committed_nullifier_ms += elapsed_ms;
+                    execution_profile.read_nullifier_wait_ms += elapsed_ms;
+                    execution_profile.spend_nullifier_committed_check_ms += elapsed_ms;
+                    execution_profile.spend_nullifier_check_ms += elapsed_ms;
+                    execution_profile.nullifier_lookup_count += 1;
+                }
+            }
+        }
+        Ok::<TransactionExecutionProfile, anyhow::Error>(execution_profile)
+    };
+
+    let read_lookup_wait_start = Instant::now();
+    let (historical_profile, read_task_profile) =
+        tokio::try_join!(historical_future, read_task_future)?;
+    prepared.execution_profile.read_lookup_wait_or_join_ms =
+        read_lookup_wait_start.elapsed().as_secs_f64() * 1000.0;
+
+    prepared.check_historical_ms = historical_profile.total_ms;
+    prepared.execution_profile.read_historical_check_ms = historical_profile.await_ms;
+    prepared.execution_profile.read_anchor_validation_ms +=
+        read_task_profile.read_anchor_validation_ms;
+    prepared.execution_profile.read_anchor_cache_wait_ms +=
+        read_task_profile.read_anchor_cache_wait_ms;
+    prepared.execution_profile.read_committed_nullifier_ms +=
+        read_task_profile.read_committed_nullifier_ms;
+    prepared.execution_profile.read_nullifier_wait_ms += read_task_profile.read_nullifier_wait_ms;
+    prepared
+        .execution_profile
+        .spend_nullifier_committed_check_ms += read_task_profile.spend_nullifier_committed_check_ms;
+    prepared.execution_profile.spend_nullifier_check_ms +=
+        read_task_profile.spend_nullifier_check_ms;
+    prepared.execution_profile.nullifier_lookup_count += read_task_profile.nullifier_lookup_count;
+
+    let effects_build_start = Instant::now();
+    prepared.effects.spend_nullifiers = spend_nullifiers;
+    prepared.effects.sct_payloads = output_payloads
+        .into_iter()
+        .map(|note_payload| (note_payload, execution_context.source.clone().into()).into())
+        .collect();
+    prepared.execution_profile.read_effects_build_ms =
+        effects_build_start.elapsed().as_secs_f64() * 1000.0;
+    prepared.execution_profile.output_add_note_payload_ms =
+        prepared.execution_profile.read_effects_build_ms;
+    prepared.execution_profile.output_action_execute_ms =
+        prepared.execution_profile.read_effects_build_ms;
+    prepared.execution_profile.action_execute_ms =
+        action_execute_start.elapsed().as_secs_f64() * 1000.0;
+    prepared.read_wall_ms = read_start.elapsed().as_secs_f64() * 1000.0;
+    Ok(prepared)
+}
+
+pub(crate) fn prepare_candidate_read_blocking_profiled(
+    tx: Arc<Transaction>,
+    snapshot: Snapshot,
+    context: HistoricalCheckContext,
+    skip_historical: bool,
+    handle: tokio::runtime::Handle,
+) -> Result<PreparedCandidateRead> {
+    let read_start = Instant::now();
+    let mut prepared = PreparedCandidateRead::default();
+
+    let execution_context = TxExecutionContext {
+        block_timestamp: context.block_timestamp,
+        source: tx.id(),
+    };
+    let mut anchor_pairs = BTreeSet::new();
+    let mut output_payloads = Vec::new();
+    let mut spend_nullifiers = Vec::new();
+    let mut tx_nullifiers = HashSet::new();
+    let action_execute_start = Instant::now();
+    let local_precheck_start = Instant::now();
+
+    for (i, action) in tx.actions().enumerate() {
+        match action {
+            Action::Spend(spend) => {
+                check_action_timestamp_freshness(
+                    spend.body.target_timestamp,
+                    execution_context.block_timestamp,
+                )?;
+
+                anyhow::ensure!(
+                    tx_nullifiers.insert(spend.body.nullifier),
+                    "transaction contains duplicate spend nullifier {}",
+                    spend.body.nullifier
+                );
+                anchor_pairs.insert((spend.body.compliance_anchor, spend.body.asset_anchor));
+                spend_nullifiers.push(spend.body.nullifier);
+            }
+            Action::Output(output) => {
+                check_action_timestamp_freshness(
+                    output.body.target_timestamp,
+                    execution_context.block_timestamp,
+                )?;
+                anchor_pairs.insert((output.body.compliance_anchor, output.body.asset_anchor));
+                output_payloads.push(output.body.note_payload.clone());
+            }
+            _ => anyhow::bail!(
+                "parallel prepare only supports spend/output actions, found unsupported action {:?} at index {}",
+                action,
+                i
+            ),
+        }
+    }
+    prepared.execution_profile.read_local_precheck_ms =
+        local_precheck_start.elapsed().as_secs_f64() * 1000.0;
+
+    let lookup_wait_start = Instant::now();
+    if skip_historical {
+        prepared.check_historical_ms = 0.0;
+    } else {
+        let historical_profile = check_historical_with_context_sync_profiled(
+            Arc::as_ref(&tx),
+            &snapshot,
+            &context,
+            &handle,
+        )?;
+        prepared.check_historical_ms = historical_profile.total_ms;
+        prepared.execution_profile.read_historical_check_ms = historical_profile.await_ms;
+    }
+
+    for (user_anchor, asset_anchor) in anchor_pairs {
+        let (elapsed_ms, cache_wait_ms) = validate_compliance_anchors_read_only_sync(
+            &handle,
+            &snapshot,
+            &user_anchor,
+            &asset_anchor,
+            context.block_height,
+            context.anchor_cache.clone(),
+        )?;
+        prepared.execution_profile.read_anchor_validation_ms += elapsed_ms;
+        prepared.execution_profile.read_anchor_cache_wait_ms += cache_wait_ms;
+    }
+    for nullifier in &spend_nullifiers {
+        let elapsed_ms = check_nullifier_read_only_sync(&handle, &snapshot, &context, *nullifier)?;
+        prepared.execution_profile.read_committed_nullifier_ms += elapsed_ms;
+        prepared.execution_profile.read_nullifier_wait_ms += elapsed_ms;
+        prepared
+            .execution_profile
+            .spend_nullifier_committed_check_ms += elapsed_ms;
+        prepared.execution_profile.spend_nullifier_check_ms += elapsed_ms;
+        prepared.execution_profile.nullifier_lookup_count += 1;
+    }
+    prepared.execution_profile.read_lookup_wait_or_join_ms =
+        lookup_wait_start.elapsed().as_secs_f64() * 1000.0;
+
+    let effects_build_start = Instant::now();
+    prepared.effects.spend_nullifiers = spend_nullifiers;
+    prepared.effects.sct_payloads = output_payloads
+        .into_iter()
+        .map(|note_payload| (note_payload, execution_context.source.clone().into()).into())
+        .collect();
+    prepared.execution_profile.read_effects_build_ms =
+        effects_build_start.elapsed().as_secs_f64() * 1000.0;
+    prepared.execution_profile.output_add_note_payload_ms =
+        prepared.execution_profile.read_effects_build_ms;
+    prepared.execution_profile.output_action_execute_ms =
+        prepared.execution_profile.read_effects_build_ms;
+    prepared.execution_profile.action_execute_ms =
+        action_execute_start.elapsed().as_secs_f64() * 1000.0;
+    prepared.read_wall_ms = read_start.elapsed().as_secs_f64() * 1000.0;
+    Ok(prepared)
+}
+
+async fn execute_spend_with_context<S>(
+    spend: &penumbra_sdk_shielded_pool::Spend,
+    mut state: S,
+    context: &TxExecutionContext,
+    block_cache: &mut BlockExecutionCache,
+    anchors_prevalidated: bool,
+) -> Result<(f64, f64)>
+where
+    S: StateWrite,
+{
+    if !anchors_prevalidated {
+        validate_compliance_anchors_with_cache(
+            &mut state,
+            &spend.body.compliance_anchor,
+            &spend.body.asset_anchor,
+            block_cache,
+        )
+        .await?;
+    }
+    check_action_timestamp_freshness(spend.body.target_timestamp, context.block_timestamp)?;
+    let committed_check_ms = check_nullifier_with_context(&mut state, spend.body.nullifier).await?;
+    // Committed-state nullifier checks intentionally ignore same-block conflicts.
+    // Duplicate nullifiers inside one proposal are resolved later during serial apply.
+    let enqueue_start = Instant::now();
+    state
+        .nullify(spend.body.nullifier, context.source.clone().into())
+        .await;
+    state.record_proto(
+        EventSpend {
+            nullifier: spend.body.nullifier,
+        }
+        .to_proto(),
+    );
+
+    Ok((
+        committed_check_ms,
+        enqueue_start.elapsed().as_secs_f64() * 1000.0,
+    ))
+}
+
+async fn execute_output_with_context<S: StateWrite>(
+    output: &penumbra_sdk_shielded_pool::Output,
+    mut state: S,
+    context: &TxExecutionContext,
+    block_cache: &mut BlockExecutionCache,
+    anchors_prevalidated: bool,
+    effects: &mut TxExecutionEffects,
+) -> Result<f64> {
+    if !anchors_prevalidated {
+        validate_compliance_anchors_with_cache(
+            &mut state,
+            &output.body.compliance_anchor,
+            &output.body.asset_anchor,
+            block_cache,
+        )
+        .await?;
+    }
+    check_action_timestamp_freshness(output.body.target_timestamp, context.block_timestamp)?;
+    let add_note_payload_start = Instant::now();
+    effects.sct_payloads.push(
+        (
+            output.body.note_payload.clone(),
+            context.source.clone().into(),
+        )
+            .into(),
+    );
+    let add_note_payload_ms = add_note_payload_start.elapsed().as_secs_f64() * 1000.0;
+    state.record_proto(
+        EventOutput {
+            note_commitment: output.body.note_payload.note_commitment,
+        }
+        .to_proto(),
+    );
+    Ok(add_note_payload_ms)
+}
+
+fn check_action_timestamp_freshness(target_timestamp: u64, block_timestamp: u64) -> Result<()> {
+    if target_timestamp == 0
+        && std::env::var_os("PENUMBRA_BENCH_ALLOW_ZERO_TARGET_TIMESTAMP").is_some()
+    {
+        return Ok(());
+    }
+    check_timestamp_freshness(target_timestamp, block_timestamp)?;
+    Ok(())
+}
+
+async fn execute_swap_with_context<S: StateWrite>(
+    swap: &penumbra_sdk_dex::Swap,
+    mut state: S,
+    context: &TxExecutionContext,
+    effects: &mut TxExecutionEffects,
+) -> Result<()> {
+    let dex_params = state.get_dex_params().await?;
+    anyhow::ensure!(
+        dex_params.is_enabled,
+        "Dex MUST be enabled to process swap actions."
+    );
+
+    state
+        .ensure_assets_not_regulated(
+            &[
+                swap.body.trading_pair.asset_1(),
+                swap.body.trading_pair.asset_2(),
+            ],
+            "Swap",
+        )
+        .await?;
+
+    let flow = (swap.body.delta_1_i, swap.body.delta_2_i);
+    state
+        .accumulate_swap_flow(&swap.body.trading_pair, flow.into())
+        .await?;
+
+    effects
+        .sct_payloads
+        .push((swap.body.payload.clone(), context.source.clone().into()).into());
+
+    let fixed_candidates = Arc::new(dex_params.fixed_candidates.clone());
+    state.add_recently_accessed_asset(swap.body.trading_pair.asset_1(), fixed_candidates.clone());
+    state.add_recently_accessed_asset(swap.body.trading_pair.asset_2(), fixed_candidates);
+    state.record_proto(EventSwap::from(swap).to_proto());
+
+    Ok(())
+}
+
+async fn execute_swap_claim_with_context<S>(
+    swap_claim: &penumbra_sdk_dex::SwapClaim,
+    mut state: S,
+    context: &TxExecutionContext,
+    effects: &mut TxExecutionEffects,
+    profile: &mut TransactionExecutionProfile,
+) -> Result<()>
+where
+    S: StateWrite,
+{
+    let trading_pair = swap_claim.body.output_data.trading_pair;
+    state
+        .ensure_assets_not_regulated(
+            &[trading_pair.asset_1(), trading_pair.asset_2()],
+            "SwapClaim",
+        )
+        .await?;
+
+    let committed_check_ms =
+        check_nullifier_with_context(&mut state, swap_claim.body.nullifier).await?;
+    profile.spend_nullifier_committed_check_ms += committed_check_ms;
+    profile.spend_nullifier_check_ms += committed_check_ms;
+    profile.nullifier_lookup_count += 1;
+
+    let source: penumbra_sdk_sct::CommitmentSource = context.source.clone().into();
+    effects.sct_payloads.push(StatePayload::RolledUp {
+        source: source.clone(),
+        commitment: swap_claim.body.output_1_commitment,
+    });
+    effects.sct_payloads.push(StatePayload::RolledUp {
+        source: source.clone(),
+        commitment: swap_claim.body.output_2_commitment,
+    });
+    let enqueue_start = Instant::now();
+    state.nullify(swap_claim.body.nullifier, source).await;
+    state.record_proto(EventSwapClaim::from(swap_claim).to_proto());
+    profile.spend_nullifier_enqueue_ms += enqueue_start.elapsed().as_secs_f64() * 1000.0;
+
+    Ok(())
+}
 
 #[async_trait]
 impl AppActionHandler for Transaction {
@@ -75,77 +1433,22 @@ impl AppActionHandler for Transaction {
     // We only instrument the top-level `check_stateful`, so we get one span for each transaction.
     #[instrument(skip(self, state))]
     async fn check_historical<S: StateRead + 'static>(&self, state: Arc<S>) -> Result<()> {
-        let mut action_checks = JoinSet::new();
-
-        // SAFETY: Transaction parameters (chain id, expiry height) against chain state
-        // that cannot change during transaction execution.
-        // The fee is _not_ checked here, but during execution.
-        tx_parameters_historical_check(state.clone(), self).await?;
-        // SAFETY: anchors are historical data and cannot change during transaction execution.
-        claimed_anchor_is_valid(state.clone(), self).await?;
-        // SAFETY: FMD parameters cannot change during transaction execution.
-        fmd_parameters_valid(state.clone(), self).await?;
-
-        // Currently, we need to clone the component actions so that the spawned
-        // futures can have 'static lifetimes. In the future, we could try to
-        // use the yoke crate, but cloning is almost certainly not a big deal
-        // for now.
-        for (i, action) in self.actions().cloned().enumerate() {
-            let state2 = state.clone();
-            let span = action.create_span(i);
-            action_checks
-                .spawn(async move { action.check_historical(state2).await }.instrument(span));
-        }
-        // Now check if any component action failed verification.
-        while let Some(check) = action_checks.join_next().await {
-            check??;
-        }
-
-        Ok(())
+        let context = HistoricalCheckContext::load(Arc::as_ref(&state)).await?;
+        check_historical_with_context(self, state, &context).await
     }
 
     // We only instrument the top-level `execute`, so we get one span for each transaction.
     #[instrument(skip(self, state))]
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        // While we have access to the full Transaction, hash it to
-        // obtain a NoteSource we can cache for various actions.
-        state.put_current_source(Some(self.id()));
-
-        // Check and record the transaction's fee payment,
-        // before doing the rest of execution.
-        let gas_used = self.gas_cost();
-        let fee = self.transaction_body.transaction_parameters.fee;
-        state.pay_fee(gas_used, fee).await?;
-
-        for (i, action) in self.actions().enumerate() {
-            let span = action.create_span(i);
-            action
-                .check_and_execute(&mut state)
-                .instrument(span)
-                .await?;
-        }
-
-        // Delete the note source, in case someone else tries to read it.
-        state.put_current_source(None);
-
-        // Record all the clues in this transaction
-        // To avoid recomputing a hash.
-        let id = self.id();
-        for clue in self
-            .transaction_body
-            .detection_data
-            .iter()
-            .flat_map(|x| x.fmd_clues.iter())
-        {
-            state.record_clue(clue.clone(), id.clone()).await?;
-        }
-
+    async fn check_and_execute<S: StateWrite>(&self, state: S) -> Result<()> {
+        check_and_execute_profiled(self, state, true).await?;
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use std::ops::Deref;
 
     use anyhow::Result;
@@ -163,6 +1466,76 @@ mod tests {
     use rand_core::OsRng;
 
     use crate::AppActionHandler;
+
+    use super::{AnchorValidationCache, ClaimedAnchorValidationCache};
+
+    #[tokio::test]
+    async fn anchor_validation_cache_counts_shared_pair_once() -> Result<()> {
+        let cache = Arc::new(AnchorValidationCache::default());
+        let pair = (
+            tct::StateCommitment::try_from([0; 32]).expect("valid commitment"),
+            tct::StateCommitment::try_from([1; 32]).expect("valid commitment"),
+        );
+
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..8 {
+            let cache = cache.clone();
+            tasks.spawn(async move {
+                let (cell, _hit, _wait_ms) = cache.entry(pair);
+                let result = cell
+                    .get_or_init(|| async { Ok::<(), String>(()) })
+                    .await
+                    .clone();
+                anyhow::ensure!(result.is_ok(), "cache cell should initialize successfully");
+                Ok::<(), anyhow::Error>(())
+            });
+        }
+
+        while let Some(result) = tasks.join_next().await {
+            result??;
+        }
+
+        let (hits, misses, unique_pairs) = cache.stats();
+        assert_eq!(misses, 1);
+        assert_eq!(hits, 7);
+        assert_eq!(unique_pairs, 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn claimed_anchor_validation_cache_counts_shared_anchor_once() -> Result<()> {
+        let cache = Arc::new(ClaimedAnchorValidationCache::default());
+        let anchor = penumbra_sdk_tct::Tree::new().root();
+
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..8 {
+            let cache = cache.clone();
+            tasks.spawn(async move {
+                let (cell, _hit) = cache.entry(anchor);
+                let result = cell
+                    .get_or_init(|| async { Ok::<(), String>(()) })
+                    .await
+                    .clone();
+                anyhow::ensure!(
+                    result.is_ok(),
+                    "claimed anchor cell should initialize successfully"
+                );
+                Ok::<(), anyhow::Error>(())
+            });
+        }
+
+        while let Some(result) = tasks.join_next().await {
+            result??;
+        }
+
+        let (hits, misses, unique_values) = cache.stats();
+        assert_eq!(misses, 1);
+        assert_eq!(hits, 7);
+        assert_eq!(unique_values, 1);
+
+        Ok(())
+    }
 
     /// Enrich a SpendPlan with valid compliance data for testing.
     /// Uses unregulated (BLACK_HOLE) compliance for simplicity.
@@ -438,5 +1811,25 @@ mod tests {
         assert!(result.is_err());
 
         Ok(())
+    }
+
+    #[test]
+    fn zero_timestamp_requires_benchmark_override() {
+        std::env::remove_var("PENUMBRA_BENCH_ALLOW_ZERO_TARGET_TIMESTAMP");
+        assert!(super::check_action_timestamp_freshness(0, 1_700_000_000).is_err());
+    }
+
+    #[test]
+    fn zero_timestamp_is_allowed_when_benchmark_override_is_set() {
+        std::env::set_var("PENUMBRA_BENCH_ALLOW_ZERO_TARGET_TIMESTAMP", "1");
+        let result = super::check_action_timestamp_freshness(0, 1_700_000_000);
+        std::env::remove_var("PENUMBRA_BENCH_ALLOW_ZERO_TARGET_TIMESTAMP");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn nonzero_timestamps_still_enforce_timestamp_freshness() {
+        assert!(super::check_action_timestamp_freshness(1_700_000_000, 1_700_000_100).is_ok());
+        assert!(super::check_action_timestamp_freshness(1_700_000_000, 1_700_003_700).is_err());
     }
 }

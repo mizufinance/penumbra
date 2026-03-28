@@ -17,6 +17,7 @@ use penumbra_sdk_governance::{
     ProposalDepositClaim, ProposalSubmit, ProposalWithdraw, ValidatorVote,
 };
 use penumbra_sdk_ibc::IbcRelay;
+use penumbra_sdk_proof_aggregation::AggregateBundle;
 use penumbra_sdk_proto::{core::transaction::v1 as pbt, DomainType};
 use penumbra_sdk_shielded_pool::Ics20Withdrawal;
 use penumbra_sdk_stake::{Delegate, Undelegate, UndelegateClaim};
@@ -61,6 +62,7 @@ pub enum ActionView {
     ActionLiquidityTournamentVote(ActionLiquidityTournamentVoteView),
     ComplianceRegisterAsset(MsgRegisterAsset),
     ComplianceRegisterUser(MsgRegisterUser),
+    AggregateBundle(AggregateBundle),
 }
 
 impl DomainType for ActionView {
@@ -120,6 +122,7 @@ impl TryFrom<pbt::ActionView> for ActionView {
                     ActionView::ComplianceRegisterAsset(x.try_into()?)
                 }
                 AV::ComplianceRegisterUser(x) => ActionView::ComplianceRegisterUser(x.try_into()?),
+                AV::AggregateBundle(x) => ActionView::AggregateBundle(x.try_into()?),
             },
         )
     }
@@ -163,6 +166,7 @@ impl From<ActionView> for pbt::ActionView {
                 }
                 ActionView::ComplianceRegisterAsset(x) => AV::ComplianceRegisterAsset(x.into()),
                 ActionView::ComplianceRegisterUser(x) => AV::ComplianceRegisterUser(x.into()),
+                ActionView::AggregateBundle(x) => AV::AggregateBundle(x.into()),
             }),
         }
     }
@@ -204,6 +208,7 @@ impl From<ActionView> for Action {
             }
             ActionView::ComplianceRegisterAsset(x) => Action::ComplianceRegisterAsset(x),
             ActionView::ComplianceRegisterUser(x) => Action::ComplianceRegisterUser(x),
+            ActionView::AggregateBundle(x) => Action::AggregateBundle(x),
         }
     }
 }

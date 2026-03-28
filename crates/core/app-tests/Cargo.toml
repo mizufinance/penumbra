@@ -123,6 +123,7 @@ penumbra-sdk-test-subscriber         = { workspace = true }
 penumbra-sdk-mock-tendermint-proxy   = { workspace = true }
 penumbra-sdk-view                    = { workspace = true }
 penumbra-sdk-wallet                  = { workspace = true }
+penumbra-sdk-proof-aggregation       = { workspace = true }
 rand                             = { workspace = true }
 rand_chacha                      = { workspace = true }
 rand_core                        = { workspace = true }
@@ -237,6 +238,10 @@ path = "tests/app_tracks_uptime_for_validators_only_once_active.rs"
 [[test]]
 name = "ics23_transfer"
 path = "tests/ics23_transfer.rs"
+
+[[test]]
+name = "app_aggregate_bundle_poc"
+path = "tests/app_aggregate_bundle_poc.rs"
 
 # Spend action handler test with compliance:
 [[test]]

@@ -7,6 +7,7 @@ use penumbra_sdk_governance::{
     DelegatorVoteProof, DelegatorVoteProofPrivate, DelegatorVoteProofPublic,
 };
 use penumbra_sdk_keys::keys::NullifierKey;
+use penumbra_sdk_proof_params::batch::BatchItem;
 use penumbra_sdk_proof_params::VerifyingKeyExt as _;
 use penumbra_sdk_proto::{core::component::funding::v1 as pb, DomainType};
 use penumbra_sdk_sct::Nullifier;
@@ -98,6 +99,15 @@ impl LiquidityTournamentVoteProof {
         public: LiquidityTournamentVoteProofPublic,
     ) -> anyhow::Result<()> {
         Ok(self.0.verify(vk, public.to_delegator_vote())?)
+    }
+
+    pub fn to_batch_item(
+        &self,
+        public: LiquidityTournamentVoteProofPublic,
+    ) -> anyhow::Result<BatchItem> {
+        self.0
+            .to_batch_item(public.to_delegator_vote())
+            .map_err(|e| anyhow::anyhow!(e))
     }
 }
 

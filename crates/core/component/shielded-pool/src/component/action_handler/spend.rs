@@ -16,27 +16,31 @@ use penumbra_sdk_txhash::TransactionContext;
 
 use crate::{event, Spend, SpendProofPublic};
 
-/// Run spend stateless checks (auth sig) without proof verification, and return
-/// a `BatchItem` for deferred batch verification. Used by the batch path in
-/// `process_proposal`.
-pub fn spend_check_stateless_and_extract(
-    spend: &Spend,
-    context: &TransactionContext,
-) -> Result<BatchItem> {
-    // 1. Check spend auth signature
+#[derive(Clone, Debug)]
+pub struct SpendCiphertextFields {
+    pub epk: decaf377::Element,
+    pub c2_core: Fq,
+    pub compliance_ciphertext: Vec<Fq>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SpendDleqFields {
+    pub target_timestamp: Fq,
+    pub dleq_c: Fq,
+    pub dleq_s: Fq,
+}
+
+pub fn spend_verify_auth_sig(spend: &Spend, context: &TransactionContext) -> Result<()> {
     spend
         .body
         .rk
         .verify(context.effect_hash.as_ref(), &spend.auth_sig)
-        .context("spend auth signature failed to verify")?;
+        .context("spend auth signature failed to verify")
+}
 
-    // 2. Extract batch item (public inputs + deserialized proof)
-    let asset_anchor = spend.body.asset_anchor;
-    let compliance_anchor = spend.body.compliance_anchor;
+pub fn spend_parse_ciphertext_fields(spend: &Spend) -> Result<SpendCiphertextFields> {
+    use penumbra_sdk_compliance::structs::{ComplianceCiphertext, SPEND_WIRE_BYTES};
 
-    use penumbra_sdk_compliance::structs::{
-        ComplianceCiphertext, SPEND_DLEQ_BYTES, SPEND_WIRE_BYTES,
-    };
     anyhow::ensure!(
         spend.body.compliance_ciphertext.len() == SPEND_WIRE_BYTES,
         "spend compliance ciphertext must be {SPEND_WIRE_BYTES} bytes, got {}",
@@ -45,6 +49,16 @@ pub fn spend_check_stateless_and_extract(
     let ct = ComplianceCiphertext::from_bytes(&spend.body.compliance_ciphertext)
         .context("failed to deserialize compliance ciphertext")?;
     let (epk, c2_core, compliance_ciphertext) = ct.to_spend_circuit_public_inputs();
+
+    Ok(SpendCiphertextFields {
+        epk,
+        c2_core,
+        compliance_ciphertext,
+    })
+}
+
+pub fn spend_parse_dleq_fields(spend: &Spend) -> Result<SpendDleqFields> {
+    use penumbra_sdk_compliance::structs::SPEND_DLEQ_BYTES;
 
     anyhow::ensure!(
         spend.body.dleq_proof.len() == SPEND_DLEQ_BYTES,
@@ -61,28 +75,63 @@ pub fn spend_check_stateless_and_extract(
         .context("dleq_s must be 32 bytes")?;
     let dleq_s = Fq::from_bytes_checked(&s_bytes)
         .map_err(|_| anyhow::anyhow!("invalid dleq_s field element"))?;
-    let target_timestamp = Fq::from(spend.body.target_timestamp);
 
-    let public = SpendProofPublic {
+    Ok(SpendDleqFields {
+        target_timestamp: Fq::from(spend.body.target_timestamp),
+        dleq_c,
+        dleq_s,
+    })
+}
+
+pub fn spend_build_public(
+    spend: &Spend,
+    context: &TransactionContext,
+    ciphertext: SpendCiphertextFields,
+    dleq: SpendDleqFields,
+) -> SpendProofPublic {
+    SpendProofPublic {
         anchor: context.anchor,
         balance_commitment: spend.body.balance_commitment,
         nullifier: spend.body.nullifier,
         rk: spend.body.rk,
-        asset_anchor,
-        compliance_anchor,
-        epk,
-        c2_core,
-        compliance_ciphertext,
-        target_timestamp,
-        dleq_c,
-        dleq_s,
+        asset_anchor: spend.body.asset_anchor,
+        compliance_anchor: spend.body.compliance_anchor,
+        epk: ciphertext.epk,
+        c2_core: ciphertext.c2_core,
+        compliance_ciphertext: ciphertext.compliance_ciphertext,
+        target_timestamp: dleq.target_timestamp,
+        dleq_c: dleq.dleq_c,
+        dleq_s: dleq.dleq_s,
         sender_leaf_hash: spend.body.sender_leaf_hash,
-    };
+    }
+}
 
+pub fn spend_extract_public(
+    spend: &Spend,
+    context: &TransactionContext,
+) -> Result<SpendProofPublic> {
+    let ciphertext = spend_parse_ciphertext_fields(spend)?;
+    let dleq = spend_parse_dleq_fields(spend)?;
+    Ok(spend_build_public(spend, context, ciphertext, dleq))
+}
+
+pub fn spend_to_batch_item(spend: &Spend, public: SpendProofPublic) -> Result<BatchItem> {
     spend
         .proof
         .to_batch_item(public)
         .map_err(|e| anyhow::anyhow!(e))
+}
+
+/// Run spend stateless checks (auth sig) without proof verification, and return
+/// a `BatchItem` for deferred batch verification. Used by the batch path in
+/// `process_proposal`.
+pub fn spend_check_stateless_and_extract(
+    spend: &Spend,
+    context: &TransactionContext,
+) -> Result<BatchItem> {
+    spend_verify_auth_sig(spend, context)?;
+    let public = spend_extract_public(spend, context)?;
+    spend_to_batch_item(spend, public)
 }
 
 #[async_trait]

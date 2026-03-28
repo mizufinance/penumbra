@@ -233,6 +233,13 @@ pub mod penumbra {
     }
 
     pub mod util {
+        pub mod node {
+            pub mod v1 {
+                include!("gen/penumbra.util.node.v1.rs");
+                include!("gen/penumbra.util.node.v1.serde.rs");
+            }
+        }
+
         pub mod tendermint_proxy {
             pub mod v1 {
                 include!("gen/penumbra.util.tendermint_proxy.v1.rs");

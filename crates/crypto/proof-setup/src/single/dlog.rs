@@ -88,7 +88,7 @@ pub fn verify(ctx: &[u8], statement: Statement, proof: &Proof) -> bool {
 mod test {
     use super::*;
 
-    use ark_ec::Group;
+    use ark_ec::PrimeGroup;
     use rand_core::OsRng;
 
     const TEST_CTX: &[u8] = b"Test Context";

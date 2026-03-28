@@ -90,7 +90,6 @@ pub enum RootCommand {
         #[clap(short, long, display_order = 500)]
         enable_expensive_rpc: bool,
     },
-
     /// Generate, join, or reset a network.
     Network {
         /// Path to directory to store output in. Must not exist. Defaults to

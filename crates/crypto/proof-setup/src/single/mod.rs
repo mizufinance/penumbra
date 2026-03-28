@@ -7,7 +7,7 @@ pub mod log;
 mod phase1;
 mod phase2;
 
-use ark_ec::{CurveGroup, Group};
+use ark_ec::{CurveGroup, PrimeGroup};
 use ark_ff::Zero;
 use ark_groth16::data_structures::ProvingKey;
 use ark_groth16::VerifyingKey;

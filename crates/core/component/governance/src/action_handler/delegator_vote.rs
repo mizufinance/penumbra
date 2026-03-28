@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use cnidarium::StateWrite;
 use decaf377::Fr;
 use penumbra_sdk_compliance::RegulatedAssetCheck;
+use penumbra_sdk_proof_params::batch::{self, BatchItem};
 use penumbra_sdk_proof_params::DELEGATOR_VOTE_PROOF_VERIFICATION_KEY;
 use penumbra_sdk_proto::StateWriteProto as _;
 use penumbra_sdk_txhash::TransactionContext;
@@ -14,42 +15,41 @@ use crate::{
 };
 use cnidarium_component::ActionHandler;
 
+pub fn delegator_vote_check_stateless_and_extract(
+    action: &DelegatorVote,
+    context: &TransactionContext,
+) -> Result<BatchItem> {
+    let public = DelegatorVoteProofPublic {
+        anchor: context.anchor,
+        balance_commitment: action.body.value.commit(Fr::zero()),
+        nullifier: action.body.nullifier,
+        rk: action.body.rk,
+        start_position: action.body.start_position,
+    };
+    action
+        .proof
+        .to_batch_item(public)
+        .map_err(|e| anyhow::anyhow!(e))
+}
+
 #[async_trait]
 impl ActionHandler for DelegatorVote {
     type CheckStatelessContext = TransactionContext;
 
     async fn check_stateless(&self, context: TransactionContext) -> Result<()> {
-        let DelegatorVote {
-            auth_sig,
-            proof,
-            body:
-                DelegatorVoteBody {
-                    start_position,
-                    nullifier,
-                    rk,
-                    value,
-                    // Unused in stateless checks:
-                    unbonded_amount: _,
-                    vote: _,     // Only used when executing the vote
-                    proposal: _, // Checked against the current open proposals statefully
-                },
-        } = self;
-
         // 1. Check spend auth signature using provided spend auth key.
-        rk.verify(context.effect_hash.as_ref(), auth_sig)
+        self.body
+            .rk
+            .verify(context.effect_hash.as_ref(), &self.auth_sig)
             .context("delegator vote auth signature failed to verify")?;
 
         // 2. Verify the proof against the provided anchor and start position:
-        let public = DelegatorVoteProofPublic {
-            anchor: context.anchor,
-            balance_commitment: value.commit(Fr::zero()),
-            nullifier: *nullifier,
-            rk: *rk,
-            start_position: *start_position,
-        };
-        proof
-            .verify(&DELEGATOR_VOTE_PROOF_VERIFICATION_KEY, public)
-            .context("a delegator vote proof did not verify")?;
+        let item = delegator_vote_check_stateless_and_extract(self, &context)?;
+        batch::batch_verify(
+            &DELEGATOR_VOTE_PROOF_VERIFICATION_KEY,
+            std::slice::from_ref(&item),
+        )
+        .map_err(|e| anyhow::anyhow!("a delegator vote proof did not verify: {e}"))?;
 
         Ok(())
     }

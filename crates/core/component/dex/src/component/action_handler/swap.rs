@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use cnidarium::StateWrite;
 use cnidarium_component::ActionHandler;
 use penumbra_sdk_compliance::RegulatedAssetCheck;
+use penumbra_sdk_proof_params::batch::{self, BatchItem};
 use penumbra_sdk_proof_params::SWAP_PROOF_VERIFICATION_KEY;
 use penumbra_sdk_proto::{DomainType as _, StateWriteProto};
 use penumbra_sdk_sct::component::source::SourceContext;
@@ -15,23 +16,27 @@ use crate::{
     swap::{proof::SwapProofPublic, Swap},
 };
 
+pub fn swap_check_stateless_and_extract(swap: &Swap) -> Result<BatchItem> {
+    // Check that the trading pair is distinct.
+    anyhow::ensure!(
+        swap.body.trading_pair.asset_1() != swap.body.trading_pair.asset_2(),
+        "Trading pair must be distinct"
+    );
+
+    swap.proof.to_batch_item(SwapProofPublic {
+        balance_commitment: swap.balance_commitment_inner(),
+        swap_commitment: swap.body.payload.commitment,
+        fee_commitment: swap.body.fee_commitment,
+    })
+}
+
 #[async_trait]
 impl ActionHandler for Swap {
     type CheckStatelessContext = ();
     async fn check_stateless(&self, _context: ()) -> Result<()> {
-        // Check that the trading pair is distinct.
-        if self.body.trading_pair.asset_1() == self.body.trading_pair.asset_2() {
-            anyhow::bail!("Trading pair must be distinct");
-        }
-
-        self.proof.verify(
-            &SWAP_PROOF_VERIFICATION_KEY,
-            SwapProofPublic {
-                balance_commitment: self.balance_commitment_inner(),
-                swap_commitment: self.body.payload.commitment,
-                fee_commitment: self.body.fee_commitment,
-            },
-        )?;
+        let item = swap_check_stateless_and_extract(self)?;
+        batch::batch_verify(&SWAP_PROOF_VERIFICATION_KEY, std::slice::from_ref(&item))
+            .map_err(|e| anyhow::anyhow!("a swap proof did not verify: {e}"))?;
 
         Ok(())
     }

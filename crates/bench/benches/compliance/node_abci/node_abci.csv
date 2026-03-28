@@ -1,7 +1,0 @@
-version,flow,metric,block_size,mean_ms,median_ms,samples,profile,run_id,timestamp,git_rev,host_label
-base,abci_roundtrip,latency_ms,,531.38,531.32,10,quick,run-1772632001-77620,1772632001,unknown-rev,unknown-host
-dev,abci_roundtrip,latency_ms,,1062.52,1061.45,10,quick,run-1772577459-57005,1772577459,unknown-rev,unknown-host
-local,abci_roundtrip,latency_ms,,619.79,620.47,10,quick,run-1772721823-25958,1772721823,unknown-rev,unknown-host
-base,block,tps,100,372.20,372.20,1,quick,run-1772632001-77620,1772632001,unknown-rev,unknown-host
-dev,block,tps,100,190.20,190.20,1,quick,run-1772577459-57005,1772577459,unknown-rev,unknown-host
-local,block,tps,100,231.65,231.65,1,quick,run-1772721823-25958,1772721823,unknown-rev,unknown-host

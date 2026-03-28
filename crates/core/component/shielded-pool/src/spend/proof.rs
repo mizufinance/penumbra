@@ -3,9 +3,8 @@ use std::str::FromStr;
 
 use anyhow::Result;
 use ark_r1cs_std::{
-    prelude::{EqGadget, FieldVar},
+    prelude::{EqGadget, FieldVar, ToBitsGadget},
     uint8::UInt8,
-    ToBitsGadget,
 };
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use decaf377::{r1cs::FqVar, Bls12_377, Fq, Fr};
@@ -189,6 +188,19 @@ pub struct SpendCircuit {
 }
 
 impl SpendCircuit {
+    #[cfg(feature = "benchmark-helpers")]
+    pub fn from_parts(
+        public: SpendProofPublic,
+        private: SpendProofPrivate,
+        claimed_statement_hash: Fq,
+    ) -> Self {
+        Self {
+            public,
+            private,
+            claimed_statement_hash,
+        }
+    }
+
     pub fn into_parts(self) -> (SpendProofPublic, SpendProofPrivate, Fq) {
         (self.public, self.private, self.claimed_statement_hash)
     }
@@ -266,7 +278,7 @@ impl ConstraintSynthesizer<Fq> for SpendCircuit {
         //
         // We short circuit the merkle path verification if the note is a _dummy_ spend (a spend
         // with zero value), since these are never committed to the state commitment tree.
-        let is_not_dummy = note_var.amount().is_eq(&FqVar::zero())?.not();
+        let is_not_dummy = !note_var.amount().is_eq(&FqVar::zero())?;
         merkle_path_var.verify(
             cs.clone(),
             &is_not_dummy,

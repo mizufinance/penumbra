@@ -3,11 +3,12 @@ use penumbra_sdk_auction::auction::dutch::actions::{
     ActionDutchAuctionEnd, ActionDutchAuctionSchedule, ActionDutchAuctionWithdraw,
 };
 use penumbra_sdk_compliance::structs::{MsgRegisterAsset, MsgRegisterUser};
+use penumbra_sdk_proof_aggregation::AggregateBundle;
 use penumbra_sdk_txhash::{EffectHash, EffectingData};
 use std::convert::{TryFrom, TryInto};
 
 use penumbra_sdk_asset::balance;
-use penumbra_sdk_proto::{core::transaction::v1 as pb, DomainType};
+use penumbra_sdk_proto::{core::transaction::v1 as pb, DomainType, Message as _};
 
 use crate::{ActionView, IsAction, TransactionPerspective};
 use serde::{Deserialize, Serialize};
@@ -52,6 +53,7 @@ pub enum Action {
 
     ComplianceRegisterAsset(MsgRegisterAsset),
     ComplianceRegisterUser(MsgRegisterUser),
+    AggregateBundle(AggregateBundle),
 }
 
 impl EffectingData for Action {
@@ -84,6 +86,17 @@ impl EffectingData for Action {
             Action::ActionLiquidityTournamentVote(a) => a.effect_hash(),
             Action::ComplianceRegisterAsset(a) => a.effect_hash(),
             Action::ComplianceRegisterUser(a) => a.effect_hash(),
+            Action::AggregateBundle(a) => {
+                let bytes = pb::AggregateBundle::from(a.clone()).encode_to_vec();
+                EffectHash(
+                    blake2b_simd::Params::new()
+                        .personal(b"PenumbraAgBH")
+                        .hash(&bytes)
+                        .as_bytes()[0..32]
+                        .try_into()
+                        .expect("hash output is 32 bytes"),
+                )
+            }
         }
     }
 }
@@ -144,6 +157,7 @@ impl Action {
             Action::ComplianceRegisterUser(_) => {
                 tracing::info_span!("ComplianceRegisterUser", ?idx)
             }
+            Action::AggregateBundle(_) => tracing::info_span!("AggregateBundle", ?idx),
         }
     }
 
@@ -177,6 +191,7 @@ impl Action {
             Action::ActionLiquidityTournamentVote(_) => 70,
             Action::ComplianceRegisterAsset(_) => 80,
             Action::ComplianceRegisterUser(_) => 81,
+            Action::AggregateBundle(_) => 82,
         }
     }
 }
@@ -213,6 +228,7 @@ impl IsAction for Action {
             Action::ActionLiquidityTournamentVote(action) => action.balance_commitment(),
             Action::ComplianceRegisterAsset(_) => balance::Commitment::default(),
             Action::ComplianceRegisterUser(_) => balance::Commitment::default(),
+            Action::AggregateBundle(_) => balance::Commitment::default(),
         }
     }
 
@@ -245,6 +261,7 @@ impl IsAction for Action {
             Action::ActionLiquidityTournamentVote(x) => x.view_from_perspective(txp),
             Action::ComplianceRegisterAsset(x) => ActionView::ComplianceRegisterAsset(x.to_owned()),
             Action::ComplianceRegisterUser(x) => ActionView::ComplianceRegisterUser(x.to_owned()),
+            Action::AggregateBundle(x) => ActionView::AggregateBundle(x.to_owned()),
         }
     }
 }
@@ -343,6 +360,9 @@ impl From<Action> for pb::Action {
             Action::ComplianceRegisterUser(inner) => pb::Action {
                 action: Some(pb::action::Action::ComplianceRegisterUser(inner.into())),
             },
+            Action::AggregateBundle(inner) => pb::Action {
+                action: Some(pb::action::Action::AggregateBundle(inner.into())),
+            },
         }
     }
 }
@@ -426,6 +446,9 @@ impl TryFrom<pb::Action> for Action {
             }
             pb::action::Action::ComplianceRegisterUser(inner) => {
                 Ok(Action::ComplianceRegisterUser(inner.try_into()?))
+            }
+            pb::action::Action::AggregateBundle(inner) => {
+                Ok(Action::AggregateBundle(inner.try_into()?))
             }
         }
     }

@@ -1,0 +1,9 @@
+{
+  "scenario": "unregulated",
+  "base_snapshot": "local-unreg-1000-ready",
+  "operation": "prepare",
+  "built_height": 1802,
+  "built_at": 1773114071,
+  "tx_count": 1000,
+  "source_indexes": "0-999"
+}
