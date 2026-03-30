@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use penumbra_sdk_transaction::{Action, Transaction};
+use penumbra_sdk_transaction::{check_transaction_enabled, Action, Transaction};
 use penumbra_sdk_txhash::AuthorizingData;
 
 #[tracing::instrument(skip(tx))]
@@ -58,6 +58,10 @@ pub fn check_non_empty_transaction(tx: &Transaction) -> anyhow::Result<()> {
             "consensus rule violated: transaction must have more than 0 actions"
         ))
     }
+}
+
+pub fn check_enabled_actions(tx: &Transaction) -> anyhow::Result<()> {
+    check_transaction_enabled(tx)
 }
 
 /// Validates the cryptographic binding between spend and output actions.

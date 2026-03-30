@@ -2,14 +2,12 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use decaf377::Fq;
-use decaf377_rdsa::{VerificationKey, VerificationKeyBytes};
 use ibc_types::core::client::ClientId;
-use once_cell::sync::Lazy;
 
+use crate::app::StateReadExt;
+use crate::{action_handler::AppActionHandler, params::change::ParameterChangeExt as _};
 use cnidarium::StateWrite;
 use penumbra_sdk_asset::STAKING_TOKEN_DENOM;
-use penumbra_sdk_community_pool::component::StateReadExt as _;
 use penumbra_sdk_governance::{
     component::{StateReadExt as _, StateWriteExt as _},
     event,
@@ -18,16 +16,10 @@ use penumbra_sdk_governance::{
     ProposalNft, ProposalSubmit, VotingReceiptToken,
 };
 use penumbra_sdk_ibc::component::ClientStateReadExt;
-use penumbra_sdk_keys::keys::{FullViewingKey, NullifierKey};
-use penumbra_sdk_proto::{DomainType, StateWriteProto as _};
+use penumbra_sdk_proto::StateWriteProto as _;
 use penumbra_sdk_sct::component::clock::EpochRead;
 use penumbra_sdk_sct::component::tree::SctRead;
 use penumbra_sdk_shielded_pool::component::AssetRegistry;
-use penumbra_sdk_transaction::{AuthorizationData, Transaction, TransactionPlan, WitnessData};
-
-use crate::app::StateReadExt;
-use crate::community_pool_ext::CommunityPoolStateWriteExt;
-use crate::{action_handler::AppActionHandler, params::change::ParameterChangeExt as _};
 
 // IMPORTANT: these length limits are enforced by consensus! Changing them will change which
 // transactions are accepted by the network, and so they *cannot* be changed without a network
@@ -72,44 +64,12 @@ impl AppActionHandler for ProposalSubmit {
             Signaling { commit: _ } => { /* all signaling proposals are valid */ }
             Emergency { halt_chain: _ } => { /* all emergency proposals are valid */ }
             ParameterChange(_change) => { /* no stateless checks -- see check-and-execute below */ }
-            CommunityPoolSpend { transaction_plan } => {
-                // Check to make sure that the transaction plan contains only valid actions for the
-                // Community Pool (none of them should require proving to build):
-                use penumbra_sdk_transaction::plan::ActionPlan::*;
-
-                let parsed_transaction_plan = TransactionPlan::decode(&transaction_plan[..])
-                    .context("transaction plan was malformed")?;
-
-                for action in &parsed_transaction_plan.actions {
-                    match action {
-                        Spend(_) | Output(_) | Swap(_) | SwapClaim(_) | DelegatorVote(_)
-                        | UndelegateClaim(_) => {
-                            anyhow::bail!("invalid action in Community Pool spend proposal (would require proving)")
-                        }
-                        Delegate(_) | Undelegate(_) => {
-                            anyhow::bail!("invalid action in Community Pool spend proposal (can't claim outputs of undelegation)")
-                        }
-                        ProposalSubmit(_) | ProposalWithdraw(_) | ProposalDepositClaim(_) => {
-                            anyhow::bail!("invalid action in Community Pool spend proposal (not allowed to manipulate proposals from within proposals)")
-                        }
-                        ValidatorDefinition(_)
-                        | ActionLiquidityTournamentVote(_)
-                        | IbcAction(_)
-                        | ValidatorVote(_)
-                        | PositionOpen(_)
-                        | PositionClose(_)
-                        | PositionWithdraw(_)
-                        | CommunityPoolSpend(_)
-                        | CommunityPoolOutput(_)
-                        | Ics20Withdrawal(_)
-                        | CommunityPoolDeposit(_)
-                        | ActionDutchAuctionSchedule(_)
-                        | ActionDutchAuctionEnd(_)
-                        | ActionDutchAuctionWithdraw(_)
-                        | ComplianceRegisterAsset(_)
-                        | ComplianceRegisterUser(_) => {}
-                    }
-                }
+            CommunityPoolSpend {
+                transaction_plan: _,
+            } => {
+                anyhow::bail!(
+                    "proposal payload disabled in lightweight transfer-only phase: CommunityPoolSpend"
+                );
             }
             UpgradePlan { .. } => {}
             FreezeIbcClient { client_id } => {
@@ -169,42 +129,12 @@ impl AppActionHandler for ProposalSubmit {
                     .apply_changes(current_parameters)
                     .context("proposed parameter changes do not apply to current parameters")?;
             }
-            ProposalPayload::CommunityPoolSpend { transaction_plan } => {
-                // If Community Pool spend proposals aren't enabled, then we can't allow them to be submitted
-                let community_pool_parameters = state.get_community_pool_params().await?;
-                anyhow::ensure!(
-                    community_pool_parameters.community_pool_spend_proposals_enabled,
-                    "Community Pool spend proposals are not enabled",
+            ProposalPayload::CommunityPoolSpend {
+                transaction_plan: _,
+            } => {
+                anyhow::bail!(
+                    "proposal payload disabled in lightweight transfer-only phase: CommunityPoolSpend"
                 );
-
-                // Check that the transaction plan can be built without any witness or auth data and
-                // it passes stateless and stateful checks, and can be executed successfully in the
-                // current chain state. This doesn't guarantee that it will execute successfully at
-                // the time when the proposal passes, but we don't want to allow proposals that are
-                // obviously going to fail to execute.
-                //
-                // NOTE: we do not do stateful checks, see below
-                let parsed_transaction_plan = TransactionPlan::decode(&transaction_plan[..])
-                    .context("transaction plan was malformed")?;
-                let tx = build_community_pool_transaction(parsed_transaction_plan.clone())
-                    .await
-                    .context("failed to build submitted Community Pool spend transaction plan")?;
-                tx.check_stateless(()).await.context(
-                    "submitted Community Pool spend transaction failed stateless checks",
-                )?;
-                /*
-                // We skip stateful checks rather than doing them in simulation. Partly this is
-                // because it's easier to not check, but also it avoids having to reason about whether
-                // there are any cases where a transaction could be invalid when submitted but become
-                // valid when voting finishes (e.g., an undelegation?)
-
-                tx.check_historical(state.clone())
-                    .await
-                    .context("submitted Community Pool spend transaction failed stateful checks")?;
-                tx.check_and_execute(StateDelta::new(state)).await.context(
-                    "submitted Community Pool spend transaction failed to execute in current chain state",
-                )?;
-                 */
             }
             ProposalPayload::UpgradePlan { .. } => {
                 // TODO(erwan): no stateful checks for upgrade plan.
@@ -233,21 +163,6 @@ impl AppActionHandler for ProposalSubmit {
             proposal,
             deposit_amount,
         } = self;
-
-        // If the proposal is a Community Pool spend proposal, we've already built it, but we need to build it
-        // again because we can't remember anything from `check_tx_stateful` to `execute`:
-        if let ProposalPayload::CommunityPoolSpend { transaction_plan } = &proposal.payload {
-            // Build the transaction again (this time we know it will succeed because it built and
-            // passed all checks in `check_tx_stateful`):
-            let parsed_transaction_plan = TransactionPlan::decode(&transaction_plan[..])
-                .context("transaction plan was malformed")?;
-            let tx = build_community_pool_transaction(parsed_transaction_plan.clone())
-                .await
-                .context("failed to build submitted Community Pool spend transaction plan in execute step")?;
-
-            // Cache the built transaction in the state so we can use it later, without rebuilding:
-            state.put_community_pool_transaction(proposal.id, tx);
-        }
 
         // Store the contents of the proposal and generate a fresh proposal id for it
         let proposal_id = state
@@ -307,68 +222,53 @@ impl AppActionHandler for ProposalSubmit {
     }
 }
 
-/// The full viewing key used to construct transactions made by the Penumbra Community Pool.
-///
-/// This full viewing key does not correspond to any known spend key; it is constructed from the
-/// hashes of two arbitrary strings.
-static COMMUNITY_POOL_FULL_VIEWING_KEY: Lazy<FullViewingKey> = Lazy::new(|| {
-    // We start with two different personalization strings for the hash function:
-    let ak_personalization = b"Penumbra_CP_ak";
-    let nk_personalization = b"Penumbra_CP_nk";
-
-    // We pick two different arbitrary strings to hash:
-    let ak_hash_input =
-        b"This hash input is used to form the `ak` component of the Penumbra Community Pool's full viewing key.";
-    let nk_hash_input =
-        b"This hash input is used to form the `nk` component of the Penumbra Community Pool's full viewing key.";
-
-    // We hash the two strings using their respective personalizations:
-    let ak_hash = blake2b_simd::Params::new()
-        .personal(ak_personalization)
-        .hash(ak_hash_input);
-    let nk_hash = blake2b_simd::Params::new()
-        .personal(nk_personalization)
-        .hash(nk_hash_input);
-
-    // We construct the `ak` component of the full viewing key from the hash of the first string:
-    let ak = VerificationKey::try_from(VerificationKeyBytes::from(
-        decaf377::Element::encode_to_curve(&Fq::from_le_bytes_mod_order(ak_hash.as_bytes()))
-            .vartime_compress()
-            .0,
-    ))
-    .expect("penumbra Community Pool FVK's `ak` must be a valid verification key by construction");
-
-    // We construct the `nk` component of the full viewing key from the hash of the second string:
-    let nk = NullifierKey(Fq::from_le_bytes_mod_order(nk_hash.as_bytes()));
-
-    // We construct the full viewing key from the `ak` and `nk` components:
-    FullViewingKey::from_components(ak, nk)
-});
-
-async fn build_community_pool_transaction(
-    transaction_plan: TransactionPlan,
-) -> Result<Transaction> {
-    let effect_hash = transaction_plan.effect_hash(&COMMUNITY_POOL_FULL_VIEWING_KEY)?;
-    transaction_plan.build(
-        &COMMUNITY_POOL_FULL_VIEWING_KEY,
-        &WitnessData {
-            anchor: penumbra_sdk_tct::Tree::new().root(),
-            state_commitment_proofs: Default::default(),
-        },
-        &AuthorizationData {
-            effect_hash: Some(effect_hash),
-            spend_auths: Default::default(),
-            delegator_vote_auths: Default::default(),
-            lqt_vote_auths: Default::default(),
-        },
-    )
-}
-
 #[cfg(test)]
 mod test {
-    /// Ensure that the Community Pool full viewing key can be constructed and does not panic when referenced.
-    #[test]
-    fn community_pool_fvk_can_be_constructed() {
-        let _ = *super::COMMUNITY_POOL_FULL_VIEWING_KEY;
+    use penumbra_sdk_governance::{
+        change::ParameterChange, Proposal, ProposalPayload, ProposalSubmit,
+    };
+
+    use crate::action_handler::AppActionHandler;
+
+    #[tokio::test]
+    async fn parameter_change_proposals_remain_enabled_statelessly() {
+        ProposalSubmit {
+            proposal: Proposal {
+                id: 0,
+                title: "parameter change".to_owned(),
+                description: "kept enabled in lightweight mode".to_owned(),
+                payload: ProposalPayload::ParameterChange(ParameterChange {
+                    changes: vec![],
+                    preconditions: vec![],
+                }),
+            },
+            deposit_amount: 0u32.into(),
+        }
+        .check_stateless(())
+        .await
+        .expect("parameter change proposals should remain enabled");
+    }
+
+    #[tokio::test]
+    async fn community_pool_spend_proposals_are_disabled_statelessly() {
+        let err = ProposalSubmit {
+            proposal: Proposal {
+                id: 0,
+                title: "community pool spend".to_owned(),
+                description: "disabled in lightweight mode".to_owned(),
+                payload: ProposalPayload::CommunityPoolSpend {
+                    transaction_plan: vec![],
+                },
+            },
+            deposit_amount: 0u32.into(),
+        }
+        .check_stateless(())
+        .await
+        .expect_err("community pool spend proposals should be disabled");
+
+        assert_eq!(
+            err.to_string(),
+            "proposal payload disabled in lightweight transfer-only phase: CommunityPoolSpend"
+        );
     }
 }

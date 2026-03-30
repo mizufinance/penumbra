@@ -30,6 +30,12 @@ use penumbra_sdk_proto::{
 };
 use penumbra_sdk_view::ViewClient;
 
+fn lightweight_transfer_only_phase_enabled() -> bool {
+    std::env::var("PENUMBRA_LIGHTWEIGHT_TRANSFER_ONLY_PHASE")
+        .map(|value| value == "1")
+        .unwrap_or(false)
+}
+
 // Generate a working pclientd config in the target directory.
 fn generate_custody_config(home_dir: &TempDir) -> anyhow::Result<()> {
     let mut init_cmd = AssertCommand::cargo_bin("pclientd")?;
@@ -231,6 +237,11 @@ async fn transaction_send_flow() -> anyhow::Result<()> {
 #[ignore]
 #[tokio::test]
 async fn swap_claim_flow() -> anyhow::Result<()> {
+    if lightweight_transfer_only_phase_enabled() {
+        eprintln!("skipping swap_claim_flow in lightweight transfer-only phase");
+        return Ok(());
+    }
+
     tracing_subscriber::fmt::try_init().ok();
     // Create a tempdir for the pclientd instance to run in.
     let data_dir = tempdir().unwrap();

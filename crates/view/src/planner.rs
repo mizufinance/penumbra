@@ -51,6 +51,7 @@ use penumbra_sdk_shielded_pool::{Ics20Withdrawal, Note, OutputPlan, SpendPlan};
 use penumbra_sdk_stake::{rate::RateData, validator, IdentityKey, UndelegateClaimPlan};
 use penumbra_sdk_tct as tct;
 use penumbra_sdk_transaction::{
+    check_transaction_plan_enabled,
     memo::MemoPlaintext,
     plan::{ActionPlan, MemoPlan, TransactionPlan},
     ActionList, TransactionParameters,
@@ -721,6 +722,8 @@ impl<R: RngCore + CryptoRng> Planner<R> {
             self.transaction_parameters.clone(),
             memo_plan,
         )?;
+
+        check_transaction_plan_enabled(&plan)?;
 
         // Automatically enrich with compliance details if needed
         self.enrich_with_compliance(view, &mut plan).await?;

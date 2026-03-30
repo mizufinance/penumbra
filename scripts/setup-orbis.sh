@@ -20,6 +20,17 @@ TEST_MNEMONIC="abandon abandon abandon abandon abandon abandon abandon abandon a
 
 PID_FILE="$COMPLIANCE_TMP/orbis-pids.txt"
 
+# --- Build sourcehubd if needed ---
+if [ ! -x "$SOURCEHUB_BIN" ]; then
+    log_info "Building sourcehubd from $SOURCEHUB_DIR..."
+    [ -d "$SOURCEHUB_DIR" ] || { log_error "sourcehub not found at $SOURCEHUB_DIR"; exit 1; }
+    _make_target="build"
+    [[ "$OSTYPE" == "darwin"* ]] && _make_target="build-mac"
+    (cd "$SOURCEHUB_DIR" && make "$_make_target") \
+        || { log_error "Failed to build sourcehubd"; exit 1; }
+    log_success "sourcehubd built"
+fi
+
 # --- Dependency checks ---
 log_info "Checking dependencies..."
 [ ! -x "$SOURCEHUB_BIN" ] && log_error "sourcehubd not found at $SOURCEHUB_BIN" && exit 1

@@ -2,7 +2,9 @@ use anyhow::Result;
 
 use penumbra_sdk_custody::{AuthorizeRequest, CustodyClient};
 use penumbra_sdk_keys::FullViewingKey;
-use penumbra_sdk_transaction::{AuthorizationData, Transaction, TransactionPlan};
+use penumbra_sdk_transaction::{
+    check_transaction_plan_enabled, AuthorizationData, Transaction, TransactionPlan,
+};
 use penumbra_sdk_view::ViewClient;
 
 pub async fn build_transaction<V, C>(
@@ -15,6 +17,8 @@ where
     V: ViewClient,
     C: CustodyClient,
 {
+    check_transaction_plan_enabled(&plan)?;
+
     // Get the authorization data from the custody service...
     let auth_data: AuthorizationData = custody
         .authorize(AuthorizeRequest {

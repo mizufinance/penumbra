@@ -17,6 +17,7 @@
 // Requires nightly.
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
+mod action_policy;
 mod auth_data;
 mod detection_data;
 mod error;
@@ -34,6 +35,10 @@ pub mod view;
 
 pub use action::Action;
 pub use action_list::ActionList;
+pub use action_policy::{
+    check_action_enabled, check_action_plan_enabled, check_transaction_enabled,
+    check_transaction_plan_enabled,
+};
 pub use auth_data::AuthorizationData;
 pub use detection_data::DetectionData;
 pub use error::Error;

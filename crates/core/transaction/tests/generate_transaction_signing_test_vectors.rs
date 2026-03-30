@@ -47,7 +47,9 @@ use penumbra_sdk_stake::{
     validator, validator::Definition, Delegate, FundingStreams, GovernanceKey, IdentityKey,
     Penalty, Undelegate, UndelegateClaimPlan,
 };
-use penumbra_sdk_transaction::{ActionPlan, TransactionParameters, TransactionPlan};
+use penumbra_sdk_transaction::{
+    check_transaction_plan_enabled, ActionPlan, TransactionParameters, TransactionPlan,
+};
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use proptest::test_runner::{Config, TestRunner};
@@ -683,7 +685,8 @@ fn generate_transaction_signing_test_vectors() {
     let test_vectors_dir = "tests/signing_test_vectors";
     std::fs::create_dir_all(test_vectors_dir).expect("failed to create test vectors dir");
 
-    for i in 0..100 {
+    let mut i = 0;
+    while i < 100 {
         let seed_phrase = SeedPhrase::from_str(SEED_PHRASE).expect("test seed phrase is valid");
         let sk = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
         let fvk = sk.full_viewing_key();
@@ -691,6 +694,10 @@ fn generate_transaction_signing_test_vectors() {
             .new_tree(&mut runner)
             .expect("Failed to create new tree");
         let transaction_plan = value_tree.current();
+
+        if check_transaction_plan_enabled(&transaction_plan).is_err() {
+            continue;
+        }
 
         let json_plan = serde_json::to_string_pretty(&transaction_plan)
             .expect("should be able to json tx plan");
@@ -722,6 +729,8 @@ fn generate_transaction_signing_test_vectors() {
         hash_file
             .write_all(effect_hash_hex.as_bytes())
             .expect("Failed to write hash file");
+
+        i += 1;
     }
 }
 
@@ -734,6 +743,7 @@ fn effect_hash_test_vectors() {
     let sk = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
     let fvk = sk.full_viewing_key();
 
+    let mut supported_vectors = 0;
     for i in 0..100 {
         let proto_file_path = format!("{}/transaction_plan_{}.proto", test_vectors_dir, i);
         let mut proto_file = File::open(&proto_file_path).expect("Failed to open Protobuf file");
@@ -743,6 +753,11 @@ fn effect_hash_test_vectors() {
             .expect("Failed to read Protobuf file");
         let transaction_plan = TransactionPlan::decode(&transaction_plan_encoded[..])
             .expect("should be able to decode transaction plan");
+
+        if check_transaction_plan_enabled(&transaction_plan).is_err() {
+            continue;
+        }
+
         let effect_hash_hex = hex::encode(
             transaction_plan
                 .effect_hash(fvk)
@@ -754,5 +769,11 @@ fn effect_hash_test_vectors() {
         let expected_effect_hash = std::fs::read_to_string(&hash_file_path)
             .expect("should be able to read expected effect hash");
         assert_eq!(effect_hash_hex, expected_effect_hash);
+        supported_vectors += 1;
     }
+
+    assert!(
+        supported_vectors > 0,
+        "expected at least one enabled signing test vector"
+    );
 }

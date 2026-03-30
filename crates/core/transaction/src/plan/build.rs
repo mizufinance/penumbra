@@ -7,7 +7,10 @@ use penumbra_sdk_txhash::AuthorizingData;
 
 use super::TransactionPlan;
 use crate::ActionPlan;
-use crate::{action::Action, AuthorizationData, Transaction, TransactionBody, WitnessData};
+use crate::{
+    action::Action, check_transaction_enabled, check_transaction_plan_enabled, AuthorizationData,
+    Transaction, TransactionBody, WitnessData,
+};
 
 impl TransactionPlan {
     /// Builds a [`TransactionPlan`] by slotting in the
@@ -18,6 +21,8 @@ impl TransactionPlan {
         actions: Vec<Action>,
         witness_data: &WitnessData,
     ) -> Result<Transaction> {
+        check_transaction_plan_enabled(&self)?;
+
         // Add the memo if it is planned.
         let memo = self
             .memo
@@ -34,11 +39,15 @@ impl TransactionPlan {
             memo,
         };
 
-        Ok(Transaction {
+        let tx = Transaction {
             transaction_body,
             anchor: witness_data.anchor,
             binding_sig: [0; 64].into(),
-        })
+        };
+
+        check_transaction_enabled(&tx)?;
+
+        Ok(tx)
     }
 
     /// Slot in the [`AuthorizationData`] and derive the synthetic
@@ -135,6 +144,8 @@ impl TransactionPlan {
         witness_data: &WitnessData,
         auth_data: &AuthorizationData,
     ) -> Result<Transaction> {
+        check_transaction_plan_enabled(&self)?;
+
         // 1. Build each action.
         let actions = self
             .actions
@@ -170,6 +181,8 @@ impl TransactionPlan {
         witness_data: &WitnessData,
         auth_data: &AuthorizationData,
     ) -> Result<Transaction> {
+        check_transaction_plan_enabled(&self)?;
+
         // Clone the witness data into an Arc so it can be shared between tasks.
         let witness_data = std::sync::Arc::new(witness_data.clone());
 

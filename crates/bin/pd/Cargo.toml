@@ -68,6 +68,7 @@ penumbra-sdk-compact-block           = { workspace = true, default-features = tr
 penumbra-sdk-custody                 = { workspace = true }
 penumbra-sdk-auction                 = { workspace = true, features = ["parallel"], default-features = true }
 penumbra-sdk-dex                     = { workspace = true, features = ["parallel"], default-features = true }
+penumbra-sdk-distributions           = { workspace = true, default-features = true }
 penumbra-sdk-fee                     = { workspace = true, default-features = true }
 penumbra-sdk-governance              = { workspace = true, features = ["parallel"], default-features = true }
 penumbra-sdk-ibc                     = { workspace = true, features = ["rpc"], default-features = true }

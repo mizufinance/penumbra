@@ -156,10 +156,6 @@ features = [
 name = "compliance_full_flow"
 path = "tests/compliance_full_flow.rs"
 
-[[test]]
-name = "compliance_action_blocking"
-path = "tests/compliance_action_blocking.rs"
-
 # Tests that don't use SpendPlan/OutputPlan (no compliance anchor needed):
 [[test]]
 name = "app_blocktimes_increment"
@@ -197,43 +193,6 @@ name = "mock_consensus_block_proving"
 path = "tests/mock_consensus_block_proving.rs"
 
 # Tests updated to use compliance registration + witness_auth_build_with_compliance:
-[[test]]
-name = "app_can_deposit_into_community_pool"
-path = "tests/app_can_deposit_into_community_pool.rs"
-
-[[test]]
-name = "app_can_define_and_delegate_to_a_validator"
-path = "tests/app_can_define_and_delegate_to_a_validator.rs"
-
-[[test]]
-name = "app_can_disable_community_pool_spends"
-path = "tests/app_can_disable_community_pool_spends.rs"
-
-[[test]]
-name = "app_can_propose_community_pool_spends"
-path = "tests/app_can_propose_community_pool_spends.rs"
-
-# DEX tests (Swap doesn't have compliance proofs, just action blocking for regulated assets):
-[[test]]
-name = "app_check_dex_vcb"
-path = "tests/app_check_dex_vcb.rs"
-
-[[test]]
-name = "swap_and_swap_claim"
-path = "tests/swap_and_swap_claim.rs"
-
-[[test]]
-name = "app_can_undelegate_from_a_validator"
-path = "tests/app_can_undelegate_from_a_validator.rs"
-
-[[test]]
-name = "app_reproduce_testnet_75_vcb_close"
-path = "tests/app_reproduce_testnet_75_vcb_close.rs"
-
-[[test]]
-name = "app_tracks_uptime_for_validators_only_once_active"
-path = "tests/app_tracks_uptime_for_validators_only_once_active.rs"
-
 # IBC transfer test with compliance setup:
 [[test]]
 name = "ics23_transfer"
@@ -266,3 +225,15 @@ path = "tests/compliance_diversifier_fix.rs"
 [[test]]
 name = "compliance_multi_spend_planner"
 path = "tests/compliance_multi_spend_planner.rs"
+
+# Disabled in the lightweight transfer-only phase:
+# - tests/compliance_action_blocking.rs
+# - tests/app_can_deposit_into_community_pool.rs
+# - tests/app_can_define_and_delegate_to_a_validator.rs
+# - tests/app_can_disable_community_pool_spends.rs
+# - tests/app_can_propose_community_pool_spends.rs
+# - tests/app_check_dex_vcb.rs
+# - tests/swap_and_swap_claim.rs
+# - tests/app_can_undelegate_from_a_validator.rs
+# - tests/app_reproduce_testnet_75_vcb_close.rs
+# - tests/app_tracks_uptime_for_validators_only_once_active.rs

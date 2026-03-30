@@ -1,10 +1,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
-use cnidarium::{StateRead, StateWrite};
+use cnidarium::StateRead;
 use futures::{StreamExt, TryStreamExt};
 use penumbra_sdk_governance::state_key;
-use penumbra_sdk_proto::{StateReadProto, StateWriteProto};
+use penumbra_sdk_proto::StateReadProto;
 use penumbra_sdk_sct::component::clock::EpochRead;
 use penumbra_sdk_transaction::Transaction;
 
@@ -42,13 +42,3 @@ pub trait CommunityPoolStateReadExt: StateRead + penumbra_sdk_stake::StateReadEx
 }
 
 impl<T: StateRead + penumbra_sdk_stake::StateReadExt + ?Sized> CommunityPoolStateReadExt for T {}
-
-#[async_trait]
-pub trait CommunityPoolStateWriteExt: StateWrite {
-    /// Get all the transactions set to be delivered in this block (scheduled in last block).
-    fn put_community_pool_transaction(&mut self, proposal: u64, transaction: Transaction) {
-        self.put(state_key::community_pool_transaction(proposal), transaction);
-    }
-}
-
-impl<T: StateWrite + ?Sized> CommunityPoolStateWriteExt for T {}

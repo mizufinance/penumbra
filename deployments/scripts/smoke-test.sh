@@ -94,6 +94,7 @@ echo "comfort ten front cycle churn burger oak absent rice ice urge result art c
 
 # Register the test wallet user for regulated assets (test_usd is regulated at genesis)
 cargo run --release --bin pcli -- --home "$pcli_test_home" tx compliance register-user test_usd
+cargo run --release --bin pcli -- --home "$pcli_test_home" tx compliance register-user test_usd --address-index 1
 >&2 echo "User registration complete."
 
 # --- Compliance smoke test setup ---
@@ -115,6 +116,8 @@ if [ -n "$dk_hex" ] && [ -n "$dk_pub_hex" ]; then
     # Register the test user for the smoke compliance asset
     cargo run --release --bin pcli -- --home "$pcli_test_home" \
         tx compliance register-user smoke_compliance_token
+    cargo run --release --bin pcli -- --home "$pcli_test_home" \
+        tx compliance register-user smoke_compliance_token --address-index 1
     >&2 echo "  User registered for smoke compliance asset."
 
     # Export env vars for integration tests
@@ -130,6 +133,7 @@ fi
 # Export devnet parameters for integration tests.
 # Must match values in run-local-devnet.sh.
 export UNBONDING_DELAY=201
+export PENUMBRA_LIGHTWEIGHT_TRANSFER_ONLY_PHASE=1
 
 # Run the integration tests. Using `just` targets so that the exact
 # invocations are easily reusable on the CLI in dev loops.
