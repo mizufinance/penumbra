@@ -8,6 +8,9 @@ use penumbra_sdk_app::{
     params::AppParameters,
 };
 use penumbra_sdk_asset::{asset, STAKING_TOKEN_ASSET_ID};
+use penumbra_sdk_distributions::{
+    genesis::Content as DistributionsContent, params::DistributionsParameters,
+};
 use penumbra_sdk_fee::genesis::Content as FeeContent;
 use penumbra_sdk_governance::genesis::Content as GovernanceContent;
 use penumbra_sdk_keys::{keys::SpendKey, Address};
@@ -255,6 +258,12 @@ impl NetworkConfig {
             },
             governance_content: GovernanceContent {
                 governance_params: gov_params,
+            },
+            distributions_content: DistributionsContent {
+                distributions_params: DistributionsParameters {
+                    staking_issuance_per_block: 0,
+                    ..Default::default()
+                },
             },
             shielded_pool_content: ShieldedPoolContent {
                 shielded_pool_params: ShieldedPoolParameters::default(),
@@ -793,6 +802,22 @@ mod tests {
             unimplemented!("TODO: support checkpointed app state")
         };
         assert_eq!(app_state.stake_content.validators.len(), 2);
+        assert_eq!(
+            app_state
+                .distributions_content
+                .distributions_params
+                .staking_issuance_per_block,
+            0
+        );
+        assert_eq!(
+            app_state
+                .shielded_pool_content
+                .allocations
+                .iter()
+                .filter(|allocation| allocation.raw_denom.starts_with("udelegation_"))
+                .count(),
+            app_state.stake_content.validators.len()
+        );
         Ok(())
     }
 
@@ -824,6 +849,22 @@ mod tests {
             unimplemented!("TODO: support checkpointed app state")
         };
         assert_eq!(app_state.stake_content.validators.len(), 2);
+        assert_eq!(
+            app_state
+                .distributions_content
+                .distributions_params
+                .staking_issuance_per_block,
+            0
+        );
+        assert_eq!(
+            app_state
+                .shielded_pool_content
+                .allocations
+                .iter()
+                .filter(|allocation| allocation.raw_denom.starts_with("udelegation_"))
+                .count(),
+            app_state.stake_content.validators.len()
+        );
         Ok(())
     }
 

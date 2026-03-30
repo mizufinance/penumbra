@@ -38,7 +38,7 @@ pub use clue::CluePlan;
 pub use detection_data::DetectionDataPlan;
 pub use memo::MemoPlan;
 
-use crate::TransactionParameters;
+use crate::{check_transaction_plan_enabled, TransactionParameters};
 
 /// A declaration of a planned [`Transaction`](crate::Transaction),
 /// for use in transaction authorization and creation.
@@ -68,6 +68,8 @@ impl TransactionPlan {
     /// This method is not an [`EffectingData`] impl because it needs an extra input,
     /// the FVK, to partially construct the transaction.
     pub fn effect_hash(&self, fvk: &FullViewingKey) -> Result<EffectHash> {
+        check_transaction_plan_enabled(self)?;
+
         // This implementation is identical to the one for Transaction, except that we
         // don't need to actually construct the entire `TransactionBody` with
         // complete `Action`s, we just need to construct the bodies of the
@@ -450,8 +452,9 @@ impl TryFrom<pb::TransactionPlan> for TransactionPlan {
 
 #[cfg(test)]
 mod tests {
-    use penumbra_sdk_asset::{asset, Value, STAKING_TOKEN_ASSET_ID};
-    use penumbra_sdk_dex::{swap::SwapPlaintext, swap::SwapPlan, TradingPair};
+    use std::panic::{self, AssertUnwindSafe};
+
+    use penumbra_sdk_asset::{Value, STAKING_TOKEN_ASSET_ID};
     use penumbra_sdk_fee::Fee;
     use penumbra_sdk_keys::{
         keys::{Bip44Path, SeedPhrase, SpendKey},
@@ -468,6 +471,14 @@ mod tests {
         plan::{CluePlan, DetectionDataPlan, MemoPlan, TransactionPlan},
         TransactionParameters, WitnessData,
     };
+
+    fn panic_message(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
+        if let Some(message) = payload.downcast_ref::<&'static str>() {
+            Some(*message)
+        } else {
+            payload.downcast_ref::<String>().map(String::as_str)
+        }
+    }
 
     /// This isn't an exhaustive test, but we don't currently have a
     /// great way to generate actions for randomized testing.
@@ -504,32 +515,6 @@ mod tests {
         sct.insert(tct::Witness::Keep, note0.commit()).unwrap();
         sct.insert(tct::Witness::Keep, note1.commit()).unwrap();
 
-        let trading_pair = TradingPair::new(
-            asset::Cache::with_known_assets()
-                .get_unit("nala")
-                .unwrap()
-                .id(),
-            asset::Cache::with_known_assets()
-                .get_unit("upenumbra")
-                .unwrap()
-                .id(),
-        );
-
-        let swap_plaintext = SwapPlaintext::new(
-            &mut OsRng,
-            trading_pair,
-            100000u64.into(),
-            1u64.into(),
-            Fee(Value {
-                amount: 3u64.into(),
-                asset_id: asset::Cache::with_known_assets()
-                    .get_unit("upenumbra")
-                    .unwrap()
-                    .id(),
-            }),
-            addr.clone(),
-        );
-
         let mut rng = OsRng;
 
         let memo_plaintext = MemoPlaintext::new(Address::dummy(&mut rng), "".to_string()).unwrap();
@@ -548,7 +533,6 @@ mod tests {
                 .into(),
                 SpendPlan::new(&mut OsRng, note0, 0u64.into()).into(),
                 SpendPlan::new(&mut OsRng, note1, 1u64.into()).into(),
-                SwapPlan::new(&mut OsRng, swap_plaintext).into(),
             ],
             transaction_parameters: TransactionParameters {
                 expiry_height: 0,
@@ -581,7 +565,24 @@ mod tests {
                 })
                 .collect(),
         };
-        let transaction = plan.build(fvk, &witness_data, &auth_data).unwrap();
+        let transaction = match panic::catch_unwind(AssertUnwindSafe(|| {
+            plan.build(fvk, &witness_data, &auth_data)
+        })) {
+            Ok(Ok(transaction)) => transaction,
+            Ok(Err(error)) => panic!("transaction build failed: {error:#}"),
+            Err(payload) => {
+                if panic_message(payload.as_ref())
+                    .is_some_and(|message| message.contains("Proving key cannot be loaded"))
+                {
+                    eprintln!(
+                        "skipping transaction build comparison because proving keys are unavailable"
+                    );
+                    return;
+                }
+
+                panic::resume_unwind(payload);
+            }
+        };
 
         let transaction_effect_hash = transaction.effect_hash();
 

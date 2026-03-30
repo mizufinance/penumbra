@@ -119,6 +119,11 @@ The smoke test:
 3. Runs transaction scenarios
 4. Validates chain state
 
+For the current lightweight-chain branch, `just smoke` exports
+`PENUMBRA_LIGHTWEIGHT_TRANSFER_ONLY_PHASE=1`. Removed-action integration tests
+must check that flag and skip at runtime; `#[ignore]` alone is not sufficient
+because the smoke suite runs ignored tests explicitly.
+
 **Note**: Smoke tests expect nix environment. Warning can be ignored if dependencies are installed.
 
 ## Compliance-Specific Tests

@@ -42,7 +42,7 @@ use self::stateful::{
     tx_parameters_historical_check_with_context,
 };
 use stateless::{
-    check_memo_exists_if_outputs_absent_if_not, check_non_empty_transaction,
+    check_enabled_actions, check_memo_exists_if_outputs_absent_if_not, check_non_empty_transaction,
     num_clues_equal_to_num_outputs, valid_binding_signature, validate_spend_output_binding,
 };
 
@@ -1406,6 +1406,7 @@ impl AppActionHandler for Transaction {
         check_memo_exists_if_outputs_absent_if_not(self)?;
         // This check ensures that transactions contain at least one action.
         check_non_empty_transaction(self)?;
+        check_enabled_actions(self)?;
         // Validate spend↔output leaf binding for compliance
         validate_spend_output_binding(self)?;
 

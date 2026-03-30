@@ -49,6 +49,21 @@ static UNBONDING_DELAY: Lazy<Duration> = Lazy::new(|| {
     Duration::from_secs((0.6 * blocks) as u64)
 });
 
+fn lightweight_transfer_only_phase_enabled() -> bool {
+    std::env::var("PENUMBRA_LIGHTWEIGHT_TRANSFER_ONLY_PHASE")
+        .map(|value| value == "1")
+        .unwrap_or(false)
+}
+
+fn skip_removed_action_flow(test_name: &str) -> bool {
+    if lightweight_transfer_only_phase_enabled() {
+        eprintln!("skipping {test_name} in lightweight transfer-only phase");
+        true
+    } else {
+        false
+    }
+}
+
 /// Import the wallet from seed phrase into a temporary directory.
 fn load_wallet_into_tmpdir() -> TempDir {
     let tmpdir = tempdir().unwrap();
@@ -95,6 +110,34 @@ fn sync(tmpdir: &TempDir) {
     sync_cmd.assert().success();
 }
 
+fn balance_for_account(tmpdir: &TempDir, account_index: u32, denom: &str) -> u64 {
+    let mut balance_cmd = Command::cargo_bin("pcli").unwrap();
+    balance_cmd
+        .args(["--home", tmpdir.path().to_str().unwrap(), "view", "balance"])
+        .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
+    let output = balance_cmd.output().expect("unable to fetch balance");
+    assert!(
+        output.status.success(),
+        "pcli view balance failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let pattern = Regex::new(&format!(
+        r"# {}\s+(\d+){}",
+        account_index,
+        regex::escape(denom)
+    ))
+    .expect("balance regex is valid");
+    let captures = pattern.captures(&stdout).unwrap_or_else(|| {
+        panic!("can find account #{account_index} balance for {denom} in:\n{stdout}")
+    });
+
+    captures[1]
+        .parse()
+        .expect("balance amount should parse as u64")
+}
+
 /// Look up a currently active validator on the testnet.
 /// Will return the most bonded, which means the Penumbra Labs CI validator.
 fn get_validator(tmpdir: &TempDir) -> String {
@@ -124,6 +167,8 @@ fn get_validator(tmpdir: &TempDir) -> String {
 fn transaction_send_from_addr_0_to_addr_1() {
     tracing_subscriber::fmt::try_init().ok();
     let tmpdir = load_wallet_into_tmpdir();
+    sync(&tmpdir);
+    let initial_addr_1_test_usd = balance_for_account(&tmpdir, 1, "test_usd");
 
     // Create a memo that we can inspect later, to confirm transaction
     // is viewable post-send.
@@ -156,6 +201,7 @@ fn transaction_send_from_addr_0_to_addr_1() {
         .and_then(|x| x.get(1))
         .expect("can find transaction id within 'pcli send tx' output")
         .as_str();
+    sync(&tmpdir);
     let mut view_cmd = Command::cargo_bin("pcli").unwrap();
     view_cmd
         .args([
@@ -203,15 +249,8 @@ fn transaction_send_from_addr_0_to_addr_1() {
     }
 
     // Now we inspect our wallet balance to ensure the funds were transferred correctly.
-    let mut balance_cmd = Command::cargo_bin("pcli").unwrap();
-    balance_cmd
-        .args(["--home", tmpdir.path().to_str().unwrap(), "view", "balance"])
-        .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
-    // The 1 is the index of the address which should be separated from the
-    // test_asset only by whitespace.
-    balance_cmd
-        .assert()
-        .stdout(predicate::str::is_match(r"1\s*2020test_usd").unwrap());
+    let addr_1_test_usd_after = balance_for_account(&tmpdir, 1, "test_usd");
+    assert_eq!(addr_1_test_usd_after, initial_addr_1_test_usd + 1020);
 
     // Cleanup: Send the asset back at the end of the test such that other tests begin
     // from the original state.
@@ -225,8 +264,11 @@ fn transaction_send_from_addr_0_to_addr_1() {
             TEST_ASSET, // 1020test_usd
             "--to",
             ADDRESS_0_STR,
+            "--source",
+            "1",
         ])
         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
+    send_cmd.assert().success();
 }
 
 #[ignore]
@@ -244,6 +286,10 @@ fn transaction_sweep() {
 #[ignore]
 #[test]
 fn delegate_and_undelegate() {
+    if skip_removed_action_flow("delegate_and_undelegate") {
+        return;
+    }
+
     tracing_subscriber::fmt::try_init().ok();
     tracing::info!("delegate_and_undelegate");
     let tmpdir = load_wallet_into_tmpdir();
@@ -374,6 +420,10 @@ fn delegate_and_undelegate() {
 #[ignore]
 #[test]
 fn lp_management() {
+    if skip_removed_action_flow("lp_management") {
+        return;
+    }
+
     let tmpdir = load_wallet_into_tmpdir();
 
     // Create a liquidity position selling 1cube for 1penumbra each.
@@ -594,6 +644,10 @@ fn lp_management() {
 /// Address 0 has 99gm and 5001test_usd.
 /// Address 1 has 1gm and 1000test_usd.
 fn swap() {
+    if skip_removed_action_flow("swap") {
+        return;
+    }
+
     let tmpdir = load_wallet_into_tmpdir();
 
     let mut balance_cmd = Command::cargo_bin("pcli").unwrap();
@@ -946,6 +1000,10 @@ fn mismatched_consensus_key_update_fails() {
 #[ignore]
 #[test]
 fn test_orders() {
+    if skip_removed_action_flow("test_orders") {
+        return;
+    }
+
     let tmpdir = load_wallet_into_tmpdir();
 
     // Close and withdraw any existing liquidity positions.
@@ -1153,6 +1211,10 @@ fn test_orders() {
 #[ignore]
 #[test]
 fn delegate_submit_proposal_and_vote() {
+    if skip_removed_action_flow("delegate_submit_proposal_and_vote") {
+        return;
+    }
+
     tracing_subscriber::fmt::try_init().ok();
     let tmpdir = load_wallet_into_tmpdir();
 
@@ -1280,6 +1342,10 @@ fn delegate_submit_proposal_and_vote() {
 /// Poll the CommunityPool RPC and confirm it returns correct info.
 /// Then make a deposit, and query again, confirming the deposit worked.
 fn community_pool_() {
+    if skip_removed_action_flow("community_pool_") {
+        return;
+    }
+
     let tmpdir = load_wallet_into_tmpdir();
     // The default devnet config doesn't contain any CommunityPool allocations,
     // so we expect the balance to be `0penumbra`.

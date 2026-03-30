@@ -1444,8 +1444,9 @@ impl App {
         ArtifactBuildBreakdown,
     )> {
         use crate::action_handler::transaction::stateless::{
-            check_memo_exists_if_outputs_absent_if_not, check_non_empty_transaction,
-            num_clues_equal_to_num_outputs, valid_binding_signature, validate_spend_output_binding,
+            check_enabled_actions, check_memo_exists_if_outputs_absent_if_not,
+            check_non_empty_transaction, num_clues_equal_to_num_outputs, valid_binding_signature,
+            validate_spend_output_binding,
         };
         use cnidarium_component::ActionHandler as _;
         use penumbra_sdk_shielded_pool::component::Ics20Transfer;
@@ -1461,6 +1462,7 @@ impl App {
             num_clues_equal_to_num_outputs(tx)?;
             check_memo_exists_if_outputs_absent_if_not(tx)?;
             check_non_empty_transaction(tx)?;
+            check_enabled_actions(tx)?;
             validate_spend_output_binding(tx)?;
             profile.precheck_ms += precheck_start.elapsed().as_secs_f64() * 1000.0;
 

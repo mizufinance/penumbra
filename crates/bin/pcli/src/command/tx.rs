@@ -83,7 +83,7 @@ use penumbra_sdk_stake::{
 use penumbra_sdk_transaction::{gas::swap_claim_gas_cost, Transaction};
 use penumbra_sdk_view::{SpendableNoteRecord, ViewClient};
 use penumbra_sdk_wallet::plan::{self, Planner};
-use proposal::ProposalCmd;
+use proposal::{ensure_lightweight_proposal_payload_enabled, ProposalCmd};
 use tonic::transport::{Channel, ClientTlsConfig};
 use url::Url;
 
@@ -391,6 +391,22 @@ impl From<VoteCmd> for (u64, Vote) {
 }
 
 impl TxCmd {
+    fn disabled_in_lightweight_phase(&self) -> Option<&'static str> {
+        match self {
+            TxCmd::Auction(_) => Some("Auction"),
+            TxCmd::Delegate { .. } => Some("Delegate"),
+            TxCmd::DelegateMany { .. } => Some("Delegate"),
+            TxCmd::Undelegate { .. } => Some("Undelegate"),
+            TxCmd::UndelegateClaim { .. } => Some("UndelegateClaim"),
+            TxCmd::Swap { .. } => Some("Swap"),
+            TxCmd::Vote { .. } => Some("DelegatorVote"),
+            TxCmd::CommunityPoolDeposit { .. } => Some("CommunityPoolDeposit"),
+            TxCmd::Position(_) => Some("Position"),
+            TxCmd::LqtVote(_) => Some("ActionLiquidityTournamentVote"),
+            _ => None,
+        }
+    }
+
     /// Determine if this command requires a network sync before it executes.
     pub fn offline(&self) -> bool {
         match self {
@@ -416,6 +432,14 @@ impl TxCmd {
     }
 
     pub async fn exec(&self, app: &mut App) -> Result<()> {
+        // Intentional for the current lightweight branch: the CLI stays aligned with
+        // planner and consensus, which reject the same action families unconditionally.
+        // If we later add a runtime phase toggle, this gate should be parameterized in
+        // lockstep with the planner/app-side policy.
+        if let Some(action_name) = self.disabled_in_lightweight_phase() {
+            anyhow::bail!("action disabled in lightweight transfer-only phase: {action_name}");
+        }
+
         // Handle compliance commands that don't need wallet/view service early
         if let TxCmd::Compliance(compliance_cmd) = self {
             if compliance_cmd.is_scan() {
@@ -1030,9 +1054,10 @@ impl TxCmd {
                     .context("can't read proposal file")?;
                 let proposal_toml: ProposalToml =
                     toml::from_str(&proposal_string).context("can't parse proposal file")?;
-                let proposal = proposal_toml
+                let proposal: penumbra_sdk_governance::Proposal = proposal_toml
                     .try_into()
                     .context("can't parse proposal file")?;
+                ensure_lightweight_proposal_payload_enabled(&proposal.payload)?;
 
                 let deposit_amount: Value = deposit_amount.parse()?;
                 ensure!(

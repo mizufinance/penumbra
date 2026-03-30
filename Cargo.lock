@@ -5263,6 +5263,7 @@ dependencies = [
  "penumbra-sdk-compact-block",
  "penumbra-sdk-custody",
  "penumbra-sdk-dex",
+ "penumbra-sdk-distributions",
  "penumbra-sdk-fee",
  "penumbra-sdk-governance",
  "penumbra-sdk-ibc",

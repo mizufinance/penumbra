@@ -86,6 +86,16 @@ pub enum ProposalKindCmd {
     UpgradePlan,
 }
 
+pub(crate) fn ensure_lightweight_proposal_payload_enabled(payload: &ProposalPayload) -> Result<()> {
+    if matches!(payload, ProposalPayload::CommunityPoolSpend { .. }) {
+        anyhow::bail!(
+            "proposal payload disabled in lightweight transfer-only phase: CommunityPoolSpend"
+        );
+    }
+
+    Ok(())
+}
+
 impl ProposalKindCmd {
     /// Generate a default proposal of a particular kind.
     pub fn template_proposal(&self, app_params: &AppParameters, id: u64) -> Result<Proposal> {
@@ -119,6 +129,8 @@ impl ProposalKindCmd {
             }
             ProposalKindCmd::UpgradePlan { .. } => ProposalPayload::UpgradePlan { height: 0 },
         };
+
+        ensure_lightweight_proposal_payload_enabled(&payload)?;
 
         Ok(Proposal {
             id,
