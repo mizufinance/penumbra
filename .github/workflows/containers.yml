@@ -16,7 +16,7 @@ env:
 jobs:
   build_amd64:
     name: Build and Push AMD64 Image
-    runs-on: buildjet-16vcpu-ubuntu-2204
+    runs-on: ubuntu-latest-16-cores
     permissions:
       contents: read
       packages: write
@@ -61,7 +61,7 @@ jobs:
 
   build_arm64:
     name: Build and Push ARM64 Image
-    runs-on: buildjet-16vcpu-ubuntu-2204-arm
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
       packages: write
