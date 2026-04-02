@@ -177,7 +177,6 @@ penumbra-sdk-app                     = { default-features = false, version = "2.
 penumbra-sdk-asset                   = { default-features = false, version = "2.1.0", path = "crates/core/asset" }
 penumbra-sdk-community-pool          = { default-features = false, version = "2.1.0", path = "crates/core/component/community-pool" }
 penumbra-sdk-compact-block           = { default-features = false, version = "2.1.0", path = "crates/core/component/compact-block" }
-penumbra-sdk-compliance              = { default-features = false, version = "2.1.0", path = "crates/core/component/compliance" }
 penumbra-sdk-custody                 = { version = "2.1.0", path = "crates/custody" }
 penumbra-sdk-custody-ledger-usb      = { version = "2.1.0", path = "crates/custody-ledger-usb" }
 penumbra-sdk-auction                 = { default-features = false, version = "2.1.0", path = "crates/core/component/auction" }
@@ -193,7 +192,6 @@ penumbra-sdk-mock-consensus          = { version = "2.1.0", path = "crates/test/
 penumbra-sdk-mock-tendermint-proxy   = { version = "2.1.0", path = "crates/test/mock-tendermint-proxy" }
 penumbra-sdk-num                     = { default-features = false, version = "2.1.0", path = "crates/core/num" }
 penumbra-sdk-proof-params            = { default-features = false, version = "2.1.0", path = "crates/crypto/proof-params" }
-penumbra-sdk-proof-aggregation       = { default-features = false, version = "2.1.0", path = "crates/crypto/proof-aggregation" }
 penumbra-sdk-proof-setup             = { version = "2.1.0", path = "crates/crypto/proof-setup" }
 penumbra-sdk-proto                   = { default-features = false, version = "2.1.0", path = "crates/proto" }
 penumbra-sdk-sct                     = { default-features = false, version = "2.1.0", path = "crates/core/component/sct" }

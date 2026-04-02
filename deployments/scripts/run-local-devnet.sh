@@ -17,20 +17,15 @@ cargo --quiet run --release --bin pd -- --help > /dev/null
 if [[ -d ~/.penumbra/network_data ]] ; then
     >&2 echo "network data exists locally, reusing it"
 else
-    # Use allocations CSV file that includes:
-    # - Dev wallet address for manual usage
-    # - test_keys::ADDRESS_0 for pclientd/pcli integration tests
-    # Use single-validator config so the network can produce blocks with just one node.
-    # The default generates 2 validators, requiring 2/3+ voting power (i.e., both nodes).
+    # XXX: Manually Add allocation address.
     cargo run --release --bin pd -- network generate \
         --chain-id penumbra-local-devnet \
-        --unbonding-delay 201 \
-        --epoch-duration 100 \
-        --proposal-voting-blocks 100 \
+        --unbonding-delay 302400 \
+        --epoch-duration 302400 \
+        --proposal-voting-blocks 50 \
         --gas-price-simple 0 \
         --timeout-commit 500ms \
-        --allocations-input-file "${repo_root}/deployments/compose/devnet-allocations.csv" \
-        --validators-input-file "${repo_root}/testnets/validators-single.json"
+        --allocation-address "penumbra1cvp32r5wp4lfnnww3g3fytxccqnu2xcj0r2qm0sa8ekjdezlm3gzk34qtg2xscqx9r6yrhz24k3l6j88q98rexyp7dnupq66cxllvpp9v0lw0xuqf0yfhv5ksfxzv0m968tmxn"
     # opt in to cometbft abci indexing to postgres
     postgresql_db_url="postgresql://penumbra:penumbra@localhost:5432/penumbra_cometbft?sslmode=disable"
     sed -i -e "s#^indexer.*#indexer = \"psql\"\\npsql-conn = \"$postgresql_db_url\"#" ~/.penumbra/network_data/node0/cometbft/config/config.toml
