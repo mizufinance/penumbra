@@ -89,4 +89,14 @@ integration-pd:
 
 # Build the container image locally
 container:
-  podman build -t ghcr.io/penumbra-zone/penumbra -f ./deployments/containerfiles/Dockerfile .
+  docker build -t ghcr.io/penumbra-zone/penumbra:local -f ./deployments/containerfiles/Dockerfile .
+
+# Run the testnet locally entirely
+testnet:
+  just --justfile {{justfile()}} testnet-clean
+  docker compose -f deployments/compose/docker-compose.yml up
+
+# clean up the testnet, removing all volumes
+testnet-clean:
+  docker compose -f deployments/compose/docker-compose.yml down --volumes
+  docker volume rm compose_penumbra-pd-node0 --force || true

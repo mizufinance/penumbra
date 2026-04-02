@@ -8,6 +8,7 @@ mod mainnet1;
 mod mainnet2;
 mod mainnet3;
 mod mainnet4;
+mod migrate2;
 mod reset_halt_bit;
 mod simple;
 mod testnet72;
@@ -21,6 +22,8 @@ use penumbra_sdk_governance::StateReadExt;
 use penumbra_sdk_sct::component::clock::EpochRead;
 use std::path::{Path, PathBuf};
 use tracing::instrument;
+
+use migrate2::Migration as MigrationTrait;
 
 use cnidarium::Storage;
 use penumbra_sdk_app::SUBSTORE_PREFIXES;
@@ -70,6 +73,17 @@ pub enum Migration {
     ///
     /// Intended to support code upgrades for Liquidity Tournament support.
     Mainnet4,
+    /// Mainnet-5 migration:
+    /// - no-op
+    ///
+    /// Uses the new migration framework.
+    Mainnet5,
+    /// IBC client recovery
+    /// - Swap IBC client state
+    IbcClientRecovery,
+    /// No-op migration
+    /// - Resets halt bit and produces new genesis without state changes
+    NoOp,
 }
 
 impl Migration {
@@ -80,6 +94,19 @@ impl Migration {
         comet_home: Option<PathBuf>,
         genesis_start: Option<tendermint::time::Time>,
         force: bool,
+    ) -> anyhow::Result<()> {
+        self.migrate_with_params(pd_home, comet_home, genesis_start, force, vec![])
+            .await
+    }
+
+    #[instrument(skip(pd_home, genesis_start, force, params))]
+    pub async fn migrate_with_params(
+        &self,
+        pd_home: PathBuf,
+        comet_home: Option<PathBuf>,
+        genesis_start: Option<tendermint::time::Time>,
+        force: bool,
+        params: Vec<String>,
     ) -> anyhow::Result<()> {
         tracing::debug!(
             ?pd_home,
@@ -106,11 +133,9 @@ impl Migration {
 
         tracing::info!("started migration");
 
-        // If this is `ReadyToStart`, we need to reset the halt bit and return early.
-        if let Migration::ReadyToStart = self {
-            reset_halt_bit::migrate(storage, pd_home, genesis_start).await?;
-            return Ok(());
-        }
+        // We early return :
+        // - using the migration framework (as opposed to legacy migrations)
+        // - using a ready-to-start or ibc-client-recovery recipe.
 
         match self {
             Migration::SimpleMigration => {
@@ -127,6 +152,64 @@ impl Migration {
             }
             Migration::Mainnet4 => {
                 mainnet4::migrate(storage, pd_home.clone(), genesis_start).await?;
+            }
+            Migration::ReadyToStart => {
+                reset_halt_bit::migrate(storage, pd_home, genesis_start).await?;
+                // Early return since we are not producing a new genesis.
+                return Ok(());
+            }
+            Migration::IbcClientRecovery => {
+                storage.release().await;
+                ensure!(
+                    params.len() >= 2,
+                    "IBC client recovery requires at least old and new client IDs"
+                );
+                // All validation is done inside of the migration recipe.
+                let old_client_id = params[0].clone();
+                let new_client_id = params[1].clone();
+
+                // Parse optional app_version from third parameter
+                let app_version = if params.len() >= 3 && !params[2].is_empty() {
+                    Some(
+                        params[2]
+                            .parse::<u64>()
+                            .context("app_version must be a valid u64")?,
+                    )
+                } else {
+                    None
+                };
+
+                let migration = migrate2::ibc_client_recovery::IbcClientRecoveryMigration::new(
+                    old_client_id,
+                    new_client_id,
+                    app_version,
+                );
+                migration
+                    .run(pd_home.clone(), comet_home.clone(), genesis_start)
+                    .await?;
+                // Early return since the new framework handles genesis generation.
+                return Ok(());
+            }
+            Migration::NoOp => {
+                storage.release().await;
+
+                // Parse optional app_version from first parameter
+                let app_version = if !params.is_empty() && !params[0].is_empty() {
+                    Some(
+                        params[0]
+                            .parse::<u64>()
+                            .context("app_version must be a valid u64")?,
+                    )
+                } else {
+                    None
+                };
+
+                let migration = migrate2::noop::NoOpMigration::new(app_version);
+                migration
+                    .run(pd_home.clone(), comet_home.clone(), genesis_start)
+                    .await?;
+                // Early return since the new framework handles genesis generation.
+                return Ok(());
             }
             // We keep historical migrations around for now, this will help inform an abstracted
             // design. Feel free to remove it if it's causing you trouble.
