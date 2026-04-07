@@ -34,7 +34,8 @@ use penumbra_sdk_transaction::view::TransactionView;
 const TEST_ASSET: &str = "1020test_usd";
 
 // The maximum amount of time any command is allowed to take before we error.
-const TIMEOUT_COMMAND_SECONDS: u64 = 60;
+// Gnark proof generation is slower than Groth16; allow extra headroom on top of sync time.
+const TIMEOUT_COMMAND_SECONDS: u64 = 300;
 
 // The time to wait before attempting to perform an undelegation claim.
 // The "unbonding_delay" value is specified in blocks, and in the smoke tests,
@@ -49,15 +50,15 @@ static UNBONDING_DELAY: Lazy<Duration> = Lazy::new(|| {
     Duration::from_secs((0.6 * blocks) as u64)
 });
 
-fn lightweight_transfer_only_phase_enabled() -> bool {
-    std::env::var("PENUMBRA_LIGHTWEIGHT_TRANSFER_ONLY_PHASE")
+fn reduced_action_surface_enabled() -> bool {
+    std::env::var("PENUMBRA_REDUCED_ACTION_SURFACE")
         .map(|value| value == "1")
         .unwrap_or(false)
 }
 
 fn skip_removed_action_flow(test_name: &str) -> bool {
-    if lightweight_transfer_only_phase_enabled() {
-        eprintln!("skipping {test_name} in lightweight transfer-only phase");
+    if reduced_action_surface_enabled() {
+        eprintln!("skipping {test_name} in reduced action surface");
         true
     } else {
         false
@@ -816,8 +817,6 @@ fn governance_submit_proposal() {
             "submit",
             "--file",
             "proposal.toml",
-            "--deposit-amount",
-            "10penumbra",
         ])
         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
     submit_cmd.assert().success();
@@ -1300,8 +1299,6 @@ fn delegate_submit_proposal_and_vote() {
             "submit",
             "--file",
             template_path,
-            "--deposit-amount",
-            "10penumbra",
         ])
         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
     submit_proposal_cmd.assert().success();

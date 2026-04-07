@@ -28,5 +28,9 @@ pub use action_handler::spend::{
     spend_parse_ciphertext_fields, spend_parse_dleq_fields, spend_to_batch_item,
     spend_verify_auth_sig, SpendCiphertextFields, SpendDleqFields,
 };
+pub use action_handler::transfer::{
+    transfer_check_stateless_and_extract, transfer_extract_public, transfer_to_batch_item,
+    transfer_verify_auth_sigs,
+};
 
 pub mod rpc;

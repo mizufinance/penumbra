@@ -1,6 +1,8 @@
-//! Common test helpers for spend and output proof tests.
+//! Common test helpers for shielded-pool proof tests.
 
 pub mod proof_test_helpers {
+    use std::time::Instant;
+
     /// Test asset ID for regulated assets
     pub const REGULATED_ASSET_ID: u64 = 1;
     /// Test asset ID for unregulated assets
@@ -10,6 +12,7 @@ pub mod proof_test_helpers {
     use penumbra_sdk_asset::{asset, Value};
     use penumbra_sdk_compliance::{IndexedLeaf, IndexedMerkleTree, MerklePath};
     use penumbra_sdk_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
+    use penumbra_sdk_proof_params::VerifyingKeyExt;
     use penumbra_sdk_tct as tct;
 
     use crate::{Note, Rseed};
@@ -63,10 +66,11 @@ pub mod proof_test_helpers {
         (anchor, indexed_leaf, merkle_path, position)
     }
 
-    /// Setup Groth16 proving and verifying keys for a circuit.
+    /// Setup Arkworks Groth16 proving and verifying keys for a circuit.
     ///
-    /// Generic helper that performs circuit-specific setup for any proof circuit.
-    pub fn setup_groth16_keys<C>() -> (
+    /// Comparison-only helper for tests and benchmarks that still measure the
+    /// old Arkworks proving path against the canonical gnark path.
+    pub fn setup_arkworks_groth16_keys<C>() -> (
         ark_groth16::ProvingKey<Bls12_377>,
         ark_groth16::PreparedVerifyingKey<Bls12_377>,
         Fq,
@@ -113,6 +117,33 @@ pub mod proof_test_helpers {
     pub enum CircuitType {
         Spend,
         Output,
+        Transfer(crate::TransferFamilyId),
+    }
+
+    /// Shared fixture layer used by all proof-family test builders.
+    pub struct BaseTestData {
+        pub note: Note,
+        pub address: penumbra_sdk_keys::Address,
+        pub value: penumbra_sdk_asset::Value,
+        pub balance_blinding: Fr,
+        pub fvk: penumbra_sdk_keys::keys::FullViewingKey,
+        pub sk: SpendKey,
+        pub user_leaf: penumbra_sdk_compliance::ComplianceLeaf,
+        pub sender_address: penumbra_sdk_keys::Address,
+        pub counterparty_leaf: penumbra_sdk_compliance::ComplianceLeaf,
+        pub ring_pk: decaf377::Element,
+        pub dk_pub: decaf377::Element,
+        pub ack_receiver: decaf377::Element,
+        pub ack_sender: decaf377::Element,
+        pub asset_anchor: tct::StateCommitment,
+        pub asset_indexed_leaf: IndexedLeaf,
+        pub asset_path: MerklePath,
+        pub asset_position: u64,
+        pub compliance_anchor: tct::StateCommitment,
+        pub compliance_path: MerklePath,
+        pub compliance_position: u64,
+        pub salt: Fq,
+        pub target_timestamp: u64,
     }
 
     /// Test data bundle containing note, keys, and compliance information.
@@ -160,17 +191,13 @@ pub mod proof_test_helpers {
         pub target_timestamp: u64,
     }
 
-    /// Generate unified test data with compliance encryption.
-    ///
-    /// Creates a note, keys, and compliance data (regulated or unregulated).
-    pub fn generate_test_data(
+    /// Generate the shared fixture data used by all proof-family tests.
+    pub fn generate_base_test_data(
         rng: &mut (impl rand::RngCore + rand_core::CryptoRng),
         asset_id: u64,
         amount: u64,
         is_regulated: bool,
-        circuit_type: CircuitType,
-    ) -> TestData {
-        use penumbra_sdk_compliance::crypto::{encrypt_output, encrypt_spend};
+    ) -> BaseTestData {
         use penumbra_sdk_num::Amount;
 
         // Receiver identity
@@ -238,8 +265,66 @@ pub mod proof_test_helpers {
             sender_d,
         );
 
-        let salt = Fq::rand(&mut *rng);
-        let target_timestamp: u64 = 1_700_000_000; // fixed Unix timestamp for tests
+        let (compliance_anchor, compliance_path, compliance_position) =
+            create_user_tree_proof(&user_leaf);
+
+        BaseTestData {
+            note,
+            address,
+            value,
+            balance_blinding,
+            fvk: fvk.clone(),
+            sk,
+            user_leaf,
+            sender_address,
+            counterparty_leaf,
+            ring_pk,
+            dk_pub,
+            ack_receiver,
+            ack_sender,
+            asset_anchor,
+            asset_indexed_leaf,
+            asset_path,
+            asset_position,
+            compliance_anchor,
+            compliance_path,
+            compliance_position,
+            salt: Fq::rand(&mut *rng),
+            target_timestamp: 1_700_000_000,
+        }
+    }
+
+    fn generate_family_test_data(
+        base: BaseTestData,
+        rng: &mut (impl rand::RngCore + rand_core::CryptoRng),
+        circuit_type: CircuitType,
+    ) -> TestData {
+        use penumbra_sdk_compliance::crypto::{encrypt_output, encrypt_spend};
+
+        let BaseTestData {
+            note,
+            address,
+            value,
+            balance_blinding,
+            fvk,
+            sk,
+            user_leaf,
+            sender_address,
+            counterparty_leaf,
+            ring_pk,
+            dk_pub,
+            ack_receiver,
+            ack_sender,
+            asset_anchor,
+            asset_indexed_leaf,
+            asset_path,
+            asset_position,
+            compliance_anchor,
+            compliance_path,
+            compliance_position,
+            salt,
+            target_timestamp,
+        } = base;
 
         let (compliance_ciphertext_bytes, ephemeral_secret, r_2, r_3) = match circuit_type {
             CircuitType::Output => {
@@ -277,6 +362,12 @@ pub mod proof_test_helpers {
                 .expect("can encrypt spend");
                 (result.ciphertext.to_bytes(), result.r_s, None, None)
             }
+            CircuitType::Transfer(family_id) => {
+                panic!(
+                    "{} uses the fused builder, not the single-family fixture path",
+                    family_id.label()
+                )
+            }
         };
 
         use penumbra_sdk_compliance::structs::ComplianceCiphertext;
@@ -293,10 +384,13 @@ pub mod proof_test_helpers {
                     let (e1, c2c, ct_fqs) = ct.to_spend_circuit_public_inputs();
                     (e1, None, None, c2c, None, None, ct_fqs)
                 }
+                CircuitType::Transfer(family_id) => {
+                    panic!(
+                        "{} uses the fused builder, not the single-family fixture path",
+                        family_id.label()
+                    )
+                }
             };
-
-        let (compliance_anchor, compliance_path, compliance_position) =
-            create_user_tree_proof(&user_leaf);
 
         // Compute DLEQ proofs using actual policy hashes from the indexed leaf
         let policy_id_hash = asset_indexed_leaf.ring.policy_id_hash;
@@ -383,7 +477,7 @@ pub mod proof_test_helpers {
             address,
             value,
             balance_blinding,
-            fvk: fvk.clone(),
+            fvk,
             sk,
             user_leaf,
             sender_address,
@@ -419,13 +513,28 @@ pub mod proof_test_helpers {
         }
     }
 
+    /// Generate unified test data with family-specific compliance encryption.
+    ///
+    /// Uses a common base fixture layer for all proof families, then derives the
+    /// spend/output-specific ciphertext and DLEQ data on top.
+    pub fn generate_test_data(
+        rng: &mut (impl rand::RngCore + rand_core::CryptoRng),
+        asset_id: u64,
+        amount: u64,
+        is_regulated: bool,
+        circuit_type: CircuitType,
+    ) -> TestData {
+        let base = generate_base_test_data(rng, asset_id, amount, is_regulated);
+        generate_family_test_data(base, rng, circuit_type)
+    }
+
     /// Run Output circuit Groth16 roundtrip test.
-    fn test_output_groth16(test_data: TestData, is_regulated: bool) {
-        use crate::output::{OutputCircuit, OutputProof, OutputProofPrivate, OutputProofPublic};
+    fn test_output_proof_roundtrip(test_data: TestData, is_regulated: bool) {
+        use crate::output::{OutputProof, OutputProofPrivate, OutputProofPublic};
         use decaf377::Fr;
         use penumbra_sdk_asset::Balance;
 
-        let (pk, pvk, blinding_r, blinding_s) = setup_groth16_keys::<OutputCircuit>();
+        let pvk = &*penumbra_sdk_proof_params::OUTPUT_PROOF_VERIFICATION_KEY;
 
         let note_commitment = test_data.note.commit();
         let balance_commitment =
@@ -478,24 +587,23 @@ pub mod proof_test_helpers {
             salt: test_data.salt,
         };
 
-        let proof = OutputProof::prove(blinding_r, blinding_s, &pk, public.clone(), private)
-            .expect("can generate proof");
+        let proof = OutputProof::prove(public.clone(), private).expect("can generate proof");
         let item = proof
             .to_batch_item(public.clone())
             .expect("can build output batch item");
         assert_eq!(item.public_inputs.len(), 1);
-        proof.verify(&pvk, public).expect("proof should verify");
+        proof.verify(pvk, public).expect("proof should verify");
     }
 
     /// Run Spend circuit Groth16 roundtrip test.
-    fn test_spend_groth16(test_data: TestData, is_regulated: bool) {
-        use crate::spend::{SpendCircuit, SpendProof, SpendProofPrivate, SpendProofPublic};
+    fn test_spend_proof_roundtrip(test_data: TestData, is_regulated: bool) {
+        use crate::spend::{SpendProof, SpendProofPrivate, SpendProofPublic};
         use penumbra_sdk_asset::Balance;
         use penumbra_sdk_sct::Nullifier;
 
         let mut rng = rand::thread_rng();
 
-        let (pk, pvk, blinding_r, blinding_s) = setup_groth16_keys::<SpendCircuit>();
+        let pvk = &*penumbra_sdk_proof_params::SPEND_PROOF_VERIFICATION_KEY;
 
         let mut sct = tct::Tree::new();
         let note_commitment = test_data.note.commit();
@@ -555,41 +663,253 @@ pub mod proof_test_helpers {
             salt: test_data.salt,
         };
 
-        let proof = SpendProof::prove(blinding_r, blinding_s, &pk, public.clone(), private)
-            .expect("can generate proof");
+        let proof = SpendProof::prove(public.clone(), private).expect("can generate proof");
         let item = proof
             .to_batch_item(public.clone())
             .expect("can build spend batch item");
         assert_eq!(item.public_inputs.len(), 1);
-        proof.verify(&pvk, public).expect("proof should verify");
+        proof.verify(pvk, public).expect("proof should verify");
     }
 
-    /// Unified Groth16 roundtrip test function.
-    ///
-    /// Consolidates all Groth16 test logic for both Spend and Output circuits,
-    /// and both regulated and unregulated assets.
-    pub fn full_groth16_roundtrip(circuit_type: CircuitType, is_regulated: bool) {
+    pub(crate) fn build_transfer_roundtrip_inputs(
+        family_id: crate::TransferFamilyId,
+        is_regulated: bool,
+    ) -> (crate::TransferProofPublic, crate::TransferProofPrivate) {
+        use crate::{OutputPlan, SpendPlan, TransferPlan};
+        use penumbra_sdk_asset::{asset, Value};
+        use penumbra_sdk_num::Amount;
+
         let mut rng = rand::thread_rng();
-        let test_data = generate_test_data(&mut rng, 1, 100, is_regulated, circuit_type);
+        let base = generate_base_test_data(&mut rng, 1, 100, is_regulated);
+
+        let input_amounts = split_transfer_amounts(
+            family_id.input_count(),
+            100u64
+                .checked_mul(family_id.input_count() as u64)
+                .expect("transfer test input total fits in u64"),
+        );
+        let input_total = 100u64
+            .checked_mul(family_id.input_count() as u64)
+            .expect("transfer test input total fits in u64");
+        let output_fee_total = 10u64
+            .checked_mul(family_id.output_count() as u64)
+            .expect("transfer test fee total fits in u64");
+        let output_amounts = split_transfer_amounts(
+            family_id.output_count(),
+            input_total
+                .checked_sub(output_fee_total)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "invalid transfer test family sizes: input_count={} output_count={}",
+                        family_id.input_count(),
+                        family_id.output_count()
+                    )
+                }),
+        );
+
+        let asset_id = asset::Id(Fq::from(1u64));
+        let mut notes = Vec::with_capacity(input_amounts.len());
+        for amount in &input_amounts {
+            notes.push(
+                crate::Note::from_parts(
+                    base.address.clone(),
+                    Value {
+                        amount: Amount::from(*amount),
+                        asset_id,
+                    },
+                    crate::Rseed::generate(&mut rng),
+                )
+                .expect("create transfer test note"),
+            );
+        }
+
+        let mut sct = tct::Tree::new();
+        for note in &notes {
+            sct.insert(tct::Witness::Keep, note.commit()).unwrap();
+        }
+        let anchor = sct.root();
+        let state_commitment_proofs = notes
+            .iter()
+            .map(|note| {
+                sct.witness(note.commit())
+                    .expect("state commitment witness")
+            })
+            .collect::<Vec<_>>();
+
+        let tx_blinding_nonce = Fr::rand(&mut rng);
+        let mut spends = Vec::with_capacity(notes.len());
+        for (note, proof) in notes.iter().cloned().zip(state_commitment_proofs.iter()) {
+            let mut spend = SpendPlan::new(&mut rng, note, proof.position());
+            spend.asset_indexed_leaf = base.asset_indexed_leaf.clone();
+            spend.asset_path = base.asset_path.clone();
+            spend.asset_position = base.asset_position;
+            spend.asset_anchor = base.asset_anchor;
+            spend.compliance_anchor = base.compliance_anchor;
+            spend.compliance_path = base.compliance_path.clone();
+            spend.compliance_position = base.compliance_position;
+            spend.is_regulated = is_regulated;
+            spend.target_timestamp = base.target_timestamp;
+            spend.tx_blinding_nonce = tx_blinding_nonce;
+            spend
+                .set_compliance_details(&mut rng)
+                .expect("set transfer spend compliance details");
+            spends.push(spend);
+        }
+
+        let sender_leaf = spends[0]
+            .compliance_leaf
+            .clone()
+            .expect("first transfer spend must have a sender compliance leaf");
+        let mut outputs = Vec::with_capacity(output_amounts.len());
+        for amount in &output_amounts {
+            let mut output = OutputPlan::new(
+                &mut rng,
+                Value {
+                    amount: Amount::from(*amount),
+                    asset_id,
+                },
+                base.address.clone(),
+            );
+            output.asset_indexed_leaf = base.asset_indexed_leaf.clone();
+            output.asset_path = base.asset_path.clone();
+            output.asset_position = base.asset_position;
+            output.asset_anchor = base.asset_anchor;
+            output.compliance_anchor = base.compliance_anchor;
+            output.compliance_path = base.compliance_path.clone();
+            output.compliance_position = base.compliance_position;
+            output.is_regulated = is_regulated;
+            output.target_timestamp = base.target_timestamp;
+            output.tx_blinding_nonce = tx_blinding_nonce;
+            output
+                .set_compliance_details(
+                    &mut rng,
+                    &sender_leaf,
+                    sender_leaf.clone(),
+                    tx_blinding_nonce,
+                )
+                .expect("set transfer output compliance details");
+            outputs.push(output);
+        }
+
+        let value_blinding = Fr::rand(&mut rng);
+        let transfer = TransferPlan::new(family_id, spends, outputs, value_blinding)
+            .expect("build transfer plan");
+
+        transfer
+            .transfer_public_private(&base.fvk, &state_commitment_proofs, anchor)
+            .expect("derive transfer public/private inputs")
+    }
+
+    fn split_transfer_amounts(parts: usize, total: u64) -> Vec<u64> {
+        assert!(
+            parts > 0,
+            "transfer test amount split requires at least one part"
+        );
+        assert!(
+            total >= parts as u64,
+            "transfer test amount split requires total >= number of parts"
+        );
+        let base = total / parts as u64;
+        let remainder = total % parts as u64;
+        (0..parts)
+            .map(|index| base + u64::from(index < remainder as usize))
+            .collect()
+    }
+
+    fn test_transfer_proof_roundtrip(family_id: crate::TransferFamilyId, is_regulated: bool) {
+        let mode = if is_regulated {
+            "regulated"
+        } else {
+            "unregulated"
+        };
+        let started = Instant::now();
+        eprintln!(
+            "[transfer roundtrip] start family={} mode={mode}",
+            family_id.label()
+        );
+
+        let phase_started = Instant::now();
+        let expected_pvk = family_id.proof_verification_key();
+        let (public, private) = build_transfer_roundtrip_inputs(family_id, is_regulated);
+        eprintln!(
+            "[transfer roundtrip] family={} mode={mode} built inputs in {:.2}s",
+            family_id.label(),
+            phase_started.elapsed().as_secs_f64()
+        );
+
+        let phase_started = Instant::now();
+        let proof = crate::TransferProof::prove(public.clone(), private).unwrap_or_else(|error| {
+            panic!("can generate {} proof: {error}", family_id.label());
+        });
+        eprintln!(
+            "[transfer roundtrip] family={} mode={mode} proved in {:.2}s",
+            family_id.label(),
+            phase_started.elapsed().as_secs_f64()
+        );
+
+        let phase_started = Instant::now();
+        let item = proof.to_batch_item(&public).unwrap_or_else(|error| {
+            panic!("can build {} batch item: {error}", family_id.label());
+        });
+        assert_eq!(item.public_inputs.len(), 1);
+        eprintln!(
+            "[transfer roundtrip] family={} mode={mode} built batch item in {:.2}s",
+            family_id.label(),
+            phase_started.elapsed().as_secs_f64()
+        );
+
+        let phase_started = Instant::now();
+        proof.verify(&public).expect("proof should verify");
+        eprintln!(
+            "[transfer roundtrip] family={} mode={mode} verified in {:.2}s",
+            family_id.label(),
+            phase_started.elapsed().as_secs_f64()
+        );
+        assert_eq!(
+            public.family_id.proof_verification_key().debug_id(),
+            expected_pvk.debug_id()
+        );
+        eprintln!(
+            "[transfer roundtrip] done family={} mode={mode} total {:.2}s",
+            family_id.label(),
+            started.elapsed().as_secs_f64()
+        );
+    }
+
+    /// Unified spend/output/transfer proof roundtrip test function.
+    pub fn full_proof_roundtrip(circuit_type: CircuitType, is_regulated: bool) {
         match circuit_type {
-            CircuitType::Output => test_output_groth16(test_data, is_regulated),
-            CircuitType::Spend => test_spend_groth16(test_data, is_regulated),
+            CircuitType::Output => {
+                let mut rng = rand::thread_rng();
+                let test_data =
+                    generate_test_data(&mut rng, 1, 100, is_regulated, CircuitType::Output);
+                test_output_proof_roundtrip(test_data, is_regulated)
+            }
+            CircuitType::Spend => {
+                let mut rng = rand::thread_rng();
+                let test_data =
+                    generate_test_data(&mut rng, 1, 100, is_regulated, CircuitType::Spend);
+                test_spend_proof_roundtrip(test_data, is_regulated)
+            }
+            CircuitType::Transfer(family_id) => {
+                test_transfer_proof_roundtrip(family_id, is_regulated)
+            }
         }
     }
 
     /// Test the SpendPlan code path: SpendPlan::new() → set fields → set_compliance_details → spend_proof.
     ///
-    /// Uses the same test data as the passing `test_spend_groth16` but routes through
+    /// Uses the same test data as the spend proof roundtrip helper but routes through
     /// the SpendPlan pipeline to isolate whether the enrichment flow introduces bugs.
     pub fn test_spend_plan_path(is_regulated: bool) {
-        use crate::spend::{SpendCircuit, SpendProofPublic};
+        use crate::spend::SpendProofPublic;
         use crate::SpendPlan;
         use penumbra_sdk_compliance::structs::ComplianceCiphertext;
 
         let mut rng = rand::thread_rng();
         let test_data = generate_test_data(&mut rng, 1, 100, is_regulated, CircuitType::Spend);
 
-        // Create SCT and get proof (same as test_spend_groth16)
+        // Create SCT and get proof inputs (same as the spend proof roundtrip helper)
         let mut sct = tct::Tree::new();
         let note_commitment = test_data.note.commit();
         sct.insert(tct::Witness::Keep, note_commitment).unwrap();
@@ -617,18 +937,9 @@ pub mod proof_test_helpers {
         plan.set_compliance_details(&mut rng)
             .expect("set_compliance_details should succeed");
 
-        // Setup fresh Groth16 keys
-        let (pk, pvk, _, _) = setup_groth16_keys::<SpendCircuit>();
-
         // Generate proof via SpendPlan's method
         let proof = plan
-            .spend_proof(
-                &test_data.fvk,
-                state_commitment_proof,
-                sct.root(),
-                &pk,
-                None,
-            )
+            .spend_proof(&test_data.fvk, state_commitment_proof, sct.root(), None)
             .expect("spend proof should succeed via plan path");
 
         // Build public inputs for verification
@@ -656,7 +967,10 @@ pub mod proof_test_helpers {
         };
 
         proof
-            .verify(&pvk, public)
+            .verify(
+                &penumbra_sdk_proof_params::SPEND_PROOF_VERIFICATION_KEY,
+                public,
+            )
             .expect("proof should verify via plan path");
     }
 
@@ -664,7 +978,7 @@ pub mod proof_test_helpers {
     ///
     /// Mirrors `test_spend_plan_path` but for OutputPlan, exercising the dual-ACK DLEQ path.
     pub fn test_output_plan_path(is_regulated: bool) {
-        use crate::output::{OutputCircuit, OutputProofPublic};
+        use crate::output::OutputProofPublic;
         use crate::OutputPlan;
         use penumbra_sdk_compliance::structs::ComplianceCiphertext;
 
@@ -699,12 +1013,9 @@ pub mod proof_test_helpers {
         )
         .expect("set_compliance_details should succeed");
 
-        // Setup Groth16 keys
-        let (pk, pvk, _, _) = setup_groth16_keys::<OutputCircuit>();
-
         // Generate proof via OutputPlan's method
         let proof = plan
-            .output_proof(&pk, None)
+            .output_proof(None)
             .expect("output proof should succeed via plan path");
 
         // Build public inputs for verification
@@ -738,7 +1049,10 @@ pub mod proof_test_helpers {
         };
 
         proof
-            .verify(&pvk, public)
+            .verify(
+                &penumbra_sdk_proof_params::OUTPUT_PROOF_VERIFICATION_KEY,
+                public,
+            )
             .expect("proof should verify via output plan path");
     }
 }

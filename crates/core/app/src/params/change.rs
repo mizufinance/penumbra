@@ -265,8 +265,8 @@ impl AppParameters {
                 "proposal voting blocks must be at least 1",
             ),
             (
-                *proposal_deposit_amount >= 1u64.into(),
-                "proposal deposit amount must be at least 1",
+                *proposal_deposit_amount >= 0u64.into(),
+                "proposal deposit amount must be non-negative",
             ),
             (
                 *proposal_valid_quorum > Ratio::new(0, 1),

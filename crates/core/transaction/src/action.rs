@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 pub enum Action {
     Output(penumbra_sdk_shielded_pool::Output),
     Spend(penumbra_sdk_shielded_pool::Spend),
+    Transfer(penumbra_sdk_shielded_pool::Transfer),
     ValidatorDefinition(penumbra_sdk_stake::validator::Definition),
     IbcRelay(penumbra_sdk_ibc::IbcRelay),
     Swap(penumbra_sdk_dex::swap::Swap),
@@ -61,6 +62,7 @@ impl EffectingData for Action {
         match self {
             Action::Output(output) => output.effect_hash(),
             Action::Spend(spend) => spend.effect_hash(),
+            Action::Transfer(transfer) => transfer.effect_hash(),
             Action::Delegate(delegate) => delegate.effect_hash(),
             Action::Undelegate(undelegate) => undelegate.effect_hash(),
             Action::UndelegateClaim(claim) => claim.effect_hash(),
@@ -109,6 +111,7 @@ impl Action {
         match self {
             Action::Output(_) => tracing::info_span!("Output", ?idx),
             Action::Spend(_) => tracing::info_span!("Spend", ?idx),
+            Action::Transfer(_) => tracing::info_span!("Transfer", ?idx),
             Action::ValidatorDefinition(_) => {
                 tracing::info_span!("ValidatorDefinition", ?idx)
             }
@@ -166,6 +169,7 @@ impl Action {
         match self {
             Action::Spend(_) => 1,
             Action::Output(_) => 2,
+            Action::Transfer(_) => 5,
             Action::Swap(_) => 3,
             Action::SwapClaim(_) => 4,
             Action::ValidatorDefinition(_) => 16,
@@ -201,6 +205,7 @@ impl IsAction for Action {
         match self {
             Action::Output(output) => output.balance_commitment(),
             Action::Spend(spend) => spend.balance_commitment(),
+            Action::Transfer(transfer) => transfer.balance_commitment(),
             Action::Delegate(delegate) => delegate.balance_commitment(),
             Action::Undelegate(undelegate) => undelegate.balance_commitment(),
             Action::UndelegateClaim(undelegate_claim) => undelegate_claim.balance_commitment(),
@@ -238,6 +243,7 @@ impl IsAction for Action {
             Action::SwapClaim(x) => x.view_from_perspective(txp),
             Action::Output(x) => x.view_from_perspective(txp),
             Action::Spend(x) => x.view_from_perspective(txp),
+            Action::Transfer(x) => x.view_from_perspective(txp),
             Action::Delegate(x) => x.view_from_perspective(txp),
             Action::Undelegate(x) => x.view_from_perspective(txp),
             Action::UndelegateClaim(x) => x.view_from_perspective(txp),
@@ -278,6 +284,9 @@ impl From<Action> for pb::Action {
             },
             Action::Spend(inner) => pb::Action {
                 action: Some(pb::action::Action::Spend(inner.into())),
+            },
+            Action::Transfer(inner) => pb::Action {
+                action: Some(pb::action::Action::Transfer(inner.into())),
             },
             Action::Delegate(inner) => pb::Action {
                 action: Some(pb::action::Action::Delegate(inner.into())),
@@ -380,6 +389,7 @@ impl TryFrom<pb::Action> for Action {
         {
             pb::action::Action::Output(inner) => Ok(Action::Output(inner.try_into()?)),
             pb::action::Action::Spend(inner) => Ok(Action::Spend(inner.try_into()?)),
+            pb::action::Action::Transfer(inner) => Ok(Action::Transfer(inner.try_into()?)),
             pb::action::Action::Delegate(inner) => Ok(Action::Delegate(inner.try_into()?)),
             pb::action::Action::Undelegate(inner) => Ok(Action::Undelegate(inner.try_into()?)),
             pb::action::Action::UndelegateClaim(inner) => {

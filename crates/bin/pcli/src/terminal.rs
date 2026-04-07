@@ -146,6 +146,7 @@ fn pretty_print_transaction_plan(
                     payload_key: PayloadKey::from([0u8; 32]),
                 },
             )),
+            ActionPlan::Transfer(_) => None,
             ActionPlan::Spend(x) => Some(ActionView::Spend(SpendView::Visible {
                 spend: dummy_spend(),
                 note: convert_note(cache, fvk, &x.note),

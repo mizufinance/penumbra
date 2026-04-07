@@ -518,12 +518,11 @@ impl Worker {
                     // This enables offline compliance lookups for future transactions to these addresses
                     let ovk = self.fvk.outgoing();
                     for action in transaction.actions() {
-                        if let penumbra_sdk_transaction::Action::Output(output) = action {
-                            let note_commitment = output.body.note_payload.note_commitment;
-                            let cv = output.body.balance_commitment;
-                            let epk = &output.body.note_payload.ephemeral_key;
-
-                            if let Ok(decrypted_note) =
+                        let maybe_decrypted_note = match action {
+                            penumbra_sdk_transaction::Action::Output(output) => {
+                                let note_commitment = output.body.note_payload.note_commitment;
+                                let cv = output.body.balance_commitment;
+                                let epk = &output.body.note_payload.ephemeral_key;
                                 penumbra_sdk_shielded_pool::Note::decrypt_outgoing(
                                     &output.body.note_payload.encrypted_note,
                                     output.body.ovk_wrapped_key.clone(),
@@ -532,27 +531,46 @@ impl Worker {
                                     ovk,
                                     epk,
                                 )
-                            {
-                                let dest_address = decrypted_note.address();
-                                // Skip self-sends (change outputs back to our own addresses)
-                                if !self.fvk.incoming().views_address(&dest_address) {
-                                    if let Err(e) = self
-                                        .storage
-                                        .record_counterparty(&dest_address, height)
-                                        .await
-                                    {
-                                        tracing::warn!(
-                                            ?dest_address,
-                                            ?e,
-                                            "failed to record counterparty during sync"
-                                        );
-                                    } else {
-                                        tracing::debug!(
-                                            ?dest_address,
-                                            height,
-                                            "recorded counterparty from historical TX"
-                                        );
-                                    }
+                                .ok()
+                            }
+                            penumbra_sdk_transaction::Action::Transfer(transfer) => {
+                                transfer.body.outputs.first().and_then(|output| {
+                                    let note_commitment = output.note_payload.note_commitment;
+                                    let cv = transfer.body.balance_commitment;
+                                    let epk = &output.note_payload.ephemeral_key;
+                                    penumbra_sdk_shielded_pool::Note::decrypt_outgoing(
+                                        &output.note_payload.encrypted_note,
+                                        output.ovk_wrapped_key.clone(),
+                                        note_commitment,
+                                        cv,
+                                        ovk,
+                                        epk,
+                                    )
+                                    .ok()
+                                })
+                            }
+                            _ => None,
+                        };
+
+                        if let Some(decrypted_note) = maybe_decrypted_note {
+                            let dest_address = decrypted_note.address();
+                            if !self.fvk.incoming().views_address(&dest_address) {
+                                if let Err(e) = self
+                                    .storage
+                                    .record_counterparty(&dest_address, height)
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        ?dest_address,
+                                        ?e,
+                                        "failed to record counterparty during sync"
+                                    );
+                                } else {
+                                    tracing::debug!(
+                                        ?dest_address,
+                                        height,
+                                        "recorded counterparty from historical TX"
+                                    );
                                 }
                             }
                         }

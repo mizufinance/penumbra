@@ -2,16 +2,19 @@
 
 ## Prerequisites
 
-**Recommended**: Use nix for the correct toolchain (includes cargo-nextest):
+**Recommended for CI parity**: Use nix for the correct toolchain (includes cargo-nextest and the bundled gnark runtime toolchain):
 ```bash
 nix develop
 ```
 
-**Without nix**: Install dependencies manually:
+**For day-to-day local Rust/gnark work without nix**: Install dependencies manually:
 ```bash
 # cargo-nextest (required for `just test`)
 # Note: Requires compatible Rust version - check rust-toolchain.toml
 cargo install cargo-nextest
+
+# Go toolchain for tools/gnark and bundled gnark runtime compilation
+# plus a CGO-capable C toolchain (clang or gcc)
 
 # For smoke/integration tests: clean network state
 pd network unsafe-reset-all
@@ -23,6 +26,10 @@ pd network unsafe-reset-all
 |---------|-------|-------------|
 | `cargo test --release -p <crate> --lib` | Single crate | Active development |
 | `just test` | All unit tests (nextest) | Before commit |
+| `just go-test` | `tools/gnark` Go tests only | Fast circuit/gadget/transfer-family iteration |
+| `just go-check` | `tools/gnark` format/build/test/vet | Before commit on gnark changes |
+| `just gnark-proof-tests` | Fast gnark inner-loop checks | During spend/output/transfer development |
+| `just gnark-proof-tests-slow` | End-to-end gnark proof generation | Before PR on spend/output/transfer changes |
 | `just smoke` | End-to-end | Before PR (transaction changes) |
 | `just integration-pcli` | pcli tests | Before PR (CLI changes) |
 | `just integration-pmonitor` | pmonitor tests | Before PR (monitoring changes) |
@@ -42,6 +49,9 @@ cargo test --release -p penumbra-sdk-compliance --lib test_name
 
 # With output
 cargo test --release -p penumbra-sdk-compliance --lib -- --nocapture
+
+# Fast gnark circuit/gadget/transfer-family loop (Go tests only)
+just go-test
 ```
 
 ### 2. Before Commit
@@ -51,6 +61,12 @@ Run all unit tests to catch regressions:
 ```bash
 # With nextest (faster, parallel)
 just test
+
+# Go-side gnark checks
+just go-check
+
+# Fast Go-only circuit iteration
+just go-test
 
 # Without nextest (fallback)
 cargo test --release --workspace --lib
@@ -65,10 +81,17 @@ Run the same checks as CI:
 just fmt
 
 # Linting
-just lint
+just check
 
 # All unit tests
 just test
+
+# Go runtime and fast gnark proof checks
+just go-check
+just gnark-proof-tests
+
+# Full slow gnark proof generation checks
+just gnark-proof-tests-slow
 
 # End-to-end smoke tests (if you touched transaction flow)
 just smoke
@@ -80,17 +103,54 @@ just smoke
 
 | Job | Description |
 |-----|-------------|
-| `rustfmt` | Code formatting check |
-| `clippy` | Linting warnings |
+| `lint` | Rust `cargo check` + formatting check |
 | `features` | Feature flag combinations compile |
 | `test` | All unit tests via cargo-nextest |
+| `go-gnark` | `tools/gnark` format/build/test/vet |
+| `gnark-rust` | Bundled gnark spend/output/transfer proof generation |
 
-### smoke.yml (Main/Release Branches)
+## Adding a Transfer Family
+
+Transfer proving uses one generic transfer library and one generic
+`transfer(n_in, n_out)` circuit implementation, but each supported family still
+needs its own proving key, verifying key, and artifact directory.
+
+To add a new family such as `3x3`:
+
+```bash
+# 1. Add the new family entry.
+$EDITOR tools/gnark/transfer_families.json
+
+# 2. Regenerate transfer-family bindings.
+cd tools/gnark
+GOCACHE=/tmp/penumbra-go-cache go run ./cmd/gen-transfer-families
+
+# 3. Generate setup artifacts and keys for the new family.
+GOCACHE=/tmp/penumbra-go-cache go run ./cmd/gnarkctl setup \
+  --circuit transfer3x3 \
+  --out-dir artifacts/transfer3x3
+
+# 4. Copy bundled artifacts into proof params.
+cd ../..
+cp -R tools/gnark/artifacts/transfer3x3 \
+  crates/crypto/proof-params/src/gen/gnark/transfer3x3
+
+# 5. Rebuild and test.
+just go-test
+cargo check -p penumbra-sdk-shielded-pool
+cargo check -p penumbra-sdk-proof-aggregation
+```
+
+The transfer-family generator now owns the Rust and Go registry wiring. After
+this refactor, adding a new supported family should not require handwritten Rust
+or Go source changes outside the manifest.
+
+### smoke.yml (Every PR)
 
 | Job | Description |
 |-----|-------------|
-| `smoke` | Full end-to-end smoke tests |
-| `pmonitor` | pmonitor integration tests |
+| `smoke` | Full end-to-end smoke tests with bundled gnark features |
+| `pmonitor` | pmonitor integration tests with bundled gnark features |
 
 ## Running Smoke Tests Locally
 
@@ -120,11 +180,11 @@ The smoke test:
 4. Validates chain state
 
 For the current lightweight-chain branch, `just smoke` exports
-`PENUMBRA_LIGHTWEIGHT_TRANSFER_ONLY_PHASE=1`. Removed-action integration tests
+`PENUMBRA_REDUCED_ACTION_SURFACE=1`. Removed-action integration tests
 must check that flag and skip at runtime; `#[ignore]` alone is not sufficient
 because the smoke suite runs ignored tests explicitly.
 
-**Note**: Smoke tests expect nix environment. Warning can be ignored if dependencies are installed.
+**Note**: Smoke tests and devnet orchestration remain nix-based. Normal Rust+gnark development no longer requires nix, but `just smoke` still assumes the nix environment.
 
 ## Compliance-Specific Tests
 

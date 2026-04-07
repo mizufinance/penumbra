@@ -1450,6 +1450,10 @@ impl AppActionHandler for Transaction {
 mod tests {
     use std::sync::Arc;
 
+    // Serializes tests that read/write PENUMBRA_BENCH_ALLOW_ZERO_TARGET_TIMESTAMP to
+    // prevent env-var races when tests run in parallel.
+    static TIMESTAMP_ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     use std::ops::Deref;
 
     use anyhow::Result;
@@ -1816,12 +1820,14 @@ mod tests {
 
     #[test]
     fn zero_timestamp_requires_benchmark_override() {
+        let _guard = TIMESTAMP_ENV_MUTEX.lock().unwrap();
         std::env::remove_var("PENUMBRA_BENCH_ALLOW_ZERO_TARGET_TIMESTAMP");
         assert!(super::check_action_timestamp_freshness(0, 1_700_000_000).is_err());
     }
 
     #[test]
     fn zero_timestamp_is_allowed_when_benchmark_override_is_set() {
+        let _guard = TIMESTAMP_ENV_MUTEX.lock().unwrap();
         std::env::set_var("PENUMBRA_BENCH_ALLOW_ZERO_TARGET_TIMESTAMP", "1");
         let result = super::check_action_timestamp_freshness(0, 1_700_000_000);
         std::env::remove_var("PENUMBRA_BENCH_ALLOW_ZERO_TARGET_TIMESTAMP");
@@ -1830,6 +1836,7 @@ mod tests {
 
     #[test]
     fn nonzero_timestamps_still_enforce_timestamp_freshness() {
+        let _guard = TIMESTAMP_ENV_MUTEX.lock().unwrap();
         assert!(super::check_action_timestamp_freshness(1_700_000_000, 1_700_000_100).is_ok());
         assert!(super::check_action_timestamp_freshness(1_700_000_000, 1_700_003_700).is_err());
     }

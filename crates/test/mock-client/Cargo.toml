@@ -21,6 +21,7 @@ penumbra-sdk-dex = {workspace = true, default-features = true}
 penumbra-sdk-keys = {workspace = true, default-features = true}
 penumbra-sdk-sct = {workspace = true, default-features = true}
 penumbra-sdk-shielded-pool = {workspace = true, features = [
+    "bundled-proving-keys",
     "component",
 ], default-features = true}
 penumbra-sdk-tct = {workspace = true, default-features = true}
@@ -28,4 +29,3 @@ penumbra-sdk-transaction = {workspace = true, default-features = true}
 penumbra-sdk-view = {workspace = true, default-features = true}
 rand_core = {workspace = true}
 tracing = {workspace = true}
-

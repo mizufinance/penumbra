@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 pub use penumbra_sdk_governance::DelegatorVoteView;
 pub use penumbra_sdk_shielded_pool::OutputView;
 pub use penumbra_sdk_shielded_pool::SpendView;
+pub use penumbra_sdk_shielded_pool::TransferView;
 
 use crate::Action;
 
@@ -36,6 +37,7 @@ pub enum ActionView {
     // Action types with encrypted contents
     Spend(SpendView),
     Output(OutputView),
+    Transfer(TransferView),
     Swap(SwapView),
     SwapClaim(SwapClaimView),
     DelegatorVote(DelegatorVoteView),
@@ -82,6 +84,7 @@ impl TryFrom<pbt::ActionView> for ActionView {
                 AV::Delegate(x) => ActionView::Delegate(x.try_into()?),
                 AV::Spend(x) => ActionView::Spend(x.try_into()?),
                 AV::Output(x) => ActionView::Output(x.try_into()?),
+                AV::Transfer(x) => ActionView::Transfer(x.try_into()?),
                 AV::Undelegate(x) => ActionView::Undelegate(x.try_into()?),
                 AV::UndelegateClaim(x) => ActionView::UndelegateClaim(x.try_into()?),
                 AV::Swap(x) => ActionView::Swap(x.try_into()?),
@@ -137,6 +140,7 @@ impl From<ActionView> for pbt::ActionView {
                 ActionView::SwapClaim(x) => AV::SwapClaim(x.into()),
                 ActionView::Output(x) => AV::Output(x.into()),
                 ActionView::Spend(x) => AV::Spend(x.into()),
+                ActionView::Transfer(x) => AV::Transfer(x.into()),
                 ActionView::Delegate(x) => AV::Delegate(x.into()),
                 ActionView::Undelegate(x) => AV::Undelegate(x.into()),
                 ActionView::UndelegateClaim(x) => AV::UndelegateClaim(x.into()),
@@ -179,6 +183,7 @@ impl From<ActionView> for Action {
             ActionView::SwapClaim(x) => Action::SwapClaim(x.into()),
             ActionView::Output(x) => Action::Output(x.into()),
             ActionView::Spend(x) => Action::Spend(x.into()),
+            ActionView::Transfer(x) => Action::Transfer(x.into()),
             ActionView::Delegate(x) => Action::Delegate(x),
             ActionView::Undelegate(x) => Action::Undelegate(x),
             ActionView::UndelegateClaim(x) => Action::UndelegateClaim(x),

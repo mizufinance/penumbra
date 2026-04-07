@@ -52,6 +52,7 @@ cargo run --release --bin pd -- network generate \
   --proposal-voting-blocks 50 \
   --timeout-commit 3s \
   --gas-price-simple 500 \
+  --validators-input-file testnets/validators-single.json \
   --allocations-input-file "$allocations_csv"
 
 # run network

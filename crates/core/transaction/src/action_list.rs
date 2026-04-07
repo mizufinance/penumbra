@@ -50,7 +50,7 @@ impl ActionList {
         let has_other_outputs = self
             .actions
             .iter()
-            .any(|action| matches!(action, ActionPlan::Output(_)));
+            .any(|action| matches!(action, ActionPlan::Output(_) | ActionPlan::Transfer(_)));
 
         has_change_outputs || has_other_outputs
     }

@@ -6390,6 +6390,7 @@ dependencies = [
  "hex",
  "penumbra-sdk-proof-params",
  "penumbra-sdk-proto",
+ "penumbra-sdk-shielded-pool",
  "rand",
  "rand_chacha",
  "rayon",
@@ -6532,6 +6533,7 @@ name = "penumbra-sdk-shielded-pool"
 version = "2.1.0"
 dependencies = [
  "anyhow",
+ "ark-ec",
  "ark-ff",
  "ark-groth16",
  "ark-r1cs-std",
@@ -6556,6 +6558,7 @@ dependencies = [
  "ibc-types",
  "im",
  "jmt",
+ "libloading",
  "metrics",
  "once_cell",
  "penumbra-sdk-asset",

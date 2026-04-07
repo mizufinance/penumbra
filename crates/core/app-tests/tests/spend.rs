@@ -256,13 +256,7 @@ async fn invalid_dummy_spend() -> anyhow::Result<()> {
     // In release builds the preflight is skipped; proof generation "succeeds" but
     // the resulting proof must fail verification.
     let public_for_verify = public.clone();
-    let proof_result = SpendProof::prove(
-        Fq::rand(&mut OsRng),
-        Fq::rand(&mut OsRng),
-        &penumbra_sdk_proof_params::SPEND_PROOF_PROVING_KEY,
-        public,
-        private,
-    );
+    let proof_result = SpendProof::prove(public, private);
 
     match proof_result {
         Err(e) => {
@@ -270,7 +264,8 @@ async fn invalid_dummy_spend() -> anyhow::Result<()> {
             assert!(
                 err_msg.contains("Unsatisfiable")
                     || err_msg.contains("UnsatisfiedConstraints")
-                    || err_msg.contains("SynthesisError"),
+                    || err_msg.contains("SynthesisError")
+                    || err_msg.contains("gnark spend prove"),
                 "error should be about unsatisfiable constraints, got: {}",
                 err_msg
             );

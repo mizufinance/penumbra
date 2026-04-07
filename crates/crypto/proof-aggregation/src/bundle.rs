@@ -1,11 +1,13 @@
 use anyhow::{anyhow, Result};
 use penumbra_sdk_proto::{core::transaction::v1 as pb, DomainType};
+use penumbra_sdk_shielded_pool::TransferFamilyId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum ProofFamilyId {
     Spend,
     Output,
+    Transfer(TransferFamilyId),
     Swap,
     SwapClaim,
     Convert,
@@ -32,6 +34,7 @@ impl From<ProofFamilyId> for pb::ProofFamilyId {
         match value {
             ProofFamilyId::Spend => Self::Spend,
             ProofFamilyId::Output => Self::Output,
+            ProofFamilyId::Transfer(_) => Self::Transfer,
             ProofFamilyId::Swap => Self::Swap,
             ProofFamilyId::SwapClaim => Self::SwapClaim,
             ProofFamilyId::Convert => Self::Convert,
@@ -40,20 +43,62 @@ impl From<ProofFamilyId> for pb::ProofFamilyId {
     }
 }
 
+impl ProofFamilyId {
+    fn try_from_proto_fields(family_id: i32, transfer_family_id: u32) -> Result<Self> {
+        match pb::ProofFamilyId::try_from(family_id) {
+            Ok(pb::ProofFamilyId::Unspecified) => Err(anyhow!("unspecified proof family id")),
+            Ok(pb::ProofFamilyId::Spend) => {
+                ensure_no_transfer_family_id("spend", transfer_family_id)?;
+                Ok(Self::Spend)
+            }
+            Ok(pb::ProofFamilyId::Output) => {
+                ensure_no_transfer_family_id("output", transfer_family_id)?;
+                Ok(Self::Output)
+            }
+            Ok(pb::ProofFamilyId::Transfer) => Ok(Self::Transfer(transfer_family_id.try_into()?)),
+            Ok(pb::ProofFamilyId::Swap) => {
+                ensure_no_transfer_family_id("swap", transfer_family_id)?;
+                Ok(Self::Swap)
+            }
+            Ok(pb::ProofFamilyId::SwapClaim) => {
+                ensure_no_transfer_family_id("swap_claim", transfer_family_id)?;
+                Ok(Self::SwapClaim)
+            }
+            Ok(pb::ProofFamilyId::Convert) => {
+                ensure_no_transfer_family_id("convert", transfer_family_id)?;
+                Ok(Self::Convert)
+            }
+            Ok(pb::ProofFamilyId::DelegatorVote) => {
+                ensure_no_transfer_family_id("delegator_vote", transfer_family_id)?;
+                Ok(Self::DelegatorVote)
+            }
+            Err(_) => Err(anyhow!("unknown proof family id {family_id}")),
+        }
+    }
+
+    fn transfer_family_id(self) -> u32 {
+        match self {
+            ProofFamilyId::Transfer(family_id) => family_id.get(),
+            _ => 0,
+        }
+    }
+}
+
+fn ensure_no_transfer_family_id(family: &str, transfer_family_id: u32) -> Result<()> {
+    if transfer_family_id == 0 {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "{family} aggregate must not set transfer_family_id={transfer_family_id}"
+        ))
+    }
+}
+
 impl TryFrom<i32> for ProofFamilyId {
     type Error = anyhow::Error;
 
     fn try_from(value: i32) -> Result<Self> {
-        match pb::ProofFamilyId::try_from(value) {
-            Ok(pb::ProofFamilyId::Unspecified) => Err(anyhow!("unspecified proof family id")),
-            Ok(pb::ProofFamilyId::Spend) => Ok(Self::Spend),
-            Ok(pb::ProofFamilyId::Output) => Ok(Self::Output),
-            Ok(pb::ProofFamilyId::Swap) => Ok(Self::Swap),
-            Ok(pb::ProofFamilyId::SwapClaim) => Ok(Self::SwapClaim),
-            Ok(pb::ProofFamilyId::Convert) => Ok(Self::Convert),
-            Ok(pb::ProofFamilyId::DelegatorVote) => Ok(Self::DelegatorVote),
-            Err(_) => Err(anyhow!("unknown proof family id {value}")),
-        }
+        Self::try_from_proto_fields(value, 0)
     }
 }
 
@@ -95,6 +140,7 @@ impl From<FamilyAggregate> for pb::FamilyAggregate {
     fn from(value: FamilyAggregate) -> Self {
         Self {
             family_id: pb::ProofFamilyId::from(value.family_id) as i32,
+            transfer_family_id: value.family_id.transfer_family_id(),
             real_count: value.real_count,
             padded_count: value.padded_count,
             aggregate_proof: value.aggregate_proof,
@@ -107,7 +153,10 @@ impl TryFrom<pb::FamilyAggregate> for FamilyAggregate {
 
     fn try_from(value: pb::FamilyAggregate) -> Result<Self> {
         Ok(Self {
-            family_id: value.family_id.try_into()?,
+            family_id: ProofFamilyId::try_from_proto_fields(
+                value.family_id,
+                value.transfer_family_id,
+            )?,
             real_count: value.real_count,
             padded_count: value.padded_count,
             aggregate_proof: value.aggregate_proof,

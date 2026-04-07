@@ -25,8 +25,18 @@ jobs:
       - name: Check for module path changes
         shell: bash
         run: |
-          cd proto/penumbra
-          buf dep update
+          cd proto
+          for attempt in 1 2 3; do
+              if buf dep update penumbra; then
+                  break
+              fi
+              if [[ "$attempt" -eq 3 ]]; then
+                  echo "ERROR: 'buf dep update penumbra' failed after ${attempt} attempts"
+                  exit 1
+              fi
+              echo "buf dep update failed on attempt ${attempt}, retrying..."
+              sleep 5
+          done
           s="$(git status --porcelain)"
           if [[ -n "$s" ]]; then
               echo "ERROR: run 'buf dep update' to synchronize buf.lock"
@@ -48,7 +58,7 @@ jobs:
   # Run our bespoke tooling for codegen, consuming the protocol buffer definitions
   # and emitting generated code. Afterward, there should be no uncommitted changes.
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout the source code
         uses: actions/checkout@v4

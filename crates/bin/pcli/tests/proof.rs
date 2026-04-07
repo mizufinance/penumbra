@@ -4,6 +4,7 @@
 use decaf377::{Fq, Fr};
 use decaf377_rdsa::{SigningKey, SpendAuth, VerificationKey};
 use penumbra_sdk_asset::{asset, Balance, Value};
+#[cfg(feature = "bundled-proving-keys")]
 use penumbra_sdk_compliance::{ComplianceLeaf, MerklePath, BLACK_HOLE_ACK};
 use penumbra_sdk_dex::swap::proof::{SwapProofPrivate, SwapProofPublic};
 use penumbra_sdk_dex::swap_claim::{SwapClaimProofPrivate, SwapClaimProofPublic};
@@ -20,28 +21,32 @@ use penumbra_sdk_num::Amount;
 use penumbra_sdk_proof_params::{
     CONVERT_PROOF_PROVING_KEY, CONVERT_PROOF_VERIFICATION_KEY, DELEGATOR_VOTE_PROOF_PROVING_KEY,
     DELEGATOR_VOTE_PROOF_VERIFICATION_KEY, NULLIFIER_DERIVATION_PROOF_PROVING_KEY,
-    NULLIFIER_DERIVATION_PROOF_VERIFICATION_KEY, OUTPUT_PROOF_PROVING_KEY,
-    OUTPUT_PROOF_VERIFICATION_KEY, SPEND_PROOF_PROVING_KEY, SPEND_PROOF_VERIFICATION_KEY,
-    SWAPCLAIM_PROOF_PROVING_KEY, SWAPCLAIM_PROOF_VERIFICATION_KEY, SWAP_PROOF_PROVING_KEY,
-    SWAP_PROOF_VERIFICATION_KEY,
+    NULLIFIER_DERIVATION_PROOF_VERIFICATION_KEY, SWAPCLAIM_PROOF_PROVING_KEY,
+    SWAPCLAIM_PROOF_VERIFICATION_KEY, SWAP_PROOF_PROVING_KEY, SWAP_PROOF_VERIFICATION_KEY,
 };
+#[cfg(feature = "bundled-proving-keys")]
+use penumbra_sdk_proof_params::{OUTPUT_PROOF_VERIFICATION_KEY, SPEND_PROOF_VERIFICATION_KEY};
 use penumbra_sdk_sct::Nullifier;
+#[cfg(feature = "bundled-proving-keys")]
 use penumbra_sdk_shielded_pool::output::{OutputProofPrivate, OutputProofPublic};
 use penumbra_sdk_shielded_pool::Note;
 use penumbra_sdk_shielded_pool::{
     NullifierDerivationProof, NullifierDerivationProofPrivate, NullifierDerivationProofPublic,
-    OutputProof, SpendProof, SpendProofPrivate, SpendProofPublic,
 };
+#[cfg(feature = "bundled-proving-keys")]
+use penumbra_sdk_shielded_pool::{OutputProof, SpendProof, SpendProofPrivate, SpendProofPublic};
 use penumbra_sdk_stake::undelegate_claim::{
     UndelegateClaimProofPrivate, UndelegateClaimProofPublic,
 };
 use penumbra_sdk_stake::{IdentityKey, Penalty, UnbondingToken, UndelegateClaimProof};
 use penumbra_sdk_tct as tct;
+#[cfg(feature = "bundled-proving-keys")]
 use penumbra_sdk_tct::StateCommitment;
 use rand_core::OsRng;
 
 /// Create a dummy 16-layer Merkle path for testing.
 /// The circuit expects exactly 16 layers in the QuadTree path.
+#[cfg(feature = "bundled-proving-keys")]
 fn dummy_merkle_path() -> MerklePath {
     MerklePath {
         layers: (0..16)
@@ -54,6 +59,7 @@ fn dummy_merkle_path() -> MerklePath {
 
 /// Create valid IMT proof data for an unregulated asset.
 /// Returns (asset_anchor, indexed_leaf, merkle_path, position) that satisfy circuit constraints.
+#[cfg(feature = "bundled-proving-keys")]
 fn create_imt_non_membership_proof(
     asset_id: Fq,
 ) -> (
@@ -77,9 +83,9 @@ fn create_imt_non_membership_proof(
     (anchor, indexed_leaf, merkle_path, position)
 }
 
+#[cfg(feature = "bundled-proving-keys")]
 #[test]
 fn spend_proof_parameters_vs_current_spend_circuit() {
-    let pk = &*SPEND_PROOF_PROVING_KEY;
     let vk = &*SPEND_PROOF_VERIFICATION_KEY;
 
     let seed_phrase = SeedPhrase::generate(OsRng);
@@ -110,10 +116,6 @@ fn spend_proof_parameters_vs_current_spend_circuit() {
     let balance_commitment = value_to_send.commit(v_blinding);
     let rk: VerificationKey<SpendAuth> = rsk.into();
     let nullifier = Nullifier::derive(&nk, 0.into(), &note_commitment);
-
-    // Random elements to provide ZK (see Section 3.2 Groth16 paper, bottom of page 17)
-    let blinding_r = Fq::rand(&mut OsRng);
-    let blinding_s = Fq::rand(&mut OsRng);
 
     // Compliance values for unregulated asset - use BLACK_HOLE_ACK
     let user_leaf = ComplianceLeaf::new(sender.clone(), value_to_send.asset_id, Fq::from(0u64));
@@ -188,8 +190,7 @@ fn spend_proof_parameters_vs_current_spend_circuit() {
         is_flagged: false,
         salt: decaf377::Fq::from(0u64),
     };
-    let proof = SpendProof::prove(blinding_r, blinding_s, pk, public.clone(), private)
-        .expect("can create proof");
+    let proof = SpendProof::prove(public.clone(), private).expect("can create proof");
 
     let proof_result = proof.verify(vk, public);
     assert!(proof_result.is_ok());
@@ -419,9 +420,9 @@ fn swap_claim_parameters_vs_current_swap_claim_circuit() {
     assert!(proof_result.is_ok());
 }
 
+#[cfg(feature = "bundled-proving-keys")]
 #[test]
 fn output_proof_parameters_vs_current_output_circuit() {
-    let pk = &*OUTPUT_PROOF_PROVING_KEY;
     let vk = &*OUTPUT_PROOF_VERIFICATION_KEY;
 
     let (public, private) = {
@@ -537,10 +538,7 @@ fn output_proof_parameters_vs_current_output_circuit() {
         (public, private)
     };
 
-    let blinding_r = Fq::rand(&mut OsRng);
-    let blinding_s = Fq::rand(&mut OsRng);
-    let proof = OutputProof::prove(blinding_r, blinding_s, pk, public.clone(), private)
-        .expect("can create proof");
+    let proof = OutputProof::prove(public.clone(), private).expect("can create proof");
 
     let proof_result = proof.verify(vk, public);
 

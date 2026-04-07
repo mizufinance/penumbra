@@ -24,7 +24,9 @@ use penumbra_sdk_governance::{
     ValidatorVote, VotingReceiptToken,
 };
 use penumbra_sdk_ibc::IbcRelay;
-use penumbra_sdk_shielded_pool::{Ics20Withdrawal, Note, Output, OutputView, Spend, SpendView};
+use penumbra_sdk_shielded_pool::{
+    Ics20Withdrawal, Note, Output, OutputView, Spend, SpendView, Transfer, TransferView,
+};
 use penumbra_sdk_stake::{Delegate, Undelegate, UndelegateClaim};
 
 use crate::{Action, ActionView, TransactionPerspective};
@@ -171,6 +173,81 @@ impl IsAction for Spend {
         };
 
         ActionView::Spend(spend_view)
+    }
+}
+
+impl IsAction for Transfer {
+    fn balance_commitment(&self) -> balance::Commitment {
+        self.body.balance_commitment
+    }
+
+    fn view_from_perspective(&self, txp: &TransactionPerspective) -> ActionView {
+        let Some(first_output) = self.body.outputs.first() else {
+            return ActionView::Transfer(TransferView::Opaque {
+                transfer: self.to_owned(),
+            });
+        };
+        let note_commitment = first_output.note_payload.note_commitment;
+        let payload_key = match txp.payload_keys.get(&note_commitment) {
+            Some(payload_key) => payload_key,
+            None => {
+                return ActionView::Transfer(TransferView::Opaque {
+                    transfer: self.to_owned(),
+                })
+            }
+        };
+        let spent_notes = match self
+            .body
+            .inputs
+            .iter()
+            .map(|input| txp.spend_nullifiers.get(&input.nullifier).cloned())
+            .collect::<Option<Vec<_>>>()
+        {
+            Some(notes) => notes,
+            None => {
+                return ActionView::Transfer(TransferView::Opaque {
+                    transfer: self.to_owned(),
+                })
+            }
+        };
+        let created_notes = match self
+            .body
+            .outputs
+            .iter()
+            .map(|output| {
+                Note::decrypt_with_payload_key(
+                    &output.note_payload.encrypted_note,
+                    payload_key,
+                    &output.note_payload.ephemeral_key,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(notes) => notes,
+            Err(_) => {
+                return ActionView::Transfer(TransferView::Opaque {
+                    transfer: self.to_owned(),
+                })
+            }
+        };
+
+        match first_output.wrapped_memo_key.decrypt_outgoing(payload_key) {
+            Ok(decrypted_memo_key) => ActionView::Transfer(TransferView::Visible {
+                transfer: self.to_owned(),
+                spent_notes: spent_notes
+                    .into_iter()
+                    .map(|note| txp.view_note(note))
+                    .collect(),
+                created_notes: created_notes
+                    .into_iter()
+                    .map(|note| txp.view_note(note))
+                    .collect(),
+                payload_key: decrypted_memo_key,
+            }),
+            Err(_) => ActionView::Transfer(TransferView::Opaque {
+                transfer: self.to_owned(),
+            }),
+        }
     }
 }
 
@@ -534,5 +611,175 @@ impl IsAction for ActionLiquidityTournamentVote {
         };
 
         ActionView::ActionLiquidityTournamentVote(lqt_vote_view)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use decaf377::Fq;
+    use decaf377_rdsa::{SigningKey, SpendAuth, VerificationKey};
+    use penumbra_sdk_asset::{asset, Balance, Value};
+    use penumbra_sdk_keys::{
+        keys::{Bip44Path, SeedPhrase, SpendKey},
+        symmetric::{OvkWrappedKey, PayloadKey, WrappedMemoKey},
+    };
+    use penumbra_sdk_sct::Nullifier;
+    use penumbra_sdk_shielded_pool::{
+        EncryptedBackref, Note, Rseed, Transfer, TransferBody, TransferFamilyId, TransferInputBody,
+        TransferOutputBody, TransferProof, TransferView,
+    };
+
+    use crate::{is_action::IsAction, ActionView, TransactionPerspective};
+
+    fn make_note_and_keys() -> (Note, penumbra_sdk_keys::keys::FullViewingKey) {
+        let mut rng = rand::thread_rng();
+        let sk =
+            SpendKey::from_seed_phrase_bip44(SeedPhrase::generate(&mut rng), &Bip44Path::new(0));
+        let fvk = sk.full_viewing_key().clone();
+        let (addr, _) = fvk.incoming().payment_address(0u32.into());
+        let value = Value {
+            amount: 10u64.into(),
+            asset_id: asset::Id(Fq::from(1u64)),
+        };
+        let rseed = Rseed::generate(&mut rng);
+        let note = Note::from_parts(addr, value, rseed).unwrap();
+        (note, fvk)
+    }
+
+    fn make_transfer(
+        note: &Note,
+        payload_key: &PayloadKey,
+        nullifier: Nullifier,
+        valid_memo: bool,
+    ) -> Transfer {
+        let note_payload = note.payload();
+        let wrapped_memo_key = if valid_memo {
+            WrappedMemoKey::encrypt(
+                payload_key,
+                note.ephemeral_secret_key(),
+                note.transmission_key(),
+                &note.diversified_generator(),
+            )
+        } else {
+            WrappedMemoKey([0u8; 48])
+        };
+        Transfer {
+            body: TransferBody {
+                family_id: TransferFamilyId::OneByOne,
+                anchor: penumbra_sdk_tct::Tree::default().root(),
+                balance_commitment: Balance::from(Value {
+                    amount: 1u64.into(),
+                    asset_id: asset::Id(Fq::from(1u64)),
+                })
+                .commit(decaf377::Fr::from(0u64)),
+                inputs: vec![TransferInputBody {
+                    nullifier,
+                    rk: VerificationKey::from(SigningKey::<SpendAuth>::from(decaf377::Fr::from(
+                        1u64,
+                    ))),
+                    encrypted_backref: EncryptedBackref::dummy(),
+                    compliance_ciphertext: vec![],
+                    dleq_proof: vec![],
+                }],
+                outputs: vec![TransferOutputBody {
+                    note_payload,
+                    wrapped_memo_key,
+                    ovk_wrapped_key: OvkWrappedKey([0u8; 48]),
+                    compliance_ciphertext: vec![],
+                    dleq_proofs: vec![],
+                }],
+                target_timestamp: 0,
+                compliance_anchor: penumbra_sdk_tct::StateCommitment(Fq::from(0u64)),
+                asset_anchor: penumbra_sdk_tct::StateCommitment(Fq::from(0u64)),
+            },
+            auth_sigs: vec![[0u8; 64].into()],
+            proof: TransferProof::default(),
+        }
+    }
+
+    fn derive_payload_key(
+        note: &Note,
+        fvk: &penumbra_sdk_keys::keys::FullViewingKey,
+    ) -> (PayloadKey, penumbra_sdk_tct::StateCommitment) {
+        let note_payload = note.payload();
+        let ivk = fvk.incoming();
+        let shared_secret = ivk
+            .key_agreement_with(&note_payload.ephemeral_key)
+            .expect("key agreement succeeded");
+        let payload_key = PayloadKey::derive(&shared_secret, &note_payload.ephemeral_key);
+        (payload_key, note_payload.note_commitment)
+    }
+
+    #[test]
+    fn transfer_view_visible_when_both_maps_present_and_memo_valid() {
+        let (note, fvk) = make_note_and_keys();
+        let (payload_key, note_commitment) = derive_payload_key(&note, &fvk);
+        let nullifier = Nullifier(Fq::from(42u64));
+        let transfer = make_transfer(&note, &payload_key, nullifier, true);
+
+        let mut txp = TransactionPerspective::default();
+        txp.payload_keys.insert(note_commitment, payload_key);
+        txp.spend_nullifiers.insert(nullifier, note.clone());
+
+        let view = transfer.view_from_perspective(&txp);
+        assert!(matches!(
+            view,
+            ActionView::Transfer(TransferView::Visible { .. })
+        ));
+    }
+
+    #[test]
+    fn transfer_view_opaque_when_payload_key_missing() {
+        let (note, fvk) = make_note_and_keys();
+        let (payload_key, _) = derive_payload_key(&note, &fvk);
+        let nullifier = Nullifier(Fq::from(43u64));
+        let transfer = make_transfer(&note, &payload_key, nullifier, true);
+
+        let mut txp = TransactionPerspective::default();
+        // payload_keys intentionally absent
+        txp.spend_nullifiers.insert(nullifier, note.clone());
+
+        let view = transfer.view_from_perspective(&txp);
+        assert!(matches!(
+            view,
+            ActionView::Transfer(TransferView::Opaque { .. })
+        ));
+    }
+
+    #[test]
+    fn transfer_view_opaque_when_nullifier_missing() {
+        let (note, fvk) = make_note_and_keys();
+        let (payload_key, note_commitment) = derive_payload_key(&note, &fvk);
+        let nullifier = Nullifier(Fq::from(44u64));
+        let transfer = make_transfer(&note, &payload_key, nullifier, true);
+
+        let mut txp = TransactionPerspective::default();
+        txp.payload_keys.insert(note_commitment, payload_key);
+        // spend_nullifiers intentionally absent
+
+        let view = transfer.view_from_perspective(&txp);
+        assert!(matches!(
+            view,
+            ActionView::Transfer(TransferView::Opaque { .. })
+        ));
+    }
+
+    #[test]
+    fn transfer_view_opaque_when_memo_key_invalid() {
+        let (note, fvk) = make_note_and_keys();
+        let (payload_key, note_commitment) = derive_payload_key(&note, &fvk);
+        let nullifier = Nullifier(Fq::from(45u64));
+        // valid_memo = false → WrappedMemoKey([0u8; 48]) → decrypt_outgoing fails
+        let transfer = make_transfer(&note, &payload_key, nullifier, false);
+
+        let mut txp = TransactionPerspective::default();
+        txp.payload_keys.insert(note_commitment, payload_key);
+        txp.spend_nullifiers.insert(nullifier, note.clone());
+
+        let view = transfer.view_from_perspective(&txp);
+        assert!(matches!(
+            view,
+            ActionView::Transfer(TransferView::Opaque { .. })
+        ));
     }
 }

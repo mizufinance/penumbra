@@ -25,6 +25,8 @@ else
         --proposal-voting-blocks 50 \
         --gas-price-simple 0 \
         --timeout-commit 500ms \
+        --allocations-input-file deployments/compose/devnet-allocations.csv \
+        --validators-input-file testnets/validators-single.json \
         --allocation-address "penumbra1cvp32r5wp4lfnnww3g3fytxccqnu2xcj0r2qm0sa8ekjdezlm3gzk34qtg2xscqx9r6yrhz24k3l6j88q98rexyp7dnupq66cxllvpp9v0lw0xuqf0yfhv5ksfxzv0m968tmxn"
     # opt in to cometbft abci indexing to postgres
     postgresql_db_url="postgresql://penumbra:penumbra@localhost:5432/penumbra_cometbft?sslmode=disable"

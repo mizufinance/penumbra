@@ -139,10 +139,12 @@ pub struct FamilyAggregate {
     #[prost(enumeration = "ProofFamilyId", tag = "1")]
     pub family_id: i32,
     #[prost(uint32, tag = "2")]
-    pub real_count: u32,
+    pub transfer_family_id: u32,
     #[prost(uint32, tag = "3")]
+    pub real_count: u32,
+    #[prost(uint32, tag = "4")]
     pub padded_count: u32,
-    #[prost(bytes = "vec", tag = "4")]
+    #[prost(bytes = "vec", tag = "5")]
     pub aggregate_proof: ::prost::alloc::vec::Vec<u8>,
 }
 impl ::prost::Name for FamilyAggregate {
@@ -179,7 +181,7 @@ impl ::prost::Name for AggregateBundle {
 pub struct Action {
     #[prost(
         oneof = "action::Action",
-        tags = "1, 2, 3, 4, 16, 17, 18, 19, 20, 21, 22, 30, 31, 32, 34, 40, 41, 42, 50, 51, 52, 53, 54, 55, 70, 80, 81, 82, 200"
+        tags = "1, 2, 3, 4, 5, 16, 17, 18, 19, 20, 21, 22, 30, 31, 32, 34, 40, 41, 42, 50, 51, 52, 53, 54, 55, 70, 80, 81, 82, 200"
     )]
     pub action: ::core::option::Option<action::Action>,
 }
@@ -196,6 +198,8 @@ pub mod action {
         Swap(super::super::super::component::dex::v1::Swap),
         #[prost(message, tag = "4")]
         SwapClaim(super::super::super::component::dex::v1::SwapClaim),
+        #[prost(message, tag = "5")]
+        Transfer(super::super::super::component::shielded_pool::v1::Transfer),
         #[prost(message, tag = "16")]
         ValidatorDefinition(
             super::super::super::component::stake::v1::ValidatorDefinition,
@@ -522,7 +526,7 @@ impl ::prost::Name for TransactionBodyView {
 pub struct ActionView {
     #[prost(
         oneof = "action_view::ActionView",
-        tags = "1, 2, 3, 4, 21, 35, 16, 17, 18, 19, 20, 22, 30, 31, 32, 34, 41, 42, 50, 51, 52, 53, 54, 55, 43, 70, 80, 81, 82, 200"
+        tags = "1, 2, 3, 4, 5, 21, 35, 16, 17, 18, 19, 20, 22, 30, 31, 32, 34, 41, 42, 50, 51, 52, 53, 54, 55, 43, 70, 80, 81, 82, 200"
     )]
     pub action_view: ::core::option::Option<action_view::ActionView>,
 }
@@ -539,6 +543,8 @@ pub mod action_view {
         Swap(super::super::super::component::dex::v1::SwapView),
         #[prost(message, tag = "4")]
         SwapClaim(super::super::super::component::dex::v1::SwapClaimView),
+        #[prost(message, tag = "5")]
+        Transfer(super::super::super::component::shielded_pool::v1::TransferView),
         #[prost(message, tag = "21")]
         DelegatorVote(super::super::super::component::governance::v1::DelegatorVoteView),
         #[prost(message, tag = "35")]
@@ -748,7 +754,7 @@ impl ::prost::Name for DetectionDataPlan {
 pub struct ActionPlan {
     #[prost(
         oneof = "action_plan::Action",
-        tags = "1, 2, 3, 4, 16, 17, 18, 19, 20, 21, 22, 200, 30, 35, 31, 32, 34, 40, 41, 42, 50, 51, 52, 53, 54, 55, 70, 80, 81"
+        tags = "1, 2, 3, 4, 5, 16, 17, 18, 19, 20, 21, 22, 200, 30, 35, 31, 32, 34, 40, 41, 42, 50, 51, 52, 53, 54, 55, 70, 80, 81"
     )]
     pub action: ::core::option::Option<action_plan::Action>,
 }
@@ -764,6 +770,8 @@ pub mod action_plan {
         Swap(super::super::super::component::dex::v1::SwapPlan),
         #[prost(message, tag = "4")]
         SwapClaim(super::super::super::component::dex::v1::SwapClaimPlan),
+        #[prost(message, tag = "5")]
+        Transfer(super::super::super::component::shielded_pool::v1::TransferPlan),
         /// This is just a message relayed to the chain.
         #[prost(message, tag = "16")]
         ValidatorDefinition(
@@ -1031,6 +1039,7 @@ pub enum ProofFamilyId {
     SwapClaim = 4,
     Convert = 5,
     DelegatorVote = 6,
+    Transfer = 7,
 }
 impl ProofFamilyId {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1046,6 +1055,7 @@ impl ProofFamilyId {
             Self::SwapClaim => "PROOF_FAMILY_ID_SWAP_CLAIM",
             Self::Convert => "PROOF_FAMILY_ID_CONVERT",
             Self::DelegatorVote => "PROOF_FAMILY_ID_DELEGATOR_VOTE",
+            Self::Transfer => "PROOF_FAMILY_ID_TRANSFER",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1058,6 +1068,7 @@ impl ProofFamilyId {
             "PROOF_FAMILY_ID_SWAP_CLAIM" => Some(Self::SwapClaim),
             "PROOF_FAMILY_ID_CONVERT" => Some(Self::Convert),
             "PROOF_FAMILY_ID_DELEGATOR_VOTE" => Some(Self::DelegatorVote),
+            "PROOF_FAMILY_ID_TRANSFER" => Some(Self::Transfer),
             _ => None,
         }
     }

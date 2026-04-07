@@ -12,12 +12,18 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use decaf377::{Bls12_377, Fq};
 use digest::Digest;
 use penumbra_sdk_proof_params::batch::BatchItem;
+use penumbra_sdk_shielded_pool::TransferFamilyId;
 
 use crate::{
     srs::DevSrs,
     transcript::{
         ConvertTranscriptDigest, DelegatorVoteTranscriptDigest, OutputTranscriptDigest,
         SpendTranscriptDigest, SwapClaimTranscriptDigest, SwapTranscriptDigest,
+    },
+    transfer_family_dispatch::{
+        aggregate_transfer_family_generated, aggregate_transfer_family_profiled_generated,
+        verify_transfer_family_aggregate_generated,
+        verify_transfer_family_aggregate_profiled_unchecked_generated,
     },
     ProofFamilyId,
 };
@@ -173,6 +179,54 @@ fn deserialize_aggregate_proof<D: Digest>(
 }
 
 impl SnarkpackBackend {
+    fn verify_transfer_family_aggregate_profiled_unchecked(
+        family_id: TransferFamilyId,
+        pvk: &PreparedVerifyingKey<Bls12_377>,
+        aggregate_proof_bytes: &[u8],
+        padded_public_inputs: &[Vec<Fq>],
+        srs: &DevSrs,
+    ) -> Result<AggregateVerificationProfile> {
+        verify_transfer_family_aggregate_profiled_unchecked_generated(
+            family_id,
+            pvk,
+            aggregate_proof_bytes,
+            padded_public_inputs,
+            srs,
+        )
+    }
+
+    fn aggregate_transfer_family(
+        family_id: TransferFamilyId,
+        items: &[BatchItem],
+        srs: &DevSrs,
+    ) -> Result<Vec<u8>> {
+        aggregate_transfer_family_generated(family_id, items, srs)
+    }
+
+    fn verify_transfer_family_aggregate(
+        family_id: TransferFamilyId,
+        pvk: &PreparedVerifyingKey<Bls12_377>,
+        aggregate_proof_bytes: &[u8],
+        padded_public_inputs: &[Vec<Fq>],
+        srs: &DevSrs,
+    ) -> Result<bool> {
+        verify_transfer_family_aggregate_generated(
+            family_id,
+            pvk,
+            aggregate_proof_bytes,
+            padded_public_inputs,
+            srs,
+        )
+    }
+
+    fn aggregate_transfer_family_profiled(
+        family_id: TransferFamilyId,
+        items: &[BatchItem],
+        srs: &DevSrs,
+    ) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
+        aggregate_transfer_family_profiled_generated(family_id, items, srs)
+    }
+
     pub fn verify_family_aggregate_profiled_unchecked(
         family_id: ProofFamilyId,
         pvk: &PreparedVerifyingKey<Bls12_377>,
@@ -200,6 +254,15 @@ impl SnarkpackBackend {
                 padded_public_inputs,
                 srs,
             ),
+            ProofFamilyId::Transfer(transfer_family_id) => {
+                Self::verify_transfer_family_aggregate_profiled_unchecked(
+                    transfer_family_id,
+                    pvk,
+                    aggregate_proof_bytes,
+                    padded_public_inputs,
+                    srs,
+                )
+            }
             ProofFamilyId::Swap => verify_with_digest_profiled::<SwapTranscriptDigest>(
                 pvk,
                 aggregate_proof_bytes,
@@ -269,6 +332,9 @@ impl AggregationBackend for SnarkpackBackend {
         match family_id {
             ProofFamilyId::Spend => aggregate_with_digest::<SpendTranscriptDigest>(items, srs),
             ProofFamilyId::Output => aggregate_with_digest::<OutputTranscriptDigest>(items, srs),
+            ProofFamilyId::Transfer(transfer_family_id) => {
+                Self::aggregate_transfer_family(transfer_family_id, items, srs)
+            }
             ProofFamilyId::Swap => aggregate_with_digest::<SwapTranscriptDigest>(items, srs),
             ProofFamilyId::SwapClaim => {
                 aggregate_with_digest::<SwapClaimTranscriptDigest>(items, srs)
@@ -302,6 +368,13 @@ impl AggregationBackend for SnarkpackBackend {
                 srs,
             )?,
             ProofFamilyId::Output => verify_with_digest::<OutputTranscriptDigest>(
+                pvk,
+                aggregate_proof_bytes,
+                padded_public_inputs,
+                srs,
+            )?,
+            ProofFamilyId::Transfer(transfer_family_id) => Self::verify_transfer_family_aggregate(
+                transfer_family_id,
                 pvk,
                 aggregate_proof_bytes,
                 padded_public_inputs,
@@ -363,6 +436,9 @@ impl SnarkpackBackend {
             ProofFamilyId::Output => {
                 aggregate_with_digest_profiled::<OutputTranscriptDigest>(items, srs)
             }
+            ProofFamilyId::Transfer(transfer_family_id) => {
+                Self::aggregate_transfer_family_profiled(transfer_family_id, items, srs)
+            }
             ProofFamilyId::Swap => {
                 aggregate_with_digest_profiled::<SwapTranscriptDigest>(items, srs)
             }
@@ -381,7 +457,10 @@ impl SnarkpackBackend {
     }
 }
 
-fn aggregate_with_digest<D: Digest>(items: &[BatchItem], srs: &DevSrs) -> Result<Vec<u8>> {
+pub(crate) fn aggregate_with_digest<D: Digest>(
+    items: &[BatchItem],
+    srs: &DevSrs,
+) -> Result<Vec<u8>> {
     let inner_product_srs = srs.inner_product_srs_for_count(items.len())?;
     let aggregate = aggregate_proofs::<Bls12_377, D>(&inner_product_srs, &collect_proofs(items))
         .map_err(|e| anyhow::anyhow!("SnarkPack aggregation failed: {e}"))?;
@@ -390,7 +469,7 @@ fn aggregate_with_digest<D: Digest>(items: &[BatchItem], srs: &DevSrs) -> Result
     Ok(bytes)
 }
 
-fn aggregate_with_digest_profiled<D: Digest>(
+pub(crate) fn aggregate_with_digest_profiled<D: Digest>(
     items: &[BatchItem],
     srs: &DevSrs,
 ) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
@@ -492,7 +571,7 @@ fn apply_core_build_profile(
     profile.backend_tipa_c_kzg_opening_ck_a_ms = core_profile.tipa_c_kzg_opening_ck_a_ms;
 }
 
-fn verify_with_digest<D: Digest>(
+pub(crate) fn verify_with_digest<D: Digest>(
     pvk: &PreparedVerifyingKey<Bls12_377>,
     aggregate_proof_bytes: &[u8],
     padded_public_inputs: &[Vec<Fq>],
@@ -508,7 +587,7 @@ fn verify_with_digest<D: Digest>(
     .map_err(|e| anyhow::anyhow!("SnarkPack verification failed: {e}"))
 }
 
-fn verify_with_digest_profiled<D: Digest>(
+pub(crate) fn verify_with_digest_profiled<D: Digest>(
     pvk: &PreparedVerifyingKey<Bls12_377>,
     aggregate_proof_bytes: &[u8],
     padded_public_inputs: &[Vec<Fq>],

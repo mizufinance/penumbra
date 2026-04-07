@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use decaf377::Fr;
 use penumbra_sdk_funding::liquidity_tournament::ActionLiquidityTournamentVotePlan;
 use penumbra_sdk_sct::epoch::Epoch;
 use rand::{CryptoRng, RngCore};
@@ -47,7 +48,9 @@ use penumbra_sdk_ibc::IbcRelay;
 use penumbra_sdk_keys::{keys::AddressIndex, Address};
 use penumbra_sdk_num::Amount;
 use penumbra_sdk_proto::view::v1::{NotesForVotingRequest, NotesRequest};
-use penumbra_sdk_shielded_pool::{Ics20Withdrawal, Note, OutputPlan, SpendPlan};
+use penumbra_sdk_shielded_pool::{
+    Ics20Withdrawal, Note, OutputPlan, SpendPlan, TransferFamilyId, TransferPlan,
+};
 use penumbra_sdk_stake::{rate::RateData, validator, IdentityKey, UndelegateClaimPlan};
 use penumbra_sdk_tct as tct;
 use penumbra_sdk_transaction::{
@@ -91,6 +94,68 @@ impl<R: RngCore + CryptoRng> Debug for Planner<R> {
 }
 
 impl<R: RngCore + CryptoRng> Planner<R> {
+    fn infer_fused_transfer_family(
+        &self,
+        spends: &[SpendPlan],
+        outputs: &[OutputPlan],
+        fee: &Fee,
+    ) -> Option<TransferFamilyId> {
+        let family = TransferFamilyId::from_shape(spends.len(), outputs.len())?;
+        let asset_id = spends.first()?.note.asset_id();
+        if fee.asset_id() != asset_id {
+            return None;
+        }
+        if spends.iter().any(|spend| spend.note.asset_id() != asset_id) {
+            return None;
+        }
+        if outputs
+            .iter()
+            .any(|output| output.value.asset_id != asset_id)
+        {
+            return None;
+        }
+
+        let total_spent = spends
+            .iter()
+            .map(|spend| spend.note.amount())
+            .sum::<Amount>();
+        let total_output = outputs
+            .iter()
+            .map(|output| output.value.amount)
+            .sum::<Amount>();
+        let expected_spend = total_output.checked_add(&fee.amount())?;
+        (total_spent == expected_spend).then_some(family)
+    }
+
+    fn maybe_fuse_transfer(&mut self, plan: &mut TransactionPlan) -> Result<()> {
+        if plan.actions.is_empty() {
+            return Ok(());
+        }
+
+        let mut spends = Vec::new();
+        let mut outputs = Vec::new();
+        for action in &plan.actions {
+            match action {
+                ActionPlan::Spend(spend) => spends.push(spend.clone()),
+                ActionPlan::Output(output) => outputs.push(output.clone()),
+                _ => return Ok(()),
+            }
+        }
+
+        let Some(family_id) =
+            self.infer_fused_transfer_family(&spends, &outputs, &plan.transaction_parameters.fee)
+        else {
+            return Ok(());
+        };
+        if !family_id.proving_implemented() {
+            return Ok(());
+        }
+
+        let transfer = TransferPlan::new(family_id, spends, outputs, Fr::rand(&mut self.rng))?;
+        plan.actions = vec![ActionPlan::Transfer(transfer)];
+        Ok(())
+    }
+
     /// Create a new planner.
     pub fn new(rng: R) -> Self {
         Self {
@@ -555,15 +620,17 @@ impl<R: RngCore + CryptoRng> Planner<R> {
             .filter(|record| record.note.amount() > Amount::zero())
             .collect::<Vec<_>>();
         filtered.sort_by(|a, b| {
+            // Keep the highest-priority note at the end so planning can use `pop()`
+            // without reallocating or removing from the front.
             // Sort by whether the note was sent to an ephemeral address...
             match (
                 a.address_index.is_ephemeral(),
                 b.address_index.is_ephemeral(),
             ) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
+                (true, false) => std::cmp::Ordering::Greater,
+                (false, true) => std::cmp::Ordering::Less,
                 // ... then by largest amount.
-                _ => b.note.amount().cmp(&a.note.amount()),
+                _ => a.note.amount().cmp(&b.note.amount()),
             }
         });
         filtered
@@ -728,6 +795,10 @@ impl<R: RngCore + CryptoRng> Planner<R> {
         // Automatically enrich with compliance details if needed
         self.enrich_with_compliance(view, &mut plan).await?;
 
+        // Fuse the exact-match 1-input/1-output transfer case after enrichment so the
+        // resulting fused plan has the same compliance witness material as legacy spend/output.
+        self.maybe_fuse_transfer(&mut plan)?;
+
         // Inject IBC compliance metadata into ICS-20 withdrawal memos for regulated assets
         inject_ibc_compliance_metadata(&mut plan);
 
@@ -807,16 +878,21 @@ fn inject_ibc_compliance_metadata(plan: &mut TransactionPlan) {
 mod tests {
     use super::*;
     use crate::{StatusStreamResponse, SwapRecord, TransactionInfo};
+    use decaf377::Fq;
     use futures::{FutureExt, Stream};
     use penumbra_sdk_app::params::AppParameters;
-    use penumbra_sdk_asset::Value;
+    use penumbra_sdk_asset::{Balance, Value};
     use penumbra_sdk_auction::auction::AuctionId;
     use penumbra_sdk_compliance::structs::OUTPUT_WIRE_BYTES;
     use penumbra_sdk_dex::lp::position;
     use penumbra_sdk_fee::GasPrices;
+    use penumbra_sdk_keys::{
+        keys::{AddressIndex, Bip44Path, SeedPhrase, SpendKey},
+        Address,
+    };
     use penumbra_sdk_proto::core::component::compliance::v1 as compliance_pb;
     use penumbra_sdk_proto::view::v1 as pb;
-    use penumbra_sdk_sct::Nullifier;
+    use penumbra_sdk_sct::{CommitmentSource, Nullifier};
     use penumbra_sdk_shielded_pool::{fmd, note, Note};
     use penumbra_sdk_stake::IdentityKey;
     use penumbra_sdk_transaction::{
@@ -826,6 +902,77 @@ mod tests {
     use rand_core::OsRng;
     use std::future::Future;
     use std::pin::Pin;
+
+    fn spendable_note_record(
+        rng: &mut OsRng,
+        amount: u64,
+        address_index: AddressIndex,
+    ) -> SpendableNoteRecord {
+        let note = Note::from_parts(
+            Address::dummy(rng),
+            Value {
+                amount: amount.into(),
+                asset_id: *penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID,
+            },
+            penumbra_sdk_shielded_pool::Rseed::generate(rng),
+        )
+        .expect("valid test note");
+
+        SpendableNoteRecord {
+            note_commitment: note.commit(),
+            note,
+            address_index,
+            nullifier: Nullifier(Fq::from(amount)),
+            height_created: 0,
+            height_spent: None,
+            position: u64::from(amount).into(),
+            source: CommitmentSource::Genesis,
+            return_address: None,
+        }
+    }
+
+    #[test]
+    fn test_planner_spends_highest_priority_note_first() {
+        let mut rng = OsRng;
+        let mut planner = Planner::new(OsRng);
+        let ephemeral_1 = AddressIndex::new_ephemeral(0, &mut rng);
+        let ephemeral_2 = AddressIndex::new_ephemeral(0, &mut rng);
+        let ephemeral_3 = AddressIndex::new_ephemeral(0, &mut rng);
+        let records = vec![
+            spendable_note_record(&mut rng, 100, AddressIndex::new(0)),
+            spendable_note_record(&mut rng, 50, ephemeral_1),
+            spendable_note_record(&mut rng, 200, ephemeral_2),
+            spendable_note_record(&mut rng, 0, ephemeral_3),
+        ];
+
+        let mut prioritized = planner.prioritize_and_filter_spendable_notes(records);
+
+        assert_eq!(
+            prioritized
+                .pop()
+                .expect("first prioritized note")
+                .note
+                .amount(),
+            200u64.into()
+        );
+        assert_eq!(
+            prioritized
+                .pop()
+                .expect("second prioritized note")
+                .note
+                .amount(),
+            50u64.into()
+        );
+        assert_eq!(
+            prioritized
+                .pop()
+                .expect("third prioritized note")
+                .note
+                .amount(),
+            100u64.into()
+        );
+        assert!(prioritized.is_empty());
+    }
 
     /// Mock ViewClient for testing that always returns regulated status
     struct MockRegulatedViewClient;
@@ -1808,5 +1955,266 @@ mod tests {
             outputs_enriched, 2,
             "Both outputs (recipient + change) should be enriched"
         );
+    }
+
+    #[test]
+    fn test_planner_fuses_exact_match_transfer() {
+        let mut rng = OsRng;
+        let asset_id = *penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID;
+        let sender_sk =
+            SpendKey::from_seed_phrase_bip44(SeedPhrase::generate(OsRng), &Bip44Path::new(0));
+        let recipient_sk =
+            SpendKey::from_seed_phrase_bip44(SeedPhrase::generate(OsRng), &Bip44Path::new(1));
+        let sender_address = sender_sk
+            .full_viewing_key()
+            .incoming()
+            .payment_address(0u32.into())
+            .0;
+        let recipient_address = recipient_sk
+            .full_viewing_key()
+            .incoming()
+            .payment_address(0u32.into())
+            .0;
+
+        let spend_note = Note::from_parts(
+            sender_address,
+            Value {
+                amount: 100u64.into(),
+                asset_id,
+            },
+            penumbra_sdk_shielded_pool::Rseed::generate(&mut rng),
+        )
+        .expect("valid note");
+
+        let spend_plan = SpendPlan::new(&mut rng, spend_note, 0u64.into());
+        let output_plan = OutputPlan::new(
+            &mut rng,
+            Value {
+                amount: 95u64.into(),
+                asset_id,
+            },
+            recipient_address,
+        );
+
+        let mut plan = TransactionPlan {
+            actions: vec![
+                ActionPlan::Spend(spend_plan),
+                ActionPlan::Output(output_plan),
+            ],
+            transaction_parameters: TransactionParameters {
+                fee: Fee::from_staking_token_amount(5u64.into()),
+                ..Default::default()
+            },
+            detection_data: None,
+            memo: None,
+        };
+
+        let mut planner = Planner::new(OsRng);
+        planner
+            .maybe_fuse_transfer(&mut plan)
+            .expect("transfer fuse should succeed");
+
+        assert_eq!(plan.actions.len(), 1);
+        match &plan.actions[0] {
+            ActionPlan::Transfer(transfer) => {
+                assert_eq!(transfer.spends[0].note.amount(), 100u64.into());
+                assert_eq!(transfer.outputs[0].value.amount, 95u64.into());
+                assert_eq!(
+                    transfer.balance,
+                    Balance::from(Value {
+                        amount: 5u64.into(),
+                        asset_id,
+                    })
+                );
+            }
+            other => panic!("expected fused transfer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_planner_does_not_fuse_when_change_is_required() {
+        let mut rng = OsRng;
+        let asset_id = *penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID;
+        let sender_sk =
+            SpendKey::from_seed_phrase_bip44(SeedPhrase::generate(OsRng), &Bip44Path::new(0));
+        let recipient_sk =
+            SpendKey::from_seed_phrase_bip44(SeedPhrase::generate(OsRng), &Bip44Path::new(1));
+        let sender_address = sender_sk
+            .full_viewing_key()
+            .incoming()
+            .payment_address(0u32.into())
+            .0;
+        let recipient_address = recipient_sk
+            .full_viewing_key()
+            .incoming()
+            .payment_address(0u32.into())
+            .0;
+
+        let spend_note = Note::from_parts(
+            sender_address,
+            Value {
+                amount: 100u64.into(),
+                asset_id,
+            },
+            penumbra_sdk_shielded_pool::Rseed::generate(&mut rng),
+        )
+        .expect("valid note");
+
+        let spend_plan = SpendPlan::new(&mut rng, spend_note, 0u64.into());
+        let output_plan = OutputPlan::new(
+            &mut rng,
+            Value {
+                amount: 90u64.into(),
+                asset_id,
+            },
+            recipient_address,
+        );
+
+        let mut plan = TransactionPlan {
+            actions: vec![
+                ActionPlan::Spend(spend_plan),
+                ActionPlan::Output(output_plan),
+            ],
+            transaction_parameters: TransactionParameters {
+                fee: Fee::from_staking_token_amount(5u64.into()),
+                ..Default::default()
+            },
+            detection_data: None,
+            memo: None,
+        };
+
+        let mut planner = Planner::new(OsRng);
+        planner
+            .maybe_fuse_transfer(&mut plan)
+            .expect("non-exact route should not error");
+
+        assert!(matches!(&plan.actions[0], ActionPlan::Spend(_)));
+        assert!(matches!(&plan.actions[1], ActionPlan::Output(_)));
+    }
+
+    #[test]
+    fn test_planner_infers_one_by_two_shape() {
+        let mut rng = OsRng;
+        let asset_id = *penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID;
+        let sender_sk =
+            SpendKey::from_seed_phrase_bip44(SeedPhrase::generate(OsRng), &Bip44Path::new(0));
+        let recipient_sk =
+            SpendKey::from_seed_phrase_bip44(SeedPhrase::generate(OsRng), &Bip44Path::new(1));
+        let sender_address = sender_sk
+            .full_viewing_key()
+            .incoming()
+            .payment_address(0u32.into())
+            .0;
+        let recipient_address = recipient_sk
+            .full_viewing_key()
+            .incoming()
+            .payment_address(0u32.into())
+            .0;
+
+        let spend_note = Note::from_parts(
+            sender_address.clone(),
+            Value {
+                amount: 100u64.into(),
+                asset_id,
+            },
+            penumbra_sdk_shielded_pool::Rseed::generate(&mut rng),
+        )
+        .expect("valid note");
+
+        let spend_plan = SpendPlan::new(&mut rng, spend_note, 0u64.into());
+        let recipient_output = OutputPlan::new(
+            &mut rng,
+            Value {
+                amount: 90u64.into(),
+                asset_id,
+            },
+            recipient_address,
+        );
+        let change_output = OutputPlan::new(
+            &mut rng,
+            Value {
+                amount: 5u64.into(),
+                asset_id,
+            },
+            sender_address,
+        );
+
+        let planner = Planner::new(OsRng);
+        let family = planner.infer_fused_transfer_family(
+            &[spend_plan],
+            &[recipient_output, change_output],
+            &Fee::from_staking_token_amount(5u64.into()),
+        );
+
+        assert_eq!(family, Some(TransferFamilyId::OneByTwo));
+        assert!(TransferFamilyId::OneByTwo.proving_implemented());
+    }
+
+    #[test]
+    fn test_planner_infers_two_by_two_shape() {
+        let mut rng = OsRng;
+        let asset_id = *penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID;
+        let sender_sk =
+            SpendKey::from_seed_phrase_bip44(SeedPhrase::generate(OsRng), &Bip44Path::new(0));
+        let recipient_sk =
+            SpendKey::from_seed_phrase_bip44(SeedPhrase::generate(OsRng), &Bip44Path::new(1));
+        let sender_address = sender_sk
+            .full_viewing_key()
+            .incoming()
+            .payment_address(0u32.into())
+            .0;
+        let recipient_address = recipient_sk
+            .full_viewing_key()
+            .incoming()
+            .payment_address(0u32.into())
+            .0;
+
+        let spend_note_1 = Note::from_parts(
+            sender_address.clone(),
+            Value {
+                amount: 60u64.into(),
+                asset_id,
+            },
+            penumbra_sdk_shielded_pool::Rseed::generate(&mut rng),
+        )
+        .expect("valid note");
+        let spend_note_2 = Note::from_parts(
+            sender_address.clone(),
+            Value {
+                amount: 40u64.into(),
+                asset_id,
+            },
+            penumbra_sdk_shielded_pool::Rseed::generate(&mut rng),
+        )
+        .expect("valid note");
+
+        let spend_plan_1 = SpendPlan::new(&mut rng, spend_note_1, 0u64.into());
+        let spend_plan_2 = SpendPlan::new(&mut rng, spend_note_2, 1u64.into());
+        let recipient_output = OutputPlan::new(
+            &mut rng,
+            Value {
+                amount: 90u64.into(),
+                asset_id,
+            },
+            recipient_address,
+        );
+        let change_output = OutputPlan::new(
+            &mut rng,
+            Value {
+                amount: 5u64.into(),
+                asset_id,
+            },
+            sender_address,
+        );
+
+        let planner = Planner::new(OsRng);
+        let family = planner.infer_fused_transfer_family(
+            &[spend_plan_1, spend_plan_2],
+            &[recipient_output, change_output],
+            &Fee::from_staking_token_amount(5u64.into()),
+        );
+
+        assert_eq!(family, Some(TransferFamilyId::TwoByTwo));
+        assert!(TransferFamilyId::TwoByTwo.proving_implemented());
     }
 }

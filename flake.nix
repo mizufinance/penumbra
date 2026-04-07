@@ -62,6 +62,7 @@
         in with pkgs; with pkgs.lib; let
           # Common development packages for all shells
           commonDevPackages = [
+            openssl
             buf
             cargo-hack
             cargo-nextest
@@ -70,6 +71,7 @@
             cometbft
             dbus
             glibcLocales # for postgres initdb locale support
+            go
             grafana
             grpcui
             grpcurl
@@ -84,6 +86,7 @@
             process-compose
             prometheus
             protobuf
+            llvmPackages.lld
             rocksdb
             rsync
             sqlfluff
@@ -95,6 +98,16 @@
             export LIBCLANG_PATH=${LIBCLANG_PATH}
             export RUST_SRC_PATH=${pkgs.rustPlatform.rustLibSrc} # Required for rust-analyzer
             export ROCKSDB_LIB_DIR=${ROCKSDB_LIB_DIR}
+            export LD_LIBRARY_PATH=${lib.makeLibraryPath [
+              pkgs.bzip2
+              pkgs.dbus
+              pkgs.lz4
+              pkgs.openssl
+              pkgs.rocksdb
+              pkgs.snappy
+              pkgs.stdenv.cc.cc
+              pkgs.zstd
+            ]}:''${LD_LIBRARY_PATH:-}
             export RUST_LOG="info,network_integration=debug,pclientd=debug,pcli=info,pd=info,penumbra=info"
           '';
 
@@ -123,7 +136,7 @@
             buildInputs = if stdenv.hostPlatform.isDarwin then
               with pkgs.darwin.apple_sdk.frameworks; [clang openssl rocksdb sqlite SystemConfiguration CoreServices]
             else
-              [clang openssl rocksdb sqlite];
+              [clang dbus openssl rocksdb sqlite];
 
             inherit system PKG_CONFIG_PATH LIBCLANG_PATH ROCKSDB_LIB_DIR;
             cargoExtraArgs = "-p pd -p pcli -p pclientd -p pindexer -p pmonitor";

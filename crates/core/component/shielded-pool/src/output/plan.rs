@@ -1,5 +1,4 @@
-use ark_groth16::ProvingKey;
-use decaf377::{Bls12_377, Fq, Fr};
+use decaf377::{Fq, Fr};
 use decaf377_ka as ka;
 use penumbra_sdk_asset::{Balance, Value, STAKING_TOKEN_ASSET_ID};
 use penumbra_sdk_compliance::MerklePath;
@@ -12,7 +11,11 @@ use penumbra_sdk_proto::{core::component::shielded_pool::v1 as pb, DomainType};
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 
-use super::{Body, Output, OutputProof, OutputProofPrivate, OutputProofPublic};
+use super::Body;
+#[cfg(any(unix, windows))]
+use super::Output;
+#[cfg(any(unix, windows))]
+use super::{OutputProof, OutputProofPrivate, OutputProofPublic};
 use crate::{Note, Rseed};
 
 /// A planned [`Output`](Output).
@@ -365,16 +368,16 @@ impl OutputPlan {
     }
 
     /// Convenience method to construct the [`Output`] described by this plan.
+    #[cfg(any(unix, windows))]
     pub fn output(
         &self,
         ovk: &OutgoingViewingKey,
         memo_key: &PayloadKey,
-        pk: &ProvingKey<Bls12_377>,
         compliance_keys: Option<(decaf377::Element, decaf377::Element)>,
     ) -> Result<Output, crate::ProofError> {
         Ok(Output {
             body: self.output_body(ovk, memo_key, compliance_keys),
-            proof: self.output_proof(pk, compliance_keys)?,
+            proof: self.output_proof(compliance_keys)?,
         })
     }
 
@@ -384,9 +387,9 @@ impl OutputPlan {
     }
 
     /// Construct the [`OutputProof`].
+    #[cfg(any(unix, windows))]
     pub fn output_proof(
         &self,
-        pk: &ProvingKey<Bls12_377>,
         _compliance_keys: Option<(decaf377::Element, decaf377::Element)>,
     ) -> Result<OutputProof, crate::ProofError> {
         let note = self.output_note();
@@ -433,63 +436,58 @@ impl OutputPlan {
             self.tx_blinding_nonce,
         );
 
-        OutputProof::prove(
-            self.proof_blinding_r,
-            self.proof_blinding_s,
-            pk,
-            OutputProofPublic {
-                balance_commitment,
-                note_commitment,
-                epk_1,
-                epk_2,
-                epk_3,
-                c2_core,
-                c2_ext,
-                c2_sext,
-                compliance_ciphertext,
-                target_timestamp: Fq::from(self.target_timestamp),
-                dleq_c_1: self.dleq_c_1,
-                dleq_s_1: self.dleq_s_1,
-                dleq_c_2: self.dleq_c_2,
-                dleq_s_2: self.dleq_s_2,
-                dleq_c_3: self.dleq_c_3,
-                dleq_s_3: self.dleq_s_3,
-                asset_anchor,
-                compliance_anchor,
-                counterparty_leaf_hash: blinded_counterparty_leaf,
-            },
-            OutputProofPrivate {
-                note: note.clone(),
-                balance_blinding: self.value_blinding,
-                asset_path: self.asset_path.clone(),
-                asset_position: self.asset_position,
-                asset_indexed_leaf: self.asset_indexed_leaf.clone(),
-                is_regulated: self.is_regulated,
-                compliance_path: self.compliance_path.clone(),
-                compliance_position: self.compliance_position,
-                user_leaf,
-                compliance_ephemeral_secret: self
-                    .compliance_ephemeral_secret
-                    .unwrap_or(Fr::from(0u64)),
-                r_2: self.r_2.unwrap_or(Fr::from(0u64)),
-                r_3: self.r_3.unwrap_or(Fr::from(0u64)),
-                counterparty_leaf: self.counterparty_leaf.clone().unwrap_or_else(|| {
-                    let b_d_fq = note
-                        .address()
-                        .diversified_generator()
-                        .vartime_compress_to_field();
-                    let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
-                    penumbra_sdk_compliance::ComplianceLeaf::new(
-                        note.address().clone(),
-                        note.asset_id(),
-                        d,
-                    )
-                }),
-                tx_blinding_nonce: self.tx_blinding_nonce,
-                is_flagged: self.is_flagged,
-                salt: self.salt,
-            },
-        )
+        let public = OutputProofPublic {
+            balance_commitment,
+            note_commitment,
+            epk_1,
+            epk_2,
+            epk_3,
+            c2_core,
+            c2_ext,
+            c2_sext,
+            compliance_ciphertext,
+            target_timestamp: Fq::from(self.target_timestamp),
+            dleq_c_1: self.dleq_c_1,
+            dleq_s_1: self.dleq_s_1,
+            dleq_c_2: self.dleq_c_2,
+            dleq_s_2: self.dleq_s_2,
+            dleq_c_3: self.dleq_c_3,
+            dleq_s_3: self.dleq_s_3,
+            asset_anchor,
+            compliance_anchor,
+            counterparty_leaf_hash: blinded_counterparty_leaf,
+        };
+        let private = OutputProofPrivate {
+            note: note.clone(),
+            balance_blinding: self.value_blinding,
+            asset_path: self.asset_path.clone(),
+            asset_position: self.asset_position,
+            asset_indexed_leaf: self.asset_indexed_leaf.clone(),
+            is_regulated: self.is_regulated,
+            compliance_path: self.compliance_path.clone(),
+            compliance_position: self.compliance_position,
+            user_leaf,
+            compliance_ephemeral_secret: self.compliance_ephemeral_secret.unwrap_or(Fr::from(0u64)),
+            r_2: self.r_2.unwrap_or(Fr::from(0u64)),
+            r_3: self.r_3.unwrap_or(Fr::from(0u64)),
+            counterparty_leaf: self.counterparty_leaf.clone().unwrap_or_else(|| {
+                let b_d_fq = note
+                    .address()
+                    .diversified_generator()
+                    .vartime_compress_to_field();
+                let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
+                penumbra_sdk_compliance::ComplianceLeaf::new(
+                    note.address().clone(),
+                    note.asset_id(),
+                    d,
+                )
+            }),
+            tx_blinding_nonce: self.tx_blinding_nonce,
+            is_flagged: self.is_flagged,
+            salt: self.salt,
+        };
+
+        OutputProof::prove(public, private)
     }
 
     pub fn output_body(
@@ -791,7 +789,6 @@ impl TryFrom<pb::OutputPlan> for OutputPlan {
 #[cfg(test)]
 mod test {
     use super::OutputPlan;
-    use crate::output::proof::OutputCircuit;
     use crate::output::OutputProofPublic;
 
     use crate::test_proof_helpers::proof_test_helpers::*;
@@ -800,6 +797,7 @@ mod test {
     use rand_core::OsRng;
 
     /// Helper to run the full verification flow for a specific asset ID.
+    #[cfg(feature = "bundled-proving-keys")]
     fn verify_output_proof_with_asset(asset_id_u64: u64) {
         use crate::test_proof_helpers::proof_test_helpers::{
             create_imt_membership_proof, create_imt_non_membership_proof, create_user_tree_proof,
@@ -817,9 +815,6 @@ mod test {
             is_regulated,
             CircuitType::Output,
         );
-
-        // 2. Setup circuit keys
-        let (pk, pvk, _blinding_r, _blinding_s) = setup_groth16_keys::<OutputCircuit>();
 
         let ovk = test_data.sk.full_viewing_key().outgoing();
         let dummy_memo_key: PayloadKey = [0; 32].into();
@@ -888,7 +883,7 @@ mod test {
 
         // 4. Generate Proof
         let output_proof = output_plan
-            .output_proof(&pk, None)
+            .output_proof(None)
             .expect("proof generation should succeed");
 
         use penumbra_sdk_compliance::structs::ComplianceCiphertext;
@@ -906,7 +901,7 @@ mod test {
 
         output_proof
             .verify(
-                &pvk,
+                &penumbra_sdk_proof_params::OUTPUT_PROOF_VERIFICATION_KEY,
                 OutputProofPublic {
                     balance_commitment,
                     note_commitment,
@@ -932,11 +927,13 @@ mod test {
             .unwrap();
     }
 
+    #[cfg(feature = "bundled-proving-keys")]
     #[test]
     fn test_regulated_asset_output_proof() {
         verify_output_proof_with_asset(REGULATED_ASSET_ID);
     }
 
+    #[cfg(feature = "bundled-proving-keys")]
     #[test]
     fn test_unregulated_asset_output_proof() {
         verify_output_proof_with_asset(UNREGULATED_ASSET_ID);

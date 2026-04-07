@@ -83,7 +83,7 @@ use penumbra_sdk_stake::{
 use penumbra_sdk_transaction::{gas::swap_claim_gas_cost, Transaction};
 use penumbra_sdk_view::{SpendableNoteRecord, ViewClient};
 use penumbra_sdk_wallet::plan::{self, Planner};
-use proposal::{ensure_lightweight_proposal_payload_enabled, ProposalCmd};
+use proposal::{ensure_reduced_action_surface_proposal_payload_enabled, ProposalCmd};
 use tonic::transport::{Channel, ClientTlsConfig};
 use url::Url;
 
@@ -391,7 +391,7 @@ impl From<VoteCmd> for (u64, Vote) {
 }
 
 impl TxCmd {
-    fn disabled_in_lightweight_phase(&self) -> Option<&'static str> {
+    fn disabled_in_reduced_action_surface(&self) -> Option<&'static str> {
         match self {
             TxCmd::Auction(_) => Some("Auction"),
             TxCmd::Delegate { .. } => Some("Delegate"),
@@ -432,12 +432,12 @@ impl TxCmd {
     }
 
     pub async fn exec(&self, app: &mut App) -> Result<()> {
-        // Intentional for the current lightweight branch: the CLI stays aligned with
+        // Intentional for the current reduced-action-surface mode: the CLI stays aligned with
         // planner and consensus, which reject the same action families unconditionally.
         // If we later add a runtime phase toggle, this gate should be parameterized in
         // lockstep with the planner/app-side policy.
-        if let Some(action_name) = self.disabled_in_lightweight_phase() {
-            anyhow::bail!("action disabled in lightweight transfer-only phase: {action_name}");
+        if let Some(action_name) = self.disabled_in_reduced_action_surface() {
+            anyhow::bail!("action disabled in reduced action surface: {action_name}");
         }
 
         // Handle compliance commands that don't need wallet/view service early
@@ -1057,20 +1057,26 @@ impl TxCmd {
                 let proposal: penumbra_sdk_governance::Proposal = proposal_toml
                     .try_into()
                     .context("can't parse proposal file")?;
-                ensure_lightweight_proposal_payload_enabled(&proposal.payload)?;
+                ensure_reduced_action_surface_proposal_payload_enabled(&proposal.payload)?;
 
-                let deposit_amount: Value = deposit_amount.parse()?;
-                ensure!(
-                    deposit_amount.asset_id == *STAKING_TOKEN_ASSET_ID,
-                    "deposit amount must be in staking token"
-                );
+                let deposit_amount: Amount = if deposit_amount.trim() == "0" {
+                    0u64.into()
+                } else {
+                    let deposit_amount: Value = deposit_amount.parse()?;
+                    ensure!(
+                        deposit_amount.asset_id == *STAKING_TOKEN_ASSET_ID
+                            || deposit_amount.amount == 0u64.into(),
+                        "deposit amount must be zero or in staking token"
+                    );
+                    deposit_amount.amount
+                };
 
                 let mut planner = Planner::new(OsRng);
                 planner
                     .set_gas_prices(gas_prices)
                     .set_fee_tier((*fee_tier).into());
                 let plan = planner
-                    .proposal_submit(proposal, deposit_amount.amount)
+                    .proposal_submit(proposal, deposit_amount)
                     .plan(
                         app.view
                             .as_mut()

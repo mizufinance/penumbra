@@ -2,6 +2,19 @@ use crate::{Action, ActionPlan, Transaction, TransactionPlan};
 
 fn disabled_action_name(action: &Action) -> Option<&'static str> {
     match action {
+        Action::Spend(_)
+        | Action::Output(_)
+        | Action::Transfer(_)
+        | Action::ValidatorDefinition(_)
+        | Action::IbcRelay(_)
+        | Action::ProposalSubmit(_)
+        | Action::ProposalWithdraw(_)
+        | Action::ValidatorVote(_)
+        | Action::ProposalDepositClaim(_)
+        | Action::Ics20Withdrawal(_)
+        | Action::ComplianceRegisterAsset(_)
+        | Action::ComplianceRegisterUser(_)
+        | Action::AggregateBundle(_) => None,
         Action::Swap(_) => Some("Swap"),
         Action::SwapClaim(_) => Some("SwapClaim"),
         Action::PositionOpen(_) => Some("PositionOpen"),
@@ -18,12 +31,23 @@ fn disabled_action_name(action: &Action) -> Option<&'static str> {
         Action::ActionDutchAuctionEnd(_) => Some("ActionDutchAuctionEnd"),
         Action::ActionDutchAuctionWithdraw(_) => Some("ActionDutchAuctionWithdraw"),
         Action::ActionLiquidityTournamentVote(_) => Some("ActionLiquidityTournamentVote"),
-        _ => None,
     }
 }
 
 fn disabled_action_plan_name(action: &ActionPlan) -> Option<&'static str> {
     match action {
+        ActionPlan::Spend(_)
+        | ActionPlan::Output(_)
+        | ActionPlan::Transfer(_)
+        | ActionPlan::ValidatorDefinition(_)
+        | ActionPlan::IbcAction(_)
+        | ActionPlan::ProposalSubmit(_)
+        | ActionPlan::ProposalWithdraw(_)
+        | ActionPlan::ValidatorVote(_)
+        | ActionPlan::ProposalDepositClaim(_)
+        | ActionPlan::Ics20Withdrawal(_)
+        | ActionPlan::ComplianceRegisterAsset(_)
+        | ActionPlan::ComplianceRegisterUser(_) => None,
         ActionPlan::Swap(_) => Some("Swap"),
         ActionPlan::SwapClaim(_) => Some("SwapClaim"),
         ActionPlan::PositionOpen(_) => Some("PositionOpen"),
@@ -40,12 +64,11 @@ fn disabled_action_plan_name(action: &ActionPlan) -> Option<&'static str> {
         ActionPlan::ActionDutchAuctionEnd(_) => Some("ActionDutchAuctionEnd"),
         ActionPlan::ActionDutchAuctionWithdraw(_) => Some("ActionDutchAuctionWithdraw"),
         ActionPlan::ActionLiquidityTournamentVote(_) => Some("ActionLiquidityTournamentVote"),
-        _ => None,
     }
 }
 
 fn disabled_action_err(name: &str) -> anyhow::Error {
-    anyhow::anyhow!("action disabled in lightweight transfer-only phase: {name}")
+    anyhow::anyhow!("action disabled in reduced action surface: {name}")
 }
 
 pub fn check_action_enabled(action: &Action) -> anyhow::Result<()> {
@@ -88,7 +111,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lightweight_policy_rejects_disabled_action() {
+    fn reduced_action_surface_rejects_disabled_action() {
         let err = check_action_enabled(&Action::CommunityPoolDeposit(CommunityPoolDeposit {
             value: Value {
                 amount: 1u64.into(),
@@ -99,12 +122,12 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "action disabled in lightweight transfer-only phase: CommunityPoolDeposit"
+            "action disabled in reduced action surface: CommunityPoolDeposit"
         );
     }
 
     #[test]
-    fn lightweight_policy_rejects_disabled_action_plan() {
+    fn reduced_action_surface_rejects_disabled_action_plan() {
         let err =
             check_action_plan_enabled(&ActionPlan::CommunityPoolDeposit(CommunityPoolDeposit {
                 value: Value {
@@ -116,7 +139,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "action disabled in lightweight transfer-only phase: CommunityPoolDeposit"
+            "action disabled in reduced action surface: CommunityPoolDeposit"
         );
     }
 }

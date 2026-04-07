@@ -1,0 +1,37 @@
+{
+  "manifest_sha256": "f7b6cbc21cc4e1d9c9b7bcff854026db06fed922240ad3f56685347e047ea754",
+  "families": [
+    {
+      "id": 1,
+      "label": "transfer1x1",
+      "artifact_name": "transfer1x1",
+      "bundled_lib_basename": "libpenumbra_gnark_transfer",
+      "n_in": 1,
+      "n_out": 1
+    },
+    {
+      "id": 2,
+      "label": "transfer1x2",
+      "artifact_name": "transfer1x2",
+      "bundled_lib_basename": "libpenumbra_gnark_transfer",
+      "n_in": 1,
+      "n_out": 2
+    },
+    {
+      "id": 3,
+      "label": "transfer2x1",
+      "artifact_name": "transfer2x1",
+      "bundled_lib_basename": "libpenumbra_gnark_transfer",
+      "n_in": 2,
+      "n_out": 1
+    },
+    {
+      "id": 4,
+      "label": "transfer2x2",
+      "artifact_name": "transfer2x2",
+      "bundled_lib_basename": "libpenumbra_gnark_transfer",
+      "n_in": 2,
+      "n_out": 2
+    }
+  ]
+}

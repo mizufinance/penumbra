@@ -133,7 +133,3 @@ url                              = { workspace = true }
 
 [dev-dependencies.penumbra-sdk-proof-params]
 workspace = true
-features = [
-  "bundled-proving-keys",
-  "download-proving-keys",
-]

@@ -2,6 +2,7 @@
 #![allow(clippy::clone_on_copy)]
 
 use std::fs;
+use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -10,7 +11,17 @@ use rustls::crypto::aws_lc_rs;
 use pcli::{command::*, opt::Opt};
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     // Preserved for posterity and memory
     if std::env::var("PCLI_DISPLAY_WARNING").is_ok() {
         pcli::warning::display();

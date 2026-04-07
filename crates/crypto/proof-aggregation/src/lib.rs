@@ -8,6 +8,7 @@ mod bundle;
 mod padding;
 mod srs;
 mod transcript;
+mod transfer_family_dispatch;
 
 use anyhow::Result;
 use ark_groth16::PreparedVerifyingKey;

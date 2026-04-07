@@ -68,7 +68,7 @@ impl AppActionHandler for ProposalSubmit {
                 transaction_plan: _,
             } => {
                 anyhow::bail!(
-                    "proposal payload disabled in lightweight transfer-only phase: CommunityPoolSpend"
+                    "proposal payload disabled in reduced action surface: CommunityPoolSpend"
                 );
             }
             UpgradePlan { .. } => {}
@@ -133,7 +133,7 @@ impl AppActionHandler for ProposalSubmit {
                 transaction_plan: _,
             } => {
                 anyhow::bail!(
-                    "proposal payload disabled in lightweight transfer-only phase: CommunityPoolSpend"
+                    "proposal payload disabled in reduced action surface: CommunityPoolSpend"
                 );
             }
             ProposalPayload::UpgradePlan { .. } => {
@@ -236,7 +236,7 @@ mod test {
             proposal: Proposal {
                 id: 0,
                 title: "parameter change".to_owned(),
-                description: "kept enabled in lightweight mode".to_owned(),
+                description: "kept enabled in reduced action surface".to_owned(),
                 payload: ProposalPayload::ParameterChange(ParameterChange {
                     changes: vec![],
                     preconditions: vec![],
@@ -255,7 +255,7 @@ mod test {
             proposal: Proposal {
                 id: 0,
                 title: "community pool spend".to_owned(),
-                description: "disabled in lightweight mode".to_owned(),
+                description: "disabled in reduced action surface".to_owned(),
                 payload: ProposalPayload::CommunityPoolSpend {
                     transaction_plan: vec![],
                 },
@@ -268,7 +268,7 @@ mod test {
 
         assert_eq!(
             err.to_string(),
-            "proposal payload disabled in lightweight transfer-only phase: CommunityPoolSpend"
+            "proposal payload disabled in reduced action surface: CommunityPoolSpend"
         );
     }
 }

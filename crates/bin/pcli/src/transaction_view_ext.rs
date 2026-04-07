@@ -257,6 +257,36 @@ impl TransactionViewExt for TransactionView {
                         }
                     }
                 }
+                penumbra_sdk_transaction::ActionView::Transfer(transfer) => match transfer {
+                    penumbra_sdk_transaction::view::action_view::TransferView::Visible {
+                        transfer: _,
+                        spent_notes: _,
+                        created_notes,
+                        payload_key: _,
+                    } => {
+                        if let Some(created_note) = created_notes.first() {
+                            action = format!(
+                                "{} -> {}",
+                                format_value_view(&created_note.value),
+                                format_address_view(&created_note.address),
+                            );
+                        } else {
+                            action = "<empty transfer>".to_string();
+                        }
+                        ["Transfer", &action]
+                    }
+                    penumbra_sdk_transaction::view::action_view::TransferView::Opaque {
+                        transfer,
+                    } => {
+                        if let Some(first_output) = transfer.body.outputs.first() {
+                            let bytes = first_output.note_payload.encrypted_note.0;
+                            action = format_opaque_bytes(&bytes);
+                        } else {
+                            action = "<empty transfer>".to_string();
+                        }
+                        ["Transfer", &action]
+                    }
+                },
                 penumbra_sdk_transaction::ActionView::Swap(swap) => {
                     // Typical swaps are one asset for another, but we can't know that for sure.
                     match swap {

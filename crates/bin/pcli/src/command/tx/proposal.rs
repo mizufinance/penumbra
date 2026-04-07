@@ -26,8 +26,10 @@ pub enum ProposalCmd {
         /// Only spend funds originally received by the given account.
         #[clap(long, default_value = "0")]
         source: u32,
-        /// The amount of the staking token to deposit alongside the proposal.
-        #[clap(long, required = true)]
+        /// The amount to deposit alongside the proposal.
+        ///
+        /// Defaults to `0`, matching the current reduced-action-surface governance flow.
+        #[clap(long, default_value = "0")]
         deposit_amount: String,
         /// The selected fee tier to multiply the fee amount by.
         #[clap(short, long, default_value_t)]
@@ -73,6 +75,18 @@ pub enum ProposalKindCmd {
     Emergency,
     /// Generate a template for a parameter change proposal.
     ParameterChange,
+    /// Generate a template for a Freeze IBC Client proposal.
+    FreezeIbcClient {
+        /// The IBC client identifier to freeze.
+        #[clap(long, default_value = "07-tendermint-0")]
+        client_id: String,
+    },
+    /// Generate a template for an Unfreeze IBC Client proposal.
+    UnfreezeIbcClient {
+        /// The IBC client identifier to unfreeze.
+        #[clap(long, default_value = "07-tendermint-0")]
+        client_id: String,
+    },
     /// Generate a template for a Community Pool spend proposal.
     CommunityPoolSpend {
         /// The transaction plan to include in the proposal, in JSON format.
@@ -86,11 +100,11 @@ pub enum ProposalKindCmd {
     UpgradePlan,
 }
 
-pub(crate) fn ensure_lightweight_proposal_payload_enabled(payload: &ProposalPayload) -> Result<()> {
+pub(crate) fn ensure_reduced_action_surface_proposal_payload_enabled(
+    payload: &ProposalPayload,
+) -> Result<()> {
     if matches!(payload, ProposalPayload::CommunityPoolSpend { .. }) {
-        anyhow::bail!(
-            "proposal payload disabled in lightweight transfer-only phase: CommunityPoolSpend"
-        );
+        anyhow::bail!("proposal payload disabled in reduced action surface: CommunityPoolSpend");
     }
 
     Ok(())
@@ -108,6 +122,14 @@ impl ProposalKindCmd {
                 ProposalPayload::ParameterChange(ParameterChange::encode_parameters(
                     serde_json::value::to_value(app_params.clone())?,
                 ))
+            }
+            ProposalKindCmd::FreezeIbcClient { client_id } => ProposalPayload::FreezeIbcClient {
+                client_id: client_id.clone(),
+            },
+            ProposalKindCmd::UnfreezeIbcClient { client_id } => {
+                ProposalPayload::UnfreezeIbcClient {
+                    client_id: client_id.clone(),
+                }
             }
             ProposalKindCmd::CommunityPoolSpend { transaction_plan } => {
                 if let Some(file) = transaction_plan {
@@ -130,7 +152,7 @@ impl ProposalKindCmd {
             ProposalKindCmd::UpgradePlan { .. } => ProposalPayload::UpgradePlan { height: 0 },
         };
 
-        ensure_lightweight_proposal_payload_enabled(&payload)?;
+        ensure_reduced_action_surface_proposal_payload_enabled(&payload)?;
 
         Ok(Proposal {
             id,

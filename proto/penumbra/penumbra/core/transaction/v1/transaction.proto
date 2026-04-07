@@ -80,13 +80,15 @@ enum ProofFamilyId {
   PROOF_FAMILY_ID_SWAP_CLAIM = 4;
   PROOF_FAMILY_ID_CONVERT = 5;
   PROOF_FAMILY_ID_DELEGATOR_VOTE = 6;
+  PROOF_FAMILY_ID_TRANSFER = 7;
 }
 
 message FamilyAggregate {
   ProofFamilyId family_id = 1;
-  uint32 real_count = 2;
-  uint32 padded_count = 3;
-  bytes aggregate_proof = 4;
+  uint32 transfer_family_id = 2;
+  uint32 real_count = 3;
+  uint32 padded_count = 4;
+  bytes aggregate_proof = 5;
 }
 
 message AggregateBundle {
@@ -103,6 +105,7 @@ message Action {
     component.shielded_pool.v1.Output output = 2;
     component.dex.v1.Swap swap = 3;
     component.dex.v1.SwapClaim swap_claim = 4;
+    component.shielded_pool.v1.Transfer transfer = 5;
 
     // Uncommon actions have numbers > 15.
 
@@ -244,6 +247,7 @@ message ActionView {
     component.shielded_pool.v1.OutputView output = 2;
     component.dex.v1.SwapView swap = 3;
     component.dex.v1.SwapClaimView swap_claim = 4;
+    component.shielded_pool.v1.TransferView transfer = 5;
     component.governance.v1.DelegatorVoteView delegator_vote = 21;
     component.dex.v1.PositionOpenView position_open_view = 35;
 
@@ -343,6 +347,7 @@ message ActionPlan {
     component.shielded_pool.v1.OutputPlan output = 2;
     component.dex.v1.SwapPlan swap = 3;
     component.dex.v1.SwapClaimPlan swap_claim = 4;
+    component.shielded_pool.v1.TransferPlan transfer = 5;
 
     // This is just a message relayed to the chain.
     component.stake.v1.ValidatorDefinition validator_definition = 16;

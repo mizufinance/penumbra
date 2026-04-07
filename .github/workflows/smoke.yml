@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   smoke:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
@@ -50,8 +50,19 @@ jobs:
         run: nix develop --command just smoke
 
   pmonitor:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
       - uses: actions/checkout@v4
         with:
           lfs: true

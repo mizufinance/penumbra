@@ -9,6 +9,7 @@ use crate::{
         },
         SlashingData,
     },
+    params::equal_validator_voting_power,
     rate::BaseRateData,
     state_key, validator, CurrentConsensusKeys, FundingStreams, IdentityKey, Penalty, StateReadExt,
     StateWriteExt, BPS_SQUARED_SCALING_FACTOR,
@@ -241,26 +242,15 @@ pub trait EpochHandler: StateWriteExt + ConsensusIndexRead {
                 "no change in delegation, no change in token supply")
         }
 
-        // Get the updated delegation token supply for use calculating voting power.
+        // Get the updated delegation token supply for reward and funding calculations.
         let delegation_token_supply = self
             .get_validator_pool_size(validator_identity)
             .await
             .unwrap_or(Amount::zero());
 
-        // Calculate the voting power in the newly beginning epoch
-        let voting_power = next_validator_rate.voting_power(delegation_token_supply);
-
-        tracing::debug!(
-            validator = ?validator.identity_key,
-            validator_delegation_pool = ?delegation_token_supply,
-            validator_power = ?voting_power,
-            "calculated validator's voting power for the upcoming epoch"
-        );
-
         // Update the state of the validator within the validator set
-        // with the newly starting epoch's calculated voting rate and power.
+        // with the newly starting epoch's calculated rate data.
         self.set_validator_rate_data(&validator.identity_key, next_validator_rate.clone());
-        self.set_validator_power(&validator.identity_key, voting_power)?;
 
         // The epoch is ending, so we check if this validator was active and if so
         // we queue its [`FundingStreams`] for processing by the funding component.
@@ -286,6 +276,17 @@ pub trait EpochHandler: StateWriteExt + ConsensusIndexRead {
                 delegation_token_supply,
             )
             .await;
+
+        let effective_state = final_state.unwrap_or(validator_state);
+        let voting_power = if matches!(
+            effective_state,
+            validator::State::Active | validator::State::Inactive
+        ) {
+            equal_validator_voting_power()
+        } else {
+            Amount::zero()
+        };
+        self.set_validator_power(&validator.identity_key, voting_power)?;
 
         tracing::debug!(validator_identity = %validator.identity_key,
             previous_epoch_validator_rate= ?prev_validator_rate,
@@ -369,10 +370,7 @@ pub trait EpochHandler: StateWriteExt + ConsensusIndexRead {
     /// Called during `end_epoch`. Will perform state transitions to validators based
     /// on changes to voting power that occurred in this epoch.
     async fn set_active_and_inactive_validators(&mut self) -> Result<()> {
-        // A list of all active and inactive validators, with nonzero voting power.
-        let mut validators_by_power = Vec::new();
-        // A list of validators with zero power, who must be inactive.
-        let mut zero_power = Vec::new();
+        let mut indexed_validators = Vec::new();
 
         let mut validator_identity_stream = self.consensus_set_stream()?;
         while let Some(identity_key) = validator_identity_stream.next().await {
@@ -381,36 +379,23 @@ pub trait EpochHandler: StateWriteExt + ConsensusIndexRead {
                 .get_validator_state(&identity_key)
                 .await?
                 .context("should be able to fetch validator state")?;
-            let power = self
-                .get_validator_power(&identity_key)
-                .await?
-                .unwrap_or_default();
             if matches!(state, validator::State::Active | validator::State::Inactive) {
-                if power == Amount::zero() {
-                    zero_power.push((identity_key, power));
-                } else {
-                    validators_by_power.push((identity_key, power));
-                }
+                indexed_validators.push(identity_key);
             }
         }
 
-        // Sort by voting power descending.
-        validators_by_power.sort_by(|a, b| b.1.cmp(&a.1));
+        indexed_validators.sort();
 
-        // The top `limit` validators with nonzero power become active.
-        // All other validators become inactive.
+        // The first `limit` indexed validators become active. All others stay inactive.
         let limit = self.get_stake_params().await?.active_validator_limit as usize;
-        let active = validators_by_power.iter().take(limit);
-        let inactive = validators_by_power
-            .iter()
-            .skip(limit)
-            .chain(zero_power.iter());
+        let active = indexed_validators.iter().take(limit);
+        let inactive = indexed_validators.iter().skip(limit);
 
-        for (v, _) in active {
+        for v in active {
             self.set_validator_state(v, validator::State::Active)
                 .await?;
         }
-        for (v, _) in inactive {
+        for v in inactive {
             self.set_validator_state(v, validator::State::Inactive)
                 .await?;
         }
@@ -444,18 +429,13 @@ pub trait EpochHandler: StateWriteExt + ConsensusIndexRead {
         while let Some(identity_key) = validator_identity_stream.next().await {
             let identity_key = identity_key?;
             let state = self.get_validator_state(&identity_key);
-            let power = self.get_validator_power(&identity_key);
             let consensus_key = self.fetch_validator_consensus_key(&identity_key);
             js.spawn(async move {
                 let state = state
                     .await?
                     .expect("every known validator must have a recorded state");
-                // Compute the effective power of this validator; this is the
-                // validator power, clamped to zero for all non-Active validators.
                 let effective_power = if matches!(state, validator::State::Active) {
-                    power
-                        .await?
-                        .expect("every active validator must have a recorded power")
+                    equal_validator_voting_power()
                 } else {
                     Amount::zero()
                 };

@@ -23,10 +23,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use ark_ff::{BigInteger, PrimeField, Zero};
+use ark_groth16::PreparedVerifyingKey;
 use async_trait::async_trait;
 use cnidarium::{ArcStateDeltaExt, Snapshot, StateDelta, StateRead, StateWrite, Storage};
 use cnidarium_component::Component;
-use decaf377::{Fq, Fr};
+use decaf377::{Bls12_377, Fq, Fr};
 use decaf377_rdsa as rdsa;
 use ibc_types::core::connection::ChainId;
 use jmt::RootHash;
@@ -78,8 +79,10 @@ use penumbra_sdk_sct::{CommitmentSource, Nullifier};
 use penumbra_sdk_shielded_pool::component::ClueManager as _;
 use penumbra_sdk_shielded_pool::component::{
     output_extract_public, output_to_batch_item, spend_extract_public, spend_to_batch_item,
-    spend_verify_auth_sig, NoteManager as _, ShieldedPool, StateReadExt as _, StateWriteExt as _,
+    spend_verify_auth_sig, transfer_extract_public, transfer_to_batch_item, NoteManager as _,
+    ShieldedPool, StateReadExt as _, StateWriteExt as _,
 };
+use penumbra_sdk_shielded_pool::TransferFamilyId;
 use penumbra_sdk_stake::component::{
     stake::ConsensusUpdateRead, undelegate_claim_check_stateless_and_extract, Staking,
     StateReadExt as _, StateWriteExt as _,
@@ -155,10 +158,55 @@ fn action_family_id(action: &Action) -> Option<ProofFamilyId> {
     match action {
         Action::Spend(_) => Some(ProofFamilyId::Spend),
         Action::Output(_) => Some(ProofFamilyId::Output),
+        Action::Transfer(transfer) => Some(ProofFamilyId::Transfer(transfer.body.family_id)),
         Action::Swap(_) => Some(ProofFamilyId::Swap),
         Action::SwapClaim(_) => Some(ProofFamilyId::SwapClaim),
         Action::DelegatorVote(_) => Some(ProofFamilyId::DelegatorVote),
         _ => None,
+    }
+}
+
+fn proof_verification_key_for_family(
+    family_id: ProofFamilyId,
+) -> &'static PreparedVerifyingKey<Bls12_377> {
+    match family_id {
+        ProofFamilyId::Spend => &SPEND_PROOF_VERIFICATION_KEY,
+        ProofFamilyId::Output => &OUTPUT_PROOF_VERIFICATION_KEY,
+        ProofFamilyId::Transfer(transfer_family_id) => transfer_family_id.proof_verification_key(),
+        ProofFamilyId::Swap => &SWAP_PROOF_VERIFICATION_KEY,
+        ProofFamilyId::SwapClaim => &SWAPCLAIM_PROOF_VERIFICATION_KEY,
+        ProofFamilyId::Convert => &CONVERT_PROOF_VERIFICATION_KEY,
+        ProofFamilyId::DelegatorVote => &DELEGATOR_VOTE_PROOF_VERIFICATION_KEY,
+    }
+}
+
+fn proof_family_label(family_id: ProofFamilyId) -> &'static str {
+    match family_id {
+        ProofFamilyId::Spend => "spend",
+        ProofFamilyId::Output => "output",
+        ProofFamilyId::Transfer(transfer_family_id) => transfer_family_id.label(),
+        ProofFamilyId::Swap => "swap",
+        ProofFamilyId::SwapClaim => "swap_claim",
+        ProofFamilyId::Convert => "convert",
+        ProofFamilyId::DelegatorVote => "delegator_vote",
+    }
+}
+
+fn proof_family_batch_verify_stage(family_id: ProofFamilyId) -> &'static str {
+    match family_id {
+        ProofFamilyId::Spend => "spend_batch_verify",
+        ProofFamilyId::Output => "output_batch_verify",
+        ProofFamilyId::Transfer(transfer_family_id) => {
+            if TransferFamilyId::ALL.contains(&transfer_family_id) {
+                "transfer_batch_verify"
+            } else {
+                panic!("unknown transfer family id {}", transfer_family_id.get());
+            }
+        }
+        ProofFamilyId::Swap => "swap_batch_verify",
+        ProofFamilyId::SwapClaim => "swap_claim_batch_verify",
+        ProofFamilyId::Convert => "convert_batch_verify",
+        ProofFamilyId::DelegatorVote => "delegator_vote_batch_verify",
     }
 }
 
@@ -499,6 +547,7 @@ impl AggregateBuildProfile {
         match family_id {
             ProofFamilyId::Spend => self.spend_ms += elapsed_ms,
             ProofFamilyId::Output => self.output_ms += elapsed_ms,
+            ProofFamilyId::Transfer(_) => self.other_ms += elapsed_ms,
             ProofFamilyId::Swap
             | ProofFamilyId::SwapClaim
             | ProofFamilyId::Convert
@@ -998,15 +1047,20 @@ impl App {
         Ok(())
     }
 
-    fn proof_family_ids() -> [ProofFamilyId; 6] {
-        [
-            ProofFamilyId::Spend,
-            ProofFamilyId::Output,
+    fn proof_family_ids() -> Vec<ProofFamilyId> {
+        let mut family_ids = vec![ProofFamilyId::Spend, ProofFamilyId::Output];
+        family_ids.extend(
+            TransferFamilyId::ALL
+                .into_iter()
+                .map(ProofFamilyId::Transfer),
+        );
+        family_ids.extend([
             ProofFamilyId::Swap,
             ProofFamilyId::SwapClaim,
             ProofFamilyId::Convert,
             ProofFamilyId::DelegatorVote,
-        ]
+        ]);
+        family_ids
     }
 
     fn total_proof_count(proof_items: &BTreeMap<ProofFamilyId, Vec<BatchItem>>) -> usize {
@@ -1516,6 +1570,35 @@ impl App {
                             .expect("output family exists")
                             .push(item);
                     }
+                    Action::Transfer(transfer) => {
+                        let t1 = Instant::now();
+                        let public = transfer_extract_public(transfer, &context)
+                            .context("transfer extract public failed")?;
+                        profile.action_extract_public_ms += t1.elapsed().as_secs_f64() * 1000.0;
+
+                        let t2 = Instant::now();
+                        let item = transfer_to_batch_item(transfer, public)
+                            .context("transfer to_batch_item failed")?;
+                        profile.action_to_batch_item_ms += t2.elapsed().as_secs_f64() * 1000.0;
+                        let family_id = action_family_id(&Action::Transfer(transfer.clone()))
+                            .expect("transfer has a proof family");
+
+                        let tx_family_items =
+                            tx_proof_items.get_mut(&family_id).ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "unsupported transfer proof family {}",
+                                    transfer.body.family_id.get()
+                                )
+                            })?;
+                        let family_items = proof_items.get_mut(&family_id).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "unsupported transfer proof family {}",
+                                transfer.body.family_id.get()
+                            )
+                        })?;
+                        tx_family_items.push(item.clone());
+                        family_items.push(item);
+                    }
                     Action::Swap(action) => {
                         let item = swap_check_stateless_and_extract(action)
                             .context("swap stateless check failed")?;
@@ -1794,72 +1877,36 @@ impl App {
     async fn legacy_batch_verify_proof_families(
         proof_items: BTreeMap<ProofFamilyId, Vec<BatchItem>>,
     ) -> Result<()> {
-        let spend_items = proof_items
-            .get(&ProofFamilyId::Spend)
-            .cloned()
-            .unwrap_or_default();
-        let output_items = proof_items
-            .get(&ProofFamilyId::Output)
-            .cloned()
-            .unwrap_or_default();
-        let swap_items = proof_items
-            .get(&ProofFamilyId::Swap)
-            .cloned()
-            .unwrap_or_default();
-        let swap_claim_items = proof_items
-            .get(&ProofFamilyId::SwapClaim)
-            .cloned()
-            .unwrap_or_default();
-        let convert_items = proof_items
-            .get(&ProofFamilyId::Convert)
-            .cloned()
-            .unwrap_or_default();
-        let delegator_vote_items = proof_items
-            .get(&ProofFamilyId::DelegatorVote)
-            .cloned()
-            .unwrap_or_default();
+        let mut proof_items = proof_items;
+        let mut tasks = tokio::task::JoinSet::new();
 
-        let spend_result = Self::verify_batch_family_chunks("spend", spend_items, |chunk| {
-            batch::batch_verify(&SPEND_PROOF_VERIFICATION_KEY, chunk)
-                .map_err(|e| anyhow::anyhow!("spend batch verification failed: {e}"))
-        });
-        let output_result = Self::verify_batch_family_chunks("output", output_items, |chunk| {
-            batch::batch_verify(&OUTPUT_PROOF_VERIFICATION_KEY, chunk)
-                .map_err(|e| anyhow::anyhow!("output batch verification failed: {e}"))
-        });
-        let swap_result = Self::verify_batch_family_chunks("swap", swap_items, |chunk| {
-            batch::batch_verify(&SWAP_PROOF_VERIFICATION_KEY, chunk)
-                .map_err(|e| anyhow::anyhow!("swap batch verification failed: {e}"))
-        });
-        let swap_claim_result =
-            Self::verify_batch_family_chunks("swap claim", swap_claim_items, |chunk| {
-                batch::batch_verify(&SWAPCLAIM_PROOF_VERIFICATION_KEY, chunk)
-                    .map_err(|e| anyhow::anyhow!("swap claim batch verification failed: {e}"))
-            });
-        let convert_result = Self::verify_batch_family_chunks("convert", convert_items, |chunk| {
-            batch::batch_verify(&CONVERT_PROOF_VERIFICATION_KEY, chunk)
-                .map_err(|e| anyhow::anyhow!("convert batch verification failed: {e}"))
-        });
-        let delegator_vote_result =
-            Self::verify_batch_family_chunks("delegator vote", delegator_vote_items, |chunk| {
-                batch::batch_verify(&DELEGATOR_VOTE_PROOF_VERIFICATION_KEY, chunk)
-                    .map_err(|e| anyhow::anyhow!("delegator vote batch verification failed: {e}"))
-            });
+        for family_id in Self::proof_family_ids() {
+            let Some(items) = proof_items.remove(&family_id) else {
+                continue;
+            };
+            if items.is_empty() {
+                continue;
+            }
 
-        let (s, o, sw, swc, c, dv) = tokio::join!(
-            spend_result,
-            output_result,
-            swap_result,
-            swap_claim_result,
-            convert_result,
-            delegator_vote_result
-        );
-        Self::handle_proof_verification_result("spend_batch_verify", s)?;
-        Self::handle_proof_verification_result("output_batch_verify", o)?;
-        Self::handle_proof_verification_result("swap_batch_verify", sw)?;
-        Self::handle_proof_verification_result("swap_claim_batch_verify", swc)?;
-        Self::handle_proof_verification_result("convert_batch_verify", c)?;
-        Self::handle_proof_verification_result("delegator_vote_batch_verify", dv)?;
+            tasks.spawn(async move {
+                let family_label = proof_family_label(family_id);
+                let batch_verify_stage = proof_family_batch_verify_stage(family_id);
+                let result = Self::verify_batch_family_chunks(family_label, items, move |chunk| {
+                    batch::batch_verify(proof_verification_key_for_family(family_id), chunk)
+                        .map_err(|e| {
+                            anyhow::anyhow!("{family_label} batch verification failed: {e}")
+                        })
+                })
+                .await;
+                (batch_verify_stage, result)
+            });
+        }
+
+        while let Some(join_result) = tasks.join_next().await {
+            let (batch_stage, result) =
+                join_result.context("legacy batch verification task panicked")?;
+            Self::handle_proof_verification_result(batch_stage, result)?;
+        }
 
         Ok(())
     }
@@ -1912,6 +1959,7 @@ impl App {
         match family_id {
             ProofFamilyId::Spend => AGGREGATE_PROOF_ESTIMATE_BYTES_SPEND,
             ProofFamilyId::Output => AGGREGATE_PROOF_ESTIMATE_BYTES_OUTPUT,
+            ProofFamilyId::Transfer(_) => AGGREGATE_PROOF_ESTIMATE_BYTES_OTHER,
             ProofFamilyId::Swap
             | ProofFamilyId::SwapClaim
             | ProofFamilyId::Convert
@@ -2119,44 +2167,12 @@ impl App {
             aggregate_tasks.push(tokio::task::spawn_blocking(
                 move || -> Result<(FamilyAggregate, AggregateBuildProfile, f64)> {
                     let family_start = Instant::now();
-                    let (aggregate_proof, backend_profile) = match family_id {
-                        ProofFamilyId::Spend => aggregate_family_profiled(
-                            family_id,
-                            &SPEND_PROOF_VERIFICATION_KEY,
-                            &padded_items,
-                            &srs_for_task,
-                        )?,
-                        ProofFamilyId::Output => aggregate_family_profiled(
-                            family_id,
-                            &OUTPUT_PROOF_VERIFICATION_KEY,
-                            &padded_items,
-                            &srs_for_task,
-                        )?,
-                        ProofFamilyId::Swap => aggregate_family_profiled(
-                            family_id,
-                            &SWAP_PROOF_VERIFICATION_KEY,
-                            &padded_items,
-                            &srs_for_task,
-                        )?,
-                        ProofFamilyId::SwapClaim => aggregate_family_profiled(
-                            family_id,
-                            &SWAPCLAIM_PROOF_VERIFICATION_KEY,
-                            &padded_items,
-                            &srs_for_task,
-                        )?,
-                        ProofFamilyId::Convert => aggregate_family_profiled(
-                            family_id,
-                            &CONVERT_PROOF_VERIFICATION_KEY,
-                            &padded_items,
-                            &srs_for_task,
-                        )?,
-                        ProofFamilyId::DelegatorVote => aggregate_family_profiled(
-                            family_id,
-                            &DELEGATOR_VOTE_PROOF_VERIFICATION_KEY,
-                            &padded_items,
-                            &srs_for_task,
-                        )?,
-                    };
+                    let (aggregate_proof, backend_profile) = aggregate_family_profiled(
+                        family_id,
+                        proof_verification_key_for_family(family_id),
+                        &padded_items,
+                        &srs_for_task,
+                    )?;
 
                     let mut family_profile = AggregateBuildProfile::default();
                     family_profile.apply_backend_build_profile(&backend_profile);
@@ -2496,52 +2512,13 @@ impl App {
 
                 verify_tasks.push(tokio::task::spawn_blocking(
                     move || -> Result<(usize, usize, ProofFamilyId, AggregateVerificationProfile)> {
-                        let backend_profile = match family {
-                            ProofFamilyId::Spend => verify_family_aggregate_profiled_unchecked(
-                                family,
-                                &SPEND_PROOF_VERIFICATION_KEY,
-                                &aggregate_proof,
-                                &padded_public_inputs,
-                                &srs_for_task,
-                            )?,
-                            ProofFamilyId::Output => verify_family_aggregate_profiled_unchecked(
-                                family,
-                                &OUTPUT_PROOF_VERIFICATION_KEY,
-                                &aggregate_proof,
-                                &padded_public_inputs,
-                                &srs_for_task,
-                            )?,
-                            ProofFamilyId::Swap => verify_family_aggregate_profiled_unchecked(
-                                family,
-                                &SWAP_PROOF_VERIFICATION_KEY,
-                                &aggregate_proof,
-                                &padded_public_inputs,
-                                &srs_for_task,
-                            )?,
-                            ProofFamilyId::SwapClaim => verify_family_aggregate_profiled_unchecked(
-                                family,
-                                &SWAPCLAIM_PROOF_VERIFICATION_KEY,
-                                &aggregate_proof,
-                                &padded_public_inputs,
-                                &srs_for_task,
-                            )?,
-                            ProofFamilyId::Convert => verify_family_aggregate_profiled_unchecked(
-                                family,
-                                &CONVERT_PROOF_VERIFICATION_KEY,
-                                &aggregate_proof,
-                                &padded_public_inputs,
-                                &srs_for_task,
-                            )?,
-                            ProofFamilyId::DelegatorVote => {
-                                verify_family_aggregate_profiled_unchecked(
-                                    family,
-                                    &DELEGATOR_VOTE_PROOF_VERIFICATION_KEY,
-                                    &aggregate_proof,
-                                    &padded_public_inputs,
-                                    &srs_for_task,
-                                )?
-                            }
-                        };
+                        let backend_profile = verify_family_aggregate_profiled_unchecked(
+                            family,
+                            proof_verification_key_for_family(family),
+                            &aggregate_proof,
+                            &padded_public_inputs,
+                            &srs_for_task,
+                        )?;
 
                         Ok((
                             debug_segment_index,

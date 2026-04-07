@@ -4,7 +4,7 @@ use penumbra_sdk_asset::{Balance, Value};
 use penumbra_sdk_dex::{swap::SwapView, swap_claim::SwapClaimView};
 use penumbra_sdk_keys::AddressView;
 use penumbra_sdk_proto::{core::transaction::v1 as pbt, DomainType};
-use penumbra_sdk_shielded_pool::{OutputView, SpendView};
+use penumbra_sdk_shielded_pool::{OutputView, SpendView, TransferView};
 use serde::{Deserialize, Serialize};
 
 pub mod action_view;
@@ -145,6 +145,28 @@ impl TransactionView {
                         effects.push(TransactionEffect { address, balance });
                     }
                     OutputView::Opaque { output: _ } => continue,
+                },
+                ActionView::Transfer(transfer_view) => match transfer_view {
+                    TransferView::Visible {
+                        transfer: _,
+                        spent_notes,
+                        created_notes,
+                        payload_key: _,
+                    } => {
+                        for spent_note in spent_notes {
+                            effects.push(TransactionEffect {
+                                address: spent_note.address.clone(),
+                                balance: Balance::from(spent_note.value.value()),
+                            });
+                        }
+                        for created_note in created_notes {
+                            effects.push(TransactionEffect {
+                                address: created_note.address.clone(),
+                                balance: -Balance::from(created_note.value.value()),
+                            });
+                        }
+                    }
+                    TransferView::Opaque { transfer: _ } => continue,
                 },
                 ActionView::Swap(swap_view) => match swap_view {
                     SwapView::Visible {
@@ -678,6 +700,7 @@ mod test {
         use view::action_view::SpendView;
 
         match action {
+            ActionPlan::Transfer(_) => None,
             ActionPlan::Output(x) => Some(ActionView::Output(
                 penumbra_sdk_shielded_pool::OutputView::Visible {
                     output: dummy_output(),

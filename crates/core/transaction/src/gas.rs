@@ -351,6 +351,16 @@ impl GasCost for ActionPlan {
             // and can call the `GasCost` impl on that.
             ActionPlan::Spend(_) => spend_gas_cost(),
             ActionPlan::Output(_) => output_gas_cost(),
+            ActionPlan::Transfer(transfer) => {
+                transfer
+                    .spends
+                    .iter()
+                    .fold(Gas::zero(), |gas, _| gas + spend_gas_cost())
+                    + transfer
+                        .outputs
+                        .iter()
+                        .fold(Gas::zero(), |gas, _| gas + output_gas_cost())
+            }
             ActionPlan::UndelegateClaim(_) => undelegate_claim_gas_cost(),
             ActionPlan::Swap(_) => swap_gas_cost(),
             ActionPlan::SwapClaim(_) => swap_claim_gas_cost(),
@@ -397,6 +407,7 @@ impl GasCost for Action {
         match self {
             Action::Output(output) => output.gas_cost(),
             Action::Spend(spend) => spend.gas_cost(),
+            Action::Transfer(transfer) => transfer.gas_cost(),
             Action::Delegate(delegate) => delegate.gas_cost(),
             Action::Undelegate(undelegate) => undelegate.gas_cost(),
             Action::UndelegateClaim(undelegate_claim) => undelegate_claim.gas_cost(),
@@ -460,6 +471,20 @@ impl GasCost for Output {
 impl GasCost for Spend {
     fn gas_cost(&self) -> Gas {
         spend_gas_cost()
+    }
+}
+
+impl GasCost for penumbra_sdk_shielded_pool::Transfer {
+    fn gas_cost(&self) -> Gas {
+        self.body
+            .inputs
+            .iter()
+            .fold(Gas::zero(), |gas, _| gas + spend_gas_cost())
+            + self
+                .body
+                .outputs
+                .iter()
+                .fold(Gas::zero(), |gas, _| gas + output_gas_cost())
     }
 }
 

@@ -19,10 +19,22 @@ impl TransactionPlan {
         let mut delegator_vote_auths = Vec::new();
         let mut lqt_vote_auths = Vec::new();
 
-        for spend_plan in self.spend_plans() {
-            let rsk = sk.spend_auth_key().randomize(&spend_plan.randomizer);
-            let auth_sig = rsk.sign(&mut rng, effect_hash.as_ref());
-            spend_auths.push(auth_sig);
+        for action_plan in &self.actions {
+            match action_plan {
+                crate::ActionPlan::Spend(spend_plan) => {
+                    let rsk = sk.spend_auth_key().randomize(&spend_plan.randomizer);
+                    let auth_sig = rsk.sign(&mut rng, effect_hash.as_ref());
+                    spend_auths.push(auth_sig);
+                }
+                crate::ActionPlan::Transfer(transfer_plan) => {
+                    for spend_plan in &transfer_plan.spends {
+                        let rsk = sk.spend_auth_key().randomize(&spend_plan.randomizer);
+                        let auth_sig = rsk.sign(&mut rng, effect_hash.as_ref());
+                        spend_auths.push(auth_sig);
+                    }
+                }
+                _ => {}
+            }
         }
         for delegator_vote_plan in self.delegator_vote_plans() {
             let rsk = sk
