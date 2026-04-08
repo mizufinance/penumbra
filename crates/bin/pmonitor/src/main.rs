@@ -179,39 +179,52 @@ impl Opt {
         &self,
         view_service: &mut ViewServiceClient<box_grpc_svc::BoxGrpcService>,
     ) -> Result<()> {
-        let mut status_stream = ViewClient::status_stream(view_service).await?;
+        loop {
+            let mut status_stream = ViewClient::status_stream(view_service).await?;
 
-        let initial_status = status_stream
-            .next()
-            .await
-            .transpose()?
-            .ok_or_else(|| anyhow::anyhow!("view service did not report sync status"))?;
+            let initial_status = status_stream
+                .next()
+                .await
+                .transpose()?
+                .ok_or_else(|| anyhow::anyhow!("view service did not report sync status"))?;
 
-        tracing::debug!(
-            "scanning blocks from last sync height {} to latest height {}",
-            initial_status.full_sync_height,
-            initial_status.latest_known_block_height,
-        );
+            tracing::debug!(
+                "scanning blocks from last sync height {} to latest height {}",
+                initial_status.full_sync_height,
+                initial_status.latest_known_block_height,
+            );
 
-        // use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-        // let progress_bar = ProgressBar::with_draw_target(
-        //     initial_status.latest_known_block_height - initial_status.full_sync_height,
-        //     ProgressDrawTarget::stdout(),
-        // )
-        // .with_style(
-        //     ProgressStyle::default_bar()
-        //         .template("[{elapsed}] {bar:50.cyan/blue} {pos:>7}/{len:7} {per_sec} ETA: {eta}"),
-        // );
-        // progress_bar.set_position(0);
+            // use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+            // let progress_bar = ProgressBar::with_draw_target(
+            //     initial_status.latest_known_block_height - initial_status.full_sync_height,
+            //     ProgressDrawTarget::stdout(),
+            // )
+            // .with_style(
+            //     ProgressStyle::default_bar()
+            //         .template("[{elapsed}] {bar:50.cyan/blue} {pos:>7}/{len:7} {per_sec} ETA: {eta}"),
+            // );
+            // progress_bar.set_position(0);
 
-        // On large networks, logging an update every 100k blocks or so seems reasonable.
-        // let log_every_n_blocks = 100000;
-        let log_every_n_blocks = 100;
-        while let Some(status) = status_stream.next().await.transpose()? {
-            if status.full_sync_height % log_every_n_blocks == 0 {
-                tracing::debug!("synced {} blocks", status.full_sync_height);
+            // On large networks, logging an update every 100k blocks or so seems reasonable.
+            // let log_every_n_blocks = 100000;
+            let log_every_n_blocks = 100;
+            while let Some(status) = status_stream.next().await.transpose()? {
+                if status.full_sync_height % log_every_n_blocks == 0 {
+                    tracing::debug!("synced {} blocks", status.full_sync_height);
+                }
+                // progress_bar.set_position(status.full_sync_height - initial_status.full_sync_height);
             }
-            // progress_bar.set_position(status.full_sync_height - initial_status.full_sync_height);
+
+            let final_sync_height = ViewClient::status(view_service).await?.full_sync_height;
+            if final_sync_height >= initial_status.latest_known_block_height {
+                break;
+            }
+
+            tracing::debug!(
+                "sync caught up to stale target height {}; retrying until local view reaches latest height {}",
+                final_sync_height,
+                initial_status.latest_known_block_height,
+            );
         }
         // progress_bar.finish();
 

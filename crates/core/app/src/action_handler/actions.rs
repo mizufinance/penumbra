@@ -22,6 +22,7 @@ impl AppActionHandler for Action {
         match self {
             Action::SwapClaim(action) => action.check_stateless(context).await,
             Action::Spend(action) => action.check_stateless(context).await,
+            Action::Transfer(action) => action.check_stateless(context).await,
             Action::DelegatorVote(action) => action.check_stateless(context).await,
             Action::Delegate(action) => action.check_stateless(()).await,
             Action::Undelegate(action) => action.check_stateless(()).await,
@@ -66,6 +67,7 @@ impl AppActionHandler for Action {
     async fn check_historical<S: StateRead + 'static>(&self, state: Arc<S>) -> Result<()> {
         match self {
             Action::Delegate(action) => action.check_historical(state).await,
+            Action::Transfer(action) => action.check_historical(state).await,
             Action::Undelegate(action) => action.check_historical(state).await,
             Action::UndelegateClaim(action) => action.check_historical(state).await,
             Action::ValidatorDefinition(action) => action.check_historical(state).await,
@@ -111,6 +113,7 @@ impl AppActionHandler for Action {
     async fn check_and_execute<S: StateWrite>(&self, state: S) -> Result<()> {
         match self {
             Action::Delegate(action) => action.check_and_execute(state).await,
+            Action::Transfer(action) => action.check_and_execute(state).await,
             Action::Undelegate(action) => action.check_and_execute(state).await,
             Action::UndelegateClaim(action) => action.check_and_execute(state).await,
             Action::ValidatorDefinition(action) => action.check_and_execute(state).await,

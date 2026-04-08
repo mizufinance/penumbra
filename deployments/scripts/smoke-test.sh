@@ -133,7 +133,7 @@ fi
 # Export devnet parameters for integration tests.
 # Must match values in run-local-devnet.sh.
 export UNBONDING_DELAY=201
-export PENUMBRA_LIGHTWEIGHT_TRANSFER_ONLY_PHASE=1
+export PENUMBRA_REDUCED_ACTION_SURFACE=1
 
 # Run the integration tests. Using `just` targets so that the exact
 # invocations are easily reusable on the CLI in dev loops.

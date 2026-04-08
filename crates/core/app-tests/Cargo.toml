@@ -80,7 +80,7 @@ penumbra-sdk-compliance              = { workspace = true, default-features = fa
 penumbra-sdk-proof-params            = { workspace = true, default-features = false }
 penumbra-sdk-proto                   = { workspace = true, default-features = true }
 penumbra-sdk-sct                     = { workspace = true, default-features = false }
-penumbra-sdk-shielded-pool           = { workspace = true, default-features = false }
+penumbra-sdk-shielded-pool           = { workspace = true, features = ["bundled-proving-keys"], default-features = false }
 penumbra-sdk-stake                   = { workspace = true, default-features = false }
 penumbra-sdk-tct                     = { workspace = true, default-features = true }
 penumbra-sdk-test-subscriber         = { workspace = true }
@@ -187,6 +187,10 @@ path = "tests/app_can_spend_notes_and_detect_outputs.rs"
 name = "app_rejects_validator_definitions_with_invalid_auth_sigs"
 path = "tests/app_rejects_validator_definitions_with_invalid_auth_sigs.rs"
 
+[[test]]
+name = "app_bootstraps_post_genesis_validator_definitions"
+path = "tests/app_bootstraps_post_genesis_validator_definitions.rs"
+
 # IBC proof verification test (uses IbcRelay action, not regulated):
 [[test]]
 name = "mock_consensus_block_proving"
@@ -226,7 +230,7 @@ path = "tests/compliance_diversifier_fix.rs"
 name = "compliance_multi_spend_planner"
 path = "tests/compliance_multi_spend_planner.rs"
 
-# Disabled in the lightweight transfer-only phase:
+# Disabled in the reduced action surface:
 # - tests/compliance_action_blocking.rs
 # - tests/app_can_deposit_into_community_pool.rs
 # - tests/app_can_define_and_delegate_to_a_validator.rs

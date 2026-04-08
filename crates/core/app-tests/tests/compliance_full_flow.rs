@@ -3,11 +3,9 @@
 
 use {
     anyhow::Result,
-    ark_groth16::Groth16,
-    ark_snark::SNARK,
     cnidarium::{StateDelta, TempStorage},
     common::TempStorageExt as _,
-    decaf377::{Bls12_377, Fq, Fr},
+    decaf377::{Fq, Fr},
     penumbra_sdk_asset::{asset, Value},
     penumbra_sdk_compliance::{
         derive_compliance_scalar,
@@ -21,8 +19,8 @@ use {
         Address,
     },
     penumbra_sdk_num,
-    penumbra_sdk_proof_params::DummyWitness,
-    penumbra_sdk_shielded_pool::{output::OutputCircuit, spend::SpendCircuit, Note, Rseed},
+    penumbra_sdk_proof_params::{OUTPUT_PROOF_VERIFICATION_KEY, SPEND_PROOF_VERIFICATION_KEY},
+    penumbra_sdk_shielded_pool::{Note, Rseed},
     penumbra_sdk_tct as tct,
     penumbra_sdk_transaction::plan::{ActionPlan, TransactionPlan},
     penumbra_sdk_view::enrich_plan_with_compliance,
@@ -500,19 +498,7 @@ async fn test_full_compliance_proof_roundtrip() -> Result<()> {
     let compliance_anchor = spend_plan.compliance_anchor;
     let asset_anchor = spend_plan.asset_anchor;
 
-    let fresh_spend_circuit = SpendCircuit::with_dummy_witness();
-    let (fresh_spend_pk, fresh_spend_vk) =
-        Groth16::<Bls12_377>::circuit_specific_setup(fresh_spend_circuit, &mut OsRng)
-            .expect("spend circuit setup");
-    let fresh_spend_vk = ark_groth16::PreparedVerifyingKey::from(fresh_spend_vk);
-
-    let spend_proof = spend_plan.spend_proof(
-        fvk,
-        state_commitment_proof.clone(),
-        anchor,
-        &fresh_spend_pk,
-        None,
-    )?;
+    let spend_proof = spend_plan.spend_proof(fvk, state_commitment_proof.clone(), anchor, None)?;
 
     use penumbra_sdk_shielded_pool::spend::SpendProofPublic;
     let spend_ct = ComplianceCiphertext::from_bytes(&spend_plan.compliance_ciphertext)?;
@@ -536,15 +522,9 @@ async fn test_full_compliance_proof_roundtrip() -> Result<()> {
         dleq_s: spend_plan.dleq_s,
         sender_leaf_hash: spend_sender_blinded,
     };
-    spend_proof.verify(&fresh_spend_vk, spend_public)?;
+    spend_proof.verify(&SPEND_PROOF_VERIFICATION_KEY, spend_public)?;
 
-    let fresh_output_circuit = OutputCircuit::with_dummy_witness();
-    let (fresh_output_pk, fresh_output_vk) =
-        Groth16::<Bls12_377>::circuit_specific_setup(fresh_output_circuit, &mut OsRng)
-            .expect("output circuit setup");
-    let fresh_output_vk = ark_groth16::PreparedVerifyingKey::from(fresh_output_vk);
-
-    let output_proof = output_plan.output_proof(&fresh_output_pk, None)?;
+    let output_proof = output_plan.output_proof(None)?;
 
     use penumbra_sdk_shielded_pool::output::OutputProofPublic;
     let output_ct = ComplianceCiphertext::from_bytes(&output_plan.compliance_ciphertext)?;
@@ -575,7 +555,7 @@ async fn test_full_compliance_proof_roundtrip() -> Result<()> {
         dleq_s_3: output_plan.dleq_s_3,
         counterparty_leaf_hash: output_sender_blinded,
     };
-    output_proof.verify(&fresh_output_vk, output_public)?;
+    output_proof.verify(&OUTPUT_PROOF_VERIFICATION_KEY, output_public)?;
 
     assert_eq!(
         output_sender_blinded, spend_sender_blinded,
@@ -595,11 +575,6 @@ async fn test_flagged_spend_proof_roundtrip() -> Result<()> {
 
     let _guard = common::set_tracing_subscriber();
     let storage = TempStorage::new_with_penumbra_prefixes().await?;
-
-    let spend_circuit = SpendCircuit::with_dummy_witness();
-    let (spend_pk, _spend_vk) =
-        Groth16::<Bls12_377>::circuit_specific_setup(spend_circuit, &mut OsRng)
-            .expect("spend circuit setup");
 
     let regulated_token_id = asset::Id(Fq::from(10001u64));
     let dummy_dk_pub = decaf377::Element::GENERATOR;
@@ -705,8 +680,7 @@ async fn test_flagged_spend_proof_roundtrip() -> Result<()> {
         "spend should be flagged (amount 1000 >= threshold 500)"
     );
 
-    let spend_proof =
-        spend_plan.spend_proof(alice_fvk, state_commitment_proof, anchor, &spend_pk, None);
+    let spend_proof = spend_plan.spend_proof(alice_fvk, state_commitment_proof, anchor, None);
     assert!(
         spend_proof.is_ok(),
         "Spend proof should succeed for flagged transaction: {:?}",

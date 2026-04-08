@@ -2,10 +2,16 @@ use anyhow::Result;
 use ark_ff::Zero;
 use decaf377::Fr;
 use decaf377_rdsa as rdsa;
+#[cfg(all(feature = "parallel", any(unix, windows)))]
+use penumbra_sdk_keys::symmetric::PayloadKey;
+#[cfg(any(unix, windows))]
 use penumbra_sdk_keys::FullViewingKey;
 use penumbra_sdk_txhash::AuthorizingData;
+#[cfg(all(feature = "parallel", any(unix, windows)))]
+use tokio::sync::oneshot;
 
 use super::TransactionPlan;
+#[cfg(any(unix, windows))]
 use crate::ActionPlan;
 use crate::{
     action::Action, check_transaction_enabled, check_transaction_plan_enabled, AuthorizationData,
@@ -13,9 +19,6 @@ use crate::{
 };
 
 impl TransactionPlan {
-    /// Builds a [`TransactionPlan`] by slotting in the
-    /// provided prebuilt actions instead of using the
-    /// [`ActionPlan`]s in the TransactionPlan.
     pub fn build_unauth_with_actions(
         self,
         actions: Vec<Action>,
@@ -59,7 +62,11 @@ impl TransactionPlan {
         mut transaction: Transaction,
     ) -> Result<Transaction> {
         // Do some basic input sanity-checking.
-        let spend_count = transaction.spends().count();
+        let spend_count = transaction.spends().count()
+            + transaction
+                .transfers()
+                .map(|t| t.auth_sigs.len())
+                .sum::<usize>();
         if auth_data.spend_auths.len() != spend_count {
             anyhow::bail!(
                 "expected {} spend auths but got {}",
@@ -77,20 +84,19 @@ impl TransactionPlan {
         }
 
         // Overwrite the placeholder authorization signatures with the real `AuthorizationData`.
-        for (spend, auth_sig) in transaction
-            .transaction_body
-            .actions
-            .iter_mut()
-            .filter_map(|action| {
-                if let Action::Spend(s) = action {
-                    Some(s)
-                } else {
-                    None
+        let mut spend_auths = auth_data.spend_auths.clone().into_iter();
+        for action in &mut transaction.transaction_body.actions {
+            match action {
+                Action::Spend(spend) => {
+                    spend.auth_sig = spend_auths.next().expect("checked spend auth count");
                 }
-            })
-            .zip(auth_data.spend_auths.clone().into_iter())
-        {
-            spend.auth_sig = auth_sig;
+                Action::Transfer(transfer) => {
+                    for auth_sig in &mut transfer.auth_sigs {
+                        *auth_sig = spend_auths.next().expect("checked spend auth count");
+                    }
+                }
+                _ => {}
+            }
         }
 
         for (delegator_vote, auth_sig) in transaction
@@ -138,6 +144,7 @@ impl TransactionPlan {
     }
 
     /// Build the serial transaction this plan describes.
+    #[cfg(any(unix, windows))]
     pub fn build(
         self,
         full_viewing_key: &FullViewingKey,
@@ -172,7 +179,7 @@ impl TransactionPlan {
         Ok(tx)
     }
 
-    #[cfg(feature = "parallel")]
+    #[cfg(all(feature = "parallel", any(unix, windows)))]
     /// Build the transaction this plan describes while proving concurrently.
     /// This can be used in environments that support tokio tasks.
     pub async fn build_concurrent(
@@ -186,26 +193,15 @@ impl TransactionPlan {
         // Clone the witness data into an Arc so it can be shared between tasks.
         let witness_data = std::sync::Arc::new(witness_data.clone());
 
-        // 1. Build each action (concurrently).
-        let action_handles = self
+        let scheduler =
+            ActionBuildScheduler::new(self.memo_key(), full_viewing_key, witness_data.clone());
+        let action_tasks = self
             .actions
             .iter()
             .cloned()
-            .map(|action_plan| {
-                let fvk2 = full_viewing_key.clone();
-                let witness_data2 = witness_data.clone(); // Arc
-                let memo_key2 = self.memo_key();
-                tokio::task::spawn_blocking(move || {
-                    ActionPlan::build_unauth(action_plan, &fvk2, &*witness_data2, memo_key2)
-                })
-            })
-            .collect::<Vec<_>>();
-
-        // 1.5. Collect all of the actions.
-        let mut actions = Vec::new();
-        for handle in action_handles {
-            actions.push(handle.await??);
-        }
+            .map(|action_plan| scheduler.spawn(action_plan))
+            .collect::<Result<Vec<_>>>()?;
+        let actions = scheduler.collect(action_tasks).await?;
 
         // 2. Pass in the prebuilt actions to the build method.
         let tx = self
@@ -229,14 +225,88 @@ impl TransactionPlan {
                 .ok_or_else(|| anyhow::anyhow!("commitment should exist in tree"))
                 .map(|proof| (commitment, proof))
         };
-        let state_commitment_proofs = self
+        let mut state_commitment_proofs = self
             .spend_plans()
             .map(witness_note)
-            .collect::<Result<_, _>>()?;
+            .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
+        for transfer in self.transfer_plans() {
+            for spend in &transfer.spends {
+                let (commitment, proof) = witness_note(spend)?;
+                state_commitment_proofs.insert(commitment, proof);
+            }
+        }
 
         Ok(WitnessData {
             anchor,
             state_commitment_proofs,
         })
     }
+}
+
+#[cfg(all(feature = "parallel", any(unix, windows)))]
+struct ActionBuildScheduler {
+    memo_key: Option<PayloadKey>,
+    full_viewing_key: FullViewingKey,
+    witness_data: std::sync::Arc<WitnessData>,
+}
+
+#[cfg(all(feature = "parallel", any(unix, windows)))]
+impl ActionBuildScheduler {
+    fn new(
+        memo_key: Option<PayloadKey>,
+        full_viewing_key: &FullViewingKey,
+        witness_data: std::sync::Arc<WitnessData>,
+    ) -> Self {
+        Self {
+            memo_key,
+            full_viewing_key: full_viewing_key.clone(),
+            witness_data,
+        }
+    }
+
+    fn spawn(&self, action_plan: ActionPlan) -> Result<PendingActionTask> {
+        let fvk = self.full_viewing_key.clone();
+        let witness_data = self.witness_data.clone();
+        let memo_key = self.memo_key;
+
+        match action_plan {
+            transfer @ ActionPlan::Transfer(_) => {
+                let (tx, rx) = oneshot::channel();
+                std::thread::Builder::new()
+                    .name("transfer-action-build".to_string())
+                    .spawn(move || {
+                        let _ = tx.send(ActionPlan::build_unauth(
+                            transfer,
+                            &fvk,
+                            &witness_data,
+                            memo_key,
+                        ));
+                    })
+                    .map_err(|e| anyhow::anyhow!("spawn transfer action build thread: {e}"))?;
+                Ok(PendingActionTask::Thread(rx))
+            }
+            other => Ok(PendingActionTask::Tokio(tokio::task::spawn_blocking(
+                move || ActionPlan::build_unauth(other, &fvk, &witness_data, memo_key),
+            ))),
+        }
+    }
+
+    async fn collect(&self, tasks: Vec<PendingActionTask>) -> Result<Vec<Action>> {
+        let mut actions = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            actions.push(match task {
+                PendingActionTask::Tokio(handle) => handle.await??,
+                PendingActionTask::Thread(receiver) => receiver.await.map_err(|_| {
+                    anyhow::anyhow!("transfer action build thread exited before replying")
+                })??,
+            });
+        }
+        Ok(actions)
+    }
+}
+
+#[cfg(all(feature = "parallel", any(unix, windows)))]
+enum PendingActionTask {
+    Tokio(tokio::task::JoinHandle<Result<Action>>),
+    Thread(oneshot::Receiver<Result<Action>>),
 }

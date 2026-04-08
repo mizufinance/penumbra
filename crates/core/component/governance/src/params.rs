@@ -72,7 +72,7 @@ impl Default for GovernanceParameters {
         Self {
             // governance
             proposal_voting_blocks: 17_280, // 24 hours, at a 5 second block time
-            proposal_deposit_amount: 10_000_000u64.into(), // 10,000,000 upenumbra = 10 penumbra
+            proposal_deposit_amount: 0u64.into(),
             // governance parameters copied from cosmos hub
             proposal_valid_quorum: Ratio::new(40, 100),
             proposal_pass_threshold: Ratio::new(50, 100),

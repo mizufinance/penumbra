@@ -13,10 +13,18 @@ publish = false
 dist = true
 
 [features]
-default = ["std", "parallel", "download-proving-keys", "demo"]
+default = ["std", "parallel", "demo"]
 demo = ["penumbra-sdk-keys/demo"]
 integration-testnet = []
-download-proving-keys = ["penumbra-sdk-proof-params/download-proving-keys"]
+bundled-proving-keys = [
+    "penumbra-sdk-proof-params/bundled-proving-keys",
+    "penumbra-sdk-shielded-pool/bundled-proving-keys",
+]
+download-proving-keys = [
+    "bundled-proving-keys",
+    "penumbra-sdk-proof-params/download-proving-keys",
+    "penumbra-sdk-shielded-pool/download-proving-keys",
+]
 sct-divergence-check = ["penumbra-sdk-view/sct-divergence-check"]
 std = ["ark-ff/std", "ibc-types/std"]
 parallel = [

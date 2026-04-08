@@ -4,12 +4,12 @@ use std::str::FromStr;
 use anyhow::Result;
 use ark_groth16::r1cs_to_qap::LibsnarkReduction;
 use ark_r1cs_std::uint8::UInt8;
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_serialize::CanonicalDeserialize;
 use decaf377::{Bls12_377, Fq, Fr};
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
 
-use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
+use ark_groth16::{Groth16, PreparedVerifyingKey, Proof};
 use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
 use ark_snark::SNARK;
@@ -173,6 +173,7 @@ impl OutputCircuit {
         }
     }
 
+    #[cfg(test)]
     fn new(
         public: OutputProofPublic,
         private: OutputProofPrivate,
@@ -459,58 +460,15 @@ impl DummyWitness for OutputCircuit {
 pub struct OutputProof([u8; GROTH16_PROOF_LENGTH_BYTES]);
 
 impl OutputProof {
-    #![allow(clippy::too_many_arguments)]
+    #[cfg(any(unix, windows))]
     pub fn prove(
-        blinding_r: Fq,
-        blinding_s: Fq,
-        pk: &ProvingKey<Bls12_377>,
         public: OutputProofPublic,
         private: OutputProofPrivate,
     ) -> Result<Self, crate::ProofError> {
-        let claimed_statement_hash = output_statement_hash_from_public(&public)
-            .map_err(|e| crate::ProofError::InvalidPublicInput(format!("statement hash: {e}")))?;
-        let circuit = OutputCircuit::new(public, private, claimed_statement_hash);
-
-        #[cfg(debug_assertions)]
-        {
-            // In debug builds, preflight constraint satisfaction to aid diagnosis.
-            use ark_relations::r1cs::ConstraintSystem;
-            let cs = ConstraintSystem::<Fq>::new_ref();
-            circuit.clone().generate_constraints(cs.clone())?;
-
-            if !cs.is_satisfied().unwrap_or(false) {
-                let unsatisfied = cs
-                    .which_is_unsatisfied()
-                    .map(|opt| {
-                        opt.map(|s| format!(" Failing constraint: {}", s))
-                            .unwrap_or_default()
-                    })
-                    .unwrap_or_default();
-                tracing::error!(
-                    "Output circuit: {} constraints, {} instance vars, {} witness vars.{}",
-                    cs.num_constraints(),
-                    cs.num_instance_variables(),
-                    cs.num_witness_variables(),
-                    unsatisfied,
-                );
-                return Err(crate::ProofError::UnsatisfiedConstraints(format!(
-                    "Output circuit constraints not satisfied.{}",
-                    unsatisfied,
-                )));
-            }
-        }
-
-        let proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
-            circuit, pk, blinding_r, blinding_s,
-        )
-        .map_err(|e| crate::ProofError::ProofGenerationFailed(format!("{:?}", e)))?;
-
-        let mut proof_bytes = [0u8; GROTH16_PROOF_LENGTH_BYTES];
-        Proof::serialize_compressed(&proof, &mut proof_bytes[..]).map_err(|e| {
-            crate::ProofError::ProofGenerationFailed(format!("serialization failed: {:?}", e))
-        })?;
-
-        Ok(Self(proof_bytes))
+        let client = gnark_output_client()?;
+        client.prove(&public, &private).map_err(|e| {
+            crate::ProofError::ProofGenerationFailed(format!("gnark output prove: {e}"))
+        })
     }
 
     /// Construct a `BatchItem` from this proof and its public inputs.
@@ -550,6 +508,50 @@ impl OutputProof {
             .then_some(())
             .ok_or_else(|| anyhow::anyhow!("output proof did not verify"))
     }
+}
+
+#[cfg(any(unix, windows))]
+static GNARK_OUTPUT_CLIENT: once_cell::sync::OnceCell<crate::gnark::GnarkOutputClient> =
+    once_cell::sync::OnceCell::new();
+
+#[cfg(any(unix, windows))]
+fn gnark_output_client() -> Result<&'static crate::gnark::GnarkOutputClient, crate::ProofError> {
+    GNARK_OUTPUT_CLIENT.get_or_try_init(init_gnark_output_client)
+}
+
+#[cfg(any(unix, windows))]
+fn init_gnark_output_client() -> Result<crate::gnark::GnarkOutputClient, crate::ProofError> {
+    // Env-var override (dev/CI): explicit artifact directory and library/daemon path.
+    if std::env::var_os("PENUMBRA_GNARK_OUTPUT_LIB").is_some()
+        || std::env::var_os("PENUMBRA_GNARK_OUTPUT_DAEMON").is_some()
+        || std::env::var_os("PENUMBRA_GNARK_OUTPUT_ARTIFACT_DIR").is_some()
+    {
+        return crate::gnark::GnarkOutputClient::from_env().map_err(|e| {
+            crate::ProofError::ProofGenerationFailed(format!("gnark output init: {e}"))
+        });
+    }
+
+    // Bundled path (test/dev default): build-script-generated library path or installed sidecar.
+    let lib_path = crate::gnark::GnarkOutputClient::bundled_lib_path()
+        .or_else(crate::gnark::GnarkOutputClient::auto_lib_path)
+        .ok_or_else(|| {
+            crate::ProofError::ProofGenerationFailed(
+                "gnark output library not found (checked bundled path and executable-adjacent locations)"
+                    .into(),
+            )
+        })?;
+    let pk_bytes = penumbra_sdk_proof_params::GNARK_OUTPUT_PROOF_PROVING_KEY_BYTES;
+    if pk_bytes.is_empty() {
+        return Err(crate::ProofError::ProofGenerationFailed(
+            "gnark output proving key not bundled \
+             (enable bundled-proving-keys feature)"
+                .into(),
+        ));
+    }
+    let pvk = penumbra_sdk_proof_params::OUTPUT_PROOF_VERIFICATION_KEY.clone();
+    let metadata = penumbra_sdk_proof_params::GNARK_OUTPUT_CIRCUIT_METADATA;
+    crate::gnark::GnarkOutputClient::from_bundled(&lib_path, pk_bytes, pvk, metadata)
+        .map_err(|e| crate::ProofError::ProofGenerationFailed(format!("gnark output init: {e}")))
 }
 
 impl DomainType for OutputProof {
@@ -910,24 +912,28 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "bundled-proving-keys")]
     #[test]
-    fn output_proof_full_groth16_roundtrip_regulated() {
-        use crate::test_proof_helpers::proof_test_helpers::{full_groth16_roundtrip, CircuitType};
-        full_groth16_roundtrip(CircuitType::Output, true);
+    fn output_proof_roundtrip_regulated() {
+        use crate::test_proof_helpers::proof_test_helpers::{full_proof_roundtrip, CircuitType};
+        full_proof_roundtrip(CircuitType::Output, true);
     }
 
+    #[cfg(feature = "bundled-proving-keys")]
     #[test]
-    fn output_proof_full_groth16_roundtrip_unregulated() {
-        use crate::test_proof_helpers::proof_test_helpers::{full_groth16_roundtrip, CircuitType};
-        full_groth16_roundtrip(CircuitType::Output, false);
+    fn output_proof_roundtrip_unregulated() {
+        use crate::test_proof_helpers::proof_test_helpers::{full_proof_roundtrip, CircuitType};
+        full_proof_roundtrip(CircuitType::Output, false);
     }
 
+    #[cfg(feature = "bundled-proving-keys")]
     #[test]
     fn output_proof_plan_path_regulated() {
         use crate::test_proof_helpers::proof_test_helpers::test_output_plan_path;
         test_output_plan_path(true);
     }
 
+    #[cfg(feature = "bundled-proving-keys")]
     #[test]
     fn output_proof_plan_path_unregulated() {
         use crate::test_proof_helpers::proof_test_helpers::test_output_plan_path;
@@ -1138,6 +1144,145 @@ mod tests {
         fn output_proof_verification_fails_balance_commitment_integrity((public, private) in arb_invalid_output_balance_commitment_integrity()) {
             assert!(check_satisfaction(&public, &private).is_err());
             assert!(check_circuit_satisfaction(public, private).is_err());
+        }
+    }
+
+    /// Compare the canonical gnark path against the legacy Arkworks path for an output proof.
+    ///
+    /// Requires `libpenumbra_gnark_output.{so,dylib}` built in `tools/gnark/`
+    /// (`go build -buildmode=c-shared -o libpenumbra_gnark_output.dylib ./cmd/outputlib`).
+    #[cfg(any(unix, windows))]
+    #[test]
+    #[ignore = "perf: requires libpenumbra_gnark_output built in tools/gnark/"]
+    fn output_gnark_vs_arkworks_timing() {
+        use crate::output::{OutputCircuit, OutputProofPrivate, OutputProofPublic};
+        use crate::test_proof_helpers::proof_test_helpers::{
+            generate_test_data, setup_arkworks_groth16_keys, CircuitType, REGULATED_ASSET_ID,
+        };
+        use ark_groth16::{r1cs_to_qap::LibsnarkReduction, Groth16};
+        use penumbra_sdk_asset::Balance;
+        use std::time::Instant;
+
+        let mut rng = rand::thread_rng();
+        let test_data =
+            generate_test_data(&mut rng, REGULATED_ASSET_ID, 100, true, CircuitType::Output);
+
+        let note_commitment = test_data.note.commit();
+        let balance_commitment =
+            (-Balance::from(test_data.value)).commit(test_data.balance_blinding);
+        let tx_blinding_nonce = Fr::from(0u64);
+        let counterparty_leaf_hash = penumbra_sdk_compliance::blind_sender_leaf(
+            test_data.counterparty_leaf.commit(),
+            tx_blinding_nonce,
+        );
+
+        let public = OutputProofPublic {
+            balance_commitment,
+            note_commitment,
+            epk_1: test_data.epk_1,
+            epk_2: test_data.epk_2.expect("output requires epk_2"),
+            epk_3: test_data.epk_3.expect("output requires epk_3"),
+            c2_core: test_data.c2_core,
+            c2_ext: test_data.c2_ext.expect("output requires c2_ext"),
+            c2_sext: test_data.c2_sext.expect("output requires c2_sext"),
+            compliance_ciphertext: test_data.compliance_ciphertext,
+            asset_anchor: test_data.asset_anchor,
+            compliance_anchor: test_data.compliance_anchor,
+            target_timestamp: Fq::from(test_data.target_timestamp),
+            dleq_c_1: test_data.dleq_c,
+            dleq_s_1: test_data.dleq_s,
+            dleq_c_2: test_data.dleq_c_2,
+            dleq_s_2: test_data.dleq_s_2,
+            dleq_c_3: test_data.dleq_c_3,
+            dleq_s_3: test_data.dleq_s_3,
+            counterparty_leaf_hash,
+        };
+        let private = OutputProofPrivate {
+            note: test_data.note,
+            balance_blinding: test_data.balance_blinding,
+            asset_path: test_data.asset_path,
+            asset_position: test_data.asset_position,
+            asset_indexed_leaf: test_data.asset_indexed_leaf,
+            is_regulated: true,
+            compliance_path: test_data.compliance_path,
+            compliance_position: test_data.compliance_position,
+            user_leaf: test_data.user_leaf,
+            compliance_ephemeral_secret: test_data.ephemeral_secret,
+            r_2: test_data.r_2.expect("output requires r_2"),
+            r_3: test_data.r_3.expect("output requires r_3"),
+            counterparty_leaf: test_data.counterparty_leaf,
+            tx_blinding_nonce,
+            is_flagged: false,
+            salt: test_data.salt,
+        };
+
+        // --- Arkworks prove ---
+        let (pk, ark_pvk, blinding_r, blinding_s) = setup_arkworks_groth16_keys::<OutputCircuit>();
+        let claimed_hash =
+            crate::public_input_hash::output_statement_hash_from_public(&public).unwrap();
+        let circuit = OutputCircuit::new(public.clone(), private.clone(), claimed_hash);
+        let t0 = Instant::now();
+        let ark_raw_proof =
+            Groth16::<decaf377::Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
+                circuit, &pk, blinding_r, blinding_s,
+            )
+            .expect("arkworks prove");
+        let ark_prove_ms = t0.elapsed().as_millis();
+        // Wrap in OutputProof (compressed) — same as production output.
+        use ark_serialize::CanonicalSerialize;
+        let mut ark_proof_bytes = Vec::new();
+        ark_raw_proof
+            .serialize_compressed(&mut ark_proof_bytes)
+            .expect("compress arkworks proof");
+        let ark_output_proof = OutputProof(ark_proof_bytes.try_into().expect("proof is 192 bytes"));
+
+        let gnark_pvk = &*penumbra_sdk_proof_params::OUTPUT_PROOF_VERIFICATION_KEY;
+        let t1 = Instant::now();
+        ark_output_proof
+            .verify(&ark_pvk, public.clone())
+            .expect("arkworks verify");
+        let ark_verify_us = t1.elapsed().as_micros();
+
+        // --- gnark prove ---
+        let lib_path = crate::gnark::GnarkOutputClient::auto_lib_path()
+            .expect("build libpenumbra_gnark_output in tools/gnark/ first");
+        let artifact_dir = auto_gnark_artifact_dir("output")
+            .expect("could not locate crates/crypto/proof-params/src/gen/gnark/output/");
+        let gnark_client = crate::gnark::GnarkOutputClient::load_library(&lib_path, &artifact_dir)
+            .expect("gnark output client");
+        let t2 = Instant::now();
+        let gnark_proof = gnark_client.prove(&public, &private).expect("gnark prove");
+        let gnark_prove_ms = t2.elapsed().as_millis();
+
+        let t3 = Instant::now();
+        gnark_proof.verify(gnark_pvk, public).expect("gnark verify");
+        let gnark_verify_us = t3.elapsed().as_micros();
+
+        println!("\n=== Output proof timing ===");
+        println!("{:<10} {:>10} {:>12}", "path", "prove ms", "verify µs");
+        println!(
+            "{:<10} {:>10} {:>12}",
+            "arkworks", ark_prove_ms, ark_verify_us
+        );
+        println!(
+            "{:<10} {:>10} {:>12}",
+            "gnark", gnark_prove_ms, gnark_verify_us
+        );
+    }
+
+    /// Locates `crates/crypto/proof-params/src/gen/gnark/<circuit>/` by walking
+    /// ancestors of the current executable until the workspace root is found.
+    fn auto_gnark_artifact_dir(circuit: &str) -> Option<std::path::PathBuf> {
+        let exe = std::env::current_exe().ok()?;
+        let mut dir = exe.parent()?;
+        loop {
+            let candidate = dir
+                .join("crates/crypto/proof-params/src/gen/gnark")
+                .join(circuit);
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
+            dir = dir.parent()?;
         }
     }
 }

@@ -70,8 +70,7 @@ impl Component for Governance {
 
     #[instrument(name = "governance", skip(state))]
     async fn end_epoch<S: StateWrite + 'static>(state: &mut Arc<S>) -> Result<()> {
-        let state = Arc::get_mut(state).expect("state should be unique");
-        state.tally_delegator_votes(None).await?;
+        let _state = Arc::get_mut(state).expect("state should be unique");
         Ok(())
     }
 }
@@ -97,9 +96,6 @@ pub async fn enact_all_passed_proposals<S: StateWrite>(mut state: S) -> Result<(
         if !proposal_ready {
             continue;
         }
-
-        // Do a final tally of any pending delegator votes for the proposal
-        state.tally_delegator_votes(Some(proposal_id)).await?;
 
         let current_state = state
             .proposal_state(proposal_id)

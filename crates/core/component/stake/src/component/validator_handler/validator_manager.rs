@@ -150,11 +150,11 @@ pub trait ValidatorManager: StateWrite {
         // Determine if the state transition is valid, returning an error otherwise.
         match (old_state, new_state) {
             (Defined | Disabled | Jailed, Inactive) => {
-                // The validator has enough stake to be considered for the consensus set.
+                // The validator is eligible to participate in the consensus-set rotation.
                 self.add_consensus_set_index(identity_key);
             }
             (Inactive | Jailed | Disabled, Defined) => {
-                // The validator's delegation pool has fallen below the `min_validator_stake` threshold.
+                // The validator is no longer eligible to participate in the consensus-set rotation.
                 // If necessary, the epoch-handler will deindex this validator after processing it.
             }
             (Inactive | Jailed | Defined, Disabled) => {
@@ -320,57 +320,20 @@ pub trait ValidatorManager: StateWrite {
         &mut self,
         validator_id: &IdentityKey,
         previous_state: validator::State,
-        next_rate: &RateData,
-        delegation_token_supply: Amount,
+        _next_rate: &RateData,
+        _delegation_token_supply: Amount,
     ) -> Option<State> {
         // Conspicuously missing from this list are `Jailed | Disabled` validators.
         // This is because their transition MUST be triggered by a manual validator upload.
         if !matches!(previous_state, Defined | Inactive | Active) {
             return None;
         }
-
-        let min_stake = self
-            .get_stake_params()
-            .await
-            .expect("staking parameters are always set")
-            .min_validator_stake;
-
-        // We convert the delegation pool into staking tokens so that we can decide whether
-        // the validator meets the minimum stake threshold.
-        let unbonded_pool = next_rate.unbonded_amount(delegation_token_supply);
-
         tracing::debug!(
             %validator_id,
-            ?delegation_token_supply,
-            ?unbonded_pool,
-            next_validator_exchange_rate = ?next_rate.validator_exchange_rate,
             ?previous_state,
-            ?min_stake,
-            "computed validator unbonded pool to explore precursor transition"
+            "validator precursor transitions no longer depend on delegated stake"
         );
-
-        let has_minimum_stake = unbonded_pool >= min_stake;
-
-        // Refer yourself to the state machine diagram for the logic behind these transitions.
-        // Note: this could be refactored, no doubt, but it's going to look ugly either way.
-        let new_state = match previous_state {
-            Defined if has_minimum_stake => Inactive,
-            Defined if !has_minimum_stake => Defined,
-            Active if has_minimum_stake => Active,
-            Active if !has_minimum_stake => Defined,
-            Inactive if has_minimum_stake => Inactive,
-            Inactive if !has_minimum_stake => Defined,
-            _ => unreachable!("the previous state was validated by the guard condition"),
-        };
-
-        if new_state != previous_state {
-            let _ = self
-                .set_validator_state(validator_id, new_state)
-                .await
-                .expect("this must be a valid transition because we guard the method");
-        }
-
-        Some(new_state)
+        Some(previous_state)
     }
 
     /// Add a new genesis validator starting in the [`Active`] state with its
@@ -395,7 +358,7 @@ pub trait ValidatorManager: StateWrite {
             .get(&delegation_id)
             .copied()
             .unwrap_or_else(Amount::zero);
-        let power = initial_validator_rate.voting_power(total_delegation_tokens);
+        let power = crate::params::equal_validator_voting_power();
 
         tracing::debug!(?initial_validator_rate, ?power, "adding genesis validator");
 
@@ -426,20 +389,30 @@ pub trait ValidatorManager: StateWrite {
     }
 
     /// Add a validator after genesis, which will start in a [`validator::State::Defined`]
-    /// state with zero voting power, and unbonded delegation tokens. This is the default
-    /// "initial" state for a validator.
+    /// state and immediately move to `Inactive` if enabled.
     async fn add_validator(&mut self, validator: Validator, rate_data: RateData) -> Result<()> {
-        // We don't immediately report the validator voting power to CometBFT
-        // until it becomes active.
+        let initial_power = if validator.enabled {
+            crate::params::equal_validator_voting_power()
+        } else {
+            Amount::zero()
+        };
+
         self.add_validator_inner(
             validator.clone(),
             rate_data,
             validator::State::Defined,
             validator::BondingState::Unbonded,
-            Amount::zero(),
+            initial_power,
             Amount::zero(),
         )
-        .await
+        .await?;
+
+        if validator.enabled {
+            self.set_validator_state(&validator.identity_key, validator::State::Inactive)
+                .await?;
+        }
+
+        Ok(())
     }
 
     /// Record a new validator definition and prime its initial state.
@@ -548,52 +521,16 @@ pub trait ValidatorManager: StateWrite {
                 } else {
                     tracing::warn!(validator_identity = %id, "validator has no recorded last_disabled_height but is disabled");
                 }
-                // The operator has re-enabled their validator, if it has enough stake it will become
-                // inactive, otherwise it will become defined.
-                let min_validator_stake = self.get_stake_params().await?.min_validator_stake;
-                let current_validator_rate =
-                    self.get_validator_rate(id).await?.ok_or_else(|| {
-                        anyhow::anyhow!("updated validator has no recorded rate data")
-                    })?;
-                let delegation_token_supply = self
-                    .get_validator_pool_size(id)
-                    .await
-                    .unwrap_or_else(Amount::zero);
-                let unbonded_amount =
-                    current_validator_rate.unbonded_amount(delegation_token_supply);
-
-                if unbonded_amount >= min_validator_stake {
-                    self.set_validator_state(id, Inactive).await?;
-                } else {
-                    self.set_validator_state(id, Defined).await?;
-                }
+                self.set_validator_state(id, Inactive).await?;
             }
             (Jailed, true) => {
-                // Treat updates to jailed validators as unjail requests.
-                // If the validator has enough stake, it will become inactive, otherwise it will become defined.
-                let min_validator_stake = self.get_stake_params().await?.min_validator_stake;
-                let validator_rate_data = self
-                    .get_validator_rate(id)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("updated validator has no recorded state"))?;
-                let delegation_pool_size = self
-                    .get_validator_pool_size(id)
-                    .await
-                    .unwrap_or_else(Amount::zero);
-
-                let unbonded_pool_size = validator_rate_data.unbonded_amount(delegation_pool_size);
-
-                if unbonded_pool_size >= min_validator_stake {
-                    self.set_validator_state(id, Inactive).await?;
-                } else {
-                    self.set_validator_state(id, Defined).await?;
-                }
+                self.set_validator_state(id, Inactive).await?;
             }
             (Active | Inactive, true) => {
                 // This validator update does not affect the validator's state.
             }
             (Defined, true) => {
-                // This validator update does not affect the validator's state.
+                self.set_validator_state(id, Inactive).await?;
             }
             (Tombstoned, _) => {
                 // Ignore updates to tombstoned validators.

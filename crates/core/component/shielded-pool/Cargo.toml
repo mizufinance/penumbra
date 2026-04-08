@@ -22,6 +22,11 @@ component = [
 # proving-keys = ["penumbra-sdk-proof-params/proving-keys"]
 default = ["std", "component"]
 std = ["ark-ff/std"]
+bundled-proving-keys = ["penumbra-sdk-proof-params/bundled-proving-keys"]
+download-proving-keys = [
+    "bundled-proving-keys",
+    "penumbra-sdk-proof-params/download-proving-keys",
+]
 parallel = [
     "penumbra-sdk-tct/parallel",
     "ark-ff/parallel",
@@ -37,6 +42,7 @@ benchmark-helpers = []
 
 [dependencies]
 anyhow = {workspace = true}
+ark-ec = {workspace = true, default-features = false}
 ark-ff = {workspace = true, default-features = false}
 ark-groth16 = {workspace = true, default-features = false}
 ark-r1cs-std = {workspace = true, default-features = false}
@@ -61,6 +67,7 @@ ibc-proto = {workspace = true, default-features = false}
 ibc-types = {workspace = true, features = ["with_serde"], default-features = false}
 im = {workspace = true}
 jmt = {workspace = true}
+libloading = {workspace = true}
 metrics = {workspace = true}
 once_cell = {workspace = true}
 penumbra-sdk-asset = {workspace = true, default-features = false}
@@ -89,4 +96,5 @@ tracing = {workspace = true}
 
 [dev-dependencies]
 penumbra-sdk-compliance = {workspace = true, default-features = false, features = ["test-helpers"]}
+penumbra-sdk-proof-params = {workspace = true, default-features = false}
 proptest = {workspace = true}

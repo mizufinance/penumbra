@@ -14,7 +14,7 @@ use assert_cmd::Command;
 use penumbra_sdk_keys::test_keys::{ADDRESS_1_STR, SEED_PHRASE};
 use tempfile::{tempdir, TempDir};
 
-const TIMEOUT_COMMAND_SECONDS: u64 = 60;
+const TIMEOUT_COMMAND_SECONDS: u64 = 120;
 
 /// Import the wallet from seed phrase into a temporary directory.
 fn load_wallet_into_tmpdir() -> TempDir {

@@ -4,22 +4,22 @@
 //!
 //! Tests assume that the initial state of the test account is after genesis,
 //! where no tokens have been delegated, and the address with index 0
-//! was distributedp 1cube.
+//! was distributed funded test assets such as `test_usd`.
 
 use std::{ops::Deref, process::Command as StdCommand};
 
 use anyhow::Context;
 use assert_cmd::cargo::CommandCargoExt;
 use assert_cmd::Command as AssertCommand;
-use base64::prelude::*;
 use futures::{FutureExt, StreamExt, TryStreamExt};
+use penumbra_sdk_keys::keys::AddressIndex;
 use tempfile::{tempdir, TempDir};
 use tokio::process::Command as TokioCommand;
 
 use penumbra_sdk_asset::{asset, Value, STAKING_TOKEN_ASSET_ID};
 use penumbra_sdk_keys::test_keys;
 use penumbra_sdk_proto::{
-    core::{component::fee::v1::Fee, component::ibc::v1::IbcRelay},
+    core::component::fee::v1::Fee,
     custody::v1::{custody_service_client::CustodyServiceClient, AuthorizeRequest},
     penumbra::view::v1::view_service_client::ViewServiceClient,
     view::v1::{
@@ -30,8 +30,8 @@ use penumbra_sdk_proto::{
 };
 use penumbra_sdk_view::ViewClient;
 
-fn lightweight_transfer_only_phase_enabled() -> bool {
-    std::env::var("PENUMBRA_LIGHTWEIGHT_TRANSFER_ONLY_PHASE")
+fn reduced_action_surface_enabled() -> bool {
+    std::env::var("PENUMBRA_REDUCED_ACTION_SURFACE")
         .map(|value| value == "1")
         .unwrap_or(false)
 }
@@ -106,37 +106,44 @@ async fn transaction_send_flow() -> anyhow::Result<()> {
     // protos manually, with no access to Penumbra crypto.
     use penumbra_sdk_proto::view::v1::transaction_planner_request as tpr;
 
-    // Specifically, pretend we're relaying IBC messages, so pull one in:
+    let test_usd = asset::REGISTRY.parse_unit("test_usd").id();
+    let source = AddressIndex::new(0);
 
-    // base64 encoded MsgCreateClient that was used to create the currently in-use Stargaze
-    // light client on the cosmos hub:
-    // https://cosmos.bigdipper.live/transactions/13C1ECC54F088473E2925AD497DDCC092101ADE420BC64BADE67D34A75769CE9
-    let msg_create_client_stargaze_raw = BASE64_STANDARD
-        .decode(
-            include_str!("../../../core/component/ibc/src/component/test/create_client.msg")
-                .replace('\n', ""),
-        )
-        .unwrap();
-    use ibc_types::core::client::msgs::MsgCreateClient;
-    use ibc_types::DomainType;
-    let msg_create_stargaze_client =
-        MsgCreateClient::decode(msg_create_client_stargaze_raw.as_slice()).unwrap();
-    let create_client_action: IbcRelay = msg_create_stargaze_client.into();
+    // Wait until the funded note set is actually available in the local view DB.
+    let mut funded = false;
+    for _ in 0..30 {
+        let balances = (&mut view_client as &mut dyn ViewClient)
+            .balances(source, Some(test_usd))
+            .await?;
+        if balances
+            .iter()
+            .any(|(asset_id, amount)| *asset_id == test_usd && *amount >= 1u64.into())
+        {
+            funded = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    anyhow::ensure!(
+        funded,
+        "pclientd never detected a spendable test_usd balance for the source account"
+    );
 
     // 5.1. Generate a transaction plan sending funds to an address.
     let plan = view_client
         .transaction_planner(TransactionPlannerRequest {
             outputs: vec![tpr::Output {
-                address: Some(test_keys::ADDRESS_1.deref().clone().into()),
+                // Use the custody policy's default allowlisted destination.
+                address: Some(test_keys::ADDRESS_0.deref().clone().into()),
                 value: Some(
                     Value {
-                        amount: 1_000_000u64.into(),
-                        asset_id: *STAKING_TOKEN_ASSET_ID,
+                        amount: 1u64.into(),
+                        asset_id: test_usd,
                     }
                     .into(),
                 ),
             }],
-            ibc_relay_actions: vec![create_client_action],
+            source: Some(source.into()),
             ..Default::default()
         })
         .await?
@@ -237,8 +244,8 @@ async fn transaction_send_flow() -> anyhow::Result<()> {
 #[ignore]
 #[tokio::test]
 async fn swap_claim_flow() -> anyhow::Result<()> {
-    if lightweight_transfer_only_phase_enabled() {
-        eprintln!("skipping swap_claim_flow in lightweight transfer-only phase");
+    if reduced_action_surface_enabled() {
+        eprintln!("skipping swap_claim_flow in reduced action surface");
         return Ok(());
     }
 

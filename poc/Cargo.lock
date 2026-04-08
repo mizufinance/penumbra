@@ -71,6 +71,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e999941b234f3131b00bc13c22d06e8c5ff726d1b6318ac7eb276997bbb4fef0"
 
 [[package]]
+name = "android_proof_lab"
+version = "2.1.0"
+dependencies = [
+ "anyhow",
+ "ark-ec",
+ "ark-ff",
+ "ark-groth16",
+ "ark-relations",
+ "ark-serialize",
+ "clap",
+ "csv",
+ "decaf377",
+ "hex",
+ "icicle-bls12-377",
+ "icicle-core",
+ "icicle-runtime",
+ "libloading",
+ "penumbra-sdk-asset",
+ "penumbra-sdk-compliance",
+ "penumbra-sdk-proof-params",
+ "penumbra-sdk-proto",
+ "penumbra-sdk-sct",
+ "penumbra-sdk-shielded-pool",
+ "penumbra-sdk-tct",
+ "rand_core",
+ "serde",
+ "serde_json",
+ "sha2 0.10.8",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2743,6 +2774,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "icicle-bls12-377"
+version = "4.0.0"
+source = "git+https://github.com/ingonyama-zk/icicle.git?tag=v4.0.0#6c77775961b0e4dc2be359feec1ac11536c18043"
+dependencies = [
+ "cmake",
+ "icicle-core",
+ "icicle-hash",
+ "icicle-runtime",
+ "serde",
+]
+
+[[package]]
+name = "icicle-core"
+version = "4.0.0"
+source = "git+https://github.com/ingonyama-zk/icicle.git?tag=v4.0.0#6c77775961b0e4dc2be359feec1ac11536c18043"
+dependencies = [
+ "cmake",
+ "hex",
+ "icicle-runtime",
+ "once_cell",
+ "rand",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "icicle-hash"
+version = "4.0.0"
+source = "git+https://github.com/ingonyama-zk/icicle.git?tag=v4.0.0#6c77775961b0e4dc2be359feec1ac11536c18043"
+dependencies = [
+ "cmake",
+ "icicle-core",
+ "icicle-runtime",
+ "rand",
+]
+
+[[package]]
+name = "icicle-runtime"
+version = "4.0.0"
+source = "git+https://github.com/ingonyama-zk/icicle.git?tag=v4.0.0#6c77775961b0e4dc2be359feec1ac11536c18043"
+dependencies = [
+ "cmake",
+ "once_cell",
+]
+
+[[package]]
 name = "ics23"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4526,6 +4603,7 @@ dependencies = [
  "hex",
  "penumbra-sdk-proof-params",
  "penumbra-sdk-proto",
+ "penumbra-sdk-shielded-pool",
  "rand",
  "rand_chacha",
  "rayon",
@@ -4635,6 +4713,7 @@ name = "penumbra-sdk-shielded-pool"
 version = "2.1.0"
 dependencies = [
  "anyhow",
+ "ark-ec",
  "ark-ff",
  "ark-groth16",
  "ark-r1cs-std",
@@ -4659,6 +4738,7 @@ dependencies = [
  "ibc-types",
  "im",
  "jmt",
+ "libloading",
  "metrics",
  "once_cell",
  "penumbra-sdk-asset",

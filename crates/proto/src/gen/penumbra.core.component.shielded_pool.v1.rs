@@ -309,6 +309,22 @@ impl ::prost::Name for ZkSpendProof {
         "/penumbra.core.component.shielded_pool.v1.ZKSpendProof".into()
     }
 }
+/// A Penumbra ZK transfer proof.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ZkTransferProof {
+    #[prost(bytes = "vec", tag = "1")]
+    pub inner: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for ZkTransferProof {
+    const NAME: &'static str = "ZKTransferProof";
+    const PACKAGE: &'static str = "penumbra.core.component.shielded_pool.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.shielded_pool.v1.ZKTransferProof".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.shielded_pool.v1.ZKTransferProof".into()
+    }
+}
 /// A Penumbra ZK nullifier derivation proof.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ZkNullifierDerivationProof {
@@ -323,6 +339,226 @@ impl ::prost::Name for ZkNullifierDerivationProof {
     }
     fn type_url() -> ::prost::alloc::string::String {
         "/penumbra.core.component.shielded_pool.v1.ZKNullifierDerivationProof".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TransferInputBody {
+    /// The nullifier of the spent note.
+    #[prost(message, optional, tag = "1")]
+    pub nullifier: ::core::option::Option<super::super::sct::v1::Nullifier>,
+    /// The randomized validating key for the spend authorization signature.
+    #[prost(message, optional, tag = "2")]
+    pub rk: ::core::option::Option<
+        super::super::super::super::crypto::decaf377_rdsa::v1::SpendVerificationKey,
+    >,
+    /// An encryption of the commitment of the input note to the sender's OVK.
+    #[prost(bytes = "vec", tag = "3")]
+    pub encrypted_backref: ::prost::alloc::vec::Vec<u8>,
+    /// Compliance ciphertext encrypting spent note details for the asset issuer.
+    #[prost(bytes = "vec", tag = "4")]
+    pub compliance_ciphertext: ::prost::alloc::vec::Vec<u8>,
+    /// DLEQ proof bundle for the spend-side policy binding.
+    #[prost(bytes = "vec", tag = "5")]
+    pub dleq_proof: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for TransferInputBody {
+    const NAME: &'static str = "TransferInputBody";
+    const PACKAGE: &'static str = "penumbra.core.component.shielded_pool.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.shielded_pool.v1.TransferInputBody".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.shielded_pool.v1.TransferInputBody".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TransferOutputBody {
+    /// The minimal data required to scan and process the created note.
+    #[prost(message, optional, tag = "1")]
+    pub note_payload: ::core::option::Option<NotePayload>,
+    /// An encrypted key for decrypting the memo.
+    #[prost(bytes = "vec", tag = "2")]
+    pub wrapped_memo_key: ::prost::alloc::vec::Vec<u8>,
+    /// The key material used for note encryption, wrapped to the sender's OVK.
+    #[prost(bytes = "vec", tag = "3")]
+    pub ovk_wrapped_key: ::prost::alloc::vec::Vec<u8>,
+    /// Compliance ciphertext encrypting created note details for the asset issuer.
+    #[prost(bytes = "vec", tag = "4")]
+    pub compliance_ciphertext: ::prost::alloc::vec::Vec<u8>,
+    /// DLEQ proof bundle for the output-side policy binding.
+    #[prost(bytes = "vec", tag = "5")]
+    pub dleq_proofs: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for TransferOutputBody {
+    const NAME: &'static str = "TransferOutputBody";
+    const PACKAGE: &'static str = "penumbra.core.component.shielded_pool.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.shielded_pool.v1.TransferOutputBody".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.shielded_pool.v1.TransferOutputBody".into()
+    }
+}
+/// Transfers shielded notes into new shielded notes as a single action.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Transfer {
+    /// The effecting data of the transfer.
+    #[prost(message, optional, tag = "1")]
+    pub body: ::core::option::Option<TransferBody>,
+    /// The authorizing signatures for each transfer input.
+    #[prost(message, repeated, tag = "2")]
+    pub auth_sigs: ::prost::alloc::vec::Vec<
+        super::super::super::super::crypto::decaf377_rdsa::v1::SpendAuthSignature,
+    >,
+    /// The proof that the transfer is well-formed.
+    #[prost(message, optional, tag = "3")]
+    pub proof: ::core::option::Option<ZkTransferProof>,
+}
+impl ::prost::Name for Transfer {
+    const NAME: &'static str = "Transfer";
+    const PACKAGE: &'static str = "penumbra.core.component.shielded_pool.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.shielded_pool.v1.Transfer".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.shielded_pool.v1.Transfer".into()
+    }
+}
+/// The body of a fused shielded transfer.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TransferBody {
+    /// The proving family this transfer uses.
+    #[prost(uint32, tag = "16")]
+    pub family_id: u32,
+    /// The state commitment tree anchor used during proof generation.
+    #[prost(message, optional, tag = "15")]
+    pub anchor: ::core::option::Option<
+        super::super::super::super::crypto::tct::v1::MerkleRoot,
+    >,
+    /// A commitment to the net balance of the action.
+    #[prost(message, optional, tag = "1")]
+    pub balance_commitment: ::core::option::Option<
+        super::super::super::asset::v1::BalanceCommitment,
+    >,
+    /// The transfer inputs.
+    #[prost(message, repeated, tag = "2")]
+    pub inputs: ::prost::alloc::vec::Vec<TransferInputBody>,
+    /// The transfer outputs.
+    #[prost(message, repeated, tag = "3")]
+    pub outputs: ::prost::alloc::vec::Vec<TransferOutputBody>,
+    /// Target timestamp for compliance verification (Unix UTC seconds).
+    #[prost(uint64, tag = "4")]
+    pub target_timestamp: u64,
+    /// Compliance tree anchor (user tree root) used during proof generation.
+    #[prost(message, optional, tag = "5")]
+    pub compliance_anchor: ::core::option::Option<
+        super::super::super::super::crypto::tct::v1::StateCommitment,
+    >,
+    /// Asset tree anchor used during proof generation.
+    #[prost(message, optional, tag = "6")]
+    pub asset_anchor: ::core::option::Option<
+        super::super::super::super::crypto::tct::v1::StateCommitment,
+    >,
+}
+impl ::prost::Name for TransferBody {
+    const NAME: &'static str = "TransferBody";
+    const PACKAGE: &'static str = "penumbra.core.component.shielded_pool.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.shielded_pool.v1.TransferBody".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.shielded_pool.v1.TransferBody".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TransferView {
+    #[prost(oneof = "transfer_view::TransferView", tags = "1, 2")]
+    pub transfer_view: ::core::option::Option<transfer_view::TransferView>,
+}
+/// Nested message and enum types in `TransferView`.
+pub mod transfer_view {
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Visible {
+        #[prost(message, optional, tag = "1")]
+        pub transfer: ::core::option::Option<super::Transfer>,
+        #[prost(message, repeated, tag = "2")]
+        pub spent_notes: ::prost::alloc::vec::Vec<super::NoteView>,
+        #[prost(message, repeated, tag = "3")]
+        pub created_notes: ::prost::alloc::vec::Vec<super::NoteView>,
+        #[prost(message, optional, tag = "4")]
+        pub payload_key: ::core::option::Option<
+            super::super::super::super::keys::v1::PayloadKey,
+        >,
+    }
+    impl ::prost::Name for Visible {
+        const NAME: &'static str = "Visible";
+        const PACKAGE: &'static str = "penumbra.core.component.shielded_pool.v1";
+        fn full_name() -> ::prost::alloc::string::String {
+            "penumbra.core.component.shielded_pool.v1.TransferView.Visible".into()
+        }
+        fn type_url() -> ::prost::alloc::string::String {
+            "/penumbra.core.component.shielded_pool.v1.TransferView.Visible".into()
+        }
+    }
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Opaque {
+        #[prost(message, optional, tag = "1")]
+        pub transfer: ::core::option::Option<super::Transfer>,
+    }
+    impl ::prost::Name for Opaque {
+        const NAME: &'static str = "Opaque";
+        const PACKAGE: &'static str = "penumbra.core.component.shielded_pool.v1";
+        fn full_name() -> ::prost::alloc::string::String {
+            "penumbra.core.component.shielded_pool.v1.TransferView.Opaque".into()
+        }
+        fn type_url() -> ::prost::alloc::string::String {
+            "/penumbra.core.component.shielded_pool.v1.TransferView.Opaque".into()
+        }
+    }
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum TransferView {
+        #[prost(message, tag = "1")]
+        Visible(Visible),
+        #[prost(message, tag = "2")]
+        Opaque(Opaque),
+    }
+}
+impl ::prost::Name for TransferView {
+    const NAME: &'static str = "TransferView";
+    const PACKAGE: &'static str = "penumbra.core.component.shielded_pool.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.shielded_pool.v1.TransferView".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.shielded_pool.v1.TransferView".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TransferPlan {
+    /// The public body this plan will produce.
+    #[prost(message, optional, tag = "1")]
+    pub body: ::core::option::Option<TransferBody>,
+    /// The blinding factor to use for the net balance commitment.
+    #[prost(bytes = "vec", tag = "2")]
+    pub value_blinding: ::prost::alloc::vec::Vec<u8>,
+    /// The net action balance committed by the action body.
+    #[prost(message, optional, tag = "3")]
+    pub balance: ::core::option::Option<super::super::super::asset::v1::Balance>,
+    /// The spend plans fused into this transfer.
+    #[prost(message, repeated, tag = "4")]
+    pub spends: ::prost::alloc::vec::Vec<SpendPlan>,
+    /// The output plans fused into this transfer.
+    #[prost(message, repeated, tag = "5")]
+    pub outputs: ::prost::alloc::vec::Vec<OutputPlan>,
+}
+impl ::prost::Name for TransferPlan {
+    const NAME: &'static str = "TransferPlan";
+    const PACKAGE: &'static str = "penumbra.core.component.shielded_pool.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.shielded_pool.v1.TransferPlan".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.shielded_pool.v1.TransferPlan".into()
     }
 }
 /// Spends a shielded note.

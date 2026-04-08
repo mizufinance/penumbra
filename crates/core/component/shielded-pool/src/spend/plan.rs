@@ -1,6 +1,7 @@
-use ark_groth16::ProvingKey;
-use decaf377::{Bls12_377, Fq, Fr};
-use decaf377_rdsa::{Signature, SpendAuth};
+use decaf377::{Fq, Fr};
+#[cfg(any(unix, windows))]
+use decaf377_rdsa::Signature;
+use decaf377_rdsa::SpendAuth;
 use penumbra_sdk_asset::{Balance, Value, STAKING_TOKEN_ASSET_ID};
 use penumbra_sdk_compliance::MerklePath;
 use penumbra_sdk_keys::{keys::AddressIndex, FullViewingKey};
@@ -10,8 +11,12 @@ use penumbra_sdk_tct as tct;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 
-use super::{Body, Spend, SpendProof};
-use crate::{Backref, Note, Rseed, SpendProofPrivate, SpendProofPublic};
+use super::Body;
+#[cfg(any(unix, windows))]
+use super::{Spend, SpendProof};
+use crate::{Backref, Note, Rseed};
+#[cfg(any(unix, windows))]
+use crate::{SpendProofPrivate, SpendProofPublic};
 
 /// A planned [`Spend`](Spend).
 ///
@@ -277,19 +282,19 @@ impl SpendPlan {
     }
 
     /// Convenience method to construct the [`Spend`] described by this [`SpendPlan`].
+    #[cfg(any(unix, windows))]
     pub fn spend(
         &self,
         fvk: &FullViewingKey,
         auth_sig: Signature<SpendAuth>,
         auth_path: tct::Proof,
         anchor: tct::Root,
-        pk: &ProvingKey<Bls12_377>,
         compliance_keys: Option<(decaf377::Element, decaf377::Element)>,
     ) -> Result<Spend, crate::ProofError> {
         Ok(Spend {
             body: self.spend_body(fvk, compliance_keys),
             auth_sig,
-            proof: self.spend_proof(fvk, auth_path, anchor, pk, compliance_keys)?,
+            proof: self.spend_proof(fvk, auth_path, anchor, compliance_keys)?,
         })
     }
 
@@ -352,12 +357,12 @@ impl SpendPlan {
     }
 
     /// Construct the [`SpendProof`] required by the [`spend::Body`] described by this [`SpendPlan`].
+    #[cfg(any(unix, windows))]
     pub fn spend_proof(
         &self,
         fvk: &FullViewingKey,
         state_commitment_proof: tct::Proof,
         anchor: tct::Root,
-        pk: &ProvingKey<Bls12_377>,
         _compliance_keys: Option<(decaf377::Element, decaf377::Element)>,
     ) -> Result<SpendProof, crate::ProofError> {
         let asset_anchor = self.asset_anchor;
@@ -423,13 +428,7 @@ impl SpendPlan {
             salt: self.salt,
         };
 
-        SpendProof::prove(
-            self.proof_blinding_r,
-            self.proof_blinding_s,
-            pk,
-            public,
-            private,
-        )
+        SpendProof::prove(public, private)
     }
 
     pub fn balance(&self) -> Balance {
@@ -581,14 +580,13 @@ impl TryFrom<pb::SpendPlan> for SpendPlan {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::spend::proof::SpendCircuit;
     use crate::test_proof_helpers::proof_test_helpers::*;
     use rand_core::OsRng;
 
+    #[cfg(feature = "bundled-proving-keys")]
     fn verify_spend_proof_with_asset(asset_id_u64: u64) {
         use crate::test_proof_helpers::proof_test_helpers::{
             create_imt_membership_proof, create_imt_non_membership_proof, create_user_tree_proof,
-            setup_groth16_keys,
         };
 
         let mut rng = OsRng;
@@ -596,8 +594,6 @@ mod test {
         let is_regulated = asset_id_u64 == REGULATED_ASSET_ID;
 
         // Setup circuit keys and SCT
-        let (pk, pvk, _blinding_r, _blinding_s) = setup_groth16_keys::<SpendCircuit>();
-
         let seed_phrase = penumbra_sdk_keys::keys::SeedPhrase::generate(&mut rng);
         let sk = penumbra_sdk_keys::keys::SpendKey::from_seed_phrase_bip44(
             seed_phrase,
@@ -662,7 +658,7 @@ mod test {
 
         // Generate proof
         let spend_proof = spend_plan
-            .spend_proof(&fvk, state_commitment_proof, anchor, &pk, None)
+            .spend_proof(&fvk, state_commitment_proof, anchor, None)
             .expect("proof generation should succeed");
 
         use penumbra_sdk_compliance::structs::ComplianceCiphertext;
@@ -678,7 +674,7 @@ mod test {
 
         spend_proof
             .verify(
-                &pvk,
+                &penumbra_sdk_proof_params::SPEND_PROOF_VERIFICATION_KEY,
                 SpendProofPublic {
                     anchor,
                     balance_commitment: spend_plan.balance().commit(spend_plan.value_blinding),
@@ -698,11 +694,13 @@ mod test {
             .unwrap();
     }
 
+    #[cfg(feature = "bundled-proving-keys")]
     #[test]
     fn test_regulated_asset_spend_proof() {
         verify_spend_proof_with_asset(REGULATED_ASSET_ID);
     }
 
+    #[cfg(feature = "bundled-proving-keys")]
     #[test]
     fn test_unregulated_asset_spend_proof() {
         verify_spend_proof_with_asset(UNREGULATED_ASSET_ID);

@@ -10,7 +10,7 @@ jobs:
     # We use a custom script to generate the index page for https://rustdoc.penumbra.zone,
     # and refactors to rust deps can break that generation. Let's ensure this script exits 0
     # on PRs, but we'll still only deploy after merge into main.
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,7 +38,7 @@ jobs:
   # TEMPORARILY DISABLED: mdbook dependencies require Rust 1.85+ (edition2024)
   # but our toolchain is pinned to 1.83. Re-enable when toolchain is updated.
   # mdbook:
-  #   runs-on: ubuntu-22.04
+  #   runs-on: ubuntu-24.04
   #   steps:
   #     - uses: actions/checkout@v4
   #       with:

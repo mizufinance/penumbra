@@ -6,6 +6,7 @@ members = [
   "crates/stage-bench",
   "crates/compliance-bench",
   "crates/preconsensus",
+  "tools/android-proof-lab",
 ]
 
 # The profile that 'cargo dist' will build with

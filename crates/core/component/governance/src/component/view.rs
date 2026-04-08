@@ -20,6 +20,7 @@ use penumbra_sdk_sct::{
 use penumbra_sdk_shielded_pool::component::AssetRegistryRead;
 use penumbra_sdk_stake::{
     component::{validator_handler::ValidatorDataRead, ConsensusIndexRead},
+    params::EQUAL_VALIDATOR_VOTING_POWER,
     DelegationToken, GovernanceKey, IdentityKey,
 };
 use penumbra_sdk_tct as tct;
@@ -535,31 +536,19 @@ pub trait StateReadExt: StateRead + penumbra_sdk_stake::StateReadExt {
             .validator_voting_power_at_proposal_start(proposal_id)
             .await?;
         let mut validator_votes = self.validator_votes(proposal_id).await?;
-        let mut delegator_tallies = self.tallied_delegator_votes(proposal_id).await?;
 
-        // For each validator, tally their own vote, overriding it with any tallied delegator votes
+        // For each validator, tally their own vote using the equal voting power snapshotted
+        // when the proposal entered voting.
         let mut tally = Tally::default();
         for (validator, power) in validator_powers.into_iter() {
-            let delegator_tally = delegator_tallies.remove(&validator).unwrap_or_default();
             if let Some(vote) = validator_votes.remove(&validator) {
-                // The effective power of a validator is the voting power of that validator at
-                // proposal start, minus the total voting power used by delegators to that validator
-                // who have voted. Their votes will be added back in below, re-assigning their
-                // voting power to their chosen votes.
-                let effective_power = power.saturating_sub(delegator_tally.total());
-                tally += (vote, effective_power).into();
+                tally += (vote, power).into();
             }
-            // Add the delegator votes in, regardless of if the validator has voted.
-            tally += delegator_tally;
         }
 
         assert!(
             validator_votes.is_empty(),
             "no inactive validator should have voted"
-        );
-        assert!(
-            delegator_tallies.is_empty(),
-            "no delegator should have been able to vote for an inactive validator"
         );
 
         Ok(tally)
@@ -610,31 +599,21 @@ pub trait StateWriteExt: StateWrite + penumbra_sdk_ibc::component::ConnectionSta
             );
         }
 
-        // Snapshot the rate data and voting power for all active validators at this height
+        // Snapshot the equal voting power for all active validators at this height.
         let mut js = JoinSet::new();
         let mut validator_identity_stream = self.consensus_set_stream()?;
         while let Some(identity_key) = validator_identity_stream.next().await {
             let identity_key = identity_key?;
 
             let state = self.get_validator_state(&identity_key);
-            let rate_data = self.get_validator_rate(&identity_key);
-            let power: penumbra_sdk_proto::state::future::DomainFuture<
-                Amount,
-                <Self as StateRead>::GetRawFut,
-            > = self.get_validator_power(&identity_key);
             js.spawn(async move {
                 let state = state
                     .await?
                     .expect("every known validator must have a recorded state");
-                // Compute the rate data, only for active validators, and write it to the state
+                // Snapshot only active validators. Equal voting power is derived from membership,
+                // not stake or exchange-rate data.
                 let per_validator = if state == validator::State::Active {
-                    let rate_data = rate_data
-                        .await?
-                        .expect("every known validator must have a recorded current rate");
-                    let power = power
-                        .await?
-                        .expect("every known validator must have a recorded current power");
-                    Some((identity_key, rate_data, power))
+                    Some(identity_key)
                 } else {
                     None
                 };
@@ -645,14 +624,10 @@ pub trait StateWriteExt: StateWrite + penumbra_sdk_ibc::component::ConnectionSta
         // Iterate over all the futures and insert them into the state (this can be done in
         // arbitrary order, because they are non-overlapping)
         while let Some(per_validator) = js.join_next().await.transpose()? {
-            if let Some((identity_key, rate_data, power)) = per_validator? {
-                self.put(
-                    state_key::rate_data_at_proposal_start(proposal_id, identity_key),
-                    rate_data,
-                );
-                self.put(
+            if let Some(identity_key) = per_validator? {
+                self.put_proto(
                     state_key::voting_power_at_proposal_start(proposal_id, identity_key),
-                    power,
+                    EQUAL_VALIDATOR_VOTING_POWER,
                 )
             }
         }

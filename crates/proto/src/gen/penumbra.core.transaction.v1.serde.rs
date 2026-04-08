@@ -24,6 +24,9 @@ impl serde::Serialize for Action {
                 action::Action::SwapClaim(v) => {
                     struct_ser.serialize_field("swapClaim", v)?;
                 }
+                action::Action::Transfer(v) => {
+                    struct_ser.serialize_field("transfer", v)?;
+                }
                 action::Action::ValidatorDefinition(v) => {
                     struct_ser.serialize_field("validatorDefinition", v)?;
                 }
@@ -116,6 +119,7 @@ impl<'de> serde::Deserialize<'de> for Action {
             "swap",
             "swap_claim",
             "swapClaim",
+            "transfer",
             "validator_definition",
             "validatorDefinition",
             "ibc_relay_action",
@@ -172,6 +176,7 @@ impl<'de> serde::Deserialize<'de> for Action {
             Output,
             Swap,
             SwapClaim,
+            Transfer,
             ValidatorDefinition,
             IbcRelayAction,
             ProposalSubmit,
@@ -223,6 +228,7 @@ impl<'de> serde::Deserialize<'de> for Action {
                             "output" => Ok(GeneratedField::Output),
                             "swap" => Ok(GeneratedField::Swap),
                             "swapClaim" | "swap_claim" => Ok(GeneratedField::SwapClaim),
+                            "transfer" => Ok(GeneratedField::Transfer),
                             "validatorDefinition" | "validator_definition" => Ok(GeneratedField::ValidatorDefinition),
                             "ibcRelayAction" | "ibc_relay_action" => Ok(GeneratedField::IbcRelayAction),
                             "proposalSubmit" | "proposal_submit" => Ok(GeneratedField::ProposalSubmit),
@@ -296,6 +302,13 @@ impl<'de> serde::Deserialize<'de> for Action {
                                 return Err(serde::de::Error::duplicate_field("swapClaim"));
                             }
                             action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::SwapClaim)
+;
+                        }
+                        GeneratedField::Transfer => {
+                            if action__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("transfer"));
+                            }
+                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::Transfer)
 ;
                         }
                         GeneratedField::ValidatorDefinition => {
@@ -512,6 +525,9 @@ impl serde::Serialize for ActionPlan {
                 action_plan::Action::SwapClaim(v) => {
                     struct_ser.serialize_field("swapClaim", v)?;
                 }
+                action_plan::Action::Transfer(v) => {
+                    struct_ser.serialize_field("transfer", v)?;
+                }
                 action_plan::Action::ValidatorDefinition(v) => {
                     struct_ser.serialize_field("validatorDefinition", v)?;
                 }
@@ -604,6 +620,7 @@ impl<'de> serde::Deserialize<'de> for ActionPlan {
             "swap",
             "swap_claim",
             "swapClaim",
+            "transfer",
             "validator_definition",
             "validatorDefinition",
             "ibc_relay_action",
@@ -660,6 +677,7 @@ impl<'de> serde::Deserialize<'de> for ActionPlan {
             Output,
             Swap,
             SwapClaim,
+            Transfer,
             ValidatorDefinition,
             IbcRelayAction,
             ProposalSubmit,
@@ -711,6 +729,7 @@ impl<'de> serde::Deserialize<'de> for ActionPlan {
                             "output" => Ok(GeneratedField::Output),
                             "swap" => Ok(GeneratedField::Swap),
                             "swapClaim" | "swap_claim" => Ok(GeneratedField::SwapClaim),
+                            "transfer" => Ok(GeneratedField::Transfer),
                             "validatorDefinition" | "validator_definition" => Ok(GeneratedField::ValidatorDefinition),
                             "ibcRelayAction" | "ibc_relay_action" => Ok(GeneratedField::IbcRelayAction),
                             "proposalSubmit" | "proposal_submit" => Ok(GeneratedField::ProposalSubmit),
@@ -784,6 +803,13 @@ impl<'de> serde::Deserialize<'de> for ActionPlan {
                                 return Err(serde::de::Error::duplicate_field("swapClaim"));
                             }
                             action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::SwapClaim)
+;
+                        }
+                        GeneratedField::Transfer => {
+                            if action__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("transfer"));
+                            }
+                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::Transfer)
 ;
                         }
                         GeneratedField::ValidatorDefinition => {
@@ -1000,6 +1026,9 @@ impl serde::Serialize for ActionView {
                 action_view::ActionView::SwapClaim(v) => {
                     struct_ser.serialize_field("swapClaim", v)?;
                 }
+                action_view::ActionView::Transfer(v) => {
+                    struct_ser.serialize_field("transfer", v)?;
+                }
                 action_view::ActionView::DelegatorVote(v) => {
                     struct_ser.serialize_field("delegatorVote", v)?;
                 }
@@ -1095,6 +1124,7 @@ impl<'de> serde::Deserialize<'de> for ActionView {
             "swap",
             "swap_claim",
             "swapClaim",
+            "transfer",
             "delegator_vote",
             "delegatorVote",
             "position_open_view",
@@ -1153,6 +1183,7 @@ impl<'de> serde::Deserialize<'de> for ActionView {
             Output,
             Swap,
             SwapClaim,
+            Transfer,
             DelegatorVote,
             PositionOpenView,
             ValidatorDefinition,
@@ -1205,6 +1236,7 @@ impl<'de> serde::Deserialize<'de> for ActionView {
                             "output" => Ok(GeneratedField::Output),
                             "swap" => Ok(GeneratedField::Swap),
                             "swapClaim" | "swap_claim" => Ok(GeneratedField::SwapClaim),
+                            "transfer" => Ok(GeneratedField::Transfer),
                             "delegatorVote" | "delegator_vote" => Ok(GeneratedField::DelegatorVote),
                             "positionOpenView" | "position_open_view" => Ok(GeneratedField::PositionOpenView),
                             "validatorDefinition" | "validator_definition" => Ok(GeneratedField::ValidatorDefinition),
@@ -1279,6 +1311,13 @@ impl<'de> serde::Deserialize<'de> for ActionView {
                                 return Err(serde::de::Error::duplicate_field("swapClaim"));
                             }
                             action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::SwapClaim)
+;
+                        }
+                        GeneratedField::Transfer => {
+                            if action_view__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("transfer"));
+                            }
+                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::Transfer)
 ;
                         }
                         GeneratedField::DelegatorVote => {
@@ -2103,6 +2142,9 @@ impl serde::Serialize for FamilyAggregate {
         if self.family_id != 0 {
             len += 1;
         }
+        if self.transfer_family_id != 0 {
+            len += 1;
+        }
         if self.real_count != 0 {
             len += 1;
         }
@@ -2117,6 +2159,9 @@ impl serde::Serialize for FamilyAggregate {
             let v = ProofFamilyId::try_from(self.family_id)
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.family_id)))?;
             struct_ser.serialize_field("familyId", &v)?;
+        }
+        if self.transfer_family_id != 0 {
+            struct_ser.serialize_field("transferFamilyId", &self.transfer_family_id)?;
         }
         if self.real_count != 0 {
             struct_ser.serialize_field("realCount", &self.real_count)?;
@@ -2141,6 +2186,8 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
         const FIELDS: &[&str] = &[
             "family_id",
             "familyId",
+            "transfer_family_id",
+            "transferFamilyId",
             "real_count",
             "realCount",
             "padded_count",
@@ -2152,6 +2199,7 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             FamilyId,
+            TransferFamilyId,
             RealCount,
             PaddedCount,
             AggregateProof,
@@ -2178,6 +2226,7 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
                     {
                         match value {
                             "familyId" | "family_id" => Ok(GeneratedField::FamilyId),
+                            "transferFamilyId" | "transfer_family_id" => Ok(GeneratedField::TransferFamilyId),
                             "realCount" | "real_count" => Ok(GeneratedField::RealCount),
                             "paddedCount" | "padded_count" => Ok(GeneratedField::PaddedCount),
                             "aggregateProof" | "aggregate_proof" => Ok(GeneratedField::AggregateProof),
@@ -2201,6 +2250,7 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut family_id__ = None;
+                let mut transfer_family_id__ = None;
                 let mut real_count__ = None;
                 let mut padded_count__ = None;
                 let mut aggregate_proof__ = None;
@@ -2211,6 +2261,14 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
                                 return Err(serde::de::Error::duplicate_field("familyId"));
                             }
                             family_id__ = Some(map_.next_value::<ProofFamilyId>()? as i32);
+                        }
+                        GeneratedField::TransferFamilyId => {
+                            if transfer_family_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("transferFamilyId"));
+                            }
+                            transfer_family_id__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                         GeneratedField::RealCount => {
                             if real_count__.is_some() {
@@ -2243,6 +2301,7 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
                 }
                 Ok(FamilyAggregate {
                     family_id: family_id__.unwrap_or_default(),
+                    transfer_family_id: transfer_family_id__.unwrap_or_default(),
                     real_count: real_count__.unwrap_or_default(),
                     padded_count: padded_count__.unwrap_or_default(),
                     aggregate_proof: aggregate_proof__.unwrap_or_default(),
@@ -3252,6 +3311,7 @@ impl serde::Serialize for ProofFamilyId {
             Self::SwapClaim => "PROOF_FAMILY_ID_SWAP_CLAIM",
             Self::Convert => "PROOF_FAMILY_ID_CONVERT",
             Self::DelegatorVote => "PROOF_FAMILY_ID_DELEGATOR_VOTE",
+            Self::Transfer => "PROOF_FAMILY_ID_TRANSFER",
         };
         serializer.serialize_str(variant)
     }
@@ -3270,6 +3330,7 @@ impl<'de> serde::Deserialize<'de> for ProofFamilyId {
             "PROOF_FAMILY_ID_SWAP_CLAIM",
             "PROOF_FAMILY_ID_CONVERT",
             "PROOF_FAMILY_ID_DELEGATOR_VOTE",
+            "PROOF_FAMILY_ID_TRANSFER",
         ];
 
         struct GeneratedVisitor;
@@ -3317,6 +3378,7 @@ impl<'de> serde::Deserialize<'de> for ProofFamilyId {
                     "PROOF_FAMILY_ID_SWAP_CLAIM" => Ok(ProofFamilyId::SwapClaim),
                     "PROOF_FAMILY_ID_CONVERT" => Ok(ProofFamilyId::Convert),
                     "PROOF_FAMILY_ID_DELEGATOR_VOTE" => Ok(ProofFamilyId::DelegatorVote),
+                    "PROOF_FAMILY_ID_TRANSFER" => Ok(ProofFamilyId::Transfer),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

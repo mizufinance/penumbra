@@ -5856,6 +5856,1248 @@ impl<'de> serde::Deserialize<'de> for spend_view::Visible {
         deserializer.deserialize_struct("penumbra.core.component.shielded_pool.v1.SpendView.Visible", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for Transfer {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.body.is_some() {
+            len += 1;
+        }
+        if !self.auth_sigs.is_empty() {
+            len += 1;
+        }
+        if self.proof.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.Transfer", len)?;
+        if let Some(v) = self.body.as_ref() {
+            struct_ser.serialize_field("body", v)?;
+        }
+        if !self.auth_sigs.is_empty() {
+            struct_ser.serialize_field("authSigs", &self.auth_sigs)?;
+        }
+        if let Some(v) = self.proof.as_ref() {
+            struct_ser.serialize_field("proof", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for Transfer {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "body",
+            "auth_sigs",
+            "authSigs",
+            "proof",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Body,
+            AuthSigs,
+            Proof,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "body" => Ok(GeneratedField::Body),
+                            "authSigs" | "auth_sigs" => Ok(GeneratedField::AuthSigs),
+                            "proof" => Ok(GeneratedField::Proof),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = Transfer;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.shielded_pool.v1.Transfer")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<Transfer, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut body__ = None;
+                let mut auth_sigs__ = None;
+                let mut proof__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Body => {
+                            if body__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("body"));
+                            }
+                            body__ = map_.next_value()?;
+                        }
+                        GeneratedField::AuthSigs => {
+                            if auth_sigs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("authSigs"));
+                            }
+                            auth_sigs__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Proof => {
+                            if proof__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("proof"));
+                            }
+                            proof__ = map_.next_value()?;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(Transfer {
+                    body: body__,
+                    auth_sigs: auth_sigs__.unwrap_or_default(),
+                    proof: proof__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.shielded_pool.v1.Transfer", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for TransferBody {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.family_id != 0 {
+            len += 1;
+        }
+        if self.anchor.is_some() {
+            len += 1;
+        }
+        if self.balance_commitment.is_some() {
+            len += 1;
+        }
+        if !self.inputs.is_empty() {
+            len += 1;
+        }
+        if !self.outputs.is_empty() {
+            len += 1;
+        }
+        if self.target_timestamp != 0 {
+            len += 1;
+        }
+        if self.compliance_anchor.is_some() {
+            len += 1;
+        }
+        if self.asset_anchor.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.TransferBody", len)?;
+        if self.family_id != 0 {
+            struct_ser.serialize_field("familyId", &self.family_id)?;
+        }
+        if let Some(v) = self.anchor.as_ref() {
+            struct_ser.serialize_field("anchor", v)?;
+        }
+        if let Some(v) = self.balance_commitment.as_ref() {
+            struct_ser.serialize_field("balanceCommitment", v)?;
+        }
+        if !self.inputs.is_empty() {
+            struct_ser.serialize_field("inputs", &self.inputs)?;
+        }
+        if !self.outputs.is_empty() {
+            struct_ser.serialize_field("outputs", &self.outputs)?;
+        }
+        if self.target_timestamp != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("targetTimestamp", ToString::to_string(&self.target_timestamp).as_str())?;
+        }
+        if let Some(v) = self.compliance_anchor.as_ref() {
+            struct_ser.serialize_field("complianceAnchor", v)?;
+        }
+        if let Some(v) = self.asset_anchor.as_ref() {
+            struct_ser.serialize_field("assetAnchor", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for TransferBody {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "family_id",
+            "familyId",
+            "anchor",
+            "balance_commitment",
+            "balanceCommitment",
+            "inputs",
+            "outputs",
+            "target_timestamp",
+            "targetTimestamp",
+            "compliance_anchor",
+            "complianceAnchor",
+            "asset_anchor",
+            "assetAnchor",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            FamilyId,
+            Anchor,
+            BalanceCommitment,
+            Inputs,
+            Outputs,
+            TargetTimestamp,
+            ComplianceAnchor,
+            AssetAnchor,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "familyId" | "family_id" => Ok(GeneratedField::FamilyId),
+                            "anchor" => Ok(GeneratedField::Anchor),
+                            "balanceCommitment" | "balance_commitment" => Ok(GeneratedField::BalanceCommitment),
+                            "inputs" => Ok(GeneratedField::Inputs),
+                            "outputs" => Ok(GeneratedField::Outputs),
+                            "targetTimestamp" | "target_timestamp" => Ok(GeneratedField::TargetTimestamp),
+                            "complianceAnchor" | "compliance_anchor" => Ok(GeneratedField::ComplianceAnchor),
+                            "assetAnchor" | "asset_anchor" => Ok(GeneratedField::AssetAnchor),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = TransferBody;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.shielded_pool.v1.TransferBody")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<TransferBody, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut family_id__ = None;
+                let mut anchor__ = None;
+                let mut balance_commitment__ = None;
+                let mut inputs__ = None;
+                let mut outputs__ = None;
+                let mut target_timestamp__ = None;
+                let mut compliance_anchor__ = None;
+                let mut asset_anchor__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::FamilyId => {
+                            if family_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("familyId"));
+                            }
+                            family_id__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Anchor => {
+                            if anchor__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("anchor"));
+                            }
+                            anchor__ = map_.next_value()?;
+                        }
+                        GeneratedField::BalanceCommitment => {
+                            if balance_commitment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("balanceCommitment"));
+                            }
+                            balance_commitment__ = map_.next_value()?;
+                        }
+                        GeneratedField::Inputs => {
+                            if inputs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("inputs"));
+                            }
+                            inputs__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Outputs => {
+                            if outputs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("outputs"));
+                            }
+                            outputs__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::TargetTimestamp => {
+                            if target_timestamp__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("targetTimestamp"));
+                            }
+                            target_timestamp__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::ComplianceAnchor => {
+                            if compliance_anchor__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("complianceAnchor"));
+                            }
+                            compliance_anchor__ = map_.next_value()?;
+                        }
+                        GeneratedField::AssetAnchor => {
+                            if asset_anchor__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetAnchor"));
+                            }
+                            asset_anchor__ = map_.next_value()?;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(TransferBody {
+                    family_id: family_id__.unwrap_or_default(),
+                    anchor: anchor__,
+                    balance_commitment: balance_commitment__,
+                    inputs: inputs__.unwrap_or_default(),
+                    outputs: outputs__.unwrap_or_default(),
+                    target_timestamp: target_timestamp__.unwrap_or_default(),
+                    compliance_anchor: compliance_anchor__,
+                    asset_anchor: asset_anchor__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.shielded_pool.v1.TransferBody", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for TransferInputBody {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.nullifier.is_some() {
+            len += 1;
+        }
+        if self.rk.is_some() {
+            len += 1;
+        }
+        if !self.encrypted_backref.is_empty() {
+            len += 1;
+        }
+        if !self.compliance_ciphertext.is_empty() {
+            len += 1;
+        }
+        if !self.dleq_proof.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.TransferInputBody", len)?;
+        if let Some(v) = self.nullifier.as_ref() {
+            struct_ser.serialize_field("nullifier", v)?;
+        }
+        if let Some(v) = self.rk.as_ref() {
+            struct_ser.serialize_field("rk", v)?;
+        }
+        if !self.encrypted_backref.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("encryptedBackref", pbjson::private::base64::encode(&self.encrypted_backref).as_str())?;
+        }
+        if !self.compliance_ciphertext.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("complianceCiphertext", pbjson::private::base64::encode(&self.compliance_ciphertext).as_str())?;
+        }
+        if !self.dleq_proof.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("dleqProof", pbjson::private::base64::encode(&self.dleq_proof).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for TransferInputBody {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "nullifier",
+            "rk",
+            "encrypted_backref",
+            "encryptedBackref",
+            "compliance_ciphertext",
+            "complianceCiphertext",
+            "dleq_proof",
+            "dleqProof",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Nullifier,
+            Rk,
+            EncryptedBackref,
+            ComplianceCiphertext,
+            DleqProof,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "nullifier" => Ok(GeneratedField::Nullifier),
+                            "rk" => Ok(GeneratedField::Rk),
+                            "encryptedBackref" | "encrypted_backref" => Ok(GeneratedField::EncryptedBackref),
+                            "complianceCiphertext" | "compliance_ciphertext" => Ok(GeneratedField::ComplianceCiphertext),
+                            "dleqProof" | "dleq_proof" => Ok(GeneratedField::DleqProof),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = TransferInputBody;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.shielded_pool.v1.TransferInputBody")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<TransferInputBody, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut nullifier__ = None;
+                let mut rk__ = None;
+                let mut encrypted_backref__ = None;
+                let mut compliance_ciphertext__ = None;
+                let mut dleq_proof__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Nullifier => {
+                            if nullifier__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullifier"));
+                            }
+                            nullifier__ = map_.next_value()?;
+                        }
+                        GeneratedField::Rk => {
+                            if rk__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rk"));
+                            }
+                            rk__ = map_.next_value()?;
+                        }
+                        GeneratedField::EncryptedBackref => {
+                            if encrypted_backref__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("encryptedBackref"));
+                            }
+                            encrypted_backref__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::ComplianceCiphertext => {
+                            if compliance_ciphertext__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("complianceCiphertext"));
+                            }
+                            compliance_ciphertext__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::DleqProof => {
+                            if dleq_proof__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dleqProof"));
+                            }
+                            dleq_proof__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(TransferInputBody {
+                    nullifier: nullifier__,
+                    rk: rk__,
+                    encrypted_backref: encrypted_backref__.unwrap_or_default(),
+                    compliance_ciphertext: compliance_ciphertext__.unwrap_or_default(),
+                    dleq_proof: dleq_proof__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.shielded_pool.v1.TransferInputBody", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for TransferOutputBody {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.note_payload.is_some() {
+            len += 1;
+        }
+        if !self.wrapped_memo_key.is_empty() {
+            len += 1;
+        }
+        if !self.ovk_wrapped_key.is_empty() {
+            len += 1;
+        }
+        if !self.compliance_ciphertext.is_empty() {
+            len += 1;
+        }
+        if !self.dleq_proofs.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.TransferOutputBody", len)?;
+        if let Some(v) = self.note_payload.as_ref() {
+            struct_ser.serialize_field("notePayload", v)?;
+        }
+        if !self.wrapped_memo_key.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("wrappedMemoKey", pbjson::private::base64::encode(&self.wrapped_memo_key).as_str())?;
+        }
+        if !self.ovk_wrapped_key.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("ovkWrappedKey", pbjson::private::base64::encode(&self.ovk_wrapped_key).as_str())?;
+        }
+        if !self.compliance_ciphertext.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("complianceCiphertext", pbjson::private::base64::encode(&self.compliance_ciphertext).as_str())?;
+        }
+        if !self.dleq_proofs.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("dleqProofs", pbjson::private::base64::encode(&self.dleq_proofs).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for TransferOutputBody {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "note_payload",
+            "notePayload",
+            "wrapped_memo_key",
+            "wrappedMemoKey",
+            "ovk_wrapped_key",
+            "ovkWrappedKey",
+            "compliance_ciphertext",
+            "complianceCiphertext",
+            "dleq_proofs",
+            "dleqProofs",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            NotePayload,
+            WrappedMemoKey,
+            OvkWrappedKey,
+            ComplianceCiphertext,
+            DleqProofs,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "notePayload" | "note_payload" => Ok(GeneratedField::NotePayload),
+                            "wrappedMemoKey" | "wrapped_memo_key" => Ok(GeneratedField::WrappedMemoKey),
+                            "ovkWrappedKey" | "ovk_wrapped_key" => Ok(GeneratedField::OvkWrappedKey),
+                            "complianceCiphertext" | "compliance_ciphertext" => Ok(GeneratedField::ComplianceCiphertext),
+                            "dleqProofs" | "dleq_proofs" => Ok(GeneratedField::DleqProofs),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = TransferOutputBody;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.shielded_pool.v1.TransferOutputBody")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<TransferOutputBody, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut note_payload__ = None;
+                let mut wrapped_memo_key__ = None;
+                let mut ovk_wrapped_key__ = None;
+                let mut compliance_ciphertext__ = None;
+                let mut dleq_proofs__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::NotePayload => {
+                            if note_payload__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("notePayload"));
+                            }
+                            note_payload__ = map_.next_value()?;
+                        }
+                        GeneratedField::WrappedMemoKey => {
+                            if wrapped_memo_key__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("wrappedMemoKey"));
+                            }
+                            wrapped_memo_key__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::OvkWrappedKey => {
+                            if ovk_wrapped_key__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ovkWrappedKey"));
+                            }
+                            ovk_wrapped_key__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::ComplianceCiphertext => {
+                            if compliance_ciphertext__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("complianceCiphertext"));
+                            }
+                            compliance_ciphertext__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::DleqProofs => {
+                            if dleq_proofs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dleqProofs"));
+                            }
+                            dleq_proofs__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(TransferOutputBody {
+                    note_payload: note_payload__,
+                    wrapped_memo_key: wrapped_memo_key__.unwrap_or_default(),
+                    ovk_wrapped_key: ovk_wrapped_key__.unwrap_or_default(),
+                    compliance_ciphertext: compliance_ciphertext__.unwrap_or_default(),
+                    dleq_proofs: dleq_proofs__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.shielded_pool.v1.TransferOutputBody", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for TransferPlan {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.body.is_some() {
+            len += 1;
+        }
+        if !self.value_blinding.is_empty() {
+            len += 1;
+        }
+        if self.balance.is_some() {
+            len += 1;
+        }
+        if !self.spends.is_empty() {
+            len += 1;
+        }
+        if !self.outputs.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.TransferPlan", len)?;
+        if let Some(v) = self.body.as_ref() {
+            struct_ser.serialize_field("body", v)?;
+        }
+        if !self.value_blinding.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("valueBlinding", pbjson::private::base64::encode(&self.value_blinding).as_str())?;
+        }
+        if let Some(v) = self.balance.as_ref() {
+            struct_ser.serialize_field("balance", v)?;
+        }
+        if !self.spends.is_empty() {
+            struct_ser.serialize_field("spends", &self.spends)?;
+        }
+        if !self.outputs.is_empty() {
+            struct_ser.serialize_field("outputs", &self.outputs)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for TransferPlan {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "body",
+            "value_blinding",
+            "valueBlinding",
+            "balance",
+            "spends",
+            "outputs",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Body,
+            ValueBlinding,
+            Balance,
+            Spends,
+            Outputs,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "body" => Ok(GeneratedField::Body),
+                            "valueBlinding" | "value_blinding" => Ok(GeneratedField::ValueBlinding),
+                            "balance" => Ok(GeneratedField::Balance),
+                            "spends" => Ok(GeneratedField::Spends),
+                            "outputs" => Ok(GeneratedField::Outputs),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = TransferPlan;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.shielded_pool.v1.TransferPlan")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<TransferPlan, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut body__ = None;
+                let mut value_blinding__ = None;
+                let mut balance__ = None;
+                let mut spends__ = None;
+                let mut outputs__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Body => {
+                            if body__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("body"));
+                            }
+                            body__ = map_.next_value()?;
+                        }
+                        GeneratedField::ValueBlinding => {
+                            if value_blinding__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("valueBlinding"));
+                            }
+                            value_blinding__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Balance => {
+                            if balance__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("balance"));
+                            }
+                            balance__ = map_.next_value()?;
+                        }
+                        GeneratedField::Spends => {
+                            if spends__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("spends"));
+                            }
+                            spends__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Outputs => {
+                            if outputs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("outputs"));
+                            }
+                            outputs__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(TransferPlan {
+                    body: body__,
+                    value_blinding: value_blinding__.unwrap_or_default(),
+                    balance: balance__,
+                    spends: spends__.unwrap_or_default(),
+                    outputs: outputs__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.shielded_pool.v1.TransferPlan", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for TransferView {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.transfer_view.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.TransferView", len)?;
+        if let Some(v) = self.transfer_view.as_ref() {
+            match v {
+                transfer_view::TransferView::Visible(v) => {
+                    struct_ser.serialize_field("visible", v)?;
+                }
+                transfer_view::TransferView::Opaque(v) => {
+                    struct_ser.serialize_field("opaque", v)?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for TransferView {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "visible",
+            "opaque",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Visible,
+            Opaque,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "visible" => Ok(GeneratedField::Visible),
+                            "opaque" => Ok(GeneratedField::Opaque),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = TransferView;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.shielded_pool.v1.TransferView")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<TransferView, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut transfer_view__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Visible => {
+                            if transfer_view__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("visible"));
+                            }
+                            transfer_view__ = map_.next_value::<::std::option::Option<_>>()?.map(transfer_view::TransferView::Visible)
+;
+                        }
+                        GeneratedField::Opaque => {
+                            if transfer_view__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("opaque"));
+                            }
+                            transfer_view__ = map_.next_value::<::std::option::Option<_>>()?.map(transfer_view::TransferView::Opaque)
+;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(TransferView {
+                    transfer_view: transfer_view__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.shielded_pool.v1.TransferView", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for transfer_view::Opaque {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.transfer.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.TransferView.Opaque", len)?;
+        if let Some(v) = self.transfer.as_ref() {
+            struct_ser.serialize_field("transfer", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for transfer_view::Opaque {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "transfer",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Transfer,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "transfer" => Ok(GeneratedField::Transfer),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = transfer_view::Opaque;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.shielded_pool.v1.TransferView.Opaque")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<transfer_view::Opaque, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut transfer__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Transfer => {
+                            if transfer__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("transfer"));
+                            }
+                            transfer__ = map_.next_value()?;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(transfer_view::Opaque {
+                    transfer: transfer__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.shielded_pool.v1.TransferView.Opaque", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for transfer_view::Visible {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.transfer.is_some() {
+            len += 1;
+        }
+        if !self.spent_notes.is_empty() {
+            len += 1;
+        }
+        if !self.created_notes.is_empty() {
+            len += 1;
+        }
+        if self.payload_key.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.TransferView.Visible", len)?;
+        if let Some(v) = self.transfer.as_ref() {
+            struct_ser.serialize_field("transfer", v)?;
+        }
+        if !self.spent_notes.is_empty() {
+            struct_ser.serialize_field("spentNotes", &self.spent_notes)?;
+        }
+        if !self.created_notes.is_empty() {
+            struct_ser.serialize_field("createdNotes", &self.created_notes)?;
+        }
+        if let Some(v) = self.payload_key.as_ref() {
+            struct_ser.serialize_field("payloadKey", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for transfer_view::Visible {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "transfer",
+            "spent_notes",
+            "spentNotes",
+            "created_notes",
+            "createdNotes",
+            "payload_key",
+            "payloadKey",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Transfer,
+            SpentNotes,
+            CreatedNotes,
+            PayloadKey,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "transfer" => Ok(GeneratedField::Transfer),
+                            "spentNotes" | "spent_notes" => Ok(GeneratedField::SpentNotes),
+                            "createdNotes" | "created_notes" => Ok(GeneratedField::CreatedNotes),
+                            "payloadKey" | "payload_key" => Ok(GeneratedField::PayloadKey),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = transfer_view::Visible;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.shielded_pool.v1.TransferView.Visible")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<transfer_view::Visible, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut transfer__ = None;
+                let mut spent_notes__ = None;
+                let mut created_notes__ = None;
+                let mut payload_key__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Transfer => {
+                            if transfer__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("transfer"));
+                            }
+                            transfer__ = map_.next_value()?;
+                        }
+                        GeneratedField::SpentNotes => {
+                            if spent_notes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("spentNotes"));
+                            }
+                            spent_notes__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::CreatedNotes => {
+                            if created_notes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("createdNotes"));
+                            }
+                            created_notes__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::PayloadKey => {
+                            if payload_key__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("payloadKey"));
+                            }
+                            payload_key__ = map_.next_value()?;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(transfer_view::Visible {
+                    transfer: transfer__,
+                    spent_notes: spent_notes__.unwrap_or_default(),
+                    created_notes: created_notes__.unwrap_or_default(),
+                    payload_key: payload_key__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.shielded_pool.v1.TransferView.Visible", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ZkNullifierDerivationProof {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -6151,5 +7393,104 @@ impl<'de> serde::Deserialize<'de> for ZkSpendProof {
             }
         }
         deserializer.deserialize_struct("penumbra.core.component.shielded_pool.v1.ZKSpendProof", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ZkTransferProof {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.inner.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.ZKTransferProof", len)?;
+        if !self.inner.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("inner", pbjson::private::base64::encode(&self.inner).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ZkTransferProof {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "inner",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Inner,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "inner" => Ok(GeneratedField::Inner),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ZkTransferProof;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.shielded_pool.v1.ZKTransferProof")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ZkTransferProof, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut inner__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Inner => {
+                            if inner__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("inner"));
+                            }
+                            inner__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(ZkTransferProof {
+                    inner: inner__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.shielded_pool.v1.ZKTransferProof", FIELDS, GeneratedVisitor)
     }
 }

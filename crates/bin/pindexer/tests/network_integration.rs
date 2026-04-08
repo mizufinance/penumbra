@@ -23,7 +23,7 @@ const PINDEXER_DATABASE_URL: &str =
 /// Reusable fn to connect to target postgres db, based on DATABASE_URL connection string.
 async fn get_db_handle(database_url: &str) -> anyhow::Result<PgPool> {
     Ok(PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(1)
         .connect(database_url)
         .await?)
 }

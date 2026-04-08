@@ -6,12 +6,10 @@ use ark_r1cs_std::{
     prelude::{EqGadget, FieldVar, ToBitsGadget},
     uint8::UInt8,
 };
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_serialize::CanonicalDeserialize;
 use decaf377::{r1cs::FqVar, Bls12_377, Fq, Fr};
 
-use ark_groth16::{
-    r1cs_to_qap::LibsnarkReduction, Groth16, PreparedVerifyingKey, Proof, ProvingKey,
-};
+use ark_groth16::{r1cs_to_qap::LibsnarkReduction, Groth16, PreparedVerifyingKey, Proof};
 use ark_r1cs_std::prelude::AllocVar;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
 use ark_snark::SNARK;
@@ -534,108 +532,16 @@ pub enum VerificationError {
 }
 
 impl SpendProof {
-    /// Generate a `SpendProof` given the proving key, public inputs,
-    /// witness data, and two random elements `blinding_r` and `blinding_s`.
+    /// Generate a `SpendProof` given the public inputs and witness data.
+    #[cfg(any(unix, windows))]
     pub fn prove(
-        blinding_r: Fq,
-        blinding_s: Fq,
-        pk: &ProvingKey<Bls12_377>,
         public: SpendProofPublic,
         private: SpendProofPrivate,
     ) -> Result<Self, crate::ProofError> {
-        #[cfg(debug_assertions)]
-        {
-            // Debug logging for compliance circuit inputs.
-            tracing::debug!(
-                asset_anchor = ?public.asset_anchor.0.to_bytes(),
-                compliance_anchor = ?public.compliance_anchor.0.to_bytes(),
-                asset_position = private.asset_position,
-                compliance_position = private.compliance_position,
-                is_regulated = private.is_regulated,
-                "SpendProof: starting circuit generation"
-            );
-
-            // Log asset indexed leaf details.
-            let native_leaf_commitment = private.asset_indexed_leaf.commit();
-            tracing::debug!(
-                note_asset_id = ?private.note.asset_id().0.to_bytes(),
-                leaf_value = ?private.asset_indexed_leaf.value.to_bytes(),
-                leaf_next_index = private.asset_indexed_leaf.next_index,
-                leaf_next_value = ?private.asset_indexed_leaf.next_value.to_bytes(),
-                native_leaf_commitment = ?native_leaf_commitment.0.to_bytes(),
-                "SpendProof: asset indexed leaf details"
-            );
-
-            // Verify the Merkle path natively before proving.
-            let native_computed_root = penumbra_sdk_compliance::recompute_root(
-                native_leaf_commitment,
-                &private.asset_path,
-                private.asset_position,
-            );
-            let asset_root_matches = native_computed_root == public.asset_anchor;
-            tracing::debug!(
-                native_computed_root = ?native_computed_root.0.to_bytes(),
-                expected_asset_anchor = ?public.asset_anchor.0.to_bytes(),
-                asset_root_matches,
-                "SpendProof: native asset root verification"
-            );
-
-            if !asset_root_matches {
-                tracing::error!(
-                    "MISMATCH: Asset tree root does not match anchor! \
-                     This indicates policy data or path is incorrect."
-                );
-            }
-        }
-
-        let claimed_statement_hash = spend_statement_hash_from_public(&public)
-            .map_err(|e| crate::ProofError::InvalidPublicInput(format!("statement hash: {e}")))?;
-
-        let circuit = SpendCircuit {
-            public: public.clone(),
-            private: private.clone(),
-            claimed_statement_hash,
-        };
-
-        #[cfg(debug_assertions)]
-        {
-            // In debug builds, preflight constraint satisfaction to aid diagnosis.
-            use ark_relations::r1cs::ConstraintSystem;
-            let cs = ConstraintSystem::<Fq>::new_ref();
-            circuit.clone().generate_constraints(cs.clone())?;
-
-            if !cs.is_satisfied().unwrap_or(false) {
-                if let Ok(Some(unsatisfied)) = cs.which_is_unsatisfied() {
-                    tracing::error!(
-                        unsatisfied_constraint = ?unsatisfied,
-                        "SpendProof: specific unsatisfied constraint"
-                    );
-                }
-                tracing::error!(
-                    num_constraints = cs.num_constraints(),
-                    num_instance_variables = cs.num_instance_variables(),
-                    "SpendProof: circuit constraints not satisfied"
-                );
-                return Err(crate::ProofError::UnsatisfiedConstraints(
-                    "Spend circuit constraints not satisfied. Possible causes: \
-                     asset registry verification failed, compliance registry verification failed, \
-                     or ciphertext binding failed"
-                        .to_string(),
-                ));
-            }
-        }
-
-        let proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
-            circuit, pk, blinding_r, blinding_s,
-        )
-        .map_err(|e| crate::ProofError::ProofGenerationFailed(format!("{:?}", e)))?;
-
-        let mut proof_bytes = [0u8; GROTH16_PROOF_LENGTH_BYTES];
-        Proof::serialize_compressed(&proof, &mut proof_bytes[..]).map_err(|e| {
-            crate::ProofError::ProofGenerationFailed(format!("serialization failed: {:?}", e))
-        })?;
-
-        Ok(Self(proof_bytes))
+        let client = gnark_spend_client()?;
+        client.prove(&public, &private).map_err(|e| {
+            crate::ProofError::ProofGenerationFailed(format!("gnark spend prove: {e}"))
+        })
     }
 
     /// Construct a `BatchItem` from this proof and its public inputs.
@@ -680,6 +586,50 @@ impl SpendProof {
         .then_some(())
         .ok_or(VerificationError::InvalidProof)
     }
+}
+
+#[cfg(any(unix, windows))]
+static GNARK_SPEND_CLIENT: once_cell::sync::OnceCell<crate::gnark::GnarkSpendClient> =
+    once_cell::sync::OnceCell::new();
+
+#[cfg(any(unix, windows))]
+fn gnark_spend_client() -> Result<&'static crate::gnark::GnarkSpendClient, crate::ProofError> {
+    GNARK_SPEND_CLIENT.get_or_try_init(init_gnark_spend_client)
+}
+
+#[cfg(any(unix, windows))]
+fn init_gnark_spend_client() -> Result<crate::gnark::GnarkSpendClient, crate::ProofError> {
+    // Env-var override (dev/CI): explicit artifact directory and library/daemon path.
+    if std::env::var_os("PENUMBRA_GNARK_SPEND_LIB").is_some()
+        || std::env::var_os("PENUMBRA_GNARK_SPEND_DAEMON").is_some()
+        || std::env::var_os("PENUMBRA_GNARK_SPEND_ARTIFACT_DIR").is_some()
+    {
+        return crate::gnark::GnarkSpendClient::from_env().map_err(|e| {
+            crate::ProofError::ProofGenerationFailed(format!("gnark spend init: {e}"))
+        });
+    }
+
+    // Bundled path (test/dev default): build-script-generated library path or installed sidecar.
+    let lib_path = crate::gnark::GnarkSpendClient::bundled_lib_path()
+        .or_else(crate::gnark::GnarkSpendClient::auto_lib_path)
+        .ok_or_else(|| {
+            crate::ProofError::ProofGenerationFailed(
+                "gnark spend library not found (checked bundled path and executable-adjacent locations)"
+                    .into(),
+            )
+        })?;
+    let pk_bytes = penumbra_sdk_proof_params::GNARK_SPEND_PROOF_PROVING_KEY_BYTES;
+    if pk_bytes.is_empty() {
+        return Err(crate::ProofError::ProofGenerationFailed(
+            "gnark spend proving key not bundled \
+             (enable bundled-proving-keys feature)"
+                .into(),
+        ));
+    }
+    let pvk = penumbra_sdk_proof_params::SPEND_PROOF_VERIFICATION_KEY.clone();
+    let metadata = penumbra_sdk_proof_params::GNARK_SPEND_CIRCUIT_METADATA;
+    crate::gnark::GnarkSpendClient::from_bundled(&lib_path, pk_bytes, pvk, metadata)
+        .map_err(|e| crate::ProofError::ProofGenerationFailed(format!("gnark spend init: {e}")))
 }
 
 impl DomainType for SpendProof {
@@ -1027,24 +977,28 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "bundled-proving-keys")]
     #[test]
-    fn spend_proof_full_groth16_roundtrip_regulated() {
-        use crate::test_proof_helpers::proof_test_helpers::{full_groth16_roundtrip, CircuitType};
-        full_groth16_roundtrip(CircuitType::Spend, true);
+    fn spend_proof_roundtrip_regulated() {
+        use crate::test_proof_helpers::proof_test_helpers::{full_proof_roundtrip, CircuitType};
+        full_proof_roundtrip(CircuitType::Spend, true);
     }
 
+    #[cfg(feature = "bundled-proving-keys")]
     #[test]
-    fn spend_proof_full_groth16_roundtrip_unregulated() {
-        use crate::test_proof_helpers::proof_test_helpers::{full_groth16_roundtrip, CircuitType};
-        full_groth16_roundtrip(CircuitType::Spend, false);
+    fn spend_proof_roundtrip_unregulated() {
+        use crate::test_proof_helpers::proof_test_helpers::{full_proof_roundtrip, CircuitType};
+        full_proof_roundtrip(CircuitType::Spend, false);
     }
 
+    #[cfg(feature = "bundled-proving-keys")]
     #[test]
     fn spend_proof_plan_path_regulated() {
         use crate::test_proof_helpers::proof_test_helpers::test_spend_plan_path;
         test_spend_plan_path(true);
     }
 
+    #[cfg(feature = "bundled-proving-keys")]
     #[test]
     fn spend_proof_plan_path_unregulated() {
         use crate::test_proof_helpers::proof_test_helpers::test_spend_plan_path;
@@ -2036,5 +1990,159 @@ mod tests {
             compressed_prover, compressed_again,
             "Compression must be deterministic"
         );
+    }
+
+    /// Compare the canonical gnark path against the legacy Arkworks path for a spend proof.
+    ///
+    /// Requires `libpenumbra_gnark_spend.{so,dylib}` built in `tools/gnark/`
+    /// (`go build -buildmode=c-shared -o libpenumbra_gnark_spend.dylib ./cmd/spendlib`).
+    #[cfg(any(unix, windows))]
+    #[test]
+    #[ignore = "perf: requires libpenumbra_gnark_spend built in tools/gnark/"]
+    fn spend_gnark_vs_arkworks_timing() {
+        use crate::spend::{SpendCircuit, SpendProofPrivate, SpendProofPublic};
+        use crate::test_proof_helpers::proof_test_helpers::{
+            generate_test_data, setup_arkworks_groth16_keys, CircuitType, REGULATED_ASSET_ID,
+        };
+        use ark_groth16::{r1cs_to_qap::LibsnarkReduction, Groth16};
+        use decaf377::{Fq, Fr};
+        use penumbra_sdk_asset::Balance;
+        use penumbra_sdk_sct::Nullifier;
+        use std::time::Instant;
+
+        let mut rng = rand::thread_rng();
+        let test_data =
+            generate_test_data(&mut rng, REGULATED_ASSET_ID, 100, true, CircuitType::Spend);
+
+        let mut sct = penumbra_sdk_tct::Tree::new();
+        let note_commitment = test_data.note.commit();
+        sct.insert(penumbra_sdk_tct::Witness::Keep, note_commitment)
+            .unwrap();
+        let anchor = sct.root();
+        let state_commitment_proof = sct.witness(note_commitment).unwrap();
+
+        let balance_commitment = Balance::from(test_data.value).commit(test_data.balance_blinding);
+        let nullifier = Nullifier::derive(
+            test_data.fvk.nullifier_key(),
+            state_commitment_proof.position(),
+            &note_commitment,
+        );
+        let randomizer = Fr::rand(&mut rng);
+        let rk = test_data
+            .fvk
+            .spend_verification_key()
+            .randomize(&randomizer);
+        let dummy_nonce = Fr::from(0u64);
+        let sender_leaf_hash =
+            penumbra_sdk_compliance::blind_sender_leaf(test_data.user_leaf.commit(), dummy_nonce);
+
+        let public = SpendProofPublic {
+            anchor,
+            balance_commitment,
+            nullifier,
+            rk,
+            asset_anchor: test_data.asset_anchor,
+            compliance_anchor: test_data.compliance_anchor,
+            epk: test_data.epk_1,
+            c2_core: test_data.c2_core,
+            compliance_ciphertext: test_data.compliance_ciphertext,
+            target_timestamp: Fq::from(test_data.target_timestamp),
+            dleq_c: test_data.dleq_c,
+            dleq_s: test_data.dleq_s,
+            sender_leaf_hash,
+        };
+        let private = SpendProofPrivate {
+            state_commitment_proof,
+            note: test_data.note,
+            v_blinding: test_data.balance_blinding,
+            spend_auth_randomizer: randomizer,
+            ak: *test_data.fvk.spend_verification_key(),
+            nk: *test_data.fvk.nullifier_key(),
+            asset_path: test_data.asset_path,
+            asset_position: test_data.asset_position,
+            asset_indexed_leaf: test_data.asset_indexed_leaf,
+            is_regulated: true,
+            compliance_path: test_data.compliance_path,
+            compliance_position: test_data.compliance_position,
+            user_leaf: test_data.user_leaf,
+            compliance_ephemeral_secret: test_data.ephemeral_secret,
+            tx_blinding_nonce: dummy_nonce,
+            is_flagged: false,
+            salt: test_data.salt,
+        };
+
+        // --- Arkworks prove ---
+        let (pk, ark_pvk, blinding_r, blinding_s) = setup_arkworks_groth16_keys::<SpendCircuit>();
+        let claimed_hash =
+            crate::public_input_hash::spend_statement_hash_from_public(&public).unwrap();
+        let circuit = SpendCircuit {
+            public: public.clone(),
+            private: private.clone(),
+            claimed_statement_hash: claimed_hash,
+        };
+        let t0 = Instant::now();
+        let ark_raw_proof =
+            Groth16::<decaf377::Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
+                circuit, &pk, blinding_r, blinding_s,
+            )
+            .expect("arkworks prove");
+        let ark_prove_ms = t0.elapsed().as_millis();
+        // Wrap in SpendProof (compressed) — same as production output.
+        use ark_serialize::CanonicalSerialize;
+        let mut ark_proof_bytes = Vec::new();
+        ark_raw_proof
+            .serialize_compressed(&mut ark_proof_bytes)
+            .expect("compress arkworks proof");
+        let ark_spend_proof = SpendProof(ark_proof_bytes.try_into().expect("proof is 192 bytes"));
+
+        let gnark_pvk = &*penumbra_sdk_proof_params::SPEND_PROOF_VERIFICATION_KEY;
+
+        let t1 = Instant::now();
+        ark_spend_proof
+            .verify(&ark_pvk, public.clone())
+            .expect("arkworks verify");
+        let ark_verify_us = t1.elapsed().as_micros();
+
+        // --- gnark prove ---
+        let lib_path = crate::gnark::GnarkSpendClient::auto_lib_path()
+            .expect("build libpenumbra_gnark_spend in tools/gnark/ first");
+        let artifact_dir = auto_gnark_artifact_dir("spend")
+            .expect("could not locate crates/crypto/proof-params/src/gen/gnark/spend/");
+        let gnark_client = crate::gnark::GnarkSpendClient::load_library(&lib_path, &artifact_dir)
+            .expect("gnark spend client");
+        let t2 = Instant::now();
+        let gnark_proof = gnark_client.prove(&public, &private).expect("gnark prove");
+        let gnark_prove_ms = t2.elapsed().as_millis();
+
+        let t3 = Instant::now();
+        gnark_proof.verify(gnark_pvk, public).expect("gnark verify");
+        let gnark_verify_us = t3.elapsed().as_micros();
+
+        println!("\n=== Spend proof timing ===");
+        println!("{:<10} {:>10} {:>12}", "path", "prove ms", "verify µs");
+        println!(
+            "{:<10} {:>10} {:>12}",
+            "arkworks", ark_prove_ms, ark_verify_us
+        );
+        println!(
+            "{:<10} {:>10} {:>12}",
+            "gnark", gnark_prove_ms, gnark_verify_us
+        );
+    }
+
+    /// Locates `crates/crypto/proof-params/src/gen/gnark/<circuit>/` by walking
+    /// ancestors of the current executable until the workspace root is found.
+    fn auto_gnark_artifact_dir(circuit: &str) -> Option<std::path::PathBuf> {
+        let exe = std::env::current_exe().ok()?;
+        let mut dir = exe.parent()?;
+        loop {
+            let candidate = dir
+                .join("crates/crypto/proof-params/src/gen/gnark")
+                .join(circuit);
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
+            dir = dir.parent()?;
+        }
     }
 }

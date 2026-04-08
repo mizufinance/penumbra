@@ -15,13 +15,21 @@ pub(crate) fn valid_binding_signature(tx: &Transaction) -> Result<()> {
 }
 
 pub fn num_clues_equal_to_num_outputs(tx: &Transaction) -> anyhow::Result<()> {
+    let num_note_creating_actions = tx
+        .actions()
+        .map(|action| match action {
+            Action::Output(_) => 1usize,
+            Action::Transfer(transfer) => transfer.body.outputs.len(),
+            _ => 0,
+        })
+        .sum::<usize>();
     if tx
         .transaction_body()
         .detection_data
         .unwrap_or_default()
         .fmd_clues
         .len()
-        != tx.outputs().count()
+        != num_note_creating_actions
     {
         Err(anyhow::anyhow!(
             "consensus rule violated: must have equal number of outputs and FMD clues"
@@ -33,7 +41,14 @@ pub fn num_clues_equal_to_num_outputs(tx: &Transaction) -> anyhow::Result<()> {
 
 #[allow(clippy::if_same_then_else)]
 pub fn check_memo_exists_if_outputs_absent_if_not(tx: &Transaction) -> anyhow::Result<()> {
-    let num_outputs = tx.outputs().count();
+    let num_outputs = tx
+        .actions()
+        .map(|action| match action {
+            Action::Output(_) => 1usize,
+            Action::Transfer(transfer) => transfer.body.outputs.len(),
+            _ => 0,
+        })
+        .sum::<usize>();
     if num_outputs > 0 && tx.transaction_body().memo.is_none() {
         Err(anyhow::anyhow!(
             "consensus rule violated: must have memo if outputs present"

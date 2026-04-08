@@ -1,6 +1,10 @@
+#[cfg(any(unix, windows))]
 use crate::Action;
+#[cfg(any(unix, windows))]
 use crate::WitnessData;
-use anyhow::{anyhow, Context, Result};
+use anyhow::anyhow;
+#[cfg(any(unix, windows))]
+use anyhow::{Context, Result};
 use ark_ff::Zero;
 use decaf377::Fr;
 use penumbra_sdk_asset::Balance;
@@ -28,7 +32,7 @@ use penumbra_sdk_txhash::{EffectHash, EffectingData};
 use penumbra_sdk_ibc::IbcRelay;
 use penumbra_sdk_keys::{symmetric::PayloadKey, FullViewingKey};
 use penumbra_sdk_proto::{core::transaction::v1 as pb_t, DomainType};
-use penumbra_sdk_shielded_pool::{Ics20Withdrawal, OutputPlan, SpendPlan};
+use penumbra_sdk_shielded_pool::{Ics20Withdrawal, OutputPlan, SpendPlan, TransferPlan};
 use penumbra_sdk_stake::{Delegate, Undelegate, UndelegateClaimPlan};
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +49,8 @@ pub enum ActionPlan {
     Spend(SpendPlan),
     /// Describes a proposed output.
     Output(OutputPlan),
+    /// Describes a proposed fused transfer.
+    Transfer(TransferPlan),
     /// We don't need any extra information (yet) to understand delegations,
     /// because we don't yet use flow encryption.
     Delegate(Delegate),
@@ -102,6 +108,7 @@ impl ActionPlan {
     ///
     /// This method is useful for controlling how a transaction's actions are
     /// built (e.g., building them in parallel, or via Web Workers).
+    #[cfg(any(unix, windows))]
     pub fn build_unauth(
         action_plan: ActionPlan,
         fvk: &FullViewingKey,
@@ -127,7 +134,6 @@ impl ActionPlan {
                             // FIXME: why does this need the anchor? isn't that implied by the auth_path?
                             // cf. delegator_vote
                             witness_data.anchor,
-                            &penumbra_sdk_proof_params::SPEND_PROOF_PROVING_KEY,
                             None, // No compliance keys for now (POC)
                         )
                         .map_err(|e| anyhow::anyhow!("spend proof generation failed: {}", e))?,
@@ -140,10 +146,36 @@ impl ActionPlan {
                         .output(
                             fvk.outgoing(),
                             memo_key.as_ref().unwrap_or(&dummy_payload_key),
-                            &penumbra_sdk_proof_params::OUTPUT_PROOF_PROVING_KEY,
                             None, // No compliance keys for now (POC)
                         )
                         .map_err(|e| anyhow::anyhow!("output proof generation failed: {}", e))?,
+                )
+            }
+            Transfer(transfer_plan) => {
+                let dummy_payload_key: PayloadKey = [0u8; 32].into();
+                let auth_paths = transfer_plan
+                    .spends
+                    .iter()
+                    .map(|spend| {
+                        let note_commitment = spend.note.commit();
+                        witness_data
+                            .state_commitment_proofs
+                            .get(&note_commitment)
+                            .cloned()
+                            .context(format!("could not get proof for {note_commitment:?}"))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                Action::Transfer(
+                    transfer_plan
+                        .transfer(
+                            fvk,
+                            vec![[0; 64].into(); transfer_plan.spends.len()],
+                            auth_paths,
+                            witness_data.anchor,
+                            memo_key.as_ref().unwrap_or(&dummy_payload_key),
+                        )
+                        .map_err(|e| anyhow::anyhow!("transfer proof generation failed: {}", e))?,
                 )
             }
             Swap(swap_plan) => Action::Swap(swap_plan.swap(fvk)),
@@ -208,6 +240,7 @@ impl ActionPlan {
         match self {
             ActionPlan::Spend(_) => 1,
             ActionPlan::Output(_) => 2,
+            ActionPlan::Transfer(_) => 5,
             ActionPlan::Swap(_) => 3,
             ActionPlan::SwapClaim(_) => 4,
             ActionPlan::ValidatorDefinition(_) => 16,
@@ -242,6 +275,7 @@ impl ActionPlan {
         match self {
             Spend(spend) => spend.balance(),
             Output(output) => output.balance(),
+            Transfer(transfer) => transfer.balance(),
             Delegate(delegate) => delegate.balance(),
             Undelegate(undelegate) => undelegate.balance(),
             UndelegateClaim(undelegate_claim) => undelegate_claim.balance(),
@@ -278,6 +312,7 @@ impl ActionPlan {
         match self {
             Spend(spend) => spend.value_blinding,
             Output(output) => output.value_blinding,
+            Transfer(transfer) => transfer.value_blinding,
             Delegate(_) => Fr::zero(),
             Undelegate(_) => Fr::zero(),
             UndelegateClaim(undelegate_claim) => undelegate_claim.balance_blinding,
@@ -307,14 +342,21 @@ impl ActionPlan {
     }
 
     /// Compute the effect hash of the action this plan will produce.
-    pub fn effect_hash(&self, fvk: &FullViewingKey, memo_key: &PayloadKey) -> EffectHash {
+    pub fn effect_hash(
+        &self,
+        fvk: &FullViewingKey,
+        memo_key: &PayloadKey,
+    ) -> anyhow::Result<EffectHash> {
         use ActionPlan::*;
 
-        match self {
+        let effect_hash = match self {
             Spend(plan) => plan.spend_body(fvk, None).effect_hash(),
             Output(plan) => plan
                 .output_body(fvk.outgoing(), memo_key, None)
                 .effect_hash(),
+            Transfer(plan) => plan
+                .transfer_body(fvk, memo_key, penumbra_sdk_tct::Tree::default().root())
+                .map(|body| body.effect_hash())?,
             Delegate(plan) => plan.effect_hash(),
             Undelegate(plan) => plan.effect_hash(),
             UndelegateClaim(plan) => plan.undelegate_claim_body().effect_hash(),
@@ -340,7 +382,9 @@ impl ActionPlan {
             ActionLiquidityTournamentVote(plan) => plan.to_body(fvk).effect_hash(),
             ComplianceRegisterAsset(plan) => plan.effect_hash(),
             ComplianceRegisterUser(plan) => plan.effect_hash(),
-        }
+        };
+
+        Ok(effect_hash)
     }
 }
 
@@ -355,6 +399,12 @@ impl From<SpendPlan> for ActionPlan {
 impl From<OutputPlan> for ActionPlan {
     fn from(inner: OutputPlan) -> ActionPlan {
         ActionPlan::Output(inner)
+    }
+}
+
+impl From<TransferPlan> for ActionPlan {
+    fn from(inner: TransferPlan) -> ActionPlan {
+        ActionPlan::Transfer(inner)
     }
 }
 
@@ -521,6 +571,9 @@ impl From<ActionPlan> for pb_t::ActionPlan {
             ActionPlan::Spend(inner) => pb_t::ActionPlan {
                 action: Some(pb_t::action_plan::Action::Spend(inner.into())),
             },
+            ActionPlan::Transfer(inner) => pb_t::ActionPlan {
+                action: Some(pb_t::action_plan::Action::Transfer(inner.into())),
+            },
             ActionPlan::Delegate(inner) => pb_t::ActionPlan {
                 action: Some(pb_t::action_plan::Action::Delegate(inner.into())),
             },
@@ -634,6 +687,9 @@ impl TryFrom<pb_t::ActionPlan> for ActionPlan {
         {
             pb_t::action_plan::Action::Output(inner) => Ok(ActionPlan::Output(inner.try_into()?)),
             pb_t::action_plan::Action::Spend(inner) => Ok(ActionPlan::Spend(inner.try_into()?)),
+            pb_t::action_plan::Action::Transfer(inner) => {
+                Ok(ActionPlan::Transfer(inner.try_into()?))
+            }
             pb_t::action_plan::Action::Delegate(inner) => {
                 Ok(ActionPlan::Delegate(inner.try_into()?))
             }

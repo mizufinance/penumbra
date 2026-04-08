@@ -19,7 +19,7 @@ use penumbra_sdk_governance::{
 use penumbra_sdk_ibc::IbcRelay;
 use penumbra_sdk_keys::{Address, FullViewingKey, PayloadKey};
 use penumbra_sdk_proto::{core::transaction::v1 as pb, DomainType};
-use penumbra_sdk_shielded_pool::{Ics20Withdrawal, OutputPlan, SpendPlan};
+use penumbra_sdk_shielded_pool::{Ics20Withdrawal, OutputPlan, SpendPlan, TransferPlan};
 use penumbra_sdk_stake::{Delegate, Undelegate, UndelegateClaimPlan};
 use penumbra_sdk_txhash::{EffectHash, EffectingData};
 use rand::{CryptoRng, Rng};
@@ -110,7 +110,7 @@ impl TransactionPlan {
         // Hash the effecting data of each action, in the order it appears in the plan,
         // which will be the order it appears in the transaction.
         for action_plan in &self.actions {
-            state.update(action_plan.effect_hash(fvk, &memo_key).as_bytes());
+            state.update(action_plan.effect_hash(fvk, &memo_key)?.as_bytes());
         }
 
         Ok(EffectHash(state.finalize().as_array().clone()))
@@ -130,6 +130,16 @@ impl TransactionPlan {
         self.actions.iter().filter_map(|action| {
             if let ActionPlan::Output(o) = action {
                 Some(o)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn transfer_plans(&self) -> impl Iterator<Item = &TransferPlan> {
+        self.actions.iter().filter_map(|action| {
+            if let ActionPlan::Transfer(t) = action {
+                Some(t)
             } else {
                 None
             }
@@ -342,17 +352,28 @@ impl TransactionPlan {
     pub fn dest_addresses(&self) -> Vec<Address> {
         self.output_plans()
             .map(|plan| plan.dest_address.clone())
+            .chain(self.transfer_plans().flat_map(|plan| plan.dest_addresses()))
             .collect()
     }
 
-    /// Convenience method to get the number of `OutputPlan`s in this transaction.
+    /// Convenience method to get the total number of outputs in this transaction,
+    /// counting both `OutputPlan`s and outputs created by each `TransferPlan`.
     pub fn num_outputs(&self) -> usize {
         self.output_plans().count()
+            + self
+                .transfer_plans()
+                .map(|plan| plan.num_outputs())
+                .sum::<usize>()
     }
 
-    /// Convenience method to get the number of `SpendPlan`s in this transaction.
+    /// Convenience method to get the total number of spends in this transaction,
+    /// counting both `spend_plans()` and spends contained in `transfer_plans()`.
     pub fn num_spends(&self) -> usize {
         self.spend_plans().count()
+            + self
+                .transfer_plans()
+                .map(|plan| plan.spends.len())
+                .sum::<usize>()
     }
 
     /// Convenience method to get the number of proofs in this transaction.
@@ -362,6 +383,7 @@ impl TransactionPlan {
             .map(|action| match action {
                 ActionPlan::Spend(_) => 1,
                 ActionPlan::Output(_) => 1,
+                ActionPlan::Transfer(_) => 1,
                 ActionPlan::Swap(_) => 1,
                 ActionPlan::SwapClaim(_) => 1,
                 ActionPlan::UndelegateClaim(_) => 1,
@@ -461,7 +483,7 @@ mod tests {
         Address,
     };
     use penumbra_sdk_shielded_pool::Note;
-    use penumbra_sdk_shielded_pool::{OutputPlan, SpendPlan};
+    use penumbra_sdk_shielded_pool::{OutputPlan, SpendPlan, TransferPlan};
     use penumbra_sdk_tct as tct;
     use penumbra_sdk_txhash::EffectingData as _;
     use rand_core::OsRng;
@@ -469,7 +491,7 @@ mod tests {
     use crate::{
         memo::MemoPlaintext,
         plan::{CluePlan, DetectionDataPlan, MemoPlan, TransactionPlan},
-        TransactionParameters, WitnessData,
+        Action, Transaction, TransactionBody, TransactionParameters, WitnessData,
     };
 
     fn panic_message(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
@@ -601,5 +623,92 @@ mod tests {
         //     })
         //     .expect("can build");
         // assert_eq!(plan_effect_hash, transaction.effect_hash());
+    }
+
+    #[test]
+    fn transfer_plan_effect_hash_matches_transaction_effect_hash() {
+        let seed_phrase = SeedPhrase::generate(OsRng);
+        let sk = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
+        let fvk = sk.full_viewing_key();
+        let (addr, _dtk) = fvk.incoming().payment_address(0u32.into());
+
+        let mut sct = tct::Tree::new();
+        let input_note = Note::generate(
+            &mut OsRng,
+            &addr,
+            Value {
+                amount: 10_000u64.into(),
+                asset_id: *STAKING_TOKEN_ASSET_ID,
+            },
+        );
+        sct.insert(tct::Witness::Keep, input_note.commit()).unwrap();
+
+        let mut spend_plan = SpendPlan::new(&mut OsRng, input_note, 0u64.into());
+        spend_plan
+            .set_compliance_details(&mut OsRng)
+            .expect("enrich spend plan");
+
+        let mut output_plan = OutputPlan::new(
+            &mut OsRng,
+            Value {
+                amount: 9_000u64.into(),
+                asset_id: *STAKING_TOKEN_ASSET_ID,
+            },
+            addr.clone(),
+        );
+        output_plan.tx_blinding_nonce = spend_plan.tx_blinding_nonce;
+        let recipient_leaf = output_plan
+            .compliance_leaf
+            .clone()
+            .expect("output plan should have recipient leaf");
+        let sender_leaf = spend_plan
+            .compliance_leaf
+            .clone()
+            .expect("spend plan should have sender leaf");
+        output_plan
+            .set_compliance_details(
+                &mut OsRng,
+                &recipient_leaf,
+                sender_leaf,
+                spend_plan.tx_blinding_nonce,
+            )
+            .expect("enrich output plan");
+
+        let transfer_plan =
+            TransferPlan::from_spend_output(spend_plan, output_plan, decaf377::Fr::from(42u64))
+                .expect("build transfer plan");
+        let memo_key = [0u8; 32].into();
+        let body = transfer_plan
+            .transfer_body(fvk, &memo_key, sct.root())
+            .expect("build transfer body from plan");
+
+        let plan = TransactionPlan {
+            actions: vec![transfer_plan.into()],
+            transaction_parameters: TransactionParameters {
+                expiry_height: 0,
+                fee: Fee::from_staking_token_amount(1_000u64.into()),
+                chain_id: "penumbra-test".to_string(),
+            },
+            detection_data: None,
+            memo: None,
+        };
+
+        let plan_effect_hash = plan.effect_hash(fvk).unwrap();
+        let transaction = Transaction {
+            transaction_body: TransactionBody {
+                actions: vec![Action::Transfer(penumbra_sdk_shielded_pool::Transfer {
+                    body,
+                    auth_sigs: vec![[0u8; 64].into()],
+                    proof: penumbra_sdk_shielded_pool::TransferProof::default(),
+                })],
+                transaction_parameters: plan.transaction_parameters.clone(),
+                detection_data: None,
+                memo: None,
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(transaction.transfers().count(), 1);
+        assert_eq!(plan_effect_hash, transaction.effect_hash());
     }
 }

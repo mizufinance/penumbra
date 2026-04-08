@@ -76,6 +76,10 @@ inherits = "release"
 debug = 1
 strip = "none"
 
+[profile.ci]
+inherits = "release"
+codegen-units = 16
+
 # config for 'cargo release'
 [workspace.metadata.release]
 # Instruct cargo-release to increment versions for all packages in the workspace in lockstep.
@@ -162,6 +166,7 @@ ics23                            = { version = "0.12.0" }
 im                               = { version = "^15.1.0" }
 indicatif                        = { version = "0.16" }
 jmt                              = { version = "0.11", features = ["migration"] }
+libloading                       = { version = "0.8" }
 ledger-lib = { git = "https://github.com/ledger-community/rust-ledger", rev = "510bb3ca30639af4bdb12a918b6bbbdb75fa5f52" }
 ledger-proto = { git = "https://github.com/ledger-community/rust-ledger", rev = "510bb3ca30639af4bdb12a918b6bbbdb75fa5f52" }
 metrics                          = { version = "0.24.1" }
@@ -192,9 +197,11 @@ penumbra-sdk-mock-consensus          = { version = "2.1.0", path = "crates/test/
 penumbra-sdk-mock-tendermint-proxy   = { version = "2.1.0", path = "crates/test/mock-tendermint-proxy" }
 penumbra-sdk-num                     = { default-features = false, version = "2.1.0", path = "crates/core/num" }
 penumbra-sdk-proof-params            = { default-features = false, version = "2.1.0", path = "crates/crypto/proof-params" }
+penumbra-sdk-proof-aggregation       = { default-features = false, version = "2.1.0", path = "crates/crypto/proof-aggregation" }
 penumbra-sdk-proof-setup             = { version = "2.1.0", path = "crates/crypto/proof-setup" }
 penumbra-sdk-proto                   = { default-features = false, version = "2.1.0", path = "crates/proto" }
 penumbra-sdk-sct                     = { default-features = false, version = "2.1.0", path = "crates/core/component/sct" }
+penumbra-sdk-compliance              = { default-features = false, version = "2.1.0", path = "crates/core/component/compliance" }
 penumbra-sdk-shielded-pool           = { default-features = false, version = "2.1.0", path = "crates/core/component/shielded-pool" }
 penumbra-sdk-stake                   = { default-features = false, version = "2.1.0", path = "crates/core/component/stake" }
 penumbra-sdk-tct                     = { default-features = false, version = "2.1.0", path = "crates/crypto/tct" }

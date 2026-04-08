@@ -14,9 +14,8 @@ rust-version = "1.75"
 dist = true
 
 [features]
-default = ["download-proving-keys"]
+default = []
 std = ["ibc-types/std"]
-download-proving-keys = ["penumbra-sdk-proof-params/download-proving-keys"]
 benchmark-system-allocator = []
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

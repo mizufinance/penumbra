@@ -1,0 +1,36 @@
+{
+  "families": [
+    {
+      "id": 1,
+      "label": "transfer1x1",
+      "artifact_name": "transfer1x1",
+      "n_in": 1,
+      "n_out": 1,
+      "bundled_lib_basename": "libpenumbra_gnark_transfer"
+    },
+    {
+      "id": 2,
+      "label": "transfer1x2",
+      "artifact_name": "transfer1x2",
+      "n_in": 1,
+      "n_out": 2,
+      "bundled_lib_basename": "libpenumbra_gnark_transfer"
+    },
+    {
+      "id": 3,
+      "label": "transfer2x1",
+      "artifact_name": "transfer2x1",
+      "n_in": 2,
+      "n_out": 1,
+      "bundled_lib_basename": "libpenumbra_gnark_transfer"
+    },
+    {
+      "id": 4,
+      "label": "transfer2x2",
+      "artifact_name": "transfer2x2",
+      "n_in": 2,
+      "n_out": 2,
+      "bundled_lib_basename": "libpenumbra_gnark_transfer"
+    }
+  ]
+}

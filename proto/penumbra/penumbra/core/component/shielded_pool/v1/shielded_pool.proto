@@ -114,9 +114,101 @@ message ZKSpendProof {
   bytes inner = 1;
 }
 
+// A Penumbra ZK transfer proof.
+message ZKTransferProof {
+  bytes inner = 1;
+}
+
 // A Penumbra ZK nullifier derivation proof.
 message ZKNullifierDerivationProof {
   bytes inner = 1;
+}
+
+message TransferInputBody {
+  // The nullifier of the spent note.
+  sct.v1.Nullifier nullifier = 1;
+  // The randomized validating key for the spend authorization signature.
+  crypto.decaf377_rdsa.v1.SpendVerificationKey rk = 2;
+  // An encryption of the commitment of the input note to the sender's OVK.
+  bytes encrypted_backref = 3;
+  // Compliance ciphertext encrypting spent note details for the asset issuer.
+  bytes compliance_ciphertext = 4;
+  // DLEQ proof bundle for the spend-side policy binding.
+  bytes dleq_proof = 5;
+}
+
+message TransferOutputBody {
+  // The minimal data required to scan and process the created note.
+  NotePayload note_payload = 1;
+  // An encrypted key for decrypting the memo.
+  bytes wrapped_memo_key = 2;
+  // The key material used for note encryption, wrapped to the sender's OVK.
+  bytes ovk_wrapped_key = 3;
+  // Compliance ciphertext encrypting created note details for the asset issuer.
+  bytes compliance_ciphertext = 4;
+  // DLEQ proof bundle for the output-side policy binding.
+  bytes dleq_proofs = 5;
+}
+
+// Transfers shielded notes into new shielded notes as a single action.
+message Transfer {
+  // The effecting data of the transfer.
+  TransferBody body = 1;
+  // The authorizing signatures for each transfer input.
+  repeated crypto.decaf377_rdsa.v1.SpendAuthSignature auth_sigs = 2;
+  // The proof that the transfer is well-formed.
+  ZKTransferProof proof = 3;
+}
+
+// The body of a fused shielded transfer.
+message TransferBody {
+  // The proving family this transfer uses.
+  uint32 family_id = 16;
+  // The state commitment tree anchor used during proof generation.
+  crypto.tct.v1.MerkleRoot anchor = 15;
+  // A commitment to the net balance of the action.
+  asset.v1.BalanceCommitment balance_commitment = 1;
+  // The transfer inputs.
+  repeated TransferInputBody inputs = 2;
+  // The transfer outputs.
+  repeated TransferOutputBody outputs = 3;
+  // Target timestamp for compliance verification (Unix UTC seconds).
+  uint64 target_timestamp = 4;
+  // Compliance tree anchor (user tree root) used during proof generation.
+  crypto.tct.v1.StateCommitment compliance_anchor = 5;
+  // Asset tree anchor used during proof generation.
+  crypto.tct.v1.StateCommitment asset_anchor = 6;
+}
+
+message TransferView {
+  message Visible {
+    Transfer transfer = 1;
+    repeated NoteView spent_notes = 2;
+    repeated NoteView created_notes = 3;
+    keys.v1.PayloadKey payload_key = 4;
+  }
+
+  message Opaque {
+    Transfer transfer = 1;
+  }
+
+  oneof transfer_view {
+    Visible visible = 1;
+    Opaque opaque = 2;
+  }
+}
+
+message TransferPlan {
+  // The public body this plan will produce.
+  TransferBody body = 1;
+  // The blinding factor to use for the net balance commitment.
+  bytes value_blinding = 2;
+  // The net action balance committed by the action body.
+  asset.v1.Balance balance = 3;
+  // The spend plans fused into this transfer.
+  repeated SpendPlan spends = 4;
+  // The output plans fused into this transfer.
+  repeated OutputPlan outputs = 5;
 }
 
 // Spends a shielded note.

@@ -510,8 +510,7 @@ impl<T: StateWrite + ?Sized> RateDataWrite for T {}
 #[async_trait]
 pub trait ConsensusIndexRead: StateRead {
     /// Returns a stream of [`IdentityKey`]s of validators that are currently in the consensus set.
-    /// This only excludes validators that do not meet the minimum validator stake requirement
-    /// (see [`StakeParameters::min_validator_stake`]).
+    /// This includes validators currently eligible for the active/inactive rotation.
     fn consensus_set_stream(
         &self,
     ) -> Result<Pin<Box<dyn futures::Stream<Item = Result<IdentityKey>> + Send + 'static>>> {
@@ -569,8 +568,7 @@ impl<T: StateRead + ?Sized> ConsensusIndexRead for T {}
 #[async_trait]
 pub trait ConsensusIndexWrite: StateWrite {
     /// Add a validator identity to the consensus set index.
-    /// The consensus set index includes any validator that has a delegation pool that
-    /// is greater than [`StakeParameters::min_validator_stake`].
+    /// The consensus set index includes validators eligible for the active/inactive rotation.
     fn add_consensus_set_index(&mut self, identity_key: &IdentityKey) {
         tracing::debug!(validator = %identity_key, "adding validator identity to consensus set index");
         self.nonverifiable_put_raw(
@@ -582,8 +580,7 @@ pub trait ConsensusIndexWrite: StateWrite {
     }
 
     /// Remove a validator identity from the consensus set index.
-    /// The consensus set index includes any validator that has a delegation pool that
-    /// is greater than [`StakeParameters::min_validator_stake`].
+    /// The consensus set index includes validators eligible for the active/inactive rotation.
     fn remove_consensus_set_index(&mut self, identity_key: &IdentityKey) {
         tracing::debug!(validator = %identity_key, "removing validator identity from consensus set index");
         self.nonverifiable_delete(

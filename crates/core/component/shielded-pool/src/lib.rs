@@ -9,6 +9,7 @@ pub use ics20_withdrawal::Ics20Withdrawal;
 pub mod event;
 pub mod fmd;
 pub mod genesis;
+pub mod gnark;
 pub mod params;
 pub mod state_key;
 
@@ -26,6 +27,7 @@ pub mod output;
 pub mod public_input_hash;
 pub mod r1cs;
 pub mod spend;
+pub mod transfer;
 
 pub mod backref;
 pub use backref::{Backref, EncryptedBackref};
@@ -47,6 +49,14 @@ pub use output::{Output, OutputCircuit, OutputPlan, OutputProof, OutputView};
 pub use spend::{
     Spend, SpendCircuit, SpendPlan, SpendProof, SpendProofPrivate, SpendProofPublic, SpendView,
 };
+pub use transfer::{
+    Transfer, TransferBody, TransferFamilyId, TransferFamilySpec, TransferInputBody,
+    TransferOutputBody, TransferOutputPrivate, TransferOutputPublic, TransferPlan, TransferProof,
+    TransferProofPrivate, TransferProofPublic, TransferSpendPrivate, TransferSpendPublic,
+    TransferView, TRANSFER_FAMILY_SPECS,
+};
 
+#[cfg(feature = "benchmark-helpers")]
+pub mod benchmark_helpers;
 #[cfg(any(test, feature = "benchmark-helpers"))]
 pub mod test_proof_helpers;

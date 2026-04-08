@@ -1,4 +1,5 @@
 mod gnark_spend;
+mod gnark_transfer;
 
 use std::fs::File;
 use std::hint::black_box;
@@ -8,33 +9,34 @@ use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
-use ark_groth16::{r1cs_to_qap::LibsnarkReduction, Groth16, Proof, ProvingKey};
 use ark_relations::r1cs::{
     ConstraintSynthesizer, ConstraintSystem, OptimizationGoal, SynthesisMode,
 };
-use ark_serialize::CanonicalSerialize;
 use clap::{Parser, ValueEnum};
-use decaf377::{Bls12_377, Fq, Fr};
+use decaf377::{Fq, Fr};
 use gnark_spend::{
     encode_spend_witness_v1, encode_spend_witness_v1_debug, translate_spend_proof_result,
     GnarkSpendClient,
 };
+use gnark_transfer::GnarkTransferClient;
 use penumbra_sdk_asset::Balance;
 use penumbra_sdk_compliance::blind_sender_leaf;
-use penumbra_sdk_proof_params::{
-    DummyWitness, GROTH16_PROOF_LENGTH_BYTES, OUTPUT_PROOF_PROVING_KEY, SPEND_PROOF_PROVING_KEY,
-};
-use penumbra_sdk_proto::penumbra::core::component::shielded_pool::v1 as shielded_pool_pb;
+use penumbra_sdk_proof_params::DummyWitness;
 use penumbra_sdk_sct::Nullifier;
 use penumbra_sdk_shielded_pool::public_input_hash::{
     output_statement_hash_from_public, spend_statement_hash_from_public,
 };
-use penumbra_sdk_shielded_pool::test_proof_helpers::proof_test_helpers::{
-    generate_test_data, CircuitType, REGULATED_ASSET_ID, UNREGULATED_ASSET_ID,
+use penumbra_sdk_shielded_pool::benchmark_helpers::{
+    benchmark_transfer_roundtrip_inputs, generate_test_data, CircuitType, REGULATED_ASSET_ID,
+    UNREGULATED_ASSET_ID,
+};
+use penumbra_sdk_shielded_pool::gnark::{
+    encode_transfer_witness_v1, translate_transfer_proof_result,
 };
 use penumbra_sdk_shielded_pool::{
     output::{OutputProofPrivate, OutputProofPublic},
     OutputCircuit, OutputProof, SpendCircuit, SpendProof, SpendProofPrivate, SpendProofPublic,
+    TransferFamilyId, TransferProofPrivate, TransferProofPublic,
 };
 use penumbra_sdk_tct as tct;
 use rand_core::OsRng;
@@ -48,6 +50,8 @@ enum CircuitKind {
     Both,
     Spend,
     Output,
+    #[clap(name = "transfer2x2")]
+    Transfer2x2,
     Parallel,
     #[clap(name = "spend2-output2-parallel")]
     Parallel2x2,
@@ -61,11 +65,13 @@ impl CircuitKind {
             CircuitKind::Both => &[
                 CircuitKind::Spend,
                 CircuitKind::Output,
+                CircuitKind::Transfer2x2,
                 CircuitKind::Parallel,
                 CircuitKind::Parallel2x2,
             ],
             CircuitKind::Spend => &[CircuitKind::Spend],
             CircuitKind::Output => &[CircuitKind::Output],
+            CircuitKind::Transfer2x2 => &[CircuitKind::Transfer2x2],
             CircuitKind::Parallel => &[CircuitKind::Parallel],
             CircuitKind::Parallel2x2 => &[CircuitKind::Parallel2x2],
             CircuitKind::Serial2x2 => &[CircuitKind::Serial2x2],
@@ -77,6 +83,7 @@ impl CircuitKind {
             CircuitKind::Both => "both",
             CircuitKind::Spend => "spend",
             CircuitKind::Output => "output",
+            CircuitKind::Transfer2x2 => "transfer2x2",
             CircuitKind::Parallel => "spend_output_parallel",
             CircuitKind::Parallel2x2 => "spend2_output2_parallel",
             CircuitKind::Serial2x2 => "spend2_output2_serial",
@@ -168,7 +175,7 @@ impl ProfileMode {
 #[derive(Debug, Parser)]
 #[clap(
     name = "android_proof_lab",
-    about = "Benchmark spend/output proof generation in an Android-friendly CLI"
+    about = "Benchmark proof generation in an Android-friendly CLI"
 )]
 struct Cli {
     #[clap(long, value_enum, default_value_t = Backend::Arkworks)]
@@ -516,21 +523,29 @@ fn run_target(
             profile_mode,
             backend,
         ),
+        CircuitKind::Transfer2x2 => benchmark_transfer_2x2(
+            target.compliance_case,
+            cold_iterations,
+            warm_iterations,
+            profile_mode,
+            backend,
+            gnark_config,
+        ),
         CircuitKind::Parallel => {
             if backend == Backend::Gnark {
-                bail!("--backend gnark only supports --circuit spend");
+                bail!("--backend gnark only supports --circuit spend or transfer2x2");
             }
             benchmark_parallel(target.compliance_case, cold_iterations, warm_iterations)
         }
         CircuitKind::Parallel2x2 => {
             if backend == Backend::Gnark {
-                bail!("--backend gnark only supports --circuit spend");
+                bail!("--backend gnark only supports --circuit spend or transfer2x2");
             }
             benchmark_parallel_2x2(target.compliance_case, cold_iterations, warm_iterations)
         }
         CircuitKind::Serial2x2 => {
             if backend == Backend::Gnark {
-                bail!("--backend gnark only supports --circuit spend");
+                bail!("--backend gnark only supports --circuit spend or transfer2x2");
             }
             benchmark_serial_2x2(target.compliance_case, cold_iterations, warm_iterations)
         }
@@ -560,8 +575,6 @@ fn benchmark_spend(
     let instance_build_start = Instant::now();
     let (public, private) = spend_instance(compliance_case);
     let instance_build_ms = instance_build_start.elapsed().as_secs_f64() * 1000.0;
-    let blinding_r = Fq::rand(&mut OsRng);
-    let blinding_s = Fq::rand(&mut OsRng);
     let stage_profile = profile_mode.captures_stage_timings();
 
     let mut summary = measure(
@@ -569,8 +582,7 @@ fn benchmark_spend(
         warm_iterations,
         move || {
             if stage_profile {
-                let profiled =
-                    profiled_spend_prove(blinding_r, blinding_s, public.clone(), private.clone())?;
+                let profiled = profiled_spend_prove(public.clone(), private.clone())?;
                 black_box(&profiled.proof);
                 black_box(&profiled.proof_bytes);
                 Ok(IterationMeasurement {
@@ -580,14 +592,8 @@ fn benchmark_spend(
                 })
             } else {
                 let start = Instant::now();
-                let proof = SpendProof::prove(
-                    blinding_r,
-                    blinding_s,
-                    &SPEND_PROOF_PROVING_KEY,
-                    public.clone(),
-                    private.clone(),
-                )
-                .expect("spend proof generation should succeed");
+                let proof = SpendProof::prove(public.clone(), private.clone())
+                    .expect("spend proof generation should succeed");
                 let wall_ms = start.elapsed().as_secs_f64() * 1000.0;
                 black_box(proof);
                 Ok(IterationMeasurement {
@@ -763,12 +769,7 @@ fn benchmark_parallel(
     warm_iterations: usize,
 ) -> Result<MeasurementSummary> {
     let (spend_public, spend_private) = spend_instance(compliance_case);
-    let spend_r = Fq::rand(&mut OsRng);
-    let spend_s = Fq::rand(&mut OsRng);
-
     let (output_public, output_private) = output_instance(compliance_case);
-    let output_r = Fq::rand(&mut OsRng);
-    let output_s = Fq::rand(&mut OsRng);
 
     measure(
         cold_iterations,
@@ -782,25 +783,13 @@ fn benchmark_parallel(
 
             thread::scope(|scope| {
                 let spend_handle = scope.spawn(move || {
-                    let proof = SpendProof::prove(
-                        spend_r,
-                        spend_s,
-                        &SPEND_PROOF_PROVING_KEY,
-                        spend_public,
-                        spend_private,
-                    )
-                    .expect("parallel spend proof generation should succeed");
+                    let proof = SpendProof::prove(spend_public, spend_private)
+                        .expect("parallel spend proof generation should succeed");
                     black_box(proof);
                 });
                 let output_handle = scope.spawn(move || {
-                    let proof = OutputProof::prove(
-                        output_r,
-                        output_s,
-                        &OUTPUT_PROOF_PROVING_KEY,
-                        output_public,
-                        output_private,
-                    )
-                    .expect("parallel output proof generation should succeed");
+                    let proof = OutputProof::prove(output_public, output_private)
+                        .expect("parallel output proof generation should succeed");
                     black_box(proof);
                 });
                 spend_handle
@@ -827,20 +816,9 @@ fn benchmark_parallel_2x2(
     warm_iterations: usize,
 ) -> Result<MeasurementSummary> {
     let (spend_public_1, spend_private_1) = spend_instance(compliance_case);
-    let spend_r_1 = Fq::rand(&mut OsRng);
-    let spend_s_1 = Fq::rand(&mut OsRng);
-
     let (spend_public_2, spend_private_2) = spend_instance(compliance_case);
-    let spend_r_2 = Fq::rand(&mut OsRng);
-    let spend_s_2 = Fq::rand(&mut OsRng);
-
     let (output_public_1, output_private_1) = output_instance(compliance_case);
-    let output_r_1 = Fq::rand(&mut OsRng);
-    let output_s_1 = Fq::rand(&mut OsRng);
-
     let (output_public_2, output_private_2) = output_instance(compliance_case);
-    let output_r_2 = Fq::rand(&mut OsRng);
-    let output_s_2 = Fq::rand(&mut OsRng);
 
     measure(
         cold_iterations,
@@ -858,47 +836,23 @@ fn benchmark_parallel_2x2(
 
             thread::scope(|scope| {
                 let spend_handle_1 = scope.spawn(move || {
-                    let proof = SpendProof::prove(
-                        spend_r_1,
-                        spend_s_1,
-                        &SPEND_PROOF_PROVING_KEY,
-                        spend_public_1,
-                        spend_private_1,
-                    )
-                    .expect("parallel spend proof generation should succeed");
+                    let proof = SpendProof::prove(spend_public_1, spend_private_1)
+                        .expect("parallel spend proof generation should succeed");
                     black_box(proof);
                 });
                 let spend_handle_2 = scope.spawn(move || {
-                    let proof = SpendProof::prove(
-                        spend_r_2,
-                        spend_s_2,
-                        &SPEND_PROOF_PROVING_KEY,
-                        spend_public_2,
-                        spend_private_2,
-                    )
-                    .expect("parallel spend proof generation should succeed");
+                    let proof = SpendProof::prove(spend_public_2, spend_private_2)
+                        .expect("parallel spend proof generation should succeed");
                     black_box(proof);
                 });
                 let output_handle_1 = scope.spawn(move || {
-                    let proof = OutputProof::prove(
-                        output_r_1,
-                        output_s_1,
-                        &OUTPUT_PROOF_PROVING_KEY,
-                        output_public_1,
-                        output_private_1,
-                    )
-                    .expect("parallel output proof generation should succeed");
+                    let proof = OutputProof::prove(output_public_1, output_private_1)
+                        .expect("parallel output proof generation should succeed");
                     black_box(proof);
                 });
                 let output_handle_2 = scope.spawn(move || {
-                    let proof = OutputProof::prove(
-                        output_r_2,
-                        output_s_2,
-                        &OUTPUT_PROOF_PROVING_KEY,
-                        output_public_2,
-                        output_private_2,
-                    )
-                    .expect("parallel output proof generation should succeed");
+                    let proof = OutputProof::prove(output_public_2, output_private_2)
+                        .expect("parallel output proof generation should succeed");
                     black_box(proof);
                 });
 
@@ -932,20 +886,9 @@ fn benchmark_serial_2x2(
     warm_iterations: usize,
 ) -> Result<MeasurementSummary> {
     let (spend_public_1, spend_private_1) = spend_instance(compliance_case);
-    let spend_r_1 = Fq::rand(&mut OsRng);
-    let spend_s_1 = Fq::rand(&mut OsRng);
-
     let (spend_public_2, spend_private_2) = spend_instance(compliance_case);
-    let spend_r_2 = Fq::rand(&mut OsRng);
-    let spend_s_2 = Fq::rand(&mut OsRng);
-
     let (output_public_1, output_private_1) = output_instance(compliance_case);
-    let output_r_1 = Fq::rand(&mut OsRng);
-    let output_s_1 = Fq::rand(&mut OsRng);
-
     let (output_public_2, output_private_2) = output_instance(compliance_case);
-    let output_r_2 = Fq::rand(&mut OsRng);
-    let output_s_2 = Fq::rand(&mut OsRng);
 
     measure(
         cold_iterations,
@@ -953,44 +896,20 @@ fn benchmark_serial_2x2(
         move || {
             let start = Instant::now();
 
-            let proof = SpendProof::prove(
-                spend_r_1,
-                spend_s_1,
-                &SPEND_PROOF_PROVING_KEY,
-                spend_public_1.clone(),
-                spend_private_1.clone(),
-            )
-            .expect("serial spend proof generation should succeed");
+            let proof = SpendProof::prove(spend_public_1.clone(), spend_private_1.clone())
+                .expect("serial spend proof generation should succeed");
             black_box(proof);
 
-            let proof = SpendProof::prove(
-                spend_r_2,
-                spend_s_2,
-                &SPEND_PROOF_PROVING_KEY,
-                spend_public_2.clone(),
-                spend_private_2.clone(),
-            )
-            .expect("serial spend proof generation should succeed");
+            let proof = SpendProof::prove(spend_public_2.clone(), spend_private_2.clone())
+                .expect("serial spend proof generation should succeed");
             black_box(proof);
 
-            let proof = OutputProof::prove(
-                output_r_1,
-                output_s_1,
-                &OUTPUT_PROOF_PROVING_KEY,
-                output_public_1.clone(),
-                output_private_1.clone(),
-            )
-            .expect("serial output proof generation should succeed");
+            let proof = OutputProof::prove(output_public_1.clone(), output_private_1.clone())
+                .expect("serial output proof generation should succeed");
             black_box(proof);
 
-            let proof = OutputProof::prove(
-                output_r_2,
-                output_s_2,
-                &OUTPUT_PROOF_PROVING_KEY,
-                output_public_2.clone(),
-                output_private_2.clone(),
-            )
-            .expect("serial output proof generation should succeed");
+            let proof = OutputProof::prove(output_public_2.clone(), output_private_2.clone())
+                .expect("serial output proof generation should succeed");
             black_box(proof);
 
             Ok(IterationMeasurement {
@@ -1012,14 +931,12 @@ fn benchmark_output(
     backend: Backend,
 ) -> Result<MeasurementSummary> {
     if backend == Backend::Gnark {
-        bail!("--backend gnark only supports --circuit spend");
+        bail!("--backend gnark only supports --circuit spend or transfer2x2");
     }
 
     let instance_build_start = Instant::now();
     let (public, private) = output_instance(compliance_case);
     let instance_build_ms = instance_build_start.elapsed().as_secs_f64() * 1000.0;
-    let blinding_r = Fq::rand(&mut OsRng);
-    let blinding_s = Fq::rand(&mut OsRng);
     let stage_profile = profile_mode.captures_stage_timings();
 
     let mut summary = measure(
@@ -1027,8 +944,7 @@ fn benchmark_output(
         warm_iterations,
         move || {
             if stage_profile {
-                let profiled =
-                    profiled_output_prove(blinding_r, blinding_s, public.clone(), private.clone())?;
+                let profiled = profiled_output_prove(public.clone(), private.clone())?;
                 black_box(&profiled.proof);
                 black_box(&profiled.proof_bytes);
                 Ok(IterationMeasurement {
@@ -1038,14 +954,8 @@ fn benchmark_output(
                 })
             } else {
                 let start = Instant::now();
-                let proof = OutputProof::prove(
-                    blinding_r,
-                    blinding_s,
-                    &OUTPUT_PROOF_PROVING_KEY,
-                    public.clone(),
-                    private.clone(),
-                )
-                .expect("output proof generation should succeed");
+                let proof = OutputProof::prove(public.clone(), private.clone())
+                    .expect("output proof generation should succeed");
                 let wall_ms = start.elapsed().as_secs_f64() * 1000.0;
                 black_box(proof);
                 Ok(IterationMeasurement {
@@ -1072,9 +982,112 @@ fn benchmark_output(
     Ok(summary)
 }
 
+fn benchmark_transfer_2x2(
+    compliance_case: ComplianceCase,
+    cold_iterations: usize,
+    warm_iterations: usize,
+    profile_mode: ProfileMode,
+    backend: Backend,
+    gnark_config: Option<&GnarkConfig>,
+) -> Result<MeasurementSummary> {
+    if compliance_case != ComplianceCase::Unregulated {
+        bail!("--circuit transfer2x2 only supports --compliance-case unregulated");
+    }
+    if backend != Backend::Gnark {
+        bail!("--circuit transfer2x2 requires --backend gnark");
+    }
+    benchmark_transfer_2x2_gnark(
+        cold_iterations,
+        warm_iterations,
+        profile_mode,
+        gnark_config.ok_or_else(|| anyhow::anyhow!("missing gnark config"))?,
+    )
+}
+
+fn transfer_2x2_unregulated_instance() -> (TransferProofPublic, TransferProofPrivate) {
+    benchmark_transfer_roundtrip_inputs(TransferFamilyId::TwoByTwo, false)
+}
+
+fn benchmark_transfer_2x2_gnark(
+    cold_iterations: usize,
+    warm_iterations: usize,
+    profile_mode: ProfileMode,
+    gnark_config: &GnarkConfig,
+) -> Result<MeasurementSummary> {
+    let stage_profile = profile_mode.captures_stage_timings();
+    let (public, private) = transfer_2x2_unregulated_instance();
+    let expected_statement_hash = public.statement_hash()?;
+
+    let client = GnarkTransferClient::load(&gnark_config.lib, &gnark_config.artifact_dir)?;
+    let correctness_check_start = Instant::now();
+    let witness = encode_transfer_witness_v1(&public, &private)?;
+    let proof_call = client.prove_raw(&witness)?;
+    let (claimed_statement_hash, proof) =
+        translate_transfer_proof_result(&proof_call.payload, TransferFamilyId::TwoByTwo)?;
+    if claimed_statement_hash != expected_statement_hash {
+        bail!(
+            "gnark transfer claimed statement hash mismatch: got {}, want {}",
+            claimed_statement_hash,
+            expected_statement_hash
+        );
+    }
+    proof.verify(&public)?;
+    let correctness_check_ms = correctness_check_start.elapsed().as_secs_f64() * 1000.0;
+
+    let mut summary = measure(
+        cold_iterations,
+        warm_iterations,
+        || {
+            let total_start = Instant::now();
+
+            let witness_pack_start = Instant::now();
+            let witness = encode_transfer_witness_v1(&public, &private)?;
+            let witness_pack_ms = witness_pack_start.elapsed().as_secs_f64() * 1000.0;
+
+            let ffi_start = Instant::now();
+            let proof_call = client.prove_raw(&witness)?;
+            let ffi_call_ms = ffi_start.elapsed().as_secs_f64() * 1000.0;
+
+            let translate_start = Instant::now();
+            let (claimed_statement_hash, proof) =
+                translate_transfer_proof_result(&proof_call.payload, TransferFamilyId::TwoByTwo)?;
+            if claimed_statement_hash != expected_statement_hash {
+                bail!(
+                    "gnark transfer claimed statement hash mismatch during benchmark: got {}, want {}",
+                    claimed_statement_hash,
+                    expected_statement_hash
+                );
+            }
+            let proof_translate_ms = translate_start.elapsed().as_secs_f64() * 1000.0;
+
+            proof.verify(&public)?;
+
+            Ok(IterationMeasurement {
+                wall_ms: total_start.elapsed().as_secs_f64() * 1000.0,
+                stage: None,
+                gnark_stage: if stage_profile {
+                    Some(GnarkStageBreakdown {
+                        witness_pack_ms,
+                        prove_path_ms: ffi_call_ms + proof_translate_ms,
+                        proof_translate_ms,
+                    })
+                } else {
+                    None
+                },
+            })
+        },
+        None,
+    )?;
+
+    summary.backend = Backend::Gnark;
+    summary.correctness_verified = Some(true);
+    summary.gnark_lib_load_ms = Some(client.lib_load_ms());
+    summary.gnark_init_ms = Some(client.init_ms());
+    summary.correctness_check_ms = Some(correctness_check_ms);
+    Ok(summary)
+}
+
 fn profiled_spend_prove(
-    blinding_r: Fq,
-    blinding_s: Fq,
     public: SpendProofPublic,
     private: SpendProofPrivate,
 ) -> Result<ProfiledProofResult<SpendProof>> {
@@ -1082,46 +1095,30 @@ fn profiled_spend_prove(
     let mut stage = ProofStageBreakdown::default();
 
     let statement_hash_start = Instant::now();
-    let claimed_statement_hash = spend_statement_hash_from_public(&public)
+    spend_statement_hash_from_public(&public)
         .map_err(|e| anyhow::anyhow!("statement hash: {e}"))?;
     stage.statement_hash_ms = statement_hash_start.elapsed().as_secs_f64() * 1000.0;
 
-    let circuit_build_start = Instant::now();
-    let circuit = SpendCircuit::from_parts(public, private, claimed_statement_hash);
-    stage.circuit_build_ms = circuit_build_start.elapsed().as_secs_f64() * 1000.0;
-
-    let pk_load_start = Instant::now();
-    let pk: &ProvingKey<Bls12_377> = &SPEND_PROOF_PROVING_KEY;
-    stage.pk_load_ms = pk_load_start.elapsed().as_secs_f64() * 1000.0;
-
     let create_proof_start = Instant::now();
-    let proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
-        circuit, pk, blinding_r, blinding_s,
-    )
-    .map_err(|e| anyhow::anyhow!("proof generation failed: {:?}", e))?;
+    let proof = SpendProof::prove(public, private)
+        .map_err(|e| anyhow::anyhow!("proof generation failed: {e}"))?;
     stage.create_proof_ms = create_proof_start.elapsed().as_secs_f64() * 1000.0;
 
     let serialize_start = Instant::now();
-    let mut proof_bytes = [0u8; GROTH16_PROOF_LENGTH_BYTES];
-    Proof::serialize_compressed(&proof, &mut proof_bytes[..])
-        .map_err(|e| anyhow::anyhow!("serialization failed: {:?}", e))?;
+    let proof_pb: penumbra_sdk_proto::penumbra::core::component::shielded_pool::v1::ZkSpendProof =
+        proof.clone().into();
+    let proof_bytes = proof_pb.inner;
     stage.serialize_ms = serialize_start.elapsed().as_secs_f64() * 1000.0;
-
-    let proof = SpendProof::try_from(shielded_pool_pb::ZkSpendProof {
-        inner: proof_bytes.to_vec(),
-    })?;
 
     Ok(ProfiledProofResult {
         proof,
-        proof_bytes: proof_bytes.to_vec(),
+        proof_bytes,
         stage,
         wall_ms: total_start.elapsed().as_secs_f64() * 1000.0,
     })
 }
 
 fn profiled_output_prove(
-    blinding_r: Fq,
-    blinding_s: Fq,
     public: OutputProofPublic,
     private: OutputProofPrivate,
 ) -> Result<ProfiledProofResult<OutputProof>> {
@@ -1129,38 +1126,24 @@ fn profiled_output_prove(
     let mut stage = ProofStageBreakdown::default();
 
     let statement_hash_start = Instant::now();
-    let claimed_statement_hash = output_statement_hash_from_public(&public)
+    output_statement_hash_from_public(&public)
         .map_err(|e| anyhow::anyhow!("statement hash: {e}"))?;
     stage.statement_hash_ms = statement_hash_start.elapsed().as_secs_f64() * 1000.0;
 
-    let circuit_build_start = Instant::now();
-    let circuit = OutputCircuit::from_parts(public, private, claimed_statement_hash);
-    stage.circuit_build_ms = circuit_build_start.elapsed().as_secs_f64() * 1000.0;
-
-    let pk_load_start = Instant::now();
-    let pk: &ProvingKey<Bls12_377> = &OUTPUT_PROOF_PROVING_KEY;
-    stage.pk_load_ms = pk_load_start.elapsed().as_secs_f64() * 1000.0;
-
     let create_proof_start = Instant::now();
-    let proof = Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(
-        circuit, pk, blinding_r, blinding_s,
-    )
-    .map_err(|e| anyhow::anyhow!("proof generation failed: {:?}", e))?;
+    let proof = OutputProof::prove(public, private)
+        .map_err(|e| anyhow::anyhow!("proof generation failed: {e}"))?;
     stage.create_proof_ms = create_proof_start.elapsed().as_secs_f64() * 1000.0;
 
     let serialize_start = Instant::now();
-    let mut proof_bytes = [0u8; GROTH16_PROOF_LENGTH_BYTES];
-    Proof::serialize_compressed(&proof, &mut proof_bytes[..])
-        .map_err(|e| anyhow::anyhow!("serialization failed: {:?}", e))?;
+    let proof_pb: penumbra_sdk_proto::penumbra::core::component::shielded_pool::v1::ZkOutputProof =
+        proof.clone().into();
+    let proof_bytes = proof_pb.inner;
     stage.serialize_ms = serialize_start.elapsed().as_secs_f64() * 1000.0;
-
-    let proof = OutputProof::try_from(shielded_pool_pb::ZkOutputProof {
-        inner: proof_bytes.to_vec(),
-    })?;
 
     Ok(ProfiledProofResult {
         proof,
-        proof_bytes: proof_bytes.to_vec(),
+        proof_bytes,
         stage,
         wall_ms: total_start.elapsed().as_secs_f64() * 1000.0,
     })
@@ -1437,20 +1420,12 @@ mod tests {
     #[test]
     fn profiled_spend_matches_library_prove() {
         let (public, private) = spend_instance(ComplianceCase::Regulated);
-        let blinding_r = Fq::from(11u64);
-        let blinding_s = Fq::from(22u64);
+        let expected = SpendProof::prove(public.clone(), private.clone())
+            .expect("library spend prove should succeed");
+        let expected_pb: penumbra_sdk_proto::penumbra::core::component::shielded_pool::v1::ZkSpendProof =
+            expected.into();
 
-        let expected = SpendProof::prove(
-            blinding_r,
-            blinding_s,
-            &SPEND_PROOF_PROVING_KEY,
-            public.clone(),
-            private.clone(),
-        )
-        .expect("library spend prove should succeed");
-        let expected_pb: shielded_pool_pb::ZkSpendProof = expected.into();
-
-        let profiled = profiled_spend_prove(blinding_r, blinding_s, public.clone(), private)
+        let profiled = profiled_spend_prove(public.clone(), private)
             .expect("profiled spend prove should succeed");
 
         assert_eq!(profiled.proof_bytes, expected_pb.inner);
@@ -1463,20 +1438,12 @@ mod tests {
     #[test]
     fn profiled_output_matches_library_prove() {
         let (public, private) = output_instance(ComplianceCase::Regulated);
-        let blinding_r = Fq::from(33u64);
-        let blinding_s = Fq::from(44u64);
+        let expected = OutputProof::prove(public.clone(), private.clone())
+            .expect("library output prove should succeed");
+        let expected_pb: penumbra_sdk_proto::penumbra::core::component::shielded_pool::v1::ZkOutputProof =
+            expected.into();
 
-        let expected = OutputProof::prove(
-            blinding_r,
-            blinding_s,
-            &OUTPUT_PROOF_PROVING_KEY,
-            public.clone(),
-            private.clone(),
-        )
-        .expect("library output prove should succeed");
-        let expected_pb: shielded_pool_pb::ZkOutputProof = expected.into();
-
-        let profiled = profiled_output_prove(blinding_r, blinding_s, public.clone(), private)
+        let profiled = profiled_output_prove(public.clone(), private)
             .expect("profiled output prove should succeed");
 
         assert_eq!(profiled.proof_bytes, expected_pb.inner);

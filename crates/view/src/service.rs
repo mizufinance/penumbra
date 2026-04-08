@@ -1600,6 +1600,12 @@ impl ViewService for ViewServer {
             .spend_plans()
             .filter(|plan| plan.note.amount() != 0u64.into())
             .map(|spend| spend.note.commit().into())
+            .chain(tx_plan.transfer_plans().flat_map(|transfer| {
+                transfer
+                    .spends
+                    .iter()
+                    .map(|spend| spend.note.commit().into())
+            }))
             .chain(
                 tx_plan
                     .swap_claim_plans()

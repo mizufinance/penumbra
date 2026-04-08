@@ -1,0 +1,7 @@
+rust-vectors/target/
+.gocache/
+.tmp/
+libpenumbra_gnark_*.dylib
+libpenumbra_gnark_*.so
+libpenumbra_gnark_*.dll
+libpenumbra_gnark_*.h

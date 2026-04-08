@@ -3,6 +3,13 @@ use penumbra_sdk_proto::core::component::stake::v1 as pb;
 use penumbra_sdk_proto::DomainType;
 use serde::{Deserialize, Serialize};
 
+/// Equal-weight voting power assigned to every validator in the supported validator set.
+pub const EQUAL_VALIDATOR_VOTING_POWER: u64 = 1_000_000;
+
+pub fn equal_validator_voting_power() -> Amount {
+    EQUAL_VALIDATOR_VOTING_POWER.into()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(try_from = "pb::StakeParameters", into = "pb::StakeParameters")]
 pub struct StakeParameters {

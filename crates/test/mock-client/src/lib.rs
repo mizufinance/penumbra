@@ -241,6 +241,9 @@ impl MockClient {
     pub fn witness_plan(&self, plan: &TransactionPlan) -> Result<WitnessData, Error> {
         let spend_commitment = |spend: &SpendPlan| spend.note.commit();
         let spends = plan.spend_plans().map(spend_commitment);
+        let transfers = plan
+            .transfer_plans()
+            .flat_map(|transfer| transfer.spends.iter().map(|spend| spend.note.commit()));
 
         let swap_claim_commitment = |swap: &SwapClaimPlan| swap.swap_plaintext.swap_commitment();
         let swap_claims = plan.swap_claim_plans().map(swap_claim_commitment);
@@ -254,8 +257,8 @@ impl MockClient {
 
         Ok(WitnessData {
             anchor: self.sct.root(),
-            // TODO: this will only witness spends and swap claims, but not other proofs
             state_commitment_proofs: spends
+                .chain(transfers)
                 .chain(swap_claims)
                 .map(witness)
                 .collect::<Result<_, Error>>()?,
@@ -583,5 +586,67 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
             asset_proofs,
             user_proofs,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MockClient;
+    use decaf377::{Fq, Fr};
+    use penumbra_sdk_asset::{asset, Value};
+    use penumbra_sdk_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
+    use penumbra_sdk_shielded_pool::{Note, OutputPlan, Rseed, SpendPlan, TransferPlan};
+    use penumbra_sdk_tct::Witness;
+    use penumbra_sdk_transaction::{ActionPlan, TransactionPlan};
+    use rand_core::OsRng;
+
+    #[test]
+    fn witness_plan_includes_transfer1x1_spend_proof() {
+        let sk =
+            SpendKey::from_seed_phrase_bip44(SeedPhrase::generate(&mut OsRng), &Bip44Path::new(0));
+        let mut client = MockClient::new(sk);
+        let fvk = client.fvk.clone();
+        let (address, _) = fvk.incoming().payment_address(0u32.into());
+
+        let note = Note::from_parts(
+            address.clone(),
+            Value {
+                amount: 100u64.into(),
+                asset_id: asset::Id(Fq::from(1u64)),
+            },
+            Rseed::generate(&mut OsRng),
+        )
+        .expect("build note");
+        let commitment = note.commit();
+        client
+            .sct
+            .insert(Witness::Keep, commitment)
+            .expect("insert note commitment");
+
+        let spend = SpendPlan::new(&mut OsRng, note.clone(), 0u64.into());
+        let output = OutputPlan::new(
+            &mut OsRng,
+            Value {
+                amount: 60u64.into(),
+                asset_id: asset::Id(note.asset_id().0),
+            },
+            address,
+        );
+        let transfer =
+            TransferPlan::from_spend_output(spend, output, Fr::from(9u64)).expect("build transfer");
+        let plan = TransactionPlan {
+            actions: vec![ActionPlan::Transfer(transfer)],
+            ..Default::default()
+        };
+
+        let witness_data = client
+            .witness_plan(&plan)
+            .expect("witness transfer1x1 plan");
+        assert!(
+            witness_data
+                .state_commitment_proofs
+                .contains_key(&commitment),
+            "transfer1x1 spent note commitment should be witnessed",
+        );
     }
 }

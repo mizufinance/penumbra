@@ -5,6 +5,10 @@ usage() {
   cat <<'EOF'
 Build, push, and run android_proof_lab on an Android device.
 
+The transfer benchmark compares prover-side cost for a fixed `2x2` unregulated
+transfer witness. Each run proves through gnark, translates the returned proof,
+then verifies it with the Rust verifier for correctness.
+
 Prerequisites:
   - rustup target add aarch64-linux-android
   - cargo install cargo-ndk
@@ -28,17 +32,17 @@ Options:
   --output <remote-file>       remote output file path
   --local-output <path>        default: tmp/android_proof_lab.json
   --simpleperf-output <path>   local perf.data path for the first profiled run
-  --gnark-lib-local <path>     local path for libpenumbra_gnark_spend.so
-                               default: tmp/gnark-spend-prototype/libpenumbra_gnark_spend.so
+  --gnark-lib-local <path>     local path for libpenumbra_gnark_transfer.so
+                               default: tmp/gnark/libpenumbra_gnark_transfer.so
   --gnark-artifact-dir-local <path>
-                               local gnark spend artifact dir
-                               default: tmp/gnark-spend-prototype/spend
-  --gnark-lib-remote <path>    remote path for libpenumbra_gnark_spend.so
-                               default: <remote-dir>/libpenumbra_gnark_spend.so
+                               local gnark transfer artifact dir
+                               default: tools/gnark/artifacts/transfer2x2
+  --gnark-lib-remote <path>    remote path for libpenumbra_gnark_transfer.so
+                               default: <remote-dir>/libpenumbra_gnark_transfer.so
   --gnark-artifact-dir-remote <path>
-                               remote gnark spend artifact dir
-                               default: <remote-dir>/gnark-spend
-  --skip-gnark-build           skip Go Android shared-library build for gnark backend
+                               remote gnark transfer artifact dir
+                               default: <remote-dir>/gnark-transfer2x2
+  --skip-gnark-build           skip Go Android shared-library build for gnark transfer backend
   --skip-build                 skip cargo ndk build
   --skip-push                  skip adb push
   --skip-run                   skip adb shell execution
@@ -49,22 +53,23 @@ All remaining arguments after `--` are passed directly to android_proof_lab.
 
 Examples:
   scripts/android/run-proof-lab.sh \
-    --rayon-threads 4 \
     --profile-mode stage -- \
-    --circuit output \
-    --compliance-case regulated \
-    --cold-iterations 1 \
-    --warm-iterations 1 \
+    --backend gnark \
+    --circuit transfer2x2 \
+    --compliance-case unregulated \
+    --cold-iterations 3 \
+    --warm-iterations 5 \
     --format json
 
   scripts/android/run-proof-lab.sh \
     --profile-mode both \
     --cpu-mask f0 \
     --simpleperf-output tmp/output-simpleperf.perf.data -- \
-    --circuit output \
-    --compliance-case regulated \
-    --cold-iterations 1 \
-    --warm-iterations 1 \
+    --backend gnark \
+    --circuit transfer2x2 \
+    --compliance-case unregulated \
+    --cold-iterations 3 \
+    --warm-iterations 5 \
     --format json
 EOF
 }
@@ -138,8 +143,10 @@ with_index_suffix() {
   printf '%s/%s-run%02d%s\n' "$dir" "$stem" "$idx" "$ext"
 }
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$ROOT"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+POC_ROOT="$REPO_ROOT/poc"
+PACKAGE_DIR="$REPO_ROOT/poc/tools/android-proof-lab"
+cd "$REPO_ROOT"
 
 BIN_NAME="android_proof_lab"
 TARGET="aarch64-linux-android"
@@ -156,8 +163,8 @@ REPEAT=1
 OUTPUT=""
 LOCAL_OUTPUT=""
 SIMPLEPERF_OUTPUT=""
-GNARK_LIB_LOCAL="tmp/gnark-spend-prototype/libpenumbra_gnark_spend.so"
-GNARK_ARTIFACT_DIR_LOCAL="tmp/gnark-spend-prototype/spend"
+GNARK_LIB_LOCAL="tmp/gnark/libpenumbra_gnark_transfer.so"
+GNARK_ARTIFACT_DIR_LOCAL="tools/gnark/artifacts/transfer2x2"
 GNARK_LIB_REMOTE=""
 GNARK_ARTIFACT_DIR_REMOTE=""
 SKIP_GNARK_BUILD=0
@@ -219,10 +226,11 @@ esac
 
 if [[ "${#LAB_ARGS[@]}" -eq 0 ]]; then
   LAB_ARGS=(
-    --circuit both
-    --compliance-case regulated
-    --cold-iterations 1
-    --warm-iterations 1
+    --backend gnark
+    --circuit transfer2x2
+    --compliance-case unregulated
+    --cold-iterations 3
+    --warm-iterations 5
     --format json
   )
 fi
@@ -252,7 +260,7 @@ resolve_local_path() {
   if [[ "$path" = /* ]]; then
     printf '%s\n' "$path"
   else
-    printf '%s/%s\n' "$ROOT" "$path"
+    printf '%s/%s\n' "$REPO_ROOT" "$path"
   fi
 }
 
@@ -317,10 +325,10 @@ if detect_gnark_backend; then
 fi
 
 if [[ -z "$GNARK_LIB_REMOTE" ]]; then
-  GNARK_LIB_REMOTE="$REMOTE_DIR/libpenumbra_gnark_spend.so"
+  GNARK_LIB_REMOTE="$REMOTE_DIR/libpenumbra_gnark_transfer.so"
 fi
 if [[ -z "$GNARK_ARTIFACT_DIR_REMOTE" ]]; then
-  GNARK_ARTIFACT_DIR_REMOTE="$REMOTE_DIR/gnark-spend"
+  GNARK_ARTIFACT_DIR_REMOTE="$REMOTE_DIR/gnark-transfer2x2"
 fi
 
 GNARK_LIB_LOCAL_ABS="$(resolve_local_path "$GNARK_LIB_LOCAL")"
@@ -330,30 +338,30 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   command -v cargo-ndk >/dev/null 2>&1 || die "cargo-ndk is not installed; run: cargo install cargo-ndk"
   rustup target list --installed | grep -qx "$TARGET" || die "Rust target $TARGET is not installed; run: rustup target add $TARGET"
 
-  CARGO_NDK_CMD=(cargo ndk -t "$ABI" build -p "$PACKAGE_NAME" --bin "$BIN_NAME")
+  CARGO_NDK_CMD=(cargo ndk -t "$ABI" build --bin "$BIN_NAME")
   if [[ -n "$BUILD_FEATURES" ]]; then
     CARGO_NDK_CMD+=(--features "$BUILD_FEATURES")
   fi
 
   case "$MODE" in
     release)
-      "${CARGO_NDK_CMD[@]}" --release
-      LOCAL_BIN="target/$TARGET/release/$BIN_NAME"
+      (cd "$PACKAGE_DIR" && "${CARGO_NDK_CMD[@]}" --release)
+      LOCAL_BIN="$POC_ROOT/target/$TARGET/release/$BIN_NAME"
       ;;
     debug)
-      "${CARGO_NDK_CMD[@]}"
-      LOCAL_BIN="target/$TARGET/debug/$BIN_NAME"
+      (cd "$PACKAGE_DIR" && "${CARGO_NDK_CMD[@]}")
+      LOCAL_BIN="$POC_ROOT/target/$TARGET/debug/$BIN_NAME"
       ;;
     android-prof)
-      "${CARGO_NDK_CMD[@]}" --profile android-prof
-      LOCAL_BIN="target/$TARGET/android-prof/$BIN_NAME"
+      (cd "$PACKAGE_DIR" && "${CARGO_NDK_CMD[@]}" --profile android-prof)
+      LOCAL_BIN="$POC_ROOT/target/$TARGET/android-prof/$BIN_NAME"
       ;;
   esac
 else
   case "$MODE" in
-    release) LOCAL_BIN="target/$TARGET/release/$BIN_NAME" ;;
-    debug) LOCAL_BIN="target/$TARGET/debug/$BIN_NAME" ;;
-    android-prof) LOCAL_BIN="target/$TARGET/android-prof/$BIN_NAME" ;;
+    release) LOCAL_BIN="$POC_ROOT/target/$TARGET/release/$BIN_NAME" ;;
+    debug) LOCAL_BIN="$POC_ROOT/target/$TARGET/debug/$BIN_NAME" ;;
+    android-prof) LOCAL_BIN="$POC_ROOT/target/$TARGET/android-prof/$BIN_NAME" ;;
   esac
 fi
 
@@ -365,12 +373,12 @@ if [[ "$GNARK_BACKEND" -eq 1 && "$SKIP_GNARK_BUILD" -eq 0 ]]; then
   NDK_CLANG="$(find_ndk_clang "$ANDROID_NDK_HOME")" || die "failed to find Android NDK clang for aarch64"
   mkdir -p "$(dirname "$GNARK_LIB_LOCAL_ABS")"
   (
-    cd "$ROOT/tools/gnark-spend-prototype"
+    cd "$REPO_ROOT/tools/gnark"
     export CGO_ENABLED=1
     export GOOS=android
     export GOARCH=arm64
     export CC="$NDK_CLANG"
-    go build -buildmode=c-shared -o "$GNARK_LIB_LOCAL_ABS" ./cmd/spendlib
+    go build -buildmode=c-shared -o "$GNARK_LIB_LOCAL_ABS" ./cmd/transferlib
   )
 fi
 

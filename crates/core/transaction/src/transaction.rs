@@ -21,7 +21,7 @@ use penumbra_sdk_proto::{
     DomainType, Message,
 };
 use penumbra_sdk_sct::Nullifier;
-use penumbra_sdk_shielded_pool::{Note, Output, Spend};
+use penumbra_sdk_shielded_pool::{Note, Output, Spend, Transfer};
 use penumbra_sdk_stake::{Delegate, Undelegate, UndelegateClaim};
 use penumbra_sdk_tct as tct;
 use penumbra_sdk_tct::StateCommitment;
@@ -32,7 +32,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     memo::{MemoCiphertext, MemoPlaintext},
-    view::{action_view::OutputView, MemoView, TransactionBodyView},
+    view::{
+        action_view::{OutputView, TransferView},
+        MemoView, TransactionBodyView,
+    },
     Action, ActionView, DetectionData, IsAction, MemoPlaintextView, TransactionParameters,
     TransactionPerspective, TransactionView,
 };
@@ -154,6 +157,7 @@ impl Transaction {
             .map(|action| match action {
                 Action::Spend(_) => 1,
                 Action::Output(_) => 1,
+                Action::Transfer(_) => 1,
                 Action::Swap(_) => 1,
                 Action::SwapClaim(_) => 1,
                 Action::UndelegateClaim(_) => 1,
@@ -196,27 +200,41 @@ impl Transaction {
             return Err(anyhow::anyhow!("no memo"));
         }
 
-        // Any output will let us decrypt the memo.
-        if let Some(output) = self.outputs().next() {
-            // First decrypt the wrapped memo key on the output.
-            let ovk_wrapped_key = output.body.ovk_wrapped_key.clone();
+        // Any note-creating shielded action with an outgoing payload key will let us decrypt the memo.
+        if let Some((note_payload, ovk_wrapped_key, wrapped_memo_key, balance_commitment)) =
+            self.actions().find_map(|action| match action {
+                Action::Output(output) => Some((
+                    output.body.note_payload.clone(),
+                    output.body.ovk_wrapped_key.clone(),
+                    output.body.wrapped_memo_key.clone(),
+                    output.body.balance_commitment,
+                )),
+                Action::Transfer(transfer) => transfer.body.outputs.first().map(|output| {
+                    (
+                        output.note_payload.clone(),
+                        output.ovk_wrapped_key.clone(),
+                        output.wrapped_memo_key.clone(),
+                        transfer.body.balance_commitment,
+                    )
+                }),
+                _ => None,
+            })
+        {
             let shared_secret = Note::decrypt_key(
                 ovk_wrapped_key,
-                output.body.note_payload.note_commitment,
-                output.body.balance_commitment,
+                note_payload.note_commitment,
+                balance_commitment,
                 fvk.outgoing(),
-                &output.body.note_payload.ephemeral_key,
+                &note_payload.ephemeral_key,
             );
 
-            let wrapped_memo_key = &output.body.wrapped_memo_key;
             let memo_key: PayloadKey = match shared_secret {
                 Ok(shared_secret) => {
                     let payload_key =
-                        PayloadKey::derive(&shared_secret, &output.body.note_payload.ephemeral_key);
+                        PayloadKey::derive(&shared_secret, &note_payload.ephemeral_key);
                     wrapped_memo_key.decrypt_outgoing(&payload_key)?
                 }
-                Err(_) => wrapped_memo_key
-                    .decrypt(output.body.note_payload.ephemeral_key, fvk.incoming())?,
+                Err(_) => wrapped_memo_key.decrypt(note_payload.ephemeral_key, fvk.incoming())?,
             };
 
             // Now we can use the memo key to decrypt the memo.
@@ -276,6 +294,29 @@ impl Transaction {
                         }
                     }
                 }
+                Action::Transfer(transfer) => {
+                    for output in &transfer.body.outputs {
+                        let ovk_wrapped_key = output.ovk_wrapped_key.clone();
+                        let commitment = output.note_payload.note_commitment;
+                        let epk = &output.note_payload.ephemeral_key;
+                        let cv = transfer.body.balance_commitment;
+                        let ovk = fvk.outgoing();
+                        let shared_secret =
+                            Note::decrypt_key(ovk_wrapped_key, commitment, cv, ovk, epk);
+
+                        match shared_secret {
+                            Ok(shared_secret) => {
+                                let payload_key = PayloadKey::derive(&shared_secret, epk);
+                                result.insert(commitment, payload_key);
+                            }
+                            Err(_) => {
+                                let shared_secret = fvk.incoming().key_agreement_with(epk)?;
+                                let payload_key = PayloadKey::derive(&shared_secret, epk);
+                                result.insert(commitment, payload_key);
+                            }
+                        }
+                    }
+                }
                 // These actions have no payload keys; they're listed explicitly
                 // for exhaustiveness.
                 Action::SwapClaim(_)
@@ -320,18 +361,29 @@ impl Transaction {
             let action_view = action.view_from_perspective(txp);
 
             // In the case of Output actions, decrypt the transaction memo if this hasn't already been done.
-            if let ActionView::Output(output) = &action_view {
+            if matches!(
+                &action_view,
+                ActionView::Output(_) | ActionView::Transfer(_)
+            ) {
                 if memo_plaintext.is_none() {
                     memo_plaintext = match self.transaction_body().memo {
                         Some(ciphertext) => {
                             memo_ciphertext = Some(ciphertext.clone());
-                            match output {
-                                OutputView::Visible {
+                            match &action_view {
+                                ActionView::Output(OutputView::Visible {
                                     output: _,
                                     note: _,
                                     payload_key: decrypted_memo_key,
-                                } => MemoCiphertext::decrypt(decrypted_memo_key, ciphertext).ok(),
-                                OutputView::Opaque { output: _ } => None,
+                                }) => MemoCiphertext::decrypt(decrypted_memo_key, ciphertext).ok(),
+                                ActionView::Output(OutputView::Opaque { output: _ }) => None,
+                                ActionView::Transfer(TransferView::Visible {
+                                    transfer: _,
+                                    spent_notes: _,
+                                    created_notes: _,
+                                    payload_key: decrypted_memo_key,
+                                }) => MemoCiphertext::decrypt(decrypted_memo_key, ciphertext).ok(),
+                                ActionView::Transfer(TransferView::Opaque { transfer: _ }) => None,
+                                _ => None,
                             }
                         }
                         None => None,
@@ -485,6 +537,16 @@ impl Transaction {
         })
     }
 
+    pub fn transfers(&self) -> impl Iterator<Item = &Transfer> {
+        self.actions().filter_map(|action| {
+            if let Action::Transfer(transfer) = action {
+                Some(transfer)
+            } else {
+                None
+            }
+        })
+    }
+
     pub fn swaps(&self) -> impl Iterator<Item = &Swap> {
         self.actions().filter_map(|action| {
             if let Action::Swap(s) = action {
@@ -496,14 +558,16 @@ impl Transaction {
     }
 
     pub fn spent_nullifiers(&self) -> impl Iterator<Item = Nullifier> + '_ {
-        self.actions().filter_map(|action| {
-            // Note: adding future actions that include nullifiers
-            // will need to be matched here as well as Spends
-            match action {
-                Action::Spend(spend) => Some(spend.body.nullifier),
-                Action::SwapClaim(swap_claim) => Some(swap_claim.body.nullifier),
-                _ => None,
-            }
+        self.actions().flat_map(|action| match action {
+            Action::Spend(spend) => vec![spend.body.nullifier],
+            Action::Transfer(transfer) => transfer
+                .body
+                .inputs
+                .iter()
+                .map(|input| input.nullifier)
+                .collect(),
+            Action::SwapClaim(swap_claim) => vec![swap_claim.body.nullifier],
+            _ => Vec::new(),
         })
     }
 
@@ -513,15 +577,19 @@ impl Transaction {
                 // Note: adding future actions that include state commitments
                 // will need to be matched here.
                 match action {
-                    Action::Output(output) => {
-                        [Some(output.body.note_payload.note_commitment), None]
-                    }
-                    Action::Swap(swap) => [Some(swap.body.payload.commitment), None],
-                    Action::SwapClaim(claim) => [
+                    Action::Output(output) => vec![Some(output.body.note_payload.note_commitment)],
+                    Action::Transfer(transfer) => transfer
+                        .body
+                        .outputs
+                        .iter()
+                        .map(|output| Some(output.note_payload.note_commitment))
+                        .collect::<Vec<_>>(),
+                    Action::Swap(swap) => vec![Some(swap.body.payload.commitment)],
+                    Action::SwapClaim(claim) => vec![
                         Some(claim.body.output_1_commitment),
                         Some(claim.body.output_2_commitment),
                     ],
-                    _ => [None, None],
+                    _ => vec![None],
                 }
             })
             .filter_map(|x| x)
@@ -631,6 +699,69 @@ impl Transaction {
         binding_verification_key_bytes
             .try_into()
             .expect("verification key is valid")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use decaf377_rdsa::{SigningKey, SpendAuth, VerificationKey};
+    use penumbra_sdk_asset::{asset, Balance, Value};
+    use penumbra_sdk_keys::symmetric::{OvkWrappedKey, WrappedMemoKey};
+    use penumbra_sdk_sct::Nullifier;
+
+    use super::{Action, Transaction, TransactionBody};
+
+    #[test]
+    fn transfer_counts_as_nullifier_and_state_commitment_source() {
+        let transfer = penumbra_sdk_shielded_pool::Transfer {
+            body: penumbra_sdk_shielded_pool::TransferBody {
+                family_id: penumbra_sdk_shielded_pool::TransferFamilyId::OneByOne,
+                anchor: penumbra_sdk_tct::Tree::default().root(),
+                balance_commitment: Balance::from(Value {
+                    amount: 9u64.into(),
+                    asset_id: asset::Id(decaf377::Fq::from(1u64)),
+                })
+                .commit(decaf377::Fr::from(2u64)),
+                inputs: vec![penumbra_sdk_shielded_pool::TransferInputBody {
+                    nullifier: Nullifier(decaf377::Fq::from(3u64)),
+                    rk: VerificationKey::from(SigningKey::<SpendAuth>::from(decaf377::Fr::from(
+                        4u64,
+                    ))),
+                    encrypted_backref: penumbra_sdk_shielded_pool::EncryptedBackref::dummy(),
+                    compliance_ciphertext: vec![1, 2, 3],
+                    dleq_proof: vec![13, 14],
+                }],
+                outputs: vec![penumbra_sdk_shielded_pool::TransferOutputBody {
+                    note_payload: penumbra_sdk_shielded_pool::NotePayload {
+                        note_commitment: penumbra_sdk_tct::StateCommitment(decaf377::Fq::from(
+                            5u64,
+                        )),
+                        ephemeral_key: decaf377_ka::Public([6u8; 32]),
+                        encrypted_note: penumbra_sdk_shielded_pool::NoteCiphertext([7u8; 176]),
+                    },
+                    wrapped_memo_key: WrappedMemoKey([8u8; 48]),
+                    ovk_wrapped_key: OvkWrappedKey([9u8; 48]),
+                    compliance_ciphertext: vec![4, 5, 6],
+                    dleq_proofs: vec![15, 16],
+                }],
+                target_timestamp: 10,
+                compliance_anchor: penumbra_sdk_tct::StateCommitment(decaf377::Fq::from(11u64)),
+                asset_anchor: penumbra_sdk_tct::StateCommitment(decaf377::Fq::from(12u64)),
+            },
+            auth_sigs: vec![[17u8; 64].into()],
+            proof: penumbra_sdk_shielded_pool::TransferProof::default(),
+        };
+
+        let tx = Transaction {
+            transaction_body: TransactionBody {
+                actions: vec![Action::Transfer(transfer)],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(tx.spent_nullifiers().collect::<Vec<_>>().len(), 1);
+        assert_eq!(tx.state_commitments().collect::<Vec<_>>().len(), 1);
     }
 }
 

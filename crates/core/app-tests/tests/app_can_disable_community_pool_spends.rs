@@ -133,7 +133,7 @@ async fn app_can_disable_community_pool_spends() -> anyhow::Result<()> {
 
     assert!(
         err.to_string().contains(
-            "proposal payload disabled in lightweight transfer-only phase: CommunityPoolSpend"
+            "proposal payload disabled in reduced action surface: CommunityPoolSpend"
         ),
         "unexpected error: {err:?}"
     );

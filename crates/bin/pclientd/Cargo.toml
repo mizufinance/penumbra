@@ -12,12 +12,13 @@ publish = false
 dist = true
 
 [features]
-default = ["std", "download-proving-keys"]
+default = ["std"]
 std = ["ibc-types/std"]
 integration-testnet = []
 sct-divergence-check = ["penumbra-sdk-view/sct-divergence-check"]
 # Enable to use rayon parallelism for crypto operations
 parallel = ["penumbra-sdk-transaction/parallel"]
+bundled-proving-keys = ["penumbra-sdk-proof-params/bundled-proving-keys"]
 download-proving-keys = ["penumbra-sdk-proof-params/download-proving-keys"]
 
 [dependencies]
