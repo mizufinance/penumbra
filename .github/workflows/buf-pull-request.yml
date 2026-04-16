@@ -9,7 +9,7 @@ jobs:
   # Ensure there are no breaking changes to the protocol specs,
   # by running the "buf lint" action against the changes in this PR.
   backwards-compatibility:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: bufbuild/buf-setup-action@v1
@@ -48,7 +48,7 @@ jobs:
   # Run our bespoke tooling for codegen, consuming the protocol buffer definitions
   # and emitting generated code. Afterward, there should be no uncommitted changes.
   build:
-    runs-on: buildjet-16vcpu-ubuntu-2204
+    runs-on: blacksmith-16vcpu-ubuntu-2204
     steps:
       - name: Checkout the source code
         uses: actions/checkout@v4

@@ -7,7 +7,7 @@ on:
 jobs:
   post_on_merge:
     if: github.event.pull_request.merged == true
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: myConsciousness/bluesky-post@v3
         with:

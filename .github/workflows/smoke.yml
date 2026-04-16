@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   smoke:
-    runs-on: buildjet-16vcpu-ubuntu-2204
+    runs-on: blacksmith-16vcpu-ubuntu-2204
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,7 +40,7 @@ jobs:
         run: nix develop --command just smoke
 
   pmonitor:
-    runs-on: buildjet-16vcpu-ubuntu-2204
+    runs-on: blacksmith-16vcpu-ubuntu-2204
     steps:
       - uses: actions/checkout@v4
         with:
