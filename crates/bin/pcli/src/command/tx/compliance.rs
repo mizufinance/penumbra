@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use penumbra_sdk_asset::asset;
-use penumbra_sdk_compliance::structs::{ComplianceCiphertext, MsgRegisterAsset, MsgRegisterUser};
+use penumbra_sdk_compliance::structs::{MsgRegisterAsset, MsgRegisterUser};
+use penumbra_sdk_compliance::{decrypt_full_flagged, TransferComplianceCiphertext};
 use penumbra_sdk_keys::Address;
 use penumbra_sdk_proto::core::app::v1::{
     query_service_client::QueryServiceClient as AppQueryServiceClient, TransactionsByHeightRequest,
@@ -13,6 +14,7 @@ use penumbra_sdk_proto::util::tendermint_proxy::v1::{
     tendermint_proxy_service_client::TendermintProxyServiceClient, GetStatusRequest,
 };
 use penumbra_sdk_transaction::{ActionPlan, TransactionPlan};
+use penumbra_sdk_view::{NoteManager, TransferPlanningResult};
 use serde::{Deserialize, Serialize};
 use tonic::transport::Channel;
 use tracing::info;
@@ -33,9 +35,6 @@ pub struct DetectedTxRef {
     pub asset_id: String,
     /// Whether the transfer is flagged (threshold exceeded).
     pub is_flagged: bool,
-    /// Whether this is a spend action (true) or output action (false).
-    #[serde(default)]
-    pub is_spend: bool,
 }
 
 /// Scan output format for JSON serialization.
@@ -229,7 +228,7 @@ pub enum IssuerDbCmd {
         #[clap(long, default_value = "/tmp/issuer-ledger.db")]
         db: PathBuf,
 
-        /// Path to audit output JSON (from orbis-sim).
+        /// Path to audit output JSON from the compliance audit pipeline.
         #[clap(long)]
         audit_output: PathBuf,
 
@@ -379,23 +378,25 @@ impl ComplianceCmd {
                         if let Some(ref body) = tx.body {
                             for (action_idx, action) in body.actions.iter().enumerate() {
                                 // Count all output actions
+                                if let Some(
+                                    penumbra_sdk_proto::core::transaction::v1::action::Action::Transfer(
+                                        transfer,
+                                    ),
+                                ) = action.action.as_ref()
                                 {
-                                    use penumbra_sdk_proto::core::transaction::v1::action::Action as AE;
-                                    if let Some(AE::Output(_)) = action.action.as_ref() {
-                                        total_outputs += 1;
+                                    if let Some(body) = transfer.body.as_ref() {
+                                        total_outputs += body.outputs.len() as u64;
                                     }
                                 }
 
-                                if let Some((ciphertext, is_spend)) =
-                                    extract_compliance_ciphertext(action)
-                                {
+                                if let Some(ciphertext) = extract_compliance_ciphertext(action) {
                                     let detection_result = if let Some(ref dk) = issuer_dk {
                                         use penumbra_sdk_compliance::issuer_keys::DetectionKey;
                                         let dk_obj = DetectionKey::new(*dk);
                                         let expected = expected_asset_id.as_ref().unwrap();
                                         match dk_obj.try_decrypt_detection(
-                                            &ciphertext.epk_1,
-                                            &ciphertext.epk_1,
+                                            &ciphertext.sender_core_epk,
+                                            &ciphertext.sender_core_epk,
                                             &ciphertext.detection_tag,
                                             expected,
                                         ) {
@@ -419,7 +420,6 @@ impl ComplianceCmd {
                                             action_index: action_idx,
                                             asset_id: asset_id.to_string(),
                                             is_flagged,
-                                            is_spend,
                                         });
                                     }
                                 }
@@ -528,9 +528,7 @@ impl ComplianceCmd {
                         if let Some(ref body) = tx.body {
                             if tx_ref.action_index < body.actions.len() {
                                 let action = &body.actions[tx_ref.action_index];
-                                if let Some((ciphertext, _is_spend)) =
-                                    extract_compliance_ciphertext(action)
-                                {
+                                if let Some(ciphertext) = extract_compliance_ciphertext(action) {
                                     // Parse asset_id from the scan output
                                     let asset_id: asset::Id = tx_ref
                                         .asset_id
@@ -539,11 +537,7 @@ impl ComplianceCmd {
 
                                     // Decrypt based on key type
                                     let result = if let Some(ref dk) = issuer_dk {
-                                        penumbra_sdk_compliance::decrypt_full_flagged(
-                                            dk,
-                                            &ciphertext,
-                                            asset_id,
-                                        )
+                                        decrypt_full_flagged(dk, &ciphertext, asset_id)
                                     } else {
                                         Ok(None)
                                     };
@@ -558,7 +552,7 @@ impl ComplianceCmd {
                                             );
                                             println!("   Action index: {}", tx_ref.action_index);
                                             println!("   Asset: {}", data.asset_id);
-                                            println!("   Amount: {}", data.core.amount);
+                                            println!("   Amount: {}", data.amount);
                                             println!("   Flagged: {}", tx_ref.is_flagged);
                                         }
                                         Ok(None) => {
@@ -681,17 +675,36 @@ impl ComplianceCmd {
                 };
 
                 // Build transaction plan
-                let mut planner = penumbra_sdk_wallet::plan::Planner::new(rand_core::OsRng);
-                planner
+                let mut note_manager = NoteManager::new(rand_core::OsRng);
+                note_manager
                     .set_gas_prices(gas_prices)
                     .set_fee_tier((*fee_tier).into());
 
-                planner.action(ActionPlan::from(msg));
-
-                Ok(planner
-                    .plan(app.view(), penumbra_sdk_keys::keys::AddressIndex::new(0))
+                match note_manager
+                    .plan_actions_with_transfer_funding(
+                        app.view(),
+                        penumbra_sdk_keys::keys::AddressIndex::new(0),
+                        vec![ActionPlan::from(msg)],
+                    )
                     .await
-                    .context("can't build transaction")?)
+                    .context("can't build transaction")?
+                {
+                    TransferPlanningResult::Ready { transaction_plan } => Ok(transaction_plan),
+                    TransferPlanningResult::NeedsMaintenance {
+                        maintenance_plan, ..
+                    } => {
+                        anyhow::bail!(
+                            "compliance registration requires note maintenance first: {:?}",
+                            maintenance_plan
+                        );
+                    }
+                    TransferPlanningResult::InsufficientBalance => {
+                        anyhow::bail!("insufficient balance for compliance registration fees");
+                    }
+                    TransferPlanningResult::UnsupportedIntent { reason } => {
+                        anyhow::bail!("{reason}");
+                    }
+                }
             }
 
             ComplianceCmd::RegisterUser {
@@ -722,17 +735,36 @@ impl ComplianceCmd {
                 };
 
                 // Build transaction plan
-                let mut planner = penumbra_sdk_wallet::plan::Planner::new(rand_core::OsRng);
-                planner
+                let mut note_manager = NoteManager::new(rand_core::OsRng);
+                note_manager
                     .set_gas_prices(gas_prices)
                     .set_fee_tier((*fee_tier).into());
 
-                planner.action(ActionPlan::from(msg));
-
-                Ok(planner
-                    .plan(app.view(), address_index)
+                match note_manager
+                    .plan_actions_with_transfer_funding(
+                        app.view(),
+                        address_index,
+                        vec![ActionPlan::from(msg)],
+                    )
                     .await
-                    .context("can't build transaction")?)
+                    .context("can't build transaction")?
+                {
+                    TransferPlanningResult::Ready { transaction_plan } => Ok(transaction_plan),
+                    TransferPlanningResult::NeedsMaintenance {
+                        maintenance_plan, ..
+                    } => {
+                        anyhow::bail!(
+                            "compliance registration requires note maintenance first: {:?}",
+                            maintenance_plan
+                        );
+                    }
+                    TransferPlanningResult::InsufficientBalance => {
+                        anyhow::bail!("insufficient balance for compliance registration fees");
+                    }
+                    TransferPlanningResult::UnsupportedIntent { reason } => {
+                        anyhow::bail!("{reason}");
+                    }
+                }
             }
 
             ComplianceCmd::Scan { .. } => {
@@ -783,22 +815,22 @@ fn parse_dk_from_hex(hex: &str) -> Result<decaf377::Fr> {
     Ok(decaf377::Fr::from_le_bytes_mod_order(&arr))
 }
 
-/// Extract compliance ciphertext from an action. Returns (ciphertext, is_spend).
+/// Extract transfer compliance ciphertext from an action.
 fn extract_compliance_ciphertext(
     action: &penumbra_sdk_proto::core::transaction::v1::Action,
-) -> Option<(ComplianceCiphertext, bool)> {
+) -> Option<TransferComplianceCiphertext> {
     use penumbra_sdk_proto::core::transaction::v1::action::Action as ActionEnum;
 
     let action_inner = action.action.as_ref()?;
 
-    let (cc_bytes, is_spend) = match action_inner {
-        ActionEnum::Output(output) => {
-            let body = output.body.as_ref()?;
-            (&body.compliance_ciphertext, false)
-        }
-        ActionEnum::Spend(spend) => {
-            let body = spend.body.as_ref()?;
-            (&body.compliance_ciphertext, true)
+    let cc_bytes = match action_inner {
+        ActionEnum::Transfer(transfer) => {
+            let body = transfer.body.as_ref()?;
+            let output = body
+                .outputs
+                .iter()
+                .find(|output| !output.compliance_ciphertext.is_empty())?;
+            &output.compliance_ciphertext
         }
         _ => return None,
     };
@@ -807,8 +839,8 @@ fn extract_compliance_ciphertext(
         return None;
     }
 
-    match ComplianceCiphertext::from_bytes(cc_bytes) {
-        Ok(ct) => Some((ct, is_spend)),
+    match TransferComplianceCiphertext::from_bytes(cc_bytes) {
+        Ok(ct) => Some(ct),
         Err(e) => {
             eprintln!(
                 "scan: ciphertext deserialization failed ({} bytes): {}",
@@ -869,7 +901,7 @@ async fn fetch_transactions(
     Ok(response.into_inner().transactions)
 }
 
-/// A single decrypted entry from an Orbis PRE audit (output by orbis-sim).
+/// A single decrypted entry from the compliance audit pipeline.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuditEntry {
     pub height: u64,
@@ -895,7 +927,6 @@ impl IssuerDbCmd {
                         action_index    INTEGER NOT NULL,
                         asset_id        TEXT NOT NULL,
                         is_flagged      BOOLEAN NOT NULL,
-                        is_spend        BOOLEAN NOT NULL DEFAULT 0,
                         amount          TEXT,
                         self_address    TEXT,
                         counterparty    TEXT,
@@ -942,15 +973,14 @@ impl IssuerDbCmd {
                     // Insert the row with NULLs for undecrypted fields
                     conn.execute(
                         "INSERT OR IGNORE INTO compliance_ledger \
-                         (height, tx_hash, action_index, asset_id, is_flagged, is_spend) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                         (height, tx_hash, action_index, asset_id, is_flagged) \
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
                         rusqlite::params![
                             tx_ref.height as i64,
                             tx_ref.tx_hash,
                             tx_ref.action_index as i64,
                             tx_ref.asset_id,
                             tx_ref.is_flagged,
-                            tx_ref.is_spend,
                         ],
                     )?;
                     inserted += 1;
@@ -964,26 +994,15 @@ impl IssuerDbCmd {
                             if let Some(ref body) = tx.body {
                                 if tx_ref.action_index < body.actions.len() {
                                     let action = &body.actions[tx_ref.action_index];
-                                    if let Some((ct, _is_spend)) =
-                                        extract_compliance_ciphertext(action)
-                                    {
-                                        // Decrypt core (amount + self address)
-                                        let core = penumbra_sdk_compliance::decrypt_core_flagged(
-                                            &dk, &ct,
-                                        )?;
-                                        // Decrypt extension (counterparty)
-                                        let ext =
-                                            penumbra_sdk_compliance::decrypt_extension_flagged(
-                                                &dk, &ct,
-                                            )?;
-
-                                        if let Some(core) = core {
+                                    if let Some(ct) = extract_compliance_ciphertext(action) {
+                                        let asset_id = tx_ref
+                                            .asset_id
+                                            .parse()
+                                            .context("invalid asset_id in scan output")?;
+                                        if let Some(data) =
+                                            decrypt_full_flagged(&dk, &ct, asset_id)?
+                                        {
                                             let now = chrono_now();
-                                            let counterparty_hex = ext
-                                                .map(|e| {
-                                                    hex::encode(e.counterparty_transmission_key)
-                                                })
-                                                .unwrap_or_default();
                                             conn.execute(
                                                 "UPDATE compliance_ledger SET \
                                                  amount = ?1, self_address = ?2, \
@@ -991,9 +1010,13 @@ impl IssuerDbCmd {
                                                  decrypted_via = 'flagged' \
                                                  WHERE height = ?5 AND action_index = ?6",
                                                 rusqlite::params![
-                                                    core.amount.value().to_string(),
-                                                    hex::encode(core.self_transmission_key),
-                                                    counterparty_hex,
+                                                    data.amount.value().to_string(),
+                                                    hex::encode(
+                                                        data.receiver_address.transmission_key
+                                                    ),
+                                                    hex::encode(
+                                                        data.sender_address.transmission_key
+                                                    ),
                                                     now,
                                                     tx_ref.height as i64,
                                                     tx_ref.action_index as i64,
@@ -1044,10 +1067,28 @@ impl IssuerDbCmd {
                     }
                 };
 
+                let fit_cell = |value: String, width: usize| -> String {
+                    let count = value.chars().count();
+                    if count <= width {
+                        value
+                    } else if width <= 1 {
+                        "…".to_string()
+                    } else {
+                        let trimmed: String = value.chars().take(width - 1).collect();
+                        format!("{trimmed}…")
+                    }
+                };
+
+                let format_via = |via: String| -> String {
+                    match via.as_str() {
+                        "flagged" => "issuer-dk".to_string(),
+                        other => other.to_string(),
+                    }
+                };
+
                 let mut stmt = conn.prepare(
                     "SELECT height, tx_hash, action_index, asset_id, is_flagged, \
-                     amount, self_address, counterparty, decrypted_at, decrypted_via, \
-                     is_spend \
+                     amount, self_address, counterparty, decrypted_at, decrypted_via \
                      FROM compliance_ledger ORDER BY height, action_index",
                 )?;
 
@@ -1063,16 +1104,15 @@ impl IssuerDbCmd {
                         row.get::<_, Option<String>>(7)?,
                         row.get::<_, Option<String>>(8)?,
                         row.get::<_, Option<String>>(9)?,
-                        row.get::<_, bool>(10).unwrap_or(false),
                     ))
                 })?;
 
                 // Header
                 println!(
-                    "{:<8} {:<5} {:<7} {:<8} {:>10} {:<12} {:<12} {:<10} {:<16}",
-                    "Height", "Act#", "Type", "Flag", "Amount", "From", "To", "Via", "Decrypted"
+                    "{:<8} {:<5} {:<10} {:<8} {:>12} {:<14} {:<14} {:<14} {:<16}",
+                    "Height", "Idx", "Action", "Flag", "Amount", "From", "To", "Via", "Decrypted"
                 );
-                println!("{}", "-".repeat(90));
+                println!("{}", "-".repeat(110));
 
                 // Collect all rows for two-pass display (spend→output inference)
                 struct DisplayRow {
@@ -1080,7 +1120,6 @@ impl IssuerDbCmd {
                     action_idx: i64,
                     is_flagged: bool,
                     has_amount: bool,
-                    is_spend: bool,
                     amount_str: String,
                     self_str: String,
                     cp_str: String,
@@ -1101,7 +1140,6 @@ impl IssuerDbCmd {
                         counterparty,
                         decrypted_at,
                         decrypted_via,
-                        is_spend,
                     ) = row?;
                     let dash = "---".to_string();
                     display_rows.push(DisplayRow {
@@ -1109,38 +1147,32 @@ impl IssuerDbCmd {
                         action_idx,
                         is_flagged,
                         has_amount: amount.is_some(),
-                        is_spend,
                         amount_str: amount
                             .as_deref()
                             .map(|s| format_display_amount(s))
+                            .map(|s| fit_cell(s, 12))
                             .unwrap_or_else(|| dash.clone()),
                         self_str: self_addr
                             .as_deref()
                             .filter(|s| !s.is_empty())
                             .map(|s| resolve_alias(s))
+                            .map(|s| fit_cell(s, 14))
                             .unwrap_or_else(|| dash.clone()),
                         cp_str: counterparty
                             .as_deref()
                             .filter(|s| !s.is_empty())
                             .map(|s| resolve_alias(s))
+                            .map(|s| fit_cell(s, 14))
                             .unwrap_or_else(|| dash.clone()),
-                        via_str: decrypted_via.unwrap_or_else(|| dash.clone()),
+                        via_str: decrypted_via
+                            .map(format_via)
+                            .map(|s| fit_cell(s, 14))
+                            .unwrap_or_else(|| dash.clone()),
                         when_str: decrypted_at
                             .as_deref()
                             .map(|s| format_timestamp(s))
                             .unwrap_or_else(|| dash.clone()),
                     });
-                }
-
-                // Build spender map: height → spender name (from SPEND rows)
-                let mut spender_at: std::collections::HashMap<i64, String> =
-                    std::collections::HashMap::new();
-                for r in &display_rows {
-                    if r.is_spend && r.self_str != "---" {
-                        spender_at
-                            .entry(r.height)
-                            .or_insert_with(|| r.self_str.clone());
-                    }
                 }
 
                 let mut count = 0u64;
@@ -1154,39 +1186,22 @@ impl IssuerDbCmd {
                         decrypted_count += 1;
                     }
 
-                    let type_str = if r.is_spend { "SPEND" } else { "OUTPUT" };
-
-                    // Spend: self_address = spender → FROM, no TO.
-                    // Output: self_address = recipient → TO, counterparty = sender → FROM.
-                    let (mut from_str, to_str) = if r.is_spend {
-                        (r.self_str.clone(), "---".to_string())
-                    } else {
-                        (r.cp_str.clone(), r.self_str.clone())
-                    };
-
-                    // Infer FROM on output rows from spend rows at the same height
-                    if !r.is_spend && from_str == "---" {
-                        if let Some(spender) = spender_at.get(&r.height) {
-                            from_str = format!("{}*", spender);
-                        }
-                    }
-
                     println!(
-                        "{:<8} {:<5} {:<7} {:<8} {:>10} {:<12} {:<12} {:<10} {:<16}",
+                        "{:<8} {:<5} {:<10} {:<8} {:>12} {:<14} {:<14} {:<14} {:<16}",
                         r.height,
                         r.action_idx,
-                        type_str,
+                        "TRANSFER",
                         if r.is_flagged { "FLAGGED" } else { "" },
                         r.amount_str,
-                        from_str,
-                        to_str,
+                        r.cp_str,
+                        r.self_str,
                         r.via_str,
                         r.when_str,
                     );
                     count += 1;
                 }
 
-                println!("{}", "-".repeat(90));
+                println!("{}", "-".repeat(110));
                 println!(
                     "Total: {} transfers | {} decrypted | {} flagged | {} encrypted",
                     count,

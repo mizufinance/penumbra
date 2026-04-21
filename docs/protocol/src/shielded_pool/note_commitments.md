@@ -24,8 +24,8 @@ is derived as:
 `rcm = from_le_bytes(prf_expand(b"Penumbra_DeriRcm", rseed, 4)) mod q`
 
 We commit to the diversified basepoint and payment address instead of the
-diversifier itself, as in the circuit `OutputProof` when we verify the integrity of
-the derived ephemeral key $epk$, we need $B_d$:
+diversifier itself, because the note-creation circuits verify the integrity of
+the derived ephemeral key $epk$ using $B_d$ directly:
 
 $epk = [esk] B_d$.
 

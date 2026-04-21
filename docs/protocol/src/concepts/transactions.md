@@ -1,88 +1,27 @@
 # Transactions
 
-Transactions describe an atomic collection of changes to the ledger state.  Each
-transaction consists of a sequence of *descriptions* for various actions[^1].
-Each description adds or subtracts (typed) value from the transaction's value
-balance, which must net to zero.
+Transactions describe an atomic collection of state changes. Each transaction
+contains a sequence of supported actions plus the authorization, memo, and
+balance-commitment data needed to execute them safely.
 
-Penumbra adapts Sapling's *Spend*, which
-spends a note and adds to the transaction's value balance, and
-*Output*, which creates a new note and subtracts from the
-transaction's value balance. Penumbra also adds many new descriptions
-to support additional functionality:
+The reduced chain supports three main categories of actions:
 
-#### Transfers
+- shielded note actions:
+  - `Transfer`
+  - `Split`
+  - `Consolidate`
+  - `ShieldedIcs20Withdrawal`
+- validator and governance actions:
+  - `ValidatorDefinition`
+  - `ProposalSubmit`
+  - `ValidatorVote`
+- service and infrastructure actions:
+  - `IbcRelay`
+  - `ComplianceRegisterAsset`
+  - `ComplianceRegisterUser`
+  - `AggregateBundle`
 
-- **Spend** descriptions spend an existing note, adding its value to the
-transaction's value balance;
-
-- **Output** descriptions create a new note, subtracting its value from the
-transaction's value balance;
-
-- **Transfer** descriptions transfer value out of Penumbra by IBC, consuming value
-from the transaction's value balance, and producing an [ICS20]
-[`FungibleTokenPacketData`][ftpd] for the counterparty chain;
-
-#### Staking
-
-- **Delegate** descriptions [deposit unbonded stake into a validator's delegation
-pool](../stake/delegation.md), consuming unbonded stake from the
-transaction's value balance and producing new notes recording delegation
-tokens representing the appropriate share of the validator's delegation pool;
-
-- **Undelegate** descriptions [withdraw from a validator's delegation
-pool](../stake/undelegation.md), consuming delegation tokens from the
-transaction's value balance and producing new notes recording the appropriate
-amount of unbonded stake;
-
-#### Governance
-
-- **CreateProposal** descriptions are used to [propose measures for on-chain
-governance](./governance.md#proposals) and supply a deposit, consuming
-bonded stake from the transaction's value balance and producing a new note that
-holds the deposit in escrow;
-
-- **WithdrawProposal** descriptions redeem an escrowed [proposal
-deposit](./governance.md#proposals), returning it to the transaction's value
-balance and immediately withdrawing the proposal.
-
-- **Vote** descriptions perform [private voting for on-chain
-governance](./governance.md#voting) and declare a vote.  This
-description leaves the value balance unchanged.
-
-#### Trading
-
-- **Swap** descriptions perform the first phase of
-a swap, consuming tokens of one type from a
-transaction's value balance, burning them, and producing a swap commitment for
-use in the second stage;
-
-- **SwapClaim** descriptions perform the second phase of
-a swap, allowing a user who burned tokens of one
-type to mint tokens of the other type at the chain-specified clearing price, and
-adding the new tokens to a transaction's value balance;
-
-#### Market-making
-
-- **OpenPosition** descriptions open concentrated liquidity
-positions, consuming value of the traded types from the
-transaction's value balance and adding the specified position to the AMM state;
-
-- **ClosePosition** descriptions close concentrated liquidity
-positions, removing the specified position to the AMM
-state and adding the value of the position, plus any accumulated fees or
-liquidity rewards, to the transaction's value balance.
-
-Each transaction also contains a fee specification, which is always
-transparently encoded. The value balance of all of a transactions actions,
-together with the fees, must net to zero.
-
-[^1]: Note that like Zcash Orchard, we use the term "action" to refer to one of
-a number of possible state updates; unlike Orchard, we do not attempt to conceal
-which types of state updates are performed, so our Action is an enum.
-
-[multi_asset]: https://github.com/zcash/zips/blob/626ea6ed78863290371a4e8bc74ccf8e92292099/drafts/zip-user-defined-assets.rst
-[ADR001]: https://docs.cosmos.network/master/architecture/adr-001-coin-source-tracing.html
-[IBC]: https://docs.cosmos.network/master/ibc/overview.html
-[ftpd]: https://github.com/cosmos/ibc/blob/master/spec/app/ics-020-fungible-token-transfer/README.md#data-structures
-[ICS20]: https://github.com/cosmos/ibc/blob/master/spec/app/ics-020-fungible-token-transfer/README.md
+Shielded actions consume existing note commitments, reveal nullifiers for spent
+notes, and create new note commitments when applicable. The transaction-level
+binding signature enforces that the value balance of all actions, together with
+fees, nets to zero.

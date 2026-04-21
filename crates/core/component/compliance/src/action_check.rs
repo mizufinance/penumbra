@@ -62,13 +62,14 @@ mod tests {
 
         let asset_id = asset::Id(Fq::from(42u64));
         state
-            .register_regulated_asset(
+            .register_asset_in_imt(
                 asset_id,
                 AssetPolicy::simple(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
                 ),
+                true,
             )
             .await
             .unwrap();
@@ -91,13 +92,14 @@ mod tests {
         let unregulated_2 = asset::Id(Fq::from(3u64));
 
         state
-            .register_regulated_asset(
+            .register_asset_in_imt(
                 regulated,
                 AssetPolicy::simple(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
                 ),
+                true,
             )
             .await
             .unwrap();

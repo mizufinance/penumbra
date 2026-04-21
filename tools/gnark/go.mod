@@ -1,6 +1,6 @@
-module github.com/penumbra-zone/penumbra/tools/gnark
+module github.com/mizufinance/penumbra/tools/gnark
 
-go 1.25.7
+go 1.25.4
 
 require (
 	github.com/consensys/gnark v0.14.0

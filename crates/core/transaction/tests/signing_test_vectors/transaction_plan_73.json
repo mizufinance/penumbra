@@ -1,45 +1,52 @@
 {
   "actions": [
     {
-      "validatorVote": {
-        "body": {
-          "proposal": "232355935",
-          "vote": {
-            "vote": "VOTE_NO"
-          },
-          "identityKey": {
-            "ik": "xzRLE+JdbguqKKN78Rkhf7QS8If/R3J3zLQeZPVt6Y0="
-          },
-          "governanceKey": {
-            "gk": "iIj4LTD/50uvW/VoDmqpmfvzLqxx9i9vHT+Mdyo4vw8="
-          },
-          "reason": {
-            "reason": "SB2Mn7Pg"
-          }
+      "proposalSubmit": {
+        "proposal": {
+          "title": "owodfjiwoqrpwbsageonizcku-3558009632368368533351792",
+          "description": "llzttxhhhmfpitizwwetrmcca-31585056",
+          "signaling": {}
+        },
+        "proposer": {
+          "ik": "L1exer1CBCA2IyAXJDRuKJ6BK4k1c2ABnnKbExDVquQ="
+        },
+        "governanceKey": {
+          "gk": "srZfwje9lWq9fqSokSkojE2afeTQfyjXaSBMY2mxmwY="
         },
         "authSig": {
-          "inner": "2hSuvM5ttTUlFQcfp1Rq0rpT+j6z+FCnfeR4jdqYygUoybUTUHDJXoWOWkCqu5y9YtS+FHZCCBPOY8D1/WiqAw=="
+          "inner": "6r+DXyi8EeEOob8g0pT3wFjopcO5V/HJkGrm/FWreADDnEQW1rASZYGspjLdy0qktbbt+HZA1ep5a/6a8kuSAw=="
         }
       }
     },
     {
-      "proposalDepositClaim": {
-        "proposal": "164051554",
-        "depositAmount": {
-          "lo": "824043981319365924"
+      "validatorVote": {
+        "body": {
+          "proposal": "453953148",
+          "vote": {
+            "vote": "VOTE_ABSTAIN"
+          },
+          "identityKey": {
+            "ik": "if585fxbdM8H9EdrtNVvXPekmfXsUPVBRdQevbfTVlw="
+          },
+          "governanceKey": {
+            "gk": "tiCwyWPXT6KZoX44XCubNaMh/oJAHjAPXdiZHNs0xw4="
+          },
+          "reason": {
+            "reason": "vj"
+          }
         },
-        "outcome": {
-          "failed": {}
+        "authSig": {
+          "inner": "Ku6e9FxuuAtvJLzYy/1PScPZvPi24fZ+ak70GNi9gAA6GDqUBY/fWKfjhimnWmV2dQQzj1Chd/BVJCmZx8GkAg=="
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "4649060038",
-    "chainId": "bqimpn-1971994483389",
+    "expiryHeight": "1156682061",
+    "chainId": "xldopdtwvilykwutjvtfdgvcmjdgsjfm-485",
     "fee": {
       "amount": {
-        "lo": "632208388077727166"
+        "lo": "433759038284772636"
       }
     }
   }

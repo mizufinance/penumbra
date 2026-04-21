@@ -10,7 +10,7 @@ use {
             StateReadExt as _,
         },
         event,
-        params::StakeParameters,
+        params::ValidatorParameters,
         validator, IdentityKey, Uptime,
     },
     anyhow::Result,
@@ -154,7 +154,7 @@ pub trait ValidatorUptimeTracker: StateWrite {
         &mut self,
         (identity_key, consensus_key, mut uptime): ValidatorInformation,
         did_address_vote: &BTreeMap<Address, bool>,
-        params: &StakeParameters,
+        params: &ValidatorParameters,
         height: u64,
     ) -> anyhow::Result<()> {
         let addr = validator_address(&consensus_key);

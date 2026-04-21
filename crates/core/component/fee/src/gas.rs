@@ -3,7 +3,7 @@ use std::{
     ops::{Add, AddAssign},
 };
 
-use penumbra_sdk_asset::{asset, Value, STAKING_TOKEN_ASSET_ID};
+use penumbra_sdk_asset::{asset, Value, BASE_ASSET_ID};
 use serde::{Deserialize, Serialize};
 
 use penumbra_sdk_num::Amount;
@@ -87,11 +87,11 @@ impl Sum for Gas {
     }
 }
 
-/// Expresses the price of each unit of gas in terms of the staking token.
+/// Expresses the price of each unit of gas in terms of the base asset.
 ///
 /// These prices have an implicit denominator of 1,000 relative to the base unit
-/// of the staking token, so gas price 1,000 times 1 unit of gas is 1 base unit
-/// of staking token.
+/// of the base asset, so gas price 1,000 times 1 unit of gas is 1 base unit
+/// of the base asset.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "pb::GasPrices", into = "pb::GasPrices")]
 pub struct GasPrices {
@@ -105,7 +105,7 @@ pub struct GasPrices {
 impl Default for GasPrices {
     fn default() -> Self {
         Self {
-            asset_id: *STAKING_TOKEN_ASSET_ID,
+            asset_id: *BASE_ASSET_ID,
             block_space_price: 0,
             compact_block_space_price: 0,
             verification_price: 0,
@@ -142,8 +142,8 @@ impl DomainType for GasPrices {
 impl From<GasPrices> for pb::GasPrices {
     fn from(prices: GasPrices) -> Self {
         pb::GasPrices {
-            // Skip serializing the asset ID if it's the staking token.
-            asset_id: if prices.asset_id == *STAKING_TOKEN_ASSET_ID {
+            // Skip serializing the asset ID if it's the base asset.
+            asset_id: if prices.asset_id == *BASE_ASSET_ID {
                 None
             } else {
                 Some(prices.asset_id.into())
@@ -169,7 +169,7 @@ impl TryFrom<pb::GasPrices> for GasPrices {
                 .asset_id
                 .map(TryInto::try_into)
                 .transpose()?
-                .unwrap_or_else(|| *STAKING_TOKEN_ASSET_ID),
+                .unwrap_or_else(|| *BASE_ASSET_ID),
         })
     }
 }

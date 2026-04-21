@@ -14,20 +14,15 @@ component = [
   "dep:cnidarium",
   "dep:cnidarium-component",
   "penumbra-sdk-proto/cnidarium",
-  "penumbra-sdk-auction/component",
-  "penumbra-sdk-community-pool/component",
   "penumbra-sdk-compact-block/component",
   "penumbra-sdk-compliance/component",
-  "penumbra-sdk-dex/component",
-  "penumbra-sdk-distributions/component",
   "penumbra-sdk-fee/component",
-  "penumbra-sdk-funding/component",
   "penumbra-sdk-governance/component",
   "penumbra-sdk-ibc/component",
   "penumbra-sdk-ibc/rpc",
   "penumbra-sdk-sct/component",
   "penumbra-sdk-shielded-pool/component",
-  "penumbra-sdk-stake/component",
+  "penumbra-sdk-validator/component",
   "dep:tonic",
   "dep:tonic-reflection",
   "dep:tonic-web"
@@ -66,14 +61,9 @@ metrics                          = { workspace = true }
 once_cell                        = { workspace = true }
 parking_lot                      = { workspace = true }
 penumbra-sdk-asset                   = { workspace = true, default-features = true }
-penumbra-sdk-auction                 = { workspace = true, default-features = false }
-penumbra-sdk-community-pool          = { workspace = true, default-features = false }
 penumbra-sdk-compact-block           = { workspace = true, default-features = false }
 penumbra-sdk-compliance              = { workspace = true, default-features = false }
-penumbra-sdk-dex                     = { workspace = true, default-features = false }
-penumbra-sdk-distributions           = { workspace = true, default-features = false }
 penumbra-sdk-fee                     = { workspace = true, default-features = false }
-penumbra-sdk-funding                 = { workspace = true, default-features = false }
 penumbra-sdk-governance              = { workspace = true, default-features = false }
 penumbra-sdk-ibc                     = { workspace = true, default-features = false }
 penumbra-sdk-keys                    = { workspace = true, default-features = true }
@@ -83,7 +73,7 @@ penumbra-sdk-proof-aggregation       = { workspace = true, default-features = tr
 penumbra-sdk-proto                   = { workspace = true, default-features = true }
 penumbra-sdk-sct                     = { workspace = true, default-features = false }
 penumbra-sdk-shielded-pool           = { workspace = true, default-features = false }
-penumbra-sdk-stake                   = { workspace = true, default-features = false }
+penumbra-sdk-validator                   = { workspace = true, default-features = false }
 penumbra-sdk-tct                     = { workspace = true, default-features = true }
 penumbra-sdk-tower-trace             = { workspace = true }
 penumbra-sdk-transaction             = { workspace = true, features = ["parallel"], default-features = true }

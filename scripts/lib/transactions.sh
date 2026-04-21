@@ -11,6 +11,14 @@
 ORBIS_CLI="${ORBIS_CLI:-cli-tool}"
 ALICE_ADDRESS_1=""
 
+run_transfer() {
+    local home="$1"
+    local value="$2"
+    local destination="$3"
+
+    run_quiet $PCLI --home "$home" tx transfer --to "$destination" "$value"
+}
+
 # Generate issuer detection key.
 # Sets: REGULATED_DK, REGULATED_DK_PUB
 # Writes: $COMPLIANCE_TMP/issuer-dk.env
@@ -87,60 +95,82 @@ register_users() {
     run_quiet $PCLI --home "$UNREGISTERED_HOME" view sync
 }
 
-# Execute the full regulated transfer set:
-#   1 multi-output funding, 6 small transfers, 1 flagged
+# Execute the full regulated flow:
+#   1 split, 9 transfers, 1 consolidate
 execute_regulated_transfers() {
-    # Multi-output funding
-    log_info "Alice -> Bob:400 + Charlie:300 (multi-output)"
-    run_quiet $PCLI --home "$ALICE_HOME" tx send-multi \
-        --output "400regulated_usd:$BOB_ADDRESS" \
-        --output "300regulated_usd:$CHARLIE_ADDRESS"
+    # One split replaces the old unsupported multi-recipient transfer.
+    # This devnet uses nonzero base-asset fees, but split fee funding is now
+    # handled separately from the regulated asset notes.
+    log_info "Alice split regulated_usd into exact send notes: 400, 300, 600, 998700"
+    local alice_split_note
+    alice_split_note=$($PCLI --home "$ALICE_HOME" view notes --asset regulated_usd --largest --commitment-only)
+    run_quiet $PCLI --home "$ALICE_HOME" tx split \
+        --note-commitment "$alice_split_note" \
+        400regulated_usd \
+        300regulated_usd \
+        600regulated_usd \
+        998700regulated_usd
     run_quiet $PCLI --home "$ALICE_HOME" view sync
     run_quiet $PCLI --home "$BOB_HOME" view sync
     run_quiet $PCLI --home "$CHARLIE_HOME" view sync
 
-    # Small transfers
+    log_info "Alice->Bob:400"
+    run_transfer "$ALICE_HOME" 400regulated_usd "$BOB_ADDRESS"
+    run_quiet $PCLI --home "$ALICE_HOME" view sync
+    run_quiet $PCLI --home "$BOB_HOME" view sync
+
+    log_info "Alice->Charlie:300"
+    run_transfer "$ALICE_HOME" 300regulated_usd "$CHARLIE_ADDRESS"
+    run_quiet $PCLI --home "$ALICE_HOME" view sync
+    run_quiet $PCLI --home "$CHARLIE_HOME" view sync
+
     log_info "Bob->Alice:50"
-    run_quiet $PCLI --home "$BOB_HOME" tx send 50regulated_usd --to "$ALICE_ADDRESS"
+    run_transfer "$BOB_HOME" 50regulated_usd "$ALICE_ADDRESS"
     run_quiet $PCLI --home "$BOB_HOME" view sync
     run_quiet $PCLI --home "$ALICE_HOME" view sync
 
     log_info "Charlie->Alice:40"
-    run_quiet $PCLI --home "$CHARLIE_HOME" tx send 40regulated_usd --to "$ALICE_ADDRESS"
+    run_transfer "$CHARLIE_HOME" 40regulated_usd "$ALICE_ADDRESS"
     run_quiet $PCLI --home "$CHARLIE_HOME" view sync
     run_quiet $PCLI --home "$ALICE_HOME" view sync
 
     log_info "Bob->Charlie:100"
-    run_quiet $PCLI --home "$BOB_HOME" tx send 100regulated_usd --to "$CHARLIE_ADDRESS"
+    run_transfer "$BOB_HOME" 100regulated_usd "$CHARLIE_ADDRESS"
     run_quiet $PCLI --home "$BOB_HOME" view sync
     run_quiet $PCLI --home "$CHARLIE_HOME" view sync
 
     log_info "Charlie->Bob:80"
-    run_quiet $PCLI --home "$CHARLIE_HOME" tx send 80regulated_usd --to "$BOB_ADDRESS"
+    run_transfer "$CHARLIE_HOME" 80regulated_usd "$BOB_ADDRESS"
     run_quiet $PCLI --home "$CHARLIE_HOME" view sync
     run_quiet $PCLI --home "$BOB_HOME" view sync
 
     log_info "Bob->Alice:60"
-    run_quiet $PCLI --home "$BOB_HOME" tx send 60regulated_usd --to "$ALICE_ADDRESS"
+    run_transfer "$BOB_HOME" 60regulated_usd "$ALICE_ADDRESS"
     run_quiet $PCLI --home "$BOB_HOME" view sync
     run_quiet $PCLI --home "$ALICE_HOME" view sync
 
     log_info "Charlie->Alice:30"
-    run_quiet $PCLI --home "$CHARLIE_HOME" tx send 30regulated_usd --to "$ALICE_ADDRESS"
+    run_transfer "$CHARLIE_HOME" 30regulated_usd "$ALICE_ADDRESS"
     run_quiet $PCLI --home "$CHARLIE_HOME" view sync
     run_quiet $PCLI --home "$ALICE_HOME" view sync
 
     # Flagged transfer (above threshold=500)
     log_info "Alice->Bob:600 (FLAGGED, above threshold=500)"
-    run_quiet $PCLI --home "$ALICE_HOME" tx send 600regulated_usd --to "$BOB_ADDRESS"
+    run_transfer "$ALICE_HOME" 600regulated_usd "$BOB_ADDRESS"
     run_quiet $PCLI --home "$ALICE_HOME" view sync
     run_quiet $PCLI --home "$BOB_HOME" view sync
+
+    log_info "Bob consolidates remaining regulated_usd notes"
+    run_quiet $PCLI --home "$BOB_HOME" tx consolidate regulated_usd --family 2x1
+    run_quiet $PCLI --home "$ALICE_HOME" view sync
+    run_quiet $PCLI --home "$BOB_HOME" view sync
+    run_quiet $PCLI --home "$CHARLIE_HOME" view sync
 }
 
 # Test that transfers to unregistered users are rejected.
 test_unregistered_rejection() {
     log_info "Alice -> Unregistered:10 (must fail)"
-    if $PCLI --home "$ALICE_HOME" tx send 10regulated_usd --to "$UNREGISTERED_ADDRESS" 2>&1; then
+    if $PCLI --home "$ALICE_HOME" tx transfer --to "$UNREGISTERED_ADDRESS" 10regulated_usd 2>&1; then
         fail "Transfer to unregistered user should have failed"
     else
         pass "Unregistered user correctly rejected"
@@ -151,7 +181,7 @@ test_unregistered_rejection() {
 # Test that unregulated assets can be sent without compliance (BLACK_HOLE ACK).
 test_unregulated_transfer() {
     log_info "Alice -> Bob:1000 test_usd (unregulated, BLACK_HOLE ACK)"
-    run_quiet $PCLI --home "$ALICE_HOME" tx send 1000test_usd --to "$BOB_ADDRESS"
+    run_transfer "$ALICE_HOME" 1000test_usd "$BOB_ADDRESS"
     run_quiet $PCLI --home "$ALICE_HOME" view sync
     run_quiet $PCLI --home "$BOB_HOME" view sync
     pass "Unregulated transfer succeeded"

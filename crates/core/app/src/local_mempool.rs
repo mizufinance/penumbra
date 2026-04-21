@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
-use penumbra_sdk_asset::{asset, STAKING_TOKEN_ASSET_ID};
+use penumbra_sdk_asset::{asset, BASE_ASSET_ID};
 use penumbra_sdk_num::Amount;
 use penumbra_sdk_proto::DomainType;
 use penumbra_sdk_sct::Nullifier;
@@ -79,8 +79,8 @@ impl AdmittedRecord {
         self
     }
 
-    pub fn is_staking_fee(&self) -> bool {
-        self.fee_asset_id == *STAKING_TOKEN_ASSET_ID
+    pub fn is_base_asset_fee(&self) -> bool {
+        self.fee_asset_id == *BASE_ASSET_ID
     }
 }
 
@@ -92,7 +92,7 @@ pub enum EvictionPolicy {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FeeEvictionPolicy {
     Disabled,
-    LaunchStakingPriority,
+    LaunchBaseAssetPriority,
 }
 
 #[derive(Clone, Debug)]
@@ -187,8 +187,8 @@ pub struct MempoolSnapshot {
     pub rejected_oversize_total: u64,
     pub rejected_full_no_evictable_total: u64,
     pub rejected_full_low_fee_total: u64,
-    pub evicted_nonstaking_total: u64,
-    pub evicted_lowest_staking_total: u64,
+    pub evicted_non_base_asset_total: u64,
+    pub evicted_lowest_base_asset_total: u64,
 }
 
 #[derive(Clone)]
@@ -349,14 +349,14 @@ struct ReservationState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct StakingFeeOrderKey {
+struct BaseAssetFeeOrderKey {
     fee_amount: Amount,
     tx_len: usize,
     admission_seq: u64,
     record_id: u64,
 }
 
-impl Ord for StakingFeeOrderKey {
+impl Ord for BaseAssetFeeOrderKey {
     fn cmp(&self, other: &Self) -> Ordering {
         let lhs = self.fee_amount.value() * other.tx_len as u128;
         let rhs = other.fee_amount.value() * self.tx_len as u128;
@@ -370,7 +370,7 @@ impl Ord for StakingFeeOrderKey {
     }
 }
 
-impl PartialOrd for StakingFeeOrderKey {
+impl PartialOrd for BaseAssetFeeOrderKey {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
@@ -379,9 +379,9 @@ impl PartialOrd for StakingFeeOrderKey {
 struct MempoolState {
     config: MempoolCoreConfig,
     free_queue: VecDeque<u64>,
-    free_nonstaking_queue: VecDeque<u64>,
-    free_staking_index: BTreeSet<StakingFeeOrderKey>,
-    record_fee_order: HashMap<u64, StakingFeeOrderKey>,
+    free_non_base_asset_queue: VecDeque<u64>,
+    free_base_asset_index: BTreeSet<BaseAssetFeeOrderKey>,
+    record_fee_order: HashMap<u64, BaseAssetFeeOrderKey>,
     free_tombstones: HashSet<u64>,
     records: HashMap<u64, Arc<AdmittedRecord>>,
     nullifier_index: HashMap<Nullifier, HashSet<u64>>,
@@ -401,8 +401,8 @@ struct MempoolState {
     rejected_oversize_total: u64,
     rejected_full_no_evictable_total: u64,
     rejected_full_low_fee_total: u64,
-    evicted_nonstaking_total: u64,
-    evicted_lowest_staking_total: u64,
+    evicted_non_base_asset_total: u64,
+    evicted_lowest_base_asset_total: u64,
     next_candidate_id: u64,
 }
 
@@ -411,8 +411,8 @@ impl MempoolState {
         Self {
             config,
             free_queue: VecDeque::new(),
-            free_nonstaking_queue: VecDeque::new(),
-            free_staking_index: BTreeSet::new(),
+            free_non_base_asset_queue: VecDeque::new(),
+            free_base_asset_index: BTreeSet::new(),
             record_fee_order: HashMap::new(),
             free_tombstones: HashSet::new(),
             records: HashMap::new(),
@@ -433,8 +433,8 @@ impl MempoolState {
             rejected_oversize_total: 0,
             rejected_full_no_evictable_total: 0,
             rejected_full_low_fee_total: 0,
-            evicted_nonstaking_total: 0,
-            evicted_lowest_staking_total: 0,
+            evicted_non_base_asset_total: 0,
+            evicted_lowest_base_asset_total: 0,
             next_candidate_id: 1,
         }
     }
@@ -459,8 +459,8 @@ impl MempoolState {
             rejected_oversize_total: self.rejected_oversize_total,
             rejected_full_no_evictable_total: self.rejected_full_no_evictable_total,
             rejected_full_low_fee_total: self.rejected_full_low_fee_total,
-            evicted_nonstaking_total: self.evicted_nonstaking_total,
-            evicted_lowest_staking_total: self.evicted_lowest_staking_total,
+            evicted_non_base_asset_total: self.evicted_non_base_asset_total,
+            evicted_lowest_base_asset_total: self.evicted_lowest_base_asset_total,
         }
     }
 
@@ -488,7 +488,7 @@ impl MempoolState {
                         return AdmitOutcome::RejectedAtCapacityNoEvictable;
                     }
                 }
-                FeeEvictionPolicy::LaunchStakingPriority => {
+                FeeEvictionPolicy::LaunchBaseAssetPriority => {
                     match self.make_room_with_fee_policy(record.as_ref()) {
                         CapacityResolution::Evicted => {
                             evicted_records += 1;
@@ -744,14 +744,14 @@ impl MempoolState {
     }
 
     fn make_room_with_fee_policy(&mut self, incoming: &AdmittedRecord) -> CapacityResolution {
-        if incoming.is_staking_fee() {
-            if self.evict_oldest_free_nonstaking().is_some() {
+        if incoming.is_base_asset_fee() {
+            if self.evict_oldest_free_non_base_asset().is_some() {
                 return CapacityResolution::Replaced;
             }
-            let Some(key) = self.free_staking_index.iter().next().copied() else {
+            let Some(key) = self.free_base_asset_index.iter().next().copied() else {
                 return CapacityResolution::RejectNoEvictable;
             };
-            let incoming_key = StakingFeeOrderKey {
+            let incoming_key = BaseAssetFeeOrderKey {
                 fee_amount: incoming.fee_amount,
                 tx_len: incoming.tx_len,
                 admission_seq: incoming.admission_seq,
@@ -760,10 +760,10 @@ impl MempoolState {
             if incoming_key <= key {
                 return CapacityResolution::RejectLowFee;
             }
-            let _ = self.evict_lowest_staking(key.record_id);
+            let _ = self.evict_lowest_base_asset(key.record_id);
             CapacityResolution::Replaced
         } else {
-            if self.evict_oldest_free_nonstaking().is_some() {
+            if self.evict_oldest_free_non_base_asset().is_some() {
                 CapacityResolution::Replaced
             } else {
                 CapacityResolution::RejectNoEvictable
@@ -789,28 +789,28 @@ impl MempoolState {
         }
     }
 
-    fn evict_oldest_free_nonstaking(&mut self) -> Option<u64> {
+    fn evict_oldest_free_non_base_asset(&mut self) -> Option<u64> {
         loop {
-            let record_id = self.free_nonstaking_queue.pop_front()?;
+            let record_id = self.free_non_base_asset_queue.pop_front()?;
             if self.free_tombstones.remove(&record_id) {
                 continue;
             }
             let Some(record) = self.records.get(&record_id) else {
                 continue;
             };
-            if self.record_reservation.contains_key(&record_id) || record.is_staking_fee() {
+            if self.record_reservation.contains_key(&record_id) || record.is_base_asset_fee() {
                 continue;
             }
-            self.remove_record(record_id, RemovalReason::EvictedNonStakingReplacement);
+            self.remove_record(record_id, RemovalReason::EvictedNonBaseAssetReplacement);
             return Some(record_id);
         }
     }
 
-    fn evict_lowest_staking(&mut self, record_id: u64) -> Option<u64> {
+    fn evict_lowest_base_asset(&mut self, record_id: u64) -> Option<u64> {
         if self.record_reservation.contains_key(&record_id) {
             return None;
         }
-        self.remove_record(record_id, RemovalReason::EvictedLowestStakingReplacement)
+        self.remove_record(record_id, RemovalReason::EvictedLowestBaseAssetReplacement)
             .then_some(record_id)
     }
 
@@ -819,23 +819,23 @@ impl MempoolState {
             return;
         };
         self.free_queue.push_back(record_id);
-        if record.is_staking_fee() {
-            let key = StakingFeeOrderKey {
+        if record.is_base_asset_fee() {
+            let key = BaseAssetFeeOrderKey {
                 fee_amount: record.fee_amount,
                 tx_len: record.tx_len,
                 admission_seq: record.admission_seq,
                 record_id,
             };
             self.record_fee_order.insert(record_id, key);
-            self.free_staking_index.insert(key);
+            self.free_base_asset_index.insert(key);
         } else {
-            self.free_nonstaking_queue.push_back(record_id);
+            self.free_non_base_asset_queue.push_back(record_id);
         }
     }
 
     fn remove_from_free_indexes(&mut self, record_id: u64) {
         if let Some(key) = self.record_fee_order.remove(&record_id) {
-            self.free_staking_index.remove(&key);
+            self.free_base_asset_index.remove(&key);
         }
     }
 
@@ -849,7 +849,7 @@ impl MempoolState {
         if self.free_tombstones.len() > GC_THRESHOLD {
             self.free_queue
                 .retain(|id| !self.free_tombstones.contains(id));
-            self.free_nonstaking_queue
+            self.free_non_base_asset_queue
                 .retain(|id| !self.free_tombstones.contains(id));
             self.free_tombstones.clear();
         }
@@ -893,15 +893,15 @@ impl MempoolState {
             RemovalReason::EvictedOldest => self.evicted_total += 1,
             RemovalReason::Committed => self.committed_total += 1,
             RemovalReason::Invalidated => self.invalidated_total += 1,
-            RemovalReason::EvictedNonStakingReplacement => {
+            RemovalReason::EvictedNonBaseAssetReplacement => {
                 self.evicted_total += 1;
                 self.replaced_total += 1;
-                self.evicted_nonstaking_total += 1;
+                self.evicted_non_base_asset_total += 1;
             }
-            RemovalReason::EvictedLowestStakingReplacement => {
+            RemovalReason::EvictedLowestBaseAssetReplacement => {
                 self.evicted_total += 1;
                 self.replaced_total += 1;
-                self.evicted_lowest_staking_total += 1;
+                self.evicted_lowest_base_asset_total += 1;
             }
         }
         true
@@ -919,8 +919,8 @@ enum RemovalReason {
     EvictedOldest,
     Committed,
     Invalidated,
-    EvictedNonStakingReplacement,
-    EvictedLowestStakingReplacement,
+    EvictedNonBaseAssetReplacement,
+    EvictedLowestBaseAssetReplacement,
 }
 
 enum CapacityResolution {
@@ -994,7 +994,7 @@ mod tests {
     use decaf377::Fq;
     use penumbra_sdk_fee::Fee;
 
-    fn dummy_nonstaking_asset(seed: u64) -> asset::Id {
+    fn dummy_non_base_asset(seed: u64) -> asset::Id {
         asset::Id(Fq::from(seed))
     }
 
@@ -1047,7 +1047,7 @@ mod tests {
             admission_seq,
             tx_len,
             spend_nullifiers,
-            *STAKING_TOKEN_ASSET_ID,
+            *BASE_ASSET_ID,
             Amount::from(1u64),
         )
     }
@@ -1170,21 +1170,21 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn higher_fee_staking_replaces_lower_fee_staking_when_full() -> Result<()> {
+    async fn higher_fee_base_asset_replaces_lower_fee_base_asset_when_full() -> Result<()> {
         let handle = MempoolHandle::new(MempoolCoreConfig {
             max_store_bytes: 128,
             max_store_txs: 2,
             ingestion_buffer: 16,
             command_buffer: 16,
             eviction_policy: EvictionPolicy::OldestUnreservedFirst,
-            fee_eviction_policy: FeeEvictionPolicy::LaunchStakingPriority,
+            fee_eviction_policy: FeeEvictionPolicy::LaunchBaseAssetPriority,
         });
         handle
             .submit_admitted(dummy_record_with_fee(
                 0,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(1u64),
             ))
             .await?;
@@ -1193,7 +1193,7 @@ mod tests {
                 1,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(2u64),
             ))
             .await?;
@@ -1203,7 +1203,7 @@ mod tests {
                 2,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(10u64),
             ))
             .await?;
@@ -1215,26 +1215,26 @@ mod tests {
             }
         ));
         let snapshot = handle.snapshot().await?;
-        assert_eq!(snapshot.evicted_lowest_staking_total, 1);
+        assert_eq!(snapshot.evicted_lowest_base_asset_total, 1);
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn equal_fee_staking_does_not_replace_existing() -> Result<()> {
+    async fn equal_fee_base_asset_does_not_replace_existing() -> Result<()> {
         let handle = MempoolHandle::new(MempoolCoreConfig {
             max_store_bytes: 64,
             max_store_txs: 1,
             ingestion_buffer: 16,
             command_buffer: 16,
             eviction_policy: EvictionPolicy::OldestUnreservedFirst,
-            fee_eviction_policy: FeeEvictionPolicy::LaunchStakingPriority,
+            fee_eviction_policy: FeeEvictionPolicy::LaunchBaseAssetPriority,
         });
         handle
             .submit_admitted(dummy_record_with_fee(
                 0,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(5u64),
             ))
             .await?;
@@ -1243,7 +1243,7 @@ mod tests {
                 1,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(5u64),
             ))
             .await?;
@@ -1259,14 +1259,14 @@ mod tests {
             ingestion_buffer: 16,
             command_buffer: 16,
             eviction_policy: EvictionPolicy::OldestUnreservedFirst,
-            fee_eviction_policy: FeeEvictionPolicy::LaunchStakingPriority,
+            fee_eviction_policy: FeeEvictionPolicy::LaunchBaseAssetPriority,
         });
         handle
             .submit_admitted(dummy_record_with_fee(
                 0,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(1u64),
             ))
             .await?;
@@ -1275,7 +1275,7 @@ mod tests {
                 1,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(1u64),
             ))
             .await?;
@@ -1284,7 +1284,7 @@ mod tests {
                 2,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(2u64),
             ))
             .await?;
@@ -1298,22 +1298,22 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn staking_evicts_oldest_free_nonstaking_first() -> Result<()> {
-        let nonstaking = dummy_nonstaking_asset(7);
+    async fn base_asset_evicts_oldest_free_non_base_asset_first() -> Result<()> {
+        let non_base_asset = dummy_non_base_asset(7);
         let handle = MempoolHandle::new(MempoolCoreConfig {
             max_store_bytes: 128,
             max_store_txs: 2,
             ingestion_buffer: 16,
             command_buffer: 16,
             eviction_policy: EvictionPolicy::OldestUnreservedFirst,
-            fee_eviction_policy: FeeEvictionPolicy::LaunchStakingPriority,
+            fee_eviction_policy: FeeEvictionPolicy::LaunchBaseAssetPriority,
         });
         handle
             .submit_admitted(dummy_record_with_fee(
                 0,
                 16,
                 Vec::new(),
-                nonstaking,
+                non_base_asset,
                 Amount::from(50u64),
             ))
             .await?;
@@ -1322,7 +1322,7 @@ mod tests {
                 1,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(1u64),
             ))
             .await?;
@@ -1332,7 +1332,7 @@ mod tests {
                 2,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(2u64),
             ))
             .await?;
@@ -1343,27 +1343,27 @@ mod tests {
             .expect("freeze");
         assert_eq!(next.lease.record_ids, vec![1, 2]);
         let snapshot = handle.snapshot().await?;
-        assert_eq!(snapshot.evicted_nonstaking_total, 1);
+        assert_eq!(snapshot.evicted_non_base_asset_total, 1);
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn nonstaking_incoming_evicts_oldest_nonstaking_only() -> Result<()> {
-        let nonstaking = dummy_nonstaking_asset(8);
+    async fn non_base_asset_incoming_evicts_oldest_non_base_asset_only() -> Result<()> {
+        let non_base_asset = dummy_non_base_asset(8);
         let handle = MempoolHandle::new(MempoolCoreConfig {
             max_store_bytes: 128,
             max_store_txs: 2,
             ingestion_buffer: 16,
             command_buffer: 16,
             eviction_policy: EvictionPolicy::OldestUnreservedFirst,
-            fee_eviction_policy: FeeEvictionPolicy::LaunchStakingPriority,
+            fee_eviction_policy: FeeEvictionPolicy::LaunchBaseAssetPriority,
         });
         handle
             .submit_admitted(dummy_record_with_fee(
                 0,
                 16,
                 Vec::new(),
-                nonstaking,
+                non_base_asset,
                 Amount::from(1u64),
             ))
             .await?;
@@ -1372,7 +1372,7 @@ mod tests {
                 1,
                 16,
                 Vec::new(),
-                nonstaking,
+                non_base_asset,
                 Amount::from(2u64),
             ))
             .await?;
@@ -1381,7 +1381,7 @@ mod tests {
                 2,
                 16,
                 Vec::new(),
-                nonstaking,
+                non_base_asset,
                 Amount::from(3u64),
             ))
             .await?;
@@ -1394,22 +1394,22 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn nonstaking_never_evicts_staking() -> Result<()> {
-        let nonstaking = dummy_nonstaking_asset(9);
+    async fn non_base_asset_never_evicts_base_asset() -> Result<()> {
+        let non_base_asset = dummy_non_base_asset(9);
         let handle = MempoolHandle::new(MempoolCoreConfig {
             max_store_bytes: 64,
             max_store_txs: 1,
             ingestion_buffer: 16,
             command_buffer: 16,
             eviction_policy: EvictionPolicy::OldestUnreservedFirst,
-            fee_eviction_policy: FeeEvictionPolicy::LaunchStakingPriority,
+            fee_eviction_policy: FeeEvictionPolicy::LaunchBaseAssetPriority,
         });
         handle
             .submit_admitted(dummy_record_with_fee(
                 0,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(1u64),
             ))
             .await?;
@@ -1418,7 +1418,7 @@ mod tests {
                 1,
                 16,
                 Vec::new(),
-                nonstaking,
+                non_base_asset,
                 Amount::from(100u64),
             ))
             .await?;
@@ -1437,7 +1437,7 @@ mod tests {
             ingestion_buffer: 16,
             command_buffer: 16,
             eviction_policy: EvictionPolicy::OldestUnreservedFirst,
-            fee_eviction_policy: FeeEvictionPolicy::LaunchStakingPriority,
+            fee_eviction_policy: FeeEvictionPolicy::LaunchBaseAssetPriority,
         });
         handle
             .submit_admitted(dummy_record(0, 16, Vec::new()))
@@ -1455,7 +1455,7 @@ mod tests {
                 2,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(10u64),
             ))
             .await?;

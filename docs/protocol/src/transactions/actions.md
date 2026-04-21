@@ -1,52 +1,18 @@
 # Action Reference
 
-This page is a quick-reference list of transaction actions. Not all actions have proof statements, as only some actions perform shielded state changes. Actions with proof statements are additionally listed separately for reference.
+This page is a quick-reference list of the supported transaction actions in the
+reduced chain.
 
-## Actions by Proof Statement
-
-| Proof                | Action                                                                                 |
-| -------------------- | -------------------------------------------------------------------------------------- |
-| Spend                | [`core.component.shielded_pool.v1.Spend`](../shielded_pool/action/spend.md)            |
-| Output               | [`core.component.shielded_pool.v1.Output`](../shielded_pool/action/output.md)          |
-| Convert              | [`core.component.stake.v1.UndelegateClaim`](../stake/action/undelegate_claim.md)       |
-| Delegator Vote       | [`core.component.governance.v1.DelegatorVote`](../governance/action/delegator_vote.md) |
-| Swap                 | [`core.component.dex.v1.Swap`](../dex/action/swap.md)                                  |
-| Swap Claim           | [`core.component.dex.v1.SwapClaim`](../dex/action/swap_claim.md)                       |
-| Nullifier Derivation | Not used in actions, intended for verifiable transaction perspectives                  |
-
-## All Actions
-
-This table lists all actions, their high-level purpose, and their contributions
-to the transaction's value balance. For ease of comprehension, shielded and
-transparent contributions to the transaction's value balance are listed
-separately, though they are handled by the same mechanism: the chain forms
-commitments with a zero blinding factor to accumulate transparent and shielded
-contributions together.
-
-| Action                                                                  | Description                                                                                                              | Shielded Balance                          | Transparent Balance                                                                                                         |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| [`shielded_pool.v1.Spend`](../shielded_pool/action/spend.md)            | Spends a note previously included on-chain, releasing its value into the transaction                                     | $+$ (value of spent note)                 |                                                                                                                             |
-| [`shielded_pool.v1.Output`](../shielded_pool/action/output.md)          | Produces a new note controlled by a specified address and adds it to the chain state                                     | $-$ (value of new note)                   |                                                                                                                             |
-| [`dex.v1.Swap`](../dex/action/swap.md)                                  | Submits a swap intent to the chain for batch execution                                                                   | $-$ (prepaid claim fee)                   | $-$ (swap inputs)                                                                                                           |
-| [`dex.v1.SwapClaim`](../dex/action/swap_claim.md)                       | Claims the outputs of a swap once the clearing price is known, producing new output notes directly                       |                                           | $+$ (prepaid claim fee)                                                                                                     |
-| `stake.v1.ValidatorDefinition`                                          | Uploads a new validator definition to the chain                                                                          |                                           |                                                                                                                             |
-| `stake.v1.Delegate`                                                     | Delegates stake to a validator, exchanging the staking token for that validator's delegation token                       |                                           | $-$ (staking token) $+$ (delegation token)                                                                                  |
-| `stake.v1.Undelegate`                                                   | Undelegates stake from a validator, exchanging delegation tokens for unbonding tokens                                    |                                           | $-$ (delegation token) $+$ (unbonding token)                                                                                |
-| [`stake.v1.UndelegateClaim`](../stake/action/undelegate_claim.md)       | Converts unbonding tokens to staking tokens after unbonding completes, at a 1:1 rate unless there are slashing penalties | $-$ (unbonding token) $+$ (staking token) |                                                                                                                             |
-| `ibc.v1.IbcRelay`                                                       | Relays IBC messages from a counterparty chain                                                                            |                                           |                                                                                                                             |
-| `ibc.v1.Ics20Withdrawal`                                                | Initiates an outbound ICS-20 token transfer                                                                              |                                           | $-$ (transfer amount)                                                                                                       |
-| `dex.v1.PositionOpen`                                                   | Opens a liquidity position                                                                                               |                                           | $-$ (initial reserves) $+$ (opened LPNFT)                                                                                   |
-| `dex.v1.PositionClose`                                                  | Closes a liquidity position                                                                                              |                                           | $-$ (opened LPNFT) $+$ (closed LPNFT)                                                                                       |
-| `dex.v1.PositionWithdraw`                                               | Withdraws reserves or rewards from a liquidity position, with sequence number $n$                                        |                                           | $-$ (withdrawn seq $n-1$ LPNFT) $+$ (withdrawn seq $n$ LPNFT) $+$ (current position reserves)                               |
-| `dex.v1.PositionRewardClaim`                                            | Deprecated and unused                                                                                                    |                                           |                                                                                                                             |
-| `governance.v1.ProposalSubmit`                                          | Submits a governance proposal for voting                                                                                 |                                           | $-$ (deposit amount) $+$ (voting proposal NFT)                                                                              |
-| `governance.v1.ProposalWithdraw`                                        | Withdraws a governance proposal from voting                                                                              |                                           | $-$ (voting proposal NFT) $+$ (withdrawn proposal NFT)                                                                      |
-| `governance.v1.ValidatorVote`                                           | Performs a governance vote as a validator                                                                                |                                           |                                                                                                                             |
-| [`governance.v1.DelegatorVote`](../governance/action/delegator_vote.md) | Performs a governance vote as a delegator                                                                                |                                           | $+$ (Voting Receipt Token)                                                                                                  |
-| `governance.v1.ProposalDepositClaim`                                    | Claims a proposal deposit once voting has finished                                                                       |                                           | $-$ (voting/withdrawn proposal NFT) $+$ (claimed proposal NFT) $+$ (deposit amount, if not slashed)                         |
-| `governance.v1.CommunityPoolSpend`                                      | Spends funds from the community pool                                                                                     |                                           | $+$ (spent value)                                                                                                           |
-| `governance.v1.CommunityPoolOutput`                                     | Like `Output`, but transparent                                                                                           |                                           | $-$ (value of new note)                                                                                                     |
-| `governance.v1.CommunityPoolDeposit`                                    | Allows deposits into the community pool                                                                                  |                                           | $-$ (value of deposit)                                                                                                      |
-| `auction.v1.ActionDutchAuctionSchedule`                           | Schedule a Dutch auction                                                                                                 |                                           | $-$ (initial reserves) $+$ (opened auction NFT)                                                                             |
-| `auction.v1.ActionDutchAuctionEnd`                                | Terminate a Dutch auction                                                                                                |                                           | $-$ (opened auction NFT) $+$ (closed auction NFT)                                                                           |
-| `auction.v1.ActionDutchAuctionWithdraw`                           | Withdraw a Dutch auction, with a sequence number $n$                                                                     |                                           | $-$ (closed/withdrawn auction nft with sequence $n-1$) $+$ (withdrawn auction NFT with sequence $n$) $+$ (auction reserves) |
+| Action | Description |
+| ------ | ----------- |
+| `shielded_pool.v1.Transfer` | Moves shielded value between addresses and may produce sender-owned change. |
+| `shielded_pool.v1.Split` | Reshapes one sender-owned note into multiple sender-owned notes. |
+| `shielded_pool.v1.Consolidate` | Merges multiple sender-owned notes into a smaller note set. |
+| `shielded_pool.v1.ShieldedIcs20Withdrawal` | Burns shielded value into an outbound ICS-20 transfer effect and may produce sender-owned change. |
+| `ibc.v1.IbcRelay` | Relays IBC datagrams needed to advance clients, connections, channels, and packets. |
+| `validator.v1.ValidatorDefinition` | Updates validator-owned chain metadata and authorization material. |
+| `governance.v1.ProposalSubmit` | Submits a governance proposal for voting. |
+| `governance.v1.ValidatorVote` | Records a validator's governance vote. |
+| `compliance.v1.ComplianceRegisterAsset` | Registers or updates asset-side compliance metadata. |
+| `compliance.v1.ComplianceRegisterUser` | Registers or updates user-side compliance metadata. |
+| `proof_aggregation.v1.AggregateBundle` | Submits an aggregation bundle through the dedicated aggregation pipeline. |

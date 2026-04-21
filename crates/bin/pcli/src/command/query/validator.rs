@@ -1,33 +1,27 @@
-use std::{
-    fs::File,
-    io::Write,
-    ops::{Deref, RangeInclusive},
-    time::Duration,
-};
+use std::{fs::File, io::Write, ops::RangeInclusive, time::Duration};
 
 use anyhow::{anyhow, Context, Error, Result};
 use colored::Colorize;
 use comfy_table::{presets, Table};
 use futures::TryStreamExt;
 use penumbra_sdk_app::params::AppParameters;
-use penumbra_sdk_num::{fixpoint::U128x128, Amount};
+use penumbra_sdk_num::Amount;
 use penumbra_sdk_proto::{
     core::{
         app::v1::{
             query_service_client::QueryServiceClient as AppQueryServiceClient, AppParametersRequest,
         },
-        component::stake::v1::{
-            query_service_client::QueryServiceClient as StakeQueryServiceClient,
+        component::validator::v1::{
+            query_service_client::QueryServiceClient as ValidatorQueryServiceClient,
             GetValidatorInfoRequest, GetValidatorInfoResponse, ValidatorInfoRequest,
             ValidatorStatusRequest, ValidatorUptimeRequest,
         },
     },
     DomainType,
 };
-use penumbra_sdk_stake::{
-    rate::RateData,
+use penumbra_sdk_validator::{
     validator::{self, Info, Status, Validator, ValidatorToml},
-    IdentityKey, Uptime, BPS_SQUARED_SCALING_FACTOR,
+    IdentityKey, Uptime,
 };
 
 use crate::App;
@@ -71,7 +65,7 @@ impl ValidatorCmd {
                 show_inactive,
                 detailed,
             } => {
-                let mut client = StakeQueryServiceClient::new(app.pd_channel().await?);
+                let mut client = ValidatorQueryServiceClient::new(app.pd_channel().await?);
 
                 let mut validators = client
                     .validator_info(ValidatorInfoRequest {
@@ -115,14 +109,7 @@ impl ValidatorCmd {
 
                 let mut table = Table::new();
                 table.load_preset(presets::NOTHING);
-                table.set_header(vec![
-                    "Voting Power",
-                    "Share",
-                    "Commission",
-                    "State",
-                    "Bonding State",
-                    "Validator Info",
-                ]);
+                table.set_header(vec!["Voting Power", "Share", "State", "Validator Info"]);
 
                 for v in validators {
                     let voting_power = (v.status.voting_power.value() as f64) * 1e-6; // apply udelegation factor
@@ -133,27 +120,16 @@ impl ValidatorCmd {
                         0.0
                     };
                     let power_percent = 100.0 * active_voting_power / total_voting_power;
-                    let commission_bps = v
-                        .validator
-                        .funding_streams
-                        .as_ref()
-                        .iter()
-                        .map(|fs| fs.rate_bps())
-                        .sum::<u16>();
 
                     table.add_row(vec![
                         format!("{voting_power:.3}"),
                         format!("{power_percent:.2}%"),
-                        format!("{commission_bps}bps"),
                         v.status.state.to_string(),
-                        v.status.bonding_state.to_string(),
                         // TODO: consider rewriting this with term colors
                         // at some point, when we get around to it
                         v.validator.identity_key.to_string().red().to_string(),
                     ]);
                     table.add_row(vec![
-                        "".into(),
-                        "".into(),
                         "".into(),
                         "".into(),
                         "".into(),
@@ -164,13 +140,9 @@ impl ValidatorCmd {
                             "".into(),
                             "".into(),
                             "".into(),
-                            "".into(),
-                            "".into(),
                             format!("  {}", v.validator.description),
                         ]);
                         table.add_row(vec![
-                            "".into(),
-                            "".into(),
                             "".into(),
                             "".into(),
                             "".into(),
@@ -194,7 +166,7 @@ impl ValidatorCmd {
                 let GetValidatorInfoResponse { validator_info } = app
                     .pd_channel()
                     .await
-                    .map(StakeQueryServiceClient::new)?
+                    .map(ValidatorQueryServiceClient::new)?
                     .get_validator_info(request)
                     .await?
                     .into_inner();
@@ -223,7 +195,7 @@ impl ValidatorCmd {
             ValidatorCmd::Uptime { identity_key } => {
                 let identity_key = identity_key.parse::<IdentityKey>()?;
 
-                let mut client = StakeQueryServiceClient::new(app.pd_channel().await?);
+                let mut client = ValidatorQueryServiceClient::new(app.pd_channel().await?);
 
                 // What's the uptime?
                 let uptime: Uptime = client
@@ -280,15 +252,12 @@ impl ValidatorCmd {
                     100.0 * (window_len as f64 - missed_blocks as f64) / window_len as f64;
                 let signed_blocks = window_len as u64 - missed_blocks as u64;
                 let min_uptime_blocks =
-                    window_len as u64 - params.stake_params.missed_blocks_maximum;
+                    window_len as u64 - params.validator_params.missed_blocks_maximum;
                 let percent_min_uptime = 100.0 * min_uptime_blocks as f64 / window_len as f64;
-                let percent_max_downtime =
-                    100.0 * params.stake_params.missed_blocks_maximum as f64 / window_len as f64;
+                let percent_max_downtime = 100.0
+                    * params.validator_params.missed_blocks_maximum as f64
+                    / window_len as f64;
                 let percent_downtime = 100.0 * missed_blocks as f64 / window_len as f64;
-                let percent_downtime_penalty =
-                    // Converting from basis points squared to percentage: basis point ^ 2  %-age
-                    //                                                    /--------------\/-----\
-                    params.stake_params.slashing_penalty_downtime as f64 / 100.0 / 100.0 / 100.0;
                 let min_remaining_downtime_blocks = (window_len as u64)
                     .saturating_sub(missed_blocks as u64)
                     .saturating_sub(min_uptime_blocks);
@@ -309,7 +278,7 @@ impl ValidatorCmd {
                 println!("Salient downtime: {percent_downtime:>6.2}% = {missed_blocks:width$}/{window_len} most-recent blocks ~ {cumulative_downtime} cumulative downtime", width = window_len_len);
                 if active {
                     println!("Unexpended grace: {percent_grace:>6.2}% = {min_remaining_downtime_blocks:width$}/{window_len} forthcoming blocks ~ {min_remaining_downtime} at minimum before penalty", width = window_len_len);
-                    println!( "Downtime penalty: {percent_downtime_penalty:>6.2}% - if downtime exceeds {percent_max_downtime:.2}%, penalty will be applied to all delegations");
+                    println!( "Downtime threshold: if downtime exceeds {percent_max_downtime:.2}%, validator enforcement will trigger");
                 }
                 if !downtime_ranges.is_empty() {
                     println!("Downtime details:");
@@ -363,7 +332,7 @@ impl ValidatorCmd {
                 let GetValidatorInfoResponse { validator_info } = app
                     .pd_channel()
                     .await
-                    .map(StakeQueryServiceClient::new)?
+                    .map(ValidatorQueryServiceClient::new)?
                     .get_validator_info(request)
                     .await?
                     .into_inner();
@@ -379,15 +348,7 @@ impl ValidatorCmd {
                 let mut table = Table::new();
                 table
                     .load_preset(presets::NOTHING)
-                    .set_header(vec![
-                        "Voting Power",
-                        "Commission",
-                        "State",
-                        "Bonding State",
-                        "Exchange Rate",
-                        "Identity Key",
-                        "Name",
-                    ])
+                    .set_header(vec!["Voting Power", "State", "Identity Key", "Name"])
                     .add_row(StatusRow::new(info));
                 println!("{table}");
             }
@@ -400,10 +361,7 @@ impl ValidatorCmd {
 /// A row within the `status` command's table output.
 struct StatusRow {
     power: f64,
-    commission: u16,
     state: validator::State,
-    bonding_state: validator::BondingState,
-    exchange_rate: U128x128,
     identity_key: IdentityKey,
     name: String,
 }
@@ -412,41 +370,23 @@ impl StatusRow {
     /// Constructs a new [`StatusRow`].
     fn new(
         Info {
-            validator:
-                Validator {
-                    funding_streams,
-                    identity_key,
-                    name,
-                    ..
-                },
+            validator: Validator {
+                identity_key, name, ..
+            },
             status:
                 Status {
                     state,
-                    bonding_state,
                     voting_power,
-                    ..
-                },
-            rate_data:
-                RateData {
-                    validator_exchange_rate,
                     ..
                 },
         }: Info,
     ) -> Self {
-        // Calculate the scaled voting power, exchange rate, and commissions.
+        // Calculate the scaled voting power.
         let power = (voting_power.value() as f64) * 1e-6;
-        let commission = funding_streams.iter().map(|fs| fs.rate_bps()).sum();
-        let exchange_rate = {
-            let rate_bps_sq = U128x128::from(validator_exchange_rate);
-            (rate_bps_sq / BPS_SQUARED_SCALING_FACTOR.deref()).expect("nonzero scaling factor")
-        };
 
         Self {
             power,
-            commission,
             state,
-            bonding_state,
-            exchange_rate,
             identity_key,
             name,
         }
@@ -457,20 +397,14 @@ impl Into<comfy_table::Row> for StatusRow {
     fn into(self) -> comfy_table::Row {
         let Self {
             power,
-            commission,
             state,
-            bonding_state,
-            exchange_rate,
             identity_key,
             name,
         } = self;
 
         [
             format!("{power:.3}"),
-            format!("{commission}bps"),
             state.to_string(),
-            bonding_state.to_string(),
-            exchange_rate.to_string(),
             identity_key.to_string(),
             name,
         ]

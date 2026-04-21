@@ -1,22 +1,43 @@
 use ark_ff::ToConstraintField;
 use ark_relations::r1cs::{ConstraintSystemRef, SynthesisError};
 use decaf377::{r1cs::FqVar, Fq};
-use once_cell::sync::Lazy;
-use penumbra_sdk_compliance::structs::{OUTPUT_CIPHERTEXT_FQS, SPEND_CIPHERTEXT_FQS};
+use penumbra_sdk_compliance::{
+    TRANSFER_CORE_CIPHERTEXT_FQS, TRANSFER_DETECTION_FQS, TRANSFER_EXT_CIPHERTEXT_FQS,
+};
 use penumbra_sdk_proof_params::statement_hash::{hash_statement_fields, hash_statement_fields_var};
 
 use crate::{
-    output::OutputProofPublic,
-    spend::SpendProofPublic,
+    consolidate::ConsolidateProofPublic,
+    shielded_ics20_withdrawal::ShieldedIcs20WithdrawalProofPublic,
+    split::SplitProofPublic,
     transfer::{TransferProofPublic, TransferSpendPublic},
-    TransferFamilyId,
+    transfer::{TRANSFER_PROOF_LABEL, TRANSFER_STATEMENT_FIELD_COUNT},
+    ConsolidateFamilyId, SplitFamilyId,
 };
 
-pub const SPEND_STATEMENT_FIELD_COUNT: usize = 17;
-pub const OUTPUT_STATEMENT_FIELD_COUNT: usize = 29;
-pub const TRANSFER_STATEMENT_BASE_FIELDS: usize = 5;
-pub const TRANSFER_STATEMENT_FIELDS_PER_INPUT: usize = 11;
-pub const TRANSFER_STATEMENT_FIELDS_PER_OUTPUT: usize = 24;
+pub const CONSOLIDATE_STATEMENT_BASE_FIELDS: usize = 2;
+pub const CONSOLIDATE_STATEMENT_FIELDS_PER_INPUT: usize = 2;
+pub const CONSOLIDATE_STATEMENT_FIELDS_PER_OUTPUT: usize = 1;
+pub const SPLIT_STATEMENT_BASE_FIELDS: usize = 2;
+pub const SPLIT_STATEMENT_FIELDS_PER_INPUT: usize = 2;
+pub const SPLIT_STATEMENT_FIELDS_PER_OUTPUT: usize = 1;
+pub const TRANSFER_STATEMENT_BASE_FIELDS: usize = 31;
+pub const TRANSFER_STATEMENT_FIELDS_PER_INPUT: usize = 2;
+pub const TRANSFER_STATEMENT_FIELDS_PER_OUTPUT: usize = 1;
+pub const SHIELDED_ICS20_WITHDRAWAL_STATEMENT_BASE_FIELDS: usize = 10;
+pub const SHIELDED_ICS20_WITHDRAWAL_STATEMENT_FIELDS_PER_INPUT: usize = 2;
+
+pub const fn consolidate_statement_field_count(n_in: usize, n_out: usize) -> usize {
+    CONSOLIDATE_STATEMENT_BASE_FIELDS
+        + CONSOLIDATE_STATEMENT_FIELDS_PER_INPUT * n_in
+        + CONSOLIDATE_STATEMENT_FIELDS_PER_OUTPUT * n_out
+}
+
+pub const fn split_statement_field_count(n_in: usize, n_out: usize) -> usize {
+    SPLIT_STATEMENT_BASE_FIELDS
+        + SPLIT_STATEMENT_FIELDS_PER_INPUT * n_in
+        + SPLIT_STATEMENT_FIELDS_PER_OUTPUT * n_out
+}
 
 pub const fn transfer_statement_field_count(n_in: usize, n_out: usize) -> usize {
     TRANSFER_STATEMENT_BASE_FIELDS
@@ -24,41 +45,32 @@ pub const fn transfer_statement_field_count(n_in: usize, n_out: usize) -> usize 
         + TRANSFER_STATEMENT_FIELDS_PER_OUTPUT * n_out
 }
 
-pub static SPEND_STATEMENT_HASH_DOMAIN: Lazy<Fq> = Lazy::new(|| {
-    Fq::from_le_bytes_mod_order(
-        blake2b_simd::blake2b(b"penumbra.shielded_pool.spend.public_input_hash.v1").as_bytes(),
-    )
-});
-pub static OUTPUT_STATEMENT_HASH_DOMAIN: Lazy<Fq> = Lazy::new(|| {
-    Fq::from_le_bytes_mod_order(
-        blake2b_simd::blake2b(b"penumbra.shielded_pool.output.public_input_hash.v1").as_bytes(),
-    )
-});
-pub static SPEND_STATEMENT_PAD_0: Lazy<Fq> = Lazy::new(|| {
-    Fq::from_le_bytes_mod_order(
-        blake2b_simd::blake2b(b"penumbra.shielded_pool.spend.public_input_hash.pad0").as_bytes(),
-    )
-});
-pub static SPEND_STATEMENT_PAD_1: Lazy<Fq> = Lazy::new(|| {
-    Fq::from_le_bytes_mod_order(
-        blake2b_simd::blake2b(b"penumbra.shielded_pool.spend.public_input_hash.pad1").as_bytes(),
-    )
-});
-pub static OUTPUT_STATEMENT_PAD_0: Lazy<Fq> = Lazy::new(|| {
-    Fq::from_le_bytes_mod_order(
-        blake2b_simd::blake2b(b"penumbra.shielded_pool.output.public_input_hash.pad0").as_bytes(),
-    )
-});
-pub static OUTPUT_STATEMENT_PAD_1: Lazy<Fq> = Lazy::new(|| {
-    Fq::from_le_bytes_mod_order(
-        blake2b_simd::blake2b(b"penumbra.shielded_pool.output.public_input_hash.pad1").as_bytes(),
-    )
-});
-fn transfer_statement_hash_constant(family_id: TransferFamilyId, suffix: &str) -> Fq {
+pub const fn shielded_ics20_withdrawal_statement_field_count(n_in: usize) -> usize {
+    SHIELDED_ICS20_WITHDRAWAL_STATEMENT_BASE_FIELDS
+        + SHIELDED_ICS20_WITHDRAWAL_STATEMENT_FIELDS_PER_INPUT * n_in
+}
+
+fn consolidate_statement_hash_constant(family_id: ConsolidateFamilyId, suffix: &str) -> Fq {
     let label = format!(
         "penumbra.shielded_pool.{}.public_input_hash.{suffix}",
         family_id.label()
     );
+    Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(label.as_bytes()).as_bytes())
+}
+fn split_statement_hash_constant(family_id: SplitFamilyId, suffix: &str) -> Fq {
+    let label = format!(
+        "penumbra.shielded_pool.{}.public_input_hash.{suffix}",
+        family_id.label()
+    );
+    Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(label.as_bytes()).as_bytes())
+}
+fn transfer_statement_hash_constant(suffix: &str) -> Fq {
+    let label = format!("penumbra.shielded_pool.{TRANSFER_PROOF_LABEL}.public_input_hash.{suffix}");
+    Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(label.as_bytes()).as_bytes())
+}
+fn shielded_ics20_withdrawal_statement_hash_constant(suffix: &str) -> Fq {
+    let label =
+        format!("penumbra.shielded_pool.shielded_ics20_withdrawal.public_input_hash.{suffix}");
     Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(label.as_bytes()).as_bytes())
 }
 
@@ -66,133 +78,16 @@ fn transfer_statement_hash_constant(family_id: TransferFamilyId, suffix: &str) -
 pub enum StatementHashError {
     #[error("invalid field length: expected {expected}, got {got}")]
     InvalidFieldLength { expected: usize, got: usize },
-    #[error("unknown transfer family id {0}")]
-    UnknownTransferFamilyId(u32),
     #[error("failed to decompress randomized spend key")]
     DecompressRk(decaf377::EncodingError),
     #[error("failed converting {field} to constraint field elements")]
     FieldEncoding { field: String },
-    #[error("invalid ciphertext field length: expected {expected}, got {got}")]
-    InvalidCiphertextLength { expected: usize, got: usize },
-}
-
-pub fn spend_statement_fields(public: &SpendProofPublic) -> Result<Vec<Fq>, StatementHashError> {
-    use StatementHashError::FieldEncoding;
-
-    if public.compliance_ciphertext.len() != SPEND_CIPHERTEXT_FQS {
-        return Err(StatementHashError::InvalidCiphertextLength {
-            expected: SPEND_CIPHERTEXT_FQS,
-            got: public.compliance_ciphertext.len(),
-        });
-    }
-
-    let rk_element = decaf377::Encoding(public.rk.to_bytes())
-        .vartime_decompress()
-        .map_err(StatementHashError::DecompressRk)?;
-
-    macro_rules! to_field_elements {
-        ($fe:expr, $name:expr) => {
-            $fe.to_field_elements().ok_or(FieldEncoding {
-                field: $name.to_owned(),
-            })?
-        };
-    }
-
-    let mut fields = [
-        to_field_elements!(Fq::from(public.anchor), "anchor"),
-        to_field_elements!(public.balance_commitment.0, "balance_commitment"),
-        to_field_elements!(public.nullifier.0, "nullifier"),
-        to_field_elements!(rk_element, "rk"),
-        to_field_elements!(public.asset_anchor.0, "asset_anchor"),
-        to_field_elements!(public.compliance_anchor.0, "compliance_anchor"),
-        to_field_elements!(public.epk, "epk"),
-        to_field_elements!(public.c2_core, "c2_core"),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>();
-
-    fields.extend(public.compliance_ciphertext.iter().copied());
-    fields.push(public.target_timestamp);
-    fields.push(public.dleq_c);
-    fields.push(public.dleq_s);
-    fields.extend(to_field_elements!(
-        public.sender_leaf_hash.0,
-        "sender_leaf_hash"
-    ));
-
-    if fields.len() != SPEND_STATEMENT_FIELD_COUNT {
-        return Err(StatementHashError::InvalidFieldLength {
-            expected: SPEND_STATEMENT_FIELD_COUNT,
-            got: fields.len(),
-        });
-    }
-
-    Ok(fields)
-}
-
-pub fn output_statement_fields(public: &OutputProofPublic) -> Result<Vec<Fq>, StatementHashError> {
-    use StatementHashError::FieldEncoding;
-
-    if public.compliance_ciphertext.len() != OUTPUT_CIPHERTEXT_FQS {
-        return Err(StatementHashError::InvalidCiphertextLength {
-            expected: OUTPUT_CIPHERTEXT_FQS,
-            got: public.compliance_ciphertext.len(),
-        });
-    }
-
-    macro_rules! to_field_elements {
-        ($fe:expr, $name:expr) => {
-            $fe.to_field_elements().ok_or(FieldEncoding {
-                field: $name.to_owned(),
-            })?
-        };
-    }
-
-    let mut fields = Vec::with_capacity(OUTPUT_STATEMENT_FIELD_COUNT);
-    fields.extend(to_field_elements!(
-        public.note_commitment.0,
-        "note_commitment"
-    ));
-    fields.extend(to_field_elements!(
-        public.balance_commitment.0,
-        "balance_commitment"
-    ));
-    fields.extend(to_field_elements!(public.asset_anchor.0, "asset_anchor"));
-    fields.extend(to_field_elements!(
-        public.compliance_anchor.0,
-        "compliance_anchor"
-    ));
-    fields.extend(to_field_elements!(public.epk_1, "epk_1"));
-    fields.extend(to_field_elements!(public.epk_2, "epk_2"));
-    fields.extend(to_field_elements!(public.epk_3, "epk_3"));
-    fields.extend(to_field_elements!(public.c2_core, "c2_core"));
-    fields.extend(to_field_elements!(public.c2_ext, "c2_ext"));
-    fields.extend(to_field_elements!(public.c2_sext, "c2_sext"));
-    fields.extend(public.compliance_ciphertext.iter().copied());
-    fields.extend(to_field_elements!(
-        public.target_timestamp,
-        "target_timestamp"
-    ));
-    fields.extend(to_field_elements!(public.dleq_c_1, "dleq_c_1"));
-    fields.extend(to_field_elements!(public.dleq_s_1, "dleq_s_1"));
-    fields.extend(to_field_elements!(public.dleq_c_2, "dleq_c_2"));
-    fields.extend(to_field_elements!(public.dleq_s_2, "dleq_s_2"));
-    fields.extend(to_field_elements!(public.dleq_c_3, "dleq_c_3"));
-    fields.extend(to_field_elements!(public.dleq_s_3, "dleq_s_3"));
-    fields.extend(to_field_elements!(
-        public.counterparty_leaf_hash.0,
-        "counterparty_leaf_hash"
-    ));
-
-    if fields.len() != OUTPUT_STATEMENT_FIELD_COUNT {
-        return Err(StatementHashError::InvalidFieldLength {
-            expected: OUTPUT_STATEMENT_FIELD_COUNT,
-            got: fields.len(),
-        });
-    }
-
-    Ok(fields)
+    #[error("invalid ciphertext field length for {label}: expected {expected}, got {got}")]
+    InvalidCiphertextLength {
+        label: String,
+        expected: usize,
+        got: usize,
+    },
 }
 
 fn transfer_rk_element(
@@ -209,6 +104,185 @@ fn transfer_field_encoding_error(field: &str) -> StatementHashError {
     }
 }
 
+fn consolidate_field_encoding_error(field: &str) -> StatementHashError {
+    StatementHashError::FieldEncoding {
+        field: field.to_owned(),
+    }
+}
+
+fn split_field_encoding_error(field: &str) -> StatementHashError {
+    StatementHashError::FieldEncoding {
+        field: field.to_owned(),
+    }
+}
+
+fn note_reshape_rk_element(
+    rk: decaf377_rdsa::VerificationKey<decaf377_rdsa::SpendAuth>,
+) -> Result<decaf377::Element, StatementHashError> {
+    decaf377::Encoding(rk.to_bytes())
+        .vartime_decompress()
+        .map_err(StatementHashError::DecompressRk)
+}
+
+trait NoteReshapeInputPublic {
+    fn nullifier(&self) -> penumbra_sdk_sct::Nullifier;
+    fn rk(&self) -> decaf377_rdsa::VerificationKey<decaf377_rdsa::SpendAuth>;
+}
+
+trait NoteReshapeOutputPublic {
+    fn note_commitment(&self) -> penumbra_sdk_tct::StateCommitment;
+}
+
+impl NoteReshapeInputPublic for crate::ConsolidateInputPublic {
+    fn nullifier(&self) -> penumbra_sdk_sct::Nullifier {
+        self.nullifier
+    }
+
+    fn rk(&self) -> decaf377_rdsa::VerificationKey<decaf377_rdsa::SpendAuth> {
+        self.rk
+    }
+}
+
+impl NoteReshapeOutputPublic for crate::ConsolidateOutputPublic {
+    fn note_commitment(&self) -> penumbra_sdk_tct::StateCommitment {
+        self.note_commitment
+    }
+}
+
+impl NoteReshapeInputPublic for crate::SplitInputPublic {
+    fn nullifier(&self) -> penumbra_sdk_sct::Nullifier {
+        self.nullifier
+    }
+
+    fn rk(&self) -> decaf377_rdsa::VerificationKey<decaf377_rdsa::SpendAuth> {
+        self.rk
+    }
+}
+
+impl NoteReshapeOutputPublic for crate::SplitOutputPublic {
+    fn note_commitment(&self) -> penumbra_sdk_tct::StateCommitment {
+        self.note_commitment
+    }
+}
+
+impl NoteReshapeInputPublic
+    for crate::shielded_ics20_withdrawal::ShieldedIcs20WithdrawalInputPublic
+{
+    fn nullifier(&self) -> penumbra_sdk_sct::Nullifier {
+        self.nullifier
+    }
+
+    fn rk(&self) -> decaf377_rdsa::VerificationKey<decaf377_rdsa::SpendAuth> {
+        self.rk
+    }
+}
+
+impl NoteReshapeOutputPublic
+    for crate::shielded_ics20_withdrawal::ShieldedIcs20WithdrawalChangePublic
+{
+    fn note_commitment(&self) -> penumbra_sdk_tct::StateCommitment {
+        self.note_commitment
+    }
+}
+
+fn note_reshape_statement_fields<I, O>(
+    anchor: penumbra_sdk_tct::Root,
+    balance_commitment: penumbra_sdk_asset::balance::Commitment,
+    inputs: &[I],
+    outputs: &[O],
+    expected: usize,
+    field_encoding_error: fn(&str) -> StatementHashError,
+) -> Result<Vec<Fq>, StatementHashError>
+where
+    I: NoteReshapeInputPublic,
+    O: NoteReshapeOutputPublic,
+{
+    let mut fields = Vec::with_capacity(expected);
+    fields.extend(
+        Fq::from(anchor)
+            .to_field_elements()
+            .ok_or_else(|| field_encoding_error("anchor"))?,
+    );
+    for (index, output) in outputs.iter().enumerate() {
+        fields.extend(
+            output
+                .note_commitment()
+                .0
+                .to_field_elements()
+                .ok_or_else(|| field_encoding_error(&format!("note_commitment_{index}")))?,
+        );
+    }
+    fields.extend(
+        balance_commitment
+            .0
+            .to_field_elements()
+            .ok_or_else(|| field_encoding_error("balance_commitment"))?,
+    );
+    for (index, input) in inputs.iter().enumerate() {
+        fields.extend(
+            input
+                .nullifier()
+                .0
+                .to_field_elements()
+                .ok_or_else(|| field_encoding_error(&format!("nullifier_{index}")))?,
+        );
+        fields.extend(
+            note_reshape_rk_element(input.rk())?
+                .to_field_elements()
+                .ok_or_else(|| field_encoding_error(&format!("rk_{index}")))?,
+        );
+    }
+
+    if fields.len() != expected {
+        return Err(StatementHashError::InvalidFieldLength {
+            expected,
+            got: fields.len(),
+        });
+    }
+
+    Ok(fields)
+}
+
+pub fn consolidate_statement_fields(
+    public: &ConsolidateProofPublic,
+) -> Result<Vec<Fq>, StatementHashError> {
+    public
+        .validate_shape()
+        .map_err(|e| consolidate_field_encoding_error(&e.to_string()))?;
+
+    let expected = consolidate_statement_field_count(
+        public.family_id.input_count(),
+        public.family_id.output_count(),
+    );
+    note_reshape_statement_fields(
+        public.anchor,
+        public.balance_commitment,
+        &public.inputs,
+        &public.outputs,
+        expected,
+        consolidate_field_encoding_error,
+    )
+}
+
+pub fn split_statement_fields(public: &SplitProofPublic) -> Result<Vec<Fq>, StatementHashError> {
+    public
+        .validate_shape()
+        .map_err(|e| split_field_encoding_error(&e.to_string()))?;
+
+    let expected = split_statement_field_count(
+        public.family_id.input_count(),
+        public.family_id.output_count(),
+    );
+    note_reshape_statement_fields(
+        public.anchor,
+        public.balance_commitment,
+        &public.inputs,
+        &public.outputs,
+        expected,
+        split_field_encoding_error,
+    )
+}
+
 pub fn transfer_statement_fields(
     public: &TransferProofPublic,
 ) -> Result<Vec<Fq>, StatementHashError> {
@@ -218,24 +292,44 @@ pub fn transfer_statement_fields(
         .validate_shape()
         .map_err(|e| transfer_field_encoding_error(&e.to_string()))?;
 
-    for spend in &public.inputs {
-        if spend.compliance_ciphertext.len() != SPEND_CIPHERTEXT_FQS {
+    let compliance = &public.compliance;
+    for (label, ciphertext, expected) in [
+        (
+            "detection_ciphertext",
+            compliance.detection_ciphertext.len(),
+            TRANSFER_DETECTION_FQS,
+        ),
+        (
+            "sender_core_ciphertext",
+            compliance.sender_core.ciphertext.len(),
+            TRANSFER_CORE_CIPHERTEXT_FQS,
+        ),
+        (
+            "sender_ext_ciphertext",
+            compliance.sender_ext.ciphertext.len(),
+            TRANSFER_EXT_CIPHERTEXT_FQS,
+        ),
+        (
+            "output_core_ciphertext",
+            compliance.output_core.ciphertext.len(),
+            TRANSFER_CORE_CIPHERTEXT_FQS,
+        ),
+        (
+            "output_ext_ciphertext",
+            compliance.output_ext.ciphertext.len(),
+            TRANSFER_EXT_CIPHERTEXT_FQS,
+        ),
+    ] {
+        if ciphertext != expected {
             return Err(InvalidCiphertextLength {
-                expected: SPEND_CIPHERTEXT_FQS,
-                got: spend.compliance_ciphertext.len(),
-            });
-        }
-    }
-    for output in &public.outputs {
-        if output.compliance_ciphertext.len() != OUTPUT_CIPHERTEXT_FQS {
-            return Err(InvalidCiphertextLength {
-                expected: OUTPUT_CIPHERTEXT_FQS,
-                got: output.compliance_ciphertext.len(),
+                label: label.to_owned(),
+                expected,
+                got: ciphertext,
             });
         }
     }
 
-    let mut fields = Vec::with_capacity(public.family_id.spec().statement_field_count);
+    let mut fields = Vec::with_capacity(TRANSFER_STATEMENT_FIELD_COUNT);
     fields.extend(
         Fq::from(public.anchor)
             .to_field_elements()
@@ -287,41 +381,24 @@ pub fn transfer_statement_fields(
             .to_field_elements()
             .ok_or_else(|| transfer_field_encoding_error("compliance_anchor"))?,
     );
-    for (index, spend) in public.inputs.iter().enumerate() {
+    fields.extend(compliance.detection_ciphertext.iter().copied());
+    for (label, tier) in [
+        ("sender_core", &compliance.sender_core),
+        ("sender_ext", &compliance.sender_ext),
+        ("output_core", &compliance.output_core),
+        ("output_ext", &compliance.output_ext),
+    ] {
         fields.extend(
-            spend
-                .epk
+            tier.epk
                 .to_field_elements()
-                .ok_or_else(|| transfer_field_encoding_error(&format!("spend_epk_{index}")))?,
+                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_epk")))?,
         );
         fields.extend(
-            spend
-                .c2_core
+            tier.c2
                 .to_field_elements()
-                .ok_or_else(|| transfer_field_encoding_error(&format!("spend_c2_core_{index}")))?,
+                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_c2")))?,
         );
-        fields.extend(spend.compliance_ciphertext.iter().copied());
-    }
-    for (index, output) in public.outputs.iter().enumerate() {
-        fields.extend(output.epk_1.to_field_elements().ok_or_else(|| {
-            transfer_field_encoding_error(&format!("output_{}_epk_1", index + 1))
-        })?);
-        fields.extend(output.epk_2.to_field_elements().ok_or_else(|| {
-            transfer_field_encoding_error(&format!("output_{}_epk_2", index + 1))
-        })?);
-        fields.extend(output.epk_3.to_field_elements().ok_or_else(|| {
-            transfer_field_encoding_error(&format!("output_{}_epk_3", index + 1))
-        })?);
-        fields.extend(output.c2_core.to_field_elements().ok_or_else(|| {
-            transfer_field_encoding_error(&format!("output_{}_c2_core", index + 1))
-        })?);
-        fields.extend(output.c2_ext.to_field_elements().ok_or_else(|| {
-            transfer_field_encoding_error(&format!("output_{}_c2_ext", index + 1))
-        })?);
-        fields.extend(output.c2_sext.to_field_elements().ok_or_else(|| {
-            transfer_field_encoding_error(&format!("output_{}_c2_sext", index + 1))
-        })?);
-        fields.extend(output.compliance_ciphertext.iter().copied());
+        fields.extend(tier.ciphertext.iter().copied());
     }
     fields.extend(
         public
@@ -329,42 +406,25 @@ pub fn transfer_statement_fields(
             .to_field_elements()
             .ok_or_else(|| transfer_field_encoding_error("target_timestamp"))?,
     );
-    for (index, spend) in public.inputs.iter().enumerate() {
+    for (label, dleq) in [
+        ("transfer_sender_core_dleq", &compliance.sender_core_dleq),
+        ("transfer_sender_ext_dleq", &compliance.sender_ext_dleq),
+        ("transfer_output_core_dleq", &compliance.output_core_dleq),
+        ("transfer_output_ext_dleq", &compliance.output_ext_dleq),
+    ] {
         fields.extend(
-            spend
-                .dleq_c
+            dleq.c
                 .to_field_elements()
-                .ok_or_else(|| transfer_field_encoding_error(&format!("spend_dleq_c_{index}")))?,
+                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_c")))?,
         );
         fields.extend(
-            spend
-                .dleq_s
+            dleq.s
                 .to_field_elements()
-                .ok_or_else(|| transfer_field_encoding_error(&format!("spend_dleq_s_{index}")))?,
+                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_s")))?,
         );
-    }
-    for (index, output) in public.outputs.iter().enumerate() {
-        fields.extend(output.dleq_c_1.to_field_elements().ok_or_else(|| {
-            transfer_field_encoding_error(&format!("output_{}_dleq_c_1", index + 1))
-        })?);
-        fields.extend(output.dleq_s_1.to_field_elements().ok_or_else(|| {
-            transfer_field_encoding_error(&format!("output_{}_dleq_s_1", index + 1))
-        })?);
-        fields.extend(output.dleq_c_2.to_field_elements().ok_or_else(|| {
-            transfer_field_encoding_error(&format!("output_{}_dleq_c_2", index + 1))
-        })?);
-        fields.extend(output.dleq_s_2.to_field_elements().ok_or_else(|| {
-            transfer_field_encoding_error(&format!("output_{}_dleq_s_2", index + 1))
-        })?);
-        fields.extend(output.dleq_c_3.to_field_elements().ok_or_else(|| {
-            transfer_field_encoding_error(&format!("output_{}_dleq_c_3", index + 1))
-        })?);
-        fields.extend(output.dleq_s_3.to_field_elements().ok_or_else(|| {
-            transfer_field_encoding_error(&format!("output_{}_dleq_s_3", index + 1))
-        })?);
     }
 
-    let expected = public.family_id.spec().statement_field_count;
+    let expected = TRANSFER_STATEMENT_FIELD_COUNT;
     if fields.len() != expected {
         return Err(InvalidFieldLength {
             expected,
@@ -375,185 +435,227 @@ pub fn transfer_statement_fields(
     Ok(fields)
 }
 
-pub fn spend_statement_hash(fields: &[Fq]) -> Result<Fq, StatementHashError> {
-    hash_statement_fields(
-        &SPEND_STATEMENT_HASH_DOMAIN,
-        *SPEND_STATEMENT_PAD_0,
-        *SPEND_STATEMENT_PAD_1,
-        fields,
-        SPEND_STATEMENT_FIELD_COUNT,
-        |expected, got| StatementHashError::InvalidFieldLength { expected, got },
-    )
+pub fn shielded_ics20_withdrawal_statement_fields(
+    public: &ShieldedIcs20WithdrawalProofPublic,
+) -> Result<Vec<Fq>, StatementHashError> {
+    public
+        .validate_shape()
+        .map_err(|e| StatementHashError::FieldEncoding {
+            field: e.to_string(),
+        })?;
+
+    let expected = shielded_ics20_withdrawal_statement_field_count(public.family_id.input_count());
+    let mut fields = note_reshape_statement_fields(
+        public.anchor,
+        public.balance_commitment,
+        &public.inputs,
+        std::slice::from_ref(&public.change_output),
+        2 + 1 + 2 * public.inputs.len(),
+        |field| StatementHashError::FieldEncoding {
+            field: field.to_owned(),
+        },
+    )?;
+    fields.extend(public.asset_anchor.0.to_field_elements().ok_or_else(|| {
+        StatementHashError::FieldEncoding {
+            field: "asset_anchor".to_owned(),
+        }
+    })?);
+    fields.extend(
+        public
+            .compliance_anchor
+            .0
+            .to_field_elements()
+            .ok_or_else(|| StatementHashError::FieldEncoding {
+                field: "compliance_anchor".to_owned(),
+            })?,
+    );
+    fields.extend(public.target_timestamp.to_field_elements().ok_or_else(|| {
+        StatementHashError::FieldEncoding {
+            field: "target_timestamp".to_owned(),
+        }
+    })?);
+    fields.extend(
+        public
+            .outbound_asset_id
+            .to_field_elements()
+            .ok_or_else(|| StatementHashError::FieldEncoding {
+                field: "outbound_asset_id".to_owned(),
+            })?,
+    );
+    fields.extend(public.outbound_amount.to_field_elements().ok_or_else(|| {
+        StatementHashError::FieldEncoding {
+            field: "outbound_amount".to_owned(),
+        }
+    })?);
+    fields.extend([
+        public.withdrawal_effect_hash_lo,
+        public.withdrawal_effect_hash_hi,
+    ]);
+
+    if fields.len() != expected {
+        return Err(StatementHashError::InvalidFieldLength {
+            expected,
+            got: fields.len(),
+        });
+    }
+
+    Ok(fields)
 }
 
-pub fn output_statement_hash(fields: &[Fq]) -> Result<Fq, StatementHashError> {
-    hash_statement_fields(
-        &OUTPUT_STATEMENT_HASH_DOMAIN,
-        *OUTPUT_STATEMENT_PAD_0,
-        *OUTPUT_STATEMENT_PAD_1,
-        fields,
-        OUTPUT_STATEMENT_FIELD_COUNT,
-        |expected, got| StatementHashError::InvalidFieldLength { expected, got },
-    )
-}
-
-pub fn transfer_statement_hash(
-    family_id: TransferFamilyId,
+pub fn consolidate_statement_hash(
+    family_id: ConsolidateFamilyId,
     fields: &[Fq],
 ) -> Result<Fq, StatementHashError> {
-    let spec = family_id.spec();
-    let domain = transfer_statement_hash_constant(family_id, "v1");
-    let pad_0 = transfer_statement_hash_constant(family_id, "pad0");
-    let pad_1 = transfer_statement_hash_constant(family_id, "pad1");
+    hash_statement_fields(
+        &consolidate_statement_hash_constant(family_id, "v1"),
+        consolidate_statement_hash_constant(family_id, "pad0"),
+        consolidate_statement_hash_constant(family_id, "pad1"),
+        fields,
+        consolidate_statement_field_count(family_id.input_count(), family_id.output_count()),
+        |expected, got| StatementHashError::InvalidFieldLength { expected, got },
+    )
+}
+
+pub fn split_statement_hash(
+    family_id: SplitFamilyId,
+    fields: &[Fq],
+) -> Result<Fq, StatementHashError> {
+    hash_statement_fields(
+        &split_statement_hash_constant(family_id, "v1"),
+        split_statement_hash_constant(family_id, "pad0"),
+        split_statement_hash_constant(family_id, "pad1"),
+        fields,
+        split_statement_field_count(family_id.input_count(), family_id.output_count()),
+        |expected, got| StatementHashError::InvalidFieldLength { expected, got },
+    )
+}
+
+pub fn transfer_statement_hash(fields: &[Fq]) -> Result<Fq, StatementHashError> {
+    let domain = transfer_statement_hash_constant("v1");
+    let pad_0 = transfer_statement_hash_constant("pad0");
+    let pad_1 = transfer_statement_hash_constant("pad1");
     hash_statement_fields(
         &domain,
         pad_0,
         pad_1,
         fields,
-        spec.statement_field_count,
+        TRANSFER_STATEMENT_FIELD_COUNT,
         |expected, got| StatementHashError::InvalidFieldLength { expected, got },
     )
 }
 
-pub fn spend_statement_hash_from_public(
-    public: &SpendProofPublic,
-) -> Result<Fq, StatementHashError> {
-    let fields = spend_statement_fields(public)?;
-    spend_statement_hash(&fields)
+pub fn shielded_ics20_withdrawal_statement_hash(fields: &[Fq]) -> Result<Fq, StatementHashError> {
+    hash_statement_fields(
+        &shielded_ics20_withdrawal_statement_hash_constant("v1"),
+        shielded_ics20_withdrawal_statement_hash_constant("pad0"),
+        shielded_ics20_withdrawal_statement_hash_constant("pad1"),
+        fields,
+        shielded_ics20_withdrawal_statement_field_count(2),
+        |expected, got| StatementHashError::InvalidFieldLength { expected, got },
+    )
 }
 
-pub fn output_statement_hash_from_public(
-    public: &OutputProofPublic,
+pub fn consolidate_statement_hash_from_public(
+    public: &ConsolidateProofPublic,
 ) -> Result<Fq, StatementHashError> {
-    let fields = output_statement_fields(public)?;
-    output_statement_hash(&fields)
+    let fields = consolidate_statement_fields(public)?;
+    consolidate_statement_hash(public.family_id, &fields)
+}
+
+pub fn split_statement_hash_from_public(
+    public: &SplitProofPublic,
+) -> Result<Fq, StatementHashError> {
+    let fields = split_statement_fields(public)?;
+    split_statement_hash(public.family_id, &fields)
 }
 
 pub fn transfer_statement_hash_from_public(
     public: &TransferProofPublic,
 ) -> Result<Fq, StatementHashError> {
     let fields = transfer_statement_fields(public)?;
-    transfer_statement_hash(public.family_id, &fields)
+    transfer_statement_hash(&fields)
 }
 
-pub fn spend_statement_hash_var(
+pub fn shielded_ics20_withdrawal_statement_hash_from_public(
+    public: &ShieldedIcs20WithdrawalProofPublic,
+) -> Result<Fq, StatementHashError> {
+    let fields = shielded_ics20_withdrawal_statement_fields(public)?;
+    shielded_ics20_withdrawal_statement_hash(&fields)
+}
+
+pub fn consolidate_statement_hash_var(
     cs: ConstraintSystemRef<Fq>,
+    family_id: ConsolidateFamilyId,
     fields: &[FqVar],
 ) -> Result<FqVar, SynthesisError> {
     hash_statement_fields_var(
         cs,
-        &SPEND_STATEMENT_HASH_DOMAIN,
-        *SPEND_STATEMENT_PAD_0,
-        *SPEND_STATEMENT_PAD_1,
+        &consolidate_statement_hash_constant(family_id, "v1"),
+        consolidate_statement_hash_constant(family_id, "pad0"),
+        consolidate_statement_hash_constant(family_id, "pad1"),
         fields,
-        SPEND_STATEMENT_FIELD_COUNT,
+        consolidate_statement_field_count(family_id.input_count(), family_id.output_count()),
     )
 }
 
-pub fn output_statement_hash_var(
+pub fn split_statement_hash_var(
     cs: ConstraintSystemRef<Fq>,
+    family_id: SplitFamilyId,
     fields: &[FqVar],
 ) -> Result<FqVar, SynthesisError> {
     hash_statement_fields_var(
         cs,
-        &OUTPUT_STATEMENT_HASH_DOMAIN,
-        *OUTPUT_STATEMENT_PAD_0,
-        *OUTPUT_STATEMENT_PAD_1,
+        &split_statement_hash_constant(family_id, "v1"),
+        split_statement_hash_constant(family_id, "pad0"),
+        split_statement_hash_constant(family_id, "pad1"),
         fields,
-        OUTPUT_STATEMENT_FIELD_COUNT,
+        split_statement_field_count(family_id.input_count(), family_id.output_count()),
     )
 }
 
 pub fn transfer_statement_hash_var(
     cs: ConstraintSystemRef<Fq>,
-    family_id: TransferFamilyId,
     fields: &[FqVar],
 ) -> Result<FqVar, SynthesisError> {
-    let spec = family_id.spec();
-    let domain = transfer_statement_hash_constant(family_id, "v1");
-    let pad_0 = transfer_statement_hash_constant(family_id, "pad0");
-    let pad_1 = transfer_statement_hash_constant(family_id, "pad1");
+    let domain = transfer_statement_hash_constant("v1");
+    let pad_0 = transfer_statement_hash_constant("pad0");
+    let pad_1 = transfer_statement_hash_constant("pad1");
     hash_statement_fields_var(
         cs,
         &domain,
         pad_0,
         pad_1,
         fields,
-        spec.statement_field_count,
+        TRANSFER_STATEMENT_FIELD_COUNT,
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{transfer_input_count, transfer_output_count};
     use ark_r1cs_std::{alloc::AllocVar, eq::EqGadget};
     use ark_relations::r1cs::ConstraintSystem;
     use decaf377::Fq;
-    use penumbra_sdk_proof_params::DummyWitness;
-    use std::iter;
-
-    use crate::{output::OutputCircuit, spend::SpendCircuit};
 
     #[test]
-    fn spend_statement_hash_native_matches_r1cs() {
-        let fields = (0..SPEND_STATEMENT_FIELD_COUNT)
-            .map(|i| Fq::from((i as u64) + 1))
-            .collect::<Vec<_>>();
-        let native = spend_statement_hash(&fields).expect("native hash should succeed");
-
-        let cs = ConstraintSystem::<Fq>::new_ref();
-        let vars = fields
-            .iter()
-            .map(|f| FqVar::new_witness(cs.clone(), || Ok(*f)).expect("witness allocation"))
-            .collect::<Vec<_>>();
-        let var_hash = spend_statement_hash_var(cs.clone(), &vars).expect("r1cs hash should work");
-        let constrained_native = FqVar::new_witness(cs.clone(), || Ok(native))
-            .expect("native witness allocation should work");
-        var_hash
-            .enforce_equal(&constrained_native)
-            .expect("hashes must be equal");
-        assert!(cs.is_satisfied().expect("cs should evaluate"));
-    }
-
-    #[test]
-    fn output_statement_hash_native_matches_r1cs() {
-        let fields = (0..OUTPUT_STATEMENT_FIELD_COUNT)
-            .map(|i| Fq::from((i as u64) + 1))
-            .collect::<Vec<_>>();
-        let native = output_statement_hash(&fields).expect("native hash should succeed");
-
-        let cs = ConstraintSystem::<Fq>::new_ref();
-        let vars = fields
-            .iter()
-            .map(|f| FqVar::new_witness(cs.clone(), || Ok(*f)).expect("witness allocation"))
-            .collect::<Vec<_>>();
-        let var_hash = output_statement_hash_var(cs.clone(), &vars).expect("r1cs hash should work");
-        let constrained_native = FqVar::new_witness(cs.clone(), || Ok(native))
-            .expect("native witness allocation should work");
-        var_hash
-            .enforce_equal(&constrained_native)
-            .expect("hashes must be equal");
-        assert!(cs.is_satisfied().expect("cs should evaluate"));
-    }
-
-    #[test]
-    fn transfer_statement_hash_native_matches_r1cs() {
-        for family_id in TransferFamilyId::ALL {
-            let fields = (0..transfer_statement_field_count(
+    fn consolidate_statement_hash_native_matches_r1cs() {
+        for family_id in ConsolidateFamilyId::ALL {
+            let fields = (0..consolidate_statement_field_count(
                 family_id.input_count(),
                 family_id.output_count(),
             ))
                 .map(|i| Fq::from((i as u64) + 1))
                 .collect::<Vec<_>>();
             let native =
-                transfer_statement_hash(family_id, &fields).expect("native hash should succeed");
+                consolidate_statement_hash(family_id, &fields).expect("native hash should succeed");
 
             let cs = ConstraintSystem::<Fq>::new_ref();
             let vars = fields
                 .iter()
                 .map(|f| FqVar::new_witness(cs.clone(), || Ok(*f)).expect("witness allocation"))
                 .collect::<Vec<_>>();
-            let var_hash = transfer_statement_hash_var(cs.clone(), family_id, &vars)
+            let var_hash = consolidate_statement_hash_var(cs.clone(), family_id, &vars)
                 .expect("r1cs hash should work");
             let constrained_native = FqVar::new_witness(cs.clone(), || Ok(native))
                 .expect("native witness allocation should work");
@@ -565,138 +667,51 @@ mod tests {
     }
 
     #[test]
-    fn spend_statement_fields_match_historical_flatten_order() {
-        let circuit = SpendCircuit::with_dummy_witness();
-        let (public, _, _) = circuit.into_parts();
+    fn split_statement_hash_native_matches_r1cs() {
+        for family_id in SplitFamilyId::ALL {
+            let fields =
+                (0..split_statement_field_count(family_id.input_count(), family_id.output_count()))
+                    .map(|i| Fq::from((i as u64) + 1))
+                    .collect::<Vec<_>>();
+            let native =
+                split_statement_hash(family_id, &fields).expect("native hash should succeed");
 
-        let rk_element = decaf377::Encoding(public.rk.to_bytes())
-            .vartime_decompress()
-            .expect("dummy rk should decompress");
-
-        let expected = iter::empty()
-            .chain(
-                Fq::from(public.anchor)
-                    .to_field_elements()
-                    .expect("anchor fields"),
-            )
-            .chain(
-                public
-                    .balance_commitment
-                    .0
-                    .to_field_elements()
-                    .expect("balance fields"),
-            )
-            .chain(
-                public
-                    .nullifier
-                    .0
-                    .to_field_elements()
-                    .expect("nullifier fields"),
-            )
-            .chain(rk_element.to_field_elements().expect("rk fields"))
-            .chain(
-                public
-                    .asset_anchor
-                    .0
-                    .to_field_elements()
-                    .expect("asset anchor fields"),
-            )
-            .chain(
-                public
-                    .compliance_anchor
-                    .0
-                    .to_field_elements()
-                    .expect("compliance anchor fields"),
-            )
-            .chain(public.epk.to_field_elements().expect("epk fields"))
-            .chain(public.c2_core.to_field_elements().expect("c2 fields"))
-            .chain(public.compliance_ciphertext.iter().copied())
-            .chain(
-                public
-                    .target_timestamp
-                    .to_field_elements()
-                    .expect("timestamp fields"),
-            )
-            .chain(public.dleq_c.to_field_elements().expect("dleq c fields"))
-            .chain(public.dleq_s.to_field_elements().expect("dleq s fields"))
-            .chain(
-                public
-                    .sender_leaf_hash
-                    .0
-                    .to_field_elements()
-                    .expect("sender leaf fields"),
-            )
-            .collect::<Vec<_>>();
-
-        let got = spend_statement_fields(&public).expect("field extraction should succeed");
-        assert_eq!(got, expected);
-        assert_eq!(got.len(), SPEND_STATEMENT_FIELD_COUNT);
+            let cs = ConstraintSystem::<Fq>::new_ref();
+            let vars = fields
+                .iter()
+                .map(|f| FqVar::new_witness(cs.clone(), || Ok(*f)).expect("witness allocation"))
+                .collect::<Vec<_>>();
+            let var_hash = split_statement_hash_var(cs.clone(), family_id, &vars)
+                .expect("r1cs hash should work");
+            let constrained_native = FqVar::new_witness(cs.clone(), || Ok(native))
+                .expect("native witness allocation should work");
+            var_hash
+                .enforce_equal(&constrained_native)
+                .expect("hashes must be equal");
+            assert!(cs.is_satisfied().expect("cs should evaluate"));
+        }
     }
 
     #[test]
-    fn output_statement_fields_match_historical_flatten_order() {
-        let circuit = OutputCircuit::with_dummy_witness();
-        let (public, _, _) = circuit.into_parts();
+    fn transfer_statement_hash_native_matches_r1cs() {
+        let fields =
+            (0..transfer_statement_field_count(transfer_input_count(), transfer_output_count()))
+                .map(|i| Fq::from((i as u64) + 1))
+                .collect::<Vec<_>>();
+        let native = transfer_statement_hash(&fields).expect("native hash should succeed");
 
-        let expected = iter::empty()
-            .chain(
-                public
-                    .note_commitment
-                    .0
-                    .to_field_elements()
-                    .expect("note commitment fields"),
-            )
-            .chain(
-                public
-                    .balance_commitment
-                    .0
-                    .to_field_elements()
-                    .expect("balance fields"),
-            )
-            .chain(
-                public
-                    .asset_anchor
-                    .0
-                    .to_field_elements()
-                    .expect("asset anchor fields"),
-            )
-            .chain(
-                public
-                    .compliance_anchor
-                    .0
-                    .to_field_elements()
-                    .expect("compliance anchor fields"),
-            )
-            .chain(public.epk_1.to_field_elements().expect("epk1 fields"))
-            .chain(public.epk_2.to_field_elements().expect("epk2 fields"))
-            .chain(public.epk_3.to_field_elements().expect("epk3 fields"))
-            .chain(public.c2_core.to_field_elements().expect("c2 core fields"))
-            .chain(public.c2_ext.to_field_elements().expect("c2 ext fields"))
-            .chain(public.c2_sext.to_field_elements().expect("c2 sext fields"))
-            .chain(public.compliance_ciphertext.iter().copied())
-            .chain(
-                public
-                    .target_timestamp
-                    .to_field_elements()
-                    .expect("timestamp fields"),
-            )
-            .chain(public.dleq_c_1.to_field_elements().expect("dleq c1 fields"))
-            .chain(public.dleq_s_1.to_field_elements().expect("dleq s1 fields"))
-            .chain(public.dleq_c_2.to_field_elements().expect("dleq c2 fields"))
-            .chain(public.dleq_s_2.to_field_elements().expect("dleq s2 fields"))
-            .chain(public.dleq_c_3.to_field_elements().expect("dleq c3 fields"))
-            .chain(public.dleq_s_3.to_field_elements().expect("dleq s3 fields"))
-            .chain(
-                public
-                    .counterparty_leaf_hash
-                    .0
-                    .to_field_elements()
-                    .expect("counterparty leaf fields"),
-            )
+        let cs = ConstraintSystem::<Fq>::new_ref();
+        let vars = fields
+            .iter()
+            .map(|f| FqVar::new_witness(cs.clone(), || Ok(*f)).expect("witness allocation"))
             .collect::<Vec<_>>();
-
-        let got = output_statement_fields(&public).expect("field extraction should succeed");
-        assert_eq!(got, expected);
-        assert_eq!(got.len(), OUTPUT_STATEMENT_FIELD_COUNT);
+        let var_hash =
+            transfer_statement_hash_var(cs.clone(), &vars).expect("r1cs hash should work");
+        let constrained_native = FqVar::new_witness(cs.clone(), || Ok(native))
+            .expect("native witness allocation should work");
+        var_hash
+            .enforce_equal(&constrained_native)
+            .expect("hashes must be equal");
+        assert!(cs.is_satisfied().expect("cs should evaluate"));
     }
 }

@@ -47,7 +47,7 @@ pub struct AuthorizeValidatorDefinitionRequest {
     /// The validator definition to authorize.
     #[prost(message, optional, tag = "1")]
     pub validator_definition: ::core::option::Option<
-        super::super::core::component::stake::v1::Validator,
+        super::super::core::component::validator::v1::Validator,
     >,
     /// Optionally, pre-authorization data, if required by the custodian.
     ///
@@ -128,6 +128,50 @@ impl ::prost::Name for AuthorizeValidatorVoteResponse {
     }
     fn type_url() -> ::prost::alloc::string::String {
         "/penumbra.custody.v1.AuthorizeValidatorVoteResponse".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AuthorizeProposalSubmitRequest {
+    /// The proposal submission body to authorize.
+    #[prost(message, optional, tag = "1")]
+    pub proposal_submit: ::core::option::Option<
+        super::super::core::component::governance::v1::ProposalSubmitBody,
+    >,
+    /// Optionally, pre-authorization data, if required by the custodian.
+    ///
+    /// Pre-authorization data is backend-specific, and backends are free to ignore it.
+    ///
+    /// Multiple `PreAuthorization` packets can be included in a single request,
+    /// to support multi-party pre-authorizations.
+    #[prost(message, repeated, tag = "3")]
+    pub pre_authorizations: ::prost::alloc::vec::Vec<PreAuthorization>,
+}
+impl ::prost::Name for AuthorizeProposalSubmitRequest {
+    const NAME: &'static str = "AuthorizeProposalSubmitRequest";
+    const PACKAGE: &'static str = "penumbra.custody.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.custody.v1.AuthorizeProposalSubmitRequest".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.custody.v1.AuthorizeProposalSubmitRequest".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AuthorizeProposalSubmitResponse {
+    /// The authorization signature for the proposal submission.
+    #[prost(message, optional, tag = "1")]
+    pub proposal_submit_auth: ::core::option::Option<
+        super::super::crypto::decaf377_rdsa::v1::SpendAuthSignature,
+    >,
+}
+impl ::prost::Name for AuthorizeProposalSubmitResponse {
+    const NAME: &'static str = "AuthorizeProposalSubmitResponse";
+    const PACKAGE: &'static str = "penumbra.custody.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.custody.v1.AuthorizeProposalSubmitResponse".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.custody.v1.AuthorizeProposalSubmitResponse".into()
     }
 }
 /// A pre-authorization packet.  This allows a custodian to delegate (partial)
@@ -430,6 +474,36 @@ pub mod custody_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /// Requests authorization of the given proposal submission.
+        pub async fn authorize_proposal_submit(
+            &mut self,
+            request: impl tonic::IntoRequest<super::AuthorizeProposalSubmitRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::AuthorizeProposalSubmitResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/penumbra.custody.v1.CustodyService/AuthorizeProposalSubmit",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "penumbra.custody.v1.CustodyService",
+                        "AuthorizeProposalSubmit",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /// Requests the full viewing key from the custodian.
         ///
         /// Custody backends should decide whether to honor this request, and how to
@@ -536,6 +610,14 @@ pub mod custody_service_server {
             request: tonic::Request<super::AuthorizeValidatorVoteRequest>,
         ) -> std::result::Result<
             tonic::Response<super::AuthorizeValidatorVoteResponse>,
+            tonic::Status,
+        >;
+        /// Requests authorization of the given proposal submission.
+        async fn authorize_proposal_submit(
+            &self,
+            request: tonic::Request<super::AuthorizeProposalSubmitRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::AuthorizeProposalSubmitResponse>,
             tonic::Status,
         >;
         /// Requests the full viewing key from the custodian.
@@ -783,6 +865,57 @@ pub mod custody_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = AuthorizeValidatorVoteSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/penumbra.custody.v1.CustodyService/AuthorizeProposalSubmit" => {
+                    #[allow(non_camel_case_types)]
+                    struct AuthorizeProposalSubmitSvc<T: CustodyService>(pub Arc<T>);
+                    impl<
+                        T: CustodyService,
+                    > tonic::server::UnaryService<super::AuthorizeProposalSubmitRequest>
+                    for AuthorizeProposalSubmitSvc<T> {
+                        type Response = super::AuthorizeProposalSubmitResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::AuthorizeProposalSubmitRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CustodyService>::authorize_proposal_submit(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = AuthorizeProposalSubmitSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

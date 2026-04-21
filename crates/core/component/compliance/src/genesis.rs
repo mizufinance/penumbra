@@ -1,20 +1,24 @@
 //! Genesis configuration for the compliance component.
 //!
 //! This module defines the genesis content structure for configuring
-//! regulated assets at chain initialization. Unregulated assets do not
-//! need registration - they are proven via IMT non-membership proofs.
+//! compliance asset entries at chain initialization.
+//!
+//! The IMT always contains a structural sentinel leaf and the protocol also
+//! seeds the neutral base asset as an explicit unregulated entry. Additional
+//! regulated assets may be configured here, while other unregulated assets
+//! continue to use IMT non-membership proofs.
 
 use penumbra_sdk_asset::asset;
 use serde::{Deserialize, Serialize};
 
 /// Genesis content for the compliance component.
 ///
-/// This allows configuring which regulated assets are registered at genesis.
-/// Only regulated assets (is_regulated: true) are stored in the IMT.
-/// Unregulated assets need no registration.
+/// This allows configuring additional compliance asset entries at genesis.
+/// The IMT already contains a structural sentinel and a seeded unregulated base
+/// asset; entries listed here are added on top of that baseline.
 #[derive(Deserialize, Serialize, Debug, Clone, Default)]
 pub struct Content {
-    /// Regulated assets to register at genesis.
+    /// Native assets to register explicitly at genesis.
     pub native_assets: Vec<NativeAssetRegistration>,
 }
 

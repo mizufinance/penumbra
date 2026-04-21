@@ -17,10 +17,10 @@ Testnet release manager: X
 
 Pre-release:
 
-- [ ] Review all merged PRs with tags [`consensus-breaking` and/or `state-breaking`](https://github.com/penumbra-zone/penumbra/pulls?q=is%3Apr+label%3Astate-breaking%2Cconsensus-breaking+created%3A%3E%3D2024-01-01)
+- [ ] Review all merged PRs with tags [`consensus-breaking` and/or `state-breaking`](https://github.com/mizufinance/penumbra/pulls?q=is%3Apr+label%3Astate-breaking%2Cconsensus-breaking+created%3A%3E%3D2024-01-01)
 - [ ] Enumerate the specific PRs that should be included in the release:
-  - [ ] https://github.com/penumbra-zone/penumbra/pull/xxxx
-  - [ ] https://github.com/penumbra-zone/penumbra/pull/xxxx
+  - [ ] https://github.com/mizufinance/penumbra/pull/xxxx
+  - [ ] https://github.com/mizufinance/penumbra/pull/xxxx
 - [ ] Confirm migrations exist where required for breaking changes already merged
 - [ ] Identify specific test cases for before/after behavior, querying chain state, to ensure that migrations are effective
 - [ ] Prepare `upgrade-plan` governance proposal
@@ -38,7 +38,7 @@ On release day:
     - [ ] Run `cargo release minor` for a new testnet, or `cargo release patch` for a bugfix. For the latter, make sure you're on a dedicated release branch.
     - [ ] Push the commit and newly generated tag, e.g. `v0.51.0`, to the remote.
 - [ ] Manually trigger container-build workflow, bc deploy workflow is disabled
-- [ ] Wait for the ["Release" workflow](https://github.com/penumbra-zone/penumbra/actions/workflows/release.yml) to complete
+- [ ] Wait for the ["Release" workflow](https://github.com/mizufinance/penumbra/actions/workflows/release.yml) to complete
 - [ ] Edit the newly created release object, and add a note summarizing the intent of the release
 - [ ] Close faucet (chain halt will make it inoperative anyway)
 - [ ] Run migrations on all validators

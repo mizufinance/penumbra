@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 #[cfg(feature = "ledger")]
 use penumbra_sdk_custody_ledger_usb::Config as LedgerConfig;
-use penumbra_sdk_stake::GovernanceKey;
+use penumbra_sdk_validator::GovernanceKey;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
 use url::Url;

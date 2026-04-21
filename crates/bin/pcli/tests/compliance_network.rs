@@ -11,8 +11,17 @@
 //! ```
 
 use assert_cmd::Command;
-use penumbra_sdk_keys::test_keys::{ADDRESS_1_STR, SEED_PHRASE};
+use penumbra_sdk_asset::asset;
+use penumbra_sdk_keys::{
+    test_keys::{ADDRESS_1_STR, SEED_PHRASE},
+    Address,
+};
+use penumbra_sdk_proto::core::component::compliance::v1::{
+    query_service_client::QueryServiceClient, ComplianceAssetStatusRequest,
+    ComplianceUserLeafRequest,
+};
 use tempfile::{tempdir, TempDir};
+use tonic::transport::Channel;
 
 const TIMEOUT_COMMAND_SECONDS: u64 = 120;
 
@@ -50,6 +59,62 @@ fn sync(tmpdir: &TempDir) {
         .args(["--home", tmpdir.path().to_str().unwrap(), "view", "sync"])
         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
     sync_cmd.assert().success();
+}
+
+fn grpc_url() -> String {
+    std::env::var("PENUMBRA_NODE_PD_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_owned())
+}
+
+fn wallet_address(tmpdir: &TempDir, index: u32) -> Address {
+    let mut cmd = Command::cargo_bin("pcli").unwrap();
+    cmd.args([
+        "--home",
+        tmpdir.path().to_str().unwrap(),
+        "view",
+        "address",
+        &index.to_string(),
+    ])
+    .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let address = String::from_utf8(output).expect("address output should be utf8");
+    address.trim().parse().expect("address output should parse")
+}
+
+fn query_asset_status(
+    asset_denom: &str,
+) -> penumbra_sdk_proto::core::component::compliance::v1::ComplianceAssetStatusResponse {
+    let asset_id = asset::REGISTRY.parse_unit(asset_denom).id();
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    rt.block_on(async {
+        QueryServiceClient::<Channel>::connect(grpc_url())
+            .await
+            .expect("view service should be reachable")
+            .compliance_asset_status(ComplianceAssetStatusRequest {
+                asset_id: Some(asset_id.into()),
+            })
+            .await
+            .expect("asset status query should succeed")
+            .into_inner()
+    })
+}
+
+fn query_user_registration(address: Address, asset_denom: &str) -> bool {
+    let asset_id = asset::REGISTRY.parse_unit(asset_denom).id();
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    rt.block_on(async {
+        QueryServiceClient::<Channel>::connect(grpc_url())
+            .await
+            .expect("view service should be reachable")
+            .compliance_user_leaf(ComplianceUserLeafRequest {
+                address: Some(address.into()),
+                asset_id: Some(asset_id.into()),
+            })
+            .await
+            .expect("user leaf query should succeed")
+            .into_inner()
+            .is_registered
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +159,7 @@ fn compliance_generate_dk() {
 }
 
 // ---------------------------------------------------------------------------
-// Unregulated transfer: standard test_usd send (should work without special setup)
+// Unregulated transfer: standard wrapped test asset send (should work without special setup)
 // ---------------------------------------------------------------------------
 
 #[ignore]
@@ -103,14 +168,14 @@ fn compliance_unregulated_transfer() {
     let tmpdir = load_wallet_into_tmpdir();
     sync(&tmpdir);
 
-    // Send a small amount of test_usd to address 1 (unregulated asset, should just work)
+    // Send a small amount of the wrapped test asset to address 1.
     let mut cmd = Command::cargo_bin("pcli").unwrap();
     cmd.args([
         "--home",
         tmpdir.path().to_str().unwrap(),
         "tx",
-        "send",
-        "1test_usd",
+        "transfer",
+        "1wtest_usd",
         "--to",
         ADDRESS_1_STR,
     ])
@@ -166,10 +231,23 @@ fn compliance_register_asset() {
         ])
         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
     reg_cmd.assert().success();
+
+    // Wait for the registration to be committed and visible in a new snapshot.
+    std::thread::sleep(std::time::Duration::from_secs(5));
+
+    let status = query_asset_status("smoke_test_asset_2");
+    assert!(
+        status.is_registered,
+        "registered asset should be visible in view service"
+    );
+    assert!(
+        status.is_regulated,
+        "registered asset should be marked regulated"
+    );
 }
 
 // ---------------------------------------------------------------------------
-// Register user for a regulated asset
+// Register user for the regulated smoke asset provisioned by smoke-test.sh
 // ---------------------------------------------------------------------------
 
 #[ignore]
@@ -177,8 +255,11 @@ fn compliance_register_asset() {
 fn compliance_register_user() {
     let tmpdir = load_wallet_into_tmpdir();
     sync(&tmpdir);
+    let address = wallet_address(&tmpdir, 0);
 
-    // Register user for test_usd (which was registered as regulated at genesis)
+    let smoke_asset =
+        std::env::var("COMPLIANCE_SMOKE_ASSET").unwrap_or_else(|_| "regulated_usd".to_string());
+
     let mut cmd = Command::cargo_bin("pcli").unwrap();
     cmd.args([
         "--home",
@@ -186,10 +267,15 @@ fn compliance_register_user() {
         "tx",
         "compliance",
         "register-user",
-        "test_usd",
+        &smoke_asset,
     ])
     .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
     cmd.assert().success();
+
+    assert!(
+        query_user_registration(address, &smoke_asset),
+        "registered user should be visible in the compliance registry"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -199,19 +285,13 @@ fn compliance_register_user() {
 #[ignore]
 #[test]
 fn compliance_detection_scan() {
-    let dk_hex = match std::env::var("COMPLIANCE_DK_HEX") {
-        Ok(v) => v,
-        Err(_) => {
-            eprintln!("COMPLIANCE_DK_HEX not set, skipping detection scan test");
-            return;
-        }
-    };
-    let smoke_asset = std::env::var("COMPLIANCE_SMOKE_ASSET")
-        .unwrap_or_else(|_| "smoke_compliance_token".to_string());
+    let dk_hex = std::env::var("COMPLIANCE_DK_HEX")
+        .expect("COMPLIANCE_DK_HEX must be set by the smoke harness");
+    let smoke_asset =
+        std::env::var("COMPLIANCE_SMOKE_ASSET").unwrap_or_else(|_| "regulated_usd".to_string());
 
     let tmpdir = load_wallet_into_tmpdir();
-    let grpc_url = std::env::var("PENUMBRA_NODE_PD_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8080".to_owned());
+    let grpc_url = grpc_url();
 
     let output_file = tmpdir.path().join("scan_output.json");
 
@@ -235,12 +315,27 @@ fn compliance_detection_scan() {
     ])
     .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
 
-    // Scan should succeed (may find 0 matches if no transfers happened)
     cmd.assert().success();
 
     // Output file should exist and be valid JSON
     assert!(output_file.exists(), "scan output file should be created");
     let content = std::fs::read_to_string(&output_file).expect("can read scan output");
-    let _: serde_json::Value =
+    let parsed: serde_json::Value =
         serde_json::from_str(&content).expect("scan output should be valid JSON");
+    let detected = parsed["detected"]
+        .as_array()
+        .expect("scan output should contain a detected array");
+
+    assert!(
+        !detected.is_empty(),
+        "scan should detect at least one regulated transfer for the smoke asset"
+    );
+    let expected_asset_id = asset::REGISTRY.parse_unit(&smoke_asset).id().to_string();
+    assert!(
+        detected
+            .iter()
+            .any(|entry| entry["asset_id"].as_str() == Some(expected_asset_id.as_str())),
+        "scan output should include the requested smoke asset (expected asset_id: {})",
+        expected_asset_id
+    );
 }

@@ -68,10 +68,10 @@ mod tests {
     fn event_round_trip() {
         use super::*;
         use crate::core::component::sct::v1::Nullifier;
-        use crate::core::component::shielded_pool::v1::{EventOutput, EventSpend};
+        use crate::core::component::shielded_pool::v1::{EventNoteCreated, EventNullifierSpent};
         use crate::crypto::tct::v1::StateCommitment;
 
-        let proto_spend = EventSpend {
+        let proto_spend = EventNullifierSpent {
             nullifier: Some(Nullifier {
                 inner: vec![
                     148, 190, 149, 23, 86, 113, 152, 145, 104, 242, 142, 162, 233, 239, 137, 141,
@@ -83,7 +83,7 @@ mod tests {
         let abci_spend = proto_spend.into_event();
 
         let expected_abci_spend = abci::Event::new(
-            "penumbra.core.component.shielded_pool.v1.EventSpend",
+            "penumbra.core.component.shielded_pool.v1.EventNullifierSpent",
             [abci::EventAttribute::V037(abci::v0_37::EventAttribute {
                 key: "nullifier".to_string(),
                 value: "{\"inner\":\"lL6VF1ZxmJFo8o6i6e+JjYyktGKaN6j/o+SzsBoZ29M=\"}".to_string(),
@@ -92,11 +92,11 @@ mod tests {
         );
         assert_eq!(abci_spend, expected_abci_spend);
 
-        let proto_spend2 = EventSpend::from_event(&abci_spend).unwrap();
+        let proto_spend2 = EventNullifierSpent::from_event(&abci_spend).unwrap();
 
         assert_eq!(proto_spend, proto_spend2);
 
-        let proto_output = EventOutput {
+        let proto_output = EventNoteCreated {
             // This is the same bytes as the nullifier above, we just care about the data format, not the value.
             note_commitment: Some(StateCommitment {
                 inner: vec![
@@ -109,7 +109,7 @@ mod tests {
         let abci_output = proto_output.into_event();
 
         let expected_abci_output = abci::Event::new(
-            "penumbra.core.component.shielded_pool.v1.EventOutput",
+            "penumbra.core.component.shielded_pool.v1.EventNoteCreated",
             [abci::EventAttribute::V037(abci::v0_37::EventAttribute {
                 // note: attribute keys become camelCase because ProtoJSON...
                 key: "noteCommitment".to_string(),
@@ -120,7 +120,7 @@ mod tests {
         );
         assert_eq!(abci_output, expected_abci_output);
 
-        let proto_output2 = EventOutput::from_event(&abci_output).unwrap();
+        let proto_output2 = EventNoteCreated::from_event(&abci_output).unwrap();
         assert_eq!(proto_output, proto_output2);
     }
 }

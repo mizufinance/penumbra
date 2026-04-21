@@ -1,4 +1,4 @@
-use decaf377::{Fq, Fr};
+use decaf377::Fr;
 use decaf377_rdsa::{SigningKey, SpendAuth, VerificationKey, VerificationKeyBytes};
 use ed25519_consensus::SigningKey as Ed25519SigningKey;
 use ibc_proto::ics23::CommitmentProof;
@@ -8,32 +8,11 @@ use ibc_types::core::{
     commitment::MerkleProof,
 };
 use ibc_types::timestamp::Timestamp;
-use penumbra_sdk_asset::asset::{Id, Metadata};
-use penumbra_sdk_auction::auction::{
-    dutch::{
-        actions::{
-            ActionDutchAuctionEnd, ActionDutchAuctionSchedule, ActionDutchAuctionWithdrawPlan,
-        },
-        DutchAuctionDescription,
-    },
-    AuctionId,
-};
-use penumbra_sdk_community_pool::{CommunityPoolDeposit, CommunityPoolOutput, CommunityPoolSpend};
-use penumbra_sdk_dex::{
-    lp::{
-        plan::{PositionOpenPlan, PositionWithdrawPlan},
-        position::{Position, State as PositionState},
-        Reserves, TradingFunction,
-    },
-    swap::{SwapPlaintext, SwapPlan},
-    swap_claim::SwapClaimPlan,
-    BatchSwapOutputData, PositionClose, TradingPair,
-};
+use penumbra_sdk_asset::{asset::Id, BASE_ASSET_DENOM};
 use penumbra_sdk_fee::Fee;
 use penumbra_sdk_governance::{
-    proposal_state::{Outcome as ProposalOutcome, Withdrawn},
-    DelegatorVotePlan, Proposal, ProposalDepositClaim, ProposalPayload, ProposalSubmit,
-    ProposalWithdraw, ValidatorVote, ValidatorVoteBody, ValidatorVoteReason, Vote,
+    Proposal, ProposalPayload, ProposalSubmit, ProposalSubmitBody, ValidatorVote,
+    ValidatorVoteBody, ValidatorVoteReason, Vote,
 };
 use penumbra_sdk_ibc::IbcRelay;
 use penumbra_sdk_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
@@ -41,15 +20,15 @@ use penumbra_sdk_keys::test_keys::SEED_PHRASE;
 use penumbra_sdk_keys::{Address, FullViewingKey};
 use penumbra_sdk_num::Amount;
 use penumbra_sdk_proto::DomainType;
-use penumbra_sdk_sct::epoch::Epoch;
-use penumbra_sdk_shielded_pool::{Ics20Withdrawal, Note, OutputPlan, Rseed, SpendPlan};
-use penumbra_sdk_stake::{
-    validator, validator::Definition, Delegate, FundingStreams, GovernanceKey, IdentityKey,
-    Penalty, Undelegate, UndelegateClaimPlan,
+use penumbra_sdk_shielded_pool::{
+    ConsolidateFamilyId, ConsolidatePlan, Ics20Withdrawal, Note, ShieldedIcs20WithdrawalFamilyId,
+    ShieldedIcs20WithdrawalPlan, ShieldedInputPlan, ShieldedOutputPlan, SplitFamilyId, SplitPlan,
+    TransferPlan,
 };
 use penumbra_sdk_transaction::{
     check_transaction_plan_enabled, ActionPlan, TransactionParameters, TransactionPlan,
 };
+use penumbra_sdk_validator::{validator, validator::Definition, GovernanceKey, IdentityKey};
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use proptest::test_runner::{Config, TestRunner};
@@ -65,7 +44,7 @@ fn amount_strategy() -> impl Strategy<Value = Amount> {
 }
 
 fn asset_id_strategy() -> impl Strategy<Value = Id> {
-    Just(*penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID)
+    Just(*penumbra_sdk_asset::BASE_ASSET_ID)
 }
 
 fn value_strategy() -> impl Strategy<Value = penumbra_sdk_asset::Value> {
@@ -89,91 +68,23 @@ fn note_strategy(addr: Address) -> impl Strategy<Value = Note> {
     value_strategy().prop_map(move |value| Note::generate(&mut OsRng, &addr, value))
 }
 
-fn spend_plan_strategy(fvk: &FullViewingKey) -> impl Strategy<Value = SpendPlan> {
+fn spend_plan_strategy(fvk: &FullViewingKey) -> impl Strategy<Value = ShieldedInputPlan> {
     let tct_strategy = any::<penumbra_sdk_tct::Position>();
     let note_strategy = note_strategy(fvk.incoming().payment_address(0u32.into()).0);
 
     (tct_strategy, note_strategy)
-        .prop_map(|(tct_pos, note)| SpendPlan::new(&mut OsRng, note, tct_pos))
+        .prop_map(|(tct_pos, note)| ShieldedInputPlan::new(&mut OsRng, note, tct_pos))
 }
 
-fn output_plan_strategy() -> impl Strategy<Value = OutputPlan> {
+fn output_plan_strategy() -> impl Strategy<Value = ShieldedOutputPlan> {
     (value_strategy(), address_strategy())
-        .prop_map(|(value, address)| OutputPlan::new(&mut OsRng, value, address))
+        .prop_map(|(value, address)| ShieldedOutputPlan::new(&mut OsRng, value, address))
 }
 
 fn identity_key_strategy() -> impl Strategy<Value = IdentityKey> {
     let rand_bytes = prop::array::uniform32(any::<u8>());
 
     rand_bytes.prop_map(|vk_bytes| IdentityKey(VerificationKeyBytes::<SpendAuth>::from(vk_bytes)))
-}
-
-fn delegate_plan_strategy() -> impl Strategy<Value = Delegate> {
-    let epoch_index_strategy = 0..10000u64;
-    let unbonded_amount_strategy = amount_strategy();
-    let delegation_amount_strategy = amount_strategy();
-
-    (
-        identity_key_strategy(),
-        epoch_index_strategy,
-        unbonded_amount_strategy,
-        delegation_amount_strategy,
-    )
-        .prop_map(
-            |(validator_identity, epoch_index, unbonded_amount, delegation_amount)| Delegate {
-                validator_identity,
-                epoch_index,
-                unbonded_amount,
-                delegation_amount,
-            },
-        )
-}
-
-fn undelegate_plan_strategy() -> impl Strategy<Value = Undelegate> {
-    let epoch_index_strategy = 0..10000u64;
-    let unbonded_amount_strategy = amount_strategy();
-    let delegation_amount_strategy = amount_strategy();
-    (
-        identity_key_strategy(),
-        epoch_index_strategy,
-        unbonded_amount_strategy,
-        delegation_amount_strategy,
-    )
-        .prop_map(
-            |(validator_identity, epoch_index, unbonded_amount, delegation_amount)| Undelegate {
-                validator_identity,
-                from_epoch: Epoch {
-                    index: epoch_index,
-                    start_height: epoch_index,
-                },
-                unbonded_amount,
-                delegation_amount,
-            },
-        )
-}
-
-fn undelegate_claim_plan_strategy() -> impl Strategy<Value = UndelegateClaimPlan> {
-    let penalty_bps = 0..100u64;
-    let unbonding_start_height_strategy = 1000..100000u64;
-    (
-        identity_key_strategy(),
-        penalty_bps,
-        amount_strategy(),
-        unbonding_start_height_strategy,
-    )
-        .prop_map(
-            |(validator_identity, penalty_bps, unbonding_amount, unbonding_start_height)| {
-                UndelegateClaimPlan {
-                    validator_identity,
-                    penalty: Penalty::from_bps(penalty_bps),
-                    unbonding_amount,
-                    balance_blinding: Fr::rand(&mut OsRng),
-                    proof_blinding_r: Fq::rand(&mut OsRng),
-                    proof_blinding_s: Fq::rand(&mut OsRng),
-                    unbonding_start_height,
-                }
-            },
-        )
 }
 
 fn signing_key_strategy() -> impl Strategy<Value = SigningKey<SpendAuth>> {
@@ -202,7 +113,6 @@ fn validator_strategy() -> impl Strategy<Value = (validator::Validator, SigningK
                     name: "test validator".to_string(),
                     website: String::default(),
                     description: String::default(),
-                    funding_streams: FundingStreams::default(),
                 },
                 new_validator_id_sk,
             )
@@ -219,94 +129,6 @@ fn validator_definition_strategy() -> impl Strategy<Value = Definition> {
             auth_sig,
         }
     })
-}
-
-fn swap_plaintext_strategy() -> impl Strategy<Value = SwapPlaintext> {
-    (
-        amount_strategy(),
-        amount_strategy(),
-        asset_id_strategy(),
-        asset_id_strategy(),
-        address_strategy(),
-    )
-        .prop_map(|(delta_1_i, delta_2_i, asset_1, asset_2, claim_address)| {
-            let trading_pair = TradingPair::new(asset_1, asset_2);
-            SwapPlaintext::new(
-                &mut OsRng,
-                trading_pair,
-                delta_1_i,
-                delta_2_i,
-                Fee::from_staking_token_amount(0u64.into()),
-                claim_address,
-            )
-        })
-}
-
-fn swap_plan_strategy() -> impl Strategy<Value = SwapPlan> {
-    (swap_plaintext_strategy()).prop_map(|swap_plaintext| SwapPlan {
-        proof_blinding_r: Fq::rand(&mut OsRng),
-        proof_blinding_s: Fq::rand(&mut OsRng),
-        swap_plaintext,
-        fee_blinding: Fr::rand(&mut OsRng),
-    })
-}
-
-fn batch_swap_output_data_strategy() -> impl Strategy<Value = BatchSwapOutputData> {
-    // Represents a filled swap
-    let delta_1 = (4001..2000000000u128).prop_map(Amount::from);
-    let delta_2 = (4001..2000000000u128).prop_map(Amount::from);
-
-    let lambda_1 = (2..2000u64).prop_map(Amount::from);
-    let lambda_2 = (2..2000u64).prop_map(Amount::from);
-
-    let unfilled_1 = (2..2000u64).prop_map(Amount::from);
-    let unfilled_2 = (2..2000u64).prop_map(Amount::from);
-
-    (
-        delta_1,
-        delta_2,
-        lambda_1,
-        lambda_2,
-        unfilled_1,
-        unfilled_2,
-        asset_id_strategy(),
-        asset_id_strategy(),
-    )
-        .prop_map(
-            |(
-                delta_1,
-                delta_2,
-                lambda_1,
-                lambda_2,
-                unfilled_1,
-                unfilled_2,
-                asset_id_1,
-                asset_id_2,
-            )| BatchSwapOutputData {
-                delta_1,
-                delta_2,
-                lambda_1,
-                lambda_2,
-                unfilled_1,
-                unfilled_2,
-                height: 0u64.into(),
-                trading_pair: TradingPair::new(asset_id_1, asset_id_2),
-                sct_position_prefix: Default::default(),
-            },
-        )
-}
-
-fn swap_claim_plan_strategy() -> impl Strategy<Value = SwapClaimPlan> {
-    (swap_plaintext_strategy(), batch_swap_output_data_strategy()).prop_map(
-        |(swap_plaintext, output_data)| SwapClaimPlan {
-            swap_plaintext,
-            position: penumbra_sdk_tct::Position::from(0u64),
-            output_data,
-            epoch_duration: 1000u64,
-            proof_blinding_r: Fq::rand(&mut OsRng),
-            proof_blinding_s: Fq::rand(&mut OsRng),
-        },
-    )
 }
 
 fn sequence_strategy() -> impl Strategy<Value = Sequence> {
@@ -363,55 +185,25 @@ fn proposal_id_strategy() -> impl Strategy<Value = u64> {
 }
 
 fn proposal_submit_strategy() -> impl Strategy<Value = ProposalSubmit> {
-    (proposal_strategy(), amount_strategy()).prop_map(|(proposal, deposit_amount)| ProposalSubmit {
-        proposal,
-        deposit_amount,
-    })
-}
-
-fn proposal_withdraw_strategy() -> impl Strategy<Value = ProposalWithdraw> {
-    (proposal_id_strategy()).prop_map(|proposal| ProposalWithdraw {
-        proposal,
-        reason: String::default(),
-    })
+    (
+        proposal_strategy(),
+        identity_key_strategy(),
+        signing_key_strategy(),
+    )
+        .prop_map(|(proposal, proposer, signing_key)| {
+            let governance_key = GovernanceKey(signing_key.into());
+            let body = ProposalSubmitBody {
+                proposal,
+                proposer,
+                governance_key,
+            };
+            let auth_sig = signing_key.sign(OsRng, &body.encode_to_vec());
+            ProposalSubmit { body, auth_sig }
+        })
 }
 
 fn vote_strategy() -> impl Strategy<Value = Vote> {
     prop_oneof![Just(Vote::Yes), Just(Vote::No), Just(Vote::Abstain),]
-}
-
-fn note_strategy_without_address() -> impl Strategy<Value = Note> {
-    (
-        address_strategy(),
-        value_strategy(),
-        prop::array::uniform32(any::<u8>()),
-    )
-        .prop_map(|(address, value, rseed_bytes)| {
-            Note::from_parts(address, value, Rseed(rseed_bytes))
-                .expect("should be a valid test note")
-        })
-}
-
-fn delegator_vote_strategy() -> impl Strategy<Value = DelegatorVotePlan> {
-    (
-        proposal_id_strategy(),
-        vote_strategy(),
-        amount_strategy(),
-        note_strategy_without_address(),
-    )
-        .prop_map(
-            |(proposal, vote, unbonded_amount, staked_note)| DelegatorVotePlan {
-                proposal,
-                vote,
-                start_position: penumbra_sdk_tct::Position::from(0u64),
-                staked_note,
-                unbonded_amount,
-                position: penumbra_sdk_tct::Position::from(0u64),
-                randomizer: Fr::rand(&mut OsRng),
-                proof_blinding_r: Fq::rand(&mut OsRng),
-                proof_blinding_s: Fq::rand(&mut OsRng),
-            },
-        )
 }
 
 fn validator_vote_strategy() -> impl Strategy<Value = ValidatorVote> {
@@ -438,213 +230,151 @@ fn validator_vote_strategy() -> impl Strategy<Value = ValidatorVote> {
         })
 }
 
-fn proposal_outcome_strategy() -> impl Strategy<Value = ProposalOutcome<()>> {
-    prop_oneof![
-        Just(ProposalOutcome::Passed),
-        Just(ProposalOutcome::Failed {
-            withdrawn: Withdrawn::No
-        }),
-        Just(ProposalOutcome::Slashed {
-            withdrawn: Withdrawn::No
-        }),
-    ]
-}
+fn shielded_ics20_withdrawal_plan_strategy(
+    fvk: &FullViewingKey,
+) -> impl Strategy<Value = ShieldedIcs20WithdrawalPlan> {
+    let note_strategy = note_strategy(fvk.incoming().payment_address(0u32.into()).0);
+    let position_strategy = any::<penumbra_sdk_tct::Position>();
 
-fn proposal_deposit_claim_strategy() -> impl Strategy<Value = ProposalDepositClaim> {
     (
-        proposal_id_strategy(),
-        amount_strategy(),
-        proposal_outcome_strategy(),
-    )
-        .prop_map(|(proposal, deposit_amount, outcome)| ProposalDepositClaim {
-            proposal,
-            deposit_amount,
-            outcome,
-        })
-}
-
-fn position_state_strategy() -> impl Strategy<Value = PositionState> {
-    prop_oneof![Just(PositionState::Opened), Just(PositionState::Closed)]
-}
-
-fn trading_function_strategy() -> impl Strategy<Value = TradingFunction> {
-    (
-        amount_strategy(),
-        amount_strategy(),
-        asset_id_strategy(),
-        asset_id_strategy(),
-    )
-        .prop_map(|(p, q, asset_1, asset_2)| {
-            let trading_pair = TradingPair::new(asset_1, asset_2);
-            TradingFunction::new(trading_pair, 0u32, p, q)
-        })
-}
-
-fn position_strategy() -> impl Strategy<Value = Position> {
-    (
-        position_state_strategy(),
-        amount_strategy(),
-        amount_strategy(),
-        trading_function_strategy(),
-    )
-        .prop_map(|(state, r1, r2, phi)| Position {
-            state,
-            reserves: Reserves { r1, r2 },
-            phi,
-            nonce: [0u8; 32],
-            close_on_fill: true,
-        })
-}
-
-fn position_open_strategy() -> impl Strategy<Value = PositionOpenPlan> {
-    (position_strategy()).prop_map(|position| PositionOpenPlan {
-        position,
-        metadata: None,
-    })
-}
-
-fn position_close_strategy() -> impl Strategy<Value = PositionClose> {
-    (position_strategy()).prop_map(|position| PositionClose {
-        position_id: position.id(),
-    })
-}
-
-fn position_withdraw_strategy() -> impl Strategy<Value = PositionWithdrawPlan> {
-    (position_strategy()).prop_map(|position| PositionWithdrawPlan {
-        position_id: position.id(),
-        reserves: position.reserves,
-        rewards: vec![],
-        pair: position.phi.pair,
-        sequence: 1u64,
-    })
-}
-
-fn community_pool_deposit_strategy() -> impl Strategy<Value = CommunityPoolDeposit> {
-    (value_strategy()).prop_map(|value| CommunityPoolDeposit { value })
-}
-
-fn community_pool_spend_strategy() -> impl Strategy<Value = CommunityPoolSpend> {
-    (value_strategy()).prop_map(|value| CommunityPoolSpend { value })
-}
-
-fn community_pool_output_strategy() -> impl Strategy<Value = CommunityPoolOutput> {
-    (value_strategy(), address_strategy())
-        .prop_map(|(value, address)| CommunityPoolOutput { value, address })
-}
-
-fn denom_strategy() -> impl Strategy<Value = String> {
-    prop::string::string_regex(r"[a-zA-Z0-9]+").unwrap()
-}
-
-fn ics20_withdrawal_strategy() -> impl Strategy<Value = Ics20Withdrawal> {
-    (
-        amount_strategy(),
+        note_strategy,
+        position_strategy,
         address_strategy(),
-        address_strategy(),
-        denom_strategy(),
         0..1000000000u64,
         0..1000000000u64,
     )
         .prop_map(
-            |(
-                amount,
-                destination_chain_address,
-                return_address,
-                denom,
-                revision_number,
-                revision_height,
-            )| Ics20Withdrawal {
-                amount,
-                denom: Metadata::try_from(&denom[..]).expect("valid test denom"),
-                destination_chain_address: destination_chain_address.to_string(),
-                return_address,
-                timeout_height: Height::new(revision_number, revision_height).expect("test value"),
-                timeout_time: 0u64,
-                source_channel: ChannelId::default(),
-                use_compat_address: false,
-                use_transparent_address: false,
-                ics20_memo: String::default(),
+            |(note, position, return_address, revision_number, revision_height)| {
+                let withdrawal = Ics20Withdrawal {
+                    amount: note.amount(),
+                    denom: BASE_ASSET_DENOM.clone(),
+                    destination_chain_address: return_address.to_string(),
+                    return_address: return_address.clone(),
+                    timeout_height: Height::new(revision_number, revision_height)
+                        .expect("test value"),
+                    timeout_time: 0u64,
+                    source_channel: ChannelId::default(),
+                    use_compat_address: false,
+                    use_transparent_address: false,
+                    ics20_memo: String::default(),
+                };
+                ShieldedIcs20WithdrawalPlan::new(
+                    ShieldedIcs20WithdrawalFamilyId::Canonical,
+                    vec![ShieldedInputPlan::new(&mut OsRng, note, position)],
+                    None,
+                    withdrawal,
+                    Fr::rand(&mut OsRng),
+                )
+                .expect("valid shielded ICS-20 withdrawal plan")
             },
         )
 }
 
-fn auction_dutch_schedule_strategy() -> impl Strategy<Value = ActionDutchAuctionSchedule> {
+fn transfer_plan_strategy(fvk: &FullViewingKey) -> impl Strategy<Value = TransferPlan> {
+    (spend_plan_strategy(fvk), output_plan_strategy()).prop_map(|(spend, output)| {
+        TransferPlan::from_spend_output(spend.into(), output.into(), Fr::rand(&mut OsRng))
+            .expect("valid transfer plan")
+    })
+}
+
+fn consolidate_plan_strategy(fvk: &FullViewingKey) -> impl Strategy<Value = ConsolidatePlan> {
+    let addr = fvk.incoming().payment_address(0u32.into()).0;
     (
-        value_strategy(),
-        asset_id_strategy(),
-        amount_strategy(),
-        amount_strategy(),
-        0..1000000000u64,
-        0..1000000000u64,
-        prop::array::uniform32(any::<u8>()),
+        note_strategy(addr.clone()),
+        any::<penumbra_sdk_tct::Position>(),
+        note_strategy(addr.clone()),
+        any::<penumbra_sdk_tct::Position>(),
     )
-        .prop_map(
-            |(input, output_id, max_output, min_output, start_height, step_count, nonce)| {
-                ActionDutchAuctionSchedule {
-                    description: DutchAuctionDescription {
-                        input,
-                        output_id,
-                        max_output,
-                        min_output,
-                        start_height,
-                        end_height: start_height + 1,
-                        step_count,
-                        nonce,
+        .prop_map(move |(note_1, pos_1, note_2, pos_2)| {
+            let total_amount = note_1.amount() + note_2.amount();
+            let output = ShieldedOutputPlan::new(
+                &mut OsRng,
+                penumbra_sdk_asset::Value {
+                    amount: total_amount,
+                    asset_id: note_1.asset_id(),
+                },
+                addr.clone(),
+            );
+            ConsolidatePlan::new(
+                ConsolidateFamilyId::TwoByOne,
+                vec![
+                    ShieldedInputPlan::new(&mut OsRng, note_1, pos_1).into(),
+                    ShieldedInputPlan::new(&mut OsRng, note_2, pos_2).into(),
+                ],
+                vec![output.into()],
+                Fr::rand(&mut OsRng),
+            )
+            .expect("valid consolidate plan")
+        })
+}
+
+fn split_plan_strategy(fvk: &FullViewingKey) -> impl Strategy<Value = SplitPlan> {
+    let addr = fvk.incoming().payment_address(0u32.into()).0;
+    (
+        note_strategy(addr.clone()),
+        any::<penumbra_sdk_tct::Position>(),
+    )
+        .prop_map(move |(note, position)| {
+            let quarter = note.amount() / Amount::from(4u64);
+            let outputs = vec![
+                ShieldedOutputPlan::new(
+                    &mut OsRng,
+                    penumbra_sdk_asset::Value {
+                        amount: quarter,
+                        asset_id: note.asset_id(),
                     },
-                }
-            },
-        )
-}
+                    addr.clone(),
+                )
+                .into(),
+                ShieldedOutputPlan::new(
+                    &mut OsRng,
+                    penumbra_sdk_asset::Value {
+                        amount: quarter,
+                        asset_id: note.asset_id(),
+                    },
+                    addr.clone(),
+                )
+                .into(),
+                ShieldedOutputPlan::new(
+                    &mut OsRng,
+                    penumbra_sdk_asset::Value {
+                        amount: quarter,
+                        asset_id: note.asset_id(),
+                    },
+                    addr.clone(),
+                )
+                .into(),
+                ShieldedOutputPlan::new(
+                    &mut OsRng,
+                    penumbra_sdk_asset::Value {
+                        amount: note.amount() - quarter - quarter - quarter,
+                        asset_id: note.asset_id(),
+                    },
+                    addr.clone(),
+                )
+                .into(),
+            ];
 
-fn auction_dutch_withdraw_plan_strategy() -> impl Strategy<Value = ActionDutchAuctionWithdrawPlan> {
-    (
-        prop::array::uniform32(any::<u8>()),
-        0..1000000000u64,
-        value_strategy(),
-        value_strategy(),
-    )
-        .prop_map(|(auction_id_bytes, seq, reserves_input, reserves_output)| {
-            ActionDutchAuctionWithdrawPlan {
-                auction_id: AuctionId(auction_id_bytes),
-                seq,
-                reserves_input,
-                reserves_output,
-            }
+            SplitPlan::new(
+                SplitFamilyId::OneByFour,
+                vec![ShieldedInputPlan::new(&mut OsRng, note, position).into()],
+                outputs,
+                Fr::rand(&mut OsRng),
+            )
+            .expect("valid split plan")
         })
-}
-
-fn auction_dutch_end_strategy() -> impl Strategy<Value = ActionDutchAuctionEnd> {
-    (prop::array::uniform32(any::<u8>())).prop_map(|auction_id_bytes| ActionDutchAuctionEnd {
-        auction_id: AuctionId(auction_id_bytes),
-    })
 }
 
 fn action_plan_strategy(fvk: &FullViewingKey) -> impl Strategy<Value = ActionPlan> {
     prop_oneof![
-        spend_plan_strategy(fvk).prop_map(ActionPlan::Spend),
-        output_plan_strategy().prop_map(ActionPlan::Output),
-        delegate_plan_strategy().prop_map(ActionPlan::Delegate),
-        undelegate_plan_strategy().prop_map(ActionPlan::Undelegate),
-        undelegate_claim_plan_strategy().prop_map(ActionPlan::UndelegateClaim),
+        transfer_plan_strategy(fvk).prop_map(ActionPlan::Transfer),
+        consolidate_plan_strategy(fvk).prop_map(ActionPlan::Consolidate),
+        split_plan_strategy(fvk).prop_map(ActionPlan::Split),
         validator_definition_strategy().prop_map(ActionPlan::ValidatorDefinition),
-        swap_plan_strategy().prop_map(ActionPlan::Swap),
-        swap_claim_plan_strategy().prop_map(ActionPlan::SwapClaim),
         proposal_submit_strategy().prop_map(ActionPlan::ProposalSubmit),
-        proposal_withdraw_strategy().prop_map(ActionPlan::ProposalWithdraw),
         ibc_action_strategy().prop_map(ActionPlan::IbcAction),
-        delegator_vote_strategy().prop_map(ActionPlan::DelegatorVote),
         validator_vote_strategy().prop_map(ActionPlan::ValidatorVote),
-        proposal_deposit_claim_strategy().prop_map(ActionPlan::ProposalDepositClaim),
-        position_open_strategy().prop_map(ActionPlan::PositionOpen),
-        position_close_strategy().prop_map(ActionPlan::PositionClose),
-        position_withdraw_strategy().prop_map(ActionPlan::PositionWithdraw),
-        community_pool_deposit_strategy().prop_map(ActionPlan::CommunityPoolDeposit),
-        community_pool_spend_strategy().prop_map(ActionPlan::CommunityPoolSpend),
-        community_pool_output_strategy().prop_map(ActionPlan::CommunityPoolOutput),
-        ics20_withdrawal_strategy().prop_map(ActionPlan::Ics20Withdrawal),
-        auction_dutch_end_strategy().prop_map(ActionPlan::ActionDutchAuctionEnd),
-        auction_dutch_withdraw_plan_strategy().prop_map(ActionPlan::ActionDutchAuctionWithdraw),
-        auction_dutch_schedule_strategy().prop_map(ActionPlan::ActionDutchAuctionSchedule),
+        shielded_ics20_withdrawal_plan_strategy(fvk).prop_map(ActionPlan::ShieldedIcs20Withdrawal),
     ]
 }
 
@@ -671,6 +401,7 @@ fn transaction_plan_strategy(fvk: &FullViewingKey) -> impl Strategy<Value = Tran
         TransactionPlan {
             actions,
             transaction_parameters: params,
+            fee_funding: None,
             detection_data: None,
             memo: None,
         }
@@ -751,8 +482,9 @@ fn effect_hash_test_vectors() {
         proto_file
             .read_to_end(&mut transaction_plan_encoded)
             .expect("Failed to read Protobuf file");
-        let transaction_plan = TransactionPlan::decode(&transaction_plan_encoded[..])
-            .expect("should be able to decode transaction plan");
+        let Ok(transaction_plan) = TransactionPlan::decode(&transaction_plan_encoded[..]) else {
+            continue;
+        };
 
         if check_transaction_plan_enabled(&transaction_plan).is_err() {
             continue;

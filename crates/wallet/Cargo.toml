@@ -23,13 +23,12 @@ hex = {workspace = true}
 penumbra-sdk-app = {workspace = true, default-features = false}
 penumbra-sdk-asset = {workspace = true, default-features = true}
 penumbra-sdk-custody = {workspace = true}
-penumbra-sdk-dex = {workspace = true, default-features = false}
 penumbra-sdk-fee = {workspace = true, default-features = false}
 penumbra-sdk-governance = {workspace = true, default-features = false}
 penumbra-sdk-keys = {workspace = true, default-features = true}
 penumbra-sdk-num = {workspace = true, default-features = true}
 penumbra-sdk-proto = {workspace = true, default-features = true}
-penumbra-sdk-stake = {workspace = true, default-features = false}
+penumbra-sdk-validator = {workspace = true, default-features = false}
 penumbra-sdk-tct = {workspace = true, default-features = true}
 penumbra-sdk-sct = {workspace = true, default-features = false}
 penumbra-sdk-transaction = {workspace = true, default-features = true}

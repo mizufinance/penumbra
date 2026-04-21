@@ -183,9 +183,6 @@ pub enum NetworkCommand {
         /// Number of blocks per epoch.
         #[clap(long)]
         epoch_duration: Option<u64>,
-        /// Number of blocks that must elapse before unbonding stake is released.
-        #[clap(long)]
-        unbonding_delay: Option<u64>,
         /// Maximum number of validators in the consensus set.
         #[clap(long)]
         active_validator_limit: Option<u64>,
@@ -238,6 +235,12 @@ pub enum NetworkCommand {
         // TODO we should support DNS names here. However, there are complications:
         // https://github.com/tendermint/tendermint/issues/1521
         external_addresses: Option<String>,
+        /// When generating Tendermint config, use this socket to bind the Tendermint RPC service.
+        #[clap(long, env = "PENUMBRA_PD_TM_RPC_BIND", default_value = "0.0.0.0:26657")]
+        tendermint_rpc_bind: SocketAddr,
+        /// When generating Tendermint config, use this socket to bind the Tendermint P2P service.
+        #[clap(long, env = "PENUMBRA_PD_TM_P2P_BIND", default_value = "0.0.0.0:26656")]
+        tendermint_p2p_bind: SocketAddr,
     },
 
     /// Like `network generate`, but joins the network to which the specified node belongs.

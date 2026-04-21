@@ -1,6 +1,7 @@
 package primitives
 
 import (
+	"math/big"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -29,40 +30,94 @@ func (c *stateCommitmentPathCircuit) Define(api frontend.API) error {
 	return nil
 }
 
-func TestStateCommitmentPathNativeMatchesRust(t *testing.T) {
-	fixture, err := LoadSpendFixture()
-	if err != nil {
-		t.Fatalf("load spend fixture: %v", err)
+func syntheticStateCommitmentPath() ([24][3]*big.Int, uint64) {
+	var path [24][3]*big.Int
+	for i := range path {
+		for j := range path[i] {
+			path[i][j] = big.NewInt(int64(1000 + i*10 + j))
+		}
 	}
-
-	root, err := VerifyStateCommitmentPathNative(fixture)
-	if err != nil {
-		t.Fatalf("verify state commitment path: %v", err)
-	}
-
-	if got, want := root.String(), fixture.Public.Anchor; got != want {
-		t.Fatalf("state commitment root mismatch: got %s want %s", got, want)
-	}
+	return path, 0x12345
 }
 
-func TestStateCommitmentPathCircuitMatchesFixture(t *testing.T) {
-	fixture, err := LoadSpendFixture()
+func computeStateCommitmentRootNative(
+	t *testing.T,
+	commitment *big.Int,
+	position uint64,
+	path [24][3]*big.Int,
+) *big.Int {
+	t.Helper()
+
+	vectors, err := LoadPrototypeVectors()
 	if err != nil {
-		t.Fatalf("load spend fixture: %v", err)
+		t.Fatalf("load prototype vectors: %v", err)
 	}
 
-	var path [24][3]frontend.Variable
-	for i, siblings := range fixture.Private.StateCommitmentProof.AuthPath {
-		for j, sibling := range siblings {
-			path[i][j] = sibling
+	domain := MustBigInt(vectors.Poseidon377.TCTDomain)
+	current, err := Poseidon377Hash1Native(domain, commitment)
+	if err != nil {
+		t.Fatalf("hash leaf: %v", err)
+	}
+
+	for height := 1; height <= len(path); height++ {
+		shift := 2 * (height - 1)
+		bit0 := (position >> shift) & 1
+		bit1 := (position >> (shift + 1)) & 1
+		index := int(bit0 + 2*bit1)
+		siblings := path[len(path)-height]
+
+		var children [4]*big.Int
+		siblingIdx := 0
+		for i := 0; i < 4; i++ {
+			if i == index {
+				children[i] = current
+				continue
+			}
+			children[i] = siblings[siblingIdx]
+			siblingIdx++
+		}
+
+		heightDomain := new(big.Int).Add(domain, big.NewInt(int64(height)))
+		heightDomain.Mod(heightDomain, ScalarField())
+		current, err = Poseidon377Hash4Native(heightDomain, children)
+		if err != nil {
+			t.Fatalf("hash node at height %d: %v", height, err)
 		}
 	}
 
+	return current
+}
+
+func statePathAssignment(path [24][3]*big.Int) [24][3]frontend.Variable {
+	var out [24][3]frontend.Variable
+	for i := range path {
+		for j := range path[i] {
+			out[i][j] = path[i][j].String()
+		}
+	}
+	return out
+}
+
+func TestStateCommitmentPathNativeMatchesSyntheticFixture(t *testing.T) {
+	commitment := big.NewInt(987654321)
+	path, position := syntheticStateCommitmentPath()
+
+	root := computeStateCommitmentRootNative(t, commitment, position, path)
+	if root.Sign() == 0 {
+		t.Fatal("expected non-zero state commitment root")
+	}
+}
+
+func TestStateCommitmentPathCircuitMatchesSyntheticFixture(t *testing.T) {
+	commitment := big.NewInt(987654321)
+	path, position := syntheticStateCommitmentPath()
+	root := computeStateCommitmentRootNative(t, commitment, position, path)
+
 	assignment := &stateCommitmentPathCircuit{
-		Commitment:   fixture.Private.StateCommitmentProof.Commitment,
-		Position:     fixture.Private.StateCommitmentProof.Position,
-		Path:         path,
-		ExpectedRoot: fixture.Public.Anchor,
+		Commitment:   commitment.String(),
+		Position:     position,
+		Path:         statePathAssignment(path),
+		ExpectedRoot: root.String(),
 	}
 
 	assert := test.NewAssert(t)

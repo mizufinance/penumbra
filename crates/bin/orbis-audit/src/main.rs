@@ -1,27 +1,17 @@
-//! Orbis PRE audit tool — real Orbis node interaction for compliance audits.
-//!
-//! Replaces `orbis-sim` with real Orbis PRE via the adjusted reader key trick:
-//! sets `reader_pk = pk_issuer + EPK_chain - enc_cmt_orbis` so Orbis computes
-//! `d * sk_ring * (pk_issuer + EPK_chain)` — identical to SimulatedOrbis math.
-//!
-//! Uses `cli-tool pre --xnc-only` to get xnc_cmt without AES decrypt (which
-//! would fail since enc_cmt != EPK_chain).
-
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, Write};
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use decaf377::{Element, Fr};
-use penumbra_sdk_compliance::compute_adjusted_reader_pk;
-use penumbra_sdk_compliance::derive_compliance_scalar;
-use penumbra_sdk_compliance::orbis::recover_seed;
-use penumbra_sdk_compliance::scanning::{
-    decrypt_core_with_seed, decrypt_extension_with_seed, decrypt_spend_ext_with_seed,
+use decaf377::{Element, Fq, Fr};
+use penumbra_sdk_compliance::{
+    compute_adjusted_reader_pk, decrypt_tier_bytes, derive_compliance_scalar, recover_seed,
+    TransferComplianceCiphertext,
 };
-use penumbra_sdk_compliance::structs::ComplianceCiphertext;
 use penumbra_sdk_keys::Address;
+use penumbra_sdk_num::Amount;
 use serde::{Deserialize, Serialize};
 use tonic::transport::Channel;
 use url::Url;
@@ -31,52 +21,43 @@ mod cli_tool;
 #[derive(Parser, Debug)]
 #[clap(
     name = "orbis-audit",
-    about = "Compliance audit via real Orbis PRE (replaces orbis-sim)"
+    about = "Compliance audit via Orbis PRE for transfer ciphertexts"
 )]
 struct Args {
-    /// Path to detected transactions JSON (from `pcli tx compliance scan`).
     #[clap(long)]
     input: PathBuf,
 
-    /// Issuer's private detection key (64 hex chars = 32 bytes).
     #[clap(long)]
     dk_hex: String,
 
-    /// The URL of the pd gRPC endpoint.
     #[clap(long, env = "PENUMBRA_NODE_PD_URL")]
     node: Url,
 
-    /// Output file for audit results (JSON format).
     #[clap(long, default_value = "/tmp/alice-audit.json")]
     output: PathBuf,
 
-    /// Disclosure tier: "default" (core PRE + sender_ciphertext in one pass),
-    /// or "extension" (core + extension PRE — reveals counterparty/sender identity).
     #[clap(long, default_value = "default")]
     tier: String,
 
-    /// Target user's Penumbra address (bech32m).
     #[clap(long)]
     sender_address: String,
 
-    /// Orbis node endpoint (e.g. http://127.0.0.1:50051).
     #[clap(long)]
     orbis_endpoint: String,
 
-    /// Orbis ring ID (required with --ring-pk-hex, otherwise fetched via get-latest-ring).
     #[clap(long)]
     ring_id: Option<String>,
 
-    /// Ring public key hex (64 chars). If provided with --ring-id, skips get-latest-ring.
     #[clap(long)]
     ring_pk_hex: Option<String>,
 
-    /// cli-tool binary name.
     #[clap(long, default_value = "cli-tool")]
     cli_tool: String,
+
+    #[clap(long = "known-address")]
+    known_addresses: Vec<String>,
 }
 
-/// Matches the scan output format from pcli.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ScanOutput {
     scan_info: serde_json::Value,
@@ -90,12 +71,8 @@ struct DetectedTxRef {
     action_index: usize,
     asset_id: String,
     is_flagged: bool,
-    #[serde(default)]
-    is_spend: bool,
 }
 
-/// Output entry for each successfully decrypted transaction.
-/// Compatible with `issuer-db update`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct AuditEntry {
     height: u64,
@@ -106,58 +83,87 @@ struct AuditEntry {
     decrypted_via: String,
 }
 
-/// Orbis context set up once per run.
+#[derive(Clone)]
 struct OrbisContext {
     object_id: String,
     enc_cmt: Element,
 }
 
+#[derive(Clone)]
+struct AuditContext<'a> {
+    cli: &'a cli_tool::CliTool,
+    orbis: &'a OrbisContext,
+    dk: &'a Fr,
+    dk_pub: &'a Element,
+    ack: Element,
+    b_d_hex: &'a str,
+    ring_pk_hex: &'a str,
+    subject_transmission_key_hex: &'a str,
+    known_transmission_keys: &'a HashSet<String>,
+    tier_mode: &'a str,
+}
+
+#[derive(Clone, Debug)]
+struct AddressData {
+    transmission_key_hex: String,
+}
+
+#[derive(Clone, Debug)]
+enum TransferMatch {
+    Sender {
+        amount: Amount,
+        receiver: AddressData,
+    },
+    Receiver {
+        amount: Amount,
+        sender: AddressData,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-
-    // Validate tier
     let tier_mode = match args.tier.as_str() {
         "default" | "extension" => args.tier.as_str(),
-        other => anyhow::bail!("--tier must be 'default' or 'extension', got '{}'", other),
+        other => anyhow::bail!("--tier must be 'default' or 'extension', got '{other}'"),
     };
 
-    // Parse issuer DK
     let dk = parse_fr(&args.dk_hex, "DK")?;
     let dk_pub = Element::GENERATOR * dk;
 
-    // Parse sender address
-    let sender_addr: Address = args
+    let subject_address: Address = args
         .sender_address
         .parse()
         .context("failed to parse --sender-address as Penumbra address")?;
-    let sender_pk_hex = hex::encode(sender_addr.transmission_key().0);
-    let b_d_fq = sender_addr
+    let subject_transmission_key_hex = hex::encode(subject_address.transmission_key().0);
+    let b_d_fq = subject_address
         .diversified_generator()
         .vartime_compress_to_field();
     let b_d_hex = hex::encode(b_d_fq.to_bytes());
 
-    // Set up Orbis CLI
-    let cli = cli_tool::CliTool::new(&args.cli_tool, args.orbis_endpoint.clone());
+    let mut known_transmission_keys = HashSet::new();
+    known_transmission_keys.insert(subject_transmission_key_hex.clone());
+    for address in &args.known_addresses {
+        let address: Address = address
+            .parse()
+            .with_context(|| format!("failed to parse --known-address {address}"))?;
+        known_transmission_keys.insert(hex::encode(address.transmission_key().0));
+    }
 
-    // Get ring: prefer explicit --ring-pk-hex + --ring-id, fall back to get-latest-ring
-    // orbis_ring_pk_hex: original hex from orbis (for cli-tool calls, different serialization)
-    // ring_pk: decaf377 Element (for compliance math: ACK, adjusted reader key)
+    let cli = cli_tool::CliTool::new(&args.cli_tool, args.orbis_endpoint.clone());
     let (ring_pk, ring_id, orbis_ring_pk_hex) = match (&args.ring_pk_hex, &args.ring_id) {
         (Some(pk_hex), Some(id)) => {
             let bytes = hex::decode(pk_hex).context("invalid --ring-pk-hex")?;
             let arr: [u8; 32] = bytes
                 .try_into()
-                .map_err(|_| anyhow::anyhow!("--ring-pk-hex must be 32 bytes"))?;
+                .map_err(|_| anyhow!("--ring-pk-hex must be 32 bytes"))?;
             let pk = decaf377::Encoding(arr)
                 .vartime_decompress()
-                .map_err(|_| anyhow::anyhow!("--ring-pk-hex is not a valid curve point"))?;
+                .map_err(|_| anyhow!("--ring-pk-hex is not a valid curve point"))?;
             (pk, id.clone(), pk_hex.clone())
         }
         _ => cli.get_latest_ring()?,
     };
-
-    // Derive ACK from ring_pk + user's b_d
     let d = derive_compliance_scalar(b_d_fq);
     let d_fr = Fr::from_le_bytes_mod_order(&d.to_bytes());
     let ack = ring_pk * d_fr;
@@ -166,165 +172,66 @@ async fn main() -> Result<()> {
         "orbis-audit: ring_pk={}, ring_id={}, target={}...",
         &orbis_ring_pk_hex[..16],
         &ring_id,
-        &sender_pk_hex[..16],
+        &subject_transmission_key_hex[..16],
     );
 
-    // Set up ACP and store dummy secret (use original orbis hex for cli-tool)
-    let orbis_ctx = setup_orbis(&cli, &orbis_ring_pk_hex, &ring_id, &b_d_hex)?;
+    let orbis = setup_orbis(&cli, &orbis_ring_pk_hex, &ring_id, &b_d_hex)?;
 
-    // Load scan output
     let file = File::open(&args.input).context("failed to open input file")?;
     let reader = BufReader::new(file);
     let scan: ScanOutput = serde_json::from_reader(reader).context("failed to parse scan JSON")?;
-
     eprintln!(
         "orbis-audit: Processing {} detected transactions",
         scan.detected.len()
     );
 
-    // Connect to Penumbra node
     let channel = connect_to_node(&args.node).await?;
+    let ctx = AuditContext {
+        cli: &cli,
+        orbis: &orbis,
+        dk: &dk,
+        dk_pub: &dk_pub,
+        ack,
+        b_d_hex: &b_d_hex,
+        ring_pk_hex: &orbis_ring_pk_hex,
+        subject_transmission_key_hex: &subject_transmission_key_hex,
+        known_transmission_keys: &known_transmission_keys,
+        tier_mode,
+    };
 
-    let mut results: Vec<AuditEntry> = Vec::new();
+    let mut results = Vec::new();
     let mut attempted = 0u64;
     let mut decrypted = 0u64;
     let mut no_ciphertext = 0u64;
-    let mut no_body = 0u64;
 
     for tx_ref in &scan.detected {
         if tx_ref.is_flagged {
             continue;
         }
-
         attempted += 1;
-
         let transactions = fetch_transactions(channel.clone(), tx_ref.height).await?;
 
-        let mut found_action = false;
         for tx in &transactions {
-            if let Some(ref body) = tx.body {
-                if tx_ref.action_index < body.actions.len() {
-                    found_action = true;
-                    let action = &body.actions[tx_ref.action_index];
-
-                    match extract_compliance_data(action) {
-                        Some(extracted) => {
-                            let ct = extracted.ct;
-
-                            // Core tier PRE via adjusted reader key
-                            let xnc_cmt_core = orbis_pre_for_epk(
-                                &cli,
-                                &orbis_ctx,
-                                &dk_pub,
-                                &ct.epk_1,
-                                &b_d_hex,
-                                &orbis_ring_pk_hex,
-                            )?;
-                            let seed_core = recover_seed(&xnc_cmt_core, &dk, &ack, &ct.c2_core);
-                            let core = decrypt_core_with_seed(seed_core, &ct)?;
-
-                            let core_handled = if let Some(c) = &core {
-                                let valid = hex::encode(c.self_transmission_key) == sender_pk_hex;
-                                if valid {
-                                    if tier_mode == "extension" {
-                                        let epk_2 = ct.epk_2.unwrap_or(ct.epk_1);
-                                        if let Some(c2_ext) = ct.c2_ext {
-                                            let xnc_cmt_ext = orbis_pre_for_epk(
-                                                &cli,
-                                                &orbis_ctx,
-                                                &dk_pub,
-                                                &epk_2,
-                                                &b_d_hex,
-                                                &orbis_ring_pk_hex,
-                                            )?;
-                                            let seed_ext =
-                                                recover_seed(&xnc_cmt_ext, &dk, &ack, &c2_ext);
-                                            let ext = decrypt_extension_with_seed(seed_ext, &ct)?;
-                                            if let Some(e) = &ext {
-                                                decrypted += 1;
-                                                results.push(AuditEntry {
-                                                    height: tx_ref.height,
-                                                    action_index: tx_ref.action_index,
-                                                    amount: c.amount.value().to_string(),
-                                                    self_address: hex::encode(
-                                                        c.self_transmission_key,
-                                                    ),
-                                                    counterparty: hex::encode(
-                                                        e.counterparty_transmission_key,
-                                                    ),
-                                                    decrypted_via: "extension".to_string(),
-                                                });
-                                            } else {
-                                                decrypted += 1;
-                                                results.push(core_entry(tx_ref, c));
-                                            }
-                                        } else {
-                                            decrypted += 1;
-                                            results.push(core_entry(tx_ref, c));
-                                        }
-                                    } else {
-                                        decrypted += 1;
-                                        results.push(core_entry(tx_ref, c));
-                                    }
-                                    true
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            };
-
-                            // Fallback: try sext tier (user is the sender)
-                            if !core_handled && tier_mode == "extension" {
-                                if let (Some(c2_sext), Some(epk_3)) = (ct.c2_sext, ct.epk_3) {
-                                    let xnc_cmt_sext = orbis_pre_for_epk(
-                                        &cli,
-                                        &orbis_ctx,
-                                        &dk_pub,
-                                        &epk_3,
-                                        &b_d_hex,
-                                        &orbis_ring_pk_hex,
-                                    )?;
-                                    let seed_sext =
-                                        recover_seed(&xnc_cmt_sext, &dk, &ack, &c2_sext);
-                                    if let Ok(Some(data)) =
-                                        decrypt_spend_ext_with_seed(seed_sext, &ct)
-                                    {
-                                        decrypted += 1;
-                                        results.push(AuditEntry {
-                                            height: tx_ref.height,
-                                            action_index: tx_ref.action_index,
-                                            amount: data.amount.value().to_string(),
-                                            self_address: hex::encode(
-                                                data.recipient_transmission_key,
-                                            ),
-                                            counterparty: sender_pk_hex.clone(),
-                                            decrypted_via: "extension".to_string(),
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                        None => {
-                            no_ciphertext += 1;
-                        }
-                    }
-                }
-            } else {
-                no_body += 1;
+            let Some(body) = tx.body.as_ref() else {
+                continue;
+            };
+            if tx_ref.action_index >= body.actions.len() {
+                continue;
             }
-        }
-        if !found_action {
-            eprintln!(
-                "orbis-audit: height={} action={}: action not found in {} txs",
-                tx_ref.height,
-                tx_ref.action_index,
-                transactions.len()
-            );
+
+            let action = &body.actions[tx_ref.action_index];
+            let Some(ct) = extract_transfer_ciphertext(action) else {
+                no_ciphertext += 1;
+                continue;
+            };
+
+            if let Some(entry) = audit_transfer(tx_ref, &ct, &ctx)? {
+                decrypted += 1;
+                results.push(entry);
+            }
         }
     }
 
-    // Write results
     let json = serde_json::to_string_pretty(&results)?;
     let mut out_file = File::create(&args.output)?;
     out_file.write_all(json.as_bytes())?;
@@ -339,19 +246,162 @@ async fn main() -> Result<()> {
             no_ciphertext
         );
     }
-    if no_body > 0 {
-        eprintln!("orbis-audit: {} transactions had no body.", no_body);
-    }
     println!("Results saved to: {}", args.output.display());
 
     Ok(())
 }
 
-// ============================================================================
-// Orbis helpers
-// ============================================================================
+fn audit_transfer(
+    tx_ref: &DetectedTxRef,
+    ct: &TransferComplianceCiphertext,
+    ctx: &AuditContext<'_>,
+) -> Result<Option<AuditEntry>> {
+    if let Some(candidate) = try_receiver_match(ct, ctx)? {
+        return Ok(Some(candidate_to_entry(tx_ref, candidate, ctx)));
+    }
+    if let Some(candidate) = try_sender_match(ct, ctx)? {
+        return Ok(Some(candidate_to_entry(tx_ref, candidate, ctx)));
+    }
+    Ok(None)
+}
 
-/// One-time setup: create ACP policy, store dummy secret, register object.
+fn try_receiver_match(
+    ct: &TransferComplianceCiphertext,
+    ctx: &AuditContext<'_>,
+) -> Result<Option<TransferMatch>> {
+    let output_core = orbis_pre_for_epk(
+        ctx.cli,
+        ctx.orbis,
+        ctx.dk_pub,
+        &ct.output_core_epk,
+        ctx.b_d_hex,
+        ctx.ring_pk_hex,
+    )?;
+    let output_core_seed = recover_seed(&output_core, ctx.dk, &ctx.ack, &ct.output_core_c2);
+    let amount = decrypt_amount_with_seed(output_core_seed, &ct.encrypted_output_core)?;
+
+    let output_ext = orbis_pre_for_epk(
+        ctx.cli,
+        ctx.orbis,
+        ctx.dk_pub,
+        &ct.output_ext_epk,
+        ctx.b_d_hex,
+        ctx.ring_pk_hex,
+    )?;
+    let output_ext_seed = recover_seed(&output_ext, ctx.dk, &ctx.ack, &ct.output_ext_c2);
+    let sender = match decrypt_address_with_seed(output_ext_seed, &ct.encrypted_output_ext) {
+        Ok(sender) => sender,
+        Err(_) => return Ok(None),
+    };
+
+    if !ctx
+        .known_transmission_keys
+        .contains(&sender.transmission_key_hex)
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(TransferMatch::Receiver { amount, sender }))
+}
+
+fn try_sender_match(
+    ct: &TransferComplianceCiphertext,
+    ctx: &AuditContext<'_>,
+) -> Result<Option<TransferMatch>> {
+    let sender_core = orbis_pre_for_epk(
+        ctx.cli,
+        ctx.orbis,
+        ctx.dk_pub,
+        &ct.sender_core_epk,
+        ctx.b_d_hex,
+        ctx.ring_pk_hex,
+    )?;
+    let sender_core_seed = recover_seed(&sender_core, ctx.dk, &ctx.ack, &ct.sender_core_c2);
+    let amount = decrypt_amount_with_seed(sender_core_seed, &ct.encrypted_sender_core)?;
+
+    let sender_ext = orbis_pre_for_epk(
+        ctx.cli,
+        ctx.orbis,
+        ctx.dk_pub,
+        &ct.sender_ext_epk,
+        ctx.b_d_hex,
+        ctx.ring_pk_hex,
+    )?;
+    let sender_ext_seed = recover_seed(&sender_ext, ctx.dk, &ctx.ack, &ct.sender_ext_c2);
+    let receiver = match decrypt_address_with_seed(sender_ext_seed, &ct.encrypted_sender_ext) {
+        Ok(receiver) => receiver,
+        Err(_) => return Ok(None),
+    };
+
+    if !ctx
+        .known_transmission_keys
+        .contains(&receiver.transmission_key_hex)
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(TransferMatch::Sender { amount, receiver }))
+}
+
+fn candidate_to_entry(
+    tx_ref: &DetectedTxRef,
+    candidate: TransferMatch,
+    ctx: &AuditContext<'_>,
+) -> AuditEntry {
+    match (ctx.tier_mode, candidate) {
+        ("default", TransferMatch::Receiver { amount, .. })
+        | ("default", TransferMatch::Sender { amount, .. }) => AuditEntry {
+            height: tx_ref.height,
+            action_index: tx_ref.action_index,
+            amount: amount.value().to_string(),
+            self_address: ctx.subject_transmission_key_hex.to_string(),
+            counterparty: String::new(),
+            decrypted_via: "core".to_string(),
+        },
+        ("extension", TransferMatch::Receiver { amount, sender }) => AuditEntry {
+            height: tx_ref.height,
+            action_index: tx_ref.action_index,
+            amount: amount.value().to_string(),
+            self_address: ctx.subject_transmission_key_hex.to_string(),
+            counterparty: sender.transmission_key_hex,
+            decrypted_via: "ext".to_string(),
+        },
+        ("extension", TransferMatch::Sender { amount, receiver }) => AuditEntry {
+            height: tx_ref.height,
+            action_index: tx_ref.action_index,
+            amount: amount.value().to_string(),
+            self_address: ctx.subject_transmission_key_hex.to_string(),
+            counterparty: receiver.transmission_key_hex,
+            decrypted_via: "ext".to_string(),
+        },
+        _ => unreachable!("tier already validated"),
+    }
+}
+
+fn decrypt_amount_with_seed(seed: Fq, encrypted: &[u8]) -> Result<Amount> {
+    let plaintext = decrypt_tier_bytes(encrypted, seed, 16);
+    let amount_bytes: [u8; 16] = plaintext[..16]
+        .try_into()
+        .context("transfer amount plaintext must be 16 bytes")?;
+    Ok(Amount::from_le_bytes(amount_bytes))
+}
+
+fn decrypt_address_with_seed(seed: Fq, encrypted: &[u8]) -> Result<AddressData> {
+    let plaintext = decrypt_tier_bytes(encrypted, seed, 64);
+    let diversified_generator_bytes: [u8; 32] = plaintext[..32]
+        .try_into()
+        .context("transfer address diversified generator must be 32 bytes")?;
+    let transmission_key: [u8; 32] = plaintext[32..64]
+        .try_into()
+        .context("transfer address transmission key must be 32 bytes")?;
+    decaf377::Encoding(diversified_generator_bytes)
+        .vartime_decompress()
+        .map_err(|_| anyhow!("invalid transfer address diversified generator"))?;
+    Ok(AddressData {
+        transmission_key_hex: hex::encode(transmission_key),
+    })
+}
+
 fn setup_orbis(
     cli: &cli_tool::CliTool,
     ring_pk_hex: &str,
@@ -359,14 +409,12 @@ fn setup_orbis(
     derivation_hex: &str,
 ) -> Result<OrbisContext> {
     eprintln!("orbis-audit: Setting up Orbis ACP...");
-
     let policy_id = cli.add_policy()?;
-    eprintln!("orbis-audit: policy_id={}", policy_id);
+    eprintln!("orbis-audit: policy_id={policy_id}");
 
-    // store_secret returns both object_id and enc_cmt from the same operation
     let (object_id, enc_cmt_hex) =
         cli.store_secret(ring_pk_hex, ring_id, &policy_id, derivation_hex)?;
-    eprintln!("orbis-audit: object_id={}", object_id);
+    eprintln!("orbis-audit: object_id={object_id}");
 
     cli.register_object(&policy_id, &object_id)?;
     cli.set_relationship(&policy_id, &object_id)?;
@@ -375,11 +423,10 @@ fn setup_orbis(
     let enc_cmt_bytes = hex::decode(&enc_cmt_hex).context("invalid enc_cmt hex")?;
     let enc_cmt_arr: [u8; 32] = enc_cmt_bytes
         .try_into()
-        .map_err(|_| anyhow::anyhow!("enc_cmt should be 32 bytes"))?;
+        .map_err(|_| anyhow!("enc_cmt should be 32 bytes"))?;
     let enc_cmt = decaf377::Encoding(enc_cmt_arr)
         .vartime_decompress()
-        .map_err(|_| anyhow::anyhow!("invalid enc_cmt curve point"))?;
-
+        .map_err(|_| anyhow!("invalid enc_cmt curve point"))?;
     eprintln!(
         "orbis-audit: enc_cmt={}",
         hex::encode(&enc_cmt.vartime_compress().0[..8])
@@ -388,10 +435,6 @@ fn setup_orbis(
     Ok(OrbisContext { object_id, enc_cmt })
 }
 
-/// Perform PRE for a single chain EPK using the adjusted reader key trick.
-///
-/// `adjusted_reader_pk = pk_issuer + EPK_chain - enc_cmt_orbis`
-/// Orbis computes: `xnc_cmt = d * sk_ring * (pk_issuer + EPK_chain)`
 fn orbis_pre_for_epk(
     cli: &cli_tool::CliTool,
     ctx: &OrbisContext,
@@ -402,7 +445,6 @@ fn orbis_pre_for_epk(
 ) -> Result<Element> {
     let adjusted_pk = compute_adjusted_reader_pk(pk_issuer, epk_chain, &ctx.enc_cmt);
     let adjusted_pk_hex = hex::encode(adjusted_pk.vartime_compress().0);
-
     let xnc_hex = cli.pre_xnc_only(
         ring_pk_hex,
         &adjusted_pk_hex,
@@ -413,38 +455,17 @@ fn orbis_pre_for_epk(
     let xnc_bytes = hex::decode(&xnc_hex).context("invalid xnc_cmt hex from PRE")?;
     let xnc_arr: [u8; 32] = xnc_bytes
         .try_into()
-        .map_err(|_| anyhow::anyhow!("xnc_cmt should be 32 bytes"))?;
-    let xnc_cmt = decaf377::Encoding(xnc_arr)
+        .map_err(|_| anyhow!("xnc_cmt should be 32 bytes"))?;
+    decaf377::Encoding(xnc_arr)
         .vartime_decompress()
-        .map_err(|_| anyhow::anyhow!("invalid xnc_cmt curve point"))?;
-
-    Ok(xnc_cmt)
+        .map_err(|_| anyhow!("invalid xnc_cmt curve point"))
 }
-
-fn core_entry(
-    tx_ref: &DetectedTxRef,
-    c: &penumbra_sdk_compliance::scanning::CoreData,
-) -> AuditEntry {
-    AuditEntry {
-        height: tx_ref.height,
-        action_index: tx_ref.action_index,
-        amount: c.amount.value().to_string(),
-        self_address: hex::encode(c.self_transmission_key),
-        counterparty: "".to_string(),
-        decrypted_via: "core".to_string(),
-    }
-}
-
-// ============================================================================
-// Helpers ported from orbis-sim
-// ============================================================================
 
 fn parse_fr(hex_str: &str, label: &str) -> Result<Fr> {
-    let bytes = hex::decode(hex_str).context(format!("invalid hex for {}", label))?;
+    let bytes = hex::decode(hex_str).context(format!("invalid hex for {label}"))?;
     if bytes.len() != 32 {
         anyhow::bail!(
-            "{} must be 32 bytes (64 hex chars), got {}",
-            label,
+            "{label} must be 32 bytes (64 hex chars), got {}",
             bytes.len()
         );
     }
@@ -453,42 +474,27 @@ fn parse_fr(hex_str: &str, label: &str) -> Result<Fr> {
     Ok(Fr::from_le_bytes_mod_order(&arr))
 }
 
-struct ExtractedCompliance {
-    ct: ComplianceCiphertext,
-    #[allow(dead_code)]
-    dleq_bytes: Vec<u8>,
-}
-
-fn extract_compliance_data(
+fn extract_transfer_ciphertext(
     action: &penumbra_sdk_proto::core::transaction::v1::Action,
-) -> Option<ExtractedCompliance> {
+) -> Option<TransferComplianceCiphertext> {
     use penumbra_sdk_proto::core::transaction::v1::action::Action as ActionEnum;
 
-    let action_inner = action.action.as_ref()?;
-
-    let (cc_bytes, dleq_bytes) = match action_inner {
-        ActionEnum::Output(output) => {
-            let body = output.body.as_ref()?;
-            (&body.compliance_ciphertext, body.dleq_proofs.clone())
-        }
-        ActionEnum::Spend(spend) => {
-            let body = spend.body.as_ref()?;
-            (&body.compliance_ciphertext, body.dleq_proof.clone())
-        }
-        _ => return None,
-    };
-
-    if cc_bytes.is_empty() {
+    let ActionEnum::Transfer(transfer) = action.action.as_ref()? else {
         return None;
-    }
+    };
+    let body = transfer.body.as_ref()?;
+    let output = body
+        .outputs
+        .iter()
+        .find(|output| !output.compliance_ciphertext.is_empty())?;
 
-    match ComplianceCiphertext::from_bytes(cc_bytes) {
-        Ok(ct) => Some(ExtractedCompliance { ct, dleq_bytes }),
-        Err(e) => {
+    match TransferComplianceCiphertext::from_bytes(&output.compliance_ciphertext) {
+        Ok(ct) => Some(ct),
+        Err(error) => {
             eprintln!(
                 "orbis-audit: ciphertext deserialization failed ({} bytes): {}",
-                cc_bytes.len(),
-                e
+                output.compliance_ciphertext.len(),
+                error
             );
             None
         }
@@ -503,7 +509,7 @@ async fn connect_to_node(node_url: &Url) -> Result<Channel> {
     endpoint
         .connect()
         .await
-        .context(format!("failed to connect to node at {}", node_url))
+        .context(format!("failed to connect to node at {node_url}"))
 }
 
 async fn fetch_transactions(
@@ -523,6 +529,172 @@ async fn fetch_transactions(
         .transactions_by_height(request)
         .await
         .context("failed to fetch transactions")?;
-
     Ok(response.into_inner().transactions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use decaf377::{Element, Fr};
+    use penumbra_sdk_asset::{asset, Value};
+    use penumbra_sdk_compliance::issuer_keys::DetectionKey;
+    use penumbra_sdk_compliance::transfer::encrypt_transfer;
+    use penumbra_sdk_keys::{keys::AddressIndex, test_keys};
+    use penumbra_sdk_num::Amount;
+    use penumbra_sdk_proto::core::component::shielded_pool::v1::{
+        Consolidate, ConsolidateBody, Split, SplitBody, Transfer, TransferBody, TransferOutputBody,
+    };
+    use penumbra_sdk_proto::core::transaction::v1::action::Action;
+    use std::collections::HashSet;
+
+    fn derive_ack(ring_pk: &Element, address: &penumbra_sdk_keys::Address) -> Element {
+        let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+        let d = derive_compliance_scalar(b_d_fq);
+        let d_fr = Fr::from_le_bytes_mod_order(&d.to_bytes());
+        *ring_pk * d_fr
+    }
+
+    fn make_transfer_ciphertext_bytes() -> Vec<u8> {
+        let dk = DetectionKey::new(Fr::from(5u64));
+        let dk_pub = dk.public_key();
+        let ring_pk = Element::GENERATOR * Fr::from(11u64);
+        let sender = test_keys::ADDRESS_0.clone();
+        let receiver = test_keys::FULL_VIEWING_KEY
+            .payment_address(AddressIndex::from(1u32))
+            .0;
+        encrypt_transfer(
+            &mut rand_core::OsRng,
+            &derive_ack(&ring_pk, &sender),
+            &derive_ack(&ring_pk, &receiver),
+            &dk_pub,
+            &receiver,
+            &sender,
+            Value {
+                amount: Amount::from(17u128),
+                asset_id: asset::Id(decaf377::Fq::from(77u64)),
+            },
+            false,
+            decaf377::Fq::from(9u64),
+        )
+        .expect("transfer ciphertext should build")
+        .ciphertext
+        .to_bytes()
+    }
+
+    fn dummy_context<'a>(tier_mode: &'a str, subject: &'a str) -> AuditContext<'a> {
+        let cli = Box::leak(Box::new(cli_tool::CliTool::new(
+            "cli-tool",
+            "http://127.0.0.1:8080".to_string(),
+        )));
+        let orbis = Box::leak(Box::new(OrbisContext {
+            object_id: "object".to_string(),
+            enc_cmt: Element::GENERATOR,
+        }));
+        let dk = Box::leak(Box::new(Fr::from(3u64)));
+        let dk_pub = Box::leak(Box::new(Element::GENERATOR * Fr::from(3u64)));
+        let mut known_transmission_keys = HashSet::new();
+        known_transmission_keys.insert(subject.to_string());
+        let known_transmission_keys = Box::leak(Box::new(known_transmission_keys));
+
+        AuditContext {
+            cli,
+            orbis,
+            dk,
+            dk_pub,
+            ack: Element::GENERATOR,
+            b_d_hex: "00",
+            ring_pk_hex: "11",
+            subject_transmission_key_hex: subject,
+            known_transmission_keys,
+            tier_mode,
+        }
+    }
+
+    #[test]
+    fn extract_transfer_ciphertext_ignores_non_transfer_actions() {
+        let split_action = penumbra_sdk_proto::core::transaction::v1::Action {
+            action: Some(Action::Split(Split {
+                body: Some(SplitBody::default()),
+                ..Default::default()
+            })),
+        };
+        let consolidate_action = penumbra_sdk_proto::core::transaction::v1::Action {
+            action: Some(Action::Consolidate(Consolidate {
+                body: Some(ConsolidateBody::default()),
+                ..Default::default()
+            })),
+        };
+
+        assert!(extract_transfer_ciphertext(&split_action).is_none());
+        assert!(extract_transfer_ciphertext(&consolidate_action).is_none());
+    }
+
+    #[test]
+    fn extract_transfer_ciphertext_reads_first_non_empty_transfer_output() {
+        let ciphertext_bytes = make_transfer_ciphertext_bytes();
+        let transfer_action = penumbra_sdk_proto::core::transaction::v1::Action {
+            action: Some(Action::Transfer(Transfer {
+                body: Some(TransferBody {
+                    outputs: vec![
+                        TransferOutputBody::default(),
+                        TransferOutputBody {
+                            compliance_ciphertext: ciphertext_bytes.clone(),
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+        };
+
+        let extracted = extract_transfer_ciphertext(&transfer_action)
+            .expect("transfer action should expose a valid ciphertext");
+        assert_eq!(extracted.to_bytes(), ciphertext_bytes);
+    }
+
+    #[test]
+    fn candidate_to_entry_uses_semantic_transfer_rendering() {
+        let tx_ref = DetectedTxRef {
+            height: 290,
+            tx_hash: "tx".to_string(),
+            action_index: 1,
+            asset_id: "asset".to_string(),
+            is_flagged: false,
+        };
+        let self_tk = "aa".repeat(32);
+        let counterparty_tk = "bb".repeat(32);
+
+        let default_ctx = dummy_context("default", &self_tk);
+        let default_entry = candidate_to_entry(
+            &tx_ref,
+            TransferMatch::Sender {
+                amount: Amount::from(400u128),
+                receiver: AddressData {
+                    transmission_key_hex: counterparty_tk.clone(),
+                },
+            },
+            &default_ctx,
+        );
+        assert_eq!(default_entry.amount, "400");
+        assert_eq!(default_entry.self_address, self_tk);
+        assert_eq!(default_entry.counterparty, "");
+        assert_eq!(default_entry.decrypted_via, "core");
+
+        let extension_ctx = dummy_context("extension", &self_tk);
+        let extension_entry = candidate_to_entry(
+            &tx_ref,
+            TransferMatch::Receiver {
+                amount: Amount::from(600u128),
+                sender: AddressData {
+                    transmission_key_hex: counterparty_tk.clone(),
+                },
+            },
+            &extension_ctx,
+        );
+        assert_eq!(extension_entry.amount, "600");
+        assert_eq!(extension_entry.self_address, self_tk);
+        assert_eq!(extension_entry.counterparty, counterparty_tk);
+        assert_eq!(extension_entry.decrypted_via, "ext");
+    }
 }

@@ -16,9 +16,7 @@ pub use metrics::*;
 /// Registers all metrics used by this crate.
 pub fn register_metrics() {
     cnidarium::register_metrics();
-    penumbra_sdk_stake::component::register_metrics();
-    penumbra_sdk_funding::component::register_metrics();
-    penumbra_sdk_dex::component::register_metrics();
+    penumbra_sdk_validator::component::register_metrics();
     // TODO: this should be under component::
     penumbra_sdk_governance::register_metrics();
     penumbra_sdk_ibc::component::register_metrics();

@@ -8,11 +8,7 @@ use std::{
 
 use penumbra_sdk_proto::{penumbra::core::component::governance::v1 as pb, DomainType};
 
-use crate::{
-    params::GovernanceParameters,
-    proposal_state::{Outcome as StateOutcome, Withdrawn},
-    vote::Vote,
-};
+use crate::{params::GovernanceParameters, proposal_state::Outcome as StateOutcome, vote::Vote};
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(try_from = "pb::Tally", into = "pb::Tally")]
@@ -123,16 +119,12 @@ impl Outcome {
     }
 }
 
-impl<T> From<Outcome> for StateOutcome<T> {
+impl From<Outcome> for StateOutcome {
     fn from(outcome: Outcome) -> Self {
         match outcome {
             Outcome::Pass => Self::Passed,
-            Outcome::Fail => Self::Failed {
-                withdrawn: Withdrawn::No,
-            },
-            Outcome::Slash => Self::Slashed {
-                withdrawn: Withdrawn::No,
-            },
+            Outcome::Fail => Self::Failed,
+            Outcome::Slash => Self::Slashed,
         }
     }
 }
@@ -147,10 +139,10 @@ impl Tally {
     }
 
     fn yes_ratio(&self) -> Ratio {
-        Ratio::new(self.yes, (self.yes + self.no).min(1))
-        // ^ in the above, the `.min(1)` is to prevent a divide-by-zero error when the only votes
-        // cast are abstains -- this results in a 0:1 ratio in that case, which will never pass, as
-        // desired in that situation
+        let non_abstain_votes = self.yes + self.no;
+        Ratio::new(self.yes, non_abstain_votes.max(1))
+        // ^ when the only votes cast are abstains, treat the yes ratio as 0/1 to avoid
+        // division-by-zero while still ensuring the proposal cannot pass.
     }
 
     pub fn outcome(self, total_voting_power: u64, params: &GovernanceParameters) -> Outcome {
@@ -227,6 +219,53 @@ impl FromStr for Ratio {
             numerator,
             denominator,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Outcome, Ratio, Tally};
+    use crate::{params::GovernanceParameters, vote::Vote};
+
+    fn tally(votes: &[(Vote, u64)]) -> Tally {
+        votes
+            .iter()
+            .copied()
+            .map(Tally::from)
+            .fold(Tally::default(), |acc, tally| acc + tally)
+    }
+
+    #[test]
+    fn mixed_yes_and_no_below_threshold_fails() {
+        let params = GovernanceParameters::default();
+        let tally = tally(&[(Vote::Yes, 50), (Vote::No, 50)]);
+
+        assert_eq!(tally.outcome(100, &params), Outcome::Fail);
+    }
+
+    #[test]
+    fn mixed_yes_and_no_above_threshold_passes() {
+        let params = GovernanceParameters::default();
+        let tally = tally(&[(Vote::Yes, 51), (Vote::No, 49)]);
+
+        assert_eq!(tally.outcome(100, &params), Outcome::Pass);
+    }
+
+    #[test]
+    fn abstain_only_tally_never_passes() {
+        let params = GovernanceParameters::default();
+        let tally = tally(&[(Vote::Abstain, 100)]);
+
+        assert_eq!(tally.outcome(100, &params), Outcome::Fail);
+    }
+
+    #[test]
+    fn slash_threshold_is_checked_before_pass_threshold() {
+        let mut params = GovernanceParameters::default();
+        params.proposal_slash_threshold = Ratio::new(3, 5);
+        let tally = tally(&[(Vote::Yes, 20), (Vote::No, 70), (Vote::Abstain, 10)]);
+
+        assert_eq!(tally.outcome(100, &params), Outcome::Slash);
     }
 }
 

@@ -1,93 +1,60 @@
 {
   "actions": [
     {
-      "validatorDefinition": {
-        "validator": {
-          "identityKey": {
-            "ik": "gqtElNJBPk2s+q0pRSL1Lhe9Asz40pfEFbw5kWlUvQs="
+      "validatorVote": {
+        "body": {
+          "proposal": "71667125",
+          "vote": {
+            "vote": "VOTE_NO"
           },
-          "consensusKey": "1gfKohIJmB3uEzQyi6CoEZf7hXIkZRnzU/J1tu830k8=",
-          "name": "test validator",
-          "enabled": true,
+          "identityKey": {
+            "ik": "EtqDXY8Yz8h9kU3waQxEjM4RQEnMFHfNwlWASXiU+us="
+          },
           "governanceKey": {
-            "gk": "gqtElNJBPk2s+q0pRSL1Lhe9Asz40pfEFbw5kWlUvQs="
+            "gk": "Kt9dPDDc8vw9GyFT7RNtx+jM8IWqTJmb2ItTTwwKMg8="
+          },
+          "reason": {
+            "reason": "m"
           }
         },
-        "authSig": "QEfBKXuO6lS1j3KSDRw5UGRgyyqhl2EMz7e7JupMeAyDM/7YZGhbI+haNgOj4lIeS5hoSEXxfRKpcXJYqheWAw=="
-      }
-    },
-    {
-      "delegate": {
-        "validatorIdentity": {
-          "ik": "/qL/qADNZ9fKgxll5wfqPJP08S1eGXo8vDCUVqXvZXw="
-        },
-        "epochIndex": "386",
-        "unbondedAmount": {
-          "lo": "176654491684834730"
-        },
-        "delegationAmount": {
-          "lo": "644297065650087116"
+        "authSig": {
+          "inner": "uAB1nLHkFAyqtwbtozS2F14SteEL90oBpP4/VSHIiAaD1LvyRxpvCHY7OOIx1vTMSAW6im2G5njGxLX9+6bfAA=="
         }
       }
     },
     {
-      "positionWithdraw": {
-        "reserves": {
-          "r1": {
-            "lo": "537059181814160310"
-          },
-          "r2": {
-            "lo": "765844856235123844"
-          }
-        },
-        "positionId": {
-          "inner": "/YUAsvSmR3TKIukZILDc1FyI7YLBpfeZ9tPKxJG5KdU="
-        },
-        "pair": {
-          "asset1": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          },
-          "asset2": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          }
-        },
-        "sequence": "1"
+      "ibcRelayAction": {
+        "rawAction": {
+          "typeUrl": "/ibc.core.channel.v1.MsgRecvPacket",
+          "value": "CrMBCPPg3x0SC2RlZmF1bHRQb3J0GgljaGFubmVsLTAiC2RlZmF1bHRQb3J0KgljaGFubmVsLTAyZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA6DAjm1YeRAxCqlfyOAkC4lZvD056L1BgSAgoAGgwI5tWHkQMQqpX8jgIijwFwZW51bWJyYTFyN3VjaHA0cWN0eTg3anVjbWU0OG1lNWc1dzN6czBqYW10NGRuNXI5cGY0cG54dWs3a2N6aHJ3ZTRhNHNqc2tlZmczZGF3NG1rdjcyZmxyOHR4aHYzNnFocGphZjB0NHhka2gyd2tyY2tkeWdtdzA4NjljOGUyN2wya2xwbDhoeDYweWU0NA=="
+        }
       }
     },
     {
-      "actionDutchAuctionSchedule": {
-        "description": {
-          "input": {
-            "amount": {
-              "lo": "946097260423965195"
-            },
-            "assetId": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            }
-          },
-          "outputId": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          },
-          "maxOutput": {
-            "lo": "595273956477477451"
-          },
-          "minOutput": {
-            "lo": "198105271265649552"
-          },
-          "startHeight": "461325602",
-          "endHeight": "461325603",
-          "stepCount": "156115871",
-          "nonce": "S7VsB2JAhYF5b2WSYr9AQeQjZCs80xYtRV6ygquS/jw="
+      "proposalSubmit": {
+        "proposal": {
+          "title": "tkvrskqgvmema-95",
+          "description": "wqzu-6284949628703751956666150340",
+          "signaling": {}
+        },
+        "proposer": {
+          "ik": "HLATS0j4IwIwdii7X5StYcOn7M/Eq0J2EabY2d/yvAk="
+        },
+        "governanceKey": {
+          "gk": "sgRj4pvUmscLMcf/3l6aF9kf2moa3B7F7ktFkWpRDQ0="
+        },
+        "authSig": {
+          "inner": "KFx0JmTvpPXj9f24VisNXG0SWbY72bhKuDSrgi97BA4a7+/7iMLU9yZt4/T+ryjXW5rzj1j60OyO2TeIgOb/Aw=="
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "5474787099",
-    "chainId": "dhqsssth-17867692514130452110575",
+    "expiryHeight": "6789315348",
+    "chainId": "rmwaoaccalyy-17215108420917562442492",
     "fee": {
       "amount": {
-        "lo": "844068578733228046"
+        "lo": "791717474659336874"
       }
     }
   }

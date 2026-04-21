@@ -10,7 +10,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 	gnarkte "github.com/consensys/gnark/std/algebra/native/twistededwards"
 	"github.com/consensys/gnark/test"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/primitives"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/primitives"
 )
 
 type dleqVerifyCircuit struct {

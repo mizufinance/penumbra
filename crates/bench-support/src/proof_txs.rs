@@ -11,12 +11,14 @@ use penumbra_sdk_app::{
     server::consensus::{Consensus, ConsensusService},
     APP_VERSION, SUBSTORE_PREFIXES,
 };
-use penumbra_sdk_asset::STAKING_TOKEN_DENOM;
+use penumbra_sdk_asset::BASE_ASSET_DENOM;
 use penumbra_sdk_keys::test_keys;
 use penumbra_sdk_mock_client::MockClient;
 use penumbra_sdk_mock_consensus::TestNode;
 use penumbra_sdk_proto::DomainType;
-use penumbra_sdk_shielded_pool::{genesis::Allocation, OutputPlan, SpendPlan};
+use penumbra_sdk_shielded_pool::{
+    genesis::Allocation, ShieldedInputPlan, ShieldedOutputPlan, TransferPlan,
+};
 use penumbra_sdk_transaction::{
     memo::MemoPlaintext, plan::MemoPlan, Transaction, TransactionParameters, TransactionPlan,
 };
@@ -27,7 +29,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 const POOL_SCHEMA_VERSION: u32 = 2;
-const POOL_TX_SHAPE: &str = "synthetic-preconsensus-spend-output-v2";
+const POOL_TX_SHAPE: &str = "synthetic-preconsensus-transfer-v2";
 const DEFAULT_SHARD_TX_COUNT: usize = 1_000;
 const SYNTHETIC_BENCHMARK_TIME_RFC3339: &str = "2026-01-01T00:00:00Z";
 
@@ -60,7 +62,7 @@ pub async fn setup_proof_storage(
 
     let allocations: Vec<Allocation> = std::iter::repeat(Allocation {
         raw_amount: 1_000_000u128.into(),
-        raw_denom: STAKING_TOKEN_DENOM.deref().base_denom().denom,
+        raw_denom: BASE_ASSET_DENOM.deref().base_denom().denom,
         address: test_keys::ADDRESS_0.to_owned(),
     })
     .take(n)
@@ -135,15 +137,18 @@ pub async fn build_proof_transactions(
                 .expect("note position exists");
 
             let mut plan = TransactionPlan {
-                actions: vec![
-                    SpendPlan::new(&mut OsRng, note.clone(), position).into(),
-                    OutputPlan::new(
+                actions: vec![TransferPlan::from_spend_output(
+                    ShieldedInputPlan::new(&mut OsRng, note.clone(), position).into(),
+                    ShieldedOutputPlan::new(
                         &mut OsRng,
                         note.value(),
                         test_keys::ADDRESS_1.deref().clone(),
                     )
                     .into(),
-                ],
+                    Default::default(),
+                )?
+                .into()],
+                fee_funding: None,
                 memo: Some(MemoPlan::new(
                     &mut OsRng,
                     MemoPlaintext::blank_memo(test_keys::ADDRESS_0.deref().clone()),

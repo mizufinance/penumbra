@@ -10,11 +10,11 @@ use {
     penumbra_sdk_mock_client::MockClient,
     penumbra_sdk_mock_consensus::TestNode,
     penumbra_sdk_proto::DomainType,
-    penumbra_sdk_stake::{
+    penumbra_sdk_validator::{
         component::validator_handler::ValidatorDataRead as _,
-        params::{equal_validator_voting_power, StakeParameters},
+        params::{equal_validator_voting_power, ValidatorParameters},
         validator::{self, State, Validator},
-        FundingStreams, GovernanceKey, IdentityKey,
+        GovernanceKey, IdentityKey,
     },
     rand_core::OsRng,
     tap::Tap,
@@ -30,8 +30,8 @@ async fn app_activates_post_genesis_validator_definitions_with_equal_weight() ->
 
     let app_state = AppState::Content(Content {
         chain_id: TestNode::<()>::CHAIN_ID.to_string(),
-        stake_content: penumbra_sdk_stake::genesis::Content {
-            stake_params: StakeParameters::default(),
+        validator_content: penumbra_sdk_validator::genesis::Content {
+            validator_params: ValidatorParameters::default(),
             ..Default::default()
         },
         ..genesis::Content::default()
@@ -65,7 +65,6 @@ async fn app_activates_post_genesis_validator_definitions_with_equal_weight() ->
         name: "bootstrap validator".to_string(),
         website: String::default(),
         description: String::default(),
-        funding_streams: FundingStreams::default(),
     };
 
     let plan = {
@@ -82,6 +81,7 @@ async fn app_activates_post_genesis_validator_definitions_with_equal_weight() ->
             actions: vec![action.into()],
             memo: None,
             detection_data: None,
+            fee_funding: None,
             transaction_parameters: TransactionParameters {
                 chain_id: TestNode::<()>::CHAIN_ID.to_string(),
                 ..Default::default()
@@ -111,15 +111,7 @@ async fn app_activates_post_genesis_validator_definitions_with_equal_weight() ->
         Some(equal_validator_voting_power()),
         "post-genesis validators should receive equal voting power"
     );
-    assert_eq!(
-        snapshot
-            .get_validator_pool_size(&new_validator.identity_key)
-            .await,
-        Some(0u64.into()),
-        "post-genesis validators should not receive synthetic delegation pool size"
-    );
-
-    use penumbra_sdk_stake::component::ConsensusIndexRead;
+    use penumbra_sdk_validator::component::ConsensusIndexRead;
     let consensus_set = snapshot.get_consensus_set().await?;
     assert!(
         consensus_set.contains(&new_validator.identity_key),

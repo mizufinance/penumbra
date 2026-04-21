@@ -3,7 +3,6 @@ use crate::{
         action_handler::ActionHandler, validator_handler::ValidatorDataRead,
         validator_handler::ValidatorManager,
     },
-    rate::RateData,
     validator,
 };
 use anyhow::{ensure, Context, Result};
@@ -31,10 +30,6 @@ impl ActionHandler for validator::Definition {
             anyhow::bail!("validator description must be less than 280 characters")
         }
 
-        if self.validator.funding_streams.len() > 8 {
-            anyhow::bail!("validators can declare at most 8 funding streams")
-        }
-
         // This prevents an attacker who compromises a validator identity signing key from locking
         // the validator in an enabled state permanently, instead making it so that the original
         // operator always has the option of disabling the validator permanently, regardless of what
@@ -49,20 +44,6 @@ impl ActionHandler for validator::Definition {
         VerificationKey::try_from(self.validator.identity_key.0)
             .and_then(|vk| vk.verify(&definition_bytes, &self.auth_sig))
             .context("validator definition signature failed to verify")?;
-
-        let total_funding_bps = self
-            .validator
-            .funding_streams
-            .iter()
-            .map(|fs| fs.rate_bps() as u64)
-            .sum::<u64>();
-
-        if total_funding_bps > 10_000 {
-            anyhow::bail!(
-                "validator defined {} bps of funding streams, greater than 10000bps (= 100%)",
-                total_funding_bps
-            );
-        }
 
         Ok(())
     }
@@ -127,18 +108,8 @@ impl ActionHandler for validator::Definition {
                     "should be able to update validator during validator definition execution",
                 )?;
         } else {
-            let validator_key = new_validator.identity_key;
-
-            // The validator starts with a reward rate of 0 and an exchange rate
-            // of 1, expressed in bps^2 (i.e. 1_0000_0000 is 1.0).
-            let initial_rate_data = RateData {
-                identity_key: validator_key,
-                validator_reward_rate: 0u128.into(),
-                validator_exchange_rate: 1_0000_0000u128.into(),
-            };
-
             state
-                .add_validator(new_validator.clone(), initial_rate_data)
+                .add_validator(new_validator.clone())
                 .await
                 .context("should be able to add validator during validator definition execution")?;
         }

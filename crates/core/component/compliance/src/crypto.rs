@@ -16,14 +16,15 @@ use ark_ff::Zero;
 use decaf377::{Element, Fq, Fr};
 use once_cell::sync::Lazy;
 use penumbra_sdk_asset::asset;
-use penumbra_sdk_keys::Address;
 use penumbra_sdk_num::Amount;
-use rand_core::{CryptoRng, RngCore};
 
 use sha2::{Digest, Sha256};
 
 use crate::issuer_keys::DETECTION_TIER_BYTES;
 use crate::structs::{ComplianceCiphertext, DleqProof};
+
+#[cfg(test)]
+use penumbra_sdk_keys::Address;
 
 /// Domain separator for SHA256 derivation — matches Orbis `DERIVATION_DOMAIN` exactly.
 const DERIVATION_DOMAIN: &[u8; 23] = b"elgamal-derivation-v1\0\0";
@@ -52,16 +53,24 @@ pub static COMPLIANCE_STREAM_CIPHER_DOMAIN: Lazy<Fq> = Lazy::new(|| {
     )
 });
 
-/// The "black hole" compliance key for unregulated assets.
+fn derive_unregulated_sink_point(domain_sep: &[u8]) -> Element {
+    let point_domain = Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(domain_sep).as_bytes());
+    Element::encode_to_curve(&point_domain)
+}
+
+/// Trapdoorless issuer detection sink for unregulated assets.
 ///
-/// For unregulated assets, compliance data is encrypted to this key, making it
-/// effectively unrecoverable since no one knows the discrete log.
-/// This is a NUMS point derived from a domain separator.
-pub static BLACK_HOLE_ACK: Lazy<Element> = Lazy::new(|| {
-    let hash = blake2b_simd::blake2b(b"penumbra.compliance.black_hole_ack");
-    let scalar = Fr::from_le_bytes_mod_order(hash.as_bytes());
-    Element::GENERATOR * scalar
-});
+/// This preserves a uniform transfer ciphertext shape without requiring a
+/// real issuer detection key for unregulated assets.
+pub static UNREGULATED_SINK_DK_PUB: Lazy<Element> =
+    Lazy::new(|| derive_unregulated_sink_point(b"penumbra.compliance.unregulated.dk-pub.v1"));
+
+/// Trapdoorless ring/ACK sink for unregulated assets.
+///
+/// This preserves uniform ACK-derived encryption routing without reusing the
+/// detection sink point or requiring any Orbis-managed ring for unregulated assets.
+pub static UNREGULATED_SINK_RING_PK: Lazy<Element> =
+    Lazy::new(|| derive_unregulated_sink_point(b"penumbra.compliance.unregulated.ring-pk.v1"));
 
 /// Decrypted compliance data.
 #[derive(Clone, Debug)]
@@ -220,226 +229,6 @@ pub fn verify_dleq_native(
     Ok(())
 }
 
-/// Compute DLEQ proof for a Spend action (1 tier: core, tier=1).
-pub fn compute_spend_dleq(r_s: Fr, k: Fr, ack: &Element, metadata_hash: Fq) -> DleqProof {
-    let epk = Element::GENERATOR * r_s;
-    compute_dleq_native(r_s, k, ack, &epk, metadata_hash)
-}
-
-/// Compute DLEQ proofs for an Output action (3 tiers: core=1, ext=2, sext=3).
-///
-/// Returns (core_proof, ext_proof, sext_proof).
-pub fn compute_output_dleqs(
-    r_1: Fr,
-    r_2: Fr,
-    r_3: Fr,
-    k_1: Fr,
-    k_2: Fr,
-    k_3: Fr,
-    ack_receiver: &Element,
-    ack_sender: &Element,
-    metadata_hash: Fq,
-) -> (DleqProof, DleqProof, DleqProof) {
-    let epk_1 = Element::GENERATOR * r_1;
-    let epk_2 = Element::GENERATOR * r_2;
-    let epk_3 = Element::GENERATOR * r_3;
-
-    let core_proof = compute_dleq_native(r_1, k_1, ack_receiver, &epk_1, metadata_hash);
-    let ext_proof = compute_dleq_native(r_2, k_2, ack_receiver, &epk_2, metadata_hash);
-    let sext_proof = compute_dleq_native(r_3, k_3, ack_sender, &epk_3, metadata_hash);
-
-    (core_proof, ext_proof, sext_proof)
-}
-
-/// Encryption result for a Spend action.
-#[derive(Clone, Debug)]
-pub struct SpendEncryptionResult {
-    pub ciphertext: ComplianceCiphertext,
-    /// Ephemeral secret r_s (circuit witness).
-    pub r_s: Fr,
-    /// r_s × DK_pub (for issuer detection).
-    pub issuer_shared_secret: Element,
-}
-
-/// Encryption result for an Output action.
-#[derive(Clone, Debug)]
-pub struct OutputEncryptionResult {
-    pub ciphertext: ComplianceCiphertext,
-    /// Ephemeral secrets (circuit witnesses).
-    pub r_1: Fr,
-    pub r_2: Fr,
-    pub r_3: Fr,
-    /// r_1 × DK_pub (for issuer detection).
-    pub issuer_shared_secret: Element,
-}
-
-/// Encrypt compliance details for a Spend action (detection + core).
-///
-/// EPK_1 = r_s × G. Detection via r_s × DK_pub.
-/// Core C2: seed + (r_s × ACK_core).compress(). Flagged: seed + (r_s × DK_pub).compress().
-pub fn encrypt_spend(
-    mut rng: impl RngCore + CryptoRng,
-    ack_core: &Element,
-    dk_pub: &Element,
-    self_address: &Address,
-    asset_id: asset::Id,
-    amount: Amount,
-    is_flagged: bool,
-    salt: Fq,
-) -> anyhow::Result<SpendEncryptionResult> {
-    let r_s = Fr::rand(&mut rng);
-    let epk_1 = Element::GENERATOR * r_s;
-    let ss_issuer = *dk_pub * r_s;
-
-    let seed_core = Fq::rand(&mut rng);
-
-    let c2_core = if is_flagged {
-        seed_core + ss_issuer.vartime_compress_to_field()
-    } else {
-        let ss_core = *ack_core * r_s;
-        seed_core + ss_core.vartime_compress_to_field()
-    };
-
-    let detection_tag = compute_detection_tier(&ss_issuer, &epk_1, &asset_id, is_flagged, salt);
-
-    let encrypted_core =
-        encrypt_tier_bytes(&amount_and_address_bytes(&amount, self_address), seed_core);
-
-    Ok(SpendEncryptionResult {
-        ciphertext: ComplianceCiphertext::new_spend(epk_1, c2_core, detection_tag, encrypted_core),
-        r_s,
-        issuer_shared_secret: ss_issuer,
-    })
-}
-
-/// Encrypt compliance details for an Output action (detection + core + ext + sext).
-///
-/// Three independent r_1, r_2, r_3. Detection via r_1 × DK_pub.
-/// Core/ext use `ack_receiver`, sext uses `ack_sender`. Flagged: all use r_i × DK_pub.
-pub fn encrypt_output(
-    mut rng: impl RngCore + CryptoRng,
-    ack_receiver: &Element,
-    ack_sender: &Element,
-    dk_pub: &Element,
-    self_address: &Address,
-    counterparty_address: &Address,
-    asset_id: asset::Id,
-    amount: Amount,
-    is_flagged: bool,
-    salt: Fq,
-) -> anyhow::Result<OutputEncryptionResult> {
-    let r_1 = Fr::rand(&mut rng);
-    let r_2 = Fr::rand(&mut rng);
-    let r_3 = Fr::rand(&mut rng);
-
-    let epk_1 = Element::GENERATOR * r_1;
-    let epk_2 = Element::GENERATOR * r_2;
-    let epk_3 = Element::GENERATOR * r_3;
-
-    let ss_issuer = *dk_pub * r_1;
-
-    let seed_core = Fq::rand(&mut rng);
-    let seed_ext = Fq::rand(&mut rng);
-    let seed_sext = Fq::rand(&mut rng);
-
-    let (c2_core, c2_ext, c2_sext) = if is_flagged {
-        let ss_1 = ss_issuer.vartime_compress_to_field();
-        let ss_2 = (*dk_pub * r_2).vartime_compress_to_field();
-        let ss_3 = (*dk_pub * r_3).vartime_compress_to_field();
-        (seed_core + ss_1, seed_ext + ss_2, seed_sext + ss_3)
-    } else {
-        let ss_core = (*ack_receiver * r_1).vartime_compress_to_field();
-        let ss_ext_v = (*ack_receiver * r_2).vartime_compress_to_field();
-        let ss_sext_v = (*ack_sender * r_3).vartime_compress_to_field();
-        (
-            seed_core + ss_core,
-            seed_ext + ss_ext_v,
-            seed_sext + ss_sext_v,
-        )
-    };
-
-    let detection_tag = compute_detection_tier(&ss_issuer, &epk_1, &asset_id, is_flagged, salt);
-
-    // Core: amount + self address (80 bytes → 3 Fq)
-    let encrypted_core =
-        encrypt_tier_bytes(&amount_and_address_bytes(&amount, self_address), seed_core);
-
-    // Extension: counterparty address (64 bytes → 3 Fq)
-    let encrypted_ext = encrypt_tier_bytes(&address_bytes(counterparty_address), seed_ext);
-
-    // Sender-extension: amount + self address (80 bytes → 3 Fq)
-    let encrypted_sext =
-        encrypt_tier_bytes(&amount_and_address_bytes(&amount, self_address), seed_sext);
-
-    Ok(OutputEncryptionResult {
-        ciphertext: ComplianceCiphertext::new_output(
-            epk_1,
-            epk_2,
-            epk_3,
-            c2_core,
-            c2_ext,
-            c2_sext,
-            detection_tag,
-            encrypted_core,
-            encrypted_ext,
-            encrypted_sext,
-        ),
-        r_1,
-        r_2,
-        r_3,
-        issuer_shared_secret: ss_issuer,
-    })
-}
-
-/// Compute the detection tier for a compliance ciphertext.
-///
-/// Derives the Poseidon seed from `ss_issuer` and `epk_1`, then encrypts
-/// the detection plaintext (asset_id with optional flag bit) and salt.
-/// Returns [asset_id+flag (32 bytes), salt (32 bytes)] = 64 bytes.
-fn compute_detection_tier(
-    ss_issuer: &Element,
-    epk_1: &Element,
-    asset_id: &asset::Id,
-    is_flagged: bool,
-    salt: Fq,
-) -> [u8; DETECTION_TIER_BYTES] {
-    let epk_1_fq = epk_1.vartime_compress_to_field();
-    let seed_detection = poseidon377::hash_2(
-        &ISSUER_DETECTION_DOMAIN,
-        (ss_issuer.vartime_compress_to_field(), epk_1_fq),
-    );
-    // ct[0]: asset_id + flag + keystream_0
-    let pt_fq = crate::issuer_keys::detection_plaintext_fq(asset_id, is_flagged);
-    let keystream_0 = poseidon377::hash_2(&seed_detection, (Fq::zero(), seed_detection));
-    let ct_0 = (pt_fq + keystream_0).to_bytes();
-
-    // ct[1]: salt + keystream_1
-    let keystream_1 = poseidon377::hash_2(&seed_detection, (Fq::from(1u64), seed_detection));
-    let ct_1 = (salt + keystream_1).to_bytes();
-
-    let mut result = [0u8; DETECTION_TIER_BYTES];
-    result[..32].copy_from_slice(&ct_0);
-    result[32..].copy_from_slice(&ct_1);
-    result
-}
-
-/// Serialize amount + address as 80 bytes for Poseidon encryption.
-fn amount_and_address_bytes(amount: &Amount, address: &Address) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(80);
-    bytes.extend_from_slice(&amount.to_le_bytes());
-    bytes.extend_from_slice(&address.diversified_generator().vartime_compress().0);
-    bytes.extend_from_slice(&address.transmission_key().0);
-    bytes
-}
-
-/// Serialize address as 64 bytes for Poseidon encryption.
-fn address_bytes(address: &Address) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(64);
-    bytes.extend_from_slice(&address.diversified_generator().vartime_compress().0);
-    bytes.extend_from_slice(&address.transmission_key().0);
-    bytes
-}
-
 /// Encrypt a byte slice using Poseidon stream cipher with the given seed.
 pub fn encrypt_tier_bytes(plaintext: &[u8], seed: Fq) -> Vec<u8> {
     let mut encrypted = Vec::new();
@@ -493,9 +282,9 @@ pub fn decrypt_detection_tier(
 
 /// Decrypt compliance data using pre-computed shared secrets.
 ///
-/// For Spend ciphertexts, `ss_ext` should be None.
-/// For flagged Spend: ss_detection = ss_core = dk × epk_1.
-/// For flagged Output: ss_detection = ss_core = dk × epk_1, ss_ext = dk × epk_2.
+/// For transfer-input ciphertexts, `ss_ext` should be None.
+/// For flagged transfer-input ciphertexts: ss_detection = ss_core = dk × epk_1.
+/// For flagged transfer-output ciphertexts: ss_detection = ss_core = dk × epk_1, ss_ext = dk × epk_2.
 /// For Orbis path: shared secrets are derived from re-encryption commitments.
 pub fn decrypt(
     ss_detection: &Element,
@@ -544,7 +333,7 @@ pub fn decrypt(
     let self_trans_key_bytes: [u8; 32] =
         core_plaintext_bytes[48..80].try_into().context("self pk")?;
 
-    // Decrypt ext if present (Output ciphertext)
+    // Decrypt ext if present (transfer-output ciphertext)
     let (counterparty_div_gen, counterparty_trans_key_bytes) =
         if let (Some(c2_ext), Some(encrypted_ext), Some(ss_ext)) =
             (&ciphertext.c2_ext, &ciphertext.encrypted_ext, ss_ext)
@@ -574,44 +363,6 @@ pub fn decrypt(
     })
 }
 
-/// Decrypt a flagged Spend ciphertext using issuer's detection key.
-pub fn decrypt_flagged_spend(
-    dk: &Fr,
-    ciphertext: &ComplianceCiphertext,
-    expected_asset_id: &asset::Id,
-) -> anyhow::Result<DecryptedComplianceData> {
-    let ss = ciphertext.epk_1 * *dk;
-    decrypt(
-        &ss,
-        &ss,
-        None,
-        &ciphertext.epk_1,
-        ciphertext,
-        expected_asset_id,
-    )
-}
-
-/// Decrypt a flagged Output ciphertext using issuer's detection key.
-pub fn decrypt_flagged_output(
-    dk: &Fr,
-    ciphertext: &ComplianceCiphertext,
-    expected_asset_id: &asset::Id,
-) -> anyhow::Result<DecryptedComplianceData> {
-    let ss_1 = ciphertext.epk_1 * *dk;
-    let epk_2 = ciphertext
-        .epk_2
-        .ok_or_else(|| anyhow::anyhow!("not an output ciphertext"))?;
-    let ss_2 = epk_2 * *dk;
-    decrypt(
-        &ss_1,
-        &ss_1,
-        Some(&ss_2),
-        &ciphertext.epk_1,
-        ciphertext,
-        expected_asset_id,
-    )
-}
-
 /// Decrypt an encrypted tier using Poseidon stream cipher.
 pub fn decrypt_tier_bytes(encrypted: &[u8], seed: Fq, expected_plaintext_len: usize) -> Vec<u8> {
     let mut plaintext_bytes = Vec::new();
@@ -632,363 +383,18 @@ pub fn decrypt_tier_bytes(encrypted: &[u8], seed: Fq, expected_plaintext_len: us
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::issuer_keys::DetectionKey;
-    use crate::structs::{OUTPUT_WIRE_BYTES, SPEND_WIRE_BYTES};
     use rand_core::OsRng;
 
-    fn make_ring_keys(rng: &mut (impl RngCore + rand_core::CryptoRng)) -> (Fr, Element) {
+    fn make_ring_keys(rng: &mut (impl rand_core::RngCore + rand_core::CryptoRng)) -> (Fr, Element) {
         let sk_ring = Fr::rand(rng);
         let ring_pk = Element::GENERATOR * sk_ring;
         (sk_ring, ring_pk)
     }
 
-    /// Derive the single ACK for a user from ring_pk and their diversified basepoint.
     fn derive_ack(ring_pk: &Element, b_d_fq: Fq) -> Element {
         let d = derive_compliance_scalar(b_d_fq);
         let d_fr = Fr::from_le_bytes_mod_order(&d.to_bytes());
         *ring_pk * d_fr
-    }
-
-    #[test]
-    fn test_encrypt_decrypt_spend_flagged() {
-        let mut rng = OsRng;
-        let dk = DetectionKey::demo();
-        let dk_pub = dk.public_key();
-
-        let (_, ring_pk) = make_ring_keys(&mut rng);
-        let self_address = Address::dummy(&mut rng);
-        let asset_id = asset::Id(Fq::from(42u64));
-        let amount = Amount::from(1000u128);
-
-        let b_d_fq = self_address
-            .diversified_generator()
-            .vartime_compress_to_field();
-        let ack = derive_ack(&ring_pk, b_d_fq);
-
-        let result = encrypt_spend(
-            &mut rng,
-            &ack,
-            &dk_pub,
-            &self_address,
-            asset_id,
-            amount,
-            true,
-            Fq::zero(),
-        )
-        .expect("encryption should succeed");
-
-        assert_eq!(result.ciphertext.to_bytes().len(), SPEND_WIRE_BYTES);
-
-        let decrypted = decrypt_flagged_spend(dk.inner(), &result.ciphertext, &asset_id)
-            .expect("decryption should succeed");
-
-        assert_eq!(decrypted.asset_id, asset_id);
-        assert_eq!(decrypted.amount, amount);
-    }
-
-    #[test]
-    fn test_encrypt_decrypt_output_flagged() {
-        let mut rng = OsRng;
-        let dk = DetectionKey::demo();
-        let dk_pub = dk.public_key();
-
-        let (_, ring_pk) = make_ring_keys(&mut rng);
-        let self_address = Address::dummy(&mut rng);
-        let counterparty_address = Address::dummy(&mut rng);
-        let asset_id = asset::Id(Fq::from(42u64));
-        let amount = Amount::from(1000u128);
-
-        let receiver_b_d_fq = self_address
-            .diversified_generator()
-            .vartime_compress_to_field();
-        let sender_b_d_fq = counterparty_address
-            .diversified_generator()
-            .vartime_compress_to_field();
-
-        let ack_receiver = derive_ack(&ring_pk, receiver_b_d_fq);
-        let ack_sender = derive_ack(&ring_pk, sender_b_d_fq);
-
-        let result = encrypt_output(
-            &mut rng,
-            &ack_receiver,
-            &ack_sender,
-            &dk_pub,
-            &self_address,
-            &counterparty_address,
-            asset_id,
-            amount,
-            true,
-            Fq::zero(),
-        )
-        .expect("encryption should succeed");
-
-        assert_eq!(result.ciphertext.to_bytes().len(), OUTPUT_WIRE_BYTES);
-
-        let decrypted = decrypt_flagged_output(dk.inner(), &result.ciphertext, &asset_id)
-            .expect("decryption should succeed");
-
-        assert_eq!(decrypted.asset_id, asset_id);
-        assert_eq!(decrypted.amount, amount);
-    }
-
-    #[test]
-    fn test_encrypt_decrypt_spend_non_flagged() {
-        let mut rng = OsRng;
-        let dk = DetectionKey::demo();
-        let dk_pub = dk.public_key();
-
-        let (sk_ring, ring_pk) = make_ring_keys(&mut rng);
-        let self_address = Address::dummy(&mut rng);
-        let asset_id = asset::Id(Fq::from(42u64));
-        let amount = Amount::from(1000u128);
-
-        let b_d_fq = self_address
-            .diversified_generator()
-            .vartime_compress_to_field();
-        let ack = derive_ack(&ring_pk, b_d_fq);
-
-        let result = encrypt_spend(
-            &mut rng,
-            &ack,
-            &dk_pub,
-            &self_address,
-            asset_id,
-            amount,
-            false,
-            Fq::zero(),
-        )
-        .expect("encryption should succeed");
-
-        // Simulate Orbis decryption: effective_sk = d_fr * sk_ring
-        let d = derive_compliance_scalar(b_d_fq);
-        let d_fr = Fr::from_le_bytes_mod_order(&d.to_bytes());
-        let effective_sk = d_fr * sk_ring;
-        let ss_core = result.ciphertext.epk_1 * effective_sk;
-        let ss_detection = result.ciphertext.epk_1 * *dk.inner();
-
-        let decrypted = decrypt(
-            &ss_detection,
-            &ss_core,
-            None,
-            &result.ciphertext.epk_1,
-            &result.ciphertext,
-            &asset_id,
-        )
-        .expect("decryption should succeed");
-
-        assert_eq!(decrypted.asset_id, asset_id);
-        assert_eq!(decrypted.amount, amount);
-    }
-
-    #[test]
-    fn test_encrypt_decrypt_output_non_flagged() {
-        let mut rng = OsRng;
-        let dk = DetectionKey::demo();
-        let dk_pub = dk.public_key();
-
-        let (sk_ring, ring_pk) = make_ring_keys(&mut rng);
-        let self_address = Address::dummy(&mut rng);
-        let counterparty_address = Address::dummy(&mut rng);
-        let asset_id = asset::Id(Fq::from(42u64));
-        let amount = Amount::from(1000u128);
-
-        let receiver_b_d_fq = self_address
-            .diversified_generator()
-            .vartime_compress_to_field();
-        let sender_b_d_fq = counterparty_address
-            .diversified_generator()
-            .vartime_compress_to_field();
-
-        let ack_receiver = derive_ack(&ring_pk, receiver_b_d_fq);
-        let ack_sender = derive_ack(&ring_pk, sender_b_d_fq);
-
-        let result = encrypt_output(
-            &mut rng,
-            &ack_receiver,
-            &ack_sender,
-            &dk_pub,
-            &self_address,
-            &counterparty_address,
-            asset_id,
-            amount,
-            false,
-            Fq::zero(),
-        )
-        .expect("encryption should succeed");
-
-        // Simulate Orbis decryption path (single derivation scalar)
-        let d_receiver = derive_compliance_scalar(receiver_b_d_fq);
-        let d_receiver_fr = Fr::from_le_bytes_mod_order(&d_receiver.to_bytes());
-
-        let ss_core = result.ciphertext.epk_1 * (d_receiver_fr * sk_ring);
-        let ss_ext = result.ciphertext.epk_2.unwrap() * (d_receiver_fr * sk_ring);
-        let ss_detection = result.ciphertext.epk_1 * *dk.inner();
-
-        let decrypted = decrypt(
-            &ss_detection,
-            &ss_core,
-            Some(&ss_ext),
-            &result.ciphertext.epk_1,
-            &result.ciphertext,
-            &asset_id,
-        )
-        .expect("decryption should succeed");
-
-        assert_eq!(decrypted.asset_id, asset_id);
-        assert_eq!(decrypted.amount, amount);
-    }
-
-    #[test]
-    fn test_detection_tier_roundtrip() {
-        let mut rng = OsRng;
-        let dk = DetectionKey::demo();
-        let dk_pub = dk.public_key();
-        let asset_id = asset::Id(Fq::from(12345u64));
-
-        let (_, ring_pk) = make_ring_keys(&mut rng);
-        let self_address = Address::dummy(&mut rng);
-        let b_d_fq = self_address
-            .diversified_generator()
-            .vartime_compress_to_field();
-        let ack = derive_ack(&ring_pk, b_d_fq);
-
-        // Not flagged
-        {
-            let result = encrypt_spend(
-                &mut rng,
-                &ack,
-                &dk_pub,
-                &self_address,
-                asset_id,
-                Amount::from(100u128),
-                false,
-                Fq::zero(),
-            )
-            .unwrap();
-
-            let (decrypted_asset, is_flagged, _salt) = decrypt_detection_tier(
-                dk.inner(),
-                &result.ciphertext.epk_1,
-                &result.ciphertext.detection_tag,
-                &asset_id,
-            )
-            .unwrap();
-
-            assert_eq!(decrypted_asset, asset_id);
-            assert!(!is_flagged);
-        }
-
-        // Flagged
-        {
-            let result = encrypt_spend(
-                &mut rng,
-                &ack,
-                &dk_pub,
-                &self_address,
-                asset_id,
-                Amount::from(100u128),
-                true,
-                Fq::zero(),
-            )
-            .unwrap();
-
-            let (decrypted_asset, is_flagged, _salt) = decrypt_detection_tier(
-                dk.inner(),
-                &result.ciphertext.epk_1,
-                &result.ciphertext.detection_tag,
-                &asset_id,
-            )
-            .unwrap();
-
-            assert_eq!(decrypted_asset, asset_id);
-            assert!(is_flagged);
-        }
-    }
-
-    #[test]
-    fn test_wrong_dk_cannot_decrypt() {
-        let mut rng = OsRng;
-        let dk1 = DetectionKey::demo();
-        let dk2 = DetectionKey::from_seed(&[1u8; 32]);
-        let dk_pub = dk1.public_key();
-        let asset_id = asset::Id(Fq::from(42u64));
-
-        let (_, ring_pk) = make_ring_keys(&mut rng);
-        let self_address = Address::dummy(&mut rng);
-        let b_d_fq = self_address
-            .diversified_generator()
-            .vartime_compress_to_field();
-        let ack = derive_ack(&ring_pk, b_d_fq);
-
-        let result = encrypt_spend(
-            &mut rng,
-            &ack,
-            &dk_pub,
-            &self_address,
-            asset_id,
-            Amount::from(100u128),
-            true,
-            Fq::zero(),
-        )
-        .unwrap();
-
-        let detection_result = decrypt_detection_tier(
-            dk2.inner(),
-            &result.ciphertext.epk_1,
-            &result.ciphertext.detection_tag,
-            &asset_id,
-        );
-        assert!(detection_result.is_err());
-    }
-
-    #[test]
-    fn test_ciphertext_sizes() {
-        let mut rng = OsRng;
-        let dk = DetectionKey::demo();
-        let dk_pub = dk.public_key();
-
-        let (_, ring_pk) = make_ring_keys(&mut rng);
-        let self_address = Address::dummy(&mut rng);
-        let counterparty_address = Address::dummy(&mut rng);
-        let asset_id = asset::Id(Fq::from(42u64));
-        let amount = Amount::from(1000u128);
-
-        let b_d_fq = self_address
-            .diversified_generator()
-            .vartime_compress_to_field();
-        let cp_b_d_fq = counterparty_address
-            .diversified_generator()
-            .vartime_compress_to_field();
-        let ack_receiver = derive_ack(&ring_pk, b_d_fq);
-        let ack_sender = derive_ack(&ring_pk, cp_b_d_fq);
-
-        let spend_result = encrypt_spend(
-            &mut rng,
-            &ack_receiver,
-            &dk_pub,
-            &self_address,
-            asset_id,
-            amount,
-            false,
-            Fq::zero(),
-        )
-        .unwrap();
-        assert_eq!(spend_result.ciphertext.to_bytes().len(), SPEND_WIRE_BYTES);
-
-        let output_result = encrypt_output(
-            &mut rng,
-            &ack_receiver,
-            &ack_sender,
-            &dk_pub,
-            &self_address,
-            &counterparty_address,
-            asset_id,
-            amount,
-            false,
-            Fq::zero(),
-        )
-        .unwrap();
-        assert_eq!(output_result.ciphertext.to_bytes().len(), OUTPUT_WIRE_BYTES);
     }
 
     #[test]
@@ -1229,48 +635,6 @@ mod tests {
     }
 
     #[test]
-    fn test_detection_tier_salt_roundtrip() {
-        let mut rng = OsRng;
-        let dk = DetectionKey::demo();
-        let dk_pub = dk.public_key();
-
-        let (_, ring_pk) = make_ring_keys(&mut rng);
-        let address = Address::dummy(&mut rng);
-        let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-        let ack = derive_ack(&ring_pk, b_d_fq);
-
-        let asset_id = asset::Id(Fq::from(42u64));
-        let salt = Fq::rand(&mut rng);
-
-        let result = encrypt_spend(
-            &mut rng,
-            &ack,
-            &dk_pub,
-            &address,
-            asset_id,
-            Amount::from(100u128),
-            false,
-            salt,
-        )
-        .unwrap();
-
-        // Decrypt detection tier and verify salt roundtrips
-        let epk_1 = Element::GENERATOR * result.r_s;
-        let (decrypted_asset_id, _flagged, decrypted_salt) = decrypt_detection_tier(
-            dk.inner(),
-            &epk_1,
-            &result.ciphertext.detection_tag,
-            &asset_id,
-        )
-        .expect("can decrypt detection tier");
-        assert_eq!(decrypted_asset_id, asset_id);
-        assert_eq!(
-            decrypted_salt, salt,
-            "salt should roundtrip through detection tier"
-        );
-    }
-
-    #[test]
     fn test_fq_to_challenge_scalar_high_bits_zeroed() {
         use ark_ff::{BigInteger, PrimeField};
 
@@ -1456,11 +820,49 @@ mod tests {
     }
 
     #[test]
-    fn test_black_hole_ack_not_identity() {
+    fn test_unregulated_sink_keys_are_stable_and_non_identity() {
         assert_ne!(
-            *BLACK_HOLE_ACK,
+            *UNREGULATED_SINK_DK_PUB,
             Element::default(),
-            "BLACK_HOLE_ACK must not be the identity element"
+            "UNREGULATED_SINK_DK_PUB must not be the identity element"
+        );
+        assert_ne!(
+            *UNREGULATED_SINK_RING_PK,
+            Element::default(),
+            "UNREGULATED_SINK_RING_PK must not be the identity element"
+        );
+        assert_ne!(
+            *UNREGULATED_SINK_DK_PUB, *UNREGULATED_SINK_RING_PK,
+            "unregulated sink keys must stay role-separated"
+        );
+        assert_ne!(
+            *UNREGULATED_SINK_DK_PUB,
+            Element::GENERATOR,
+            "UNREGULATED_SINK_DK_PUB must not collapse to the generator"
+        );
+        assert_ne!(
+            *UNREGULATED_SINK_RING_PK,
+            Element::GENERATOR,
+            "UNREGULATED_SINK_RING_PK must not collapse to the generator"
+        );
+    }
+
+    #[test]
+    fn test_unregulated_sink_keys_are_hash_to_curve_points() {
+        let legacy_dk_hash = blake2b_simd::blake2b(b"penumbra.compliance.unregulated.dk-pub.v1");
+        let legacy_ring_hash = blake2b_simd::blake2b(b"penumbra.compliance.unregulated.ring-pk.v1");
+        let legacy_dk_scalar = Fr::from_le_bytes_mod_order(legacy_dk_hash.as_bytes());
+        let legacy_ring_scalar = Fr::from_le_bytes_mod_order(legacy_ring_hash.as_bytes());
+
+        assert_ne!(
+            *UNREGULATED_SINK_DK_PUB,
+            Element::GENERATOR * legacy_dk_scalar,
+            "UNREGULATED_SINK_DK_PUB must not be a public-scalar multiple of G"
+        );
+        assert_ne!(
+            *UNREGULATED_SINK_RING_PK,
+            Element::GENERATOR * legacy_ring_scalar,
+            "UNREGULATED_SINK_RING_PK must not be a public-scalar multiple of G"
         );
     }
 
@@ -1514,102 +916,5 @@ mod tests {
             h1, h3,
             "different input ordering must produce different hash"
         );
-    }
-
-    /// Verify all 3 tiers of an output ciphertext are independently decryptable
-    /// with distinct ACKs: core/ext use ack_receiver, sext uses ack_sender.
-    #[test]
-    fn test_output_three_tier_ack_isolation() {
-        use crate::scanning::{decrypt_extension, decrypt_spend_ext};
-
-        let mut rng = OsRng;
-        let dk = DetectionKey::demo();
-        let dk_pub = dk.public_key();
-
-        let (sk_ring, ring_pk) = make_ring_keys(&mut rng);
-        let receiver_address = Address::dummy(&mut rng);
-        let sender_address = Address::dummy(&mut rng);
-        let asset_id = asset::Id(Fq::from(42u64));
-        let amount = Amount::from(1000u128);
-
-        let receiver_b_d_fq = receiver_address
-            .diversified_generator()
-            .vartime_compress_to_field();
-        let sender_b_d_fq = sender_address
-            .diversified_generator()
-            .vartime_compress_to_field();
-
-        let ack_receiver = derive_ack(&ring_pk, receiver_b_d_fq);
-        let ack_sender = derive_ack(&ring_pk, sender_b_d_fq);
-
-        let result = encrypt_output(
-            &mut rng,
-            &ack_receiver,
-            &ack_sender,
-            &dk_pub,
-            &receiver_address,
-            &sender_address,
-            asset_id,
-            amount,
-            false,
-            Fq::zero(),
-        )
-        .expect("encryption should succeed");
-
-        let ct = &result.ciphertext;
-        assert_eq!(ct.to_bytes().len(), OUTPUT_WIRE_BYTES);
-
-        // Derive effective secret keys for each party
-        let d_receiver = derive_compliance_scalar(receiver_b_d_fq);
-        let d_receiver_fr = Fr::from_le_bytes_mod_order(&d_receiver.to_bytes());
-        let d_sender = derive_compliance_scalar(sender_b_d_fq);
-        let d_sender_fr = Fr::from_le_bytes_mod_order(&d_sender.to_bytes());
-
-        // Core tier: epk_1 × (d_receiver × sk_ring)
-        let ss_core = ct.epk_1 * (d_receiver_fr * sk_ring);
-        let seed_core = ct.c2_core - ss_core.vartime_compress_to_field();
-        let core_pt = decrypt_tier_bytes(&ct.encrypted_core, seed_core, 80);
-        let decrypted_amount = Amount::from_le_bytes(core_pt[0..16].try_into().unwrap());
-        assert_eq!(
-            decrypted_amount, amount,
-            "core tier should decrypt with ack_receiver"
-        );
-
-        // Ext tier: epk_2 × (d_receiver × sk_ring)
-        let ss_ext = ct.epk_2.unwrap() * (d_receiver_fr * sk_ring);
-        let ext_data = decrypt_extension(&ss_ext, ct)
-            .expect("ext decryption should succeed")
-            .expect("ext data should be present");
-        assert_eq!(
-            ext_data.counterparty_diversified_generator,
-            *sender_address.diversified_generator(),
-            "ext tier should contain sender address"
-        );
-
-        // Sext tier: epk_3 × (d_sender × sk_ring) — uses ack_sender
-        let ss_sext = ct.epk_3.unwrap() * (d_sender_fr * sk_ring);
-        let sext_data = decrypt_spend_ext(&ss_sext, ct)
-            .expect("sext decryption should succeed")
-            .expect("sext data should be present");
-        assert_eq!(sext_data.amount, amount, "sext tier should contain amount");
-        assert_eq!(
-            sext_data.recipient_diversified_generator,
-            *receiver_address.diversified_generator(),
-            "sext tier should contain receiver address"
-        );
-
-        // Cross-ACK isolation: ack_receiver key cannot decrypt sext tier
-        let ss_sext_wrong = ct.epk_3.unwrap() * (d_receiver_fr * sk_ring);
-        let wrong_sext = decrypt_spend_ext(&ss_sext_wrong, ct);
-        // Should either fail or return wrong data
-        match wrong_sext {
-            Ok(Some(data)) => {
-                assert_ne!(
-                    data.amount, amount,
-                    "wrong ACK should not recover correct sext data"
-                );
-            }
-            _ => {} // Error or None is also acceptable
-        }
     }
 }

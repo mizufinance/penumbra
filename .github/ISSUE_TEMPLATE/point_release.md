@@ -27,4 +27,4 @@ Is an external consumer blocked on a new RPC?
 ## Compatibility
 As this is a point-release, all changes must be fully compatible for all nodes and clients.
 Careful attention should be given to the delta between most recent tag on the main branch:
-https://github.com/penumbra-zone/penumbra/compare/v(X.Y.(Z-1)..main
+https://github.com/mizufinance/penumbra/compare/v(X.Y.(Z-1)..main

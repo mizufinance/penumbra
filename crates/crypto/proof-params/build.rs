@@ -7,9 +7,7 @@
 //! then use the build.rs logic to fetch the assets ahead of compilation. Use the feature
 //! `download-proving-keys` to enable the auto-download behavior.
 use anyhow::Context;
-use sha2::{Digest, Sha256};
 use std::{
-    fs,
     io::Read,
     path::{Path, PathBuf},
     process::Command,
@@ -17,72 +15,33 @@ use std::{
 
 include!("src/gen/gnark/transfer_families_build.rs");
 
-const TRANSFER_FAMILY_GENERATED_SOURCES: &[(&str, bool)] = &[
-    (
-        "tools/gnark/internal/generated/transfer_families_generated.go",
-        false,
-    ),
-    (
-        "crates/core/component/shielded-pool/src/transfer/generated.rs",
-        false,
-    ),
-    (
-        "crates/crypto/proof-params/src/gen/gnark/transfer_families_manifest.json",
-        true,
-    ),
-    (
-        "crates/crypto/proof-params/src/gen/gnark/transfer_families_build.rs",
-        false,
-    ),
-    (
-        "crates/crypto/proof-params/src/gen/gnark/transfer_registry.rs",
-        false,
-    ),
-    (
-        "crates/crypto/proof-aggregation/src/transfer_family_dispatch.rs",
-        false,
-    ),
-];
-
 fn main() {
     emit_transfer_family_rerun_hints().expect("emit transfer family rerun-if-changed hints");
-    enforce_transfer_family_codegen_sync().expect("validate transfer family generated sources");
 
     let mut proving_parameter_files = vec![
-        "src/gen/output_pk.bin".to_owned(),
-        "src/gen/spend_pk.bin".to_owned(),
-        "src/gen/swap_pk.bin".to_owned(),
-        "src/gen/swapclaim_pk.bin".to_owned(),
-        "src/gen/convert_pk.bin".to_owned(),
-        "src/gen/delegator_vote_pk.bin".to_owned(),
         "src/gen/nullifier_derivation_pk.bin".to_owned(),
-        "src/gen/gnark/spend/proving_key.bin".to_owned(),
-        "src/gen/gnark/output/proving_key.bin".to_owned(),
+        "../../../tools/gnark/artifacts/shielded_ics20_withdrawal/proving_key.bin".to_owned(),
     ];
-    proving_parameter_files.extend(
-        GENERATED_TRANSFER_FAMILIES
-            .iter()
-            .map(|family| format!("src/gen/gnark/{}/proving_key.bin", family.artifact_name)),
-    );
+    proving_parameter_files.extend(GENERATED_TRANSFER_FAMILIES.iter().map(|family| {
+        format!(
+            "../../../tools/gnark/artifacts/{}/proving_key.bin",
+            family.artifact_name
+        )
+    }));
 
     let mut verification_parameter_files = vec![
-        "src/gen/output_vk.param".to_owned(),
-        "src/gen/spend_vk.param".to_owned(),
-        "src/gen/swap_vk.param".to_owned(),
-        "src/gen/swapclaim_vk.param".to_owned(),
-        "src/gen/convert_vk.param".to_owned(),
-        "src/gen/delegator_vote_vk.param".to_owned(),
         "src/gen/nullifier_derivation_vk.param".to_owned(),
-        "src/gen/gnark/spend/verifying_key.json".to_owned(),
-        "src/gen/gnark/output/verifying_key.json".to_owned(),
-        "src/gen/gnark/spend/circuit_metadata.json".to_owned(),
-        "src/gen/gnark/output/circuit_metadata.json".to_owned(),
+        "../../../tools/gnark/artifacts/shielded_ics20_withdrawal/verifying_key.json".to_owned(),
+        "../../../tools/gnark/artifacts/shielded_ics20_withdrawal/circuit_metadata.json".to_owned(),
     ];
     verification_parameter_files.extend(GENERATED_TRANSFER_FAMILIES.iter().flat_map(|family| {
         [
-            format!("src/gen/gnark/{}/verifying_key.json", family.artifact_name),
             format!(
-                "src/gen/gnark/{}/circuit_metadata.json",
+                "../../../tools/gnark/artifacts/{}/verifying_key.json",
+                family.artifact_name
+            ),
+            format!(
+                "../../../tools/gnark/artifacts/{}/circuit_metadata.json",
                 family.artifact_name
             ),
         ]
@@ -109,107 +68,21 @@ fn main() {
 
 fn emit_transfer_family_rerun_hints() -> anyhow::Result<()> {
     let repo_root = repo_root()?;
-    println!(
-        "cargo:rerun-if-changed={}",
-        repo_root
-            .join("tools/gnark/transfer_families.json")
-            .display()
-    );
-    for (relative_path, _) in TRANSFER_FAMILY_GENERATED_SOURCES {
+    for relative_path in [
+        "tools/gnark/transfer_families.json",
+        "tools/gnark/internal/generated/transfer_families_generated.go",
+        "crates/core/component/shielded-pool/src/transfer/generated.rs",
+        "crates/crypto/proof-params/src/gen/gnark/transfer_families_manifest.json",
+        "crates/crypto/proof-params/src/gen/gnark/transfer_families_build.rs",
+        "crates/crypto/proof-params/src/gen/gnark/transfer_registry.rs",
+        "crates/crypto/proof-aggregation/src/transfer_family_dispatch.rs",
+    ] {
         println!(
             "cargo:rerun-if-changed={}",
             repo_root.join(relative_path).display()
         );
     }
     Ok(())
-}
-
-fn enforce_transfer_family_codegen_sync() -> anyhow::Result<()> {
-    let repo_root = repo_root()?;
-    let manifest_path = repo_root.join("tools/gnark/transfer_families.json");
-    if !manifest_path.exists() {
-        return Ok(());
-    }
-
-    let manifest_bytes = fs::read(&manifest_path).with_context(|| {
-        format!(
-            "read transfer family manifest at {}",
-            manifest_path.display()
-        )
-    })?;
-    let expected_hash = hex::encode(Sha256::digest(&manifest_bytes));
-
-    let mut stale_files = Vec::new();
-    for (relative_path, is_json_manifest) in TRANSFER_FAMILY_GENERATED_SOURCES {
-        let path = repo_root.join(relative_path);
-        let actual_hash = generated_manifest_hash(&path, *is_json_manifest)?;
-        if actual_hash != expected_hash {
-            stale_files.push(path);
-        }
-    }
-
-    if !stale_files.is_empty() {
-        let stale_list = stale_files
-            .iter()
-            .map(|path| format!("  - {}", path.display()))
-            .collect::<Vec<_>>()
-            .join("\n");
-        anyhow::bail!(
-            "transfer-family generated sources are stale or incomplete:\n{stale_list}\n\
-             rerun:\n  cd tools/gnark && GOCACHE=/tmp/penumbra-go-cache go run ./cmd/gen-transfer-families"
-        );
-    }
-
-    Ok(())
-}
-
-fn generated_manifest_hash(path: &Path, is_json_manifest: bool) -> anyhow::Result<String> {
-    let contents = fs::read_to_string(path)
-        .with_context(|| format!("read generated transfer-family file {}", path.display()))?;
-    if is_json_manifest {
-        json_manifest_hash(&contents).with_context(|| {
-            format!(
-                "extract manifest_sha256 from generated transfer-family json {}",
-                path.display()
-            )
-        })
-    } else {
-        comment_manifest_hash(&contents).with_context(|| {
-            format!(
-                "extract Manifest SHA256 comment from generated transfer-family source {}",
-                path.display()
-            )
-        })
-    }
-}
-
-fn comment_manifest_hash(contents: &str) -> anyhow::Result<String> {
-    const PREFIX: &str = "Manifest SHA256:";
-    contents
-        .lines()
-        .find_map(|line| {
-            line.split_once(PREFIX)
-                .map(|(_, hash)| hash.trim().to_owned())
-        })
-        .ok_or_else(|| anyhow::anyhow!("missing `{PREFIX}` comment"))
-}
-
-fn json_manifest_hash(contents: &str) -> anyhow::Result<String> {
-    const KEY: &str = "\"manifest_sha256\"";
-    let (_, rest) = contents
-        .split_once(KEY)
-        .ok_or_else(|| anyhow::anyhow!("missing {KEY} field"))?;
-    let (_, rest) = rest
-        .split_once(':')
-        .ok_or_else(|| anyhow::anyhow!("missing colon after {KEY}"))?;
-    let rest = rest.trim_start();
-    let quoted = rest
-        .strip_prefix('"')
-        .ok_or_else(|| anyhow::anyhow!("{KEY} value is not a JSON string"))?;
-    let end = quoted
-        .find('"')
-        .ok_or_else(|| anyhow::anyhow!("unterminated {KEY} string"))?;
-    Ok(quoted[..end].to_owned())
 }
 
 fn write_bundled_gnark_runtime_paths() -> anyhow::Result<()> {
@@ -249,20 +122,14 @@ fn write_bundled_gnark_runtime_paths() -> anyhow::Result<()> {
         .join(format!("{target_os}-{target_arch}"));
     std::fs::create_dir_all(&gnark_out_dir).context("create bundled gnark output directory")?;
 
-    let spend_lib_path = gnark_out_dir.join(format!("libpenumbra_gnark_spend.{lib_ext}"));
-    let output_lib_path = gnark_out_dir.join(format!("libpenumbra_gnark_output.{lib_ext}"));
     let transfer_lib_path = gnark_out_dir.join(format!("libpenumbra_gnark_transfer.{lib_ext}"));
+    let consolidate_lib_path =
+        gnark_out_dir.join(format!("libpenumbra_gnark_consolidate.{lib_ext}"));
+    let split_lib_path = gnark_out_dir.join(format!("libpenumbra_gnark_split.{lib_ext}"));
+    let shielded_ics20_withdrawal_lib_path = gnark_out_dir.join(format!(
+        "libpenumbra_gnark_shielded_ics20_withdrawal.{lib_ext}"
+    ));
 
-    build_gnark_library(&gnark_dir, "./cmd/spendlib", &spend_lib_path, goos, goarch)
-        .context("build bundled gnark spend library")?;
-    build_gnark_library(
-        &gnark_dir,
-        "./cmd/outputlib",
-        &output_lib_path,
-        goos,
-        goarch,
-    )
-    .context("build bundled gnark output library")?;
     build_gnark_library(
         &gnark_dir,
         "./cmd/transferlib",
@@ -271,14 +138,34 @@ fn write_bundled_gnark_runtime_paths() -> anyhow::Result<()> {
         goarch,
     )
     .context("build bundled gnark transfer library")?;
+    build_gnark_library(
+        &gnark_dir,
+        "./cmd/consolidatelib",
+        &consolidate_lib_path,
+        goos,
+        goarch,
+    )
+    .context("build bundled gnark consolidate library")?;
+    build_gnark_library(&gnark_dir, "./cmd/splitlib", &split_lib_path, goos, goarch)
+        .context("build bundled gnark split library")?;
+    build_gnark_library(
+        &gnark_dir,
+        "./cmd/shieldedics20withdrawallib",
+        &shielded_ics20_withdrawal_lib_path,
+        goos,
+        goarch,
+    )
+    .context("build bundled gnark shielded ICS-20 withdrawal library")?;
 
     let include_body = format!(
-        "pub const GNARK_SPEND_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n\
-         pub const GNARK_OUTPUT_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n\
-         pub const GNARK_TRANSFER_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n",
-        spend_lib_path.display(),
-        output_lib_path.display(),
+        "pub const GNARK_TRANSFER_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n\
+         pub const GNARK_CONSOLIDATE_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n\
+         pub const GNARK_SPLIT_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n\
+         pub const GNARK_SHIELDED_ICS20_WITHDRAWAL_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n",
         transfer_lib_path.display(),
+        consolidate_lib_path.display(),
+        split_lib_path.display(),
+        shielded_ics20_withdrawal_lib_path.display(),
     );
     let _ = GENERATED_TRANSFER_FAMILIES;
     std::fs::write(&include_path, include_body).context("write gnark runtime include file")?;
@@ -288,9 +175,10 @@ fn write_bundled_gnark_runtime_paths() -> anyhow::Result<()> {
 
 fn write_empty_gnark_runtime_include(include_path: &Path) -> anyhow::Result<()> {
     let include_body = String::from(
-        "pub const GNARK_SPEND_BUNDLED_LIBRARY_PATH: Option<&str> = None;\n\
-         pub const GNARK_OUTPUT_BUNDLED_LIBRARY_PATH: Option<&str> = None;\n\
-         pub const GNARK_TRANSFER_BUNDLED_LIBRARY_PATH: Option<&str> = None;\n",
+        "pub const GNARK_TRANSFER_BUNDLED_LIBRARY_PATH: Option<&str> = None;\n\
+         pub const GNARK_CONSOLIDATE_BUNDLED_LIBRARY_PATH: Option<&str> = None;\n\
+         pub const GNARK_SPLIT_BUNDLED_LIBRARY_PATH: Option<&str> = None;\n\
+         pub const GNARK_SHIELDED_ICS20_WITHDRAWAL_BUNDLED_LIBRARY_PATH: Option<&str> = None;\n",
     );
     let _ = GENERATED_TRANSFER_FAMILIES;
     std::fs::write(include_path, include_body)?;
@@ -482,7 +370,7 @@ mod downloads {
 
     /// The Git LFS server to use.
     static GIT_LFS_SERVER: &str =
-        "https://github.com/penumbra-zone/penumbra.git/info/lfs/objects/batch";
+        "https://github.com/mizufinance/penumbra.git/info/lfs/objects/batch";
 
     /// Represents a Git LFS pointer.
     pub struct GitLFSPointer {

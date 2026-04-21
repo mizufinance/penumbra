@@ -2,18 +2,14 @@ use std::fmt::Display;
 
 use anyhow::Context;
 use anyhow::Result;
-use penumbra_sdk_auction::params::AuctionParameters;
-use penumbra_sdk_community_pool::params::CommunityPoolParameters;
-use penumbra_sdk_dex::DexParameters;
-use penumbra_sdk_distributions::params::DistributionsParameters;
+use penumbra_sdk_asset::BASE_ASSET_ID;
 use penumbra_sdk_fee::FeeParameters;
-use penumbra_sdk_funding::params::FundingParameters;
 use penumbra_sdk_governance::change::ParameterChange;
 use penumbra_sdk_governance::{params::GovernanceParameters, tally::Ratio};
 use penumbra_sdk_ibc::params::IBCParameters;
 use penumbra_sdk_sct::params::SctParameters;
 use penumbra_sdk_shielded_pool::params::ShieldedPoolParameters;
-use penumbra_sdk_stake::params::StakeParameters;
+use penumbra_sdk_validator::params::ValidatorParameters;
 
 use super::AppParameters;
 
@@ -23,11 +19,6 @@ pub trait ParameterChangeExt {
 
 impl ParameterChangeExt for ParameterChange {
     fn apply_changes(&self, app_parameters: AppParameters) -> Result<AppParameters, anyhow::Error> {
-        // Check the changes against the denylist of banned parameters
-        for _change in &self.changes {
-            // TODO: implement denylist. each component should have a list of &'static str denied fields
-        }
-
         let app_parameters_raw = serde_json::value::to_value(app_parameters.clone())
             .context("could not encode app parameters to json value")?;
         let new_app_parameters_raw = self
@@ -60,30 +51,14 @@ impl AppParameters {
         // Tracked by #3593
         let AppParameters {
             chain_id,
-            auction_params: AuctionParameters {},
-            community_pool_params:
-                CommunityPoolParameters {
-                    community_pool_spend_proposals_enabled: _,
-                },
-            distributions_params:
-                DistributionsParameters {
-                    staking_issuance_per_block: _,
-                    liquidity_tournament_incentive_per_block: _,
-                    liquidity_tournament_end_block: _,
-                },
             fee_params:
                 FeeParameters {
                     fixed_gas_prices: _,
                     fixed_alt_gas_prices: _,
                 },
-            funding_params:
-                FundingParameters {
-                    liquidity_tournament: _,
-                },
             governance_params:
                 GovernanceParameters {
                     proposal_voting_blocks: _,
-                    proposal_deposit_amount: _,
                     proposal_valid_quorum,
                     proposal_pass_threshold,
                     proposal_slash_threshold,
@@ -96,23 +71,11 @@ impl AppParameters {
                 },
             sct_params: SctParameters { epoch_duration },
             shielded_pool_params: ShieldedPoolParameters { fmd_meta_params: _ },
-            stake_params:
-                StakeParameters {
+            validator_params:
+                ValidatorParameters {
                     active_validator_limit,
-                    slashing_penalty_misbehavior: _,
-                    slashing_penalty_downtime: _,
                     signed_blocks_window_len,
                     missed_blocks_maximum: _,
-                    min_validator_stake: _,
-                    unbonding_delay: _,
-                },
-            dex_params:
-                DexParameters {
-                    is_enabled: _,
-                    fixed_candidates: _,
-                    max_hops: _,
-                    max_positions_per_pair: _,
-                    max_execution_budget: _,
                 },
             // IMPORTANT: Don't use `..` here! We want to ensure every single field is verified!
         } = self;
@@ -127,12 +90,12 @@ impl AppParameters {
             ),
             (
                 active_validator_limit,
-                &new.stake_params.active_validator_limit,
+                &new.validator_params.active_validator_limit,
                 "active validator limit",
             ),
             (
                 signed_blocks_window_len,
-                &new.stake_params.signed_blocks_window_len,
+                &new.validator_params.signed_blocks_window_len,
                 "signed blocks window length",
             ),
         ])?;
@@ -160,30 +123,14 @@ impl AppParameters {
     pub fn check_valid(&self) -> Result<()> {
         let AppParameters {
             chain_id,
-            auction_params: AuctionParameters {},
-            community_pool_params:
-                CommunityPoolParameters {
-                    community_pool_spend_proposals_enabled: _,
-                },
-            distributions_params:
-                DistributionsParameters {
-                    staking_issuance_per_block: _,
-                    liquidity_tournament_incentive_per_block: _,
-                    liquidity_tournament_end_block: _,
-                },
             fee_params:
                 FeeParameters {
-                    fixed_gas_prices: _,
-                    fixed_alt_gas_prices: _,
-                },
-            funding_params:
-                FundingParameters {
-                    liquidity_tournament: _,
+                    fixed_gas_prices,
+                    fixed_alt_gas_prices,
                 },
             governance_params:
                 GovernanceParameters {
                     proposal_voting_blocks,
-                    proposal_deposit_amount,
                     proposal_valid_quorum,
                     proposal_pass_threshold,
                     proposal_slash_threshold,
@@ -196,23 +143,11 @@ impl AppParameters {
                 },
             sct_params: SctParameters { epoch_duration },
             shielded_pool_params: ShieldedPoolParameters { fmd_meta_params: _ },
-            stake_params:
-                StakeParameters {
+            validator_params:
+                ValidatorParameters {
                     active_validator_limit,
-                    slashing_penalty_misbehavior,
-                    slashing_penalty_downtime,
                     signed_blocks_window_len,
                     missed_blocks_maximum,
-                    min_validator_stake,
-                    unbonding_delay,
-                },
-            dex_params:
-                DexParameters {
-                    is_enabled: _,
-                    fixed_candidates: _,
-                    max_hops: _,
-                    max_positions_per_pair: _,
-                    max_execution_budget: _,
                 },
             // IMPORTANT: Don't use `..` here! We want to ensure every single field is verified!
         } = self;
@@ -224,28 +159,8 @@ impl AppParameters {
                 "epoch duration must be at least one block",
             ),
             (
-                *unbonding_delay >= epoch_duration * 2 + 1,
-                "unbonding must take at least two epochs",
-            ),
-            (
                 *active_validator_limit > 3,
                 "active validator limit must be at least 4",
-            ),
-            (
-                *slashing_penalty_misbehavior >= 1,
-                "slashing penalty (misbehavior) must be at least 1 basis point",
-            ),
-            (
-                *slashing_penalty_misbehavior <= 100_000_000,
-                "slashing penalty (misbehavior) must be at most 10,000 basis points^2",
-            ),
-            (
-                *slashing_penalty_downtime >= 1,
-                "slashing penalty (downtime) must be at least 1 basis point",
-            ),
-            (
-                *slashing_penalty_downtime <= 100_000_000,
-                "slashing penalty (downtime) must be at most 10,000 basis points^2",
             ),
             (
                 *signed_blocks_window_len >= 2,
@@ -265,10 +180,6 @@ impl AppParameters {
                 "proposal voting blocks must be at least 1",
             ),
             (
-                *proposal_deposit_amount >= 0u64.into(),
-                "proposal deposit amount must be non-negative",
-            ),
-            (
                 *proposal_valid_quorum > Ratio::new(0, 1),
                 "proposal valid quorum must be greater than 0",
             ),
@@ -281,8 +192,12 @@ impl AppParameters {
                 "proposal slash threshold must be greater than 1/2",
             ),
             (
-                *min_validator_stake >= 1_000_000u128.into(),
-                "the minimum validator stake must be at least 1penumbra",
+                fixed_gas_prices.asset_id == *BASE_ASSET_ID,
+                "fee gas prices must use the base asset",
+            ),
+            (
+                fixed_alt_gas_prices.is_empty(),
+                "alternate gas-price configuration is not supported on the reduced chain",
             ),
         ])
     }

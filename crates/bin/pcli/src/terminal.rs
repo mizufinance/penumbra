@@ -1,17 +1,11 @@
 use std::io::{IsTerminal, Read, Write};
 
 use anyhow::Result;
-use decaf377::{Element, Fq};
-use decaf377_rdsa::{Domain, Signature, VerificationKey};
-use penumbra_sdk_asset::{asset::Cache, balance::Commitment};
+use decaf377_rdsa::{Domain, Signature};
+use penumbra_sdk_asset::asset::Cache;
 use penumbra_sdk_custody::threshold::{SigningRequest, Terminal};
-use penumbra_sdk_keys::{
-    symmetric::{OvkWrappedKey, WrappedMemoKey},
-    FullViewingKey, PayloadKey,
-};
-use penumbra_sdk_proof_params::GROTH16_PROOF_LENGTH_BYTES;
-use penumbra_sdk_sct::Nullifier;
-use penumbra_sdk_shielded_pool::{EncryptedBackref, Note, NoteView};
+use penumbra_sdk_keys::FullViewingKey;
+use penumbra_sdk_shielded_pool::{Note, NoteView};
 use penumbra_sdk_tct::structure::Hash;
 use penumbra_sdk_transaction::{view, ActionPlan, ActionView, TransactionPlan, TransactionView};
 use termion::{color, input::TermRead};
@@ -43,86 +37,11 @@ fn pretty_print_transaction_plan(
     fvk: Option<FullViewingKey>,
     plan: &TransactionPlan,
 ) -> anyhow::Result<()> {
-    use penumbra_sdk_shielded_pool::{output, spend};
-
     fn dummy_sig<D: Domain>() -> Signature<D> {
         Signature::from([0u8; 64])
     }
 
-    fn dummy_pk<D: Domain>() -> VerificationKey<D> {
-        VerificationKey::try_from(Element::default().vartime_compress().0)
-            .expect("creating a dummy verification key should work")
-    }
-
-    fn dummy_commitment() -> Commitment {
-        Commitment(Element::default())
-    }
-
-    fn dummy_proof_spend() -> spend::SpendProof {
-        spend::SpendProof::try_from(
-            penumbra_sdk_proto::penumbra::core::component::shielded_pool::v1::ZkSpendProof {
-                inner: vec![0u8; GROTH16_PROOF_LENGTH_BYTES],
-            },
-        )
-        .expect("creating a dummy proof should work")
-    }
-
-    fn dummy_proof_output() -> output::OutputProof {
-        output::OutputProof::try_from(
-            penumbra_sdk_proto::penumbra::core::component::shielded_pool::v1::ZkOutputProof {
-                inner: vec![0u8; GROTH16_PROOF_LENGTH_BYTES],
-            },
-        )
-        .expect("creating a dummy proof should work")
-    }
-
-    fn dummy_spend() -> spend::Spend {
-        spend::Spend {
-            body: spend::Body {
-                balance_commitment: dummy_commitment(),
-                nullifier: Nullifier(Fq::default()),
-                rk: dummy_pk(),
-                encrypted_backref: EncryptedBackref::try_from([0u8; 0])
-                    .expect("can create dummy encrypted backref"),
-                compliance_ciphertext: vec![],
-                target_timestamp: 0,
-                sender_leaf_hash: penumbra_sdk_tct::StateCommitment(Fq::default()),
-                compliance_anchor: penumbra_sdk_tct::StateCommitment(Fq::default()),
-                asset_anchor: penumbra_sdk_tct::StateCommitment(Fq::default()),
-                dleq_proof: vec![],
-            },
-            auth_sig: dummy_sig(),
-            proof: dummy_proof_spend(),
-        }
-    }
-
-    fn dummy_output() -> output::Output {
-        output::Output {
-            body: output::Body {
-                note_payload: penumbra_sdk_shielded_pool::NotePayload {
-                    note_commitment: penumbra_sdk_shielded_pool::note::StateCommitment(
-                        Fq::default(),
-                    ),
-                    ephemeral_key: [0u8; 32]
-                        .as_slice()
-                        .try_into()
-                        .expect("can create dummy ephemeral key"),
-                    encrypted_note: penumbra_sdk_shielded_pool::NoteCiphertext([0u8; 176]),
-                },
-                balance_commitment: dummy_commitment(),
-                ovk_wrapped_key: OvkWrappedKey([0u8; 48]),
-                wrapped_memo_key: WrappedMemoKey([0u8; 48]),
-                compliance_ciphertext: vec![],
-                target_timestamp: 0,
-                counterparty_leaf_hash: penumbra_sdk_tct::StateCommitment(Fq::default()),
-                compliance_anchor: penumbra_sdk_tct::StateCommitment(Fq::default()),
-                asset_anchor: penumbra_sdk_tct::StateCommitment(Fq::default()),
-                dleq_proofs: vec![],
-            },
-            proof: dummy_proof_output(),
-        }
-    }
-
+    #[allow(dead_code)]
     fn convert_note(cache: &Cache, fvk: &FullViewingKey, note: &Note) -> NoteView {
         NoteView {
             value: note.value().view_with_cache(cache),
@@ -132,48 +51,19 @@ fn pretty_print_transaction_plan(
     }
 
     fn convert_action(
-        cache: &Cache,
-        fvk: &FullViewingKey,
+        _cache: &Cache,
+        _fvk: &FullViewingKey,
         action: &ActionPlan,
     ) -> Option<ActionView> {
-        use view::action_view::SpendView;
-
         match action {
-            ActionPlan::Output(x) => Some(ActionView::Output(
-                penumbra_sdk_shielded_pool::OutputView::Visible {
-                    output: dummy_output(),
-                    note: convert_note(cache, fvk, &x.output_note()),
-                    payload_key: PayloadKey::from([0u8; 32]),
-                },
-            )),
             ActionPlan::Transfer(_) => None,
-            ActionPlan::Spend(x) => Some(ActionView::Spend(SpendView::Visible {
-                spend: dummy_spend(),
-                note: convert_note(cache, fvk, &x.note),
-            })),
+            ActionPlan::Consolidate(_) => None,
+            ActionPlan::Split(_) => None,
             ActionPlan::ValidatorDefinition(_) => None,
-            ActionPlan::Swap(_) => None,
-            ActionPlan::SwapClaim(_) => None,
             ActionPlan::ProposalSubmit(_) => None,
-            ActionPlan::ProposalWithdraw(_) => None,
-            ActionPlan::DelegatorVote(_) => None,
             ActionPlan::ValidatorVote(_) => None,
-            ActionPlan::ProposalDepositClaim(_) => None,
-            ActionPlan::PositionOpen(_) => None,
-            ActionPlan::PositionClose(_) => None,
-            ActionPlan::PositionWithdraw(_) => None,
-            ActionPlan::Delegate(_) => None,
-            ActionPlan::Undelegate(_) => None,
-            ActionPlan::UndelegateClaim(_) => None,
-            ActionPlan::Ics20Withdrawal(_) => None,
-            ActionPlan::CommunityPoolSpend(_) => None,
-            ActionPlan::CommunityPoolOutput(_) => None,
-            ActionPlan::CommunityPoolDeposit(_) => None,
-            ActionPlan::ActionDutchAuctionSchedule(_) => None,
-            ActionPlan::ActionDutchAuctionEnd(_) => None,
-            ActionPlan::ActionDutchAuctionWithdraw(_) => None,
-            ActionPlan::IbcAction(_) => todo!(),
-            ActionPlan::ActionLiquidityTournamentVote(_) => None,
+            ActionPlan::ShieldedIcs20Withdrawal(_) => None,
+            ActionPlan::IbcAction(_) => None,
             ActionPlan::ComplianceRegisterAsset(_) => None,
             ActionPlan::ComplianceRegisterUser(_) => None,
         }
@@ -202,6 +92,7 @@ fn pretty_print_transaction_plan(
                 .filter_map(|x| convert_action(&cache, &fvk, x))
                 .collect(),
             transaction_parameters: plan.transaction_parameters.clone(),
+            fee_funding: None,
             detection_data: None,
             memo_view: None,
         },
@@ -235,6 +126,10 @@ impl Terminal for ActualTerminal {
             SigningRequest::ValidatorVote(vote) => {
                 println!("{}", serde_json::to_string_pretty(vote)?);
                 println!("Do you approve this validator vote?");
+            }
+            SigningRequest::ProposalSubmit(proposal_submit) => {
+                println!("{}", serde_json::to_string_pretty(proposal_submit)?);
+                println!("Do you approve this proposal submission?");
             }
         };
 

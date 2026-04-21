@@ -16,11 +16,11 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/abi"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/artifacts"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/circuits"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/generated"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/primitives"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/abi"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/artifacts"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/circuits"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/generated"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/primitives"
 )
 
 func main() {
@@ -55,7 +55,7 @@ func usage() {
 
 func runSetup(args []string) error {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
-	circuit := fs.String("circuit", "", "spend, output, or transferNxM family label")
+	circuit := fs.String("circuit", "", "transferNxM, consolidateN, splitN, or shielded-ics20-withdrawalN family label")
 	outDir := fs.String("out-dir", "", "output directory")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -140,7 +140,7 @@ func runSetup(args []string) error {
 
 func runProve(args []string) error {
 	fs := flag.NewFlagSet("prove", flag.ContinueOnError)
-	circuit := fs.String("circuit", "", "spend, output, or transferNxM family label")
+	circuit := fs.String("circuit", "", "transferNxM, consolidateN, splitN, or shielded-ics20-withdrawalN family label")
 	witnessPath := fs.String("witness", "", "witness binary path")
 	artifactDir := fs.String("artifact-dir", "", "artifact directory")
 	outPath := fs.String("out", "", "output artifacts JSON path")
@@ -228,13 +228,12 @@ func runProve(args []string) error {
 
 func runReplay(args []string) error {
 	fs := flag.NewFlagSet("replay", flag.ContinueOnError)
-	circuit := fs.String("circuit", "spend", "spend, output, or transferNxM family label")
+	circuit := fs.String("circuit", "transfer", "transfer, consolidateN, splitN, or shielded-ics20-withdrawalN family label")
 	witnessPath := fs.String("witness", "", "witness binary path")
 	artifactDir := fs.String("artifact-dir", "", "artifact directory for prove mode")
 	mode := fs.String("mode", "decode", "decode, solve, or prove")
 	rawOut := fs.String("raw-out", "", "optional file for raw dump")
 	assignmentOut := fs.String("assignment-out", "", "optional file for assignment dump")
-	crosscheckOut := fs.String("crosscheck-out", "", "optional file for spend-only crosschecks")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -247,49 +246,15 @@ func runReplay(args []string) error {
 		return fmt.Errorf("read witness: %w", err)
 	}
 	switch *circuit {
-	case "spend":
-		rawDump, err := abi.DecodeSpendWitnessRawDumpV1(payload)
-		if err != nil {
-			return err
-		}
-		if err := writeOrStdout(*rawOut, rawDump); err != nil {
-			return err
-		}
-		assignmentDump, err := abi.DumpSpendCircuitAssignmentFromWitnessV1(payload)
-		if err != nil {
-			return err
-		}
-		if err := writeOrStdout(*assignmentOut, assignmentDump); err != nil {
-			return err
-		}
-		crosscheckDump, err := abi.CrossCheckRandomizedVerificationKeyWitnessV1(payload)
-		if err != nil {
-			return err
-		}
-		if err := writeOrStdout(*crosscheckOut, crosscheckDump); err != nil {
-			return err
-		}
-	case "output":
-		rawDump, err := abi.DecodeOutputWitnessRawDumpV1(payload)
-		if err != nil {
-			return err
-		}
-		if err := writeOrStdout(*rawOut, rawDump); err != nil {
-			return err
-		}
-		assignmentDump, err := abi.DumpOutputCircuitAssignmentFromWitnessV1(payload)
-		if err != nil {
-			return err
-		}
-		if err := writeOrStdout(*assignmentOut, assignmentDump); err != nil {
-			return err
-		}
-		if *crosscheckOut != "" {
-			return fmt.Errorf("--crosscheck-out is only supported for --circuit spend")
-		}
 	default:
 		if _, ok := generated.TransferFamilyByLabel(*circuit); !ok {
-			return fmt.Errorf("unsupported --circuit %q", *circuit)
+			if _, ok := generated.ConsolidateFamilyByLabel(*circuit); !ok {
+				if _, ok := generated.SplitFamilyByLabel(*circuit); !ok {
+					if _, ok := generated.ShieldedIcs20WithdrawalFamilyByLabel(*circuit); !ok {
+						return fmt.Errorf("unsupported --circuit %q", *circuit)
+					}
+				}
+			}
 		}
 		if *rawOut != "" {
 			return fmt.Errorf("--raw-out is not implemented yet for --circuit %s", *circuit)
@@ -300,9 +265,6 @@ func runReplay(args []string) error {
 		}
 		if err := writeOrStdout(*assignmentOut, fmt.Sprintf("%#v\n", assignment)); err != nil {
 			return err
-		}
-		if *crosscheckOut != "" {
-			return fmt.Errorf("--crosscheck-out is only supported for --circuit spend")
 		}
 	}
 	if *mode == "decode" {
@@ -318,25 +280,41 @@ func runReplay(args []string) error {
 		ccs        constraint.ConstraintSystem
 	)
 	switch *circuit {
-	case "spend":
-		assignment, err = abi.NewSpendCircuitAssignmentFromWitnessV1(payload)
-		if err != nil {
-			return err
-		}
-		ccs, err = frontend.Compile(primitives.ScalarField(), r1cs.NewBuilder, &circuits.SpendCircuit{})
-	case "output":
-		assignment, err = abi.NewOutputCircuitAssignmentFromWitnessV1(payload)
-		if err != nil {
-			return err
-		}
-		ccs, err = frontend.Compile(primitives.ScalarField(), r1cs.NewBuilder, &circuits.OutputCircuit{})
 	default:
-		if family, ok := generated.TransferFamilyByLabel(*circuit); ok {
+		if _, ok := generated.TransferFamilyByLabel(*circuit); ok {
 			assignment, _, err = abi.NewTransferCircuitAssignmentFromWitnessV1(payload)
 			if err != nil {
 				return err
 			}
-			ccs, err = frontend.Compile(primitives.ScalarField(), r1cs.NewBuilder, circuits.NewTransferCircuit(family.NIn, family.NOut))
+			ccs, err = frontend.Compile(primitives.ScalarField(), r1cs.NewBuilder, circuits.NewTransferCircuit())
+			break
+		}
+		if family, ok := generated.ConsolidateFamilyByLabel(*circuit); ok {
+			assignment, _, err = abi.NewConsolidateCircuitAssignmentFromWitnessV1(payload)
+			if err != nil {
+				return err
+			}
+			ccs, err = frontend.Compile(primitives.ScalarField(), r1cs.NewBuilder, circuits.NewConsolidateCircuit(family.NIn))
+			break
+		}
+		if family, ok := generated.SplitFamilyByLabel(*circuit); ok {
+			assignment, _, err = abi.NewSplitCircuitAssignmentFromWitnessV1(payload)
+			if err != nil {
+				return err
+			}
+			ccs, err = frontend.Compile(primitives.ScalarField(), r1cs.NewBuilder, circuits.NewSplitCircuit(family.NOut))
+			break
+		}
+		if family, ok := generated.ShieldedIcs20WithdrawalFamilyByLabel(*circuit); ok {
+			assignment, _, err = abi.NewShieldedIcs20WithdrawalCircuitAssignmentFromWitnessV1(payload)
+			if err != nil {
+				return err
+			}
+			ccs, err = frontend.Compile(
+				primitives.ScalarField(),
+				r1cs.NewBuilder,
+				circuits.NewShieldedIcs20WithdrawalCircuit(family.NIn),
+			)
 			break
 		}
 		return fmt.Errorf("unsupported --circuit %q", *circuit)
@@ -469,15 +447,25 @@ func runVerifyBench(args []string) error {
 func compileCircuit(circuit string) (constraint.ConstraintSystem, float64, error) {
 	compileStart := time.Now()
 	switch circuit {
-	case "spend":
-		ccs, err := frontend.Compile(primitives.ScalarField(), r1cs.NewBuilder, &circuits.SpendCircuit{})
-		return ccs, time.Since(compileStart).Seconds() * 1000, err
-	case "output":
-		ccs, err := frontend.Compile(primitives.ScalarField(), r1cs.NewBuilder, &circuits.OutputCircuit{})
-		return ccs, time.Since(compileStart).Seconds() * 1000, err
 	default:
-		if family, ok := generated.TransferFamilyByLabel(circuit); ok {
-			ccs, err := frontend.Compile(primitives.ScalarField(), r1cs.NewBuilder, circuits.NewTransferCircuit(family.NIn, family.NOut))
+		if _, ok := generated.TransferFamilyByLabel(circuit); ok {
+			ccs, err := frontend.Compile(primitives.ScalarField(), r1cs.NewBuilder, circuits.NewTransferCircuit())
+			return ccs, time.Since(compileStart).Seconds() * 1000, err
+		}
+		if family, ok := generated.ConsolidateFamilyByLabel(circuit); ok {
+			ccs, err := frontend.Compile(primitives.ScalarField(), r1cs.NewBuilder, circuits.NewConsolidateCircuit(family.NIn))
+			return ccs, time.Since(compileStart).Seconds() * 1000, err
+		}
+		if family, ok := generated.SplitFamilyByLabel(circuit); ok {
+			ccs, err := frontend.Compile(primitives.ScalarField(), r1cs.NewBuilder, circuits.NewSplitCircuit(family.NOut))
+			return ccs, time.Since(compileStart).Seconds() * 1000, err
+		}
+		if family, ok := generated.ShieldedIcs20WithdrawalFamilyByLabel(circuit); ok {
+			ccs, err := frontend.Compile(
+				primitives.ScalarField(),
+				r1cs.NewBuilder,
+				circuits.NewShieldedIcs20WithdrawalCircuit(family.NIn),
+			)
 			return ccs, time.Since(compileStart).Seconds() * 1000, err
 		}
 		return nil, 0, fmt.Errorf("unsupported circuit %q", circuit)
@@ -486,26 +474,6 @@ func compileCircuit(circuit string) (constraint.ConstraintSystem, float64, error
 
 func witnessAssignment(circuit string, witnessPayload []byte) (frontend.Circuit, witnessSummary, error) {
 	switch circuit {
-	case "spend":
-		decoded, err := abi.DecodeSpendWitnessV1(witnessPayload)
-		if err != nil {
-			return nil, witnessSummary{}, err
-		}
-		assignment, err := abi.NewSpendCircuitAssignmentFromWitnessV1(witnessPayload)
-		return assignment, witnessSummary{
-			ClaimedStatementHash: primitives.LittleEndianBytesToBigInt(decoded.ClaimedStatementHash[:]).String(),
-			StatementFields:      vec32Strings(decoded.StatementFields),
-		}, err
-	case "output":
-		decoded, err := abi.DecodeOutputWitnessV1(witnessPayload)
-		if err != nil {
-			return nil, witnessSummary{}, err
-		}
-		assignment, err := abi.NewOutputCircuitAssignmentFromWitnessV1(witnessPayload)
-		return assignment, witnessSummary{
-			ClaimedStatementHash: primitives.LittleEndianBytesToBigInt(decoded.ClaimedStatementHash[:]).String(),
-			StatementFields:      vec32Strings(decoded.StatementFields),
-		}, err
 	default:
 		if _, ok := generated.TransferFamilyByLabel(circuit); ok {
 			decoded, _, err := abi.DecodeTransferWitnessV1(witnessPayload)
@@ -513,6 +481,39 @@ func witnessAssignment(circuit string, witnessPayload []byte) (frontend.Circuit,
 				return nil, witnessSummary{}, err
 			}
 			assignment, _, err := abi.NewTransferCircuitAssignmentFromWitnessV1(witnessPayload)
+			return assignment, witnessSummary{
+				ClaimedStatementHash: primitives.LittleEndianBytesToBigInt(decoded.ClaimedStatementHash[:]).String(),
+				StatementFields:      vec32Strings(decoded.StatementFields),
+			}, err
+		}
+		if _, ok := generated.ConsolidateFamilyByLabel(circuit); ok {
+			decoded, _, err := abi.DecodeConsolidateWitnessV1(witnessPayload)
+			if err != nil {
+				return nil, witnessSummary{}, err
+			}
+			assignment, _, err := abi.NewConsolidateCircuitAssignmentFromWitnessV1(witnessPayload)
+			return assignment, witnessSummary{
+				ClaimedStatementHash: primitives.LittleEndianBytesToBigInt(decoded.ClaimedStatementHash[:]).String(),
+				StatementFields:      vec32Strings(decoded.StatementFields),
+			}, err
+		}
+		if _, ok := generated.SplitFamilyByLabel(circuit); ok {
+			decoded, _, err := abi.DecodeSplitWitnessV1(witnessPayload)
+			if err != nil {
+				return nil, witnessSummary{}, err
+			}
+			assignment, _, err := abi.NewSplitCircuitAssignmentFromWitnessV1(witnessPayload)
+			return assignment, witnessSummary{
+				ClaimedStatementHash: primitives.LittleEndianBytesToBigInt(decoded.ClaimedStatementHash[:]).String(),
+				StatementFields:      vec32Strings(decoded.StatementFields),
+			}, err
+		}
+		if _, ok := generated.ShieldedIcs20WithdrawalFamilyByLabel(circuit); ok {
+			decoded, _, err := abi.DecodeShieldedIcs20WithdrawalWitnessV1(witnessPayload)
+			if err != nil {
+				return nil, witnessSummary{}, err
+			}
+			assignment, _, err := abi.NewShieldedIcs20WithdrawalCircuitAssignmentFromWitnessV1(witnessPayload)
 			return assignment, witnessSummary{
 				ClaimedStatementHash: primitives.LittleEndianBytesToBigInt(decoded.ClaimedStatementHash[:]).String(),
 				StatementFields:      vec32Strings(decoded.StatementFields),

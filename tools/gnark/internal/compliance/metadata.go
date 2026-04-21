@@ -2,7 +2,7 @@ package compliance
 
 import (
 	"github.com/consensys/gnark/frontend"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/primitives"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/primitives"
 )
 
 func ComputeMetadataHash(api frontend.API, policyIDHash, resourceHash, permissionHash, tier, targetTimestamp, salt frontend.Variable) (frontend.Variable, error) {

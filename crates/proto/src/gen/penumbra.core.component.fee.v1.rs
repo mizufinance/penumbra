@@ -6,7 +6,7 @@ pub struct Fee {
     #[prost(message, optional, tag = "1")]
     pub amount: ::core::option::Option<super::super::super::num::v1::Amount>,
     /// If present, the asset ID of the token used to pay fees.
-    /// If absent, specifies the staking token implicitly.
+    /// If absent, specifies the base asset implicitly.
     #[prost(message, optional, tag = "2")]
     pub asset_id: ::core::option::Option<super::super::super::asset::v1::AssetId>,
 }
@@ -52,19 +52,19 @@ impl ::prost::Name for Gas {
 pub struct GasPrices {
     /// The asset ID of the fee token these prices are for.
     ///
-    /// If absent, specifies the staking token implicitly.
+    /// If absent, specifies the base asset implicitly.
     #[prost(message, optional, tag = "15")]
     pub asset_id: ::core::option::Option<super::super::super::asset::v1::AssetId>,
-    /// The price per unit block space in terms of the staking token, with an implicit 1,000 denominator.
+    /// The price per unit block space in terms of the base asset, with an implicit 1,000 denominator.
     #[prost(uint64, tag = "1")]
     pub block_space_price: u64,
-    /// The price per unit compact block space in terms of the staking token, with an implicit 1,000 denominator.
+    /// The price per unit compact block space in terms of the base asset, with an implicit 1,000 denominator.
     #[prost(uint64, tag = "2")]
     pub compact_block_space_price: u64,
-    /// The price per unit verification cost in terms of the staking token, with an implicit 1,000 denominator.
+    /// The price per unit verification cost in terms of the base asset, with an implicit 1,000 denominator.
     #[prost(uint64, tag = "3")]
     pub verification_price: u64,
-    /// The price per unit execution cost in terms of the staking token, with an implicit 1,000 denominator.
+    /// The price per unit execution cost in terms of the base asset, with an implicit 1,000 denominator.
     #[prost(uint64, tag = "4")]
     pub execution_price: u64,
 }

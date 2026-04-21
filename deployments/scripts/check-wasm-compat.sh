@@ -18,19 +18,14 @@ set -euo pipefail
 
 packages=(
     penumbra-sdk-asset
-    penumbra-sdk-community-pool
     penumbra-sdk-compact-block
-    penumbra-sdk-auction
-    penumbra-sdk-dex
-    penumbra-sdk-distributions
     penumbra-sdk-fee
-    penumbra-sdk-funding
     penumbra-sdk-governance
     penumbra-sdk-ibc
     penumbra-sdk-keys
     penumbra-sdk-sct
     penumbra-sdk-shielded-pool
-    penumbra-sdk-stake
+    penumbra-sdk-validator
     penumbra-sdk-tct
     penumbra-sdk-transaction
     penumbra-sdk-txhash

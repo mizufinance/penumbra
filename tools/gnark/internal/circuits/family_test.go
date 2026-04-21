@@ -1,7 +1,8 @@
 package circuits_test
 
 import (
-	"os"
+	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -9,9 +10,9 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 	"github.com/consensys/gnark/test"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/abi"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/circuits"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/primitives"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/abi"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/circuits"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/primitives"
 )
 
 type circuitFamily struct {
@@ -22,73 +23,50 @@ type circuitFamily struct {
 	mutateCompliance func(frontend.Circuit)
 }
 
+func mutateFieldByOne(value frontend.Variable) frontend.Variable {
+	switch v := value.(type) {
+	case string:
+		n, ok := new(big.Int).SetString(v, 10)
+		if !ok {
+			panic("invalid decimal frontend.Variable string")
+		}
+		return new(big.Int).Add(n, big.NewInt(1)).String()
+	case *big.Int:
+		return new(big.Int).Add(v, big.NewInt(1))
+	case big.Int:
+		return new(big.Int).Add(&v, big.NewInt(1))
+	case int:
+		return v + 1
+	case int64:
+		return v + 1
+	case uint64:
+		return v + 1
+	default:
+		panic("unsupported frontend.Variable type for mutation")
+	}
+}
+
 func testCircuitFamilies() []circuitFamily {
 	return []circuitFamily{
 		{
-			name:    "spend",
-			circuit: func() frontend.Circuit { return &circuits.SpendCircuit{} },
+			name:    "transfer",
+			circuit: func() frontend.Circuit { return circuits.NewTransferCircuit() },
 			assignment: func(t *testing.T) frontend.Circuit {
 				t.Helper()
-				assignment, err := abi.NewSpendCircuitAssignmentFromWitnessV1(primitives.LoadSpendWitnessV1())
-				if err != nil {
-					t.Fatalf("build spend assignment from witness binary: %v", err)
-				}
-				return assignment
-			},
-			mutateStatement: func(assignment frontend.Circuit) {
-				a := assignment.(*circuits.SpendCircuit)
-				a.ClaimedStatementHash = circuits.MutateFieldByOne(a.ClaimedStatementHash)
-			},
-			mutateCompliance: func(assignment frontend.Circuit) {
-				a := assignment.(*circuits.SpendCircuit)
-				a.Dleq.C = circuits.MutateFieldByOne(a.Dleq.C)
-			},
-		},
-		{
-			name:    "output",
-			circuit: func() frontend.Circuit { return &circuits.OutputCircuit{} },
-			assignment: func(t *testing.T) frontend.Circuit {
-				t.Helper()
-				assignment, err := abi.NewOutputCircuitAssignmentFromWitnessV1(primitives.LoadOutputWitnessV1())
-				if err != nil {
-					t.Fatalf("build output assignment from witness binary: %v", err)
-				}
-				return assignment
-			},
-			mutateStatement: func(assignment frontend.Circuit) {
-				a := assignment.(*circuits.OutputCircuit)
-				a.ClaimedStatementHash = circuits.MutateFieldByOne(a.ClaimedStatementHash)
-			},
-			mutateCompliance: func(assignment frontend.Circuit) {
-				a := assignment.(*circuits.OutputCircuit)
-				a.Dleq1.C = circuits.MutateFieldByOne(a.Dleq1.C)
-			},
-		},
-		{
-			name:    "transfer1x1",
-			circuit: func() frontend.Circuit { return circuits.NewTransferCircuit(1, 1) },
-			assignment: func(t *testing.T) frontend.Circuit {
-				t.Helper()
-				fixtureBytes, err := os.ReadFile("../../testdata/transfer1x1_witness_v1.bin")
-				if err != nil {
-					if os.IsNotExist(err) {
-						t.Skipf("transfer1x1 witness fixture not found: %v", err)
-					}
-					t.Fatalf("read transfer1x1 witness fixture: %v", err)
-				}
+				fixtureBytes := primitives.LoadTransferWitnessV1("transfer")
 				assignment, _, err := abi.NewTransferCircuitAssignmentFromWitnessV1(fixtureBytes)
 				if err != nil {
-					t.Fatalf("decode transfer1x1 witness fixture: %v", err)
+					t.Fatalf("decode transfer witness fixture: %v", err)
 				}
 				return assignment
 			},
 			mutateStatement: func(assignment frontend.Circuit) {
 				a := assignment.(*circuits.TransferCircuit)
-				a.ClaimedStatementHash = circuits.MutateFieldByOne(a.ClaimedStatementHash)
+				a.ClaimedStatementHash = mutateFieldByOne(a.ClaimedStatementHash)
 			},
 			mutateCompliance: func(assignment frontend.Circuit) {
 				a := assignment.(*circuits.TransferCircuit)
-				a.Spends[0].Dleq.C = circuits.MutateFieldByOne(a.Spends[0].Dleq.C)
+				a.Compliance.SenderCore.Dleq.C = mutateFieldByOne(a.Compliance.SenderCore.Dleq.C)
 			},
 		},
 	}
@@ -141,6 +119,29 @@ func TestCircuitFamiliesRejectMutatedComplianceField(t *testing.T) {
 		t.Run(family.name, func(t *testing.T) {
 			assignment := family.assignment(t)
 			family.mutateCompliance(assignment)
+
+			assert := test.NewAssert(t)
+			assert.CheckCircuit(
+				family.circuit(),
+				test.WithCurves(ecc.BLS12_377),
+				test.WithBackends(backend.GROTH16),
+				test.WithInvalidAssignment(assignment),
+			)
+		})
+	}
+}
+
+func TestTransferFamiliesRejectWrongReceiverOrdering(t *testing.T) {
+	for _, family := range testCircuitFamilies() {
+		if !strings.HasPrefix(family.name, "transfer") {
+			continue
+		}
+		t.Run(family.name, func(t *testing.T) {
+			assignment := family.assignment(t).(*circuits.TransferCircuit)
+			assignment.Outputs[0].IsReceiver = 0
+			if len(assignment.Outputs) > 1 {
+				assignment.Outputs[1].IsReceiver = 1
+			}
 
 			assert := test.NewAssert(t)
 			assert.CheckCircuit(

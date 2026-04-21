@@ -1,26 +1,15 @@
-//! Declarative transaction plans, used for transaction authorization and
-//! creation.
+//! Declarative transaction plans, used for transaction authorization and creation.
 
 use anyhow::Result;
 use decaf377_fmd::Precision;
-use penumbra_sdk_community_pool::{CommunityPoolDeposit, CommunityPoolOutput, CommunityPoolSpend};
-use penumbra_sdk_dex::{
-    lp::{
-        action::PositionClose,
-        plan::{PositionOpenPlan, PositionWithdrawPlan},
-    },
-    swap::SwapPlan,
-    swap_claim::SwapClaimPlan,
-};
-use penumbra_sdk_funding::liquidity_tournament::ActionLiquidityTournamentVotePlan;
-use penumbra_sdk_governance::{
-    DelegatorVotePlan, ProposalDepositClaim, ProposalSubmit, ProposalWithdraw, ValidatorVote,
-};
+use penumbra_sdk_governance::{ProposalSubmit, ValidatorVote};
 use penumbra_sdk_ibc::IbcRelay;
-use penumbra_sdk_keys::{Address, FullViewingKey, PayloadKey};
+#[cfg(any(unix, windows))]
+use penumbra_sdk_keys::FullViewingKey;
+use penumbra_sdk_keys::{Address, PayloadKey};
 use penumbra_sdk_proto::{core::transaction::v1 as pb, DomainType};
-use penumbra_sdk_shielded_pool::{Ics20Withdrawal, OutputPlan, SpendPlan, TransferPlan};
-use penumbra_sdk_stake::{Delegate, Undelegate, UndelegateClaimPlan};
+use penumbra_sdk_shielded_pool::{Ics20Withdrawal, ShieldedIcs20WithdrawalPlan, TransferPlan};
+#[cfg(any(unix, windows))]
 use penumbra_sdk_txhash::{EffectHash, EffectingData};
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
@@ -38,7 +27,8 @@ pub use clue::CluePlan;
 pub use detection_data::DetectionDataPlan;
 pub use memo::MemoPlan;
 
-use crate::{check_transaction_plan_enabled, TransactionParameters};
+use crate::FeeFundingPlan;
+use crate::TransactionParameters;
 
 /// A declaration of a planned [`Transaction`](crate::Transaction),
 /// for use in transaction authorization and creation.
@@ -47,68 +37,46 @@ use crate::{check_transaction_plan_enabled, TransactionParameters};
 pub struct TransactionPlan {
     pub actions: Vec<ActionPlan>,
     pub transaction_parameters: TransactionParameters,
+    pub fee_funding: Option<FeeFundingPlan>,
     pub detection_data: Option<DetectionDataPlan>,
     pub memo: Option<MemoPlan>,
 }
 
 impl TransactionPlan {
-    /// Sort the actions in [`TransactionPlan`] by type, using the protobuf field number in the [`ActionPlan`].
     pub fn sort_actions(&mut self) {
-        self.actions
-            .sort_by_key(|action: &ActionPlan| action.variant_index());
+        self.actions.sort_by_key(ActionPlan::variant_index);
     }
 
-    /// Computes the [`EffectHash`] for the [`Transaction`] described by this
-    /// [`TransactionPlan`].
-    ///
-    /// This method does not require constructing the entire [`Transaction`],
-    /// but it does require the associated [`FullViewingKey`] to derive
-    /// effecting data that will be fed into the [`EffectHash`].
-    ///
-    /// This method is not an [`EffectingData`] impl because it needs an extra input,
-    /// the FVK, to partially construct the transaction.
+    #[cfg(any(unix, windows))]
     pub fn effect_hash(&self, fvk: &FullViewingKey) -> Result<EffectHash> {
-        check_transaction_plan_enabled(self)?;
-
-        // This implementation is identical to the one for Transaction, except that we
-        // don't need to actually construct the entire `TransactionBody` with
-        // complete `Action`s, we just need to construct the bodies of the
-        // actions the transaction will have when constructed.
-
         let mut state = blake2b_simd::Params::new()
             .personal(b"PenumbraEfHs")
             .to_state();
 
         let parameters_hash = self.transaction_parameters.effect_hash();
-
         let memo_hash = match self.memo {
             Some(ref memo) => memo.memo()?.effect_hash(),
             None => EffectHash::default(),
         };
-
         let detection_data_hash = self
             .detection_data
             .as_ref()
             .map(|plan| plan.detection_data().effect_hash())
-            // If the detection data is not present, use the all-zero hash to
-            // record its absence in the overall effect hash.
             .unwrap_or_default();
-
-        // Hash the fixed data of the transaction body.
+        let memo_key = self.memo_key().unwrap_or([0u8; 32].into());
+        let fee_funding_hash = self
+            .fee_funding
+            .as_ref()
+            .map(|plan| plan.effect_hash(fvk, &memo_key))
+            .transpose()?
+            .unwrap_or_default();
         state.update(parameters_hash.as_bytes());
         state.update(memo_hash.as_bytes());
         state.update(detection_data_hash.as_bytes());
+        state.update(fee_funding_hash.as_bytes());
 
-        // Hash the number of actions, then each action.
         let num_actions = self.actions.len() as u32;
         state.update(&num_actions.to_le_bytes());
-
-        // If the memo_key is None, then there is no memo, so there will be no
-        // outputs that the memo key is passed to, so we can fill in a dummy key.
-        let memo_key = self.memo_key().unwrap_or([0u8; 32].into());
-
-        // Hash the effecting data of each action, in the order it appears in the plan,
-        // which will be the order it appears in the transaction.
         for action_plan in &self.actions {
             state.update(action_plan.effect_hash(fvk, &memo_key)?.as_bytes());
         }
@@ -116,60 +84,10 @@ impl TransactionPlan {
         Ok(EffectHash(state.finalize().as_array().clone()))
     }
 
-    pub fn spend_plans(&self) -> impl Iterator<Item = &SpendPlan> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::Spend(s) = action {
-                Some(s)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn output_plans(&self) -> impl Iterator<Item = &OutputPlan> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::Output(o) = action {
-                Some(o)
-            } else {
-                None
-            }
-        })
-    }
-
     pub fn transfer_plans(&self) -> impl Iterator<Item = &TransferPlan> {
         self.actions.iter().filter_map(|action| {
-            if let ActionPlan::Transfer(t) = action {
-                Some(t)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn delegations(&self) -> impl Iterator<Item = &Delegate> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::Delegate(d) = action {
-                Some(d)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn undelegations(&self) -> impl Iterator<Item = &Undelegate> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::Undelegate(d) = action {
-                Some(d)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn undelegate_claim_plans(&self) -> impl Iterator<Item = &UndelegateClaimPlan> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::UndelegateClaim(d) = action {
-                Some(d)
+            if let ActionPlan::Transfer(plan) = action {
+                Some(plan)
             } else {
                 None
             }
@@ -178,8 +96,8 @@ impl TransactionPlan {
 
     pub fn ibc_actions(&self) -> impl Iterator<Item = &IbcRelay> {
         self.actions.iter().filter_map(|action| {
-            if let ActionPlan::IbcAction(ibc_action) = action {
-                Some(ibc_action)
+            if let ActionPlan::IbcAction(action) = action {
+                Some(action)
             } else {
                 None
             }
@@ -188,10 +106,10 @@ impl TransactionPlan {
 
     pub fn validator_definitions(
         &self,
-    ) -> impl Iterator<Item = &penumbra_sdk_stake::validator::Definition> {
+    ) -> impl Iterator<Item = &penumbra_sdk_validator::validator::Definition> {
         self.actions.iter().filter_map(|action| {
-            if let ActionPlan::ValidatorDefinition(d) = action {
-                Some(d)
+            if let ActionPlan::ValidatorDefinition(definition) = action {
+                Some(definition)
             } else {
                 None
             }
@@ -200,38 +118,8 @@ impl TransactionPlan {
 
     pub fn proposal_submits(&self) -> impl Iterator<Item = &ProposalSubmit> {
         self.actions.iter().filter_map(|action| {
-            if let ActionPlan::ProposalSubmit(p) = action {
-                Some(p)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn proposal_withdraws(&self) -> impl Iterator<Item = &ProposalWithdraw> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::ProposalWithdraw(p) = action {
-                Some(p)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn delegator_vote_plans(&self) -> impl Iterator<Item = &DelegatorVotePlan> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::DelegatorVote(v) = action {
-                Some(v)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn lqt_vote_plans(&self) -> impl Iterator<Item = &ActionLiquidityTournamentVotePlan> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::ActionLiquidityTournamentVote(v) = action {
-                Some(v)
+            if let ActionPlan::ProposalSubmit(submit) = action {
+                Some(submit)
             } else {
                 None
             }
@@ -240,98 +128,20 @@ impl TransactionPlan {
 
     pub fn validator_votes(&self) -> impl Iterator<Item = &ValidatorVote> {
         self.actions.iter().filter_map(|action| {
-            if let ActionPlan::ValidatorVote(v) = action {
-                Some(v)
+            if let ActionPlan::ValidatorVote(vote) = action {
+                Some(vote)
             } else {
                 None
             }
         })
     }
 
-    pub fn proposal_deposit_claims(&self) -> impl Iterator<Item = &ProposalDepositClaim> {
+    pub fn shielded_ics20_withdrawal_plans(
+        &self,
+    ) -> impl Iterator<Item = &ShieldedIcs20WithdrawalPlan> {
         self.actions.iter().filter_map(|action| {
-            if let ActionPlan::ProposalDepositClaim(p) = action {
-                Some(p)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn swap_plans(&self) -> impl Iterator<Item = &SwapPlan> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::Swap(v) = action {
-                Some(v)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn swap_claim_plans(&self) -> impl Iterator<Item = &SwapClaimPlan> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::SwapClaim(v) = action {
-                Some(v)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn community_pool_spends(&self) -> impl Iterator<Item = &CommunityPoolSpend> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::CommunityPoolSpend(v) = action {
-                Some(v)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn community_pool_deposits(&self) -> impl Iterator<Item = &CommunityPoolDeposit> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::CommunityPoolDeposit(v) = action {
-                Some(v)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn community_pool_outputs(&self) -> impl Iterator<Item = &CommunityPoolOutput> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::CommunityPoolOutput(v) = action {
-                Some(v)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn position_openings(&self) -> impl Iterator<Item = &PositionOpenPlan> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::PositionOpen(v) = action {
-                Some(v)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn position_closings(&self) -> impl Iterator<Item = &PositionClose> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::PositionClose(v) = action {
-                Some(v)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn position_withdrawals(&self) -> impl Iterator<Item = &PositionWithdrawPlan> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::PositionWithdraw(v) = action {
-                Some(v)
+            if let ActionPlan::ShieldedIcs20Withdrawal(plan) = action {
+                Some(plan)
             } else {
                 None
             }
@@ -340,89 +150,131 @@ impl TransactionPlan {
 
     pub fn ics20_withdrawals(&self) -> impl Iterator<Item = &Ics20Withdrawal> {
         self.actions.iter().filter_map(|action| {
-            if let ActionPlan::Ics20Withdrawal(v) = action {
-                Some(v)
+            if let ActionPlan::ShieldedIcs20Withdrawal(plan) = action {
+                Some(&plan.withdrawal)
             } else {
                 None
             }
         })
     }
 
-    /// Convenience method to get all the destination addresses for each `OutputPlan`s.
     pub fn dest_addresses(&self) -> Vec<Address> {
-        self.output_plans()
-            .map(|plan| plan.dest_address.clone())
-            .chain(self.transfer_plans().flat_map(|plan| plan.dest_addresses()))
-            .collect()
+        let mut addresses = self
+            .actions
+            .iter()
+            .flat_map(|action| match action {
+                ActionPlan::Transfer(plan) => plan.dest_addresses().collect::<Vec<_>>(),
+                ActionPlan::Consolidate(plan) => plan
+                    .outputs
+                    .iter()
+                    .map(|output| output.dest_address.clone())
+                    .collect::<Vec<_>>(),
+                ActionPlan::Split(plan) => plan
+                    .outputs
+                    .iter()
+                    .map(|output| output.dest_address.clone())
+                    .collect::<Vec<_>>(),
+                ActionPlan::ShieldedIcs20Withdrawal(plan) => vec![plan.created_output_address()],
+                _ => Vec::new(),
+            })
+            .collect::<Vec<_>>();
+
+        if let Some(fee_funding) = &self.fee_funding {
+            addresses.extend(
+                fee_funding
+                    .transfer
+                    .outputs
+                    .iter()
+                    .map(|output| output.dest_address.clone()),
+            );
+        }
+
+        addresses
     }
 
-    /// Convenience method to get the total number of outputs in this transaction,
-    /// counting both `OutputPlan`s and outputs created by each `TransferPlan`.
     pub fn num_outputs(&self) -> usize {
-        self.output_plans().count()
-            + self
-                .transfer_plans()
-                .map(|plan| plan.num_outputs())
-                .sum::<usize>()
-    }
-
-    /// Convenience method to get the total number of spends in this transaction,
-    /// counting both `spend_plans()` and spends contained in `transfer_plans()`.
-    pub fn num_spends(&self) -> usize {
-        self.spend_plans().count()
-            + self
-                .transfer_plans()
-                .map(|plan| plan.spends.len())
-                .sum::<usize>()
-    }
-
-    /// Convenience method to get the number of proofs in this transaction.
-    pub fn num_proofs(&self) -> usize {
-        self.actions
+        let action_outputs = self
+            .actions
             .iter()
             .map(|action| match action {
-                ActionPlan::Spend(_) => 1,
-                ActionPlan::Output(_) => 1,
-                ActionPlan::Transfer(_) => 1,
-                ActionPlan::Swap(_) => 1,
-                ActionPlan::SwapClaim(_) => 1,
-                ActionPlan::UndelegateClaim(_) => 1,
-                ActionPlan::DelegatorVote(_) => 1,
-                ActionPlan::ActionLiquidityTournamentVote(_) => 1,
+                ActionPlan::Transfer(plan) => plan.outputs.len(),
+                ActionPlan::Consolidate(plan) => plan.outputs.len(),
+                ActionPlan::Split(plan) => plan.outputs.len(),
+                ActionPlan::ShieldedIcs20Withdrawal(plan) => plan.note_creating_output_count(),
                 _ => 0,
             })
-            .sum()
+            .sum::<usize>();
+
+        let fee_funding_outputs = self
+            .fee_funding
+            .as_ref()
+            .map(|fee_funding| fee_funding.transfer.outputs.len())
+            .unwrap_or_default();
+
+        action_outputs + fee_funding_outputs
     }
 
-    /// Method to populate the detection data for this transaction plan.
+    pub fn num_spends(&self) -> usize {
+        let action_spends = self
+            .actions
+            .iter()
+            .map(|action| match action {
+                ActionPlan::Transfer(plan) => plan.spends.len(),
+                ActionPlan::Consolidate(plan) => plan.spends.len(),
+                ActionPlan::Split(plan) => plan.spends.len(),
+                ActionPlan::ShieldedIcs20Withdrawal(plan) => plan.spends.len(),
+                _ => 0,
+            })
+            .sum::<usize>();
+
+        let fee_funding_spends = self
+            .fee_funding
+            .as_ref()
+            .map(|fee_funding| fee_funding.transfer.spends.len())
+            .unwrap_or_default();
+
+        action_spends + fee_funding_spends
+    }
+
+    pub fn num_proofs(&self) -> usize {
+        let action_proofs = self
+            .actions
+            .iter()
+            .map(|action| match action {
+                ActionPlan::Transfer(_)
+                | ActionPlan::Consolidate(_)
+                | ActionPlan::Split(_)
+                | ActionPlan::ShieldedIcs20Withdrawal(_) => 1,
+                _ => 0,
+            })
+            .sum::<usize>();
+
+        action_proofs + usize::from(self.fee_funding.is_some())
+    }
+
     pub fn populate_detection_data<R: CryptoRng + Rng>(
         &mut self,
         mut rng: R,
         precision: Precision,
     ) {
-        // Add one clue per recipient.
         let mut clue_plans = vec![];
         for dest_address in self.dest_addresses() {
             clue_plans.push(CluePlan::new(&mut rng, dest_address, precision));
         }
 
-        // Now add dummy clues until we have one clue per output.
-        let num_dummy_clues = self.num_outputs() - clue_plans.len();
+        let num_dummy_clues = self.num_outputs().saturating_sub(clue_plans.len());
         for _ in 0..num_dummy_clues {
             let dummy_address = Address::dummy(&mut rng);
             clue_plans.push(CluePlan::new(&mut rng, dummy_address, precision));
         }
 
-        if !clue_plans.is_empty() {
-            self.detection_data = Some(DetectionDataPlan { clue_plans });
+        self.detection_data = if clue_plans.is_empty() {
+            None
         } else {
-            self.detection_data = None;
-        }
+            Some(DetectionDataPlan { clue_plans })
+        };
     }
 
-    /// A builder-style version of [`TransactionPlan::populate_detection_data()`].
-    ///
-    /// Populates the detection data for this transaction plan.
     pub fn with_populated_detection_data<R: CryptoRng + Rng>(
         mut self,
         rng: R,
@@ -432,9 +284,8 @@ impl TransactionPlan {
         self
     }
 
-    /// Convenience method to grab the `MemoKey` from the plan.
     pub fn memo_key(&self) -> Option<PayloadKey> {
-        self.memo.as_ref().map(|memo_plan| memo_plan.key.clone())
+        self.memo.as_ref().map(|memo_plan| memo_plan.key)
     }
 }
 
@@ -447,6 +298,7 @@ impl From<TransactionPlan> for pb::TransactionPlan {
         Self {
             actions: msg.actions.into_iter().map(Into::into).collect(),
             transaction_parameters: Some(msg.transaction_parameters.into()),
+            fee_funding: msg.fee_funding.map(Into::into),
             detection_data: msg.detection_data.map(Into::into),
             memo: msg.memo.map(Into::into),
         }
@@ -455,6 +307,7 @@ impl From<TransactionPlan> for pb::TransactionPlan {
 
 impl TryFrom<pb::TransactionPlan> for TransactionPlan {
     type Error = anyhow::Error;
+
     fn try_from(value: pb::TransactionPlan) -> Result<Self, Self::Error> {
         Ok(Self {
             actions: value
@@ -464,8 +317,9 @@ impl TryFrom<pb::TransactionPlan> for TransactionPlan {
                 .collect::<Result<_, _>>()?,
             transaction_parameters: value
                 .transaction_parameters
-                .ok_or_else(|| anyhow::anyhow!("transaction plan missing transaction parameters"))?
+                .ok_or_else(|| anyhow::anyhow!("missing transaction parameters"))?
                 .try_into()?,
+            fee_funding: value.fee_funding.map(TryInto::try_into).transpose()?,
             detection_data: value.detection_data.map(TryInto::try_into).transpose()?,
             memo: value.memo.map(TryInto::try_into).transpose()?,
         })
@@ -474,241 +328,185 @@ impl TryFrom<pb::TransactionPlan> for TransactionPlan {
 
 #[cfg(test)]
 mod tests {
-    use std::panic::{self, AssertUnwindSafe};
-
-    use penumbra_sdk_asset::{Value, STAKING_TOKEN_ASSET_ID};
-    use penumbra_sdk_fee::Fee;
-    use penumbra_sdk_keys::{
-        keys::{Bip44Path, SeedPhrase, SpendKey},
-        Address,
+    use super::*;
+    use decaf377::Fr;
+    use ibc_types::core::channel::ChannelId;
+    use ibc_types::core::client::Height as IbcHeight;
+    use penumbra_sdk_asset::{Value, BASE_ASSET_ID};
+    use penumbra_sdk_keys::keys::{AddressIndex, Bip44Path, SeedPhrase, SpendKey};
+    use penumbra_sdk_keys::test_keys;
+    use penumbra_sdk_shielded_pool::{
+        Ics20Withdrawal, Note, Rseed, ShieldedIcs20WithdrawalFamilyId, ShieldedInputPlan,
+        ShieldedOutputPlan,
     };
-    use penumbra_sdk_shielded_pool::Note;
-    use penumbra_sdk_shielded_pool::{OutputPlan, SpendPlan, TransferPlan};
-    use penumbra_sdk_tct as tct;
-    use penumbra_sdk_txhash::EffectingData as _;
     use rand_core::OsRng;
+    use std::{ops::Deref, str::FromStr};
 
-    use crate::{
-        memo::MemoPlaintext,
-        plan::{CluePlan, DetectionDataPlan, MemoPlan, TransactionPlan},
-        Action, Transaction, TransactionBody, TransactionParameters, WitnessData,
-    };
-
-    fn panic_message(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
-        if let Some(message) = payload.downcast_ref::<&'static str>() {
-            Some(*message)
-        } else {
-            payload.downcast_ref::<String>().map(String::as_str)
-        }
-    }
-
-    /// This isn't an exhaustive test, but we don't currently have a
-    /// great way to generate actions for randomized testing.
-    ///
-    /// All we hope to check here is that, for a basic transaction plan,
-    /// we compute the same auth hash for the plan and for the transaction.
     #[test]
-    fn plan_effect_hash_matches_transaction_effect_hash() {
-        let rng = OsRng;
-        let seed_phrase = SeedPhrase::generate(rng);
-        let sk = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
-        let fvk = sk.full_viewing_key();
-        let (addr, _dtk) = fvk.incoming().payment_address(0u32.into());
-
-        let mut sct = tct::Tree::new();
-
-        let note0 = Note::generate(
-            &mut OsRng,
-            &addr,
-            Value {
-                amount: 10000u64.into(),
-                asset_id: *STAKING_TOKEN_ASSET_ID,
-            },
-        );
-        let note1 = Note::generate(
-            &mut OsRng,
-            &addr,
-            Value {
-                amount: 20000u64.into(),
-                asset_id: *STAKING_TOKEN_ASSET_ID,
-            },
-        );
-
-        sct.insert(tct::Witness::Keep, note0.commit()).unwrap();
-        sct.insert(tct::Witness::Keep, note1.commit()).unwrap();
-
+    fn detection_data_includes_dummy_clues_for_transfer_family_shape() {
         let mut rng = OsRng;
-
-        let memo_plaintext = MemoPlaintext::new(Address::dummy(&mut rng), "".to_string()).unwrap();
-        let mut plan: TransactionPlan = TransactionPlan {
-            // Put outputs first to check that the auth hash
-            // computation is not affected by plan ordering.
-            actions: vec![
-                OutputPlan::new(
-                    &mut OsRng,
-                    Value {
-                        amount: 30000u64.into(),
-                        asset_id: *STAKING_TOKEN_ASSET_ID,
-                    },
-                    addr.clone(),
-                )
-                .into(),
-                SpendPlan::new(&mut OsRng, note0, 0u64.into()).into(),
-                SpendPlan::new(&mut OsRng, note1, 1u64.into()).into(),
-            ],
-            transaction_parameters: TransactionParameters {
-                expiry_height: 0,
-                fee: Fee::default(),
-                chain_id: "penumbra-test".to_string(),
-            },
-            detection_data: Some(DetectionDataPlan {
-                clue_plans: vec![CluePlan::new(&mut OsRng, addr, 1.try_into().unwrap())],
-            }),
-            memo: Some(MemoPlan::new(&mut OsRng, memo_plaintext.clone())),
+        let sender_sk =
+            SpendKey::from_seed_phrase_bip44(SeedPhrase::generate(&mut rng), &Bip44Path::new(0));
+        let recipient_sk =
+            SpendKey::from_seed_phrase_bip44(SeedPhrase::generate(&mut rng), &Bip44Path::new(0));
+        let sender = sender_sk
+            .full_viewing_key()
+            .incoming()
+            .payment_address(AddressIndex::from(0u32))
+            .0;
+        let recipient = recipient_sk
+            .full_viewing_key()
+            .incoming()
+            .payment_address(AddressIndex::from(0u32))
+            .0;
+        let value = Value {
+            amount: 100u64.into(),
+            asset_id: *BASE_ASSET_ID,
         };
+        let note = Note::from_parts(sender, value, Rseed::generate(&mut rng)).expect("valid note");
+        let spend = ShieldedInputPlan::new(&mut rng, note, 0u64.into());
+        let output = ShieldedOutputPlan::new(&mut rng, value, recipient);
+        let transfer =
+            TransferPlan::from_spend_output(spend, output, Fr::rand(&mut rng)).expect("plan");
 
-        // Sort actions within the transaction plan.
-        plan.sort_actions();
-
-        println!("{}", serde_json::to_string_pretty(&plan).unwrap());
-
-        let plan_effect_hash = plan.effect_hash(fvk).unwrap();
-
-        let auth_data = plan.authorize(rng, &sk).unwrap();
-        let witness_data = WitnessData {
-            anchor: sct.root(),
-            state_commitment_proofs: plan
-                .spend_plans()
-                .map(|spend: &SpendPlan| {
-                    (
-                        spend.note.commit(),
-                        sct.witness(spend.note.commit()).unwrap(),
-                    )
-                })
-                .collect(),
-        };
-        let transaction = match panic::catch_unwind(AssertUnwindSafe(|| {
-            plan.build(fvk, &witness_data, &auth_data)
-        })) {
-            Ok(Ok(transaction)) => transaction,
-            Ok(Err(error)) => panic!("transaction build failed: {error:#}"),
-            Err(payload) => {
-                if panic_message(payload.as_ref())
-                    .is_some_and(|message| message.contains("Proving key cannot be loaded"))
-                {
-                    eprintln!(
-                        "skipping transaction build comparison because proving keys are unavailable"
-                    );
-                    return;
-                }
-
-                panic::resume_unwind(payload);
-            }
-        };
-
-        let transaction_effect_hash = transaction.effect_hash();
-
-        assert_eq!(plan_effect_hash, transaction_effect_hash);
-
-        let decrypted_memo = transaction.decrypt_memo(fvk).expect("can decrypt memo");
-        assert_eq!(decrypted_memo, memo_plaintext);
-
-        // TODO: fix this and move into its own test?
-        // // Also check the concurrent build results in the same effect hash.
-        // let rt = Runtime::new().unwrap();
-        // let transaction = rt
-        //     .block_on(async move {
-        //         plan.build_concurrent(&mut OsRng, fvk, auth_data, witness_data)
-        //             .await
-        //     })
-        //     .expect("can build");
-        // assert_eq!(plan_effect_hash, transaction.effect_hash());
-    }
-
-    #[test]
-    fn transfer_plan_effect_hash_matches_transaction_effect_hash() {
-        let seed_phrase = SeedPhrase::generate(OsRng);
-        let sk = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0));
-        let fvk = sk.full_viewing_key();
-        let (addr, _dtk) = fvk.incoming().payment_address(0u32.into());
-
-        let mut sct = tct::Tree::new();
-        let input_note = Note::generate(
-            &mut OsRng,
-            &addr,
-            Value {
-                amount: 10_000u64.into(),
-                asset_id: *STAKING_TOKEN_ASSET_ID,
-            },
-        );
-        sct.insert(tct::Witness::Keep, input_note.commit()).unwrap();
-
-        let mut spend_plan = SpendPlan::new(&mut OsRng, input_note, 0u64.into());
-        spend_plan
-            .set_compliance_details(&mut OsRng)
-            .expect("enrich spend plan");
-
-        let mut output_plan = OutputPlan::new(
-            &mut OsRng,
-            Value {
-                amount: 9_000u64.into(),
-                asset_id: *STAKING_TOKEN_ASSET_ID,
-            },
-            addr.clone(),
-        );
-        output_plan.tx_blinding_nonce = spend_plan.tx_blinding_nonce;
-        let recipient_leaf = output_plan
-            .compliance_leaf
-            .clone()
-            .expect("output plan should have recipient leaf");
-        let sender_leaf = spend_plan
-            .compliance_leaf
-            .clone()
-            .expect("spend plan should have sender leaf");
-        output_plan
-            .set_compliance_details(
-                &mut OsRng,
-                &recipient_leaf,
-                sender_leaf,
-                spend_plan.tx_blinding_nonce,
-            )
-            .expect("enrich output plan");
-
-        let transfer_plan =
-            TransferPlan::from_spend_output(spend_plan, output_plan, decaf377::Fr::from(42u64))
-                .expect("build transfer plan");
-        let memo_key = [0u8; 32].into();
-        let body = transfer_plan
-            .transfer_body(fvk, &memo_key, sct.root())
-            .expect("build transfer body from plan");
-
-        let plan = TransactionPlan {
-            actions: vec![transfer_plan.into()],
-            transaction_parameters: TransactionParameters {
-                expiry_height: 0,
-                fee: Fee::from_staking_token_amount(1_000u64.into()),
-                chain_id: "penumbra-test".to_string(),
-            },
+        let mut plan = TransactionPlan {
+            actions: vec![ActionPlan::Transfer(transfer)],
+            transaction_parameters: Default::default(),
+            fee_funding: None,
             detection_data: None,
             memo: None,
         };
+        plan.populate_detection_data(&mut rng, Precision::default());
 
-        let plan_effect_hash = plan.effect_hash(fvk).unwrap();
-        let transaction = Transaction {
-            transaction_body: TransactionBody {
-                actions: vec![Action::Transfer(penumbra_sdk_shielded_pool::Transfer {
-                    body,
-                    auth_sigs: vec![[0u8; 64].into()],
-                    proof: penumbra_sdk_shielded_pool::TransferProof::default(),
-                })],
-                transaction_parameters: plan.transaction_parameters.clone(),
-                detection_data: None,
-                memo: None,
-            },
-            ..Default::default()
+        assert_eq!(
+            plan.num_outputs(),
+            1,
+            "transfer should count semantic outputs, not padded family slots"
+        );
+        assert_eq!(
+            plan.detection_data
+                .as_ref()
+                .expect("detection data")
+                .clue_plans
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn shielded_ics20_withdrawal_counts_change_output_for_destinations_and_clues() {
+        let spend_value = Value {
+            amount: 50_000u64.into(),
+            asset_id: *BASE_ASSET_ID,
+        };
+        let change_value = Value {
+            amount: 10_000u64.into(),
+            asset_id: *BASE_ASSET_ID,
+        };
+        let note = Note::generate(&mut OsRng, &test_keys::ADDRESS_0, spend_value);
+        let spend = ShieldedInputPlan::new(&mut OsRng, note, 0u64.into());
+        let change = ShieldedOutputPlan::new(
+            &mut OsRng,
+            change_value,
+            test_keys::ADDRESS_0.deref().clone(),
+        );
+        let withdrawal = Ics20Withdrawal {
+            amount: 40_000u64.into(),
+            denom: penumbra_sdk_asset::BASE_ASSET_DENOM.clone(),
+            destination_chain_address: "cosmos1destination".to_string(),
+            return_address: test_keys::ADDRESS_0.deref().clone(),
+            timeout_height: IbcHeight::new(1, 10).expect("valid timeout height"),
+            timeout_time: 60_000_000_000,
+            source_channel: ChannelId::from_str("channel-0").expect("valid channel id"),
+            use_compat_address: false,
+            ics20_memo: String::new(),
+            use_transparent_address: false,
         };
 
-        assert_eq!(transaction.transfers().count(), 1);
-        assert_eq!(plan_effect_hash, transaction.effect_hash());
+        let withdrawal = ShieldedIcs20WithdrawalPlan::new(
+            ShieldedIcs20WithdrawalFamilyId::Canonical,
+            vec![spend],
+            Some(change),
+            withdrawal,
+            Fr::from(7u64),
+        )
+        .expect("plan should be valid");
+
+        let mut plan = TransactionPlan {
+            actions: vec![ActionPlan::ShieldedIcs20Withdrawal(withdrawal)],
+            transaction_parameters: Default::default(),
+            fee_funding: None,
+            detection_data: None,
+            memo: None,
+        };
+        plan.populate_detection_data(&mut OsRng, Precision::default());
+
+        assert_eq!(plan.num_outputs(), 1);
+        assert_eq!(
+            plan.dest_addresses(),
+            vec![test_keys::ADDRESS_0.deref().clone()]
+        );
+        assert_eq!(
+            plan.detection_data
+                .as_ref()
+                .expect("detection data")
+                .clue_plans
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn shielded_ics20_withdrawal_without_explicit_change_still_counts_hidden_change_note() {
+        let spend_value = Value {
+            amount: 40_000u64.into(),
+            asset_id: *BASE_ASSET_ID,
+        };
+        let note = Note::generate(&mut OsRng, &test_keys::ADDRESS_0, spend_value);
+        let spend = ShieldedInputPlan::new(&mut OsRng, note, 0u64.into());
+        let withdrawal = Ics20Withdrawal {
+            amount: 40_000u64.into(),
+            denom: penumbra_sdk_asset::BASE_ASSET_DENOM.clone(),
+            destination_chain_address: "cosmos1destination".to_string(),
+            return_address: test_keys::ADDRESS_0.deref().clone(),
+            timeout_height: IbcHeight::new(1, 10).expect("valid timeout height"),
+            timeout_time: 60_000_000_000,
+            source_channel: ChannelId::from_str("channel-0").expect("valid channel id"),
+            use_compat_address: false,
+            ics20_memo: String::new(),
+            use_transparent_address: false,
+        };
+
+        let withdrawal = ShieldedIcs20WithdrawalPlan::new(
+            ShieldedIcs20WithdrawalFamilyId::Canonical,
+            vec![spend],
+            None,
+            withdrawal,
+            Fr::from(7u64),
+        )
+        .expect("plan should be valid");
+
+        let mut plan = TransactionPlan {
+            actions: vec![ActionPlan::ShieldedIcs20Withdrawal(withdrawal)],
+            transaction_parameters: Default::default(),
+            fee_funding: None,
+            detection_data: None,
+            memo: None,
+        };
+        plan.populate_detection_data(&mut OsRng, Precision::default());
+
+        assert_eq!(plan.num_outputs(), 1);
+        assert_eq!(
+            plan.dest_addresses(),
+            vec![test_keys::ADDRESS_0.deref().clone()]
+        );
+        assert_eq!(
+            plan.detection_data
+                .as_ref()
+                .expect("detection data")
+                .clue_plans
+                .len(),
+            1
+        );
     }
 }

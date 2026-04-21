@@ -18,15 +18,18 @@ pub use shielded_pool::{ShieldedPool, StateReadExt, StateWriteExt};
 pub use transfer::Ics20Transfer;
 
 // Batch verification helpers for process_proposal
-pub use action_handler::output::{
-    output_build_public, output_check_stateless_and_extract, output_extract_public,
-    output_parse_ciphertext_fields, output_parse_dleq_fields, output_to_batch_item,
-    OutputCiphertextFields, OutputDleqFields,
+pub use action_handler::consolidate::{
+    consolidate_check_stateless_and_extract, consolidate_extract_public, consolidate_to_batch_item,
+    consolidate_verify_auth_sigs,
 };
-pub use action_handler::spend::{
-    spend_build_public, spend_check_stateless_and_extract, spend_extract_public,
-    spend_parse_ciphertext_fields, spend_parse_dleq_fields, spend_to_batch_item,
-    spend_verify_auth_sig, SpendCiphertextFields, SpendDleqFields,
+pub use action_handler::shielded_ics20_withdrawal::{
+    shielded_ics20_withdrawal_check_stateless_and_extract,
+    shielded_ics20_withdrawal_extract_public, shielded_ics20_withdrawal_to_batch_item,
+    shielded_ics20_withdrawal_verify_auth_sigs,
+};
+pub use action_handler::split::{
+    split_check_stateless_and_extract, split_extract_public, split_to_batch_item,
+    split_verify_auth_sigs,
 };
 pub use action_handler::transfer::{
     transfer_check_stateless_and_extract, transfer_extract_public, transfer_to_batch_item,

@@ -1,10 +1,9 @@
 package abi
 
 import (
-	"os"
 	"testing"
 
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/primitives"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/primitives"
 )
 
 type witnessFamily struct {
@@ -16,37 +15,8 @@ type witnessFamily struct {
 func testWitnessFamilies() []witnessFamily {
 	return []witnessFamily{
 		{
-			name: "spend",
-			payload: func(t *testing.T) []byte {
-				t.Helper()
-				return primitives.LoadSpendWitnessV1()
-			},
-			decode: func(payload []byte) error {
-				_, err := DecodeSpendWitnessV1(payload)
-				return err
-			},
-		},
-		{
-			name: "output",
-			payload: func(t *testing.T) []byte {
-				t.Helper()
-				return primitives.LoadOutputWitnessV1()
-			},
-			decode: func(payload []byte) error {
-				_, err := DecodeOutputWitnessV1(payload)
-				return err
-			},
-		},
-		{
-			name: "transfer1x1",
-			payload: func(t *testing.T) []byte {
-				t.Helper()
-				payload, err := os.ReadFile("../../testdata/transfer1x1_witness_v1.bin")
-				if err != nil {
-					t.Skipf("transfer1x1 witness fixture not found: %v", err)
-				}
-				return payload
-			},
+			name:    "transfer",
+			payload: func(t *testing.T) []byte { return primitives.LoadTransferWitnessV1("transfer") },
 			decode: func(payload []byte) error {
 				_, _, err := DecodeTransferWitnessV1(payload)
 				return err

@@ -57,7 +57,8 @@ pub trait ComplianceProofProvider: Send + Sync {
     ) -> Result<(MerklePath, u64, IndexedLeaf, bool)>;
 
     /// Get user proof and leaf: (merkle_path, position, leaf).
-    /// For unregulated assets, implementations should return a synthetic leaf with BLACK_HOLE_ACK.
+    /// For unregulated assets, implementations should return the normal synthetic
+    /// non-membership/default data path; no issuer-readable registration is required.
     /// Returns error if user is not registered for this asset.
     async fn get_user_proof(
         &self,

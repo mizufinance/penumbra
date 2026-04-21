@@ -247,7 +247,7 @@ impl ::prost::Name for ComplianceMerkleProofsRequest {
     }
 }
 /// Response containing Merkle proofs for compliance ZK proofs.
-/// This provides all the data needed to populate SpendPlan/OutputPlan compliance fields.
+/// This provides all the data needed to populate shielded input/output compliance fields.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ComplianceMerkleProofsResponse {
     /// Whether the user is registered for this asset.
@@ -537,7 +537,7 @@ impl ::prost::Name for EventAssetRegistered {
 /// Carries the spend ciphertext so the issuer can track regulated assets across IBC.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct IbcComplianceMetadata {
-    /// The compliance ciphertext from the funding spend.
+    /// The compliance ciphertext from the transfer-side input bundle.
     #[prost(bytes = "vec", tag = "1")]
     pub compliance_ciphertext: ::prost::alloc::vec::Vec<u8>,
     /// The asset ID being transferred.

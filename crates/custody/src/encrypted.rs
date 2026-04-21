@@ -259,6 +259,16 @@ impl<T: Terminal + Clone + Send + Sync + 'static> pb::custody_service_server::Cu
             .await
     }
 
+    async fn authorize_proposal_submit(
+        &self,
+        request: Request<pb::AuthorizeProposalSubmitRequest>,
+    ) -> Result<Response<pb::AuthorizeProposalSubmitResponse>, Status> {
+        self.get_inner()
+            .await?
+            .authorize_proposal_submit(request)
+            .await
+    }
+
     async fn export_full_viewing_key(
         &self,
         request: Request<pb::ExportFullViewingKeyRequest>,

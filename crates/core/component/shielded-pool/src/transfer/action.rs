@@ -1,6 +1,7 @@
 use std::convert::TryInto;
 
 use anyhow::{Context, Error};
+use decaf377::Fq;
 use decaf377_rdsa::{Signature, SpendAuth, VerificationKey};
 use penumbra_sdk_asset::balance;
 use penumbra_sdk_keys::symmetric::{OvkWrappedKey, WrappedMemoKey};
@@ -8,7 +9,7 @@ use penumbra_sdk_proto::{core::component::shielded_pool::v1 as pb, DomainType};
 use penumbra_sdk_sct::Nullifier;
 use penumbra_sdk_txhash::{EffectHash, EffectingData};
 
-use super::generated::TransferFamilyId;
+use super::generated::{transfer_auth_sig_count, transfer_input_count, transfer_output_count};
 use crate::{
     backref::ENCRYPTED_BACKREF_LEN, transfer::TransferProof, EncryptedBackref, NotePayload,
 };
@@ -23,6 +24,12 @@ pub struct TransferInputBody {
     pub dleq_proof: Vec<u8>,
 }
 
+impl TransferInputBody {
+    pub fn is_dummy(&self) -> bool {
+        self.encrypted_backref.is_empty() || self.nullifier.0 == Fq::from(0u64)
+    }
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(try_from = "pb::TransferOutputBody", into = "pb::TransferOutputBody")]
 pub struct TransferOutputBody {
@@ -33,10 +40,15 @@ pub struct TransferOutputBody {
     pub dleq_proofs: Vec<u8>,
 }
 
+impl TransferOutputBody {
+    pub fn is_dummy(&self) -> bool {
+        self.wrapped_memo_key.0 == [0u8; 48] && self.ovk_wrapped_key.0 == [0u8; 48]
+    }
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(try_from = "pb::TransferBody", into = "pb::TransferBody")]
 pub struct TransferBody {
-    pub family_id: TransferFamilyId,
     pub anchor: penumbra_sdk_tct::Root,
     pub balance_commitment: balance::Commitment,
     pub inputs: Vec<TransferInputBody>,
@@ -56,17 +68,15 @@ pub struct Transfer {
 impl TransferBody {
     pub fn validate_shape(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
-            self.inputs.len() == self.family_id.input_count(),
-            "transfer family {:?} expects {} inputs, got {}",
-            self.family_id,
-            self.family_id.input_count(),
+            self.inputs.len() == transfer_input_count(),
+            "transfer expects {} inputs, got {}",
+            transfer_input_count(),
             self.inputs.len()
         );
         anyhow::ensure!(
-            self.outputs.len() == self.family_id.output_count(),
-            "transfer family {:?} expects {} outputs, got {}",
-            self.family_id,
-            self.family_id.output_count(),
+            self.outputs.len() == transfer_output_count(),
+            "transfer expects {} outputs, got {}",
+            transfer_output_count(),
             self.outputs.len()
         );
         Ok(())
@@ -82,6 +92,18 @@ impl EffectingData for TransferBody {
         // transaction action hash the same effecting data even when the real anchor
         // is filled in later during build/proving.
         effecting.anchor = penumbra_sdk_tct::Tree::default().root();
+        // Transfer compliance bytes are constructed during body assembly and are not
+        // part of the user-selected economic effect of the transfer action. Clearing
+        // them keeps the effect hash stable across repeated body construction while
+        // the full transaction auth hash still commits to the serialized body.
+        for input in &mut effecting.inputs {
+            input.compliance_ciphertext.clear();
+            input.dleq_proof.clear();
+        }
+        for output in &mut effecting.outputs {
+            output.compliance_ciphertext.clear();
+            output.dleq_proofs.clear();
+        }
         EffectHash::from_proto_effecting_data(&effecting.to_proto())
     }
 }
@@ -124,9 +146,9 @@ impl TryFrom<pb::Transfer> for Transfer {
             .collect::<Result<Vec<_>, _>>()?;
 
         anyhow::ensure!(
-            auth_sigs.len() == body.family_id.auth_sig_count(),
+            auth_sigs.len() == transfer_auth_sig_count(),
             "transfer expected {} auth sigs, got {}",
-            body.family_id.auth_sig_count(),
+            transfer_auth_sig_count(),
             auth_sigs.len()
         );
 
@@ -238,7 +260,6 @@ impl DomainType for TransferBody {
 impl From<TransferBody> for pb::TransferBody {
     fn from(msg: TransferBody) -> Self {
         Self {
-            family_id: msg.family_id.into(),
             anchor: Some(msg.anchor.into()),
             balance_commitment: Some(msg.balance_commitment.into()),
             inputs: msg.inputs.into_iter().map(Into::into).collect(),
@@ -255,7 +276,6 @@ impl TryFrom<pb::TransferBody> for TransferBody {
 
     fn try_from(proto: pb::TransferBody) -> Result<Self, Self::Error> {
         let body = Self {
-            family_id: proto.family_id.try_into()?,
             anchor: proto
                 .anchor
                 .ok_or_else(|| anyhow::anyhow!("missing anchor"))?

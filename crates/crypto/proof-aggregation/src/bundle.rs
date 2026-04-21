@@ -1,17 +1,16 @@
 use anyhow::{anyhow, Result};
 use penumbra_sdk_proto::{core::transaction::v1 as pb, DomainType};
-use penumbra_sdk_shielded_pool::TransferFamilyId;
+use penumbra_sdk_shielded_pool::{
+    ConsolidateFamilyId, ShieldedIcs20WithdrawalFamilyId, SplitFamilyId,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum ProofFamilyId {
-    Spend,
-    Output,
-    Transfer(TransferFamilyId),
-    Swap,
-    SwapClaim,
-    Convert,
-    DelegatorVote,
+    Transfer,
+    Consolidate(ConsolidateFamilyId),
+    Split(SplitFamilyId),
+    ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -32,65 +31,149 @@ pub struct AggregateBundle {
 impl From<ProofFamilyId> for pb::ProofFamilyId {
     fn from(value: ProofFamilyId) -> Self {
         match value {
-            ProofFamilyId::Spend => Self::Spend,
-            ProofFamilyId::Output => Self::Output,
-            ProofFamilyId::Transfer(_) => Self::Transfer,
-            ProofFamilyId::Swap => Self::Swap,
-            ProofFamilyId::SwapClaim => Self::SwapClaim,
-            ProofFamilyId::Convert => Self::Convert,
-            ProofFamilyId::DelegatorVote => Self::DelegatorVote,
+            ProofFamilyId::Transfer => Self::Transfer,
+            ProofFamilyId::Consolidate(_) => Self::Consolidate,
+            ProofFamilyId::Split(_) => Self::Split,
+            ProofFamilyId::ShieldedIcs20Withdrawal(_) => Self::ShieldedIcs20Withdrawal,
         }
     }
 }
 
 impl ProofFamilyId {
-    fn try_from_proto_fields(family_id: i32, transfer_family_id: u32) -> Result<Self> {
+    fn try_from_proto_fields(
+        family_id: i32,
+        consolidate_family_id: u32,
+        split_family_id: u32,
+        shielded_ics20_withdrawal_family_id: u32,
+    ) -> Result<Self> {
         match pb::ProofFamilyId::try_from(family_id) {
             Ok(pb::ProofFamilyId::Unspecified) => Err(anyhow!("unspecified proof family id")),
-            Ok(pb::ProofFamilyId::Spend) => {
-                ensure_no_transfer_family_id("spend", transfer_family_id)?;
-                Ok(Self::Spend)
+            Ok(pb::ProofFamilyId::Transfer) => {
+                ensure_only_transfer_related_ids(
+                    consolidate_family_id,
+                    split_family_id,
+                    shielded_ics20_withdrawal_family_id,
+                )?;
+                Ok(Self::Transfer)
             }
-            Ok(pb::ProofFamilyId::Output) => {
-                ensure_no_transfer_family_id("output", transfer_family_id)?;
-                Ok(Self::Output)
+            Ok(pb::ProofFamilyId::Consolidate) => {
+                ensure_only_consolidate_family_id(
+                    consolidate_family_id,
+                    split_family_id,
+                    shielded_ics20_withdrawal_family_id,
+                )?;
+                Ok(Self::Consolidate(consolidate_family_id.try_into()?))
             }
-            Ok(pb::ProofFamilyId::Transfer) => Ok(Self::Transfer(transfer_family_id.try_into()?)),
-            Ok(pb::ProofFamilyId::Swap) => {
-                ensure_no_transfer_family_id("swap", transfer_family_id)?;
-                Ok(Self::Swap)
+            Ok(pb::ProofFamilyId::Split) => {
+                ensure_only_split_family_id(
+                    consolidate_family_id,
+                    split_family_id,
+                    shielded_ics20_withdrawal_family_id,
+                )?;
+                Ok(Self::Split(split_family_id.try_into()?))
             }
-            Ok(pb::ProofFamilyId::SwapClaim) => {
-                ensure_no_transfer_family_id("swap_claim", transfer_family_id)?;
-                Ok(Self::SwapClaim)
-            }
-            Ok(pb::ProofFamilyId::Convert) => {
-                ensure_no_transfer_family_id("convert", transfer_family_id)?;
-                Ok(Self::Convert)
-            }
-            Ok(pb::ProofFamilyId::DelegatorVote) => {
-                ensure_no_transfer_family_id("delegator_vote", transfer_family_id)?;
-                Ok(Self::DelegatorVote)
+            Ok(pb::ProofFamilyId::ShieldedIcs20Withdrawal) => {
+                ensure_only_shielded_ics20_withdrawal_family_id(
+                    consolidate_family_id,
+                    split_family_id,
+                    shielded_ics20_withdrawal_family_id,
+                )?;
+                Ok(Self::ShieldedIcs20Withdrawal(
+                    shielded_ics20_withdrawal_family_id.try_into()?,
+                ))
             }
             Err(_) => Err(anyhow!("unknown proof family id {family_id}")),
         }
     }
 
-    fn transfer_family_id(self) -> u32 {
+    fn consolidate_family_id(self) -> u32 {
         match self {
-            ProofFamilyId::Transfer(family_id) => family_id.get(),
+            ProofFamilyId::Consolidate(family_id) => family_id.get(),
+            _ => 0,
+        }
+    }
+
+    fn split_family_id(self) -> u32 {
+        match self {
+            ProofFamilyId::Split(family_id) => family_id.get(),
+            _ => 0,
+        }
+    }
+
+    fn shielded_ics20_withdrawal_family_id(self) -> u32 {
+        match self {
+            ProofFamilyId::ShieldedIcs20Withdrawal(family_id) => family_id.get(),
             _ => 0,
         }
     }
 }
 
-fn ensure_no_transfer_family_id(family: &str, transfer_family_id: u32) -> Result<()> {
-    if transfer_family_id == 0 {
-        Ok(())
-    } else {
+fn ensure_only_transfer_related_ids(
+    consolidate_family_id: u32,
+    split_family_id: u32,
+    shielded_ics20_withdrawal_family_id: u32,
+) -> Result<()> {
+    if consolidate_family_id != 0
+        || split_family_id != 0
+        || shielded_ics20_withdrawal_family_id != 0
+    {
         Err(anyhow!(
-            "{family} aggregate must not set transfer_family_id={transfer_family_id}"
+            "transfer aggregate must not set consolidate/split/shielded_ics20_withdrawal ids: consolidate={consolidate_family_id}, split={split_family_id}, shielded_ics20_withdrawal={shielded_ics20_withdrawal_family_id}"
         ))
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_only_consolidate_family_id(
+    consolidate_family_id: u32,
+    split_family_id: u32,
+    shielded_ics20_withdrawal_family_id: u32,
+) -> Result<()> {
+    if consolidate_family_id == 0 {
+        Err(anyhow!(
+            "consolidate aggregate must set consolidate_family_id"
+        ))
+    } else if split_family_id != 0 || shielded_ics20_withdrawal_family_id != 0 {
+        Err(anyhow!(
+            "consolidate aggregate must not set split/shielded_ics20_withdrawal ids: split={split_family_id}, shielded_ics20_withdrawal={shielded_ics20_withdrawal_family_id}"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_only_split_family_id(
+    consolidate_family_id: u32,
+    split_family_id: u32,
+    shielded_ics20_withdrawal_family_id: u32,
+) -> Result<()> {
+    if split_family_id == 0 {
+        Err(anyhow!("split aggregate must set split_family_id"))
+    } else if consolidate_family_id != 0 || shielded_ics20_withdrawal_family_id != 0 {
+        Err(anyhow!(
+            "split aggregate must not set consolidate/shielded_ics20_withdrawal ids: consolidate={consolidate_family_id}, shielded_ics20_withdrawal={shielded_ics20_withdrawal_family_id}"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_only_shielded_ics20_withdrawal_family_id(
+    consolidate_family_id: u32,
+    split_family_id: u32,
+    shielded_ics20_withdrawal_family_id: u32,
+) -> Result<()> {
+    if shielded_ics20_withdrawal_family_id == 0 {
+        Err(anyhow!(
+            "shielded_ics20_withdrawal aggregate must set shielded_ics20_withdrawal_family_id"
+        ))
+    } else if consolidate_family_id != 0 || split_family_id != 0 {
+        Err(anyhow!(
+            "shielded_ics20_withdrawal aggregate must not set consolidate/split ids: consolidate={consolidate_family_id}, split={split_family_id}"
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -98,7 +181,7 @@ impl TryFrom<i32> for ProofFamilyId {
     type Error = anyhow::Error;
 
     fn try_from(value: i32) -> Result<Self> {
-        Self::try_from_proto_fields(value, 0)
+        Self::try_from_proto_fields(value, 0, 0, 0)
     }
 }
 
@@ -140,7 +223,11 @@ impl From<FamilyAggregate> for pb::FamilyAggregate {
     fn from(value: FamilyAggregate) -> Self {
         Self {
             family_id: pb::ProofFamilyId::from(value.family_id) as i32,
-            transfer_family_id: value.family_id.transfer_family_id(),
+            consolidate_family_id: value.family_id.consolidate_family_id(),
+            split_family_id: value.family_id.split_family_id(),
+            shielded_ics20_withdrawal_family_id: value
+                .family_id
+                .shielded_ics20_withdrawal_family_id(),
             real_count: value.real_count,
             padded_count: value.padded_count,
             aggregate_proof: value.aggregate_proof,
@@ -155,7 +242,9 @@ impl TryFrom<pb::FamilyAggregate> for FamilyAggregate {
         Ok(Self {
             family_id: ProofFamilyId::try_from_proto_fields(
                 value.family_id,
-                value.transfer_family_id,
+                value.consolidate_family_id,
+                value.split_family_id,
+                value.shielded_ics20_withdrawal_family_id,
             )?,
             real_count: value.real_count,
             padded_count: value.padded_count,
@@ -168,18 +257,27 @@ impl TryFrom<pb::FamilyAggregate> for FamilyAggregate {
 mod tests {
     use super::{AggregateBundle, FamilyAggregate, ProofFamilyId};
     use penumbra_sdk_proto::DomainType;
+    use penumbra_sdk_shielded_pool::{ConsolidateFamilyId, SplitFamilyId};
 
     #[test]
     fn aggregate_bundle_proto_round_trip() {
         let bundle = AggregateBundle {
             version: 7,
             srs_id: vec![1, 2, 3, 4],
-            families: vec![FamilyAggregate {
-                family_id: ProofFamilyId::SwapClaim,
-                real_count: 3,
-                padded_count: 4,
-                aggregate_proof: vec![9, 8, 7],
-            }],
+            families: vec![
+                FamilyAggregate {
+                    family_id: ProofFamilyId::Consolidate(ConsolidateFamilyId::TwoByOne),
+                    real_count: 1,
+                    padded_count: 1,
+                    aggregate_proof: vec![1, 2, 3],
+                },
+                FamilyAggregate {
+                    family_id: ProofFamilyId::Split(SplitFamilyId::OneByFour),
+                    real_count: 2,
+                    padded_count: 2,
+                    aggregate_proof: vec![4, 5, 6],
+                },
+            ],
         };
 
         let proto = bundle.to_proto();

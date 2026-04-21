@@ -42,14 +42,10 @@ cargo $nightly_opt doc --no-deps \
   -p pcli \
   -p pclientd \
   -p pd \
-  -p pmonitor \
   -p penumbra-sdk-app \
   -p penumbra-sdk-asset \
-  -p penumbra-sdk-community-pool \
   -p penumbra-sdk-custody \
   -p penumbra-sdk-custody-ledger-usb \
-  -p penumbra-sdk-dex \
-  -p penumbra-sdk-distributions \
   -p penumbra-sdk-fee \
   -p penumbra-sdk-governance \
   -p penumbra-sdk-ibc \
@@ -60,11 +56,10 @@ cargo $nightly_opt doc --no-deps \
   -p penumbra-sdk-mock-client \
   -p penumbra-sdk-num \
   -p penumbra-sdk-proof-params \
-  -p penumbra-sdk-proof-setup \
   -p penumbra-sdk-proto \
   -p penumbra-sdk-sct \
   -p penumbra-sdk-shielded-pool \
-  -p penumbra-sdk-stake \
+  -p penumbra-sdk-validator \
   -p penumbra-sdk-tct \
   -p penumbra-sdk-transaction \
   -p penumbra-sdk-txhash \

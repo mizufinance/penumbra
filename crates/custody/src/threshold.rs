@@ -7,7 +7,10 @@ use tonic::{async_trait, Request, Response, Status};
 use penumbra_sdk_keys::{keys::AddressIndex, Address, FullViewingKey};
 use penumbra_sdk_proto::{custody::v1 as pb, DomainType};
 
-use crate::{AuthorizeRequest, AuthorizeValidatorDefinitionRequest, AuthorizeValidatorVoteRequest};
+use crate::{
+    AuthorizeProposalSubmitRequest, AuthorizeRequest, AuthorizeValidatorDefinitionRequest,
+    AuthorizeValidatorVoteRequest,
+};
 
 pub use self::config::Config;
 use self::sign::no_signature_response;
@@ -27,6 +30,8 @@ pub enum SigningResponse {
     ValidatorDefinition(decaf377_rdsa::Signature<decaf377_rdsa::SpendAuth>),
     /// Authorization signature for a validator vote.
     ValidatorVote(decaf377_rdsa::Signature<decaf377_rdsa::SpendAuth>),
+    /// Authorization signature for a proposal submission.
+    ProposalSubmit(decaf377_rdsa::Signature<decaf377_rdsa::SpendAuth>),
 }
 
 impl From<AuthorizationData> for SigningResponse {
@@ -66,6 +71,9 @@ pub async fn follow(
         ))?,
         SigningRequest::ValidatorVote(_) => governance_config.ok_or(anyhow!(
             "cannot threshold sign validator vote using a non-threshold validator governance custody backend"
+        ))?,
+        SigningRequest::ProposalSubmit(_) => governance_config.ok_or(anyhow!(
+            "cannot threshold sign proposal submit using a non-threshold validator governance custody backend"
         ))?,
     };
     if !terminal
@@ -331,6 +339,32 @@ impl<T: Terminal + Sync + Send + 'static> pb::custody_service_server::CustodySer
         }))
     }
 
+    async fn authorize_proposal_submit(
+        &self,
+        request: Request<pb::AuthorizeProposalSubmitRequest>,
+    ) -> Result<Response<pb::AuthorizeProposalSubmitResponse>, Status> {
+        let request: AuthorizeProposalSubmitRequest = request
+            .into_inner()
+            .try_into()
+            .map_err(|e| Status::invalid_argument(format!("{e}")))?;
+        let data = self
+            .authorize(SigningRequest::ProposalSubmit(request.proposal_submit))
+            .await
+            .map_err(|e| {
+                Status::internal(format!(
+                    "Failed to process proposal submit authorization request: {e}"
+                ))
+            })?;
+        let SigningResponse::ProposalSubmit(proposal_submit_auth) = data else {
+            return Err(Status::internal(
+                "expected proposal submit authorization but custody service returned another kind of authorization data".to_string()
+            ));
+        };
+        Ok(Response::new(pb::AuthorizeProposalSubmitResponse {
+            proposal_submit_auth: Some(proposal_submit_auth.into()),
+        }))
+    }
+
     async fn export_full_viewing_key(
         &self,
         _request: Request<pb::ExportFullViewingKeyRequest>,
@@ -522,103 +556,6 @@ mod test {
 
     #[tokio::test]
     async fn test_transaction_signing() -> Result<()> {
-        const TEST_PLAN: &'static str = r#"
-{
-    "actions": [
-        {
-            "output": {
-                "value": {
-                    "amount": {
-                        "lo": "1000000000"
-                    },
-                    "assetId": {
-                        "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-                    }
-                },
-                "destAddress": {
-                    "inner": "UuFEV0VoZNxNTttsJVJzRqEzW4bm0z2RCxhUneve0KTvDjQipeg/1zx0ftbDjgr6uPiSA70yJIdlpFyxeLyXfAAtmSy6BCpR3YjEkf1bI5Q="
-                },
-                "rseed": "4m4bxumA0sHuonPjr12UnI4CWKj1wuq4y6rrMRb0nw0=",
-                "valueBlinding": "HHS7tY19JuWMwdKJvtKs8AmhMVa7osSpZ+CCBszu/AE=",
-                "proofBlindingR": "FmbXZoh5Pd2mEtiAEkkAZpllWo9pdwTPlXeODBXHUxA=",
-                "proofBlindingS": "0x96kUchW8jFfnxglAoMtvzPT5/RLg2RvfkRKjlU8BA="
-            }
-        },
-        {
-            "spend": {
-                "note": {
-                    "value": {
-                        "amount": {
-                            "lo": "1000000000000"
-                        },
-                        "assetId": {
-                            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-                        }
-                    },
-                    "rseed": "3svSxWREwvvVzb2upQuu3Cyr56O2kRbo0nuX4+OWcdc=",
-                    "address": {
-                        "inner": "6146pY5upA9bQa4tag+6hXpMXa2kO5fcicSJGVEUP4HhZt7m4FpwAJ3+qwr5gpbHUON7DigyEJRpeV31FATGdfJhHBzGDWC+CIvi8dyIzGo="
-                    }
-                },
-                "position": "90",
-                "randomizer": "dJvg8FGvw5rJAvtSQvlQ4imLXahVXn419+xroVMLSwA=",
-                "valueBlinding": "Ce1/hBKLEMB/bjEA06b4zUJVEstNUjkDBWM3WrVu+QM=",
-                "proofBlindingR": "gXA7M4VR48IoxKrf4w4jGae2O7OGlTecU/RBXd4g6QI=",
-                "proofBlindingS": "7+Rhrve7mdgsKbkfFq41yfq9+Mx2qRAZDtwP3VUDAAs="
-            }
-        },
-        {
-            "output": {
-                "value": {
-                    "amount": {
-                        "lo": "999000000000"
-                    },
-                    "assetId": {
-                        "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-                    }
-                },
-                "destAddress": {
-                    "inner": "6146pY5upA9bQa4tag+6hXpMXa2kO5fcicSJGVEUP4HhZt7m4FpwAJ3+qwr5gpbHUON7DigyEJRpeV31FATGdfJhHBzGDWC+CIvi8dyIzGo="
-                },
-                "rseed": "rCTbPc6xWyEcDV73Pl+W6XXbACShVOM+8/vdc7RSLlo=",
-                "valueBlinding": "DP0FN5CV4g9xZN6u2W6/4o6I/Zwr38n81q4YnJ6COAA=",
-                "proofBlindingR": "KV3u8Dc+cZo0HFUIn7n95UkQVXWeYp+3vAVuIpCIZRI=",
-                "proofBlindingS": "i00KyJVklWXUhVRy37N3p9szFIvo7383to/qxBexnBE="
-            }
-        }
-    ],
-    "transactionParameters": {
-        "chainId": "penumbra-testnet-rhea-8b2dfc5c",
-        "fee": {
-            "amount": {}
-        }
-    },
-    "detectionData": {
-        "cluePlans": [
-            {
-                "address": {
-                    "inner": "UuFEV0VoZNxNTttsJVJzRqEzW4bm0z2RCxhUneve0KTvDjQipeg/1zx0ftbDjgr6uPiSA70yJIdlpFyxeLyXfAAtmSy6BCpR3YjEkf1bI5Q="
-                },
-                "rseed": "1Li0Qx05txsyOrx2pfO9kD5rDSUMy9e+j/hHmucqARI="
-            },
-            {
-                "address": {
-                    "inner": "6146pY5upA9bQa4tag+6hXpMXa2kO5fcicSJGVEUP4HhZt7m4FpwAJ3+qwr5gpbHUON7DigyEJRpeV31FATGdfJhHBzGDWC+CIvi8dyIzGo="
-                },
-                "rseed": "ePtCm9/tFcpLBdlgyu8bYRKV5CHbqd823UGDhG1LsGY="
-            }
-        ]
-    },
-    "memo": {
-        "plaintext": {
-            "returnAddress": {
-                "inner": "OB8AEHEehWo0o0/Dn7JtNmgdDX1VRPaDgn6MLl6n41hVjI3llljrTDCFRRjN5mkNwVwsAyJ/UdfjNIFzbGV62YVXfBJ/IMVTq2CNAHwR8Qo="
-            }
-        },
-        "key": "3plOcPZzKKj8KT3sVdKnblUUFDRzCmMWYtgwB3BqfXQ="
-    }
-}
-        "#;
         const T: u16 = 3;
         const N: u16 = 3;
 
@@ -633,7 +570,45 @@ mod test {
         {
             tokio::spawn(async move { follow(Some(&config), Some(&config), &terminal).await });
         }
-        let plan = serde_json::from_str::<TransactionPlan>(TEST_PLAN)?;
+        let sender = coordinator_config
+            .fvk()
+            .incoming()
+            .payment_address(0u32.into())
+            .0;
+        let recipient = coordinator_config
+            .fvk()
+            .incoming()
+            .payment_address(1u32.into())
+            .0;
+        let value = penumbra_sdk_asset::Value {
+            amount: 1_000u64.into(),
+            asset_id: *penumbra_sdk_asset::BASE_ASSET_ID,
+        };
+        let note = penumbra_sdk_shielded_pool::Note::from_parts(
+            sender.clone(),
+            penumbra_sdk_asset::Value {
+                amount: 2_000u64.into(),
+                asset_id: *penumbra_sdk_asset::BASE_ASSET_ID,
+            },
+            penumbra_sdk_shielded_pool::Rseed::generate(&mut OsRng),
+        )?;
+        let spend =
+            penumbra_sdk_shielded_pool::ShieldedInputPlan::new(&mut OsRng, note, 0u64.into());
+        let output =
+            penumbra_sdk_shielded_pool::ShieldedOutputPlan::new(&mut OsRng, value, recipient);
+        let transfer = penumbra_sdk_shielded_pool::TransferPlan::from_spend_output(
+            spend,
+            output,
+            decaf377::Fr::rand(&mut OsRng),
+        )?;
+        let mut plan = TransactionPlan {
+            actions: vec![penumbra_sdk_transaction::ActionPlan::Transfer(transfer)],
+            memo: None,
+            detection_data: None,
+            fee_funding: None,
+            transaction_parameters: penumbra_sdk_transaction::TransactionParameters::default(),
+        };
+        plan.populate_detection_data(OsRng, Default::default());
         let fvk = coordinator_config.fvk().clone();
         let authorization_data = Threshold::new(coordinator_config, coordinator_terminal)
             .authorize(SigningRequest::TransactionPlan(plan.clone()))
@@ -648,12 +623,30 @@ mod test {
                 .effect_hash
                 .expect("effect hash not present")
         );
-        // The transaction plan only has spends
-        for (randomizer, sig) in plan
-            .spend_plans()
-            .map(|x| x.randomizer)
-            .zip(tx_authorization_data.spend_auths)
-        {
+        let spend_randomizers = plan.actions.iter().flat_map(|action| match action {
+            penumbra_sdk_transaction::ActionPlan::Transfer(plan) => plan
+                .spends
+                .iter()
+                .map(|spend| spend.randomizer)
+                .collect::<Vec<_>>(),
+            penumbra_sdk_transaction::ActionPlan::Consolidate(plan) => plan
+                .spends
+                .iter()
+                .map(|spend| spend.randomizer)
+                .collect::<Vec<_>>(),
+            penumbra_sdk_transaction::ActionPlan::Split(plan) => plan
+                .spends
+                .iter()
+                .map(|spend| spend.randomizer)
+                .collect::<Vec<_>>(),
+            penumbra_sdk_transaction::ActionPlan::ShieldedIcs20Withdrawal(plan) => plan
+                .spends
+                .iter()
+                .map(|spend| spend.randomizer)
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        });
+        for (randomizer, sig) in spend_randomizers.zip(tx_authorization_data.spend_auths) {
             fvk.spend_verification_key().randomize(&randomizer).verify(
                 tx_authorization_data
                     .effect_hash

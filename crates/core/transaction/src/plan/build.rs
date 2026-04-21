@@ -1,32 +1,32 @@
 use anyhow::Result;
+#[cfg(any(unix, windows))]
 use ark_ff::Zero;
+#[cfg(any(unix, windows))]
 use decaf377::Fr;
+#[cfg(any(unix, windows))]
 use decaf377_rdsa as rdsa;
 #[cfg(all(feature = "parallel", any(unix, windows)))]
 use penumbra_sdk_keys::symmetric::PayloadKey;
 #[cfg(any(unix, windows))]
 use penumbra_sdk_keys::FullViewingKey;
-use penumbra_sdk_txhash::AuthorizingData;
+#[cfg(any(unix, windows))]
+use penumbra_sdk_txhash::{AuthorizingData, EffectingData};
 #[cfg(all(feature = "parallel", any(unix, windows)))]
 use tokio::sync::oneshot;
 
 use super::TransactionPlan;
-#[cfg(any(unix, windows))]
 use crate::ActionPlan;
-use crate::{
-    action::Action, check_transaction_enabled, check_transaction_plan_enabled, AuthorizationData,
-    Transaction, TransactionBody, WitnessData,
-};
+#[cfg(any(unix, windows))]
+use crate::AuthorizationData;
+use crate::{action::Action, Transaction, TransactionBody, WitnessData};
 
 impl TransactionPlan {
     pub fn build_unauth_with_actions(
         self,
         actions: Vec<Action>,
+        fee_funding: Option<crate::FeeFunding>,
         witness_data: &WitnessData,
     ) -> Result<Transaction> {
-        check_transaction_plan_enabled(&self)?;
-
-        // Add the memo if it is planned.
         let memo = self
             .memo
             .as_ref()
@@ -35,38 +35,42 @@ impl TransactionPlan {
 
         let detection_data = self.detection_data.as_ref().map(|x| x.detection_data());
 
-        let transaction_body = TransactionBody {
-            actions,
-            transaction_parameters: self.transaction_parameters,
-            detection_data,
-            memo,
-        };
-
-        let tx = Transaction {
-            transaction_body,
+        Ok(Transaction {
+            transaction_body: TransactionBody {
+                actions,
+                transaction_parameters: self.transaction_parameters,
+                fee_funding,
+                detection_data,
+                memo,
+            },
             anchor: witness_data.anchor,
             binding_sig: [0; 64].into(),
-        };
-
-        check_transaction_enabled(&tx)?;
-
-        Ok(tx)
+        })
     }
 
-    /// Slot in the [`AuthorizationData`] and derive the synthetic
-    /// blinding factors needed to compute the binding signature
-    /// and assemble the transaction.
+    #[cfg(any(unix, windows))]
     pub fn apply_auth_data(
         &self,
         auth_data: &AuthorizationData,
         mut transaction: Transaction,
     ) -> Result<Transaction> {
-        // Do some basic input sanity-checking.
-        let spend_count = transaction.spends().count()
-            + transaction
-                .transfers()
-                .map(|t| t.auth_sigs.len())
-                .sum::<usize>();
+        let spend_count = self
+            .actions
+            .iter()
+            .map(|action| match action {
+                ActionPlan::Transfer(plan) => plan.spends.len(),
+                ActionPlan::Consolidate(plan) => plan.spends.len(),
+                ActionPlan::Split(plan) => plan.spends.len(),
+                ActionPlan::ShieldedIcs20Withdrawal(plan) => plan.spends.len(),
+                _ => 0,
+            })
+            .sum::<usize>()
+            + self
+                .fee_funding
+                .as_ref()
+                .map(|fee_funding| fee_funding.transfer.spends.len())
+                .unwrap_or_default();
+
         if auth_data.spend_auths.len() != spend_count {
             anyhow::bail!(
                 "expected {} spend auths but got {}",
@@ -75,75 +79,82 @@ impl TransactionPlan {
             );
         }
 
-        // Derive the synthetic blinding factors from `TransactionPlan`.
         let mut synthetic_blinding_factor = Fr::zero();
-
-        // Accumulate the blinding factors.
         for action_plan in &self.actions {
             synthetic_blinding_factor += action_plan.value_blinding();
         }
+        if let Some(fee_funding) = &self.fee_funding {
+            synthetic_blinding_factor += fee_funding.value_blinding();
+        }
 
-        // Overwrite the placeholder authorization signatures with the real `AuthorizationData`.
         let mut spend_auths = auth_data.spend_auths.clone().into_iter();
-        for action in &mut transaction.transaction_body.actions {
-            match action {
-                Action::Spend(spend) => {
-                    spend.auth_sig = spend_auths.next().expect("checked spend auth count");
+        let effect_hash = auth_data
+            .effect_hash
+            .unwrap_or_else(|| transaction.effect_hash());
+
+        for (action_plan, action) in self
+            .actions
+            .iter()
+            .zip(transaction.transaction_body.actions.iter_mut())
+        {
+            match (action_plan, action) {
+                (ActionPlan::Transfer(plan), Action::Transfer(transfer)) => {
+                    for (index, auth_sig) in transfer.auth_sigs.iter_mut().enumerate() {
+                        if index < plan.spends.len() {
+                            *auth_sig = spend_auths.next().expect("checked spend auth count");
+                        } else {
+                            *auth_sig = plan.synthetic_dummy_auth_sig(index, effect_hash.as_ref());
+                        }
+                    }
                 }
-                Action::Transfer(transfer) => {
-                    for auth_sig in &mut transfer.auth_sigs {
+                (ActionPlan::Consolidate(plan), Action::Consolidate(consolidate)) => {
+                    for auth_sig in consolidate.auth_sigs.iter_mut().take(plan.spends.len()) {
                         *auth_sig = spend_auths.next().expect("checked spend auth count");
+                    }
+                }
+                (ActionPlan::Split(plan), Action::Split(split)) => {
+                    for auth_sig in split.auth_sigs.iter_mut().take(plan.spends.len()) {
+                        *auth_sig = spend_auths.next().expect("checked spend auth count");
+                    }
+                }
+                (
+                    ActionPlan::ShieldedIcs20Withdrawal(plan),
+                    Action::ShieldedIcs20Withdrawal(withdrawal),
+                ) => {
+                    for (index, auth_sig) in withdrawal.auth_sigs.iter_mut().enumerate() {
+                        if index < plan.spends.len() {
+                            *auth_sig = spend_auths.next().expect("checked spend auth count");
+                        } else {
+                            *auth_sig = plan.synthetic_dummy_auth_sig(index, effect_hash.as_ref());
+                        }
                     }
                 }
                 _ => {}
             }
         }
 
-        for (delegator_vote, auth_sig) in transaction
-            .transaction_body
-            .actions
-            .iter_mut()
-            .filter_map(|action| {
-                if let Action::DelegatorVote(s) = action {
-                    Some(s)
+        if let (Some(fee_funding_plan), Some(fee_funding)) = (
+            self.fee_funding.as_ref(),
+            transaction.transaction_body.fee_funding.as_mut(),
+        ) {
+            for (index, auth_sig) in fee_funding.transfer.auth_sigs.iter_mut().enumerate() {
+                if index < fee_funding_plan.transfer.spends.len() {
+                    *auth_sig = spend_auths.next().expect("checked spend auth count");
                 } else {
-                    None
+                    *auth_sig = fee_funding_plan
+                        .transfer
+                        .synthetic_dummy_auth_sig(index, effect_hash.as_ref());
                 }
-            })
-            .zip(auth_data.delegator_vote_auths.clone().into_iter())
-        {
-            delegator_vote.auth_sig = auth_sig;
+            }
         }
 
-        for (lqt_vote, auth_sig) in transaction
-            .transaction_body
-            .actions
-            .iter_mut()
-            .filter_map(|action| {
-                if let Action::ActionLiquidityTournamentVote(s) = action {
-                    Some(s)
-                } else {
-                    None
-                }
-            })
-            .zip(auth_data.lqt_vote_auths.clone().into_iter())
-        {
-            lqt_vote.auth_sig = auth_sig;
-        }
-
-        // Compute the binding signature and assemble the transaction.
         let binding_signing_key = rdsa::SigningKey::from(synthetic_blinding_factor);
         let auth_hash = transaction.transaction_body.auth_hash();
-
-        let binding_sig = binding_signing_key.sign_deterministic(auth_hash.as_bytes());
-        tracing::debug!(bvk = ?rdsa::VerificationKey::from(&binding_signing_key), ?auth_hash);
-
-        transaction.binding_sig = binding_sig;
+        transaction.binding_sig = binding_signing_key.sign_deterministic(auth_hash.as_bytes());
 
         Ok(transaction)
     }
 
-    /// Build the serial transaction this plan describes.
     #[cfg(any(unix, windows))]
     pub fn build(
         self,
@@ -151,9 +162,6 @@ impl TransactionPlan {
         witness_data: &WitnessData,
         auth_data: &AuthorizationData,
     ) -> Result<Transaction> {
-        check_transaction_plan_enabled(&self)?;
-
-        // 1. Build each action.
         let actions = self
             .actions
             .iter()
@@ -166,31 +174,26 @@ impl TransactionPlan {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+        let memo_key = self.memo_key().unwrap_or([0u8; 32].into());
+        let fee_funding = self
+            .fee_funding
+            .as_ref()
+            .map(|fee_funding| fee_funding.build_unauth(full_viewing_key, witness_data, &memo_key))
+            .transpose()?;
 
-        // 2. Pass in the prebuilt actions to the build method.
         let tx = self
             .clone()
-            .build_unauth_with_actions(actions, witness_data)?;
-
-        // 3. Slot in the authorization data with .apply_auth_data,
-        let tx = self.apply_auth_data(auth_data, tx)?;
-
-        // 4. Return the completed transaction.
-        Ok(tx)
+            .build_unauth_with_actions(actions, fee_funding, witness_data)?;
+        self.apply_auth_data(auth_data, tx)
     }
 
     #[cfg(all(feature = "parallel", any(unix, windows)))]
-    /// Build the transaction this plan describes while proving concurrently.
-    /// This can be used in environments that support tokio tasks.
     pub async fn build_concurrent(
         self,
         full_viewing_key: &FullViewingKey,
         witness_data: &WitnessData,
         auth_data: &AuthorizationData,
     ) -> Result<Transaction> {
-        check_transaction_plan_enabled(&self)?;
-
-        // Clone the witness data into an Arc so it can be shared between tasks.
         let witness_data = std::sync::Arc::new(witness_data.clone());
 
         let scheduler =
@@ -202,35 +205,61 @@ impl TransactionPlan {
             .map(|action_plan| scheduler.spawn(action_plan))
             .collect::<Result<Vec<_>>>()?;
         let actions = scheduler.collect(action_tasks).await?;
+        let memo_key = self.memo_key().unwrap_or([0u8; 32].into());
+        let fee_funding = self
+            .fee_funding
+            .as_ref()
+            .map(|fee_funding| fee_funding.build_unauth(full_viewing_key, &witness_data, &memo_key))
+            .transpose()?;
 
-        // 2. Pass in the prebuilt actions to the build method.
         let tx = self
             .clone()
-            .build_unauth_with_actions(actions, &*witness_data)?;
-
-        // 3. Slot in the authorization data with .apply_auth_data,
-        let tx = self.apply_auth_data(auth_data, tx)?;
-
-        // 4. Return the completed transaction.
-        Ok(tx)
+            .build_unauth_with_actions(actions, fee_funding, &*witness_data)?;
+        self.apply_auth_data(auth_data, tx)
     }
 
-    /// Returns a [`WitnessData`], which may be used to build this transaction.
     pub fn witness_data(&self, sct: &penumbra_sdk_tct::Tree) -> Result<WitnessData, anyhow::Error> {
         let anchor = sct.root();
 
-        let witness_note = |spend: &penumbra_sdk_shielded_pool::SpendPlan| {
+        let witness_note = |spend: &penumbra_sdk_shielded_pool::ShieldedInputPlan| {
             let commitment = spend.note.commit();
             sct.witness(commitment)
                 .ok_or_else(|| anyhow::anyhow!("commitment should exist in tree"))
                 .map(|proof| (commitment, proof))
         };
-        let mut state_commitment_proofs = self
-            .spend_plans()
-            .map(witness_note)
-            .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
-        for transfer in self.transfer_plans() {
-            for spend in &transfer.spends {
+
+        let mut state_commitment_proofs = std::collections::BTreeMap::new();
+        for action in &self.actions {
+            match action {
+                ActionPlan::Transfer(plan) => {
+                    for spend in &plan.spends {
+                        let (commitment, proof) = witness_note(spend)?;
+                        state_commitment_proofs.insert(commitment, proof);
+                    }
+                }
+                ActionPlan::Consolidate(plan) => {
+                    for spend in &plan.spends {
+                        let (commitment, proof) = witness_note(spend)?;
+                        state_commitment_proofs.insert(commitment, proof);
+                    }
+                }
+                ActionPlan::Split(plan) => {
+                    for spend in &plan.spends {
+                        let (commitment, proof) = witness_note(spend)?;
+                        state_commitment_proofs.insert(commitment, proof);
+                    }
+                }
+                ActionPlan::ShieldedIcs20Withdrawal(plan) => {
+                    for spend in &plan.spends {
+                        let (commitment, proof) = witness_note(spend)?;
+                        state_commitment_proofs.insert(commitment, proof);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(fee_funding) = &self.fee_funding {
+            for spend in &fee_funding.transfer.spends {
                 let (commitment, proof) = witness_note(spend)?;
                 state_commitment_proofs.insert(commitment, proof);
             }

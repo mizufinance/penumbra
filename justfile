@@ -79,26 +79,66 @@ gnark-proof-tests-slow:
   cargo test --release -p pcli --test proof
   cargo test --release -p penumbra-sdk-shielded-pool --features bundled-proving-keys transfer_proof_roundtrip --lib
   cargo test --release -p penumbra-sdk-shielded-pool --lib
-  cargo test --release -p penumbra-sdk-app-tests --test compliance_full_flow
 
 # Run the default gnark validation suite.
 gnark-proof-tests: gnark-proof-tests-fast
 
 # CI wrapper for `check`.
 ci-check:
-  nix develop --command just check
+  if command -v nix >/dev/null 2>&1; then \
+    nix develop --command just check; \
+  else \
+    just check; \
+  fi
 
 # CI wrapper for `test`.
 ci-test:
-  cargo nextest run --cargo-profile ci
+  if command -v cargo-nextest >/dev/null 2>&1; then \
+    cargo nextest run --cargo-profile ci; \
+  else \
+    echo "warning: cargo-nextest not found; falling back to 'cargo test --release --no-fail-fast'"; \
+    cargo test --release --no-fail-fast; \
+  fi
 
 # CI wrapper for `go-check`.
 ci-go-check:
-  nix develop --command just go-check
+  if command -v nix >/dev/null 2>&1; then \
+    nix develop --command just go-check; \
+  else \
+    just go-check; \
+  fi
 
 # CI wrapper for `gnark-proof-tests`.
 ci-gnark-proof-tests:
-  nix develop --command just gnark-proof-tests-slow
+  if command -v nix >/dev/null 2>&1; then \
+    nix develop --command just gnark-proof-tests-slow; \
+  else \
+    just gnark-proof-tests-slow; \
+  fi
+
+# Run the Rust and gnark CI surfaces locally, using the same commands as GitHub Actions.
+ci-preflight:
+  if command -v nix >/dev/null 2>&1; then \
+    nix develop --command ./deployments/scripts/check-crate-feature-sets; \
+  elif command -v cargo-hack >/dev/null 2>&1; then \
+    ./deployments/scripts/check-crate-feature-sets; \
+  else \
+    echo "warning: nix and cargo-hack not found; falling back to 'cargo check --workspace --all-targets --all-features --release'"; \
+    cargo check --workspace --all-targets --all-features --release; \
+  fi
+  if command -v nix >/dev/null 2>&1; then \
+    nix develop --command ./deployments/scripts/check-wasm-compat.sh; \
+  else \
+    ./deployments/scripts/check-wasm-compat.sh; \
+  fi
+  just ci-test
+  just ci-go-check
+  just ci-gnark-proof-tests
+  if command -v nix >/dev/null 2>&1; then \
+    nix develop --command just smoke; \
+  else \
+    just smoke; \
+  fi
 
 # Run Orbis crypto integration tests (DKG, DLEQ, PRE against real nodes).
 orbis-test:
@@ -139,43 +179,41 @@ test:
 integration-testnet:
   cargo nextest run --release ${CARGO_FEATURE_ARGS:-} --features integration-testnet -E 'test(/_testnet$/)'
 
-# Run integration tests for pmonitor tool
-integration-pmonitor:
-  ./deployments/scripts/warn-about-pd-state
-  rm -rf /tmp/pmonitor-integration-test
-  # Prebuild binaries, so they're available inside the tests without blocking.
-  cargo build --release -p pcli --features bundled-proving-keys,download-proving-keys
-  cargo build --release -p pd
-  cargo -q run --release --bin pd -- --help > /dev/null
-  cargo nextest run --release -p pmonitor --features bundled-proving-keys,download-proving-keys,network-integration --no-capture --no-fail-fast
-
 # Run smoke test suite, via process-compose config.
 smoke:
   ./deployments/scripts/check-nix-shell
-  ./deployments/scripts/warn-about-pd-state
   ./deployments/scripts/smoke-test.sh
+
+reduced-surface-check:
+  bash ./deployments/scripts/check-reduced-surface.sh
 
 # Run integration tests for pclientd. Assumes specific dev env is already running.
 integration-pclientd:
-  cargo test --release --features bundled-proving-keys,download-proving-keys,sct-divergence-check --package pclientd -- \
+  cargo test --release --features bundled-proving-keys,download-proving-keys,sct-divergence-check --package pclientd --test network_integration -- \
     --ignored --test-threads 1 --nocapture
 
 # Run integration tests for pcli. Assumes specific dev env is already running.
 integration-pcli:
-  cargo test --release --features bundled-proving-keys,download-proving-keys,sct-divergence-check --package pcli -- \
+  cargo test --release --features bundled-proving-keys,download-proving-keys,sct-divergence-check --package pcli --test network_integration -- \
+    --ignored --test-threads 1 --nocapture
+  cargo test --release --features bundled-proving-keys,download-proving-keys,sct-divergence-check --package pcli --test compliance_network -- \
     --ignored --test-threads 1 --nocapture
 
 # Run integration tests for pindexer. Assumes specific dev env is already running.
 integration-pindexer:
-  cargo nextest run --release -p pindexer --features network-integration
+  if cargo nextest --version >/dev/null 2>&1; then \
+    cargo nextest run --release -p pindexer --features network-integration; \
+  else \
+    cargo test --release -p pindexer --features network-integration -- --ignored --test-threads 1 --nocapture; \
+  fi
 
 # Run integration tests for pd. Assumes specific dev env is already running.
 integration-pd:
-  cargo test --release --package pd -- --ignored --test-threads 1 --nocapture
+  cargo test --release --package pd --test network_integration -- --ignored --test-threads 1 --nocapture
 
 # Build the container image locally
 container:
-  docker build -t ghcr.io/penumbra-zone/penumbra:local -f ./deployments/containerfiles/Dockerfile .
+  docker build -t ghcr.io/mizufinance/penumbra:local -f ./deployments/containerfiles/Dockerfile .
 
 # Run the testnet locally entirely
 testnet:

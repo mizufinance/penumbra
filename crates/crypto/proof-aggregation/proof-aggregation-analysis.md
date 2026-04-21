@@ -415,15 +415,11 @@ Current target to beat:
 
 The current Penumbra proving call path is:
 
-- `SpendProof::prove` / `OutputProof::prove`
+- shielded action proof generation (`Transfer`, `Split`, `Consolidate`, `ShieldedIcs20Withdrawal`)
 - `Groth16::<Bls12_377, LibsnarkReduction>::create_proof_with_reduction(...)`
 - Arkworks `create_proof_with_assignment(...)`
 - `E::G1::msm_bigint(...)` and `calculate_coeff(...)`
 - `VariableBaseMSM::msm_bigint(...)`
-
-The important local files are:
-
-- [spend/proof.rs](/Users/antoinecyr/Documents/Source/penumbra/crates/core/component/shielded-pool/src/spend/proof.rs)
 - [output/proof.rs](/Users/antoinecyr/Documents/Source/penumbra/crates/core/component/shielded-pool/src/output/proof.rs)
 
 The important upstream `0.5` files are:

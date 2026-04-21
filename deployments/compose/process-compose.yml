@@ -19,7 +19,7 @@ log_location: deployments/logs/dev-env-combined.log
 processes:
   # Run pd validator based on generated network.
   pd:
-    command: cargo run --release --bin pd -- start
+    command: cargo run --release --bin pd -- start --home ${PENUMBRA_DEVNET_HOME}/network_data/node0/pd --cometbft-addr http://127.0.0.1:16657
     readiness_probe:
       http_get:
         host: 127.0.0.1
@@ -32,13 +32,13 @@ processes:
 
   # Run CometBFT for consensus driver.
   cometbft:
-    command: cometbft --log_level=debug --home ~/.penumbra/network_data/node0/cometbft start
+    command: cometbft --log_level=debug --home ${PENUMBRA_DEVNET_HOME}/network_data/node0/cometbft start
     readiness_probe:
       http_get:
         host: 127.0.0.1
         scheme: http
         path: "/"
-        port: 26657
+        port: 16657
       failure_threshold: 2
       initial_delay_seconds: 5
       period_seconds: 5

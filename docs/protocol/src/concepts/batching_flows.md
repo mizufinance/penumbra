@@ -1,8 +1,8 @@
 # Batching Flows
 
 Penumbra's ledger records value as it moves between different economic roles –
-for instance, movement between unbonded stake and delegation tokens, movement
-between different assets as they are traded, etc.   This creates a tension
+for instance, movement between shielded notes and outbound IBC withdrawals, or
+movement between different shielded asset positions. This creates a tension
 between the need to reveal the total amount of value in each role as part of the
 public chain state, and the desire to shield value amounts in individual
 transactions.

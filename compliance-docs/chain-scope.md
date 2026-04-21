@@ -1,48 +1,32 @@
 # Chain Scope
 
-This is a lightweight Penumbra deployment scoped to shielded transfers only.
-Most application logic — staking, governance, DeFi, liquidity — lives on BankD.
+This is a lightweight Penumbra deployment with a deliberately smaller action surface.
+Most application logic such as staking and DeFi lives on BankD.
 This chain's sole purpose is to provide a shielded transfer layer with compliance
 visibility for regulated assets.
 
-## Enabled Actions
+## Supported Actions
 
 | Action | Purpose |
 |--------|---------|
-| `Spend` | Consume a shielded note |
-| `Output` | Create a shielded note |
+| `Transfer` | Spend up to two notes and create up to two shielded notes |
+| `Consolidate` | Merge many notes of one asset into a smaller number of notes |
+| `Split` | Split one note into several notes of the same asset |
 | `IbcRelay` | IBC light client and channel lifecycle (inbound and outbound) |
-| `Ics20Withdrawal` | Transfer tokens out via IBC |
+| `ShieldedIcs20Withdrawal` | Transfer tokens out via IBC |
 | `ValidatorDefinition` | Validator registration (permissionless, no rewards) |
 | `ProposalSubmit` | Submit a governance proposal (parameter change, upgrade, IBC freeze) |
-| `ProposalWithdraw` | Cancel a pending proposal |
 | `ValidatorVote` | Validator votes on governance proposals |
-| `ProposalDepositClaim` | Reclaim governance deposit after resolution |
 | `ComplianceRegisterAsset` | Register a regulated asset with its issuer policy |
 | `ComplianceRegisterUser` | Register a user address for a regulated asset |
 | `AggregateBundle` | Validator-submitted proof aggregation (internal, not user-facing) |
 
-## Disabled Actions
+## Removed Actions
 
-| Action | Reason |
-|--------|--------|
-| `Swap` | DEX lives on BankD |
-| `SwapClaim` | DEX lives on BankD |
-| `PositionOpen` | DEX lives on BankD |
-| `PositionClose` | DEX lives on BankD |
-| `PositionWithdraw` | DEX lives on BankD |
-| `ActionDutchAuctionSchedule` | DEX lives on BankD |
-| `ActionDutchAuctionEnd` | DEX lives on BankD |
-| `ActionDutchAuctionWithdraw` | DEX lives on BankD |
-| `Delegate` | No staking rewards on this chain |
-| `Undelegate` | No staking rewards on this chain |
-| `UndelegateClaim` | No staking rewards on this chain |
-| `DelegatorVote` | No delegators (staking disabled) |
-| `CommunityPoolSpend` | No community pool on this chain |
-| `CommunityPoolOutput` | No community pool on this chain |
-| `CommunityPoolDeposit` | No community pool on this chain |
-| `ActionLiquidityTournamentVote` | DEX-dependent, lives on BankD |
-| `ProposalPayload::CommunityPoolSpend` | No community pool on this chain |
+The chain does not expose DEX, staking delegation, community-pool transaction
+actions, or the legacy governance withdrawal / deposit-claim flow. Those
+surfaces remain on other chains or were deleted as part of the POA governance
+and shielded-circuit simplification.
 
 ## Relationship to BankD
 
@@ -51,11 +35,11 @@ BankD is the primary application chain. It handles:
 - DEX and liquidity positions
 - Dutch auctions
 - Community pool
-- Full on-chain governance with delegator voting
+- Governance features not present on this chain
 
 This chain connects to BankD via IBC. Tokens flow in via `IbcRelay` / ICS-20
 and are shielded here for private transfers. Tokens flow back to BankD via
-`Ics20Withdrawal`. Compliance enforcement applies only while tokens are on
+`ShieldedIcs20Withdrawal`. Compliance enforcement applies only while tokens are on
 this chain.
 
 ## Validator Set

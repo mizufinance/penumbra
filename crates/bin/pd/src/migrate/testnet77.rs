@@ -16,8 +16,7 @@ use crate::network::generate::NetworkConfig;
 
 /// Run the full migration, given an export path and a start time for genesis.
 ///
-/// Menu:
-/// - Reconstruct a correct VCB balance for the auction component.
+/// Reset the halt bit and re-emit genesis state after a no-op consensus upgrade.
 #[instrument]
 pub async fn migrate(
     storage: Storage,

@@ -10,14 +10,7 @@ use tracing::instrument;
 
 use cnidarium_component::Component;
 
-use crate::{
-    proposal_state::{
-        Outcome as ProposalOutcome, State as ProposalState, Withdrawn as ProposalWithdrawn,
-    },
-    tally,
-};
-
-pub use crate::action_handler::delegator_vote::delegator_vote_check_stateless_and_extract;
+use crate::{proposal_state::State as ProposalState, tally};
 
 mod view;
 
@@ -118,10 +111,6 @@ pub async fn enact_all_passed_proposals<S: StateWrite>(mut state: S) -> Result<(
                 // error, since proposals are allowed to fail to be enacted)
                 match outcome {
                     tally::Outcome::Pass => {
-                        // IMPORTANT: We **ONLY** enact proposals that have concluded, and whose
-                        // tally is `Pass`, and whose state is not `Withdrawn`. This is the sole
-                        // place in the codebase where we prevent withdrawn proposals from being
-                        // passed!
                         let payload = state
                             .proposal_payload(proposal_id)
                             .await?
@@ -172,17 +161,8 @@ pub async fn enact_all_passed_proposals<S: StateWrite>(mut state: S) -> Result<(
 
                 outcome.into()
             }
-            ProposalState::Withdrawn { reason } => {
-                tracing::info!(proposal = %proposal_id, reason = ?reason, "proposal concluded after being withdrawn");
-                ProposalOutcome::Failed {
-                    withdrawn: ProposalWithdrawn::WithReason { reason },
-                }
-            }
             ProposalState::Finished { outcome: _ } => {
                 anyhow::bail!("proposal {proposal_id} is already finished, and should have been removed from the active set");
-            }
-            ProposalState::Claimed { outcome: _ } => {
-                anyhow::bail!("proposal {proposal_id} is already claimed, and should have been removed from the active set");
             }
         };
 

@@ -28,11 +28,6 @@ pub struct CompactBlock {
     pub fmd_parameters: ::core::option::Option<
         super::super::shielded_pool::v1::FmdParameters,
     >,
-    /// Price data for swaps executed in this block.
-    #[prost(message, repeated, tag = "8")]
-    pub swap_outputs: ::prost::alloc::vec::Vec<
-        super::super::dex::v1::BatchSwapOutputData,
-    >,
     /// Indicates updated app parameters.
     #[prost(bool, tag = "9")]
     pub app_parameters_updated: bool,
@@ -79,7 +74,7 @@ pub struct StatePayload {
     #[prost(message, optional, tag = "1")]
     pub source: ::core::option::Option<super::super::sct::v1::CommitmentSource>,
     /// The state payload itself.
-    #[prost(oneof = "state_payload::StatePayload", tags = "2, 3, 4")]
+    #[prost(oneof = "state_payload::StatePayload", tags = "2, 3")]
     pub state_payload: ::core::option::Option<state_payload::StatePayload>,
 }
 /// Nested message and enum types in `StatePayload`.
@@ -118,21 +113,6 @@ pub mod state_payload {
             "/penumbra.core.component.compact_block.v1.StatePayload.Note".into()
         }
     }
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Swap {
-        #[prost(message, optional, tag = "2")]
-        pub swap: ::core::option::Option<super::super::super::dex::v1::SwapPayload>,
-    }
-    impl ::prost::Name for Swap {
-        const NAME: &'static str = "Swap";
-        const PACKAGE: &'static str = "penumbra.core.component.compact_block.v1";
-        fn full_name() -> ::prost::alloc::string::String {
-            "penumbra.core.component.compact_block.v1.StatePayload.Swap".into()
-        }
-        fn type_url() -> ::prost::alloc::string::String {
-            "/penumbra.core.component.compact_block.v1.StatePayload.Swap".into()
-        }
-    }
     /// The state payload itself.
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum StatePayload {
@@ -140,8 +120,6 @@ pub mod state_payload {
         RolledUp(RolledUp),
         #[prost(message, tag = "3")]
         Note(Note),
-        #[prost(message, tag = "4")]
-        Swap(Swap),
     }
 }
 impl ::prost::Name for StatePayload {

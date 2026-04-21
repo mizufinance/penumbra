@@ -1,6 +1,7 @@
 use {
     super::TestNodeWithIBC,
     anyhow::{anyhow, Result},
+    decaf377::Fr,
     ibc_proto::ibc::core::{
         channel::v1::{IdentifiedChannel, QueryChannelRequest, QueryConnectionChannelsRequest},
         client::v1::{QueryClientStateRequest, QueryConsensusStateRequest},
@@ -49,11 +50,11 @@ use {
     penumbra_sdk_keys::keys::AddressIndex,
     penumbra_sdk_num::Amount,
     penumbra_sdk_proto::{util::tendermint_proxy::v1::GetBlockByHeightRequest, DomainType},
-    penumbra_sdk_shielded_pool::{Ics20Withdrawal, OutputPlan, SpendPlan},
-    penumbra_sdk_stake::state_key::chain,
-    penumbra_sdk_transaction::{
-        memo::MemoPlaintext, plan::MemoPlan, TransactionParameters, TransactionPlan,
+    penumbra_sdk_shielded_pool::{
+        Ics20Withdrawal, ShieldedIcs20WithdrawalFamilyId, ShieldedIcs20WithdrawalPlan,
+        ShieldedInputPlan, ShieldedOutputPlan,
     },
+    penumbra_sdk_transaction::{TransactionParameters, TransactionPlan},
     prost::Message as _,
     rand::SeedableRng as _,
     rand_chacha::ChaCha12Core,
@@ -362,6 +363,7 @@ impl MockRelayer {
                     // Now fill out the remaining parts of the transaction needed for verification:
                     memo: None,
                     detection_data: None, // We'll set this automatically below
+                    fee_funding: None,
                     transaction_parameters: TransactionParameters {
                         chain_id: chain_a_ibc.chain_id.clone(),
                         ..Default::default()
@@ -411,6 +413,7 @@ impl MockRelayer {
                 // Now fill out the remaining parts of the transaction needed for verification:
                 memo: None,
                 detection_data: None, // We'll set this automatically below
+                fee_funding: None,
                 transaction_parameters: TransactionParameters {
                     chain_id: chain_a_ibc.chain_id.clone(),
                     ..Default::default()
@@ -531,6 +534,7 @@ impl MockRelayer {
                 // Now fill out the remaining parts of the transaction needed for verification:
                 memo: None,
                 detection_data: None, // We'll set this automatically below
+                fee_funding: None,
                 transaction_parameters: TransactionParameters {
                     chain_id: self.chain_b_ibc.chain_id.clone(),
                     ..Default::default()
@@ -622,6 +626,7 @@ impl MockRelayer {
                 // Now fill out the remaining parts of the transaction needed for verification:
                 memo: None,
                 detection_data: None, // We'll set this automatically below
+                fee_funding: None,
                 transaction_parameters: TransactionParameters {
                     chain_id: chain_a_ibc.chain_id.clone(),
                     ..Default::default()
@@ -788,6 +793,7 @@ impl MockRelayer {
                 // Now fill out the remaining parts of the transaction needed for verification:
                 memo: None,
                 detection_data: None, // We'll set this automatically below
+                fee_funding: None,
                 transaction_parameters: TransactionParameters {
                     chain_id: self.chain_a_ibc.chain_id.clone(),
                     ..Default::default()
@@ -945,6 +951,7 @@ impl MockRelayer {
                 // Now fill out the remaining parts of the transaction needed for verification:
                 memo: None,
                 detection_data: None, // We'll set this automatically below
+                fee_funding: None,
                 transaction_parameters: TransactionParameters {
                     chain_id: self.chain_a_ibc.chain_id.clone(),
                     ..Default::default()
@@ -1127,6 +1134,7 @@ impl MockRelayer {
                 // Now fill out the remaining parts of the transaction needed for verification:
                 memo: None,
                 detection_data: None, // We'll set this automatically below
+                fee_funding: None,
                 transaction_parameters: TransactionParameters {
                     chain_id: self.chain_b_ibc.chain_id.clone(),
                     ..Default::default()
@@ -1238,6 +1246,7 @@ impl MockRelayer {
                 // Now fill out the remaining parts of the transaction needed for verification:
                 memo: None,
                 detection_data: None, // We'll set this automatically below
+                fee_funding: None,
                 transaction_parameters: TransactionParameters {
                     chain_id: self.chain_b_ibc.chain_id.clone(),
                     ..Default::default()
@@ -1338,6 +1347,7 @@ impl MockRelayer {
                 // Now fill out the remaining parts of the transaction needed for verification:
                 memo: None,
                 detection_data: None, // We'll set this automatically below
+                fee_funding: None,
                 transaction_parameters: TransactionParameters {
                     chain_id: self.chain_b_ibc.chain_id.clone(),
                     ..Default::default()
@@ -1407,10 +1417,10 @@ impl MockRelayer {
         let chain_a_note = chain_a_client
             .notes
             .values()
-            .filter(|n| n.asset_id() == *penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID)
+            .filter(|n| n.asset_id() == *penumbra_sdk_asset::BASE_ASSET_ID)
             .cloned()
             .next()
-            .ok_or_else(|| anyhow!("mock client had no staking token note"))?;
+            .ok_or_else(|| anyhow!("mock client had no base-asset note"))?;
 
         // Get the balance of that asset on chain A
         let pretransfer_balance_a: Amount = chain_a_client
@@ -1489,9 +1499,7 @@ impl MockRelayer {
             use_transparent_address: false,
             ics20_memo: "".to_string(),
         };
-        // There will need to be `Spend` and `Output` actions
-        // within the transaction in order for it to balance
-        let spend_plan = SpendPlan::new(
+        let spend_plan = ShieldedInputPlan::new(
             &mut rand_chacha::ChaChaRng::seed_from_u64(1312),
             chain_a_note.clone(),
             chain_a_client
@@ -1499,7 +1507,7 @@ impl MockRelayer {
                 .expect("note should be in mock client's tree"),
         );
 
-        let output_plan = OutputPlan::new(
+        let change_output = ShieldedOutputPlan::new(
             &mut rand_chacha::ChaChaRng::seed_from_u64(1312),
             // half the note is being withdrawn, so we can use `transfer_value` both for the withdrawal action
             // and the change output
@@ -1508,26 +1516,25 @@ impl MockRelayer {
         );
 
         let mut plan = {
-            let ics20_msg = withdrawal.into();
+            let ics20_msg = ShieldedIcs20WithdrawalPlan::new(
+                ShieldedIcs20WithdrawalFamilyId::Canonical,
+                vec![spend_plan],
+                Some(change_output),
+                withdrawal,
+                Fr::from(1312u64),
+            )
+            .expect("valid shielded ICS-20 withdrawal plan");
             TransactionPlan {
-                actions: vec![ics20_msg, spend_plan.into(), output_plan.into()],
+                actions: vec![ics20_msg.into()],
                 // Now fill out the remaining parts of the transaction needed for verification:
-                memo: Some(MemoPlan::new(
-                    &mut rand_chacha::ChaChaRng::seed_from_u64(1312),
-                    MemoPlaintext::blank_memo(
-                        chain_a_client.fvk.payment_address(AddressIndex::new(0)).0,
-                    ),
-                )),
-                detection_data: None, // We'll set this automatically below
+                memo: None,
+                detection_data: None,
+                fee_funding: None,
                 transaction_parameters: TransactionParameters {
                     chain_id: self.chain_a_ibc.chain_id.clone(),
                     ..Default::default()
                 },
             }
-            .with_populated_detection_data(
-                rand_chacha::ChaChaRng::seed_from_u64(1312),
-                Default::default(),
-            )
         };
         let tx = self
             .chain_a_ibc
@@ -1639,6 +1646,7 @@ impl MockRelayer {
                         // Now fill out the remaining parts of the transaction needed for verification:
                         memo: None,
                         detection_data: None, // We'll set this automatically below
+                        fee_funding: None,
                         transaction_parameters: TransactionParameters {
                             chain_id: self.chain_b_ibc.chain_id.clone(),
                             ..Default::default()
@@ -1759,6 +1767,7 @@ impl MockRelayer {
                         // Now fill out the remaining parts of the transaction needed for verification:
                         memo: None,
                         detection_data: None, // We'll set this automatically below
+                        fee_funding: None,
                         transaction_parameters: TransactionParameters {
                             chain_id: self.chain_a_ibc.chain_id.clone(),
                             ..Default::default()
@@ -1844,6 +1853,7 @@ async fn _build_and_send_update_client(
             // Now fill out the remaining parts of the transaction needed for verification:
             memo: None,
             detection_data: None, // We'll set this automatically below
+            fee_funding: None,
             transaction_parameters: TransactionParameters {
                 chain_id: chain_a_ibc.chain_id.clone(),
                 ..Default::default()

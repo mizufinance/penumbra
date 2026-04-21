@@ -111,37 +111,6 @@ CREATE INDEX spendable_notes_idx ON spendable_notes (
     height_spent       -- null if unspent, so spent/unspent is first
 );
 
--- This table records the mapping from swap commitments to swap plaintexts.
--- For now we just store the swap plaintexts as a blob.
-CREATE TABLE swaps (
-    swap_commitment         BLOB PRIMARY KEY NOT NULL,
-    swap                    BLOB NOT NULL,
-    position                BIGINT NOT NULL,
-    nullifier               BLOB NOT NULL,
-    output_data             BLOB NOT NULL,
-    height_claimed          BIGINT,
-    source                  BLOB NOT NULL
-);
-
-CREATE INDEX swaps_nullifier_idx ON swaps (nullifier);
-
-CREATE TABLE positions (
-     position_id            BLOB PRIMARY KEY NOT NULL,
-     position_state         TEXT NOT NULL,
-     trading_pair           TEXT NOT NULL,
-     account                BIGINT
-);
-
--- This table records the user's own auction state, using the
--- auction id as a primary key. An extra-column is available
--- to cross-reference note commitments that is associated with
--- the entry.
-CREATE TABLE auctions (
-     auction_id             BLOB PRIMARY KEY NOT NULL,
-     auction_state          BIGINT NOT NULL,
-     note_commitment        BLOB
-);
-
 CREATE TABLE epochs (
     epoch_index BIGINT PRIMARY KEY,
     root BLOB,

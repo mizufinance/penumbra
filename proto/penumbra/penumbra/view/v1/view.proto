@@ -2,17 +2,12 @@ syntax = "proto3";
 
 package penumbra.view.v1;
 
-import "google/protobuf/any.proto";
 import "penumbra/core/app/v1/app.proto";
 import "penumbra/core/asset/v1/asset.proto";
-import "penumbra/core/component/auction/v1/auction.proto";
-import "penumbra/core/component/dex/v1/dex.proto";
 import "penumbra/core/component/fee/v1/fee.proto";
-import "penumbra/core/component/governance/v1/governance.proto";
 import "penumbra/core/component/ibc/v1/ibc.proto";
 import "penumbra/core/component/sct/v1/sct.proto";
 import "penumbra/core/component/shielded_pool/v1/shielded_pool.proto";
-import "penumbra/core/component/stake/v1/stake.proto";
 import "penumbra/core/keys/v1/keys.proto";
 import "penumbra/core/num/v1/num.proto";
 import "penumbra/core/transaction/v1/transaction.proto";
@@ -35,9 +30,6 @@ service ViewService {
   // Queries for notes that have been accepted by the chain.
   // Returns a stream of `NotesResponse`s.
   rpc Notes(NotesRequest) returns (stream NotesResponse);
-
-  // Returns a stream of `NotesForVotingResponse`s.
-  rpc NotesForVoting(NotesForVotingRequest) returns (stream NotesForVotingResponse);
 
   // Queries for metadata about known assets.
   // Returns a stream of `AssetsResponse`s.
@@ -81,12 +73,6 @@ service ViewService {
   // Query for a note by its note commitment, optionally waiting until the note is detected.
   rpc NoteByCommitment(NoteByCommitmentRequest) returns (NoteByCommitmentResponse);
 
-  // Query for a swap by its swap commitment, optionally waiting until the swap is detected.
-  rpc SwapByCommitment(SwapByCommitmentRequest) returns (SwapByCommitmentResponse);
-
-  // Query for all unclaimed swaps.
-  rpc UnclaimedSwaps(UnclaimedSwapsRequest) returns (stream UnclaimedSwapsResponse);
-
   // Query for whether a nullifier has been spent, optionally waiting until it is spent.
   rpc NullifierStatus(NullifierStatusRequest) returns (NullifierStatusResponse);
 
@@ -96,9 +82,6 @@ service ViewService {
   // Query for the full transactions in the given range of blocks.
   // Returns a stream of `TransactionInfoResponse`s.
   rpc TransactionInfo(TransactionInfoRequest) returns (stream TransactionInfoResponse);
-
-  // Query for owned position IDs for the given trading pair and in the given position state.
-  rpc OwnedPositionIds(OwnedPositionIdsRequest) returns (stream OwnedPositionIdsResponse);
 
   // Translates a high-level intent ("send X funds to Y address") into a complete transaction plan.
   rpc TransactionPlanner(TransactionPlannerRequest) returns (TransactionPlannerResponse);
@@ -138,34 +121,6 @@ service ViewService {
   // This method streams status updates to the caller before finally returning confirmation.
   rpc BroadcastTransaction(BroadcastTransactionRequest) returns (stream BroadcastTransactionResponse);
 
-  // Get delegation tokens for a given address index. Each delegation token will
-  // be represented by a `ValueView` with the given address index's balance of
-  // that token. Each `ValueView`'s `extended_metadata` field will contain the
-  // `ValidatorInfo` of the delegated validator.
-  rpc DelegationsByAddressIndex(DelegationsByAddressIndexRequest) returns (stream DelegationsByAddressIndexResponse);
-
-  // Get unbonding tokens for the given address index, optionally filtered by
-  // whether the tokens are currently claimable.
-  rpc UnbondingTokensByAddressIndex(UnbondingTokensByAddressIndexRequest) returns (stream UnbondingTokensByAddressIndexResponse);
-
-  // Gets the auctions controlled by the user's wallet.
-  rpc Auctions(AuctionsRequest) returns (stream AuctionsResponse);
-
-  // Gets the latest swaps controlled by the user's wallet. 
-  rpc LatestSwaps(LatestSwapsRequest) returns (stream LatestSwapsResponse);
-
-  // Gets a list of votes cast in the liquidity tournament for a specific epoch or up to certain block height. 
-  rpc TournamentVotes(TournamentVotesRequest) returns (stream TournamentVotesResponse);
-
-  // Gets the spendable note records that are eligible for voting in the current epoch.
-  rpc LqtVotingNotes(LqtVotingNotesRequest) returns (stream LqtVotingNotesResponse);
-
-  // Request bundles of liquidity positions by trading pair / subaccount / strategy.
-  rpc LpPositionBundle(LpPositionBundleRequest) returns (stream LpPositionBundleResponse);
-
-  // Request a list of LP strategies (e.g, for a UI to display a catalogue of strategies).
-  rpc LpStrategyCatalog(LpStrategyCatalogRequest) returns (stream LpStrategyCatalogResponse);
-
   // Query the compliance registry for an asset's regulation status.
   // Uses local compliance trees with fallback to pd's compliance service.
   rpc ComplianceAssetStatus(ComplianceAssetStatusRequest)
@@ -192,50 +147,6 @@ service ViewService {
       returns (ComplianceUserLeafResponse);
 }
 
-message LqtVotingNotesRequest {
-  // The epoch index to check for nullifier usage.
-  uint64 epoch_index = 1;
-  // If present, filter balances to only include the account specified by the `AddressIndex`.
-  core.keys.v1.AddressIndex account_filter = 2;
-}
-
-message LqtVotingNotesResponse {
-  // The delegation note that can be used to vote with in current epoch, only if `already_voted` is false.
-  SpendableNoteRecord note_record = 1;
-  // Flag indicating whether each note was already used for voting in the current epoch.
-  bool already_voted = 2;
-}
-
-// Note: implementations must not accept messages with both `epoch_index`
-// and `block_height` set. This is a convenience API, to allow consumers
-// to defer epoch tracking to a view service.
-message TournamentVotesRequest {
-  // Retrieves votes for the specified epoch.
-  uint64 epoch_index = 1;
-  // Retrieves votes as of the specified block height.
-  uint64 block_height = 2;
-  // If present, filter votes to only include the account specified by the `AddressIndex`.
-  core.keys.v1.AddressIndex account_filter = 3;
-}
-
-message TournamentVotesResponse {
-  message Vote {
-    // The incentivized asset receiving this vote.
-    core.asset.v1.AssetId incentivized_asset = 1;
-    // The amount of voting power that this specific vote contributed.
-    core.num.v1.Amount vote_power = 2;
-    // The amount of rewards issued for votes on this asset.
-    core.asset.v1.Value reward = 3;
-    // The transaction ID for the vote. 
-    core.txhash.v1.TransactionId transaction = 4;
-    // Epoch index the vote occured in.
-    uint64 epoch_index = 5;
-  }
-  
-  // A list of votes cast for the incentivized asset.
-  repeated Vote votes = 1;
-}
-
 // There's only one transparent address per wallet, so this request has no parameters;
 // the message exists to satisfy forward-compatibility properties.
 message TransparentAddressRequest {}
@@ -245,44 +156,6 @@ message TransparentAddressResponse {
   core.keys.v1.Address address = 1;
   // The t-address encoding of the transparent address
   string encoding = 2;
-}
-
-// Filters in an `AuctionsRequest` will be combined using `AND` logic -- that
-// is, the more filters you add, the fewer responses you're likely to get.
-message AuctionsRequest {
-  // If present, filter balances to only include the account specified by the `AddressIndex`.
-  core.keys.v1.AddressIndex account_filter = 1;
-  // If present, include inactive auctions as well as active ones.
-  bool include_inactive = 2;
-  // If set, query a fullnode for the current state of the auctions.
-  bool query_latest_state = 3;
-  // If present, filter to only include auctions whose IDs are in this array.
-  repeated core.component.auction.v1.AuctionId auction_ids_filter = 4;
-}
-
-message AuctionsResponse {
-  core.component.auction.v1.AuctionId id = 1;
-  // The state of the returned auction.
-  //
-  // Only present when `query_latest_state` was provided.
-  google.protobuf.Any auction = 2;
-  // The state of any DEX positions relevant to the returned auction.
-  //
-  // Only present when `query_latest_state` was provided.
-  // Could be empty, depending on the auction state.
-  repeated core.component.dex.v1.Position positions = 3;
-  // The note recording the auction NFT.
-  SpendableNoteRecord note_record = 4;
-  // The sequence number of the auction state _as known to the local view
-  // service_. Note that the local view service may lag behind the fullnode. For
-  // example, if the chain hits an auction's `end_height`, but the user hasn't
-  // yet exchanged their sequence-0 (opened) auction NFT for a sequence-1
-  // (closed) auction NFT, the local view service will have a sequence number of
-  // 0.
-  //
-  // Dutch auctions move from:
-  // 0 (opened) => 1 (closed) => n (withdrawn)
-  uint64 local_seq = 5;
 }
 
 message AuthorizeAndBuildRequest {
@@ -346,23 +219,9 @@ message TransactionPlannerRequest {
   core.keys.v1.AddressIndex source = 4;
 
   // Request contents
-  repeated Output outputs = 20;
-  repeated Spend spends = 21;
-  repeated Swap swaps = 30;
-  repeated SwapClaim swap_claims = 31;
-  repeated Delegate delegations = 40;
-  repeated Undelegate undelegations = 50;
-  repeated UndelegateClaim undelegation_claims = 51;
+  repeated TransferOutput outputs = 20;
   repeated penumbra.core.component.ibc.v1.IbcRelay ibc_relay_actions = 60;
   repeated penumbra.core.component.ibc.v1.Ics20Withdrawal ics20_withdrawals = 61;
-  repeated PositionOpen position_opens = 70;
-  repeated PositionClose position_closes = 71;
-  repeated PositionWithdraw position_withdraws = 72;
-  repeated ActionDutchAuctionSchedule dutch_auction_schedule_actions = 73;
-  repeated ActionDutchAuctionEnd dutch_auction_end_actions = 74;
-  repeated ActionDutchAuctionWithdraw dutch_auction_withdraw_actions = 75;
-  repeated DelegatorVote delegator_votes = 76;
-  repeated ActionLiquidityTournamentVote action_liquidity_tournament_vote = 77;
 
   // Specifies either that the planner should compute fees automatically or that it should use a fixed fee amount.
   oneof fee_mode {
@@ -379,117 +238,11 @@ message TransactionPlannerRequest {
   penumbra.core.component.sct.v1.Epoch epoch = 201;
 
   // Request message subtypes
-  message Output {
-    // The amount and denomination in which the Output is issued.
+  message TransferOutput {
+    // The amount and denomination in which the transfer output is issued.
     core.asset.v1.Value value = 1;
-    // The address to which Output will be sent.
+    // The address to which the transfer output will be sent.
     core.keys.v1.Address address = 2;
-  }
-  message Spend {
-    // The input amount and denomination in which the Spend is issued.
-    core.asset.v1.Value value = 1;
-    // The source address from which the Spend will be sent.
-    core.keys.v1.Address address = 2;
-  }
-  message Swap {
-    // The input amount and denomination to be traded in the Swap.
-    core.asset.v1.Value value = 1;
-    // The denomination to be received as a Output of the Swap.
-    core.asset.v1.AssetId target_asset = 2;
-    // The pre-paid fee to be paid for claiming the Swap outputs.
-    core.component.fee.v1.Fee fee = 3;
-    // The address to which swap claim output will be sent.
-    core.keys.v1.Address claim_address = 4;
-  }
-  message SwapClaim {
-    // SwapCommitment to identify the Swap to be claimed.
-    // Use the commitment from the Swap message:
-    // penumbra.core.component.dex.v1.Swap.body.payload.commitment.
-    crypto.tct.v1.StateCommitment swap_commitment = 1;
-  }
-  message Delegate {
-    core.num.v1.Amount amount = 1;
-    core.component.stake.v1.RateData rate_data = 3;
-  }
-  message Undelegate {
-    core.asset.v1.Value value = 1;
-    core.component.stake.v1.RateData rate_data = 2;
-  }
-  message UndelegateClaim {
-    // The identity key of the validator to finish undelegating from.
-    core.keys.v1.IdentityKey validator_identity = 1;
-    // The epoch in which unbonding began, used to verify the penalty.
-    uint64 start_epoch_index = 2 [deprecated = true];
-    // The penalty applied to undelegation, in bps^2 (10e-8).
-    // In the happy path (no slashing), this is 0.
-    core.component.stake.v1.Penalty penalty = 3;
-    // The amount of unbonding tokens to claim.
-    // This is a bare number because its denom is determined by the preceding data.
-    core.num.v1.Amount unbonding_amount = 4;
-    // The height at which unbonding began.
-    uint64 unbonding_start_height = 5;
-  }
-  message PositionOpen {
-    // Contains the data defining the position, sufficient to compute its `PositionId`.
-    //
-    // Positions are immutable, so the `PositionData` (and hence the `PositionId`)
-    // are unchanged over the entire lifetime of the position.
-    core.component.dex.v1.Position position = 1;
-    // Optionally, provide position metadata to encrypt.
-    core.component.dex.v1.PositionMetadata position_meta = 2;
-  }
-  message PositionClose {
-    // The position to close.
-    core.component.dex.v1.PositionId position_id = 1;
-  }
-  message PositionWithdraw {
-    // The position to withdraw.
-    core.component.dex.v1.PositionId position_id = 1;
-    // The position's final reserves.
-    core.component.dex.v1.Reserves reserves = 2;
-    // The trading pair of the position.
-    core.component.dex.v1.TradingPair trading_pair = 3;
-  }
-
-  message ActionDutchAuctionSchedule {
-    // The description of the auction to schedule.
-    core.component.auction.v1.DutchAuctionDescription description = 1;
-  }
-
-  message ActionDutchAuctionEnd {
-    // The unique id of the auction to close.
-    core.component.auction.v1.AuctionId auction_id = 1;
-  }
-
-  message ActionDutchAuctionWithdraw {
-    // The auction to withdraw funds from.
-    core.component.auction.v1.AuctionId auction_id = 1;
-    // The sequence number of the withdrawal.
-    uint64 seq = 2;
-  }
-
-  message DelegatorVote {
-    // The proposal being voted on.
-    uint64 proposal = 1;
-    // The vote.
-    core.component.governance.v1.Vote vote = 2;
-    // The block height at which the proposal started voting.
-    uint64 start_block_height = 3;
-    // The position of the state commitment tree at which the proposal is considered to have started voting.
-    uint64 start_position = 4;
-    // The validators rate data for the proposal.
-    repeated core.component.stake.v1.RateData rate_data = 5;
-  }
-
-  message ActionLiquidityTournamentVote {
-    // The asset the user wants to vote for.
-    core.asset.v1.Denom incentivized = 1;
-    // The address the user wants potential rewards to go to.
-    core.keys.v1.Address rewards_recipient = 2;
-    // The note containing the staked note used for voting.
-    repeated SpendableNoteRecord staked_notes = 3;
-    // The epoch index of the tournament.
-    uint64 epoch_index = 4;
   }
 }
 
@@ -587,7 +340,7 @@ message NotesRequest {
   // If set, only return notes with the specified asset id.
   core.asset.v1.AssetId asset_id = 3;
 
-  // If set, only return notes with the specified address incore.component.dex.v1.
+  // If set, only return notes with the specified address index.
   core.keys.v1.AddressIndex address_index = 4;
 
   // If set, stop returning notes once the total exceeds this amount.
@@ -597,14 +350,6 @@ message NotesRequest {
 }
 
 // A query for notes to be used for voting on a proposal.
-message NotesForVotingRequest {
-  // The starting height of the proposal.
-  uint64 votable_at_height = 1;
-
-  // If set, only return notes with the specified asset id.
-  core.keys.v1.AddressIndex address_index = 3;
-}
-
 message WitnessRequest {
   // The transaction plan to witness
   core.transaction.v1.TransactionPlan transaction_plan = 3;
@@ -643,12 +388,6 @@ message AssetsRequest {
   bool filtered = 1;
   // Include these specific denominations in the response.
   repeated core.asset.v1.Denom include_specific_denominations = 2;
-  // Include all delegation tokens, to any validator, in the response.
-  bool include_delegation_tokens = 3;
-  // Include all unbonding tokens, from any validator, in the response.
-  bool include_unbonding_tokens = 4;
-  // Include all LP NFTs in the response.
-  bool include_lp_nfts = 5;
   // Include all proposal NFTs in the response.
   bool include_proposal_nfts = 6;
   // Include all voting receipt tokens in the response.
@@ -692,22 +431,6 @@ message NoteByCommitmentRequest {
 
 message NoteByCommitmentResponse {
   SpendableNoteRecord spendable_note = 1;
-}
-
-message SwapByCommitmentRequest {
-  crypto.tct.v1.StateCommitment swap_commitment = 2;
-  // If set to true, waits to return until the requested swap is detected.
-  bool await_detection = 3;
-}
-
-message SwapByCommitmentResponse {
-  SwapRecord swap = 1;
-}
-
-message UnclaimedSwapsRequest {}
-
-message UnclaimedSwapsResponse {
-  SwapRecord swap = 1;
 }
 
 message NullifierStatusRequest {
@@ -758,18 +481,13 @@ message NotesResponse {
   SpendableNoteRecord note_record = 1;
 }
 
-message NotesForVotingResponse {
-  SpendableNoteRecord note_record = 1;
-  core.keys.v1.IdentityKey identity_key = 2;
-}
-
 // A note plaintext with associated metadata about its status.
 message SpendableNoteRecord {
   // The note commitment, identifying the note.
   crypto.tct.v1.StateCommitment note_commitment = 1;
   // The note plaintext itself.
   core.component.shielded_pool.v1.Note note = 2;
-  // A precomputed decryption of the note's address incore.component.dex.v1.
+  // The address index of the note within this wallet.
   core.keys.v1.AddressIndex address_index = 3;
   // The note's nullifier.
   core.component.sct.v1.Nullifier nullifier = 4;
@@ -785,31 +503,6 @@ message SpendableNoteRecord {
   core.keys.v1.AddressView return_address = 9;
 }
 
-message SwapRecord {
-  crypto.tct.v1.StateCommitment swap_commitment = 1;
-  core.component.dex.v1.SwapPlaintext swap = 2;
-  uint64 position = 3;
-  core.component.sct.v1.Nullifier nullifier = 4;
-  core.component.dex.v1.BatchSwapOutputData output_data = 5;
-  uint64 height_claimed = 6;
-  core.component.sct.v1.CommitmentSource source = 7;
-}
-
-message OwnedPositionIdsRequest {
-  // If present, return only positions with this position state.
-  core.component.dex.v1.PositionState position_state = 1;
-  // If present, return only positions for this trading pair.
-  core.component.dex.v1.TradingPair trading_pair = 2;
-  // If present, return only positions for this subaccount index.
-  core.keys.v1.AddressIndex subaccount = 3;
-}
-
-message OwnedPositionIdsResponse {
-  core.component.dex.v1.PositionId position_id = 1;
-  // The subaccount this position belongs to.
-  core.keys.v1.AddressIndex subaccount = 2;
-}
-
 // Requests information on an asset by asset id
 message AssetMetadataByIdRequest {
   // The asset id to request information on.
@@ -821,150 +514,6 @@ message AssetMetadataByIdResponse {
   //
   // If the requested asset was unknown, this field will not be present.
   core.asset.v1.Metadata denom_metadata = 1;
-}
-
-// Requests `ValueView`s of delegation tokens for the given address index. The
-// returned `ValueView`s will include the `ValidatorInfo` for the delegated
-// validator in their `extended_metadata` fields.
-message DelegationsByAddressIndexRequest {
-  // The address index to fetch delegation balances for.
-  core.keys.v1.AddressIndex address_index = 1;
-
-  enum Filter {
-    // By default, returns delegations for all active validators. For validators
-    // that the given address index has no delegation tokens for, a `ValueView`
-    // with a balance of `0` will be returned.
-    FILTER_UNSPECIFIED = 0;
-
-    // Returns only delegations to active validators that the given address
-    // index holds delegation tokens for.
-    FILTER_ALL_ACTIVE_WITH_NONZERO_BALANCES = 1;
-
-    // Return delegations for all validators, whether active or not. For
-    // validators that the given address index has no delegation tokens for, a
-    // `ValueView` with a balance of `0` will be returned.
-    FILTER_ALL = 2;
-  }
-
-  Filter filter = 2;
-}
-
-// Contains a `ValueView` of delegation tokens for the requested address index.
-// The `ValueView` includes the `ValidatorInfo` for the delegated validator in
-// cits `extended_metadata` field.
-message DelegationsByAddressIndexResponse {
-  core.asset.v1.ValueView value_view = 1;
-}
-
-// Requests unbonding tokens for a given address index, with optional filtering
-// for whether the tokens are currently claimable.
-message UnbondingTokensByAddressIndexRequest {
-  enum Filter {
-    // Return all unbonding tokens, regardless of whether they're claimable
-    // right now.
-    FILTER_UNSPECIFIED = 0;
-
-    // Return all unbonding tokens that are currently claimable. This includes:
-    // - tokens that have passed the `unbonding_delay` (from `StakeParameters`)
-    // - tokens for unbonded validators
-    FILTER_CLAIMABLE = 1;
-
-    // Return all unbonding tokens that are not yet claimable, because they are
-    // still in the `unbonding_delay` (from `StakeParameters`) period.
-    FILTER_NOT_YET_CLAIMABLE = 2;
-  }
-
-  Filter filter = 1;
-
-  // The address index to fetch unbonding tokens for.
-  core.keys.v1.AddressIndex address_index = 2;
-}
-
-// Returns unbonding tokens for the given address index, optionally filtered by
-// whether the tokens are currently claimable.
-message UnbondingTokensByAddressIndexResponse {
-  // A `ValueView` representing the amount of the given unbonding token.
-  core.asset.v1.ValueView value_view = 1;
-
-  // Whether the unbonding token is currently claimable. This will only be
-  // `true` if the `unbonding_delay` (from `StakeParameters`) has passed or the
-  // validator has unbonded.
-  bool claimable = 2;
-}
-
-// Requests the latest swaps controlled by the user's wallet. 
-message LatestSwapsRequest {
-  // If present, filter balances to only include the account specified by the `AddressIndex`.
-  core.keys.v1.AddressIndex account_filter = 1;
-  // If present, filter balances to only include trading activity on the specified pair.
-  core.component.dex.v1.DirectedTradingPair pair = 2;
-  // If present, limit the responses to activity that occurred after this block height.
-  uint64 after_height = 3;
-  // Limit the response to the last entries within `response_limit`.
-  uint64 response_limit = 4;
-}
-
-message LatestSwapsResponse {
-  // The trading pair involved in this swap.
-  core.component.dex.v1.DirectedTradingPair pair = 1;
-  // The input value for the swap.
-  core.asset.v1.Value input = 2;
-  // The output value received from the swap.
-  core.asset.v1.Value output = 3;
-  // The block height at which this swap occurred.
-  uint64 block_height = 4;
-  // The hash of the transaction that was broadcast.
-  core.txhash.v1.TransactionId id = 5;
-}
-
-// Request bundles of liquidity positions by trading pair / subaccount / strategy.
-message LpPositionBundleRequest {
-  // Filter by subaccount index.
-  core.keys.v1.AddressIndex subaccount = 1;
-  // Filter by trading pair.
-  core.component.dex.v1.TradingPair trading_pair = 2;
-  // Filter by strategy, and also identifier if present.
-  core.component.dex.v1.PositionMetadata position_metadata = 3;
-  // Filter by strategy state.
-  core.component.dex.v1.PositionState position_state = 4;
-}
-
-message LpPositionBundleResponse {
-  message Entry {
-    // The trading pair for which this strategy is defined.
-    core.component.dex.v1.TradingPair trading_pair = 1;
-    // The subaccount index for which this strategy is defined.
-    core.keys.v1.AddressIndex subaccount = 2;
-    // The LP strategy metadata.
-    core.component.dex.v1.PositionMetadata position_metadata = 3;
-    // The strategy state (e.g., open, closed, etc.).
-    core.component.dex.v1.PositionState position_state = 4;
-    // The position id for the LP strategy.
-    repeated core.component.dex.v1.PositionId position_id = 5;
-  }
-  repeated Entry entries = 1;
-}
-
-// Request a list of LP strategies (e.g, for a UI to display a catalogue of strategies).
-message LpStrategyCatalogRequest {
-  // Filter by subaccount index.
-  core.keys.v1.AddressIndex subaccount = 1;
-  // Filter by trading pair.
-  core.component.dex.v1.TradingPair trading_pair = 2;
-  // Filter by strategy.
-  core.component.dex.v1.PositionMetadata position_metadata = 3;
-}
-
-message LpStrategyCatalogResponse {
-  message StrategyEntry {
-    // The trading pair for which this strategy is defined.
-    core.component.dex.v1.TradingPair trading_pair = 1;
-    // The subaccount index for which this strategy is defined.
-    core.keys.v1.AddressIndex subaccount = 2;
-    // The LP strategy metadata.
-    core.component.dex.v1.PositionMetadata position_metadata = 3;
-  }
-  repeated StrategyEntry strategies = 1;
 }
 
 // Compliance RPCs - View-specific types
@@ -1080,4 +629,3 @@ message ComplianceBatchMerkleProofsResponse {
   // Results for each query, in the same order as the request.
   repeated ComplianceMerkleProofsResponse results = 3;
 }
-

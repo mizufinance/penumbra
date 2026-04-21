@@ -1,5 +1,4 @@
 use anyhow::Context;
-use penumbra_sdk_num::Amount;
 use penumbra_sdk_proto::core::component::governance::v1 as pb;
 use penumbra_sdk_proto::DomainType;
 use serde::{Deserialize, Serialize};
@@ -14,8 +13,6 @@ use crate::tally::Ratio;
 pub struct GovernanceParameters {
     /// The number of blocks during which a proposal is voted on.
     pub proposal_voting_blocks: u64,
-    /// The deposit required to create a proposal.
-    pub proposal_deposit_amount: Amount,
     /// The quorum required for a proposal to be considered valid, as a fraction of the total stake
     /// weight of the network.
     pub proposal_valid_quorum: Ratio,
@@ -35,10 +32,6 @@ impl TryFrom<pb::GovernanceParameters> for GovernanceParameters {
     fn try_from(msg: pb::GovernanceParameters) -> anyhow::Result<Self> {
         Ok(GovernanceParameters {
             proposal_voting_blocks: msg.proposal_voting_blocks,
-            proposal_deposit_amount: msg
-                .proposal_deposit_amount
-                .ok_or_else(|| anyhow::anyhow!("missing proposal_deposit_amount"))?
-                .try_into()?,
             proposal_valid_quorum: msg
                 .proposal_valid_quorum
                 .parse()
@@ -59,7 +52,6 @@ impl From<GovernanceParameters> for pb::GovernanceParameters {
     fn from(params: GovernanceParameters) -> Self {
         pb::GovernanceParameters {
             proposal_voting_blocks: params.proposal_voting_blocks,
-            proposal_deposit_amount: Some(params.proposal_deposit_amount.into()),
             proposal_valid_quorum: params.proposal_valid_quorum.to_string(),
             proposal_pass_threshold: params.proposal_pass_threshold.to_string(),
             proposal_slash_threshold: params.proposal_slash_threshold.to_string(),
@@ -72,7 +64,6 @@ impl Default for GovernanceParameters {
         Self {
             // governance
             proposal_voting_blocks: 17_280, // 24 hours, at a 5 second block time
-            proposal_deposit_amount: 0u64.into(),
             // governance parameters copied from cosmos hub
             proposal_valid_quorum: Ratio::new(40, 100),
             proposal_pass_threshold: Ratio::new(50, 100),

@@ -142,7 +142,14 @@ where
         for tx in data {
             let tx = tx.into();
             // The caller may want to access the DeliverTx responses
-            deliver_tx_responses.push(test_node.deliver_tx(tx).await?);
+            let response = test_node.deliver_tx(tx).await?;
+            anyhow::ensure!(
+                response.code.is_ok(),
+                "deliver_tx failed with code {:?}: {}",
+                response.code,
+                response.log
+            );
+            deliver_tx_responses.push(response);
         }
 
         // The CheckTx, BeginBlock, DeliverTx, EndBlock methods include an Events field.

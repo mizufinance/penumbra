@@ -1,6 +1,8 @@
 use std::pin::Pin;
 
+use async_stream::try_stream;
 use cnidarium::Storage;
+use futures::{StreamExt, TryStreamExt};
 use penumbra_sdk_asset::asset::{self};
 use penumbra_sdk_proto::core::component::shielded_pool::v1::{
     query_service_server::QueryService, AssetMetadataByIdRequest, AssetMetadataByIdResponse,
@@ -66,8 +68,34 @@ impl QueryService for Server {
 
     async fn asset_metadata_by_ids(
         &self,
-        _request: tonic::Request<AssetMetadataByIdsRequest>,
+        request: tonic::Request<AssetMetadataByIdsRequest>,
     ) -> Result<tonic::Response<Self::AssetMetadataByIdsStream>, tonic::Status> {
-        unimplemented!("asset_metadata_by_ids not yet implemented")
+        let state = self.storage.latest_snapshot();
+        let request = request.into_inner();
+
+        let ids = request
+            .asset_id
+            .into_iter()
+            .map(|asset_id| {
+                asset_id
+                    .try_into()
+                    .map_err(|e| Status::invalid_argument(format!("could not parse asset_id: {e}")))
+            })
+            .collect::<Result<Vec<asset::Id>, Status>>()?;
+
+        let stream = try_stream! {
+            for id in ids {
+                let denom_metadata = state.denom_metadata_by_asset(&id).await;
+                yield AssetMetadataByIdsResponse {
+                    denom_metadata: denom_metadata.map(Into::into),
+                };
+            }
+        };
+
+        Ok(tonic::Response::new(
+            stream
+                .map_err(|e: anyhow::Error| Status::internal(format!("error fetching assets: {e}")))
+                .boxed(),
+        ))
     }
 }

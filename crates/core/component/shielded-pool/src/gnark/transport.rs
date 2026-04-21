@@ -8,20 +8,22 @@ use std::{
 #[cfg(any(unix, windows))]
 use std::{ffi::CString, ptr};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Result};
+#[cfg(any(unix, windows))]
+use anyhow::{bail, Context};
 use ark_groth16::PreparedVerifyingKey;
 use decaf377::Bls12_377;
 #[cfg(any(unix, windows))]
 use libloading::Library;
+#[cfg(any(unix, windows))]
 use penumbra_sdk_proof_params::VerifyingKeyExt;
 
-use crate::gnark::{
-    artifacts::{
-        load_artifact_metadata, load_prepared_vk, sha256_hex, validate_artifact_hashes,
-        validate_artifact_metadata, GnarkArtifactMetadata,
-    },
-    runtime::{sha256_hex_path, validate_daemon_ready, GnarkDaemonProcess},
+use crate::gnark::artifacts::{
+    load_artifact_metadata, load_prepared_vk, validate_artifact_hashes, validate_artifact_metadata,
 };
+#[cfg(any(unix, windows))]
+use crate::gnark::artifacts::{sha256_hex, GnarkArtifactMetadata};
+use crate::gnark::runtime::{sha256_hex_path, validate_daemon_ready, GnarkDaemonProcess};
 
 #[repr(C)]
 pub(crate) struct PenumbraGnarkInitResult {
@@ -65,7 +67,6 @@ pub(crate) enum GnarkTransport {
 #[derive(Clone, Copy)]
 pub(crate) struct GnarkFamilyConfig {
     pub family: &'static str,
-    pub lib_basename: &'static str,
     pub env_artifact_dir: &'static str,
     pub env_lib: &'static str,
     pub env_daemon: &'static str,

@@ -1,7 +1,6 @@
 use anyhow::anyhow;
 use pbjson_types::Any;
 use penumbra_sdk_asset::{asset, EstimatedPrice, Value, ValueView};
-use penumbra_sdk_dex::BatchSwapOutputData;
 use penumbra_sdk_keys::{Address, AddressView, PayloadKey, PositionMetadataKey};
 use penumbra_sdk_proto::core::transaction::v1::{
     self as pb, NullifierWithNote, PayloadKeyWithCommitment,
@@ -53,10 +52,6 @@ pub struct TransactionPerspective {
     ///
     /// Allows walking forwards from an output to the transaction that later spent it.
     pub nullification_transaction_ids_by_commitment: BTreeMap<note::StateCommitment, TransactionId>,
-    /// Any relevant batch swap output data.
-    ///
-    /// This can be used to fill in information about swap outputs.
-    pub batch_swap_output_data: Vec<BatchSwapOutputData>,
     /// The key used to decrypt position metadata.
     ///
     /// We leave this as optional for maximal backwards compatibility.
@@ -162,11 +157,6 @@ impl From<TransactionPerspective> for pb::TransactionPerspective {
                         transaction_id: Some(v.into()),
                     },
                 )
-                .collect(),
-            batch_swap_output_data: msg
-                .batch_swap_output_data
-                .into_iter()
-                .map(Into::into)
                 .collect(),
             position_metadata_key: msg.position_metadata_key.map(|x| x.into()),
         }
@@ -291,11 +281,6 @@ impl TryFrom<pb::TransactionPerspective> for TransactionPerspective {
                     ))
                 })
                 .collect::<Result<_, anyhow::Error>>()?,
-            batch_swap_output_data: msg
-                .batch_swap_output_data
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
             position_metadata_key: msg
                 .position_metadata_key
                 .map(|x| x.try_into())

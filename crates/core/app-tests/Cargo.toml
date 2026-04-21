@@ -19,19 +19,14 @@ component = [
   "dep:cnidarium",
   "dep:cnidarium-component",
   "penumbra-sdk-proto/cnidarium",
-  "penumbra-sdk-auction/component",
-  "penumbra-sdk-community-pool/component",
   "penumbra-sdk-compact-block/component",
-  "penumbra-sdk-dex/component",
-  "penumbra-sdk-distributions/component",
   "penumbra-sdk-fee/component",
-  "penumbra-sdk-funding/component",
   "penumbra-sdk-governance/component",
   "penumbra-sdk-ibc/component",
   "penumbra-sdk-ibc/rpc",
   "penumbra-sdk-sct/component",
   "penumbra-sdk-shielded-pool/component",
-  "penumbra-sdk-stake/component",
+  "penumbra-sdk-validator/component",
   "dep:tonic",
   "dep:tonic-reflection",
   "dep:tonic-web"
@@ -65,13 +60,8 @@ once_cell                        = { workspace = true }
 parking_lot                      = { workspace = true }
 penumbra-sdk-asset               = { workspace = true, default-features = true }
 penumbra-sdk-app                 = { workspace = true, default-features = true }
-penumbra-sdk-auction                 = { workspace = true, default-features = false }
-penumbra-sdk-community-pool          = { workspace = true, default-features = false }
 penumbra-sdk-compact-block           = { workspace = true, default-features = false }
-penumbra-sdk-dex                     = { workspace = true, default-features = false }
-penumbra-sdk-distributions           = { workspace = true, default-features = false }
 penumbra-sdk-fee                     = { workspace = true, default-features = false }
-penumbra-sdk-funding                 = { workspace = true, default-features = false }
 penumbra-sdk-governance              = { workspace = true, default-features = false }
 penumbra-sdk-ibc                     = { workspace = true, default-features = false }
 penumbra-sdk-keys                    = { workspace = true, default-features = true }
@@ -81,7 +71,7 @@ penumbra-sdk-proof-params            = { workspace = true, default-features = fa
 penumbra-sdk-proto                   = { workspace = true, default-features = true }
 penumbra-sdk-sct                     = { workspace = true, default-features = false }
 penumbra-sdk-shielded-pool           = { workspace = true, features = ["bundled-proving-keys"], default-features = false }
-penumbra-sdk-stake                   = { workspace = true, default-features = false }
+penumbra-sdk-validator                   = { workspace = true, default-features = false }
 penumbra-sdk-tct                     = { workspace = true, default-features = true }
 penumbra-sdk-test-subscriber         = { workspace = true }
 penumbra-sdk-tower-trace             = { workspace = true }
@@ -151,12 +141,7 @@ features = [
 # Many tests need updates to use MockClient::witness_auth_build_with_compliance
 # for compliance anchor support. See CLAUDE.md for details.
 
-# Tests that work with compliance system:
-[[test]]
-name = "compliance_full_flow"
-path = "tests/compliance_full_flow.rs"
-
-# Tests that don't use SpendPlan/OutputPlan (no compliance anchor needed):
+# Tests that don't use shielded input/output plans (no compliance anchor needed):
 [[test]]
 name = "app_blocktimes_increment"
 path = "tests/app_blocktimes_increment.rs"
@@ -177,12 +162,7 @@ path = "tests/mock_consensus_can_define_a_genesis_validator.rs"
 name = "mock_consensus_can_send_a_sequence_of_empty_blocks"
 path = "tests/mock_consensus_can_send_a_sequence_of_empty_blocks.rs"
 
-# Tests updated to use MockClient::witness_auth_build_with_compliance:
-[[test]]
-name = "app_can_spend_notes_and_detect_outputs"
-path = "tests/app_can_spend_notes_and_detect_outputs.rs"
-
-# Tests without SpendPlan/OutputPlan (no compliance needed):
+# Tests without shielded input/output plans (no compliance needed):
 [[test]]
 name = "app_rejects_validator_definitions_with_invalid_auth_sigs"
 path = "tests/app_rejects_validator_definitions_with_invalid_auth_sigs.rs"
@@ -203,15 +183,13 @@ name = "ics23_transfer"
 path = "tests/ics23_transfer.rs"
 
 [[test]]
-name = "app_aggregate_bundle_poc"
-path = "tests/app_aggregate_bundle_poc.rs"
+name = "app_can_transfer_notes_and_detect_new_notes"
+path = "tests/app_can_transfer_notes_and_detect_new_notes.rs"
 
-# Spend action handler test with compliance:
 [[test]]
-name = "spend"
-path = "tests/spend.rs"
+name = "compliance_diversifier_fix"
+path = "tests/compliance_diversifier_fix.rs"
 
-# Tests using Planner (now with compliance setup):
 [[test]]
 name = "view_server_can_be_served_on_localhost"
 path = "tests/view_server_can_be_served_on_localhost.rs"
@@ -220,24 +198,3 @@ path = "tests/view_server_can_be_served_on_localhost.rs"
 name = "app_can_sweep_a_collection_of_small_notes"
 path = "tests/app_can_sweep_a_collection_of_small_notes.rs"
 
-# Test for diversifier fix in compliance enrichment:
-[[test]]
-name = "compliance_diversifier_fix"
-path = "tests/compliance_diversifier_fix.rs"
-
-# Test for multi-spend batched compliance enrichment:
-[[test]]
-name = "compliance_multi_spend_planner"
-path = "tests/compliance_multi_spend_planner.rs"
-
-# Disabled in the reduced action surface:
-# - tests/compliance_action_blocking.rs
-# - tests/app_can_deposit_into_community_pool.rs
-# - tests/app_can_define_and_delegate_to_a_validator.rs
-# - tests/app_can_disable_community_pool_spends.rs
-# - tests/app_can_propose_community_pool_spends.rs
-# - tests/app_check_dex_vcb.rs
-# - tests/swap_and_swap_claim.rs
-# - tests/app_can_undelegate_from_a_validator.rs
-# - tests/app_reproduce_testnet_75_vcb_close.rs
-# - tests/app_tracks_uptime_for_validators_only_once_active.rs

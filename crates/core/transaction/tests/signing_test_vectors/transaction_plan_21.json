@@ -1,51 +1,56 @@
 {
   "actions": [
     {
-      "communityPoolOutput": {
-        "value": {
-          "amount": {
-            "lo": "712099694586710147"
+      "validatorVote": {
+        "body": {
+          "proposal": "34232162",
+          "vote": {
+            "vote": "VOTE_YES"
           },
-          "assetId": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+          "identityKey": {
+            "ik": "f9WsFBhpzMLzDyMVdQJOz2tcQL/0vsZ8bj+/G/wRiDQ="
+          },
+          "governanceKey": {
+            "gk": "nL5iCDCgG35OKmsKdvYTWQl9vZGqPHjDbiJBiD+ZrAQ="
+          },
+          "reason": {
+            "reason": "G5lYTh7a"
           }
         },
-        "address": {
-          "inner": "Tm2rBPOYpFW2CLE9B6KPLTyGdUc6PfJV4LmnXPGTfI8dIdY796ukjOHkUwnCt8fstxsFLcMc8g2Rxco3JsbCETCbzy4opIQfbTJfBdY5y1c="
+        "authSig": {
+          "inner": "AjrYiT01h4s/C9UA0Wlmll4tEse1Bw4o6pvyTxzykwnso2UDzMyqSQ7oZ7Yn7SgUDDqX5vZ3RhteNui2MOlOAQ=="
         }
       }
     },
     {
-      "positionWithdraw": {
-        "reserves": {
-          "r1": {
-            "lo": "247508319787471057"
+      "validatorVote": {
+        "body": {
+          "proposal": "311570235",
+          "vote": {
+            "vote": "VOTE_ABSTAIN"
           },
-          "r2": {
-            "lo": "114694080530884377"
+          "identityKey": {
+            "ik": "0MmbFkLD3uQbHudHh+ysrodCTBYfcZQ00BqwZyup+TE="
+          },
+          "governanceKey": {
+            "gk": "XJFdDabiP2tZMjcB2hDKUqAeFUjH/qQa25Zqi5+ssQI="
+          },
+          "reason": {
+            "reason": "3TY6G5DP1UW4Qh29V7UjMkja0FWXPqBs"
           }
         },
-        "positionId": {
-          "inner": "9v1igf0nprB5wk+3cn5Z+nin3Cev+ZAmwRksGLytd7w="
-        },
-        "pair": {
-          "asset1": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          },
-          "asset2": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          }
-        },
-        "sequence": "1"
+        "authSig": {
+          "inner": "OhDpsiQhcIVK3V0/BNGSBzfCgwcVMJOzoTCoI3umLAKfoplDfmOv68Fa4mmuUVMjHnY3jb9TpVdLsj55SNU+Aw=="
+        }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "8529472275",
-    "chainId": "toshihssfheg-03135770992860569234333807401742",
+    "expiryHeight": "5583917483",
+    "chainId": "bxucucfijrcgcfrjkudpozhhj-16952860421",
     "fee": {
       "amount": {
-        "lo": "792681549408059150"
+        "lo": "425625286951072669"
       }
     }
   }

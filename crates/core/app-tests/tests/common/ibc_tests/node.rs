@@ -243,7 +243,7 @@ impl TestNodeWithIBC {
             }
         }
 
-        // Build minimal transaction directly (no SpendPlan = no witness data needed)
+        // Build minimal transaction directly (no shielded input plan = no witness data needed)
         let transaction_body = TransactionBody {
             actions,
             transaction_parameters: TransactionParameters {
@@ -251,6 +251,7 @@ impl TestNodeWithIBC {
                 chain_id: self.chain_id.clone(),
                 fee: Default::default(),
             },
+            fee_funding: None,
             detection_data: None,
             memo: None,
         };

@@ -52,8 +52,10 @@ pcli tx compliance register-asset <asset_id> --regulated \
   [--allowed-channels channel-0,channel-3]
 ```
 
-**Asset Registry (IMT)**: Indexed Merkle Tree with sorted linked list. Stores
-only regulated assets. Membership proof: `leaf.value == asset_id`.
+**Asset Registry (IMT)**: Indexed Merkle Tree with sorted linked list. It always
+contains a structural zero-value sentinel and the protocol also seeds the
+neutral base asset as an explicit unregulated entry. Additional regulated assets
+are inserted explicitly. Membership proof: `leaf.value == asset_id`.
 Non-membership (gap) proof: `low.value < asset_id < low.next_value`. Both use
 identical circuit structure — validators cannot distinguish them.
 
@@ -61,10 +63,11 @@ identical circuit structure — validators cannot distinguish them.
 channels allowed. Unregulated = no restrictions. First-hop enforcement only.
 Immutable after registration.
 
-**Blocked actions** for regulated assets: Swap, SwapClaim, Position*,
-DutchAuction*, Delegate, Undelegate, UndelegateClaim, IbcRelay,
-Ics20Withdrawal (unless whitelisted), ProposalSubmit/Withdraw, ValidatorVote,
-ProposalDepositClaim, CommunityPoolSpend/Deposit/Output.
+**Chain action surface** for regulated assets: `Transfer`, `Consolidate`,
+`Split`, `ProposalSubmit`, `ValidatorVote`, `ValidatorDefinition`,
+`ShieldedIcs20Withdrawal` (subject to channel whitelist), and compliance
+registration actions. DEX, staking, community-pool, delegator-vote, and
+proposal-withdraw/deposit-claim actions are removed from this chain.
 
 Unregistered assets default to unregulated.
 
@@ -89,14 +92,14 @@ ACK = d × ring_pk                                    per-address, publicly comp
 produce different `d` values and therefore different ACKs. Different assets use
 different `ring_pk`, so ACKs differ across assets even for the same address.
 
-Output actions use dual ACK: `ack_receiver` (core/ext tiers) and `ack_sender`
-(sext tier). Spend actions use single ACK (self). Tier isolation comes from
-independent ephemeral scalars (r1, r2, r3), not per-tier d values.
+Transfer uses sender and receiver ACKs across its transfer compliance bundle.
+`Split` and `Consolidate` do not carry compliance ciphertext.
 
-For unregulated assets, **BLACK_HOLE_ACK** is used: a NUMS point
-`hash_to_curve("penumbra.compliance.black_hole_ack")` with unknown discrete
-log — ciphertext is effectively dead. IMT non-membership proof proves
-unregulated status.
+For unregulated assets, Penumbra uses two fixed protocol sink public keys:
+one for issuer detection routing and one for ring/ACK routing. Both are
+domain-separated hash-to-curve points with no corresponding private key, so
+the issuer ciphertext keeps the same wire shape but is effectively undecryptable.
+IMT non-membership proof still proves unregulated status.
 
 ### ZK Proof of Storage
 
@@ -151,7 +154,7 @@ FROST sig → stores leaf.
 |----------|--------|
 | Asset not registered | Unregulated. IMT non-membership proof. Full privacy. |
 | User not registered | Transaction rejected. |
-| Sender registered, receiver not | Transaction rejected (Output proof fails). |
+| Sender registered, receiver not | Transaction rejected (transfer compliance check fails). |
 
 ---
 
@@ -160,7 +163,7 @@ FROST sig → stores leaf.
 The user runs the same command as vanilla Penumbra:
 
 ```bash
-pcli tx send <recipient> <amount> <asset>
+pcli tx transfer --to <recipient> <amount><asset>
 ```
 
 No compliance-specific flags needed. The planner detects whether the asset is
@@ -172,34 +175,12 @@ regulated and handles compliance automatically.
 2. Looks up `dk_pub`, `ring_pk`, `threshold` from AssetPolicy (IMT)
 3. Derives ACKs: `ack_receiver = d_receiver × ring_pk`, `ack_sender = d_sender × ring_pk`
 4. Computes `is_flagged = (amount >= threshold)`
-5. Generates independent ephemeral scalars: Spend `r_s`, Output `r_1, r_2, r_3`
-6. Computes EPKs (all on G)
+5. Generates the transfer compliance ephemeral scalars and EPKs
 
 ### Ciphertext Construction
 
-**Spend ciphertext (224 bytes)**: 1 EPK, single ACK (self)
-
-| Field | Bytes | Content |
-|-------|-------|---------|
-| EPK | 32 | `r_s × G` |
-| c2_core | 32 | ElGamal envelope for core tier seed |
-| Detection | 64 | 2 Fq: encrypted (asset_id + flag bit, salt) to DK_pub |
-| Core | 96 | 3 Fq: encrypted (amount + sender address) |
-
-**Output ciphertext (544 bytes)**: 3 EPKs (independent r), dual ACK
-
-| Field | Bytes | Content |
-|-------|-------|---------|
-| EPK_1 | 32 | `r_1 × G` — detection + receiver core |
-| EPK_2 | 32 | `r_2 × G` — receiver extension (independent r) |
-| EPK_3 | 32 | `r_3 × G` — sender extension (independent r) |
-| c2_core | 32 | ElGamal envelope for core tier seed |
-| c2_ext | 32 | ElGamal envelope for output extension tier seed |
-| c2_sext | 32 | ElGamal envelope for spend extension tier seed |
-| Detection | 64 | 2 Fq: encrypted (asset_id + flag bit, salt) to DK_pub |
-| Core | 96 | 3 Fq: encrypted (amount + receiver address) |
-| Output Extension | 96 | 3 Fq: encrypted counterparty address |
-| Spend Extension | 96 | 3 Fq: encrypted sender's counterparty info |
+Transfer compliance uses the transfer ciphertext and transfer DLEQ bundle.
+The receiver leg carries the compliance bytes; sender-owned change outputs carry none.
 
 ### 4-Tier Encryption
 
@@ -217,11 +198,8 @@ to recover the stream cipher seed.
 **Flagging**: When amount >= threshold, all tiers encrypt to DK_pub directly.
 The issuer decrypts flagged transactions without Orbis.
 
-**Independent-r EPK design**: Each ACK-tier uses a different ephemeral scalar.
-Detection and core share `r_1` on Output (safe: different key families —
-DK vs ACK). Extension uses `r_2`, sext uses `r_3`. This prevents the issuer
-from deriving one tier from another after obtaining a single PRE result
-(DLP hard on r).
+Each transfer compliance tier is bound independently with its own salt and DLEQ
+statement material.
 
 ### DLEQ Proof
 
@@ -243,23 +221,23 @@ Public outputs: (c, s) per tier
 `target_timestamp` is Unix UTC seconds, set by client to `now()`, validator
 enforces ±1 hour of block time.
 
-Spend: +2 Fq public outputs (c, s). Output: +6 Fq (c1, s1, c2, s2, c3, s3).
+Transfer exposes one DLEQ proof per transfer compliance tier.
 
 For unregulated assets, DLEQ uses zeroed policy fields — valid but useless
 (no Orbis ring exists).
 
 ### ZK Proofs and Validation
 
-**SpendCircuit** validates: QuadTree membership, IMT membership/non-membership,
-encryption correctness, flag correctness, independent-r EPK structure, DLEQ
-proof, binding to {policy_id, permission, resource}.
+**Transfer compliance circuit** validates: QuadTree membership,
+IMT membership/non-membership, encryption correctness, flag correctness,
+per-tier DLEQ proofs, and binding to `{policy_id, permission, resource}`.
 
-**OutputCircuit** validates: same as Spend, plus extension tier encryption,
-dual ACK correctness.
+**Split** and **Consolidate** do not participate in compliance encryption or
+binding checks.
 
 **Stateful checks** (validator): compliance_anchor in history, asset_anchor in
-history, target_timestamp within ±1hr of block time, nullifier unspent (Spend),
-regulated asset not in blocked action type, FROST sig valid (RegisterUser).
+history, target_timestamp within ±1hr of block time, and FROST signature valid
+for `ComplianceRegisterUser`.
 
 Ciphertexts are stored on-chain after broadcast.
 

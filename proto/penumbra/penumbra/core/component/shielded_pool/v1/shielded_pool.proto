@@ -3,6 +3,7 @@ package penumbra.core.component.shielded_pool.v1;
 
 import "penumbra/core/asset/v1/asset.proto";
 import "penumbra/core/component/compliance/v1/compliance.proto";
+import "penumbra/core/component/ibc/v1/ibc.proto";
 import "penumbra/core/component/sct/v1/sct.proto";
 import "penumbra/core/keys/v1/keys.proto";
 import "penumbra/core/num/v1/num.proto";
@@ -104,18 +105,23 @@ message NotePayload {
   NoteCiphertext encrypted_note = 3;
 }
 
-// A Penumbra ZK output proof.
-message ZKOutputProof {
-  bytes inner = 1;
-}
-
-// A Penumbra ZK spend proof.
-message ZKSpendProof {
-  bytes inner = 1;
-}
-
 // A Penumbra ZK transfer proof.
 message ZKTransferProof {
+  bytes inner = 1;
+}
+
+// A Penumbra ZK consolidate proof.
+message ZKConsolidateProof {
+  bytes inner = 1;
+}
+
+// A Penumbra ZK split proof.
+message ZKSplitProof {
+  bytes inner = 1;
+}
+
+// A Penumbra ZK shielded ICS-20 withdrawal proof.
+message ZKShieldedIcs20WithdrawalProof {
   bytes inner = 1;
 }
 
@@ -162,8 +168,6 @@ message Transfer {
 
 // The body of a fused shielded transfer.
 message TransferBody {
-  // The proving family this transfer uses.
-  uint32 family_id = 16;
   // The state commitment tree anchor used during proof generation.
   crypto.tct.v1.MerkleRoot anchor = 15;
   // A commitment to the net balance of the action.
@@ -205,29 +209,237 @@ message TransferPlan {
   bytes value_blinding = 2;
   // The net action balance committed by the action body.
   asset.v1.Balance balance = 3;
-  // The spend plans fused into this transfer.
-  repeated SpendPlan spends = 4;
-  // The output plans fused into this transfer.
-  repeated OutputPlan outputs = 5;
+  // The shielded input plans fused into this transfer.
+  repeated ShieldedInputPlan spends = 4;
+  // The shielded output plans fused into this transfer.
+  repeated ShieldedOutputPlan outputs = 5;
 }
 
-// Spends a shielded note.
-message Spend {
-  // The effecting data of the spend.
-  SpendBody body = 1;
-  // The authorizing signature for the spend.
-  crypto.decaf377_rdsa.v1.SpendAuthSignature auth_sig = 2;
-  // The proof that the spend is well-formed is authorizing data.
-  ZKSpendProof proof = 3;
+message ShieldedIcs20WithdrawalChangeBody {
+  // The minimal data required to scan and process the created change note.
+  NotePayload note_payload = 1;
+  // An encrypted key for decrypting the memo.
+  bytes wrapped_memo_key = 2;
+  // The key material used for note encryption, wrapped to the sender's OVK.
+  bytes ovk_wrapped_key = 3;
 }
 
-// ABCI Event recording a spend.
-message EventSpend {
+// Withdraws shielded funds over ICS-20 while keeping shielded change in the same action.
+message ShieldedIcs20Withdrawal {
+  // The effecting data of the withdrawal.
+  ShieldedIcs20WithdrawalBody body = 1;
+  // The authorizing signatures for each consumed input.
+  repeated crypto.decaf377_rdsa.v1.SpendAuthSignature auth_sigs = 2;
+  // The proof that the withdrawal is well-formed.
+  ZKShieldedIcs20WithdrawalProof proof = 3;
+}
+
+message ShieldedIcs20WithdrawalBody {
+  // The proving family this action uses.
+  uint32 family_id = 1;
+  // The state commitment tree anchor used during proof generation.
+  crypto.tct.v1.MerkleRoot anchor = 2;
+  // A commitment to the net balance of the action.
+  asset.v1.BalanceCommitment balance_commitment = 3;
+  // The consumed notes.
+  repeated TransferInputBody inputs = 4;
+  // The embedded outbound ICS-20 withdrawal payload.
+  penumbra.core.component.ibc.v1.Ics20Withdrawal withdrawal = 5;
+  // The sender-owned change note or sender-owned zero-value dummy.
+  ShieldedIcs20WithdrawalChangeBody change_output = 6;
+  // Target timestamp for compliance verification (Unix UTC seconds).
+  uint64 target_timestamp = 7;
+  // Compliance tree anchor (user tree root) used during proof generation.
+  crypto.tct.v1.StateCommitment compliance_anchor = 8;
+  // Asset tree anchor used during proof generation.
+  crypto.tct.v1.StateCommitment asset_anchor = 9;
+}
+
+message ShieldedIcs20WithdrawalView {
+  message Visible {
+    ShieldedIcs20Withdrawal withdrawal = 1;
+    repeated NoteView spent_notes = 2;
+    NoteView change_note = 3;
+    keys.v1.PayloadKey payload_key = 4;
+  }
+
+  message Opaque {
+    ShieldedIcs20Withdrawal withdrawal = 1;
+  }
+
+  oneof shielded_ics20_withdrawal_view {
+    Visible visible = 1;
+    Opaque opaque = 2;
+  }
+}
+
+message ShieldedIcs20WithdrawalPlan {
+  // The public body this plan will produce.
+  ShieldedIcs20WithdrawalBody body = 1;
+  // The blinding factor to use for the net balance commitment.
+  bytes value_blinding = 2;
+  // The net action balance committed by the action body.
+  asset.v1.Balance balance = 3;
+  // The shielded input plans fused into this withdrawal.
+  repeated ShieldedInputPlan spends = 4;
+  // The sender-owned change output, if any.
+  ShieldedOutputPlan change_output = 5;
+  // The embedded outbound ICS-20 withdrawal payload.
+  penumbra.core.component.ibc.v1.Ics20Withdrawal withdrawal = 6;
+}
+
+message ConsolidateInputBody {
+  // The nullifier of the spent note.
+  sct.v1.Nullifier nullifier = 1;
+  // The randomized validating key for the spend authorization signature.
+  crypto.decaf377_rdsa.v1.SpendVerificationKey rk = 2;
+  // An encryption of the commitment of the input note to the sender's OVK.
+  bytes encrypted_backref = 3;
+}
+
+message ConsolidateOutputBody {
+  // The minimal data required to scan and process the created note.
+  NotePayload note_payload = 1;
+  // An encrypted key for decrypting the memo.
+  bytes wrapped_memo_key = 2;
+  // The key material used for note encryption, wrapped to the sender's OVK.
+  bytes ovk_wrapped_key = 3;
+}
+
+// Consolidates multiple notes owned by one address into fewer notes owned by that same address.
+message Consolidate {
+  // The effecting data of the consolidate action.
+  ConsolidateBody body = 1;
+  // The authorizing signatures for each consumed input.
+  repeated crypto.decaf377_rdsa.v1.SpendAuthSignature auth_sigs = 2;
+  // The proof that the consolidate action is well-formed.
+  ZKConsolidateProof proof = 3;
+}
+
+message ConsolidateBody {
+  // The proving family this action uses.
+  uint32 family_id = 1;
+  // The state commitment tree anchor used during proof generation.
+  crypto.tct.v1.MerkleRoot anchor = 2;
+  // A commitment to the net balance of the action.
+  asset.v1.BalanceCommitment balance_commitment = 3;
+  // The consumed notes.
+  repeated ConsolidateInputBody inputs = 4;
+  // The created notes.
+  repeated ConsolidateOutputBody outputs = 5;
+}
+
+message ConsolidateView {
+  message Visible {
+    Consolidate consolidate = 1;
+    repeated NoteView spent_notes = 2;
+    repeated NoteView created_notes = 3;
+    keys.v1.PayloadKey payload_key = 4;
+  }
+
+  message Opaque {
+    Consolidate consolidate = 1;
+  }
+
+  oneof consolidate_view {
+    Visible visible = 1;
+    Opaque opaque = 2;
+  }
+}
+
+message ConsolidatePlan {
+  // The public body this plan will produce.
+  ConsolidateBody body = 1;
+  // The blinding factor to use for the net balance commitment.
+  bytes value_blinding = 2;
+  // The net action balance committed by the action body.
+  asset.v1.Balance balance = 3;
+  // The shielded input plans fused into this consolidation.
+  repeated ShieldedInputPlan spends = 4;
+  // The shielded output plans fused into this consolidation.
+  repeated ShieldedOutputPlan outputs = 5;
+}
+
+message SplitInputBody {
+  // The nullifier of the spent note.
+  sct.v1.Nullifier nullifier = 1;
+  // The randomized validating key for the spend authorization signature.
+  crypto.decaf377_rdsa.v1.SpendVerificationKey rk = 2;
+  // An encryption of the commitment of the input note to the sender's OVK.
+  bytes encrypted_backref = 3;
+}
+
+message SplitOutputBody {
+  // The minimal data required to scan and process the created note.
+  NotePayload note_payload = 1;
+  // An encrypted key for decrypting the memo.
+  bytes wrapped_memo_key = 2;
+  // The key material used for note encryption, wrapped to the sender's OVK.
+  bytes ovk_wrapped_key = 3;
+}
+
+// Split-style note reshaping action.
+// Current supported families consume one note and create multiple notes owned by the same address.
+message Split {
+  // The effecting data of the split action.
+  SplitBody body = 1;
+  // The authorizing signatures for each consumed input.
+  repeated crypto.decaf377_rdsa.v1.SpendAuthSignature auth_sigs = 2;
+  // The proof that the split action is well-formed.
+  ZKSplitProof proof = 3;
+}
+
+message SplitBody {
+  // The proving family this action uses.
+  uint32 family_id = 1;
+  // The state commitment tree anchor used during proof generation.
+  crypto.tct.v1.MerkleRoot anchor = 2;
+  // A commitment to the net balance of the action.
+  asset.v1.BalanceCommitment balance_commitment = 3;
+  // The consumed notes.
+  repeated SplitInputBody inputs = 4;
+  // The created notes.
+  repeated SplitOutputBody outputs = 5;
+}
+
+message SplitView {
+  message Visible {
+    Split split = 1;
+    repeated NoteView spent_notes = 2;
+    repeated NoteView created_notes = 3;
+    keys.v1.PayloadKey payload_key = 4;
+  }
+
+  message Opaque {
+    Split split = 1;
+  }
+
+  oneof split_view {
+    Visible visible = 1;
+    Opaque opaque = 2;
+  }
+}
+
+message SplitPlan {
+  // The public body this plan will produce.
+  SplitBody body = 1;
+  // The blinding factor to use for the net balance commitment.
+  bytes value_blinding = 2;
+  // The net action balance committed by the action body.
+  asset.v1.Balance balance = 3;
+  // The shielded input plans fused into this split.
+  repeated ShieldedInputPlan spends = 4;
+  // The shielded output plans fused into this split.
+  repeated ShieldedOutputPlan outputs = 5;
+}
+
+// ABCI Event recording a spent nullifier.
+message EventNullifierSpent {
   core.component.sct.v1.Nullifier nullifier = 1;
 }
 
-// ABCI Event recording an output.
-message EventOutput {
+// ABCI Event recording a created note commitment.
+message EventNoteCreated {
   crypto.tct.v1.StateCommitment note_commitment = 1;
 }
 
@@ -237,49 +449,7 @@ message EventBroadcastClue {
   txhash.v1.TransactionId tx = 2;
 }
 
-// The body of a spend description, containing only the effecting data
-// describing changes to the ledger, and not the authorizing data that allows
-// those changes to be performed.
-message SpendBody {
-  // A commitment to the value of the input note.
-  asset.v1.BalanceCommitment balance_commitment = 1;
-  // The nullifier of the input note.
-  sct.v1.Nullifier nullifier = 6;
-  // The randomized validating key for the spend authorization signature.
-  crypto.decaf377_rdsa.v1.SpendVerificationKey rk = 4;
-  // An encryption of the commitment of the input note to the sender's OVK.
-  bytes encrypted_backref = 7;
-  // Compliance ciphertext encrypting input note details for asset issuer.
-  // 155 bytes total = [Clue: 8 bytes] + [Encrypted Payload: 147 bytes].
-  // Payload contains: Amount (16B) + Asset ID (32B) + Rseed (32B) + Address (64B) + Padding (3B).
-  // Packed in the circuit as 5 field elements of 31 bytes each.
-  bytes compliance_ciphertext = 8;
-  // Target timestamp for compliance verification (Unix UTC seconds).
-  uint64 target_timestamp = 9;
-  // Blinded sender leaf hash (for binding with output circuit).
-  crypto.tct.v1.StateCommitment sender_leaf_hash = 10;
-  // Compliance tree anchor (user tree root) used during proof generation.
-  crypto.tct.v1.StateCommitment compliance_anchor = 12;
-  // Asset tree anchor used during proof generation.
-  crypto.tct.v1.StateCommitment asset_anchor = 13;
-  // DLEQ proof (c, s) for Orbis policy binding. 64 bytes (2 × 32-byte LE Fr scalars).
-  bytes dleq_proof = 14;
-}
-message SpendView {
-  message Visible {
-    Spend spend = 1;
-    NoteView note = 2;
-  }
-  message Opaque {
-    Spend spend = 1;
-  }
-  oneof spend_view {
-    Visible visible = 1;
-    Opaque opaque = 2;
-  }
-}
-
-message SpendPlan {
+message ShieldedInputPlan {
   // The plaintext note we plan to spend.
   Note note = 1;
   // The position of the note we plan to spend.
@@ -338,72 +508,7 @@ message SpendPlan {
   bytes threshold = 29;
 }
 
-// Creates a new shielded note.
-message Output {
-  // The effecting data for the output.
-  OutputBody body = 1;
-  // The output proof is authorizing data.
-  ZKOutputProof proof = 2;
-}
-
-// The body of an output description, containing only the effecting data
-// describing changes to the ledger, and not the authorizing data that allows
-// those changes to be performed.
-message OutputBody {
-  // The minimal data required to scan and process the new output note.
-  NotePayload note_payload = 1;
-  // A commitment to the value of the output note. 32 bytes.
-  asset.v1.BalanceCommitment balance_commitment = 2;
-  // An encrypted key for decrypting the memo.
-  bytes wrapped_memo_key = 3;
-  // The key material used for note encryption, wrapped in encryption to the
-  // sender's outgoing viewing key. 48 bytes.
-  bytes ovk_wrapped_key = 4;
-  // Compliance ciphertext encrypting output note details for asset issuer.
-  // 160 bytes = 5 field elements (amount, asset_id, note_blinding, receiver_g_d, receiver_pk_d).
-  // Sender address is captured in the Spend circuit.
-  bytes compliance_ciphertext = 5;
-  // Target timestamp for compliance verification (Unix UTC seconds).
-  uint64 target_timestamp = 6;
-  reserved 7; // receiver_leaf_hash (removed)
-  // Blinded counterparty (sender) leaf hash (for binding with spend circuit).
-  crypto.tct.v1.StateCommitment counterparty_leaf_hash = 8;
-  // Compliance tree anchor (user tree root) used during proof generation.
-  crypto.tct.v1.StateCommitment compliance_anchor = 9;
-  // Asset tree anchor used during proof generation.
-  crypto.tct.v1.StateCommitment asset_anchor = 10;
-  // Issuer's detection key public (32 bytes, compressed curve point).
-  // For threshold-based flagging. Identity element if no policy exists.
-  bytes dk_pub = 11;
-  // Amount threshold for flagging (16 bytes, little-endian u128).
-  // u128::MAX if no policy exists (never flag).
-  bytes threshold = 12;
-  // Sender-encrypted field: recipient (gd, pk) and amount encrypted to sender's ack_orbis.
-  // 96 bytes = 3 × 32 (3 Fq elements). Enables sender to verify output details.
-  // Uses deterministic seed from ECDH with sender's ack_orbis (same r as compliance EPK).
-  bytes sender_ciphertext = 13;
-  // DLEQ proofs (c_1, s_1, c_2, s_2, c_3, s_3) for Orbis policy binding.
-  // 192 bytes (6 × 32-byte LE Fr scalars, one (c,s) pair per tier).
-  bytes dleq_proofs = 14;
-}
-
-message OutputView {
-  message Visible {
-    Output output = 1;
-    NoteView note = 2;
-    keys.v1.PayloadKey payload_key = 3;
-  }
-
-  message Opaque {
-    Output output = 1;
-  }
-  oneof output_view {
-    Visible visible = 1;
-    Opaque opaque = 2;
-  }
-}
-
-message OutputPlan {
+message ShieldedOutputPlan {
   // The value to send to this output.
   asset.v1.Value value = 1;
   // The destination address to send it to.

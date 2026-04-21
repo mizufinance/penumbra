@@ -140,7 +140,7 @@ message ComplianceMerkleProofsRequest {
 }
 
 // Response containing Merkle proofs for compliance ZK proofs.
-// This provides all the data needed to populate SpendPlan/OutputPlan compliance fields.
+// This provides all the data needed to populate shielded input/output compliance fields.
 message ComplianceMerkleProofsResponse {
   // Whether the user is registered for this asset.
   // If false, compliance_path and compliance_position will be empty/zero.
@@ -282,7 +282,7 @@ message EventAssetRegistered {
 // Compliance metadata embedded in ICS-20 transfer memo field.
 // Carries the spend ciphertext so the issuer can track regulated assets across IBC.
 message IbcComplianceMetadata {
-  // The compliance ciphertext from the funding spend.
+  // The compliance ciphertext from the transfer-side input bundle.
   bytes compliance_ciphertext = 1;
   // The asset ID being transferred.
   asset.v1.AssetId asset_id = 7;

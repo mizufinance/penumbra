@@ -351,32 +351,6 @@ impl Metadata {
         REGISTRY.parse_denom(&denom.denom)
     }
 
-    pub fn is_auction_nft(&self) -> bool {
-        self.starts_with("auctionnft_")
-    }
-
-    pub fn is_withdrawn_auction_nft(&self) -> bool {
-        self.starts_with("auctionnft_2")
-    }
-
-    pub fn is_opened_position_nft(&self) -> bool {
-        let prefix = "lpnft_opened_".to_string();
-
-        self.starts_with(&prefix)
-    }
-
-    pub fn is_withdrawn_position_nft(&self) -> bool {
-        let prefix = "lpnft_withdrawn_".to_string();
-
-        self.starts_with(&prefix)
-    }
-
-    pub fn is_closed_position_nft(&self) -> bool {
-        let prefix = "lpnft_closed_".to_string();
-
-        self.starts_with(&prefix)
-    }
-
     /// Returns the IBC transfer path and base denom
     /// if this is an IBC transferred asset, `None` otherwise.
     ///

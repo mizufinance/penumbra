@@ -1,7 +1,7 @@
 use crate::App;
 use anyhow::{anyhow, Context, Result};
 use futures::TryStreamExt;
-use penumbra_sdk_asset::{asset, Value, STAKING_TOKEN_ASSET_ID};
+use penumbra_sdk_asset::{asset, Value, BASE_ASSET_ID};
 use penumbra_sdk_keys::FullViewingKey;
 use penumbra_sdk_num::Amount;
 use penumbra_sdk_proto::view::v1::{AssetsRequest, GasPricesRequest};
@@ -125,7 +125,7 @@ impl MigrateCmd {
                 // If this fails, then it won't be possible to migrate.
                 let (&(largest_account, _), _) = account_values
                     .iter()
-                    .filter(|((_, asset), _)| *asset == *STAKING_TOKEN_ASSET_ID)
+                    .filter(|((_, asset), _)| *asset == *BASE_ASSET_ID)
                     .max_by_key(|&(_, &amount)| amount)
                     .ok_or(anyhow!("no account with the ability to pay fees exists"))?;
 
@@ -182,9 +182,6 @@ impl MigrateCmd {
                     .assets(AssetsRequest {
                         filtered: false,
                         include_specific_denominations: vec![],
-                        include_lp_nfts: true,
-                        include_delegation_tokens: true,
-                        include_unbonding_tokens: true,
                         include_proposal_nfts: false,
                         include_voting_receipt_tokens: false,
                     })
@@ -240,7 +237,7 @@ impl MigrateCmd {
                 // Find the subaccount with the most fee token to pay fees
                 let (&(fee_account, _), _) = subaccount_values
                     .iter()
-                    .filter(|((_, asset), _)| *asset == *STAKING_TOKEN_ASSET_ID)
+                    .filter(|((_, asset), _)| *asset == *BASE_ASSET_ID)
                     .max_by_key(|&(_, &amount)| amount)
                     .ok_or(anyhow!(
                         "no subaccount in the range has the ability to pay fees"
@@ -257,7 +254,7 @@ impl MigrateCmd {
                     }
 
                     // For the fee account, the change will handle the remaining balance
-                    if account == fee_account && asset_id == *STAKING_TOKEN_ASSET_ID {
+                    if account == fee_account && asset_id == *BASE_ASSET_ID {
                         continue;
                     }
 

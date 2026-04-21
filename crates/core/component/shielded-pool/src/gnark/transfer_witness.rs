@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use decaf377::{Encoding, Fq};
 
 use crate::{
@@ -8,17 +8,16 @@ use crate::{
         IndexedLeafBinary, MerklePathBinary, PointAffineBytes,
     },
     public_input_hash::{transfer_statement_fields, transfer_statement_hash_from_public},
-    transfer::{TransferProofPrivate, TransferProofPublic},
-    TransferFamilyId,
+    transfer::{
+        transfer_input_count, transfer_output_count, TransferComplianceCiphertextPublic,
+        TransferComplianceDleqPublic, TransferProofPrivate, TransferProofPublic,
+        TRANSFER_PROOF_LABEL,
+    },
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransferSpendWitnessV1 {
     pub nullifier: [u8; 32],
-    pub spend_c2_core: [u8; 32],
-    pub spend_compliance_ciphertext: Vec<[u8; 32]>,
-    pub spend_dleq_c: [u8; 32],
-    pub spend_dleq_s: [u8; 32],
     pub spent_note_blinding: [u8; 32],
     pub spent_note_amount: [u8; 32],
     pub spent_note_asset_id: [u8; 32],
@@ -28,11 +27,10 @@ pub struct TransferSpendWitnessV1 {
     pub state_commitment_position: u64,
     pub state_commitment_auth_path: Vec<[[u8; 32]; 3]>,
     pub spend_auth_randomizer: [u8; 32],
-    pub spend_compliance_ephemeral: [u8; 32],
-    pub spend_is_flagged: bool,
-    pub spend_salt: [u8; 32],
+    pub is_dummy: bool,
+    pub dummy_nullifier_seed: [u8; 32],
+    pub dummy_spend_auth_key: [u8; 32],
     pub rk_affine: PointAffineBytes,
-    pub spend_epk_affine: PointAffineBytes,
     pub spent_diversified_generator_affine: PointAffineBytes,
     pub spent_transmission_key_affine: PointAffineBytes,
 }
@@ -40,16 +38,6 @@ pub struct TransferSpendWitnessV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransferOutputWitnessV1 {
     pub note_commitment: [u8; 32],
-    pub output_c2_core: [u8; 32],
-    pub output_c2_ext: [u8; 32],
-    pub output_c2_sext: [u8; 32],
-    pub output_compliance_ciphertext: Vec<[u8; 32]>,
-    pub output_dleq_c_1: [u8; 32],
-    pub output_dleq_s_1: [u8; 32],
-    pub output_dleq_c_2: [u8; 32],
-    pub output_dleq_s_2: [u8; 32],
-    pub output_dleq_c_3: [u8; 32],
-    pub output_dleq_s_3: [u8; 32],
     pub created_note_blinding: [u8; 32],
     pub created_note_amount: [u8; 32],
     pub created_note_asset_id: [u8; 32],
@@ -59,14 +47,8 @@ pub struct TransferOutputWitnessV1 {
     pub recipient_compliance_position: u64,
     pub recipient_asset_id: [u8; 32],
     pub recipient_d: [u8; 32],
-    pub output_compliance_ephemeral: [u8; 32],
-    pub output_r_2: [u8; 32],
-    pub output_r_3: [u8; 32],
-    pub output_is_flagged: bool,
-    pub output_salt: [u8; 32],
-    pub output_epk_1_affine: PointAffineBytes,
-    pub output_epk_2_affine: PointAffineBytes,
-    pub output_epk_3_affine: PointAffineBytes,
+    /// Output 0 is the receiver leg. Output 1, when present, is sender-owned change.
+    pub is_receiver: bool,
     pub created_diversified_generator_affine: PointAffineBytes,
     pub created_transmission_key_affine: PointAffineBytes,
     pub recipient_diversified_generator_affine: PointAffineBytes,
@@ -74,8 +56,16 @@ pub struct TransferOutputWitnessV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransferComplianceCiphertextWitnessV1 {
+    pub c2: [u8; 32],
+    pub ciphertext: Vec<[u8; 32]>,
+    pub dleq_c: [u8; 32],
+    pub dleq_s: [u8; 32],
+    pub epk_affine: PointAffineBytes,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransferWitnessV1 {
-    pub family_id: TransferFamilyId,
     pub total_length: u32,
     pub n_in: u32,
     pub n_out: u32,
@@ -97,7 +87,16 @@ pub struct TransferWitnessV1 {
     pub sender_compliance_position: u64,
     pub sender_asset_id: [u8; 32],
     pub sender_d: [u8; 32],
-    pub tx_blinding_nonce: [u8; 32],
+    pub transfer_nonce_root: [u8; 32],
+    pub detection_ciphertext: Vec<[u8; 32]>,
+    pub sender_core: TransferComplianceCiphertextWitnessV1,
+    pub sender_ext: TransferComplianceCiphertextWitnessV1,
+    pub output_core: TransferComplianceCiphertextWitnessV1,
+    pub output_ext: TransferComplianceCiphertextWitnessV1,
+    pub sender_r_core: [u8; 32],
+    pub sender_r_ext: [u8; 32],
+    pub output_r_core: [u8; 32],
+    pub output_r_ext: [u8; 32],
     pub spends: Vec<TransferSpendWitnessV1>,
     pub outputs: Vec<TransferOutputWitnessV1>,
     pub balance_commitment_affine: PointAffineBytes,
@@ -121,6 +120,23 @@ fn verification_key_point(
         .map_err(|e| anyhow!("decompress {label}: {e:?}"))
 }
 
+fn compliance_tier_witness(
+    tier: &TransferComplianceCiphertextPublic,
+    dleq: &TransferComplianceDleqPublic,
+) -> Result<TransferComplianceCiphertextWitnessV1> {
+    Ok(TransferComplianceCiphertextWitnessV1 {
+        c2: tier.c2.to_bytes(),
+        ciphertext: tier
+            .ciphertext
+            .iter()
+            .map(|value| value.to_bytes())
+            .collect(),
+        dleq_c: dleq.c.to_bytes(),
+        dleq_s: dleq.s.to_bytes(),
+        epk_affine: point_affine_bytes(tier.epk)?,
+    })
+}
+
 impl TransferWitnessV1 {
     pub fn from_public_private(
         public: &TransferProofPublic,
@@ -128,18 +144,11 @@ impl TransferWitnessV1 {
     ) -> Result<Self> {
         public.validate_shape()?;
         private.validate_shape()?;
-        if public.family_id != private.family_id {
-            bail!(
-                "transfer witness family mismatch: public={} private={}",
-                public.family_id.get(),
-                private.family_id.get()
-            );
-        }
 
         let claimed_statement_hash = transfer_statement_hash_from_public(public)
-            .map_err(|e| anyhow!("compute {} statement hash: {e}", public.family_id.label()))?;
+            .map_err(|e| anyhow!("compute {TRANSFER_PROOF_LABEL} statement hash: {e}"))?;
         let statement_fields = transfer_statement_fields(public)
-            .map_err(|e| anyhow!("compute {} statement fields: {e}", public.family_id.label()))?;
+            .map_err(|e| anyhow!("compute {TRANSFER_PROOF_LABEL} statement fields: {e}"))?;
 
         let sender_leaf = compliance_leaf_from_typed(&private.sender_leaf)?;
         let (_, sender_asset_id, sender_d) = compliance_leaf_parts(&sender_leaf);
@@ -158,14 +167,6 @@ impl TransferWitnessV1 {
                     .collect::<Vec<_>>();
                 Ok(TransferSpendWitnessV1 {
                     nullifier: public_input.nullifier.0.to_bytes(),
-                    spend_c2_core: public_input.c2_core.to_bytes(),
-                    spend_compliance_ciphertext: public_input
-                        .compliance_ciphertext
-                        .iter()
-                        .map(|value| value.to_bytes())
-                        .collect(),
-                    spend_dleq_c: public_input.dleq_c.to_bytes(),
-                    spend_dleq_s: public_input.dleq_s.to_bytes(),
                     spent_note_blinding: private_input.spent_note.note_blinding().to_bytes(),
                     spent_note_amount: Fq::from(private_input.spent_note.value().amount).to_bytes(),
                     spent_note_asset_id: private_input.spent_note.asset_id().0.to_bytes(),
@@ -184,16 +185,13 @@ impl TransferWitnessV1 {
                     ),
                     state_commitment_auth_path,
                     spend_auth_randomizer: private_input.spend_auth_randomizer.to_bytes(),
-                    spend_compliance_ephemeral: private_input
-                        .spend_compliance_ephemeral_secret
-                        .to_bytes(),
-                    spend_is_flagged: private_input.spend_is_flagged,
-                    spend_salt: private_input.spend_salt.to_bytes(),
+                    is_dummy: private_input.is_dummy,
+                    dummy_nullifier_seed: private_input.dummy_nullifier_seed.to_bytes(),
+                    dummy_spend_auth_key: private_input.dummy_spend_auth_key.to_bytes(),
                     rk_affine: point_affine_bytes(verification_key_point(
                         public_input.rk,
                         &format!("rk_{index}"),
                     )?)?,
-                    spend_epk_affine: point_affine_bytes(public_input.epk)?,
                     spent_diversified_generator_affine: point_affine_bytes(
                         private_input.spent_note.diversified_generator(),
                     )?,
@@ -218,20 +216,6 @@ impl TransferWitnessV1 {
                 let (_, recipient_asset_id, recipient_d) = compliance_leaf_parts(&recipient_leaf);
                 Ok(TransferOutputWitnessV1 {
                     note_commitment: public_output.note_commitment.0.to_bytes(),
-                    output_c2_core: public_output.c2_core.to_bytes(),
-                    output_c2_ext: public_output.c2_ext.to_bytes(),
-                    output_c2_sext: public_output.c2_sext.to_bytes(),
-                    output_compliance_ciphertext: public_output
-                        .compliance_ciphertext
-                        .iter()
-                        .map(|value| value.to_bytes())
-                        .collect(),
-                    output_dleq_c_1: public_output.dleq_c_1.to_bytes(),
-                    output_dleq_s_1: public_output.dleq_s_1.to_bytes(),
-                    output_dleq_c_2: public_output.dleq_c_2.to_bytes(),
-                    output_dleq_s_2: public_output.dleq_s_2.to_bytes(),
-                    output_dleq_c_3: public_output.dleq_c_3.to_bytes(),
-                    output_dleq_s_3: public_output.dleq_s_3.to_bytes(),
                     created_note_blinding: private_output.created_note.note_blinding().to_bytes(),
                     created_note_amount: Fq::from(private_output.created_note.value().amount)
                         .to_bytes(),
@@ -247,16 +231,7 @@ impl TransferWitnessV1 {
                     recipient_compliance_position: private_output.recipient_compliance_position,
                     recipient_asset_id,
                     recipient_d,
-                    output_compliance_ephemeral: private_output
-                        .output_compliance_ephemeral_secret
-                        .to_bytes(),
-                    output_r_2: private_output.output_r_2.to_bytes(),
-                    output_r_3: private_output.output_r_3.to_bytes(),
-                    output_is_flagged: private_output.output_is_flagged,
-                    output_salt: private_output.output_salt.to_bytes(),
-                    output_epk_1_affine: point_affine_bytes(public_output.epk_1)?,
-                    output_epk_2_affine: point_affine_bytes(public_output.epk_2)?,
-                    output_epk_3_affine: point_affine_bytes(public_output.epk_3)?,
+                    is_receiver: private_output.is_receiver,
                     created_diversified_generator_affine: point_affine_bytes(
                         private_output.created_note.diversified_generator(),
                     )?,
@@ -284,11 +259,10 @@ impl TransferWitnessV1 {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Self {
-            family_id: public.family_id,
+        let mut witness = Self {
             total_length: 0,
-            n_in: public.inputs.len() as u32,
-            n_out: public.outputs.len() as u32,
+            n_in: transfer_input_count() as u32,
+            n_out: transfer_output_count() as u32,
             anchor: Fq::from(public.anchor).to_bytes(),
             balance_commitment: public.balance_commitment.to_bytes(),
             asset_anchor: public.asset_anchor.0.to_bytes(),
@@ -310,18 +284,44 @@ impl TransferWitnessV1 {
             sender_compliance_position: private.sender_compliance_position,
             sender_asset_id,
             sender_d,
-            tx_blinding_nonce: private.tx_blinding_nonce.to_bytes(),
+            transfer_nonce_root: private.compliance.transfer_nonce_root.to_bytes(),
+            detection_ciphertext: public
+                .compliance
+                .detection_ciphertext
+                .iter()
+                .map(|value| value.to_bytes())
+                .collect(),
+            sender_core: compliance_tier_witness(
+                &public.compliance.sender_core,
+                &public.compliance.sender_core_dleq,
+            )?,
+            sender_ext: compliance_tier_witness(
+                &public.compliance.sender_ext,
+                &public.compliance.sender_ext_dleq,
+            )?,
+            output_core: compliance_tier_witness(
+                &public.compliance.output_core,
+                &public.compliance.output_core_dleq,
+            )?,
+            output_ext: compliance_tier_witness(
+                &public.compliance.output_ext,
+                &public.compliance.output_ext_dleq,
+            )?,
+            sender_r_core: private.compliance.sender_r_core.to_bytes(),
+            sender_r_ext: private.compliance.sender_r_ext.to_bytes(),
+            output_r_core: private.compliance.output_r_core.to_bytes(),
+            output_r_ext: private.compliance.output_r_ext.to_bytes(),
             spends,
             outputs,
             balance_commitment_affine: point_affine_bytes(public.balance_commitment.0)?,
             ak_affine: point_affine_bytes(verification_key_point(private.ak, "ak")?)?,
             asset_indexed_leaf_dk_pub_affine: point_affine_bytes_with_fallback(
                 private.asset_indexed_leaf.params.dk_pub,
-                decaf377::Element::GENERATOR,
+                *penumbra_sdk_compliance::UNREGULATED_SINK_DK_PUB,
             )?,
             asset_indexed_leaf_ring_pk_affine: point_affine_bytes_with_fallback(
                 private.asset_indexed_leaf.ring.ring_pk,
-                decaf377::Element::GENERATOR,
+                *penumbra_sdk_compliance::UNREGULATED_SINK_RING_PK,
             )?,
             sender_diversified_generator_affine: point_affine_bytes(
                 *private.sender_leaf.address.diversified_generator(),
@@ -331,6 +331,9 @@ impl TransferWitnessV1 {
                     .vartime_decompress()
                     .map_err(|e| anyhow!("decompress sender transmission key: {e:?}"))?,
             )?,
-        })
+        };
+        witness.total_length = u32::try_from(witness.encode()?.len())
+            .map_err(|_| anyhow!("encoded {TRANSFER_PROOF_LABEL} witness exceeds u32"))?;
+        Ok(witness)
     }
 }

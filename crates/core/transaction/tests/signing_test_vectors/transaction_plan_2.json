@@ -1,84 +1,28 @@
 {
   "actions": [
     {
-      "delegatorVote": {
-        "proposal": "98347638",
-        "vote": {
-          "vote": "VOTE_YES"
-        },
-        "stakedNote": {
-          "value": {
-            "amount": {
-              "lo": "61405833153289403"
-            },
-            "assetId": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            }
-          },
-          "rseed": "QLaHAcThV64ma0W8IE3RnTSE2sfLLWY4X3Q3TZZLYRQ=",
-          "address": {
-            "inner": "GpGU0KdBOYIlWyiCFzQQG1vh9/RfFDiSfaw+QJQm30gP3RAv02bn1G4Qjp6K9eg0vov6NSVXAmc8toUz0ph9EUtKIqQWZEhNF+6pgLmrNRU="
-          }
-        },
-        "unbondedAmount": {
-          "lo": "137717772665555080"
-        },
-        "randomizer": "Ll/MzqY38KdIwCifymHCUBFTr1FwoH5duhR4PSTwLAI=",
-        "proofBlindingR": "5gnnhudzfKcKIoddgFvjHaeLyJD6vjtdpukeNjo3HQU=",
-        "proofBlindingS": "ozeLj0ymnw09T4kalK5jg3MkCs8hKgF6K9TWnhzINQU="
-      }
-    },
-    {
-      "positionClose": {
-        "positionId": {
-          "inner": "mLU1tL5o32ikzQ0HnEVeTv3GKiVxa34zQ5Ezkzu/z1c="
+      "ibcRelayAction": {
+        "rawAction": {
+          "typeUrl": "/ibc.core.channel.v1.MsgRecvPacket",
+          "value": "CrQBCPqG79oCEgtkZWZhdWx0UG9ydBoJY2hhbm5lbC0wIgtkZWZhdWx0UG9ydCoJY2hhbm5lbC0wMmQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOgwIv/HKjwEQ4+uOugJA8JfXrLmei9QYEgIKABoMCL/xyo8BEOPrjroCIo8BcGVudW1icmExenJlOWU1OG5heGYzbjU4MjY5MHl2cDR3dmc2M2xxNWRwdHQ4cWwwemo4Z3l3c3RsNThydjZqamQ5ZmxzaDdyMnlqNDJnZ3Q1cGU2bDB6ZHZneDY2MjV4dDBuczd4Zzgyd3BjYThlcmFkdTI4cnI4cDdwZ3Z4YzlmN2Y5emFna2QwYWhkd3k="
         }
       }
     },
     {
-      "positionOpenPlan": {
-        "position": {
-          "phi": {
-            "component": {
-              "p": {
-                "lo": "513377921908462950"
-              },
-              "q": {
-                "lo": "822670474651398752"
-              }
-            },
-            "pair": {
-              "asset1": {
-                "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-              },
-              "asset2": {
-                "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-              }
-            }
-          },
-          "nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-          "state": {
-            "state": "POSITION_STATE_ENUM_CLOSED"
-          },
-          "reserves": {
-            "r1": {
-              "lo": "742587200658157872"
-            },
-            "r2": {
-              "lo": "914845762068212468"
-            }
-          },
-          "closeOnFill": true
+      "ibcRelayAction": {
+        "rawAction": {
+          "typeUrl": "/ibc.core.channel.v1.MsgRecvPacket",
+          "value": "CrQBCKLT3ZsEEgtkZWZhdWx0UG9ydBoJY2hhbm5lbC0wIgtkZWZhdWx0UG9ydCoJY2hhbm5lbC0wMmQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOgwI6avquQIQkrWbjgNAmKTtubmei9QYEgIKABoMCOmr6rkCEJK1m44DIo8BcGVudW1icmExbTcwZTd1OGprbHZ0dGU2NzNxand6bTU2dmgwNjgycXAwdHBnMDhjeWE1MGdrcTY2d3E2a2RjZ3VhZ21uZDcwczljODJ2MDg5eWpzenlycjJ0dmtxNWtqd243OGw2cDB0cmVlcWRmZnhrazltNW4zbWV2ZzJ2dzNlZ3VhOWFlbXhlNWFncDY="
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "1942518256",
-    "chainId": "uuheufz-72162849773198",
+    "expiryHeight": "7989626562",
+    "chainId": "hsfqzfmfyfirjmhqmdphwjvlragwxsgb-9347545",
     "fee": {
       "amount": {
-        "lo": "360791754734904906"
+        "lo": "484918419275836590"
       }
     }
   }

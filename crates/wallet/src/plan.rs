@@ -1,18 +1,13 @@
 use std::collections::BTreeMap;
 
 use anyhow::Context;
-use decaf377::Fq;
 use rand_core::{CryptoRng, RngCore};
 use tracing::instrument;
 
-use penumbra_sdk_dex::swap_claim::SwapClaimPlan;
 use penumbra_sdk_keys::keys::AddressIndex;
 use penumbra_sdk_proto::view::v1::NotesRequest;
-use penumbra_sdk_transaction::{TransactionParameters, TransactionPlan};
-pub use penumbra_sdk_view::Planner;
-use penumbra_sdk_view::{SpendableNoteRecord, ViewClient};
-
-pub const SWEEP_COUNT: usize = 8;
+use penumbra_sdk_transaction::TransactionPlan;
+use penumbra_sdk_view::{NoteManager, SpendableNoteRecord, TransferPlanningResult, ViewClient};
 
 #[instrument(skip(view, rng))]
 pub async fn sweep<V, R>(view: &mut V, mut rng: R) -> anyhow::Result<Vec<TransactionPlan>>
@@ -22,64 +17,8 @@ where
 {
     let mut plans = Vec::new();
 
-    // First, find any un-claimed swaps and add `SwapClaim` plans for them.
-    plans.extend(claim_unclaimed_swaps(view, &mut rng).await?);
-
-    // Finally, sweep dust notes by spending them to their owner's address.
-    // This will consolidate small-value notes into larger ones.
+    // Sweep dust notes by consolidating them into larger notes.
     plans.extend(sweep_notes(view, &mut rng).await?);
-
-    Ok(plans)
-}
-
-#[instrument(skip(view, rng))]
-async fn claim_unclaimed_swaps<V, R>(
-    view: &mut V,
-    mut rng: R,
-) -> anyhow::Result<Vec<TransactionPlan>>
-where
-    V: ViewClient,
-    R: RngCore + CryptoRng,
-{
-    let mut plans = Vec::new();
-    // fetch all transactions
-    // check if they contain Swap actions
-    // if they do, check if the associated notes are unspent
-    // if they are, decrypt the SwapCiphertext in the Swap action and construct a SwapClaim
-
-    let app_params = view.app_params().await?;
-    let epoch_duration = app_params.sct_params.epoch_duration;
-
-    let unclaimed_swaps = view.unclaimed_swaps().await?;
-
-    for swap in unclaimed_swaps {
-        // We found an unclaimed swap, so we can claim it.
-        let swap_plaintext = swap.swap;
-
-        let output_data = swap.output_data;
-
-        let mut plan = TransactionPlan {
-            transaction_parameters: TransactionParameters {
-                chain_id: app_params.clone().chain_id,
-                fee: swap_plaintext.claim_fee.clone(),
-                ..Default::default()
-            },
-            // The transaction doesn't need a memo, because it's to ourselves.
-            memo: None,
-            ..Default::default()
-        };
-
-        let action_plan = SwapClaimPlan {
-            swap_plaintext,
-            position: swap.position,
-            output_data,
-            epoch_duration,
-            proof_blinding_r: Fq::rand(&mut rng),
-            proof_blinding_s: Fq::rand(&mut rng),
-        };
-        plan.actions.push(action_plan.into());
-        plans.push(plan);
-    }
 
     Ok(plans)
 }
@@ -120,24 +59,30 @@ where
 
             // Sort notes by amount, ascending, so the biggest notes are at the end...
             records.sort_by(|a, b| a.note.value().amount.cmp(&b.note.value().amount));
-            // ... so that when we use chunks_exact, we get SWEEP_COUNT sized
-            // chunks, ignoring the biggest notes in the remainder.
-            for group in records.chunks_exact(SWEEP_COUNT) {
-                let mut planner = Planner::new(&mut rng);
-                planner.set_gas_prices(gas_prices);
-
-                for record in group {
-                    planner.spend(record.note.clone(), record.position);
-                }
-
-                let plan = planner
-                    .plan(view, index)
-                    .await
-                    .context("can't build sweep transaction")?;
-
-                tracing::debug!(?plan);
-                plans.push(plan);
+            if records.len() < 2 {
+                continue;
             }
+
+            let mut note_manager = NoteManager::new(&mut rng);
+            note_manager.set_gas_prices(gas_prices);
+
+            let planning_result = note_manager
+                .plan_consolidate(view, index, asset_id, None)
+                .await
+                .context("can't build sweep transaction")?;
+
+            let plan = match planning_result {
+                TransferPlanningResult::Ready { transaction_plan } => transaction_plan,
+                TransferPlanningResult::NeedsMaintenance { .. } => continue,
+                TransferPlanningResult::InsufficientBalance => continue,
+                TransferPlanningResult::UnsupportedIntent { reason } => {
+                    tracing::debug!(?asset_id, ?reason, "skipping unsupported sweep intent");
+                    continue;
+                }
+            };
+
+            tracing::debug!(?plan);
+            plans.push(plan);
         }
     }
 

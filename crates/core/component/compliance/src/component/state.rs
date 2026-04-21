@@ -4,6 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cnidarium::StateWrite;
 use cnidarium_component::{ActionHandler, Component};
+use penumbra_sdk_asset::BASE_ASSET_ID;
 use penumbra_sdk_proto::{StateReadProto, StateWriteProto};
 use tendermint::v0_37::abci;
 use tracing::instrument;
@@ -80,12 +81,44 @@ impl Component for Compliance {
         // Genesis starts clean; modifications during init/register calls will set this.
         state.clear_compliance_trees_modified();
 
-        // Register regulated native assets from genesis configuration.
-        // Unregulated assets are NOT stored - they're proven via IMT non-membership.
+        // Seed the neutral base asset into the IMT as an explicit unregulated asset.
+        //
+        // This keeps the chain-native asset on a stable membership-proof path
+        // without treating it as regulated.
+        if let Some(result) = state
+            .register_asset_in_imt(
+                *BASE_ASSET_ID,
+                crate::structs::AssetPolicy::default_unregulated(),
+                false,
+            )
+            .await
+            .expect("must be able to register base asset at genesis")
+        {
+            let event = crate::event::EventAssetRegistered {
+                asset_id: *BASE_ASSET_ID,
+                is_regulated: false,
+                position: result.position,
+                indexed_leaf: result.indexed_leaf,
+                low_leaf_position: result.low_leaf_position,
+                updated_low_leaf: result.updated_low_leaf,
+            };
+
+            state.record_proto(event::asset_registered(
+                event.asset_id,
+                event.is_regulated,
+                event.position,
+                event.indexed_leaf.clone(),
+                event.low_leaf_position,
+                event.updated_low_leaf.clone(),
+            ));
+            state.record_pending_asset_registration(event);
+        }
+
+        // Register native assets from genesis configuration.
         if let Some(genesis) = app_state {
             for registration in &genesis.native_assets {
-                if registration.is_regulated {
-                    // Regulated assets MUST have a detection key
+                let (policy, is_regulated) = if registration.is_regulated {
+                    // Regulated assets MUST have a detection key.
                     let dk_pub_bytes = registration
                         .dk_pub
                         .expect("regulated asset in genesis must have dk_pub");
@@ -93,18 +126,45 @@ impl Component for Compliance {
                         .vartime_decompress()
                         .expect("invalid dk_pub encoding in genesis");
 
-                    let policy = crate::structs::AssetPolicy::simple(
-                        dk_pub,
-                        u128::MAX,
-                        decaf377::Element::GENERATOR,
-                    );
-                    state
-                        .register_regulated_asset(registration.asset_id, policy)
-                        .await
-                        .expect("must be able to register regulated asset at genesis");
+                    (
+                        crate::structs::AssetPolicy::simple(
+                            dk_pub,
+                            u128::MAX,
+                            decaf377::Element::GENERATOR,
+                        ),
+                        true,
+                    )
+                } else {
+                    (crate::structs::AssetPolicy::default_unregulated(), false)
+                };
+
+                if let Some(result) = state
+                    .register_asset_in_imt(registration.asset_id, policy, is_regulated)
+                    .await
+                    .expect("must be able to register native asset at genesis")
+                {
+                    let event = crate::event::EventAssetRegistered {
+                        asset_id: registration.asset_id,
+                        is_regulated,
+                        position: result.position,
+                        indexed_leaf: result.indexed_leaf,
+                        low_leaf_position: result.low_leaf_position,
+                        updated_low_leaf: result.updated_low_leaf,
+                    };
+
+                    state.record_proto(event::asset_registered(
+                        event.asset_id,
+                        event.is_regulated,
+                        event.position,
+                        event.indexed_leaf.clone(),
+                        event.low_leaf_position,
+                        event.updated_low_leaf.clone(),
+                    ));
+                    state.record_pending_asset_registration(event);
                     tracing::info!(
                         ?registration.asset_id,
-                        "registered regulated asset at genesis"
+                        is_regulated,
+                        "registered native asset at genesis"
                     );
                 }
             }
@@ -161,6 +221,12 @@ impl ActionHandler for MsgRegisterUser {
     }
 
     async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
+        anyhow::ensure!(
+            state.is_asset_regulated(self.leaf.asset_id).await?,
+            "cannot register user for unregulated asset {}",
+            self.leaf.asset_id
+        );
+
         // Check if user is already registered for this asset (idempotent)
         if let Some(existing_position) = state
             .get_user_leaf_position(&self.leaf.address, self.leaf.asset_id)
@@ -215,51 +281,55 @@ impl ActionHandler for MsgRegisterAsset {
     }
 
     async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        // Only regulated assets are stored in the IMT.
-        // Unregulated status is proven via non-membership proofs.
-        if self.is_regulated {
+        let (policy, is_regulated) = if self.is_regulated {
             let dk_pub = self.dk_pub.ok_or_else(|| {
                 anyhow::anyhow!("regulated assets require a detection key (dk_pub)")
             })?;
 
             let threshold = self.threshold.unwrap_or(u128::MAX);
             let ring_pk = self.ring_pk.unwrap_or(decaf377::Element::GENERATOR);
-            let policy = crate::structs::AssetPolicy::new(
-                dk_pub,
-                threshold,
-                self.allowed_channels.clone(),
-                self.ring_id.clone(),
-                ring_pk,
-                self.policy_id.clone(),
-                self.permission.clone(),
-                self.resource.clone(),
-            );
-            if let Some(result) = state
-                .register_regulated_asset(self.asset_id, policy)
-                .await?
-            {
-                let event = crate::event::EventAssetRegistered {
-                    asset_id: self.asset_id,
-                    is_regulated: self.is_regulated,
-                    position: result.position,
-                    indexed_leaf: result.indexed_leaf,
-                    low_leaf_position: result.low_leaf_position,
-                    updated_low_leaf: result.updated_low_leaf,
-                };
+            (
+                crate::structs::AssetPolicy::new(
+                    dk_pub,
+                    threshold,
+                    self.allowed_channels.clone(),
+                    self.ring_id.clone(),
+                    ring_pk,
+                    self.policy_id.clone(),
+                    self.permission.clone(),
+                    self.resource.clone(),
+                ),
+                true,
+            )
+        } else {
+            (crate::structs::AssetPolicy::default_unregulated(), false)
+        };
 
-                state.record_proto(event::asset_registered(
-                    event.asset_id,
-                    event.is_regulated,
-                    event.position,
-                    event.indexed_leaf.clone(),
-                    event.low_leaf_position,
-                    event.updated_low_leaf.clone(),
-                ));
+        if let Some(result) = state
+            .register_asset_in_imt(self.asset_id, policy, is_regulated)
+            .await?
+        {
+            let event = crate::event::EventAssetRegistered {
+                asset_id: self.asset_id,
+                is_regulated,
+                position: result.position,
+                indexed_leaf: result.indexed_leaf,
+                low_leaf_position: result.low_leaf_position,
+                updated_low_leaf: result.updated_low_leaf,
+            };
 
-                state.record_pending_asset_registration(event);
-            }
-            // If None, asset was already registered — policy is immutable, skip
+            state.record_proto(event::asset_registered(
+                event.asset_id,
+                event.is_regulated,
+                event.position,
+                event.indexed_leaf.clone(),
+                event.low_leaf_position,
+                event.updated_low_leaf.clone(),
+            ));
+
+            state.record_pending_asset_registration(event);
         }
+        // If None, asset was already registered — policy is immutable, skip.
 
         Ok(())
     }
@@ -268,9 +338,9 @@ impl ActionHandler for MsgRegisterAsset {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cnidarium::TempStorage;
+    use cnidarium::{StateRead, TempStorage};
     use decaf377::Fq;
-    use penumbra_sdk_asset::asset;
+    use penumbra_sdk_asset::{asset, BASE_ASSET_ID};
     use penumbra_sdk_keys::Address;
 
     use crate::genesis::NativeAssetRegistration;
@@ -308,8 +378,15 @@ mod tests {
         let asset_imt = state.get_asset_imt().await.unwrap();
 
         assert_eq!(user_tree.depth(), 16);
-        // IMT should only have sentinel leaf
-        assert_eq!(asset_imt.leaf_count(), 1);
+        // IMT contains the sentinel plus the neutral base asset registration.
+        assert_eq!(asset_imt.leaf_count(), 2);
+
+        let proof_data = state.get_asset_proof_data(*BASE_ASSET_ID).await.unwrap();
+        assert_eq!(proof_data.indexed_leaf.value, BASE_ASSET_ID.0);
+        assert!(
+            !proof_data.is_regulated,
+            "the seeded base asset must stay explicitly unregulated"
+        );
     }
 
     #[tokio::test]
@@ -338,7 +415,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_msg_register_user() {
+    async fn test_msg_register_user_for_regulated_asset() {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
@@ -347,11 +424,27 @@ mod tests {
         let genesis = genesis::Content::default();
         Compliance::init_chain(&mut state, Some(&genesis)).await;
 
-        // Create a register user message
+        let asset_id = asset::Id(Fq::from(1u64));
+        MsgRegisterAsset {
+            asset_id,
+            is_regulated: true,
+            dk_pub: Some(decaf377::Element::GENERATOR),
+            threshold: None,
+            allowed_channels: vec![],
+            ring_pk: None,
+            ring_id: String::new(),
+            policy_id: String::new(),
+            permission: String::new(),
+            resource: String::new(),
+        }
+        .check_and_execute(&mut state)
+        .await
+        .unwrap();
+
         let msg = MsgRegisterUser {
             leaf: ComplianceLeaf {
                 address: Address::dummy(&mut rand::thread_rng()),
-                asset_id: asset::Id(Fq::from(1u64)),
+                asset_id,
                 d: Fq::from(0u64),
             },
             signature: vec![0u8; 64], // Dummy signature
@@ -360,9 +453,83 @@ mod tests {
         // Execute the action directly on state
         msg.check_and_execute(&mut state).await.unwrap();
 
-        // Verify user was registered
+        // Duplicate registration stays idempotent for regulated assets.
+        msg.check_and_execute(&mut state).await.unwrap();
+
+        // Verify user was registered once.
         let user_count = state.get_user_count().await.unwrap();
         assert_eq!(user_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_msg_register_user_for_unregulated_asset_fails_without_mutating_state() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        Compliance::init_chain(&mut state, Some(&genesis::Content::default())).await;
+
+        let msg = MsgRegisterUser {
+            leaf: ComplianceLeaf {
+                address: Address::dummy(&mut rand::thread_rng()),
+                asset_id: *BASE_ASSET_ID,
+                d: Fq::from(0u64),
+            },
+            signature: vec![0u8; 64],
+        };
+
+        let error = msg.check_and_execute(&mut state).await.expect_err(
+            "unregulated assets, including the base asset, must reject user registration",
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("cannot register user for unregulated asset"),
+            "unexpected error: {error}"
+        );
+
+        assert_eq!(state.get_user_count().await.unwrap(), 0);
+        assert!(state
+            .object_get::<Vec<crate::event::EventUserRegistered>>(
+                crate::state_key::pending_user_registrations()
+            )
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_msg_register_user_for_absent_asset_fails_without_mutating_state() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        Compliance::init_chain(&mut state, Some(&genesis::Content::default())).await;
+
+        let msg = MsgRegisterUser {
+            leaf: ComplianceLeaf {
+                address: Address::dummy(&mut rand::thread_rng()),
+                asset_id: asset::Id(Fq::from(999_999u64)),
+                d: Fq::from(0u64),
+            },
+            signature: vec![0u8; 64],
+        };
+
+        let error = msg
+            .check_and_execute(&mut state)
+            .await
+            .expect_err("absent assets must reject user registration");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot register user for unregulated asset"),
+            "unexpected error: {error}"
+        );
+
+        assert_eq!(state.get_user_count().await.unwrap(), 0);
+        assert!(state
+            .object_get::<Vec<crate::event::EventUserRegistered>>(
+                crate::state_key::pending_user_registrations()
+            )
+            .is_none());
     }
 
     #[tokio::test]

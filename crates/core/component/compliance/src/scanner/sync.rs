@@ -81,21 +81,17 @@ pub struct ExtractedCiphertext {
     pub action_index: usize,
     /// The compliance ciphertext bytes.
     pub compliance_ciphertext: Vec<u8>,
-    /// Whether this is from a spend (true) or output (false) action.
-    pub is_spend: bool,
-    /// The sender-encrypted ciphertext (96 bytes, only present on outputs).
-    pub sender_ciphertext: Vec<u8>,
 }
 
 /// Extract compliance ciphertexts from a transaction.
-pub fn extract_ciphertexts(tx: &ProtoTransaction) -> Result<Vec<(usize, Vec<u8>, bool)>> {
+pub fn extract_ciphertexts(tx: &ProtoTransaction) -> Result<Vec<(usize, Vec<u8>)>> {
     Ok(extract_ciphertexts_full(tx)?
         .into_iter()
-        .map(|e| (e.action_index, e.compliance_ciphertext, e.is_spend))
+        .map(|e| (e.action_index, e.compliance_ciphertext))
         .collect())
 }
 
-/// Extract compliance ciphertexts from a transaction, including sender_ciphertext.
+/// Extract transfer compliance ciphertexts from a transaction.
 pub fn extract_ciphertexts_full(tx: &ProtoTransaction) -> Result<Vec<ExtractedCiphertext>> {
     use penumbra_sdk_proto::core::transaction::v1::action::Action;
 
@@ -107,27 +103,15 @@ pub fn extract_ciphertexts_full(tx: &ProtoTransaction) -> Result<Vec<ExtractedCi
     let mut results = Vec::new();
     for (idx, action) in actions.iter().enumerate() {
         match &action.action {
-            Some(Action::Output(output)) => {
-                if let Some(body) = &output.body {
-                    if !body.compliance_ciphertext.is_empty() {
-                        results.push(ExtractedCiphertext {
-                            action_index: idx,
-                            compliance_ciphertext: body.compliance_ciphertext.clone(),
-                            is_spend: false,
-                            sender_ciphertext: body.sender_ciphertext.clone(),
-                        });
-                    }
-                }
-            }
-            Some(Action::Spend(spend)) => {
-                if let Some(body) = &spend.body {
-                    if !body.compliance_ciphertext.is_empty() {
-                        results.push(ExtractedCiphertext {
-                            action_index: idx,
-                            compliance_ciphertext: body.compliance_ciphertext.clone(),
-                            is_spend: true,
-                            sender_ciphertext: vec![],
-                        });
+            Some(Action::Transfer(transfer)) => {
+                if let Some(body) = &transfer.body {
+                    for output in &body.outputs {
+                        if !output.compliance_ciphertext.is_empty() {
+                            results.push(ExtractedCiphertext {
+                                action_index: idx,
+                                compliance_ciphertext: output.compliance_ciphertext.clone(),
+                            });
+                        }
                     }
                 }
             }
@@ -140,7 +124,11 @@ pub fn extract_ciphertexts_full(tx: &ProtoTransaction) -> Result<Vec<ExtractedCi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use penumbra_sdk_proto::core::component::shielded_pool::v1::{
+        Consolidate, ConsolidateBody, Split, SplitBody, Transfer, TransferBody, TransferOutputBody,
+    };
     use penumbra_sdk_proto::core::transaction::v1::TransactionBody;
+    use penumbra_sdk_proto::core::transaction::v1::{action::Action, Action as ActionProto};
 
     #[test]
     fn test_extract_empty() {
@@ -152,5 +140,49 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(extract_ciphertexts(&tx).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_extract_ciphertexts_full_only_reads_transfer_outputs() {
+        let tx = ProtoTransaction {
+            body: Some(TransactionBody {
+                actions: vec![
+                    ActionProto {
+                        action: Some(Action::Split(Split {
+                            body: Some(SplitBody::default()),
+                            ..Default::default()
+                        })),
+                    },
+                    ActionProto {
+                        action: Some(Action::Transfer(Transfer {
+                            body: Some(TransferBody {
+                                outputs: vec![
+                                    TransferOutputBody::default(),
+                                    TransferOutputBody {
+                                        compliance_ciphertext: vec![1, 2, 3, 4],
+                                        ..Default::default()
+                                    },
+                                ],
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        })),
+                    },
+                    ActionProto {
+                        action: Some(Action::Consolidate(Consolidate {
+                            body: Some(ConsolidateBody::default()),
+                            ..Default::default()
+                        })),
+                    },
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let extracted = extract_ciphertexts_full(&tx).expect("transfer extraction should succeed");
+        assert_eq!(extracted.len(), 1);
+        assert_eq!(extracted[0].action_index, 1);
+        assert_eq!(extracted[0].compliance_ciphertext, vec![1, 2, 3, 4]);
     }
 }

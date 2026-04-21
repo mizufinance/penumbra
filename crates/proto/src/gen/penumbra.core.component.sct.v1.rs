@@ -59,7 +59,7 @@ impl ::prost::Name for Epoch {
 /// decide whether or not to download block data.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommitmentSource {
-    #[prost(oneof = "commitment_source::Source", tags = "1, 2, 20, 30, 40, 50")]
+    #[prost(oneof = "commitment_source::Source", tags = "1, 2, 40")]
     pub source: ::core::option::Option<commitment_source::Source>,
 }
 /// Nested message and enum types in `CommitmentSource`.
@@ -101,36 +101,6 @@ pub mod commitment_source {
             "/penumbra.core.component.sct.v1.CommitmentSource.Transaction".into()
         }
     }
-    /// The commitment was created through a validator's funding stream.
-    #[derive(Clone, Copy, PartialEq, ::prost::Message)]
-    pub struct FundingStreamReward {
-        /// The epoch index the rewards were issued in.
-        #[prost(uint64, tag = "1")]
-        pub epoch_index: u64,
-    }
-    impl ::prost::Name for FundingStreamReward {
-        const NAME: &'static str = "FundingStreamReward";
-        const PACKAGE: &'static str = "penumbra.core.component.sct.v1";
-        fn full_name() -> ::prost::alloc::string::String {
-            "penumbra.core.component.sct.v1.CommitmentSource.FundingStreamReward".into()
-        }
-        fn type_url() -> ::prost::alloc::string::String {
-            "/penumbra.core.component.sct.v1.CommitmentSource.FundingStreamReward".into()
-        }
-    }
-    /// The commitment was created through a `CommunityPoolOutput` in a governance-initated transaction.
-    #[derive(Clone, Copy, PartialEq, ::prost::Message)]
-    pub struct CommunityPoolOutput {}
-    impl ::prost::Name for CommunityPoolOutput {
-        const NAME: &'static str = "CommunityPoolOutput";
-        const PACKAGE: &'static str = "penumbra.core.component.sct.v1";
-        fn full_name() -> ::prost::alloc::string::String {
-            "penumbra.core.component.sct.v1.CommitmentSource.CommunityPoolOutput".into()
-        }
-        fn type_url() -> ::prost::alloc::string::String {
-            "/penumbra.core.component.sct.v1.CommitmentSource.CommunityPoolOutput".into()
-        }
-    }
     /// The commitment was created by an inbound ICS20 transfer.
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Ics20Transfer {
@@ -154,44 +124,14 @@ pub mod commitment_source {
             "/penumbra.core.component.sct.v1.CommitmentSource.Ics20Transfer".into()
         }
     }
-    /// The commitment was created by the LQT mechanism and tracks LQT reward notes.
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct LiquidityTournamentReward {
-        /// The epoch in which the reward occured.
-        #[prost(uint64, tag = "1")]
-        pub epoch: u64,
-        /// Transaction hash of the transaction that did the voting.
-        #[prost(message, optional, tag = "2")]
-        pub tx_hash: ::core::option::Option<
-            super::super::super::super::txhash::v1::TransactionId,
-        >,
-    }
-    impl ::prost::Name for LiquidityTournamentReward {
-        const NAME: &'static str = "LiquidityTournamentReward";
-        const PACKAGE: &'static str = "penumbra.core.component.sct.v1";
-        fn full_name() -> ::prost::alloc::string::String {
-            "penumbra.core.component.sct.v1.CommitmentSource.LiquidityTournamentReward"
-                .into()
-        }
-        fn type_url() -> ::prost::alloc::string::String {
-            "/penumbra.core.component.sct.v1.CommitmentSource.LiquidityTournamentReward"
-                .into()
-        }
-    }
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Source {
         #[prost(message, tag = "1")]
         Transaction(Transaction),
         #[prost(message, tag = "2")]
         Ics20Transfer(Ics20Transfer),
-        #[prost(message, tag = "20")]
-        FundingStreamReward(FundingStreamReward),
-        #[prost(message, tag = "30")]
-        CommunityPoolOutput(CommunityPoolOutput),
         #[prost(message, tag = "40")]
         Genesis(Genesis),
-        #[prost(message, tag = "50")]
-        Lqt(LiquidityTournamentReward),
     }
 }
 impl ::prost::Name for CommitmentSource {

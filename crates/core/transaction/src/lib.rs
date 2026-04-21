@@ -17,31 +17,26 @@
 // Requires nightly.
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
-mod action_policy;
 mod auth_data;
 mod detection_data;
 mod error;
+mod fee_funding;
 mod is_action;
 mod parameters;
 mod transaction;
 mod witness_data;
 
 pub mod action;
-pub mod action_list;
 pub mod gas;
 pub mod memo;
 pub mod plan;
 pub mod view;
 
 pub use action::Action;
-pub use action_list::ActionList;
-pub use action_policy::{
-    check_action_enabled, check_action_plan_enabled, check_transaction_enabled,
-    check_transaction_plan_enabled,
-};
 pub use auth_data::AuthorizationData;
 pub use detection_data::DetectionData;
 pub use error::Error;
+pub use fee_funding::{FeeFunding, FeeFundingPlan};
 pub use is_action::IsAction;
 pub use parameters::TransactionParameters;
 pub use penumbra_sdk_proof_aggregation::{AggregateBundle, FamilyAggregate, ProofFamilyId};
@@ -54,3 +49,11 @@ pub use witness_data::WitnessData;
 /// A compatibility wrapper for trait implementations that are temporarily duplicated
 /// in multiple crates as an orphan rule work around until we finish splitting crates (#2288).
 pub struct Compat<'a, T>(pub &'a T);
+
+pub fn check_transaction_enabled(_tx: &Transaction) -> anyhow::Result<()> {
+    Ok(())
+}
+
+pub fn check_transaction_plan_enabled(_plan: &TransactionPlan) -> anyhow::Result<()> {
+    Ok(())
+}

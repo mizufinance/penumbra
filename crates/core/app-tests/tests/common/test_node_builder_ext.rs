@@ -5,10 +5,8 @@ use {
     penumbra_sdk_mock_consensus::builder::Builder,
     penumbra_sdk_proto::{
         core::keys::v1::{GovernanceKey, IdentityKey},
-        penumbra::core::component::stake::v1::Validator as PenumbraValidator,
+        penumbra::core::component::validator::v1::Validator as PenumbraValidator,
     },
-    penumbra_sdk_shielded_pool::genesis::Allocation,
-    penumbra_sdk_stake::DelegationToken,
     rand::Rng,
     rand_core::OsRng,
     tracing::trace,
@@ -38,20 +36,11 @@ impl BuilderExt for Builder {
             // that way tests can operate with no rng.
             let seed = Some(SpendKeyBytes(consensus_vk.to_bytes()));
 
-            // Generate a penumbra validator with this consensus key, and a corresponding
-            // allocation of delegation tokens.
-            let (validator, allocation) = generate_penumbra_sdk_validator(consensus_vk, seed);
+            // Generate a penumbra validator with this consensus key.
+            let validator = generate_penumbra_sdk_validator(consensus_vk, seed);
 
-            // Add the validator to the staking component's genesis content.
-            trace!(?validator, "adding validator to staking genesis content");
-            content.stake_content.validators.push(validator);
-
-            // Add an allocation of delegation tokens to the shielded pool content.
-            trace!(
-                ?allocation,
-                "adding allocation to shielded pool genesis content"
-            );
-            content.shielded_pool_content.allocations.push(allocation);
+            trace!(?validator, "adding validator to validator genesis content");
+            content.validator_content.validators.push(validator);
         }
 
         // Set the chain ID from the content
@@ -71,7 +60,7 @@ impl BuilderExt for Builder {
 fn generate_penumbra_sdk_validator(
     consensus_key: &ed25519_consensus::VerificationKey,
     seed: Option<SpendKeyBytes>,
-) -> (PenumbraValidator, Allocation) {
+) -> PenumbraValidator {
     let seed = seed.unwrap_or(SpendKeyBytes(OsRng.gen()));
     let spend_key = SpendKey::from(seed.clone());
     let validator_id_sk = spend_key.spend_auth_key();
@@ -92,22 +81,7 @@ fn generate_penumbra_sdk_validator(
         name: String::default(),
         website: String::default(),
         description: String::default(),
-        funding_streams: Vec::default(),
     };
 
-    let (address, _) = spend_key
-        .full_viewing_key()
-        .incoming()
-        .payment_address(0u32.into());
-
-    let ik = penumbra_sdk_stake::IdentityKey(validator_id_vk.into());
-    let delegation_denom = DelegationToken::from(ik).denom();
-
-    let allocation = Allocation {
-        raw_amount: 1000u128.into(),
-        raw_denom: delegation_denom.to_string(),
-        address,
-    };
-
-    (v, allocation)
+    v
 }

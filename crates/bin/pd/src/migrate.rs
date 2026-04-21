@@ -7,15 +7,10 @@
 mod mainnet1;
 mod mainnet2;
 mod mainnet3;
-mod mainnet4;
 mod migrate2;
 mod reset_halt_bit;
 mod simple;
-mod testnet72;
-mod testnet74;
-mod testnet76;
 mod testnet77;
-mod testnet78;
 
 use anyhow::{ensure, Context};
 use penumbra_sdk_governance::StateReadExt;
@@ -40,25 +35,9 @@ pub enum Migration {
     /// A simple migration: adds a key to the consensus state.
     /// This is useful for testing upgrade mechanisms, including in production.
     SimpleMigration,
-    /// Testnet-72 migration:
-    /// - Migrate `BatchSwapOutputData` to new protobuf, replacing epoch height with index.
-    Testnet72,
-    /// Testnet-74 migration:
-    /// - Update the base liquidity index to order routable pairs by descending liquidity
-    /// - Update arb executions to include the amount of filled input in the output
-    /// - Add `AuctionParameters` to the consensus state
-    Testnet74,
-    /// Testnet-76 migration:
-    /// - Heal the auction component's VCB tally.
-    /// - Update FMD parameters to new protobuf structure.
-    Testnet76,
     /// Testnet-77 migration:
     /// - Reset the halt bit
     Testnet77,
-    /// Testnet-78 migration:
-    /// - Truncate various user-supplied `String` fields to a maximum length.
-    /// - Populate the DEX NV price idnexes with position data
-    Testnet78,
     /// Mainnet-1 migration:
     /// - Restore IBC packet commitments for improperly handled withdrawal attempts
     Mainnet1,
@@ -68,16 +47,6 @@ pub enum Migration {
     /// Mainnet-3 migration:
     /// - no-op
     Mainnet3,
-    /// Mainnet-4 migration:
-    /// - no-op
-    ///
-    /// Intended to support code upgrades for Liquidity Tournament support.
-    Mainnet4,
-    /// Mainnet-5 migration:
-    /// - no-op
-    ///
-    /// Uses the new migration framework.
-    Mainnet5,
     /// IBC client recovery
     /// - Swap IBC client state
     IbcClientRecovery,
@@ -149,9 +118,6 @@ impl Migration {
             }
             Migration::Mainnet3 => {
                 mainnet3::migrate(storage, pd_home.clone(), genesis_start).await?;
-            }
-            Migration::Mainnet4 => {
-                mainnet4::migrate(storage, pd_home.clone(), genesis_start).await?;
             }
             Migration::ReadyToStart => {
                 reset_halt_bit::migrate(storage, pd_home, genesis_start).await?;
