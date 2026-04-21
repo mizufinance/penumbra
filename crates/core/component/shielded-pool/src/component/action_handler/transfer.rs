@@ -3,9 +3,6 @@ use async_trait::async_trait;
 use cnidarium::StateWrite;
 use cnidarium_component::ActionHandler;
 use penumbra_sdk_compliance::registry::ComplianceRegistryRead;
-use penumbra_sdk_compliance::structs::{
-    ComplianceCiphertext, OUTPUT_DLEQ_BYTES, OUTPUT_WIRE_BYTES, SPEND_DLEQ_BYTES, SPEND_WIRE_BYTES,
-};
 use penumbra_sdk_proof_params::batch::{self, BatchItem};
 use penumbra_sdk_proto::{DomainType as _, StateWriteProto as _};
 use penumbra_sdk_sct::component::{
@@ -15,100 +12,13 @@ use penumbra_sdk_sct::component::{
 };
 use penumbra_sdk_txhash::TransactionContext;
 
+use crate::transfer::compliance::{
+    parse_transfer_output_compliance, transfer_compliance_public_from_parts,
+};
 use crate::{
     component::NoteManager, event, Transfer, TransferOutputPublic, TransferProofPublic,
     TransferSpendPublic,
 };
-
-fn parse_spend_ciphertext_fields(
-    input: &crate::TransferInputBody,
-) -> Result<(decaf377::Element, decaf377::Fq, Vec<decaf377::Fq>)> {
-    anyhow::ensure!(
-        input.compliance_ciphertext.len() == SPEND_WIRE_BYTES,
-        "transfer spend compliance ciphertext must be {SPEND_WIRE_BYTES} bytes, got {}",
-        input.compliance_ciphertext.len()
-    );
-    let ct = ComplianceCiphertext::from_bytes(&input.compliance_ciphertext)
-        .context("failed to deserialize transfer spend compliance ciphertext")?;
-    Ok(ct.to_spend_circuit_public_inputs())
-}
-
-fn parse_output_ciphertext_fields(
-    output: &crate::TransferOutputBody,
-) -> Result<(
-    decaf377::Element,
-    decaf377::Element,
-    decaf377::Element,
-    decaf377::Fq,
-    decaf377::Fq,
-    decaf377::Fq,
-    Vec<decaf377::Fq>,
-)> {
-    anyhow::ensure!(
-        output.compliance_ciphertext.len() == OUTPUT_WIRE_BYTES,
-        "transfer output compliance ciphertext must be {OUTPUT_WIRE_BYTES} bytes, got {}",
-        output.compliance_ciphertext.len()
-    );
-    let ct = ComplianceCiphertext::from_bytes(&output.compliance_ciphertext)
-        .context("failed to deserialize transfer output compliance ciphertext")?;
-    Ok(ct.to_output_circuit_public_inputs())
-}
-
-fn parse_spend_dleq_fields(
-    input: &crate::TransferInputBody,
-    target_timestamp: u64,
-) -> Result<(decaf377::Fq, decaf377::Fq, decaf377::Fq)> {
-    anyhow::ensure!(
-        input.dleq_proof.len() == SPEND_DLEQ_BYTES,
-        "transfer spend dleq_proof must be {SPEND_DLEQ_BYTES} bytes, got {}",
-        input.dleq_proof.len()
-    );
-    let c_bytes: [u8; 32] = input.dleq_proof[..32]
-        .try_into()
-        .context("transfer spend dleq_c must be 32 bytes")?;
-    let s_bytes: [u8; 32] = input.dleq_proof[32..64]
-        .try_into()
-        .context("transfer spend dleq_s must be 32 bytes")?;
-    Ok((
-        decaf377::Fq::from(target_timestamp),
-        decaf377::Fq::from_bytes_checked(&c_bytes)
-            .map_err(|_| anyhow::anyhow!("invalid transfer spend dleq_c field element"))?,
-        decaf377::Fq::from_bytes_checked(&s_bytes)
-            .map_err(|_| anyhow::anyhow!("invalid transfer spend dleq_s field element"))?,
-    ))
-}
-
-fn parse_output_dleq_fields(
-    output: &crate::TransferOutputBody,
-) -> Result<(
-    decaf377::Fq,
-    decaf377::Fq,
-    decaf377::Fq,
-    decaf377::Fq,
-    decaf377::Fq,
-    decaf377::Fq,
-)> {
-    anyhow::ensure!(
-        output.dleq_proofs.len() == OUTPUT_DLEQ_BYTES,
-        "transfer output dleq_proofs must be {OUTPUT_DLEQ_BYTES} bytes, got {}",
-        output.dleq_proofs.len()
-    );
-    let parse = |offset: usize| -> anyhow::Result<decaf377::Fq> {
-        let bytes: [u8; 32] = output.dleq_proofs[offset..offset + 32]
-            .try_into()
-            .context("transfer output dleq field must be 32 bytes")?;
-        decaf377::Fq::from_bytes_checked(&bytes)
-            .map_err(|_| anyhow::anyhow!("invalid transfer output dleq field element"))
-    };
-    Ok((
-        parse(0)?,
-        parse(32)?,
-        parse(64)?,
-        parse(96)?,
-        parse(128)?,
-        parse(160)?,
-    ))
-}
 
 pub fn transfer_verify_auth_sigs(transfer: &Transfer, context: &TransactionContext) -> Result<()> {
     anyhow::ensure!(
@@ -133,30 +43,19 @@ pub fn transfer_verify_auth_sigs(transfer: &Transfer, context: &TransactionConte
 }
 
 fn transfer_check_lengths(transfer: &Transfer) -> Result<()> {
-    for input in &transfer.body.inputs {
+    for (index, input) in transfer.body.inputs.iter().enumerate() {
         anyhow::ensure!(
-            input.compliance_ciphertext.len() == SPEND_WIRE_BYTES,
-            "transfer spend compliance ciphertext must be {SPEND_WIRE_BYTES} bytes, got {}",
-            input.compliance_ciphertext.len()
+            input.compliance_ciphertext.is_empty(),
+            "transfer input {} compliance ciphertext must be empty",
+            index + 1
         );
         anyhow::ensure!(
-            input.dleq_proof.len() == SPEND_DLEQ_BYTES,
-            "transfer spend dleq_proof must be {SPEND_DLEQ_BYTES} bytes, got {}",
-            input.dleq_proof.len()
-        );
-    }
-    for output in &transfer.body.outputs {
-        anyhow::ensure!(
-            output.compliance_ciphertext.len() == OUTPUT_WIRE_BYTES,
-            "transfer output compliance ciphertext must be {OUTPUT_WIRE_BYTES} bytes, got {}",
-            output.compliance_ciphertext.len()
-        );
-        anyhow::ensure!(
-            output.dleq_proofs.len() == OUTPUT_DLEQ_BYTES,
-            "transfer output dleq_proofs must be {OUTPUT_DLEQ_BYTES} bytes, got {}",
-            output.dleq_proofs.len()
+            input.dleq_proof.is_empty(),
+            "transfer input {} DLEQ proof must be empty",
+            index + 1
         );
     }
+    let _ = parse_transfer_output_compliance(&transfer.body.outputs)?;
     Ok(())
 }
 
@@ -169,50 +68,25 @@ pub fn transfer_extract_public(
         .inputs
         .iter()
         .map(|input| {
-            let (epk, c2_core, compliance_ciphertext) = parse_spend_ciphertext_fields(input)?;
-            let (_, dleq_c, dleq_s) =
-                parse_spend_dleq_fields(input, transfer.body.target_timestamp)?;
             Ok(TransferSpendPublic {
                 nullifier: input.nullifier,
                 rk: input.rk,
-                epk,
-                c2_core,
-                compliance_ciphertext,
-                dleq_c,
-                dleq_s,
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    let (ciphertext, dleqs) = parse_transfer_output_compliance(&transfer.body.outputs)?;
     let outputs = transfer
         .body
         .outputs
         .iter()
         .map(|output| {
-            let (epk_1, epk_2, epk_3, c2_core, c2_ext, c2_sext, compliance_ciphertext) =
-                parse_output_ciphertext_fields(output)?;
-            let (dleq_c_1, dleq_s_1, dleq_c_2, dleq_s_2, dleq_c_3, dleq_s_3) =
-                parse_output_dleq_fields(output)?;
             Ok(TransferOutputPublic {
                 note_commitment: output.note_payload.note_commitment,
-                epk_1,
-                epk_2,
-                epk_3,
-                c2_core,
-                c2_ext,
-                c2_sext,
-                compliance_ciphertext,
-                dleq_c_1,
-                dleq_s_1,
-                dleq_c_2,
-                dleq_s_2,
-                dleq_c_3,
-                dleq_s_3,
             })
         })
         .collect::<Result<Vec<_>>>()?;
 
     let public = TransferProofPublic {
-        family_id: transfer.body.family_id,
         anchor: context.anchor,
         balance_commitment: transfer.body.balance_commitment,
         asset_anchor: transfer.body.asset_anchor,
@@ -220,10 +94,11 @@ pub fn transfer_extract_public(
         target_timestamp: decaf377::Fq::from(transfer.body.target_timestamp),
         inputs,
         outputs,
+        compliance: transfer_compliance_public_from_parts(&ciphertext, &dleqs),
     };
     public
         .validate_shape()
-        .context("transfer proof family shape mismatch")?;
+        .context("transfer proof shape mismatch")?;
     Ok(public)
 }
 
@@ -251,7 +126,7 @@ impl ActionHandler for Transfer {
     async fn check_stateless(&self, context: TransactionContext) -> Result<()> {
         let item = transfer_check_stateless_and_extract(self, &context)?;
         batch::batch_verify(
-            self.body.family_id.proof_verification_key(),
+            penumbra_sdk_proof_params::transfer_proof_verification_key(),
             std::slice::from_ref(&item),
         )
         .map_err(|e| anyhow::anyhow!("transfer proof did not verify: {e}"))?;
@@ -281,21 +156,21 @@ impl ActionHandler for Transfer {
             .get_current_source()
             .ok_or_else(|| anyhow::anyhow!("source should be set during execution"))?;
 
-        for input in &self.body.inputs {
+        for input in self.body.inputs.iter().filter(|input| !input.is_dummy()) {
             state.nullify(input.nullifier, source.into()).await;
             state.record_proto(
-                event::EventSpend {
+                event::EventNullifierSpent {
                     nullifier: input.nullifier,
                 }
                 .to_proto(),
             );
         }
-        for output in &self.body.outputs {
+        for output in self.body.outputs.iter().filter(|output| !output.is_dummy()) {
             state
                 .add_note_payload(output.note_payload.clone(), source.into())
                 .await;
             state.record_proto(
-                event::EventOutput {
+                event::EventNoteCreated {
                     note_commitment: output.note_payload.note_commitment,
                 }
                 .to_proto(),

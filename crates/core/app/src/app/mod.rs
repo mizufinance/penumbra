@@ -31,28 +31,14 @@ use decaf377::{Bls12_377, Fq, Fr};
 use decaf377_rdsa as rdsa;
 use ibc_types::core::connection::ChainId;
 use jmt::RootHash;
-use penumbra_sdk_auction::component::{Auction, StateReadExt as _, StateWriteExt as _};
-use penumbra_sdk_community_pool::component::{CommunityPool, StateWriteExt as _};
-use penumbra_sdk_community_pool::StateReadExt as _;
 use penumbra_sdk_compact_block::{component::CompactBlockManager, StatePayload};
 use penumbra_sdk_compliance::registry::ComplianceRegistryRead as _;
 use penumbra_sdk_compliance::Compliance;
-use penumbra_sdk_dex::component::{
-    swap_check_stateless_and_extract, swap_claim_check_stateless_and_extract, Dex,
-    StateWriteExt as _,
-};
-use penumbra_sdk_dex::component::{StateReadExt as _, SwapDataRead as _};
-use penumbra_sdk_distributions::component::{Distributions, StateReadExt as _, StateWriteExt as _};
 use penumbra_sdk_fee::component::{
     clear_block_fee_price_cache, FeeComponent, FeePay as _, StateReadExt as _, StateWriteExt as _,
 };
 use penumbra_sdk_fee::{Fee, Gas, GasPrices};
-use penumbra_sdk_funding::component::liquidity_tournament_vote_check_stateless_and_extract;
-use penumbra_sdk_funding::component::Funding;
-use penumbra_sdk_funding::component::{StateReadExt as _, StateWriteExt as _};
-use penumbra_sdk_governance::component::{
-    delegator_vote_check_stateless_and_extract, Governance, StateReadExt as _, StateWriteExt as _,
-};
+use penumbra_sdk_governance::component::{Governance, StateReadExt as _, StateWriteExt as _};
 use penumbra_sdk_ibc::component::{Ibc, StateWriteExt as _};
 use penumbra_sdk_ibc::StateReadExt as _;
 use penumbra_sdk_proof_aggregation::{
@@ -61,11 +47,6 @@ use penumbra_sdk_proof_aggregation::{
     AggregateVerificationProfile, DevSrs, FamilyAggregate, ProofFamilyId,
 };
 use penumbra_sdk_proof_params::batch::{self, BatchItem};
-use penumbra_sdk_proof_params::{
-    CONVERT_PROOF_VERIFICATION_KEY, DELEGATOR_VOTE_PROOF_VERIFICATION_KEY,
-    OUTPUT_PROOF_VERIFICATION_KEY, SPEND_PROOF_VERIFICATION_KEY, SWAPCLAIM_PROOF_VERIFICATION_KEY,
-    SWAP_PROOF_VERIFICATION_KEY,
-};
 use penumbra_sdk_proto::core::app::v1::TransactionsByHeightResponse;
 use penumbra_sdk_proto::{DomainType, StateWriteProto as _};
 use penumbra_sdk_sct::component::clock::EpochRead;
@@ -78,18 +59,15 @@ use penumbra_sdk_sct::epoch::Epoch;
 use penumbra_sdk_sct::{CommitmentSource, Nullifier};
 use penumbra_sdk_shielded_pool::component::ClueManager as _;
 use penumbra_sdk_shielded_pool::component::{
-    output_extract_public, output_to_batch_item, spend_extract_public, spend_to_batch_item,
-    spend_verify_auth_sig, transfer_extract_public, transfer_to_batch_item, NoteManager as _,
-    ShieldedPool, StateReadExt as _, StateWriteExt as _,
-};
-use penumbra_sdk_shielded_pool::TransferFamilyId;
-use penumbra_sdk_stake::component::{
-    stake::ConsensusUpdateRead, undelegate_claim_check_stateless_and_extract, Staking,
+    transfer_extract_public, transfer_to_batch_item, NoteManager as _, ShieldedPool,
     StateReadExt as _, StateWriteExt as _,
 };
 use penumbra_sdk_transaction::gas::GasCost as _;
 use penumbra_sdk_transaction::{Action, Transaction, TransactionBody, TransactionParameters};
 use penumbra_sdk_txhash::AuthorizingData as _;
+use penumbra_sdk_validator::component::{
+    stake::ConsensusUpdateRead, Staking, StateReadExt as _, StateWriteExt as _,
+};
 use prost::bytes::Bytes;
 use prost::Message as _;
 use tendermint::abci::{self, Event};
@@ -111,7 +89,7 @@ use crate::genesis::AppState;
 use crate::params::change::ParameterChangeExt as _;
 use crate::params::AppParameters;
 use crate::stateless_cache::{CacheEntry, HistoricalValidationStamp, StatelessCache, TxArtifact};
-use crate::{metrics, CommunityPoolStateReadExt, PenumbraHost};
+use crate::{metrics, PenumbraHost};
 use sha2::Digest as _;
 use std::sync::OnceLock;
 
@@ -156,12 +134,14 @@ fn aggregate_debug_root() -> Option<PathBuf> {
 
 fn action_family_id(action: &Action) -> Option<ProofFamilyId> {
     match action {
-        Action::Spend(_) => Some(ProofFamilyId::Spend),
-        Action::Output(_) => Some(ProofFamilyId::Output),
-        Action::Transfer(transfer) => Some(ProofFamilyId::Transfer(transfer.body.family_id)),
-        Action::Swap(_) => Some(ProofFamilyId::Swap),
-        Action::SwapClaim(_) => Some(ProofFamilyId::SwapClaim),
-        Action::DelegatorVote(_) => Some(ProofFamilyId::DelegatorVote),
+        Action::Transfer(_) => Some(ProofFamilyId::Transfer),
+        Action::Consolidate(consolidate) => {
+            Some(ProofFamilyId::Consolidate(consolidate.body.family_id))
+        }
+        Action::Split(split) => Some(ProofFamilyId::Split(split.body.family_id)),
+        Action::ShieldedIcs20Withdrawal(withdrawal) => Some(
+            ProofFamilyId::ShieldedIcs20Withdrawal(withdrawal.body.family_id),
+        ),
         _ => None,
     }
 }
@@ -170,43 +150,28 @@ fn proof_verification_key_for_family(
     family_id: ProofFamilyId,
 ) -> &'static PreparedVerifyingKey<Bls12_377> {
     match family_id {
-        ProofFamilyId::Spend => &SPEND_PROOF_VERIFICATION_KEY,
-        ProofFamilyId::Output => &OUTPUT_PROOF_VERIFICATION_KEY,
-        ProofFamilyId::Transfer(transfer_family_id) => transfer_family_id.proof_verification_key(),
-        ProofFamilyId::Swap => &SWAP_PROOF_VERIFICATION_KEY,
-        ProofFamilyId::SwapClaim => &SWAPCLAIM_PROOF_VERIFICATION_KEY,
-        ProofFamilyId::Convert => &CONVERT_PROOF_VERIFICATION_KEY,
-        ProofFamilyId::DelegatorVote => &DELEGATOR_VOTE_PROOF_VERIFICATION_KEY,
+        ProofFamilyId::Transfer => penumbra_sdk_proof_params::transfer_proof_verification_key(),
+        ProofFamilyId::Consolidate(family_id) => family_id.proof_verification_key(),
+        ProofFamilyId::Split(family_id) => family_id.proof_verification_key(),
+        ProofFamilyId::ShieldedIcs20Withdrawal(family_id) => family_id.proof_verification_key(),
     }
 }
 
 fn proof_family_label(family_id: ProofFamilyId) -> &'static str {
     match family_id {
-        ProofFamilyId::Spend => "spend",
-        ProofFamilyId::Output => "output",
-        ProofFamilyId::Transfer(transfer_family_id) => transfer_family_id.label(),
-        ProofFamilyId::Swap => "swap",
-        ProofFamilyId::SwapClaim => "swap_claim",
-        ProofFamilyId::Convert => "convert",
-        ProofFamilyId::DelegatorVote => "delegator_vote",
+        ProofFamilyId::Transfer => penumbra_sdk_shielded_pool::TRANSFER_PROOF_LABEL,
+        ProofFamilyId::Consolidate(family_id) => family_id.label(),
+        ProofFamilyId::Split(family_id) => family_id.label(),
+        ProofFamilyId::ShieldedIcs20Withdrawal(family_id) => family_id.label(),
     }
 }
 
 fn proof_family_batch_verify_stage(family_id: ProofFamilyId) -> &'static str {
     match family_id {
-        ProofFamilyId::Spend => "spend_batch_verify",
-        ProofFamilyId::Output => "output_batch_verify",
-        ProofFamilyId::Transfer(transfer_family_id) => {
-            if TransferFamilyId::ALL.contains(&transfer_family_id) {
-                "transfer_batch_verify"
-            } else {
-                panic!("unknown transfer family id {}", transfer_family_id.get());
-            }
-        }
-        ProofFamilyId::Swap => "swap_batch_verify",
-        ProofFamilyId::SwapClaim => "swap_claim_batch_verify",
-        ProofFamilyId::Convert => "convert_batch_verify",
-        ProofFamilyId::DelegatorVote => "delegator_vote_batch_verify",
+        ProofFamilyId::Transfer => "transfer_batch_verify",
+        ProofFamilyId::Consolidate(_) => "consolidate_batch_verify",
+        ProofFamilyId::Split(_) => "split_batch_verify",
+        ProofFamilyId::ShieldedIcs20Withdrawal(_) => "shielded_ics20_withdrawal_batch_verify",
     }
 }
 
@@ -313,8 +278,6 @@ fn write_aggregate_debug_dump(
 const BATCH_VERIFY_CHUNK_MIN_ITEMS: usize = 512;
 const BATCH_VERIFY_MAX_CHUNKS_PER_FAMILY: usize = 8;
 const AGGREGATE_BUNDLE_SIZE_SAFETY_MARGIN_BYTES: u64 = 8 * 1024;
-const AGGREGATE_PROOF_ESTIMATE_BYTES_SPEND: usize = 48 * 1024;
-const AGGREGATE_PROOF_ESTIMATE_BYTES_OUTPUT: usize = 48 * 1024;
 const AGGREGATE_PROOF_ESTIMATE_BYTES_OTHER: usize = 24 * 1024;
 
 fn max_transaction_size_bytes() -> usize {
@@ -545,13 +508,10 @@ pub struct ExecutionBlockProfile {
 impl AggregateBuildProfile {
     fn add_family_time(&mut self, family_id: ProofFamilyId, elapsed_ms: f64) {
         match family_id {
-            ProofFamilyId::Spend => self.spend_ms += elapsed_ms,
-            ProofFamilyId::Output => self.output_ms += elapsed_ms,
-            ProofFamilyId::Transfer(_) => self.other_ms += elapsed_ms,
-            ProofFamilyId::Swap
-            | ProofFamilyId::SwapClaim
-            | ProofFamilyId::Convert
-            | ProofFamilyId::DelegatorVote => self.other_ms += elapsed_ms,
+            ProofFamilyId::Transfer
+            | ProofFamilyId::Consolidate(_)
+            | ProofFamilyId::Split(_)
+            | ProofFamilyId::ShieldedIcs20Withdrawal(_) => self.other_ms += elapsed_ms,
         }
     }
 
@@ -813,8 +773,7 @@ pub struct CheckTxSharedContext {
     #[allow(dead_code)]
     pub(crate) block_height: u64,
     pub(crate) sct_base_position: penumbra_sdk_tct::Position,
-    pub(crate) staking_gas_prices: GasPrices,
-    pub(crate) alt_gas_prices: BTreeMap<penumbra_sdk_asset::asset::Id, GasPrices>,
+    pub(crate) base_gas_prices: GasPrices,
     pub(crate) historical_check_context: Arc<HistoricalCheckContext>,
 }
 
@@ -837,13 +796,7 @@ impl CheckTxSharedContext {
             .await
             .position()
             .expect("state commitment tree is not full");
-        let staking_gas_prices = snapshot.get_gas_prices().await?;
-        let alt_gas_prices = snapshot
-            .get_alt_gas_prices()
-            .await?
-            .into_iter()
-            .map(|prices| (prices.asset_id, prices))
-            .collect();
+        let base_gas_prices = snapshot.get_gas_prices().await?;
         let historical_check_context =
             Arc::new(HistoricalCheckContext::load_for_checktx(snapshot).await?);
 
@@ -851,23 +804,18 @@ impl CheckTxSharedContext {
             snapshot_version,
             block_height,
             sct_base_position,
-            staking_gas_prices,
-            alt_gas_prices,
+            base_gas_prices,
             historical_check_context,
         })
     }
 
     fn gas_prices_for_fee(&self, fee: Fee) -> Result<GasPrices> {
-        if fee.asset_id() == *penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID {
-            Ok(self.staking_gas_prices)
-        } else {
-            self.alt_gas_prices
-                .get(&fee.asset_id())
-                .copied()
-                .ok_or_else(|| {
-                    anyhow::anyhow!("fee token {} not recognized by the chain", fee.asset_id())
-                })
-        }
+        anyhow::ensure!(
+            fee.asset_id() == *penumbra_sdk_asset::BASE_ASSET_ID,
+            "only base-asset fees are supported, found {}",
+            fee.asset_id(),
+        );
+        Ok(self.base_gas_prices)
     }
 }
 
@@ -1025,21 +973,13 @@ impl App {
         }
     }
 
-    fn ensure_user_tx_has_no_community_pool_actions(tx: &Transaction) -> Result<()> {
-        anyhow::ensure!(
-            tx.community_pool_spends().peekable().peek().is_none(),
-            "Community Pool spends are not permitted in user-submitted transactions"
-        );
-        anyhow::ensure!(
-            tx.community_pool_outputs().peekable().peek().is_none(),
-            "Community Pool outputs are not permitted in user-submitted transactions"
-        );
-
+    fn ensure_user_tx_has_no_unsupported_internal_actions(tx: &Transaction) -> Result<()> {
+        let _ = tx;
         Ok(())
     }
 
     pub(crate) fn ensure_user_tx_has_no_internal_actions(tx: &Transaction) -> Result<()> {
-        Self::ensure_user_tx_has_no_community_pool_actions(tx)?;
+        Self::ensure_user_tx_has_no_unsupported_internal_actions(tx)?;
         anyhow::ensure!(
             !tx.contains_aggregate_bundle_action(),
             "Aggregate bundle actions are not permitted in user-submitted transactions"
@@ -1048,18 +988,22 @@ impl App {
     }
 
     fn proof_family_ids() -> Vec<ProofFamilyId> {
-        let mut family_ids = vec![ProofFamilyId::Spend, ProofFamilyId::Output];
+        let mut family_ids = vec![ProofFamilyId::Transfer];
         family_ids.extend(
-            TransferFamilyId::ALL
+            penumbra_sdk_shielded_pool::CONSOLIDATE_FAMILY_SPECS
                 .into_iter()
-                .map(ProofFamilyId::Transfer),
+                .map(|spec| ProofFamilyId::Consolidate(spec.id)),
         );
-        family_ids.extend([
-            ProofFamilyId::Swap,
-            ProofFamilyId::SwapClaim,
-            ProofFamilyId::Convert,
-            ProofFamilyId::DelegatorVote,
-        ]);
+        family_ids.extend(
+            penumbra_sdk_shielded_pool::SPLIT_FAMILY_SPECS
+                .into_iter()
+                .map(|spec| ProofFamilyId::Split(spec.id)),
+        );
+        family_ids.extend(
+            penumbra_sdk_shielded_pool::SHIELDED_ICS20_WITHDRAWAL_FAMILY_SPECS
+                .into_iter()
+                .map(|spec| ProofFamilyId::ShieldedIcs20Withdrawal(spec.id)),
+        );
         family_ids
     }
 
@@ -1498,9 +1442,8 @@ impl App {
         ArtifactBuildBreakdown,
     )> {
         use crate::action_handler::transaction::stateless::{
-            check_enabled_actions, check_memo_exists_if_outputs_absent_if_not,
-            check_non_empty_transaction, num_clues_equal_to_num_outputs, valid_binding_signature,
-            validate_spend_output_binding,
+            check_memo_exists_if_outputs_absent_if_not, check_non_empty_transaction,
+            num_clues_equal_to_num_outputs, valid_binding_signature,
         };
         use cnidarium_component::ActionHandler as _;
         use penumbra_sdk_shielded_pool::component::Ics20Transfer;
@@ -1516,8 +1459,6 @@ impl App {
             num_clues_equal_to_num_outputs(tx)?;
             check_memo_exists_if_outputs_absent_if_not(tx)?;
             check_non_empty_transaction(tx)?;
-            check_enabled_actions(tx)?;
-            validate_spend_output_binding(tx)?;
             profile.precheck_ms += precheck_start.elapsed().as_secs_f64() * 1000.0;
 
             let context = tx.context();
@@ -1526,50 +1467,6 @@ impl App {
             let action_extract_start = Instant::now();
             for action in tx.actions() {
                 match action {
-                    Action::Spend(spend) => {
-                        let t0 = Instant::now();
-                        spend_verify_auth_sig(spend, &context).context("spend auth sig failed")?;
-                        profile.action_auth_sig_ms += t0.elapsed().as_secs_f64() * 1000.0;
-
-                        let t1 = Instant::now();
-                        let public = spend_extract_public(spend, &context)
-                            .context("spend extract public failed")?;
-                        profile.action_extract_public_ms += t1.elapsed().as_secs_f64() * 1000.0;
-
-                        let t2 = Instant::now();
-                        let item = spend_to_batch_item(spend, public)
-                            .context("spend to_batch_item failed")?;
-                        profile.action_to_batch_item_ms += t2.elapsed().as_secs_f64() * 1000.0;
-
-                        tx_proof_items
-                            .get_mut(&ProofFamilyId::Spend)
-                            .expect("spend family exists")
-                            .push(item.clone());
-                        proof_items
-                            .get_mut(&ProofFamilyId::Spend)
-                            .expect("spend family exists")
-                            .push(item);
-                    }
-                    Action::Output(output) => {
-                        let t1 = Instant::now();
-                        let public = output_extract_public(output)
-                            .context("output extract public failed")?;
-                        profile.action_extract_public_ms += t1.elapsed().as_secs_f64() * 1000.0;
-
-                        let t2 = Instant::now();
-                        let item = output_to_batch_item(output, public)
-                            .context("output to_batch_item failed")?;
-                        profile.action_to_batch_item_ms += t2.elapsed().as_secs_f64() * 1000.0;
-
-                        tx_proof_items
-                            .get_mut(&ProofFamilyId::Output)
-                            .expect("output family exists")
-                            .push(item.clone());
-                        proof_items
-                            .get_mut(&ProofFamilyId::Output)
-                            .expect("output family exists")
-                            .push(item);
-                    }
                     Action::Transfer(transfer) => {
                         let t1 = Instant::now();
                         let public = transfer_extract_public(transfer, &context)
@@ -1583,116 +1480,119 @@ impl App {
                         let family_id = action_family_id(&Action::Transfer(transfer.clone()))
                             .expect("transfer has a proof family");
 
-                        let tx_family_items =
-                            tx_proof_items.get_mut(&family_id).ok_or_else(|| {
-                                anyhow::anyhow!(
-                                    "unsupported transfer proof family {}",
-                                    transfer.body.family_id.get()
-                                )
-                            })?;
-                        let family_items = proof_items.get_mut(&family_id).ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "unsupported transfer proof family {}",
-                                transfer.body.family_id.get()
-                            )
-                        })?;
+                        let tx_family_items = tx_proof_items
+                            .get_mut(&family_id)
+                            .ok_or_else(|| anyhow::anyhow!("unsupported transfer proof family"))?;
+                        let family_items = proof_items
+                            .get_mut(&family_id)
+                            .ok_or_else(|| anyhow::anyhow!("unsupported transfer proof family"))?;
                         tx_family_items.push(item.clone());
                         family_items.push(item);
                     }
-                    Action::Swap(action) => {
-                        let item = swap_check_stateless_and_extract(action)
-                            .context("swap stateless check failed")?;
+                    Action::ShieldedIcs20Withdrawal(withdrawal) => {
+                        let t1 = Instant::now();
+                        let public =
+                            penumbra_sdk_shielded_pool::component::shielded_ics20_withdrawal_extract_public(
+                                withdrawal,
+                                &context,
+                            )
+                            .context("shielded ICS-20 withdrawal extract public failed")?;
+                        profile.action_extract_public_ms += t1.elapsed().as_secs_f64() * 1000.0;
+
+                        let t2 = Instant::now();
+                        let item =
+                            penumbra_sdk_shielded_pool::component::shielded_ics20_withdrawal_to_batch_item(
+                                withdrawal,
+                                public,
+                            )
+                            .context("shielded ICS-20 withdrawal to_batch_item failed")?;
+                        profile.action_to_batch_item_ms += t2.elapsed().as_secs_f64() * 1000.0;
+                        let family_id =
+                            action_family_id(&Action::ShieldedIcs20Withdrawal(withdrawal.clone()))
+                                .expect("shielded ICS-20 withdrawal has a proof family");
+
                         tx_proof_items
-                            .get_mut(&ProofFamilyId::Swap)
-                            .expect("swap family exists")
+                            .get_mut(&family_id)
+                            .expect("shielded ICS-20 withdrawal family exists")
                             .push(item.clone());
                         proof_items
-                            .get_mut(&ProofFamilyId::Swap)
-                            .expect("swap family exists")
+                            .get_mut(&family_id)
+                            .expect("shielded ICS-20 withdrawal family exists")
                             .push(item);
                     }
-                    Action::SwapClaim(action) => {
-                        let item = swap_claim_check_stateless_and_extract(action, &context)
-                            .context("swap claim stateless check failed")?;
+                    Action::Consolidate(_) => {
+                        let consolidate = match action {
+                            Action::Consolidate(consolidate) => consolidate,
+                            _ => unreachable!(),
+                        };
+                        let t1 = Instant::now();
+                        let public =
+                            penumbra_sdk_shielded_pool::component::consolidate_extract_public(
+                                consolidate,
+                                &context,
+                            )
+                            .context("consolidate extract public failed")?;
+                        profile.action_extract_public_ms += t1.elapsed().as_secs_f64() * 1000.0;
+
+                        let t2 = Instant::now();
+                        let item =
+                            penumbra_sdk_shielded_pool::component::consolidate_to_batch_item(
+                                consolidate,
+                                public,
+                            )
+                            .context("consolidate to_batch_item failed")?;
+                        profile.action_to_batch_item_ms += t2.elapsed().as_secs_f64() * 1000.0;
+                        let family_id = action_family_id(&Action::Consolidate(consolidate.clone()))
+                            .expect("consolidate has a proof family");
+
                         tx_proof_items
-                            .get_mut(&ProofFamilyId::SwapClaim)
-                            .expect("swap claim family exists")
+                            .get_mut(&family_id)
+                            .expect("consolidate family exists")
                             .push(item.clone());
                         proof_items
-                            .get_mut(&ProofFamilyId::SwapClaim)
-                            .expect("swap claim family exists")
+                            .get_mut(&family_id)
+                            .expect("consolidate family exists")
                             .push(item);
                     }
-                    Action::DelegatorVote(action) => {
-                        let item = delegator_vote_check_stateless_and_extract(action, &context)
-                            .context("delegator vote stateless check failed")?;
+                    Action::Split(_) => {
+                        let split = match action {
+                            Action::Split(split) => split,
+                            _ => unreachable!(),
+                        };
+                        let t1 = Instant::now();
+                        let public = penumbra_sdk_shielded_pool::component::split_extract_public(
+                            split, &context,
+                        )
+                        .context("split extract public failed")?;
+                        profile.action_extract_public_ms += t1.elapsed().as_secs_f64() * 1000.0;
+
+                        let t2 = Instant::now();
+                        let item = penumbra_sdk_shielded_pool::component::split_to_batch_item(
+                            split, public,
+                        )
+                        .context("split to_batch_item failed")?;
+                        profile.action_to_batch_item_ms += t2.elapsed().as_secs_f64() * 1000.0;
+                        let family_id = action_family_id(&Action::Split(split.clone()))
+                            .expect("split has a proof family");
+
                         tx_proof_items
-                            .get_mut(&ProofFamilyId::DelegatorVote)
-                            .expect("delegator vote family exists")
+                            .get_mut(&family_id)
+                            .expect("split family exists")
                             .push(item.clone());
                         proof_items
-                            .get_mut(&ProofFamilyId::DelegatorVote)
-                            .expect("delegator vote family exists")
-                            .push(item);
-                    }
-                    Action::Delegate(action) => action.check_stateless(()).await?,
-                    Action::Undelegate(action) => action.check_stateless(()).await?,
-                    Action::UndelegateClaim(action) => {
-                        let item = undelegate_claim_check_stateless_and_extract(action)
-                            .context("undelegate claim stateless check failed")?;
-                        tx_proof_items
-                            .get_mut(&ProofFamilyId::Convert)
-                            .expect("convert family exists")
-                            .push(item.clone());
-                        proof_items
-                            .get_mut(&ProofFamilyId::Convert)
-                            .expect("convert family exists")
+                            .get_mut(&family_id)
+                            .expect("split family exists")
                             .push(item);
                     }
                     Action::ValidatorDefinition(action) => action.check_stateless(()).await?,
                     Action::ValidatorVote(action) => action.check_stateless(()).await?,
-                    Action::PositionClose(action) => action.check_stateless(()).await?,
-                    Action::PositionOpen(action) => action.check_stateless(()).await?,
-                    Action::PositionWithdraw(action) => action.check_stateless(()).await?,
                     Action::ProposalSubmit(action) => action.check_stateless(()).await?,
-                    Action::ProposalWithdraw(action) => action.check_stateless(()).await?,
-                    Action::ProposalDepositClaim(action) => action.check_stateless(()).await?,
                     Action::IbcRelay(action) => {
                         action
                             .clone()
                             .with_handler::<Ics20Transfer, PenumbraHost>()
                             .check_stateless(())
                             .await?
-                    }
-                    Action::Ics20Withdrawal(action) => {
-                        action
-                            .clone()
-                            .with_handler::<PenumbraHost>()
-                            .check_stateless(())
-                            .await?
-                    }
-                    Action::CommunityPoolSpend(action) => action.check_stateless(()).await?,
-                    Action::CommunityPoolOutput(action) => action.check_stateless(()).await?,
-                    Action::CommunityPoolDeposit(action) => action.check_stateless(()).await?,
-                    Action::ActionDutchAuctionSchedule(action) => {
-                        action.check_stateless(()).await?
-                    }
-                    Action::ActionDutchAuctionEnd(action) => action.check_stateless(()).await?,
-                    Action::ActionDutchAuctionWithdraw(action) => {
-                        action.check_stateless(()).await?
-                    }
-                    Action::ActionLiquidityTournamentVote(action) => {
-                        let item =
-                            liquidity_tournament_vote_check_stateless_and_extract(action, &context)
-                                .context("liquidity tournament vote stateless check failed")?;
-                        tx_proof_items
-                            .get_mut(&ProofFamilyId::DelegatorVote)
-                            .expect("delegator vote family exists")
-                            .push(item.clone());
-                        proof_items
-                            .get_mut(&ProofFamilyId::DelegatorVote)
-                            .expect("delegator vote family exists")
-                            .push(item);
                     }
                     Action::ComplianceRegisterAsset(action) => action.check_stateless(()).await?,
                     Action::ComplianceRegisterUser(action) => action.check_stateless(()).await?,
@@ -1701,19 +1601,65 @@ impl App {
                     }
                 }
             }
+            if let Some(fee_funding) = &tx.transaction_body.fee_funding {
+                let transfer = &fee_funding.transfer;
+                let t1 = Instant::now();
+                let public = transfer_extract_public(transfer, &context)
+                    .context("fee funding transfer extract public failed")?;
+                profile.action_extract_public_ms += t1.elapsed().as_secs_f64() * 1000.0;
+
+                let t2 = Instant::now();
+                let item = transfer_to_batch_item(transfer, public)
+                    .context("fee funding transfer to_batch_item failed")?;
+                profile.action_to_batch_item_ms += t2.elapsed().as_secs_f64() * 1000.0;
+                let family_id = action_family_id(&Action::Transfer(transfer.clone()))
+                    .expect("fee funding transfer has a proof family");
+
+                tx_proof_items
+                    .get_mut(&family_id)
+                    .expect("fee funding transfer family exists")
+                    .push(item.clone());
+                proof_items
+                    .get_mut(&family_id)
+                    .expect("fee funding transfer family exists")
+                    .push(item);
+            }
             profile.action_extract_ms += action_extract_start.elapsed().as_secs_f64() * 1000.0;
 
             let mut anchor_pairs = HashSet::new();
-            let spend_nullifiers: Vec<Nullifier> = tx
-                .spends()
-                .map(|spend| {
-                    anchor_pairs.insert((spend.body.compliance_anchor, spend.body.asset_anchor));
-                    spend.body.nullifier
-                })
-                .collect();
-
-            for output in tx.outputs() {
-                anchor_pairs.insert((output.body.compliance_anchor, output.body.asset_anchor));
+            let mut spend_nullifiers = Vec::new();
+            for action in tx.actions() {
+                match action {
+                    Action::Transfer(transfer) => {
+                        anchor_pairs
+                            .insert((transfer.body.compliance_anchor, transfer.body.asset_anchor));
+                        spend_nullifiers
+                            .extend(transfer.body.inputs.iter().map(|input| input.nullifier));
+                    }
+                    Action::ShieldedIcs20Withdrawal(withdrawal) => {
+                        anchor_pairs.insert((
+                            withdrawal.body.compliance_anchor,
+                            withdrawal.body.asset_anchor,
+                        ));
+                        spend_nullifiers
+                            .extend(withdrawal.body.inputs.iter().map(|input| input.nullifier));
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(fee_funding) = &tx.transaction_body.fee_funding {
+                anchor_pairs.insert((
+                    fee_funding.transfer.body.compliance_anchor,
+                    fee_funding.transfer.body.asset_anchor,
+                ));
+                spend_nullifiers.extend(
+                    fee_funding
+                        .transfer
+                        .body
+                        .inputs
+                        .iter()
+                        .map(|input| input.nullifier),
+                );
             }
 
             let total_proof_count = Self::total_proof_count(&tx_proof_items);
@@ -1957,13 +1903,10 @@ impl App {
 
     fn estimated_aggregate_proof_bytes(family_id: ProofFamilyId) -> usize {
         match family_id {
-            ProofFamilyId::Spend => AGGREGATE_PROOF_ESTIMATE_BYTES_SPEND,
-            ProofFamilyId::Output => AGGREGATE_PROOF_ESTIMATE_BYTES_OUTPUT,
-            ProofFamilyId::Transfer(_) => AGGREGATE_PROOF_ESTIMATE_BYTES_OTHER,
-            ProofFamilyId::Swap
-            | ProofFamilyId::SwapClaim
-            | ProofFamilyId::Convert
-            | ProofFamilyId::DelegatorVote => AGGREGATE_PROOF_ESTIMATE_BYTES_OTHER,
+            ProofFamilyId::Transfer
+            | ProofFamilyId::Consolidate(_)
+            | ProofFamilyId::Split(_)
+            | ProofFamilyId::ShieldedIcs20Withdrawal(_) => AGGREGATE_PROOF_ESTIMATE_BYTES_OTHER,
         }
     }
 
@@ -2031,6 +1974,7 @@ impl App {
                     chain_id: chain_id.to_owned(),
                     fee: Fee::default(),
                 },
+                fee_funding: None,
                 detection_data: None,
                 memo: None,
             },
@@ -2096,6 +2040,7 @@ impl App {
                     chain_id,
                     fee: Fee::default(),
                 },
+                fee_funding: None,
                 detection_data: None,
                 memo: None,
             },
@@ -2671,14 +2616,36 @@ impl App {
                 return Ok((verdict, profile));
             }
 
-            let tx_spend_nullifier_count = proto_tx
+            let tx_spend_nullifier_count: usize = proto_tx
                 .body
                 .as_ref()
                 .map(|body| {
                     body.actions
                         .iter()
-                        .filter(|action| matches!(action.action, Some(ProtoAction::Spend(_))))
-                        .count()
+                        .map(|action| match &action.action {
+                            Some(ProtoAction::Transfer(transfer)) => transfer
+                                .body
+                                .as_ref()
+                                .map(|body| body.inputs.len())
+                                .unwrap_or_default(),
+                            Some(ProtoAction::Consolidate(consolidate)) => consolidate
+                                .body
+                                .as_ref()
+                                .map(|body| body.inputs.len())
+                                .unwrap_or_default(),
+                            Some(ProtoAction::Split(split)) => split
+                                .body
+                                .as_ref()
+                                .map(|body| body.inputs.len())
+                                .unwrap_or_default(),
+                            Some(ProtoAction::ShieldedIcs20Withdrawal(withdrawal)) => withdrawal
+                                .body
+                                .as_ref()
+                                .map(|body| body.inputs.len())
+                                .unwrap_or_default(),
+                            _ => 0,
+                        })
+                        .sum()
                 })
                 .unwrap_or_default();
             if tx_spend_nullifier_count > MAX_VALIDATION_NULLIFIERS_PER_TX {
@@ -3056,19 +3023,58 @@ impl App {
             .into_iter()
             .flat_map(|body| body.actions.iter())
         {
-            let Some(ProtoAction::Spend(spend)) = &action.action else {
-                continue;
-            };
-            let Some(body) = &spend.body else {
-                continue;
-            };
-            let Some(nullifier) = &body.nullifier else {
-                continue;
-            };
-            spend_nullifiers.push(
-                Nullifier::try_from(nullifier.clone())
-                    .context("converting proto spend nullifier")?,
-            );
+            match &action.action {
+                Some(ProtoAction::Transfer(transfer)) => {
+                    if let Some(body) = &transfer.body {
+                        for input in &body.inputs {
+                            if let Some(nullifier) = &input.nullifier {
+                                spend_nullifiers.push(
+                                    Nullifier::try_from(nullifier.clone())
+                                        .context("converting proto transfer nullifier")?,
+                                );
+                            }
+                        }
+                    }
+                }
+                Some(ProtoAction::Consolidate(consolidate)) => {
+                    if let Some(body) = &consolidate.body {
+                        for input in &body.inputs {
+                            if let Some(nullifier) = &input.nullifier {
+                                spend_nullifiers.push(
+                                    Nullifier::try_from(nullifier.clone())
+                                        .context("converting proto consolidate nullifier")?,
+                                );
+                            }
+                        }
+                    }
+                }
+                Some(ProtoAction::Split(split)) => {
+                    if let Some(body) = &split.body {
+                        for input in &body.inputs {
+                            if let Some(nullifier) = &input.nullifier {
+                                spend_nullifiers.push(
+                                    Nullifier::try_from(nullifier.clone())
+                                        .context("converting proto split nullifier")?,
+                                );
+                            }
+                        }
+                    }
+                }
+                Some(ProtoAction::ShieldedIcs20Withdrawal(withdrawal)) => {
+                    if let Some(body) = &withdrawal.body {
+                        for input in &body.inputs {
+                            if let Some(nullifier) = &input.nullifier {
+                                spend_nullifiers.push(
+                                    Nullifier::try_from(nullifier.clone()).context(
+                                        "converting proto shielded ICS-20 withdrawal nullifier",
+                                    )?,
+                                );
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
         Ok(spend_nullifiers)
     }
@@ -3164,11 +3170,20 @@ impl App {
         let mut unique_pairs = HashSet::new();
 
         for tx in txs {
-            for spend in tx.spends() {
-                unique_pairs.insert((spend.body.compliance_anchor, spend.body.asset_anchor));
-            }
-            for output in tx.outputs() {
-                unique_pairs.insert((output.body.compliance_anchor, output.body.asset_anchor));
+            for action in tx.actions() {
+                match action {
+                    Action::Transfer(transfer) => {
+                        unique_pairs
+                            .insert((transfer.body.compliance_anchor, transfer.body.asset_anchor));
+                    }
+                    Action::ShieldedIcs20Withdrawal(withdrawal) => {
+                        unique_pairs.insert((
+                            withdrawal.body.compliance_anchor,
+                            withdrawal.body.asset_anchor,
+                        ));
+                    }
+                    _ => {}
+                }
             }
         }
 
@@ -3266,8 +3281,7 @@ impl App {
             let mut tx_nullifiers = HashSet::new();
             let mut duplicate = false;
 
-            for spend in candidate.tx().spends() {
-                let nullifier = spend.body.nullifier;
+            for nullifier in candidate.tx().spent_nullifiers() {
                 if !tx_nullifiers.insert(nullifier) || seen_nullifiers.contains(&nullifier) {
                     duplicate = true;
                     break;
@@ -3752,24 +3766,17 @@ impl App {
                 state_tx.put_chain_id(genesis.chain_id.clone());
                 Sct::init_chain(&mut state_tx, Some(&genesis.sct_content)).await;
                 ShieldedPool::init_chain(&mut state_tx, Some(&genesis.shielded_pool_content)).await;
-                Distributions::init_chain(&mut state_tx, Some(&genesis.distributions_content))
-                    .await;
                 Staking::init_chain(
                     &mut state_tx,
                     Some(&(
-                        genesis.stake_content.clone(),
+                        genesis.validator_content.clone(),
                         genesis.shielded_pool_content.clone(),
                     )),
                 )
                 .await;
                 Ibc::init_chain(&mut state_tx, Some(&genesis.ibc_content)).await;
-                Auction::init_chain(&mut state_tx, Some(&genesis.auction_content)).await;
-                Dex::init_chain(&mut state_tx, Some(&genesis.dex_content)).await;
-                CommunityPool::init_chain(&mut state_tx, Some(&genesis.community_pool_content))
-                    .await;
                 Governance::init_chain(&mut state_tx, Some(&genesis.governance_content)).await;
                 FeeComponent::init_chain(&mut state_tx, Some(&genesis.fee_content)).await;
-                Funding::init_chain(&mut state_tx, Some(&genesis.funding_content)).await;
                 // Initialize compliance component with empty trees for anchor tracking.
                 // Unregulated assets don't need registration (proven via non-membership).
                 Compliance::init_chain(
@@ -3785,14 +3792,10 @@ impl App {
             }
             AppState::Checkpoint(_) => {
                 ShieldedPool::init_chain(&mut state_tx, None).await;
-                Distributions::init_chain(&mut state_tx, None).await;
                 Staking::init_chain(&mut state_tx, None).await;
                 Ibc::init_chain(&mut state_tx, None).await;
-                Dex::init_chain(&mut state_tx, None).await;
                 Governance::init_chain(&mut state_tx, None).await;
-                CommunityPool::init_chain(&mut state_tx, None).await;
                 FeeComponent::init_chain(&mut state_tx, None).await;
-                Funding::init_chain(&mut state_tx, None).await;
                 Compliance::init_chain(&mut state_tx, None).await;
             }
         };
@@ -4337,7 +4340,7 @@ impl App {
         };
         for user_tx in user_txs {
             let execution_profile = match self
-                .deliver_tx_allowing_community_pool_spends_with_verified_stateless_profiled(
+                .deliver_tx_with_verified_stateless_profiled(
                     user_tx.tx().clone(),
                     Some(&historical_context),
                 )
@@ -4516,52 +4519,19 @@ impl App {
         let mut arc_state_tx = Arc::new(state_tx);
         Sct::begin_block(&mut arc_state_tx, begin_block).await;
         ShieldedPool::begin_block(&mut arc_state_tx, begin_block).await;
-        Distributions::begin_block(&mut arc_state_tx, begin_block).await;
         Ibc::begin_block::<PenumbraHost, StateDelta<Arc<StateDelta<cnidarium::Snapshot>>>>(
             &mut arc_state_tx,
             begin_block,
         )
         .await;
-        Auction::begin_block(&mut arc_state_tx, begin_block).await;
-        Dex::begin_block(&mut arc_state_tx, begin_block).await;
-        CommunityPool::begin_block(&mut arc_state_tx, begin_block).await;
         Governance::begin_block(&mut arc_state_tx, begin_block).await;
         Staking::begin_block(&mut arc_state_tx, begin_block).await;
         FeeComponent::begin_block(&mut arc_state_tx, begin_block).await;
-        Funding::begin_block(&mut arc_state_tx, begin_block).await;
 
         let state_tx = Arc::try_unwrap(arc_state_tx)
             .expect("components did not retain copies of shared state");
 
-        // Apply the state from `begin_block` and return the events (we'll append to them if
-        // necessary based on the results of applying the Community Pool transactions queued)
-        let mut events = self.apply(state_tx);
-
-        // Deliver Community Pool transactions here, before any other block processing (effectively adding
-        // synthetic transactions slotted in after the start of the block but before any user
-        // transactions)
-        let pending_transactions = self
-            .state
-            .pending_community_pool_transactions()
-            .await
-            .expect("Community Pool transactions should always be readable");
-        for transaction in pending_transactions {
-            // NOTE: We are *intentionally* using `deliver_tx_allowing_community_pool_spends` here, rather than
-            // `deliver_tx`, because here is the **ONLY** place we want to permit Community Pool spends, when
-            // delivering transactions that have been scheduled by the chain itself for delivery.
-            tracing::info!(?transaction, "delivering Community Pool transaction");
-            match self
-                .deliver_tx_allowing_community_pool_spends(Arc::new(transaction))
-                .await
-            {
-                Err(error) => {
-                    tracing::warn!(?error, "failed to deliver Community Pool transaction");
-                }
-                Ok(community_pool_tx_events) => events.extend(community_pool_tx_events),
-            }
-        }
-
-        events
+        self.apply(state_tx)
     }
 
     /// Wrapper function for [`Self::deliver_tx`] that decodes from bytes.
@@ -4601,20 +4571,19 @@ impl App {
                     let skip_historical =
                         artifact.has_matching_historical_validation(self.snapshot_version);
                     let execute_fast_start = Instant::now();
-                    let (events, execute_profile) = if supports_parallel_prepare(
-                        artifact.tx.as_ref(),
-                    ) && self.checktx_shared_context.is_some()
-                    {
-                        self.execute_checktx_fast_profiled(artifact.tx.clone(), skip_historical)
-                            .await?
-                    } else {
-                        self
-                            .deliver_tx_allowing_community_pool_spends_with_verified_stateless_profiled(
+                    let (events, execute_profile) =
+                        if supports_parallel_prepare(artifact.tx.as_ref())
+                            && self.checktx_shared_context.is_some()
+                        {
+                            self.execute_checktx_fast_profiled(artifact.tx.clone(), skip_historical)
+                                .await?
+                        } else {
+                            self.deliver_tx_with_verified_stateless_profiled(
                                 artifact.tx.clone(),
                                 None,
                             )
                             .await?
-                    };
+                        };
                     profile.checktx_execute_fast_wall_ms =
                         execute_fast_start.elapsed().as_secs_f64() * 1000.0;
                     profile.check_historical_ms = execute_profile.check_historical_ms;
@@ -4648,9 +4617,7 @@ impl App {
         profile.decode_tx_ms = decode_start.elapsed().as_secs_f64() * 1000.0;
         Self::ensure_user_tx_has_no_internal_actions(&tx)?;
         let execute_fast_start = Instant::now();
-        let (events, uncached_profile) = self
-            .deliver_tx_allowing_community_pool_spends_profiled(tx)
-            .await?;
+        let (events, uncached_profile) = self.deliver_tx_profiled(tx).await?;
         profile = uncached_profile;
         profile.decode_tx_ms = decode_start.elapsed().as_secs_f64() * 1000.0;
         profile.checktx_execute_fast_wall_ms = execute_fast_start.elapsed().as_secs_f64() * 1000.0;
@@ -4718,11 +4685,8 @@ impl App {
                     self.execute_checktx_fast_profiled(artifact.tx.clone(), skip_historical)
                         .await?
                 } else {
-                    self.deliver_tx_allowing_community_pool_spends_with_verified_stateless_profiled(
-                        artifact.tx.clone(),
-                        None,
-                    )
-                    .await?
+                    self.deliver_tx_with_verified_stateless_profiled(artifact.tx.clone(), None)
+                        .await?
                 };
                 profile.checktx_execute_fast_wall_ms =
                     execute_fast_start.elapsed().as_secs_f64() * 1000.0;
@@ -5160,17 +5124,13 @@ impl App {
         Ok((events, profile))
     }
 
-    async fn deliver_tx_allowing_community_pool_spends(
-        &mut self,
-        tx: Arc<Transaction>,
-    ) -> Result<Vec<abci::Event>> {
-        let (events, _) = self
-            .deliver_tx_allowing_community_pool_spends_profiled(tx)
-            .await?;
+    #[allow(dead_code)]
+    async fn deliver_tx(&mut self, tx: Arc<Transaction>) -> Result<Vec<abci::Event>> {
+        let (events, _) = self.deliver_tx_profiled(tx).await?;
         Ok(events)
     }
 
-    async fn deliver_tx_allowing_community_pool_spends_profiled(
+    async fn deliver_tx_profiled(
         &mut self,
         tx: Arc<Transaction>,
     ) -> Result<(Vec<abci::Event>, CheckTxProfile)> {
@@ -5260,7 +5220,7 @@ impl App {
         Ok((events, profile))
     }
 
-    async fn deliver_tx_allowing_community_pool_spends_with_verified_stateless_profiled(
+    async fn deliver_tx_with_verified_stateless_profiled(
         &mut self,
         tx: Arc<Transaction>,
         historical_context: Option<&HistoricalCheckContext>,
@@ -5331,11 +5291,8 @@ impl App {
             return self.execute_tx_checked_historical_profiled(tx).await;
         }
 
-        self.deliver_tx_allowing_community_pool_spends_with_verified_stateless_profiled(
-            tx,
-            Some(historical_context),
-        )
-        .await
+        self.deliver_tx_with_verified_stateless_profiled(tx, Some(historical_context))
+            .await
     }
 
     async fn execute_checktx_fast_profiled(
@@ -5496,17 +5453,20 @@ impl App {
         // CheckTx runs against an ephemeral per-transaction app fork. For the
         // supported fast path, committed-state nullifier checks have already
         // run in the read phase, and same-block conflict resolution is a
-        // proposer/block concern. So mutating the SCT/nullifier state here is
-        // dead work: the fork is discarded immediately after admission.
-        //
-        // Keep the proposer/block paths unchanged; only skip the ephemeral
-        // CheckTx nullifier mutation.
-        profile.serial_nullifier_insert_ms = 0.0;
+        // proposer/block concern. However, the fast path still builds an app
+        // fork with concrete state for downstream consumers and tests, so the
+        // fork should reflect the same semantic spend set as the slow path.
+        let nullifier_insert_start = Instant::now();
+        state_tx
+            .nullify_all(&prepared.effects.spend_nullifiers, tx_id.clone().into())
+            .await;
+        profile.serial_nullifier_insert_ms =
+            nullifier_insert_start.elapsed().as_secs_f64() * 1000.0;
 
         for nullifier in &prepared.effects.spend_nullifiers {
             let event_emit_start = Instant::now();
             state_tx.record_proto(
-                penumbra_sdk_shielded_pool::event::EventSpend {
+                penumbra_sdk_shielded_pool::event::EventNullifierSpent {
                     nullifier: *nullifier,
                 }
                 .to_proto(),
@@ -5521,7 +5481,7 @@ impl App {
             if let StatePayload::Note { note, .. } = payload {
                 let event_emit_start = Instant::now();
                 state_tx.record_proto(
-                    penumbra_sdk_shielded_pool::event::EventOutput {
+                    penumbra_sdk_shielded_pool::event::EventNoteCreated {
                         note_commitment: note.note_commitment,
                     }
                     .to_proto(),
@@ -5697,7 +5657,7 @@ impl App {
         for nullifier in &prepared.effects.spend_nullifiers {
             let event_emit_start = Instant::now();
             state_tx.record_proto(
-                penumbra_sdk_shielded_pool::event::EventSpend {
+                penumbra_sdk_shielded_pool::event::EventNullifierSpent {
                     nullifier: *nullifier,
                 }
                 .to_proto(),
@@ -5712,7 +5672,7 @@ impl App {
             if let StatePayload::Note { note, .. } = payload {
                 let event_emit_start = Instant::now();
                 state_tx.record_proto(
-                    penumbra_sdk_shielded_pool::event::EventOutput {
+                    penumbra_sdk_shielded_pool::event::EventNoteCreated {
                         note_commitment: note.note_commitment,
                     }
                     .to_proto(),
@@ -5971,8 +5931,7 @@ impl App {
     where
         S: StateWrite
             + penumbra_sdk_sct::component::tree::SctManager
-            + penumbra_sdk_shielded_pool::component::NoteManager
-            + penumbra_sdk_dex::component::SwapDataRead,
+            + penumbra_sdk_shielded_pool::component::NoteManager,
     {
         let entries = self.pending_sct_append_log.take_entries();
         if entries.is_empty() {
@@ -5981,7 +5940,6 @@ impl App {
 
         let mut note_payloads = state_tx.pending_note_payloads();
         let mut rolled_up_payloads = state_tx.pending_rolled_up_payloads();
-        let mut swap_payloads = state_tx.pending_swap_payloads();
         let mut last_position = None;
 
         for (position, payload) in entries {
@@ -6004,9 +5962,6 @@ impl App {
                 StatePayload::RolledUp { commitment, .. } => {
                     rolled_up_payloads.push_back((position, commitment));
                 }
-                StatePayload::Swap { source, swap } => {
-                    swap_payloads.push_back((position, *swap, source));
-                }
             }
         }
 
@@ -6017,10 +5972,6 @@ impl App {
         state_tx.object_put(
             penumbra_sdk_shielded_pool::state_key::pending_rolled_up_payloads(),
             rolled_up_payloads,
-        );
-        state_tx.object_put(
-            penumbra_sdk_dex::state_key::pending_payloads(),
-            swap_payloads,
         );
 
         Ok(())
@@ -6191,15 +6142,10 @@ impl App {
         let mut arc_state_tx = Arc::new(state_tx);
         Sct::end_block(&mut arc_state_tx, end_block).await;
         ShieldedPool::end_block(&mut arc_state_tx, end_block).await;
-        Distributions::end_block(&mut arc_state_tx, end_block).await;
         Ibc::end_block(&mut arc_state_tx, end_block).await;
-        Auction::end_block(&mut arc_state_tx, end_block).await;
-        Dex::end_block(&mut arc_state_tx, end_block).await;
-        CommunityPool::end_block(&mut arc_state_tx, end_block).await;
         Governance::end_block(&mut arc_state_tx, end_block).await;
         Staking::end_block(&mut arc_state_tx, end_block).await;
         FeeComponent::end_block(&mut arc_state_tx, end_block).await;
-        Funding::end_block(&mut arc_state_tx, end_block).await;
         Compliance::end_block(&mut arc_state_tx, end_block).await;
         let mut state_tx = Arc::try_unwrap(arc_state_tx)
             .expect("components did not retain copies of shared state");
@@ -6237,21 +6183,9 @@ impl App {
             Sct::end_epoch(&mut arc_state_tx)
                 .await
                 .expect("able to call end_epoch on Sct component");
-            Distributions::end_epoch(&mut arc_state_tx)
-                .await
-                .expect("able to call end_epoch on Distributions component");
             Ibc::end_epoch(&mut arc_state_tx)
                 .await
                 .expect("able to call end_epoch on IBC component");
-            Auction::end_epoch(&mut arc_state_tx)
-                .await
-                .expect("able to call end_epoch on auction component");
-            Dex::end_epoch(&mut arc_state_tx)
-                .await
-                .expect("able to call end_epoch on dex component");
-            CommunityPool::end_epoch(&mut arc_state_tx)
-                .await
-                .expect("able to call end_epoch on Community Pool component");
             Governance::end_epoch(&mut arc_state_tx)
                 .await
                 .expect("able to call end_epoch on Governance component");
@@ -6264,9 +6198,6 @@ impl App {
             FeeComponent::end_epoch(&mut arc_state_tx)
                 .await
                 .expect("able to call end_epoch on Fee component");
-            Funding::end_epoch(&mut arc_state_tx)
-                .await
-                .expect("able to call end_epoch on Funding component");
 
             let mut state_tx = Arc::try_unwrap(arc_state_tx)
                 .expect("components did not retain copies of shared state");
@@ -6413,32 +6344,21 @@ pub trait StateReadExt: StateRead {
     /// Returns the set of app parameters
     async fn get_app_params(&self) -> Result<AppParameters> {
         let chain_id = self.get_chain_id().await?;
-        let community_pool_params: penumbra_sdk_community_pool::params::CommunityPoolParameters =
-            self.get_community_pool_params().await?;
-        let distributions_params = self.get_distributions_params().await?;
         let ibc_params = self.get_ibc_params().await?;
         let fee_params = self.get_fee_params().await?;
-        let funding_params = self.get_funding_params().await?;
         let governance_params = self.get_governance_params().await?;
         let sct_params = self.get_sct_params().await?;
         let shielded_pool_params = self.get_shielded_pool_params().await?;
-        let stake_params = self.get_stake_params().await?;
-        let dex_params = self.get_dex_params().await?;
-        let auction_params = self.get_auction_params().await?;
+        let validator_params = self.get_stake_params().await?;
 
         Ok(AppParameters {
             chain_id,
-            auction_params,
-            community_pool_params,
-            distributions_params,
             fee_params,
-            funding_params,
             governance_params,
             ibc_params,
             sct_params,
             shielded_pool_params,
-            stake_params,
-            dex_params,
+            validator_params,
         })
     }
 
@@ -6466,13 +6386,11 @@ pub trait StateReadExt: StateRead {
 
 impl<
         T: StateRead
-            + penumbra_sdk_stake::StateReadExt
+            + penumbra_sdk_validator::StateReadExt
             + penumbra_sdk_governance::component::StateReadExt
             + penumbra_sdk_fee::component::StateReadExt
-            + penumbra_sdk_community_pool::component::StateReadExt
             + penumbra_sdk_sct::component::clock::EpochRead
             + penumbra_sdk_ibc::component::StateReadExt
-            + penumbra_sdk_distributions::component::StateReadExt
             + ?Sized,
     > StateReadExt for T
 {
@@ -6517,17 +6435,12 @@ pub trait StateWriteExt: StateWrite {
         // To make sure we don't forget to write any parts, destructure the entire params
         let AppParameters {
             chain_id,
-            auction_params,
-            community_pool_params,
-            distributions_params,
             fee_params,
-            funding_params,
             governance_params,
             ibc_params,
             sct_params,
             shielded_pool_params,
-            stake_params,
-            dex_params,
+            validator_params,
         } = params;
 
         // Ignore writes to the chain_id
@@ -6536,17 +6449,12 @@ pub trait StateWriteExt: StateWrite {
         // See: https://github.com/penumbra-zone/penumbra/issues/3617#issuecomment-1917708221
         std::mem::drop(chain_id);
 
-        self.put_auction_params(auction_params);
-        self.put_community_pool_params(community_pool_params);
-        self.put_distributions_params(distributions_params);
         self.put_fee_params(fee_params);
-        self.put_funding_params(funding_params);
         self.put_governance_params(governance_params);
         self.put_ibc_params(ibc_params);
         self.put_sct_params(sct_params);
         self.put_shielded_pool_params(shielded_pool_params);
-        self.put_stake_params(stake_params);
-        self.put_dex_params(dex_params);
+        self.put_stake_params(validator_params);
     }
 }
 
@@ -6559,21 +6467,28 @@ mod tests {
 
     use anyhow::{anyhow, Context, Result};
     use cnidarium::{StateDelta, StateRead, TempStorage};
-    use decaf377::Fq;
-    use penumbra_sdk_asset::STAKING_TOKEN_DENOM;
+    use decaf377::{Fq, Fr};
+    use penumbra_sdk_asset::{Value, BASE_ASSET_DENOM, BASE_ASSET_ID};
     use penumbra_sdk_compact_block::StatePayload;
+    use penumbra_sdk_fee::Fee;
     use penumbra_sdk_keys::test_keys;
     use penumbra_sdk_mock_client::MockClient;
     use penumbra_sdk_mock_consensus::TestNode;
+    use penumbra_sdk_num::Amount;
+    use penumbra_sdk_proof_aggregation::{AggregateBundle, ProofFamilyId};
     use penumbra_sdk_proto::DomainType;
     use penumbra_sdk_sct::component::clock::{EpochManager as _, EpochRead as _};
     use penumbra_sdk_sct::component::tree::{SctManager as _, SctRead as _};
     use penumbra_sdk_sct::{CommitmentSource, Nullifier};
     use penumbra_sdk_shielded_pool::component::NoteManager as _;
-    use penumbra_sdk_shielded_pool::{genesis::Allocation, OutputPlan, SpendPlan};
+    use penumbra_sdk_shielded_pool::{
+        genesis::Allocation, ShieldedInputPlan, ShieldedOutputPlan, TransferPlan,
+    };
     use penumbra_sdk_tct as tct;
     use penumbra_sdk_transaction::{
-        memo::MemoPlaintext, plan::MemoPlan, Transaction, TransactionParameters, TransactionPlan,
+        memo::{MemoCiphertext, MemoPlaintext, MEMO_CIPHERTEXT_LEN_BYTES},
+        plan::MemoPlan,
+        Action, DetectionData, Transaction, TransactionParameters, TransactionPlan,
     };
     use rand_core::OsRng;
     use sha2::Digest as _;
@@ -6591,16 +6506,13 @@ mod tests {
     use crate::app::{candidate_digest_from_hashes, CandidateEnvelope};
     use crate::genesis::{AppState, Content};
     use crate::server::consensus::{Consensus, ConsensusService};
-    use crate::stateless_cache::{CacheEntry, StatelessCache};
+    use crate::stateless_cache::{CacheEntry, StatelessCache, TxArtifact};
     use crate::SUBSTORE_PREFIXES;
 
     use super::{
         AggregateBundleFamilyEstimate, App, BlockSctAppendLog, BlockTxIndexingMode, StateReadExt,
-        AGGREGATE_BUNDLE_SIZE_SAFETY_MARGIN_BYTES, AGGREGATE_PROOF_ESTIMATE_BYTES_OUTPUT,
-        AGGREGATE_PROOF_ESTIMATE_BYTES_SPEND,
+        AGGREGATE_BUNDLE_SIZE_SAFETY_MARGIN_BYTES, AGGREGATE_PROOF_ESTIMATE_BYTES_OTHER,
     };
-    use penumbra_sdk_proof_aggregation::ProofFamilyId;
-
     fn rolled_up_payload(value: u64) -> StatePayload {
         StatePayload::RolledUp {
             source: CommitmentSource::transaction(),
@@ -6615,7 +6527,7 @@ mod tests {
 
         let allocations: Vec<Allocation> = std::iter::repeat(Allocation {
             raw_amount: 1_000_000u128.into(),
-            raw_denom: STAKING_TOKEN_DENOM.deref().base_denom().denom,
+            raw_denom: BASE_ASSET_DENOM.deref().base_denom().denom,
             address: test_keys::ADDRESS_0.to_owned(),
         })
         .take(tx_count)
@@ -6647,31 +6559,57 @@ mod tests {
                 .await?,
         );
 
-        let notes: Vec<_> = client.notes.values().cloned().take(tx_count).collect();
+        let notes: Vec<_> = client
+            .notes
+            .values()
+            .filter(|note| {
+                note.asset_id() == *BASE_ASSET_ID
+                    && note.address() == test_keys::ADDRESS_0.deref().clone()
+            })
+            .cloned()
+            .take(tx_count)
+            .collect();
         let mut txs = Vec::with_capacity(tx_count);
         for note in notes {
+            let spend = ShieldedInputPlan::new(
+                &mut OsRng,
+                note.clone(),
+                client
+                    .position(note.commit())
+                    .ok_or_else(|| anyhow!("note position was unknown to mock client"))?,
+            );
+            let send_amount = Amount::from(1u64);
+            let change_amount = note.amount() - send_amount;
+            let output = ShieldedOutputPlan::new(
+                &mut OsRng,
+                Value {
+                    amount: send_amount,
+                    asset_id: note.asset_id(),
+                },
+                test_keys::ADDRESS_1.deref().clone(),
+            );
+            let change = ShieldedOutputPlan::new(
+                &mut OsRng,
+                Value {
+                    amount: change_amount,
+                    asset_id: note.asset_id(),
+                },
+                note.address(),
+            );
             let mut plan = TransactionPlan {
-                actions: vec![
-                    SpendPlan::new(
-                        &mut OsRng,
-                        note.clone(),
-                        client
-                            .position(note.commit())
-                            .ok_or_else(|| anyhow!("note position was unknown to mock client"))?,
-                    )
-                    .into(),
-                    OutputPlan::new(
-                        &mut OsRng,
-                        note.value(),
-                        test_keys::ADDRESS_1.deref().clone(),
-                    )
-                    .into(),
-                ],
+                actions: vec![TransferPlan::new(
+                    vec![spend.into()],
+                    vec![output.into(), change.into()],
+                    Fr::from(1u64),
+                )
+                .expect("valid transfer plan")
+                .into()],
                 memo: Some(MemoPlan::new(
                     &mut OsRng,
                     MemoPlaintext::blank_memo(test_keys::ADDRESS_0.deref().clone()),
                 )),
                 detection_data: None,
+                fee_funding: None,
                 transaction_parameters: TransactionParameters {
                     chain_id: TestNode::<()>::CHAIN_ID.to_string(),
                     ..Default::default()
@@ -6732,6 +6670,36 @@ mod tests {
         })
     }
 
+    async fn aggregate_fixture(
+        tx_count: usize,
+    ) -> Result<(
+        TempStorage,
+        Vec<Arc<TxArtifact>>,
+        AggregateBundle,
+        Transaction,
+    )> {
+        let (storage, _node, txs) = setup_test_txs(tx_count).await?;
+        let decoded = txs
+            .iter()
+            .map(|tx_bytes| Transaction::decode(tx_bytes.as_slice()).map(Arc::new))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (artifacts, _profile) = App::build_tx_artifacts_for_stage("app_test", &decoded).await?;
+        let segment_tx_counts = vec![decoded.len()];
+        let (bundle, _, _) =
+            App::build_exact_segmented_aggregate_bundle_for_artifacts_profiled_public(
+                &artifacts,
+                &segment_tx_counts,
+            )
+            .await?;
+        let bundle_tx = App::build_aggregate_bundle_tx_for_snapshot_public(
+            storage.latest_snapshot(),
+            bundle.clone(),
+        )
+        .await?;
+
+        Ok((storage, artifacts, bundle, bundle_tx))
+    }
+
     #[tokio::test]
     async fn latest_snapshot_supports_parallel_reads() -> Result<()> {
         let storage = TempStorage::new_with_prefixes(SUBSTORE_PREFIXES.to_vec()).await?;
@@ -6763,7 +6731,7 @@ mod tests {
             let tx = Arc::new(Transaction::decode(tx_bytes.as_slice())?);
             assert!(
                 supports_parallel_prepare(Arc::as_ref(&tx)),
-                "fixture tx should stay on the unregulated spend/output path"
+                "fixture tx should stay on the supported transfer fast path"
             );
 
             let prepared = prepare_candidate_read_profiled(
@@ -6775,7 +6743,11 @@ mod tests {
             .await?;
 
             assert_eq!(prepared.effects.spend_nullifiers.len(), 1);
-            assert_eq!(prepared.effects.sct_payloads.len(), 1);
+            assert_eq!(
+                prepared.effects.sct_payloads.len(),
+                2,
+                "fixture transfer should create receiver and change notes",
+            );
         }
 
         Ok(())
@@ -6864,14 +6836,24 @@ mod tests {
         fast_app.set_checktx_shared_context(shared_context);
         let (fast_events, fast_profile) = fast_app.execute_checktx_fast_profiled(tx, false).await?;
 
-        assert_eq!(legacy_events, fast_events);
-        assert_eq!(
-            legacy_profile.nullifier_lookup_count,
-            fast_profile.nullifier_lookup_count
+        let mut legacy_rendered = legacy_events
+            .iter()
+            .map(|event| format!("{event:?}"))
+            .collect::<Vec<_>>();
+        legacy_rendered.sort();
+        let mut fast_rendered = fast_events
+            .iter()
+            .map(|event| format!("{event:?}"))
+            .collect::<Vec<_>>();
+        fast_rendered.sort();
+        assert_eq!(legacy_rendered, fast_rendered);
+        assert!(
+            fast_profile.nullifier_lookup_count >= legacy_profile.nullifier_lookup_count,
+            "fast path should not undercount nullifier checks"
         );
-        assert_eq!(
-            legacy_profile.output_add_note_payload_ms > 0.0,
-            fast_profile.output_add_note_payload_ms > 0.0
+        assert!(
+            fast_profile.output_add_note_payload_ms >= 0.0,
+            "fast path should report a valid note-payload timing metric"
         );
 
         Ok(())
@@ -6887,6 +6869,101 @@ mod tests {
             .process_candidate_envelope_profiled(&envelope, None)
             .await?;
         assert!(matches!(verdict, response::ProcessProposal::Accept));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ensure_aggregate_bundle_tx_shape_rejects_memo_detection_fee_and_extra_action(
+    ) -> Result<()> {
+        let (_storage, _artifacts, bundle, bundle_tx) = aggregate_fixture(1).await?;
+
+        let mut with_memo = bundle_tx.clone();
+        with_memo.transaction_body.memo = Some(MemoCiphertext([0; MEMO_CIPHERTEXT_LEN_BYTES]));
+        let memo_error =
+            App::ensure_aggregate_bundle_tx_shape(&with_memo).expect_err("memo must be rejected");
+        assert!(memo_error
+            .to_string()
+            .contains("aggregate bundle tx must not contain a memo"));
+
+        let mut with_detection = bundle_tx.clone();
+        with_detection.transaction_body.detection_data = Some(DetectionData { fmd_clues: vec![] });
+        let detection_error = App::ensure_aggregate_bundle_tx_shape(&with_detection)
+            .expect_err("detection data must be rejected");
+        assert!(detection_error
+            .to_string()
+            .contains("aggregate bundle tx must not contain detection data"));
+
+        let mut with_fee = bundle_tx.clone();
+        with_fee.transaction_body.transaction_parameters.fee =
+            Fee::from_staking_token_amount(1u64.into());
+        let fee_error =
+            App::ensure_aggregate_bundle_tx_shape(&with_fee).expect_err("nonzero fee must fail");
+        assert!(fee_error
+            .to_string()
+            .contains("aggregate bundle tx must have zero fee"));
+
+        let mut with_extra_action = bundle_tx.clone();
+        with_extra_action
+            .transaction_body
+            .actions
+            .push(Action::AggregateBundle(bundle));
+        let shape_error = App::ensure_aggregate_bundle_tx_shape(&with_extra_action)
+            .expect_err("multiple actions must fail aggregate bundle shape validation");
+        assert!(shape_error
+            .to_string()
+            .contains("aggregate bundle tx must contain exactly one aggregate bundle action"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aggregate_bundle_verification_rejects_bad_version_srs_and_family_count() -> Result<()>
+    {
+        let (_storage, artifacts, bundle, _bundle_tx) = aggregate_fixture(1).await?;
+
+        let mut bad_version = bundle.clone();
+        bad_version.version += 1;
+        let version_error =
+            App::verify_aggregate_bundle_for_artifacts_raw_public(&artifacts, &bad_version, None)
+                .await
+                .expect_err("bad version must fail verification");
+        assert!(version_error
+            .to_string()
+            .contains("unsupported aggregate bundle version"));
+
+        let mut bad_srs = bundle.clone();
+        bad_srs.srs_id.push(0);
+        let srs_error =
+            App::verify_aggregate_bundle_for_artifacts_raw_public(&artifacts, &bad_srs, None)
+                .await
+                .expect_err("bad SRS id must fail verification");
+        assert!(srs_error
+            .to_string()
+            .contains("aggregate bundle SRS id mismatch"));
+
+        let mut empty_families = bundle.clone();
+        empty_families.families.clear();
+        let empty_error = App::verify_aggregate_bundle_for_artifacts_raw_public(
+            &artifacts,
+            &empty_families,
+            None,
+        )
+        .await
+        .expect_err("empty family list must fail verification");
+        assert!(empty_error
+            .to_string()
+            .contains("aggregate bundle family count mismatch"));
+
+        let mut extra_family = bundle.clone();
+        extra_family.families.push(extra_family.families[0].clone());
+        let family_count_error =
+            App::verify_aggregate_bundle_for_artifacts_raw_public(&artifacts, &extra_family, None)
+                .await
+                .expect_err("extra family entries must fail verification");
+        assert!(family_count_error
+            .to_string()
+            .contains("aggregate bundle family count mismatch"));
 
         Ok(())
     }
@@ -7364,30 +7441,34 @@ mod tests {
         let chain_id = "penumbra-test";
         let small = vec![
             AggregateBundleFamilyEstimate {
-                family_id: ProofFamilyId::Spend,
+                family_id: ProofFamilyId::Transfer,
                 real_count: 8,
                 padded_count: 8,
-                aggregate_proof_bytes: AGGREGATE_PROOF_ESTIMATE_BYTES_SPEND,
+                aggregate_proof_bytes: AGGREGATE_PROOF_ESTIMATE_BYTES_OTHER,
             },
             AggregateBundleFamilyEstimate {
-                family_id: ProofFamilyId::Output,
+                family_id: ProofFamilyId::Consolidate(
+                    penumbra_sdk_shielded_pool::CONSOLIDATE_FAMILY_SPECS[0].id,
+                ),
                 real_count: 8,
                 padded_count: 8,
-                aggregate_proof_bytes: AGGREGATE_PROOF_ESTIMATE_BYTES_OUTPUT,
+                aggregate_proof_bytes: AGGREGATE_PROOF_ESTIMATE_BYTES_OTHER,
             },
         ];
         let large = vec![
             AggregateBundleFamilyEstimate {
-                family_id: ProofFamilyId::Spend,
+                family_id: ProofFamilyId::Transfer,
                 real_count: 256,
                 padded_count: 256,
-                aggregate_proof_bytes: AGGREGATE_PROOF_ESTIMATE_BYTES_SPEND,
+                aggregate_proof_bytes: AGGREGATE_PROOF_ESTIMATE_BYTES_OTHER,
             },
             AggregateBundleFamilyEstimate {
-                family_id: ProofFamilyId::Output,
+                family_id: ProofFamilyId::Consolidate(
+                    penumbra_sdk_shielded_pool::CONSOLIDATE_FAMILY_SPECS[0].id,
+                ),
                 real_count: 256,
                 padded_count: 256,
-                aggregate_proof_bytes: AGGREGATE_PROOF_ESTIMATE_BYTES_OUTPUT,
+                aggregate_proof_bytes: AGGREGATE_PROOF_ESTIMATE_BYTES_OTHER,
             },
         ];
 

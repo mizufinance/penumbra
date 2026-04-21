@@ -1,59 +1,90 @@
 {
   "actions": [
     {
-      "delegatorVote": {
-        "proposal": "521727045",
-        "vote": {
-          "vote": "VOTE_YES"
-        },
-        "stakedNote": {
-          "value": {
-            "amount": {
-              "lo": "357843745815566989"
-            },
-            "assetId": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            }
+      "validatorDefinition": {
+        "validator": {
+          "identityKey": {
+            "ik": "hiVpyaqtehtWEe/frK3YEHAJZe5K9qd8ZJrPR1lgfA0="
           },
-          "rseed": "YIhG+covaI3IebqtexGWJUZ7febVmtblwUnFrUVinX0=",
-          "address": {
-            "inner": "WCPKf3U7L/z0J/fiHUes3JA3k923xPBBUvqFBE9ltmZkjRm/m37QI3DZ4P6wUwFYBmmpXcodfGy7ohEqlyi8PRnYW5vxBRac3Ckm5V8axzI="
+          "consensusKey": "wTCf9z4AkBaR5pjEGjulypmTwAGQKTf+xvPZpU2s3gE=",
+          "name": "test validator",
+          "enabled": true,
+          "governanceKey": {
+            "gk": "hiVpyaqtehtWEe/frK3YEHAJZe5K9qd8ZJrPR1lgfA0="
           }
         },
-        "unbondedAmount": {
-          "lo": "364442721542345505"
+        "authSig": "Qq/bcGrpif1uzwmU9DS0i1NZrhTtrB4NmbBTwa44pwckdIhmfeiUFuzRkk9l5oGVIPPYxB1U9517fKUD4GozAg=="
+      }
+    },
+    {
+      "validatorVote": {
+        "body": {
+          "proposal": "249962003",
+          "vote": {
+            "vote": "VOTE_ABSTAIN"
+          },
+          "identityKey": {
+            "ik": "xKtjtouRJ5Gsxne8uwSfmrwg8F5oeo10zqEp74b6Jz4="
+          },
+          "governanceKey": {
+            "gk": "ut5IBvqSy6eqzhQX/a96pKLfWbeEPi7nHZnKWI5XjQY="
+          },
+          "reason": {
+            "reason": "aR3z2wU8O0qCZNXNs"
+          }
         },
-        "randomizer": "VWe8e/uP1EdIiWLDJht/PHqIvAES0j/r5gHFbvNnAQI=",
-        "proofBlindingR": "tRghMnYfx3yPeotDGDgJrzmxTN3oeJh7fRbNzPWpgwo=",
-        "proofBlindingS": "aFWYVlJKCs1xu19ohIVqG7GoyCnxA9Sel8rF61nuAws="
+        "authSig": {
+          "inner": "QEqemLyCotijOxu01zKaCcyhwPYhbB/PUCRCJzGOkgmZG0hf7MOLnpODV6BTCvg2kBmrqB+RICK3ORmM+29fAw=="
+        }
       }
     },
     {
       "proposalSubmit": {
         "proposal": {
-          "title": "dutqafqxsdn-134466921549",
-          "description": "dcyqzjriupgdjhdd-656644379607947900970868188922",
+          "title": "vfevcjkjazjil-63955905957339964106495593797",
+          "description": "gwollxtarsvee-0310896003171461717",
           "signaling": {}
         },
-        "depositAmount": {
-          "lo": "829995950227231169"
+        "proposer": {
+          "ik": "fdAnSf9QhKG6HCdmhaPDZtez3nh68csD9a0DjSQqak4="
+        },
+        "governanceKey": {
+          "gk": "ShafA9XEz+vcVbhBhDQOt6m3VzJX/WymzdLMckLbZQc="
+        },
+        "authSig": {
+          "inner": "TlX92CEWiIkza8bVPXPLRBYDtY8LNkPpSDUGttqwDwJ/PC2RCuwupuNWbrveqeieih8NkMY5oE9vMgJLV9zCAw=="
         }
       }
     },
     {
-      "actionDutchAuctionEnd": {
-        "auctionId": {
-          "inner": "DjRdmYeuRbjc5amUbEAVUIpwsjC0ekc4TrUtzXWSsQ8="
+      "validatorVote": {
+        "body": {
+          "proposal": "254825124",
+          "vote": {
+            "vote": "VOTE_ABSTAIN"
+          },
+          "identityKey": {
+            "ik": "8r1VfOPMoBEOsHef15DeyJ0mpXXRMZvFxkWlb63VjjA="
+          },
+          "governanceKey": {
+            "gk": "voXKsnXfuAOEzzLYdhKgX06ubHC/eyygKaKJ/NKXuQY="
+          },
+          "reason": {
+            "reason": "2Q3qBo63Rr51Hp3nEkXfbx7"
+          }
+        },
+        "authSig": {
+          "inner": "dNaq7b6dVlfmvhIbrNYUn2R368iaRE/eeOndOhWi4QGx4BQdjT6sunMNaKsAiCY8pEVoxDsFV2t+D8oQJrjEAQ=="
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "2050629411",
-    "chainId": "clbgmrbrqbfcbczay-82214",
+    "expiryHeight": "538588763",
+    "chainId": "ojnfiqghvmge-0278641453342409296624884322",
     "fee": {
       "amount": {
-        "lo": "500618720887710914"
+        "lo": "948454108891859296"
       }
     }
   }

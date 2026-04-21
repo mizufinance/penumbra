@@ -2,15 +2,18 @@ use anyhow::Error;
 use cnidarium::StateRead;
 use penumbra_sdk_compact_block::{component::StateReadExt as _, CompactBlock, StatePayload};
 use penumbra_sdk_compliance::{ComplianceLeaf, ComplianceRegistryRead, MerklePath};
-use penumbra_sdk_dex::{swap::SwapPlaintext, swap_claim::SwapClaimPlan};
 use penumbra_sdk_keys::{keys::SpendKey, FullViewingKey};
 use penumbra_sdk_sct::{
     component::{clock::EpochRead, tree::SctRead},
     Nullifier,
 };
-use penumbra_sdk_shielded_pool::{note, Note, SpendPlan};
+use penumbra_sdk_shielded_pool::{note, Note};
 use penumbra_sdk_tct as tct;
-use penumbra_sdk_transaction::{AuthorizationData, Transaction, TransactionPlan, WitnessData};
+use penumbra_sdk_transaction::{
+    memo::MemoPlaintext,
+    plan::{ActionPlan, MemoPlan},
+    AuthorizationData, Transaction, TransactionPlan, WitnessData,
+};
 use penumbra_sdk_view::enrich_plan_with_compliance;
 use rand_core::OsRng;
 use std::collections::BTreeMap;
@@ -26,7 +29,6 @@ pub struct MockClient {
     pub nullifiers: BTreeMap<note::StateCommitment, Nullifier>,
     /// Whether a note was spent or not.
     pub spent_notes: BTreeMap<note::StateCommitment, ()>,
-    swaps: BTreeMap<tct::StateCommitment, SwapPlaintext>,
     pub sct: penumbra_sdk_tct::Tree,
 }
 
@@ -40,7 +42,6 @@ impl MockClient {
             spent_notes: Default::default(),
             nullifiers: Default::default(),
             sct: Default::default(),
-            swaps: Default::default(),
         }
     }
 
@@ -127,41 +128,6 @@ impl MockClient {
                         }
                     }
                 }
-                StatePayload::Swap { swap: payload, .. } => {
-                    match payload.trial_decrypt(&self.fvk) {
-                        Some(swap) => {
-                            self.sct.insert(Keep, payload.commitment)?;
-                            // At this point, we need to retain the swap plaintext,
-                            // and also derive the expected output notes so we can
-                            // notice them while scanning later blocks.
-                            self.swaps.insert(payload.commitment, swap.clone());
-
-                            let batch_data =
-                                block.swap_outputs.get(&swap.trading_pair).ok_or_else(|| {
-                                    anyhow::anyhow!("server gave invalid compact block")
-                                })?;
-
-                            let (output_1, output_2) = swap.output_notes(batch_data);
-                            // Pre-insert the output notes into our notes table, so that
-                            // we can notice them when we scan the block where they are claimed.
-                            // TODO: We should handle tracking the nullifiers for these notes,
-                            // however they aren't inserted into the SCT at this point.
-                            // let nullifier_1 = self
-                            //     .nullifier(output_1.commit())
-                            //     .expect("newly inserted swap should be present in sct");
-                            // let nullifier_2 = self
-                            //     .nullifier(output_2.commit())
-                            //     .expect("newly inserted swap should be present in sct");
-                            self.notes.insert(output_1.commit(), output_1.clone());
-                            // self.nullifiers.insert(output_1.commit(), nullifier_1);
-                            self.notes.insert(output_2.commit(), output_2.clone());
-                            // self.nullifiers.insert(output_2.commit(), nullifier_2);
-                        }
-                        None => {
-                            self.sct.insert(Forget, payload.commitment)?;
-                        }
-                    }
-                }
                 StatePayload::RolledUp { commitment, .. } => {
                     if self.notes.contains_key(&commitment) {
                         // This is a note we anticipated, so retain its auth path.
@@ -209,10 +175,6 @@ impl MockClient {
         self.notes.get(commitment).cloned()
     }
 
-    pub fn swap_by_commitment(&self, commitment: &note::StateCommitment) -> Option<SwapPlaintext> {
-        self.swaps.get(commitment).cloned()
-    }
-
     pub fn position(
         &self,
         commitment: note::StateCommitment,
@@ -239,14 +201,29 @@ impl MockClient {
     }
 
     pub fn witness_plan(&self, plan: &TransactionPlan) -> Result<WitnessData, Error> {
-        let spend_commitment = |spend: &SpendPlan| spend.note.commit();
-        let spends = plan.spend_plans().map(spend_commitment);
-        let transfers = plan
-            .transfer_plans()
-            .flat_map(|transfer| transfer.spends.iter().map(|spend| spend.note.commit()));
-
-        let swap_claim_commitment = |swap: &SwapClaimPlan| swap.swap_plaintext.swap_commitment();
-        let swap_claims = plan.swap_claim_plans().map(swap_claim_commitment);
+        let commitments = plan.actions.iter().flat_map(|action| match action {
+            ActionPlan::Transfer(plan) => plan
+                .spends
+                .iter()
+                .map(|spend| spend.note.commit())
+                .collect::<Vec<_>>(),
+            ActionPlan::Consolidate(plan) => plan
+                .spends
+                .iter()
+                .map(|spend| spend.note.commit())
+                .collect::<Vec<_>>(),
+            ActionPlan::Split(plan) => plan
+                .spends
+                .iter()
+                .map(|spend| spend.note.commit())
+                .collect::<Vec<_>>(),
+            ActionPlan::ShieldedIcs20Withdrawal(plan) => plan
+                .spends
+                .iter()
+                .map(|spend| spend.note.commit())
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        });
 
         let witness = |commitment| {
             self.sct
@@ -257,11 +234,7 @@ impl MockClient {
 
         Ok(WitnessData {
             anchor: self.sct.root(),
-            state_commitment_proofs: spends
-                .chain(transfers)
-                .chain(swap_claims)
-                .map(witness)
-                .collect::<Result<_, Error>>()?,
+            state_commitment_proofs: commitments.map(witness).collect::<Result<_, Error>>()?,
         })
     }
 
@@ -280,8 +253,7 @@ impl MockClient {
     /// Build a transaction with compliance enrichment from state.
     ///
     /// This method enriches the plan with compliance data (anchors, Merkle paths, etc.)
-    /// from the provided state, then builds the transaction. Use this for tests that
-    /// involve SpendPlan/OutputPlan actions which require compliance anchors.
+    /// from the provided state before building the transaction.
     pub async fn witness_auth_build_with_compliance<S: StateRead + Send + Sync>(
         &self,
         plan: &mut TransactionPlan,
@@ -300,6 +272,19 @@ impl MockClient {
         // Enrich the plan with compliance data
         self.enrich_plan_with_compliance_internal(plan, state, block_ts)
             .await?;
+        // Populate FMD clues if not already set (stateless checks require
+        // num_clues == num_note_creating_outputs).
+        if plan.detection_data.is_none() {
+            plan.populate_detection_data(&mut OsRng, Default::default());
+        }
+        // Populate memo if outputs exist but no memo set.
+        if plan.memo.is_none() && plan.num_outputs() > 0 {
+            let (return_address, _) = self.fvk.incoming().payment_address(0u32.into());
+            plan.memo = Some(MemoPlan::new(
+                &mut OsRng,
+                MemoPlaintext::new(return_address, String::new())?,
+            ));
+        }
         // Then build normally
         let witness_data = self.witness_plan(plan)?;
         let auth_data = self.authorize_plan(plan)?;
@@ -400,11 +385,34 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
         address: &penumbra_sdk_keys::Address,
         asset_id: penumbra_sdk_asset::asset::Id,
     ) -> anyhow::Result<(MerklePath, u64, ComplianceLeaf)> {
-        // First check if asset is regulated
-        let (_, _, _, is_regulated) = self.get_asset_proof(asset_id).await?;
+        if let Some(position) = self.state.get_user_leaf_position(address, asset_id).await? {
+            let path_layers = self.state.get_user_auth_path(position).await?;
+            let leaf = self
+                .state
+                .get_user_leaf(address, asset_id)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "user leaf not found for address {:?} and asset {:?}",
+                        address,
+                        asset_id
+                    )
+                })?;
 
-        // For unregulated assets, return synthetic leaf (circuit skips user tree check).
-        // Use real d so leaf commitment matches what generate_compliance_details creates.
+            let path = MerklePath {
+                layers: path_layers
+                    .into_iter()
+                    .map(|siblings| penumbra_sdk_compliance::MerklePathLayer {
+                        siblings: siblings.iter().map(|s| s.0.to_bytes().to_vec()).collect(),
+                    })
+                    .collect(),
+            };
+
+            return Ok((path, position, leaf));
+        }
+
+        // Unregulated assets can still build without a registered user leaf.
+        let (_, _, _, is_regulated) = self.get_asset_proof(asset_id).await?;
         if !is_regulated {
             let b_d_fq = address.diversified_generator().vartime_compress_to_field();
             let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
@@ -416,42 +424,11 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
             return Ok((MerklePath::default(), 0, synthetic_leaf));
         }
 
-        // For regulated assets, user must be registered
-        let position = self
-            .state
-            .get_user_leaf_position(address, asset_id)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "user not registered in compliance tree for address {:?} and asset {:?}",
-                    address,
-                    asset_id
-                )
-            })?;
-
-        let path_layers = self.state.get_user_auth_path(position).await?;
-        let leaf = self
-            .state
-            .get_user_leaf(address, asset_id)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "user leaf not found for address {:?} and asset {:?}",
-                    address,
-                    asset_id
-                )
-            })?;
-
-        let path = MerklePath {
-            layers: path_layers
-                .into_iter()
-                .map(|siblings| penumbra_sdk_compliance::MerklePathLayer {
-                    siblings: siblings.iter().map(|s| s.0.to_bytes().to_vec()).collect(),
-                })
-                .collect(),
-        };
-
-        Ok((path, position, leaf))
+        Err(anyhow::anyhow!(
+            "user not registered in compliance tree for address {:?} and asset {:?}",
+            address,
+            asset_id
+        ))
     }
 
     /// Override get_batch_proofs to ensure anchor/proof consistency.
@@ -482,13 +459,14 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
             // Generate asset proof from the SAME tree we got the anchor from
             if !asset_proofs.contains_key(asset_id) {
                 let value = asset_id.0;
+                let is_regulated = self.state.is_asset_regulated(*asset_id).await?;
 
-                let (path, position, indexed_leaf, is_regulated) = if asset_tree.contains(value) {
-                    // Regulated asset - membership proof
+                let (path, position, indexed_leaf) = if asset_tree.contains(value) {
+                    // Explicitly present asset - use membership proof regardless of regulation.
                     let (pos, leaf, auth_path) = asset_tree.membership_proof(value)?;
-                    (MerklePath::from_auth_path(auth_path), pos, leaf, true)
+                    (MerklePath::from_auth_path(auth_path), pos, leaf)
                 } else {
-                    // Unregulated asset - non-membership proof
+                    // Asset absent from the IMT - use non-membership proof.
                     let (pos, leaf, auth_path) = asset_tree.non_membership_proof(value)?;
 
                     // DEBUG: Verify the proof before returning
@@ -512,7 +490,7 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
                         tracing::error!("IMT non-membership proof verification FAILED");
                     }
 
-                    (MerklePath::from_auth_path(auth_path), pos, leaf, false)
+                    (MerklePath::from_auth_path(auth_path), pos, leaf)
                 };
 
                 asset_proofs.insert(*asset_id, (path, position, indexed_leaf, is_regulated));
@@ -523,31 +501,11 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
             if !user_proofs.contains_key(&key) {
                 let (_, _, _, is_regulated) = asset_proofs.get(asset_id).unwrap();
 
-                let user_proof = if !is_regulated {
-                    // Unregulated: synthetic leaf with real d so leaf commitment
-                    // matches what generate_compliance_details creates.
-                    let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-                    let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
-                    let synthetic_leaf = ComplianceLeaf {
-                        address: address.clone(),
-                        asset_id: *asset_id,
-                        d,
-                    };
-                    (MerklePath::default(), 0u64, synthetic_leaf)
-                } else {
-                    // Regulated: get real proof from user tree
-                    let position = self
-                        .state
-                        .get_user_leaf_position(address, *asset_id)
-                        .await?
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "user not registered for address {:?} and asset {:?}",
-                                address,
-                                asset_id
-                            )
-                        })?;
-
+                let user_proof = if let Some(position) = self
+                    .state
+                    .get_user_leaf_position(address, *asset_id)
+                    .await?
+                {
                     let auth_path = user_tree.auth_path(position)?;
                     let leaf = self
                         .state
@@ -574,6 +532,23 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
                     };
 
                     (path, position, leaf)
+                } else if !is_regulated {
+                    // Unregulated fallback: synthetic leaf with real d so leaf commitment
+                    // matches what generate_compliance_details creates.
+                    let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+                    let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
+                    let synthetic_leaf = ComplianceLeaf {
+                        address: address.clone(),
+                        asset_id: *asset_id,
+                        d,
+                    };
+                    (MerklePath::default(), 0u64, synthetic_leaf)
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "user not registered for address {:?} and asset {:?}",
+                        address,
+                        asset_id
+                    ));
                 };
 
                 user_proofs.insert(key, user_proof);
@@ -595,13 +570,15 @@ mod tests {
     use decaf377::{Fq, Fr};
     use penumbra_sdk_asset::{asset, Value};
     use penumbra_sdk_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
-    use penumbra_sdk_shielded_pool::{Note, OutputPlan, Rseed, SpendPlan, TransferPlan};
+    use penumbra_sdk_shielded_pool::{
+        Note, Rseed, ShieldedInputPlan, ShieldedOutputPlan, TransferPlan,
+    };
     use penumbra_sdk_tct::Witness;
     use penumbra_sdk_transaction::{ActionPlan, TransactionPlan};
     use rand_core::OsRng;
 
     #[test]
-    fn witness_plan_includes_transfer1x1_spend_proof() {
+    fn witness_plan_includes_hidden_arity_transfer_spend_proof() {
         let sk =
             SpendKey::from_seed_phrase_bip44(SeedPhrase::generate(&mut OsRng), &Bip44Path::new(0));
         let mut client = MockClient::new(sk);
@@ -623,8 +600,8 @@ mod tests {
             .insert(Witness::Keep, commitment)
             .expect("insert note commitment");
 
-        let spend = SpendPlan::new(&mut OsRng, note.clone(), 0u64.into());
-        let output = OutputPlan::new(
+        let spend = ShieldedInputPlan::new(&mut OsRng, note.clone(), 0u64.into());
+        let output = ShieldedOutputPlan::new(
             &mut OsRng,
             Value {
                 amount: 60u64.into(),
@@ -632,8 +609,8 @@ mod tests {
             },
             address,
         );
-        let transfer =
-            TransferPlan::from_spend_output(spend, output, Fr::from(9u64)).expect("build transfer");
+        let transfer = TransferPlan::from_spend_output(spend.into(), output.into(), Fr::from(9u64))
+            .expect("build transfer");
         let plan = TransactionPlan {
             actions: vec![ActionPlan::Transfer(transfer)],
             ..Default::default()
@@ -641,12 +618,12 @@ mod tests {
 
         let witness_data = client
             .witness_plan(&plan)
-            .expect("witness transfer1x1 plan");
+            .expect("witness transfer hidden-arity plan");
         assert!(
             witness_data
                 .state_commitment_proofs
                 .contains_key(&commitment),
-            "transfer1x1 spent note commitment should be witnessed",
+            "hidden-arity transfer spent note commitment should be witnessed",
         );
     }
 }

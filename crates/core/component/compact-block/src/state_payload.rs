@@ -1,7 +1,6 @@
 use std::convert::TryFrom;
 
 use anyhow::{Context, Result};
-use penumbra_sdk_dex::swap::SwapPayload;
 use penumbra_sdk_proto::penumbra::core::component::compact_block::v1::{self as pb};
 use penumbra_sdk_shielded_pool::{note, NotePayload};
 
@@ -21,10 +20,6 @@ pub enum StatePayload {
         source: CommitmentSource,
         note: Box<NotePayload>,
     },
-    Swap {
-        source: CommitmentSource,
-        swap: Box<SwapPayload>,
-    },
 }
 
 pub struct StatePayloadDebugKind<'a>(pub &'a StatePayload);
@@ -34,7 +29,6 @@ impl<'a> std::fmt::Debug for StatePayloadDebugKind<'a> {
         match self.0 {
             StatePayload::RolledUp { .. } => f.debug_struct("RolledUp").finish_non_exhaustive(),
             StatePayload::Note { .. } => f.debug_struct("Note").finish_non_exhaustive(),
-            StatePayload::Swap { .. } => f.debug_struct("Swap").finish_non_exhaustive(),
         }
     }
 }
@@ -44,7 +38,6 @@ impl StatePayload {
         match self {
             Self::RolledUp { commitment, .. } => commitment,
             Self::Note { note, .. } => &note.note_commitment,
-            Self::Swap { swap, .. } => &swap.commitment,
         }
     }
 
@@ -52,7 +45,6 @@ impl StatePayload {
         match self {
             Self::RolledUp { source, .. } => source,
             Self::Note { source, .. } => source,
-            Self::Swap { source, .. } => source,
         }
     }
 }
@@ -75,15 +67,6 @@ impl From<(NotePayload, CommitmentSource)> for StatePayload {
     }
 }
 
-impl From<(SwapPayload, CommitmentSource)> for StatePayload {
-    fn from((swap, source): (SwapPayload, CommitmentSource)) -> Self {
-        Self::Swap {
-            swap: Box::new(swap),
-            source,
-        }
-    }
-}
-
 impl From<StatePayload> for pb::StatePayload {
     fn from(msg: StatePayload) -> Self {
         match msg {
@@ -100,14 +83,6 @@ impl From<StatePayload> for pb::StatePayload {
                 state_payload: Some(pb::state_payload::StatePayload::Note(
                     pb::state_payload::Note {
                         note: Some((*note).into()),
-                    },
-                )),
-            },
-            StatePayload::Swap { source, swap } => pb::StatePayload {
-                source: Some(source.into()),
-                state_payload: Some(pb::state_payload::StatePayload::Swap(
-                    pb::state_payload::Swap {
-                        swap: Some((*swap).into()),
                     },
                 )),
             },
@@ -136,15 +111,6 @@ impl TryFrom<pb::StatePayload> for StatePayload {
                 Ok(StatePayload::Note {
                     note: Box::new(
                         note.ok_or_else(|| anyhow::anyhow!("missing note"))?
-                            .try_into()?,
-                    ),
-                    source,
-                })
-            }
-            Some(pb::state_payload::StatePayload::Swap(pb::state_payload::Swap { swap })) => {
-                Ok(StatePayload::Swap {
-                    swap: Box::new(
-                        swap.ok_or_else(|| anyhow::anyhow!("missing swap"))?
                             .try_into()?,
                     ),
                     source,

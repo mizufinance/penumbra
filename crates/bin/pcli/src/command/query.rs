@@ -1,22 +1,16 @@
 use anyhow::{anyhow, Context, Result};
 
-pub(crate) mod auction;
 mod chain;
-mod community_pool;
-mod dex;
 mod governance;
 mod ibc_query;
 mod shielded_pool;
 mod tx;
 mod validator;
 
-use auction::AuctionCmd;
 use base64::prelude::*;
 use chain::ChainCmd;
 use cnidarium::proto::v1::non_verifiable_key_value_request::Key as NVKey;
 use colored_json::ToColoredJson;
-use community_pool::CommunityPoolCmd;
-use dex::DexCmd;
 use governance::GovernanceCmd;
 use ibc_query::IbcCmd;
 use shielded_pool::ShieldedPool;
@@ -69,12 +63,6 @@ pub enum QueryCmd {
     /// Queries information about governance proposals.
     #[clap(subcommand)]
     Governance(GovernanceCmd),
-    /// Queries information about the Community Pool.
-    #[clap(subcommand)]
-    CommunityPool(CommunityPoolCmd),
-    /// Queries information about the decentralized exchange.
-    #[clap(subcommand)]
-    Dex(DexCmd),
     /// Queries information about IBC.
     #[clap(subcommand)]
     Ibc(IbcCmd),
@@ -91,9 +79,6 @@ pub enum QueryCmd {
         #[clap(long, default_value = "")]
         nv_key_regex: String,
     },
-    /// Queries information about a Dutch auction.
-    #[clap(subcommand)]
-    Auction(AuctionCmd),
 }
 
 impl QueryCmd {
@@ -119,24 +104,12 @@ impl QueryCmd {
             return validator.exec(app).await;
         }
 
-        if let QueryCmd::Dex(dex) = self {
-            return dex.exec(app).await;
-        }
-
         if let QueryCmd::Governance(governance) = self {
             return governance.exec(app).await;
         }
 
-        if let QueryCmd::CommunityPool(cp) = self {
-            return cp.exec(app).await;
-        }
-
         if let QueryCmd::Ibc(ibc) = self {
             return ibc.exec(app).await;
-        }
-
-        if let QueryCmd::Auction(auction) = self {
-            return auction.exec(app).await;
         }
 
         // TODO: this is a hack; we should replace all raw state key uses with RPC methods.
@@ -162,11 +135,8 @@ impl QueryCmd {
             QueryCmd::Tx(_)
             | QueryCmd::Chain(_)
             | QueryCmd::Validator(_)
-            | QueryCmd::Dex(_)
             | QueryCmd::Governance(_)
-            | QueryCmd::CommunityPool(_)
             | QueryCmd::Watch { .. }
-            | QueryCmd::Auction { .. }
             | QueryCmd::Ibc(_) => {
                 unreachable!("query handled in guard");
             }
@@ -230,7 +200,6 @@ impl QueryCmd {
 
     pub fn offline(&self) -> bool {
         match self {
-            QueryCmd::Dex { .. } | QueryCmd::CommunityPool { .. } => false,
             QueryCmd::Tx { .. }
             | QueryCmd::Chain { .. }
             | QueryCmd::Validator { .. }
@@ -238,7 +207,6 @@ impl QueryCmd {
             | QueryCmd::Governance { .. }
             | QueryCmd::Key { .. }
             | QueryCmd::Watch { .. }
-            | QueryCmd::Auction { .. }
             | QueryCmd::Ibc(_) => true,
         }
     }
@@ -252,11 +220,8 @@ impl QueryCmd {
             QueryCmd::Tx { .. }
             | QueryCmd::Chain { .. }
             | QueryCmd::Validator { .. }
-            | QueryCmd::Dex { .. }
             | QueryCmd::Governance { .. }
-            | QueryCmd::CommunityPool { .. }
             | QueryCmd::Watch { .. }
-            | QueryCmd::Auction { .. }
             | QueryCmd::Ibc(_) => {
                 unreachable!("query is special cased")
             }

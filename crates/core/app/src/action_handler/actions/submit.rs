@@ -7,19 +7,17 @@ use ibc_types::core::client::ClientId;
 use crate::app::StateReadExt;
 use crate::{action_handler::AppActionHandler, params::change::ParameterChangeExt as _};
 use cnidarium::StateWrite;
-use penumbra_sdk_asset::STAKING_TOKEN_DENOM;
 use penumbra_sdk_governance::{
     component::{StateReadExt as _, StateWriteExt as _},
     event,
     proposal::{Proposal, ProposalPayload},
     proposal_state::State as ProposalState,
-    ProposalNft, ProposalSubmit, VotingReceiptToken,
+    ProposalSubmit, ProposalSubmitBody,
 };
 use penumbra_sdk_ibc::component::ClientStateReadExt;
-use penumbra_sdk_proto::StateWriteProto as _;
+use penumbra_sdk_proto::{DomainType, Message as _, StateWriteProto as _};
 use penumbra_sdk_sct::component::clock::EpochRead;
 use penumbra_sdk_sct::component::tree::SctRead;
-use penumbra_sdk_shielded_pool::component::AssetRegistry;
 
 // IMPORTANT: these length limits are enforced by consensus! Changing them will change which
 // transactions are accepted by the network, and so they *cannot* be changed without a network
@@ -38,10 +36,11 @@ pub const PROPOSAL_DESCRIPTION_LIMIT: usize = 10_000; // ⚠️ DON'T CHANGE THI
 impl AppActionHandler for ProposalSubmit {
     type CheckStatelessContext = ();
     async fn check_stateless(&self, _context: ()) -> Result<()> {
-        let ProposalSubmit {
+        let ProposalSubmitBody {
             proposal,
-            deposit_amount: _, // we don't check the deposit amount because it's defined by state
-        } = self;
+            proposer: _,
+            governance_key,
+        } = &self.body;
         let Proposal {
             id: _, // we can't check the ID statelessly because it's defined by state
             title,
@@ -64,13 +63,6 @@ impl AppActionHandler for ProposalSubmit {
             Signaling { commit: _ } => { /* all signaling proposals are valid */ }
             Emergency { halt_chain: _ } => { /* all emergency proposals are valid */ }
             ParameterChange(_change) => { /* no stateless checks -- see check-and-execute below */ }
-            CommunityPoolSpend {
-                transaction_plan: _,
-            } => {
-                anyhow::bail!(
-                    "proposal payload disabled in reduced action surface: CommunityPoolSpend"
-                );
-            }
             UpgradePlan { .. } => {}
             FreezeIbcClient { client_id } => {
                 let _ = &ClientId::from_str(client_id)
@@ -82,6 +74,11 @@ impl AppActionHandler for ProposalSubmit {
             }
         }
 
+        governance_key
+            .0
+            .verify(&self.body.to_proto().encode_to_vec(), &self.auth_sig)
+            .context("proposal submission signature failed to verify")?;
+
         Ok(())
     }
 
@@ -90,22 +87,16 @@ impl AppActionHandler for ProposalSubmit {
         // if profiling shows that they cause a bottleneck we could (CAREFULLY)
         // move some of them back.
 
-        let ProposalSubmit {
-            deposit_amount,
-            proposal, // statelessly verified
-        } = self;
+        let ProposalSubmitBody {
+            proposal,
+            proposer,
+            governance_key,
+        } = &self.body;
 
-        // Check that the deposit amount agrees with the parameters
-        let governance_parameters = state.get_governance_params().await?;
-        if *deposit_amount != governance_parameters.proposal_deposit_amount {
-            anyhow::bail!(
-                "submitted proposal deposit of {}{} does not match required proposal deposit of {}{}",
-                deposit_amount,
-                *STAKING_TOKEN_DENOM,
-                governance_parameters.proposal_deposit_amount,
-                *STAKING_TOKEN_DENOM,
-            );
-        }
+        state.check_validator_is_active(proposer).await?;
+        state
+            .check_governance_key_matches_validator(proposer, governance_key)
+            .await?;
 
         // Check that the proposal ID is the correct next proposal ID
         let next_proposal_id = state.next_proposal_id().await?;
@@ -128,13 +119,6 @@ impl AppActionHandler for ProposalSubmit {
                 change
                     .apply_changes(current_parameters)
                     .context("proposed parameter changes do not apply to current parameters")?;
-            }
-            ProposalPayload::CommunityPoolSpend {
-                transaction_plan: _,
-            } => {
-                anyhow::bail!(
-                    "proposal payload disabled in reduced action surface: CommunityPoolSpend"
-                );
             }
             ProposalPayload::UpgradePlan { .. } => {
                 // TODO(erwan): no stateful checks for upgrade plan.
@@ -159,29 +143,13 @@ impl AppActionHandler for ProposalSubmit {
 
         // (end of former check_stateful checks)
 
-        let ProposalSubmit {
-            proposal,
-            deposit_amount,
-        } = self;
-
         // Store the contents of the proposal and generate a fresh proposal id for it
         let proposal_id = state
             .new_proposal(proposal)
             .await
             .context("can create proposal")?;
 
-        // Set the deposit amount for the proposal
-        state.put_deposit_amount(proposal_id, *deposit_amount);
-
-        // Register the denom for the voting proposal NFT
-        state
-            .register_denom(&ProposalNft::deposit(proposal_id).denom())
-            .await;
-
-        // Register the denom for the vote receipt tokens
-        state
-            .register_denom(&VotingReceiptToken::new(proposal_id).denom())
-            .await;
+        state.put_proposal_submitter(proposal_id, *proposer);
 
         // Set the proposal state to voting (votes start immediately)
         state.put_proposal_state(proposal_id, ProposalState::Voting);
@@ -224,51 +192,41 @@ impl AppActionHandler for ProposalSubmit {
 
 #[cfg(test)]
 mod test {
+    use decaf377_rdsa::{SigningKey, SpendAuth, VerificationKey};
     use penumbra_sdk_governance::{
-        change::ParameterChange, Proposal, ProposalPayload, ProposalSubmit,
+        change::ParameterChange, Proposal, ProposalPayload, ProposalSubmit, ProposalSubmitBody,
     };
+    use penumbra_sdk_proto::{DomainType, Message};
+    use penumbra_sdk_validator::{GovernanceKey, IdentityKey};
+    use rand_core::OsRng;
 
     use crate::action_handler::AppActionHandler;
 
-    #[tokio::test]
-    async fn parameter_change_proposals_remain_enabled_statelessly() {
-        ProposalSubmit {
+    fn test_proposal_submit(payload: ProposalPayload) -> ProposalSubmit {
+        let sk = SigningKey::<SpendAuth>::new(OsRng);
+        let vk = VerificationKey::from(&sk);
+        let body = ProposalSubmitBody {
             proposal: Proposal {
                 id: 0,
                 title: "parameter change".to_owned(),
-                description: "kept enabled in reduced action surface".to_owned(),
-                payload: ProposalPayload::ParameterChange(ParameterChange {
-                    changes: vec![],
-                    preconditions: vec![],
-                }),
+                description: "parameter change remains supported".to_owned(),
+                payload,
             },
-            deposit_amount: 0u32.into(),
-        }
-        .check_stateless(())
-        .await
-        .expect("parameter change proposals should remain enabled");
+            proposer: IdentityKey(vk.into()),
+            governance_key: GovernanceKey(sk.into()),
+        };
+        let auth_sig = sk.sign(OsRng, &body.to_proto().encode_to_vec());
+        ProposalSubmit { body, auth_sig }
     }
 
     #[tokio::test]
-    async fn community_pool_spend_proposals_are_disabled_statelessly() {
-        let err = ProposalSubmit {
-            proposal: Proposal {
-                id: 0,
-                title: "community pool spend".to_owned(),
-                description: "disabled in reduced action surface".to_owned(),
-                payload: ProposalPayload::CommunityPoolSpend {
-                    transaction_plan: vec![],
-                },
-            },
-            deposit_amount: 0u32.into(),
-        }
+    async fn parameter_change_proposals_remain_enabled_statelessly() {
+        test_proposal_submit(ProposalPayload::ParameterChange(ParameterChange {
+            changes: vec![],
+            preconditions: vec![],
+        }))
         .check_stateless(())
         .await
-        .expect_err("community pool spend proposals should be disabled");
-
-        assert_eq!(
-            err.to_string(),
-            "proposal payload disabled in reduced action surface: CommunityPoolSpend"
-        );
+        .expect("parameter change proposals should remain enabled");
     }
 }

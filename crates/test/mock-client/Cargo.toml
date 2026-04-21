@@ -17,7 +17,6 @@ penumbra-sdk-asset = {workspace = true}
 poseidon377 = {workspace = true}
 penumbra-sdk-compact-block = {workspace = true, default-features = true}
 penumbra-sdk-compliance = {workspace = true, features = ["component"], default-features = true}
-penumbra-sdk-dex = {workspace = true, default-features = true}
 penumbra-sdk-keys = {workspace = true, default-features = true}
 penumbra-sdk-sct = {workspace = true, default-features = true}
 penumbra-sdk-shielded-pool = {workspace = true, features = [

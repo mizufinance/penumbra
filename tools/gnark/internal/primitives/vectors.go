@@ -3,6 +3,7 @@ package primitives
 import (
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"github.com/consensys/gnark-crypto/ecc"
 	"math/big"
 	"sync"
@@ -11,14 +12,8 @@ import (
 //go:embed vectors/phase05_vectors.json
 var embeddedPhase05Vectors []byte
 
-//go:embed vectors/spend_fixture.json
-var embeddedSpendFixture []byte
-
-//go:embed vectors/spend_witness_v1.bin
-var embeddedSpendWitnessV1 []byte
-
-//go:embed vectors/output_witness_v1.bin
-var embeddedOutputWitnessV1 []byte
+//go:embed vectors/transfer_witness_v1.bin
+var embeddedTransferWitnessV1 []byte
 
 type CurveVectors struct {
 	A                                     string `json:"a"`
@@ -229,12 +224,9 @@ type SpendFixture struct {
 }
 
 var (
-	vectorsOnce      sync.Once
-	vectorsData      PrototypeVectors
-	vectorsErr       error
-	spendFixtureOnce sync.Once
-	spendFixtureData SpendFixture
-	spendFixtureErr  error
+	vectorsOnce sync.Once
+	vectorsData PrototypeVectors
+	vectorsErr  error
 )
 
 func ScalarField() *big.Int {
@@ -249,18 +241,16 @@ func LoadPrototypeVectors() (PrototypeVectors, error) {
 }
 
 func LoadSpendFixture() (SpendFixture, error) {
-	spendFixtureOnce.Do(func() {
-		spendFixtureErr = json.Unmarshal(embeddedSpendFixture, &spendFixtureData)
-	})
-	return spendFixtureData, spendFixtureErr
+	return SpendFixture{}, fmt.Errorf("legacy spend fixture removed")
 }
 
-func LoadSpendWitnessV1() []byte {
-	return embeddedSpendWitnessV1
-}
-
-func LoadOutputWitnessV1() []byte {
-	return embeddedOutputWitnessV1
+func LoadTransferWitnessV1(label string) []byte {
+	switch label {
+	case "transfer":
+		return embeddedTransferWitnessV1
+	default:
+		panic("unknown transfer witness label: " + label)
+	}
 }
 
 func MustBigInt(decimal string) *big.Int {

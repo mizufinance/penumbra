@@ -12,20 +12,14 @@ impl serde::Serialize for Action {
         let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1.Action", len)?;
         if let Some(v) = self.action.as_ref() {
             match v {
-                action::Action::Spend(v) => {
-                    struct_ser.serialize_field("spend", v)?;
-                }
-                action::Action::Output(v) => {
-                    struct_ser.serialize_field("output", v)?;
-                }
-                action::Action::Swap(v) => {
-                    struct_ser.serialize_field("swap", v)?;
-                }
-                action::Action::SwapClaim(v) => {
-                    struct_ser.serialize_field("swapClaim", v)?;
-                }
                 action::Action::Transfer(v) => {
                     struct_ser.serialize_field("transfer", v)?;
+                }
+                action::Action::Consolidate(v) => {
+                    struct_ser.serialize_field("consolidate", v)?;
+                }
+                action::Action::Split(v) => {
+                    struct_ser.serialize_field("split", v)?;
                 }
                 action::Action::ValidatorDefinition(v) => {
                     struct_ser.serialize_field("validatorDefinition", v)?;
@@ -36,59 +30,8 @@ impl serde::Serialize for Action {
                 action::Action::ProposalSubmit(v) => {
                     struct_ser.serialize_field("proposalSubmit", v)?;
                 }
-                action::Action::ProposalWithdraw(v) => {
-                    struct_ser.serialize_field("proposalWithdraw", v)?;
-                }
                 action::Action::ValidatorVote(v) => {
                     struct_ser.serialize_field("validatorVote", v)?;
-                }
-                action::Action::DelegatorVote(v) => {
-                    struct_ser.serialize_field("delegatorVote", v)?;
-                }
-                action::Action::ProposalDepositClaim(v) => {
-                    struct_ser.serialize_field("proposalDepositClaim", v)?;
-                }
-                action::Action::PositionOpen(v) => {
-                    struct_ser.serialize_field("positionOpen", v)?;
-                }
-                action::Action::PositionClose(v) => {
-                    struct_ser.serialize_field("positionClose", v)?;
-                }
-                action::Action::PositionWithdraw(v) => {
-                    struct_ser.serialize_field("positionWithdraw", v)?;
-                }
-                action::Action::PositionRewardClaim(v) => {
-                    struct_ser.serialize_field("positionRewardClaim", v)?;
-                }
-                action::Action::Delegate(v) => {
-                    struct_ser.serialize_field("delegate", v)?;
-                }
-                action::Action::Undelegate(v) => {
-                    struct_ser.serialize_field("undelegate", v)?;
-                }
-                action::Action::UndelegateClaim(v) => {
-                    struct_ser.serialize_field("undelegateClaim", v)?;
-                }
-                action::Action::CommunityPoolSpend(v) => {
-                    struct_ser.serialize_field("communityPoolSpend", v)?;
-                }
-                action::Action::CommunityPoolOutput(v) => {
-                    struct_ser.serialize_field("communityPoolOutput", v)?;
-                }
-                action::Action::CommunityPoolDeposit(v) => {
-                    struct_ser.serialize_field("communityPoolDeposit", v)?;
-                }
-                action::Action::ActionDutchAuctionSchedule(v) => {
-                    struct_ser.serialize_field("actionDutchAuctionSchedule", v)?;
-                }
-                action::Action::ActionDutchAuctionEnd(v) => {
-                    struct_ser.serialize_field("actionDutchAuctionEnd", v)?;
-                }
-                action::Action::ActionDutchAuctionWithdraw(v) => {
-                    struct_ser.serialize_field("actionDutchAuctionWithdraw", v)?;
-                }
-                action::Action::ActionLiquidityTournamentVote(v) => {
-                    struct_ser.serialize_field("actionLiquidityTournamentVote", v)?;
                 }
                 action::Action::ComplianceRegisterAsset(v) => {
                     struct_ser.serialize_field("complianceRegisterAsset", v)?;
@@ -99,8 +42,8 @@ impl serde::Serialize for Action {
                 action::Action::AggregateBundle(v) => {
                     struct_ser.serialize_field("aggregateBundle", v)?;
                 }
-                action::Action::Ics20Withdrawal(v) => {
-                    struct_ser.serialize_field("ics20Withdrawal", v)?;
+                action::Action::ShieldedIcs20Withdrawal(v) => {
+                    struct_ser.serialize_field("shieldedIcs20Withdrawal", v)?;
                 }
             }
         }
@@ -114,94 +57,40 @@ impl<'de> serde::Deserialize<'de> for Action {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "spend",
-            "output",
-            "swap",
-            "swap_claim",
-            "swapClaim",
             "transfer",
+            "consolidate",
+            "split",
             "validator_definition",
             "validatorDefinition",
             "ibc_relay_action",
             "ibcRelayAction",
             "proposal_submit",
             "proposalSubmit",
-            "proposal_withdraw",
-            "proposalWithdraw",
             "validator_vote",
             "validatorVote",
-            "delegator_vote",
-            "delegatorVote",
-            "proposal_deposit_claim",
-            "proposalDepositClaim",
-            "position_open",
-            "positionOpen",
-            "position_close",
-            "positionClose",
-            "position_withdraw",
-            "positionWithdraw",
-            "position_reward_claim",
-            "positionRewardClaim",
-            "delegate",
-            "undelegate",
-            "undelegate_claim",
-            "undelegateClaim",
-            "community_pool_spend",
-            "communityPoolSpend",
-            "community_pool_output",
-            "communityPoolOutput",
-            "community_pool_deposit",
-            "communityPoolDeposit",
-            "action_dutch_auction_schedule",
-            "actionDutchAuctionSchedule",
-            "action_dutch_auction_end",
-            "actionDutchAuctionEnd",
-            "action_dutch_auction_withdraw",
-            "actionDutchAuctionWithdraw",
-            "action_liquidity_tournament_vote",
-            "actionLiquidityTournamentVote",
             "compliance_register_asset",
             "complianceRegisterAsset",
             "compliance_register_user",
             "complianceRegisterUser",
             "aggregate_bundle",
             "aggregateBundle",
-            "ics20_withdrawal",
-            "ics20Withdrawal",
+            "shielded_ics20_withdrawal",
+            "shieldedIcs20Withdrawal",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            Spend,
-            Output,
-            Swap,
-            SwapClaim,
             Transfer,
+            Consolidate,
+            Split,
             ValidatorDefinition,
             IbcRelayAction,
             ProposalSubmit,
-            ProposalWithdraw,
             ValidatorVote,
-            DelegatorVote,
-            ProposalDepositClaim,
-            PositionOpen,
-            PositionClose,
-            PositionWithdraw,
-            PositionRewardClaim,
-            Delegate,
-            Undelegate,
-            UndelegateClaim,
-            CommunityPoolSpend,
-            CommunityPoolOutput,
-            CommunityPoolDeposit,
-            ActionDutchAuctionSchedule,
-            ActionDutchAuctionEnd,
-            ActionDutchAuctionWithdraw,
-            ActionLiquidityTournamentVote,
             ComplianceRegisterAsset,
             ComplianceRegisterUser,
             AggregateBundle,
-            Ics20Withdrawal,
+            ShieldedIcs20Withdrawal,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -224,36 +113,17 @@ impl<'de> serde::Deserialize<'de> for Action {
                         E: serde::de::Error,
                     {
                         match value {
-                            "spend" => Ok(GeneratedField::Spend),
-                            "output" => Ok(GeneratedField::Output),
-                            "swap" => Ok(GeneratedField::Swap),
-                            "swapClaim" | "swap_claim" => Ok(GeneratedField::SwapClaim),
                             "transfer" => Ok(GeneratedField::Transfer),
+                            "consolidate" => Ok(GeneratedField::Consolidate),
+                            "split" => Ok(GeneratedField::Split),
                             "validatorDefinition" | "validator_definition" => Ok(GeneratedField::ValidatorDefinition),
                             "ibcRelayAction" | "ibc_relay_action" => Ok(GeneratedField::IbcRelayAction),
                             "proposalSubmit" | "proposal_submit" => Ok(GeneratedField::ProposalSubmit),
-                            "proposalWithdraw" | "proposal_withdraw" => Ok(GeneratedField::ProposalWithdraw),
                             "validatorVote" | "validator_vote" => Ok(GeneratedField::ValidatorVote),
-                            "delegatorVote" | "delegator_vote" => Ok(GeneratedField::DelegatorVote),
-                            "proposalDepositClaim" | "proposal_deposit_claim" => Ok(GeneratedField::ProposalDepositClaim),
-                            "positionOpen" | "position_open" => Ok(GeneratedField::PositionOpen),
-                            "positionClose" | "position_close" => Ok(GeneratedField::PositionClose),
-                            "positionWithdraw" | "position_withdraw" => Ok(GeneratedField::PositionWithdraw),
-                            "positionRewardClaim" | "position_reward_claim" => Ok(GeneratedField::PositionRewardClaim),
-                            "delegate" => Ok(GeneratedField::Delegate),
-                            "undelegate" => Ok(GeneratedField::Undelegate),
-                            "undelegateClaim" | "undelegate_claim" => Ok(GeneratedField::UndelegateClaim),
-                            "communityPoolSpend" | "community_pool_spend" => Ok(GeneratedField::CommunityPoolSpend),
-                            "communityPoolOutput" | "community_pool_output" => Ok(GeneratedField::CommunityPoolOutput),
-                            "communityPoolDeposit" | "community_pool_deposit" => Ok(GeneratedField::CommunityPoolDeposit),
-                            "actionDutchAuctionSchedule" | "action_dutch_auction_schedule" => Ok(GeneratedField::ActionDutchAuctionSchedule),
-                            "actionDutchAuctionEnd" | "action_dutch_auction_end" => Ok(GeneratedField::ActionDutchAuctionEnd),
-                            "actionDutchAuctionWithdraw" | "action_dutch_auction_withdraw" => Ok(GeneratedField::ActionDutchAuctionWithdraw),
-                            "actionLiquidityTournamentVote" | "action_liquidity_tournament_vote" => Ok(GeneratedField::ActionLiquidityTournamentVote),
                             "complianceRegisterAsset" | "compliance_register_asset" => Ok(GeneratedField::ComplianceRegisterAsset),
                             "complianceRegisterUser" | "compliance_register_user" => Ok(GeneratedField::ComplianceRegisterUser),
                             "aggregateBundle" | "aggregate_bundle" => Ok(GeneratedField::AggregateBundle),
-                            "ics20Withdrawal" | "ics20_withdrawal" => Ok(GeneratedField::Ics20Withdrawal),
+                            "shieldedIcs20Withdrawal" | "shielded_ics20_withdrawal" => Ok(GeneratedField::ShieldedIcs20Withdrawal),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -276,39 +146,25 @@ impl<'de> serde::Deserialize<'de> for Action {
                 let mut action__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::Spend => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("spend"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::Spend)
-;
-                        }
-                        GeneratedField::Output => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("output"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::Output)
-;
-                        }
-                        GeneratedField::Swap => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("swap"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::Swap)
-;
-                        }
-                        GeneratedField::SwapClaim => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("swapClaim"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::SwapClaim)
-;
-                        }
                         GeneratedField::Transfer => {
                             if action__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("transfer"));
                             }
                             action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::Transfer)
+;
+                        }
+                        GeneratedField::Consolidate => {
+                            if action__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("consolidate"));
+                            }
+                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::Consolidate)
+;
+                        }
+                        GeneratedField::Split => {
+                            if action__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("split"));
+                            }
+                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::Split)
 ;
                         }
                         GeneratedField::ValidatorDefinition => {
@@ -332,130 +188,11 @@ impl<'de> serde::Deserialize<'de> for Action {
                             action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::ProposalSubmit)
 ;
                         }
-                        GeneratedField::ProposalWithdraw => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("proposalWithdraw"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::ProposalWithdraw)
-;
-                        }
                         GeneratedField::ValidatorVote => {
                             if action__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("validatorVote"));
                             }
                             action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::ValidatorVote)
-;
-                        }
-                        GeneratedField::DelegatorVote => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("delegatorVote"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::DelegatorVote)
-;
-                        }
-                        GeneratedField::ProposalDepositClaim => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("proposalDepositClaim"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::ProposalDepositClaim)
-;
-                        }
-                        GeneratedField::PositionOpen => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("positionOpen"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::PositionOpen)
-;
-                        }
-                        GeneratedField::PositionClose => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("positionClose"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::PositionClose)
-;
-                        }
-                        GeneratedField::PositionWithdraw => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("positionWithdraw"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::PositionWithdraw)
-;
-                        }
-                        GeneratedField::PositionRewardClaim => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("positionRewardClaim"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::PositionRewardClaim)
-;
-                        }
-                        GeneratedField::Delegate => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("delegate"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::Delegate)
-;
-                        }
-                        GeneratedField::Undelegate => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("undelegate"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::Undelegate)
-;
-                        }
-                        GeneratedField::UndelegateClaim => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("undelegateClaim"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::UndelegateClaim)
-;
-                        }
-                        GeneratedField::CommunityPoolSpend => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("communityPoolSpend"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::CommunityPoolSpend)
-;
-                        }
-                        GeneratedField::CommunityPoolOutput => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("communityPoolOutput"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::CommunityPoolOutput)
-;
-                        }
-                        GeneratedField::CommunityPoolDeposit => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("communityPoolDeposit"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::CommunityPoolDeposit)
-;
-                        }
-                        GeneratedField::ActionDutchAuctionSchedule => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("actionDutchAuctionSchedule"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::ActionDutchAuctionSchedule)
-;
-                        }
-                        GeneratedField::ActionDutchAuctionEnd => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("actionDutchAuctionEnd"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::ActionDutchAuctionEnd)
-;
-                        }
-                        GeneratedField::ActionDutchAuctionWithdraw => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("actionDutchAuctionWithdraw"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::ActionDutchAuctionWithdraw)
-;
-                        }
-                        GeneratedField::ActionLiquidityTournamentVote => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("actionLiquidityTournamentVote"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::ActionLiquidityTournamentVote)
 ;
                         }
                         GeneratedField::ComplianceRegisterAsset => {
@@ -479,11 +216,11 @@ impl<'de> serde::Deserialize<'de> for Action {
                             action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::AggregateBundle)
 ;
                         }
-                        GeneratedField::Ics20Withdrawal => {
+                        GeneratedField::ShieldedIcs20Withdrawal => {
                             if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("ics20Withdrawal"));
+                                return Err(serde::de::Error::duplicate_field("shieldedIcs20Withdrawal"));
                             }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::Ics20Withdrawal)
+                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::ShieldedIcs20Withdrawal)
 ;
                         }
                         GeneratedField::__SkipField__ => {
@@ -513,20 +250,14 @@ impl serde::Serialize for ActionPlan {
         let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1.ActionPlan", len)?;
         if let Some(v) = self.action.as_ref() {
             match v {
-                action_plan::Action::Spend(v) => {
-                    struct_ser.serialize_field("spend", v)?;
-                }
-                action_plan::Action::Output(v) => {
-                    struct_ser.serialize_field("output", v)?;
-                }
-                action_plan::Action::Swap(v) => {
-                    struct_ser.serialize_field("swap", v)?;
-                }
-                action_plan::Action::SwapClaim(v) => {
-                    struct_ser.serialize_field("swapClaim", v)?;
-                }
                 action_plan::Action::Transfer(v) => {
                     struct_ser.serialize_field("transfer", v)?;
+                }
+                action_plan::Action::Consolidate(v) => {
+                    struct_ser.serialize_field("consolidate", v)?;
+                }
+                action_plan::Action::Split(v) => {
+                    struct_ser.serialize_field("split", v)?;
                 }
                 action_plan::Action::ValidatorDefinition(v) => {
                     struct_ser.serialize_field("validatorDefinition", v)?;
@@ -537,65 +268,11 @@ impl serde::Serialize for ActionPlan {
                 action_plan::Action::ProposalSubmit(v) => {
                     struct_ser.serialize_field("proposalSubmit", v)?;
                 }
-                action_plan::Action::ProposalWithdraw(v) => {
-                    struct_ser.serialize_field("proposalWithdraw", v)?;
-                }
                 action_plan::Action::ValidatorVote(v) => {
                     struct_ser.serialize_field("validatorVote", v)?;
                 }
-                action_plan::Action::DelegatorVote(v) => {
-                    struct_ser.serialize_field("delegatorVote", v)?;
-                }
-                action_plan::Action::ProposalDepositClaim(v) => {
-                    struct_ser.serialize_field("proposalDepositClaim", v)?;
-                }
-                action_plan::Action::Ics20Withdrawal(v) => {
-                    struct_ser.serialize_field("ics20Withdrawal", v)?;
-                }
-                action_plan::Action::PositionOpen(v) => {
-                    struct_ser.serialize_field("positionOpen", v)?;
-                }
-                action_plan::Action::PositionOpenPlan(v) => {
-                    struct_ser.serialize_field("positionOpenPlan", v)?;
-                }
-                action_plan::Action::PositionClose(v) => {
-                    struct_ser.serialize_field("positionClose", v)?;
-                }
-                action_plan::Action::PositionWithdraw(v) => {
-                    struct_ser.serialize_field("positionWithdraw", v)?;
-                }
-                action_plan::Action::PositionRewardClaim(v) => {
-                    struct_ser.serialize_field("positionRewardClaim", v)?;
-                }
-                action_plan::Action::Delegate(v) => {
-                    struct_ser.serialize_field("delegate", v)?;
-                }
-                action_plan::Action::Undelegate(v) => {
-                    struct_ser.serialize_field("undelegate", v)?;
-                }
-                action_plan::Action::UndelegateClaim(v) => {
-                    struct_ser.serialize_field("undelegateClaim", v)?;
-                }
-                action_plan::Action::CommunityPoolSpend(v) => {
-                    struct_ser.serialize_field("communityPoolSpend", v)?;
-                }
-                action_plan::Action::CommunityPoolOutput(v) => {
-                    struct_ser.serialize_field("communityPoolOutput", v)?;
-                }
-                action_plan::Action::CommunityPoolDeposit(v) => {
-                    struct_ser.serialize_field("communityPoolDeposit", v)?;
-                }
-                action_plan::Action::ActionDutchAuctionSchedule(v) => {
-                    struct_ser.serialize_field("actionDutchAuctionSchedule", v)?;
-                }
-                action_plan::Action::ActionDutchAuctionEnd(v) => {
-                    struct_ser.serialize_field("actionDutchAuctionEnd", v)?;
-                }
-                action_plan::Action::ActionDutchAuctionWithdraw(v) => {
-                    struct_ser.serialize_field("actionDutchAuctionWithdraw", v)?;
-                }
-                action_plan::Action::ActionLiquidityTournamentVote(v) => {
-                    struct_ser.serialize_field("actionLiquidityTournamentVote", v)?;
+                action_plan::Action::ShieldedIcs20Withdrawal(v) => {
+                    struct_ser.serialize_field("shieldedIcs20Withdrawal", v)?;
                 }
                 action_plan::Action::ComplianceRegisterAsset(v) => {
                     struct_ser.serialize_field("complianceRegisterAsset", v)?;
@@ -615,56 +292,19 @@ impl<'de> serde::Deserialize<'de> for ActionPlan {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "spend",
-            "output",
-            "swap",
-            "swap_claim",
-            "swapClaim",
             "transfer",
+            "consolidate",
+            "split",
             "validator_definition",
             "validatorDefinition",
             "ibc_relay_action",
             "ibcRelayAction",
             "proposal_submit",
             "proposalSubmit",
-            "proposal_withdraw",
-            "proposalWithdraw",
             "validator_vote",
             "validatorVote",
-            "delegator_vote",
-            "delegatorVote",
-            "proposal_deposit_claim",
-            "proposalDepositClaim",
-            "ics20_withdrawal",
-            "ics20Withdrawal",
-            "position_open",
-            "positionOpen",
-            "position_open_plan",
-            "positionOpenPlan",
-            "position_close",
-            "positionClose",
-            "position_withdraw",
-            "positionWithdraw",
-            "position_reward_claim",
-            "positionRewardClaim",
-            "delegate",
-            "undelegate",
-            "undelegate_claim",
-            "undelegateClaim",
-            "community_pool_spend",
-            "communityPoolSpend",
-            "community_pool_output",
-            "communityPoolOutput",
-            "community_pool_deposit",
-            "communityPoolDeposit",
-            "action_dutch_auction_schedule",
-            "actionDutchAuctionSchedule",
-            "action_dutch_auction_end",
-            "actionDutchAuctionEnd",
-            "action_dutch_auction_withdraw",
-            "actionDutchAuctionWithdraw",
-            "action_liquidity_tournament_vote",
-            "actionLiquidityTournamentVote",
+            "shielded_ics20_withdrawal",
+            "shieldedIcs20Withdrawal",
             "compliance_register_asset",
             "complianceRegisterAsset",
             "compliance_register_user",
@@ -673,34 +313,14 @@ impl<'de> serde::Deserialize<'de> for ActionPlan {
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            Spend,
-            Output,
-            Swap,
-            SwapClaim,
             Transfer,
+            Consolidate,
+            Split,
             ValidatorDefinition,
             IbcRelayAction,
             ProposalSubmit,
-            ProposalWithdraw,
             ValidatorVote,
-            DelegatorVote,
-            ProposalDepositClaim,
-            Ics20Withdrawal,
-            PositionOpen,
-            PositionOpenPlan,
-            PositionClose,
-            PositionWithdraw,
-            PositionRewardClaim,
-            Delegate,
-            Undelegate,
-            UndelegateClaim,
-            CommunityPoolSpend,
-            CommunityPoolOutput,
-            CommunityPoolDeposit,
-            ActionDutchAuctionSchedule,
-            ActionDutchAuctionEnd,
-            ActionDutchAuctionWithdraw,
-            ActionLiquidityTournamentVote,
+            ShieldedIcs20Withdrawal,
             ComplianceRegisterAsset,
             ComplianceRegisterUser,
             __SkipField__,
@@ -725,34 +345,14 @@ impl<'de> serde::Deserialize<'de> for ActionPlan {
                         E: serde::de::Error,
                     {
                         match value {
-                            "spend" => Ok(GeneratedField::Spend),
-                            "output" => Ok(GeneratedField::Output),
-                            "swap" => Ok(GeneratedField::Swap),
-                            "swapClaim" | "swap_claim" => Ok(GeneratedField::SwapClaim),
                             "transfer" => Ok(GeneratedField::Transfer),
+                            "consolidate" => Ok(GeneratedField::Consolidate),
+                            "split" => Ok(GeneratedField::Split),
                             "validatorDefinition" | "validator_definition" => Ok(GeneratedField::ValidatorDefinition),
                             "ibcRelayAction" | "ibc_relay_action" => Ok(GeneratedField::IbcRelayAction),
                             "proposalSubmit" | "proposal_submit" => Ok(GeneratedField::ProposalSubmit),
-                            "proposalWithdraw" | "proposal_withdraw" => Ok(GeneratedField::ProposalWithdraw),
                             "validatorVote" | "validator_vote" => Ok(GeneratedField::ValidatorVote),
-                            "delegatorVote" | "delegator_vote" => Ok(GeneratedField::DelegatorVote),
-                            "proposalDepositClaim" | "proposal_deposit_claim" => Ok(GeneratedField::ProposalDepositClaim),
-                            "ics20Withdrawal" | "ics20_withdrawal" => Ok(GeneratedField::Ics20Withdrawal),
-                            "positionOpen" | "position_open" => Ok(GeneratedField::PositionOpen),
-                            "positionOpenPlan" | "position_open_plan" => Ok(GeneratedField::PositionOpenPlan),
-                            "positionClose" | "position_close" => Ok(GeneratedField::PositionClose),
-                            "positionWithdraw" | "position_withdraw" => Ok(GeneratedField::PositionWithdraw),
-                            "positionRewardClaim" | "position_reward_claim" => Ok(GeneratedField::PositionRewardClaim),
-                            "delegate" => Ok(GeneratedField::Delegate),
-                            "undelegate" => Ok(GeneratedField::Undelegate),
-                            "undelegateClaim" | "undelegate_claim" => Ok(GeneratedField::UndelegateClaim),
-                            "communityPoolSpend" | "community_pool_spend" => Ok(GeneratedField::CommunityPoolSpend),
-                            "communityPoolOutput" | "community_pool_output" => Ok(GeneratedField::CommunityPoolOutput),
-                            "communityPoolDeposit" | "community_pool_deposit" => Ok(GeneratedField::CommunityPoolDeposit),
-                            "actionDutchAuctionSchedule" | "action_dutch_auction_schedule" => Ok(GeneratedField::ActionDutchAuctionSchedule),
-                            "actionDutchAuctionEnd" | "action_dutch_auction_end" => Ok(GeneratedField::ActionDutchAuctionEnd),
-                            "actionDutchAuctionWithdraw" | "action_dutch_auction_withdraw" => Ok(GeneratedField::ActionDutchAuctionWithdraw),
-                            "actionLiquidityTournamentVote" | "action_liquidity_tournament_vote" => Ok(GeneratedField::ActionLiquidityTournamentVote),
+                            "shieldedIcs20Withdrawal" | "shielded_ics20_withdrawal" => Ok(GeneratedField::ShieldedIcs20Withdrawal),
                             "complianceRegisterAsset" | "compliance_register_asset" => Ok(GeneratedField::ComplianceRegisterAsset),
                             "complianceRegisterUser" | "compliance_register_user" => Ok(GeneratedField::ComplianceRegisterUser),
                             _ => Ok(GeneratedField::__SkipField__),
@@ -777,39 +377,25 @@ impl<'de> serde::Deserialize<'de> for ActionPlan {
                 let mut action__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::Spend => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("spend"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::Spend)
-;
-                        }
-                        GeneratedField::Output => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("output"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::Output)
-;
-                        }
-                        GeneratedField::Swap => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("swap"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::Swap)
-;
-                        }
-                        GeneratedField::SwapClaim => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("swapClaim"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::SwapClaim)
-;
-                        }
                         GeneratedField::Transfer => {
                             if action__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("transfer"));
                             }
                             action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::Transfer)
+;
+                        }
+                        GeneratedField::Consolidate => {
+                            if action__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("consolidate"));
+                            }
+                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::Consolidate)
+;
+                        }
+                        GeneratedField::Split => {
+                            if action__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("split"));
+                            }
+                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::Split)
 ;
                         }
                         GeneratedField::ValidatorDefinition => {
@@ -833,13 +419,6 @@ impl<'de> serde::Deserialize<'de> for ActionPlan {
                             action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::ProposalSubmit)
 ;
                         }
-                        GeneratedField::ProposalWithdraw => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("proposalWithdraw"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::ProposalWithdraw)
-;
-                        }
                         GeneratedField::ValidatorVote => {
                             if action__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("validatorVote"));
@@ -847,130 +426,11 @@ impl<'de> serde::Deserialize<'de> for ActionPlan {
                             action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::ValidatorVote)
 ;
                         }
-                        GeneratedField::DelegatorVote => {
+                        GeneratedField::ShieldedIcs20Withdrawal => {
                             if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("delegatorVote"));
+                                return Err(serde::de::Error::duplicate_field("shieldedIcs20Withdrawal"));
                             }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::DelegatorVote)
-;
-                        }
-                        GeneratedField::ProposalDepositClaim => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("proposalDepositClaim"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::ProposalDepositClaim)
-;
-                        }
-                        GeneratedField::Ics20Withdrawal => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("ics20Withdrawal"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::Ics20Withdrawal)
-;
-                        }
-                        GeneratedField::PositionOpen => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("positionOpen"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::PositionOpen)
-;
-                        }
-                        GeneratedField::PositionOpenPlan => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("positionOpenPlan"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::PositionOpenPlan)
-;
-                        }
-                        GeneratedField::PositionClose => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("positionClose"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::PositionClose)
-;
-                        }
-                        GeneratedField::PositionWithdraw => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("positionWithdraw"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::PositionWithdraw)
-;
-                        }
-                        GeneratedField::PositionRewardClaim => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("positionRewardClaim"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::PositionRewardClaim)
-;
-                        }
-                        GeneratedField::Delegate => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("delegate"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::Delegate)
-;
-                        }
-                        GeneratedField::Undelegate => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("undelegate"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::Undelegate)
-;
-                        }
-                        GeneratedField::UndelegateClaim => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("undelegateClaim"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::UndelegateClaim)
-;
-                        }
-                        GeneratedField::CommunityPoolSpend => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("communityPoolSpend"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::CommunityPoolSpend)
-;
-                        }
-                        GeneratedField::CommunityPoolOutput => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("communityPoolOutput"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::CommunityPoolOutput)
-;
-                        }
-                        GeneratedField::CommunityPoolDeposit => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("communityPoolDeposit"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::CommunityPoolDeposit)
-;
-                        }
-                        GeneratedField::ActionDutchAuctionSchedule => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("actionDutchAuctionSchedule"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::ActionDutchAuctionSchedule)
-;
-                        }
-                        GeneratedField::ActionDutchAuctionEnd => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("actionDutchAuctionEnd"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::ActionDutchAuctionEnd)
-;
-                        }
-                        GeneratedField::ActionDutchAuctionWithdraw => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("actionDutchAuctionWithdraw"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::ActionDutchAuctionWithdraw)
-;
-                        }
-                        GeneratedField::ActionLiquidityTournamentVote => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("actionLiquidityTournamentVote"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::ActionLiquidityTournamentVote)
+                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::ShieldedIcs20Withdrawal)
 ;
                         }
                         GeneratedField::ComplianceRegisterAsset => {
@@ -1014,26 +474,14 @@ impl serde::Serialize for ActionView {
         let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1.ActionView", len)?;
         if let Some(v) = self.action_view.as_ref() {
             match v {
-                action_view::ActionView::Spend(v) => {
-                    struct_ser.serialize_field("spend", v)?;
-                }
-                action_view::ActionView::Output(v) => {
-                    struct_ser.serialize_field("output", v)?;
-                }
-                action_view::ActionView::Swap(v) => {
-                    struct_ser.serialize_field("swap", v)?;
-                }
-                action_view::ActionView::SwapClaim(v) => {
-                    struct_ser.serialize_field("swapClaim", v)?;
-                }
                 action_view::ActionView::Transfer(v) => {
                     struct_ser.serialize_field("transfer", v)?;
                 }
-                action_view::ActionView::DelegatorVote(v) => {
-                    struct_ser.serialize_field("delegatorVote", v)?;
+                action_view::ActionView::Consolidate(v) => {
+                    struct_ser.serialize_field("consolidate", v)?;
                 }
-                action_view::ActionView::PositionOpenView(v) => {
-                    struct_ser.serialize_field("positionOpenView", v)?;
+                action_view::ActionView::Split(v) => {
+                    struct_ser.serialize_field("split", v)?;
                 }
                 action_view::ActionView::ValidatorDefinition(v) => {
                     struct_ser.serialize_field("validatorDefinition", v)?;
@@ -1044,56 +492,8 @@ impl serde::Serialize for ActionView {
                 action_view::ActionView::ProposalSubmit(v) => {
                     struct_ser.serialize_field("proposalSubmit", v)?;
                 }
-                action_view::ActionView::ProposalWithdraw(v) => {
-                    struct_ser.serialize_field("proposalWithdraw", v)?;
-                }
                 action_view::ActionView::ValidatorVote(v) => {
                     struct_ser.serialize_field("validatorVote", v)?;
-                }
-                action_view::ActionView::ProposalDepositClaim(v) => {
-                    struct_ser.serialize_field("proposalDepositClaim", v)?;
-                }
-                action_view::ActionView::PositionOpen(v) => {
-                    struct_ser.serialize_field("positionOpen", v)?;
-                }
-                action_view::ActionView::PositionClose(v) => {
-                    struct_ser.serialize_field("positionClose", v)?;
-                }
-                action_view::ActionView::PositionWithdraw(v) => {
-                    struct_ser.serialize_field("positionWithdraw", v)?;
-                }
-                action_view::ActionView::PositionRewardClaim(v) => {
-                    struct_ser.serialize_field("positionRewardClaim", v)?;
-                }
-                action_view::ActionView::Delegate(v) => {
-                    struct_ser.serialize_field("delegate", v)?;
-                }
-                action_view::ActionView::Undelegate(v) => {
-                    struct_ser.serialize_field("undelegate", v)?;
-                }
-                action_view::ActionView::CommunityPoolSpend(v) => {
-                    struct_ser.serialize_field("communityPoolSpend", v)?;
-                }
-                action_view::ActionView::CommunityPoolOutput(v) => {
-                    struct_ser.serialize_field("communityPoolOutput", v)?;
-                }
-                action_view::ActionView::CommunityPoolDeposit(v) => {
-                    struct_ser.serialize_field("communityPoolDeposit", v)?;
-                }
-                action_view::ActionView::ActionDutchAuctionSchedule(v) => {
-                    struct_ser.serialize_field("actionDutchAuctionSchedule", v)?;
-                }
-                action_view::ActionView::ActionDutchAuctionEnd(v) => {
-                    struct_ser.serialize_field("actionDutchAuctionEnd", v)?;
-                }
-                action_view::ActionView::ActionDutchAuctionWithdraw(v) => {
-                    struct_ser.serialize_field("actionDutchAuctionWithdraw", v)?;
-                }
-                action_view::ActionView::UndelegateClaim(v) => {
-                    struct_ser.serialize_field("undelegateClaim", v)?;
-                }
-                action_view::ActionView::ActionLiquidityTournamentVote(v) => {
-                    struct_ser.serialize_field("actionLiquidityTournamentVote", v)?;
                 }
                 action_view::ActionView::ComplianceRegisterAsset(v) => {
                     struct_ser.serialize_field("complianceRegisterAsset", v)?;
@@ -1104,8 +504,8 @@ impl serde::Serialize for ActionView {
                 action_view::ActionView::AggregateBundle(v) => {
                     struct_ser.serialize_field("aggregateBundle", v)?;
                 }
-                action_view::ActionView::Ics20Withdrawal(v) => {
-                    struct_ser.serialize_field("ics20Withdrawal", v)?;
+                action_view::ActionView::ShieldedIcs20Withdrawal(v) => {
+                    struct_ser.serialize_field("shieldedIcs20Withdrawal", v)?;
                 }
             }
         }
@@ -1119,97 +519,40 @@ impl<'de> serde::Deserialize<'de> for ActionView {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "spend",
-            "output",
-            "swap",
-            "swap_claim",
-            "swapClaim",
             "transfer",
-            "delegator_vote",
-            "delegatorVote",
-            "position_open_view",
-            "positionOpenView",
+            "consolidate",
+            "split",
             "validator_definition",
             "validatorDefinition",
             "ibc_relay_action",
             "ibcRelayAction",
             "proposal_submit",
             "proposalSubmit",
-            "proposal_withdraw",
-            "proposalWithdraw",
             "validator_vote",
             "validatorVote",
-            "proposal_deposit_claim",
-            "proposalDepositClaim",
-            "position_open",
-            "positionOpen",
-            "position_close",
-            "positionClose",
-            "position_withdraw",
-            "positionWithdraw",
-            "position_reward_claim",
-            "positionRewardClaim",
-            "delegate",
-            "undelegate",
-            "community_pool_spend",
-            "communityPoolSpend",
-            "community_pool_output",
-            "communityPoolOutput",
-            "community_pool_deposit",
-            "communityPoolDeposit",
-            "action_dutch_auction_schedule",
-            "actionDutchAuctionSchedule",
-            "action_dutch_auction_end",
-            "actionDutchAuctionEnd",
-            "action_dutch_auction_withdraw",
-            "actionDutchAuctionWithdraw",
-            "undelegate_claim",
-            "undelegateClaim",
-            "action_liquidity_tournament_vote",
-            "actionLiquidityTournamentVote",
             "compliance_register_asset",
             "complianceRegisterAsset",
             "compliance_register_user",
             "complianceRegisterUser",
             "aggregate_bundle",
             "aggregateBundle",
-            "ics20_withdrawal",
-            "ics20Withdrawal",
+            "shielded_ics20_withdrawal",
+            "shieldedIcs20Withdrawal",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            Spend,
-            Output,
-            Swap,
-            SwapClaim,
             Transfer,
-            DelegatorVote,
-            PositionOpenView,
+            Consolidate,
+            Split,
             ValidatorDefinition,
             IbcRelayAction,
             ProposalSubmit,
-            ProposalWithdraw,
             ValidatorVote,
-            ProposalDepositClaim,
-            PositionOpen,
-            PositionClose,
-            PositionWithdraw,
-            PositionRewardClaim,
-            Delegate,
-            Undelegate,
-            CommunityPoolSpend,
-            CommunityPoolOutput,
-            CommunityPoolDeposit,
-            ActionDutchAuctionSchedule,
-            ActionDutchAuctionEnd,
-            ActionDutchAuctionWithdraw,
-            UndelegateClaim,
-            ActionLiquidityTournamentVote,
             ComplianceRegisterAsset,
             ComplianceRegisterUser,
             AggregateBundle,
-            Ics20Withdrawal,
+            ShieldedIcs20Withdrawal,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -1232,37 +575,17 @@ impl<'de> serde::Deserialize<'de> for ActionView {
                         E: serde::de::Error,
                     {
                         match value {
-                            "spend" => Ok(GeneratedField::Spend),
-                            "output" => Ok(GeneratedField::Output),
-                            "swap" => Ok(GeneratedField::Swap),
-                            "swapClaim" | "swap_claim" => Ok(GeneratedField::SwapClaim),
                             "transfer" => Ok(GeneratedField::Transfer),
-                            "delegatorVote" | "delegator_vote" => Ok(GeneratedField::DelegatorVote),
-                            "positionOpenView" | "position_open_view" => Ok(GeneratedField::PositionOpenView),
+                            "consolidate" => Ok(GeneratedField::Consolidate),
+                            "split" => Ok(GeneratedField::Split),
                             "validatorDefinition" | "validator_definition" => Ok(GeneratedField::ValidatorDefinition),
                             "ibcRelayAction" | "ibc_relay_action" => Ok(GeneratedField::IbcRelayAction),
                             "proposalSubmit" | "proposal_submit" => Ok(GeneratedField::ProposalSubmit),
-                            "proposalWithdraw" | "proposal_withdraw" => Ok(GeneratedField::ProposalWithdraw),
                             "validatorVote" | "validator_vote" => Ok(GeneratedField::ValidatorVote),
-                            "proposalDepositClaim" | "proposal_deposit_claim" => Ok(GeneratedField::ProposalDepositClaim),
-                            "positionOpen" | "position_open" => Ok(GeneratedField::PositionOpen),
-                            "positionClose" | "position_close" => Ok(GeneratedField::PositionClose),
-                            "positionWithdraw" | "position_withdraw" => Ok(GeneratedField::PositionWithdraw),
-                            "positionRewardClaim" | "position_reward_claim" => Ok(GeneratedField::PositionRewardClaim),
-                            "delegate" => Ok(GeneratedField::Delegate),
-                            "undelegate" => Ok(GeneratedField::Undelegate),
-                            "communityPoolSpend" | "community_pool_spend" => Ok(GeneratedField::CommunityPoolSpend),
-                            "communityPoolOutput" | "community_pool_output" => Ok(GeneratedField::CommunityPoolOutput),
-                            "communityPoolDeposit" | "community_pool_deposit" => Ok(GeneratedField::CommunityPoolDeposit),
-                            "actionDutchAuctionSchedule" | "action_dutch_auction_schedule" => Ok(GeneratedField::ActionDutchAuctionSchedule),
-                            "actionDutchAuctionEnd" | "action_dutch_auction_end" => Ok(GeneratedField::ActionDutchAuctionEnd),
-                            "actionDutchAuctionWithdraw" | "action_dutch_auction_withdraw" => Ok(GeneratedField::ActionDutchAuctionWithdraw),
-                            "undelegateClaim" | "undelegate_claim" => Ok(GeneratedField::UndelegateClaim),
-                            "actionLiquidityTournamentVote" | "action_liquidity_tournament_vote" => Ok(GeneratedField::ActionLiquidityTournamentVote),
                             "complianceRegisterAsset" | "compliance_register_asset" => Ok(GeneratedField::ComplianceRegisterAsset),
                             "complianceRegisterUser" | "compliance_register_user" => Ok(GeneratedField::ComplianceRegisterUser),
                             "aggregateBundle" | "aggregate_bundle" => Ok(GeneratedField::AggregateBundle),
-                            "ics20Withdrawal" | "ics20_withdrawal" => Ok(GeneratedField::Ics20Withdrawal),
+                            "shieldedIcs20Withdrawal" | "shielded_ics20_withdrawal" => Ok(GeneratedField::ShieldedIcs20Withdrawal),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -1285,34 +608,6 @@ impl<'de> serde::Deserialize<'de> for ActionView {
                 let mut action_view__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::Spend => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("spend"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::Spend)
-;
-                        }
-                        GeneratedField::Output => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("output"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::Output)
-;
-                        }
-                        GeneratedField::Swap => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("swap"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::Swap)
-;
-                        }
-                        GeneratedField::SwapClaim => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("swapClaim"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::SwapClaim)
-;
-                        }
                         GeneratedField::Transfer => {
                             if action_view__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("transfer"));
@@ -1320,18 +615,18 @@ impl<'de> serde::Deserialize<'de> for ActionView {
                             action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::Transfer)
 ;
                         }
-                        GeneratedField::DelegatorVote => {
+                        GeneratedField::Consolidate => {
                             if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("delegatorVote"));
+                                return Err(serde::de::Error::duplicate_field("consolidate"));
                             }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::DelegatorVote)
+                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::Consolidate)
 ;
                         }
-                        GeneratedField::PositionOpenView => {
+                        GeneratedField::Split => {
                             if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("positionOpenView"));
+                                return Err(serde::de::Error::duplicate_field("split"));
                             }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::PositionOpenView)
+                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::Split)
 ;
                         }
                         GeneratedField::ValidatorDefinition => {
@@ -1355,123 +650,11 @@ impl<'de> serde::Deserialize<'de> for ActionView {
                             action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::ProposalSubmit)
 ;
                         }
-                        GeneratedField::ProposalWithdraw => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("proposalWithdraw"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::ProposalWithdraw)
-;
-                        }
                         GeneratedField::ValidatorVote => {
                             if action_view__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("validatorVote"));
                             }
                             action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::ValidatorVote)
-;
-                        }
-                        GeneratedField::ProposalDepositClaim => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("proposalDepositClaim"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::ProposalDepositClaim)
-;
-                        }
-                        GeneratedField::PositionOpen => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("positionOpen"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::PositionOpen)
-;
-                        }
-                        GeneratedField::PositionClose => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("positionClose"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::PositionClose)
-;
-                        }
-                        GeneratedField::PositionWithdraw => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("positionWithdraw"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::PositionWithdraw)
-;
-                        }
-                        GeneratedField::PositionRewardClaim => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("positionRewardClaim"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::PositionRewardClaim)
-;
-                        }
-                        GeneratedField::Delegate => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("delegate"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::Delegate)
-;
-                        }
-                        GeneratedField::Undelegate => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("undelegate"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::Undelegate)
-;
-                        }
-                        GeneratedField::CommunityPoolSpend => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("communityPoolSpend"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::CommunityPoolSpend)
-;
-                        }
-                        GeneratedField::CommunityPoolOutput => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("communityPoolOutput"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::CommunityPoolOutput)
-;
-                        }
-                        GeneratedField::CommunityPoolDeposit => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("communityPoolDeposit"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::CommunityPoolDeposit)
-;
-                        }
-                        GeneratedField::ActionDutchAuctionSchedule => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("actionDutchAuctionSchedule"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::ActionDutchAuctionSchedule)
-;
-                        }
-                        GeneratedField::ActionDutchAuctionEnd => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("actionDutchAuctionEnd"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::ActionDutchAuctionEnd)
-;
-                        }
-                        GeneratedField::ActionDutchAuctionWithdraw => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("actionDutchAuctionWithdraw"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::ActionDutchAuctionWithdraw)
-;
-                        }
-                        GeneratedField::UndelegateClaim => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("undelegateClaim"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::UndelegateClaim)
-;
-                        }
-                        GeneratedField::ActionLiquidityTournamentVote => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("actionLiquidityTournamentVote"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::ActionLiquidityTournamentVote)
 ;
                         }
                         GeneratedField::ComplianceRegisterAsset => {
@@ -1495,11 +678,11 @@ impl<'de> serde::Deserialize<'de> for ActionView {
                             action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::AggregateBundle)
 ;
                         }
-                        GeneratedField::Ics20Withdrawal => {
+                        GeneratedField::ShieldedIcs20Withdrawal => {
                             if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("ics20Withdrawal"));
+                                return Err(serde::de::Error::duplicate_field("shieldedIcs20Withdrawal"));
                             }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::Ics20Withdrawal)
+                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::ShieldedIcs20Withdrawal)
 ;
                         }
                         GeneratedField::__SkipField__ => {
@@ -1665,24 +848,12 @@ impl serde::Serialize for AuthorizationData {
         if !self.spend_auths.is_empty() {
             len += 1;
         }
-        if !self.delegator_vote_auths.is_empty() {
-            len += 1;
-        }
-        if !self.lqt_vote_auths.is_empty() {
-            len += 1;
-        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1.AuthorizationData", len)?;
         if let Some(v) = self.effect_hash.as_ref() {
             struct_ser.serialize_field("effectHash", v)?;
         }
         if !self.spend_auths.is_empty() {
             struct_ser.serialize_field("spendAuths", &self.spend_auths)?;
-        }
-        if !self.delegator_vote_auths.is_empty() {
-            struct_ser.serialize_field("delegatorVoteAuths", &self.delegator_vote_auths)?;
-        }
-        if !self.lqt_vote_auths.is_empty() {
-            struct_ser.serialize_field("lqtVoteAuths", &self.lqt_vote_auths)?;
         }
         struct_ser.end()
     }
@@ -1698,18 +869,12 @@ impl<'de> serde::Deserialize<'de> for AuthorizationData {
             "effectHash",
             "spend_auths",
             "spendAuths",
-            "delegator_vote_auths",
-            "delegatorVoteAuths",
-            "lqt_vote_auths",
-            "lqtVoteAuths",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             EffectHash,
             SpendAuths,
-            DelegatorVoteAuths,
-            LqtVoteAuths,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -1734,8 +899,6 @@ impl<'de> serde::Deserialize<'de> for AuthorizationData {
                         match value {
                             "effectHash" | "effect_hash" => Ok(GeneratedField::EffectHash),
                             "spendAuths" | "spend_auths" => Ok(GeneratedField::SpendAuths),
-                            "delegatorVoteAuths" | "delegator_vote_auths" => Ok(GeneratedField::DelegatorVoteAuths),
-                            "lqtVoteAuths" | "lqt_vote_auths" => Ok(GeneratedField::LqtVoteAuths),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -1757,8 +920,6 @@ impl<'de> serde::Deserialize<'de> for AuthorizationData {
             {
                 let mut effect_hash__ = None;
                 let mut spend_auths__ = None;
-                let mut delegator_vote_auths__ = None;
-                let mut lqt_vote_auths__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::EffectHash => {
@@ -1773,18 +934,6 @@ impl<'de> serde::Deserialize<'de> for AuthorizationData {
                             }
                             spend_auths__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::DelegatorVoteAuths => {
-                            if delegator_vote_auths__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("delegatorVoteAuths"));
-                            }
-                            delegator_vote_auths__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::LqtVoteAuths => {
-                            if lqt_vote_auths__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("lqtVoteAuths"));
-                            }
-                            lqt_vote_auths__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -1793,8 +942,6 @@ impl<'de> serde::Deserialize<'de> for AuthorizationData {
                 Ok(AuthorizationData {
                     effect_hash: effect_hash__,
                     spend_auths: spend_auths__.unwrap_or_default(),
-                    delegator_vote_auths: delegator_vote_auths__.unwrap_or_default(),
-                    lqt_vote_auths: lqt_vote_auths__.unwrap_or_default(),
                 })
             }
         }
@@ -2142,9 +1289,6 @@ impl serde::Serialize for FamilyAggregate {
         if self.family_id != 0 {
             len += 1;
         }
-        if self.transfer_family_id != 0 {
-            len += 1;
-        }
         if self.real_count != 0 {
             len += 1;
         }
@@ -2154,14 +1298,20 @@ impl serde::Serialize for FamilyAggregate {
         if !self.aggregate_proof.is_empty() {
             len += 1;
         }
+        if self.consolidate_family_id != 0 {
+            len += 1;
+        }
+        if self.split_family_id != 0 {
+            len += 1;
+        }
+        if self.shielded_ics20_withdrawal_family_id != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1.FamilyAggregate", len)?;
         if self.family_id != 0 {
             let v = ProofFamilyId::try_from(self.family_id)
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.family_id)))?;
             struct_ser.serialize_field("familyId", &v)?;
-        }
-        if self.transfer_family_id != 0 {
-            struct_ser.serialize_field("transferFamilyId", &self.transfer_family_id)?;
         }
         if self.real_count != 0 {
             struct_ser.serialize_field("realCount", &self.real_count)?;
@@ -2173,6 +1323,15 @@ impl serde::Serialize for FamilyAggregate {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("aggregateProof", pbjson::private::base64::encode(&self.aggregate_proof).as_str())?;
+        }
+        if self.consolidate_family_id != 0 {
+            struct_ser.serialize_field("consolidateFamilyId", &self.consolidate_family_id)?;
+        }
+        if self.split_family_id != 0 {
+            struct_ser.serialize_field("splitFamilyId", &self.split_family_id)?;
+        }
+        if self.shielded_ics20_withdrawal_family_id != 0 {
+            struct_ser.serialize_field("shieldedIcs20WithdrawalFamilyId", &self.shielded_ics20_withdrawal_family_id)?;
         }
         struct_ser.end()
     }
@@ -2186,23 +1345,29 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
         const FIELDS: &[&str] = &[
             "family_id",
             "familyId",
-            "transfer_family_id",
-            "transferFamilyId",
             "real_count",
             "realCount",
             "padded_count",
             "paddedCount",
             "aggregate_proof",
             "aggregateProof",
+            "consolidate_family_id",
+            "consolidateFamilyId",
+            "split_family_id",
+            "splitFamilyId",
+            "shielded_ics20_withdrawal_family_id",
+            "shieldedIcs20WithdrawalFamilyId",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             FamilyId,
-            TransferFamilyId,
             RealCount,
             PaddedCount,
             AggregateProof,
+            ConsolidateFamilyId,
+            SplitFamilyId,
+            ShieldedIcs20WithdrawalFamilyId,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -2226,10 +1391,12 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
                     {
                         match value {
                             "familyId" | "family_id" => Ok(GeneratedField::FamilyId),
-                            "transferFamilyId" | "transfer_family_id" => Ok(GeneratedField::TransferFamilyId),
                             "realCount" | "real_count" => Ok(GeneratedField::RealCount),
                             "paddedCount" | "padded_count" => Ok(GeneratedField::PaddedCount),
                             "aggregateProof" | "aggregate_proof" => Ok(GeneratedField::AggregateProof),
+                            "consolidateFamilyId" | "consolidate_family_id" => Ok(GeneratedField::ConsolidateFamilyId),
+                            "splitFamilyId" | "split_family_id" => Ok(GeneratedField::SplitFamilyId),
+                            "shieldedIcs20WithdrawalFamilyId" | "shielded_ics20_withdrawal_family_id" => Ok(GeneratedField::ShieldedIcs20WithdrawalFamilyId),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -2250,10 +1417,12 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut family_id__ = None;
-                let mut transfer_family_id__ = None;
                 let mut real_count__ = None;
                 let mut padded_count__ = None;
                 let mut aggregate_proof__ = None;
+                let mut consolidate_family_id__ = None;
+                let mut split_family_id__ = None;
+                let mut shielded_ics20_withdrawal_family_id__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::FamilyId => {
@@ -2261,14 +1430,6 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
                                 return Err(serde::de::Error::duplicate_field("familyId"));
                             }
                             family_id__ = Some(map_.next_value::<ProofFamilyId>()? as i32);
-                        }
-                        GeneratedField::TransferFamilyId => {
-                            if transfer_family_id__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("transferFamilyId"));
-                            }
-                            transfer_family_id__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
                         }
                         GeneratedField::RealCount => {
                             if real_count__.is_some() {
@@ -2294,6 +1455,30 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::ConsolidateFamilyId => {
+                            if consolidate_family_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("consolidateFamilyId"));
+                            }
+                            consolidate_family_id__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::SplitFamilyId => {
+                            if split_family_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("splitFamilyId"));
+                            }
+                            split_family_id__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::ShieldedIcs20WithdrawalFamilyId => {
+                            if shielded_ics20_withdrawal_family_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("shieldedIcs20WithdrawalFamilyId"));
+                            }
+                            shielded_ics20_withdrawal_family_id__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -2301,14 +1486,206 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
                 }
                 Ok(FamilyAggregate {
                     family_id: family_id__.unwrap_or_default(),
-                    transfer_family_id: transfer_family_id__.unwrap_or_default(),
                     real_count: real_count__.unwrap_or_default(),
                     padded_count: padded_count__.unwrap_or_default(),
                     aggregate_proof: aggregate_proof__.unwrap_or_default(),
+                    consolidate_family_id: consolidate_family_id__.unwrap_or_default(),
+                    split_family_id: split_family_id__.unwrap_or_default(),
+                    shielded_ics20_withdrawal_family_id: shielded_ics20_withdrawal_family_id__.unwrap_or_default(),
                 })
             }
         }
         deserializer.deserialize_struct("penumbra.core.transaction.v1.FamilyAggregate", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for FeeFunding {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.transfer.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1.FeeFunding", len)?;
+        if let Some(v) = self.transfer.as_ref() {
+            struct_ser.serialize_field("transfer", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for FeeFunding {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "transfer",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Transfer,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "transfer" => Ok(GeneratedField::Transfer),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = FeeFunding;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.transaction.v1.FeeFunding")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<FeeFunding, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut transfer__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Transfer => {
+                            if transfer__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("transfer"));
+                            }
+                            transfer__ = map_.next_value()?;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(FeeFunding {
+                    transfer: transfer__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.transaction.v1.FeeFunding", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for FeeFundingPlan {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.transfer.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1.FeeFundingPlan", len)?;
+        if let Some(v) = self.transfer.as_ref() {
+            struct_ser.serialize_field("transfer", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for FeeFundingPlan {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "transfer",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Transfer,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "transfer" => Ok(GeneratedField::Transfer),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = FeeFundingPlan;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.transaction.v1.FeeFundingPlan")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<FeeFundingPlan, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut transfer__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Transfer => {
+                            if transfer__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("transfer"));
+                            }
+                            transfer__ = map_.next_value()?;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(FeeFundingPlan {
+                    transfer: transfer__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.transaction.v1.FeeFundingPlan", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for MemoCiphertext {
@@ -3305,13 +2682,10 @@ impl serde::Serialize for ProofFamilyId {
     {
         let variant = match self {
             Self::Unspecified => "PROOF_FAMILY_ID_UNSPECIFIED",
-            Self::Spend => "PROOF_FAMILY_ID_SPEND",
-            Self::Output => "PROOF_FAMILY_ID_OUTPUT",
-            Self::Swap => "PROOF_FAMILY_ID_SWAP",
-            Self::SwapClaim => "PROOF_FAMILY_ID_SWAP_CLAIM",
-            Self::Convert => "PROOF_FAMILY_ID_CONVERT",
-            Self::DelegatorVote => "PROOF_FAMILY_ID_DELEGATOR_VOTE",
             Self::Transfer => "PROOF_FAMILY_ID_TRANSFER",
+            Self::Consolidate => "PROOF_FAMILY_ID_CONSOLIDATE",
+            Self::Split => "PROOF_FAMILY_ID_SPLIT",
+            Self::ShieldedIcs20Withdrawal => "PROOF_FAMILY_ID_SHIELDED_ICS20_WITHDRAWAL",
         };
         serializer.serialize_str(variant)
     }
@@ -3324,13 +2698,10 @@ impl<'de> serde::Deserialize<'de> for ProofFamilyId {
     {
         const FIELDS: &[&str] = &[
             "PROOF_FAMILY_ID_UNSPECIFIED",
-            "PROOF_FAMILY_ID_SPEND",
-            "PROOF_FAMILY_ID_OUTPUT",
-            "PROOF_FAMILY_ID_SWAP",
-            "PROOF_FAMILY_ID_SWAP_CLAIM",
-            "PROOF_FAMILY_ID_CONVERT",
-            "PROOF_FAMILY_ID_DELEGATOR_VOTE",
             "PROOF_FAMILY_ID_TRANSFER",
+            "PROOF_FAMILY_ID_CONSOLIDATE",
+            "PROOF_FAMILY_ID_SPLIT",
+            "PROOF_FAMILY_ID_SHIELDED_ICS20_WITHDRAWAL",
         ];
 
         struct GeneratedVisitor;
@@ -3372,13 +2743,10 @@ impl<'de> serde::Deserialize<'de> for ProofFamilyId {
             {
                 match value {
                     "PROOF_FAMILY_ID_UNSPECIFIED" => Ok(ProofFamilyId::Unspecified),
-                    "PROOF_FAMILY_ID_SPEND" => Ok(ProofFamilyId::Spend),
-                    "PROOF_FAMILY_ID_OUTPUT" => Ok(ProofFamilyId::Output),
-                    "PROOF_FAMILY_ID_SWAP" => Ok(ProofFamilyId::Swap),
-                    "PROOF_FAMILY_ID_SWAP_CLAIM" => Ok(ProofFamilyId::SwapClaim),
-                    "PROOF_FAMILY_ID_CONVERT" => Ok(ProofFamilyId::Convert),
-                    "PROOF_FAMILY_ID_DELEGATOR_VOTE" => Ok(ProofFamilyId::DelegatorVote),
                     "PROOF_FAMILY_ID_TRANSFER" => Ok(ProofFamilyId::Transfer),
+                    "PROOF_FAMILY_ID_CONSOLIDATE" => Ok(ProofFamilyId::Consolidate),
+                    "PROOF_FAMILY_ID_SPLIT" => Ok(ProofFamilyId::Split),
+                    "PROOF_FAMILY_ID_SHIELDED_ICS20_WITHDRAWAL" => Ok(ProofFamilyId::ShieldedIcs20Withdrawal),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
@@ -3530,6 +2898,9 @@ impl serde::Serialize for TransactionBody {
         if self.transaction_parameters.is_some() {
             len += 1;
         }
+        if self.fee_funding.is_some() {
+            len += 1;
+        }
         if self.detection_data.is_some() {
             len += 1;
         }
@@ -3542,6 +2913,9 @@ impl serde::Serialize for TransactionBody {
         }
         if let Some(v) = self.transaction_parameters.as_ref() {
             struct_ser.serialize_field("transactionParameters", v)?;
+        }
+        if let Some(v) = self.fee_funding.as_ref() {
+            struct_ser.serialize_field("feeFunding", v)?;
         }
         if let Some(v) = self.detection_data.as_ref() {
             struct_ser.serialize_field("detectionData", v)?;
@@ -3562,6 +2936,8 @@ impl<'de> serde::Deserialize<'de> for TransactionBody {
             "actions",
             "transaction_parameters",
             "transactionParameters",
+            "fee_funding",
+            "feeFunding",
             "detection_data",
             "detectionData",
             "memo",
@@ -3571,6 +2947,7 @@ impl<'de> serde::Deserialize<'de> for TransactionBody {
         enum GeneratedField {
             Actions,
             TransactionParameters,
+            FeeFunding,
             DetectionData,
             Memo,
             __SkipField__,
@@ -3597,6 +2974,7 @@ impl<'de> serde::Deserialize<'de> for TransactionBody {
                         match value {
                             "actions" => Ok(GeneratedField::Actions),
                             "transactionParameters" | "transaction_parameters" => Ok(GeneratedField::TransactionParameters),
+                            "feeFunding" | "fee_funding" => Ok(GeneratedField::FeeFunding),
                             "detectionData" | "detection_data" => Ok(GeneratedField::DetectionData),
                             "memo" => Ok(GeneratedField::Memo),
                             _ => Ok(GeneratedField::__SkipField__),
@@ -3620,6 +2998,7 @@ impl<'de> serde::Deserialize<'de> for TransactionBody {
             {
                 let mut actions__ = None;
                 let mut transaction_parameters__ = None;
+                let mut fee_funding__ = None;
                 let mut detection_data__ = None;
                 let mut memo__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -3635,6 +3014,12 @@ impl<'de> serde::Deserialize<'de> for TransactionBody {
                                 return Err(serde::de::Error::duplicate_field("transactionParameters"));
                             }
                             transaction_parameters__ = map_.next_value()?;
+                        }
+                        GeneratedField::FeeFunding => {
+                            if fee_funding__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("feeFunding"));
+                            }
+                            fee_funding__ = map_.next_value()?;
                         }
                         GeneratedField::DetectionData => {
                             if detection_data__.is_some() {
@@ -3656,6 +3041,7 @@ impl<'de> serde::Deserialize<'de> for TransactionBody {
                 Ok(TransactionBody {
                     actions: actions__.unwrap_or_default(),
                     transaction_parameters: transaction_parameters__,
+                    fee_funding: fee_funding__,
                     detection_data: detection_data__,
                     memo: memo__,
                 })
@@ -3678,6 +3064,9 @@ impl serde::Serialize for TransactionBodyView {
         if self.transaction_parameters.is_some() {
             len += 1;
         }
+        if self.fee_funding.is_some() {
+            len += 1;
+        }
         if self.detection_data.is_some() {
             len += 1;
         }
@@ -3690,6 +3079,9 @@ impl serde::Serialize for TransactionBodyView {
         }
         if let Some(v) = self.transaction_parameters.as_ref() {
             struct_ser.serialize_field("transactionParameters", v)?;
+        }
+        if let Some(v) = self.fee_funding.as_ref() {
+            struct_ser.serialize_field("feeFunding", v)?;
         }
         if let Some(v) = self.detection_data.as_ref() {
             struct_ser.serialize_field("detectionData", v)?;
@@ -3711,6 +3103,8 @@ impl<'de> serde::Deserialize<'de> for TransactionBodyView {
             "actionViews",
             "transaction_parameters",
             "transactionParameters",
+            "fee_funding",
+            "feeFunding",
             "detection_data",
             "detectionData",
             "memo_view",
@@ -3721,6 +3115,7 @@ impl<'de> serde::Deserialize<'de> for TransactionBodyView {
         enum GeneratedField {
             ActionViews,
             TransactionParameters,
+            FeeFunding,
             DetectionData,
             MemoView,
             __SkipField__,
@@ -3747,6 +3142,7 @@ impl<'de> serde::Deserialize<'de> for TransactionBodyView {
                         match value {
                             "actionViews" | "action_views" => Ok(GeneratedField::ActionViews),
                             "transactionParameters" | "transaction_parameters" => Ok(GeneratedField::TransactionParameters),
+                            "feeFunding" | "fee_funding" => Ok(GeneratedField::FeeFunding),
                             "detectionData" | "detection_data" => Ok(GeneratedField::DetectionData),
                             "memoView" | "memo_view" => Ok(GeneratedField::MemoView),
                             _ => Ok(GeneratedField::__SkipField__),
@@ -3770,6 +3166,7 @@ impl<'de> serde::Deserialize<'de> for TransactionBodyView {
             {
                 let mut action_views__ = None;
                 let mut transaction_parameters__ = None;
+                let mut fee_funding__ = None;
                 let mut detection_data__ = None;
                 let mut memo_view__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -3785,6 +3182,12 @@ impl<'de> serde::Deserialize<'de> for TransactionBodyView {
                                 return Err(serde::de::Error::duplicate_field("transactionParameters"));
                             }
                             transaction_parameters__ = map_.next_value()?;
+                        }
+                        GeneratedField::FeeFunding => {
+                            if fee_funding__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("feeFunding"));
+                            }
+                            fee_funding__ = map_.next_value()?;
                         }
                         GeneratedField::DetectionData => {
                             if detection_data__.is_some() {
@@ -3806,6 +3209,7 @@ impl<'de> serde::Deserialize<'de> for TransactionBodyView {
                 Ok(TransactionBodyView {
                     action_views: action_views__.unwrap_or_default(),
                     transaction_parameters: transaction_parameters__,
+                    fee_funding: fee_funding__,
                     detection_data: detection_data__,
                     memo_view: memo_view__,
                 })
@@ -3987,9 +3391,6 @@ impl serde::Serialize for TransactionPerspective {
         if !self.nullification_transaction_ids_by_commitment.is_empty() {
             len += 1;
         }
-        if !self.batch_swap_output_data.is_empty() {
-            len += 1;
-        }
         if self.position_metadata_key.is_some() {
             len += 1;
         }
@@ -4024,9 +3425,6 @@ impl serde::Serialize for TransactionPerspective {
         if !self.nullification_transaction_ids_by_commitment.is_empty() {
             struct_ser.serialize_field("nullificationTransactionIdsByCommitment", &self.nullification_transaction_ids_by_commitment)?;
         }
-        if !self.batch_swap_output_data.is_empty() {
-            struct_ser.serialize_field("batchSwapOutputData", &self.batch_swap_output_data)?;
-        }
         if let Some(v) = self.position_metadata_key.as_ref() {
             struct_ser.serialize_field("positionMetadataKey", v)?;
         }
@@ -4058,8 +3456,6 @@ impl<'de> serde::Deserialize<'de> for TransactionPerspective {
             "creationTransactionIdsByNullifier",
             "nullification_transaction_ids_by_commitment",
             "nullificationTransactionIdsByCommitment",
-            "batch_swap_output_data",
-            "batchSwapOutputData",
             "position_metadata_key",
             "positionMetadataKey",
         ];
@@ -4076,7 +3472,6 @@ impl<'de> serde::Deserialize<'de> for TransactionPerspective {
             ExtendedMetadata,
             CreationTransactionIdsByNullifier,
             NullificationTransactionIdsByCommitment,
-            BatchSwapOutputData,
             PositionMetadataKey,
             __SkipField__,
         }
@@ -4110,7 +3505,6 @@ impl<'de> serde::Deserialize<'de> for TransactionPerspective {
                             "extendedMetadata" | "extended_metadata" => Ok(GeneratedField::ExtendedMetadata),
                             "creationTransactionIdsByNullifier" | "creation_transaction_ids_by_nullifier" => Ok(GeneratedField::CreationTransactionIdsByNullifier),
                             "nullificationTransactionIdsByCommitment" | "nullification_transaction_ids_by_commitment" => Ok(GeneratedField::NullificationTransactionIdsByCommitment),
-                            "batchSwapOutputData" | "batch_swap_output_data" => Ok(GeneratedField::BatchSwapOutputData),
                             "positionMetadataKey" | "position_metadata_key" => Ok(GeneratedField::PositionMetadataKey),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
@@ -4141,7 +3535,6 @@ impl<'de> serde::Deserialize<'de> for TransactionPerspective {
                 let mut extended_metadata__ = None;
                 let mut creation_transaction_ids_by_nullifier__ = None;
                 let mut nullification_transaction_ids_by_commitment__ = None;
-                let mut batch_swap_output_data__ = None;
                 let mut position_metadata_key__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -4205,12 +3598,6 @@ impl<'de> serde::Deserialize<'de> for TransactionPerspective {
                             }
                             nullification_transaction_ids_by_commitment__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::BatchSwapOutputData => {
-                            if batch_swap_output_data__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("batchSwapOutputData"));
-                            }
-                            batch_swap_output_data__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::PositionMetadataKey => {
                             if position_metadata_key__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("positionMetadataKey"));
@@ -4233,7 +3620,6 @@ impl<'de> serde::Deserialize<'de> for TransactionPerspective {
                     extended_metadata: extended_metadata__.unwrap_or_default(),
                     creation_transaction_ids_by_nullifier: creation_transaction_ids_by_nullifier__.unwrap_or_default(),
                     nullification_transaction_ids_by_commitment: nullification_transaction_ids_by_commitment__.unwrap_or_default(),
-                    batch_swap_output_data: batch_swap_output_data__.unwrap_or_default(),
                     position_metadata_key: position_metadata_key__,
                 })
             }
@@ -4595,6 +3981,9 @@ impl serde::Serialize for TransactionPlan {
         if self.transaction_parameters.is_some() {
             len += 1;
         }
+        if self.fee_funding.is_some() {
+            len += 1;
+        }
         if self.detection_data.is_some() {
             len += 1;
         }
@@ -4607,6 +3996,9 @@ impl serde::Serialize for TransactionPlan {
         }
         if let Some(v) = self.transaction_parameters.as_ref() {
             struct_ser.serialize_field("transactionParameters", v)?;
+        }
+        if let Some(v) = self.fee_funding.as_ref() {
+            struct_ser.serialize_field("feeFunding", v)?;
         }
         if let Some(v) = self.detection_data.as_ref() {
             struct_ser.serialize_field("detectionData", v)?;
@@ -4627,6 +4019,8 @@ impl<'de> serde::Deserialize<'de> for TransactionPlan {
             "actions",
             "transaction_parameters",
             "transactionParameters",
+            "fee_funding",
+            "feeFunding",
             "detection_data",
             "detectionData",
             "memo",
@@ -4636,6 +4030,7 @@ impl<'de> serde::Deserialize<'de> for TransactionPlan {
         enum GeneratedField {
             Actions,
             TransactionParameters,
+            FeeFunding,
             DetectionData,
             Memo,
             __SkipField__,
@@ -4662,6 +4057,7 @@ impl<'de> serde::Deserialize<'de> for TransactionPlan {
                         match value {
                             "actions" => Ok(GeneratedField::Actions),
                             "transactionParameters" | "transaction_parameters" => Ok(GeneratedField::TransactionParameters),
+                            "feeFunding" | "fee_funding" => Ok(GeneratedField::FeeFunding),
                             "detectionData" | "detection_data" => Ok(GeneratedField::DetectionData),
                             "memo" => Ok(GeneratedField::Memo),
                             _ => Ok(GeneratedField::__SkipField__),
@@ -4685,6 +4081,7 @@ impl<'de> serde::Deserialize<'de> for TransactionPlan {
             {
                 let mut actions__ = None;
                 let mut transaction_parameters__ = None;
+                let mut fee_funding__ = None;
                 let mut detection_data__ = None;
                 let mut memo__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -4700,6 +4097,12 @@ impl<'de> serde::Deserialize<'de> for TransactionPlan {
                                 return Err(serde::de::Error::duplicate_field("transactionParameters"));
                             }
                             transaction_parameters__ = map_.next_value()?;
+                        }
+                        GeneratedField::FeeFunding => {
+                            if fee_funding__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("feeFunding"));
+                            }
+                            fee_funding__ = map_.next_value()?;
                         }
                         GeneratedField::DetectionData => {
                             if detection_data__.is_some() {
@@ -4721,6 +4124,7 @@ impl<'de> serde::Deserialize<'de> for TransactionPlan {
                 Ok(TransactionPlan {
                     actions: actions__.unwrap_or_default(),
                     transaction_parameters: transaction_parameters__,
+                    fee_funding: fee_funding__,
                     detection_data: detection_data__,
                     memo: memo__,
                 })

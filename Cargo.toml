@@ -8,27 +8,18 @@ exclude = ["tools/proto-compiler", "crates/bin/orbis-test", "poc"]
 members = [
   "crates/bench-support",
   "crates/bench",
-  "crates/bin/elcuity",
   "crates/bin/orbis-audit",
-  "crates/bin/orbis-ring-test",
-  "crates/bin/orbis-sim",
   "crates/bin/pcli",
   "crates/bin/pclientd",
   "crates/bin/pd",
   "crates/bin/pindexer",
-  "crates/bin/pmonitor",
   "crates/cnidarium-component",
   "crates/core/app",
   "crates/core/app-tests",
   "crates/core/asset",
-  "crates/core/component/community-pool",
   "crates/core/component/compact-block",
-  "crates/core/component/auction",
   "crates/core/component/compliance",
-  "crates/core/component/dex",
-  "crates/core/component/distributions",
   "crates/core/component/fee",
-  "crates/core/component/funding",
   "crates/core/component/governance",
   "crates/core/component/ibc",
   "crates/core/component/sct",
@@ -44,7 +35,6 @@ members = [
   "crates/crypto/eddy",
   "crates/crypto/proof-aggregation",
   "crates/crypto/proof-params",
-  "crates/crypto/proof-setup",
   "crates/crypto/tct",
   "crates/custody",
   "crates/custody-ledger-usb",
@@ -62,8 +52,6 @@ members = [
   "crates/util/cometindex",
   "crates/view",
   "crates/wallet",
-  "tools/summonerd",
-  "tools/parameter-setup",
   "tools/picturesque",
   ]
 
@@ -107,7 +95,7 @@ allow-branch = ["*"]
 authors    = ["Penumbra Labs <team@penumbralabs.xyz"]
 edition    = "2021"
 version    = "2.1.0"
-repository = "https://github.com/penumbra-zone/penumbra"
+repository = "https://github.com/mizufinance/penumbra"
 homepage   = "https://penumbra.zone"
 license    = "MIT OR Apache-2.0"
 
@@ -180,15 +168,10 @@ pbjson                           = { version = "0.7.0" }
 pbjson-types                     = { version = "0.7.0" }
 penumbra-sdk-app                     = { default-features = false, version = "2.1.0", path = "crates/core/app" }
 penumbra-sdk-asset                   = { default-features = false, version = "2.1.0", path = "crates/core/asset" }
-penumbra-sdk-community-pool          = { default-features = false, version = "2.1.0", path = "crates/core/component/community-pool" }
 penumbra-sdk-compact-block           = { default-features = false, version = "2.1.0", path = "crates/core/component/compact-block" }
 penumbra-sdk-custody                 = { version = "2.1.0", path = "crates/custody" }
 penumbra-sdk-custody-ledger-usb      = { version = "2.1.0", path = "crates/custody-ledger-usb" }
-penumbra-sdk-auction                 = { default-features = false, version = "2.1.0", path = "crates/core/component/auction" }
-penumbra-sdk-dex                     = { default-features = false, version = "2.1.0", path = "crates/core/component/dex" }
-penumbra-sdk-distributions           = { default-features = false, version = "2.1.0", path = "crates/core/component/distributions" }
 penumbra-sdk-fee                     = { default-features = false, version = "2.1.0", path = "crates/core/component/fee" }
-penumbra-sdk-funding                 = { default-features = false, version = "2.1.0", path = "crates/core/component/funding" }
 penumbra-sdk-governance              = { default-features = false, version = "2.1.0", path = "crates/core/component/governance" }
 penumbra-sdk-ibc                     = { default-features = false, version = "2.1.0", path = "crates/core/component/ibc" }
 penumbra-sdk-keys                    = { default-features = false, version = "2.1.0", path = "crates/core/keys" }
@@ -198,12 +181,11 @@ penumbra-sdk-mock-tendermint-proxy   = { version = "2.1.0", path = "crates/test/
 penumbra-sdk-num                     = { default-features = false, version = "2.1.0", path = "crates/core/num" }
 penumbra-sdk-proof-params            = { default-features = false, version = "2.1.0", path = "crates/crypto/proof-params" }
 penumbra-sdk-proof-aggregation       = { default-features = false, version = "2.1.0", path = "crates/crypto/proof-aggregation" }
-penumbra-sdk-proof-setup             = { version = "2.1.0", path = "crates/crypto/proof-setup" }
 penumbra-sdk-proto                   = { default-features = false, version = "2.1.0", path = "crates/proto" }
 penumbra-sdk-sct                     = { default-features = false, version = "2.1.0", path = "crates/core/component/sct" }
 penumbra-sdk-compliance              = { default-features = false, version = "2.1.0", path = "crates/core/component/compliance" }
 penumbra-sdk-shielded-pool           = { default-features = false, version = "2.1.0", path = "crates/core/component/shielded-pool" }
-penumbra-sdk-stake                   = { default-features = false, version = "2.1.0", path = "crates/core/component/stake" }
+penumbra-sdk-validator                = { default-features = false, version = "2.1.0", path = "crates/core/component/stake" }
 penumbra-sdk-tct                     = { default-features = false, version = "2.1.0", path = "crates/crypto/tct" }
 penumbra-sdk-test-subscriber         = { version = "2.1.0", path = "crates/test/tracing-subscriber" }
 penumbra-sdk-tower-trace             = { version = "2.1.0", path = "crates/util/tower-trace" }

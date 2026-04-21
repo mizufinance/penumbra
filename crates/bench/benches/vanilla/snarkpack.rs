@@ -8,6 +8,7 @@ use penumbra_sdk_proof_aggregation::{
     aggregate_family, pad_items_to_power_of_two, verify_family_aggregate, DevSrs, ProofFamilyId,
 };
 use penumbra_sdk_proof_params::batch::BatchItem;
+use penumbra_sdk_shielded_pool::ShieldedIcs20WithdrawalFamilyId;
 use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
 
 #[derive(Clone)]
@@ -95,12 +96,10 @@ fn snarkpack_bench(c: &mut Criterion) {
     let srs = DevSrs::default();
     let counts = [1usize, 2, 4, 8, 64];
     let families = [
-        ProofFamilyId::Spend,
-        ProofFamilyId::Output,
-        ProofFamilyId::Swap,
-        ProofFamilyId::SwapClaim,
-        ProofFamilyId::Convert,
-        ProofFamilyId::DelegatorVote,
+        ProofFamilyId::Transfer,
+        ProofFamilyId::Consolidate(penumbra_sdk_shielded_pool::CONSOLIDATE_FAMILY_SPECS[0].id),
+        ProofFamilyId::Split(penumbra_sdk_shielded_pool::SPLIT_FAMILY_SPECS[0].id),
+        ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical),
     ];
 
     let fixtures: Vec<_> = families

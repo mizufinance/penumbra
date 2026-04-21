@@ -1,3 +1,213 @@
+impl serde::Serialize for AuthorizeProposalSubmitRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.proposal_submit.is_some() {
+            len += 1;
+        }
+        if !self.pre_authorizations.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.custody.v1.AuthorizeProposalSubmitRequest", len)?;
+        if let Some(v) = self.proposal_submit.as_ref() {
+            struct_ser.serialize_field("proposalSubmit", v)?;
+        }
+        if !self.pre_authorizations.is_empty() {
+            struct_ser.serialize_field("preAuthorizations", &self.pre_authorizations)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AuthorizeProposalSubmitRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "proposal_submit",
+            "proposalSubmit",
+            "pre_authorizations",
+            "preAuthorizations",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ProposalSubmit,
+            PreAuthorizations,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "proposalSubmit" | "proposal_submit" => Ok(GeneratedField::ProposalSubmit),
+                            "preAuthorizations" | "pre_authorizations" => Ok(GeneratedField::PreAuthorizations),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AuthorizeProposalSubmitRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.custody.v1.AuthorizeProposalSubmitRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AuthorizeProposalSubmitRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut proposal_submit__ = None;
+                let mut pre_authorizations__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ProposalSubmit => {
+                            if proposal_submit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("proposalSubmit"));
+                            }
+                            proposal_submit__ = map_.next_value()?;
+                        }
+                        GeneratedField::PreAuthorizations => {
+                            if pre_authorizations__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("preAuthorizations"));
+                            }
+                            pre_authorizations__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(AuthorizeProposalSubmitRequest {
+                    proposal_submit: proposal_submit__,
+                    pre_authorizations: pre_authorizations__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.custody.v1.AuthorizeProposalSubmitRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for AuthorizeProposalSubmitResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.proposal_submit_auth.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.custody.v1.AuthorizeProposalSubmitResponse", len)?;
+        if let Some(v) = self.proposal_submit_auth.as_ref() {
+            struct_ser.serialize_field("proposalSubmitAuth", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AuthorizeProposalSubmitResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "proposal_submit_auth",
+            "proposalSubmitAuth",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ProposalSubmitAuth,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "proposalSubmitAuth" | "proposal_submit_auth" => Ok(GeneratedField::ProposalSubmitAuth),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AuthorizeProposalSubmitResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.custody.v1.AuthorizeProposalSubmitResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AuthorizeProposalSubmitResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut proposal_submit_auth__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ProposalSubmitAuth => {
+                            if proposal_submit_auth__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("proposalSubmitAuth"));
+                            }
+                            proposal_submit_auth__ = map_.next_value()?;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(AuthorizeProposalSubmitResponse {
+                    proposal_submit_auth: proposal_submit_auth__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.custody.v1.AuthorizeProposalSubmitResponse", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for AuthorizeRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>

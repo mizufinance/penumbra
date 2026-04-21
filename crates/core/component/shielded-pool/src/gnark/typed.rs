@@ -87,22 +87,6 @@ pub(crate) fn decode_indexed_leaf(cursor: &mut BinaryCursor<'_>) -> Result<Index
     })
 }
 
-pub(crate) fn encode_compliance_leaf(buf: &mut Vec<u8>, leaf: &ComplianceLeafBinary) {
-    put_bytes(buf, &leaf.address);
-    put_bytes(buf, &leaf.asset_id);
-    put_bytes(buf, &leaf.d);
-}
-
-pub(crate) fn decode_compliance_leaf(
-    cursor: &mut BinaryCursor<'_>,
-) -> Result<ComplianceLeafBinary> {
-    Ok(ComplianceLeafBinary {
-        address: cursor.read_fixed::<80>()?,
-        asset_id: cursor.read_fixed::<32>()?,
-        d: cursor.read_fixed::<32>()?,
-    })
-}
-
 pub(crate) fn merkle_path_from_typed(path: &MerklePath) -> Result<MerklePathBinary> {
     let mut layers = Vec::with_capacity(path.layers.len());
     for layer in &path.layers {

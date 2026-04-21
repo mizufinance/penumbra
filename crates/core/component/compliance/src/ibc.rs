@@ -15,11 +15,11 @@ const MEMO_KEY: &str = "penumbra_compliance";
 
 /// Compliance metadata for IBC transfers of regulated assets.
 ///
-/// Carries the spend ciphertext and minimal context so the issuer can
+/// Carries the transfer-input ciphertext and minimal context so the issuer can
 /// track its regulated asset across IBC channels.
 #[derive(Clone, Debug)]
 pub struct IbcComplianceMetadata {
-    /// The compliance ciphertext from the funding spend (SPEND_WIRE_BYTES bytes).
+    /// The compliance ciphertext from the transfer-side input bundle (TRANSFER_INPUT_WIRE_BYTES bytes).
     pub compliance_ciphertext: Vec<u8>,
     /// The asset ID being transferred.
     pub asset_id: asset::Id,
@@ -93,10 +93,10 @@ impl IbcComplianceMetadata {
 
     /// Parse from protobuf representation.
     pub fn from_proto_public(proto: pb::IbcComplianceMetadata) -> Result<Self> {
-        use crate::structs::SPEND_WIRE_BYTES;
+        use crate::structs::TRANSFER_INPUT_WIRE_BYTES;
         anyhow::ensure!(
-            proto.compliance_ciphertext.len() == SPEND_WIRE_BYTES,
-            "IBC compliance ciphertext must be {SPEND_WIRE_BYTES} bytes, got {}",
+            proto.compliance_ciphertext.len() == TRANSFER_INPUT_WIRE_BYTES,
+            "IBC compliance ciphertext must be {TRANSFER_INPUT_WIRE_BYTES} bytes, got {}",
             proto.compliance_ciphertext.len()
         );
 
@@ -116,13 +116,13 @@ impl IbcComplianceMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::structs::SPEND_WIRE_BYTES;
+    use crate::structs::TRANSFER_INPUT_WIRE_BYTES;
     use decaf377::Fq;
 
     #[test]
     fn roundtrip_encode_decode() {
         let metadata = IbcComplianceMetadata {
-            compliance_ciphertext: vec![1u8; SPEND_WIRE_BYTES],
+            compliance_ciphertext: vec![1u8; TRANSFER_INPUT_WIRE_BYTES],
             asset_id: asset::Id(Fq::from(12345u64)),
         };
 
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn preserves_user_memo() {
         let metadata = IbcComplianceMetadata {
-            compliance_ciphertext: vec![0u8; SPEND_WIRE_BYTES],
+            compliance_ciphertext: vec![0u8; TRANSFER_INPUT_WIRE_BYTES],
             asset_id: asset::Id(Fq::from(1u64)),
         };
 
@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn missing_asset_id_rejected() {
         let proto = pb::IbcComplianceMetadata {
-            compliance_ciphertext: vec![0u8; SPEND_WIRE_BYTES],
+            compliance_ciphertext: vec![0u8; TRANSFER_INPUT_WIRE_BYTES],
             asset_id: None,
         };
         let result = IbcComplianceMetadata::from_proto_public(proto);
@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn roundtrip_with_existing_memo() {
         let metadata = IbcComplianceMetadata {
-            compliance_ciphertext: vec![0xAB; SPEND_WIRE_BYTES],
+            compliance_ciphertext: vec![0xAB; TRANSFER_INPUT_WIRE_BYTES],
             asset_id: asset::Id(Fq::from(999u64)),
         };
 
@@ -206,7 +206,10 @@ mod tests {
         let decoded = IbcComplianceMetadata::from_memo(&memo)
             .unwrap()
             .expect("should decode");
-        assert_eq!(decoded.compliance_ciphertext, vec![0xAB; SPEND_WIRE_BYTES]);
+        assert_eq!(
+            decoded.compliance_ciphertext,
+            vec![0xAB; TRANSFER_INPUT_WIRE_BYTES]
+        );
         assert_eq!(decoded.asset_id, asset::Id(Fq::from(999u64)));
     }
 
@@ -214,7 +217,7 @@ mod tests {
     fn extract_user_memo_no_memo_field() {
         // JSON with compliance data but no "memo" key
         let metadata = IbcComplianceMetadata {
-            compliance_ciphertext: vec![0u8; SPEND_WIRE_BYTES],
+            compliance_ciphertext: vec![0u8; TRANSFER_INPUT_WIRE_BYTES],
             asset_id: asset::Id(Fq::from(1u64)),
         };
         let memo = metadata.encode_to_memo("").unwrap();

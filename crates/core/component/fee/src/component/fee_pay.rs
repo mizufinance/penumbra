@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use anyhow::{ensure, Result};
 use async_trait::async_trait;
 use cnidarium::StateWrite;
@@ -15,8 +13,7 @@ const BLOCK_FEE_PRICE_CACHE_KEY: &str = "penumbra.fee.block_fee_price_cache";
 
 #[derive(Clone, Debug)]
 struct BlockFeePriceCache {
-    staking_gas_prices: crate::GasPrices,
-    alt_gas_prices: BTreeMap<penumbra_sdk_asset::asset::Id, crate::GasPrices>,
+    base_gas_prices: crate::GasPrices,
 }
 
 pub fn clear_block_fee_price_cache<S: StateWrite>(state: &mut S) {
@@ -33,33 +30,22 @@ pub trait FeePay: StateWrite {
                 cache
             } else {
                 let cache = BlockFeePriceCache {
-                    staking_gas_prices: self
+                    base_gas_prices: self
                         .get_gas_prices()
                         .await
                         .expect("gas prices must be present in state"),
-                    alt_gas_prices: self
-                        .get_alt_gas_prices()
-                        .await
-                        .expect("alt gas prices must be present in state")
-                        .into_iter()
-                        .map(|prices| (prices.asset_id, prices))
-                        .collect(),
                 };
                 self.object_put(BLOCK_FEE_PRICE_CACHE_KEY, cache.clone());
                 cache
             };
 
-        let current_gas_prices = if fee.asset_id() == *penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID {
-            fee_price_cache.staking_gas_prices
-        } else {
-            fee_price_cache
-                .alt_gas_prices
-                .get(&fee.asset_id())
-                .copied()
-                .ok_or_else(|| {
-                    anyhow::anyhow!("fee token {} not recognized by the chain", fee.asset_id())
-                })?
-        };
+        ensure!(
+            fee.asset_id() == *penumbra_sdk_asset::BASE_ASSET_ID,
+            "only base-asset fees are supported, found {}",
+            fee.asset_id(),
+        );
+
+        let current_gas_prices = fee_price_cache.base_gas_prices;
 
         // Double check that the gas price assets match.
         ensure!(

@@ -49,39 +49,6 @@ jobs:
       - name: run the smoke-test suite
         run: nix develop --command just smoke
 
-  pmonitor:
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-
-      - name: install nix
-        uses: nixbuild/nix-quick-install-action@v28
-
-      - name: setup nix cache
-        uses: nix-community/cache-nix-action@v5
-        with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-
-      - name: Load rust cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: run the pmonitor integration tests
-        run: nix develop --command just integration-pmonitor
-
   # Integration tests that run against the public testnet endpoints.
   # Temporarily disabling these in CI, as the testnet endpoints are
   # incompatible with `main`, given GH5010.

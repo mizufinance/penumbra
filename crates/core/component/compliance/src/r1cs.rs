@@ -1247,7 +1247,7 @@ fn verify_poseidon_encryption_spend(
     Ok(())
 }
 
-/// Spend-only compliance verification (detection + core, no extension).
+/// Transfer-input-only compliance verification (detection + core, no extension).
 ///
 /// Single r_s: EPK = r_s × G. ACK_core derived in-circuit from ring_pk.
 /// Policy fields (dk_pub, threshold, ring_pk) are private witnesses bound by IMT proof.
@@ -1670,18 +1670,18 @@ mod tests {
         );
     }
 
-    /// Test: verify_asset_registry_imt gadget with REAL staking token asset ID
+    /// Test: verify_asset_registry_imt gadget with the real base asset ID
     /// This tests whether is_cmp works correctly with large field elements (256-bit hashes)
     #[test]
     fn test_verify_asset_registry_imt_non_membership_large_asset_id() {
         use crate::IndexedMerkleTree;
-        use penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID;
+        use penumbra_sdk_asset::BASE_ASSET_ID;
 
         let cs = ConstraintSystem::<Fq>::new_ref();
 
         // Create an IMT (empty except sentinel)
         let tree = IndexedMerkleTree::new();
-        let asset_id = STAKING_TOKEN_ASSET_ID.0; // Real 256-bit hash value
+        let asset_id = BASE_ASSET_ID.0; // Real 256-bit hash value
 
         // Get non-membership proof (sentinel proves the gap)
         let (position, indexed_leaf, auth_path) = tree

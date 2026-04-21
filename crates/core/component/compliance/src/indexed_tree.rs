@@ -1560,8 +1560,8 @@ mod tests {
         let leaf = IndexedLeaf::from_policy(Fq::from(42u64), 0, *FQ_MAX, &policy);
 
         assert_eq!(leaf.value, Fq::from(42u64));
-        assert_eq!(leaf.params.dk_pub, decaf377::Element::default());
+        assert_eq!(leaf.params.dk_pub, *crate::crypto::UNREGULATED_SINK_DK_PUB);
         assert_eq!(leaf.params.threshold, u128::MAX);
-        assert_eq!(leaf.ring.ring_pk, decaf377::Element::default());
+        assert_eq!(leaf.ring.ring_pk, *crate::crypto::UNREGULATED_SINK_RING_PK);
     }
 }

@@ -9,15 +9,15 @@ type ProofG2 = <Bls12_377 as Pairing>::G2Affine;
 type ProofG1Base = <ProofG1 as AffineRepr>::BaseField;
 type ProofG2Base = <ProofG2 as AffineRepr>::BaseField;
 
-const TRANSFER_PROOF_RESULT_MAGIC: &[u8; 4] = b"PTPR";
-const TRANSFER_PROOF_RESULT_VERSION: u32 = 1;
+const PROOF_RESULT_VERSION: u32 = 1;
 
 fn parse_g1_base_be(bytes: &[u8]) -> ProofG1Base {
     ProofG1Base::from_be_bytes_mod_order(bytes)
 }
 
-pub(crate) fn parse_transfer_binary_proof_result(
+pub(crate) fn parse_binary_proof_result(
     payload: &[u8],
+    magic: &[u8; 4],
     label: &str,
 ) -> Result<(Fq, Proof<Bls12_377>)> {
     const G1_BYTES: usize = 48;
@@ -32,11 +32,11 @@ pub(crate) fn parse_transfer_binary_proof_result(
             EXPECTED_LEN
         );
     }
-    if &payload[0..4] != TRANSFER_PROOF_RESULT_MAGIC {
+    if &payload[0..4] != magic {
         bail!("invalid gnark {label} proof result magic");
     }
     let version = u32::from_le_bytes(payload[4..8].try_into().unwrap());
-    if version != TRANSFER_PROOF_RESULT_VERSION {
+    if version != PROOF_RESULT_VERSION {
         bail!("unsupported gnark {label} proof result version {version}");
     }
     let total_len = u32::from_le_bytes(payload[8..12].try_into().unwrap()) as usize;
@@ -91,4 +91,11 @@ pub(crate) fn parse_transfer_binary_proof_result(
     }
 
     Ok((claimed_hash, Proof { a, b, c }))
+}
+
+pub(crate) fn parse_transfer_binary_proof_result(
+    payload: &[u8],
+    label: &str,
+) -> Result<(Fq, Proof<Bls12_377>)> {
+    parse_binary_proof_result(payload, b"PTPR", label)
 }

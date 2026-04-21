@@ -25,32 +25,21 @@ use {
             },
         },
     },
-    penumbra_sdk_auction::component::rpc::Server as AuctionServer,
-    penumbra_sdk_community_pool::component::rpc::Server as CommunityPoolServer,
     penumbra_sdk_compact_block::component::rpc::Server as CompactBlockServer,
     penumbra_sdk_compliance::component::RpcServer as ComplianceServer,
-    penumbra_sdk_dex::component::rpc::Server as DexServer,
     penumbra_sdk_fee::component::rpc::Server as FeeServer,
-    penumbra_sdk_funding::component::rpc::Server as FundingServer,
     penumbra_sdk_governance::component::rpc::Server as GovernanceServer,
     penumbra_sdk_proto::{
         core::{
             app::v1::query_service_server::QueryServiceServer as AppQueryServiceServer,
             component::{
-                auction::v1::query_service_server::QueryServiceServer as AuctionQueryServiceServer,
-                community_pool::v1::query_service_server::QueryServiceServer as CommunityPoolQueryServiceServer,
                 compact_block::v1::query_service_server::QueryServiceServer as CompactBlockQueryServiceServer,
                 compliance::v1::query_service_server::QueryServiceServer as ComplianceQueryServiceServer,
-                dex::v1::{
-                    query_service_server::QueryServiceServer as DexQueryServiceServer,
-                    simulation_service_server::SimulationServiceServer,
-                },
                 fee::v1::query_service_server::QueryServiceServer as FeeQueryServiceServer,
-                funding::v1::funding_service_server::FundingServiceServer as FundingQueryServiceServer,
                 governance::v1::query_service_server::QueryServiceServer as GovernanceQueryServiceServer,
                 sct::v1::query_service_server::QueryServiceServer as SctQueryServiceServer,
                 shielded_pool::v1::query_service_server::QueryServiceServer as ShieldedPoolQueryServiceServer,
-                stake::v1::query_service_server::QueryServiceServer as StakeQueryServiceServer,
+                validator::v1::query_service_server::QueryServiceServer as ValidatorQueryServiceServer,
             },
         },
         util::{
@@ -62,7 +51,7 @@ use {
     },
     penumbra_sdk_sct::component::rpc::Server as SctServer,
     penumbra_sdk_shielded_pool::component::rpc::Server as ShieldedPoolServer,
-    penumbra_sdk_stake::component::rpc::Server as StakeServer,
+    penumbra_sdk_validator::component::rpc::Server as StakeServer,
     tonic::service::{Routes, RoutesBuilder},
     tonic_web::enable as we,
 };
@@ -85,9 +74,6 @@ fn add_common_routes(
         .add_service(we(StorageQueryServiceServer::new(StorageServer::new(
             storage.clone(),
         ))))
-        .add_service(we(AuctionQueryServiceServer::new(AuctionServer::new(
-            storage.clone(),
-        ))))
         .add_service(we(AppQueryServiceServer::new(AppQueryServer::new(
             storage.clone(),
         ))))
@@ -97,9 +83,6 @@ fn add_common_routes(
         .add_service(we(ComplianceQueryServiceServer::new(
             ComplianceServer::new(storage.clone()),
         )))
-        .add_service(we(DexQueryServiceServer::new(DexServer::new(
-            storage.clone(),
-        ))))
         .add_service(we(FeeQueryServiceServer::new(FeeServer::new(
             storage.clone(),
         ))))
@@ -118,21 +101,12 @@ fn add_common_routes(
         .add_service(we(BankQueryServer::new(ShieldedPoolServer::new(
             storage.clone(),
         ))))
-        .add_service(we(CommunityPoolQueryServiceServer::new(
-            CommunityPoolServer::new(storage.clone()),
-        )))
-        .add_service(we(StakeQueryServiceServer::new(StakeServer::new(
+        .add_service(we(ValidatorQueryServiceServer::new(StakeServer::new(
             storage.clone(),
         ))))
         .add_service(we(ClientQueryServer::new(ibc.clone())))
         .add_service(we(ChannelQueryServer::new(ibc.clone())))
         .add_service(we(ConnectionQueryServer::new(ibc.clone())))
-        .add_service(we(SimulationServiceServer::new(DexServer::new(
-            storage.clone(),
-        ))))
-        .add_service(we(FundingQueryServiceServer::new(FundingServer::new(
-            storage.clone(),
-        ))))
         .add_service(we(tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(penumbra_sdk_proto::FILE_DESCRIPTOR_SET)
             .build_v1()

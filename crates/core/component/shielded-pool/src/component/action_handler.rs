@@ -1,4 +1,6 @@
+pub(crate) mod consolidate;
 mod ics20_withdrawal;
-pub(crate) mod output;
-pub(crate) mod spend;
+mod note_reshape;
+pub(crate) mod shielded_ics20_withdrawal;
+pub(crate) mod split;
 pub(crate) mod transfer;

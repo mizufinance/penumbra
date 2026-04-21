@@ -199,7 +199,6 @@ fn get_component<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use penumbra_sdk_num::Amount;
 
     use crate::params::GovernanceParameters;
 
@@ -209,14 +208,8 @@ mod tests {
         "sctParams": {
           "epochDuration": "719"
         },
-        "communityPoolParams": {
-          "communityPoolSpendProposalsEnabled": true
-        },
         "governanceParams": {
           "proposalVotingBlocks": "17280",
-          "proposalDepositAmount": {
-            "lo": "10000000"
-          },
           "proposalValidQuorum": "40/100",
           "proposalPassThreshold": "50/100",
           "proposalSlashThreshold": "80/100"
@@ -226,59 +219,22 @@ mod tests {
           "inboundIcs20TransfersEnabled": true,
           "outboundIcs20TransfersEnabled": true
         },
-        "stakeParams": {
+        "validatorParams": {
           "activeValidatorLimit": "80",
-          "baseRewardRate": "30000",
-          "slashingPenaltyMisbehavior": "10000000",
-          "slashingPenaltyDowntime": "10000",
           "signedBlocksWindowLen": "10000",
           "missedBlocksMaximum": "9500",
-          "minValidatorStake": {
+          "minValidatorFunding": {
             "lo": "1000000"
-          },
-          "unbondingDelay": "2158"
+          }
         },
         "feeParams": {
           "fixedGasPrices": {}
         },
-        "distributionsParams": {
-          "stakingIssuancePerBlock": "1"
-        },
-        "fundingParams": {},
         "shieldedPoolParams": {
-          "fixedFmdParams": {
+          "fmdMetaParams": {
             "asOfBlockHeight": "1"
           }
-        },
-        "dexParams": {
-          "isEnabled": true,
-          "fixedCandidates": [
-            {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            },
-            {
-              "inner": "reum7wQmk/owgvGMWMZn/6RFPV24zIKq3W6In/WwZgg="
-            },
-            {
-              "inner": "HW2Eq3UZVSBttoUwUi/MUtE7rr2UU7/UH500byp7OAc="
-            },
-            {
-              "inner": "nwPDkQq3OvLnBwGTD+nmv1Ifb2GEmFCgNHrU++9BsRE="
-            },
-            {
-              "inner": "ypUT1AOtjfwMOKMATACoD9RSvi8jY/YnYGi46CZ/6Q8="
-            },
-            {
-              "inner": "pmpygqUf4DL+z849rGPpudpdK/+FAv8qQ01U2C73kAw="
-            },
-            {
-              "inner": "o2gZdbhCH70Ry+7iBhkSeHC/PB1LZhgkn7LHC2kEhQc="
-            }
-          ],
-          "maxHops": 4,
-          "maxPositionsPerPair": 10
-        },
-        "auctionParams": {}
+        }
       }
     "#;
 
@@ -300,18 +256,11 @@ mod tests {
         // Make changes to the gov parameters specifically since they're
         // local to this crate so we can also inspect the decoded parameters.
         let changes = ParameterChange {
-            changes: vec![
-                super::EncodedParameter {
-                    component: "governanceParams".to_string(),
-                    key: "proposalVotingBlocks".to_string(),
-                    value: r#""17281""#.to_string(),
-                },
-                super::EncodedParameter {
-                    component: "governanceParams".to_string(),
-                    key: "proposalDepositAmount".to_string(),
-                    value: r#"{"lo":"10000001"}"#.to_string(),
-                },
-            ],
+            changes: vec![super::EncodedParameter {
+                component: "governanceParams".to_string(),
+                key: "proposalVotingBlocks".to_string(),
+                value: r#""17281""#.to_string(),
+            }],
             preconditions: vec![],
         };
         let new_parameters_raw = changes
@@ -339,15 +288,7 @@ mod tests {
         dbg!(&new_gov_parameters);
 
         assert_eq!(old_gov_parameters.proposal_voting_blocks, 17280);
-        assert_eq!(
-            old_gov_parameters.proposal_deposit_amount,
-            Amount::from(10_000_000u64)
-        );
         assert_eq!(new_gov_parameters.proposal_voting_blocks, 17281);
-        assert_eq!(
-            new_gov_parameters.proposal_deposit_amount,
-            Amount::from(10_000_001u64)
-        );
     }
 
     #[test]

@@ -49,6 +49,12 @@ use bincode;
 
 /// Proof data for an asset in the IMT.
 /// Contains all information needed for membership or non-membership proofs.
+///
+/// Regulation status is derived from the stored policy entry, not from mere
+/// membership in the IMT. This allows explicit entries beyond regulated assets,
+/// including the protocol-seeded unregulated base asset, to use stable
+/// membership proofs without being treated as regulated by the
+/// transfer/compliance path.
 #[derive(Clone, Debug)]
 pub struct AssetProofData {
     /// The indexed leaf (for membership or non-membership proof).
@@ -57,7 +63,7 @@ pub struct AssetProofData {
     pub position: u64,
     /// Authentication path from leaf to root.
     pub auth_path: MerklePath,
-    /// Whether the asset is regulated (membership) or not (non-membership).
+    /// Whether the asset is regulated according to stored policy metadata.
     pub is_regulated: bool,
 }
 
@@ -104,24 +110,25 @@ pub trait ComplianceRegistryRead: StateRead {
     async fn get_asset_proof_data(&self, asset_id: asset::Id) -> Result<AssetProofData> {
         let tree = self.get_asset_imt().await?;
         let value = asset_id.0;
+        let is_regulated = self.is_asset_regulated(asset_id).await?;
 
         if tree.contains(value) {
-            // Regulated asset - membership proof
+            // Asset is explicitly present in the IMT.
             let (position, indexed_leaf, path) = tree.membership_proof(value)?;
             Ok(AssetProofData {
                 indexed_leaf,
                 position,
                 auth_path: MerklePath::from_auth_path(path),
-                is_regulated: true,
+                is_regulated,
             })
         } else {
-            // Unregulated asset - non-membership proof
+            // Asset is absent from the IMT, so use non-membership.
             let (position, indexed_leaf, path) = tree.non_membership_proof(value)?;
             Ok(AssetProofData {
                 indexed_leaf,
                 position,
                 auth_path: MerklePath::from_auth_path(path),
-                is_regulated: false,
+                is_regulated,
             })
         }
     }
@@ -488,23 +495,17 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
         Ok(position)
     }
 
-    /// Register a regulated asset in the IMT.
+    /// Register an asset in the IMT.
     ///
-    /// Only regulated assets are stored in the IMT. Unregulated status is proven
-    /// via non-membership proofs (asset falls in a gap between leaves).
-    ///
-    /// This method is idempotent - if the asset is already registered, returns None.
-    ///
-    /// The `dk_pub` is the issuer's detection key - REQUIRED for regulated assets.
-    /// The leaf will have a policy with that detection key and threshold = u64::MAX
-    /// (nothing flagged by default, threshold can be set separately).
-    ///
-    /// # Returns
-    /// Some(InsertResult) with full insertion data for client sync, or None if already registered.
-    async fn register_regulated_asset(
+    /// This method is idempotent: if the asset is already present, it returns
+    /// `Ok(None)`. Regulation status is tracked separately via the stored policy
+    /// entry, so callers can insert an explicit unregulated asset with the
+    /// default policy and `is_regulated = false`.
+    async fn register_asset_in_imt(
         &mut self,
         asset_id: asset::Id,
         policy: AssetPolicy,
+        is_regulated: bool,
     ) -> Result<Option<indexed_tree::InsertResult>> {
         let mut tree = self.get_asset_imt_for_write().await?;
 
@@ -524,8 +525,10 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
         self.write_asset_imt_cache(tree.clone());
         self.mark_compliance_trees_modified();
 
-        // Also store the full policy separately for reference/display
-        self.set_asset_policy(asset_id, policy);
+        // Only regulated assets need an asset-policy entry for later lookup and gating.
+        if is_regulated {
+            self.set_asset_policy(asset_id, policy);
+        }
 
         // Update the persisted asset count
         let new_count = tree.leaf_count();
@@ -535,9 +538,21 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
             ?asset_id,
             result.position,
             new_count,
-            "registered regulated asset in IMT"
+            is_regulated,
+            "registered asset in IMT"
         );
         Ok(Some(result))
+    }
+
+    /// Register a regulated asset in the IMT with the given policy.
+    ///
+    /// Convenience wrapper for `register_asset_in_imt` with `is_regulated = true`.
+    async fn register_regulated_asset(
+        &mut self,
+        asset_id: asset::Id,
+        policy: AssetPolicy,
+    ) -> Result<Option<indexed_tree::InsertResult>> {
+        self.register_asset_in_imt(asset_id, policy, true).await
     }
 
     /// Save the asset IMT to state.

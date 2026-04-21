@@ -33,6 +33,9 @@ pub struct TransactionBody {
     /// Parameters determining if a transaction should be accepted by this chain.
     #[prost(message, optional, tag = "2")]
     pub transaction_parameters: ::core::option::Option<TransactionParameters>,
+    /// Optional tx-level fee funding, present on nonzero-fee transactions.
+    #[prost(message, optional, tag = "3")]
+    pub fee_funding: ::core::option::Option<FeeFunding>,
     /// Detection data for use with Fuzzy Message Detection
     #[prost(message, optional, tag = "4")]
     pub detection_data: ::core::option::Option<DetectionData>,
@@ -138,14 +141,18 @@ impl ::prost::Name for DetectionData {
 pub struct FamilyAggregate {
     #[prost(enumeration = "ProofFamilyId", tag = "1")]
     pub family_id: i32,
-    #[prost(uint32, tag = "2")]
-    pub transfer_family_id: u32,
     #[prost(uint32, tag = "3")]
     pub real_count: u32,
     #[prost(uint32, tag = "4")]
     pub padded_count: u32,
     #[prost(bytes = "vec", tag = "5")]
     pub aggregate_proof: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint32, tag = "6")]
+    pub consolidate_family_id: u32,
+    #[prost(uint32, tag = "7")]
+    pub split_family_id: u32,
+    #[prost(uint32, tag = "8")]
+    pub shielded_ics20_withdrawal_family_id: u32,
 }
 impl ::prost::Name for FamilyAggregate {
     const NAME: &'static str = "FamilyAggregate";
@@ -179,97 +186,30 @@ impl ::prost::Name for AggregateBundle {
 /// A state change performed by a transaction.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Action {
-    #[prost(
-        oneof = "action::Action",
-        tags = "1, 2, 3, 4, 5, 16, 17, 18, 19, 20, 21, 22, 30, 31, 32, 34, 40, 41, 42, 50, 51, 52, 53, 54, 55, 70, 80, 81, 82, 200"
-    )]
+    #[prost(oneof = "action::Action", tags = "5, 6, 7, 16, 17, 18, 20, 80, 81, 82, 200")]
     pub action: ::core::option::Option<action::Action>,
 }
 /// Nested message and enum types in `Action`.
 pub mod action {
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Action {
-        /// Common actions have numbers \< 15, to save space.
-        #[prost(message, tag = "1")]
-        Spend(super::super::super::component::shielded_pool::v1::Spend),
-        #[prost(message, tag = "2")]
-        Output(super::super::super::component::shielded_pool::v1::Output),
-        #[prost(message, tag = "3")]
-        Swap(super::super::super::component::dex::v1::Swap),
-        #[prost(message, tag = "4")]
-        SwapClaim(super::super::super::component::dex::v1::SwapClaim),
         #[prost(message, tag = "5")]
         Transfer(super::super::super::component::shielded_pool::v1::Transfer),
+        #[prost(message, tag = "6")]
+        Consolidate(super::super::super::component::shielded_pool::v1::Consolidate),
+        #[prost(message, tag = "7")]
+        Split(super::super::super::component::shielded_pool::v1::Split),
         #[prost(message, tag = "16")]
         ValidatorDefinition(
-            super::super::super::component::stake::v1::ValidatorDefinition,
+            super::super::super::component::validator::v1::ValidatorDefinition,
         ),
         #[prost(message, tag = "17")]
         IbcRelayAction(super::super::super::component::ibc::v1::IbcRelay),
         /// Governance:
         #[prost(message, tag = "18")]
         ProposalSubmit(super::super::super::component::governance::v1::ProposalSubmit),
-        #[prost(message, tag = "19")]
-        ProposalWithdraw(
-            super::super::super::component::governance::v1::ProposalWithdraw,
-        ),
         #[prost(message, tag = "20")]
         ValidatorVote(super::super::super::component::governance::v1::ValidatorVote),
-        #[prost(message, tag = "21")]
-        DelegatorVote(super::super::super::component::governance::v1::DelegatorVote),
-        #[prost(message, tag = "22")]
-        ProposalDepositClaim(
-            super::super::super::component::governance::v1::ProposalDepositClaim,
-        ),
-        /// Positions
-        #[prost(message, tag = "30")]
-        PositionOpen(super::super::super::component::dex::v1::PositionOpen),
-        #[prost(message, tag = "31")]
-        PositionClose(super::super::super::component::dex::v1::PositionClose),
-        #[prost(message, tag = "32")]
-        PositionWithdraw(super::super::super::component::dex::v1::PositionWithdraw),
-        #[prost(message, tag = "34")]
-        PositionRewardClaim(
-            super::super::super::component::dex::v1::PositionRewardClaim,
-        ),
-        /// (un)delegation
-        #[prost(message, tag = "40")]
-        Delegate(super::super::super::component::stake::v1::Delegate),
-        #[prost(message, tag = "41")]
-        Undelegate(super::super::super::component::stake::v1::Undelegate),
-        #[prost(message, tag = "42")]
-        UndelegateClaim(super::super::super::component::stake::v1::UndelegateClaim),
-        /// Community Pool
-        #[prost(message, tag = "50")]
-        CommunityPoolSpend(
-            super::super::super::component::governance::v1::CommunityPoolSpend,
-        ),
-        #[prost(message, tag = "51")]
-        CommunityPoolOutput(
-            super::super::super::component::governance::v1::CommunityPoolOutput,
-        ),
-        #[prost(message, tag = "52")]
-        CommunityPoolDeposit(
-            super::super::super::component::governance::v1::CommunityPoolDeposit,
-        ),
-        /// Dutch auctions
-        #[prost(message, tag = "53")]
-        ActionDutchAuctionSchedule(
-            super::super::super::component::auction::v1::ActionDutchAuctionSchedule,
-        ),
-        #[prost(message, tag = "54")]
-        ActionDutchAuctionEnd(
-            super::super::super::component::auction::v1::ActionDutchAuctionEnd,
-        ),
-        #[prost(message, tag = "55")]
-        ActionDutchAuctionWithdraw(
-            super::super::super::component::auction::v1::ActionDutchAuctionWithdraw,
-        ),
-        /// Funding
-        #[prost(message, tag = "70")]
-        ActionLiquidityTournamentVote(
-            super::super::super::component::funding::v1::ActionLiquidityTournamentVote,
-        ),
         /// Compliance
         #[prost(message, tag = "80")]
         ComplianceRegisterAsset(
@@ -282,7 +222,9 @@ pub mod action {
         #[prost(message, tag = "82")]
         AggregateBundle(super::AggregateBundle),
         #[prost(message, tag = "200")]
-        Ics20Withdrawal(super::super::super::component::ibc::v1::Ics20Withdrawal),
+        ShieldedIcs20Withdrawal(
+            super::super::super::component::shielded_pool::v1::ShieldedIcs20Withdrawal,
+        ),
     }
 }
 impl ::prost::Name for Action {
@@ -333,13 +275,6 @@ pub struct TransactionPerspective {
     #[prost(message, repeated, tag = "50")]
     pub nullification_transaction_ids_by_commitment: ::prost::alloc::vec::Vec<
         transaction_perspective::NullificationTransactionIdByCommitment,
-    >,
-    /// Any relevant BatchSwapOutputData to the transaction.
-    ///
-    /// This can be used to fill in information about swap outputs.
-    #[prost(message, repeated, tag = "60")]
-    pub batch_swap_output_data: ::prost::alloc::vec::Vec<
-        super::super::component::dex::v1::BatchSwapOutputData,
     >,
     #[prost(message, optional, tag = "70")]
     pub position_metadata_key: ::core::option::Option<
@@ -502,6 +437,11 @@ pub struct TransactionBodyView {
     /// Transaction parameters.
     #[prost(message, optional, tag = "2")]
     pub transaction_parameters: ::core::option::Option<TransactionParameters>,
+    /// Optional tx-level fee funding, present on nonzero-fee transactions.
+    #[prost(message, optional, tag = "3")]
+    pub fee_funding: ::core::option::Option<
+        super::super::component::shielded_pool::v1::TransferView,
+    >,
     /// The detection data in this transaction, only populated if
     /// there are outputs in the actions of this transaction.
     #[prost(message, optional, tag = "4")]
@@ -526,7 +466,7 @@ impl ::prost::Name for TransactionBodyView {
 pub struct ActionView {
     #[prost(
         oneof = "action_view::ActionView",
-        tags = "1, 2, 3, 4, 5, 21, 35, 16, 17, 18, 19, 20, 22, 30, 31, 32, 34, 41, 42, 50, 51, 52, 53, 54, 55, 43, 70, 80, 81, 82, 200"
+        tags = "5, 6, 7, 16, 17, 18, 20, 80, 81, 82, 200"
     )]
     pub action_view: ::core::option::Option<action_view::ActionView>,
 }
@@ -534,91 +474,24 @@ pub struct ActionView {
 pub mod action_view {
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum ActionView {
-        /// Action types with visible/opaque variants
-        #[prost(message, tag = "1")]
-        Spend(super::super::super::component::shielded_pool::v1::SpendView),
-        #[prost(message, tag = "2")]
-        Output(super::super::super::component::shielded_pool::v1::OutputView),
-        #[prost(message, tag = "3")]
-        Swap(super::super::super::component::dex::v1::SwapView),
-        #[prost(message, tag = "4")]
-        SwapClaim(super::super::super::component::dex::v1::SwapClaimView),
         #[prost(message, tag = "5")]
         Transfer(super::super::super::component::shielded_pool::v1::TransferView),
-        #[prost(message, tag = "21")]
-        DelegatorVote(super::super::super::component::governance::v1::DelegatorVoteView),
-        #[prost(message, tag = "35")]
-        PositionOpenView(super::super::super::component::dex::v1::PositionOpenView),
+        #[prost(message, tag = "6")]
+        Consolidate(super::super::super::component::shielded_pool::v1::ConsolidateView),
+        #[prost(message, tag = "7")]
+        Split(super::super::super::component::shielded_pool::v1::SplitView),
         /// Action types without visible/opaque variants
         #[prost(message, tag = "16")]
         ValidatorDefinition(
-            super::super::super::component::stake::v1::ValidatorDefinition,
+            super::super::super::component::validator::v1::ValidatorDefinition,
         ),
         #[prost(message, tag = "17")]
         IbcRelayAction(super::super::super::component::ibc::v1::IbcRelay),
         /// Governance:
         #[prost(message, tag = "18")]
         ProposalSubmit(super::super::super::component::governance::v1::ProposalSubmit),
-        #[prost(message, tag = "19")]
-        ProposalWithdraw(
-            super::super::super::component::governance::v1::ProposalWithdraw,
-        ),
         #[prost(message, tag = "20")]
         ValidatorVote(super::super::super::component::governance::v1::ValidatorVote),
-        #[prost(message, tag = "22")]
-        ProposalDepositClaim(
-            super::super::super::component::governance::v1::ProposalDepositClaim,
-        ),
-        /// Deprecated: UIP-9 requires us to have an actual view here.
-        #[prost(message, tag = "30")]
-        PositionOpen(super::super::super::component::dex::v1::PositionOpen),
-        #[prost(message, tag = "31")]
-        PositionClose(super::super::super::component::dex::v1::PositionClose),
-        #[prost(message, tag = "32")]
-        PositionWithdraw(super::super::super::component::dex::v1::PositionWithdraw),
-        #[prost(message, tag = "34")]
-        PositionRewardClaim(
-            super::super::super::component::dex::v1::PositionRewardClaim,
-        ),
-        #[prost(message, tag = "41")]
-        Delegate(super::super::super::component::stake::v1::Delegate),
-        #[prost(message, tag = "42")]
-        Undelegate(super::super::super::component::stake::v1::Undelegate),
-        /// Community Pool
-        #[prost(message, tag = "50")]
-        CommunityPoolSpend(
-            super::super::super::component::governance::v1::CommunityPoolSpend,
-        ),
-        #[prost(message, tag = "51")]
-        CommunityPoolOutput(
-            super::super::super::component::governance::v1::CommunityPoolOutput,
-        ),
-        #[prost(message, tag = "52")]
-        CommunityPoolDeposit(
-            super::super::super::component::governance::v1::CommunityPoolDeposit,
-        ),
-        /// Dutch auctions
-        #[prost(message, tag = "53")]
-        ActionDutchAuctionSchedule(
-            super::super::super::component::auction::v1::ActionDutchAuctionScheduleView,
-        ),
-        #[prost(message, tag = "54")]
-        ActionDutchAuctionEnd(
-            super::super::super::component::auction::v1::ActionDutchAuctionEnd,
-        ),
-        #[prost(message, tag = "55")]
-        ActionDutchAuctionWithdraw(
-            super::super::super::component::auction::v1::ActionDutchAuctionWithdrawView,
-        ),
-        /// TODO: we have no way to recover the opening of the undelegate_claim's
-        /// balance commitment, and can only infer the value from looking at the rest
-        /// of the transaction. is that fine?
-        #[prost(message, tag = "43")]
-        UndelegateClaim(super::super::super::component::stake::v1::UndelegateClaim),
-        #[prost(message, tag = "70")]
-        ActionLiquidityTournamentVote(
-            super::super::super::component::funding::v1::ActionLiquidityTournamentVoteView,
-        ),
         /// Compliance
         #[prost(message, tag = "80")]
         ComplianceRegisterAsset(
@@ -631,7 +504,9 @@ pub mod action_view {
         #[prost(message, tag = "82")]
         AggregateBundle(super::AggregateBundle),
         #[prost(message, tag = "200")]
-        Ics20Withdrawal(super::super::super::component::ibc::v1::Ics20Withdrawal),
+        ShieldedIcs20Withdrawal(
+            super::super::super::component::shielded_pool::v1::ShieldedIcs20WithdrawalView,
+        ),
     }
 }
 impl ::prost::Name for ActionView {
@@ -651,20 +526,9 @@ pub struct AuthorizationData {
     #[prost(message, optional, tag = "1")]
     pub effect_hash: ::core::option::Option<super::super::txhash::v1::EffectHash>,
     /// The required spend authorizations, returned in the same order as the
-    /// Spend actions in the original request.
+    /// shielded spends in the original request.
     #[prost(message, repeated, tag = "2")]
     pub spend_auths: ::prost::alloc::vec::Vec<
-        super::super::super::crypto::decaf377_rdsa::v1::SpendAuthSignature,
-    >,
-    /// The required delegator vote authorizations, returned in the same order as the
-    /// DelegatorVote actions in the original request.
-    #[prost(message, repeated, tag = "3")]
-    pub delegator_vote_auths: ::prost::alloc::vec::Vec<
-        super::super::super::crypto::decaf377_rdsa::v1::SpendAuthSignature,
-    >,
-    /// The required LQT vote authorizations, in the same order as the original request.
-    #[prost(message, repeated, tag = "4")]
-    pub lqt_vote_auths: ::prost::alloc::vec::Vec<
         super::super::super::crypto::decaf377_rdsa::v1::SpendAuthSignature,
     >,
 }
@@ -714,6 +578,9 @@ pub struct TransactionPlan {
     /// Parameters determining if a transaction should be accepted by this chain.
     #[prost(message, optional, tag = "2")]
     pub transaction_parameters: ::core::option::Option<TransactionParameters>,
+    /// Optional tx-level fee funding, present on nonzero-fee transactions.
+    #[prost(message, optional, tag = "3")]
+    pub fee_funding: ::core::option::Option<FeeFundingPlan>,
     /// Detection data for use with Fuzzy Message Detection
     #[prost(message, optional, tag = "4")]
     pub detection_data: ::core::option::Option<DetectionDataPlan>,
@@ -729,6 +596,42 @@ impl ::prost::Name for TransactionPlan {
     }
     fn type_url() -> ::prost::alloc::string::String {
         "/penumbra.core.transaction.v1.TransactionPlan".into()
+    }
+}
+/// Tx-level fee funding backed by the transfer proof machinery.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FeeFunding {
+    #[prost(message, optional, tag = "1")]
+    pub transfer: ::core::option::Option<
+        super::super::component::shielded_pool::v1::Transfer,
+    >,
+}
+impl ::prost::Name for FeeFunding {
+    const NAME: &'static str = "FeeFunding";
+    const PACKAGE: &'static str = "penumbra.core.transaction.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.transaction.v1.FeeFunding".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.transaction.v1.FeeFunding".into()
+    }
+}
+/// Planned tx-level fee funding backed by the transfer proof machinery.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FeeFundingPlan {
+    #[prost(message, optional, tag = "1")]
+    pub transfer: ::core::option::Option<
+        super::super::component::shielded_pool::v1::TransferPlan,
+    >,
+}
+impl ::prost::Name for FeeFundingPlan {
+    const NAME: &'static str = "FeeFundingPlan";
+    const PACKAGE: &'static str = "penumbra.core.transaction.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.transaction.v1.FeeFundingPlan".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.transaction.v1.FeeFundingPlan".into()
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -754,7 +657,7 @@ impl ::prost::Name for DetectionDataPlan {
 pub struct ActionPlan {
     #[prost(
         oneof = "action_plan::Action",
-        tags = "1, 2, 3, 4, 5, 16, 17, 18, 19, 20, 21, 22, 200, 30, 35, 31, 32, 34, 40, 41, 42, 50, 51, 52, 53, 54, 55, 70, 80, 81"
+        tags = "5, 6, 7, 16, 17, 18, 20, 200, 80, 81"
     )]
     pub action: ::core::option::Option<action_plan::Action>,
 }
@@ -762,20 +665,16 @@ pub struct ActionPlan {
 pub mod action_plan {
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Action {
-        #[prost(message, tag = "1")]
-        Spend(super::super::super::component::shielded_pool::v1::SpendPlan),
-        #[prost(message, tag = "2")]
-        Output(super::super::super::component::shielded_pool::v1::OutputPlan),
-        #[prost(message, tag = "3")]
-        Swap(super::super::super::component::dex::v1::SwapPlan),
-        #[prost(message, tag = "4")]
-        SwapClaim(super::super::super::component::dex::v1::SwapClaimPlan),
         #[prost(message, tag = "5")]
         Transfer(super::super::super::component::shielded_pool::v1::TransferPlan),
+        #[prost(message, tag = "6")]
+        Consolidate(super::super::super::component::shielded_pool::v1::ConsolidatePlan),
+        #[prost(message, tag = "7")]
+        Split(super::super::super::component::shielded_pool::v1::SplitPlan),
         /// This is just a message relayed to the chain.
         #[prost(message, tag = "16")]
         ValidatorDefinition(
-            super::super::super::component::stake::v1::ValidatorDefinition,
+            super::super::super::component::validator::v1::ValidatorDefinition,
         ),
         /// This is just a message relayed to the chain.
         #[prost(message, tag = "17")]
@@ -783,73 +682,11 @@ pub mod action_plan {
         /// Governance:
         #[prost(message, tag = "18")]
         ProposalSubmit(super::super::super::component::governance::v1::ProposalSubmit),
-        #[prost(message, tag = "19")]
-        ProposalWithdraw(
-            super::super::super::component::governance::v1::ProposalWithdraw,
-        ),
         #[prost(message, tag = "20")]
         ValidatorVote(super::super::super::component::governance::v1::ValidatorVote),
-        #[prost(message, tag = "21")]
-        DelegatorVote(super::super::super::component::governance::v1::DelegatorVotePlan),
-        #[prost(message, tag = "22")]
-        ProposalDepositClaim(
-            super::super::super::component::governance::v1::ProposalDepositClaim,
-        ),
         #[prost(message, tag = "200")]
-        Ics20Withdrawal(super::super::super::component::ibc::v1::Ics20Withdrawal),
-        #[prost(message, tag = "30")]
-        PositionOpen(super::super::super::component::dex::v1::PositionOpen),
-        #[prost(message, tag = "35")]
-        PositionOpenPlan(super::super::super::component::dex::v1::PositionOpenPlan),
-        #[prost(message, tag = "31")]
-        PositionClose(super::super::super::component::dex::v1::PositionClose),
-        /// The position withdraw/reward claim actions require balance information so they have Plan types.
-        #[prost(message, tag = "32")]
-        PositionWithdraw(super::super::super::component::dex::v1::PositionWithdrawPlan),
-        #[prost(message, tag = "34")]
-        PositionRewardClaim(
-            super::super::super::component::dex::v1::PositionRewardClaimPlan,
-        ),
-        /// We don't need any extra information (yet) to understand delegations,
-        /// because we don't yet use flow encryption.
-        #[prost(message, tag = "40")]
-        Delegate(super::super::super::component::stake::v1::Delegate),
-        /// We don't need any extra information (yet) to understand undelegations,
-        /// because we don't yet use flow encryption.
-        #[prost(message, tag = "41")]
-        Undelegate(super::super::super::component::stake::v1::Undelegate),
-        #[prost(message, tag = "42")]
-        UndelegateClaim(super::super::super::component::stake::v1::UndelegateClaimPlan),
-        /// Community Pool
-        #[prost(message, tag = "50")]
-        CommunityPoolSpend(
-            super::super::super::component::governance::v1::CommunityPoolSpend,
-        ),
-        #[prost(message, tag = "51")]
-        CommunityPoolOutput(
-            super::super::super::component::governance::v1::CommunityPoolOutput,
-        ),
-        #[prost(message, tag = "52")]
-        CommunityPoolDeposit(
-            super::super::super::component::governance::v1::CommunityPoolDeposit,
-        ),
-        /// Dutch auctions
-        #[prost(message, tag = "53")]
-        ActionDutchAuctionSchedule(
-            super::super::super::component::auction::v1::ActionDutchAuctionSchedule,
-        ),
-        #[prost(message, tag = "54")]
-        ActionDutchAuctionEnd(
-            super::super::super::component::auction::v1::ActionDutchAuctionEnd,
-        ),
-        #[prost(message, tag = "55")]
-        ActionDutchAuctionWithdraw(
-            super::super::super::component::auction::v1::ActionDutchAuctionWithdrawPlan,
-        ),
-        /// Funding
-        #[prost(message, tag = "70")]
-        ActionLiquidityTournamentVote(
-            super::super::super::component::funding::v1::ActionLiquidityTournamentVotePlan,
+        ShieldedIcs20Withdrawal(
+            super::super::super::component::shielded_pool::v1::ShieldedIcs20WithdrawalPlan,
         ),
         /// Compliance
         #[prost(message, tag = "80")]
@@ -1033,13 +870,10 @@ impl ::prost::Name for MemoView {
 #[repr(i32)]
 pub enum ProofFamilyId {
     Unspecified = 0,
-    Spend = 1,
-    Output = 2,
-    Swap = 3,
-    SwapClaim = 4,
-    Convert = 5,
-    DelegatorVote = 6,
     Transfer = 7,
+    Consolidate = 8,
+    Split = 9,
+    ShieldedIcs20Withdrawal = 10,
 }
 impl ProofFamilyId {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1049,26 +883,22 @@ impl ProofFamilyId {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             Self::Unspecified => "PROOF_FAMILY_ID_UNSPECIFIED",
-            Self::Spend => "PROOF_FAMILY_ID_SPEND",
-            Self::Output => "PROOF_FAMILY_ID_OUTPUT",
-            Self::Swap => "PROOF_FAMILY_ID_SWAP",
-            Self::SwapClaim => "PROOF_FAMILY_ID_SWAP_CLAIM",
-            Self::Convert => "PROOF_FAMILY_ID_CONVERT",
-            Self::DelegatorVote => "PROOF_FAMILY_ID_DELEGATOR_VOTE",
             Self::Transfer => "PROOF_FAMILY_ID_TRANSFER",
+            Self::Consolidate => "PROOF_FAMILY_ID_CONSOLIDATE",
+            Self::Split => "PROOF_FAMILY_ID_SPLIT",
+            Self::ShieldedIcs20Withdrawal => "PROOF_FAMILY_ID_SHIELDED_ICS20_WITHDRAWAL",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "PROOF_FAMILY_ID_UNSPECIFIED" => Some(Self::Unspecified),
-            "PROOF_FAMILY_ID_SPEND" => Some(Self::Spend),
-            "PROOF_FAMILY_ID_OUTPUT" => Some(Self::Output),
-            "PROOF_FAMILY_ID_SWAP" => Some(Self::Swap),
-            "PROOF_FAMILY_ID_SWAP_CLAIM" => Some(Self::SwapClaim),
-            "PROOF_FAMILY_ID_CONVERT" => Some(Self::Convert),
-            "PROOF_FAMILY_ID_DELEGATOR_VOTE" => Some(Self::DelegatorVote),
             "PROOF_FAMILY_ID_TRANSFER" => Some(Self::Transfer),
+            "PROOF_FAMILY_ID_CONSOLIDATE" => Some(Self::Consolidate),
+            "PROOF_FAMILY_ID_SPLIT" => Some(Self::Split),
+            "PROOF_FAMILY_ID_SHIELDED_ICS20_WITHDRAWAL" => {
+                Some(Self::ShieldedIcs20Withdrawal)
+            }
             _ => None,
         }
     }

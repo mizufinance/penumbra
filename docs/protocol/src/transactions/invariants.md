@@ -3,11 +3,16 @@
 
 #### Invariants
 
-1. Value cannot be created or destroyed after genesis or via IBC except staking (creates value), and DEX arbitrage execution (destroys value). The DEX cannot create value.
+1. User-submitted transactions cannot create or destroy value. Cross-chain value
+   movement is handled explicitly by the IBC deposit and withdrawal mechanisms.
 
-    1.1. Each action may create or destroy value, but commits to this imbalance, which when summed over a transaction, will not violate this rule.
+1.1. Each supported shielded action commits to its local value balance, and the
+     transaction binding signature ties the total transaction balance to zero.
 
 2. Individual actions are bound to the transaction they belong to.
+
+3. Only the reduced supported action surface is accepted. Removed action
+   families are invalid and must be rejected before execution.
 
 #### Justification
 
@@ -17,14 +22,10 @@
 
 ## Action-Level
 
-* [Output Invariants](../shielded_pool/action/output.md)
-
-* [Spend Invariants](../shielded_pool/action/spend.md)
-
-* [DelegatorVote Invariants](../governance/action/delegator_vote.md)
-
-* [Swap Invariants](../dex/action/swap.md)
-
-* [SwapClaim Invariants](../dex/action/swap_claim.md)
-
-* [UndelegateClaim Invariants](../stake/action/undelegate_claim.md)
+- Shielded actions must consume valid note commitments, reveal fresh
+  nullifiers, and create note commitments that match their proved witness data.
+- `Transfer` alone participates in compliance extraction and binding.
+- `Split` and `Consolidate` reshape sender-owned notes without compliance
+  binding.
+- `ShieldedIcs20Withdrawal` additionally binds its outbound IBC withdrawal
+  effect while preserving shielded accounting for any sender-owned change.

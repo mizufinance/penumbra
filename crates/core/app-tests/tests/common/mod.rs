@@ -36,7 +36,7 @@ pub async fn register_assets_for_compliance<S: StateWrite + ComplianceRegistryRe
 ///
 /// This helper registers the given addresses for the specified assets as unregulated
 /// users (using BLACK_HOLE_ACK). This is necessary for tests that build transactions
-/// with SpendPlan/OutputPlan, as the compliance circuit requires valid Merkle proofs.
+/// with shielded input/output plans, as the compliance circuit requires valid Merkle proofs.
 ///
 /// # Example
 /// ```ignore
@@ -76,8 +76,7 @@ pub async fn register_test_users_for_compliance<S: StateWrite>(
 /// is NOT committed to storage - it's only used for building the transaction.
 ///
 /// Note: The actual chain will NOT have this compliance data, which means transactions
-/// will fail stateful checks unless the assets are already registered (e.g., auto-registered
-/// dynamic assets like delegation tokens).
+/// will fail stateful checks unless the assets are already registered.
 #[allow(dead_code)]
 pub async fn state_with_compliance_for_build(
     storage: &cnidarium::TempStorage,
@@ -120,7 +119,7 @@ mod test_node_ext;
 
 /// Helpful additions for reading validator information.
 ///
-/// See [`ValidatorDataRead`][penumbra_sdk_stake::component::validator_handler::ValidatorDataRead],
+/// See [`ValidatorDataRead`][penumbra_sdk_validator::component::validator_handler::ValidatorDataRead],
 /// and [`ValidatorDataReadExt`].
 mod validator_read_ext;
 

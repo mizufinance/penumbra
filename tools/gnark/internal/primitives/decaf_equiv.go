@@ -11,6 +11,13 @@ func AssertDecafEquivalent(api frontend.API, left, right gnarkte.Point) {
 	api.AssertIsEqual(api.Mul(left.X, right.Y), api.Mul(right.X, left.Y))
 }
 
+func AssertDecafEquivalentIf(api frontend.API, left, right gnarkte.Point, cond frontend.Variable) {
+	api.AssertIsBoolean(cond)
+	lhs := api.Mul(left.X, right.Y)
+	rhs := api.Mul(right.X, left.Y)
+	api.AssertIsEqual(api.Mul(cond, lhs), api.Mul(cond, rhs))
+}
+
 func DecafEquivalentNative(left, right gnarkte.Point) bool {
 	modulus := ScalarField()
 	lhs := new(big.Int).Mul(left.X.(*big.Int), right.Y.(*big.Int))

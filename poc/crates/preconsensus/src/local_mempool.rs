@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
-use penumbra_sdk_asset::{asset, STAKING_TOKEN_ASSET_ID};
+use penumbra_sdk_asset::{asset, BASE_ASSET_ID};
 use penumbra_sdk_num::Amount;
 use penumbra_sdk_proto::DomainType;
 use penumbra_sdk_sct::Nullifier;
@@ -80,7 +80,7 @@ impl AdmittedRecord {
     }
 
     pub fn is_staking_fee(&self) -> bool {
-        self.fee_asset_id == *STAKING_TOKEN_ASSET_ID
+        self.fee_asset_id == *BASE_ASSET_ID
     }
 }
 
@@ -1047,7 +1047,7 @@ mod tests {
             admission_seq,
             tx_len,
             spend_nullifiers,
-            *STAKING_TOKEN_ASSET_ID,
+            *BASE_ASSET_ID,
             Amount::from(1u64),
         )
     }
@@ -1184,7 +1184,7 @@ mod tests {
                 0,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(1u64),
             ))
             .await?;
@@ -1193,7 +1193,7 @@ mod tests {
                 1,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(2u64),
             ))
             .await?;
@@ -1203,7 +1203,7 @@ mod tests {
                 2,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(10u64),
             ))
             .await?;
@@ -1234,7 +1234,7 @@ mod tests {
                 0,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(5u64),
             ))
             .await?;
@@ -1243,7 +1243,7 @@ mod tests {
                 1,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(5u64),
             ))
             .await?;
@@ -1266,7 +1266,7 @@ mod tests {
                 0,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(1u64),
             ))
             .await?;
@@ -1275,7 +1275,7 @@ mod tests {
                 1,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(1u64),
             ))
             .await?;
@@ -1284,7 +1284,7 @@ mod tests {
                 2,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(2u64),
             ))
             .await?;
@@ -1322,7 +1322,7 @@ mod tests {
                 1,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(1u64),
             ))
             .await?;
@@ -1332,7 +1332,7 @@ mod tests {
                 2,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(2u64),
             ))
             .await?;
@@ -1409,7 +1409,7 @@ mod tests {
                 0,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(1u64),
             ))
             .await?;
@@ -1455,7 +1455,7 @@ mod tests {
                 2,
                 16,
                 Vec::new(),
-                *STAKING_TOKEN_ASSET_ID,
+                *BASE_ASSET_ID,
                 Amount::from(10u64),
             ))
             .await?;

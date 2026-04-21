@@ -36,7 +36,7 @@ impl ::prost::Name for Signature {
 /// The message the coordinator sends in round 1 of the signing protocol.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CoordinatorRound1 {
-    #[prost(oneof = "coordinator_round1::Request", tags = "1, 2, 3")]
+    #[prost(oneof = "coordinator_round1::Request", tags = "1, 2, 3, 4")]
     pub request: ::core::option::Option<coordinator_round1::Request>,
 }
 /// Nested message and enum types in `CoordinatorRound1`.
@@ -49,12 +49,17 @@ pub mod coordinator_round1 {
         /// The validator definition the coordinator would like the followers to sign.
         #[prost(message, tag = "2")]
         ValidatorDefinition(
-            super::super::super::super::core::component::stake::v1::Validator,
+            super::super::super::super::core::component::validator::v1::Validator,
         ),
         /// The validator vote the coordinator would like the followers to sign.
         #[prost(message, tag = "3")]
         ValidatorVote(
             super::super::super::super::core::component::governance::v1::ValidatorVoteBody,
+        ),
+        /// The proposal submission the coordinator would like the followers to sign.
+        #[prost(message, tag = "4")]
+        ProposalSubmit(
+            super::super::super::super::core::component::governance::v1::ProposalSubmitBody,
         ),
     }
 }

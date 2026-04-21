@@ -103,119 +103,10 @@ impl Deref for LazyProvingKey {
 // Note: Conditionally load the proving key objects if the
 // bundled-proving-keys is present.
 
-/// Verification key for the spend proof.
-pub static SPEND_PROOF_VERIFICATION_KEY: Lazy<PreparedVerifyingKey<Bls12_377>> = Lazy::new(|| {
-    if let Some(dir) = std::env::var_os("PENUMBRA_GNARK_SPEND_ARTIFACT_DIR") {
-        return load_verifying_key_json_artifact(Path::new(&dir), "spend")
-            .expect("can deserialize spend VerifyingKey")
-            .into();
-    }
-    load_verifying_key_json_bytes(include_bytes!("gen/gnark/spend/verifying_key.json"))
-        .expect("bundled spend VerifyingKey is valid")
-        .into()
-});
-
-pub mod spend {
-    include!("gen/spend_id.rs");
-}
-
-/// Verification key for the output proof.
-pub static OUTPUT_PROOF_VERIFICATION_KEY: Lazy<PreparedVerifyingKey<Bls12_377>> = Lazy::new(|| {
-    if let Some(dir) = std::env::var_os("PENUMBRA_GNARK_OUTPUT_ARTIFACT_DIR") {
-        return load_verifying_key_json_artifact(Path::new(&dir), "output")
-            .expect("can deserialize output VerifyingKey")
-            .into();
-    }
-    load_verifying_key_json_bytes(include_bytes!("gen/gnark/output/verifying_key.json"))
-        .expect("bundled output VerifyingKey is valid")
-        .into()
-});
-
-pub mod output {
-    include!("gen/output_id.rs");
-}
-
 include!("gen/gnark/transfer_registry.rs");
-
-/// Proving key for the swap proof.
-pub static SWAP_PROOF_PROVING_KEY: Lazy<LazyProvingKey> = Lazy::new(|| {
-    let swap_proving_key = LazyProvingKey::new(swap::PROVING_KEY_ID);
-
-    #[cfg(feature = "bundled-proving-keys")]
-    swap_proving_key
-        .try_load(include_bytes!("gen/swap_pk.bin"))
-        .expect("bundled proving key is valid");
-
-    swap_proving_key
-});
-
-/// Verification key for the swap proof.
-pub static SWAP_PROOF_VERIFICATION_KEY: Lazy<PreparedVerifyingKey<Bls12_377>> =
-    Lazy::new(|| swap_verification_parameters().into());
-
-pub mod swap {
-    include!("gen/swap_id.rs");
-}
-
-/// Proving key for the swap claim proof.
-pub static SWAPCLAIM_PROOF_PROVING_KEY: Lazy<LazyProvingKey> = Lazy::new(|| {
-    let swapclaim_proving_key = LazyProvingKey::new(swapclaim::PROVING_KEY_ID);
-
-    #[cfg(feature = "bundled-proving-keys")]
-    swapclaim_proving_key
-        .try_load(include_bytes!("gen/swapclaim_pk.bin"))
-        .expect("bundled proving key is valid");
-
-    swapclaim_proving_key
-});
-
-/// Verification key for the swap claim proof.
-pub static SWAPCLAIM_PROOF_VERIFICATION_KEY: Lazy<PreparedVerifyingKey<Bls12_377>> =
-    Lazy::new(|| swapclaim_verification_parameters().into());
-
-pub mod swapclaim {
-    include!("gen/swapclaim_id.rs");
-}
-
-/// Proving key for the convert proof.
-pub static CONVERT_PROOF_PROVING_KEY: Lazy<LazyProvingKey> = Lazy::new(|| {
-    let convert_proving_key = LazyProvingKey::new(convert::PROVING_KEY_ID);
-
-    #[cfg(feature = "bundled-proving-keys")]
-    convert_proving_key
-        .try_load(include_bytes!("gen/convert_pk.bin"))
-        .expect("bundled proving key is valid");
-
-    convert_proving_key
-});
-
-/// Verification key for the convert proof.
-pub static CONVERT_PROOF_VERIFICATION_KEY: Lazy<PreparedVerifyingKey<Bls12_377>> =
-    Lazy::new(|| convert_verification_parameters().into());
-
-pub mod convert {
-    include!("gen/convert_id.rs");
-}
-
-/// Proving key for the delegator vote proof.
-pub static DELEGATOR_VOTE_PROOF_PROVING_KEY: Lazy<LazyProvingKey> = Lazy::new(|| {
-    let delegator_vote_proving_key = LazyProvingKey::new(delegator_vote::PROVING_KEY_ID);
-
-    #[cfg(feature = "bundled-proving-keys")]
-    delegator_vote_proving_key
-        .try_load(include_bytes!("gen/delegator_vote_pk.bin"))
-        .expect("bundled proving key is valid");
-
-    delegator_vote_proving_key
-});
-
-/// Verification key for the delegator vote proof.
-pub static DELEGATOR_VOTE_PROOF_VERIFICATION_KEY: Lazy<PreparedVerifyingKey<Bls12_377>> =
-    Lazy::new(|| delegator_vote_verification_parameters().into());
-
-pub mod delegator_vote {
-    include!("gen/delegator_vote_id.rs");
-}
+include!("gen/gnark/consolidate_registry.rs");
+include!("gen/gnark/split_registry.rs");
+include!("gen/gnark/shielded_ics20_withdrawal_registry.rs");
 
 /// Proving key for the nullifier derivation proof.
 pub static NULLIFIER_DERIVATION_PROOF_PROVING_KEY: Lazy<LazyProvingKey> = Lazy::new(|| {
@@ -229,7 +120,7 @@ pub static NULLIFIER_DERIVATION_PROOF_PROVING_KEY: Lazy<LazyProvingKey> = Lazy::
     nullifier_proving_key
 });
 
-/// Verification key for the delegator vote proof.
+/// Verification key for the nullifier derivation proof.
 pub static NULLIFIER_DERIVATION_PROOF_VERIFICATION_KEY: Lazy<PreparedVerifyingKey<Bls12_377>> =
     Lazy::new(|| nullifier_derivation_verification_parameters().into());
 
@@ -239,62 +130,6 @@ pub mod nullifier_derivation {
 
 // Note: Here we are using `CanonicalDeserialize::deserialize_uncompressed_unchecked` as the
 // parameters are being loaded from a trusted source (our source code).
-
-/// Bundled gnark spend circuit metadata JSON.
-pub static GNARK_SPEND_CIRCUIT_METADATA: &[u8] =
-    include_bytes!("gen/gnark/spend/circuit_metadata.json");
-
-/// Bundled gnark output circuit metadata JSON.
-pub static GNARK_OUTPUT_CIRCUIT_METADATA: &[u8] =
-    include_bytes!("gen/gnark/output/circuit_metadata.json");
-
-/// Gnark spend proving key bytes. Non-empty only with the `bundled-proving-keys` feature.
-pub static GNARK_SPEND_PROOF_PROVING_KEY_BYTES: &[u8] = {
-    #[cfg(feature = "bundled-proving-keys")]
-    {
-        include_bytes!("gen/gnark/spend/proving_key.bin")
-    }
-    #[cfg(not(feature = "bundled-proving-keys"))]
-    {
-        &[]
-    }
-};
-
-/// Gnark output proving key bytes. Non-empty only with the `bundled-proving-keys` feature.
-pub static GNARK_OUTPUT_PROOF_PROVING_KEY_BYTES: &[u8] = {
-    #[cfg(feature = "bundled-proving-keys")]
-    {
-        include_bytes!("gen/gnark/output/proving_key.bin")
-    }
-    #[cfg(not(feature = "bundled-proving-keys"))]
-    {
-        &[]
-    }
-};
-
-fn swap_verification_parameters() -> VerifyingKey<Bls12_377> {
-    let vk_params = include_bytes!("gen/swap_vk.param");
-    VerifyingKey::deserialize_uncompressed_unchecked(&vk_params[..])
-        .expect("can deserialize VerifyingKey")
-}
-
-fn swapclaim_verification_parameters() -> VerifyingKey<Bls12_377> {
-    let vk_params = include_bytes!("gen/swapclaim_vk.param");
-    VerifyingKey::deserialize_uncompressed_unchecked(&vk_params[..])
-        .expect("can deserialize VerifyingKey")
-}
-
-fn convert_verification_parameters() -> VerifyingKey<Bls12_377> {
-    let vk_params = include_bytes!("gen/convert_vk.param");
-    VerifyingKey::deserialize_uncompressed_unchecked(&vk_params[..])
-        .expect("can deserialize VerifyingKey")
-}
-
-fn delegator_vote_verification_parameters() -> VerifyingKey<Bls12_377> {
-    let vk_params = include_bytes!("gen/delegator_vote_vk.param");
-    VerifyingKey::deserialize_uncompressed_unchecked(&vk_params[..])
-        .expect("can deserialize VerifyingKey")
-}
 
 fn nullifier_derivation_verification_parameters() -> VerifyingKey<Bls12_377> {
     let vk_params = include_bytes!("gen/nullifier_derivation_vk.param");
@@ -430,18 +265,7 @@ mod tests {
 
     #[test]
     fn bundled_keys_smoke_load() {
-        let _ = &*SWAP_PROOF_PROVING_KEY;
-        let _ = &*SWAPCLAIM_PROOF_PROVING_KEY;
-        let _ = &*CONVERT_PROOF_PROVING_KEY;
-        let _ = &*DELEGATOR_VOTE_PROOF_PROVING_KEY;
         let _ = &*NULLIFIER_DERIVATION_PROOF_PROVING_KEY;
-
-        let _ = &*SPEND_PROOF_VERIFICATION_KEY;
-        let _ = &*OUTPUT_PROOF_VERIFICATION_KEY;
-        let _ = &*SWAP_PROOF_VERIFICATION_KEY;
-        let _ = &*SWAPCLAIM_PROOF_VERIFICATION_KEY;
-        let _ = &*CONVERT_PROOF_VERIFICATION_KEY;
-        let _ = &*DELEGATOR_VOTE_PROOF_VERIFICATION_KEY;
         let _ = &*NULLIFIER_DERIVATION_PROOF_VERIFICATION_KEY;
     }
 }

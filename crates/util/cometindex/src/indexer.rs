@@ -93,7 +93,7 @@ async fn catchup(
     indices: &[Arc<dyn AppView>],
     genesis: Arc<serde_json::Value>,
 ) -> anyhow::Result<bool> {
-    if indices.len() <= 0 {
+    if indices.is_empty() {
         tracing::info!(why = "no indices", "catchup completed");
         return Ok(true);
     }

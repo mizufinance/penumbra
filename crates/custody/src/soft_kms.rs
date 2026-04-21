@@ -4,8 +4,9 @@
 use decaf377_rdsa::{Signature, SpendAuth};
 use penumbra_sdk_proto::{
     core::component::{
+        governance::v1::ProposalSubmitBody as ProtoProposalSubmitBody,
         governance::v1::ValidatorVoteBody as ProtoValidatorVoteBody,
-        stake::v1::Validator as ProtoValidator,
+        validator::v1::Validator as ProtoValidator,
     },
     custody::v1::{self as pb, AuthorizeResponse},
     Message as _,
@@ -15,8 +16,8 @@ use rand_core::OsRng;
 use tonic::{async_trait, Request, Response, Status};
 
 use crate::{
-    policy::Policy, AuthorizeRequest, AuthorizeValidatorDefinitionRequest,
-    AuthorizeValidatorVoteRequest,
+    policy::Policy, AuthorizeProposalSubmitRequest, AuthorizeRequest,
+    AuthorizeValidatorDefinitionRequest, AuthorizeValidatorVoteRequest,
 };
 
 mod config;
@@ -90,6 +91,28 @@ impl SoftKms {
             .spend_auth_key()
             .sign(OsRng, &validator_vote_bytes))
     }
+
+    /// Attempt to authorize the requested proposal submission.
+    #[tracing::instrument(skip(self, request), name = "softhsm_sign_proposal_submit")]
+    pub fn sign_proposal_submit(
+        &self,
+        request: &AuthorizeProposalSubmitRequest,
+    ) -> anyhow::Result<Signature<SpendAuth>> {
+        tracing::debug!(?request.proposal_submit);
+
+        for policy in &self.config.auth_policy {
+            policy.check_proposal_submit(request)?;
+        }
+
+        let protobuf_serialized: ProtoProposalSubmitBody = request.proposal_submit.clone().into();
+        let proposal_submit_bytes = protobuf_serialized.encode_to_vec();
+
+        Ok(self
+            .config
+            .spend_key
+            .spend_auth_key()
+            .sign(OsRng, &proposal_submit_bytes))
+    }
 }
 
 #[async_trait]
@@ -152,6 +175,24 @@ impl pb::custody_service_server::CustodyService for SoftKms {
         };
 
         Ok(Response::new(authorization_response))
+    }
+
+    async fn authorize_proposal_submit(
+        &self,
+        request: Request<pb::AuthorizeProposalSubmitRequest>,
+    ) -> Result<Response<pb::AuthorizeProposalSubmitResponse>, Status> {
+        let request = request
+            .into_inner()
+            .try_into()
+            .map_err(|e: anyhow::Error| Status::invalid_argument(e.to_string()))?;
+
+        let proposal_submit_auth = self
+            .sign_proposal_submit(&request)
+            .map_err(|e| Status::unauthenticated(format!("{e:#}")))?;
+
+        Ok(Response::new(pb::AuthorizeProposalSubmitResponse {
+            proposal_submit_auth: Some(proposal_submit_auth.into()),
+        }))
     }
 
     async fn export_full_viewing_key(

@@ -2,7 +2,7 @@ package circuits
 
 import (
 	"github.com/consensys/gnark/frontend"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/compliance"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/compliance"
 )
 
 type NoteFields struct {
@@ -59,35 +59,34 @@ type UserComplianceFields struct {
 	Position     frontend.Variable
 }
 
-type SpendEncryptionFields struct {
-	Epk                  Point2D
-	C2Core               frontend.Variable
-	ComplianceCiphertext [SpendCiphertextFQCount]frontend.Variable
-	IsRegulated          frontend.Variable
-	IsFlagged            frontend.Variable
-	ComplianceEphemeral  frontend.Variable
-	Salt                 frontend.Variable
-	TxBlindingNonce      frontend.Variable
-}
-
-type OutputEncryptionFields struct {
-	Epk1                 Point2D
-	Epk2                 Point2D
-	Epk3                 Point2D
-	C2Core               frontend.Variable
-	C2Ext                frontend.Variable
-	C2Sext               frontend.Variable
-	ComplianceCiphertext [compliance.OutputCiphertextFQCount]frontend.Variable
-	IsRegulated          frontend.Variable
-	IsFlagged            frontend.Variable
-	ComplianceEphemeral  frontend.Variable
-	R2                   frontend.Variable
-	R3                   frontend.Variable
-	Salt                 frontend.Variable
-	TxBlindingNonce      frontend.Variable
-}
-
 type DLEQFields struct {
 	C frontend.Variable
 	S frontend.Variable
+}
+
+type TransferComplianceCoreFields struct {
+	Epk        Point2D
+	C2         frontend.Variable
+	Ciphertext [compliance.TransferCoreCiphertextFQCount]frontend.Variable
+	Dleq       DLEQFields
+}
+
+type TransferComplianceExtFields struct {
+	Epk        Point2D
+	C2         frontend.Variable
+	Ciphertext [compliance.TransferExtCiphertextFQCount]frontend.Variable
+	Dleq       DLEQFields
+}
+
+type TransferComplianceFields struct {
+	TransferNonceRoot   frontend.Variable
+	DetectionCiphertext [compliance.TransferDetectionFQCount]frontend.Variable
+	SenderRCore         frontend.Variable
+	SenderRExt          frontend.Variable
+	OutputRCore         frontend.Variable
+	OutputRExt          frontend.Variable
+	SenderCore          TransferComplianceCoreFields
+	SenderExt           TransferComplianceExtFields
+	OutputCore          TransferComplianceCoreFields
+	OutputExt           TransferComplianceExtFields
 }

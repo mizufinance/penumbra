@@ -25,6 +25,10 @@ pub enum ProofError {
     #[error("invalid public input: {0}")]
     InvalidPublicInput(String),
 
+    /// Invalid private input.
+    #[error("invalid private input: {0}")]
+    InvalidPrivateInput(String),
+
     /// Asset registry verification failed.
     #[error("asset registry verification failed: wrong asset anchor or path")]
     AssetRegistryVerificationFailed,

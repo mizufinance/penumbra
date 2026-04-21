@@ -77,7 +77,10 @@ ACK is not stored — derivable from `ring_pk` + `B_d`.
 
 ### IMT (Asset Registry)
 
-Stores only regulated assets. Sorted linked list enabling gap proofs.
+Contains a structural zero-value sentinel plus explicitly inserted asset
+entries. The protocol seeds the base asset as an explicit unregulated entry,
+regulated assets are inserted explicitly, and other unregulated assets use
+non-membership gap proofs.
 
 ```rust
 IndexedLeaf { value: Fq, next_index: u64, next_value: Fq }

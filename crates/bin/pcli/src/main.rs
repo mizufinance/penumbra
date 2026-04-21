@@ -82,7 +82,6 @@ async fn run() -> Result<()> {
         Command::Validator(cmd) => cmd.exec(&mut app).await?,
         Command::Query(cmd) => cmd.exec(&mut app).await?,
         Command::Threshold(cmd) => cmd.exec(&mut app).await?,
-        Command::Migrate(cmd) => cmd.exec(&mut app).await?,
     }
 
     Ok(())

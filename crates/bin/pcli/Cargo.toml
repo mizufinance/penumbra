@@ -31,10 +31,8 @@ parallel = [
     "penumbra-sdk-proof-params/parallel",
     "decaf377/parallel",
     "penumbra-sdk-shielded-pool/parallel",
-    "penumbra-sdk-auction/parallel",
-    "penumbra-sdk-dex/parallel",
     "penumbra-sdk-governance/parallel",
-    "penumbra-sdk-stake/parallel",
+    "penumbra-sdk-validator/parallel",
     "penumbra-sdk-transaction/parallel",
     "penumbra-sdk-wallet/parallel",
 ]
@@ -74,13 +72,10 @@ ndarray = "0.15.6"
 once_cell = {workspace = true}
 penumbra-sdk-app = {workspace = true, default-features = false}
 penumbra-sdk-asset = {workspace = true, default-features = false}
-penumbra-sdk-community-pool = {workspace = true, default-features = false}
 penumbra-sdk-compact-block = {workspace = true, default-features = false}
 penumbra-sdk-compliance = {workspace = true, default-features = true}
 penumbra-sdk-custody = {workspace = true}
 penumbra-sdk-custody-ledger-usb = {workspace = true, optional = true}
-penumbra-sdk-auction = {workspace = true, default-features = false}
-penumbra-sdk-dex = {workspace = true, default-features = false}
 penumbra-sdk-fee = {workspace = true, default-features = false}
 penumbra-sdk-governance = {workspace = true, default-features = false}
 penumbra-sdk-ibc = {workspace = true, default-features = false}
@@ -90,7 +85,7 @@ penumbra-sdk-proof-params = { workspace = true, default-features = true }
 penumbra-sdk-proto = {workspace = true, features = ["rpc", "box-grpc"], default-features = true}
 penumbra-sdk-sct = {workspace = true, default-features = false}
 penumbra-sdk-shielded-pool = {workspace = true, default-features = false}
-penumbra-sdk-stake = {workspace = true, default-features = false}
+penumbra-sdk-validator = {workspace = true, default-features = false}
 penumbra-sdk-tct = {workspace = true, default-features = true}
 penumbra-sdk-transaction = {workspace = true, default-features = true}
 penumbra-sdk-view = {workspace = true}

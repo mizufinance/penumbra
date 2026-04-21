@@ -27,6 +27,10 @@ impl Component for FeeComponent {
     async fn init_chain<S: StateWrite>(mut state: S, app_state: Option<&Self::AppState>) {
         match app_state {
             Some(genesis) => {
+                genesis
+                    .fee_params
+                    .validate_base_asset_only()
+                    .expect("fee params must use base-asset gas only");
                 state.put_fee_params(genesis.fee_params.clone());
             }
             None => { /* perform upgrade specific check */ }
@@ -50,7 +54,7 @@ impl Component for FeeComponent {
         let fees = state_ref.accumulated_base_fees_and_tips();
 
         let (swapped_base, swapped_tip) = fees
-            .get(&penumbra_sdk_asset::STAKING_TOKEN_ASSET_ID)
+            .get(&penumbra_sdk_asset::BASE_ASSET_ID)
             .cloned()
             .unwrap_or_default();
 

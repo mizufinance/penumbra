@@ -17,19 +17,3 @@ The danger is unleashed only if you execute this software.
                            \x1b[1;31mUSE AT YOUR OWN RISK\x1b[0m"
     )
 }
-
-pub fn rmm() {
-    eprintln!(
-        "
-
-        🚧📉 In the twilight of financial reckoning, whence tools that replicate payoffs dwell, 📈🚧
-        💸 Lo! Beware the treacherous path, for risk and uncertainty shroudeth the numbers, 💸
-        📉 In the shadows of miscalculation, one must treat cautiously, lest ruin befall, 📈
-        💸 As the fates of wealth and prosperity intertwine, with the whispers of uncertainty. 🚧
-        🚧📈 Heed this warning, O wise one, for unseen perils may lead to unforeseen loss. 📉🚧
-
-        \x1b[1;31mPAYOFF REPLICATION IS A WORK-IN-PROGRESS AND CAN PRODUCE INCORRECT RESULTS\x1b[0m
-        \x1b[1;31mUSING THIS TOOL MIGHT LEAD YOU TO LOSE VALUE, PROCEED WITH CAUTION!!!!!!!!!\x1b[0m
-        "
-    )
-}

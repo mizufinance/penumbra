@@ -1,6 +1,4 @@
 #[cfg(any(unix, windows))]
-use crate::TransferFamilyId;
-#[cfg(any(unix, windows))]
 use anyhow::Result;
 
 #[cfg(any(unix, windows))]
@@ -12,7 +10,7 @@ pub(super) fn should_skip_transfer_proof_roundtrip_tests() -> bool {
         return true;
     }
 
-    match transfer_prover_available_for_tests(TransferFamilyId::OneByOne) {
+    match transfer_prover_available_for_tests() {
         Ok(false) => {
             eprintln!(
                 "skipping transfer gnark roundtrip tests: no bundled or external gnark transfer prover transport is available"
@@ -25,14 +23,12 @@ pub(super) fn should_skip_transfer_proof_roundtrip_tests() -> bool {
 }
 
 #[cfg(any(unix, windows))]
-fn transfer_prover_available_for_tests(
-    family_id: TransferFamilyId,
-) -> Result<bool, crate::ProofError> {
+fn transfer_prover_available_for_tests() -> Result<bool, crate::ProofError> {
     if crate::gnark::GnarkTransferClient::env_override_configured() {
-        return crate::gnark::GnarkTransferClient::from_env(family_id)
+        return crate::gnark::GnarkTransferClient::from_env()
             .map(|_| true)
             .map_err(|error| crate::ProofError::ProofGenerationFailed(error.to_string()));
     }
 
-    Ok(crate::gnark::GnarkTransferClient::bundled_transport_available(family_id))
+    Ok(crate::gnark::GnarkTransferClient::bundled_transport_available())
 }

@@ -1,15 +1,15 @@
+#[cfg(any(unix, windows))]
 use anyhow::Result;
 #[cfg(any(unix, windows))]
 use std::{
-    collections::BTreeMap,
     sync::{mpsc, LazyLock},
     thread,
 };
 
+#[cfg(any(unix, windows))]
 use crate::{
     gnark::GnarkTransferClient,
     transfer::{TransferProof, TransferProofPrivate, TransferProofPublic},
-    TransferFamilyId,
 };
 
 #[cfg(any(unix, windows))]
@@ -35,7 +35,7 @@ static TRANSFER_PROVER_RUNTIME: LazyLock<mpsc::Sender<TransferProverRuntimeReque
         thread::Builder::new()
             .name("transfer-prover-runtime".to_string())
             .spawn(move || {
-                let mut clients = BTreeMap::<TransferFamilyId, GnarkTransferClient>::new();
+                let mut client: Option<GnarkTransferClient> = None;
                 while let Ok(request) = rx.recv() {
                     match request {
                         TransferProverRuntimeRequest::Prove {
@@ -43,14 +43,12 @@ static TRANSFER_PROVER_RUNTIME: LazyLock<mpsc::Sender<TransferProverRuntimeReque
                             private,
                             response,
                         } => {
-                            let family_id = public.family_id;
                             let result = (|| {
-                                ensure_client(&mut clients, family_id)?
+                                ensure_client(&mut client)?
                                     .prove(&public, &private)
                                     .map_err(|e| {
                                         crate::ProofError::ProofGenerationFailed(format!(
-                                            "gnark {} prove: {e}",
-                                            family_id.label()
+                                            "gnark transfer prove: {e}",
                                         ))
                                     })
                             })();
@@ -75,15 +73,10 @@ pub(super) fn prove_with_runtime(
 }
 
 #[cfg(any(unix, windows))]
-fn init_gnark_transfer_client(
-    family_id: TransferFamilyId,
-) -> Result<GnarkTransferClient, crate::ProofError> {
+fn init_gnark_transfer_client() -> Result<GnarkTransferClient, crate::ProofError> {
     if GnarkTransferClient::env_override_configured() {
-        return crate::gnark::GnarkTransferClient::from_env(family_id).map_err(|e| {
-            crate::ProofError::ProofGenerationFailed(format!(
-                "gnark {} init: {e}",
-                family_id.label()
-            ))
+        return crate::gnark::GnarkTransferClient::from_env().map_err(|e| {
+            crate::ProofError::ProofGenerationFailed(format!("gnark transfer init: {e}",))
         });
     }
 
@@ -101,34 +94,27 @@ fn init_gnark_transfer_client(
                 "gnark transfer library not found (checked bundled path and executable-adjacent locations)".to_string(),
             )
         })?;
-    let pk_bytes = family_id.proving_key_bytes();
+    let pk_bytes = penumbra_sdk_proof_params::transfer_proving_key_bytes();
     if pk_bytes.is_empty() {
         return Err(crate::ProofError::ProofGenerationFailed(format!(
-            "gnark {} proving key not bundled (enable bundled-proving-keys feature)",
-            family_id.label()
+            "gnark transfer proving key not bundled (enable bundled-proving-keys feature)",
         )));
     }
-    let pvk = family_id.proof_verification_key().clone();
-    let metadata = family_id.circuit_metadata_bytes();
-    crate::gnark::GnarkTransferClient::from_bundled(&lib_path, pk_bytes, pvk, metadata, family_id)
-        .map_err(|e| {
-            crate::ProofError::ProofGenerationFailed(format!(
-                "gnark {} init: {e}",
-                family_id.label()
-            ))
-        })
+    let pvk = penumbra_sdk_proof_params::transfer_proof_verification_key().clone();
+    let metadata = penumbra_sdk_proof_params::transfer_circuit_metadata();
+    crate::gnark::GnarkTransferClient::from_bundled(&lib_path, pk_bytes, pvk, metadata)
+        .map_err(|e| crate::ProofError::ProofGenerationFailed(format!("gnark transfer init: {e}")))
 }
 
 #[cfg(any(unix, windows))]
-fn ensure_client<'a>(
-    clients: &'a mut BTreeMap<TransferFamilyId, GnarkTransferClient>,
-    family_id: TransferFamilyId,
-) -> Result<&'a GnarkTransferClient, crate::ProofError> {
-    if let std::collections::btree_map::Entry::Vacant(entry) = clients.entry(family_id) {
-        entry.insert(init_gnark_transfer_client(family_id)?);
+fn ensure_client(
+    client: &mut Option<GnarkTransferClient>,
+) -> Result<&GnarkTransferClient, crate::ProofError> {
+    if client.is_none() {
+        *client = Some(init_gnark_transfer_client()?);
     }
-    Ok(clients
-        .get(&family_id)
+    Ok(client
+        .as_ref()
         .expect("transfer prover runtime cached client"))
 }
 

@@ -25,8 +25,6 @@ use url::Url;
 #[case(r#"^penumbra_stake_missed_blocks\{identity_key=".*"\} \d+"#)]
 // TODO: re-enable once epoch duration is reduced for smoke tests
 // #[case(r"^penumbra_funding_streams_total_processing_time_milliseconds_count_milliseconds \d+")]
-#[case(r"^penumbra_dex_path_search_duration_seconds_count_seconds \d+")]
-#[case(r"^penumbra_dex_path_search_relax_path_duration_seconds_count_seconds \d+")]
 #[tokio::test]
 #[ignore]
 /// Confirm that prometheus metrics are being exported for scraping.
@@ -137,9 +135,9 @@ async fn check_grpc_server_reflection() -> anyhow::Result<()> {
 /// Returns a Vec<String> where each String is a fully qualified gRPC query service name,
 /// such as:
 ///
-///   - penumbra.core.component.community_pool.v1.QueryService
+///   - penumbra.core.component.governance.v1.QueryService
 ///   - penumbra.view.v1.ViewService
-///   - penumbra.core.component.dex.v1.SimulationService
+///   - penumbra.core.component.validator.v1.QueryService
 ///
 /// The gRPC service names are read from the [penumbra_sdk_proto] crate's [FILE_DESCRIPTOR_SET],
 /// which is exported at build time.

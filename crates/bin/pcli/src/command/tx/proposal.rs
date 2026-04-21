@@ -1,9 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use penumbra_sdk_app::params::AppParameters;
 use penumbra_sdk_governance::{change::ParameterChange, Proposal, ProposalPayload};
-use penumbra_sdk_proto::DomainType;
-use penumbra_sdk_transaction::TransactionPlan;
 
 use super::FeeTier;
 
@@ -14,7 +12,7 @@ pub enum ProposalCmd {
         /// The file to output the template to.
         #[clap(long, global = true)]
         file: Option<camino::Utf8PathBuf>,
-        /// The kind of the proposal to template [one of: signaling, emergency, parameter-change, or community-pool-spend].
+        /// The kind of the proposal to template.
         #[clap(subcommand)]
         kind: ProposalKindCmd,
     },
@@ -23,41 +21,6 @@ pub enum ProposalCmd {
         /// The proposal to vote on, in TOML format.
         #[clap(long)]
         file: camino::Utf8PathBuf,
-        /// Only spend funds originally received by the given account.
-        #[clap(long, default_value = "0")]
-        source: u32,
-        /// The amount to deposit alongside the proposal.
-        ///
-        /// Defaults to `0`, matching the current reduced-action-surface governance flow.
-        #[clap(long, default_value = "0")]
-        deposit_amount: String,
-        /// The selected fee tier to multiply the fee amount by.
-        #[clap(short, long, default_value_t)]
-        fee_tier: FeeTier,
-    },
-    /// Withdraw a governance proposal that you previously submitted.
-    Withdraw {
-        /// The proposal id to withdraw.
-        proposal_id: u64,
-        /// A short description of the reason for the proposal being withdrawn, meant to be
-        /// displayed to users.
-        #[clap(long)]
-        reason: String,
-        /// Only spend funds originally received by the given account.
-        #[clap(long, default_value = "0")]
-        source: u32,
-        /// The selected fee tier to multiply the fee amount by.
-        #[clap(short, long, default_value_t)]
-        fee_tier: FeeTier,
-    },
-    /// Claim a governance proposal deposit for a proposal you submitted that has finished voting.
-    ///
-    /// This consumes the voting or withdrawn proposal NFT and mints an NFT representing whether the
-    /// proposal passed, failed, or was slashed. In the case of a slash, the deposit is not returned
-    /// by this action; in other cases, it is returned to you.
-    DepositClaim {
-        /// The proposal id to claim the deposit for.
-        proposal_id: u64,
         /// Only spend funds originally received by the given account.
         #[clap(long, default_value = "0")]
         source: u32,
@@ -87,27 +50,8 @@ pub enum ProposalKindCmd {
         #[clap(long, default_value = "07-tendermint-0")]
         client_id: String,
     },
-    /// Generate a template for a Community Pool spend proposal.
-    CommunityPoolSpend {
-        /// The transaction plan to include in the proposal, in JSON format.
-        ///
-        /// If not specified, the default empty transaction plan will be included, to be replaced
-        /// in the template before submission.
-        #[clap(long)]
-        transaction_plan: Option<camino::Utf8PathBuf>,
-    },
     /// Generate a template for an upgrade proposal,
     UpgradePlan,
-}
-
-pub(crate) fn ensure_reduced_action_surface_proposal_payload_enabled(
-    payload: &ProposalPayload,
-) -> Result<()> {
-    if matches!(payload, ProposalPayload::CommunityPoolSpend { .. }) {
-        anyhow::bail!("proposal payload disabled in reduced action surface: CommunityPoolSpend");
-    }
-
-    Ok(())
 }
 
 impl ProposalKindCmd {
@@ -131,28 +75,8 @@ impl ProposalKindCmd {
                     client_id: client_id.clone(),
                 }
             }
-            ProposalKindCmd::CommunityPoolSpend { transaction_plan } => {
-                if let Some(file) = transaction_plan {
-                    ProposalPayload::CommunityPoolSpend {
-                        transaction_plan: serde_json::from_reader(
-                            std::fs::File::open(file).with_context(|| {
-                                format!("Failed to open transaction plan file {:?}", file)
-                            })?,
-                        )
-                        .with_context(|| {
-                            format!("Failed to parse transaction plan file {:?}", file)
-                        })?,
-                    }
-                } else {
-                    ProposalPayload::CommunityPoolSpend {
-                        transaction_plan: TransactionPlan::default().encode_to_vec(),
-                    }
-                }
-            }
             ProposalKindCmd::UpgradePlan { .. } => ProposalPayload::UpgradePlan { height: 0 },
         };
-
-        ensure_reduced_action_surface_proposal_payload_enabled(&payload)?;
 
         Ok(Proposal {
             id,
@@ -168,8 +92,6 @@ impl ProposalCmd {
         match self {
             ProposalCmd::Template { .. } => false,
             ProposalCmd::Submit { .. } => false,
-            ProposalCmd::Withdraw { .. } => false,
-            ProposalCmd::DepositClaim { .. } => false,
         }
     }
 }

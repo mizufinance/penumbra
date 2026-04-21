@@ -1,8 +1,8 @@
 use penumbra_sdk_num::Amount;
-use penumbra_sdk_proto::{penumbra::core::component::stake::v1 as pb, DomainType};
+use penumbra_sdk_proto::{penumbra::core::component::validator::v1 as pb, DomainType};
 use serde::{Deserialize, Serialize};
 
-use crate::{validator::BondingState, validator::State, IdentityKey};
+use crate::{validator::State, IdentityKey};
 
 /// The current status of a validator, including its identity, voting power, and state in the
 /// validator state machine.
@@ -15,8 +15,6 @@ pub struct Status {
     pub voting_power: Amount,
     /// The validator's current state.
     pub state: State,
-    /// Represents the bonding status of the validator's stake pool.
-    pub bonding_state: BondingState,
 }
 
 impl DomainType for Status {
@@ -28,7 +26,6 @@ impl From<Status> for pb::ValidatorStatus {
         pb::ValidatorStatus {
             identity_key: Some(v.identity_key.into()),
             voting_power: Some(v.voting_power.into()),
-            bonding_state: Some(v.bonding_state.into()),
             state: Some(v.state.into()),
         }
     }
@@ -49,10 +46,6 @@ impl TryFrom<pb::ValidatorStatus> for Status {
             state: v
                 .state
                 .ok_or_else(|| anyhow::anyhow!("missing state field in proto"))?
-                .try_into()?,
-            bonding_state: v
-                .bonding_state
-                .expect("expected bonding state to be set on validator status")
                 .try_into()?,
         })
     }

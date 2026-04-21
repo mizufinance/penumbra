@@ -11,7 +11,7 @@ processes:
     command: |-
       set -e
       ./deployments/scripts/prep-postgres-env
-      postgres -k /tmp -D ~/.penumbra/network_data/postgresql/
+      postgres -k /tmp -D ${PENUMBRA_DEVNET_HOME}/network_data/postgresql/
     readiness_probe:
       exec:
         command: psql -h localhost -p 5432 -lqt
@@ -66,7 +66,7 @@ processes:
       cargo run --release --bin pindexer -- \
           --src-database-url "postgresql://localhost:5432/penumbra_cometbft?sslmode=disable" \
           --dst-database-url "postgresql://localhost:5432/penumbra_pindexer?sslmode=disable" \
-          --genesis-json ~/.penumbra/network_data/node0/cometbft/config/genesis.json
+          --genesis-json ${PENUMBRA_DEVNET_HOME}/network_data/node0/cometbft/config/genesis.json
     depends_on:
       postgresql-init:
         condition: process_completed_successfully

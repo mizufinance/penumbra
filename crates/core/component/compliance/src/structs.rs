@@ -20,40 +20,56 @@ pub const TOTAL_PLAINTEXT_BYTES: usize =
 
 /// Compliance ciphertext wire format constants.
 ///
-/// **Spend format (192 bytes):** EPK_1(32) + c2_core(32) + detection(32) + core(96)
+/// **Transfer-input format (224 bytes):** EPK_1(32) + c2_core(32) + detection(64) + core(96)
 ///
-/// **Output format (512 bytes):** EPK_1(32) + EPK_2(32) + EPK_3(32)
-///   + c2_core(32) + c2_ext(32) + c2_sext(32) + detection(32) + core(96) + ext(96) + sext(96)
+/// **Transfer-output format (544 bytes):** EPK_1(32) + EPK_2(32) + EPK_3(32)
+///   + c2_core(32) + c2_ext(32) + c2_sext(32) + detection(64) + core(96) + ext(96) + sext(96)
 pub const EPK_BYTES: usize = 32;
 pub const C2_BYTES: usize = 32;
 pub const DETECTION_TAG_BYTES: usize = 64; // 2 Fq elements: asset_id+flag, salt
 pub const ENCRYPTED_TIER_BYTES: usize = 96; // 3 Fq elements per tier
 
-/// Spend ciphertext: 1 EPK + 1 c2 + detection + core.
-pub const SPEND_WIRE_BYTES: usize =
+/// Transfer-input ciphertext: 1 EPK + 1 c2 + detection + core.
+pub const TRANSFER_INPUT_WIRE_BYTES: usize =
     EPK_BYTES + C2_BYTES + DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES; // 224 bytes
-pub const SPEND_CIPHERTEXT_FQS: usize = (DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES) / 32; // 5
+pub const TRANSFER_INPUT_CIPHERTEXT_FQS: usize = (DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES) / 32; // 5
 
-/// Output ciphertext: 3 EPKs + 3 c2s + detection + 3 tiers.
-pub const OUTPUT_WIRE_BYTES: usize =
+/// Transfer-output ciphertext: 3 EPKs + 3 c2s + detection + 3 tiers.
+pub const TRANSFER_OUTPUT_WIRE_BYTES: usize =
     EPK_BYTES * 3 + C2_BYTES * 3 + DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES * 3; // 544 bytes
-pub const OUTPUT_CIPHERTEXT_FQS: usize = (DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES * 3) / 32; // 11
+pub const TRANSFER_OUTPUT_CIPHERTEXT_FQS: usize =
+    (DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES * 3) / 32; // 11
 
-/// DLEQ proof wire format: (c, s) per tier. Spend has 1 tier, Output has 3.
+/// DLEQ proof wire format: (c, s) per tier. Transfer-input has 1 tier, transfer-output has 3.
 pub const FQ_BYTES: usize = 32;
-pub const SPEND_DLEQ_BYTES: usize = FQ_BYTES * 2; // 64 bytes: c || s
-pub const OUTPUT_DLEQ_BYTES: usize = FQ_BYTES * 6; // 192 bytes: c1||s1||c2||s2||c3||s3
+pub const TRANSFER_INPUT_DLEQ_BYTES: usize = FQ_BYTES * 2; // 64 bytes: c || s
+pub const TRANSFER_OUTPUT_DLEQ_BYTES: usize = FQ_BYTES * 6; // 192 bytes: c1||s1||c2||s2||c3||s3
 
 // Compile-time consistency checks.
 const _: () = {
-    assert!(SPEND_WIRE_BYTES == 224, "SPEND_WIRE_BYTES must be 224");
-    assert!(OUTPUT_WIRE_BYTES == 544, "OUTPUT_WIRE_BYTES must be 544");
-    assert!(SPEND_DLEQ_BYTES == 64, "SPEND_DLEQ_BYTES must be 64");
-    assert!(OUTPUT_DLEQ_BYTES == 192, "OUTPUT_DLEQ_BYTES must be 192");
-    assert!(SPEND_CIPHERTEXT_FQS == 5, "SPEND_CIPHERTEXT_FQS must be 5");
     assert!(
-        OUTPUT_CIPHERTEXT_FQS == 11,
-        "OUTPUT_CIPHERTEXT_FQS must be 11"
+        TRANSFER_INPUT_WIRE_BYTES == 224,
+        "TRANSFER_INPUT_WIRE_BYTES must be 224"
+    );
+    assert!(
+        TRANSFER_OUTPUT_WIRE_BYTES == 544,
+        "TRANSFER_OUTPUT_WIRE_BYTES must be 544"
+    );
+    assert!(
+        TRANSFER_INPUT_DLEQ_BYTES == 64,
+        "TRANSFER_INPUT_DLEQ_BYTES must be 64"
+    );
+    assert!(
+        TRANSFER_OUTPUT_DLEQ_BYTES == 192,
+        "TRANSFER_OUTPUT_DLEQ_BYTES must be 192"
+    );
+    assert!(
+        TRANSFER_INPUT_CIPHERTEXT_FQS == 5,
+        "TRANSFER_INPUT_CIPHERTEXT_FQS must be 5"
+    );
+    assert!(
+        TRANSFER_OUTPUT_CIPHERTEXT_FQS == 11,
+        "TRANSFER_OUTPUT_CIPHERTEXT_FQS must be 11"
     );
 };
 
@@ -274,17 +290,17 @@ impl AssetPolicy {
 
     /// Create a default policy for unregulated assets.
     ///
-    /// Uses identity element for dk_pub/ring_pk and u128::MAX for threshold.
+    /// Uses protocol sink keys for dk_pub/ring_pk and u128::MAX for threshold.
     pub fn default_unregulated() -> Self {
         Self {
             params: AssetParams {
-                dk_pub: decaf377::Element::default(),
+                dk_pub: *crate::crypto::UNREGULATED_SINK_DK_PUB,
                 threshold: u128::MAX,
                 allowed_channels: vec![],
             },
             ring: RingData {
                 ring_id: String::new(),
-                ring_pk: decaf377::Element::default(),
+                ring_pk: *crate::crypto::UNREGULATED_SINK_RING_PK,
                 policy_id: String::new(),
                 permission: String::new(),
                 resource: String::new(),
@@ -776,6 +792,21 @@ mod tests {
 
         assert_eq!(policy, recovered);
     }
+
+    #[test]
+    fn test_default_unregulated_policy_uses_sink_keys() {
+        let policy = AssetPolicy::default_unregulated();
+
+        assert_eq!(
+            policy.params.dk_pub,
+            *crate::crypto::UNREGULATED_SINK_DK_PUB
+        );
+        assert_eq!(
+            policy.ring.ring_pk,
+            *crate::crypto::UNREGULATED_SINK_RING_PK
+        );
+        assert_eq!(policy.params.threshold, u128::MAX);
+    }
 }
 
 /// A Merkle path in the Quad Merkle Tree (arity 4).
@@ -866,26 +897,26 @@ impl From<MerklePathLayer> for pb::MerklePathLayer {
 /// Compliance ciphertext with tiered encryption.
 ///
 /// Supports two formats:
-/// - **Spend** (192 bytes): 1 EPK + c2_core + detection + core
-/// - **Output** (512 bytes): 3 EPKs + 3 c2s + detection + core + ext + sext
+/// - **Transfer-input** (224 bytes): 1 EPK + c2_core + detection + core
+/// - **Transfer-output** (544 bytes): 3 EPKs + 3 c2s + detection + core + ext + sext
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComplianceCiphertext {
     /// Ephemeral public key EPK_1 = r_1 × G (all actions).
     pub epk_1: decaf377::Element,
 
-    /// Ephemeral public key EPK_2 = r_2 × G (Output only).
+    /// Ephemeral public key EPK_2 = r_2 × G (transfer-output only).
     pub epk_2: Option<decaf377::Element>,
 
-    /// Ephemeral public key EPK_3 = r_3 × G (Output only).
+    /// Ephemeral public key EPK_3 = r_3 × G (transfer-output only).
     pub epk_3: Option<decaf377::Element>,
 
     /// Encrypted seed for core tier (ElGamal envelope).
     pub c2_core: Fq,
 
-    /// Encrypted seed for extension tier (Output only).
+    /// Encrypted seed for extension tier (transfer-output only).
     pub c2_ext: Option<Fq>,
 
-    /// Encrypted seed for sender-extension tier (Output only).
+    /// Encrypted seed for sender-extension tier (transfer-output only).
     pub c2_sext: Option<Fq>,
 
     /// Encrypted detection tier: [asset_id+flag (32 bytes), salt (32 bytes)].
@@ -894,10 +925,10 @@ pub struct ComplianceCiphertext {
     /// Encrypted core data: amount + self address (96 bytes).
     pub encrypted_core: Vec<u8>,
 
-    /// Encrypted extension: counterparty address for receiver (96 bytes, Output only).
+    /// Encrypted extension: counterparty address for receiver (96 bytes, transfer-output only).
     pub encrypted_ext: Option<Vec<u8>>,
 
-    /// Encrypted sender-extension: counterparty data for sender (96 bytes, Output only).
+    /// Encrypted sender-extension: counterparty data for sender (96 bytes, transfer-output only).
     pub encrypted_sext: Option<Vec<u8>>,
 }
 
@@ -907,8 +938,8 @@ impl ComplianceCiphertext {
         self.epk_1.vartime_compress().0
     }
 
-    /// Create a Spend ciphertext (detection + core only, 224 bytes).
-    pub fn new_spend(
+    /// Create a transfer-input ciphertext (detection + core only, 224 bytes).
+    pub fn new_transfer_input(
         epk_1: decaf377::Element,
         c2_core: Fq,
         detection_tag: [u8; DETECTION_TAG_BYTES],
@@ -928,8 +959,8 @@ impl ComplianceCiphertext {
         }
     }
 
-    /// Create an Output ciphertext (all tiers, 544 bytes).
-    pub fn new_output(
+    /// Create a transfer-output ciphertext (all tiers, 544 bytes).
+    pub fn new_transfer_output(
         epk_1: decaf377::Element,
         epk_2: decaf377::Element,
         epk_3: decaf377::Element,
@@ -955,15 +986,15 @@ impl ComplianceCiphertext {
         }
     }
 
-    /// Whether this is a Spend ciphertext (no extension tiers).
-    pub fn is_spend(&self) -> bool {
+    /// Whether this is a transfer-input ciphertext (no extension tiers).
+    pub fn is_transfer_input(&self) -> bool {
         self.epk_2.is_none()
     }
 
     /// Serialize to bytes.
     ///
-    /// Spend (192): EPK_1 + c2_core + detection + core
-    /// Output (512): EPK_1 + EPK_2 + EPK_3 + c2_core + c2_ext + c2_sext + detection + core + ext + sext
+    /// Transfer-input (224): EPK_1 + c2_core + detection + core
+    /// Transfer-output (544): EPK_1 + EPK_2 + EPK_3 + c2_core + c2_ext + c2_sext + detection + core + ext + sext
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.epk_1_bytes());
@@ -991,15 +1022,15 @@ impl ComplianceCiphertext {
         bytes
     }
 
-    /// Deserialize from bytes. Accepts Spend (192 bytes) or Output (512 bytes) format.
+    /// Deserialize from bytes. Accepts transfer-input (224 bytes) or transfer-output (544 bytes) format.
     pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
         let is_output = match bytes.len() {
-            SPEND_WIRE_BYTES => false,
-            OUTPUT_WIRE_BYTES => true,
+            TRANSFER_INPUT_WIRE_BYTES => false,
+            TRANSFER_OUTPUT_WIRE_BYTES => true,
             n => anyhow::bail!(
-                "invalid ciphertext length: expected {} (spend) or {} (output), got {}",
-                SPEND_WIRE_BYTES,
-                OUTPUT_WIRE_BYTES,
+                "invalid ciphertext length: expected {} (transfer input) or {} (transfer output), got {}",
+                TRANSFER_INPUT_WIRE_BYTES,
+                TRANSFER_OUTPUT_WIRE_BYTES,
                 n
             ),
         };
@@ -1013,7 +1044,7 @@ impl ComplianceCiphertext {
             .map_err(|_| anyhow::anyhow!("failed to decompress epk_1"))?;
         offset += EPK_BYTES;
 
-        // EPK_2 and EPK_3 (output only)
+        // EPK_2 and EPK_3 (transfer-output only)
         let (epk_2, epk_3) = if is_output {
             let epk_2_bytes: [u8; EPK_BYTES] = bytes[offset..offset + EPK_BYTES].try_into()?;
             let epk_2 = decaf377::Encoding(epk_2_bytes)
@@ -1038,7 +1069,7 @@ impl ComplianceCiphertext {
             .map_err(|_| anyhow::anyhow!("invalid c2_core field element"))?;
         offset += C2_BYTES;
 
-        // c2_ext and c2_sext (output only)
+        // c2_ext and c2_sext (transfer-output only)
         let (c2_ext, c2_sext) = if is_output {
             let ext_bytes: [u8; C2_BYTES] = bytes[offset..offset + C2_BYTES].try_into()?;
             let c2_ext = Fq::from_bytes_checked(&ext_bytes)
@@ -1085,11 +1116,11 @@ impl ComplianceCiphertext {
         })
     }
 
-    /// Convert to Output circuit public inputs (11 Fq).
+    /// Convert to transfer-output circuit public inputs (11 Fq).
     ///
     /// Returns `(epk_1, epk_2, epk_3, c2_core, c2_ext, c2_sext, ciphertext_fqs)`
     /// where ciphertext_fqs = [detection:2][core:3][ext:3][sext:3] = 11 Fq.
-    pub fn to_output_circuit_public_inputs(
+    pub fn to_transfer_output_circuit_public_inputs(
         &self,
     ) -> (
         decaf377::Element,
@@ -1104,24 +1135,24 @@ impl ComplianceCiphertext {
 
         let epk_2 = self
             .epk_2
-            .expect("to_output_circuit_public_inputs called on Spend ciphertext");
+            .expect("to_transfer_output_circuit_public_inputs called on transfer-input ciphertext");
         let epk_3 = self
             .epk_3
-            .expect("to_output_circuit_public_inputs called on Spend ciphertext");
+            .expect("to_transfer_output_circuit_public_inputs called on transfer-input ciphertext");
         let c2_ext = self
             .c2_ext
-            .expect("to_output_circuit_public_inputs called on Spend ciphertext");
+            .expect("to_transfer_output_circuit_public_inputs called on transfer-input ciphertext");
         let c2_sext = self
             .c2_sext
-            .expect("to_output_circuit_public_inputs called on Spend ciphertext");
+            .expect("to_transfer_output_circuit_public_inputs called on transfer-input ciphertext");
         let encrypted_ext = self
             .encrypted_ext
             .as_ref()
-            .expect("to_output_circuit_public_inputs called on Spend ciphertext");
+            .expect("to_transfer_output_circuit_public_inputs called on transfer-input ciphertext");
         let encrypted_sext = self
             .encrypted_sext
             .as_ref()
-            .expect("to_output_circuit_public_inputs called on Spend ciphertext");
+            .expect("to_transfer_output_circuit_public_inputs called on transfer-input ciphertext");
 
         let payload_bytes = DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES * 3;
         let mut ciphertext_bytes = Vec::with_capacity(payload_bytes);
@@ -1140,7 +1171,7 @@ impl ComplianceCiphertext {
             })
             .collect();
 
-        debug_assert_eq!(ciphertext_fqs.len(), OUTPUT_CIPHERTEXT_FQS);
+        debug_assert_eq!(ciphertext_fqs.len(), TRANSFER_OUTPUT_CIPHERTEXT_FQS);
 
         (
             self.epk_1,
@@ -1153,11 +1184,11 @@ impl ComplianceCiphertext {
         )
     }
 
-    /// Convert to Spend circuit public inputs (5 Fq).
+    /// Convert to transfer-input circuit public inputs (5 Fq).
     ///
     /// Returns `(epk_1, c2_core, ciphertext_fqs)` where ciphertext_fqs
     /// = [detection:2][core:3] = 5 Fq.
-    pub fn to_spend_circuit_public_inputs(
+    pub fn to_transfer_input_circuit_public_inputs(
         &self,
     ) -> (decaf377::Element, decaf377::Fq, Vec<decaf377::Fq>) {
         use decaf377::Fq;
@@ -1174,7 +1205,7 @@ impl ComplianceCiphertext {
             })
             .collect();
 
-        debug_assert_eq!(ciphertext_fqs.len(), SPEND_CIPHERTEXT_FQS);
+        debug_assert_eq!(ciphertext_fqs.len(), TRANSFER_INPUT_CIPHERTEXT_FQS);
 
         (self.epk_1, self.c2_core, ciphertext_fqs)
     }

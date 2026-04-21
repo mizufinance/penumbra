@@ -3,16 +3,19 @@ use anyhow::{bail, Context, Result};
 use crate::{
     gnark::{
         binary::{encode_vec_32, put_bytes, put_u32, put_u64, put_u8, BinaryCursor},
-        transfer_witness::{TransferOutputWitnessV1, TransferSpendWitnessV1, TransferWitnessV1},
+        transfer_witness::{
+            TransferComplianceCiphertextWitnessV1, TransferOutputWitnessV1, TransferSpendWitnessV1,
+            TransferWitnessV1,
+        },
         typed::{
             decode_indexed_leaf, encode_indexed_leaf, encode_merkle_path, encode_point_affine,
         },
     },
-    TransferFamilyId,
+    transfer::{transfer_input_count, transfer_output_count, TRANSFER_PROOF_LABEL},
 };
 
 const TRANSFER_WITNESS_MAGIC: &[u8; 4] = b"PTWG";
-const TRANSFER_WITNESS_VERSION: u32 = 3;
+const TRANSFER_WITNESS_VERSION: u32 = 6;
 
 impl TransferWitnessV1 {
     pub fn encode(&self) -> Result<Vec<u8>> {
@@ -20,7 +23,6 @@ impl TransferWitnessV1 {
         put_bytes(&mut buf, TRANSFER_WITNESS_MAGIC);
         put_u32(&mut buf, TRANSFER_WITNESS_VERSION);
         put_u32(&mut buf, 0);
-        put_u32(&mut buf, self.family_id.get());
         put_u32(&mut buf, self.n_in);
         put_u32(&mut buf, self.n_out);
         put_bytes(&mut buf, &self.anchor);
@@ -41,12 +43,20 @@ impl TransferWitnessV1 {
         put_u64(&mut buf, self.sender_compliance_position);
         put_bytes(&mut buf, &self.sender_asset_id);
         put_bytes(&mut buf, &self.sender_d);
-        put_bytes(&mut buf, &self.tx_blinding_nonce);
+        put_bytes(&mut buf, &self.transfer_nonce_root);
+        encode_vec_32(&mut buf, &self.detection_ciphertext)?;
+        encode_compliance_tier(&mut buf, &self.sender_core)?;
+        encode_compliance_tier(&mut buf, &self.sender_ext)?;
+        encode_compliance_tier(&mut buf, &self.output_core)?;
+        encode_compliance_tier(&mut buf, &self.output_ext)?;
+        put_bytes(&mut buf, &self.sender_r_core);
+        put_bytes(&mut buf, &self.sender_r_ext);
+        put_bytes(&mut buf, &self.output_r_core);
+        put_bytes(&mut buf, &self.output_r_ext);
 
         for spend in &self.spends {
             encode_spend(&mut buf, spend)?;
         }
-
         for output in &self.outputs {
             encode_output(&mut buf, output)?;
         }
@@ -81,18 +91,15 @@ impl TransferWitnessV1 {
             );
         }
 
-        let family_id = TransferFamilyId::try_from(cursor.read_u32()?)?;
         let n_in = cursor.read_u32()?;
         let n_out = cursor.read_u32()?;
-        let spec = family_id.spec();
-        if n_in as usize != spec.n_in || n_out as usize != spec.n_out {
+        if n_in as usize != transfer_input_count() || n_out as usize != transfer_output_count() {
             bail!(
-                "{} witness shape mismatch: got {}x{}, expected {}x{}",
-                family_id.label(),
+                "{TRANSFER_PROOF_LABEL} witness shape mismatch: got {}x{}, expected {}x{}",
                 n_in,
                 n_out,
-                spec.n_in,
-                spec.n_out
+                transfer_input_count(),
+                transfer_output_count()
             );
         }
 
@@ -114,7 +121,16 @@ impl TransferWitnessV1 {
         let sender_compliance_position = cursor.read_u64()?;
         let sender_asset_id = cursor.read_fixed::<32>()?;
         let sender_d = cursor.read_fixed::<32>()?;
-        let tx_blinding_nonce = cursor.read_fixed::<32>()?;
+        let transfer_nonce_root = cursor.read_fixed::<32>()?;
+        let detection_ciphertext = cursor.read_vec_32()?;
+        let sender_core = decode_compliance_tier(&mut cursor)?;
+        let sender_ext = decode_compliance_tier(&mut cursor)?;
+        let output_core = decode_compliance_tier(&mut cursor)?;
+        let output_ext = decode_compliance_tier(&mut cursor)?;
+        let sender_r_core = cursor.read_fixed::<32>()?;
+        let sender_r_ext = cursor.read_fixed::<32>()?;
+        let output_r_core = cursor.read_fixed::<32>()?;
+        let output_r_ext = cursor.read_fixed::<32>()?;
 
         let spends = (0..n_in)
             .map(|_| decode_spend(&mut cursor))
@@ -124,7 +140,6 @@ impl TransferWitnessV1 {
             .collect::<Result<Vec<_>>>()?;
 
         let witness = Self {
-            family_id,
             total_length,
             n_in,
             n_out,
@@ -146,7 +161,16 @@ impl TransferWitnessV1 {
             sender_compliance_position,
             sender_asset_id,
             sender_d,
-            tx_blinding_nonce,
+            transfer_nonce_root,
+            detection_ciphertext,
+            sender_core,
+            sender_ext,
+            output_core,
+            output_ext,
+            sender_r_core,
+            sender_r_ext,
+            output_r_core,
+            output_r_ext,
             spends,
             outputs,
             balance_commitment_affine: cursor.read_point_affine()?,
@@ -157,17 +181,37 @@ impl TransferWitnessV1 {
             sender_transmission_key_affine: cursor.read_point_affine()?,
         };
 
-        cursor.finish(family_id.label())?;
+        cursor.finish(TRANSFER_PROOF_LABEL)?;
         Ok(witness)
     }
 }
 
+fn encode_compliance_tier(
+    buf: &mut Vec<u8>,
+    tier: &TransferComplianceCiphertextWitnessV1,
+) -> Result<()> {
+    put_bytes(buf, &tier.c2);
+    encode_vec_32(buf, &tier.ciphertext)?;
+    put_bytes(buf, &tier.dleq_c);
+    put_bytes(buf, &tier.dleq_s);
+    encode_point_affine(buf, &tier.epk_affine);
+    Ok(())
+}
+
+fn decode_compliance_tier(
+    cursor: &mut BinaryCursor<'_>,
+) -> Result<TransferComplianceCiphertextWitnessV1> {
+    Ok(TransferComplianceCiphertextWitnessV1 {
+        c2: cursor.read_fixed::<32>()?,
+        ciphertext: cursor.read_vec_32()?,
+        dleq_c: cursor.read_fixed::<32>()?,
+        dleq_s: cursor.read_fixed::<32>()?,
+        epk_affine: cursor.read_point_affine()?,
+    })
+}
+
 fn encode_spend(buf: &mut Vec<u8>, spend: &TransferSpendWitnessV1) -> Result<()> {
     put_bytes(buf, &spend.nullifier);
-    put_bytes(buf, &spend.spend_c2_core);
-    encode_vec_32(buf, &spend.spend_compliance_ciphertext)?;
-    put_bytes(buf, &spend.spend_dleq_c);
-    put_bytes(buf, &spend.spend_dleq_s);
     put_bytes(buf, &spend.spent_note_blinding);
     put_bytes(buf, &spend.spent_note_amount);
     put_bytes(buf, &spend.spent_note_asset_id);
@@ -186,11 +230,10 @@ fn encode_spend(buf: &mut Vec<u8>, spend: &TransferSpendWitnessV1) -> Result<()>
         }
     }
     put_bytes(buf, &spend.spend_auth_randomizer);
-    put_bytes(buf, &spend.spend_compliance_ephemeral);
-    put_u8(buf, u8::from(spend.spend_is_flagged));
-    put_bytes(buf, &spend.spend_salt);
+    put_u8(buf, u8::from(spend.is_dummy));
+    put_bytes(buf, &spend.dummy_nullifier_seed);
+    put_bytes(buf, &spend.dummy_spend_auth_key);
     encode_point_affine(buf, &spend.rk_affine);
-    encode_point_affine(buf, &spend.spend_epk_affine);
     encode_point_affine(buf, &spend.spent_diversified_generator_affine);
     encode_point_affine(buf, &spend.spent_transmission_key_affine);
     Ok(())
@@ -199,10 +242,6 @@ fn encode_spend(buf: &mut Vec<u8>, spend: &TransferSpendWitnessV1) -> Result<()>
 fn decode_spend(cursor: &mut BinaryCursor<'_>) -> Result<TransferSpendWitnessV1> {
     Ok(TransferSpendWitnessV1 {
         nullifier: cursor.read_fixed::<32>()?,
-        spend_c2_core: cursor.read_fixed::<32>()?,
-        spend_compliance_ciphertext: cursor.read_vec_32()?,
-        spend_dleq_c: cursor.read_fixed::<32>()?,
-        spend_dleq_s: cursor.read_fixed::<32>()?,
         spent_note_blinding: cursor.read_fixed::<32>()?,
         spent_note_amount: cursor.read_fixed::<32>()?,
         spent_note_asset_id: cursor.read_fixed::<32>()?,
@@ -223,11 +262,10 @@ fn decode_spend(cursor: &mut BinaryCursor<'_>) -> Result<TransferSpendWitnessV1>
             state_commitment_auth_path
         },
         spend_auth_randomizer: cursor.read_fixed::<32>()?,
-        spend_compliance_ephemeral: cursor.read_fixed::<32>()?,
-        spend_is_flagged: cursor.read_u8()? != 0,
-        spend_salt: cursor.read_fixed::<32>()?,
+        is_dummy: cursor.read_u8()? != 0,
+        dummy_nullifier_seed: cursor.read_fixed::<32>()?,
+        dummy_spend_auth_key: cursor.read_fixed::<32>()?,
         rk_affine: cursor.read_point_affine()?,
-        spend_epk_affine: cursor.read_point_affine()?,
         spent_diversified_generator_affine: cursor.read_point_affine()?,
         spent_transmission_key_affine: cursor.read_point_affine()?,
     })
@@ -235,16 +273,6 @@ fn decode_spend(cursor: &mut BinaryCursor<'_>) -> Result<TransferSpendWitnessV1>
 
 fn encode_output(buf: &mut Vec<u8>, output: &TransferOutputWitnessV1) -> Result<()> {
     put_bytes(buf, &output.note_commitment);
-    put_bytes(buf, &output.output_c2_core);
-    put_bytes(buf, &output.output_c2_ext);
-    put_bytes(buf, &output.output_c2_sext);
-    encode_vec_32(buf, &output.output_compliance_ciphertext)?;
-    put_bytes(buf, &output.output_dleq_c_1);
-    put_bytes(buf, &output.output_dleq_s_1);
-    put_bytes(buf, &output.output_dleq_c_2);
-    put_bytes(buf, &output.output_dleq_s_2);
-    put_bytes(buf, &output.output_dleq_c_3);
-    put_bytes(buf, &output.output_dleq_s_3);
     put_bytes(buf, &output.created_note_blinding);
     put_bytes(buf, &output.created_note_amount);
     put_bytes(buf, &output.created_note_asset_id);
@@ -254,14 +282,7 @@ fn encode_output(buf: &mut Vec<u8>, output: &TransferOutputWitnessV1) -> Result<
     put_u64(buf, output.recipient_compliance_position);
     put_bytes(buf, &output.recipient_asset_id);
     put_bytes(buf, &output.recipient_d);
-    put_bytes(buf, &output.output_compliance_ephemeral);
-    put_bytes(buf, &output.output_r_2);
-    put_bytes(buf, &output.output_r_3);
-    put_u8(buf, u8::from(output.output_is_flagged));
-    put_bytes(buf, &output.output_salt);
-    encode_point_affine(buf, &output.output_epk_1_affine);
-    encode_point_affine(buf, &output.output_epk_2_affine);
-    encode_point_affine(buf, &output.output_epk_3_affine);
+    put_u8(buf, u8::from(output.is_receiver));
     encode_point_affine(buf, &output.created_diversified_generator_affine);
     encode_point_affine(buf, &output.created_transmission_key_affine);
     encode_point_affine(buf, &output.recipient_diversified_generator_affine);
@@ -272,16 +293,6 @@ fn encode_output(buf: &mut Vec<u8>, output: &TransferOutputWitnessV1) -> Result<
 fn decode_output(cursor: &mut BinaryCursor<'_>) -> Result<TransferOutputWitnessV1> {
     Ok(TransferOutputWitnessV1 {
         note_commitment: cursor.read_fixed::<32>()?,
-        output_c2_core: cursor.read_fixed::<32>()?,
-        output_c2_ext: cursor.read_fixed::<32>()?,
-        output_c2_sext: cursor.read_fixed::<32>()?,
-        output_compliance_ciphertext: cursor.read_vec_32()?,
-        output_dleq_c_1: cursor.read_fixed::<32>()?,
-        output_dleq_s_1: cursor.read_fixed::<32>()?,
-        output_dleq_c_2: cursor.read_fixed::<32>()?,
-        output_dleq_s_2: cursor.read_fixed::<32>()?,
-        output_dleq_c_3: cursor.read_fixed::<32>()?,
-        output_dleq_s_3: cursor.read_fixed::<32>()?,
         created_note_blinding: cursor.read_fixed::<32>()?,
         created_note_amount: cursor.read_fixed::<32>()?,
         created_note_asset_id: cursor.read_fixed::<32>()?,
@@ -291,14 +302,7 @@ fn decode_output(cursor: &mut BinaryCursor<'_>) -> Result<TransferOutputWitnessV
         recipient_compliance_position: cursor.read_u64()?,
         recipient_asset_id: cursor.read_fixed::<32>()?,
         recipient_d: cursor.read_fixed::<32>()?,
-        output_compliance_ephemeral: cursor.read_fixed::<32>()?,
-        output_r_2: cursor.read_fixed::<32>()?,
-        output_r_3: cursor.read_fixed::<32>()?,
-        output_is_flagged: cursor.read_u8()? != 0,
-        output_salt: cursor.read_fixed::<32>()?,
-        output_epk_1_affine: cursor.read_point_affine()?,
-        output_epk_2_affine: cursor.read_point_affine()?,
-        output_epk_3_affine: cursor.read_point_affine()?,
+        is_receiver: cursor.read_u8()? != 0,
         created_diversified_generator_affine: cursor.read_point_affine()?,
         created_transmission_key_affine: cursor.read_point_affine()?,
         recipient_diversified_generator_affine: cursor.read_point_affine()?,

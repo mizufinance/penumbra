@@ -2,8 +2,6 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use cnidarium::StateWrite;
 use penumbra_sdk_compliance::{ComplianceRegistryRead, ComplianceRegistryWrite};
-#[cfg(feature = "component")]
-use penumbra_sdk_dex::component::SwapDataRead;
 use penumbra_sdk_fee::component::StateReadExt as _;
 use penumbra_sdk_governance::StateReadExt as _;
 use penumbra_sdk_proto::DomainType;
@@ -88,7 +86,7 @@ trait Inner: StateWrite {
             .await
             .context("could not end SCT block")?;
 
-        // Pull out all the pending state payloads (note and swap)
+        // Pull out all the pending state payloads.
         let note_payloads = self
             .pending_note_payloads()
             .into_iter()
@@ -98,25 +96,14 @@ trait Inner: StateWrite {
             .pending_rolled_up_payloads()
             .into_iter()
             .map(|(pos, commitment)| (pos, commitment.into()));
-        let swap_payloads = self
-            .pending_swap_payloads()
-            .into_iter()
-            // Strip the sources of transaction IDs
-            .map(|(pos, swap, source)| (pos, (swap, source.stripped()).into()));
 
         // Sort the payloads by position and put them in the compact block
-        let mut state_payloads = note_payloads
-            .chain(rolled_up_payloads)
-            .chain(swap_payloads)
-            .collect::<Vec<_>>();
+        let mut state_payloads = note_payloads.chain(rolled_up_payloads).collect::<Vec<_>>();
         state_payloads.sort_by_key(|(pos, _)| *pos);
         let state_payloads = state_payloads
             .into_iter()
             .map(|(_, payload)| payload)
             .collect();
-
-        // Gather the swap outputs
-        let swap_outputs = self.pending_batch_swap_outputs().into_iter().collect();
 
         // Add all the pending nullifiers to the compact block
         let nullifiers = self.pending_nullifiers().into_iter().collect();
@@ -143,7 +130,6 @@ trait Inner: StateWrite {
             block_root,
             epoch_root,
             proposal_started,
-            swap_outputs,
             fmd_parameters,
             app_parameters_updated,
             gas_prices,

@@ -30,13 +30,11 @@ cfg_if::cfg_if! {
         pub mod stateless_cache;
 
         mod action_handler;
-        mod community_pool_ext;
         mod penumbra_host_chain;
 
         pub use crate::{
             action_handler::AppActionHandler, app::StateWriteExt,
-            community_pool_ext::CommunityPoolStateReadExt, metrics::register_metrics,
-            penumbra_host_chain::PenumbraHost,
+            metrics::register_metrics, penumbra_host_chain::PenumbraHost,
         };
 
         /// Temporary compat wrapper for duplicate trait impls

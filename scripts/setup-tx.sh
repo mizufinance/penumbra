@@ -19,7 +19,7 @@ ORBIS_CLI="${ORBIS_CLI:-cli-tool}"
 
 # ═══════════════════════════════════════════════════════════════════════
 print_banner "Compliance Setup: Chain Transactions" \
-    "DKG + registrations + transfers (run once)"
+    "DKG + registrations + split/transfers/consolidate (run once)"
 
 # ═══════════════════════════════════════════════════════════════════════
 print_phase "Prerequisites"
@@ -47,6 +47,9 @@ if ! command -v "$ORBIS_CLI" &>/dev/null; then
     exit 1
 fi
 log_success "All prerequisites OK"
+
+log_info "Validating demo gnark runtimes..."
+ensure_demo_gnark_libs
 
 # ═══════════════════════════════════════════════════════════════════════
 print_phase "Distributed Key Generation (DKG)"
@@ -126,9 +129,11 @@ print_phase "Regulated Transfers"
 
 echo "  Each transfer builds a ZK proof of compliance and encrypts"
 echo "  transaction data in 4 tiers: detection, core, extension, sext."
+echo "  Split/consolidate are note-management actions and do not produce"
+echo "  compliance ciphertext entries."
 echo ""
 execute_regulated_transfers
-pass "8 regulated transfers complete (1 flagged)"
+pass "1 split + 9 regulated transfers + 1 consolidate complete (1 flagged)"
 
 # ═══════════════════════════════════════════════════════════════════════
 print_phase "Edge Cases"

@@ -72,23 +72,10 @@ pub mod penumbra {
 
         /// Components of the Penumbra application.
         pub mod component {
-            pub mod auction {
-                pub mod v1 {
-                    include!("gen/penumbra.core.component.auction.v1.rs");
-                    include!("gen/penumbra.core.component.auction.v1.serde.rs");
-                }
-            }
             pub mod compact_block {
                 pub mod v1 {
                     include!("gen/penumbra.core.component.compact_block.v1.rs");
                     include!("gen/penumbra.core.component.compact_block.v1.serde.rs");
-                }
-            }
-
-            pub mod community_pool {
-                pub mod v1 {
-                    include!("gen/penumbra.core.component.community_pool.v1.rs");
-                    include!("gen/penumbra.core.component.community_pool.v1.serde.rs");
                 }
             }
 
@@ -99,31 +86,10 @@ pub mod penumbra {
                 }
             }
 
-            pub mod dex {
-                pub mod v1 {
-                    include!("gen/penumbra.core.component.dex.v1.rs");
-                    include!("gen/penumbra.core.component.dex.v1.serde.rs");
-                }
-            }
-
-            pub mod distributions {
-                pub mod v1 {
-                    include!("gen/penumbra.core.component.distributions.v1.rs");
-                    include!("gen/penumbra.core.component.distributions.v1.serde.rs");
-                }
-            }
-
             pub mod fee {
                 pub mod v1 {
                     include!("gen/penumbra.core.component.fee.v1.rs");
                     include!("gen/penumbra.core.component.fee.v1.serde.rs");
-                }
-            }
-
-            pub mod funding {
-                pub mod v1 {
-                    include!("gen/penumbra.core.component.funding.v1.rs");
-                    include!("gen/penumbra.core.component.funding.v1.serde.rs");
                 }
             }
 
@@ -141,6 +107,13 @@ pub mod penumbra {
                 }
             }
 
+            pub mod validator {
+                pub mod v1 {
+                    include!("gen/penumbra.core.component.validator.v1.rs");
+                    include!("gen/penumbra.core.component.validator.v1.serde.rs");
+                }
+            }
+
             pub mod sct {
                 pub mod v1 {
                     include!("gen/penumbra.core.component.sct.v1.rs");
@@ -152,13 +125,6 @@ pub mod penumbra {
                 pub mod v1 {
                     include!("gen/penumbra.core.component.shielded_pool.v1.rs");
                     include!("gen/penumbra.core.component.shielded_pool.v1.serde.rs");
-                }
-            }
-
-            pub mod stake {
-                pub mod v1 {
-                    include!("gen/penumbra.core.component.stake.v1.rs");
-                    include!("gen/penumbra.core.component.stake.v1.serde.rs");
                 }
             }
         }
@@ -244,15 +210,6 @@ pub mod penumbra {
             pub mod v1 {
                 include!("gen/penumbra.util.tendermint_proxy.v1.rs");
                 include!("gen/penumbra.util.tendermint_proxy.v1.serde.rs");
-            }
-        }
-    }
-
-    pub mod tools {
-        pub mod summoning {
-            pub mod v1 {
-                include!("gen/penumbra.tools.summoning.v1.rs");
-                include!("gen/penumbra.tools.summoning.v1.serde.rs");
             }
         }
     }

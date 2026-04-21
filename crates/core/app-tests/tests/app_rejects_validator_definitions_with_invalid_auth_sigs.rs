@@ -11,7 +11,7 @@ use {
     penumbra_sdk_mock_client::MockClient,
     penumbra_sdk_mock_consensus::TestNode,
     penumbra_sdk_proto::DomainType,
-    penumbra_sdk_stake::{validator::Validator, FundingStreams, GovernanceKey, IdentityKey},
+    penumbra_sdk_validator::{validator::Validator, GovernanceKey, IdentityKey},
     rand_core::OsRng,
     tap::Tap,
     tracing::{error_span, info, Instrument},
@@ -86,14 +86,13 @@ async fn app_rejects_validator_definitions_with_invalid_auth_sigs() -> anyhow::R
         name: "test validator".to_string(),
         website: String::default(),
         description: String::default(),
-        funding_streams: FundingStreams::default(),
     };
 
     // Make a transaction that defines a new validator, providing an invalid signature.
     let plan = {
         use {
-            penumbra_sdk_stake::validator,
             penumbra_sdk_transaction::{ActionPlan, TransactionParameters, TransactionPlan},
+            penumbra_sdk_validator::validator,
             rand_core::OsRng,
         };
         let bytes = new_validator.encode_to_vec();
@@ -109,6 +108,7 @@ async fn app_rejects_validator_definitions_with_invalid_auth_sigs() -> anyhow::R
             // Now fill out the remaining parts of the transaction needed for verification:
             memo: None,
             detection_data: None, // We'll set this automatically below
+            fee_funding: None,
             transaction_parameters: TransactionParameters {
                 chain_id: TestNode::<()>::CHAIN_ID.to_string(),
                 ..Default::default()
@@ -120,13 +120,20 @@ async fn app_rejects_validator_definitions_with_invalid_auth_sigs() -> anyhow::R
     let tx = client.witness_auth_build(&plan).await?;
 
     // Execute the transaction, applying it to the chain state.
-    node.block()
+    let err = node
+        .block()
         .add_tx(tx.encode_to_vec())
         .execute()
         .instrument(error_span!(
             "executing block with validator definition transaction"
         ))
-        .await?;
+        .await
+        .expect_err("invalid validator definition transaction should be rejected");
+    assert!(
+        err.to_string()
+            .contains("validator definition signature failed to verify"),
+        "unexpected validator definition rejection: {err:#}"
+    );
 
     // Allow spawned verification tasks to complete cleanup after failed tx.
     // When check_historical fails, JoinSet tasks may still hold Arc<State> briefly.

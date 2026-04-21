@@ -265,7 +265,7 @@ impl Device {
         };
         let spend_auth_count: u8 =
             u16::from_le_bytes(response_data[64..66].try_into()?).try_into()?;
-        let delegator_auth_count: u8 =
+        let _delegator_auth_count: u8 =
             u16::from_le_bytes(response_data[66..68].try_into()?).try_into()?;
 
         for i in 0..spend_auth_count {
@@ -282,23 +282,6 @@ impl Device {
                 .await?;
             auth_data.spend_auths.push(response.payload()?.try_into()?);
         }
-        for i in 0..delegator_auth_count {
-            response = self
-                .request(
-                    ApduHeader {
-                        cla: 0x80,
-                        ins: 0x06,
-                        p1: i,
-                        p2: 0,
-                    },
-                    &[],
-                )
-                .await?;
-            auth_data
-                .delegator_vote_auths
-                .push(response.payload()?.try_into()?);
-        }
-
         Ok(auth_data)
     }
 }

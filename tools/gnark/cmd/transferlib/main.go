@@ -37,11 +37,11 @@ import (
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 	"github.com/consensys/gnark/logger"
 
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/abi"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/artifacts"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/circuits"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/generated"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/primitives"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/abi"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/artifacts"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/circuits"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/generated"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/primitives"
 )
 
 const (
@@ -51,7 +51,6 @@ const (
 
 type proverContext struct {
 	circuitName string
-	familyID    uint32
 	ccs         constraint.ConstraintSystem
 	pk          *groth16bls.ProvingKey
 }
@@ -117,11 +116,11 @@ func loadProvingKeyFromBytes(data []byte) (*groth16bls.ProvingKey, error) {
 	return pk, nil
 }
 
-func compileTransferCircuit(family generated.TransferFamilySpec) (constraint.ConstraintSystem, error) {
+func compileTransferCircuit() (constraint.ConstraintSystem, error) {
 	return frontend.Compile(
 		primitives.ScalarField(),
 		r1cs.NewBuilder,
-		circuits.NewTransferCircuit(family.NIn, family.NOut),
+		circuits.NewTransferCircuit(),
 	)
 }
 
@@ -174,7 +173,7 @@ func initContext(circuit string, pk *groth16bls.ProvingKey, metadata *artifacts.
 	if err != nil {
 		return nil, err
 	}
-	ccs, err := compileTransferCircuit(family)
+	ccs, err := compileTransferCircuit()
 	if err != nil {
 		return nil, fmt.Errorf("compile %s circuit: %w", family.Label, err)
 	}
@@ -183,7 +182,6 @@ func initContext(circuit string, pk *groth16bls.ProvingKey, metadata *artifacts.
 	}
 	return &proverContext{
 		circuitName: family.Label,
-		familyID:    family.ID,
 		ccs:         ccs,
 		pk:          pk,
 	}, nil
@@ -309,11 +307,11 @@ func penumbra_gnark_transfer_prove(handle C.uint64_t, witnessPtr unsafe.Pointer,
 		setBytesResult(out, 1, []byte(fmt.Sprintf("decode witness: %v", err)), 0)
 		return
 	}
-	if family.ID != ctx.familyID {
+	if family.Label != ctx.circuitName {
 		setBytesResult(
 			out,
 			1,
-			[]byte(fmt.Sprintf("transfer witness family mismatch: got %s (%d), expected %s (%d)", family.Label, family.ID, ctx.circuitName, ctx.familyID)),
+			[]byte(fmt.Sprintf("transfer witness circuit mismatch: got %s, expected %s", family.Label, ctx.circuitName)),
 			0,
 		)
 		return

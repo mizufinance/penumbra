@@ -12,18 +12,16 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use decaf377::{Bls12_377, Fq};
 use digest::Digest;
 use penumbra_sdk_proof_params::batch::BatchItem;
-use penumbra_sdk_shielded_pool::TransferFamilyId;
+use penumbra_sdk_shielded_pool::{ConsolidateFamilyId, SplitFamilyId};
 
 use crate::{
     srs::DevSrs,
     transcript::{
-        ConvertTranscriptDigest, DelegatorVoteTranscriptDigest, OutputTranscriptDigest,
-        SpendTranscriptDigest, SwapClaimTranscriptDigest, SwapTranscriptDigest,
+        ConsolidateTranscriptDigest, ShieldedIcs20WithdrawalTranscriptDigest, SplitTranscriptDigest,
     },
     transfer_family_dispatch::{
-        aggregate_transfer_family_generated, aggregate_transfer_family_profiled_generated,
-        verify_transfer_family_aggregate_generated,
-        verify_transfer_family_aggregate_profiled_unchecked_generated,
+        aggregate_transfer, aggregate_transfer_profiled, verify_transfer_aggregate,
+        verify_transfer_aggregate_profiled_unchecked,
     },
     ProofFamilyId,
 };
@@ -180,14 +178,12 @@ fn deserialize_aggregate_proof<D: Digest>(
 
 impl SnarkpackBackend {
     fn verify_transfer_family_aggregate_profiled_unchecked(
-        family_id: TransferFamilyId,
         pvk: &PreparedVerifyingKey<Bls12_377>,
         aggregate_proof_bytes: &[u8],
         padded_public_inputs: &[Vec<Fq>],
         srs: &DevSrs,
     ) -> Result<AggregateVerificationProfile> {
-        verify_transfer_family_aggregate_profiled_unchecked_generated(
-            family_id,
+        verify_transfer_aggregate_profiled_unchecked(
             pvk,
             aggregate_proof_bytes,
             padded_public_inputs,
@@ -195,36 +191,120 @@ impl SnarkpackBackend {
         )
     }
 
-    fn aggregate_transfer_family(
-        family_id: TransferFamilyId,
-        items: &[BatchItem],
-        srs: &DevSrs,
-    ) -> Result<Vec<u8>> {
-        aggregate_transfer_family_generated(family_id, items, srs)
+    fn aggregate_transfer_family(items: &[BatchItem], srs: &DevSrs) -> Result<Vec<u8>> {
+        aggregate_transfer(items, srs)
     }
 
     fn verify_transfer_family_aggregate(
-        family_id: TransferFamilyId,
         pvk: &PreparedVerifyingKey<Bls12_377>,
         aggregate_proof_bytes: &[u8],
         padded_public_inputs: &[Vec<Fq>],
         srs: &DevSrs,
     ) -> Result<bool> {
-        verify_transfer_family_aggregate_generated(
-            family_id,
-            pvk,
-            aggregate_proof_bytes,
-            padded_public_inputs,
-            srs,
-        )
+        verify_transfer_aggregate(pvk, aggregate_proof_bytes, padded_public_inputs, srs)
     }
 
     fn aggregate_transfer_family_profiled(
-        family_id: TransferFamilyId,
         items: &[BatchItem],
         srs: &DevSrs,
     ) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
-        aggregate_transfer_family_profiled_generated(family_id, items, srs)
+        aggregate_transfer_profiled(items, srs)
+    }
+
+    fn aggregate_split_family_profiled(
+        family_id: SplitFamilyId,
+        items: &[BatchItem],
+        srs: &DevSrs,
+    ) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
+        match family_id {
+            SplitFamilyId::OneByFour => aggregate_with_digest_profiled::<
+                SplitTranscriptDigest<{ SplitFamilyId::OneByFour.get() }>,
+            >(items, srs),
+            SplitFamilyId::OneByEight => aggregate_with_digest_profiled::<
+                SplitTranscriptDigest<{ SplitFamilyId::OneByEight.get() }>,
+            >(items, srs),
+            other => Err(anyhow::anyhow!(
+                "unknown split aggregate family {}",
+                other.get()
+            )),
+        }
+    }
+
+    fn aggregate_consolidate_family_profiled(
+        family_id: ConsolidateFamilyId,
+        items: &[BatchItem],
+        srs: &DevSrs,
+    ) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
+        match family_id {
+            ConsolidateFamilyId::TwoByOne => aggregate_with_digest_profiled::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::TwoByOne.get() }>,
+            >(items, srs),
+            ConsolidateFamilyId::FourByOne => aggregate_with_digest_profiled::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::FourByOne.get() }>,
+            >(items, srs),
+            ConsolidateFamilyId::EightByOne => aggregate_with_digest_profiled::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::EightByOne.get() }>,
+            >(items, srs),
+            other => Err(anyhow::anyhow!(
+                "unknown consolidate aggregate family {}",
+                other.get()
+            )),
+        }
+    }
+
+    fn verify_split_family_aggregate_profiled_unchecked(
+        family_id: SplitFamilyId,
+        pvk: &PreparedVerifyingKey<Bls12_377>,
+        aggregate_proof_bytes: &[u8],
+        padded_public_inputs: &[Vec<Fq>],
+        srs: &DevSrs,
+    ) -> Result<AggregateVerificationProfile> {
+        match family_id {
+            SplitFamilyId::OneByFour => {
+                verify_with_digest_profiled::<
+                    SplitTranscriptDigest<{ SplitFamilyId::OneByFour.get() }>,
+                >(pvk, aggregate_proof_bytes, padded_public_inputs, srs)
+            }
+            SplitFamilyId::OneByEight => {
+                verify_with_digest_profiled::<
+                    SplitTranscriptDigest<{ SplitFamilyId::OneByEight.get() }>,
+                >(pvk, aggregate_proof_bytes, padded_public_inputs, srs)
+            }
+            other => Err(anyhow::anyhow!(
+                "unknown split aggregate family {}",
+                other.get()
+            )),
+        }
+    }
+
+    fn verify_consolidate_family_aggregate_profiled_unchecked(
+        family_id: ConsolidateFamilyId,
+        pvk: &PreparedVerifyingKey<Bls12_377>,
+        aggregate_proof_bytes: &[u8],
+        padded_public_inputs: &[Vec<Fq>],
+        srs: &DevSrs,
+    ) -> Result<AggregateVerificationProfile> {
+        match family_id {
+            ConsolidateFamilyId::TwoByOne => {
+                verify_with_digest_profiled::<
+                    ConsolidateTranscriptDigest<{ ConsolidateFamilyId::TwoByOne.get() }>,
+                >(pvk, aggregate_proof_bytes, padded_public_inputs, srs)
+            }
+            ConsolidateFamilyId::FourByOne => {
+                verify_with_digest_profiled::<
+                    ConsolidateTranscriptDigest<{ ConsolidateFamilyId::FourByOne.get() }>,
+                >(pvk, aggregate_proof_bytes, padded_public_inputs, srs)
+            }
+            ConsolidateFamilyId::EightByOne => {
+                verify_with_digest_profiled::<
+                    ConsolidateTranscriptDigest<{ ConsolidateFamilyId::EightByOne.get() }>,
+                >(pvk, aggregate_proof_bytes, padded_public_inputs, srs)
+            }
+            other => Err(anyhow::anyhow!(
+                "unknown consolidate aggregate family {}",
+                other.get()
+            )),
+        }
     }
 
     pub fn verify_family_aggregate_profiled_unchecked(
@@ -242,50 +322,38 @@ impl SnarkpackBackend {
         );
 
         match family_id {
-            ProofFamilyId::Spend => verify_with_digest_profiled::<SpendTranscriptDigest>(
+            ProofFamilyId::Transfer => Self::verify_transfer_family_aggregate_profiled_unchecked(
                 pvk,
                 aggregate_proof_bytes,
                 padded_public_inputs,
                 srs,
             ),
-            ProofFamilyId::Output => verify_with_digest_profiled::<OutputTranscriptDigest>(
-                pvk,
-                aggregate_proof_bytes,
-                padded_public_inputs,
-                srs,
-            ),
-            ProofFamilyId::Transfer(transfer_family_id) => {
-                Self::verify_transfer_family_aggregate_profiled_unchecked(
-                    transfer_family_id,
+            ProofFamilyId::Consolidate(family_id) => {
+                Self::verify_consolidate_family_aggregate_profiled_unchecked(
+                    family_id,
                     pvk,
                     aggregate_proof_bytes,
                     padded_public_inputs,
                     srs,
                 )
             }
-            ProofFamilyId::Swap => verify_with_digest_profiled::<SwapTranscriptDigest>(
-                pvk,
-                aggregate_proof_bytes,
-                padded_public_inputs,
-                srs,
-            ),
-            ProofFamilyId::SwapClaim => verify_with_digest_profiled::<SwapClaimTranscriptDigest>(
-                pvk,
-                aggregate_proof_bytes,
-                padded_public_inputs,
-                srs,
-            ),
-            ProofFamilyId::Convert => verify_with_digest_profiled::<ConvertTranscriptDigest>(
-                pvk,
-                aggregate_proof_bytes,
-                padded_public_inputs,
-                srs,
-            ),
-            ProofFamilyId::DelegatorVote => verify_with_digest_profiled::<
-                DelegatorVoteTranscriptDigest,
-            >(
-                pvk, aggregate_proof_bytes, padded_public_inputs, srs
-            ),
+            ProofFamilyId::Split(family_id) => {
+                Self::verify_split_family_aggregate_profiled_unchecked(
+                    family_id,
+                    pvk,
+                    aggregate_proof_bytes,
+                    padded_public_inputs,
+                    srs,
+                )
+            }
+            ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
+                verify_with_digest_profiled::<ShieldedIcs20WithdrawalTranscriptDigest>(
+                    pvk,
+                    aggregate_proof_bytes,
+                    padded_public_inputs,
+                    srs,
+                )
+            }
         }
     }
 
@@ -330,18 +398,16 @@ impl AggregationBackend for SnarkpackBackend {
         );
 
         match family_id {
-            ProofFamilyId::Spend => aggregate_with_digest::<SpendTranscriptDigest>(items, srs),
-            ProofFamilyId::Output => aggregate_with_digest::<OutputTranscriptDigest>(items, srs),
-            ProofFamilyId::Transfer(transfer_family_id) => {
-                Self::aggregate_transfer_family(transfer_family_id, items, srs)
+            ProofFamilyId::Transfer => Self::aggregate_transfer_family(items, srs),
+            ProofFamilyId::Consolidate(family_id) => {
+                Self::aggregate_consolidate_family_profiled(family_id, items, srs)
+                    .map(|(bytes, _)| bytes)
             }
-            ProofFamilyId::Swap => aggregate_with_digest::<SwapTranscriptDigest>(items, srs),
-            ProofFamilyId::SwapClaim => {
-                aggregate_with_digest::<SwapClaimTranscriptDigest>(items, srs)
+            ProofFamilyId::Split(family_id) => {
+                Self::aggregate_split_family_profiled(family_id, items, srs).map(|(bytes, _)| bytes)
             }
-            ProofFamilyId::Convert => aggregate_with_digest::<ConvertTranscriptDigest>(items, srs),
-            ProofFamilyId::DelegatorVote => {
-                aggregate_with_digest::<DelegatorVoteTranscriptDigest>(items, srs)
+            ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
+                aggregate_with_digest::<ShieldedIcs20WithdrawalTranscriptDigest>(items, srs)
             }
         }
     }
@@ -361,49 +427,40 @@ impl AggregationBackend for SnarkpackBackend {
         );
 
         let accepted = match family_id {
-            ProofFamilyId::Spend => verify_with_digest::<SpendTranscriptDigest>(
+            ProofFamilyId::Transfer => Self::verify_transfer_family_aggregate(
                 pvk,
                 aggregate_proof_bytes,
                 padded_public_inputs,
                 srs,
             )?,
-            ProofFamilyId::Output => verify_with_digest::<OutputTranscriptDigest>(
-                pvk,
-                aggregate_proof_bytes,
-                padded_public_inputs,
-                srs,
-            )?,
-            ProofFamilyId::Transfer(transfer_family_id) => Self::verify_transfer_family_aggregate(
-                transfer_family_id,
-                pvk,
-                aggregate_proof_bytes,
-                padded_public_inputs,
-                srs,
-            )?,
-            ProofFamilyId::Swap => verify_with_digest::<SwapTranscriptDigest>(
-                pvk,
-                aggregate_proof_bytes,
-                padded_public_inputs,
-                srs,
-            )?,
-            ProofFamilyId::SwapClaim => verify_with_digest::<SwapClaimTranscriptDigest>(
-                pvk,
-                aggregate_proof_bytes,
-                padded_public_inputs,
-                srs,
-            )?,
-            ProofFamilyId::Convert => verify_with_digest::<ConvertTranscriptDigest>(
-                pvk,
-                aggregate_proof_bytes,
-                padded_public_inputs,
-                srs,
-            )?,
-            ProofFamilyId::DelegatorVote => verify_with_digest::<DelegatorVoteTranscriptDigest>(
-                pvk,
-                aggregate_proof_bytes,
-                padded_public_inputs,
-                srs,
-            )?,
+            ProofFamilyId::Consolidate(family_id) => {
+                Self::verify_consolidate_family_aggregate_profiled_unchecked(
+                    family_id,
+                    pvk,
+                    aggregate_proof_bytes,
+                    padded_public_inputs,
+                    srs,
+                )?
+                .accepted
+            }
+            ProofFamilyId::Split(family_id) => {
+                Self::verify_split_family_aggregate_profiled_unchecked(
+                    family_id,
+                    pvk,
+                    aggregate_proof_bytes,
+                    padded_public_inputs,
+                    srs,
+                )?
+                .accepted
+            }
+            ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
+                verify_with_digest::<ShieldedIcs20WithdrawalTranscriptDigest>(
+                    pvk,
+                    aggregate_proof_bytes,
+                    padded_public_inputs,
+                    srs,
+                )?
+            }
         };
 
         ensure!(accepted, "SnarkPack verification rejected {:?}", family_id);
@@ -430,27 +487,16 @@ impl SnarkpackBackend {
         );
 
         let (bytes, profile) = match family_id {
-            ProofFamilyId::Spend => {
-                aggregate_with_digest_profiled::<SpendTranscriptDigest>(items, srs)
+            ProofFamilyId::Transfer => Self::aggregate_transfer_family_profiled(items, srs),
+            ProofFamilyId::Consolidate(family_id) => {
+                Self::aggregate_consolidate_family_profiled(family_id, items, srs)
             }
-            ProofFamilyId::Output => {
-                aggregate_with_digest_profiled::<OutputTranscriptDigest>(items, srs)
+            ProofFamilyId::Split(family_id) => {
+                Self::aggregate_split_family_profiled(family_id, items, srs)
             }
-            ProofFamilyId::Transfer(transfer_family_id) => {
-                Self::aggregate_transfer_family_profiled(transfer_family_id, items, srs)
-            }
-            ProofFamilyId::Swap => {
-                aggregate_with_digest_profiled::<SwapTranscriptDigest>(items, srs)
-            }
-            ProofFamilyId::SwapClaim => {
-                aggregate_with_digest_profiled::<SwapClaimTranscriptDigest>(items, srs)
-            }
-            ProofFamilyId::Convert => {
-                aggregate_with_digest_profiled::<ConvertTranscriptDigest>(items, srs)
-            }
-            ProofFamilyId::DelegatorVote => {
-                aggregate_with_digest_profiled::<DelegatorVoteTranscriptDigest>(items, srs)
-            }
+            ProofFamilyId::ShieldedIcs20Withdrawal(_) => aggregate_with_digest_profiled::<
+                ShieldedIcs20WithdrawalTranscriptDigest,
+            >(items, srs),
         }?;
 
         Ok((bytes, profile))
@@ -640,6 +686,7 @@ mod tests {
     use ark_snark::SNARK;
     use decaf377::Fq;
     use penumbra_sdk_proof_params::batch;
+    use penumbra_sdk_shielded_pool::ShieldedIcs20WithdrawalFamilyId;
     use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
 
     use crate::{
@@ -706,21 +753,35 @@ mod tests {
         let srs = DevSrs::default();
         let padded_items =
             pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
-        let aggregate = aggregate_family(ProofFamilyId::Spend, &pvk, &padded_items, &srs)
+        let family_id = ProofFamilyId::Transfer;
+        let aggregate = aggregate_family(family_id, &pvk, &padded_items, &srs)
             .expect("aggregation should succeed");
         let padded_public_inputs = padded_items
             .into_iter()
             .map(|item| item.public_inputs)
             .collect::<Vec<_>>();
 
-        verify_family_aggregate(
-            ProofFamilyId::Spend,
-            &pvk,
-            &aggregate,
-            &padded_public_inputs,
-            &srs,
-        )
-        .expect("aggregate verification should succeed");
+        verify_family_aggregate(family_id, &pvk, &aggregate, &padded_public_inputs, &srs)
+            .expect("aggregate verification should succeed");
+    }
+
+    #[test]
+    fn snarkpack_backend_accepts_valid_shielded_ics20_withdrawal_aggregate() {
+        let (pvk, items) = sample_items();
+        let srs = DevSrs::default();
+        let padded_items =
+            pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
+        let family_id =
+            ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical);
+        let aggregate = aggregate_family(family_id, &pvk, &padded_items, &srs)
+            .expect("aggregation should succeed");
+        let padded_public_inputs = padded_items
+            .into_iter()
+            .map(|item| item.public_inputs)
+            .collect::<Vec<_>>();
+
+        verify_family_aggregate(family_id, &pvk, &aggregate, &padded_public_inputs, &srs)
+            .expect("shielded ICS-20 withdrawal aggregate verification should succeed");
     }
 
     #[test]
@@ -729,7 +790,8 @@ mod tests {
         let srs = DevSrs::default();
         let padded_items =
             pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
-        let mut aggregate = aggregate_family(ProofFamilyId::Spend, &pvk, &padded_items, &srs)
+        let family_id = ProofFamilyId::Transfer;
+        let mut aggregate = aggregate_family(family_id, &pvk, &padded_items, &srs)
             .expect("aggregation should succeed");
         aggregate.truncate(aggregate.len() / 2);
         let padded_public_inputs = padded_items
@@ -737,14 +799,8 @@ mod tests {
             .map(|item| item.public_inputs)
             .collect::<Vec<_>>();
 
-        let err = verify_family_aggregate(
-            ProofFamilyId::Spend,
-            &pvk,
-            &aggregate,
-            &padded_public_inputs,
-            &srs,
-        )
-        .expect_err("malformed aggregate bytes should be rejected");
+        let err = verify_family_aggregate(family_id, &pvk, &aggregate, &padded_public_inputs, &srs)
+            .expect_err("malformed aggregate bytes should be rejected");
 
         assert!(
             err.to_string().contains("InvalidData")
@@ -762,7 +818,8 @@ mod tests {
         let srs = DevSrs::default();
         let padded_items =
             pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
-        let aggregate = aggregate_family(ProofFamilyId::Spend, &pvk, &padded_items, &srs)
+        let family_id = ProofFamilyId::Transfer;
+        let aggregate = aggregate_family(family_id, &pvk, &padded_items, &srs)
             .expect("aggregation should succeed");
         let mut padded_public_inputs = padded_items
             .into_iter()
@@ -770,14 +827,8 @@ mod tests {
             .collect::<Vec<_>>();
         padded_public_inputs[0][0] += Fq::from(1u64);
 
-        let err = verify_family_aggregate(
-            ProofFamilyId::Spend,
-            &pvk,
-            &aggregate,
-            &padded_public_inputs,
-            &srs,
-        )
-        .expect_err("mutated public inputs should be rejected");
+        let err = verify_family_aggregate(family_id, &pvk, &aggregate, &padded_public_inputs, &srs)
+            .expect_err("mutated public inputs should be rejected");
 
         assert!(
             err.to_string().contains("rejected") || err.to_string().contains("failed"),
@@ -791,7 +842,8 @@ mod tests {
         let srs = DevSrs::default();
         let padded_items =
             pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
-        let aggregate = aggregate_family(ProofFamilyId::Spend, &pvk, &padded_items, &srs)
+        let family_id = ProofFamilyId::Transfer;
+        let aggregate = aggregate_family(family_id, &pvk, &padded_items, &srs)
             .expect("aggregation should succeed");
         let padded_public_inputs = padded_items
             .into_iter()
@@ -799,7 +851,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let err = verify_family_aggregate(
-            ProofFamilyId::Output,
+            ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical),
             &pvk,
             &aggregate,
             &padded_public_inputs,
@@ -819,7 +871,8 @@ mod tests {
         let srs = DevSrs::default();
         let padded_items =
             pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
-        let aggregate = aggregate_family(ProofFamilyId::Spend, &pvk, &padded_items, &srs)
+        let family_id = ProofFamilyId::Transfer;
+        let aggregate = aggregate_family(family_id, &pvk, &padded_items, &srs)
             .expect("aggregation should succeed");
         let padded_public_inputs = padded_items
             .into_iter()
@@ -827,7 +880,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let profile = verify_family_aggregate_profiled(
-            ProofFamilyId::Spend,
+            family_id,
             &pvk,
             &aggregate,
             &padded_public_inputs,
@@ -851,9 +904,9 @@ mod tests {
         let padded_items =
             pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
 
-        let (_aggregate, profile) =
-            aggregate_family_profiled(ProofFamilyId::Spend, &pvk, &padded_items, &srs)
-                .expect("profiled aggregation should succeed");
+        let family_id = ProofFamilyId::Transfer;
+        let (_aggregate, profile) = aggregate_family_profiled(family_id, &pvk, &padded_items, &srs)
+            .expect("profiled aggregation should succeed");
 
         assert!(profile.backend_tipa_ab_ms >= profile.backend_tipa_ab_gipa_ms);
         assert!(profile.backend_tipa_c_ms >= profile.backend_tipa_c_gipa_ms);
@@ -918,12 +971,10 @@ mod tests {
         let srs = DevSrs::default();
 
         for family_id in [
-            ProofFamilyId::Spend,
-            ProofFamilyId::Output,
-            ProofFamilyId::Swap,
-            ProofFamilyId::SwapClaim,
-            ProofFamilyId::Convert,
-            ProofFamilyId::DelegatorVote,
+            ProofFamilyId::Transfer,
+            ProofFamilyId::Consolidate(penumbra_sdk_shielded_pool::CONSOLIDATE_FAMILY_SPECS[0].id),
+            ProofFamilyId::Split(penumbra_sdk_shielded_pool::SPLIT_FAMILY_SPECS[0].id),
+            ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical),
         ] {
             for count in [1usize, 2, 4, 8, 64, 256, 1024] {
                 let repeated = vec![base_item.clone(); count];

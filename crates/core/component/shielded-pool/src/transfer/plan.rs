@@ -1,23 +1,43 @@
 use anyhow::{anyhow, ensure, Error};
 use decaf377::{Fq, Fr};
 #[cfg(any(unix, windows))]
-use decaf377_rdsa::Signature;
-use penumbra_sdk_asset::Balance;
+use decaf377_rdsa::{Signature, SpendAuth, VerificationKey};
+#[cfg(not(any(unix, windows)))]
+use decaf377_rdsa::{SpendAuth, VerificationKey};
+use penumbra_sdk_asset::{asset, Balance};
 #[cfg(any(unix, windows))]
-use penumbra_sdk_compliance::{structs::ComplianceCiphertext, ComplianceLeaf};
-use penumbra_sdk_keys::{symmetric::PayloadKey, FullViewingKey};
+use penumbra_sdk_compliance::ComplianceLeaf;
+use penumbra_sdk_keys::Address;
+#[cfg(any(unix, windows))]
+use penumbra_sdk_keys::{
+    symmetric::{PayloadKey, WrappedMemoKey},
+    FullViewingKey,
+};
 use penumbra_sdk_proto::{core::component::shielded_pool::v1 as pb, DomainType};
 use penumbra_sdk_tct as tct;
 use serde::{Deserialize, Serialize};
 use std::convert::{TryFrom, TryInto};
 
 #[cfg(any(unix, windows))]
+use super::compliance::{
+    build_transfer_compliance, change_output_transfer_compliance,
+    receiver_output_transfer_compliance,
+};
+#[cfg(any(unix, windows))]
+use crate::note_reshape::dummy_spend_auth_sig;
+#[cfg(any(unix, windows))]
+use crate::note_reshape::dummy_state_commitment_proof;
+use crate::note_reshape::{pad_to_len, HiddenArityPadder};
+#[cfg(any(unix, windows))]
 use crate::transfer::{
     Transfer, TransferOutputPrivate, TransferOutputPublic, TransferProof, TransferProofPrivate,
     TransferProofPublic, TransferSpendPrivate, TransferSpendPublic,
 };
-use crate::transfer::{TransferBody, TransferFamilyId, TransferInputBody, TransferOutputBody};
-use crate::{OutputPlan, SpendPlan};
+use crate::transfer::{
+    TransferBody, TransferInputBody, TransferOutputBody, PADDED_TRANSFER_INPUTS,
+    PADDED_TRANSFER_OUTPUTS,
+};
+use crate::{Note, ShieldedInputPlan, ShieldedOutputPlan};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(try_from = "pb::TransferPlan", into = "pb::TransferPlan")]
@@ -25,31 +45,28 @@ pub struct TransferPlan {
     pub body: TransferBody,
     pub value_blinding: Fr,
     pub balance: Balance,
-    pub spends: Vec<SpendPlan>,
-    pub outputs: Vec<OutputPlan>,
+    pub spends: Vec<ShieldedInputPlan>,
+    pub outputs: Vec<ShieldedOutputPlan>,
 }
 
 impl TransferPlan {
     pub fn new(
-        family_id: TransferFamilyId,
-        spends: Vec<SpendPlan>,
-        outputs: Vec<OutputPlan>,
+        mut spends: Vec<ShieldedInputPlan>,
+        mut outputs: Vec<ShieldedOutputPlan>,
         value_blinding: Fr,
     ) -> anyhow::Result<Self> {
         ensure!(!spends.is_empty(), "transfer requires at least one spend");
         ensure!(!outputs.is_empty(), "transfer requires at least one output");
         ensure!(
-            spends.len() == family_id.input_count(),
-            "transfer family {:?} expects {} spends, got {}",
-            family_id,
-            family_id.input_count(),
+            spends.len() <= PADDED_TRANSFER_INPUTS,
+            "transfer supports at most {} spends, got {}",
+            PADDED_TRANSFER_INPUTS,
             spends.len()
         );
         ensure!(
-            outputs.len() == family_id.output_count(),
-            "transfer family {:?} expects {} outputs, got {}",
-            family_id,
-            family_id.output_count(),
+            outputs.len() <= PADDED_TRANSFER_OUTPUTS,
+            "transfer supports at most {} outputs, got {}",
+            PADDED_TRANSFER_OUTPUTS,
             outputs.len()
         );
 
@@ -68,43 +85,62 @@ impl TransferPlan {
             acc += output.balance();
             acc
         });
+        let shared_asset_anchor = spends[0].asset_anchor;
+        let shared_compliance_anchor = spends[0].compliance_anchor;
+        let shared_target_timestamp = spends[0].target_timestamp;
+        let shared_is_regulated = spends[0].is_regulated;
+        let shared_tx_blinding_nonce = spends[0].tx_blinding_nonce;
+        for spend in &mut spends {
+            spend.asset_anchor = shared_asset_anchor;
+            spend.compliance_anchor = shared_compliance_anchor;
+            spend.target_timestamp = shared_target_timestamp;
+            spend.is_regulated = shared_is_regulated;
+            spend.tx_blinding_nonce = shared_tx_blinding_nonce;
+        }
+        for output in &mut outputs {
+            output.asset_anchor = shared_asset_anchor;
+            output.compliance_anchor = shared_compliance_anchor;
+            output.target_timestamp = shared_target_timestamp;
+            output.is_regulated = shared_is_regulated;
+            output.tx_blinding_nonce = shared_tx_blinding_nonce;
+        }
 
-        Ok(Self {
-            body: Self::placeholder_body(
-                &spends,
-                &outputs,
-                family_id,
-                balance.commit(value_blinding),
-            ),
+        let mut plan = Self {
+            body: TransferBody {
+                anchor: tct::Tree::default().root(),
+                balance_commitment: balance.commit(value_blinding),
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                target_timestamp: spends[0].target_timestamp,
+                compliance_anchor: spends[0].compliance_anchor,
+                asset_anchor: spends[0].asset_anchor,
+            },
             value_blinding,
             balance,
             spends,
             outputs,
-        })
+        };
+        plan.body = plan.placeholder_body();
+        Ok(plan)
     }
 
     pub fn from_spend_output(
-        spend: SpendPlan,
-        output: OutputPlan,
+        spend: ShieldedInputPlan,
+        output: ShieldedOutputPlan,
         value_blinding: Fr,
     ) -> anyhow::Result<Self> {
-        Self::new(
-            TransferFamilyId::OneByOne,
-            vec![spend],
-            vec![output],
-            value_blinding,
-        )
+        Self::new(vec![spend], vec![output], value_blinding)
     }
 
     pub fn shape(&self) -> (usize, usize) {
         (self.spends.len(), self.outputs.len())
     }
 
-    pub fn inputs(&self) -> &[SpendPlan] {
+    pub fn inputs(&self) -> &[ShieldedInputPlan] {
         &self.spends
     }
 
-    pub fn outputs(&self) -> &[OutputPlan] {
+    pub fn outputs(&self) -> &[ShieldedOutputPlan] {
         &self.outputs
     }
 
@@ -126,44 +162,125 @@ impl TransferPlan {
         self.balance.clone()
     }
 
-    fn placeholder_body(
-        spends: &[SpendPlan],
-        outputs: &[OutputPlan],
-        family_id: TransferFamilyId,
-        balance_commitment: penumbra_sdk_asset::balance::Commitment,
-    ) -> TransferBody {
-        let inputs = spends
+    fn first_spend(&self) -> &ShieldedInputPlan {
+        self.spends
+            .first()
+            .expect("transfer plan must contain at least one real spend")
+    }
+
+    fn sender_address(&self) -> Address {
+        self.first_spend().note.address()
+    }
+
+    fn transfer_asset_id(&self) -> asset::Id {
+        self.first_spend().note.asset_id()
+    }
+
+    fn padder(&self) -> HiddenArityPadder {
+        HiddenArityPadder {
+            value_blinding: self.value_blinding,
+            first_spend_randomizer: self.first_spend().randomizer,
+            sender_address: self.sender_address(),
+            asset_id: self.transfer_asset_id(),
+            nullifier_domain_sep_label: b"penumbra.transfer.synthetic_dummy.nullifier",
+            nullifier_seed_label: b"penumbra.transfer.synthetic_dummy.nullifier_seed",
+            spend_auth_key_label: b"penumbra.transfer.synthetic_dummy.spend_auth_key",
+            spend_auth_randomizer_label: b"penumbra.transfer.synthetic_dummy.spend_auth_randomizer",
+            input_note_label: b"penumbra.transfer.synthetic_dummy.input_note",
+            output_note_label: b"penumbra.transfer.synthetic_dummy.output_note",
+        }
+    }
+
+    fn synthetic_dummy_nullifier_seed(&self, slot: usize) -> Fq {
+        self.padder().synthetic_dummy_nullifier_seed(slot)
+    }
+
+    fn synthetic_dummy_spend_auth_key(&self, slot: usize) -> Fr {
+        self.padder().synthetic_dummy_spend_auth_key(slot)
+    }
+
+    fn synthetic_dummy_spend_auth_randomizer(&self, slot: usize) -> Fr {
+        self.padder().synthetic_dummy_spend_auth_randomizer(slot)
+    }
+
+    fn synthetic_dummy_nullifier(&self, slot: usize) -> penumbra_sdk_sct::Nullifier {
+        self.padder().synthetic_dummy_nullifier(slot)
+    }
+
+    fn synthetic_dummy_verification_key(&self, slot: usize) -> VerificationKey<SpendAuth> {
+        self.padder().synthetic_dummy_verification_key(slot)
+    }
+
+    #[cfg(any(unix, windows))]
+    pub fn synthetic_dummy_auth_sig(
+        &self,
+        slot: usize,
+        effect_hash: &[u8],
+    ) -> Signature<SpendAuth> {
+        self.padder().synthetic_dummy_auth_sig(slot, effect_hash)
+    }
+
+    fn synthetic_dummy_input_note(&self, slot: usize) -> Note {
+        self.padder().synthetic_dummy_input_note(slot)
+    }
+
+    fn synthetic_dummy_output_note(&self, slot: usize) -> Note {
+        self.padder().synthetic_dummy_output_note(slot)
+    }
+
+    fn placeholder_body(&self) -> TransferBody {
+        let mut inputs = self
+            .spends
             .iter()
-            .map(|spend| TransferInputBody {
+            .map(|_spend| TransferInputBody {
                 nullifier: penumbra_sdk_sct::Nullifier(Fq::from(0u64)),
                 rk: decaf377_rdsa::VerificationKey::from(decaf377_rdsa::SigningKey::<
                     decaf377_rdsa::SpendAuth,
                 >::from(Fr::from(0u64))),
                 encrypted_backref: crate::EncryptedBackref::dummy(),
-                compliance_ciphertext: spend.compliance_ciphertext.clone(),
-                dleq_proof: spend_dleq_proof_bytes(spend),
+                compliance_ciphertext: Vec::new(),
+                dleq_proof: Vec::new(),
             })
-            .collect();
-        let outputs = outputs
+            .collect::<Vec<_>>();
+        pad_to_len(&mut inputs, PADDED_TRANSFER_INPUTS, |slot| {
+            TransferInputBody {
+                nullifier: self.synthetic_dummy_nullifier(slot),
+                rk: self.synthetic_dummy_verification_key(slot),
+                encrypted_backref: crate::EncryptedBackref::dummy(),
+                compliance_ciphertext: Vec::new(),
+                dleq_proof: Vec::new(),
+            }
+        });
+
+        let mut outputs = self
+            .outputs
             .iter()
             .map(|output| TransferOutputBody {
                 note_payload: output.output_note().payload(),
                 wrapped_memo_key: penumbra_sdk_keys::symmetric::WrappedMemoKey([0u8; 48]),
                 ovk_wrapped_key: penumbra_sdk_keys::symmetric::OvkWrappedKey([0u8; 48]),
-                compliance_ciphertext: output.compliance_ciphertext.clone(),
-                dleq_proofs: output_dleq_proof_bytes(output),
+                compliance_ciphertext: Vec::new(),
+                dleq_proofs: Vec::new(),
             })
-            .collect();
+            .collect::<Vec<_>>();
+        pad_to_len(&mut outputs, PADDED_TRANSFER_OUTPUTS, |slot| {
+            TransferOutputBody {
+                note_payload: self.synthetic_dummy_output_note(slot).payload(),
+                wrapped_memo_key: penumbra_sdk_keys::symmetric::WrappedMemoKey([0u8; 48]),
+                ovk_wrapped_key: penumbra_sdk_keys::symmetric::OvkWrappedKey([0u8; 48]),
+                compliance_ciphertext: Vec::new(),
+                dleq_proofs: Vec::new(),
+            }
+        });
 
         TransferBody {
-            family_id,
             anchor: tct::Tree::default().root(),
-            balance_commitment,
+            balance_commitment: self.balance.commit(self.value_blinding),
             inputs,
             outputs,
-            target_timestamp: spends[0].target_timestamp,
-            compliance_anchor: spends[0].compliance_anchor,
-            asset_anchor: spends[0].asset_anchor,
+            target_timestamp: self.spends[0].target_timestamp,
+            compliance_anchor: self.spends[0].compliance_anchor,
+            asset_anchor: self.spends[0].asset_anchor,
         }
     }
 
@@ -191,6 +308,7 @@ impl TransferPlan {
             .spends
             .first()
             .ok_or_else(|| anyhow!("transfer requires at least one spend"))?;
+        let sender_address = first_spend.note.address();
         for spend in &self.spends {
             ensure!(
                 spend.note.asset_id() == first_spend.note.asset_id(),
@@ -243,9 +361,16 @@ impl TransferPlan {
                 "transfer output regulation flags must match spends",
             );
         }
+        if let Some(change_output) = self.outputs.get(1) {
+            ensure!(
+                change_output.dest_address == sender_address,
+                "transfer output 1 must be sender-owned change",
+            );
+        }
         Ok(())
     }
 
+    #[cfg(any(unix, windows))]
     pub fn transfer_body(
         &self,
         fvk: &FullViewingKey,
@@ -253,38 +378,77 @@ impl TransferPlan {
         anchor: tct::Root,
     ) -> anyhow::Result<TransferBody> {
         self.validate_invariants()?;
+        let sender_leaf = sender_leaf(
+            self.spends
+                .first()
+                .ok_or_else(|| anyhow!("transfer requires at least one spend"))?,
+        );
+        let (grouped_ciphertext, grouped_dleqs, _, _) = build_transfer_compliance(
+            &self.outputs,
+            &sender_leaf,
+            &self.spends[0].asset_indexed_leaf,
+            self.spends[0].target_timestamp,
+            self.spends[0].tx_blinding_nonce,
+        )?;
 
         let inputs = self
             .spends
             .iter()
             .map(|spend| {
-                let spend_body = spend.spend_body(fvk, None);
-                TransferInputBody {
-                    nullifier: spend_body.nullifier,
-                    rk: spend_body.rk,
-                    encrypted_backref: spend_body.encrypted_backref,
-                    compliance_ciphertext: spend_body.compliance_ciphertext,
-                    dleq_proof: spend_body.dleq_proof,
-                }
+                let mut input = spend.action_input_body(fvk);
+                input.compliance_ciphertext.clear();
+                input.dleq_proof.clear();
+                input
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let mut inputs = inputs;
+        pad_to_len(&mut inputs, PADDED_TRANSFER_INPUTS, |slot| {
+            TransferInputBody {
+                nullifier: self.synthetic_dummy_nullifier(slot),
+                rk: self.synthetic_dummy_verification_key(slot),
+                encrypted_backref: crate::EncryptedBackref::dummy(),
+                compliance_ciphertext: Vec::new(),
+                dleq_proof: Vec::new(),
+            }
+        });
+
         let outputs = self
             .outputs
             .iter()
-            .map(|output| {
-                let output_body = output.output_body(fvk.outgoing(), memo_key, None);
+            .enumerate()
+            .map(|(index, output)| {
+                let (note_payload, wrapped_memo_key, ovk_wrapped_key) =
+                    output.action_output_parts(fvk.outgoing(), memo_key);
+                let (compliance_ciphertext, dleq_proofs) = if index == 0 {
+                    receiver_output_transfer_compliance(&grouped_ciphertext, &grouped_dleqs)
+                } else {
+                    change_output_transfer_compliance()
+                };
                 TransferOutputBody {
-                    note_payload: output_body.note_payload,
-                    wrapped_memo_key: output_body.wrapped_memo_key,
-                    ovk_wrapped_key: output_body.ovk_wrapped_key,
-                    compliance_ciphertext: output_body.compliance_ciphertext,
-                    dleq_proofs: output_body.dleq_proofs,
+                    note_payload,
+                    wrapped_memo_key,
+                    ovk_wrapped_key,
+                    compliance_ciphertext,
+                    dleq_proofs,
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let mut outputs = outputs;
+        pad_to_len(&mut outputs, PADDED_TRANSFER_OUTPUTS, |slot| {
+            let dummy_note = self.synthetic_dummy_output_note(slot);
+            TransferOutputBody {
+                note_payload: dummy_note.payload(),
+                // Body-level dummy sentinel: proof/public commitments still use the synthetic
+                // note commitment, but consensus/view code can identify padded outputs
+                // without relying on note commitment zeroing.
+                wrapped_memo_key: WrappedMemoKey([0u8; 48]),
+                ovk_wrapped_key: penumbra_sdk_keys::symmetric::OvkWrappedKey([0u8; 48]),
+                compliance_ciphertext: Vec::new(),
+                dleq_proofs: Vec::new(),
+            }
+        });
 
         Ok(TransferBody {
-            family_id: self.body.family_id,
             anchor,
             balance_commitment: self.balance.commit(self.value_blinding),
             inputs,
@@ -330,61 +494,50 @@ impl TransferPlan {
                 }
             }
         }
+        let sender_leaf = sender_leaf(&self.spends[0]);
+        let (_, _, compliance_public, compliance_private) = build_transfer_compliance(
+            &self.outputs,
+            &sender_leaf,
+            &self.spends[0].asset_indexed_leaf,
+            self.spends[0].target_timestamp,
+            self.spends[0].tx_blinding_nonce,
+        )
+        .map_err(|e| crate::ProofError::InvalidPublicInput(e.to_string()))?;
 
         let input_publics = self
             .spends
             .iter()
             .map(|spend| {
-                let spend_ct = ComplianceCiphertext::from_bytes(&spend.compliance_ciphertext)
-                    .map_err(|e| {
-                        crate::ProofError::InvalidPublicInput(format!(
-                            "invalid transfer spend compliance ciphertext: {e}"
-                        ))
-                    })?;
-                let (epk, c2_core, compliance_ciphertext) =
-                    spend_ct.to_spend_circuit_public_inputs();
                 Ok(TransferSpendPublic {
                     nullifier: spend.nullifier(fvk),
                     rk: spend.rk(fvk),
-                    epk,
-                    c2_core,
-                    compliance_ciphertext,
-                    dleq_c: spend.dleq_c,
-                    dleq_s: spend.dleq_s,
                 })
             })
             .collect::<Result<Vec<_>, crate::ProofError>>()?;
+        let mut input_publics = input_publics;
+        pad_to_len(&mut input_publics, PADDED_TRANSFER_INPUTS, |slot| {
+            TransferSpendPublic {
+                nullifier: self.synthetic_dummy_nullifier(slot),
+                rk: self.synthetic_dummy_verification_key(slot),
+            }
+        });
 
         let output_publics = self
             .outputs
             .iter()
             .map(|output| {
-                let output_ct = ComplianceCiphertext::from_bytes(&output.compliance_ciphertext)
-                    .map_err(|e| {
-                        crate::ProofError::InvalidPublicInput(format!(
-                            "invalid transfer output compliance ciphertext: {e}"
-                        ))
-                    })?;
-                let (epk_1, epk_2, epk_3, c2_core, c2_ext, c2_sext, compliance_ciphertext) =
-                    output_ct.to_output_circuit_public_inputs();
                 Ok(TransferOutputPublic {
                     note_commitment: output.output_note().commit(),
-                    epk_1,
-                    epk_2,
-                    epk_3,
-                    c2_core,
-                    c2_ext,
-                    c2_sext,
-                    compliance_ciphertext,
-                    dleq_c_1: output.dleq_c_1,
-                    dleq_s_1: output.dleq_s_1,
-                    dleq_c_2: output.dleq_c_2,
-                    dleq_s_2: output.dleq_s_2,
-                    dleq_c_3: output.dleq_c_3,
-                    dleq_s_3: output.dleq_s_3,
                 })
             })
             .collect::<Result<Vec<_>, crate::ProofError>>()?;
+        let mut output_publics = output_publics;
+        pad_to_len(&mut output_publics, PADDED_TRANSFER_OUTPUTS, |slot| {
+            let dummy_note = self.synthetic_dummy_output_note(slot);
+            TransferOutputPublic {
+                note_commitment: dummy_note.commit(),
+            }
+        });
 
         let input_privates = self
             .spends
@@ -395,57 +548,55 @@ impl TransferPlan {
                     state_commitment_proof,
                     spent_note: spend.note.clone(),
                     spend_auth_randomizer: spend.randomizer,
-                    spend_compliance_ephemeral_secret: spend
-                        .compliance_ephemeral_secret
-                        .ok_or_else(|| {
-                            crate::ProofError::InvalidPublicInput(
-                                "spend plan not enriched: compliance_ephemeral_secret is missing"
-                                    .into(),
-                            )
-                        })?,
-                    spend_is_flagged: spend.is_flagged,
-                    spend_salt: spend.salt,
+                    is_dummy: false,
+                    dummy_nullifier_seed: Fq::from(0u64),
+                    dummy_spend_auth_key: Fr::from(0u64),
                 })
             })
             .collect::<Result<Vec<_>, crate::ProofError>>()?;
+        let mut input_privates = input_privates;
+        pad_to_len(&mut input_privates, PADDED_TRANSFER_INPUTS, |slot| {
+            let dummy_note = self.synthetic_dummy_input_note(slot);
+            let dummy_proof = dummy_state_commitment_proof(dummy_note.commit());
+            TransferSpendPrivate {
+                state_commitment_proof: dummy_proof,
+                spent_note: dummy_note,
+                spend_auth_randomizer: self.synthetic_dummy_spend_auth_randomizer(slot),
+                is_dummy: true,
+                dummy_nullifier_seed: self.synthetic_dummy_nullifier_seed(slot),
+                dummy_spend_auth_key: self.synthetic_dummy_spend_auth_key(slot),
+            }
+        });
 
         let output_privates = self
             .outputs
             .iter()
-            .map(|output| {
+            .enumerate()
+            .map(|(index, output)| {
                 let created_note = output.output_note();
                 Ok(TransferOutputPrivate {
                     recipient_compliance_path: output.compliance_path.clone(),
                     recipient_compliance_position: output.compliance_position,
                     recipient_leaf: recipient_leaf(output, &created_note),
-                    output_compliance_ephemeral_secret: output
-                        .compliance_ephemeral_secret
-                        .ok_or_else(|| {
-                            crate::ProofError::InvalidPublicInput(
-                                "output plan not enriched: compliance_ephemeral_secret is missing"
-                                    .into(),
-                            )
-                        })?,
-                    output_r_2: output.r_2.ok_or_else(|| {
-                        crate::ProofError::InvalidPublicInput(
-                            "output plan not enriched: r_2 is missing".into(),
-                        )
-                    })?,
-                    output_r_3: output.r_3.ok_or_else(|| {
-                        crate::ProofError::InvalidPublicInput(
-                            "output plan not enriched: r_3 is missing".into(),
-                        )
-                    })?,
-                    output_is_flagged: output.is_flagged,
-                    output_salt: output.salt,
+                    is_receiver: index == 0,
                     created_note,
                 })
             })
             .collect::<Result<Vec<_>, crate::ProofError>>()?;
+        let mut output_privates = output_privates;
+        pad_to_len(&mut output_privates, PADDED_TRANSFER_OUTPUTS, |slot| {
+            let dummy_note = self.synthetic_dummy_output_note(slot);
+            TransferOutputPrivate {
+                recipient_compliance_path: self.spends[0].compliance_path.clone(),
+                recipient_compliance_position: self.spends[0].compliance_position,
+                recipient_leaf: sender_leaf.clone(),
+                is_receiver: false,
+                created_note: dummy_note,
+            }
+        });
 
         Ok((
             TransferProofPublic {
-                family_id: self.body.family_id,
                 anchor,
                 balance_commitment: self.balance.commit(self.value_blinding),
                 asset_anchor: self.spends[0].asset_anchor,
@@ -453,9 +604,9 @@ impl TransferPlan {
                 target_timestamp: Fq::from(self.spends[0].target_timestamp),
                 inputs: input_publics,
                 outputs: output_publics,
+                compliance: compliance_public,
             },
             TransferProofPrivate {
-                family_id: self.body.family_id,
                 action_balance_blinding: self.value_blinding,
                 ak: *fvk.spend_verification_key(),
                 nk: *fvk.nullifier_key(),
@@ -465,8 +616,8 @@ impl TransferPlan {
                 is_regulated: self.spends[0].is_regulated,
                 sender_compliance_path: self.spends[0].compliance_path.clone(),
                 sender_compliance_position: self.spends[0].compliance_position,
-                sender_leaf: sender_leaf(&self.spends[0]),
-                tx_blinding_nonce: self.spends[0].tx_blinding_nonce,
+                sender_leaf,
+                compliance: compliance_private,
                 inputs: input_privates,
                 outputs: output_privates,
             },
@@ -495,6 +646,10 @@ impl TransferPlan {
         let (public, private) =
             self.transfer_public_private(fvk, &state_commitment_proofs, anchor)?;
         let proof = TransferProof::prove(public, private)?;
+        let mut auth_sigs = auth_sigs;
+        while auth_sigs.len() < PADDED_TRANSFER_INPUTS {
+            auth_sigs.push(dummy_spend_auth_sig());
+        }
 
         Ok(Transfer {
             body,
@@ -554,26 +709,8 @@ impl TryFrom<pb::TransferPlan> for TransferPlan {
     }
 }
 
-fn spend_dleq_proof_bytes(spend: &SpendPlan) -> Vec<u8> {
-    let mut proof = Vec::with_capacity(64);
-    proof.extend_from_slice(&spend.dleq_c.to_bytes());
-    proof.extend_from_slice(&spend.dleq_s.to_bytes());
-    proof
-}
-
-fn output_dleq_proof_bytes(output: &OutputPlan) -> Vec<u8> {
-    let mut proofs = Vec::with_capacity(192);
-    proofs.extend_from_slice(&output.dleq_c_1.to_bytes());
-    proofs.extend_from_slice(&output.dleq_s_1.to_bytes());
-    proofs.extend_from_slice(&output.dleq_c_2.to_bytes());
-    proofs.extend_from_slice(&output.dleq_s_2.to_bytes());
-    proofs.extend_from_slice(&output.dleq_c_3.to_bytes());
-    proofs.extend_from_slice(&output.dleq_s_3.to_bytes());
-    proofs
-}
-
 #[cfg(any(unix, windows))]
-fn sender_leaf(spend: &SpendPlan) -> ComplianceLeaf {
+fn sender_leaf(spend: &ShieldedInputPlan) -> ComplianceLeaf {
     spend.compliance_leaf.clone().unwrap_or_else(|| {
         let b_d_fq = spend
             .note
@@ -590,7 +727,7 @@ fn sender_leaf(spend: &SpendPlan) -> ComplianceLeaf {
 }
 
 #[cfg(any(unix, windows))]
-fn recipient_leaf(output: &OutputPlan, created_note: &crate::Note) -> ComplianceLeaf {
+fn recipient_leaf(output: &ShieldedOutputPlan, created_note: &crate::Note) -> ComplianceLeaf {
     output.compliance_leaf.clone().unwrap_or_else(|| {
         let b_d_fq = created_note
             .address()

@@ -7,21 +7,16 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bitvec::vec::BitVec;
 use cnidarium::{Snapshot, StateRead, StateWrite};
+use cnidarium_component::ActionHandler as _;
 use futures::{pin_mut, StreamExt};
 use penumbra_sdk_compact_block::StatePayload;
 use penumbra_sdk_compliance::registry::{check_timestamp_freshness, ComplianceRegistryRead as _};
-use penumbra_sdk_compliance::RegulatedAssetCheck;
-use penumbra_sdk_dex::component::{InternalDexWrite as _, StateReadExt as _, SwapDataWrite as _};
-use penumbra_sdk_dex::event::EventSwap;
-use penumbra_sdk_dex::event::EventSwapClaim;
 use penumbra_sdk_fee::component::FeePay as _;
-use penumbra_sdk_proto::{DomainType as _, StateWriteProto as _};
 use penumbra_sdk_sct::component::clock::EpochRead;
 use penumbra_sdk_sct::component::source::SourceContext;
-use penumbra_sdk_sct::component::tree::{SctManager, VerificationExt as _};
+use penumbra_sdk_sct::component::tree::VerificationExt as _;
 use penumbra_sdk_sct::Nullifier;
 use penumbra_sdk_shielded_pool::component::{ClueManager, StateReadExt as _};
-use penumbra_sdk_shielded_pool::event::{EventOutput, EventSpend};
 use penumbra_sdk_shielded_pool::fmd;
 use penumbra_sdk_tct::StateCommitment;
 use penumbra_sdk_transaction::{gas::GasCost as _, Action, Transaction};
@@ -42,8 +37,8 @@ use self::stateful::{
     tx_parameters_historical_check_with_context,
 };
 use stateless::{
-    check_enabled_actions, check_memo_exists_if_outputs_absent_if_not, check_non_empty_transaction,
-    num_clues_equal_to_num_outputs, valid_binding_signature, validate_spend_output_binding,
+    check_memo_exists_if_outputs_absent_if_not, check_non_empty_transaction,
+    num_clues_equal_to_num_outputs, valid_binding_signature,
 };
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -286,6 +281,7 @@ struct TxExecutionContext {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 struct BlockExecutionCache {
     block_height: u64,
     block_timestamp: u64,
@@ -372,6 +368,7 @@ async fn load_block_execution_cache<S: StateWrite>(state: &mut S) -> Result<Bloc
     Ok(cache)
 }
 
+#[allow(dead_code)]
 async fn validate_compliance_anchors_with_cache<S: StateWrite>(
     state: &mut S,
     user_anchor: &StateCommitment,
@@ -417,6 +414,7 @@ async fn validate_compliance_anchors_with_cache<S: StateWrite>(
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn check_nullifier_with_context<S>(
     state: &mut S,
     nullifier: penumbra_sdk_sct::Nullifier,
@@ -529,14 +527,13 @@ async fn validate_claimed_anchor_read_only<S: StateRead>(
 }
 
 pub(crate) fn supports_parallel_prepare(tx: &Transaction) -> bool {
-    tx.actions()
-        .all(|action| matches!(action, Action::Spend(_) | Action::Output(_)))
+    tx.actions().all(|a| matches!(a, Action::Transfer(_)))
 }
 
 fn action_requires_historical_check(action: &Action) -> bool {
     matches!(
         action,
-        Action::SwapClaim(_) | Action::IbcRelay(_) | Action::Ics20Withdrawal(_)
+        Action::IbcRelay(_) | Action::ShieldedIcs20Withdrawal(_)
     )
 }
 
@@ -776,10 +773,10 @@ where
     S: StateWrite,
 {
     let mut profile = TransactionExecutionProfile::default();
-    let mut effects = TxExecutionEffects::default();
+    let effects = TxExecutionEffects::default();
     let tx_id = tx.id();
     let action_spans_enabled = tracing::enabled!(tracing::Level::INFO);
-    let mut block_cache = load_block_execution_cache(&mut state).await?;
+    let block_cache = load_block_execution_cache(&mut state).await?;
 
     let set_source_start = Instant::now();
     state.put_current_source(Some(tx_id.clone()));
@@ -791,124 +788,10 @@ where
     state.pay_fee(gas_used, fee).await?;
     profile.pay_fee_ms = pay_fee_start.elapsed().as_secs_f64() * 1000.0;
 
-    let execution_context = TxExecutionContext {
-        block_timestamp: block_cache.block_timestamp,
-        source: tx_id.clone(),
-    };
-
     let action_execute_start = Instant::now();
-    let mut validated_anchor_pairs: BTreeSet<(StateCommitment, StateCommitment)> = BTreeSet::new();
     for (i, action) in tx.actions().enumerate() {
         let action_start = Instant::now();
         match action {
-            Action::Spend(spend) => {
-                let anchor_pair = (spend.body.compliance_anchor, spend.body.asset_anchor);
-                let anchors_prevalidated = validated_anchor_pairs.contains(&anchor_pair)
-                    || block_cache.validated_anchor_pairs.contains(&anchor_pair);
-                if action_spans_enabled {
-                    let span = action.create_span(i);
-                    let (committed_check_ms, enqueue_ms) = execute_spend_with_context(
-                        spend,
-                        &mut state,
-                        &execution_context,
-                        &mut block_cache,
-                        anchors_prevalidated,
-                    )
-                    .instrument(span)
-                    .await?;
-                    profile.spend_nullifier_committed_check_ms += committed_check_ms;
-                    profile.spend_nullifier_check_ms += committed_check_ms;
-                    profile.spend_nullifier_enqueue_ms += enqueue_ms;
-                    profile.nullifier_lookup_count += 1;
-                } else {
-                    let (committed_check_ms, enqueue_ms) = execute_spend_with_context(
-                        spend,
-                        &mut state,
-                        &execution_context,
-                        &mut block_cache,
-                        anchors_prevalidated,
-                    )
-                    .await?;
-                    profile.spend_nullifier_committed_check_ms += committed_check_ms;
-                    profile.spend_nullifier_check_ms += committed_check_ms;
-                    profile.spend_nullifier_enqueue_ms += enqueue_ms;
-                    profile.nullifier_lookup_count += 1;
-                }
-                if !anchors_prevalidated {
-                    validated_anchor_pairs.insert(anchor_pair);
-                }
-                profile.spend_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
-            }
-            Action::Output(output) => {
-                let anchor_pair = (output.body.compliance_anchor, output.body.asset_anchor);
-                let anchors_prevalidated = validated_anchor_pairs.contains(&anchor_pair)
-                    || block_cache.validated_anchor_pairs.contains(&anchor_pair);
-                if action_spans_enabled {
-                    let span = action.create_span(i);
-                    let add_note_payload_ms = execute_output_with_context(
-                        output,
-                        &mut state,
-                        &execution_context,
-                        &mut block_cache,
-                        anchors_prevalidated,
-                        &mut effects,
-                    )
-                    .instrument(span)
-                    .await?;
-                    profile.output_add_note_payload_ms += add_note_payload_ms;
-                } else {
-                    let add_note_payload_ms = execute_output_with_context(
-                        output,
-                        &mut state,
-                        &execution_context,
-                        &mut block_cache,
-                        anchors_prevalidated,
-                        &mut effects,
-                    )
-                    .await?;
-                    profile.output_add_note_payload_ms += add_note_payload_ms;
-                }
-                if !anchors_prevalidated {
-                    validated_anchor_pairs.insert(anchor_pair);
-                }
-                profile.output_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
-            }
-            Action::Swap(swap) => {
-                if action_spans_enabled {
-                    let span = action.create_span(i);
-                    execute_swap_with_context(swap, &mut state, &execution_context, &mut effects)
-                        .instrument(span)
-                        .await?;
-                } else {
-                    execute_swap_with_context(swap, &mut state, &execution_context, &mut effects)
-                        .await?;
-                }
-                profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
-            }
-            Action::SwapClaim(swap_claim) => {
-                if action_spans_enabled {
-                    let span = action.create_span(i);
-                    execute_swap_claim_with_context(
-                        swap_claim,
-                        &mut state,
-                        &execution_context,
-                        &mut effects,
-                        &mut profile,
-                    )
-                    .instrument(span)
-                    .await?;
-                } else {
-                    execute_swap_claim_with_context(
-                        swap_claim,
-                        &mut state,
-                        &execution_context,
-                        &mut effects,
-                        &mut profile,
-                    )
-                    .await?;
-                }
-                profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
-            }
             _ => {
                 if action_spans_enabled {
                     let span = action.create_span(i);
@@ -922,6 +805,11 @@ where
                 profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
             }
         }
+    }
+    if let Some(fee_funding) = &tx.transaction_body.fee_funding {
+        let action_start = Instant::now();
+        fee_funding.transfer.check_and_execute(&mut state).await?;
+        profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
     }
     profile.action_execute_ms = action_execute_start.elapsed().as_secs_f64() * 1000.0;
     state.object_put(BLOCK_EXECUTION_CACHE_KEY, block_cache);
@@ -965,34 +853,70 @@ pub(crate) async fn prepare_candidate_read_profiled<S: StateRead + 'static>(
 
     for (i, action) in tx.actions().enumerate() {
         match action {
-            Action::Spend(spend) => {
+            Action::Transfer(transfer) => {
                 check_action_timestamp_freshness(
-                    spend.body.target_timestamp,
+                    transfer.body.target_timestamp,
                     execution_context.block_timestamp,
                 )?;
-
-                anyhow::ensure!(
-                    tx_nullifiers.insert(spend.body.nullifier),
-                    "transaction contains duplicate spend nullifier {}",
-                    spend.body.nullifier
+                for input in &transfer.body.inputs {
+                    if input.is_dummy() {
+                        continue;
+                    }
+                    anyhow::ensure!(
+                        tx_nullifiers.insert(input.nullifier),
+                        "transaction contains duplicate spend nullifier {}",
+                        input.nullifier
+                    );
+                    spend_nullifiers.push(input.nullifier);
+                }
+                anchor_pairs.insert((transfer.body.compliance_anchor, transfer.body.asset_anchor));
+                output_payloads.extend(
+                    transfer
+                        .body
+                        .outputs
+                        .iter()
+                        .filter(|output| !output.is_dummy())
+                        .map(|output| output.note_payload.clone()),
                 );
-                anchor_pairs.insert((spend.body.compliance_anchor, spend.body.asset_anchor));
-                spend_nullifiers.push(spend.body.nullifier);
             }
-            Action::Output(output) => {
-                check_action_timestamp_freshness(
-                    output.body.target_timestamp,
-                    execution_context.block_timestamp,
-                )?;
-                anchor_pairs.insert((output.body.compliance_anchor, output.body.asset_anchor));
-                output_payloads.push(output.body.note_payload.clone());
-            }
+            // Split and Consolidate have no nullifiers or compliance anchors to pre-read.
+            Action::Split(_) | Action::Consolidate(_) => {}
             _ => anyhow::bail!(
-                "parallel prepare only supports spend/output actions, found unsupported action {:?} at index {}",
+                "parallel prepare only supports transfer actions, found unsupported action {:?} at index {}",
                 action,
                 i
             ),
         }
+    }
+    if let Some(fee_funding) = &tx.transaction_body.fee_funding {
+        check_action_timestamp_freshness(
+            fee_funding.transfer.body.target_timestamp,
+            execution_context.block_timestamp,
+        )?;
+        for input in &fee_funding.transfer.body.inputs {
+            if input.is_dummy() {
+                continue;
+            }
+            anyhow::ensure!(
+                tx_nullifiers.insert(input.nullifier),
+                "transaction contains duplicate spend nullifier {}",
+                input.nullifier
+            );
+            spend_nullifiers.push(input.nullifier);
+        }
+        anchor_pairs.insert((
+            fee_funding.transfer.body.compliance_anchor,
+            fee_funding.transfer.body.asset_anchor,
+        ));
+        output_payloads.extend(
+            fee_funding
+                .transfer
+                .body
+                .outputs
+                .iter()
+                .filter(|output| !output.is_dummy())
+                .map(|output| output.note_payload.clone()),
+        );
     }
     prepared.execution_profile.read_local_precheck_ms =
         local_precheck_start.elapsed().as_secs_f64() * 1000.0;
@@ -1126,34 +1050,70 @@ pub(crate) fn prepare_candidate_read_blocking_profiled(
 
     for (i, action) in tx.actions().enumerate() {
         match action {
-            Action::Spend(spend) => {
+            Action::Transfer(transfer) => {
                 check_action_timestamp_freshness(
-                    spend.body.target_timestamp,
+                    transfer.body.target_timestamp,
                     execution_context.block_timestamp,
                 )?;
-
-                anyhow::ensure!(
-                    tx_nullifiers.insert(spend.body.nullifier),
-                    "transaction contains duplicate spend nullifier {}",
-                    spend.body.nullifier
+                for input in &transfer.body.inputs {
+                    if input.is_dummy() {
+                        continue;
+                    }
+                    anyhow::ensure!(
+                        tx_nullifiers.insert(input.nullifier),
+                        "transaction contains duplicate spend nullifier {}",
+                        input.nullifier
+                    );
+                    spend_nullifiers.push(input.nullifier);
+                }
+                anchor_pairs.insert((transfer.body.compliance_anchor, transfer.body.asset_anchor));
+                output_payloads.extend(
+                    transfer
+                        .body
+                        .outputs
+                        .iter()
+                        .filter(|output| !output.is_dummy())
+                        .map(|output| output.note_payload.clone()),
                 );
-                anchor_pairs.insert((spend.body.compliance_anchor, spend.body.asset_anchor));
-                spend_nullifiers.push(spend.body.nullifier);
             }
-            Action::Output(output) => {
-                check_action_timestamp_freshness(
-                    output.body.target_timestamp,
-                    execution_context.block_timestamp,
-                )?;
-                anchor_pairs.insert((output.body.compliance_anchor, output.body.asset_anchor));
-                output_payloads.push(output.body.note_payload.clone());
-            }
+            // Split and Consolidate have no nullifiers or compliance anchors to pre-read.
+            Action::Split(_) | Action::Consolidate(_) => {}
             _ => anyhow::bail!(
-                "parallel prepare only supports spend/output actions, found unsupported action {:?} at index {}",
+                "parallel prepare only supports transfer actions, found unsupported action {:?} at index {}",
                 action,
                 i
             ),
         }
+    }
+    if let Some(fee_funding) = &tx.transaction_body.fee_funding {
+        check_action_timestamp_freshness(
+            fee_funding.transfer.body.target_timestamp,
+            execution_context.block_timestamp,
+        )?;
+        for input in &fee_funding.transfer.body.inputs {
+            if input.is_dummy() {
+                continue;
+            }
+            anyhow::ensure!(
+                tx_nullifiers.insert(input.nullifier),
+                "transaction contains duplicate spend nullifier {}",
+                input.nullifier
+            );
+            spend_nullifiers.push(input.nullifier);
+        }
+        anchor_pairs.insert((
+            fee_funding.transfer.body.compliance_anchor,
+            fee_funding.transfer.body.asset_anchor,
+        ));
+        output_payloads.extend(
+            fee_funding
+                .transfer
+                .body
+                .outputs
+                .iter()
+                .filter(|output| !output.is_dummy())
+                .map(|output| output.note_payload.clone()),
+        );
     }
     prepared.execution_profile.read_local_precheck_ms =
         local_precheck_start.elapsed().as_secs_f64() * 1000.0;
@@ -1215,82 +1175,6 @@ pub(crate) fn prepare_candidate_read_blocking_profiled(
     Ok(prepared)
 }
 
-async fn execute_spend_with_context<S>(
-    spend: &penumbra_sdk_shielded_pool::Spend,
-    mut state: S,
-    context: &TxExecutionContext,
-    block_cache: &mut BlockExecutionCache,
-    anchors_prevalidated: bool,
-) -> Result<(f64, f64)>
-where
-    S: StateWrite,
-{
-    if !anchors_prevalidated {
-        validate_compliance_anchors_with_cache(
-            &mut state,
-            &spend.body.compliance_anchor,
-            &spend.body.asset_anchor,
-            block_cache,
-        )
-        .await?;
-    }
-    check_action_timestamp_freshness(spend.body.target_timestamp, context.block_timestamp)?;
-    let committed_check_ms = check_nullifier_with_context(&mut state, spend.body.nullifier).await?;
-    // Committed-state nullifier checks intentionally ignore same-block conflicts.
-    // Duplicate nullifiers inside one proposal are resolved later during serial apply.
-    let enqueue_start = Instant::now();
-    state
-        .nullify(spend.body.nullifier, context.source.clone().into())
-        .await;
-    state.record_proto(
-        EventSpend {
-            nullifier: spend.body.nullifier,
-        }
-        .to_proto(),
-    );
-
-    Ok((
-        committed_check_ms,
-        enqueue_start.elapsed().as_secs_f64() * 1000.0,
-    ))
-}
-
-async fn execute_output_with_context<S: StateWrite>(
-    output: &penumbra_sdk_shielded_pool::Output,
-    mut state: S,
-    context: &TxExecutionContext,
-    block_cache: &mut BlockExecutionCache,
-    anchors_prevalidated: bool,
-    effects: &mut TxExecutionEffects,
-) -> Result<f64> {
-    if !anchors_prevalidated {
-        validate_compliance_anchors_with_cache(
-            &mut state,
-            &output.body.compliance_anchor,
-            &output.body.asset_anchor,
-            block_cache,
-        )
-        .await?;
-    }
-    check_action_timestamp_freshness(output.body.target_timestamp, context.block_timestamp)?;
-    let add_note_payload_start = Instant::now();
-    effects.sct_payloads.push(
-        (
-            output.body.note_payload.clone(),
-            context.source.clone().into(),
-        )
-            .into(),
-    );
-    let add_note_payload_ms = add_note_payload_start.elapsed().as_secs_f64() * 1000.0;
-    state.record_proto(
-        EventOutput {
-            note_commitment: output.body.note_payload.note_commitment,
-        }
-        .to_proto(),
-    );
-    Ok(add_note_payload_ms)
-}
-
 fn check_action_timestamp_freshness(target_timestamp: u64, block_timestamp: u64) -> Result<()> {
     if target_timestamp == 0
         && std::env::var_os("PENUMBRA_BENCH_ALLOW_ZERO_TARGET_TIMESTAMP").is_some()
@@ -1298,86 +1182,6 @@ fn check_action_timestamp_freshness(target_timestamp: u64, block_timestamp: u64)
         return Ok(());
     }
     check_timestamp_freshness(target_timestamp, block_timestamp)?;
-    Ok(())
-}
-
-async fn execute_swap_with_context<S: StateWrite>(
-    swap: &penumbra_sdk_dex::Swap,
-    mut state: S,
-    context: &TxExecutionContext,
-    effects: &mut TxExecutionEffects,
-) -> Result<()> {
-    let dex_params = state.get_dex_params().await?;
-    anyhow::ensure!(
-        dex_params.is_enabled,
-        "Dex MUST be enabled to process swap actions."
-    );
-
-    state
-        .ensure_assets_not_regulated(
-            &[
-                swap.body.trading_pair.asset_1(),
-                swap.body.trading_pair.asset_2(),
-            ],
-            "Swap",
-        )
-        .await?;
-
-    let flow = (swap.body.delta_1_i, swap.body.delta_2_i);
-    state
-        .accumulate_swap_flow(&swap.body.trading_pair, flow.into())
-        .await?;
-
-    effects
-        .sct_payloads
-        .push((swap.body.payload.clone(), context.source.clone().into()).into());
-
-    let fixed_candidates = Arc::new(dex_params.fixed_candidates.clone());
-    state.add_recently_accessed_asset(swap.body.trading_pair.asset_1(), fixed_candidates.clone());
-    state.add_recently_accessed_asset(swap.body.trading_pair.asset_2(), fixed_candidates);
-    state.record_proto(EventSwap::from(swap).to_proto());
-
-    Ok(())
-}
-
-async fn execute_swap_claim_with_context<S>(
-    swap_claim: &penumbra_sdk_dex::SwapClaim,
-    mut state: S,
-    context: &TxExecutionContext,
-    effects: &mut TxExecutionEffects,
-    profile: &mut TransactionExecutionProfile,
-) -> Result<()>
-where
-    S: StateWrite,
-{
-    let trading_pair = swap_claim.body.output_data.trading_pair;
-    state
-        .ensure_assets_not_regulated(
-            &[trading_pair.asset_1(), trading_pair.asset_2()],
-            "SwapClaim",
-        )
-        .await?;
-
-    let committed_check_ms =
-        check_nullifier_with_context(&mut state, swap_claim.body.nullifier).await?;
-    profile.spend_nullifier_committed_check_ms += committed_check_ms;
-    profile.spend_nullifier_check_ms += committed_check_ms;
-    profile.nullifier_lookup_count += 1;
-
-    let source: penumbra_sdk_sct::CommitmentSource = context.source.clone().into();
-    effects.sct_payloads.push(StatePayload::RolledUp {
-        source: source.clone(),
-        commitment: swap_claim.body.output_1_commitment,
-    });
-    effects.sct_payloads.push(StatePayload::RolledUp {
-        source: source.clone(),
-        commitment: swap_claim.body.output_2_commitment,
-    });
-    let enqueue_start = Instant::now();
-    state.nullify(swap_claim.body.nullifier, source).await;
-    state.record_proto(EventSwapClaim::from(swap_claim).to_proto());
-    profile.spend_nullifier_enqueue_ms += enqueue_start.elapsed().as_secs_f64() * 1000.0;
-
     Ok(())
 }
 
@@ -1406,9 +1210,6 @@ impl AppActionHandler for Transaction {
         check_memo_exists_if_outputs_absent_if_not(self)?;
         // This check ensures that transactions contain at least one action.
         check_non_empty_transaction(self)?;
-        check_enabled_actions(self)?;
-        // Validate spend↔output leaf binding for compliance
-        validate_spend_output_binding(self)?;
 
         let context = self.context();
 
@@ -1426,6 +1227,10 @@ impl AppActionHandler for Transaction {
         // Now check if any component action failed verification.
         while let Some(check) = action_checks.join_next().await {
             check??;
+        }
+
+        if let Some(fee_funding) = &self.transaction_body.fee_funding {
+            fee_funding.transfer.check_stateless(context).await?;
         }
 
         Ok(())
@@ -1458,11 +1263,11 @@ mod tests {
 
     use anyhow::Result;
     use decaf377::Fr;
-    use penumbra_sdk_asset::{asset, Value, STAKING_TOKEN_ASSET_ID};
+    use penumbra_sdk_asset::{asset, Value, BASE_ASSET_ID};
     use penumbra_sdk_compliance::{ComplianceLeaf, IndexedMerkleTree, MerklePath, QuadTree};
     use penumbra_sdk_fee::Fee;
     use penumbra_sdk_keys::{test_keys, Address};
-    use penumbra_sdk_shielded_pool::{Note, OutputPlan, SpendPlan};
+    use penumbra_sdk_shielded_pool::{Note, ShieldedInputPlan, ShieldedOutputPlan, TransferPlan};
     use penumbra_sdk_tct as tct;
     use penumbra_sdk_transaction::{
         plan::{CluePlan, DetectionDataPlan, TransactionPlan},
@@ -1542,11 +1347,11 @@ mod tests {
         Ok(())
     }
 
-    /// Enrich a SpendPlan with valid compliance data for testing.
-    /// Uses unregulated (BLACK_HOLE) compliance for simplicity.
+    /// Enrich a shielded input plan with valid compliance data for testing.
+    /// Uses unregulated compliance for simplicity.
     fn enrich_spend_for_test<R: rand_core::RngCore + rand_core::CryptoRng>(
         rng: &mut R,
-        spend: &mut SpendPlan,
+        spend: &mut ShieldedInputPlan,
         _sender_address: &Address,
     ) {
         let asset_id = spend.note.asset_id();
@@ -1585,11 +1390,11 @@ mod tests {
         spend.compliance_position = 0;
     }
 
-    /// Enrich an OutputPlan with valid compliance data for testing.
-    /// Uses unregulated (BLACK_HOLE) compliance for simplicity.
+    /// Enrich a shielded output plan with valid compliance data for testing.
+    /// Uses unregulated compliance for simplicity.
     fn enrich_output_for_test<R: rand_core::RngCore + rand_core::CryptoRng>(
         rng: &mut R,
-        output: &mut OutputPlan,
+        output: &mut ShieldedOutputPlan,
         sender_address: &Address,
         asset_id: asset::Id,
     ) {
@@ -1659,12 +1464,12 @@ mod tests {
         // Generate two notes controlled by the test address.
         let value = Value {
             amount: 100u64.into(),
-            asset_id: *STAKING_TOKEN_ASSET_ID,
+            asset_id: *BASE_ASSET_ID,
         };
         let note = Note::generate(&mut OsRng, &test_keys::ADDRESS_0, value);
         let value2 = Value {
             amount: 50u64.into(),
-            asset_id: *STAKING_TOKEN_ASSET_ID,
+            asset_id: *BASE_ASSET_ID,
         };
         let note2 = Note::generate(&mut OsRng, &test_keys::ADDRESS_0, value2);
 
@@ -1683,9 +1488,10 @@ mod tests {
         let auth_path2 = sct.witness(note2.commit()).unwrap();
 
         // Create plans and enrich with compliance data
-        let mut spend1 = SpendPlan::new(&mut OsRng, note, auth_path.position());
-        let mut spend2 = SpendPlan::new(&mut OsRng, note2, auth_path2.position());
-        let mut output1 = OutputPlan::new(&mut OsRng, value, test_keys::ADDRESS_1.deref().clone());
+        let mut spend1 = ShieldedInputPlan::new(&mut OsRng, note, auth_path.position());
+        let mut spend2 = ShieldedInputPlan::new(&mut OsRng, note2, auth_path2.position());
+        let mut output1 =
+            ShieldedOutputPlan::new(&mut OsRng, value, test_keys::ADDRESS_1.deref().clone());
 
         enrich_spend_for_test(&mut OsRng, &mut spend1, &test_keys::ADDRESS_0);
         enrich_spend_for_test(&mut OsRng, &mut spend2, &test_keys::ADDRESS_0);
@@ -1696,15 +1502,21 @@ mod tests {
             value.asset_id,
         );
 
-        // Add a single spend and output to the transaction plan such that the
-        // transaction balances.
+        let transfer = TransferPlan::new(
+            vec![spend1.into(), spend2.into()],
+            vec![output1.into()],
+            Fr::rand(&mut OsRng),
+        )
+        .expect("valid transfer plan");
+
         let plan = TransactionPlan {
             transaction_parameters: TransactionParameters {
                 expiry_height: 0,
                 fee: Fee::default(),
                 chain_id: "".into(),
             },
-            actions: vec![spend1.into(), spend2.into(), output1.into()],
+            actions: vec![transfer.into()],
+            fee_funding: None,
             detection_data: Some(DetectionDataPlan {
                 clue_plans: vec![CluePlan::new(
                     &mut OsRng,
@@ -1722,7 +1534,8 @@ mod tests {
         let witness_data = WitnessData {
             anchor: sct.root(),
             state_commitment_proofs: plan
-                .spend_plans()
+                .transfer_plans()
+                .flat_map(|transfer| transfer.spends.iter())
                 .map(|spend| {
                     (
                         spend.note.commit(),
@@ -1752,7 +1565,7 @@ mod tests {
         // Generate a note controlled by the test address.
         let value = Value {
             amount: 100u64.into(),
-            asset_id: *STAKING_TOKEN_ASSET_ID,
+            asset_id: *BASE_ASSET_ID,
         };
         let note = Note::generate(&mut OsRng, &test_keys::ADDRESS_0, value);
 
@@ -1763,8 +1576,9 @@ mod tests {
         let auth_path = sct.witness(note.commit()).unwrap();
 
         // Create plans and enrich with compliance data
-        let mut spend1 = SpendPlan::new(&mut OsRng, note, auth_path.position());
-        let mut output1 = OutputPlan::new(&mut OsRng, value, test_keys::ADDRESS_1.deref().clone());
+        let mut spend1 = ShieldedInputPlan::new(&mut OsRng, note, auth_path.position());
+        let mut output1 =
+            ShieldedOutputPlan::new(&mut OsRng, value, test_keys::ADDRESS_1.deref().clone());
 
         enrich_spend_for_test(&mut OsRng, &mut spend1, &test_keys::ADDRESS_0);
         enrich_output_for_test(
@@ -1774,15 +1588,18 @@ mod tests {
             value.asset_id,
         );
 
-        // Add a single spend and output to the transaction plan such that the
-        // transaction balances.
+        let transfer =
+            TransferPlan::from_spend_output(spend1.into(), output1.into(), Fr::rand(&mut OsRng))
+                .expect("valid transfer plan");
+
         let plan = TransactionPlan {
             transaction_parameters: TransactionParameters {
                 expiry_height: 0,
                 fee: Fee::default(),
                 chain_id: "".into(),
             },
-            actions: vec![spend1.into(), output1.into()],
+            actions: vec![transfer.into()],
+            fee_funding: None,
             detection_data: None,
             memo: None,
         };
@@ -1794,7 +1611,8 @@ mod tests {
         let witness_data = WitnessData {
             anchor: sct.root(),
             state_commitment_proofs: plan
-                .spend_plans()
+                .transfer_plans()
+                .flat_map(|transfer| transfer.spends.iter())
                 .map(|spend| {
                     (
                         spend.note.commit(),

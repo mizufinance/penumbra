@@ -3,20 +3,11 @@
 # provisioned via nix, for ingesting ABCI events from CometBFT for Penumbra.
 set -euo pipefail
 
-
-# The Nix env will add the postgres share directory to XDG_DATA_DIRS.
-# Let's pluck that out of the dir listing env vars, so we can copy files out of it
-# to a writable location.
-postgres_share_dir="$(echo "$XDG_DATA_DIRS" | perl -npE 's/:/\n/g' | grep postgresql | tail -n 1)"
-
-if [[ -z "${postgres_share_dir}" ]] ; then
-    >&2 "ERROR: could not find postgres dir in XDG_DATA_DIRS"
-    exit 1
-fi
+penumbra_devnet_home="${PENUMBRA_DEVNET_HOME:-$HOME/.penumbra}"
 
 # Set up a write-friendly directory for postgres state.
 # The nix store is read-only by default, so add write capability to copy.
-postgres_config_dir="$HOME/.penumbra/network_data/postgresql"
+postgres_config_dir="${penumbra_devnet_home}/network_data/postgresql"
 # While debugging it may be useful to nuke the dir between runs.
 # rm -rf "$postgres_config_dir"
 mkdir -p "${postgres_config_dir}"

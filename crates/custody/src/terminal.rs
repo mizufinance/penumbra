@@ -1,8 +1,8 @@
 use anyhow::Result;
-use penumbra_sdk_governance::ValidatorVoteBody;
+use penumbra_sdk_governance::{ProposalSubmitBody, ValidatorVoteBody};
 use penumbra_sdk_proto::DomainType;
-use penumbra_sdk_stake::validator::Validator;
 use penumbra_sdk_transaction::TransactionPlan;
+use penumbra_sdk_validator::validator::Validator;
 use serde::de::DeserializeOwned;
 use tonic::async_trait;
 
@@ -11,6 +11,7 @@ pub enum SigningRequest {
     TransactionPlan(TransactionPlan),
     ValidatorDefinition(Validator),
     ValidatorVote(ValidatorVoteBody),
+    ProposalSubmit(ProposalSubmitBody),
 }
 /// A trait abstracting over the kind of terminal interface we expect.
 ///

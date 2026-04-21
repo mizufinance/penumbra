@@ -47,20 +47,20 @@ testnet_raw=# SELECT * FROM events JOIN blocks ON events.block_id = blocks.rowid
  99045 |     7534 |       | penumbra.core.component.sct.v1.EventBlockRoot               |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
  99046 |     7534 |  4350 | tx                                                          |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
  99047 |     7534 |  4350 | tx                                                          |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
- 99048 |     7534 |  4350 | penumbra.core.component.shielded_pool.v1.EventSpend         |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
+ 99048 |     7534 |  4350 | penumbra.core.component.shielded_pool.v1.EventNullifierSpent |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
  99049 |     7534 |  4350 | penumbra.core.component.sct.v1.EventCommitment              |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
- 99050 |     7534 |  4350 | penumbra.core.component.shielded_pool.v1.EventOutput        |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
+ 99050 |     7534 |  4350 | penumbra.core.component.shielded_pool.v1.EventNoteCreated    |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
  99051 |     7534 |  4350 | penumbra.core.component.sct.v1.EventCommitment              |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
- 99052 |     7534 |  4350 | penumbra.core.component.shielded_pool.v1.EventOutput        |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
+ 99052 |     7534 |  4350 | penumbra.core.component.shielded_pool.v1.EventNoteCreated    |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
  99053 |     7534 |  4350 | penumbra.core.component.shielded_pool.v1.EventBroadcastClue |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
  99054 |     7534 |  4350 | penumbra.core.component.shielded_pool.v1.EventBroadcastClue |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
  99055 |     7534 |  4351 | tx                                                          |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
  99056 |     7534 |  4351 | tx                                                          |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
- 99057 |     7534 |  4351 | penumbra.core.component.shielded_pool.v1.EventSpend         |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
+ 99057 |     7534 |  4351 | penumbra.core.component.shielded_pool.v1.EventNullifierSpent |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
  99058 |     7534 |  4351 | penumbra.core.component.sct.v1.EventCommitment              |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
- 99059 |     7534 |  4351 | penumbra.core.component.shielded_pool.v1.EventOutput        |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
+ 99059 |     7534 |  4351 | penumbra.core.component.shielded_pool.v1.EventNoteCreated    |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
  99060 |     7534 |  4351 | penumbra.core.component.sct.v1.EventCommitment              |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
- 99061 |     7534 |  4351 | penumbra.core.component.shielded_pool.v1.EventOutput        |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
+ 99061 |     7534 |  4351 | penumbra.core.component.shielded_pool.v1.EventNoteCreated    |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
  99062 |     7534 |  4351 | penumbra.core.component.shielded_pool.v1.EventBroadcastClue |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
  99063 |     7534 |  4351 | penumbra.core.component.shielded_pool.v1.EventBroadcastClue |  7534 | 426939 | penumbra-testnet-deimos-8 | 2024-06-07 01:38:33.440578-04
 (21 rows)

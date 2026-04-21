@@ -54,7 +54,9 @@ for port in 50051 50052 50053; do
 done
 log_success "3 Orbis nodes ready (ports 50051-50053)"
 
-if [ ! -f "$ORBIS_AUDIT" ]; then
+if [ ! -f "$ORBIS_AUDIT" ] \
+    || [ "$REPO_ROOT/crates/bin/orbis-audit/src/main.rs" -nt "$ORBIS_AUDIT" ] \
+    || [ "$REPO_ROOT/crates/bin/orbis-audit/src/cli_tool.rs" -nt "$ORBIS_AUDIT" ]; then
     log_info "Building orbis-audit..."
     cargo build --release -p orbis-audit --manifest-path "$REPO_ROOT/Cargo.toml"
 fi
@@ -99,15 +101,14 @@ print_phase "Chain Scan (Detection Layer)"
 
 echo "  The issuer scans the chain using their detection key (DK)."
 echo "  Flagged transfers (amount >= threshold) are auto-decrypted."
-echo "  Non-flagged transfers are detected but remain encrypted."
+echo "  Non-flagged transfer outputs are detected but remain encrypted."
+echo "  Split/consolidate actions do not appear here because compliance is transfer-only."
 echo ""
 run_scan "$DETECTED"
 
 TOTAL=$(python3 -c "import json; d=json.load(open('$DETECTED')); print(len(d['detected']))")
 FLAGGED=$(python3 -c "import json; d=json.load(open('$DETECTED')); print(sum(1 for t in d['detected'] if t['is_flagged']))")
-SPENDS=$(python3 -c "import json; d=json.load(open('$DETECTED')); print(sum(1 for t in d['detected'] if t.get('is_spend', False)))")
-OUTPUTS=$((TOTAL - SPENDS))
-echo "  Detected: $TOTAL actions ($OUTPUTS outputs, $SPENDS spends)"
+echo "  Detected: $TOTAL transfer entries"
 echo "  Flagged:  $FLAGGED (auto-decrypted)"
 echo "  Encrypted: $((TOTAL - FLAGGED)) (require Orbis PRE)"
 pass "Chain scan complete"
@@ -153,6 +154,9 @@ for user_info in "Alice:$ALICE_ADDRESS" "Bob:$BOB_ADDRESS"; do
         --output "$AUDIT_FILE" \
         --tier default \
         --sender-address "$USER_ADDR" \
+        --known-address "$ALICE_ADDRESS" \
+        --known-address "$BOB_ADDRESS" \
+        --known-address "$CHARLIE_ADDRESS" \
         --orbis-endpoint "$ORBIS_ENDPOINT" \
         --ring-pk-hex "$RING_PK" \
         --ring-id "$RING_ID"
@@ -164,7 +168,7 @@ for user_info in "Alice:$ALICE_ADDRESS" "Bob:$BOB_ADDRESS"; do
         run_quiet $PCLI tx compliance issuer-db update \
             --db "$ISSUER_DB" \
             --audit-output "$AUDIT_FILE" \
-            --audit-subject "$USER_NAME core"
+            --audit-subject "$USER_NAME"
     fi
 done
 log_info "Charlie: skipped (not audited — transactions remain encrypted)"
@@ -203,6 +207,9 @@ for user_info in "Alice:$ALICE_ADDRESS" "Bob:$BOB_ADDRESS"; do
         --output "$AUDIT_FILE" \
         --tier extension \
         --sender-address "$USER_ADDR" \
+        --known-address "$ALICE_ADDRESS" \
+        --known-address "$BOB_ADDRESS" \
+        --known-address "$CHARLIE_ADDRESS" \
         --orbis-endpoint "$ORBIS_ENDPOINT" \
         --ring-pk-hex "$RING_PK" \
         --ring-id "$RING_ID"
@@ -214,7 +221,7 @@ for user_info in "Alice:$ALICE_ADDRESS" "Bob:$BOB_ADDRESS"; do
         run_quiet $PCLI tx compliance issuer-db update \
             --db "$ISSUER_DB" \
             --audit-output "$AUDIT_FILE" \
-            --audit-subject "$USER_NAME ext"
+            --audit-subject "$USER_NAME"
     fi
 done
 log_info "Charlie: skipped (not audited)"
@@ -235,7 +242,7 @@ $PCLI tx compliance issuer-db show --db "$ISSUER_DB"
 #  SUMMARY
 # ═══════════════════════════════════════════════════════════════════════
 print_banner "Demo Complete"
-echo "  Transactions:  $TOTAL actions ($OUTPUTS outputs, $SPENDS spends)"
+echo "  Transfer rows: $TOTAL"
 echo "  Flagged:       $FLAGGED  (STATE 1: auto-decrypted via issuer DK)"
 echo "  Audited:       Alice, Bob (STATE 2+3: decrypted via Orbis PRE)"
 echo "  Not audited:   Charlie (transactions remain encrypted)"

@@ -230,8 +230,7 @@ impl IssuerComplianceWorker {
                                     asset_id = %detected.asset_id,
                                     "detected FLAGGED transaction - issuer has full visibility"
                                 );
-                                // Issuer can decrypt full ciphertext here if needed
-                                // detected.ciphertext contains the full ComplianceCiphertext
+                                // Issuer can decrypt full transfer compliance data here if needed.
                             } else {
                                 debug!(
                                     height,

@@ -203,12 +203,8 @@ async fn main() -> anyhow::Result<()> {
             };
 
             // Configure a Prometheus recorder and exporter.
-            use penumbra_sdk_dex::component::metrics::PrometheusBuilderExt;
             let (recorder, exporter) = PrometheusBuilder::new()
                 .with_http_listener(metrics_bind)
-                // Set explicit buckets so that Prometheus endpoint emits true histograms, rather
-                // than the default distribution type summaries, for time-series data.
-                .set_buckets_for_dex_metrics()?
                 .build()
                 .map_err(|e| {
                     let msg = format!(
@@ -354,7 +350,6 @@ async fn main() -> anyhow::Result<()> {
                     peer_address_template,
                     timeout_commit,
                     epoch_duration,
-                    unbonding_delay,
                     active_validator_limit,
                     allocations_input_file,
                     allocation_address,
@@ -364,6 +359,8 @@ async fn main() -> anyhow::Result<()> {
                     preserve_chain_id,
                     external_addresses,
                     proposal_voting_blocks,
+                    tendermint_rpc_bind,
+                    tendermint_p2p_bind,
                 },
             network_dir,
         } => {
@@ -421,9 +418,10 @@ async fn main() -> anyhow::Result<()> {
                 timeout_commit,
                 active_validator_limit,
                 epoch_duration,
-                unbonding_delay,
                 proposal_voting_blocks,
                 gas_price_simple,
+                tendermint_rpc_bind,
+                tendermint_p2p_bind,
             )?;
             tracing::info!(
                 n_validators = t.validators.len(),

@@ -8,12 +8,7 @@ use ark_ff::Zero;
 use decaf377::Fr;
 use decaf377_rdsa::{Binding, Signature, VerificationKey, VerificationKeyBytes};
 use penumbra_sdk_asset::Balance;
-use penumbra_sdk_community_pool::{CommunityPoolDeposit, CommunityPoolOutput, CommunityPoolSpend};
-use penumbra_sdk_dex::{
-    lp::action::{PositionClose, PositionOpen},
-    swap::Swap,
-};
-use penumbra_sdk_governance::{DelegatorVote, ProposalSubmit, ProposalWithdraw, ValidatorVote};
+use penumbra_sdk_governance::{ProposalSubmit, ValidatorVote};
 use penumbra_sdk_ibc::IbcRelay;
 use penumbra_sdk_keys::{AddressView, FullViewingKey, PayloadKey};
 use penumbra_sdk_proto::{
@@ -21,8 +16,7 @@ use penumbra_sdk_proto::{
     DomainType, Message,
 };
 use penumbra_sdk_sct::Nullifier;
-use penumbra_sdk_shielded_pool::{Note, Output, Spend, Transfer};
-use penumbra_sdk_stake::{Delegate, Undelegate, UndelegateClaim};
+use penumbra_sdk_shielded_pool::{Consolidate, Note, ShieldedIcs20WithdrawalView, Split, Transfer};
 use penumbra_sdk_tct as tct;
 use penumbra_sdk_tct::StateCommitment;
 use penumbra_sdk_txhash::{
@@ -31,9 +25,10 @@ use penumbra_sdk_txhash::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    fee_funding::FeeFunding,
     memo::{MemoCiphertext, MemoPlaintext},
     view::{
-        action_view::{OutputView, TransferView},
+        action_view::{ConsolidateView, SplitView, TransferView},
         MemoView, TransactionBodyView,
     },
     Action, ActionView, DetectionData, IsAction, MemoPlaintextView, TransactionParameters,
@@ -44,18 +39,17 @@ use crate::{
 pub struct TransactionBody {
     pub actions: Vec<Action>,
     pub transaction_parameters: TransactionParameters,
+    pub fee_funding: Option<FeeFunding>,
     pub detection_data: Option<DetectionData>,
     pub memo: Option<MemoCiphertext>,
 }
 
-/// Represents a transaction summary containing multiple effects.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(try_from = "pbt::TransactionSummary", into = "pbt::TransactionSummary")]
 pub struct TransactionSummary {
     pub effects: Vec<TransactionEffect>,
 }
 
-/// Represents an individual effect of a transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransactionEffect {
     pub address: AddressView,
@@ -73,23 +67,23 @@ impl EffectingData for TransactionBody {
             .memo
             .as_ref()
             .map(|memo| memo.effect_hash())
-            // If the memo is not present, use the all-zero hash to record its absence in
-            // the overall effect hash.
             .unwrap_or_default();
         let detection_data_hash = self
             .detection_data
             .as_ref()
             .map(|detection_data| detection_data.effect_hash())
-            // If the detection data is not present, use the all-zero hash to
-            // record its absence in the overall effect hash.
+            .unwrap_or_default();
+        let fee_funding_hash = self
+            .fee_funding
+            .as_ref()
+            .map(EffectingData::effect_hash)
             .unwrap_or_default();
 
-        // Hash the fixed data of the transaction body.
         state.update(parameters_hash.as_bytes());
         state.update(memo_hash.as_bytes());
         state.update(detection_data_hash.as_bytes());
+        state.update(fee_funding_hash.as_bytes());
 
-        // Hash the number of actions, then each action.
         let num_actions = self.actions.len() as u32;
         state.update(&num_actions.to_le_bytes());
         for action in &self.actions {
@@ -155,17 +149,14 @@ impl Transaction {
             .actions
             .iter()
             .map(|action| match action {
-                Action::Spend(_) => 1,
-                Action::Output(_) => 1,
-                Action::Transfer(_) => 1,
-                Action::Swap(_) => 1,
-                Action::SwapClaim(_) => 1,
-                Action::UndelegateClaim(_) => 1,
-                Action::DelegatorVote(_) => 1,
-                Action::ActionLiquidityTournamentVote(_) => 1,
+                Action::Transfer(_)
+                | Action::Consolidate(_)
+                | Action::Split(_)
+                | Action::ShieldedIcs20Withdrawal(_) => 1,
                 _ => 0,
             })
-            .sum()
+            .sum::<usize>()
+            + usize::from(self.transaction_body.fee_funding.is_some())
     }
 
     pub fn is_aggregate_bundle_tx(&self) -> bool {
@@ -191,25 +182,15 @@ impl Transaction {
         self.aggregate_bundle_action().is_some()
     }
 
-    /// Helper function for decrypting the memo on the transaction given an FVK.
-    ///
-    /// Will return an Error if there is no memo.
     pub fn decrypt_memo(&self, fvk: &FullViewingKey) -> anyhow::Result<MemoPlaintext> {
-        // Error if we don't have an encrypted memo field to decrypt.
         if self.transaction_body().memo.is_none() {
             return Err(anyhow::anyhow!("no memo"));
         }
 
-        // Any note-creating shielded action with an outgoing payload key will let us decrypt the memo.
-        if let Some((note_payload, ovk_wrapped_key, wrapped_memo_key, balance_commitment)) =
-            self.actions().find_map(|action| match action {
-                Action::Output(output) => Some((
-                    output.body.note_payload.clone(),
-                    output.body.ovk_wrapped_key.clone(),
-                    output.body.wrapped_memo_key.clone(),
-                    output.body.balance_commitment,
-                )),
-                Action::Transfer(transfer) => transfer.body.outputs.first().map(|output| {
+        if let Some((note_payload, ovk_wrapped_key, wrapped_memo_key, balance_commitment)) = self
+            .actions()
+            .find_map(|action| match action {
+                Action::Transfer(transfer) => transfer.body.outputs.iter().next().map(|output| {
                     (
                         output.note_payload.clone(),
                         output.ovk_wrapped_key.clone(),
@@ -217,7 +198,52 @@ impl Transaction {
                         transfer.body.balance_commitment,
                     )
                 }),
+                Action::Consolidate(consolidate) => {
+                    consolidate.body.outputs.iter().next().map(|output| {
+                        (
+                            output.note_payload.clone(),
+                            output.ovk_wrapped_key.clone(),
+                            output.wrapped_memo_key.clone(),
+                            consolidate.body.balance_commitment,
+                        )
+                    })
+                }
+                Action::Split(split) => split.body.outputs.iter().next().map(|output| {
+                    (
+                        output.note_payload.clone(),
+                        output.ovk_wrapped_key.clone(),
+                        output.wrapped_memo_key.clone(),
+                        split.body.balance_commitment,
+                    )
+                }),
+                Action::ShieldedIcs20Withdrawal(withdrawal) => Some((
+                    withdrawal.body.change_output.note_payload.clone(),
+                    withdrawal.body.change_output.ovk_wrapped_key.clone(),
+                    withdrawal.body.change_output.wrapped_memo_key.clone(),
+                    withdrawal.body.balance_commitment,
+                )),
                 _ => None,
+            })
+            .or_else(|| {
+                self.transaction_body
+                    .fee_funding
+                    .as_ref()
+                    .and_then(|fee_funding| {
+                        fee_funding
+                            .transfer
+                            .body
+                            .outputs
+                            .iter()
+                            .next()
+                            .map(|output| {
+                                (
+                                    output.note_payload.clone(),
+                                    output.ovk_wrapped_key.clone(),
+                                    output.wrapped_memo_key.clone(),
+                                    fee_funding.transfer.body.balance_commitment,
+                                )
+                            })
+                    })
             })
         {
             let shared_secret = Note::decrypt_key(
@@ -237,19 +263,14 @@ impl Transaction {
                 Err(_) => wrapped_memo_key.decrypt(note_payload.ephemeral_key, fvk.incoming())?,
             };
 
-            // Now we can use the memo key to decrypt the memo.
             let tx_body = self.transaction_body();
             let memo_ciphertext = tx_body
                 .memo
                 .as_ref()
                 .expect("memo field exists on this transaction");
-            let decrypted_memo = MemoCiphertext::decrypt(&memo_key, memo_ciphertext.clone())?;
-
-            // The memo is shared across all outputs, so we can stop here.
-            return Ok(decrypted_memo);
+            return MemoCiphertext::decrypt(&memo_key, memo_ciphertext.clone());
         }
 
-        // If we got here, we were unable to decrypt the memo.
         Err(anyhow::anyhow!("unable to decrypt memo"))
     }
 
@@ -261,91 +282,66 @@ impl Transaction {
 
         for action in self.actions() {
             match action {
-                Action::Swap(swap) => {
-                    let commitment = swap.body.payload.commitment;
-                    let payload_key = PayloadKey::derive_swap(fvk.outgoing(), commitment);
-
-                    result.insert(commitment, payload_key);
+                Action::Transfer(transfer) => {
+                    insert_payload_keys_for_outputs(
+                        &mut result,
+                        &transfer.body.outputs,
+                        transfer.body.balance_commitment,
+                        fvk,
+                    )?;
                 }
-                Action::Output(output) => {
-                    // Outputs may be either incoming or outgoing; for an outgoing output
-                    // we need to use the ovk_wrapped_key, and for an incoming output we need to
-                    // use the IVK to perform key agreement with the ephemeral key.
-                    let ovk_wrapped_key = output.body.ovk_wrapped_key.clone();
-                    let commitment = output.body.note_payload.note_commitment;
-                    let epk = &output.body.note_payload.ephemeral_key;
-                    let cv = output.body.balance_commitment;
-                    let ovk = fvk.outgoing();
+                Action::Consolidate(consolidate) => {
+                    insert_payload_keys_for_outputs(
+                        &mut result,
+                        &consolidate.body.outputs,
+                        consolidate.body.balance_commitment,
+                        fvk,
+                    )?;
+                }
+                Action::Split(split) => {
+                    insert_payload_keys_for_outputs(
+                        &mut result,
+                        &split.body.outputs,
+                        split.body.balance_commitment,
+                        fvk,
+                    )?;
+                }
+                Action::ShieldedIcs20Withdrawal(withdrawal) => {
+                    let output = &withdrawal.body.change_output;
+                    let ovk_wrapped_key = output.ovk_wrapped_key.clone();
+                    let commitment = output.note_payload.note_commitment;
+                    let epk = &output.note_payload.ephemeral_key;
+                    let cv = withdrawal.body.balance_commitment;
                     let shared_secret =
-                        Note::decrypt_key(ovk_wrapped_key, commitment, cv, ovk, epk);
+                        Note::decrypt_key(ovk_wrapped_key, commitment, cv, fvk.outgoing(), epk);
 
                     match shared_secret {
                         Ok(shared_secret) => {
-                            // This is an outgoing output.
-                            let payload_key = PayloadKey::derive(&shared_secret, epk);
-                            result.insert(commitment, payload_key);
+                            result.insert(commitment, PayloadKey::derive(&shared_secret, epk));
                         }
                         Err(_) => {
-                            // This is (maybe) an incoming output, use the ivk.
                             let shared_secret = fvk.incoming().key_agreement_with(epk)?;
-                            let payload_key = PayloadKey::derive(&shared_secret, epk);
-
-                            result.insert(commitment, payload_key);
+                            result.insert(commitment, PayloadKey::derive(&shared_secret, epk));
                         }
                     }
                 }
-                Action::Transfer(transfer) => {
-                    for output in &transfer.body.outputs {
-                        let ovk_wrapped_key = output.ovk_wrapped_key.clone();
-                        let commitment = output.note_payload.note_commitment;
-                        let epk = &output.note_payload.ephemeral_key;
-                        let cv = transfer.body.balance_commitment;
-                        let ovk = fvk.outgoing();
-                        let shared_secret =
-                            Note::decrypt_key(ovk_wrapped_key, commitment, cv, ovk, epk);
-
-                        match shared_secret {
-                            Ok(shared_secret) => {
-                                let payload_key = PayloadKey::derive(&shared_secret, epk);
-                                result.insert(commitment, payload_key);
-                            }
-                            Err(_) => {
-                                let shared_secret = fvk.incoming().key_agreement_with(epk)?;
-                                let payload_key = PayloadKey::derive(&shared_secret, epk);
-                                result.insert(commitment, payload_key);
-                            }
-                        }
-                    }
-                }
-                // These actions have no payload keys; they're listed explicitly
-                // for exhaustiveness.
-                Action::SwapClaim(_)
-                | Action::Spend(_)
-                | Action::Delegate(_)
-                | Action::Undelegate(_)
-                | Action::UndelegateClaim(_)
-                | Action::ValidatorDefinition(_)
+                Action::ValidatorDefinition(_)
                 | Action::IbcRelay(_)
                 | Action::ProposalSubmit(_)
-                | Action::ProposalWithdraw(_)
                 | Action::ValidatorVote(_)
-                | Action::DelegatorVote(_)
-                | Action::ProposalDepositClaim(_)
-                | Action::PositionOpen(_)
-                | Action::PositionClose(_)
-                | Action::PositionWithdraw(_)
-                | Action::Ics20Withdrawal(_)
-                | Action::CommunityPoolSpend(_)
-                | Action::CommunityPoolOutput(_)
-                | Action::CommunityPoolDeposit(_)
-                | Action::ActionDutchAuctionSchedule(_)
-                | Action::ActionDutchAuctionEnd(_)
-                | Action::ActionDutchAuctionWithdraw(_)
-                | Action::ActionLiquidityTournamentVote(_)
                 | Action::ComplianceRegisterAsset(_)
                 | Action::ComplianceRegisterUser(_)
                 | Action::AggregateBundle(_) => {}
             }
+        }
+
+        if let Some(fee_funding) = &self.transaction_body.fee_funding {
+            insert_payload_keys_for_outputs(
+                &mut result,
+                &fee_funding.transfer.body.outputs,
+                fee_funding.transfer.body.balance_commitment,
+                fvk,
+            )?;
         }
 
         Ok(result)
@@ -353,59 +349,57 @@ impl Transaction {
 
     pub fn view_from_perspective(&self, txp: &TransactionPerspective) -> TransactionView {
         let mut action_views = Vec::new();
-
         let mut memo_plaintext: Option<MemoPlaintext> = None;
         let mut memo_ciphertext: Option<MemoCiphertext> = None;
 
         for action in self.actions() {
             let action_view = action.view_from_perspective(txp);
 
-            // In the case of Output actions, decrypt the transaction memo if this hasn't already been done.
             if matches!(
                 &action_view,
-                ActionView::Output(_) | ActionView::Transfer(_)
-            ) {
-                if memo_plaintext.is_none() {
-                    memo_plaintext = match self.transaction_body().memo {
-                        Some(ciphertext) => {
-                            memo_ciphertext = Some(ciphertext.clone());
-                            match &action_view {
-                                ActionView::Output(OutputView::Visible {
-                                    output: _,
-                                    note: _,
-                                    payload_key: decrypted_memo_key,
-                                }) => MemoCiphertext::decrypt(decrypted_memo_key, ciphertext).ok(),
-                                ActionView::Output(OutputView::Opaque { output: _ }) => None,
-                                ActionView::Transfer(TransferView::Visible {
-                                    transfer: _,
-                                    spent_notes: _,
-                                    created_notes: _,
-                                    payload_key: decrypted_memo_key,
-                                }) => MemoCiphertext::decrypt(decrypted_memo_key, ciphertext).ok(),
-                                ActionView::Transfer(TransferView::Opaque { transfer: _ }) => None,
-                                _ => None,
-                            }
-                        }
-                        None => None,
+                ActionView::Transfer(_)
+                    | ActionView::Consolidate(_)
+                    | ActionView::Split(_)
+                    | ActionView::ShieldedIcs20Withdrawal(_)
+            ) && memo_plaintext.is_none()
+            {
+                memo_plaintext = match self.transaction_body().memo {
+                    Some(ciphertext) => {
+                        memo_ciphertext = Some(ciphertext.clone());
+                        payload_key_from_view(&action_view).and_then(|payload_key| {
+                            MemoCiphertext::decrypt(payload_key, ciphertext).ok()
+                        })
                     }
+                    None => None,
                 }
             }
 
             action_views.push(action_view);
         }
 
+        let fee_funding = self
+            .transaction_body
+            .fee_funding
+            .as_ref()
+            .map(|fee_funding| fee_funding.view_from_perspective(txp));
+        if memo_plaintext.is_none() {
+            if let (Some(ciphertext), Some(TransferView::Visible { payload_key, .. })) =
+                (self.transaction_body().memo, fee_funding.as_ref())
+            {
+                memo_ciphertext = Some(ciphertext.clone());
+                memo_plaintext = MemoCiphertext::decrypt(payload_key, ciphertext).ok();
+            }
+        }
+
         let memo_view = match memo_ciphertext {
             Some(ciphertext) => match memo_plaintext {
-                Some(plaintext) => {
-                    let plaintext_view: MemoPlaintextView = MemoPlaintextView {
+                Some(plaintext) => Some(MemoView::Visible {
+                    plaintext: MemoPlaintextView {
                         return_address: txp.view_address(plaintext.return_address()),
                         text: plaintext.text().to_owned(),
-                    };
-                    Some(MemoView::Visible {
-                        plaintext: plaintext_view,
-                        ciphertext,
-                    })
-                }
+                    },
+                    ciphertext,
+                }),
                 None => Some(MemoView::Opaque { ciphertext }),
             },
             None => None,
@@ -423,6 +417,7 @@ impl Transaction {
             body_view: TransactionBodyView {
                 action_views,
                 transaction_parameters: self.transaction_parameters(),
+                fee_funding,
                 detection_data,
                 memo_view,
             },
@@ -435,50 +430,10 @@ impl Transaction {
         self.transaction_body.actions.iter()
     }
 
-    pub fn delegations(&self) -> impl Iterator<Item = &Delegate> {
-        self.actions().filter_map(|action| {
-            if let Action::Delegate(d) = action {
-                Some(d)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn undelegations(&self) -> impl Iterator<Item = &Undelegate> {
-        self.actions().filter_map(|action| {
-            if let Action::Undelegate(d) = action {
-                Some(d)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn undelegate_claims(&self) -> impl Iterator<Item = &UndelegateClaim> {
-        self.actions().filter_map(|action| {
-            if let Action::UndelegateClaim(d) = action {
-                Some(d)
-            } else {
-                None
-            }
-        })
-    }
-
     pub fn proposal_submits(&self) -> impl Iterator<Item = &ProposalSubmit> {
         self.actions().filter_map(|action| {
-            if let Action::ProposalSubmit(s) = action {
-                Some(s)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn proposal_withdraws(&self) -> impl Iterator<Item = &ProposalWithdraw> {
-        self.actions().filter_map(|action| {
-            if let Action::ProposalWithdraw(w) = action {
-                Some(w)
+            if let Action::ProposalSubmit(submit) = action {
+                Some(submit)
             } else {
                 None
             }
@@ -487,18 +442,8 @@ impl Transaction {
 
     pub fn validator_votes(&self) -> impl Iterator<Item = &ValidatorVote> {
         self.actions().filter_map(|action| {
-            if let Action::ValidatorVote(v) = action {
-                Some(v)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn delegator_votes(&self) -> impl Iterator<Item = &DelegatorVote> {
-        self.actions().filter_map(|action| {
-            if let Action::DelegatorVote(v) = action {
-                Some(v)
+            if let Action::ValidatorVote(vote) = action {
+                Some(vote)
             } else {
                 None
             }
@@ -517,20 +462,10 @@ impl Transaction {
 
     pub fn validator_definitions(
         &self,
-    ) -> impl Iterator<Item = &penumbra_sdk_stake::validator::Definition> {
+    ) -> impl Iterator<Item = &penumbra_sdk_validator::validator::Definition> {
         self.actions().filter_map(|action| {
-            if let Action::ValidatorDefinition(d) = action {
-                Some(d)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn outputs(&self) -> impl Iterator<Item = &Output> {
-        self.actions().filter_map(|action| {
-            if let Action::Output(d) = action {
-                Some(d)
+            if let Action::ValidatorDefinition(definition) = action {
+                Some(definition)
             } else {
                 None
             }
@@ -547,10 +482,20 @@ impl Transaction {
         })
     }
 
-    pub fn swaps(&self) -> impl Iterator<Item = &Swap> {
+    pub fn consolidations(&self) -> impl Iterator<Item = &Consolidate> {
         self.actions().filter_map(|action| {
-            if let Action::Swap(s) = action {
-                Some(s)
+            if let Action::Consolidate(consolidate) = action {
+                Some(consolidate)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn splits(&self) -> impl Iterator<Item = &Split> {
+        self.actions().filter_map(|action| {
+            if let Action::Split(split) = action {
+                Some(split)
             } else {
                 None
             }
@@ -558,101 +503,97 @@ impl Transaction {
     }
 
     pub fn spent_nullifiers(&self) -> impl Iterator<Item = Nullifier> + '_ {
-        self.actions().flat_map(|action| match action {
-            Action::Spend(spend) => vec![spend.body.nullifier],
-            Action::Transfer(transfer) => transfer
-                .body
-                .inputs
-                .iter()
-                .map(|input| input.nullifier)
-                .collect(),
-            Action::SwapClaim(swap_claim) => vec![swap_claim.body.nullifier],
-            _ => Vec::new(),
-        })
+        let mut nullifiers = self
+            .actions()
+            .flat_map(|action| match action {
+                Action::Transfer(transfer) => transfer
+                    .body
+                    .inputs
+                    .iter()
+                    .filter(|input| !input.is_dummy())
+                    .map(|input| input.nullifier)
+                    .collect(),
+                Action::Consolidate(consolidate) => consolidate
+                    .body
+                    .inputs
+                    .iter()
+                    .map(|input| input.nullifier)
+                    .collect(),
+                Action::Split(split) => split
+                    .body
+                    .inputs
+                    .iter()
+                    .map(|input| input.nullifier)
+                    .collect(),
+                Action::ShieldedIcs20Withdrawal(withdrawal) => withdrawal
+                    .body
+                    .inputs
+                    .iter()
+                    .map(|input| input.nullifier)
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect::<Vec<_>>();
+
+        if let Some(fee_funding) = &self.transaction_body.fee_funding {
+            nullifiers.extend(
+                fee_funding
+                    .transfer
+                    .body
+                    .inputs
+                    .iter()
+                    .filter(|input| !input.is_dummy())
+                    .map(|input| input.nullifier),
+            );
+        }
+
+        nullifiers.into_iter()
     }
 
     pub fn state_commitments(&self) -> impl Iterator<Item = StateCommitment> + '_ {
-        self.actions()
-            .flat_map(|action| {
-                // Note: adding future actions that include state commitments
-                // will need to be matched here.
-                match action {
-                    Action::Output(output) => vec![Some(output.body.note_payload.note_commitment)],
-                    Action::Transfer(transfer) => transfer
-                        .body
-                        .outputs
-                        .iter()
-                        .map(|output| Some(output.note_payload.note_commitment))
-                        .collect::<Vec<_>>(),
-                    Action::Swap(swap) => vec![Some(swap.body.payload.commitment)],
-                    Action::SwapClaim(claim) => vec![
-                        Some(claim.body.output_1_commitment),
-                        Some(claim.body.output_2_commitment),
-                    ],
-                    _ => vec![None],
-                }
+        let mut commitments = self
+            .actions()
+            .flat_map(|action| match action {
+                Action::Transfer(transfer) => transfer
+                    .body
+                    .outputs
+                    .iter()
+                    .filter(|output| !output.is_dummy())
+                    .map(|output| Some(output.note_payload.note_commitment))
+                    .collect::<Vec<_>>(),
+                Action::Consolidate(consolidate) => consolidate
+                    .body
+                    .outputs
+                    .iter()
+                    .map(|output| Some(output.note_payload.note_commitment))
+                    .collect::<Vec<_>>(),
+                Action::Split(split) => split
+                    .body
+                    .outputs
+                    .iter()
+                    .map(|output| Some(output.note_payload.note_commitment))
+                    .collect::<Vec<_>>(),
+                Action::ShieldedIcs20Withdrawal(withdrawal) => vec![Some(
+                    withdrawal.body.change_output.note_payload.note_commitment,
+                )],
+                _ => vec![None],
             })
             .filter_map(|x| x)
-    }
+            .collect::<Vec<_>>();
 
-    pub fn community_pool_deposits(&self) -> impl Iterator<Item = &CommunityPoolDeposit> {
-        self.actions().filter_map(|action| {
-            if let Action::CommunityPoolDeposit(d) = action {
-                Some(d)
-            } else {
-                None
-            }
-        })
-    }
+        if let Some(fee_funding) = &self.transaction_body.fee_funding {
+            commitments.extend(
+                fee_funding
+                    .transfer
+                    .body
+                    .outputs
+                    .iter()
+                    .filter(|output| !output.is_dummy())
+                    .map(|output| output.note_payload.note_commitment),
+            );
+        }
 
-    pub fn community_pool_spends(&self) -> impl Iterator<Item = &CommunityPoolSpend> {
-        self.actions().filter_map(|action| {
-            if let Action::CommunityPoolSpend(s) = action {
-                Some(s)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn spends(&self) -> impl Iterator<Item = &Spend> {
-        self.actions().filter_map(|action| {
-            if let Action::Spend(s) = action {
-                Some(s)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn community_pool_outputs(&self) -> impl Iterator<Item = &CommunityPoolOutput> {
-        self.actions().filter_map(|action| {
-            if let Action::CommunityPoolOutput(o) = action {
-                Some(o)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn position_openings(&self) -> impl Iterator<Item = &PositionOpen> {
-        self.actions().filter_map(|action| {
-            if let Action::PositionOpen(d) = action {
-                Some(d)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn position_closings(&self) -> impl Iterator<Item = &PositionClose> {
-        self.actions().filter_map(|action| {
-            if let Action::PositionClose(d) = action {
-                Some(d)
-            } else {
-                None
-            }
-        })
+        commitments.into_iter()
     }
 
     pub fn transaction_body(&self) -> TransactionBody {
@@ -677,14 +618,15 @@ impl Transaction {
         TransactionId(id_bytes)
     }
 
-    /// Compute the binding verification key from the transaction data.
     pub fn binding_verification_key(&self) -> VerificationKey<Binding> {
         let mut balance_commitments = decaf377::Element::default();
         for action in &self.transaction_body.actions {
             balance_commitments += action.balance_commitment().0;
         }
+        if let Some(fee_funding) = &self.transaction_body.fee_funding {
+            balance_commitments += fee_funding.balance_commitment().0;
+        }
 
-        // Add fee into binding verification key computation.
         let fee_v_blinding = Fr::zero();
         let fee_value_commitment = self
             .transaction_body
@@ -702,12 +644,102 @@ impl Transaction {
     }
 }
 
+fn insert_payload_keys_for_outputs<Output>(
+    result: &mut BTreeMap<StateCommitment, PayloadKey>,
+    outputs: &[Output],
+    balance_commitment: penumbra_sdk_asset::balance::Commitment,
+    fvk: &FullViewingKey,
+) -> anyhow::Result<()>
+where
+    for<'a> &'a Output: IntoOutputRef<'a>,
+{
+    for output in outputs {
+        let output = output.into_output_ref();
+        let commitment = output.note_payload.note_commitment;
+        let epk = &output.note_payload.ephemeral_key;
+        let shared_secret = Note::decrypt_key(
+            output.ovk_wrapped_key.clone(),
+            commitment,
+            balance_commitment,
+            fvk.outgoing(),
+            epk,
+        );
+
+        match shared_secret {
+            Ok(shared_secret) => {
+                result.insert(commitment, PayloadKey::derive(&shared_secret, epk));
+            }
+            Err(_) => {
+                let shared_secret = fvk.incoming().key_agreement_with(epk)?;
+                result.insert(commitment, PayloadKey::derive(&shared_secret, epk));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+trait IntoOutputRef<'a> {
+    fn into_output_ref(self) -> OutputRef<'a>;
+}
+
+struct OutputRef<'a> {
+    note_payload: &'a penumbra_sdk_shielded_pool::NotePayload,
+    ovk_wrapped_key: &'a penumbra_sdk_keys::symmetric::OvkWrappedKey,
+}
+
+impl<'a> IntoOutputRef<'a> for &'a penumbra_sdk_shielded_pool::TransferOutputBody {
+    fn into_output_ref(self) -> OutputRef<'a> {
+        OutputRef {
+            note_payload: &self.note_payload,
+            ovk_wrapped_key: &self.ovk_wrapped_key,
+        }
+    }
+}
+
+impl<'a> IntoOutputRef<'a> for &'a penumbra_sdk_shielded_pool::ConsolidateOutputBody {
+    fn into_output_ref(self) -> OutputRef<'a> {
+        OutputRef {
+            note_payload: &self.note_payload,
+            ovk_wrapped_key: &self.ovk_wrapped_key,
+        }
+    }
+}
+
+impl<'a> IntoOutputRef<'a> for &'a penumbra_sdk_shielded_pool::SplitOutputBody {
+    fn into_output_ref(self) -> OutputRef<'a> {
+        OutputRef {
+            note_payload: &self.note_payload,
+            ovk_wrapped_key: &self.ovk_wrapped_key,
+        }
+    }
+}
+
+fn payload_key_from_view(action_view: &ActionView) -> Option<&PayloadKey> {
+    match action_view {
+        ActionView::Transfer(TransferView::Visible { payload_key, .. }) => Some(payload_key),
+        ActionView::Transfer(TransferView::Opaque { .. }) => None,
+        ActionView::Consolidate(ConsolidateView::Visible { payload_key, .. }) => Some(payload_key),
+        ActionView::Consolidate(ConsolidateView::Opaque { .. }) => None,
+        ActionView::Split(SplitView::Visible { payload_key, .. }) => Some(payload_key),
+        ActionView::Split(SplitView::Opaque { .. }) => None,
+        ActionView::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalView::Visible {
+            payload_key,
+            ..
+        }) => Some(payload_key),
+        ActionView::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalView::Opaque { .. }) => None,
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use decaf377_rdsa::{SigningKey, SpendAuth, VerificationKey};
-    use penumbra_sdk_asset::{asset, Balance, Value};
+    use penumbra_sdk_asset::{asset, Balance, Value, BASE_ASSET_DENOM};
     use penumbra_sdk_keys::symmetric::{OvkWrappedKey, WrappedMemoKey};
+    use penumbra_sdk_keys::Address;
     use penumbra_sdk_sct::Nullifier;
+    use penumbra_sdk_shielded_pool::backref::ENCRYPTED_BACKREF_LEN;
 
     use super::{Action, Transaction, TransactionBody};
 
@@ -715,40 +747,71 @@ mod tests {
     fn transfer_counts_as_nullifier_and_state_commitment_source() {
         let transfer = penumbra_sdk_shielded_pool::Transfer {
             body: penumbra_sdk_shielded_pool::TransferBody {
-                family_id: penumbra_sdk_shielded_pool::TransferFamilyId::OneByOne,
                 anchor: penumbra_sdk_tct::Tree::default().root(),
                 balance_commitment: Balance::from(Value {
                     amount: 9u64.into(),
                     asset_id: asset::Id(decaf377::Fq::from(1u64)),
                 })
                 .commit(decaf377::Fr::from(2u64)),
-                inputs: vec![penumbra_sdk_shielded_pool::TransferInputBody {
-                    nullifier: Nullifier(decaf377::Fq::from(3u64)),
-                    rk: VerificationKey::from(SigningKey::<SpendAuth>::from(decaf377::Fr::from(
-                        4u64,
-                    ))),
-                    encrypted_backref: penumbra_sdk_shielded_pool::EncryptedBackref::dummy(),
-                    compliance_ciphertext: vec![1, 2, 3],
-                    dleq_proof: vec![13, 14],
-                }],
-                outputs: vec![penumbra_sdk_shielded_pool::TransferOutputBody {
-                    note_payload: penumbra_sdk_shielded_pool::NotePayload {
-                        note_commitment: penumbra_sdk_tct::StateCommitment(decaf377::Fq::from(
-                            5u64,
+                inputs: vec![
+                    penumbra_sdk_shielded_pool::TransferInputBody {
+                        nullifier: Nullifier(decaf377::Fq::from(3u64)),
+                        rk: VerificationKey::from(SigningKey::<SpendAuth>::from(
+                            decaf377::Fr::from(4u64),
                         )),
-                        ephemeral_key: decaf377_ka::Public([6u8; 32]),
-                        encrypted_note: penumbra_sdk_shielded_pool::NoteCiphertext([7u8; 176]),
+                        encrypted_backref: penumbra_sdk_shielded_pool::EncryptedBackref::try_from(
+                            [1u8; ENCRYPTED_BACKREF_LEN],
+                        )
+                        .expect("valid encrypted backref"),
+                        compliance_ciphertext: vec![1, 2, 3],
+                        dleq_proof: vec![13, 14],
                     },
-                    wrapped_memo_key: WrappedMemoKey([8u8; 48]),
-                    ovk_wrapped_key: OvkWrappedKey([9u8; 48]),
-                    compliance_ciphertext: vec![4, 5, 6],
-                    dleq_proofs: vec![15, 16],
-                }],
+                    penumbra_sdk_shielded_pool::TransferInputBody {
+                        nullifier: Nullifier(decaf377::Fq::from(30u64)),
+                        rk: VerificationKey::from(SigningKey::<SpendAuth>::from(
+                            decaf377::Fr::from(40u64),
+                        )),
+                        encrypted_backref: penumbra_sdk_shielded_pool::EncryptedBackref::try_from(
+                            [2u8; ENCRYPTED_BACKREF_LEN],
+                        )
+                        .expect("valid encrypted backref"),
+                        compliance_ciphertext: vec![],
+                        dleq_proof: vec![],
+                    },
+                ],
+                outputs: vec![
+                    penumbra_sdk_shielded_pool::TransferOutputBody {
+                        note_payload: penumbra_sdk_shielded_pool::NotePayload {
+                            note_commitment: penumbra_sdk_tct::StateCommitment(decaf377::Fq::from(
+                                5u64,
+                            )),
+                            ephemeral_key: decaf377_ka::Public([6u8; 32]),
+                            encrypted_note: penumbra_sdk_shielded_pool::NoteCiphertext([7u8; 176]),
+                        },
+                        wrapped_memo_key: WrappedMemoKey([8u8; 48]),
+                        ovk_wrapped_key: OvkWrappedKey([9u8; 48]),
+                        compliance_ciphertext: vec![4, 5, 6],
+                        dleq_proofs: vec![15, 16],
+                    },
+                    penumbra_sdk_shielded_pool::TransferOutputBody {
+                        note_payload: penumbra_sdk_shielded_pool::NotePayload {
+                            note_commitment: penumbra_sdk_tct::StateCommitment(decaf377::Fq::from(
+                                50u64,
+                            )),
+                            ephemeral_key: decaf377_ka::Public([60u8; 32]),
+                            encrypted_note: penumbra_sdk_shielded_pool::NoteCiphertext([70u8; 176]),
+                        },
+                        wrapped_memo_key: WrappedMemoKey([80u8; 48]),
+                        ovk_wrapped_key: OvkWrappedKey([90u8; 48]),
+                        compliance_ciphertext: vec![],
+                        dleq_proofs: vec![],
+                    },
+                ],
                 target_timestamp: 10,
                 compliance_anchor: penumbra_sdk_tct::StateCommitment(decaf377::Fq::from(11u64)),
                 asset_anchor: penumbra_sdk_tct::StateCommitment(decaf377::Fq::from(12u64)),
             },
-            auth_sigs: vec![[17u8; 64].into()],
+            auth_sigs: vec![[17u8; 64].into(), [0u8; 64].into()],
             proof: penumbra_sdk_shielded_pool::TransferProof::default(),
         };
 
@@ -760,8 +823,161 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(tx.spent_nullifiers().collect::<Vec<_>>().len(), 1);
-        assert_eq!(tx.state_commitments().collect::<Vec<_>>().len(), 1);
+        assert_eq!(tx.spent_nullifiers().collect::<Vec<_>>().len(), 2);
+        assert_eq!(tx.state_commitments().collect::<Vec<_>>().len(), 2);
+    }
+
+    #[test]
+    fn num_proofs_counts_new_shielded_action_families() {
+        let tx = Transaction {
+            transaction_body: TransactionBody {
+                actions: vec![
+                    Action::Consolidate(penumbra_sdk_shielded_pool::Consolidate {
+                        body: penumbra_sdk_shielded_pool::ConsolidateBody {
+                            family_id: penumbra_sdk_shielded_pool::ConsolidateFamilyId::TwoByOne,
+                            anchor: penumbra_sdk_tct::Tree::default().root(),
+                            balance_commitment: Balance::default().commit(decaf377::Fr::from(1u64)),
+                            inputs: vec![
+                                penumbra_sdk_shielded_pool::ConsolidateInputBody {
+                                    nullifier: Nullifier(decaf377::Fq::from(2u64)),
+                                    rk: VerificationKey::from(SigningKey::<SpendAuth>::from(
+                                        decaf377::Fr::from(3u64),
+                                    )),
+                                    encrypted_backref:
+                                        penumbra_sdk_shielded_pool::EncryptedBackref::dummy(),
+                                },
+                                penumbra_sdk_shielded_pool::ConsolidateInputBody {
+                                    nullifier: Nullifier(decaf377::Fq::from(4u64)),
+                                    rk: VerificationKey::from(SigningKey::<SpendAuth>::from(
+                                        decaf377::Fr::from(5u64),
+                                    )),
+                                    encrypted_backref:
+                                        penumbra_sdk_shielded_pool::EncryptedBackref::dummy(),
+                                },
+                            ],
+                            outputs: vec![penumbra_sdk_shielded_pool::ConsolidateOutputBody {
+                                note_payload: penumbra_sdk_shielded_pool::NotePayload {
+                                    note_commitment: penumbra_sdk_tct::StateCommitment(
+                                        decaf377::Fq::from(6u64),
+                                    ),
+                                    ephemeral_key: decaf377_ka::Public([7u8; 32]),
+                                    encrypted_note:
+                                        penumbra_sdk_shielded_pool::NoteCiphertext([8u8; 176]),
+                                },
+                                wrapped_memo_key: WrappedMemoKey([9u8; 48]),
+                                ovk_wrapped_key: OvkWrappedKey([10u8; 48]),
+                            }],
+                        },
+                        auth_sigs: vec![[11u8; 64].into(), [12u8; 64].into()],
+                        proof: penumbra_sdk_shielded_pool::ConsolidateProof::default(),
+                    }),
+                    Action::Split(penumbra_sdk_shielded_pool::Split {
+                        body: penumbra_sdk_shielded_pool::SplitBody {
+                            family_id: penumbra_sdk_shielded_pool::SplitFamilyId::OneByFour,
+                            anchor: penumbra_sdk_tct::Tree::default().root(),
+                            balance_commitment: Balance::default().commit(decaf377::Fr::from(13u64)),
+                            inputs: vec![penumbra_sdk_shielded_pool::SplitInputBody {
+                                nullifier: Nullifier(decaf377::Fq::from(14u64)),
+                                rk: VerificationKey::from(SigningKey::<SpendAuth>::from(
+                                    decaf377::Fr::from(15u64),
+                                )),
+                                encrypted_backref:
+                                    penumbra_sdk_shielded_pool::EncryptedBackref::dummy(),
+                            }],
+                            outputs: vec![
+                                penumbra_sdk_shielded_pool::SplitOutputBody {
+                                    note_payload: penumbra_sdk_shielded_pool::NotePayload {
+                                        note_commitment: penumbra_sdk_tct::StateCommitment(
+                                            decaf377::Fq::from(16u64),
+                                        ),
+                                        ephemeral_key: decaf377_ka::Public([17u8; 32]),
+                                        encrypted_note: penumbra_sdk_shielded_pool::NoteCiphertext(
+                                            [18u8; 176],
+                                        ),
+                                    },
+                                    wrapped_memo_key: WrappedMemoKey([19u8; 48]),
+                                    ovk_wrapped_key: OvkWrappedKey([20u8; 48]),
+                                };
+                                4
+                            ],
+                        },
+                        auth_sigs: vec![[21u8; 64].into()],
+                        proof: penumbra_sdk_shielded_pool::SplitProof::default(),
+                    }),
+                    Action::ShieldedIcs20Withdrawal(
+                        penumbra_sdk_shielded_pool::ShieldedIcs20Withdrawal {
+                            body: penumbra_sdk_shielded_pool::ShieldedIcs20WithdrawalBody {
+                                family_id:
+                                    penumbra_sdk_shielded_pool::ShieldedIcs20WithdrawalFamilyId::Canonical,
+                                anchor: penumbra_sdk_tct::Tree::default().root(),
+                                balance_commitment: Balance::default().commit(decaf377::Fr::from(22u64)),
+                                inputs: vec![
+                                    penumbra_sdk_shielded_pool::TransferInputBody {
+                                        nullifier: Nullifier(decaf377::Fq::from(23u64)),
+                                        rk: VerificationKey::from(SigningKey::<SpendAuth>::from(
+                                            decaf377::Fr::from(24u64),
+                                        )),
+                                        encrypted_backref:
+                                            penumbra_sdk_shielded_pool::EncryptedBackref::dummy(),
+                                        compliance_ciphertext: vec![],
+                                        dleq_proof: vec![],
+                                    },
+                                    penumbra_sdk_shielded_pool::TransferInputBody {
+                                        nullifier: Nullifier(decaf377::Fq::from(25u64)),
+                                        rk: VerificationKey::from(SigningKey::<SpendAuth>::from(
+                                            decaf377::Fr::from(26u64),
+                                        )),
+                                        encrypted_backref:
+                                            penumbra_sdk_shielded_pool::EncryptedBackref::dummy(),
+                                        compliance_ciphertext: vec![],
+                                        dleq_proof: vec![],
+                                    },
+                                ],
+                                withdrawal: penumbra_sdk_shielded_pool::Ics20Withdrawal {
+                                    amount: 1u64.into(),
+                                    denom: BASE_ASSET_DENOM.clone(),
+                                    destination_chain_address: "cosmos1deadbeef".to_string(),
+                                    return_address: Address::dummy(&mut rand_core::OsRng),
+                                    timeout_height: ibc_types::core::client::Height::new(0, 10)
+                                        .expect("valid timeout height"),
+                                    timeout_time: 1,
+                                    source_channel: ibc_types::core::channel::ChannelId::new(7),
+                                    use_compat_address: false,
+                                    ics20_memo: String::new(),
+                                    use_transparent_address: false,
+                                },
+                                change_output:
+                                    penumbra_sdk_shielded_pool::ShieldedIcs20WithdrawalChangeBody {
+                                        note_payload: penumbra_sdk_shielded_pool::NotePayload {
+                                            note_commitment: penumbra_sdk_tct::StateCommitment(
+                                                decaf377::Fq::from(27u64),
+                                            ),
+                                            ephemeral_key: decaf377_ka::Public([28u8; 32]),
+                                            encrypted_note:
+                                                penumbra_sdk_shielded_pool::NoteCiphertext(
+                                                    [29u8; 176],
+                                                ),
+                                        },
+                                        wrapped_memo_key: WrappedMemoKey([30u8; 48]),
+                                        ovk_wrapped_key: OvkWrappedKey([31u8; 48]),
+                                    },
+                                target_timestamp: 0,
+                                compliance_anchor: penumbra_sdk_tct::StateCommitment(
+                                    decaf377::Fq::from(32u64),
+                                ),
+                                asset_anchor: penumbra_sdk_tct::StateCommitment(decaf377::Fq::from(33u64)),
+                            },
+                            auth_sigs: vec![[34u8; 64].into(), [35u8; 64].into()],
+                            proof: penumbra_sdk_shielded_pool::ShieldedIcs20WithdrawalProof::default(),
+                        },
+                    ),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(tx.num_proofs(), 3);
     }
 }
 
@@ -816,9 +1032,10 @@ impl DomainType for TransactionBody {
 impl From<TransactionBody> for pbt::TransactionBody {
     fn from(msg: TransactionBody) -> Self {
         pbt::TransactionBody {
-            actions: msg.actions.into_iter().map(|x| x.into()).collect(),
+            actions: msg.actions.into_iter().map(Into::into).collect(),
             transaction_parameters: Some(msg.transaction_parameters.into()),
-            detection_data: msg.detection_data.map(|x| x.into()),
+            fee_funding: msg.fee_funding.map(Into::into),
+            detection_data: msg.detection_data.map(Into::into),
             memo: msg.memo.map(Into::into),
         }
     }
@@ -828,14 +1045,15 @@ impl TryFrom<pbt::TransactionBody> for TransactionBody {
     type Error = Error;
 
     fn try_from(proto: pbt::TransactionBody) -> anyhow::Result<Self, Self::Error> {
-        let mut actions = Vec::<Action>::new();
-        for action in proto.actions {
-            actions.push(
+        let actions = proto
+            .actions
+            .into_iter()
+            .map(|action| {
                 action
                     .try_into()
-                    .context("action malformed while parsing transaction body")?,
-            );
-        }
+                    .context("action malformed while parsing transaction body")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         let memo = proto
             .memo
@@ -848,6 +1066,11 @@ impl TryFrom<pbt::TransactionBody> for TransactionBody {
             .map(TryFrom::try_from)
             .transpose()
             .context("detection data malformed while parsing transaction body")?;
+        let fee_funding = proto
+            .fee_funding
+            .map(TryFrom::try_from)
+            .transpose()
+            .context("fee funding malformed while parsing transaction body")?;
 
         let transaction_parameters = proto
             .transaction_parameters
@@ -858,6 +1081,7 @@ impl TryFrom<pbt::TransactionBody> for TransactionBody {
         Ok(TransactionBody {
             actions,
             transaction_parameters,
+            fee_funding,
             detection_data,
             memo,
         })
@@ -882,8 +1106,8 @@ impl From<&Transaction> for pbt::Transaction {
     fn from(msg: &Transaction) -> Self {
         Transaction {
             transaction_body: msg.transaction_body.clone(),
-            anchor: msg.anchor.clone(),
-            binding_sig: msg.binding_sig.clone(),
+            anchor: msg.anchor,
+            binding_sig: msg.binding_sig,
         }
         .into()
     }

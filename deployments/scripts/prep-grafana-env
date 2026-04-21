@@ -3,6 +3,7 @@
 # provisioned via nix, for displaying Penumbra metrics.
 set -euo pipefail
 
+penumbra_devnet_home="${PENUMBRA_DEVNET_HOME:-$HOME/.penumbra}"
 
 # The Nix env will add the Grafana public directory to XDG_DATA_DIRS.
 # Let's pluck that out of the dir listing env vars, so we can copy files out of it
@@ -16,7 +17,7 @@ fi
 
 # Set up a write-friendly directory for grafana state from the local fullnode.
 # The nix store is read-only by default, so add write capability to copy.
-grafana_config_dir="$HOME/.penumbra/network_data/grafana"
+grafana_config_dir="${penumbra_devnet_home}/network_data/grafana"
 # While debugging it may be useful to nuke the dir between runs.
 # rm -rf "$grafana_config_dir"
 rsync -a "${grafana_share_dir:?}/grafana/" "${grafana_config_dir}/"

@@ -1,6 +1,7 @@
 package compliance
 
 import (
+	"math/big"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -9,7 +10,7 @@ import (
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 	gnarkte "github.com/consensys/gnark/std/algebra/native/twistededwards"
 	"github.com/consensys/gnark/test"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/primitives"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/primitives"
 )
 
 type indexedLeafCommitmentCircuit struct {
@@ -68,33 +69,69 @@ func (c *quadPathCircuit) Define(api frontend.API) error {
 	return nil
 }
 
-func TestIndexedLeafCommitmentNativeMatchesAssetFixture(t *testing.T) {
-	fixture, err := primitives.LoadSpendFixture()
+func syntheticIndexedLeafInputs(t *testing.T) IndexedLeafInputs {
+	t.Helper()
+
+	vectors, err := primitives.LoadPrototypeVectors()
 	if err != nil {
-		t.Fatalf("load spend fixture: %v", err)
+		t.Fatalf("load prototype vectors: %v", err)
 	}
 
-	inputs, err := IndexedLeafInputsFromFixture(fixture)
-	if err != nil {
-		t.Fatalf("decode indexed leaf inputs: %v", err)
+	return IndexedLeafInputs{
+		Value:     big.NewInt(11),
+		NextIndex: uint64(7),
+		NextValue: big.NewInt(22),
+		DKPub: gnarkte.Point{
+			X: primitives.MustBigInt(vectors.Decaf377CompanionCurve.GeneratorX),
+			Y: primitives.MustBigInt(vectors.Decaf377CompanionCurve.GeneratorY),
+		},
+		Threshold:    "5",
+		ChannelsHash: big.NewInt(33),
+		RingPK: gnarkte.Point{
+			X: primitives.MustBigInt(vectors.Decaf377CompanionCurve.ValueBlindingGeneratorX),
+			Y: primitives.MustBigInt(vectors.Decaf377CompanionCurve.ValueBlindingGeneratorY),
+		},
+		RingIDHash:     big.NewInt(44),
+		PolicyIDHash:   big.NewInt(55),
+		PermissionHash: big.NewInt(66),
+		ResourceHash:   big.NewInt(77),
 	}
+}
 
+func syntheticQuadPath() ([ComplianceQuadTreeDepth][3]*big.Int, uint64) {
+	var path [ComplianceQuadTreeDepth][3]*big.Int
+	for i := 0; i < ComplianceQuadTreeDepth; i++ {
+		for j := 0; j < 3; j++ {
+			path[i][j] = big.NewInt(int64(100 + i*10 + j))
+		}
+	}
+	return path, 0x9a35
+}
+
+func quadPathAssignment(path [ComplianceQuadTreeDepth][3]*big.Int) [ComplianceQuadTreeDepth][3]frontend.Variable {
+	var out [ComplianceQuadTreeDepth][3]frontend.Variable
+	for i := range path {
+		for j := range path[i] {
+			out[i][j] = path[i][j].String()
+		}
+	}
+	return out
+}
+
+func TestIndexedLeafCommitmentNativeMatchesQuadPath(t *testing.T) {
+	inputs := syntheticIndexedLeafInputs(t)
 	commitment, err := IndexedLeafCommitmentNative(inputs)
 	if err != nil {
 		t.Fatalf("compute indexed leaf commitment: %v", err)
 	}
 
-	path, err := QuadPathFromFixture(fixture.Private.AssetPath)
+	path, position := syntheticQuadPath()
+	root, err := VerifyQuadPathNative(commitment, path, position)
 	if err != nil {
-		t.Fatalf("decode asset path: %v", err)
+		t.Fatalf("verify quad path natively: %v", err)
 	}
-	root, err := VerifyQuadPathNative(commitment, path, fixture.Private.AssetPosition)
-	if err != nil {
-		t.Fatalf("verify asset path natively: %v", err)
-	}
-
-	if got, want := root.String(), fixture.Public.AssetAnchor; got != want {
-		t.Fatalf("asset root mismatch: got %s want %s", got, want)
+	if root.Sign() == 0 {
+		t.Fatal("expected non-zero quad path root")
 	}
 }
 
@@ -112,16 +149,8 @@ func TestQuadPathCircuitCompiles(t *testing.T) {
 	}
 }
 
-func TestAssetIndexedLeafCircuitMatchesFixture(t *testing.T) {
-	fixture, err := primitives.LoadSpendFixture()
-	if err != nil {
-		t.Fatalf("load spend fixture: %v", err)
-	}
-
-	inputs, err := IndexedLeafInputsFromFixture(fixture)
-	if err != nil {
-		t.Fatalf("decode indexed leaf inputs: %v", err)
-	}
+func TestIndexedLeafCircuitMatchesNativeCommitment(t *testing.T) {
+	inputs := syntheticIndexedLeafInputs(t)
 	commitment, err := IndexedLeafCommitmentNative(inputs)
 	if err != nil {
 		t.Fatalf("compute indexed leaf commitment: %v", err)
@@ -153,72 +182,19 @@ func TestAssetIndexedLeafCircuitMatchesFixture(t *testing.T) {
 	)
 }
 
-func TestAssetQuadPathCircuitMatchesFixture(t *testing.T) {
-	fixture, err := primitives.LoadSpendFixture()
+func TestQuadPathCircuitMatchesNativeRoot(t *testing.T) {
+	leafHash := big.NewInt(123456789)
+	path, position := syntheticQuadPath()
+	root, err := VerifyQuadPathNative(leafHash, path, position)
 	if err != nil {
-		t.Fatalf("load spend fixture: %v", err)
-	}
-
-	inputs, err := IndexedLeafInputsFromFixture(fixture)
-	if err != nil {
-		t.Fatalf("decode indexed leaf inputs: %v", err)
-	}
-	commitment, err := IndexedLeafCommitmentNative(inputs)
-	if err != nil {
-		t.Fatalf("compute indexed leaf commitment: %v", err)
-	}
-	path, err := QuadPathFromFixture(fixture.Private.AssetPath)
-	if err != nil {
-		t.Fatalf("decode asset path: %v", err)
-	}
-
-	var assignmentPath [ComplianceQuadTreeDepth][3]frontend.Variable
-	for i := 0; i < ComplianceQuadTreeDepth; i++ {
-		for j := 0; j < 3; j++ {
-			assignmentPath[i][j] = path[i][j].String()
-		}
+		t.Fatalf("compute quad path root: %v", err)
 	}
 
 	assignment := &quadPathCircuit{
-		LeafHash:     commitment.String(),
-		Position:     fixture.Private.AssetPosition,
-		Path:         assignmentPath,
-		ExpectedRoot: fixture.Public.AssetAnchor,
-	}
-
-	assert := test.NewAssert(t)
-	assert.CheckCircuit(
-		&quadPathCircuit{},
-		test.WithCurves(ecc.BLS12_377),
-		test.WithBackends(backend.GROTH16),
-		test.WithValidAssignment(assignment),
-	)
-}
-
-func TestComplianceQuadPathCircuitMatchesFixture(t *testing.T) {
-	fixture, err := primitives.LoadSpendFixture()
-	if err != nil {
-		t.Fatalf("load spend fixture: %v", err)
-	}
-
-	leafCommitment := fixture.Private.UserLeafCommitment
-	path, err := QuadPathFromFixture(fixture.Private.CompliancePath)
-	if err != nil {
-		t.Fatalf("decode compliance path: %v", err)
-	}
-
-	var assignmentPath [ComplianceQuadTreeDepth][3]frontend.Variable
-	for i := 0; i < ComplianceQuadTreeDepth; i++ {
-		for j := 0; j < 3; j++ {
-			assignmentPath[i][j] = path[i][j].String()
-		}
-	}
-
-	assignment := &quadPathCircuit{
-		LeafHash:     leafCommitment,
-		Position:     fixture.Private.CompliancePosition,
-		Path:         assignmentPath,
-		ExpectedRoot: fixture.Public.ComplianceAnchor,
+		LeafHash:     leafHash.String(),
+		Position:     position,
+		Path:         quadPathAssignment(path),
+		ExpectedRoot: root.String(),
 	}
 
 	assert := test.NewAssert(t)

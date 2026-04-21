@@ -1,6 +1,40 @@
 use anyhow::{Context, Result};
-use penumbra_sdk_transaction::{check_transaction_enabled, Action, Transaction};
+use penumbra_sdk_transaction::{Action, Transaction};
 use penumbra_sdk_txhash::AuthorizingData;
+
+fn note_creating_output_count(tx: &Transaction) -> usize {
+    let action_outputs = tx
+        .actions()
+        .map(|action| match action {
+            Action::Transfer(transfer) => transfer
+                .body
+                .outputs
+                .iter()
+                .filter(|output| !output.is_dummy())
+                .count(),
+            Action::Consolidate(consolidate) => consolidate.body.outputs.len(),
+            Action::Split(split) => split.body.outputs.len(),
+            Action::ShieldedIcs20Withdrawal(_) => 1,
+            _ => 0,
+        })
+        .sum::<usize>();
+
+    let fee_outputs = tx
+        .transaction_body()
+        .fee_funding
+        .map(|fee_funding| {
+            fee_funding
+                .transfer
+                .body
+                .outputs
+                .iter()
+                .filter(|output| !output.is_dummy())
+                .count()
+        })
+        .unwrap_or_default();
+
+    action_outputs + fee_outputs
+}
 
 #[tracing::instrument(skip(tx))]
 pub(crate) fn valid_binding_signature(tx: &Transaction) -> Result<()> {
@@ -15,14 +49,7 @@ pub(crate) fn valid_binding_signature(tx: &Transaction) -> Result<()> {
 }
 
 pub fn num_clues_equal_to_num_outputs(tx: &Transaction) -> anyhow::Result<()> {
-    let num_note_creating_actions = tx
-        .actions()
-        .map(|action| match action {
-            Action::Output(_) => 1usize,
-            Action::Transfer(transfer) => transfer.body.outputs.len(),
-            _ => 0,
-        })
-        .sum::<usize>();
+    let num_note_creating_actions = note_creating_output_count(tx);
     if tx
         .transaction_body()
         .detection_data
@@ -41,14 +68,7 @@ pub fn num_clues_equal_to_num_outputs(tx: &Transaction) -> anyhow::Result<()> {
 
 #[allow(clippy::if_same_then_else)]
 pub fn check_memo_exists_if_outputs_absent_if_not(tx: &Transaction) -> anyhow::Result<()> {
-    let num_outputs = tx
-        .actions()
-        .map(|action| match action {
-            Action::Output(_) => 1usize,
-            Action::Transfer(transfer) => transfer.body.outputs.len(),
-            _ => 0,
-        })
-        .sum::<usize>();
+    let num_outputs = note_creating_output_count(tx);
     if num_outputs > 0 && tx.transaction_body().memo.is_none() {
         Err(anyhow::anyhow!(
             "consensus rule violated: must have memo if outputs present"
@@ -73,57 +93,4 @@ pub fn check_non_empty_transaction(tx: &Transaction) -> anyhow::Result<()> {
             "consensus rule violated: transaction must have more than 0 actions"
         ))
     }
-}
-
-pub fn check_enabled_actions(tx: &Transaction) -> anyhow::Result<()> {
-    check_transaction_enabled(tx)
-}
-
-/// Validates the cryptographic binding between spend and output actions.
-///
-/// For compliance, each output's `counterparty_leaf_hash` must match some spend's
-/// `sender_leaf_hash`. This ensures the sender/receiver relationship is cryptographically
-/// bound without revealing which compliance leaves are transacting.
-pub fn validate_spend_output_binding(tx: &Transaction) -> anyhow::Result<()> {
-    // Collect spend and output bodies
-    let spends: Vec<_> = tx
-        .actions()
-        .filter_map(|a| {
-            if let Action::Spend(s) = a {
-                Some(&s.body)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    let outputs: Vec<_> = tx
-        .actions()
-        .filter_map(|a| {
-            if let Action::Output(o) = a {
-                Some(&o.body)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    // If no spends or outputs, nothing to validate
-    if spends.is_empty() || outputs.is_empty() {
-        return Ok(());
-    }
-
-    // For each output, verify binding with spends:
-    // output.counterparty_leaf_hash must match some spend.sender_leaf_hash
-    for output in &outputs {
-        let has_matching_spend = spends
-            .iter()
-            .any(|spend| output.counterparty_leaf_hash.0 == spend.sender_leaf_hash.0);
-
-        if !has_matching_spend {
-            anyhow::bail!("output counterparty_leaf_hash has no matching spend sender_leaf_hash");
-        }
-    }
-
-    Ok(())
 }

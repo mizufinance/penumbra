@@ -1,9 +1,0 @@
-{
-  "chain_id": "penumbra-unreg-bench",
-  "genesis_hash": "unknown",
-  "scenario": "unregulated",
-  "tx_count": 1000,
-  "created_at": 1773114071,
-  "source_label": "ready",
-  "notes": "ready-1000"
-}

@@ -1,12 +1,14 @@
 # POC Workspace
 
-This nested workspace contains non-production work from the `recursive-verification` branch:
+This nested workspace contains non-production work centered on the remaining
+preconsensus prototype surface:
 
 - `crates/preconsensus`: POC runtime and stage-study support types
-- `crates/stage-bench`: mempool, builder, validation, execution, and proof-stage labs
-- `crates/compliance-bench`: client, scanner, validator, local-fullnode, and TPS correlation flows
 - `tools/`: isolated experiments that are not part of the supported bench surface
-- `scripts/tps/`: retained fixture and stage-bench runners
+
+The older `stage-bench` and `compliance-bench` labs were removed from this
+workspace. The retained `scripts/tps/` entrypoints now only explain that those
+benches are no longer available here.
 
 The root workspace remains production-oriented. Build this workspace separately with:
 
@@ -17,7 +19,5 @@ cargo build --workspace --manifest-path poc/Cargo.toml
 Supported POC entrypoints:
 
 ```bash
-poc/scripts/tps/fixtures.sh
-poc/scripts/tps/run-stage-bench.sh
-poc/scripts/tps/run-stage-bench-remote.sh
+cargo build --workspace --manifest-path poc/Cargo.toml
 ```

@@ -124,9 +124,8 @@ deployments/
 ### 3. Validator Configuration
 
 - Add support for validator key generation with secure key management
-- Include validator funding stream configuration in JSON
+- Include validator metadata (logo, description, website) and key-rotation configuration in JSON
 - Add commission rate configuration
-- Support for validator metadata (logo, description, website)
 
 ### 4. Docker Compose Improvements
 

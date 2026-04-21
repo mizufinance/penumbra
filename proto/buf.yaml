@@ -7,7 +7,7 @@ deps:
   - buf.build/cosmos/ibc:7ab44ae956a0488ea04e04511efa5f70
 lint:
   use:
-    - DEFAULT
+    - STANDARD
   except:
     - FIELD_NOT_REQUIRED
     - PACKAGE_NO_IMPORT_CYCLE

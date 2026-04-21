@@ -9,9 +9,8 @@ use penumbra_sdk_app::{
 };
 use penumbra_sdk_keys::keys::{SpendKey, SpendKeyBytes};
 use penumbra_sdk_mock_consensus::TestNode;
-use penumbra_sdk_proto::core::component::stake::v1::Validator;
-use penumbra_sdk_shielded_pool::genesis::Allocation;
-use penumbra_sdk_stake::{DelegationToken, GovernanceKey, IdentityKey};
+use penumbra_sdk_proto::core::component::validator::v1::Validator;
+use penumbra_sdk_validator::{GovernanceKey, IdentityKey};
 #[allow(unused_imports)]
 pub use relayer::MockRelayer;
 
@@ -114,35 +113,15 @@ pub fn get_verified_genesis() -> Result<Genesis> {
         website: "https://example.com".to_string(),
         description: "test".to_string(),
         enabled: true,
-        funding_streams: vec![],
         sequence_number: 0,
     };
 
     // let's only do one validator per chain for now
     // since it's easier to validate against cometbft
     genesis_contents
-        .stake_content
+        .validator_content
         .validators
         .push(validator_a.clone());
-
-    // the validator needs some initial delegations
-    let identity_key_a: IdentityKey = IdentityKey(
-        spend_key_a
-            .full_viewing_key()
-            .spend_verification_key()
-            .clone()
-            .into(),
-    );
-    let delegation_id_a = DelegationToken::from(&identity_key_a).denom();
-    let ivk_a = spend_key_a.incoming_viewing_key();
-    genesis_contents
-        .shielded_pool_content
-        .allocations
-        .push(Allocation {
-            address: ivk_a.payment_address(0u32.into()).0,
-            raw_amount: (25_000 * 10u128.pow(6)).into(),
-            raw_denom: delegation_id_a.to_string(),
-        });
 
     let genesis = Genesis {
         genesis_time: start_time.clone(),
@@ -163,8 +142,7 @@ pub fn get_verified_genesis() -> Result<Genesis> {
                 time_iota_ms: 500,
             },
             evidence: tendermint::evidence::Params {
-                // We should keep this in approximate sync with the recommended default for
-                // `StakeParameters::unbonding_delay`, this is roughly a week.
+                // Keep this roughly aligned with the intended evidence retention window.
                 max_age_num_blocks: 130000,
                 // Similarly, we set the max age duration for evidence to be a little over a week.
                 max_age_duration: tendermint::evidence::Duration(Duration::from_secs(650000)),

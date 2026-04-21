@@ -25,17 +25,15 @@ pub trait StateReadExt: StateRead {
         // read these from the _fee params_ instead, since those are
         // the values that will get updated by governance.
         let params = self.get_fee_params().await?;
+        params.validate_base_asset_only()?;
         Ok(params.fixed_gas_prices)
     }
 
-    /// Gets the current gas prices for alternative fee tokens.
+    /// The reduced chain does not expose alternative fee tokens.
     async fn get_alt_gas_prices(&self) -> Result<Vec<GasPrices>> {
-        // When we implement dynamic gas pricing, we will want
-        // to read the prices we computed. But until then, we need to
-        // read these from the _fee params_ instead, since those are
-        // the values that will get updated by governance.
         let params = self.get_fee_params().await?;
-        Ok(params.fixed_alt_gas_prices)
+        params.validate_base_asset_only()?;
+        Ok(Vec::new())
     }
 
     /// Returns true if the gas prices have been changed in this block.

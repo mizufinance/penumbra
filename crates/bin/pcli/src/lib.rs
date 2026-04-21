@@ -20,7 +20,6 @@ pub mod config;
 pub mod opt;
 pub mod warning;
 
-mod dex_utils;
 mod network;
 mod terminal;
 mod transaction_view_ext;

@@ -62,16 +62,14 @@ pub trait NoteManager: StateWrite {
     async fn add_note_payload(&mut self, note_payload: NotePayload, source: CommitmentSource) {
         tracing::debug!(source = ?source);
 
-        // 0. Record an ABCI event for transaction indexing.
-        //self.record(event::state_payload(&payload));
-
-        // 1. Insert it into the SCT, recording its note source:
+        // Action handlers emit semantic note-created/nullifier-spent events.
+        // NoteManager only stages SCT and compact-block state.
         let position = self.add_sct_commitment(note_payload.note_commitment, source.clone())
             .await
             // TODO: why? can't we exceed the number of state commitments in a block?
             .expect("inserting into the state commitment tree should not fail because we should budget commitments per block (currently unimplemented)");
 
-        // 2. Finally, record it to be inserted into the compact block:
+        // Queue the payload for compact-block emission after SCT insertion.
         let mut payloads = self.pending_note_payloads();
         payloads.push_back((position, note_payload, source));
         self.object_put(state_key::pending_notes(), payloads);
@@ -85,16 +83,14 @@ pub trait NoteManager: StateWrite {
     ) {
         tracing::debug!(?note_commitment);
 
-        // 0. Record an ABCI event for transaction indexing.
-        //self.record(event::state_payload(&payload));
-
-        // 1. Insert it into the SCT:
+        // Rolled-up payloads are synchronization artifacts only; semantic events
+        // are emitted by the action handlers that created them.
         let position = self.add_sct_commitment(note_commitment, source)
             .await
             // TODO: why? can't we exceed the number of state commitments in a block?
             .expect("inserting into the state commitment tree should not fail because we should budget commitments per block (currently unimplemented)");
 
-        // 2. Finally, record it to be inserted into the compact block:
+        // Queue the rolled-up commitment for compact-block emission.
         let mut payloads = self.pending_rolled_up_payloads();
         payloads.push_back((position, note_commitment));
         self.object_put(state_key::pending_rolled_up_payloads(), payloads);

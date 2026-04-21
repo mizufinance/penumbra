@@ -79,9 +79,9 @@ Transactions are signed used the [`decaf377-rdsa` construction](../crypto/decaf3
 
 ## `SpendAuth` Signatures
 
-`SpendAuth` signatures are included on each `Spend` and `DelegatorVote` action
-(see [Multi-Asset Shielded Pool](../shielded_pool.md) and [Governance](../governance.md)
-for more details on `Spend` and `DelegatorVote` actions respectively).
+`SpendAuth` signatures are included on each shielded spend-bearing action
+(for instance `Transfer`, `Consolidate`, and `Split`), as well as actions such
+as `ValidatorVote` that use the same authorization domain.
 
 The `SpendAuth` signatures are created using a randomized signing key $rsk$ and the corresponding randomized verification key $rk$ provided on the action. The purpose of the randomization is to prevent linkage of verification keys across actions.
 
@@ -100,8 +100,9 @@ The data that is _not_ effecting data is *authorizing data*:
 
 >"Authorizing data" is the rest of the data within a transaction. It does not contribute to the effects of the transaction on global state, but allows those effects to take place. This data can be changed arbitrarily without resulting in a different transaction (but the changes may alter whether the transaction is allowed to be applied or not).
 
-For example, the nullifier on a `Spend` is effecting data, whereas the
-proofs or signatures associated with the `Spend` are authorizing data.
+For example, the nullifier on a shielded input inside a `Transfer`,
+`Consolidate`, `Split`, or `ShieldedIcs20Withdrawal` is effecting data, whereas
+the proofs or signatures associated with that action are authorizing data.
 
 In Penumbra, the effect hash of each transaction is computed using the BLAKE2b-512
 hash function. The effect hash is derived from the proto-encoding of the action - in

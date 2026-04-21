@@ -120,6 +120,7 @@ async fn verify_storage_proof_simple() -> anyhow::Result<()> {
             // Now fill out the remaining parts of the transaction needed for verification:
             memo: None,
             detection_data: None, // We'll set this automatically below
+            fee_funding: None,
             transaction_parameters: TransactionParameters {
                 chain_id: TestNode::<()>::CHAIN_ID.to_string(),
                 ..Default::default()

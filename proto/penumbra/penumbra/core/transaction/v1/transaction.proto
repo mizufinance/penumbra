@@ -3,16 +3,13 @@ package penumbra.core.transaction.v1;
 
 import "google/protobuf/any.proto";
 import "penumbra/core/asset/v1/asset.proto";
-import "penumbra/core/component/auction/v1/auction.proto";
 import "penumbra/core/component/compliance/v1/compliance.proto";
-import "penumbra/core/component/dex/v1/dex.proto";
 import "penumbra/core/component/fee/v1/fee.proto";
 import "penumbra/core/component/governance/v1/governance.proto";
-import "penumbra/core/component/funding/v1/funding.proto";
 import "penumbra/core/component/ibc/v1/ibc.proto";
 import "penumbra/core/component/sct/v1/sct.proto";
 import "penumbra/core/component/shielded_pool/v1/shielded_pool.proto";
-import "penumbra/core/component/stake/v1/stake.proto";
+import "penumbra/core/component/validator/v1/validator.proto";
 import "penumbra/core/keys/v1/keys.proto";
 import "penumbra/core/txhash/v1/txhash.proto";
 import "penumbra/crypto/decaf377_fmd/v1/decaf377_fmd.proto";
@@ -35,6 +32,8 @@ message TransactionBody {
   repeated Action actions = 1;
   // Parameters determining if a transaction should be accepted by this chain.
   TransactionParameters transaction_parameters = 2;
+  // Optional tx-level fee funding, present on nonzero-fee transactions.
+  FeeFunding fee_funding = 3;
   // Detection data for use with Fuzzy Message Detection
   DetectionData detection_data = 4;
   // The encrypted memo for this transaction.
@@ -74,21 +73,20 @@ message DetectionData {
 
 enum ProofFamilyId {
   PROOF_FAMILY_ID_UNSPECIFIED = 0;
-  PROOF_FAMILY_ID_SPEND = 1;
-  PROOF_FAMILY_ID_OUTPUT = 2;
-  PROOF_FAMILY_ID_SWAP = 3;
-  PROOF_FAMILY_ID_SWAP_CLAIM = 4;
-  PROOF_FAMILY_ID_CONVERT = 5;
-  PROOF_FAMILY_ID_DELEGATOR_VOTE = 6;
   PROOF_FAMILY_ID_TRANSFER = 7;
+  PROOF_FAMILY_ID_CONSOLIDATE = 8;
+  PROOF_FAMILY_ID_SPLIT = 9;
+  PROOF_FAMILY_ID_SHIELDED_ICS20_WITHDRAWAL = 10;
 }
 
 message FamilyAggregate {
   ProofFamilyId family_id = 1;
-  uint32 transfer_family_id = 2;
   uint32 real_count = 3;
   uint32 padded_count = 4;
   bytes aggregate_proof = 5;
+  uint32 consolidate_family_id = 6;
+  uint32 split_family_id = 7;
+  uint32 shielded_ics20_withdrawal_family_id = 8;
 }
 
 message AggregateBundle {
@@ -100,55 +98,25 @@ message AggregateBundle {
 // A state change performed by a transaction.
 message Action {
   oneof action {
-    // Common actions have numbers < 15, to save space.
-    component.shielded_pool.v1.Spend spend = 1;
-    component.shielded_pool.v1.Output output = 2;
-    component.dex.v1.Swap swap = 3;
-    component.dex.v1.SwapClaim swap_claim = 4;
     component.shielded_pool.v1.Transfer transfer = 5;
+    component.shielded_pool.v1.Consolidate consolidate = 6;
+    component.shielded_pool.v1.Split split = 7;
 
     // Uncommon actions have numbers > 15.
 
-    component.stake.v1.ValidatorDefinition validator_definition = 16;
+    component.validator.v1.ValidatorDefinition validator_definition = 16;
     component.ibc.v1.IbcRelay ibc_relay_action = 17;
 
     // Governance:
     component.governance.v1.ProposalSubmit proposal_submit = 18;
-    component.governance.v1.ProposalWithdraw proposal_withdraw = 19;
     component.governance.v1.ValidatorVote validator_vote = 20;
-    component.governance.v1.DelegatorVote delegator_vote = 21;
-    component.governance.v1.ProposalDepositClaim proposal_deposit_claim = 22;
-
-    // Positions
-    component.dex.v1.PositionOpen position_open = 30;
-    component.dex.v1.PositionClose position_close = 31;
-    component.dex.v1.PositionWithdraw position_withdraw = 32;
-    component.dex.v1.PositionRewardClaim position_reward_claim = 34 [deprecated = true];
-
-    // (un)delegation
-    component.stake.v1.Delegate delegate = 40;
-    component.stake.v1.Undelegate undelegate = 41;
-    component.stake.v1.UndelegateClaim undelegate_claim = 42;
-
-    // Community Pool
-    component.governance.v1.CommunityPoolSpend community_pool_spend = 50;
-    component.governance.v1.CommunityPoolOutput community_pool_output = 51;
-    component.governance.v1.CommunityPoolDeposit community_pool_deposit = 52;
-
-    // Dutch auctions
-    component.auction.v1.ActionDutchAuctionSchedule action_dutch_auction_schedule = 53;
-    component.auction.v1.ActionDutchAuctionEnd action_dutch_auction_end = 54;
-    component.auction.v1.ActionDutchAuctionWithdraw action_dutch_auction_withdraw = 55;
-
-    // Funding
-    component.funding.v1.ActionLiquidityTournamentVote action_liquidity_tournament_vote = 70;
 
     // Compliance
     component.compliance.v1.MsgRegisterAsset compliance_register_asset = 80;
     component.compliance.v1.MsgRegisterUser compliance_register_user = 81;
     AggregateBundle aggregate_bundle = 82;
 
-    component.ibc.v1.Ics20Withdrawal ics20_withdrawal = 200;
+    component.shielded_pool.v1.ShieldedIcs20Withdrawal shielded_ics20_withdrawal = 200;
   }
 }
 
@@ -197,11 +165,6 @@ message TransactionPerspective {
   }
   repeated NullificationTransactionIdByCommitment nullification_transaction_ids_by_commitment = 50;
 
-  // Any relevant BatchSwapOutputData to the transaction.
-  //
-  // This can be used to fill in information about swap outputs.
-  repeated component.dex.v1.BatchSwapOutputData batch_swap_output_data = 60;
-
   keys.v1.PositionMetadataKey position_metadata_key = 70;
 }
 
@@ -231,6 +194,8 @@ message TransactionBodyView {
   repeated ActionView action_views = 1;
   // Transaction parameters.
   TransactionParameters transaction_parameters = 2;
+  // Optional tx-level fee funding, present on nonzero-fee transactions.
+  component.shielded_pool.v1.TransferView fee_funding = 3;
   // The detection data in this transaction, only populated if
   // there are outputs in the actions of this transaction.
   DetectionData detection_data = 4;
@@ -242,55 +207,24 @@ message TransactionBodyView {
 // A view of a specific state change action performed by a transaction.
 message ActionView {
   oneof action_view {
-    // Action types with visible/opaque variants
-    component.shielded_pool.v1.SpendView spend = 1;
-    component.shielded_pool.v1.OutputView output = 2;
-    component.dex.v1.SwapView swap = 3;
-    component.dex.v1.SwapClaimView swap_claim = 4;
     component.shielded_pool.v1.TransferView transfer = 5;
-    component.governance.v1.DelegatorVoteView delegator_vote = 21;
-    component.dex.v1.PositionOpenView position_open_view = 35;
+    component.shielded_pool.v1.ConsolidateView consolidate = 6;
+    component.shielded_pool.v1.SplitView split = 7;
 
     // Action types without visible/opaque variants
-    component.stake.v1.ValidatorDefinition validator_definition = 16;
+    component.validator.v1.ValidatorDefinition validator_definition = 16;
     component.ibc.v1.IbcRelay ibc_relay_action = 17;
 
     // Governance:
     component.governance.v1.ProposalSubmit proposal_submit = 18;
-    component.governance.v1.ProposalWithdraw proposal_withdraw = 19;
     component.governance.v1.ValidatorVote validator_vote = 20;
-    component.governance.v1.ProposalDepositClaim proposal_deposit_claim = 22;
-
-    // Deprecated: UIP-9 requires us to have an actual view here.
-    component.dex.v1.PositionOpen position_open = 30 [deprecated = true];
-    component.dex.v1.PositionClose position_close = 31;
-    component.dex.v1.PositionWithdraw position_withdraw = 32;
-    component.dex.v1.PositionRewardClaim position_reward_claim = 34 [deprecated = true];
-
-    component.stake.v1.Delegate delegate = 41;
-    component.stake.v1.Undelegate undelegate = 42;
-    // Community Pool
-    component.governance.v1.CommunityPoolSpend community_pool_spend = 50;
-    component.governance.v1.CommunityPoolOutput community_pool_output = 51;
-    component.governance.v1.CommunityPoolDeposit community_pool_deposit = 52;
-    // Dutch auctions
-    component.auction.v1.ActionDutchAuctionScheduleView action_dutch_auction_schedule = 53;
-    component.auction.v1.ActionDutchAuctionEnd action_dutch_auction_end = 54;
-    component.auction.v1.ActionDutchAuctionWithdrawView action_dutch_auction_withdraw = 55;
-
-    // TODO: we have no way to recover the opening of the undelegate_claim's
-    // balance commitment, and can only infer the value from looking at the rest
-    // of the transaction. is that fine?
-    component.stake.v1.UndelegateClaim undelegate_claim = 43;
-
-    component.funding.v1.ActionLiquidityTournamentVoteView action_liquidity_tournament_vote = 70;
 
     // Compliance
     component.compliance.v1.MsgRegisterAsset compliance_register_asset = 80;
     component.compliance.v1.MsgRegisterUser compliance_register_user = 81;
     AggregateBundle aggregate_bundle = 82;
 
-    component.ibc.v1.Ics20Withdrawal ics20_withdrawal = 200;
+    component.shielded_pool.v1.ShieldedIcs20WithdrawalView shielded_ics20_withdrawal = 200;
   }
 }
 
@@ -299,13 +233,8 @@ message AuthorizationData {
   // The computed auth hash for the approved transaction plan.
   core.txhash.v1.EffectHash effect_hash = 1;
   // The required spend authorizations, returned in the same order as the
-  // Spend actions in the original request.
+  // shielded spends in the original request.
   repeated crypto.decaf377_rdsa.v1.SpendAuthSignature spend_auths = 2;
-  // The required delegator vote authorizations, returned in the same order as the
-  // DelegatorVote actions in the original request.
-  repeated crypto.decaf377_rdsa.v1.SpendAuthSignature delegator_vote_auths = 3;
-  // The required LQT vote authorizations, in the same order as the original request.
-  repeated crypto.decaf377_rdsa.v1.SpendAuthSignature lqt_vote_auths = 4;
 }
 
 // The data required for proving when building a transaction from a plan.
@@ -327,10 +256,22 @@ message TransactionPlan {
   repeated ActionPlan actions = 1;
   // Parameters determining if a transaction should be accepted by this chain.
   TransactionParameters transaction_parameters = 2;
+  // Optional tx-level fee funding, present on nonzero-fee transactions.
+  FeeFundingPlan fee_funding = 3;
   // Detection data for use with Fuzzy Message Detection
   DetectionDataPlan detection_data = 4;
   // The memo plan for this transaction.
   MemoPlan memo = 5;
+}
+
+// Tx-level fee funding backed by the transfer proof machinery.
+message FeeFunding {
+  component.shielded_pool.v1.Transfer transfer = 1;
+}
+
+// Planned tx-level fee funding backed by the transfer proof machinery.
+message FeeFundingPlan {
+  component.shielded_pool.v1.TransferPlan transfer = 1;
 }
 
 message DetectionDataPlan {
@@ -343,53 +284,19 @@ message DetectionDataPlan {
 // themselves.
 message ActionPlan {
   oneof action {
-    component.shielded_pool.v1.SpendPlan spend = 1;
-    component.shielded_pool.v1.OutputPlan output = 2;
-    component.dex.v1.SwapPlan swap = 3;
-    component.dex.v1.SwapClaimPlan swap_claim = 4;
     component.shielded_pool.v1.TransferPlan transfer = 5;
+    component.shielded_pool.v1.ConsolidatePlan consolidate = 6;
+    component.shielded_pool.v1.SplitPlan split = 7;
 
     // This is just a message relayed to the chain.
-    component.stake.v1.ValidatorDefinition validator_definition = 16;
+    component.validator.v1.ValidatorDefinition validator_definition = 16;
     // This is just a message relayed to the chain.
     component.ibc.v1.IbcRelay ibc_relay_action = 17;
     // Governance:
     component.governance.v1.ProposalSubmit proposal_submit = 18;
-    component.governance.v1.ProposalWithdraw proposal_withdraw = 19;
     component.governance.v1.ValidatorVote validator_vote = 20;
-    component.governance.v1.DelegatorVotePlan delegator_vote = 21;
-    component.governance.v1.ProposalDepositClaim proposal_deposit_claim = 22;
 
-    component.ibc.v1.Ics20Withdrawal ics20_withdrawal = 200;
-
-    component.dex.v1.PositionOpen position_open = 30 [deprecated = true];
-    component.dex.v1.PositionOpenPlan position_open_plan = 35;
-    component.dex.v1.PositionClose position_close = 31;
-
-    // The position withdraw/reward claim actions require balance information so they have Plan types.
-    component.dex.v1.PositionWithdrawPlan position_withdraw = 32;
-    component.dex.v1.PositionRewardClaimPlan position_reward_claim = 34 [deprecated = true];
-
-    // We don't need any extra information (yet) to understand delegations,
-    // because we don't yet use flow encryption.
-    component.stake.v1.Delegate delegate = 40;
-    // We don't need any extra information (yet) to understand undelegations,
-    // because we don't yet use flow encryption.
-    component.stake.v1.Undelegate undelegate = 41;
-    component.stake.v1.UndelegateClaimPlan undelegate_claim = 42;
-
-    // Community Pool
-    component.governance.v1.CommunityPoolSpend community_pool_spend = 50;
-    component.governance.v1.CommunityPoolOutput community_pool_output = 51;
-    component.governance.v1.CommunityPoolDeposit community_pool_deposit = 52;
-
-    // Dutch auctions
-    component.auction.v1.ActionDutchAuctionSchedule action_dutch_auction_schedule = 53;
-    component.auction.v1.ActionDutchAuctionEnd action_dutch_auction_end = 54;
-    component.auction.v1.ActionDutchAuctionWithdrawPlan action_dutch_auction_withdraw = 55;
-
-    // Funding
-    component.funding.v1.ActionLiquidityTournamentVotePlan action_liquidity_tournament_vote = 70;
+    component.shielded_pool.v1.ShieldedIcs20WithdrawalPlan shielded_ics20_withdrawal = 200;
 
     // Compliance
     component.compliance.v1.MsgRegisterAsset compliance_register_asset = 80;

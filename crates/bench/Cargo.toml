@@ -38,26 +38,6 @@ path = "benches/vanilla/nullifier_derivation.rs"
 harness = false
 
 [[bench]]
-name = "delegator_vote"
-path = "benches/vanilla/delegator_vote.rs"
-harness = false
-
-[[bench]]
-name = "swap"
-path = "benches/vanilla/swap.rs"
-harness = false
-
-[[bench]]
-name = "swap_claim"
-path = "benches/vanilla/swap_claim.rs"
-harness = false
-
-[[bench]]
-name = "convert"
-path = "benches/vanilla/convert.rs"
-harness = false
-
-[[bench]]
 name = "decaf377"
 path = "benches/vanilla/decaf377.rs"
 harness = false
@@ -142,8 +122,5 @@ criterion = {workspace = true, features = ["html_reports"]}
 decaf377-fmd = {workspace = true}
 decaf377-ka = {workspace = true}
 decaf377-rdsa = {workspace = true}
-penumbra-sdk-dex = {workspace = true, default-features = true}
-penumbra-sdk-governance = {workspace = true, default-features = true}
 rand_chacha = {workspace = true}
-penumbra-sdk-stake = {workspace = true, default-features = true}
 tempfile = {workspace = true}

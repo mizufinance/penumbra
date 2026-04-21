@@ -7,9 +7,9 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 	gnarkte "github.com/consensys/gnark/std/algebra/native/twistededwards"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/compliance"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/generated"
-	"github.com/penumbra-zone/penumbra/tools/gnark/internal/primitives"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/compliance"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/generated"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/primitives"
 )
 
 type noteCommitmentProfileCircuit struct {
@@ -138,67 +138,250 @@ func (c *spendSharedSecretsProfileCircuit) Define(api frontend.API) error {
 	return err
 }
 
-type outputSharedSecretsProfileCircuit struct {
-	R1        frontend.Variable
-	R2        frontend.Variable
-	R3        frontend.Variable
-	AckRX     frontend.Variable
-	AckRY     frontend.Variable
-	AckSX     frontend.Variable
-	AckSY     frontend.Variable
-	DKPubX    frontend.Variable
-	DKPubY    frontend.Variable
-	IsFlagged frontend.Variable
-	Epk1X     frontend.Variable
-	Epk1Y     frontend.Variable
-	Epk2X     frontend.Variable
-	Epk2Y     frontend.Variable
-	Epk3X     frontend.Variable
-	Epk3Y     frontend.Variable
+type transferSaltProfileCircuit struct {
+	TransferNonceRoot frontend.Variable
 }
 
-func (c *outputSharedSecretsProfileCircuit) Define(api frontend.API) error {
-	_, _, _, _, _, _, _, err := compliance.DeriveSharedSecretsOutput(
+func (c *transferSaltProfileCircuit) Define(api frontend.API) error {
+	_, err := compliance.DeriveTransferSalt(api, c.TransferNonceRoot, compliance.TransferSenderExtSaltLabel)
+	return err
+}
+
+type transferMetadataProfileCircuit struct {
+	PolicyIDHash    frontend.Variable
+	ResourceHash    frontend.Variable
+	PermissionHash  frontend.Variable
+	TargetTimestamp frontend.Variable
+	Salt            frontend.Variable
+}
+
+func (c *transferMetadataProfileCircuit) Define(api frontend.API) error {
+	_, err := compliance.ComputeMetadataHash(
 		api,
-		c.R1,
-		c.R2,
-		c.R3,
-		gnarkte.Point{X: c.AckRX, Y: c.AckRY},
-		gnarkte.Point{X: c.AckSX, Y: c.AckSY},
-		gnarkte.Point{X: c.DKPubX, Y: c.DKPubY},
-		c.IsFlagged,
-		gnarkte.Point{X: c.Epk1X, Y: c.Epk1Y},
-		gnarkte.Point{X: c.Epk2X, Y: c.Epk2Y},
-		gnarkte.Point{X: c.Epk3X, Y: c.Epk3Y},
+		c.PolicyIDHash,
+		c.ResourceHash,
+		c.PermissionHash,
+		2,
+		c.TargetTimestamp,
+		c.Salt,
 	)
 	return err
 }
 
-func compileConstraintCount(t *testing.T, name string, circuit frontend.Circuit) {
+type transferDetectionProfileCircuit struct {
+	IsRegulated     frontend.Variable
+	IsFlagged       frontend.Variable
+	SharedSecretX   frontend.Variable
+	SharedSecretY   frontend.Variable
+	SenderCoreEPKFq frontend.Variable
+	DetectionSalt   frontend.Variable
+	AssetID         frontend.Variable
+	Ciphertext0     frontend.Variable
+	Ciphertext1     frontend.Variable
+}
+
+func (c *transferDetectionProfileCircuit) Define(api frontend.API) error {
+	return compliance.VerifyPoseidonEncryptionTransferDetection(
+		api,
+		c.IsRegulated,
+		c.IsFlagged,
+		gnarkte.Point{X: c.SharedSecretX, Y: c.SharedSecretY},
+		c.SenderCoreEPKFq,
+		c.DetectionSalt,
+		c.AssetID,
+		[compliance.TransferDetectionFQCount]frontend.Variable{c.Ciphertext0, c.Ciphertext1},
+	)
+}
+
+type transferAmountCiphertextProfileCircuit struct {
+	IsRegulated   frontend.Variable
+	SharedSecretX frontend.Variable
+	SharedSecretY frontend.Variable
+	C2            frontend.Variable
+	Amount        frontend.Variable
+	Ciphertext0   frontend.Variable
+}
+
+func (c *transferAmountCiphertextProfileCircuit) Define(api frontend.API) error {
+	return compliance.VerifyPoseidonEncryptionTransferAmount(
+		api,
+		c.IsRegulated,
+		gnarkte.Point{X: c.SharedSecretX, Y: c.SharedSecretY},
+		c.C2,
+		c.Amount,
+		[compliance.TransferCoreCiphertextFQCount]frontend.Variable{c.Ciphertext0},
+	)
+}
+
+type transferAddressCiphertextProfileCircuit struct {
+	IsRegulated            frontend.Variable
+	SharedSecretX          frontend.Variable
+	SharedSecretY          frontend.Variable
+	C2                     frontend.Variable
+	DiversifiedGeneratorFq frontend.Variable
+	TransmissionKeyFq      frontend.Variable
+	Ciphertext0            frontend.Variable
+	Ciphertext1            frontend.Variable
+	Ciphertext2            frontend.Variable
+}
+
+func (c *transferAddressCiphertextProfileCircuit) Define(api frontend.API) error {
+	return compliance.VerifyPoseidonEncryptionTransferAddress(
+		api,
+		c.IsRegulated,
+		gnarkte.Point{X: c.SharedSecretX, Y: c.SharedSecretY},
+		c.C2,
+		c.DiversifiedGeneratorFq,
+		c.TransmissionKeyFq,
+		[compliance.TransferExtCiphertextFQCount]frontend.Variable{
+			c.Ciphertext0,
+			c.Ciphertext1,
+			c.Ciphertext2,
+		},
+	)
+}
+
+type transferSharedProfileCircuit struct {
+	TransferCircuit
+}
+
+func newTransferSharedProfileCircuit() *transferSharedProfileCircuit {
+	return &transferSharedProfileCircuit{TransferCircuit: *NewTransferCircuit()}
+}
+
+func (c *transferSharedProfileCircuit) Define(api frontend.API) error {
+	_, err := c.TransferCircuit.verifySharedTransferContext(api)
+	return err
+}
+
+type transferSharedSpendProfileCircuit struct {
+	TransferCircuit
+}
+
+func newTransferSharedSpendProfileCircuit() *transferSharedSpendProfileCircuit {
+	return &transferSharedSpendProfileCircuit{TransferCircuit: *NewTransferCircuit()}
+}
+
+func (c *transferSharedSpendProfileCircuit) Define(api frontend.API) error {
+	shared, err := c.TransferCircuit.verifySharedTransferContext(api)
+	if err != nil {
+		return err
+	}
+	statementData := c.TransferCircuit.newTransferStatementData()
+	return c.TransferCircuit.verifyTransferSpend(api, &shared, &statementData, &c.Spends[0], 0)
+}
+
+type transferSharedReceiverOutputProfileCircuit struct {
+	TransferCircuit
+}
+
+func newTransferSharedReceiverOutputProfileCircuit() *transferSharedReceiverOutputProfileCircuit {
+	return &transferSharedReceiverOutputProfileCircuit{TransferCircuit: *NewTransferCircuit()}
+}
+
+func (c *transferSharedReceiverOutputProfileCircuit) Define(api frontend.API) error {
+	shared, err := c.TransferCircuit.verifySharedTransferContext(api)
+	if err != nil {
+		return err
+	}
+	statementData := c.TransferCircuit.newTransferStatementData()
+	return c.TransferCircuit.verifyTransferOutput(api, &shared, &statementData, &c.Outputs[0], 0)
+}
+
+type transferSharedReceiverComplianceProfileCircuit struct {
+	TransferCircuit
+}
+
+func newTransferSharedReceiverComplianceProfileCircuit() *transferSharedReceiverComplianceProfileCircuit {
+	return &transferSharedReceiverComplianceProfileCircuit{TransferCircuit: *NewTransferCircuit()}
+}
+
+func (c *transferSharedReceiverComplianceProfileCircuit) Define(api frontend.API) error {
+	shared, err := c.TransferCircuit.verifySharedTransferContext(api)
+	if err != nil {
+		return err
+	}
+	statementData := c.TransferCircuit.newTransferStatementData()
+	if err := c.TransferCircuit.verifyTransferOutput(api, &shared, &statementData, &c.Outputs[0], 0); err != nil {
+		return err
+	}
+	return c.TransferCircuit.verifyTransferComplianceCiphertexts(api, &shared, &statementData)
+}
+
+func compileConstraintCount(t *testing.T, name string, circuit frontend.Circuit) int {
 	t.Helper()
 	ccs, err := frontend.Compile(ecc.BLS12_377.ScalarField(), r1cs.NewBuilder, circuit)
 	if err != nil {
 		t.Fatalf("compile %s: %v", name, err)
 	}
-	t.Logf("%s: %d constraints", name, ccs.GetNbConstraints())
+	count := ccs.GetNbConstraints()
+	t.Logf("%s: %d constraints", name, count)
+	return count
 }
 
 func TestConstraintProfiles(t *testing.T) {
 	compileConstraintCount(t, "note commitment", &noteCommitmentProfileCircuit{})
-	compileConstraintCount(t, "balance commitment", &balanceCommitmentCircuit{})
-	compileConstraintCount(t, "randomized verification key", &randomizedVerificationKeyCircuit{})
 	compileConstraintCount(t, "threshold comparator", &thresholdProfileCircuit{})
 	compileConstraintCount(t, "point compression", &pointCompressionProfileCircuit{})
 	compileConstraintCount(t, "compliance leaf commitment", &complianceLeafProfileCircuit{})
 	compileConstraintCount(t, "quad path", &quadPathProfileCircuit{})
 	compileConstraintCount(t, "dleq", &dleqProfileCircuit{})
 	compileConstraintCount(t, "spend shared secrets", &spendSharedSecretsProfileCircuit{})
-	compileConstraintCount(t, "output shared secrets", &outputSharedSecretsProfileCircuit{})
+	transferSalt := compileConstraintCount(t, "transfer salt derivation", &transferSaltProfileCircuit{})
+	transferMetadata := compileConstraintCount(t, "transfer metadata hash", &transferMetadataProfileCircuit{})
+	transferDetection := compileConstraintCount(t, "transfer detection ciphertext", &transferDetectionProfileCircuit{})
+	transferAmount := compileConstraintCount(t, "transfer amount ciphertext", &transferAmountCiphertextProfileCircuit{})
+	transferAddress := compileConstraintCount(t, "transfer address ciphertext", &transferAddressCiphertextProfileCircuit{})
+
+	transferShared := compileConstraintCount(
+		t,
+		"transfer shared context",
+		newTransferSharedProfileCircuit(),
+	)
+	transferSharedSpend := compileConstraintCount(
+		t,
+		"transfer shared + one spend leg",
+		newTransferSharedSpendProfileCircuit(),
+	)
+	transferSharedReceiver := compileConstraintCount(
+		t,
+		"transfer shared + receiver output leg",
+		newTransferSharedReceiverOutputProfileCircuit(),
+	)
+	transferSharedReceiverCompliance := compileConstraintCount(
+		t,
+		"transfer shared + receiver output leg + grouped compliance block",
+		newTransferSharedReceiverComplianceProfileCircuit(),
+	)
+
+	fullCounts := make(map[string]int, len(generated.TransferFamilies))
 	for _, family := range generated.TransferFamilies {
-		compileConstraintCount(
+		fullCounts[family.Label] = compileConstraintCount(
 			t,
 			family.Label+" full circuit",
-			NewTransferCircuit(family.NIn, family.NOut),
+			NewTransferCircuit(),
 		)
 	}
+
+	baseShared := transferShared
+	baseSpendLeg := transferSharedSpend - transferShared
+	baseReceiverLeg := transferSharedReceiver - transferShared
+	baseCompliance := transferSharedReceiverCompliance - transferSharedReceiver
+	t.Logf("  transfer total: %d", fullCounts["transfer"])
+	t.Logf("transfer inferred breakdown:")
+	t.Logf("  shared context: %d", baseShared)
+	t.Logf("  first spend leg: %d", baseSpendLeg)
+	t.Logf("  receiver output leg: %d", baseReceiverLeg)
+	t.Logf("  grouped compliance block: %d", baseCompliance)
+
+	counterpartyTierEstimate := transferSalt + 9033 + transferAddress + transferMetadata + 17835 + 1046
+	t.Logf("transfer compliance sub-gadgets:")
+	t.Logf("  transfer detection ciphertext: %d", transferDetection)
+	t.Logf("  transfer amount ciphertext: %d", transferAmount)
+	t.Logf("  transfer address ciphertext: %d", transferAddress)
+	t.Logf("  transfer salt derivation: %d", transferSalt)
+	t.Logf("  transfer metadata hash: %d", transferMetadata)
+	t.Logf("estimated cost of one distinct counterparty ciphertext tier:")
+	t.Logf("  salt + shared-secret + address ciphertext + metadata + DLEQ + EPK compression: %d", counterpartyTierEstimate)
+	t.Logf("  as share of transfer: %.2f%%", 100*float64(counterpartyTierEstimate)/float64(fullCounts["transfer"]))
 }

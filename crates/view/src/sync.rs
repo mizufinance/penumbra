@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use penumbra_sdk_compact_block::{CompactBlock, StatePayload};
-use penumbra_sdk_dex::swap::{SwapPayload, SwapPlaintext};
 use penumbra_sdk_fee::GasPrices;
 use penumbra_sdk_keys::FullViewingKey;
 use penumbra_sdk_sct::Nullifier;
@@ -9,7 +8,7 @@ use penumbra_sdk_shielded_pool::{fmd, Note, NotePayload};
 use penumbra_sdk_tct::{self as tct, StateCommitment};
 use tracing::Instrument;
 
-use crate::{SpendableNoteRecord, Storage, SwapRecord};
+use crate::{SpendableNoteRecord, Storage};
 
 const SCT_BLOCK_CAPACITY: usize = u16::MAX as usize + 1;
 
@@ -17,7 +16,6 @@ const SCT_BLOCK_CAPACITY: usize = u16::MAX as usize + 1;
 #[derive(Debug, Clone)]
 pub struct FilteredBlock {
     pub new_notes: BTreeMap<StateCommitment, SpendableNoteRecord>,
-    pub new_swaps: BTreeMap<StateCommitment, SwapRecord>,
     pub spent_nullifiers: Vec<Nullifier>,
     pub height: u64,
     pub fmd_parameters: Option<fmd::Parameters>,
@@ -36,7 +34,6 @@ pub async fn scan_block(
         block_root,
         epoch_root,
         fmd_parameters,
-        swap_outputs,
         app_parameters_updated,
         gas_prices,
         // TODO: do we need this, or is there a bug in scan_block?
@@ -54,33 +51,17 @@ pub async fn scan_block(
             async move { note_payload.trial_decrypt(&fvk2) }.instrument(tracing::Span::current()),
         )
     };
-    // Trial-decrypt a swap with our own specific viewing key
-    let trial_decrypt_swap =
-        |swap_payload: SwapPayload| -> tokio::task::JoinHandle<Option<SwapPlaintext>> {
-            // TODO: change fvk to Arc<FVK> in Worker and pass to scan_block as Arc
-            // need this so the task is 'static and not dependent on key lifetime
-            let fvk2 = fvk.clone();
-            tokio::spawn(
-                async move { swap_payload.trial_decrypt(&fvk2) }
-                    .instrument(tracing::Span::current()),
-            )
-        };
-
     // Nullifiers we've found in this block
     let spent_nullifiers: Vec<Nullifier> = nullifiers;
 
     // Trial-decrypt the notes in this block, keeping track of the ones that were meant for us
     let mut note_decryptions = Vec::new();
-    let mut swap_decryptions = Vec::new();
     let mut unknown_commitments = Vec::new();
 
     for payload in state_payloads.iter() {
         match payload {
             StatePayload::Note { note, .. } => {
                 note_decryptions.push(trial_decrypt_note((**note).clone()));
-            }
-            StatePayload::Swap { swap, .. } => {
-                swap_decryptions.push(trial_decrypt_swap((**swap).clone()));
             }
             StatePayload::RolledUp { commitment, .. } => unknown_commitments.push(*commitment),
         }
@@ -95,22 +76,10 @@ pub async fn scan_block(
             note_advice.insert(note.commit(), note);
         }
     }
-    let mut swap_advice = BTreeMap::new();
-    for decryption in swap_decryptions {
-        if let Some(swap) = decryption
-            .await
-            .expect("able to join tokio swap decryption handle")
-        {
-            swap_advice.insert(swap.swap_commitment(), swap);
-        }
-    }
-
     // Newly detected spendable notes.
     let mut new_notes = BTreeMap::new();
-    // Newly detected claimable swaps.
-    let mut new_swaps = BTreeMap::new();
 
-    if note_advice.is_empty() && swap_advice.is_empty() {
+    if note_advice.is_empty() {
         // If there are no notes we care about in this block, just insert the block root into the
         // tree instead of processing each commitment individually
         state_commitment_tree
@@ -132,11 +101,8 @@ pub async fn scan_block(
 
             // We need to insert each commitment, so use a match statement to ensure we
             // exhaustively cover all possible cases.
-            match (
-                note_advice.get(payload.commitment()),
-                swap_advice.get(payload.commitment()),
-            ) {
-                (Some(note), None) => {
+            match note_advice.get(payload.commitment()) {
+                Some(note) => {
                     // Keep track of this commitment for later witnessing
                     let position = state_commitment_tree
                         .insert(tct::Witness::Keep, *payload.commitment())
@@ -162,53 +128,12 @@ pub async fn scan_block(
                         },
                     );
                 }
-                (None, Some(swap)) => {
-                    // Keep track of this commitment for later witnessing
-                    let position = state_commitment_tree
-                        .insert(tct::Witness::Keep, *payload.commitment())
-                        .expect("inserting a commitment must succeed");
-
-                    let Some(output_data) = swap_outputs.get(&swap.trading_pair).cloned() else {
-                        // We've been given an invalid compact block, but we
-                        // should keep going, because the fullnode we're talking
-                        // to could be lying to us and handing us crafted blocks
-                        // with garbage data only we can see, in order to
-                        // pinpoint whether or not we control a specific address,
-                        // so we can't let on that we've noticed any problem.
-                        tracing::warn!("invalid compact block, batch swap output data missing for trading pair {:?}", swap.trading_pair);
-                        continue;
-                    };
-
-                    // Record the output notes for the future swap claim, so we can detect
-                    // them when the swap is claimed.
-                    let (output_1, output_2) = swap.output_notes(&output_data);
-                    storage.give_advice(output_1).await?;
-                    storage.give_advice(output_2).await?;
-
-                    let source = payload.source().clone();
-                    let nullifier =
-                        Nullifier::derive(fvk.nullifier_key(), position, payload.commitment());
-
-                    new_swaps.insert(
-                        *payload.commitment(),
-                        SwapRecord {
-                            swap_commitment: *payload.commitment(),
-                            swap: swap.clone(),
-                            position,
-                            nullifier,
-                            source,
-                            output_data,
-                            height_claimed: None,
-                        },
-                    );
-                }
-                (None, None) => {
+                None => {
                     // Don't remember this commitment; it wasn't ours
                     state_commitment_tree
                         .insert(tct::Witness::Forget, *payload.commitment())
                         .expect("inserting a commitment must succeed");
                 }
-                (Some(_), Some(_)) => unreachable!("swap and note commitments are distinct"),
             }
 
             commitments_in_reconstructed_block += 1;
@@ -242,7 +167,6 @@ pub async fn scan_block(
     // Construct filtered block
     let result = FilteredBlock {
         new_notes,
-        new_swaps,
         spent_nullifiers: filtered_nullifiers,
         height,
         fmd_parameters,

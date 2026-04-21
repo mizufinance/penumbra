@@ -31,7 +31,7 @@ use super::Server;
 #[async_trait]
 impl BankQuery for Server {
     /// Returns the total supply for all IBC assets.
-    /// Internally-minted assets (Penumbra tokens, LP tokens, delegation tokens, etc.)
+    /// Internally-minted assets (Penumbra tokens and other chain-native assets)
     /// are also included but the supplies are will only reflect what has been transferred out.
     ///
     /// TODO: Implement a way to fetch the total supply for these assets.

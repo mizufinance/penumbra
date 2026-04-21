@@ -93,23 +93,14 @@ log_info "Alice: ${ALICE_ADDRESS:0:40}..."
 log_info "Generating Penumbra network..."
 run_quiet $PD network generate \
     --chain-id penumbra-local-devnet \
-    --unbonding-delay 302400 \
     --epoch-duration 302400 \
     --proposal-voting-blocks 50 \
-    --gas-price-simple 0 \
+    --gas-price-simple 1000 \
     --timeout-commit 500ms \
+    --tendermint-rpc-bind 0.0.0.0:16657 \
+    --tendermint-p2p-bind 0.0.0.0:16656 \
     --validators-input-file "$repo_root/testnets/validators-single.json" \
     --allocation-address "$ALICE_ADDRESS"
-
-# Move cometbft RPC/P2P to 16657/16656 to avoid conflict with SourceHub on 26657/26656.
-COMETBFT_CONFIG=~/.penumbra/network_data/node0/cometbft/config/config.toml
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' 's|laddr = "tcp://0.0.0.0:26657"|laddr = "tcp://0.0.0.0:16657"|' "$COMETBFT_CONFIG"
-    sed -i '' 's|laddr = "tcp://0.0.0.0:26656"|laddr = "tcp://0.0.0.0:16656"|' "$COMETBFT_CONFIG"
-else
-    sed -i 's|laddr = "tcp://0.0.0.0:26657"|laddr = "tcp://0.0.0.0:16657"|' "$COMETBFT_CONFIG"
-    sed -i 's|laddr = "tcp://0.0.0.0:26656"|laddr = "tcp://0.0.0.0:16656"|' "$COMETBFT_CONFIG"
-fi
 
 # Start pd
 log_info "Starting pd..."
@@ -124,7 +115,7 @@ track_pid $! "COMETBFT_PID"
 
 # Wait for Penumbra to be ready (blocks producing = pd + cometbft connected)
 log_info "Waiting for Penumbra node..."
-wait_for_penumbra 16657 45 2
+wait_for_penumbra 16657 45 2 5
 log_success "Penumbra node ready (pd: http://localhost:8080, cometbft: http://localhost:16657)"
 
 # ===================================================================
@@ -157,29 +148,14 @@ log_info "Bob:          ${BOB_ADDRESS:0:40}..."
 log_info "Charlie:      ${CHARLIE_ADDRESS:0:40}..."
 log_info "Unregistered: ${UNREGISTERED_ADDRESS:0:40}..."
 
-# Fund other wallets from Alice
-log_info "Funding Bob..."
-run_quiet $PCLI --home "$ALICE_HOME" tx send-multi \
-    --output "10000000000upenumbra:$BOB_ADDRESS" \
-    --output "100000test_usd:$BOB_ADDRESS"
+log_info "Prefunding Bob and Charlie with base asset for nonzero-fee demo flows..."
+run_quiet $PCLI --home "$ALICE_HOME" tx transfer --to "$BOB_ADDRESS" 1000000upenumbra
+run_quiet $PCLI --home "$ALICE_HOME" tx transfer --to "$CHARLIE_ADDRESS" 1000000upenumbra
 run_quiet $PCLI --home "$ALICE_HOME" view sync
-
-log_info "Funding Charlie..."
-run_quiet $PCLI --home "$ALICE_HOME" tx send-multi \
-    --output "10000000000upenumbra:$CHARLIE_ADDRESS" \
-    --output "100000test_usd:$CHARLIE_ADDRESS"
-run_quiet $PCLI --home "$ALICE_HOME" view sync
-
-log_info "Funding Unregistered..."
-run_quiet $PCLI --home "$ALICE_HOME" tx send 1000000000upenumbra --to "$UNREGISTERED_ADDRESS"
-run_quiet $PCLI --home "$ALICE_HOME" view sync
-
-# Sync recipients
 run_quiet $PCLI --home "$BOB_HOME" view sync
 run_quiet $PCLI --home "$CHARLIE_HOME" view sync
-run_quiet $PCLI --home "$UNREGISTERED_HOME" view sync
 
-log_success "All wallets funded"
+log_success "Wallets initialized, synced, and fee-funded"
 
 # ===================================================================
 # EXPORT ENV

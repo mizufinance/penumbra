@@ -1,5 +1,6 @@
 use anyhow::{Context, Error};
 
+use decaf377::Fq;
 use penumbra_sdk_keys::keys::FullViewingKey;
 use penumbra_sdk_num::Amount;
 use penumbra_sdk_proto::{penumbra::core::component::shielded_pool::v1 as pb, DomainType};
@@ -17,7 +18,23 @@ pub struct NotePayload {
 }
 
 impl NotePayload {
+    pub fn dummy() -> Self {
+        Self {
+            note_commitment: note::StateCommitment(Fq::from(0u64)),
+            ephemeral_key: ka::Public([0u8; 32]),
+            encrypted_note: NoteCiphertext([0u8; crate::note::NOTE_CIPHERTEXT_BYTES]),
+        }
+    }
+
+    pub fn is_dummy(&self) -> bool {
+        self.note_commitment.0 == Fq::from(0u64)
+    }
+
     pub fn trial_decrypt(&self, fvk: &FullViewingKey) -> Option<Note> {
+        if self.is_dummy() {
+            return None;
+        }
+
         // Try to decrypt the encrypted note using the ephemeral key and persistent incoming
         // viewing key -- if it doesn't decrypt, it wasn't meant for us.
         let note = Note::decrypt(&self.encrypted_note, fvk.incoming(), &self.ephemeral_key).ok()?;
@@ -74,6 +91,14 @@ impl DomainType for NotePayload {
 
 impl From<NotePayload> for pb::NotePayload {
     fn from(msg: NotePayload) -> Self {
+        if msg.is_dummy() {
+            return pb::NotePayload {
+                note_commitment: Some(msg.note_commitment.into()),
+                ephemeral_key: Vec::new(),
+                encrypted_note: None,
+            };
+        }
+
         pb::NotePayload {
             note_commitment: Some(msg.note_commitment.into()),
             ephemeral_key: msg.ephemeral_key.0.to_vec(),
@@ -86,11 +111,24 @@ impl TryFrom<pb::NotePayload> for NotePayload {
     type Error = Error;
 
     fn try_from(proto: pb::NotePayload) -> anyhow::Result<Self, Self::Error> {
+        let note_commitment: note::StateCommitment = proto
+            .note_commitment
+            .ok_or_else(|| anyhow::anyhow!("missing note commitment"))?
+            .try_into()?;
+        if note_commitment.0 == Fq::from(0u64) {
+            anyhow::ensure!(
+                proto.ephemeral_key.is_empty(),
+                "dummy note payload ephemeral key must be empty"
+            );
+            anyhow::ensure!(
+                proto.encrypted_note.is_none(),
+                "dummy note payload encrypted note must be absent"
+            );
+            return Ok(NotePayload::dummy());
+        }
+
         Ok(NotePayload {
-            note_commitment: proto
-                .note_commitment
-                .ok_or_else(|| anyhow::anyhow!("missing note commitment"))?
-                .try_into()?,
+            note_commitment,
             ephemeral_key: ka::Public::try_from(&proto.ephemeral_key[..])
                 .context("ephemeral key malformed")?,
             encrypted_note: proto

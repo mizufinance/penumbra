@@ -6,19 +6,21 @@ use std::{
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE, Engine as _};
 use decaf377_rdsa::{Signature, SpendAuth};
-use penumbra_sdk_view::Planner;
 use rand_core::OsRng;
 use serde_json::Value;
 
 use penumbra_sdk_governance::{
     ValidatorVote, ValidatorVoteBody, ValidatorVoteReason, Vote, MAX_VALIDATOR_VOTE_REASON_LENGTH,
 };
+use penumbra_sdk_keys::keys::AddressIndex;
 use penumbra_sdk_proto::{view::v1::GasPricesRequest, DomainType};
-use penumbra_sdk_stake::{
+use penumbra_sdk_transaction::plan::ActionPlan;
+use penumbra_sdk_validator::{
     validator,
     validator::{Validator, ValidatorToml},
-    FundingStream, FundingStreams, IdentityKey,
+    IdentityKey,
 };
+use penumbra_sdk_view::{NoteManager, TransferPlanningResult};
 
 use crate::App;
 
@@ -275,16 +277,42 @@ impl ValidatorCmd {
                     validator: new_validator,
                     auth_sig,
                 };
-                // Construct a new transaction and include the validator definition.
 
-                let plan = Planner::new(OsRng)
-                    .validator_definition(vd)
+                let mut note_manager = NoteManager::new(OsRng);
+                note_manager
                     .set_gas_prices(gas_prices)
-                    .set_fee_tier((*fee_tier).into())
-                    .plan(app.view(), source.into())
-                    .await?;
+                    .set_fee_tier((*fee_tier).into());
 
-                app.build_and_submit_transaction(plan).await?;
+                match note_manager
+                    .plan_actions_with_transfer_funding(
+                        app.view
+                            .as_mut()
+                            .context("view service must be initialized")?,
+                        AddressIndex::new(*source),
+                        vec![ActionPlan::ValidatorDefinition(vd)],
+                    )
+                    .await
+                    .context("can't build validator definition transaction")?
+                {
+                    TransferPlanningResult::Ready { transaction_plan } => {
+                        app.build_and_submit_transaction(transaction_plan).await?;
+                    }
+                    TransferPlanningResult::NeedsMaintenance {
+                        maintenance_plan, ..
+                    } => {
+                        anyhow::bail!(
+                            "validator definition requires note maintenance first; submit the suggested consolidate transaction and retry after finality: {:?}",
+                            maintenance_plan
+                        );
+                    }
+                    TransferPlanningResult::InsufficientBalance => {
+                        anyhow::bail!("insufficient balance for validator definition fees");
+                    }
+                    TransferPlanningResult::UnsupportedIntent { reason } => {
+                        anyhow::bail!("{reason}");
+                    }
+                }
+
                 // Only commit the state if the transaction was submitted
                 // successfully, so that we don't store pending notes that will
                 // never appear on-chain.
@@ -397,15 +425,40 @@ impl ValidatorCmd {
 
                 let vote = ValidatorVote { body, auth_sig };
 
-                // Construct a new transaction and include the validator definition.
-                let plan = Planner::new(OsRng)
+                let mut note_manager = NoteManager::new(OsRng);
+                note_manager
                     .set_gas_prices(gas_prices)
-                    .set_fee_tier((*fee_tier).into())
-                    .validator_vote(vote)
-                    .plan(app.view(), source.into())
-                    .await?;
+                    .set_fee_tier((*fee_tier).into());
 
-                app.build_and_submit_transaction(plan).await?;
+                match note_manager
+                    .plan_actions_with_transfer_funding(
+                        app.view
+                            .as_mut()
+                            .context("view service must be initialized")?,
+                        AddressIndex::new(*source),
+                        vec![ActionPlan::ValidatorVote(vote)],
+                    )
+                    .await
+                    .context("can't build validator vote transaction")?
+                {
+                    TransferPlanningResult::Ready { transaction_plan } => {
+                        app.build_and_submit_transaction(transaction_plan).await?;
+                    }
+                    TransferPlanningResult::NeedsMaintenance {
+                        maintenance_plan, ..
+                    } => {
+                        anyhow::bail!(
+                            "validator vote requires note maintenance first; submit the suggested consolidate transaction and retry after finality: {:?}",
+                            maintenance_plan
+                        );
+                    }
+                    TransferPlanningResult::InsufficientBalance => {
+                        anyhow::bail!("insufficient balance for validator vote fees");
+                    }
+                    TransferPlanningResult::UnsupportedIntent { reason } => {
+                        anyhow::bail!("{reason}");
+                    }
+                }
 
                 println!("Cast validator vote");
             }
@@ -413,7 +466,7 @@ impl ValidatorCmd {
                 file,
                 tendermint_validator_keyfile,
             }) => {
-                let (address, _dtk) = fvk.incoming().payment_address(0u32.into());
+                let (_address, _dtk) = fvk.incoming().payment_address(0u32.into());
                 let identity_key = IdentityKey(fvk.spend_verification_key().clone().into());
                 // By default, the template sets the governance key to the same verification key as
                 // the identity key, but a validator can change this if they want to use different
@@ -461,13 +514,6 @@ impl ValidatorCmd {
                     // Default enabled to "false" so operators are required to manually
                     // enable their validators when ready.
                     enabled: false,
-                    funding_streams: FundingStreams::try_from(vec![
-                        FundingStream::ToAddress {
-                            address,
-                            rate_bps: 100,
-                        },
-                        FundingStream::ToCommunityPool { rate_bps: 100 },
-                    ])?,
                     sequence_number: 0,
                 }
                 .into();
@@ -480,8 +526,7 @@ impl ValidatorCmd {
 # {}
 # You should fill in the name, website, and description fields.
 #
-# By default, validators are disabled, and cannot be delegated to. To change
-# this, set `enabled = true`.
+# By default, validators are disabled. To change this, set `enabled = true`.
 #
 # Every time you upload a new validator config, you'll need to increment the
 # `sequence_number`.

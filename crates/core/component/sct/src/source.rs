@@ -16,10 +16,6 @@ pub enum CommitmentSource {
         /// indicating to the client that they should download and inspect the block's transactions.
         id: Option<[u8; 32]>,
     },
-    /// The commitment was created through a validator's funding stream.
-    FundingStreamReward { epoch_index: u64 },
-    /// The commitment was created through a `CommunityPoolOutput` in a governance-initated transaction.
-    CommunityPoolOutput,
     /// The commitment was created by an inbound ICS20 transfer.
     Ics20Transfer {
         /// The sequence number of the transfer packet.
@@ -28,13 +24,6 @@ pub enum CommitmentSource {
         channel_id: String,
         /// The sender address on the counterparty chain.
         sender: String,
-    },
-    /// The commitment was created through the participation in the liquidity tournament.
-    LiquidityTournamentReward {
-        /// The epoch in which the reward occured.
-        epoch: u64,
-        /// Transaction hash of the transaction that did the voting.
-        tx_hash: TransactionId,
     },
 }
 
@@ -75,12 +64,6 @@ impl From<CommitmentSource> for pb::CommitmentSource {
                 CommitmentSource::Transaction { id } => Source::Transaction(pbcs::Transaction {
                     id: id.map(|bytes| bytes.to_vec()).unwrap_or_default(),
                 }),
-                CommitmentSource::FundingStreamReward { epoch_index } => {
-                    Source::FundingStreamReward(pbcs::FundingStreamReward { epoch_index })
-                }
-                CommitmentSource::CommunityPoolOutput => {
-                    Source::CommunityPoolOutput(pbcs::CommunityPoolOutput {})
-                }
                 CommitmentSource::Ics20Transfer {
                     packet_seq,
                     channel_id,
@@ -90,12 +73,6 @@ impl From<CommitmentSource> for pb::CommitmentSource {
                     channel_id,
                     sender,
                 }),
-                CommitmentSource::LiquidityTournamentReward { epoch, tx_hash } => {
-                    Source::Lqt(pbcs::LiquidityTournamentReward {
-                        epoch,
-                        tx_hash: Some(tx_hash.into()),
-                    })
-                }
             }),
         }
     }
@@ -110,10 +87,6 @@ impl TryFrom<pb::CommitmentSource> for CommitmentSource {
 
         Ok(match source {
             Source::Genesis(_) => Self::Genesis,
-            Source::CommunityPoolOutput(_) => Self::CommunityPoolOutput,
-            Source::FundingStreamReward(x) => Self::FundingStreamReward {
-                epoch_index: x.epoch_index,
-            },
             Source::Transaction(x) => {
                 if x.id.is_empty() {
                     Self::Transaction { id: None }
@@ -129,14 +102,6 @@ impl TryFrom<pb::CommitmentSource> for CommitmentSource {
                 packet_seq: x.packet_seq,
                 channel_id: x.channel_id,
                 sender: x.sender,
-            },
-            Source::Lqt(x) => Self::LiquidityTournamentReward {
-                epoch: x.epoch,
-                tx_hash: x
-                    .tx_hash
-                    .map(|x| x.try_into())
-                    .transpose()?
-                    .ok_or_else(|| anyhow!("missing LQT transaction hash"))?,
             },
         })
     }

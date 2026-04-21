@@ -12,8 +12,8 @@ use penumbra_sdk_proto::{
                 query_service_client::QueryServiceClient as SctQueryServiceClient,
                 EpochByHeightRequest,
             },
-            stake::v1::{
-                query_service_client::QueryServiceClient as StakeQueryServiceClient,
+            validator::v1::{
+                query_service_client::QueryServiceClient as ValidatorQueryServiceClient,
                 ValidatorInfoRequest,
             },
         },
@@ -24,7 +24,7 @@ use penumbra_sdk_proto::{
     },
     Message,
 };
-use penumbra_sdk_stake::validator;
+use penumbra_sdk_validator::validator;
 
 use crate::App;
 
@@ -94,7 +94,7 @@ impl ChainCmd {
             .index;
 
         // Fetch validators.
-        let mut client = StakeQueryServiceClient::new(channel.clone());
+        let mut client = ValidatorQueryServiceClient::new(channel.clone());
         let validators = client
             .validator_info(ValidatorInfoRequest {
                 show_inactive: true,

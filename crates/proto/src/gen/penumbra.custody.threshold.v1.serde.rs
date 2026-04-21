@@ -21,6 +21,9 @@ impl serde::Serialize for CoordinatorRound1 {
                 coordinator_round1::Request::ValidatorVote(v) => {
                     struct_ser.serialize_field("validatorVote", v)?;
                 }
+                coordinator_round1::Request::ProposalSubmit(v) => {
+                    struct_ser.serialize_field("proposalSubmit", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -38,6 +41,8 @@ impl<'de> serde::Deserialize<'de> for CoordinatorRound1 {
             "validatorDefinition",
             "validator_vote",
             "validatorVote",
+            "proposal_submit",
+            "proposalSubmit",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -45,6 +50,7 @@ impl<'de> serde::Deserialize<'de> for CoordinatorRound1 {
             Plan,
             ValidatorDefinition,
             ValidatorVote,
+            ProposalSubmit,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -70,6 +76,7 @@ impl<'de> serde::Deserialize<'de> for CoordinatorRound1 {
                             "plan" => Ok(GeneratedField::Plan),
                             "validatorDefinition" | "validator_definition" => Ok(GeneratedField::ValidatorDefinition),
                             "validatorVote" | "validator_vote" => Ok(GeneratedField::ValidatorVote),
+                            "proposalSubmit" | "proposal_submit" => Ok(GeneratedField::ProposalSubmit),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -111,6 +118,13 @@ impl<'de> serde::Deserialize<'de> for CoordinatorRound1 {
                                 return Err(serde::de::Error::duplicate_field("validatorVote"));
                             }
                             request__ = map_.next_value::<::std::option::Option<_>>()?.map(coordinator_round1::Request::ValidatorVote)
+;
+                        }
+                        GeneratedField::ProposalSubmit => {
+                            if request__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("proposalSubmit"));
+                            }
+                            request__ = map_.next_value::<::std::option::Option<_>>()?.map(coordinator_round1::Request::ProposalSubmit)
 ;
                         }
                         GeneratedField::__SkipField__ => {

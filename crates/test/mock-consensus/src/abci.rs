@@ -86,6 +86,7 @@ where
                     code,
                     gas_used,
                     gas_wanted,
+                    log,
                     events,
                     ..
                 } = &response;
@@ -93,6 +94,7 @@ where
                     ?code,
                     ?gas_used,
                     ?gas_wanted,
+                    ?log,
                     ?events,
                     "received DeliverTx response"
                 );

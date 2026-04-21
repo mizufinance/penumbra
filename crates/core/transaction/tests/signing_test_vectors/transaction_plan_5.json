@@ -1,79 +1,52 @@
 {
   "actions": [
     {
-      "ics20Withdrawal": {
-        "amount": {
-          "lo": "461127664612600000"
+      "proposalSubmit": {
+        "proposal": {
+          "title": "awptotbqnyqlgidge-355173",
+          "description": "ipgfnahzhxdclgzvaexpjwlxtcnil-4057141572296755719096624931037",
+          "signaling": {}
         },
-        "denom": {
-          "denom": "t00yff35pnfDWDqTwh035m5239Uxux3"
+        "proposer": {
+          "ik": "qzg9487/2RXCmy0dKzmxrIvWwLhj/TLgxGUefS/HD5M="
         },
-        "destinationChainAddress": "penumbra19k4c9y0khxje4mekxrj5z9nldnqgxzkk4d3dd2kvy73vljz5tee80pntpg2zakce3m73ranuzpp3ejukx7vcftvlm5m4dfp0awdyqruy6lmp77slneanjn7mhwt4ec3f90qxn5",
-        "returnAddress": {
-          "inner": "4mS/JOv1z6XoEJc22YAoqyC4RMp9UR4FXNI+Z+gL3g7Km5Rm1IxyCt52JREsJ1EB29VRUv2m4F9sz5YaelNVVM/Pyo7y4VUxxdOQfbcx9QQ="
+        "governanceKey": {
+          "gk": "iJrQm5xedlK/HSoF/QYTVmmnLQWltgqtKp74ZR+oTg4="
         },
-        "timeoutHeight": {
-          "revisionNumber": "759022029",
-          "revisionHeight": "875380148"
-        },
-        "sourceChannel": "channel-0"
+        "authSig": {
+          "inner": "ejYwrhiN14UUUKjNAGYvSEwzvF843253Bxv7elkQ2Q5PGjWzGZLpNU8FHOdXRFUg1oIr/xcvifoBs95/c/keAQ=="
+        }
       }
     },
     {
-      "positionWithdraw": {
-        "reserves": {
-          "r1": {
-            "lo": "411121700800173833"
+      "validatorVote": {
+        "body": {
+          "proposal": "894123683",
+          "vote": {
+            "vote": "VOTE_YES"
           },
-          "r2": {
-            "lo": "586204271550972831"
+          "identityKey": {
+            "ik": "0I4Taul/fI3fvL5BsoUA38ZPKMmC7m82/q27bQIF6BE="
+          },
+          "governanceKey": {
+            "gk": "qghy88Pui3NczRDMGPxl4v6uhq3GT0y9T3fqIh09gA0="
+          },
+          "reason": {
+            "reason": "RPxrMxz5zgrq42"
           }
         },
-        "positionId": {
-          "inner": "bo7OmGXX60jpn4K66xEruo23U99XJJXRRHwiHfvthJ0="
-        },
-        "pair": {
-          "asset1": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          },
-          "asset2": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          }
-        },
-        "sequence": "1"
-      }
-    },
-    {
-      "actionDutchAuctionWithdraw": {
-        "auctionId": {
-          "inner": "se1TEXrnZsQwIXoW03cM5q9Zjpjc/98IERWJb19nncI="
-        },
-        "seq": "894819389",
-        "reservesInput": {
-          "amount": {
-            "lo": "194540818684833410"
-          },
-          "assetId": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          }
-        },
-        "reservesOutput": {
-          "amount": {
-            "lo": "798372768440068718"
-          },
-          "assetId": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          }
+        "authSig": {
+          "inner": "GviA6Mc2jtJx/trnpBKISNsYT+aFQmZsf2qhjARWBA0RDY8KOYkcPVtmt0aJGrbIifUSxG/kKPadmPA4ma3DAw=="
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "4240024064",
-    "chainId": "zeqxkcnm-7611099779369008257868550541398",
+    "expiryHeight": "5020708876",
+    "chainId": "jrnbtepqparoyzrxxyjp-072",
     "fee": {
       "amount": {
-        "lo": "905396297158108540"
+        "lo": "234168135091127110"
       }
     }
   }

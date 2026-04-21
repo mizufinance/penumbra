@@ -5,9 +5,7 @@ use std::{
 };
 
 use anyhow::Context;
-use penumbra_sdk_auction::auction::AuctionNft;
 use penumbra_sdk_compact_block::CompactBlock;
-use penumbra_sdk_dex::lp::{position, LpNft};
 use penumbra_sdk_keys::FullViewingKey;
 use penumbra_sdk_proto::core::{
     app::v1::{
@@ -258,12 +256,6 @@ impl Worker {
             .new_notes
             .values()
             .map(|record| &record.source)
-            .chain(
-                filtered_block
-                    .new_swaps
-                    .values()
-                    .map(|record| &record.source),
-            )
             .any(|source| matches!(source, CommitmentSource::Transaction { .. }));
 
         // Only make a block request if we detected transactions in the FilteredBlock.
@@ -299,13 +291,6 @@ impl Worker {
             for commitment in tx.state_commitments() {
                 filtered_block
                     .new_notes
-                    .entry(commitment)
-                    .and_modify(|record| {
-                        relevant = true;
-                        record.source = CommitmentSource::Transaction { id: Some(tx_id) };
-                    });
-                filtered_block
-                    .new_swaps
                     .entry(commitment)
                     .and_modify(|record| {
                         relevant = true;
@@ -396,8 +381,8 @@ impl Worker {
                 // Optimization: if the block is empty, seal the in-memory SCT,
                 // and skip touching the database:
                 sct_guard.end_block()?;
-                // We also need to end the epoch, since if there are no funding streams, then an
-                // epoch boundary won't necessarily require scanning:
+                // We also need to end the epoch, since an epoch boundary might not imply any
+                // wallet-visible note changes that require scanning:
                 if block.epoch_root.is_some() {
                     sct_guard
                         .end_epoch()
@@ -419,97 +404,6 @@ impl Worker {
                 for transaction in &transactions {
                     for action in transaction.actions() {
                         match action {
-                            penumbra_sdk_transaction::Action::PositionOpen(position_open) => {
-                                let position_id = position_open.position.id();
-
-                                // Record every possible permutation.
-                                let lp_nft = LpNft::new(position_id, position::State::Opened);
-                                let _id = lp_nft.asset_id();
-                                let denom = lp_nft.denom();
-                                self.storage.record_asset(denom).await?;
-
-                                let lp_nft = LpNft::new(position_id, position::State::Closed);
-                                let _id = lp_nft.asset_id();
-                                let denom = lp_nft.denom();
-                                self.storage.record_asset(denom).await?;
-
-                                let lp_nft = LpNft::new(
-                                    position_id,
-                                    position::State::Withdrawn { sequence: 0 },
-                                );
-                                let _id = lp_nft.asset_id();
-                                let denom = lp_nft.denom();
-                                self.storage.record_asset(denom).await?;
-
-                                // Record the position itself
-                                self.storage
-                                    .record_position(position_open.position.clone())
-                                    .await?;
-                            }
-                            penumbra_sdk_transaction::Action::PositionClose(position_close) => {
-                                let position_id = position_close.position_id;
-
-                                // Update the position record
-                                self.storage
-                                    .update_position(position_id, position::State::Closed)
-                                    .await?;
-                            }
-                            penumbra_sdk_transaction::Action::PositionWithdraw(
-                                position_withdraw,
-                            ) => {
-                                let position_id = position_withdraw.position_id;
-
-                                // Record the LPNFT for the current sequence number.
-                                let state = position::State::Withdrawn {
-                                    sequence: position_withdraw.sequence,
-                                };
-                                let lp_nft = LpNft::new(position_id, state);
-                                let denom = lp_nft.denom();
-                                self.storage.record_asset(denom).await?;
-
-                                // Update the position record
-                                self.storage.update_position(position_id, state).await?;
-                            }
-                            penumbra_sdk_transaction::Action::ActionDutchAuctionSchedule(
-                                schedule_da,
-                            ) => {
-                                let auction_id = schedule_da.description.id();
-                                let auction_nft_opened = AuctionNft::new(auction_id, 0);
-                                let nft_metadata_opened = auction_nft_opened.metadata.clone();
-
-                                self.storage.record_asset(nft_metadata_opened).await?;
-
-                                self.storage
-                                    .record_auction_with_state(
-                                        schedule_da.description.id(),
-                                        0u64, // Opened
-                                    )
-                                    .await?;
-                            }
-                            penumbra_sdk_transaction::Action::ActionDutchAuctionEnd(end_da) => {
-                                let auction_id = end_da.auction_id;
-                                let auction_nft_closed = AuctionNft::new(auction_id, 1);
-                                let nft_metadata_closed = auction_nft_closed.metadata.clone();
-
-                                self.storage.record_asset(nft_metadata_closed).await?;
-
-                                self.storage
-                                    .record_auction_with_state(end_da.auction_id, 1)
-                                    .await?;
-                            }
-                            penumbra_sdk_transaction::Action::ActionDutchAuctionWithdraw(
-                                withdraw_da,
-                            ) => {
-                                let auction_id = withdraw_da.auction_id;
-                                let auction_nft_withdrawn =
-                                    AuctionNft::new(auction_id, withdraw_da.seq);
-                                let nft_metadata_withdrawn = auction_nft_withdrawn.metadata.clone();
-
-                                self.storage.record_asset(nft_metadata_withdrawn).await?;
-                                self.storage
-                                    .record_auction_with_state(auction_id, withdraw_da.seq)
-                                    .await?;
-                            }
                             _ => (),
                         };
                     }
@@ -518,59 +412,84 @@ impl Worker {
                     // This enables offline compliance lookups for future transactions to these addresses
                     let ovk = self.fvk.outgoing();
                     for action in transaction.actions() {
-                        let maybe_decrypted_note = match action {
-                            penumbra_sdk_transaction::Action::Output(output) => {
-                                let note_commitment = output.body.note_payload.note_commitment;
-                                let cv = output.body.balance_commitment;
-                                let epk = &output.body.note_payload.ephemeral_key;
+                        let outputs: Vec<_> = match action {
+                            penumbra_sdk_transaction::Action::Transfer(transfer) => transfer
+                                .body
+                                .outputs
+                                .iter()
+                                .map(|output| {
+                                    (
+                                        &output.note_payload.encrypted_note,
+                                        output.ovk_wrapped_key.clone(),
+                                        output.note_payload.note_commitment,
+                                        transfer.body.balance_commitment,
+                                        &output.note_payload.ephemeral_key,
+                                    )
+                                })
+                                .collect(),
+                            penumbra_sdk_transaction::Action::Consolidate(consolidate) => {
+                                consolidate
+                                    .body
+                                    .outputs
+                                    .iter()
+                                    .map(|output| {
+                                        (
+                                            &output.note_payload.encrypted_note,
+                                            output.ovk_wrapped_key.clone(),
+                                            output.note_payload.note_commitment,
+                                            consolidate.body.balance_commitment,
+                                            &output.note_payload.ephemeral_key,
+                                        )
+                                    })
+                                    .collect()
+                            }
+                            penumbra_sdk_transaction::Action::Split(split) => split
+                                .body
+                                .outputs
+                                .iter()
+                                .map(|output| {
+                                    (
+                                        &output.note_payload.encrypted_note,
+                                        output.ovk_wrapped_key.clone(),
+                                        output.note_payload.note_commitment,
+                                        split.body.balance_commitment,
+                                        &output.note_payload.ephemeral_key,
+                                    )
+                                })
+                                .collect(),
+                            _ => Vec::new(),
+                        };
+
+                        for (encrypted_note, ovk_wrapped_key, note_commitment, cv, epk) in outputs {
+                            if let Ok(decrypted_note) =
                                 penumbra_sdk_shielded_pool::Note::decrypt_outgoing(
-                                    &output.body.note_payload.encrypted_note,
-                                    output.body.ovk_wrapped_key.clone(),
+                                    encrypted_note,
+                                    ovk_wrapped_key,
                                     note_commitment,
                                     cv,
                                     ovk,
                                     epk,
                                 )
-                                .ok()
-                            }
-                            penumbra_sdk_transaction::Action::Transfer(transfer) => {
-                                transfer.body.outputs.first().and_then(|output| {
-                                    let note_commitment = output.note_payload.note_commitment;
-                                    let cv = transfer.body.balance_commitment;
-                                    let epk = &output.note_payload.ephemeral_key;
-                                    penumbra_sdk_shielded_pool::Note::decrypt_outgoing(
-                                        &output.note_payload.encrypted_note,
-                                        output.ovk_wrapped_key.clone(),
-                                        note_commitment,
-                                        cv,
-                                        ovk,
-                                        epk,
-                                    )
-                                    .ok()
-                                })
-                            }
-                            _ => None,
-                        };
-
-                        if let Some(decrypted_note) = maybe_decrypted_note {
-                            let dest_address = decrypted_note.address();
-                            if !self.fvk.incoming().views_address(&dest_address) {
-                                if let Err(e) = self
-                                    .storage
-                                    .record_counterparty(&dest_address, height)
-                                    .await
-                                {
-                                    tracing::warn!(
-                                        ?dest_address,
-                                        ?e,
-                                        "failed to record counterparty during sync"
-                                    );
-                                } else {
-                                    tracing::debug!(
-                                        ?dest_address,
-                                        height,
-                                        "recorded counterparty from historical TX"
-                                    );
+                            {
+                                let dest_address = decrypted_note.address();
+                                if !self.fvk.incoming().views_address(&dest_address) {
+                                    if let Err(e) = self
+                                        .storage
+                                        .record_counterparty(&dest_address, height)
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            ?dest_address,
+                                            ?e,
+                                            "failed to record counterparty during sync"
+                                        );
+                                    } else {
+                                        tracing::debug!(
+                                            ?dest_address,
+                                            height,
+                                            "recorded counterparty from historical TX"
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -581,30 +500,12 @@ impl Worker {
                 for note_record in filtered_block.new_notes.values() {
                     // If the asset is already known, skip it, unless there's useful information
                     // to cross-reference.
-                    if let Some(note_denom) = self
+                    if self
                         .storage
                         .asset_by_id(&note_record.note.asset_id())
                         .await?
+                        .is_some()
                     {
-                        // If the asset metata is for an auction, we record the associated note commitment
-                        // in the auction state table to cross reference with SNRs.
-                        if note_denom.is_auction_nft() {
-                            let note_commitment = note_record.note_commitment;
-                            let auction_nft: AuctionNft = note_denom.try_into()?;
-                            self.storage
-                                .update_auction_with_note_commitment(
-                                    auction_nft.id,
-                                    note_commitment,
-                                )
-                                .await?;
-                        } else if let Ok(lp_nft) = LpNft::try_from(note_denom) {
-                            self.storage
-                                .update_position_with_account(
-                                    lp_nft.position_id(),
-                                    note_record.address_index.account,
-                                )
-                                .await?;
-                        }
                         continue;
                     } else {
                         // If the asset is unknown, we may be able to query for its denom metadata and store that.

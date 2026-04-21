@@ -1,11 +1,10 @@
 use crate::{
-    rate::RateData,
-    validator::{BondingState, State, Validator},
-    Delegate, IdentityKey, Penalty, Undelegate,
+    validator::{State, Validator},
+    IdentityKey,
 };
 use anyhow::{anyhow, Context as _};
 use penumbra_sdk_num::Amount;
-use penumbra_sdk_proto::{core::component::stake::v1 as pb, DomainType, Name as _};
+use penumbra_sdk_proto::{core::component::validator::v1 as pb, DomainType, Name as _};
 use tendermint::abci::types::Misbehavior;
 
 #[derive(Clone, Debug)]
@@ -91,89 +90,6 @@ impl DomainType for EventValidatorVotingPowerChange {
 }
 
 #[derive(Clone, Debug)]
-pub struct EventValidatorBondingStateChange {
-    pub identity_key: IdentityKey,
-    pub bonding_state: BondingState,
-}
-
-impl TryFrom<pb::EventValidatorBondingStateChange> for EventValidatorBondingStateChange {
-    type Error = anyhow::Error;
-
-    fn try_from(value: pb::EventValidatorBondingStateChange) -> Result<Self, Self::Error> {
-        fn inner(
-            value: pb::EventValidatorBondingStateChange,
-        ) -> anyhow::Result<EventValidatorBondingStateChange> {
-            Ok(EventValidatorBondingStateChange {
-                identity_key: value
-                    .identity_key
-                    .ok_or(anyhow!("missing `identity_key`"))?
-                    .try_into()?,
-                bonding_state: value
-                    .bonding_state
-                    .ok_or(anyhow!("missing `bonding_state`"))?
-                    .try_into()?,
-            })
-        }
-        inner(value).context(format!(
-            "parsing {}",
-            pb::EventValidatorBondingStateChange::NAME
-        ))
-    }
-}
-
-impl From<EventValidatorBondingStateChange> for pb::EventValidatorBondingStateChange {
-    fn from(value: EventValidatorBondingStateChange) -> Self {
-        Self {
-            identity_key: Some(value.identity_key.into()),
-            bonding_state: Some(value.bonding_state.into()),
-        }
-    }
-}
-
-impl DomainType for EventValidatorBondingStateChange {
-    type Proto = pb::EventValidatorBondingStateChange;
-}
-
-#[derive(Clone, Debug)]
-pub struct EventRateDataChange {
-    pub identity_key: IdentityKey,
-    pub rate_data: RateData,
-}
-
-impl TryFrom<pb::EventRateDataChange> for EventRateDataChange {
-    type Error = anyhow::Error;
-
-    fn try_from(value: pb::EventRateDataChange) -> Result<Self, Self::Error> {
-        fn inner(value: pb::EventRateDataChange) -> anyhow::Result<EventRateDataChange> {
-            Ok(EventRateDataChange {
-                identity_key: value
-                    .identity_key
-                    .ok_or(anyhow!("missing `identity_key`"))?
-                    .try_into()?,
-                rate_data: value
-                    .rate_data
-                    .ok_or(anyhow!("missing `rate_data`"))?
-                    .try_into()?,
-            })
-        }
-        inner(value).context(format!("parsing {}", pb::EventRateDataChange::NAME))
-    }
-}
-
-impl From<EventRateDataChange> for pb::EventRateDataChange {
-    fn from(value: EventRateDataChange) -> Self {
-        Self {
-            identity_key: Some(value.identity_key.into()),
-            rate_data: Some(value.rate_data.into()),
-        }
-    }
-}
-
-impl DomainType for EventRateDataChange {
-    type Proto = pb::EventRateDataChange;
-}
-
-#[derive(Clone, Debug)]
 pub struct EventValidatorDefinitionUpload {
     pub validator: Validator,
 }
@@ -247,102 +163,6 @@ impl DomainType for EventValidatorMissedBlock {
 }
 
 #[derive(Clone, Debug)]
-pub struct EventDelegate {
-    pub identity_key: IdentityKey,
-    pub amount: Amount,
-}
-
-impl From<&Delegate> for EventDelegate {
-    fn from(value: &Delegate) -> Self {
-        Self {
-            identity_key: value.validator_identity,
-            amount: value.unbonded_amount,
-        }
-    }
-}
-
-impl TryFrom<pb::EventDelegate> for EventDelegate {
-    type Error = anyhow::Error;
-
-    fn try_from(value: pb::EventDelegate) -> Result<Self, Self::Error> {
-        fn inner(value: pb::EventDelegate) -> anyhow::Result<EventDelegate> {
-            Ok(EventDelegate {
-                identity_key: value
-                    .identity_key
-                    .ok_or(anyhow!("missing `identity_key`"))?
-                    .try_into()?,
-                amount: value
-                    .amount
-                    .ok_or(anyhow!("missing `amount`"))?
-                    .try_into()?,
-            })
-        }
-        inner(value).context(format!("parsing {}", pb::EventDelegate::NAME))
-    }
-}
-
-impl From<EventDelegate> for pb::EventDelegate {
-    fn from(value: EventDelegate) -> Self {
-        Self {
-            identity_key: Some(value.identity_key.into()),
-            amount: Some(value.amount.into()),
-        }
-    }
-}
-
-impl DomainType for EventDelegate {
-    type Proto = pb::EventDelegate;
-}
-
-#[derive(Clone, Debug)]
-pub struct EventUndelegate {
-    pub identity_key: IdentityKey,
-    pub amount: Amount,
-}
-
-impl From<&Undelegate> for EventUndelegate {
-    fn from(value: &Undelegate) -> Self {
-        Self {
-            identity_key: value.validator_identity,
-            amount: value.unbonded_amount,
-        }
-    }
-}
-
-impl TryFrom<pb::EventUndelegate> for EventUndelegate {
-    type Error = anyhow::Error;
-
-    fn try_from(value: pb::EventUndelegate) -> Result<Self, Self::Error> {
-        fn inner(value: pb::EventUndelegate) -> anyhow::Result<EventUndelegate> {
-            Ok(EventUndelegate {
-                identity_key: value
-                    .identity_key
-                    .ok_or(anyhow!("missing `identity_key`"))?
-                    .try_into()?,
-                amount: value
-                    .amount
-                    .ok_or(anyhow!("missing `amount`"))?
-                    .try_into()?,
-            })
-        }
-        inner(value).context(format!("parsing {}", pb::EventUndelegate::NAME))
-    }
-}
-
-impl From<EventUndelegate> for pb::EventUndelegate {
-    fn from(value: EventUndelegate) -> Self {
-        Self {
-            identity_key: Some(value.identity_key.into()),
-            amount: Some(value.amount.into()),
-        }
-    }
-}
-
-impl DomainType for EventUndelegate {
-    type Proto = pb::EventUndelegate;
-}
-
-#[derive(Clone, Debug)]
 pub struct EventTombstoneValidator {
     pub evidence_height: u64,
     pub current_height: u64,
@@ -401,48 +221,4 @@ impl From<EventTombstoneValidator> for pb::EventTombstoneValidator {
 
 impl DomainType for EventTombstoneValidator {
     type Proto = pb::EventTombstoneValidator;
-}
-
-#[derive(Clone, Debug)]
-pub struct EventSlashingPenaltyApplied {
-    pub identity_key: IdentityKey,
-    pub epoch_index: u64,
-    pub new_penalty: Penalty,
-}
-
-impl TryFrom<pb::EventSlashingPenaltyApplied> for EventSlashingPenaltyApplied {
-    type Error = anyhow::Error;
-
-    fn try_from(value: pb::EventSlashingPenaltyApplied) -> Result<Self, Self::Error> {
-        fn inner(
-            value: pb::EventSlashingPenaltyApplied,
-        ) -> anyhow::Result<EventSlashingPenaltyApplied> {
-            Ok(EventSlashingPenaltyApplied {
-                identity_key: value
-                    .identity_key
-                    .ok_or(anyhow!("missing `identity_key`"))?
-                    .try_into()?,
-                epoch_index: value.epoch_index,
-                new_penalty: value
-                    .new_penalty
-                    .ok_or(anyhow!("missing `new_penalty`"))?
-                    .try_into()?,
-            })
-        }
-        inner(value).context(format!("parsing {}", pb::EventSlashingPenaltyApplied::NAME))
-    }
-}
-
-impl From<EventSlashingPenaltyApplied> for pb::EventSlashingPenaltyApplied {
-    fn from(value: EventSlashingPenaltyApplied) -> Self {
-        Self {
-            identity_key: Some(value.identity_key.into()),
-            epoch_index: value.epoch_index,
-            new_penalty: Some(value.new_penalty.into()),
-        }
-    }
-}
-
-impl DomainType for EventSlashingPenaltyApplied {
-    type Proto = pb::EventSlashingPenaltyApplied;
 }

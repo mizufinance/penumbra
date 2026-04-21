@@ -8,7 +8,7 @@ edition = "2021"
 homepage   = "https://penumbra.zone"
 license    = "MIT OR Apache-2.0"
 publish = false
-repository = "https://github.com/penumbra-zone/penumbra"
+repository = "https://github.com/mizufinance/penumbra"
 version = "0.1.0"
 
 [dependencies]

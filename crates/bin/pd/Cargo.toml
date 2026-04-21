@@ -65,9 +65,6 @@ penumbra-sdk-asset                   = { workspace = true, default-features = tr
 penumbra-sdk-auto-https              = { version = "2.1.0", path = "../../util/auto-https" }
 penumbra-sdk-compact-block           = { workspace = true, default-features = true }
 penumbra-sdk-custody                 = { workspace = true }
-penumbra-sdk-auction                 = { workspace = true, features = ["parallel"], default-features = true }
-penumbra-sdk-dex                     = { workspace = true, features = ["parallel"], default-features = true }
-penumbra-sdk-distributions           = { workspace = true, default-features = true }
 penumbra-sdk-fee                     = { workspace = true, default-features = true }
 penumbra-sdk-governance              = { workspace = true, features = ["parallel"], default-features = true }
 penumbra-sdk-ibc                     = { workspace = true, features = ["rpc"], default-features = true }
@@ -76,7 +73,7 @@ penumbra-sdk-num                     = { workspace = true, default-features = tr
 penumbra-sdk-proto                   = { workspace = true, default-features = true }
 penumbra-sdk-sct                     = { workspace = true, default-features = true }
 penumbra-sdk-shielded-pool           = { workspace = true, features = ["parallel"], default-features = true }
-penumbra-sdk-stake                   = { workspace = true, features = ["parallel"], default-features = true }
+penumbra-sdk-validator                   = { workspace = true, features = ["parallel"], default-features = true }
 penumbra-sdk-tct                     = { workspace = true, default-features = true }
 penumbra-sdk-tendermint-proxy        = { version = "2.1.0", path = "../../util/tendermint-proxy" }
 penumbra-sdk-tower-trace             = { workspace = true }

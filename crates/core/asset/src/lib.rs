@@ -13,13 +13,13 @@ pub use equivalent_value::EquivalentValue;
 pub use estimated_price::EstimatedPrice;
 pub use value::{Value, ValueVar, ValueView};
 
-pub static STAKING_TOKEN_DENOM: Lazy<asset::Metadata> = Lazy::new(|| {
+pub static BASE_ASSET_DENOM: Lazy<asset::Metadata> = Lazy::new(|| {
     asset::Cache::with_known_assets()
         .get_unit("upenumbra")
         .expect("unable to get upenumbra denom, which should be hardcoded")
         .base()
 });
-pub static STAKING_TOKEN_ASSET_ID: Lazy<asset::Id> = Lazy::new(|| STAKING_TOKEN_DENOM.id());
+pub static BASE_ASSET_ID: Lazy<asset::Id> = Lazy::new(|| BASE_ASSET_DENOM.id());
 
 pub static TEST_USD_DENOM: Lazy<asset::Metadata> = Lazy::new(|| {
     asset::Cache::with_known_assets()

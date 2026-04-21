@@ -18,11 +18,10 @@ The primary content of a transaction is its list of actions. Each action is exec
 Crucially, each action makes a shielded contribution to the transaction's value
 balance by means of a _balance commitment_, using the commitment scheme for asset values described in detail in the [Asset Model](./assets.md).
 
-Some actions, like a `Spend`, consume state fragments from the chain and release
-value into the transaction, while others, like `Output`, consume value from the
-transaction and record it in the state. And actions like `Delegate` consume one
-type of value (the staking token) and release another type of value (the
-delegation token).
+Shielded actions such as `Transfer`, `Split`, and `Consolidate` consume and
+create shielded notes while maintaining a balanced transaction-level value
+commitment. Other supported actions, such as `ValidatorDefinition` or governance
+actions, affect non-shielded state directly.
 
 The chain requires that transactions do not create or destroy value.  To
 accomplish conservation of value, the _binding signature_ proves that the

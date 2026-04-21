@@ -27,8 +27,7 @@ pub struct TendermintProxy {
 impl TendermintProxy {
     /// Returns a new [`TendermintProxy`].
     pub fn new(tendermint_url: url::Url) -> Self {
-        let client = HttpClient::new(tendermint_url.as_ref())
-            .expect("tendermint rpc URL should be validated before proxy creation");
+        let client = build_tendermint_http_client(&tendermint_url);
         Self {
             tendermint_url,
             client,
@@ -36,10 +35,43 @@ impl TendermintProxy {
     }
 }
 
+fn build_tendermint_http_client(tendermint_url: &url::Url) -> HttpClient {
+    let rpc_url = tendermint_url
+        .as_ref()
+        .try_into()
+        .expect("tendermint rpc URL should be validated before proxy creation");
+
+    // Smoke/devnet connects to a local CometBFT RPC endpoint. Building the reqwest client
+    // with system proxy autodetection can panic on macOS in `system-configuration`, so we
+    // opt out here and provide the client explicitly.
+    let http_client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("tendermint rpc client should build");
+
+    HttpClient::builder(rpc_url)
+        .client(http_client)
+        .build()
+        .expect("tendermint rpc URL should be validated before proxy creation")
+}
+
 impl std::fmt::Debug for TendermintProxy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TendermintProxy")
             .field("tendermint_url", &self.tendermint_url)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_tendermint_http_client;
+
+    #[test]
+    fn build_tendermint_http_client_for_localhost() {
+        let url = "http://127.0.0.1:16657"
+            .parse()
+            .expect("localhost tendermint URL should parse");
+        let _client = build_tendermint_http_client(&url);
     }
 }

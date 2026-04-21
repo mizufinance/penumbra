@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeMap,
     fs::{self, File},
     io::{Read, Write},
     path::PathBuf,
@@ -7,8 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{ensure, Context, Result};
-use decaf377::{Fq, Fr};
+use anyhow::{Context, Result};
 use ibc_proto::ibc::core::client::v1::{
     query_client::QueryClient as IbcClientQueryClient, QueryClientStateRequest,
 };
@@ -22,44 +20,19 @@ use ibc_types::core::{
     client::Height as IbcHeight,
 };
 use ibc_types::lightclients::tendermint::client_state::ClientState as TendermintClientState;
-use lqt_vote::LqtVoteCmd;
 use rand_core::OsRng;
 use regex::Regex;
 
 use compliance::ComplianceCmd;
-use liquidity_position::PositionCmd;
-use penumbra_sdk_asset::{asset, asset::Metadata, Value, STAKING_TOKEN_ASSET_ID};
-use penumbra_sdk_dex::{
-    lp::position::{self, Position, State},
-    swap_claim::SwapClaimPlan,
-};
+use penumbra_sdk_asset::{asset, asset::Metadata, Value};
 use penumbra_sdk_fee::FeeTier;
-use penumbra_sdk_governance::{
-    proposal::ProposalToml, proposal_state::State as ProposalState, Vote,
-};
+use penumbra_sdk_governance::{proposal::ProposalToml, ProposalSubmit, ProposalSubmitBody};
 use penumbra_sdk_keys::{keys::AddressIndex, Address};
 use penumbra_sdk_num::Amount;
-use penumbra_sdk_proto::core::app::v1::{
-    query_service_client::QueryServiceClient as AppQueryServiceClient, AppParametersRequest,
-};
 use penumbra_sdk_proto::{
-    core::component::{
-        dex::v1::{
-            query_service_client::QueryServiceClient as DexQueryServiceClient,
-            LiquidityPositionByIdRequest, PositionId,
-        },
-        governance::v1::{
-            query_service_client::QueryServiceClient as GovernanceQueryServiceClient,
-            NextProposalIdRequest, ProposalDataRequest, ProposalInfoRequest, ProposalInfoResponse,
-            ProposalRateDataRequest,
-        },
-        sct::v1::{
-            query_service_client::QueryServiceClient as SctQueryServiceClient, EpochByHeightRequest,
-        },
-        stake::v1::{
-            query_service_client::QueryServiceClient as StakeQueryServiceClient,
-            ValidatorPenaltyRequest, ValidatorStatusRequest,
-        },
+    core::component::governance::v1::{
+        query_service_client::QueryServiceClient as GovernanceQueryServiceClient,
+        NextProposalIdRequest,
     },
     cosmos::tx::v1beta1::{
         mode_info::{Single, Sum},
@@ -72,36 +45,19 @@ use penumbra_sdk_proto::{
     view::v1::GasPricesRequest,
     Message, Name as _,
 };
-use penumbra_sdk_shielded_pool::Ics20Withdrawal;
-use penumbra_sdk_stake::{
-    rate::RateData,
-    validator::{self},
-};
-use penumbra_sdk_stake::{
-    DelegationToken, IdentityKey, Penalty, UnbondingToken, UndelegateClaimPlan,
-};
-use penumbra_sdk_transaction::{gas::swap_claim_gas_cost, Transaction};
-use penumbra_sdk_view::{SpendableNoteRecord, ViewClient};
-use penumbra_sdk_wallet::plan::{self, Planner};
-use proposal::{ensure_reduced_action_surface_proposal_payload_enabled, ProposalCmd};
+use penumbra_sdk_shielded_pool::{ConsolidateFamilyId, Ics20Withdrawal};
+use penumbra_sdk_transaction::Transaction;
+use penumbra_sdk_validator::{GovernanceKey, IdentityKey};
+use penumbra_sdk_view::{NoteManager, TransferPlanningResult, ViewClient};
+use proposal::ProposalCmd;
 use tonic::transport::{Channel, ClientTlsConfig};
 use url::Url;
 
-use crate::command::tx::auction::AuctionCmd;
 use crate::App;
 use clap::Parser;
 
-mod auction;
 mod compliance;
-mod liquidity_position;
-mod lqt_vote;
 mod proposal;
-mod replicate;
-
-/// The planner can fail to build a large transaction, so
-/// pcli splits apart the number of positions to close/withdraw
-/// in the [`PositionCmd::CloseAll`]/[`PositionCmd::WithdrawAll`] commands.
-const POSITION_CHUNK_SIZE: usize = 30;
 
 #[derive(Debug, Parser)]
 pub struct TxCmdWithOptions {
@@ -110,6 +66,26 @@ pub struct TxCmdWithOptions {
     pub offline: Option<PathBuf>,
     #[clap(subcommand)]
     pub cmd: TxCmd,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum ConsolidateFamilyArg {
+    #[clap(name = "2x1")]
+    TwoByOne,
+    #[clap(name = "4x1")]
+    FourByOne,
+    #[clap(name = "8x1")]
+    EightByOne,
+}
+
+impl From<ConsolidateFamilyArg> for ConsolidateFamilyId {
+    fn from(value: ConsolidateFamilyArg) -> Self {
+        match value {
+            ConsolidateFamilyArg::TwoByOne => ConsolidateFamilyId::TwoByOne,
+            ConsolidateFamilyArg::FourByOne => ConsolidateFamilyId::FourByOne,
+            ConsolidateFamilyArg::EightByOne => ConsolidateFamilyId::EightByOne,
+        }
+    }
 }
 
 impl TxCmdWithOptions {
@@ -126,16 +102,13 @@ impl TxCmdWithOptions {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum TxCmd {
-    /// Auction related commands.
-    #[clap(display_order = 600, subcommand)]
-    Auction(AuctionCmd),
-    /// Send funds to a Penumbra address.
-    #[clap(display_order = 100)]
-    Send {
-        /// The destination address to send funds to.
+    /// Transfer funds to a Penumbra address.
+    #[clap(name = "transfer", display_order = 100)]
+    Transfer {
+        /// The destination address to transfer funds to.
         #[clap(long, display_order = 100)]
         to: String,
-        /// The amounts to send, written as typed values 1.87penumbra, 12cubes, etc.
+        /// The amounts to transfer, written as typed values 1.87penumbra, 12cubes, etc.
         values: Vec<String>,
         /// Only spend funds originally received by the given account.
         #[clap(long, default_value = "0", display_order = 300)]
@@ -147,33 +120,30 @@ pub enum TxCmd {
         #[clap(short, long, default_value_t)]
         fee_tier: FeeTier,
     },
-    /// Send funds to multiple recipients in a single transaction.
-    ///
-    /// Each --output flag specifies a "VALUE:ADDRESS" pair, e.g.
-    /// `pcli tx send-multi --output "100regulated_usd:penumbra1abc..." --output "200regulated_usd:penumbra1def..."`
+    /// Consolidate many notes of one asset into a larger note.
     #[clap(display_order = 101)]
-    SendMulti {
-        /// Outputs as "VALUE:ADDRESS" pairs.
-        #[clap(long = "output", min_values = 1, required = true)]
-        outputs: Vec<String>,
+    Consolidate {
+        /// The asset to consolidate, expressed as a display denom.
+        asset: String,
         /// Only spend funds originally received by the given account.
         #[clap(long, default_value = "0", display_order = 300)]
         source: u32,
-        /// Optional. Set the transaction's memo field to the provided text.
+        /// Optional. Select a specific consolidate family.
+        #[clap(long, value_enum)]
+        family: Option<ConsolidateFamilyArg>,
+        /// The selected fee tier to multiply the fee amount by.
+        #[clap(short, long, default_value_t)]
+        fee_tier: FeeTier,
+    },
+    /// Split a spendable note into exactly 4 or 8 notes of the same asset.
+    #[clap(display_order = 102)]
+    Split {
+        /// The note commitment of the spendable note to split, as hex.
         #[clap(long)]
-        memo: Option<String>,
-        /// The selected fee tier to multiply the fee amount by.
-        #[clap(short, long, default_value_t)]
-        fee_tier: FeeTier,
-    },
-    /// Deposit stake into a validator's delegation pool.
-    #[clap(display_order = 200)]
-    Delegate {
-        /// The identity key of the validator to delegate to.
-        #[clap(long, display_order = 100)]
-        to: String,
-        /// The amount of stake to delegate.
-        amount: String,
+        note_commitment: String,
+        /// The output values to create, written as typed values using the note's asset.
+        #[clap(min_values = 4, required = true)]
+        values: Vec<String>,
         /// Only spend funds originally received by the given account.
         #[clap(long, default_value = "0", display_order = 300)]
         source: u32,
@@ -181,115 +151,19 @@ pub enum TxCmd {
         #[clap(short, long, default_value_t)]
         fee_tier: FeeTier,
     },
-    /// Delegate to many validators in a single transaction.
-    #[clap(display_order = 200)]
-    DelegateMany {
-        /// A path to a CSV file of (validator identity, UM amount) pairs.
-        ///
-        /// The amount is in UM, not upenumbra.
-        #[clap(long, display_order = 100)]
-        csv_path: String,
-        /// Only spend funds originally received by the given account.
-        #[clap(long, default_value = "0", display_order = 300)]
-        source: u32,
-        /// The selected fee tier to multiply the fee amount by.
-        #[clap(short, long, default_value_t)]
-        fee_tier: FeeTier,
-    },
-    /// Withdraw stake from a validator's delegation pool.
-    #[clap(display_order = 200)]
-    Undelegate {
-        /// The amount of delegation tokens to undelegate.
-        amount: String,
-        /// Only spend funds originally received by the given account.
-        #[clap(long, default_value = "0", display_order = 300)]
-        source: u32,
-        /// The selected fee tier to multiply the fee amount by.
-        #[clap(short, long, default_value_t)]
-        fee_tier: FeeTier,
-    },
-    /// Claim any undelegations that have finished unbonding.
-    #[clap(display_order = 200)]
-    UndelegateClaim {
-        /// The selected fee tier to multiply the fee amount by.
-        #[clap(short, long, default_value_t)]
-        fee_tier: FeeTier,
-    },
-    /// Swap tokens of one denomination for another using the DEX.
-    ///
-    /// Swaps are batched and executed at the market-clearing price.
-    ///
-    /// A swap generates two transactions: an initial "swap" transaction that
-    /// submits the swap, and a "swap claim" transaction that privately mints
-    /// the output funds once the batch has executed.  The second transaction
-    /// will be created and submitted automatically.
-    #[clap(display_order = 300)]
-    Swap {
-        /// The input amount to swap, written as a typed value 1.87penumbra, 12cubes, etc.
-        input: String,
-        /// The denomination to swap the input into, e.g. `gm`
-        #[clap(long, display_order = 100)]
-        into: String,
-        /// Only spend funds originally received by the given account.
-        #[clap(long, default_value = "0", display_order = 300)]
-        source: u32,
-        /// The selected fee tier to multiply the fee amount by.
-        #[clap(short, long, default_value_t)]
-        fee_tier: FeeTier,
-    },
-    /// Vote on a governance proposal in your role as a delegator (see also: `pcli validator vote`).
-    #[clap(display_order = 400)]
-    Vote {
-        /// Only spend funds and vote with staked delegation tokens originally received by the given
-        /// account.
-        #[clap(long, default_value = "0", global = true, display_order = 300)]
-        source: u32,
-        #[clap(subcommand)]
-        vote: VoteCmd,
-        /// The selected fee tier to multiply the fee amount by.
-        #[clap(short, long, default_value_t)]
-        fee_tier: FeeTier,
-    },
-    /// Submit or withdraw a governance proposal.
+    /// Submit or vote on a governance proposal.
     #[clap(display_order = 500, subcommand)]
     Proposal(ProposalCmd),
     /// Compliance-related transactions (asset and user registration).
     #[clap(display_order = 550, subcommand)]
     Compliance(ComplianceCmd),
-    /// Deposit funds into the Community Pool.
-    #[clap(display_order = 600)]
-    CommunityPoolDeposit {
-        /// The amounts to send, written as typed values 1.87penumbra, 12cubes, etc.
-        #[clap(min_values = 1, required = true)]
-        values: Vec<String>,
-        /// Only spend funds originally received by the given account.
-        #[clap(long, default_value = "0", display_order = 300)]
-        source: u32,
-        /// The selected fee tier to multiply the fee amount by.
-        #[clap(short, long, default_value_t)]
-        fee_tier: FeeTier,
-    },
-    /// Manage liquidity positions.
-    #[clap(display_order = 500, subcommand, visible_alias = "lp")]
-    Position(PositionCmd),
-    /// Consolidate many small notes into a few larger notes.
-    ///
-    /// Since Penumbra transactions reveal their arity (how many spends,
-    /// outputs, etc), but transactions are unlinkable from each other, it is
-    /// slightly preferable to sweep small notes into larger ones in an isolated
-    /// "sweep" transaction, rather than at the point that they should be spent.
-    ///
-    /// Currently, only zero-fee sweep transactions are implemented.
-    #[clap(display_order = 990)]
-    Sweep,
-
-    /// Perform an ICS-20 withdrawal, moving funds from the Penumbra chain
+    /// Perform a shielded ICS-20 withdrawal, moving funds from the Penumbra chain
     /// to a counterparty chain.
     ///
     /// For a withdrawal to be processed on the counterparty, IBC packets must be relayed between
     /// the two chains. Relaying is out of scope for the `pcli` tool.
-    #[clap(display_order = 250)]
-    Withdraw {
+    #[clap(name = "shielded-ics20-withdrawal", display_order = 250)]
+    ShieldedIcs20Withdrawal {
         /// Address on the receiving chain,
         /// e.g. cosmos1grgelyng2v6v3t8z87wu3sxgt9m5s03xvslewd. The chain_id for the counterparty
         /// chain will be discovered automatically, based on the `--channel` setting.
@@ -350,8 +224,6 @@ pub enum TxCmd {
         /// The transaction to be broadcast
         transaction: PathBuf,
     },
-    #[clap(display_order = 700)]
-    LqtVote(LqtVoteCmd),
 }
 
 /// Vote on a governance proposal.
@@ -380,66 +252,34 @@ pub enum VoteCmd {
     },
 }
 
-impl From<VoteCmd> for (u64, Vote) {
-    fn from(cmd: VoteCmd) -> (u64, Vote) {
+impl From<VoteCmd> for (u64, penumbra_sdk_governance::Vote) {
+    fn from(cmd: VoteCmd) -> (u64, penumbra_sdk_governance::Vote) {
         match cmd {
-            VoteCmd::Yes { proposal_id } => (proposal_id, Vote::Yes),
-            VoteCmd::No { proposal_id } => (proposal_id, Vote::No),
-            VoteCmd::Abstain { proposal_id } => (proposal_id, Vote::Abstain),
+            VoteCmd::Yes { proposal_id } => (proposal_id, penumbra_sdk_governance::Vote::Yes),
+            VoteCmd::No { proposal_id } => (proposal_id, penumbra_sdk_governance::Vote::No),
+            VoteCmd::Abstain { proposal_id } => {
+                (proposal_id, penumbra_sdk_governance::Vote::Abstain)
+            }
         }
     }
 }
 
 impl TxCmd {
-    fn disabled_in_reduced_action_surface(&self) -> Option<&'static str> {
-        match self {
-            TxCmd::Auction(_) => Some("Auction"),
-            TxCmd::Delegate { .. } => Some("Delegate"),
-            TxCmd::DelegateMany { .. } => Some("Delegate"),
-            TxCmd::Undelegate { .. } => Some("Undelegate"),
-            TxCmd::UndelegateClaim { .. } => Some("UndelegateClaim"),
-            TxCmd::Swap { .. } => Some("Swap"),
-            TxCmd::Vote { .. } => Some("DelegatorVote"),
-            TxCmd::CommunityPoolDeposit { .. } => Some("CommunityPoolDeposit"),
-            TxCmd::Position(_) => Some("Position"),
-            TxCmd::LqtVote(_) => Some("ActionLiquidityTournamentVote"),
-            _ => None,
-        }
-    }
-
     /// Determine if this command requires a network sync before it executes.
     pub fn offline(&self) -> bool {
         match self {
-            TxCmd::Send { .. } => false,
-            TxCmd::SendMulti { .. } => false,
-            TxCmd::Sweep { .. } => false,
-            TxCmd::Swap { .. } => false,
-            TxCmd::Delegate { .. } => false,
-            TxCmd::DelegateMany { .. } => false,
-            TxCmd::Undelegate { .. } => false,
-            TxCmd::UndelegateClaim { .. } => false,
-            TxCmd::Vote { .. } => false,
+            TxCmd::Transfer { .. } => false,
+            TxCmd::Consolidate { .. } => false,
+            TxCmd::Split { .. } => false,
             TxCmd::Proposal(proposal_cmd) => proposal_cmd.offline(),
             TxCmd::Compliance(compliance_cmd) => compliance_cmd.offline(),
-            TxCmd::CommunityPoolDeposit { .. } => false,
-            TxCmd::Position(lp_cmd) => lp_cmd.offline(),
-            TxCmd::Withdraw { .. } => false,
-            TxCmd::Auction(_) => false,
+            TxCmd::ShieldedIcs20Withdrawal { .. } => false,
             TxCmd::Broadcast { .. } => false,
             TxCmd::RegisterForwardingAccount { .. } => false,
-            TxCmd::LqtVote(cmd) => cmd.offline(),
         }
     }
 
     pub async fn exec(&self, app: &mut App) -> Result<()> {
-        // Intentional for the current reduced-action-surface mode: the CLI stays aligned with
-        // planner and consensus, which reject the same action families unconditionally.
-        // If we later add a runtime phase toggle, this gate should be parameterized in
-        // lockstep with the planner/app-side policy.
-        if let Some(action_name) = self.disabled_in_reduced_action_surface() {
-            anyhow::bail!("action disabled in reduced action surface: {action_name}");
-        }
-
         // Handle compliance commands that don't need wallet/view service early
         if let TxCmd::Compliance(compliance_cmd) = self {
             if compliance_cmd.is_scan() {
@@ -456,9 +296,7 @@ impl TxCmd {
             }
         }
 
-        // TODO: use a command line flag to determine the fee token,
-        // and pull the appropriate GasPrices out of this rpc response,
-        // the rest should follow
+        // The reduced chain prices gas only in the base asset.
         // TODO: fetching this here means that no tx commands
         // can be run in offline mode, which is a bit annoying
         let gas_prices = app
@@ -473,7 +311,7 @@ impl TxCmd {
             .try_into()?;
 
         match self {
-            TxCmd::Send {
+            TxCmd::Transfer {
                 values,
                 to,
                 source: from,
@@ -489,99 +327,143 @@ impl TxCmd {
                     .parse::<Address>()
                     .map_err(|_| anyhow::anyhow!("address is invalid"))?;
 
-                let mut planner = Planner::new(OsRng);
-
-                planner
+                let mut note_manager = NoteManager::new(OsRng);
+                note_manager
                     .set_gas_prices(gas_prices)
                     .set_fee_tier((*fee_tier).into());
-                for value in values.iter().cloned() {
-                    planner.output(value, to.clone());
-                }
-                let plan = planner
-                    .memo(memo.clone().unwrap_or_default())
-                    .plan(
+                note_manager.memo(memo.clone().unwrap_or_default());
+                match note_manager
+                    .plan_transfer_values(
                         app.view
                             .as_mut()
                             .context("view service must be initialized")?,
                         AddressIndex::new(*from),
+                        values,
+                        to,
                     )
                     .await
-                    .context("can't build send transaction")?;
-                app.build_and_submit_transaction(plan).await?;
-            }
-            TxCmd::SendMulti {
-                outputs,
-                source: from,
-                memo,
-                fee_tier,
-            } => {
-                // Parse each "VALUE:ADDRESS" pair.
-                let parsed_outputs = outputs
-                    .iter()
-                    .enumerate()
-                    .map(|(i, s)| {
-                        let (value_str, addr_str) = s.split_once(':').ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "output #{} is not in VALUE:ADDRESS format: {:?}",
-                                i + 1,
-                                s
-                            )
-                        })?;
-                        let value = value_str
-                            .parse::<Value>()
-                            .with_context(|| format!("invalid value in output #{}", i + 1))?;
-                        let address = addr_str
-                            .parse::<Address>()
-                            .map_err(|_| anyhow::anyhow!("invalid address in output #{}", i + 1))?;
-                        Ok((value, address))
-                    })
-                    .collect::<Result<Vec<(Value, Address)>>>()?;
-
-                let mut planner = Planner::new(OsRng);
-                planner
-                    .set_gas_prices(gas_prices)
-                    .set_fee_tier((*fee_tier).into());
-                for (value, address) in parsed_outputs {
-                    planner.output(value, address);
+                    .context("can't build transfer transaction")?
+                {
+                    TransferPlanningResult::Ready { transaction_plan } => {
+                        app.build_and_submit_transaction(transaction_plan).await?;
+                    }
+                    TransferPlanningResult::NeedsMaintenance {
+                        maintenance_plan, ..
+                    } => {
+                        anyhow::bail!(
+                            "transfer requires note maintenance first; submit the suggested consolidate transaction and retry after finality: {:?}",
+                            maintenance_plan
+                        );
+                    }
+                    TransferPlanningResult::InsufficientBalance => {
+                        anyhow::bail!("insufficient balance for requested transfer");
+                    }
+                    TransferPlanningResult::UnsupportedIntent { reason } => {
+                        anyhow::bail!("{reason}");
+                    }
                 }
-                let plan = planner
-                    .memo(memo.clone().unwrap_or_default())
-                    .plan(
-                        app.view
-                            .as_mut()
-                            .context("view service must be initialized")?,
-                        AddressIndex::new(*from),
-                    )
-                    .await
-                    .context("can't build multi-send transaction")?;
-                app.build_and_submit_transaction(plan).await?;
             }
-            TxCmd::CommunityPoolDeposit {
-                values,
+            TxCmd::Consolidate {
+                asset,
                 source,
+                family,
                 fee_tier,
             } => {
-                let values = values
-                    .iter()
-                    .map(|v| v.parse())
-                    .collect::<Result<Vec<Value>, _>>()?;
-
-                let mut planner = Planner::new(OsRng);
-                planner
+                let asset_id = asset::REGISTRY.parse_unit(asset.as_str()).id();
+                let mut note_manager = NoteManager::new(OsRng);
+                note_manager
                     .set_gas_prices(gas_prices)
                     .set_fee_tier((*fee_tier).into());
-                for value in values {
-                    planner.community_pool_deposit(value);
-                }
-                let plan = planner
-                    .plan(
+                match note_manager
+                    .plan_consolidate(
                         app.view
                             .as_mut()
                             .context("view service must be initialized")?,
                         AddressIndex::new(*source),
+                        asset_id,
+                        family.map(Into::into),
                     )
-                    .await?;
-                app.build_and_submit_transaction(plan).await?;
+                    .await
+                    .context("can't build consolidate transaction")?
+                {
+                    TransferPlanningResult::Ready { transaction_plan } => {
+                        app.build_and_submit_transaction(transaction_plan).await?;
+                    }
+                    TransferPlanningResult::NeedsMaintenance { .. } => {
+                        anyhow::bail!("consolidate planning unexpectedly requested maintenance");
+                    }
+                    TransferPlanningResult::InsufficientBalance => {
+                        anyhow::bail!("insufficient balance for requested consolidate");
+                    }
+                    TransferPlanningResult::UnsupportedIntent { reason } => {
+                        anyhow::bail!("{reason}");
+                    }
+                }
+            }
+            TxCmd::Split {
+                note_commitment,
+                values,
+                source,
+                fee_tier,
+            } => {
+                let note_commitment =
+                    penumbra_sdk_shielded_pool::note::StateCommitment::parse_hex(note_commitment)
+                        .map_err(|e| anyhow::anyhow!("invalid note commitment: {e}"))?;
+                let note_record =
+                    ViewClient::note_by_commitment(app.view(), note_commitment).await?;
+                anyhow::ensure!(
+                    note_record.address_index.account == *source,
+                    "selected note is not controlled by source account {}",
+                    source
+                );
+
+                let output_values = values
+                    .iter()
+                    .map(|value| value.parse::<Value>())
+                    .collect::<Result<Vec<_>, _>>()?;
+                let output_amounts = output_values
+                    .iter()
+                    .map(|value| {
+                        anyhow::ensure!(
+                            value.asset_id == note_record.note.asset_id(),
+                            "split output {:?} must use the same asset as the selected note",
+                            value
+                        );
+                        Ok(value.amount)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let mut note_manager = NoteManager::new(OsRng);
+                note_manager
+                    .set_gas_prices(gas_prices)
+                    .set_fee_tier((*fee_tier).into());
+                match note_manager
+                    .plan_split(
+                        app.view
+                            .as_mut()
+                            .context("view service must be initialized")?,
+                        AddressIndex::new(*source),
+                        note_record,
+                        output_amounts,
+                    )
+                    .await
+                    .context("can't build split transaction")?
+                {
+                    TransferPlanningResult::Ready { transaction_plan } => {
+                        app.build_and_submit_transaction(transaction_plan).await?;
+                    }
+                    TransferPlanningResult::NeedsMaintenance { .. } => {
+                        anyhow::bail!("split planning unexpectedly requested maintenance");
+                    }
+                    TransferPlanningResult::InsufficientBalance => {
+                        anyhow::bail!(
+                            "selected note does not cover requested split outputs and fee"
+                        );
+                    }
+                    TransferPlanningResult::UnsupportedIntent { reason } => {
+                        anyhow::bail!("{reason}");
+                    }
+                }
             }
             TxCmd::Compliance(compliance_cmd) => {
                 // Scan command is handled early in exec() before gas_prices fetch.
@@ -589,462 +471,9 @@ impl TxCmd {
                 let plan = compliance_cmd.plan(app, gas_prices).await?;
                 app.build_and_submit_transaction(plan).await?;
             }
-            TxCmd::Sweep => loop {
-                let plans = plan::sweep(
-                    app.view
-                        .as_mut()
-                        .context("view service must be initialized")?,
-                    OsRng,
-                )
-                .await?;
-                let num_plans = plans.len();
-
-                for (i, plan) in plans.into_iter().enumerate() {
-                    println!("building sweep {i} of {num_plans}");
-                    app.build_and_submit_transaction(plan).await?;
-                }
-                if num_plans == 0 {
-                    println!("finished sweeping");
-                    break;
-                }
-            },
-            TxCmd::Swap {
-                input,
-                into,
-                source,
-                fee_tier,
-            } => {
-                let input = input.parse::<Value>()?;
-                let into = asset::REGISTRY.parse_unit(into.as_str()).base();
-                let fee_tier: FeeTier = (*fee_tier).into();
-
-                let fvk = app.config.full_viewing_key.clone();
-
-                // If a source address was specified, use it for the swap, otherwise,
-                // use the default address.
-                let (claim_address, _dtk_d) =
-                    fvk.incoming().payment_address(AddressIndex::new(*source));
-
-                let mut planner = Planner::new(OsRng);
-                planner
-                    .set_gas_prices(gas_prices.clone())
-                    .set_fee_tier(fee_tier.into());
-
-                // We don't expect much of a drift in gas prices in a few blocks, and the fee tier
-                // adjustments should be enough to cover it.
-                let estimated_claim_fee = gas_prices
-                    .fee(&swap_claim_gas_cost())
-                    .apply_tier(fee_tier.into());
-
-                planner.swap(input, into.id(), estimated_claim_fee, claim_address)?;
-
-                let plan = planner
-                    .plan(app.view(), AddressIndex::new(*source))
-                    .await
-                    .context("can't plan swap transaction")?;
-
-                // Hold on to the swap plaintext to be able to claim.
-                let swap_plaintext = plan
-                    .swap_plans()
-                    .next()
-                    .expect("swap plan must be present")
-                    .swap_plaintext
-                    .clone();
-
-                // Submit the `Swap` transaction, waiting for confirmation,
-                // at which point the swap will be available for claiming.
-                app.build_and_submit_transaction(plan).await?;
-
-                // Fetch the SwapRecord with the claimable swap.
-                let swap_record = app
-                    .view()
-                    .swap_by_commitment(swap_plaintext.swap_commitment())
-                    .await?;
-
-                let asset_cache = app.view().assets().await?;
-
-                let pro_rata_outputs = swap_record
-                    .output_data
-                    .pro_rata_outputs((swap_plaintext.delta_1_i, swap_plaintext.delta_2_i));
-                println!("Swap submitted and batch confirmed!");
-                println!(
-                    "You will receive outputs of {} and {}. Claiming now...",
-                    Value {
-                        amount: pro_rata_outputs.0,
-                        asset_id: swap_record.output_data.trading_pair.asset_1(),
-                    }
-                    .format(&asset_cache),
-                    Value {
-                        amount: pro_rata_outputs.1,
-                        asset_id: swap_record.output_data.trading_pair.asset_2(),
-                    }
-                    .format(&asset_cache),
-                );
-
-                let params = app
-                    .view
-                    .as_mut()
-                    .context("view service must be initialized")?
-                    .app_params()
-                    .await?;
-
-                let mut planner = Planner::new(OsRng);
-                planner
-                    .set_gas_prices(gas_prices)
-                    .set_fee_tier(fee_tier.into());
-                let plan = planner
-                    .swap_claim(SwapClaimPlan {
-                        swap_plaintext,
-                        position: swap_record.position,
-                        output_data: swap_record.output_data,
-                        epoch_duration: params.sct_params.epoch_duration,
-                        proof_blinding_r: Fq::rand(&mut OsRng),
-                        proof_blinding_s: Fq::rand(&mut OsRng),
-                    })
-                    .plan(app.view(), AddressIndex::new(*source))
-                    .await
-                    .context("can't plan swap claim")?;
-
-                // Submit the `SwapClaim` transaction.
-                // BUG: this doesn't wait for confirmation, see
-                // https://github.com/penumbra-zone/penumbra/pull/2091/commits/128b24a6303c2f855a708e35f9342987f1dd34ec
-                app.build_and_submit_transaction(plan).await?;
-            }
-            TxCmd::Delegate {
-                to,
-                amount,
-                source,
-                fee_tier,
-            } => {
-                let unbonded_amount = {
-                    let Value { amount, asset_id } = amount.parse::<Value>()?;
-                    if asset_id != *STAKING_TOKEN_ASSET_ID {
-                        anyhow::bail!("staking can only be done with the staking token");
-                    }
-                    amount
-                };
-
-                let to = to.parse::<IdentityKey>()?;
-
-                let mut stake_client = StakeQueryServiceClient::new(app.pd_channel().await?);
-                let rate_data: RateData = stake_client
-                    .current_validator_rate(tonic::Request::new(to.into()))
-                    .await?
-                    .into_inner()
-                    .try_into()?;
-
-                let mut sct_client = SctQueryServiceClient::new(app.pd_channel().await?);
-                let latest_sync_height = app.view().status().await?.full_sync_height;
-                let epoch = sct_client
-                    .epoch_by_height(EpochByHeightRequest {
-                        height: latest_sync_height,
-                    })
-                    .await?
-                    .into_inner()
-                    .epoch
-                    .expect("epoch must be available")
-                    .into();
-
-                let mut planner = Planner::new(OsRng);
-                planner
-                    .set_gas_prices(gas_prices)
-                    .set_fee_tier((*fee_tier).into());
-                let plan = planner
-                    .delegate(epoch, unbonded_amount, rate_data)
-                    .plan(app.view(), AddressIndex::new(*source))
-                    .await
-                    .context("can't plan delegation, try running pcli tx sweep and try again")?;
-
-                app.build_and_submit_transaction(plan).await?;
-            }
-            TxCmd::DelegateMany {
-                csv_path,
-                source,
-                fee_tier,
-            } => {
-                let mut stake_client = StakeQueryServiceClient::new(app.pd_channel().await?);
-
-                let mut sct_client = SctQueryServiceClient::new(app.pd_channel().await?);
-                let latest_sync_height = app.view().status().await?.full_sync_height;
-                let epoch = sct_client
-                    .epoch_by_height(EpochByHeightRequest {
-                        height: latest_sync_height,
-                    })
-                    .await?
-                    .into_inner()
-                    .epoch
-                    .expect("epoch must be available")
-                    .into();
-
-                let mut planner = Planner::new(OsRng);
-                planner
-                    .set_gas_prices(gas_prices)
-                    .set_fee_tier((*fee_tier).into());
-
-                let file = File::open(csv_path).context("can't open CSV file")?;
-                let mut reader = csv::ReaderBuilder::new()
-                    .has_headers(false) // Don't skip any rows
-                    .from_reader(file);
-                for result in reader.records() {
-                    let record = result?;
-                    let validator_identity: IdentityKey = record[0].parse()?;
-
-                    let rate_data: RateData = stake_client
-                        .current_validator_rate(tonic::Request::new(validator_identity.into()))
-                        .await?
-                        .into_inner()
-                        .try_into()?;
-
-                    let typed_amount_str = format!("{}penumbra", &record[1]);
-
-                    let unbonded_amount = {
-                        let Value { amount, asset_id } = typed_amount_str.parse::<Value>()?;
-                        if asset_id != *STAKING_TOKEN_ASSET_ID {
-                            anyhow::bail!("staking can only be done with the staking token");
-                        }
-                        amount
-                    };
-
-                    planner.delegate(epoch, unbonded_amount, rate_data);
-                }
-
-                let plan = planner
-                    .plan(app.view(), AddressIndex::new(*source))
-                    .await
-                    .context("can't plan delegation, try running pcli tx sweep and try again")?;
-
-                app.build_and_submit_transaction(plan).await?;
-            }
-            TxCmd::Undelegate {
-                amount,
-                source,
-                fee_tier,
-            } => {
-                let delegation_value @ Value {
-                    amount: _,
-                    asset_id,
-                } = amount.parse::<Value>()?;
-
-                // TODO: it's awkward that we can't just pull the denom out of the `amount` string we were already given
-                let delegation_token: DelegationToken = app
-                    .view()
-                    .assets()
-                    .await?
-                    .get(&asset_id)
-                    .ok_or_else(|| anyhow::anyhow!("unknown asset id {}", asset_id))?
-                    .clone()
-                    .try_into()
-                    .context("could not parse supplied denomination as a delegation token")?;
-
-                let from = delegation_token.validator();
-
-                let mut stake_client = StakeQueryServiceClient::new(app.pd_channel().await?);
-                let rate_data: RateData = stake_client
-                    .current_validator_rate(tonic::Request::new(from.into()))
-                    .await?
-                    .into_inner()
-                    .try_into()?;
-
-                let mut sct_client = SctQueryServiceClient::new(app.pd_channel().await?);
-                let latest_sync_height = app.view().status().await?.full_sync_height;
-                let epoch = sct_client
-                    .epoch_by_height(EpochByHeightRequest {
-                        height: latest_sync_height,
-                    })
-                    .await?
-                    .into_inner()
-                    .epoch
-                    .expect("epoch must be available")
-                    .into();
-
-                let mut planner = Planner::new(OsRng);
-                planner
-                    .set_gas_prices(gas_prices)
-                    .set_fee_tier((*fee_tier).into());
-
-                let plan = planner
-                    .undelegate(epoch, delegation_value.amount, rate_data)
-                    .plan(
-                        app.view
-                            .as_mut()
-                            .context("view service must be initialized")?,
-                        AddressIndex::new(*source),
-                    )
-                    .await
-                    .context("can't build undelegate plan")?;
-
-                app.build_and_submit_transaction(plan).await?;
-            }
-            TxCmd::UndelegateClaim { fee_tier } => {
-                let channel = app.pd_channel().await?;
-                let view: &mut dyn ViewClient = app
-                    .view
-                    .as_mut()
-                    .context("view service must be initialized")?;
-
-                let current_height = view.status().await?.full_sync_height;
-                let asset_cache = view.assets().await?;
-
-                // Query the view client for the list of undelegations that are ready to be claimed.
-                // We want to claim them into the same address index that currently holds the tokens.
-                let notes = view.unspent_notes_by_address_and_asset().await?;
-
-                let notes: Vec<(
-                    AddressIndex,
-                    Vec<(UnbondingToken, Vec<SpendableNoteRecord>)>,
-                )> = notes
-                    .into_iter()
-                    .map(|(address_index, notes_by_asset)| {
-                        let mut filtered_notes: Vec<(UnbondingToken, Vec<SpendableNoteRecord>)> =
-                            notes_by_asset
-                                .into_iter()
-                                .filter_map(|(asset_id, notes)| {
-                                    // Filter for notes that are unbonding tokens.
-                                    let denom = asset_cache
-                                        .get(&asset_id)
-                                        .expect("asset ID should exist in asset cache")
-                                        .clone();
-                                    match UnbondingToken::try_from(denom) {
-                                        Ok(token) => Some((token, notes)),
-                                        Err(_) => None,
-                                    }
-                                })
-                                .collect();
-
-                        filtered_notes.sort_by_key(|(token, _)| token.unbonding_start_height());
-
-                        (address_index, filtered_notes)
-                    })
-                    .collect();
-
-                for (address_index, notes_by_asset) in notes.into_iter() {
-                    for (token, notes) in notes_by_asset.into_iter() {
-                        println!("claiming {}", token.denom().default_unit());
-
-                        let validator_identity = token.validator();
-                        let unbonding_start_height = token.unbonding_start_height();
-
-                        let mut app_client = AppQueryServiceClient::new(channel.clone());
-                        let mut stake_client = StakeQueryServiceClient::new(channel.clone());
-                        let mut sct_client = SctQueryServiceClient::new(channel.clone());
-
-                        let min_block_delay = app_client
-                            .app_parameters(AppParametersRequest {})
-                            .await?
-                            .into_inner()
-                            .app_parameters
-                            .expect("app parameters must be available")
-                            .stake_params
-                            .expect("stake params must be available")
-                            .unbonding_delay;
-
-                        // Fetch the validator pool's state at present:
-                        let bonding_state = stake_client
-                            .validator_status(ValidatorStatusRequest {
-                                identity_key: Some(validator_identity.into()),
-                            })
-                            .await?
-                            .into_inner()
-                            .status
-                            .context("unable to get validator status")?
-                            .bonding_state
-                            .expect("bonding state must be available")
-                            .try_into()
-                            .expect("valid bonding state");
-
-                        let upper_bound_block_delay = unbonding_start_height + min_block_delay;
-
-                        // We have to be cautious to compute the penalty over the exact range of epochs
-                        // because we could be processing old unbonding tokens that are bound to a validator
-                        // that transitioned to a variety of states, incurring penalties that do not apply
-                        // to these tokens.
-                        // We can replace this with a single gRPC call to the staking component.
-                        // For now, this is sufficient.
-                        let unbonding_height = match bonding_state {
-                            validator::BondingState::Bonded => upper_bound_block_delay,
-                            validator::BondingState::Unbonding { unbonds_at_height } => {
-                                if unbonds_at_height > unbonding_start_height {
-                                    unbonds_at_height.min(upper_bound_block_delay)
-                                } else {
-                                    current_height
-                                }
-                            }
-                            validator::BondingState::Unbonded => current_height,
-                        };
-
-                        // if the unbonding height is in the future we clamp to the current height:
-                        let unbonding_height = unbonding_height.min(current_height);
-
-                        let start_epoch_index = sct_client
-                            .epoch_by_height(EpochByHeightRequest {
-                                height: unbonding_start_height,
-                            })
-                            .await
-                            .expect("can get epoch by height")
-                            .into_inner()
-                            .epoch
-                            .context("unable to get epoch for unbonding start height")?
-                            .index;
-
-                        let end_epoch_index = sct_client
-                            .epoch_by_height(EpochByHeightRequest {
-                                height: unbonding_height,
-                            })
-                            .await
-                            .expect("can get epoch by height")
-                            .into_inner()
-                            .epoch
-                            .context("unable to get epoch for unbonding end height")?
-                            .index;
-
-                        let penalty: Penalty = stake_client
-                            .validator_penalty(tonic::Request::new(ValidatorPenaltyRequest {
-                                identity_key: Some(validator_identity.into()),
-                                start_epoch_index,
-                                end_epoch_index,
-                            }))
-                            .await?
-                            .into_inner()
-                            .penalty
-                            .ok_or_else(|| {
-                                anyhow::anyhow!(
-                                    "no penalty returned for validator {}",
-                                    validator_identity
-                                )
-                            })?
-                            .try_into()?;
-
-                        let mut planner = Planner::new(OsRng);
-                        planner
-                            .set_gas_prices(gas_prices.clone())
-                            .set_fee_tier((*fee_tier).into());
-                        let unbonding_amount = notes.iter().map(|n| n.note.amount()).sum();
-
-                        let plan = planner
-                            .undelegate_claim(UndelegateClaimPlan {
-                                validator_identity,
-                                unbonding_start_height,
-                                penalty,
-                                unbonding_amount,
-                                balance_blinding: Fr::rand(&mut OsRng),
-                                proof_blinding_r: Fq::rand(&mut OsRng),
-                                proof_blinding_s: Fq::rand(&mut OsRng),
-                            })
-                            .plan(
-                                app.view
-                                    .as_mut()
-                                    .context("view service must be initialized")?,
-                                address_index,
-                            )
-                            .await?;
-                        app.build_and_submit_transaction(plan).await?;
-                    }
-                }
-            }
             TxCmd::Proposal(ProposalCmd::Submit {
                 file,
                 source,
-                deposit_amount,
                 fee_tier,
             }) => {
                 let mut proposal_file = File::open(file).context("can't open proposal file")?;
@@ -1057,56 +486,51 @@ impl TxCmd {
                 let proposal: penumbra_sdk_governance::Proposal = proposal_toml
                     .try_into()
                     .context("can't parse proposal file")?;
-                ensure_reduced_action_surface_proposal_payload_enabled(&proposal.payload)?;
 
-                let deposit_amount: Amount = if deposit_amount.trim() == "0" {
-                    0u64.into()
-                } else {
-                    let deposit_amount: Value = deposit_amount.parse()?;
-                    ensure!(
-                        deposit_amount.asset_id == *STAKING_TOKEN_ASSET_ID
-                            || deposit_amount.amount == 0u64.into(),
-                        "deposit amount must be zero or in staking token"
-                    );
-                    deposit_amount.amount
+                let fvk = app.config.full_viewing_key.clone();
+                let proposer = IdentityKey(fvk.spend_verification_key().clone().into());
+                let governance_key: GovernanceKey = app.config.governance_key();
+                let body = ProposalSubmitBody {
+                    proposal,
+                    proposer,
+                    governance_key,
                 };
+                let auth_sig = app.sign_proposal_submit(body.clone()).await?;
+                let proposal_submit = ProposalSubmit { body, auth_sig };
 
-                let mut planner = Planner::new(OsRng);
-                planner
+                let mut note_manager = NoteManager::new(OsRng);
+                note_manager
                     .set_gas_prices(gas_prices)
                     .set_fee_tier((*fee_tier).into());
-                let plan = planner
-                    .proposal_submit(proposal, deposit_amount)
-                    .plan(
+                match note_manager
+                    .plan_actions_with_transfer_funding(
                         app.view
                             .as_mut()
                             .context("view service must be initialized")?,
                         AddressIndex::new(*source),
+                        vec![proposal_submit.into()],
                     )
-                    .await?;
-                app.build_and_submit_transaction(plan).await?;
-            }
-            TxCmd::Proposal(ProposalCmd::Withdraw {
-                proposal_id,
-                reason,
-                source,
-                fee_tier,
-            }) => {
-                let mut planner = Planner::new(OsRng);
-                planner
-                    .set_gas_prices(gas_prices)
-                    .set_fee_tier((*fee_tier).into());
-                let plan = planner
-                    .proposal_withdraw(*proposal_id, reason.clone())
-                    .plan(
-                        app.view
-                            .as_mut()
-                            .context("view service must be initialized")?,
-                        AddressIndex::new(*source),
-                    )
-                    .await?;
-
-                app.build_and_submit_transaction(plan).await?;
+                    .await
+                    .context("can't build proposal submit transaction")?
+                {
+                    TransferPlanningResult::Ready { transaction_plan } => {
+                        app.build_and_submit_transaction(transaction_plan).await?;
+                    }
+                    TransferPlanningResult::NeedsMaintenance {
+                        maintenance_plan, ..
+                    } => {
+                        anyhow::bail!(
+                            "proposal submission requires note maintenance first; submit the suggested consolidate transaction and retry after finality: {:?}",
+                            maintenance_plan
+                        );
+                    }
+                    TransferPlanningResult::InsufficientBalance => {
+                        anyhow::bail!("insufficient balance for proposal submission fees");
+                    }
+                    TransferPlanningResult::UnsupportedIntent { reason } => {
+                        anyhow::bail!("{reason}");
+                    }
+                }
             }
             TxCmd::Proposal(ProposalCmd::Template { file, kind }) => {
                 let app_params = app.view().app_params().await?;
@@ -1132,159 +556,7 @@ impl TxCmd {
                     println!("{}", toml::to_string_pretty(&toml_template)?);
                 }
             }
-            TxCmd::Proposal(ProposalCmd::DepositClaim {
-                proposal_id,
-                source,
-                fee_tier,
-            }) => {
-                let mut client = GovernanceQueryServiceClient::new(app.pd_channel().await?);
-                let proposal = client
-                    .proposal_data(ProposalDataRequest {
-                        proposal_id: *proposal_id,
-                    })
-                    .await?
-                    .into_inner();
-                let state: ProposalState = proposal
-                    .state
-                    .context(format!(
-                        "proposal state for proposal {} was not found",
-                        proposal_id
-                    ))?
-                    .try_into()?;
-                let deposit_amount: Amount = proposal
-                    .proposal_deposit_amount
-                    .context(format!(
-                        "proposal deposit amount for proposal {} was not found",
-                        proposal_id
-                    ))?
-                    .try_into()?;
-
-                let outcome = match state {
-                    ProposalState::Voting => anyhow::bail!(
-                        "proposal {} is still voting, so the deposit cannot yet be claimed",
-                        proposal_id
-                    ),
-                    ProposalState::Withdrawn { reason: _ } => {
-                        anyhow::bail!("proposal {} has been withdrawn but voting has not yet concluded, so the deposit cannot yet be claimed", proposal_id);
-                    }
-                    ProposalState::Finished { outcome } => outcome.map(|_| ()),
-                    ProposalState::Claimed { outcome: _ } => {
-                        anyhow::bail!("proposal {} has already been claimed", proposal_id)
-                    }
-                };
-
-                let plan = Planner::new(OsRng)
-                    .set_gas_prices(gas_prices)
-                    .set_fee_tier((*fee_tier).into())
-                    .proposal_deposit_claim(*proposal_id, deposit_amount, outcome)
-                    .plan(
-                        app.view
-                            .as_mut()
-                            .context("view service must be initialized")?,
-                        AddressIndex::new(*source),
-                    )
-                    .await?;
-
-                app.build_and_submit_transaction(plan).await?;
-            }
-            TxCmd::Vote {
-                vote,
-                source,
-                fee_tier,
-            } => {
-                let (proposal_id, vote): (u64, Vote) = (*vote).into();
-
-                // Before we vote on the proposal, we have to gather some information about it so
-                // that we can prepare our vote:
-                // - the start height, so we can select the votable staked notes to vote with
-                // - the start position, so we can submit the appropriate public `start_position`
-                //   input for stateless proof verification
-                // - the rate data for every validator at the start of the proposal, so we can
-                //   convert staked notes into voting power and mint the correct amount of voting
-                //   receipt tokens to ourselves
-
-                let mut client = GovernanceQueryServiceClient::new(app.pd_channel().await?);
-                let ProposalInfoResponse {
-                    start_block_height,
-                    start_position,
-                } = client
-                    .proposal_info(ProposalInfoRequest { proposal_id })
-                    .await?
-                    .into_inner();
-                let start_position = start_position.into();
-
-                let mut rate_data_stream = client
-                    .proposal_rate_data(ProposalRateDataRequest { proposal_id })
-                    .await?
-                    .into_inner();
-
-                let mut start_rate_data = BTreeMap::new();
-                while let Some(response) = rate_data_stream.message().await? {
-                    let rate_data: RateData = response
-                        .rate_data
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("proposal rate data stream response missing rate data")
-                        })?
-                        .try_into()
-                        .context("invalid rate data")?;
-                    start_rate_data.insert(rate_data.identity_key.clone(), rate_data);
-                }
-
-                let plan = Planner::new(OsRng)
-                    .set_gas_prices(gas_prices)
-                    .set_fee_tier((*fee_tier).into())
-                    .delegator_vote(
-                        app.view(),
-                        AddressIndex::new(*source),
-                        proposal_id,
-                        vote,
-                        start_block_height,
-                        start_position,
-                        start_rate_data,
-                    )
-                    .await?
-                    .plan(
-                        app.view
-                            .as_mut()
-                            .context("view service must be initialized")?,
-                        AddressIndex::new(*source),
-                    )
-                    .await?;
-
-                app.build_and_submit_transaction(plan).await?;
-            }
-            TxCmd::Position(PositionCmd::Order(order)) => {
-                let asset_cache = app.view().assets().await?;
-
-                tracing::info!(?order);
-                let source = AddressIndex::new(order.source());
-                let positions = order.as_position(&asset_cache, OsRng)?;
-                tracing::info!(?positions);
-                for position in &positions {
-                    println!("Position id: {}", position.id());
-                }
-
-                let mut planner = Planner::new(OsRng);
-                planner
-                    .set_gas_prices(gas_prices)
-                    .set_fee_tier(order.fee_tier().into());
-
-                for position in positions {
-                    planner.position_open(position);
-                }
-
-                let plan = planner
-                    .plan(
-                        app.view
-                            .as_mut()
-                            .context("view service must be initialized")?,
-                        source,
-                    )
-                    .await?;
-
-                app.build_and_submit_transaction(plan).await?;
-            }
-            TxCmd::Withdraw {
+            TxCmd::ShieldedIcs20Withdrawal {
                 to,
                 value,
                 timeout_height,
@@ -1420,236 +692,39 @@ impl TxCmd {
                     use_transparent_address: *use_transparent_address,
                 };
 
-                let plan = Planner::new(OsRng)
-                    .set_gas_prices(gas_prices)
-                    .set_fee_tier((*fee_tier).into())
-                    .ics20_withdrawal(withdrawal)
-                    .plan(
-                        app.view
-                            .as_mut()
-                            .context("view service must be initialized")?,
-                        AddressIndex::new(*source),
-                    )
-                    .await?;
-                app.build_and_submit_transaction(plan).await?;
-            }
-            TxCmd::Position(PositionCmd::Close {
-                position_ids,
-                source,
-                fee_tier,
-            }) => {
-                let mut planner = Planner::new(OsRng);
-                planner
+                let mut note_manager = NoteManager::new(OsRng);
+                note_manager
                     .set_gas_prices(gas_prices)
                     .set_fee_tier((*fee_tier).into());
-
-                position_ids.iter().for_each(|position_id| {
-                    planner.position_close(*position_id);
-                });
-
-                let plan = planner
-                    .plan(
+                match note_manager
+                    .plan_ics20_withdrawal(
                         app.view
                             .as_mut()
                             .context("view service must be initialized")?,
                         AddressIndex::new(*source),
+                        withdrawal,
                     )
-                    .await?;
-
-                app.build_and_submit_transaction(plan).await?;
-            }
-            TxCmd::Position(PositionCmd::CloseAll {
-                source,
-                trading_pair,
-                fee_tier,
-            }) => {
-                let view: &mut dyn ViewClient = app
-                    .view
-                    .as_mut()
-                    .context("view service must be initialized")?;
-
-                let owned_position_ids = view
-                    .owned_position_ids(Some(position::State::Opened), *trading_pair, None)
-                    .await?;
-
-                if owned_position_ids.is_empty() {
-                    println!("No open positions are available to close.");
-                    return Ok(());
-                }
-
-                println!(
-                    "{} total open positions, closing in {} batches of {}",
-                    owned_position_ids.len(),
-                    owned_position_ids.len() / POSITION_CHUNK_SIZE + 1,
-                    POSITION_CHUNK_SIZE
-                );
-
-                let mut planner = Planner::new(OsRng);
-
-                // Close 5 positions in a single transaction to avoid planner failures.
-                for positions_to_close_now in owned_position_ids.chunks(POSITION_CHUNK_SIZE) {
-                    planner
-                        .set_gas_prices(gas_prices)
-                        .set_fee_tier((*fee_tier).into());
-
-                    for position_id in positions_to_close_now {
-                        // Close the position
-                        planner.position_close(*position_id);
+                    .await
+                    .context("can't build ICS-20 withdrawal transaction")?
+                {
+                    TransferPlanningResult::Ready { transaction_plan } => {
+                        app.build_and_submit_transaction(transaction_plan).await?;
                     }
-
-                    let final_plan = planner
-                        .plan(
-                            app.view
-                                .as_mut()
-                                .context("view service must be initialized")?,
-                            AddressIndex::new(*source),
-                        )
-                        .await?;
-                    app.build_and_submit_transaction(final_plan).await?;
-                }
-            }
-            TxCmd::Position(PositionCmd::WithdrawAll {
-                source,
-                trading_pair,
-                fee_tier,
-            }) => {
-                let view: &mut dyn ViewClient = app
-                    .view
-                    .as_mut()
-                    .context("view service must be initialized")?;
-
-                let owned_position_ids = view
-                    .owned_position_ids(Some(position::State::Closed), *trading_pair, None)
-                    .await?;
-
-                if owned_position_ids.is_empty() {
-                    println!("No closed positions are available to withdraw.");
-                    return Ok(());
-                }
-
-                println!(
-                    "{} total closed positions, withdrawing in {} batches of {}",
-                    owned_position_ids.len(),
-                    owned_position_ids.len() / POSITION_CHUNK_SIZE + 1,
-                    POSITION_CHUNK_SIZE,
-                );
-
-                let mut client = DexQueryServiceClient::new(app.pd_channel().await?);
-
-                let mut planner = Planner::new(OsRng);
-
-                // Withdraw 5 positions in a single transaction to avoid planner failures.
-                for positions_to_withdraw_now in owned_position_ids.chunks(POSITION_CHUNK_SIZE) {
-                    planner
-                        .set_gas_prices(gas_prices)
-                        .set_fee_tier((*fee_tier).into());
-
-                    for position_id in positions_to_withdraw_now {
-                        // Withdraw the position
-
-                        // Fetch the information regarding the position from the view service.
-                        let position = client
-                            .liquidity_position_by_id(LiquidityPositionByIdRequest {
-                                position_id: Some((*position_id).into()),
-                            })
-                            .await?
-                            .into_inner();
-
-                        let reserves = position
-                            .data
-                            .clone()
-                            .expect("missing position metadata")
-                            .reserves
-                            .expect("missing position reserves");
-                        let pair = position
-                            .data
-                            .expect("missing position")
-                            .phi
-                            .expect("missing position trading function")
-                            .pair
-                            .expect("missing trading function pair");
-                        planner.position_withdraw(
-                            *position_id,
-                            reserves.try_into().expect("invalid reserves"),
-                            pair.try_into().expect("invalid pair"),
-                            0,
+                    TransferPlanningResult::NeedsMaintenance {
+                        maintenance_plan, ..
+                    } => {
+                        anyhow::bail!(
+                            "ICS-20 withdrawal requires note maintenance first; submit the suggested consolidate transaction and retry after finality: {:?}",
+                            maintenance_plan
                         );
                     }
-
-                    let final_plan = planner
-                        .plan(
-                            app.view
-                                .as_mut()
-                                .context("view service must be initialized")?,
-                            AddressIndex::new(*source),
-                        )
-                        .await?;
-                    app.build_and_submit_transaction(final_plan).await?;
+                    TransferPlanningResult::InsufficientBalance => {
+                        anyhow::bail!("insufficient balance for requested ICS-20 withdrawal");
+                    }
+                    TransferPlanningResult::UnsupportedIntent { reason } => {
+                        anyhow::bail!("{reason}");
+                    }
                 }
-            }
-            TxCmd::Position(PositionCmd::Withdraw {
-                source,
-                position_ids,
-                fee_tier,
-            }) => {
-                let mut client = DexQueryServiceClient::new(app.pd_channel().await?);
-
-                let mut planner = Planner::new(OsRng);
-                planner
-                    .set_gas_prices(gas_prices)
-                    .set_fee_tier((*fee_tier).into());
-
-                for position_id in position_ids {
-                    // Fetch the information regarding the position from the view service.
-                    let response = client
-                        .liquidity_position_by_id(LiquidityPositionByIdRequest {
-                            position_id: Some(PositionId::from(*position_id)),
-                        })
-                        .await?
-                        .into_inner();
-
-                    let position: Position = response
-                        .data
-                        .expect("missing position")
-                        .try_into()
-                        .expect("invalid position state");
-
-                    let reserves = position.reserves;
-                    let pair = position.phi.pair;
-                    let next_seq = match position.state {
-                        State::Withdrawn { sequence } => sequence + 1,
-                        State::Closed => 0,
-                        _ => {
-                            anyhow::bail!("position {} is not in a withdrawable state", position_id)
-                        }
-                    };
-                    planner.position_withdraw(
-                        *position_id,
-                        reserves.try_into()?,
-                        pair.try_into()?,
-                        next_seq,
-                    );
-                }
-
-                let plan = planner
-                    .plan(
-                        app.view
-                            .as_mut()
-                            .context("view service must be initialized")?,
-                        AddressIndex::new(*source),
-                    )
-                    .await?;
-
-                app.build_and_submit_transaction(plan).await?;
-            }
-            TxCmd::Position(PositionCmd::RewardClaim {}) => {
-                unimplemented!("deprecated, remove this")
-            }
-            TxCmd::Position(PositionCmd::Replicate(replicate_cmd)) => {
-                replicate_cmd.exec(app).await?;
-            }
-            TxCmd::Auction(AuctionCmd::Dutch(auction_cmd)) => {
-                auction_cmd.exec(app).await?;
             }
             TxCmd::Broadcast { transaction } => {
                 let transaction: Transaction = serde_json::from_slice(&fs::read(transaction)?)?;
@@ -1756,7 +831,6 @@ impl TxCmd {
 
                 println!("Noble response: {:?}", r);
             }
-            TxCmd::LqtVote(cmd) => cmd.exec(app, gas_prices).await?,
         }
 
         Ok(())

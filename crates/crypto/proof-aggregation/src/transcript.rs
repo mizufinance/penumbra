@@ -5,7 +5,9 @@ use blake2::{
     digest::{generic_array::GenericArray, FixedOutput, Reset, Update},
     Blake2b,
 };
-use penumbra_sdk_shielded_pool::TransferFamilyId;
+use penumbra_sdk_shielded_pool::{
+    ConsolidateFamilyId, ShieldedIcs20WithdrawalFamilyId, SplitFamilyId,
+};
 
 use crate::ProofFamilyId;
 
@@ -17,61 +19,44 @@ pub enum TranscriptPhase {
 
 pub fn transcript_family_domain(family_id: ProofFamilyId) -> Cow<'static, [u8]> {
     match family_id {
-        ProofFamilyId::Spend => Cow::Borrowed(b"penumbra.snarkpack.spend.v1"),
-        ProofFamilyId::Output => Cow::Borrowed(b"penumbra.snarkpack.output.v1"),
-        ProofFamilyId::Transfer(family_id) => {
+        ProofFamilyId::Transfer => Cow::Borrowed(b"penumbra.snarkpack.transfer.v1"),
+        ProofFamilyId::Consolidate(family_id) => {
             Cow::Owned(format!("penumbra.snarkpack.{}.v1", family_id.label()).into_bytes())
         }
-        ProofFamilyId::Swap => Cow::Borrowed(b"penumbra.snarkpack.swap.v1"),
-        ProofFamilyId::SwapClaim => Cow::Borrowed(b"penumbra.snarkpack.swap_claim.v1"),
-        ProofFamilyId::Convert => Cow::Borrowed(b"penumbra.snarkpack.convert.v1"),
-        ProofFamilyId::DelegatorVote => Cow::Borrowed(b"penumbra.snarkpack.delegator_vote.v1"),
+        ProofFamilyId::Split(family_id) => {
+            Cow::Owned(format!("penumbra.snarkpack.{}.v1", family_id.label()).into_bytes())
+        }
+        ProofFamilyId::ShieldedIcs20Withdrawal(family_id) => {
+            Cow::Owned(format!("penumbra.snarkpack.{}.v1", family_id.label()).into_bytes())
+        }
     }
 }
 
 pub fn transcript_domain(family_id: ProofFamilyId, phase: TranscriptPhase) -> Cow<'static, [u8]> {
     match (family_id, phase) {
-        (ProofFamilyId::Spend, TranscriptPhase::Prover) => {
-            Cow::Borrowed(b"penumbra.snarkpack.spend.prover.v1")
+        (ProofFamilyId::Transfer, TranscriptPhase::Prover) => {
+            Cow::Borrowed(b"penumbra.snarkpack.transfer.prover.v1")
         }
-        (ProofFamilyId::Spend, TranscriptPhase::Verifier) => {
-            Cow::Borrowed(b"penumbra.snarkpack.spend.verifier.v1")
+        (ProofFamilyId::Transfer, TranscriptPhase::Verifier) => {
+            Cow::Borrowed(b"penumbra.snarkpack.transfer.verifier.v1")
         }
-        (ProofFamilyId::Output, TranscriptPhase::Prover) => {
-            Cow::Borrowed(b"penumbra.snarkpack.output.prover.v1")
-        }
-        (ProofFamilyId::Output, TranscriptPhase::Verifier) => {
-            Cow::Borrowed(b"penumbra.snarkpack.output.verifier.v1")
-        }
-        (ProofFamilyId::Transfer(family_id), TranscriptPhase::Prover) => {
+        (ProofFamilyId::Consolidate(family_id), TranscriptPhase::Prover) => {
             Cow::Owned(format!("penumbra.snarkpack.{}.prover.v1", family_id.label()).into_bytes())
         }
-        (ProofFamilyId::Transfer(family_id), TranscriptPhase::Verifier) => {
+        (ProofFamilyId::Consolidate(family_id), TranscriptPhase::Verifier) => {
             Cow::Owned(format!("penumbra.snarkpack.{}.verifier.v1", family_id.label()).into_bytes())
         }
-        (ProofFamilyId::Swap, TranscriptPhase::Prover) => {
-            Cow::Borrowed(b"penumbra.snarkpack.swap.prover.v1")
+        (ProofFamilyId::Split(family_id), TranscriptPhase::Prover) => {
+            Cow::Owned(format!("penumbra.snarkpack.{}.prover.v1", family_id.label()).into_bytes())
         }
-        (ProofFamilyId::Swap, TranscriptPhase::Verifier) => {
-            Cow::Borrowed(b"penumbra.snarkpack.swap.verifier.v1")
+        (ProofFamilyId::Split(family_id), TranscriptPhase::Verifier) => {
+            Cow::Owned(format!("penumbra.snarkpack.{}.verifier.v1", family_id.label()).into_bytes())
         }
-        (ProofFamilyId::SwapClaim, TranscriptPhase::Prover) => {
-            Cow::Borrowed(b"penumbra.snarkpack.swap_claim.prover.v1")
+        (ProofFamilyId::ShieldedIcs20Withdrawal(family_id), TranscriptPhase::Prover) => {
+            Cow::Owned(format!("penumbra.snarkpack.{}.prover.v1", family_id.label()).into_bytes())
         }
-        (ProofFamilyId::SwapClaim, TranscriptPhase::Verifier) => {
-            Cow::Borrowed(b"penumbra.snarkpack.swap_claim.verifier.v1")
-        }
-        (ProofFamilyId::Convert, TranscriptPhase::Prover) => {
-            Cow::Borrowed(b"penumbra.snarkpack.convert.prover.v1")
-        }
-        (ProofFamilyId::Convert, TranscriptPhase::Verifier) => {
-            Cow::Borrowed(b"penumbra.snarkpack.convert.verifier.v1")
-        }
-        (ProofFamilyId::DelegatorVote, TranscriptPhase::Prover) => {
-            Cow::Borrowed(b"penumbra.snarkpack.delegator_vote.prover.v1")
-        }
-        (ProofFamilyId::DelegatorVote, TranscriptPhase::Verifier) => {
-            Cow::Borrowed(b"penumbra.snarkpack.delegator_vote.verifier.v1")
+        (ProofFamilyId::ShieldedIcs20Withdrawal(family_id), TranscriptPhase::Verifier) => {
+            Cow::Owned(format!("penumbra.snarkpack.{}.verifier.v1", family_id.label()).into_bytes())
         }
     }
 }
@@ -117,39 +102,114 @@ macro_rules! define_family_digest {
     };
 }
 
-define_family_digest!(SpendTranscriptDigest, ProofFamilyId::Spend);
-define_family_digest!(OutputTranscriptDigest, ProofFamilyId::Output);
-define_family_digest!(SwapTranscriptDigest, ProofFamilyId::Swap);
-define_family_digest!(SwapClaimTranscriptDigest, ProofFamilyId::SwapClaim);
-define_family_digest!(ConvertTranscriptDigest, ProofFamilyId::Convert);
-define_family_digest!(DelegatorVoteTranscriptDigest, ProofFamilyId::DelegatorVote);
+define_family_digest!(
+    ShieldedIcs20WithdrawalTranscriptDigest,
+    ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical)
+);
 
 #[derive(Clone)]
-pub(crate) struct TransferTranscriptDigest<const FAMILY_ID: u32>(Blake2b);
+pub(crate) struct TransferTranscriptDigest(Blake2b);
 
-impl<const FAMILY_ID: u32> Default for TransferTranscriptDigest<FAMILY_ID> {
+impl Default for TransferTranscriptDigest {
     fn default() -> Self {
         let mut inner = Blake2b::default();
-        inner.update(
-            transcript_family_domain(ProofFamilyId::Transfer(TransferFamilyId(FAMILY_ID))).as_ref(),
-        );
+        inner.update(transcript_family_domain(ProofFamilyId::Transfer).as_ref());
         Self(inner)
     }
 }
 
-impl<const FAMILY_ID: u32> Update for TransferTranscriptDigest<FAMILY_ID> {
+impl Update for TransferTranscriptDigest {
     fn update(&mut self, data: impl AsRef<[u8]>) {
         self.0.update(data);
     }
 }
 
-impl<const FAMILY_ID: u32> Reset for TransferTranscriptDigest<FAMILY_ID> {
+impl Reset for TransferTranscriptDigest {
     fn reset(&mut self) {
         *self = Self::default();
     }
 }
 
-impl<const FAMILY_ID: u32> FixedOutput for TransferTranscriptDigest<FAMILY_ID> {
+impl FixedOutput for TransferTranscriptDigest {
+    type OutputSize = <Blake2b as FixedOutput>::OutputSize;
+
+    fn finalize_into(self, out: &mut GenericArray<u8, Self::OutputSize>) {
+        self.0.finalize_into(out);
+    }
+
+    fn finalize_into_reset(&mut self, out: &mut GenericArray<u8, Self::OutputSize>) {
+        let inner = mem::take(&mut self.0);
+        inner.finalize_into(out);
+        self.reset();
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SplitTranscriptDigest<const FAMILY_ID: u32>(Blake2b);
+
+impl<const FAMILY_ID: u32> Default for SplitTranscriptDigest<FAMILY_ID> {
+    fn default() -> Self {
+        let mut inner = Blake2b::default();
+        inner.update(
+            transcript_family_domain(ProofFamilyId::Split(SplitFamilyId(FAMILY_ID))).as_ref(),
+        );
+        Self(inner)
+    }
+}
+
+impl<const FAMILY_ID: u32> Update for SplitTranscriptDigest<FAMILY_ID> {
+    fn update(&mut self, data: impl AsRef<[u8]>) {
+        self.0.update(data);
+    }
+}
+
+impl<const FAMILY_ID: u32> Reset for SplitTranscriptDigest<FAMILY_ID> {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+impl<const FAMILY_ID: u32> FixedOutput for SplitTranscriptDigest<FAMILY_ID> {
+    type OutputSize = <Blake2b as FixedOutput>::OutputSize;
+
+    fn finalize_into(self, out: &mut GenericArray<u8, Self::OutputSize>) {
+        self.0.finalize_into(out);
+    }
+
+    fn finalize_into_reset(&mut self, out: &mut GenericArray<u8, Self::OutputSize>) {
+        let inner = mem::take(&mut self.0);
+        inner.finalize_into(out);
+        self.reset();
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ConsolidateTranscriptDigest<const FAMILY_ID: u32>(Blake2b);
+
+impl<const FAMILY_ID: u32> Default for ConsolidateTranscriptDigest<FAMILY_ID> {
+    fn default() -> Self {
+        let mut inner = Blake2b::default();
+        inner.update(
+            transcript_family_domain(ProofFamilyId::Consolidate(ConsolidateFamilyId(FAMILY_ID)))
+                .as_ref(),
+        );
+        Self(inner)
+    }
+}
+
+impl<const FAMILY_ID: u32> Update for ConsolidateTranscriptDigest<FAMILY_ID> {
+    fn update(&mut self, data: impl AsRef<[u8]>) {
+        self.0.update(data);
+    }
+}
+
+impl<const FAMILY_ID: u32> Reset for ConsolidateTranscriptDigest<FAMILY_ID> {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+impl<const FAMILY_ID: u32> FixedOutput for ConsolidateTranscriptDigest<FAMILY_ID> {
     type OutputSize = <Blake2b as FixedOutput>::OutputSize;
 
     fn finalize_into(self, out: &mut GenericArray<u8, Self::OutputSize>) {
@@ -168,26 +228,20 @@ mod tests {
     use std::collections::BTreeSet;
 
     use crate::ProofFamilyId;
-    use penumbra_sdk_shielded_pool::TransferFamilyId;
+    use penumbra_sdk_shielded_pool::{ConsolidateFamilyId, SplitFamilyId};
 
     use super::{transcript_domain, transcript_family_domain, TranscriptPhase};
 
     #[test]
     fn transcript_domains_are_unique() {
         let mut domains = BTreeSet::new();
-        let mut families = vec![
-            ProofFamilyId::Spend,
-            ProofFamilyId::Output,
-            ProofFamilyId::Swap,
-            ProofFamilyId::SwapClaim,
-            ProofFamilyId::Convert,
-            ProofFamilyId::DelegatorVote,
-        ];
+        let mut families = vec![ProofFamilyId::Transfer];
         families.extend(
-            TransferFamilyId::ALL
+            ConsolidateFamilyId::ALL
                 .into_iter()
-                .map(ProofFamilyId::Transfer),
+                .map(ProofFamilyId::Consolidate),
         );
+        families.extend(SplitFamilyId::ALL.into_iter().map(ProofFamilyId::Split));
         for family in families {
             for phase in [TranscriptPhase::Prover, TranscriptPhase::Verifier] {
                 assert!(domains.insert(transcript_domain(family, phase)));
@@ -198,19 +252,13 @@ mod tests {
     #[test]
     fn transcript_family_domains_are_unique() {
         let mut domains = BTreeSet::new();
-        let mut families = vec![
-            ProofFamilyId::Spend,
-            ProofFamilyId::Output,
-            ProofFamilyId::Swap,
-            ProofFamilyId::SwapClaim,
-            ProofFamilyId::Convert,
-            ProofFamilyId::DelegatorVote,
-        ];
+        let mut families = vec![ProofFamilyId::Transfer];
         families.extend(
-            TransferFamilyId::ALL
+            ConsolidateFamilyId::ALL
                 .into_iter()
-                .map(ProofFamilyId::Transfer),
+                .map(ProofFamilyId::Consolidate),
         );
+        families.extend(SplitFamilyId::ALL.into_iter().map(ProofFamilyId::Split));
         for family in families {
             assert!(domains.insert(transcript_family_domain(family)));
         }

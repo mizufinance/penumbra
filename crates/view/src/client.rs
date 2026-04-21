@@ -2,8 +2,6 @@ use std::{collections::BTreeMap, future::Future, pin::Pin};
 
 use anyhow::Result;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
-use pbjson_types::Any;
-use penumbra_sdk_auction::auction::AuctionId;
 use tonic::{codegen::Bytes, Streaming};
 use tracing::instrument;
 
@@ -11,10 +9,6 @@ use penumbra_sdk_app::params::AppParameters;
 use penumbra_sdk_asset::{
     asset::{self, Id, Metadata},
     ValueView,
-};
-use penumbra_sdk_dex::{
-    lp::position::{self, Position},
-    TradingPair,
 };
 use penumbra_sdk_fee::GasPrices;
 use penumbra_sdk_keys::{keys::AddressIndex, Address};
@@ -25,12 +19,11 @@ use penumbra_sdk_proto::view::v1::{
 };
 use penumbra_sdk_sct::Nullifier;
 use penumbra_sdk_shielded_pool::{fmd, note};
-use penumbra_sdk_stake::IdentityKey;
 use penumbra_sdk_transaction::{
     txhash::TransactionId, AuthorizationData, Transaction, TransactionPlan, WitnessData,
 };
 
-use crate::{SpendableNoteRecord, StatusStreamResponse, SwapRecord, TransactionInfo};
+use crate::{SpendableNoteRecord, StatusStreamResponse, TransactionInfo};
 
 pub(crate) type BroadcastStatusStream = Pin<
     Box<dyn Future<Output = Result<Streaming<BroadcastTransactionResponse>, anyhow::Error>> + Send>,
@@ -50,29 +43,6 @@ pub(crate) type BroadcastStatusStream = Pin<
 ///   enforce that it is a tower `Service`.
 #[allow(clippy::type_complexity)]
 pub trait ViewClient {
-    /// Query the auction state
-    fn auctions(
-        &mut self,
-        account_filter: Option<AddressIndex>,
-        include_inactive: bool,
-        query_latest_state: bool,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        Vec<(
-                            AuctionId,
-                            SpendableNoteRecord,
-                            u64,
-                            Option<Any>,
-                            Vec<Position>,
-                        )>,
-                    >,
-                > + Send
-                + 'static,
-        >,
-    >;
-
     /// Get the current status of chain sync.
     fn status(
         &mut self,
@@ -111,14 +81,6 @@ pub trait ViewClient {
         request: pb::NotesRequest,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<SpendableNoteRecord>>> + Send + 'static>>;
 
-    /// Queries for notes for voting.
-    fn notes_for_voting(
-        &mut self,
-        request: pb::NotesForVotingRequest,
-    ) -> Pin<
-        Box<dyn Future<Output = Result<Vec<(SpendableNoteRecord, IdentityKey)>>> + Send + 'static>,
-    >;
-
     /// Queries for account balance by address
     fn balances(
         &mut self,
@@ -131,12 +93,6 @@ pub trait ViewClient {
         &mut self,
         note_commitment: note::StateCommitment,
     ) -> Pin<Box<dyn Future<Output = Result<SpendableNoteRecord>> + Send + 'static>>;
-
-    /// Queries for a specific swap by commitment, returning immediately if it is not found.
-    fn swap_by_commitment(
-        &mut self,
-        swap_commitment: penumbra_sdk_tct::StateCommitment,
-    ) -> Pin<Box<dyn Future<Output = Result<SwapRecord>> + Send + 'static>>;
 
     /// Queries for a specific nullifier's status, returning immediately if it is not found.
     fn nullifier_status(
@@ -179,14 +135,6 @@ pub trait ViewClient {
 
     /// Queries for all known assets.
     fn assets(&mut self) -> Pin<Box<dyn Future<Output = Result<asset::Cache>> + Send + 'static>>;
-
-    /// Queries for liquidity positions owned by the full viewing key.
-    fn owned_position_ids(
-        &mut self,
-        position_state: Option<position::State>,
-        trading_pair: Option<TradingPair>,
-        subaccount: Option<AddressIndex>,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<position::Id>>> + Send + 'static>>;
 
     /// Generates a full perspective for a selected transaction using a full viewing key
     fn transaction_info_by_hash(
@@ -335,18 +283,6 @@ pub trait ViewClient {
         address: Address,
     ) -> Pin<Box<dyn Future<Output = Result<Option<AddressIndex>>> + Send + 'static>>;
 
-    /// Queries for unclaimed Swaps.
-    fn unclaimed_swaps(
-        &mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<SwapRecord>>> + Send + 'static>>;
-
-    /// Get all of the notes that can be used for voting
-    fn lqt_voting_notes(
-        &mut self,
-        epoch: u64,
-        filter: Option<AddressIndex>,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<SpendableNoteRecord>>> + Send + 'static>>;
-
     /// Query the compliance registry for an asset's regulation status.
     ///
     /// Returns `Some(true)` if the asset is regulated, `Some(false)` if explicitly unregulated,
@@ -385,7 +321,7 @@ pub trait ViewClient {
 
     /// Query the Merkle proofs needed for compliance ZK proofs.
     ///
-    /// This returns all the data needed to populate SpendPlan/OutputPlan compliance fields:
+    /// This returns all the data needed to populate shielded input/output compliance fields:
     /// - User's Merkle path and position in the compliance tree
     /// - Asset's Merkle path and position in the asset tree
     /// - Both tree anchors (roots)
@@ -554,37 +490,6 @@ where
         .boxed()
     }
 
-    fn notes_for_voting(
-        &mut self,
-        request: pb::NotesForVotingRequest,
-    ) -> Pin<
-        Box<dyn Future<Output = Result<Vec<(SpendableNoteRecord, IdentityKey)>>> + Send + 'static>,
-    > {
-        let mut self2 = self.clone();
-        async move {
-            let req = self2.notes_for_voting(tonic::Request::new(request));
-            let pb_notes: Vec<_> = req.await?.into_inner().try_collect().await?;
-
-            pb_notes
-                .into_iter()
-                .map(|note_rsp| {
-                    let note_record = note_rsp
-                        .note_record
-                        .ok_or_else(|| anyhow::anyhow!("empty NotesForVotingResponse message"))?
-                        .try_into()?;
-
-                    let identity_key = note_rsp
-                        .identity_key
-                        .ok_or_else(|| anyhow::anyhow!("empty NotesForVotingResponse message"))?
-                        .try_into()?;
-
-                    Ok((note_record, identity_key))
-                })
-                .collect()
-        }
-        .boxed()
-    }
-
     fn note_by_commitment(
         &mut self,
         note_commitment: note::StateCommitment,
@@ -638,29 +543,6 @@ where
                     Ok((id, amount))
                 })
                 .collect()
-        }
-        .boxed()
-    }
-
-    fn swap_by_commitment(
-        &mut self,
-        swap_commitment: penumbra_sdk_tct::StateCommitment,
-    ) -> Pin<Box<dyn Future<Output = Result<SwapRecord>> + Send + 'static>> {
-        let mut self2 = self.clone();
-        async move {
-            let swap_commitment_response = ViewServiceClient::swap_by_commitment(
-                &mut self2,
-                tonic::Request::new(pb::SwapByCommitmentRequest {
-                    swap_commitment: Some(swap_commitment.into()),
-                    await_detection: false,
-                }),
-            );
-            let swap_commitment_response = swap_commitment_response.await?.into_inner();
-
-            swap_commitment_response
-                .swap
-                .ok_or_else(|| anyhow::anyhow!("empty SwapByCommitmentResponse message"))?
-                .try_into()
         }
         .boxed()
     }
@@ -774,43 +656,6 @@ where
                 .collect::<anyhow::Result<Vec<Metadata>>>()?;
 
             Ok(assets.into_iter().collect())
-        }
-        .boxed()
-    }
-
-    fn owned_position_ids(
-        &mut self,
-        position_state: Option<position::State>,
-        trading_pair: Option<TradingPair>,
-        subaccount: Option<AddressIndex>,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<position::Id>>> + Send + 'static>> {
-        // should the return be streamed here? none of the other viewclient responses are, probably fine for now
-        // but might be an issue eventually
-        let mut self2 = self.clone();
-        async move {
-            // We have to manually invoke the method on the type, because it has the
-            // same name as the one we're implementing.
-            let rsp = ViewServiceClient::owned_position_ids(
-                &mut self2,
-                tonic::Request::new(pb::OwnedPositionIdsRequest {
-                    trading_pair: trading_pair.map(Into::into),
-                    position_state: position_state.map(Into::into),
-                    subaccount: subaccount.map(Into::into),
-                }),
-            );
-
-            let pb_position_ids: Vec<_> = rsp.await?.into_inner().try_collect().await?;
-
-            let position_ids = pb_position_ids
-                .into_iter()
-                .map(|p| {
-                    position::Id::try_from(p.position_id.ok_or_else(|| {
-                        anyhow::anyhow!("empty OwnedPositionsIdsResponse message")
-                    })?)
-                })
-                .collect::<anyhow::Result<Vec<position::Id>>>()?;
-
-            Ok(position_ids)
         }
         .boxed()
     }
@@ -1033,146 +878,6 @@ where
             Err(anyhow::anyhow!("should have received complete status or error"))
         }
             .boxed()
-    }
-
-    fn unclaimed_swaps(
-        &mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<SwapRecord>>> + Send + 'static>> {
-        let mut self2 = self.clone();
-        async move {
-            let swaps_response = ViewServiceClient::unclaimed_swaps(
-                &mut self2,
-                tonic::Request::new(pb::UnclaimedSwapsRequest {}),
-            );
-            let pb_swaps: Vec<_> = swaps_response.await?.into_inner().try_collect().await?;
-
-            pb_swaps
-                .into_iter()
-                .map(|swap_rsp| {
-                    let swap_record = swap_rsp
-                        .swap
-                        .ok_or_else(|| anyhow::anyhow!("empty UnclaimedSwapsResponse message"));
-
-                    match swap_record {
-                        Ok(swap) => swap.try_into(),
-                        Err(e) => Err(e),
-                    }
-                })
-                .collect()
-        }
-        .boxed()
-    }
-
-    fn auctions(
-        &mut self,
-        account_filter: Option<AddressIndex>,
-        include_inactive: bool,
-        query_latest_state: bool,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        Vec<(
-                            AuctionId,
-                            SpendableNoteRecord,
-                            u64,
-                            Option<Any>,
-                            Vec<Position>,
-                        )>,
-                    >,
-                > + Send
-                + 'static,
-        >,
-    > {
-        let mut client = self.clone();
-        async move {
-            let request = tonic::Request::new(pb::AuctionsRequest {
-                account_filter: account_filter.map(Into::into),
-                include_inactive,
-                query_latest_state,
-                auction_ids_filter: Vec::new(), // TODO: Support `auction_ids_filter`
-            });
-
-            let auctions: Vec<pb::AuctionsResponse> =
-                ViewServiceClient::auctions(&mut client, request)
-                    .await?
-                    .into_inner()
-                    .try_collect()
-                    .await?;
-
-            let resp: Vec<(
-                AuctionId,
-                SpendableNoteRecord,
-                u64,
-                Option<Any>,
-                Vec<Position>,
-            )> = auctions
-                .into_iter()
-                .map(|auction_rsp| {
-                    let pb_id = auction_rsp
-                        .id
-                        .ok_or_else(|| anyhow::anyhow!("missing auction id"))?;
-                    let auction_id: AuctionId = pb_id.try_into()?;
-                    let snr: SpendableNoteRecord = auction_rsp
-                        .note_record
-                        .ok_or_else(|| anyhow::anyhow!("missing SNR from auction response"))?
-                        .try_into()?;
-
-                    let local_seq = auction_rsp.local_seq;
-
-                    let auction = auction_rsp.auction;
-                    let lps: Vec<Position> = auction_rsp
-                        .positions
-                        .into_iter()
-                        .map(TryInto::try_into)
-                        .collect::<Result<Vec<_>>>()?;
-
-                    Ok::<
-                        (
-                            AuctionId,
-                            SpendableNoteRecord,
-                            u64, /* the local sequence number */
-                            Option<Any>, /* the auction state if it was requested */
-                            Vec<Position>, /* associated liquidity positions if we queried the latest state */
-                        ),
-                        anyhow::Error,
-                    >((auction_id, snr, local_seq, auction, lps))
-                })
-                .filter_map(|res| res.ok()) // TODO: scrap this later.
-                .collect();
-
-            Ok(resp)
-        }
-        .boxed()
-    }
-
-    fn lqt_voting_notes(
-        &mut self,
-        epoch: u64,
-        filter: Option<AddressIndex>,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<SpendableNoteRecord>>> + Send + 'static>> {
-        let mut client = self.clone();
-        async move {
-            let request = tonic::Request::new(pb::LqtVotingNotesRequest {
-                epoch_index: epoch,
-                account_filter: filter.map(|x| x.into()),
-            });
-            let response = client.lqt_voting_notes(request).await?;
-            let pb_notes: Vec<pb::LqtVotingNotesResponse> =
-                response.into_inner().try_collect().await?;
-
-            pb_notes
-                .into_iter()
-                .map(|note_rsp| {
-                    let note_record = note_rsp
-                        .note_record
-                        .ok_or_else(|| anyhow::anyhow!("empty LqtVotingNotesResponse message"))?
-                        .try_into()?;
-                    Ok(note_record)
-                })
-                .collect()
-        }
-        .boxed()
     }
 
     fn compliance_asset_status(

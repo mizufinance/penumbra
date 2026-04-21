@@ -1,8 +1,7 @@
-use std::{collections::BTreeMap, convert::TryFrom};
+use std::convert::TryFrom;
 
 use anyhow::Result;
 use penumbra_sdk_compliance::event::{EventAssetRegistered, EventUserRegistered};
-use penumbra_sdk_dex::{BatchSwapOutputData, TradingPair};
 use penumbra_sdk_fee::GasPrices;
 use penumbra_sdk_proto::{
     core::component::compact_block::v1::CompactBlockRangeResponse,
@@ -36,8 +35,6 @@ pub struct CompactBlock {
     pub fmd_parameters: Option<fmd::Parameters>,
     /// If the block indicated a proposal was being started.
     pub proposal_started: bool,
-    /// Output prices for batch swaps occurring in this block.
-    pub swap_outputs: BTreeMap<TradingPair, BatchSwapOutputData>,
     /// Set if the app parameters have been updated. Notifies the client that it should re-sync from the fullnode RPC.
     pub app_parameters_updated: bool,
     /// Updated gas prices for the native token, if they have changed.
@@ -70,7 +67,6 @@ impl Default for CompactBlock {
             epoch_root: None,
             fmd_parameters: None,
             proposal_started: false,
-            swap_outputs: BTreeMap::new(),
             app_parameters_updated: false,
             gas_prices: None,
             alt_gas_prices: Vec::new(),
@@ -117,7 +113,6 @@ impl From<CompactBlock> for pb::CompactBlock {
             epoch_root: cb.epoch_root.map(Into::into),
             fmd_parameters: cb.fmd_parameters.map(Into::into),
             proposal_started: cb.proposal_started,
-            swap_outputs: cb.swap_outputs.into_values().map(Into::into).collect(),
             app_parameters_updated: cb.app_parameters_updated,
             gas_prices: cb.gas_prices.map(Into::into),
             alt_gas_prices: cb.alt_gas_prices.into_iter().map(Into::into).collect(),
@@ -174,12 +169,6 @@ impl TryFrom<pb::CompactBlock> for CompactBlock {
                 .into_iter()
                 .map(StatePayload::try_from)
                 .collect::<Result<Vec<StatePayload>>>()?,
-            swap_outputs: value
-                .swap_outputs
-                .into_iter()
-                .map(BatchSwapOutputData::try_from)
-                .map(|s| s.map(|swap_output| (swap_output.trading_pair, swap_output)))
-                .collect::<Result<BTreeMap<TradingPair, BatchSwapOutputData>>>()?,
             nullifiers: value
                 .nullifiers
                 .into_iter()
