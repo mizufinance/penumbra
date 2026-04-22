@@ -38,6 +38,14 @@ export_demo_gnark_env() {
 
 export_demo_gnark_env
 
+export_compliance_rust_log() {
+    if [ -z "${RUST_LOG:-}" ]; then
+        export RUST_LOG="info"
+    fi
+}
+
+export_compliance_rust_log
+
 gnark_symbol_grep() {
     local lib_path="$1"
     local symbol="$2"
@@ -218,6 +226,167 @@ wait_for_grpc() {
     done
 }
 
+wait_for_tcp_port() {
+    local port="$1"
+    local max_attempts="${2:-30}"
+    local interval="${3:-2}"
+    wait_for_grpc "$port" "$max_attempts" "$interval"
+}
+
+extract_toml_string() {
+    local file="$1"
+    local key="$2"
+
+    awk -F'"' -v key="$key" '$1 == key " = " { print $2; exit }' "$file"
+}
+
+set_pcli_view_url() {
+    local config_path="$1"
+    local view_url="$2"
+    local tmpfile
+    tmpfile=$(mktemp)
+
+    awk -v view_url="$view_url" '
+        BEGIN { updated = 0 }
+        /^view_url = / {
+            print "view_url = \"" view_url "\""
+            updated = 1
+            next
+        }
+        /^grpc_url = / {
+            print
+            if (!updated) {
+                print "view_url = \"" view_url "\""
+                updated = 1
+            }
+            next
+        }
+        { print }
+        END {
+            if (!updated) {
+                print "view_url = \"" view_url "\""
+            }
+        }
+    ' "$config_path" > "$tmpfile"
+
+    mv "$tmpfile" "$config_path"
+}
+
+configure_wallet_view_service() {
+    local wallet_name="$1"
+    local wallet_home="$2"
+    local daemon_home="$3"
+    local bind_port="$4"
+    local pcli_bin="$5"
+    local pclientd_bin="$6"
+    local pid_file="$7"
+    local config_path="$wallet_home/config.toml"
+    local fvk
+    local grpc_url
+    local view_url="http://127.0.0.1:${bind_port}"
+    local daemon_log="$COMPLIANCE_TMP/${wallet_name}-pclientd.log"
+    local daemon_pid
+
+    fvk="$(extract_toml_string "$config_path" "full_viewing_key")"
+    grpc_url="$(extract_toml_string "$config_path" "grpc_url")"
+
+    if [ -z "$fvk" ] || [ -z "$grpc_url" ]; then
+        log_error "failed to read wallet config for $wallet_name from $config_path"
+        return 1
+    fi
+
+    rm -rf "$daemon_home"
+    mkdir -p "$daemon_home"
+
+    printf '%s\n' "$fvk" | "$pclientd_bin" --home "$daemon_home" init \
+        --view \
+        --grpc-url "$grpc_url" \
+        --bind-addr "127.0.0.1:${bind_port}" >/dev/null
+
+    set_pcli_view_url "$config_path" "$view_url"
+
+    "$pclientd_bin" --home "$daemon_home" start > "$daemon_log" 2>&1 &
+    daemon_pid=$!
+    echo "${wallet_name}_PCLIENTD_PID=$daemon_pid" >> "$pid_file"
+
+    wait_for_tcp_port "$bind_port" 30 1
+
+    for attempt in $(seq 1 30); do
+        if ! kill -0 "$daemon_pid" 2>/dev/null; then
+            log_error "$wallet_name pclientd exited early"
+            tail -n 50 "$daemon_log" >&2 || true
+            return 1
+        fi
+
+        if "$pcli_bin" --home "$wallet_home" view balance >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+
+    log_error "$wallet_name pclientd did not become ready"
+    tail -n 50 "$daemon_log" >&2 || true
+    return 1
+}
+
+docker_compose_flavor() {
+    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        printf 'docker-compose-v2\n'
+        return 0
+    fi
+    if command -v docker-compose >/dev/null 2>&1; then
+        printf 'docker-compose-v1\n'
+        return 0
+    fi
+    log_error "docker compose not found"
+    return 1
+}
+
+run_orbis_compose() {
+    local compose_file="$1"
+    shift
+    local flavor
+    flavor="$(docker_compose_flavor)" || return 1
+    case "$flavor" in
+        docker-compose-v2)
+            docker compose -f "$compose_file" "$@"
+            ;;
+        docker-compose-v1)
+            docker-compose -f "$compose_file" "$@"
+            ;;
+    esac
+}
+
+wait_for_orbis_stack() {
+    wait_for_url "http://127.0.0.1:26657/status" 60 2 || return 1
+    wait_for_tcp_port 50051 60 2 || return 1
+    wait_for_tcp_port 50052 60 2 || return 1
+    wait_for_tcp_port 50053 60 2 || return 1
+}
+
+wait_for_penumbra_stack() {
+    wait_for_penumbra 16657 45 2 5 || return 1
+    wait_for_tcp_port 8080 30 1 || return 1
+}
+
+kill_tracked_pids() {
+    local pid_file="$1"
+
+    [ -f "$pid_file" ] || return 0
+
+    while IFS='=' read -r _ pid; do
+        [ -n "${pid:-}" ] || continue
+        kill "$pid" 2>/dev/null || true
+    done < "$pid_file"
+
+    while IFS='=' read -r _ pid; do
+        [ -n "${pid:-}" ] || continue
+        wait "$pid" 2>/dev/null || true
+    done < "$pid_file"
+
+    rm -f "$pid_file"
+}
+
 # --- Wait for Penumbra node to be fully ready (blocks producing) ---
 wait_for_penumbra() {
     local cometbft_port="${1:-16657}"
@@ -277,7 +446,7 @@ load_env() {
     local env_file="${1:-$COMPLIANCE_TMP/compliance-demo.env}"
     if [ ! -f "$env_file" ]; then
         log_error "Environment file not found: $env_file"
-        log_error "Run scripts/setup-penumbra.sh first"
+        log_error "Run ./scripts/penumbra-up.sh first"
         exit 1
     fi
     source "$env_file"

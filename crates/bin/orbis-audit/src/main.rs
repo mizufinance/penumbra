@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use decaf377::{Element, Fq, Fr};
+use penumbra_orbis_client::OrbisClient;
 use penumbra_sdk_compliance::{
     compute_adjusted_reader_pk, decrypt_tier_bytes, derive_compliance_scalar, recover_seed,
     TransferComplianceCiphertext,
@@ -15,8 +16,6 @@ use penumbra_sdk_num::Amount;
 use serde::{Deserialize, Serialize};
 use tonic::transport::Channel;
 use url::Url;
-
-mod cli_tool;
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -50,9 +49,6 @@ struct Args {
 
     #[clap(long)]
     ring_pk_hex: Option<String>,
-
-    #[clap(long, default_value = "cli-tool")]
-    cli_tool: String,
 
     #[clap(long = "known-address")]
     known_addresses: Vec<String>,
@@ -91,13 +87,12 @@ struct OrbisContext {
 
 #[derive(Clone)]
 struct AuditContext<'a> {
-    cli: &'a cli_tool::CliTool,
+    cli: &'a OrbisClient,
     orbis: &'a OrbisContext,
     dk: &'a Fr,
     dk_pub: &'a Element,
     ack: Element,
     b_d_hex: &'a str,
-    ring_pk_hex: &'a str,
     subject_transmission_key_hex: &'a str,
     known_transmission_keys: &'a HashSet<String>,
     tier_mode: &'a str,
@@ -150,7 +145,7 @@ async fn main() -> Result<()> {
         known_transmission_keys.insert(hex::encode(address.transmission_key().0));
     }
 
-    let cli = cli_tool::CliTool::new(&args.cli_tool, args.orbis_endpoint.clone());
+    let cli = OrbisClient::new(args.orbis_endpoint.clone());
     let (ring_pk, ring_id, orbis_ring_pk_hex) = match (&args.ring_pk_hex, &args.ring_id) {
         (Some(pk_hex), Some(id)) => {
             let bytes = hex::decode(pk_hex).context("invalid --ring-pk-hex")?;
@@ -162,7 +157,10 @@ async fn main() -> Result<()> {
                 .map_err(|_| anyhow!("--ring-pk-hex is not a valid curve point"))?;
             (pk, id.clone(), pk_hex.clone())
         }
-        _ => cli.get_latest_ring()?,
+        _ => {
+            let ring = cli.get_latest_ring().await?;
+            (ring.ring_pk, ring.ring_id, ring.ring_pk_hex)
+        }
     };
     let d = derive_compliance_scalar(b_d_fq);
     let d_fr = Fr::from_le_bytes_mod_order(&d.to_bytes());
@@ -175,7 +173,7 @@ async fn main() -> Result<()> {
         &subject_transmission_key_hex[..16],
     );
 
-    let orbis = setup_orbis(&cli, &orbis_ring_pk_hex, &ring_id, &b_d_hex)?;
+    let orbis = setup_orbis(&cli, &orbis_ring_pk_hex, &ring_id, &b_d_hex).await?;
 
     let file = File::open(&args.input).context("failed to open input file")?;
     let reader = BufReader::new(file);
@@ -193,7 +191,6 @@ async fn main() -> Result<()> {
         dk_pub: &dk_pub,
         ack,
         b_d_hex: &b_d_hex,
-        ring_pk_hex: &orbis_ring_pk_hex,
         subject_transmission_key_hex: &subject_transmission_key_hex,
         known_transmission_keys: &known_transmission_keys,
         tier_mode,
@@ -225,7 +222,7 @@ async fn main() -> Result<()> {
                 continue;
             };
 
-            if let Some(entry) = audit_transfer(tx_ref, &ct, &ctx)? {
+            if let Some(entry) = audit_transfer(tx_ref, &ct, &ctx).await? {
                 decrypted += 1;
                 results.push(entry);
             }
@@ -251,21 +248,21 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn audit_transfer(
+async fn audit_transfer(
     tx_ref: &DetectedTxRef,
     ct: &TransferComplianceCiphertext,
     ctx: &AuditContext<'_>,
 ) -> Result<Option<AuditEntry>> {
-    if let Some(candidate) = try_receiver_match(ct, ctx)? {
+    if let Some(candidate) = try_receiver_match(ct, ctx).await? {
         return Ok(Some(candidate_to_entry(tx_ref, candidate, ctx)));
     }
-    if let Some(candidate) = try_sender_match(ct, ctx)? {
+    if let Some(candidate) = try_sender_match(ct, ctx).await? {
         return Ok(Some(candidate_to_entry(tx_ref, candidate, ctx)));
     }
     Ok(None)
 }
 
-fn try_receiver_match(
+async fn try_receiver_match(
     ct: &TransferComplianceCiphertext,
     ctx: &AuditContext<'_>,
 ) -> Result<Option<TransferMatch>> {
@@ -275,8 +272,8 @@ fn try_receiver_match(
         ctx.dk_pub,
         &ct.output_core_epk,
         ctx.b_d_hex,
-        ctx.ring_pk_hex,
-    )?;
+    )
+    .await?;
     let output_core_seed = recover_seed(&output_core, ctx.dk, &ctx.ack, &ct.output_core_c2);
     let amount = decrypt_amount_with_seed(output_core_seed, &ct.encrypted_output_core)?;
 
@@ -286,8 +283,8 @@ fn try_receiver_match(
         ctx.dk_pub,
         &ct.output_ext_epk,
         ctx.b_d_hex,
-        ctx.ring_pk_hex,
-    )?;
+    )
+    .await?;
     let output_ext_seed = recover_seed(&output_ext, ctx.dk, &ctx.ack, &ct.output_ext_c2);
     let sender = match decrypt_address_with_seed(output_ext_seed, &ct.encrypted_output_ext) {
         Ok(sender) => sender,
@@ -304,7 +301,7 @@ fn try_receiver_match(
     Ok(Some(TransferMatch::Receiver { amount, sender }))
 }
 
-fn try_sender_match(
+async fn try_sender_match(
     ct: &TransferComplianceCiphertext,
     ctx: &AuditContext<'_>,
 ) -> Result<Option<TransferMatch>> {
@@ -314,8 +311,8 @@ fn try_sender_match(
         ctx.dk_pub,
         &ct.sender_core_epk,
         ctx.b_d_hex,
-        ctx.ring_pk_hex,
-    )?;
+    )
+    .await?;
     let sender_core_seed = recover_seed(&sender_core, ctx.dk, &ctx.ack, &ct.sender_core_c2);
     let amount = decrypt_amount_with_seed(sender_core_seed, &ct.encrypted_sender_core)?;
 
@@ -325,8 +322,8 @@ fn try_sender_match(
         ctx.dk_pub,
         &ct.sender_ext_epk,
         ctx.b_d_hex,
-        ctx.ring_pk_hex,
-    )?;
+    )
+    .await?;
     let sender_ext_seed = recover_seed(&sender_ext, ctx.dk, &ctx.ack, &ct.sender_ext_c2);
     let receiver = match decrypt_address_with_seed(sender_ext_seed, &ct.encrypted_sender_ext) {
         Ok(receiver) => receiver,
@@ -402,22 +399,25 @@ fn decrypt_address_with_seed(seed: Fq, encrypted: &[u8]) -> Result<AddressData> 
     })
 }
 
-fn setup_orbis(
-    cli: &cli_tool::CliTool,
+async fn setup_orbis(
+    cli: &OrbisClient,
     ring_pk_hex: &str,
     ring_id: &str,
     derivation_hex: &str,
 ) -> Result<OrbisContext> {
     eprintln!("orbis-audit: Setting up Orbis ACP...");
-    let policy_id = cli.add_policy()?;
+    let policy_id = cli.add_policy().await?;
     eprintln!("orbis-audit: policy_id={policy_id}");
 
-    let (object_id, enc_cmt_hex) =
-        cli.store_secret(ring_pk_hex, ring_id, &policy_id, derivation_hex)?;
+    let store_secret = cli
+        .store_secret(ring_pk_hex, ring_id, &policy_id, derivation_hex)
+        .await?;
+    let object_id = store_secret.object_id;
+    let enc_cmt_hex = store_secret.enc_cmt_hex;
     eprintln!("orbis-audit: object_id={object_id}");
 
-    cli.register_object(&policy_id, &object_id)?;
-    cli.set_relationship(&policy_id, &object_id)?;
+    cli.register_object(&policy_id, &object_id).await?;
+    cli.set_relationship(&policy_id, &object_id).await?;
     eprintln!("orbis-audit: ACP configured");
 
     let enc_cmt_bytes = hex::decode(&enc_cmt_hex).context("invalid enc_cmt hex")?;
@@ -435,22 +435,19 @@ fn setup_orbis(
     Ok(OrbisContext { object_id, enc_cmt })
 }
 
-fn orbis_pre_for_epk(
-    cli: &cli_tool::CliTool,
+async fn orbis_pre_for_epk(
+    cli: &OrbisClient,
     ctx: &OrbisContext,
     pk_issuer: &Element,
     epk_chain: &Element,
     derivation_hex: &str,
-    ring_pk_hex: &str,
 ) -> Result<Element> {
     let adjusted_pk = compute_adjusted_reader_pk(pk_issuer, epk_chain, &ctx.enc_cmt);
     let adjusted_pk_hex = hex::encode(adjusted_pk.vartime_compress().0);
-    let xnc_hex = cli.pre_xnc_only(
-        ring_pk_hex,
-        &adjusted_pk_hex,
-        &ctx.object_id,
-        derivation_hex,
-    )?;
+    let xnc_hex = cli
+        .pre_xnc_only(&adjusted_pk_hex, &ctx.object_id, derivation_hex)
+        .await?
+        .xnc_cmt_hex;
 
     let xnc_bytes = hex::decode(&xnc_hex).context("invalid xnc_cmt hex from PRE")?;
     let xnc_arr: [u8; 32] = xnc_bytes
@@ -582,10 +579,7 @@ mod tests {
     }
 
     fn dummy_context<'a>(tier_mode: &'a str, subject: &'a str) -> AuditContext<'a> {
-        let cli = Box::leak(Box::new(cli_tool::CliTool::new(
-            "cli-tool",
-            "http://127.0.0.1:8080".to_string(),
-        )));
+        let cli = Box::leak(Box::new(OrbisClient::new("http://127.0.0.1:8080")));
         let orbis = Box::leak(Box::new(OrbisContext {
             object_id: "object".to_string(),
             enc_cmt: Element::GENERATOR,
@@ -603,7 +597,6 @@ mod tests {
             dk_pub,
             ack: Element::GENERATOR,
             b_d_hex: "00",
-            ring_pk_hex: "11",
             subject_transmission_key_hex: subject,
             known_transmission_keys,
             tier_mode,

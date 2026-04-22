@@ -1,0 +1,77 @@
+name: orbis-integration
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/orbis-integration.yml'
+      - 'Justfile'
+      - 'compliance-docs/testing.md'
+      - 'crates/bin/orbis-audit/**'
+      - 'crates/bin/orbis-integration/**'
+      - 'crates/core/component/compliance/**'
+      - 'crates/util/orbis-client/**'
+      - 'deployments/orbis/**'
+      - 'scripts/**'
+      - 'testnets/validators-single.json'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  orbis-integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout Penumbra
+        uses: actions/checkout@v4
+        with:
+          path: penumbra
+          lfs: true
+
+      - name: install nix
+        uses: nixbuild/nix-quick-install-action@v28
+
+      - name: setup nix cache
+        uses: nix-community/cache-nix-action@v5
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('penumbra/**/*.nix') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+
+      - name: Load rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Penumbra binaries
+        working-directory: penumbra
+        run: |
+          nix develop --command cargo build --release -p pcli -p pclientd --features bundled-proving-keys
+          nix develop --command cargo build --release -p pd -p orbis-audit -p orbis-integration
+
+      - name: Run Penumbra Orbis integration flow
+        working-directory: penumbra
+        run: just orbis-integration
+
+      - name: Capture Orbis docker logs
+        if: failure()
+        working-directory: penumbra
+        run: |
+          mkdir -p tmp
+          ./scripts/orbis-stack.sh logs > tmp/orbis-docker.log || true
+
+      - name: Upload integration artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbis-integration-artifacts
+          path: |
+            penumbra/tmp/**

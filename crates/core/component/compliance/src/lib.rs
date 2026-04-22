@@ -112,8 +112,11 @@ pub use leaf_binding::{
     blind_counterparty_leaf, blind_sender_leaf, DOMAIN_SEP_COUNTERPARTY, DOMAIN_SEP_SENDER,
 };
 
-pub mod orbis;
-pub use orbis::{compute_adjusted_reader_pk, recover_seed, OrbisReencryptor, SimulatedOrbis};
+pub mod orbis_interop;
+pub use orbis_interop::{
+    compute_adjusted_reader_pk, compute_reencrypt_commitment, compute_ring_pk, recover_seed,
+    verify_and_compute_reencrypt_commitment, verify_reencrypt_proof,
+};
 
 /// Create valid IMT non-membership proof for an unregulated asset.
 ///

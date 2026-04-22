@@ -140,17 +140,15 @@ ci-preflight:
     just smoke; \
   fi
 
-# Run Orbis crypto integration tests (DKG, DLEQ, PRE against real nodes).
-orbis-test:
-    ./scripts/test-orbis-primitives.sh
+# Bring up Penumbra infra for the Orbis compliance flow.
+penumbra-up:
+    ./scripts/penumbra-up.sh
 
-# Run compliance transaction setup (DKG, registrations, transfers — run once).
-compliance-setup-tx:
-    ./scripts/setup-tx.sh
-
-# Run scanning + progressive disclosure demo (rerunnable).
-compliance-scanning:
-    ./scripts/test-orbis-scanning.sh
+# Full one-shot Penumbra + Orbis integration flow.
+orbis-integration:
+    RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-1.89.0}" cargo build --release -p pcli -p pclientd --features bundled-proving-keys
+    RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-1.89.0}" cargo build --release -p pd -p orbis-audit -p orbis-integration
+    ./target/release/orbis-integration run
 
 # Render livereload environment for editing the Protocol documentation.
 protocol-docs:

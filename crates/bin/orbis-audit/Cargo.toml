@@ -19,13 +19,16 @@ decaf377 = { workspace = true, default-features = true }
 hex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tonic = { workspace = true }
 url = { workspace = true }
 
+penumbra-orbis-client = { workspace = true }
 penumbra-sdk-compliance = { workspace = true, default-features = false }
 penumbra-sdk-asset = { workspace = true, default-features = false }
 penumbra-sdk-keys = { workspace = true, default-features = false }
 penumbra-sdk-num = { workspace = true, default-features = false }
 penumbra-sdk-proto = { workspace = true, features = ["rpc"], default-features = true }
+poseidon377 = { workspace = true }
 rand_core = { workspace = true }

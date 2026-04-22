@@ -61,6 +61,7 @@ tracing = {workspace = true}
 [dev-dependencies]
 decaf377-fmd = {workspace = true}
 decaf377-ka = {workspace = true}
+hex = {workspace = true}
 penumbra-sdk-keys = {workspace = true, features = ["demo"]}
 rand = {workspace = true}
 serde_json = {workspace = true}

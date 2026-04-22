@@ -165,106 +165,67 @@ cargo test --release -p penumbra-sdk-app-tests --test compliance_full_flow
 cargo test --release -p penumbra-sdk-view --lib planner::tests
 ```
 
-### Demo Scripts (Local Devnet)
+### Penumbra + Orbis Integration
 
-End-to-end demos on a local devnet with real Orbis nodes.
+Penumbra now treats Orbis as an external dependency. The Orbis network and
+SourceHub lifecycle come from the vendored runtime contract in
+`deployments/orbis/`, and Penumbra owns the typed integration flow on top of
+that runtime.
 
 #### Prerequisites
 
 ```bash
 # Build Penumbra binaries
-cargo build --release -p pcli -p pd
-
-# Install external tools (from orbis-rs repo)
-#   orbis-node, cli-tool  — with decaf377 feature
-#   sourcehubd            — from sourcehub repo
+cargo build --release -p pcli -p pclientd --features bundled-proving-keys
+cargo build --release -p pd -p orbis-audit -p orbis-integration
 ```
 
-#### Scripts Overview
+#### Script Overview
 
 | Command | Requires | Description |
 |---------|----------|-------------|
-| `./scripts/setup-penumbra.sh` | — | Penumbra devnet: pd + cometbft + wallets (Terminal 1, stays running) |
-| `./scripts/setup-orbis.sh` | — | Orbis network: SourceHub + 3 MPC nodes (Terminal 2, stays running) |
-| `./scripts/setup-tx.sh` | Both setups running | DKG + registrations + transfer/split/consolidate (run once) |
-| `./scripts/test-orbis-scanning.sh` | setup-tx.sh completed | Progressive disclosure demo (rerunnable) |
-| `./scripts/test-orbis-primitives.sh` | setup-orbis.sh | Orbis crypto tests (DKG, FROST, DLEQ, PRE) |
+| `./scripts/penumbra-up.sh` | built `pd` + `pcli` + `pclientd` | Start Penumbra devnet, wallets, and persistent view daemons |
+| `./scripts/orbis-stack.sh up` | Docker | Start SourceHub + 3 Orbis nodes from the vendored runtime contract |
+| `./target/release/orbis-integration seed` | Penumbra + Orbis up | Run DKG + registrations + split/transfer/consolidate |
+| `./target/release/orbis-integration verify` | `seed` completed | Rerunnable progressive-disclosure verification |
+| `just orbis-integration` | same prerequisites as above | One-shot CI-style bring-up, seed, verify, teardown |
 
-All artifacts (logs, wallets, keys, scan data) go to `tmp/`.
+All artifacts go to `tmp/`.
 
-#### Infrastructure Setup
+#### Recommended Local Flow
 
-Start each in a separate terminal:
-
-```bash
-# Terminal 1: Penumbra devnet (pd + cometbft + wallets)
-./scripts/setup-penumbra.sh
-
-# Terminal 2: Orbis network (SourceHub + 3 MPC nodes)
-./scripts/setup-orbis.sh
-```
-
-Both scripts stay in the foreground and clean up on Ctrl+C.
-
-#### Transaction Setup (run once)
-
-After both setups are ready:
+One-shot CI-style flow:
 
 ```bash
-./scripts/setup-tx.sh
+just orbis-integration
 ```
 
-This runs all chain-writing operations once:
-1. DKG to establish Orbis ring (threshold 2-of-3)
-2. Generates issuer detection key (DK)
-3. Registers regulated asset (threshold: 500 display units)
-4. Registers users (Alice, Bob, Charlie)
-5. Executes one split, regulated transfers, and one consolidate
-6. Tests edge cases (unregistered user rejection, unregulated asset transfer)
-
-Keys are saved to `tmp/` so the scanning demo can reuse them.
-
-#### Scanning Demo (rerunnable)
+Manual phased flow:
 
 ```bash
-./scripts/test-orbis-scanning.sh
+./scripts/penumbra-up.sh
+./scripts/orbis-stack.sh up
+./target/release/orbis-integration seed
+./target/release/orbis-integration verify
 ```
+`orbis-integration verify` is read-only and can be rerun against the same
+seeded chain state any number of times.
 
-Read-only analysis that can be re-run any number of times against the same chain:
-1. Scans chain and populates issuer database
-2. Shows **STATE 1**: detection-only (flagged transfer entries auto-decrypted via DK)
-3. Performs Orbis PRE for Alice & Bob (core tier) → **STATE 2**: amounts + self-addresses
-4. Performs Orbis PRE for Alice & Bob (extension tier) → **STATE 3**: counterparty addresses
+#### What The Seed + Verify Phases Cover
 
-Charlie is deliberately not audited — his non-flagged transactions stay encrypted,
-demonstrating that PRE is selective per-user access.
+`orbis-integration seed` performs:
+1. DKG to establish the Orbis ring (threshold 2-of-3)
+2. Issuer detection-key generation
+3. Regulated asset registration
+4. User registration for Alice, Bob, and Charlie
+5. One split, regulated transfers, and one consolidate
+6. Negative checks for unregistered users and unregulated assets
 
-#### Orbis Crypto Tests
-
-```bash
-./scripts/test-orbis-primitives.sh
-```
-
-Runs the `orbis-test` binary against real Orbis nodes:
-- DKG, FROST threshold signatures, DLEQ proofs, 3-tier PRE
-- Includes negative tests (unauthorized users, invalid proofs)
-
-#### Quick Start
-
-```bash
-# Terminal 1
-./scripts/setup-penumbra.sh
-
-# Terminal 2
-./scripts/setup-orbis.sh
-
-# Terminal 3 (after both setups are ready)
-./scripts/setup-tx.sh
-./scripts/test-orbis-scanning.sh
-
-# Re-run scanning demo as many times as needed
-./scripts/test-orbis-scanning.sh
-```
+`orbis-integration verify` performs:
+1. Detection-only chain scanning
+2. Core-tier PRE for Alice and Bob
+3. Extension-tier PRE for Alice and Bob
+4. Verification that Charlie remains encrypted because no PRE is requested
 
 ## Troubleshooting
 
