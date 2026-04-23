@@ -37,8 +37,15 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum CommandKind {
-    Run,
+    /// Run the full bring-up, seed, verify, and teardown flow.
+    Run {
+        /// Keep the Penumbra and Orbis stacks running if the flow fails.
+        #[clap(long)]
+        keep_on_fail: bool,
+    },
+    /// Seed an already running Penumbra + Orbis stack.
     Seed,
+    /// Run the read-only verification phase against a seeded stack.
     Verify,
 }
 
@@ -76,13 +83,13 @@ async fn main() -> Result<()> {
     let repo = RepoPaths::discover()?;
 
     match args.command {
-        CommandKind::Run => run_full_flow(&repo).await,
+        CommandKind::Run { keep_on_fail } => run_full_flow(&repo, keep_on_fail).await,
         CommandKind::Seed => seed(&repo).await,
         CommandKind::Verify => verify(&repo).await,
     }
 }
 
-async fn run_full_flow(repo: &RepoPaths) -> Result<()> {
+async fn run_full_flow(repo: &RepoPaths, keep_on_fail: bool) -> Result<()> {
     let mut started_penumbra = false;
     let mut started_orbis = false;
     let result = async {
@@ -100,6 +107,10 @@ async fn run_full_flow(repo: &RepoPaths) -> Result<()> {
 
     if result.is_err() {
         let _ = capture_orbis_logs(repo);
+        if keep_on_fail {
+            eprintln!("orbis-integration: preserving Penumbra and Orbis stacks for debugging");
+            return result;
+        }
     }
     if started_orbis {
         let _ = run_script_with_args(repo, "scripts/orbis-stack.sh", &["down"]);
@@ -112,8 +123,10 @@ async fn run_full_flow(repo: &RepoPaths) -> Result<()> {
 }
 
 async fn seed(repo: &RepoPaths) -> Result<()> {
-    let env = DemoEnv::load(&repo.env_file)?;
-    ensure_demo_gnark_libs(repo)?;
+    let env = load_required_env(
+        &repo.env_file,
+        "run `just orbis-integration-up` before `just orbis-integration-seed`",
+    )?;
     wait_for_tcp("127.0.0.1:8080", 30, Duration::from_secs(1))?;
     wait_for_tcp("127.0.0.1:50051", 60, Duration::from_secs(2))?;
     wait_for_tcp("127.0.0.1:50052", 60, Duration::from_secs(2))?;
@@ -420,9 +433,18 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
 }
 
 async fn verify(repo: &RepoPaths) -> Result<()> {
-    let env = DemoEnv::load(&repo.env_file)?;
-    let ring_info = DemoEnv::load(&repo.ring_info_file)?;
-    let issuer = DemoEnv::load(&repo.issuer_dk_file)?;
+    let env = load_required_env(
+        &repo.env_file,
+        "run `just orbis-integration-up` before `just orbis-integration-verify`",
+    )?;
+    let ring_info = load_required_env(
+        &repo.ring_info_file,
+        "run `just orbis-integration-seed` before `just orbis-integration-verify`",
+    )?;
+    let issuer = load_required_env(
+        &repo.issuer_dk_file,
+        "run `just orbis-integration-seed` before `just orbis-integration-verify`",
+    )?;
     let node1 = OrbisClient::new(NODE1_ENDPOINT);
     let node2 = OrbisClient::new(NODE2_ENDPOINT);
     let node3 = OrbisClient::new(NODE3_ENDPOINT);
@@ -607,55 +629,10 @@ fn capture_orbis_logs(repo: &RepoPaths) -> Result<()> {
             .current_dir(&repo.root)
             .arg("logs"),
     )?;
-    fs::write(repo.tmp.join("orbis-docker.log"), output.stdout)
+    let mut logs = output.stdout;
+    logs.extend_from_slice(&output.stderr);
+    fs::write(repo.tmp.join("orbis-docker.log"), logs)
         .with_context(|| "failed to write tmp/orbis-docker.log".to_string())?;
-    Ok(())
-}
-
-fn ensure_demo_gnark_libs(repo: &RepoPaths) -> Result<()> {
-    let ext = if cfg!(target_os = "macos") {
-        "dylib"
-    } else {
-        "so"
-    };
-    let gnark_dir = repo.root.join("tools/gnark");
-    let expected = [
-        gnark_dir.join(format!("libpenumbra_gnark_transfer.{ext}")),
-        gnark_dir.join(format!("libpenumbra_gnark_split.{ext}")),
-        gnark_dir.join(format!("libpenumbra_gnark_consolidate.{ext}")),
-        gnark_dir.join(format!("libpenumbra_gnark_shielded_ics20_withdrawal.{ext}")),
-    ];
-    if expected.iter().all(|path| path.is_file()) {
-        return Ok(());
-    }
-
-    let builds = [
-        ("./cmd/splitlib", format!("libpenumbra_gnark_split.{ext}")),
-        (
-            "./cmd/transferlib",
-            format!("libpenumbra_gnark_transfer.{ext}"),
-        ),
-        (
-            "./cmd/consolidatelib",
-            format!("libpenumbra_gnark_consolidate.{ext}"),
-        ),
-        (
-            "./cmd/shieldedics20withdrawallib",
-            format!("libpenumbra_gnark_shielded_ics20_withdrawal.{ext}"),
-        ),
-    ];
-    for (pkg, output) in builds {
-        run_command(
-            Command::new("go")
-                .current_dir(&gnark_dir)
-                .env("CGO_ENABLED", "1")
-                .arg("build")
-                .arg("-buildmode=c-shared")
-                .arg("-o")
-                .arg(output)
-                .arg(pkg),
-        )?;
-    }
     Ok(())
 }
 
@@ -712,7 +689,7 @@ where
         bail!(
             "pcli command failed with status {}:\n{}",
             output.status,
-            String::from_utf8_lossy(&output.stderr)
+            format_captured_output(&output)
         );
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -745,15 +722,14 @@ fn run_script_with_args(repo: &RepoPaths, script: &str, args: &[&str]) -> Result
 }
 
 fn run_command(command: &mut Command) -> Result<()> {
-    let output = command_output(command)?;
-    if output.status.success() {
+    let description = format!("{command:?}");
+    let status = command
+        .status()
+        .with_context(|| format!("failed to run {description}"))?;
+    if status.success() {
         Ok(())
     } else {
-        bail!(
-            "command failed with status {}:\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        )
+        bail!("command failed with status {status}: {description}")
     }
 }
 
@@ -793,6 +769,17 @@ fn shell_escape(arg: &str) -> String {
         arg.to_string()
     } else {
         format!("{arg:?}")
+    }
+}
+
+fn format_captured_output(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (false, false) => format!("stdout:\n{stdout}\n\nstderr:\n{stderr}"),
+        (false, true) => format!("stdout:\n{stdout}"),
+        (true, false) => format!("stderr:\n{stderr}"),
+        (true, true) => String::from("<no captured output>"),
     }
 }
 
@@ -864,6 +851,13 @@ fn count_json_array(path: &Path) -> Result<usize> {
         .as_array()
         .map(|items| items.len())
         .ok_or_else(|| anyhow!("expected JSON array in {}", path.display()))
+}
+
+fn load_required_env(path: &Path, hint: &str) -> Result<DemoEnv> {
+    if !path.exists() {
+        bail!("missing {}: {hint}", path.display());
+    }
+    DemoEnv::load(path)
 }
 
 impl RepoPaths {

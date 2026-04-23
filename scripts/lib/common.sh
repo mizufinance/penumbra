@@ -5,6 +5,8 @@
 # --- Repo-local tmp directory for all artifacts ---
 COMPLIANCE_TMP="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tmp"
 COMPLIANCE_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+COMPLIANCE_STACK_HOME="${PENUMBRA_ORBIS_HOME:-$COMPLIANCE_TMP/penumbra-home}"
+COMPLIANCE_NETWORK_DATA_DIR="${COMPLIANCE_STACK_HOME}/network_data"
 mkdir -p "$COMPLIANCE_TMP"
 
 gnark_lib_ext() {
@@ -35,8 +37,6 @@ export_demo_gnark_env() {
     export PENUMBRA_GNARK_SHIELDED_ICS20_WITHDRAWAL_LIB="$COMPLIANCE_REPO_ROOT/tools/gnark/libpenumbra_gnark_shielded_ics20_withdrawal.${ext}"
     export PENUMBRA_GNARK_SHIELDED_ICS20_WITHDRAWAL_ARTIFACT_DIR="$COMPLIANCE_REPO_ROOT/tools/gnark/artifacts/shielded_ics20_withdrawal"
 }
-
-export_demo_gnark_env
 
 export_compliance_rust_log() {
     if [ -z "${RUST_LOG:-}" ]; then
@@ -150,6 +150,39 @@ log_info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
 log_success() { echo -e "${GREEN}[OK]${NC} $*"; }
 log_warning() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $*"; }
+
+is_tcp_port_in_use() {
+    local port="$1"
+
+    if command -v nc >/dev/null 2>&1; then
+        nc -z 127.0.0.1 "$port" >/dev/null 2>&1
+        return $?
+    fi
+
+    (echo > /dev/tcp/127.0.0.1/"$port") >/dev/null 2>&1
+}
+
+ensure_ports_available() {
+    local has_conflict=0
+    local port
+
+    for port in "$@"; do
+        if ! is_tcp_port_in_use "$port"; then
+            continue
+        fi
+
+        log_error "TCP port $port is already in use"
+        if command -v lsof >/dev/null 2>&1; then
+            lsof -nP -iTCP:"$port" -sTCP:LISTEN >&2 || true
+        fi
+        has_conflict=1
+    done
+
+    if [ "$has_conflict" -eq 1 ]; then
+        log_error "Free the conflicting ports or run ./scripts/penumbra-down.sh and ./scripts/orbis-stack.sh down"
+        return 1
+    fi
+}
 
 # --- Test counters ---
 PASSED=0
@@ -342,6 +375,18 @@ docker_compose_flavor() {
     return 1
 }
 
+docker_daemon_ready() {
+    command -v docker >/dev/null 2>&1 || return 1
+    docker info >/dev/null 2>&1
+}
+
+ensure_docker_daemon() {
+    docker_daemon_ready && return 0
+    log_error "Docker daemon is not running"
+    log_error "Start Docker Desktop or your local Docker service, then rerun the command"
+    return 1
+}
+
 run_orbis_compose() {
     local compose_file="$1"
     shift
@@ -446,7 +491,7 @@ load_env() {
     local env_file="${1:-$COMPLIANCE_TMP/compliance-demo.env}"
     if [ ! -f "$env_file" ]; then
         log_error "Environment file not found: $env_file"
-        log_error "Run ./scripts/penumbra-up.sh first"
+        log_error "Run `just orbis-integration-up` first"
         exit 1
     fi
     source "$env_file"
@@ -493,3 +538,15 @@ print_phase() {
     echo "$line"
     echo ""
 }
+
+maybe_enable_demo_gnark_env() {
+    if [ "${PENUMBRA_ORBIS_USE_DEMO_GNARK:-0}" != "1" ]; then
+        return 0
+    fi
+
+    log_info "PENUMBRA_ORBIS_USE_DEMO_GNARK=1 enabled; validating demo gnark runtimes"
+    ensure_demo_gnark_libs
+    export_demo_gnark_env
+}
+
+maybe_enable_demo_gnark_env

@@ -43,6 +43,8 @@ pub struct OrbisEncryptedSeedUploadPackage {
     pub shared_point: Vec<u8>,
     pub challenge: Vec<u8>,
     pub response: Vec<u8>,
+    pub orbis_challenge: Vec<u8>,
+    pub orbis_response: Vec<u8>,
     pub derived_pk: Vec<u8>,
     pub metadata_hash: Vec<u8>,
 }
@@ -77,6 +79,17 @@ impl OrbisEncryptedSeedUploadPackage {
         Fq::from_bytes_checked(&metadata).map_err(|_| anyhow!("invalid metadata_hash"))
     }
 
+    pub fn orbis_policy_metadata(&self) -> Vec<u8> {
+        encode_orbis_policy_metadata(
+            &self.policy_id,
+            &self.resource,
+            &self.permission,
+            Some(&self.tier_label),
+            Some(self.timestamp),
+            Some(&self.salt),
+        )
+    }
+
     pub fn derived_pk(&self) -> Result<Element> {
         parse_element(&self.derived_pk, "derived_pk")
     }
@@ -100,6 +113,19 @@ impl OrbisEncryptedSeedUploadPackage {
 
     pub fn challenge_scalar(&self) -> Fq {
         Fq::from_le_bytes_mod_order(&self.challenge)
+    }
+
+    pub fn orbis_response_scalar(&self) -> Result<Fr> {
+        let bytes: [u8; 32] = self
+            .orbis_response
+            .clone()
+            .try_into()
+            .map_err(|_| anyhow!("orbis_response must be 32 bytes"))?;
+        Fr::from_bytes_checked(&bytes).map_err(|_| anyhow!("invalid orbis_response scalar"))
+    }
+
+    pub fn orbis_challenge_scalar(&self) -> Fq {
+        Fq::from_le_bytes_mod_order(&self.orbis_challenge)
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -135,18 +161,28 @@ impl OrbisEncryptedSeedUploadPackage {
         let derived_pk = self.derived_pk()?;
         let enc_cmt = self.enc_cmt()?;
         let shared_point = self.shared_point()?;
-        let metadata_hash = self.statement.metadata_hash()?;
-        anyhow::ensure!(
-            self.metadata_hash_fq()? == metadata_hash,
-            "metadata_hash does not match canonical statement metadata hash"
-        );
+        let transfer_metadata_hash = self.statement.metadata_hash()?;
         verify_dleq_native(
             &derived_pk,
             &enc_cmt,
             &shared_point,
             &self.challenge_scalar(),
             &self.response_scalar()?,
-            metadata_hash,
+            transfer_metadata_hash,
+        )?;
+
+        let metadata_hash = self.orbis_policy_metadata();
+        anyhow::ensure!(
+            self.metadata_hash == metadata_hash,
+            "metadata_hash does not match Orbis policy metadata"
+        );
+        verify_dleq_native(
+            &derived_pk,
+            &enc_cmt,
+            &shared_point,
+            &self.orbis_challenge_scalar(),
+            &self.orbis_response_scalar()?,
+            self.metadata_hash_fq()?,
         )
     }
 }
@@ -279,7 +315,15 @@ pub fn build_orbis_encrypted_seed_upload_package_with_randomness(
 
     let tier_label = tier.label().to_string();
     let salt_hex = hex::encode(salt.to_bytes());
-    let metadata_hash = statement.metadata_hash()?.to_bytes().to_vec();
+    let transfer_metadata_hash = statement.metadata_hash()?.to_bytes().to_vec();
+    let metadata_hash = encode_orbis_policy_metadata(
+        policy_id,
+        resource,
+        permission,
+        Some(tier.label()),
+        Some(timestamp),
+        Some(&salt_hex),
+    );
 
     let (enc_cmt, encrypted_secret, proof) = encrypt_secret_with_randomness(
         rng,
@@ -287,6 +331,16 @@ pub fn build_orbis_encrypted_seed_upload_package_with_randomness(
         &seed.to_bytes(),
         r,
         Some(&derivation_bytes),
+        Some(&transfer_metadata_hash),
+    )?;
+    let derived_pk = parse_element(&proof.derived_pk, "derived_pk")?;
+    let shared_point = parse_element(&proof.shared_point, "shared_point")?;
+    let (orbis_challenge, orbis_response) = generate_encryption_proof(
+        rng,
+        &r,
+        &derived_pk,
+        &enc_cmt,
+        &shared_point,
         Some(&metadata_hash),
     )?;
 
@@ -305,6 +359,8 @@ pub fn build_orbis_encrypted_seed_upload_package_with_randomness(
         shared_point: proof.shared_point,
         challenge: proof.challenge,
         response: proof.response,
+        orbis_challenge: orbis_challenge.to_bytes().to_vec(),
+        orbis_response: orbis_response.to_bytes().to_vec(),
         derived_pk: proof.derived_pk,
         metadata_hash,
     })
@@ -555,5 +611,50 @@ mod tests {
         let recovered = decrypt_orbis_reencrypted_seed(&package, &reader_sk, &xnc_cmt, &secret)
             .expect("seed should decrypt");
         assert_eq!(recovered, seed);
+    }
+
+    #[test]
+    fn upload_package_binds_orbis_policy_metadata() {
+        let mut rng = OsRng;
+        let ring_pk = Element::GENERATOR * Fr::rand(&mut rng);
+        let statement = TransferTierMetadataStatement::from_identifiers(
+            Fq::from(42u64),
+            "ring-id",
+            "policy-id",
+            "document",
+            "read",
+            TransferTierKind::OutputCore,
+            1_700_000_000,
+            Fq::from(99u64),
+        );
+
+        let package = build_orbis_encrypted_seed_upload_package(
+            &mut rng,
+            &ring_pk,
+            Fq::from(7u64),
+            statement.clone(),
+            "ring-id",
+            "policy-id",
+            "document",
+            "read",
+            TransferTierKind::OutputCore,
+            1_700_000_000,
+            Fq::from(99u64),
+        )
+        .expect("package should build");
+
+        let canonical_metadata = statement.metadata_hash().expect("canonical metadata");
+        let orbis_metadata = package.orbis_policy_metadata();
+
+        assert_eq!(package.metadata_hash, orbis_metadata);
+        assert_ne!(
+            package.metadata_hash,
+            canonical_metadata.to_bytes().to_vec()
+        );
+        assert_ne!(package.challenge, package.orbis_challenge);
+        assert_ne!(package.response, package.orbis_response);
+        package
+            .validate()
+            .expect("proof should validate with Orbis metadata");
     }
 }

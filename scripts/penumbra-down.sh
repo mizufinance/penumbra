@@ -9,7 +9,4 @@ PID_FILE="$COMPLIANCE_TMP/penumbra-pids.txt"
 
 print_banner "Penumbra Infra Teardown"
 kill_tracked_pids "$PID_FILE"
-pkill pclientd 2>/dev/null || true
-pkill pd 2>/dev/null || true
-pkill cometbft 2>/dev/null || true
 log_success "Penumbra infra stopped"

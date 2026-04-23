@@ -175,22 +175,30 @@ that runtime.
 #### Prerequisites
 
 ```bash
-# Build Penumbra binaries
-cargo build --release -p pcli -p pclientd --features bundled-proving-keys
-cargo build --release -p pd -p orbis-audit -p orbis-integration
+# One-shot local run
+just orbis-integration
 ```
 
 #### Script Overview
 
 | Command | Requires | Description |
 |---------|----------|-------------|
+| `just orbis-integration-build` | Rust toolchain | Build `pcli`, `pclientd`, `pd`, `orbis-audit`, and `orbis-integration` |
+| `just orbis-integration` | Docker + local runtime deps | Build, preflight, bring up Penumbra + Orbis, seed, verify, and tear down |
+| `just orbis-integration-debug` | Docker + local runtime deps | Same as `just orbis-integration`, but keep the stack running on failure |
+| `just orbis-integration-up` | Docker + local runtime deps | Build, preflight, and start Penumbra devnet plus the Orbis stack |
+| `just orbis-integration-seed` | `just orbis-integration-up` | Run DKG + registrations + split/transfer/consolidate |
+| `just orbis-integration-verify` | `just orbis-integration-seed` | Rerunnable progressive-disclosure verification |
+| `just orbis-integration-down` | none | Tear down the Penumbra + Orbis stack |
+| `just orbis-integration-logs` | Orbis stack running | Print SourceHub + Orbis Docker logs |
 | `./scripts/penumbra-up.sh` | built `pd` + `pcli` + `pclientd` | Start Penumbra devnet, wallets, and persistent view daemons |
 | `./scripts/orbis-stack.sh up` | Docker | Start SourceHub + 3 Orbis nodes from the vendored runtime contract |
 | `./target/release/orbis-integration seed` | Penumbra + Orbis up | Run DKG + registrations + split/transfer/consolidate |
 | `./target/release/orbis-integration verify` | `seed` completed | Rerunnable progressive-disclosure verification |
-| `just orbis-integration` | same prerequisites as above | One-shot CI-style bring-up, seed, verify, teardown |
 
-All artifacts go to `tmp/`.
+All artifacts go to repo-local `tmp/`. The Orbis integration devnet also uses
+repo-local state under `tmp/penumbra-home`, so this flow does not need to touch
+`~/.penumbra/network_data`.
 
 #### Recommended Local Flow
 
@@ -203,13 +211,25 @@ just orbis-integration
 Manual phased flow:
 
 ```bash
-./scripts/penumbra-up.sh
-./scripts/orbis-stack.sh up
-./target/release/orbis-integration seed
-./target/release/orbis-integration verify
+just orbis-integration-up
+just orbis-integration-seed
+just orbis-integration-verify
 ```
 `orbis-integration verify` is read-only and can be rerun against the same
 seeded chain state any number of times.
+
+If you want to keep the stack alive after a failure for inspection:
+
+```bash
+just orbis-integration-debug
+```
+
+For advanced debugging only, you can opt into the local demo gnark shared
+libraries instead of the bundled runtime used by the release binaries:
+
+```bash
+PENUMBRA_ORBIS_USE_DEMO_GNARK=1 just orbis-integration
+```
 
 #### What The Seed + Verify Phases Cover
 

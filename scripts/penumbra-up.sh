@@ -16,7 +16,10 @@ repo_root="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 PCLI="${PCLI:-$repo_root/target/release/pcli}"
 PCLIENTD="${PCLIENTD:-$repo_root/target/release/pclientd}"
 PD="${PD:-$repo_root/target/release/pd}"
+PENUMBRA_DEVNET_HOME="${PENUMBRA_DEVNET_HOME:-$COMPLIANCE_STACK_HOME}"
+NETWORK_DATA_DIR="${PENUMBRA_DEVNET_HOME}/network_data"
 PENUMBRA_NODE_PD_URL="${PENUMBRA_NODE_PD_URL:-http://localhost:8080}"
+export PENUMBRA_DEVNET_HOME
 export PENUMBRA_NODE_PD_URL
 
 ALICE_HOME="$COMPLIANCE_TMP/alice-wallet"
@@ -35,11 +38,11 @@ UNREGISTERED_VIEW_URL="http://127.0.0.1:18084"
 ENV_FILE="$COMPLIANCE_TMP/compliance-demo.env"
 PID_FILE="$COMPLIANCE_TMP/penumbra-pids.txt"
 
-print_banner "Penumbra Infra Bring-Up" "pd + cometbft + wallets + persistent view daemons"
+print_banner "Penumbra Infra Bring-Up" "repo-local devnet + wallets + persistent view daemons"
 
 log_info "Checking dependencies..."
 for bin in "$PCLI" "$PCLIENTD" "$PD"; do
-    [ ! -f "$bin" ] && log_error "$(basename "$bin") not found at $bin" && exit 1
+    [ ! -x "$bin" ] && log_error "$(basename "$bin") not found at $bin" && exit 1
 done
 for bin in cometbft jq; do
     command -v "$bin" >/dev/null 2>&1 || { log_error "$bin not found in PATH"; exit 1; }
@@ -48,22 +51,22 @@ log_success "All dependencies found"
 
 log_info "Resetting previous Penumbra state..."
 kill_tracked_pids "$PID_FILE"
-pkill pd 2>/dev/null || true
-pkill cometbft 2>/dev/null || true
 sleep 2
+ensure_ports_available 8080 16656 16657 18081 18082 18083 18084
 
 rm -rf \
-    ~/.penumbra/network_data \
+    "$PENUMBRA_DEVNET_HOME" \
     "$ALICE_HOME" "$BOB_HOME" "$CHARLIE_HOME" "$UNREGISTERED_HOME" \
     "$ALICE_PCLIENTD_HOME" "$BOB_PCLIENTD_HOME" "$CHARLIE_PCLIENTD_HOME" "$UNREGISTERED_PCLIENTD_HOME"
 rm -f "$ENV_FILE" "$PID_FILE"
+mkdir -p "$PENUMBRA_DEVNET_HOME"
 
 log_info "Initializing Alice wallet..."
 echo | "$PCLI" --home "$ALICE_HOME" init soft-kms generate >/dev/null 2>&1
 ALICE_ADDRESS=$("$PCLI" --home "$ALICE_HOME" view address 0)
 
 log_info "Generating Penumbra network..."
-run_quiet "$PD" network generate \
+run_quiet "$PD" network --network-dir "$NETWORK_DATA_DIR" generate \
     --chain-id penumbra-local-devnet \
     --epoch-duration 302400 \
     --proposal-voting-blocks 50 \
@@ -75,13 +78,13 @@ run_quiet "$PD" network generate \
     --allocation-address "$ALICE_ADDRESS"
 
 log_info "Starting pd..."
-"$PD" start --home ~/.penumbra/network_data/node0/pd \
+"$PD" start --home "$NETWORK_DATA_DIR/node0/pd" \
     --cometbft-addr http://127.0.0.1:16657 > "$COMPLIANCE_TMP/pd.log" 2>&1 &
 PD_PID=$!
 echo "PD_PID=$PD_PID" >> "$PID_FILE"
 
 log_info "Starting cometbft..."
-cometbft start --home ~/.penumbra/network_data/node0/cometbft > "$COMPLIANCE_TMP/cometbft.log" 2>&1 &
+cometbft start --home "$NETWORK_DATA_DIR/node0/cometbft" > "$COMPLIANCE_TMP/cometbft.log" 2>&1 &
 COMETBFT_PID=$!
 echo "COMETBFT_PID=$COMETBFT_PID" >> "$PID_FILE"
 
@@ -128,6 +131,7 @@ export CHARLIE_ADDRESS="$CHARLIE_ADDRESS"
 export UNREGISTERED_ADDRESS="$UNREGISTERED_ADDRESS"
 export PCLI="$PCLI"
 export PCLIENTD="$PCLIENTD"
+export PENUMBRA_DEVNET_HOME="$PENUMBRA_DEVNET_HOME"
 export PENUMBRA_NODE_PD_URL="$PENUMBRA_NODE_PD_URL"
 export ALICE_PCLIENTD_HOME="$ALICE_PCLIENTD_HOME"
 export BOB_PCLIENTD_HOME="$BOB_PCLIENTD_HOME"

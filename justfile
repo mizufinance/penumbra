@@ -145,11 +145,64 @@ ci-preflight:
 penumbra-up:
     ./scripts/penumbra-up.sh
 
-# Full one-shot Penumbra + Orbis integration flow.
-orbis-integration:
+# Validate local dependencies for the Orbis integration flow.
+orbis-integration-preflight:
+    ./scripts/orbis-integration-preflight.sh
+
+# Validate binaries required by the Orbis integration flow.
+orbis-integration-preflight-binaries:
+    ./scripts/orbis-integration-preflight.sh --require-binaries
+
+# Validate binaries and local ports before bringing up the stack.
+orbis-integration-preflight-bringup:
+    ./scripts/orbis-integration-preflight.sh --require-binaries --check-ports-free
+
+# Build the binaries required by the Orbis integration flow.
+orbis-integration-build:
     cargo build --release -p pcli -p pclientd --features bundled-proving-keys
     cargo build --release -p pd -p orbis-audit -p orbis-integration
+
+# Run the full Orbis integration flow assuming release binaries already exist.
+orbis-integration-run:
+    just orbis-integration-preflight-bringup
     ./target/release/orbis-integration run
+
+# Keep the stack running on failure for local debugging.
+orbis-integration-debug:
+    just orbis-integration-build
+    just orbis-integration-preflight-bringup
+    ./target/release/orbis-integration run --keep-on-fail
+
+# Build and run the full one-shot Penumbra + Orbis integration flow.
+orbis-integration:
+    just orbis-integration-build
+    just orbis-integration-run
+
+# Bring up Penumbra and Orbis for phased local debugging.
+orbis-integration-up:
+    just orbis-integration-build
+    just orbis-integration-preflight-bringup
+    ./scripts/penumbra-up.sh
+    ./scripts/orbis-stack.sh up
+
+# Run the seed phase against an already running Penumbra + Orbis stack.
+orbis-integration-seed:
+    just orbis-integration-preflight-binaries
+    ./target/release/orbis-integration seed
+
+# Run the read-only verify phase against an existing seeded stack.
+orbis-integration-verify:
+    just orbis-integration-preflight-binaries
+    ./target/release/orbis-integration verify
+
+# Tear down the Orbis integration stack.
+orbis-integration-down:
+    ./scripts/orbis-stack.sh down
+    ./scripts/penumbra-down.sh
+
+# Print Docker logs for the Orbis stack.
+orbis-integration-logs:
+    ./scripts/orbis-stack.sh logs
 
 # Render livereload environment for editing the Protocol documentation.
 protocol-docs:

@@ -3,15 +3,21 @@ on:
   pull_request:
     paths:
       - '.github/workflows/orbis-integration.yml'
-      - 'Justfile'
+      - 'justfile'
       - 'compliance-docs/testing.md'
       - 'crates/bin/orbis-audit/**'
       - 'crates/bin/orbis-integration/**'
+      - 'crates/bin/pcli/**'
+      - 'crates/bin/pclientd/**'
+      - 'crates/bin/pd/**'
       - 'crates/core/component/compliance/**'
+      - 'crates/core/component/shielded-pool/**'
+      - 'crates/crypto/proof-params/**'
       - 'crates/util/orbis-client/**'
       - 'deployments/orbis/**'
       - 'scripts/**'
       - 'testnets/validators-single.json'
+      - 'tools/gnark/**'
   workflow_dispatch:
 
 concurrency:
@@ -51,15 +57,9 @@ jobs:
       - name: Load rust cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Build Penumbra binaries
-        working-directory: penumbra
-        run: |
-          nix develop --command cargo build --release -p pcli -p pclientd --features bundled-proving-keys
-          nix develop --command cargo build --release -p pd -p orbis-audit -p orbis-integration
-
       - name: Run Penumbra Orbis integration flow
         working-directory: penumbra
-        run: just orbis-integration
+        run: nix develop --command just orbis-integration
 
       - name: Capture Orbis docker logs
         if: failure()
