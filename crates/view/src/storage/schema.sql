@@ -198,9 +198,8 @@ CREATE TABLE compliance_asset_tree_position (
 );
 INSERT INTO compliance_asset_tree_position VALUES (0, 1); -- Starts with sentinel
 
--- Asset policies (threshold and issuer DK_pub)
+-- Full asset policies used by compliance planning and Orbis upload packaging.
 CREATE TABLE compliance_asset_policies (
     asset_id BLOB PRIMARY KEY,
-    dk_pub BLOB NOT NULL,        -- 32 bytes compressed curve point
-    threshold BLOB NOT NULL       -- 16 bytes little-endian u128 threshold for flagging
+    policy BLOB NOT NULL
 );

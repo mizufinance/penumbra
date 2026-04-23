@@ -21,7 +21,7 @@ pub const CONSOLIDATE_STATEMENT_FIELDS_PER_OUTPUT: usize = 1;
 pub const SPLIT_STATEMENT_BASE_FIELDS: usize = 2;
 pub const SPLIT_STATEMENT_FIELDS_PER_INPUT: usize = 2;
 pub const SPLIT_STATEMENT_FIELDS_PER_OUTPUT: usize = 1;
-pub const TRANSFER_STATEMENT_BASE_FIELDS: usize = 31;
+pub const TRANSFER_STATEMENT_BASE_FIELDS: usize = 75;
 pub const TRANSFER_STATEMENT_FIELDS_PER_INPUT: usize = 2;
 pub const TRANSFER_STATEMENT_FIELDS_PER_OUTPUT: usize = 1;
 pub const SHIELDED_ICS20_WITHDRAWAL_STATEMENT_BASE_FIELDS: usize = 10;
@@ -406,21 +406,100 @@ pub fn transfer_statement_fields(
             .to_field_elements()
             .ok_or_else(|| transfer_field_encoding_error("target_timestamp"))?,
     );
-    for (label, dleq) in [
-        ("transfer_sender_core_dleq", &compliance.sender_core_dleq),
-        ("transfer_sender_ext_dleq", &compliance.sender_ext_dleq),
-        ("transfer_output_core_dleq", &compliance.output_core_dleq),
-        ("transfer_output_ext_dleq", &compliance.output_ext_dleq),
+    for (label, proof) in [
+        ("transfer_sender_core_proof", &compliance.sender_core.proof),
+        ("transfer_sender_ext_proof", &compliance.sender_ext.proof),
+        ("transfer_output_core_proof", &compliance.output_core.proof),
+        ("transfer_output_ext_proof", &compliance.output_ext.proof),
     ] {
+        let statement = &proof.statement;
+        let subject_b_d = statement
+            .subject_b_d()
+            .map_err(|e| transfer_field_encoding_error(&format!("{label}_subject_b_d: {e}")))?;
+        let ring_id_hash = statement
+            .ring_id_hash()
+            .map_err(|e| transfer_field_encoding_error(&format!("{label}_ring_id_hash: {e}")))?;
+        let policy_id_hash = statement
+            .policy_id_hash()
+            .map_err(|e| transfer_field_encoding_error(&format!("{label}_policy_id_hash: {e}")))?;
+        let resource_hash = statement
+            .resource_hash()
+            .map_err(|e| transfer_field_encoding_error(&format!("{label}_resource_hash: {e}")))?;
+        let permission_hash = statement
+            .permission_hash()
+            .map_err(|e| transfer_field_encoding_error(&format!("{label}_permission_hash: {e}")))?;
+        let salt = statement
+            .salt()
+            .map_err(|e| transfer_field_encoding_error(&format!("{label}_salt: {e}")))?;
         fields.extend(
-            dleq.c
+            subject_b_d
                 .to_field_elements()
-                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_c")))?,
+                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_subject_b_d")))?,
         );
         fields.extend(
-            dleq.s
+            ring_id_hash
                 .to_field_elements()
-                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_s")))?,
+                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_ring_id_hash")))?,
+        );
+        fields.extend(
+            policy_id_hash
+                .to_field_elements()
+                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_policy_id_hash")))?,
+        );
+        fields.extend(
+            resource_hash
+                .to_field_elements()
+                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_resource_hash")))?,
+        );
+        fields.extend(
+            permission_hash.to_field_elements().ok_or_else(|| {
+                transfer_field_encoding_error(&format!("{label}_permission_hash"))
+            })?,
+        );
+        fields.extend(
+            Fq::from(statement.tier.as_u64())
+                .to_field_elements()
+                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_tier")))?,
+        );
+        fields.extend(
+            Fq::from(statement.target_timestamp)
+                .to_field_elements()
+                .ok_or_else(|| {
+                    transfer_field_encoding_error(&format!("{label}_target_timestamp"))
+                })?,
+        );
+        fields.extend(
+            salt.to_field_elements()
+                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_salt")))?,
+        );
+        fields.extend(
+            proof
+                .derived_pk
+                .to_field_elements()
+                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_derived_pk")))?,
+        );
+        fields.extend(
+            proof
+                .enc_cmt
+                .to_field_elements()
+                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_enc_cmt")))?,
+        );
+        fields.extend(
+            proof
+                .shared_point
+                .to_field_elements()
+                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_shared_point")))?,
+        );
+        fields.extend(
+            proof
+                .challenge
+                .to_field_elements()
+                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_challenge")))?,
+        );
+        fields.extend(
+            Fq::from_le_bytes_mod_order(&proof.response.to_bytes())
+                .to_field_elements()
+                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_response")))?,
         );
     }
 

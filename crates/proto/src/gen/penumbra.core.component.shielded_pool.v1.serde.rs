@@ -4974,6 +4974,9 @@ impl serde::Serialize for ShieldedInputPlan {
         if !self.threshold.is_empty() {
             len += 1;
         }
+        if self.asset_policy.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.ShieldedInputPlan", len)?;
         if let Some(v) = self.note.as_ref() {
             struct_ser.serialize_field("note", v)?;
@@ -5092,6 +5095,9 @@ impl serde::Serialize for ShieldedInputPlan {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("threshold", pbjson::private::base64::encode(&self.threshold).as_str())?;
         }
+        if let Some(v) = self.asset_policy.as_ref() {
+            struct_ser.serialize_field("assetPolicy", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -5151,6 +5157,8 @@ impl<'de> serde::Deserialize<'de> for ShieldedInputPlan {
             "dk_pub",
             "dkPub",
             "threshold",
+            "asset_policy",
+            "assetPolicy",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5182,6 +5190,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedInputPlan {
             RingPk,
             DkPub,
             Threshold,
+            AssetPolicy,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -5231,6 +5240,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedInputPlan {
                             "ringPk" | "ring_pk" => Ok(GeneratedField::RingPk),
                             "dkPub" | "dk_pub" => Ok(GeneratedField::DkPub),
                             "threshold" => Ok(GeneratedField::Threshold),
+                            "assetPolicy" | "asset_policy" => Ok(GeneratedField::AssetPolicy),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -5277,6 +5287,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedInputPlan {
                 let mut ring_pk__ = None;
                 let mut dk_pub__ = None;
                 let mut threshold__ = None;
+                let mut asset_policy__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Note => {
@@ -5477,6 +5488,12 @@ impl<'de> serde::Deserialize<'de> for ShieldedInputPlan {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::AssetPolicy => {
+                            if asset_policy__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetPolicy"));
+                            }
+                            asset_policy__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -5510,6 +5527,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedInputPlan {
                     ring_pk: ring_pk__.unwrap_or_default(),
                     dk_pub: dk_pub__.unwrap_or_default(),
                     threshold: threshold__.unwrap_or_default(),
+                    asset_policy: asset_policy__,
                 })
             }
         }
@@ -5636,6 +5654,9 @@ impl serde::Serialize for ShieldedOutputPlan {
             len += 1;
         }
         if !self.r_3.is_empty() {
+            len += 1;
+        }
+        if self.asset_policy.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.ShieldedOutputPlan", len)?;
@@ -5805,6 +5826,9 @@ impl serde::Serialize for ShieldedOutputPlan {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("r3", pbjson::private::base64::encode(&self.r_3).as_str())?;
         }
+        if let Some(v) = self.asset_policy.as_ref() {
+            struct_ser.serialize_field("assetPolicy", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -5888,6 +5912,8 @@ impl<'de> serde::Deserialize<'de> for ShieldedOutputPlan {
             "r2",
             "r_3",
             "r3",
+            "asset_policy",
+            "assetPolicy",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5930,6 +5956,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedOutputPlan {
             IsFlagged,
             R2,
             R3,
+            AssetPolicy,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -5990,6 +6017,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedOutputPlan {
                             "isFlagged" | "is_flagged" => Ok(GeneratedField::IsFlagged),
                             "r2" | "r_2" => Ok(GeneratedField::R2),
                             "r3" | "r_3" => Ok(GeneratedField::R3),
+                            "assetPolicy" | "asset_policy" => Ok(GeneratedField::AssetPolicy),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -6047,6 +6075,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedOutputPlan {
                 let mut is_flagged__ = None;
                 let mut r_2__ = None;
                 let mut r_3__ = None;
+                let mut asset_policy__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Value => {
@@ -6329,6 +6358,12 @@ impl<'de> serde::Deserialize<'de> for ShieldedOutputPlan {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::AssetPolicy => {
+                            if asset_policy__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetPolicy"));
+                            }
+                            asset_policy__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -6373,6 +6408,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedOutputPlan {
                     is_flagged: is_flagged__.unwrap_or_default(),
                     r_2: r_2__.unwrap_or_default(),
                     r_3: r_3__.unwrap_or_default(),
+                    asset_policy: asset_policy__,
                 })
             }
         }
@@ -7944,9 +7980,6 @@ impl serde::Serialize for TransferInputBody {
         if !self.compliance_ciphertext.is_empty() {
             len += 1;
         }
-        if !self.dleq_proof.is_empty() {
-            len += 1;
-        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.TransferInputBody", len)?;
         if let Some(v) = self.nullifier.as_ref() {
             struct_ser.serialize_field("nullifier", v)?;
@@ -7964,11 +7997,6 @@ impl serde::Serialize for TransferInputBody {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("complianceCiphertext", pbjson::private::base64::encode(&self.compliance_ciphertext).as_str())?;
         }
-        if !self.dleq_proof.is_empty() {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("dleqProof", pbjson::private::base64::encode(&self.dleq_proof).as_str())?;
-        }
         struct_ser.end()
     }
 }
@@ -7985,8 +8013,6 @@ impl<'de> serde::Deserialize<'de> for TransferInputBody {
             "encryptedBackref",
             "compliance_ciphertext",
             "complianceCiphertext",
-            "dleq_proof",
-            "dleqProof",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -7995,7 +8021,6 @@ impl<'de> serde::Deserialize<'de> for TransferInputBody {
             Rk,
             EncryptedBackref,
             ComplianceCiphertext,
-            DleqProof,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -8022,7 +8047,6 @@ impl<'de> serde::Deserialize<'de> for TransferInputBody {
                             "rk" => Ok(GeneratedField::Rk),
                             "encryptedBackref" | "encrypted_backref" => Ok(GeneratedField::EncryptedBackref),
                             "complianceCiphertext" | "compliance_ciphertext" => Ok(GeneratedField::ComplianceCiphertext),
-                            "dleqProof" | "dleq_proof" => Ok(GeneratedField::DleqProof),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -8046,7 +8070,6 @@ impl<'de> serde::Deserialize<'de> for TransferInputBody {
                 let mut rk__ = None;
                 let mut encrypted_backref__ = None;
                 let mut compliance_ciphertext__ = None;
-                let mut dleq_proof__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Nullifier => {
@@ -8077,14 +8100,6 @@ impl<'de> serde::Deserialize<'de> for TransferInputBody {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::DleqProof => {
-                            if dleq_proof__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("dleqProof"));
-                            }
-                            dleq_proof__ = 
-                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
-                            ;
-                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -8095,7 +8110,6 @@ impl<'de> serde::Deserialize<'de> for TransferInputBody {
                     rk: rk__,
                     encrypted_backref: encrypted_backref__.unwrap_or_default(),
                     compliance_ciphertext: compliance_ciphertext__.unwrap_or_default(),
-                    dleq_proof: dleq_proof__.unwrap_or_default(),
                 })
             }
         }
@@ -8122,7 +8136,7 @@ impl serde::Serialize for TransferOutputBody {
         if !self.compliance_ciphertext.is_empty() {
             len += 1;
         }
-        if !self.dleq_proofs.is_empty() {
+        if !self.orbis_upload_bundle.is_empty() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.shielded_pool.v1.TransferOutputBody", len)?;
@@ -8144,10 +8158,10 @@ impl serde::Serialize for TransferOutputBody {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("complianceCiphertext", pbjson::private::base64::encode(&self.compliance_ciphertext).as_str())?;
         }
-        if !self.dleq_proofs.is_empty() {
+        if !self.orbis_upload_bundle.is_empty() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("dleqProofs", pbjson::private::base64::encode(&self.dleq_proofs).as_str())?;
+            struct_ser.serialize_field("orbisUploadBundle", pbjson::private::base64::encode(&self.orbis_upload_bundle).as_str())?;
         }
         struct_ser.end()
     }
@@ -8167,8 +8181,8 @@ impl<'de> serde::Deserialize<'de> for TransferOutputBody {
             "ovkWrappedKey",
             "compliance_ciphertext",
             "complianceCiphertext",
-            "dleq_proofs",
-            "dleqProofs",
+            "orbis_upload_bundle",
+            "orbisUploadBundle",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -8177,7 +8191,7 @@ impl<'de> serde::Deserialize<'de> for TransferOutputBody {
             WrappedMemoKey,
             OvkWrappedKey,
             ComplianceCiphertext,
-            DleqProofs,
+            OrbisUploadBundle,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -8204,7 +8218,7 @@ impl<'de> serde::Deserialize<'de> for TransferOutputBody {
                             "wrappedMemoKey" | "wrapped_memo_key" => Ok(GeneratedField::WrappedMemoKey),
                             "ovkWrappedKey" | "ovk_wrapped_key" => Ok(GeneratedField::OvkWrappedKey),
                             "complianceCiphertext" | "compliance_ciphertext" => Ok(GeneratedField::ComplianceCiphertext),
-                            "dleqProofs" | "dleq_proofs" => Ok(GeneratedField::DleqProofs),
+                            "orbisUploadBundle" | "orbis_upload_bundle" => Ok(GeneratedField::OrbisUploadBundle),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -8228,7 +8242,7 @@ impl<'de> serde::Deserialize<'de> for TransferOutputBody {
                 let mut wrapped_memo_key__ = None;
                 let mut ovk_wrapped_key__ = None;
                 let mut compliance_ciphertext__ = None;
-                let mut dleq_proofs__ = None;
+                let mut orbis_upload_bundle__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::NotePayload => {
@@ -8261,11 +8275,11 @@ impl<'de> serde::Deserialize<'de> for TransferOutputBody {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::DleqProofs => {
-                            if dleq_proofs__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("dleqProofs"));
+                        GeneratedField::OrbisUploadBundle => {
+                            if orbis_upload_bundle__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("orbisUploadBundle"));
                             }
-                            dleq_proofs__ = 
+                            orbis_upload_bundle__ = 
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -8279,7 +8293,7 @@ impl<'de> serde::Deserialize<'de> for TransferOutputBody {
                     wrapped_memo_key: wrapped_memo_key__.unwrap_or_default(),
                     ovk_wrapped_key: ovk_wrapped_key__.unwrap_or_default(),
                     compliance_ciphertext: compliance_ciphertext__.unwrap_or_default(),
-                    dleq_proofs: dleq_proofs__.unwrap_or_default(),
+                    orbis_upload_bundle: orbis_upload_bundle__.unwrap_or_default(),
                 })
             }
         }

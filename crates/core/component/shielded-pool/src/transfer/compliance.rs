@@ -1,18 +1,19 @@
 use anyhow::{anyhow, ensure, Result};
-use decaf377::{Fq, Fr};
+use decaf377::Fr;
 use penumbra_sdk_asset::Value;
 use penumbra_sdk_compliance::{
-    compute_transfer_dleqs, derive_transfer_salt, encrypt_transfer, IndexedLeaf,
-    TransferComplianceCiphertext, TransferComplianceDleqProofs, TransferCompliancePublicInputs,
-    TRANSFER_DLEQ_BYTES, TRANSFER_WIRE_BYTES,
+    build_orbis_encrypted_seed_upload_package_with_randomness, derive_transfer_salt,
+    encrypt_transfer, AssetPolicy, IndexedLeaf, TransferComplianceCiphertext,
+    TransferCompliancePublicInputs, TransferOrbisUploadBundle, TransferTierKind,
+    TransferTierMetadataStatement, TRANSFER_WIRE_BYTES,
 };
 use rand::{rngs::StdRng, SeedableRng};
 
 use super::TransferOutputBody;
 use crate::{
     transfer::{
-        TransferComplianceCiphertextPublic, TransferComplianceDleqPublic,
-        TransferCompliancePrivate, TransferCompliancePublic,
+        TransferComplianceCiphertextPublic, TransferCompliancePrivate,
+        TransferComplianceProofPublic, TransferCompliancePublic, TransferTierRandomizers,
     },
     ShieldedOutputPlan,
 };
@@ -27,15 +28,26 @@ fn transfer_compliance_rng_seed(transfer_nonce_root: Fr) -> [u8; 32] {
     seed
 }
 
+fn transfer_orbis_upload_rng_seed(transfer_nonce_root: Fr) -> [u8; 32] {
+    let hash = blake2b_simd::Params::new()
+        .hash_length(32)
+        .personal(b"pnxfer-orbis-v1")
+        .hash(&transfer_nonce_root.to_bytes());
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(hash.as_bytes());
+    seed
+}
+
 pub(crate) fn build_transfer_compliance(
     outputs: &[ShieldedOutputPlan],
     sender_leaf: &penumbra_sdk_compliance::ComplianceLeaf,
+    asset_policy: &AssetPolicy,
     asset_indexed_leaf: &IndexedLeaf,
     target_timestamp: u64,
     transfer_nonce_root: Fr,
 ) -> Result<(
     TransferComplianceCiphertext,
-    TransferComplianceDleqProofs,
+    TransferOrbisUploadBundle,
     TransferCompliancePublic,
     TransferCompliancePrivate,
 )> {
@@ -90,50 +102,141 @@ pub(crate) fn build_transfer_compliance(
         detection_salt,
     )?;
 
-    let sender_k_core = Fr::rand(&mut rng);
-    let sender_k_ext = Fr::rand(&mut rng);
-    let output_k_core = Fr::rand(&mut rng);
-    let output_k_ext = Fr::rand(&mut rng);
+    let sender_b_d = sender_leaf
+        .address
+        .diversified_generator()
+        .vartime_compress_to_field();
+    let receiver_b_d = receiver_note
+        .address()
+        .diversified_generator()
+        .vartime_compress_to_field();
+    let policy_id = &asset_policy.ring.policy_id;
+    let ring_id = &asset_policy.ring.ring_id;
+    let resource = &asset_policy.ring.resource;
+    let permission = &asset_policy.ring.permission;
+    let mut upload_rng = StdRng::from_seed(transfer_orbis_upload_rng_seed(transfer_nonce_root));
+    let bundle = TransferOrbisUploadBundle {
+        sender_core: build_orbis_encrypted_seed_upload_package_with_randomness(
+            &mut upload_rng,
+            &ring_pk,
+            encryption.sender.core.seed,
+            encryption.sender.core.r,
+            TransferTierMetadataStatement::from_identifiers(
+                sender_b_d,
+                ring_id,
+                policy_id,
+                resource,
+                permission,
+                TransferTierKind::SenderCore,
+                target_timestamp,
+                sender_core_salt,
+            ),
+            ring_id,
+            policy_id,
+            resource,
+            permission,
+            TransferTierKind::SenderCore,
+            target_timestamp,
+            sender_core_salt,
+        )?,
+        sender_ext: build_orbis_encrypted_seed_upload_package_with_randomness(
+            &mut upload_rng,
+            &ring_pk,
+            encryption.sender.ext.seed,
+            encryption.sender.ext.r,
+            TransferTierMetadataStatement::from_identifiers(
+                sender_b_d,
+                ring_id,
+                policy_id,
+                resource,
+                permission,
+                TransferTierKind::SenderExt,
+                target_timestamp,
+                sender_ext_salt,
+            ),
+            ring_id,
+            policy_id,
+            resource,
+            permission,
+            TransferTierKind::SenderExt,
+            target_timestamp,
+            sender_ext_salt,
+        )?,
+        output_core: build_orbis_encrypted_seed_upload_package_with_randomness(
+            &mut upload_rng,
+            &ring_pk,
+            encryption.output.core.seed,
+            encryption.output.core.r,
+            TransferTierMetadataStatement::from_identifiers(
+                receiver_b_d,
+                ring_id,
+                policy_id,
+                resource,
+                permission,
+                TransferTierKind::OutputCore,
+                target_timestamp,
+                output_core_salt,
+            ),
+            ring_id,
+            policy_id,
+            resource,
+            permission,
+            TransferTierKind::OutputCore,
+            target_timestamp,
+            output_core_salt,
+        )?,
+        output_ext: build_orbis_encrypted_seed_upload_package_with_randomness(
+            &mut upload_rng,
+            &ring_pk,
+            encryption.output.ext.seed,
+            encryption.output.ext.r,
+            TransferTierMetadataStatement::from_identifiers(
+                receiver_b_d,
+                ring_id,
+                policy_id,
+                resource,
+                permission,
+                TransferTierKind::OutputExt,
+                target_timestamp,
+                output_ext_salt,
+            ),
+            ring_id,
+            policy_id,
+            resource,
+            permission,
+            TransferTierKind::OutputExt,
+            target_timestamp,
+            output_ext_salt,
+        )?,
+    };
 
-    let dleqs = compute_transfer_dleqs(
-        encryption.sender_r_core,
-        encryption.sender_r_ext,
-        encryption.output_r_core,
-        encryption.output_r_ext,
-        sender_k_core,
-        sender_k_ext,
-        output_k_core,
-        output_k_ext,
-        &sender_ack,
-        &receiver_ack,
-        asset_indexed_leaf.ring.policy_id_hash,
-        asset_indexed_leaf.ring.resource_hash,
-        asset_indexed_leaf.ring.permission_hash,
-        sender_core_salt,
-        sender_ext_salt,
-        output_core_salt,
-        output_ext_salt,
-        target_timestamp,
-    );
-
-    let public = transfer_compliance_public_from_parts(&encryption.ciphertext, &dleqs);
+    let public = transfer_compliance_public_from_parts(&encryption.ciphertext, &bundle)?;
     let private = TransferCompliancePrivate {
         transfer_nonce_root,
-        sender_r_core: encryption.sender_r_core,
-        sender_r_ext: encryption.sender_r_ext,
-        output_r_core: encryption.output_r_core,
-        output_r_ext: encryption.output_r_ext,
+        sender: TransferTierRandomizers {
+            core: encryption.sender.core.r,
+            ext: encryption.sender.ext.r,
+        },
+        output: TransferTierRandomizers {
+            core: encryption.output.core.r,
+            ext: encryption.output.ext.r,
+        },
         is_flagged,
     };
 
-    Ok((encryption.ciphertext, dleqs, public, private))
+    Ok((encryption.ciphertext, bundle, public, private))
 }
 
 pub(crate) fn receiver_output_transfer_compliance(
     ciphertext: &TransferComplianceCiphertext,
-    dleqs: &TransferComplianceDleqProofs,
+    bundle: &TransferOrbisUploadBundle,
 ) -> (Vec<u8>, Vec<u8>) {
-    (ciphertext.to_bytes(), dleqs.to_bytes())
+    (
+        ciphertext.to_bytes(),
+        bundle
+            .to_bytes()
+            .expect("Orbis upload bundle should serialize"),
+    )
 }
 
 pub(crate) fn change_output_transfer_compliance() -> (Vec<u8>, Vec<u8>) {
@@ -142,7 +245,7 @@ pub(crate) fn change_output_transfer_compliance() -> (Vec<u8>, Vec<u8>) {
 
 pub(crate) fn parse_transfer_output_compliance(
     outputs: &[TransferOutputBody],
-) -> Result<(TransferComplianceCiphertext, TransferComplianceDleqProofs)> {
+) -> Result<(TransferComplianceCiphertext, TransferOrbisUploadBundle)> {
     // Output 0 carries the receiver-leg compliance bundle. Output 1, when
     // present, is sender-owned change and must not carry transfer compliance bytes.
     let receiver_output = outputs
@@ -153,11 +256,6 @@ pub(crate) fn parse_transfer_output_compliance(
         "receiver output transfer compliance ciphertext must be {TRANSFER_WIRE_BYTES} bytes, got {}",
         receiver_output.compliance_ciphertext.len()
     );
-    ensure!(
-        receiver_output.dleq_proofs.len() == TRANSFER_DLEQ_BYTES,
-        "receiver output transfer DLEQ bundle must be {TRANSFER_DLEQ_BYTES} bytes, got {}",
-        receiver_output.dleq_proofs.len()
-    );
     for (index, output) in outputs.iter().enumerate().skip(1) {
         ensure!(
             output.compliance_ciphertext.is_empty(),
@@ -165,21 +263,23 @@ pub(crate) fn parse_transfer_output_compliance(
             index
         );
         ensure!(
-            output.dleq_proofs.is_empty(),
-            "change output {} transfer DLEQ proofs must be empty",
+            output.orbis_upload_bundle.is_empty(),
+            "change output {} Orbis upload bundle must be empty",
             index
         );
     }
+    let bundle = TransferOrbisUploadBundle::from_bytes(&receiver_output.orbis_upload_bundle)?;
+    bundle.validate()?;
     Ok((
         TransferComplianceCiphertext::from_bytes(&receiver_output.compliance_ciphertext)?,
-        TransferComplianceDleqProofs::from_bytes(&receiver_output.dleq_proofs)?,
+        bundle,
     ))
 }
 
 pub(crate) fn transfer_compliance_public_from_parts(
     ciphertext: &TransferComplianceCiphertext,
-    dleqs: &TransferComplianceDleqProofs,
-) -> TransferCompliancePublic {
+    bundle: &TransferOrbisUploadBundle,
+) -> Result<TransferCompliancePublic> {
     let TransferCompliancePublicInputs {
         sender_core_epk,
         sender_ext_epk,
@@ -196,43 +296,31 @@ pub(crate) fn transfer_compliance_public_from_parts(
         output_ext_ciphertext,
     } = ciphertext.to_transfer_circuit_public_inputs();
 
-    TransferCompliancePublic {
+    Ok(TransferCompliancePublic {
         detection_ciphertext: detection_ciphertext.to_vec(),
         sender_core: TransferComplianceCiphertextPublic {
             epk: sender_core_epk,
             c2: sender_core_c2,
             ciphertext: sender_core_ciphertext.to_vec(),
+            proof: TransferComplianceProofPublic::try_from_package(&bundle.sender_core)?,
         },
         sender_ext: TransferComplianceCiphertextPublic {
             epk: sender_ext_epk,
             c2: sender_ext_c2,
             ciphertext: sender_ext_ciphertext.to_vec(),
+            proof: TransferComplianceProofPublic::try_from_package(&bundle.sender_ext)?,
         },
         output_core: TransferComplianceCiphertextPublic {
             epk: output_core_epk,
             c2: output_core_c2,
             ciphertext: output_core_ciphertext.to_vec(),
+            proof: TransferComplianceProofPublic::try_from_package(&bundle.output_core)?,
         },
         output_ext: TransferComplianceCiphertextPublic {
             epk: output_ext_epk,
             c2: output_ext_c2,
             ciphertext: output_ext_ciphertext.to_vec(),
+            proof: TransferComplianceProofPublic::try_from_package(&bundle.output_ext)?,
         },
-        sender_core_dleq: TransferComplianceDleqPublic {
-            c: dleqs.sender_core.c,
-            s: Fq::from_le_bytes_mod_order(&dleqs.sender_core.s.to_bytes()),
-        },
-        sender_ext_dleq: TransferComplianceDleqPublic {
-            c: dleqs.sender_ext.c,
-            s: Fq::from_le_bytes_mod_order(&dleqs.sender_ext.s.to_bytes()),
-        },
-        output_core_dleq: TransferComplianceDleqPublic {
-            c: dleqs.output_core.c,
-            s: Fq::from_le_bytes_mod_order(&dleqs.output_core.s.to_bytes()),
-        },
-        output_ext_dleq: TransferComplianceDleqPublic {
-            c: dleqs.output_ext.c,
-            s: Fq::from_le_bytes_mod_order(&dleqs.output_ext.s.to_bytes()),
-        },
-    }
+    })
 }

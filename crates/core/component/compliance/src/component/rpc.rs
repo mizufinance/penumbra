@@ -104,6 +104,7 @@ impl QueryService for Server {
             is_regulated: proof_data.is_regulated,
             dk_pub: vec![],    // Policy data not available from node
             threshold: vec![], // Policy data not available from node
+            asset_policy: None,
         };
 
         Ok(tonic::Response::new(response))

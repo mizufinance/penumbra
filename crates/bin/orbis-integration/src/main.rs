@@ -22,6 +22,8 @@ const NODE1_CONTAINER: &str = "orbis-integration-node-1";
 const NODE2_CONTAINER: &str = "orbis-integration-node-2";
 const NODE3_CONTAINER: &str = "orbis-integration-node-3";
 const ORBIS_NAMESPACE: &str = "orbis";
+const ORBIS_RESOURCE: &str = "document";
+const ORBIS_PERMISSION: &str = "read";
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -144,11 +146,19 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
     );
     eprintln!("orbis-integration: DKG message: {}", dkg.message);
     let ring = wait_for_latest_ring(&node1).await?;
+    let policy_id = node1.add_policy().await?;
     fs::write(
         &repo.ring_info_file,
         format!(
-            "RING_PK={}\nRING_ID={}\nRING_PEER_IDS={},{},{}\n",
-            ring.ring_pk_hex, ring.ring_id, info1.peer_id, info2.peer_id, info3.peer_id
+            "RING_PK={}\nRING_ID={}\nRING_PEER_IDS={},{},{}\nORBIS_POLICY_ID={}\nORBIS_RESOURCE={}\nORBIS_PERMISSION={}\n",
+            ring.ring_pk_hex,
+            ring.ring_id,
+            info1.peer_id,
+            info2.peer_id,
+            info3.peer_id,
+            policy_id,
+            ORBIS_RESOURCE,
+            ORBIS_PERMISSION
         ),
     )
     .with_context(|| format!("failed to write {}", repo.ring_info_file.display()))?;
@@ -189,6 +199,14 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
             "500000000000000000000",
             "--ring-pk-hex",
             &ring.ring_pk_hex,
+            "--ring-id",
+            &ring.ring_id,
+            "--policy-id",
+            &policy_id,
+            "--resource",
+            ORBIS_RESOURCE,
+            "--permission",
+            ORBIS_PERMISSION,
         ],
     )?;
     sync_wallets(repo, &env, &["ALICE_HOME", "BOB_HOME", "CHARLIE_HOME"])?;
@@ -537,11 +555,7 @@ async fn verify(repo: &RepoPaths) -> Result<()> {
                     .arg("--known-address")
                     .arg(env.get("CHARLIE_ADDRESS")?)
                     .arg("--orbis-endpoint")
-                    .arg(NODE1_ENDPOINT)
-                    .arg("--ring-pk-hex")
-                    .arg(ring_info.get("RING_PK")?)
-                    .arg("--ring-id")
-                    .arg(ring_info.get("RING_ID")?),
+                    .arg(NODE1_ENDPOINT),
             )?;
 
             let audit_count = count_json_array(&audit_file)?;
@@ -772,7 +786,10 @@ where
 }
 
 fn shell_escape(arg: &str) -> String {
-    if arg.chars().all(|ch| ch.is_ascii_alphanumeric() || "/._:-".contains(ch)) {
+    if arg
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || "/._:-".contains(ch))
+    {
         arg.to_string()
     } else {
         format!("{arg:?}")

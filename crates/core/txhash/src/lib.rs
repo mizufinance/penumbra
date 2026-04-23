@@ -1,5 +1,5 @@
 // Requires nightly.
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 mod auth_hash;
 mod context;
 mod effect_hash;

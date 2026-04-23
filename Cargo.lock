@@ -6328,6 +6328,7 @@ dependencies = [
 name = "penumbra-sdk-compliance"
 version = "2.1.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "ark-ff",
  "ark-groth16",
@@ -6346,6 +6347,7 @@ dependencies = [
  "decaf377-fmd",
  "decaf377-ka",
  "hex",
+ "hkdf 0.12.4",
  "once_cell",
  "penumbra-sdk-asset",
  "penumbra-sdk-keys",

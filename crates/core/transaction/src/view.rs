@@ -325,7 +325,6 @@ mod tests {
                                     ),
                                     encrypted_backref: EncryptedBackref::dummy(),
                                     compliance_ciphertext: Vec::new(),
-                                    dleq_proof: Vec::new(),
                                 }],
                                 withdrawal: Ics20Withdrawal {
                                     destination_chain_address: "cosmos1destination".to_string(),

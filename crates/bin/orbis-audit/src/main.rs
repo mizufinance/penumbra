@@ -8,8 +8,8 @@ use clap::Parser;
 use decaf377::{Element, Fq, Fr};
 use penumbra_orbis_client::OrbisClient;
 use penumbra_sdk_compliance::{
-    compute_adjusted_reader_pk, decrypt_tier_bytes, derive_compliance_scalar, recover_seed,
-    TransferComplianceCiphertext,
+    decrypt_orbis_reencrypted_seed, decrypt_tier_bytes, OrbisEncryptedSeedUploadPackage,
+    TransferComplianceCiphertext, TransferOrbisUploadBundle,
 };
 use penumbra_sdk_keys::Address;
 use penumbra_sdk_num::Amount;
@@ -44,12 +44,6 @@ struct Args {
     #[clap(long)]
     orbis_endpoint: String,
 
-    #[clap(long)]
-    ring_id: Option<String>,
-
-    #[clap(long)]
-    ring_pk_hex: Option<String>,
-
     #[clap(long = "known-address")]
     known_addresses: Vec<String>,
 }
@@ -80,19 +74,16 @@ struct AuditEntry {
 }
 
 #[derive(Clone)]
-struct OrbisContext {
+struct PackageObjectContext {
     object_id: String,
-    enc_cmt: Element,
+    package: OrbisEncryptedSeedUploadPackage,
 }
 
 #[derive(Clone)]
 struct AuditContext<'a> {
     cli: &'a OrbisClient,
-    orbis: &'a OrbisContext,
     dk: &'a Fr,
     dk_pub: &'a Element,
-    ack: Element,
-    b_d_hex: &'a str,
     subject_transmission_key_hex: &'a str,
     known_transmission_keys: &'a HashSet<String>,
     tier_mode: &'a str,
@@ -131,10 +122,6 @@ async fn main() -> Result<()> {
         .parse()
         .context("failed to parse --sender-address as Penumbra address")?;
     let subject_transmission_key_hex = hex::encode(subject_address.transmission_key().0);
-    let b_d_fq = subject_address
-        .diversified_generator()
-        .vartime_compress_to_field();
-    let b_d_hex = hex::encode(b_d_fq.to_bytes());
 
     let mut known_transmission_keys = HashSet::new();
     known_transmission_keys.insert(subject_transmission_key_hex.clone());
@@ -146,34 +133,10 @@ async fn main() -> Result<()> {
     }
 
     let cli = OrbisClient::new(args.orbis_endpoint.clone());
-    let (ring_pk, ring_id, orbis_ring_pk_hex) = match (&args.ring_pk_hex, &args.ring_id) {
-        (Some(pk_hex), Some(id)) => {
-            let bytes = hex::decode(pk_hex).context("invalid --ring-pk-hex")?;
-            let arr: [u8; 32] = bytes
-                .try_into()
-                .map_err(|_| anyhow!("--ring-pk-hex must be 32 bytes"))?;
-            let pk = decaf377::Encoding(arr)
-                .vartime_decompress()
-                .map_err(|_| anyhow!("--ring-pk-hex is not a valid curve point"))?;
-            (pk, id.clone(), pk_hex.clone())
-        }
-        _ => {
-            let ring = cli.get_latest_ring().await?;
-            (ring.ring_pk, ring.ring_id, ring.ring_pk_hex)
-        }
-    };
-    let d = derive_compliance_scalar(b_d_fq);
-    let d_fr = Fr::from_le_bytes_mod_order(&d.to_bytes());
-    let ack = ring_pk * d_fr;
-
     eprintln!(
-        "orbis-audit: ring_pk={}, ring_id={}, target={}...",
-        &orbis_ring_pk_hex[..16],
-        &ring_id,
-        &subject_transmission_key_hex[..16],
+        "orbis-audit: target={}...",
+        &subject_transmission_key_hex[..16]
     );
-
-    let orbis = setup_orbis(&cli, &orbis_ring_pk_hex, &ring_id, &b_d_hex).await?;
 
     let file = File::open(&args.input).context("failed to open input file")?;
     let reader = BufReader::new(file);
@@ -186,11 +149,8 @@ async fn main() -> Result<()> {
     let channel = connect_to_node(&args.node).await?;
     let ctx = AuditContext {
         cli: &cli,
-        orbis: &orbis,
         dk: &dk,
         dk_pub: &dk_pub,
-        ack,
-        b_d_hex: &b_d_hex,
         subject_transmission_key_hex: &subject_transmission_key_hex,
         known_transmission_keys: &known_transmission_keys,
         tier_mode,
@@ -217,12 +177,12 @@ async fn main() -> Result<()> {
             }
 
             let action = &body.actions[tx_ref.action_index];
-            let Some(ct) = extract_transfer_ciphertext(action) else {
+            let Some((ct, bundle)) = extract_transfer_data(action) else {
                 no_ciphertext += 1;
                 continue;
             };
 
-            if let Some(entry) = audit_transfer(tx_ref, &ct, &ctx).await? {
+            if let Some(entry) = audit_transfer(tx_ref, &ct, &bundle, &ctx).await? {
                 decrypted += 1;
                 results.push(entry);
             }
@@ -251,12 +211,13 @@ async fn main() -> Result<()> {
 async fn audit_transfer(
     tx_ref: &DetectedTxRef,
     ct: &TransferComplianceCiphertext,
+    bundle: &TransferOrbisUploadBundle,
     ctx: &AuditContext<'_>,
 ) -> Result<Option<AuditEntry>> {
-    if let Some(candidate) = try_receiver_match(ct, ctx).await? {
+    if let Some(candidate) = try_receiver_match(ct, bundle, ctx).await? {
         return Ok(Some(candidate_to_entry(tx_ref, candidate, ctx)));
     }
-    if let Some(candidate) = try_sender_match(ct, ctx).await? {
+    if let Some(candidate) = try_sender_match(ct, bundle, ctx).await? {
         return Ok(Some(candidate_to_entry(tx_ref, candidate, ctx)));
     }
     Ok(None)
@@ -264,28 +225,21 @@ async fn audit_transfer(
 
 async fn try_receiver_match(
     ct: &TransferComplianceCiphertext,
+    bundle: &TransferOrbisUploadBundle,
     ctx: &AuditContext<'_>,
 ) -> Result<Option<TransferMatch>> {
-    let output_core = orbis_pre_for_epk(
-        ctx.cli,
-        ctx.orbis,
-        ctx.dk_pub,
-        &ct.output_core_epk,
-        ctx.b_d_hex,
-    )
-    .await?;
-    let output_core_seed = recover_seed(&output_core, ctx.dk, &ctx.ack, &ct.output_core_c2);
+    let ring_id = bundle.output_core.ring_id.clone();
+    let TransferOrbisUploadBundle {
+        output_core,
+        output_ext,
+        ..
+    } = bundle.clone();
+    let output_core_seed =
+        pre_package_seed(ctx.cli, &ring_id, output_core, ctx.dk, ctx.dk_pub).await?;
     let amount = decrypt_amount_with_seed(output_core_seed, &ct.encrypted_output_core)?;
 
-    let output_ext = orbis_pre_for_epk(
-        ctx.cli,
-        ctx.orbis,
-        ctx.dk_pub,
-        &ct.output_ext_epk,
-        ctx.b_d_hex,
-    )
-    .await?;
-    let output_ext_seed = recover_seed(&output_ext, ctx.dk, &ctx.ack, &ct.output_ext_c2);
+    let output_ext_seed =
+        pre_package_seed(ctx.cli, &ring_id, output_ext, ctx.dk, ctx.dk_pub).await?;
     let sender = match decrypt_address_with_seed(output_ext_seed, &ct.encrypted_output_ext) {
         Ok(sender) => sender,
         Err(_) => return Ok(None),
@@ -303,28 +257,21 @@ async fn try_receiver_match(
 
 async fn try_sender_match(
     ct: &TransferComplianceCiphertext,
+    bundle: &TransferOrbisUploadBundle,
     ctx: &AuditContext<'_>,
 ) -> Result<Option<TransferMatch>> {
-    let sender_core = orbis_pre_for_epk(
-        ctx.cli,
-        ctx.orbis,
-        ctx.dk_pub,
-        &ct.sender_core_epk,
-        ctx.b_d_hex,
-    )
-    .await?;
-    let sender_core_seed = recover_seed(&sender_core, ctx.dk, &ctx.ack, &ct.sender_core_c2);
+    let ring_id = bundle.sender_core.ring_id.clone();
+    let TransferOrbisUploadBundle {
+        sender_core,
+        sender_ext,
+        ..
+    } = bundle.clone();
+    let sender_core_seed =
+        pre_package_seed(ctx.cli, &ring_id, sender_core, ctx.dk, ctx.dk_pub).await?;
     let amount = decrypt_amount_with_seed(sender_core_seed, &ct.encrypted_sender_core)?;
 
-    let sender_ext = orbis_pre_for_epk(
-        ctx.cli,
-        ctx.orbis,
-        ctx.dk_pub,
-        &ct.sender_ext_epk,
-        ctx.b_d_hex,
-    )
-    .await?;
-    let sender_ext_seed = recover_seed(&sender_ext, ctx.dk, &ctx.ack, &ct.sender_ext_c2);
+    let sender_ext_seed =
+        pre_package_seed(ctx.cli, &ring_id, sender_ext, ctx.dk, ctx.dk_pub).await?;
     let receiver = match decrypt_address_with_seed(sender_ext_seed, &ct.encrypted_sender_ext) {
         Ok(receiver) => receiver,
         Err(_) => return Ok(None),
@@ -399,63 +346,49 @@ fn decrypt_address_with_seed(seed: Fq, encrypted: &[u8]) -> Result<AddressData> 
     })
 }
 
-async fn setup_orbis(
+async fn ensure_package_object(
     cli: &OrbisClient,
-    ring_pk_hex: &str,
     ring_id: &str,
-    derivation_hex: &str,
-) -> Result<OrbisContext> {
-    eprintln!("orbis-audit: Setting up Orbis ACP...");
-    let policy_id = cli.add_policy().await?;
-    eprintln!("orbis-audit: policy_id={policy_id}");
-
-    let store_secret = cli
-        .store_secret(ring_pk_hex, ring_id, &policy_id, derivation_hex)
+    package: OrbisEncryptedSeedUploadPackage,
+) -> Result<PackageObjectContext> {
+    package.validate()?;
+    let stored = cli.store_encrypted_seed_package(ring_id, &package).await?;
+    cli.register_object(&package.policy_id, &stored.object_id)
         .await?;
-    let object_id = store_secret.object_id;
-    let enc_cmt_hex = store_secret.enc_cmt_hex;
-    eprintln!("orbis-audit: object_id={object_id}");
-
-    cli.register_object(&policy_id, &object_id).await?;
-    cli.set_relationship(&policy_id, &object_id).await?;
-    eprintln!("orbis-audit: ACP configured");
-
-    let enc_cmt_bytes = hex::decode(&enc_cmt_hex).context("invalid enc_cmt hex")?;
-    let enc_cmt_arr: [u8; 32] = enc_cmt_bytes
-        .try_into()
-        .map_err(|_| anyhow!("enc_cmt should be 32 bytes"))?;
-    let enc_cmt = decaf377::Encoding(enc_cmt_arr)
-        .vartime_decompress()
-        .map_err(|_| anyhow!("invalid enc_cmt curve point"))?;
-    eprintln!(
-        "orbis-audit: enc_cmt={}",
-        hex::encode(&enc_cmt.vartime_compress().0[..8])
-    );
-
-    Ok(OrbisContext { object_id, enc_cmt })
+    cli.set_relationship(&package.policy_id, &stored.object_id)
+        .await?;
+    Ok(PackageObjectContext {
+        object_id: stored.object_id,
+        package,
+    })
 }
 
-async fn orbis_pre_for_epk(
+async fn pre_package_seed(
     cli: &OrbisClient,
-    ctx: &OrbisContext,
-    pk_issuer: &Element,
-    epk_chain: &Element,
-    derivation_hex: &str,
-) -> Result<Element> {
-    let adjusted_pk = compute_adjusted_reader_pk(pk_issuer, epk_chain, &ctx.enc_cmt);
-    let adjusted_pk_hex = hex::encode(adjusted_pk.vartime_compress().0);
-    let xnc_hex = cli
-        .pre_xnc_only(&adjusted_pk_hex, &ctx.object_id, derivation_hex)
-        .await?
-        .xnc_cmt_hex;
+    ring_id: &str,
+    package: OrbisEncryptedSeedUploadPackage,
+    reader_sk: &Fr,
+    reader_pk: &Element,
+) -> Result<Fq> {
+    let object = ensure_package_object(cli, ring_id, package).await?;
+    let pre = cli
+        .start_pre(
+            &hex::encode(reader_pk.vartime_compress().0),
+            &object.object_id,
+            &hex::encode(object.package.derivation_bytes()),
+            Some(&object.package.salt),
+            Some(object.package.timestamp),
+        )
+        .await?;
 
-    let xnc_bytes = hex::decode(&xnc_hex).context("invalid xnc_cmt hex from PRE")?;
+    let xnc_bytes = hex::decode(&pre.xnc_cmt_hex).context("invalid xnc_cmt hex from PRE")?;
     let xnc_arr: [u8; 32] = xnc_bytes
         .try_into()
         .map_err(|_| anyhow!("xnc_cmt should be 32 bytes"))?;
-    decaf377::Encoding(xnc_arr)
+    let xnc_cmt = decaf377::Encoding(xnc_arr)
         .vartime_decompress()
-        .map_err(|_| anyhow!("invalid xnc_cmt curve point"))
+        .map_err(|_| anyhow!("invalid xnc_cmt curve point"))?;
+    decrypt_orbis_reencrypted_seed(&object.package, reader_sk, &xnc_cmt, &pre.secret)
 }
 
 fn parse_fr(hex_str: &str, label: &str) -> Result<Fr> {
@@ -471,9 +404,9 @@ fn parse_fr(hex_str: &str, label: &str) -> Result<Fr> {
     Ok(Fr::from_le_bytes_mod_order(&arr))
 }
 
-fn extract_transfer_ciphertext(
+fn extract_transfer_data(
     action: &penumbra_sdk_proto::core::transaction::v1::Action,
-) -> Option<TransferComplianceCiphertext> {
+) -> Option<(TransferComplianceCiphertext, TransferOrbisUploadBundle)> {
     use penumbra_sdk_proto::core::transaction::v1::action::Action as ActionEnum;
 
     let ActionEnum::Transfer(transfer) = action.action.as_ref()? else {
@@ -485,17 +418,29 @@ fn extract_transfer_ciphertext(
         .iter()
         .find(|output| !output.compliance_ciphertext.is_empty())?;
 
-    match TransferComplianceCiphertext::from_bytes(&output.compliance_ciphertext) {
-        Ok(ct) => Some(ct),
+    let ct = match TransferComplianceCiphertext::from_bytes(&output.compliance_ciphertext) {
+        Ok(ct) => ct,
         Err(error) => {
             eprintln!(
                 "orbis-audit: ciphertext deserialization failed ({} bytes): {}",
                 output.compliance_ciphertext.len(),
                 error
             );
-            None
+            return None;
         }
-    }
+    };
+    let bundle = match TransferOrbisUploadBundle::from_bytes(&output.orbis_upload_bundle) {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            eprintln!(
+                "orbis-audit: upload bundle deserialization failed ({} bytes): {}",
+                output.orbis_upload_bundle.len(),
+                error
+            );
+            return None;
+        }
+    };
+    Some((ct, bundle))
 }
 
 async fn connect_to_node(node_url: &Url) -> Result<Channel> {
@@ -534,8 +479,8 @@ mod tests {
     use super::*;
     use decaf377::{Element, Fr};
     use penumbra_sdk_asset::{asset, Value};
-    use penumbra_sdk_compliance::issuer_keys::DetectionKey;
     use penumbra_sdk_compliance::transfer::encrypt_transfer;
+    use penumbra_sdk_compliance::{derive_compliance_scalar, issuer_keys::DetectionKey};
     use penumbra_sdk_keys::{keys::AddressIndex, test_keys};
     use penumbra_sdk_num::Amount;
     use penumbra_sdk_proto::core::component::shielded_pool::v1::{
@@ -580,10 +525,6 @@ mod tests {
 
     fn dummy_context<'a>(tier_mode: &'a str, subject: &'a str) -> AuditContext<'a> {
         let cli = Box::leak(Box::new(OrbisClient::new("http://127.0.0.1:8080")));
-        let orbis = Box::leak(Box::new(OrbisContext {
-            object_id: "object".to_string(),
-            enc_cmt: Element::GENERATOR,
-        }));
         let dk = Box::leak(Box::new(Fr::from(3u64)));
         let dk_pub = Box::leak(Box::new(Element::GENERATOR * Fr::from(3u64)));
         let mut known_transmission_keys = HashSet::new();
@@ -592,11 +533,8 @@ mod tests {
 
         AuditContext {
             cli,
-            orbis,
             dk,
             dk_pub,
-            ack: Element::GENERATOR,
-            b_d_hex: "00",
             subject_transmission_key_hex: subject,
             known_transmission_keys,
             tier_mode,
@@ -604,7 +542,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_transfer_ciphertext_ignores_non_transfer_actions() {
+    fn extract_transfer_data_ignores_non_transfer_actions() {
         let split_action = penumbra_sdk_proto::core::transaction::v1::Action {
             action: Some(Action::Split(Split {
                 body: Some(SplitBody::default()),
@@ -618,13 +556,131 @@ mod tests {
             })),
         };
 
-        assert!(extract_transfer_ciphertext(&split_action).is_none());
-        assert!(extract_transfer_ciphertext(&consolidate_action).is_none());
+        assert!(extract_transfer_data(&split_action).is_none());
+        assert!(extract_transfer_data(&consolidate_action).is_none());
+    }
+
+    fn make_upload_bundle_bytes() -> Vec<u8> {
+        let mut rng = rand_core::OsRng;
+        let ring_sk = Fr::rand(&mut rng);
+        let ring_pk = Element::GENERATOR * ring_sk;
+        let sender = test_keys::ADDRESS_0.clone();
+        let receiver = test_keys::FULL_VIEWING_KEY
+            .payment_address(AddressIndex::from(1u32))
+            .0;
+        let sender_b_d = sender.diversified_generator().vartime_compress_to_field();
+        let receiver_b_d = receiver.diversified_generator().vartime_compress_to_field();
+        let policy_id = "policy-id";
+        let resource = "document";
+        let permission = "read";
+        let ring_id = "ring-id";
+        let timestamp = 1_700_000_000;
+        let sender_core_salt = decaf377::Fq::from(11u64);
+        let sender_ext_salt = decaf377::Fq::from(12u64);
+        let output_core_salt = decaf377::Fq::from(13u64);
+        let output_ext_salt = decaf377::Fq::from(14u64);
+
+        let bundle = TransferOrbisUploadBundle {
+            sender_core: penumbra_sdk_compliance::build_orbis_encrypted_seed_upload_package(
+                &mut rng,
+                &ring_pk,
+                decaf377::Fq::from(21u64),
+                penumbra_sdk_compliance::TransferTierMetadataStatement::from_identifiers(
+                    sender_b_d,
+                    ring_id,
+                    policy_id,
+                    resource,
+                    permission,
+                    penumbra_sdk_compliance::TransferTierKind::SenderCore,
+                    timestamp,
+                    sender_core_salt,
+                ),
+                ring_id,
+                policy_id,
+                resource,
+                permission,
+                penumbra_sdk_compliance::TransferTierKind::SenderCore,
+                timestamp,
+                sender_core_salt,
+            )
+            .expect("sender_core package should build"),
+            sender_ext: penumbra_sdk_compliance::build_orbis_encrypted_seed_upload_package(
+                &mut rng,
+                &ring_pk,
+                decaf377::Fq::from(22u64),
+                penumbra_sdk_compliance::TransferTierMetadataStatement::from_identifiers(
+                    sender_b_d,
+                    ring_id,
+                    policy_id,
+                    resource,
+                    permission,
+                    penumbra_sdk_compliance::TransferTierKind::SenderExt,
+                    timestamp,
+                    sender_ext_salt,
+                ),
+                ring_id,
+                policy_id,
+                resource,
+                permission,
+                penumbra_sdk_compliance::TransferTierKind::SenderExt,
+                timestamp,
+                sender_ext_salt,
+            )
+            .expect("sender_ext package should build"),
+            output_core: penumbra_sdk_compliance::build_orbis_encrypted_seed_upload_package(
+                &mut rng,
+                &ring_pk,
+                decaf377::Fq::from(23u64),
+                penumbra_sdk_compliance::TransferTierMetadataStatement::from_identifiers(
+                    receiver_b_d,
+                    ring_id,
+                    policy_id,
+                    resource,
+                    permission,
+                    penumbra_sdk_compliance::TransferTierKind::OutputCore,
+                    timestamp,
+                    output_core_salt,
+                ),
+                ring_id,
+                policy_id,
+                resource,
+                permission,
+                penumbra_sdk_compliance::TransferTierKind::OutputCore,
+                timestamp,
+                output_core_salt,
+            )
+            .expect("output_core package should build"),
+            output_ext: penumbra_sdk_compliance::build_orbis_encrypted_seed_upload_package(
+                &mut rng,
+                &ring_pk,
+                decaf377::Fq::from(24u64),
+                penumbra_sdk_compliance::TransferTierMetadataStatement::from_identifiers(
+                    receiver_b_d,
+                    ring_id,
+                    policy_id,
+                    resource,
+                    permission,
+                    penumbra_sdk_compliance::TransferTierKind::OutputExt,
+                    timestamp,
+                    output_ext_salt,
+                ),
+                ring_id,
+                policy_id,
+                resource,
+                permission,
+                penumbra_sdk_compliance::TransferTierKind::OutputExt,
+                timestamp,
+                output_ext_salt,
+            )
+            .expect("output_ext package should build"),
+        };
+        bundle.to_bytes().expect("bundle should serialize")
     }
 
     #[test]
-    fn extract_transfer_ciphertext_reads_first_non_empty_transfer_output() {
+    fn extract_transfer_data_reads_first_non_empty_transfer_output() {
         let ciphertext_bytes = make_transfer_ciphertext_bytes();
+        let bundle_bytes = make_upload_bundle_bytes();
         let transfer_action = penumbra_sdk_proto::core::transaction::v1::Action {
             action: Some(Action::Transfer(Transfer {
                 body: Some(TransferBody {
@@ -632,6 +688,7 @@ mod tests {
                         TransferOutputBody::default(),
                         TransferOutputBody {
                             compliance_ciphertext: ciphertext_bytes.clone(),
+                            orbis_upload_bundle: bundle_bytes.clone(),
                             ..Default::default()
                         },
                     ],
@@ -641,9 +698,13 @@ mod tests {
             })),
         };
 
-        let extracted = extract_transfer_ciphertext(&transfer_action)
-            .expect("transfer action should expose a valid ciphertext");
-        assert_eq!(extracted.to_bytes(), ciphertext_bytes);
+        let (ciphertext, bundle) =
+            extract_transfer_data(&transfer_action).expect("transfer action should expose data");
+        assert_eq!(ciphertext.to_bytes(), ciphertext_bytes);
+        assert_eq!(
+            bundle.to_bytes().expect("bundle should serialize"),
+            bundle_bytes
+        );
     }
 
     #[test]

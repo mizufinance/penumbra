@@ -112,6 +112,8 @@ message ComplianceAssetStatusResponse {
   // Transfers at or above this amount are encrypted to issuer's DK instead of user's daily key.
   // u128::MAX means never flag.
   bytes threshold = 5;
+  // Full asset policy for regulated assets.
+  AssetPolicy asset_policy = 6;
 }
 
 // Request for querying the current compliance tree anchors.

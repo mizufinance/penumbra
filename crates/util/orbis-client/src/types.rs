@@ -1,23 +1,5 @@
 use decaf377::Element;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SecretEnvelope {
-    pub enc_cmt: Vec<u8>,
-    pub encrypted_data: Vec<u8>,
-    pub nonce: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PreparedSecret {
-    pub encrypted_document: Vec<u8>,
-    pub enc_cmt: Vec<u8>,
-    pub shared_point: Vec<u8>,
-    pub challenge: Vec<u8>,
-    pub response: Vec<u8>,
-    pub metadata: Vec<u8>,
-    pub derived_pk: Option<Vec<u8>>,
-}
+use penumbra_sdk_compliance::OrbisSecretEnvelope;
 
 #[derive(Debug, Clone)]
 pub struct DkgResult {
@@ -40,6 +22,7 @@ pub struct RingInfo {
     pub ring_pk_hex: String,
 }
 
+/// Result of storing an encrypted-seed object in Orbis.
 #[derive(Debug, Clone)]
 pub struct StoreSecretResult {
     pub status: String,
@@ -48,10 +31,11 @@ pub struct StoreSecretResult {
     pub object_id: String,
     pub ring_id: String,
     pub signature: String,
-    pub enc_cmt_hex: String,
 }
 
+/// Result of asking Orbis to PRE an encrypted-seed object.
 #[derive(Debug, Clone)]
 pub struct PreResult {
     pub xnc_cmt_hex: String,
+    pub secret: OrbisSecretEnvelope,
 }

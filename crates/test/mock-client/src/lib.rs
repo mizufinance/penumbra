@@ -380,6 +380,13 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
         ))
     }
 
+    async fn get_asset_policy(
+        &self,
+        asset_id: penumbra_sdk_asset::asset::Id,
+    ) -> anyhow::Result<Option<penumbra_sdk_compliance::AssetPolicy>> {
+        self.state.get_asset_policy(asset_id).await
+    }
+
     async fn get_user_proof(
         &self,
         address: &penumbra_sdk_keys::Address,
@@ -453,6 +460,7 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
         let compliance_anchor = tct::StateCommitment(user_tree.root().0);
 
         let mut asset_proofs = BTreeMap::new();
+        let mut asset_policies = BTreeMap::new();
         let mut user_proofs = BTreeMap::new();
 
         for (address, asset_id) in queries {
@@ -492,6 +500,20 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
 
                     (MerklePath::from_auth_path(auth_path), pos, leaf)
                 };
+
+                if is_regulated {
+                    let policy =
+                        self.state
+                            .get_asset_policy(*asset_id)
+                            .await?
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "missing asset policy for regulated asset {}",
+                                    asset_id
+                                )
+                            })?;
+                    asset_policies.insert(*asset_id, policy);
+                }
 
                 asset_proofs.insert(*asset_id, (path, position, indexed_leaf, is_regulated));
             }
@@ -559,6 +581,7 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
             compliance_anchor,
             asset_anchor,
             asset_proofs,
+            asset_policies,
             user_proofs,
         })
     }

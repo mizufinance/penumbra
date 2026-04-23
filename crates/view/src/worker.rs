@@ -203,11 +203,7 @@ impl Worker {
             // Also store the asset policy in SQLite for direct lookups
             if event.is_regulated {
                 self.storage
-                    .store_asset_policy(
-                        &event.asset_id,
-                        &event.indexed_leaf.params.dk_pub,
-                        event.indexed_leaf.params.threshold,
-                    )
+                    .store_asset_policy(&event.asset_id, &event.asset_policy)
                     .await?;
             }
         }

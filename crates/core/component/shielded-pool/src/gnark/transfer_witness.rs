@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use decaf377::{Encoding, Fq};
+use penumbra_sdk_compliance::TransferTierMetadataStatement;
 
 use crate::{
     gnark::typed::{
@@ -10,8 +11,7 @@ use crate::{
     public_input_hash::{transfer_statement_fields, transfer_statement_hash_from_public},
     transfer::{
         transfer_input_count, transfer_output_count, TransferComplianceCiphertextPublic,
-        TransferComplianceDleqPublic, TransferProofPrivate, TransferProofPublic,
-        TRANSFER_PROOF_LABEL,
+        TransferProofPrivate, TransferProofPublic, TRANSFER_PROOF_LABEL,
     },
 };
 
@@ -59,9 +59,26 @@ pub struct TransferOutputWitnessV1 {
 pub struct TransferComplianceCiphertextWitnessV1 {
     pub c2: [u8; 32],
     pub ciphertext: Vec<[u8; 32]>,
-    pub dleq_c: [u8; 32],
-    pub dleq_s: [u8; 32],
+    pub subject_b_d: [u8; 32],
+    pub ring_id_hash: [u8; 32],
+    pub policy_id_hash: [u8; 32],
+    pub resource_hash: [u8; 32],
+    pub permission_hash: [u8; 32],
+    pub tier: u64,
+    pub statement_target_timestamp: [u8; 32],
+    pub salt: [u8; 32],
+    pub challenge: [u8; 32],
+    pub response: [u8; 32],
     pub epk_affine: PointAffineBytes,
+    pub derived_pk_affine: PointAffineBytes,
+    pub enc_cmt_affine: PointAffineBytes,
+    pub shared_point_affine: PointAffineBytes,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransferTierRandomizersWitnessV1 {
+    pub core: [u8; 32],
+    pub ext: [u8; 32],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,10 +110,8 @@ pub struct TransferWitnessV1 {
     pub sender_ext: TransferComplianceCiphertextWitnessV1,
     pub output_core: TransferComplianceCiphertextWitnessV1,
     pub output_ext: TransferComplianceCiphertextWitnessV1,
-    pub sender_r_core: [u8; 32],
-    pub sender_r_ext: [u8; 32],
-    pub output_r_core: [u8; 32],
-    pub output_r_ext: [u8; 32],
+    pub sender_randomizers: TransferTierRandomizersWitnessV1,
+    pub output_randomizers: TransferTierRandomizersWitnessV1,
     pub spends: Vec<TransferSpendWitnessV1>,
     pub outputs: Vec<TransferOutputWitnessV1>,
     pub balance_commitment_affine: PointAffineBytes,
@@ -122,8 +137,8 @@ fn verification_key_point(
 
 fn compliance_tier_witness(
     tier: &TransferComplianceCiphertextPublic,
-    dleq: &TransferComplianceDleqPublic,
 ) -> Result<TransferComplianceCiphertextWitnessV1> {
+    let statement: &TransferTierMetadataStatement = &tier.proof.statement;
     Ok(TransferComplianceCiphertextWitnessV1 {
         c2: tier.c2.to_bytes(),
         ciphertext: tier
@@ -131,9 +146,20 @@ fn compliance_tier_witness(
             .iter()
             .map(|value| value.to_bytes())
             .collect(),
-        dleq_c: dleq.c.to_bytes(),
-        dleq_s: dleq.s.to_bytes(),
+        subject_b_d: statement.subject_b_d_bytes,
+        ring_id_hash: statement.ring_id_hash_bytes,
+        policy_id_hash: statement.policy_id_hash_bytes,
+        resource_hash: statement.resource_hash_bytes,
+        permission_hash: statement.permission_hash_bytes,
+        tier: statement.tier.as_u64(),
+        statement_target_timestamp: Fq::from(statement.target_timestamp).to_bytes(),
+        salt: statement.salt_bytes,
+        challenge: tier.proof.challenge.to_bytes(),
+        response: tier.proof.response.to_bytes(),
         epk_affine: point_affine_bytes(tier.epk)?,
+        derived_pk_affine: point_affine_bytes(tier.proof.derived_pk)?,
+        enc_cmt_affine: point_affine_bytes(tier.proof.enc_cmt)?,
+        shared_point_affine: point_affine_bytes(tier.proof.shared_point)?,
     })
 }
 
@@ -291,26 +317,18 @@ impl TransferWitnessV1 {
                 .iter()
                 .map(|value| value.to_bytes())
                 .collect(),
-            sender_core: compliance_tier_witness(
-                &public.compliance.sender_core,
-                &public.compliance.sender_core_dleq,
-            )?,
-            sender_ext: compliance_tier_witness(
-                &public.compliance.sender_ext,
-                &public.compliance.sender_ext_dleq,
-            )?,
-            output_core: compliance_tier_witness(
-                &public.compliance.output_core,
-                &public.compliance.output_core_dleq,
-            )?,
-            output_ext: compliance_tier_witness(
-                &public.compliance.output_ext,
-                &public.compliance.output_ext_dleq,
-            )?,
-            sender_r_core: private.compliance.sender_r_core.to_bytes(),
-            sender_r_ext: private.compliance.sender_r_ext.to_bytes(),
-            output_r_core: private.compliance.output_r_core.to_bytes(),
-            output_r_ext: private.compliance.output_r_ext.to_bytes(),
+            sender_core: compliance_tier_witness(&public.compliance.sender_core)?,
+            sender_ext: compliance_tier_witness(&public.compliance.sender_ext)?,
+            output_core: compliance_tier_witness(&public.compliance.output_core)?,
+            output_ext: compliance_tier_witness(&public.compliance.output_ext)?,
+            sender_randomizers: TransferTierRandomizersWitnessV1 {
+                core: private.compliance.sender.core.to_bytes(),
+                ext: private.compliance.sender.ext.to_bytes(),
+            },
+            output_randomizers: TransferTierRandomizersWitnessV1 {
+                core: private.compliance.output.core.to_bytes(),
+                ext: private.compliance.output.ext.to_bytes(),
+            },
             spends,
             outputs,
             balance_commitment_affine: point_affine_bytes(public.balance_commitment.0)?,

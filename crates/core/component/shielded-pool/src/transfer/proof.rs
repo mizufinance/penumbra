@@ -5,7 +5,10 @@ use ark_snark::SNARK;
 use decaf377::{Bls12_377, Fq, Fr};
 use decaf377_rdsa::{SpendAuth, VerificationKey};
 use penumbra_sdk_asset::balance;
-use penumbra_sdk_compliance::{ComplianceLeaf, IndexedLeaf, MerklePath};
+use penumbra_sdk_compliance::{
+    ComplianceLeaf, IndexedLeaf, MerklePath, OrbisEncryptedSeedUploadPackage,
+    TransferTierMetadataStatement,
+};
 use penumbra_sdk_keys::keys::NullifierKey;
 use penumbra_sdk_proof_params::GROTH16_PROOF_LENGTH_BYTES;
 use penumbra_sdk_proto::{core::component::shielded_pool::v1 as pb, DomainType};
@@ -34,12 +37,30 @@ pub struct TransferComplianceCiphertextPublic {
     pub epk: decaf377::Element,
     pub c2: Fq,
     pub ciphertext: Vec<Fq>,
+    pub proof: TransferComplianceProofPublic,
 }
 
 #[derive(Clone, Debug)]
-pub struct TransferComplianceDleqPublic {
-    pub c: Fq,
-    pub s: Fq,
+pub struct TransferComplianceProofPublic {
+    pub statement: TransferTierMetadataStatement,
+    pub derived_pk: decaf377::Element,
+    pub enc_cmt: decaf377::Element,
+    pub shared_point: decaf377::Element,
+    pub challenge: Fq,
+    pub response: Fr,
+}
+
+impl TransferComplianceProofPublic {
+    pub fn try_from_package(package: &OrbisEncryptedSeedUploadPackage) -> Result<Self> {
+        Ok(Self {
+            statement: package.statement.clone(),
+            derived_pk: package.derived_pk()?,
+            enc_cmt: package.enc_cmt()?,
+            shared_point: package.shared_point()?,
+            challenge: package.challenge_scalar(),
+            response: package.response_scalar()?,
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -49,10 +70,6 @@ pub struct TransferCompliancePublic {
     pub sender_ext: TransferComplianceCiphertextPublic,
     pub output_core: TransferComplianceCiphertextPublic,
     pub output_ext: TransferComplianceCiphertextPublic,
-    pub sender_core_dleq: TransferComplianceDleqPublic,
-    pub sender_ext_dleq: TransferComplianceDleqPublic,
-    pub output_core_dleq: TransferComplianceDleqPublic,
-    pub output_ext_dleq: TransferComplianceDleqPublic,
 }
 
 #[derive(Clone, Debug)]
@@ -112,12 +129,16 @@ pub struct TransferOutputPrivate {
 }
 
 #[derive(Clone, Debug)]
+pub struct TransferTierRandomizers {
+    pub core: Fr,
+    pub ext: Fr,
+}
+
+#[derive(Clone, Debug)]
 pub struct TransferCompliancePrivate {
     pub transfer_nonce_root: Fr,
-    pub sender_r_core: Fr,
-    pub sender_r_ext: Fr,
-    pub output_r_core: Fr,
-    pub output_r_ext: Fr,
+    pub sender: TransferTierRandomizers,
+    pub output: TransferTierRandomizers,
     pub is_flagged: bool,
 }
 
@@ -951,36 +972,52 @@ mod tests {
             extracted_public.compliance.output_ext.ciphertext
         );
         assert_eq!(
-            proving_public.compliance.sender_core_dleq.c,
-            extracted_public.compliance.sender_core_dleq.c
+            proving_public.compliance.sender_core.proof.statement,
+            extracted_public.compliance.sender_core.proof.statement
         );
         assert_eq!(
-            proving_public.compliance.sender_core_dleq.s,
-            extracted_public.compliance.sender_core_dleq.s
+            proving_public.compliance.sender_core.proof.challenge,
+            extracted_public.compliance.sender_core.proof.challenge
         );
         assert_eq!(
-            proving_public.compliance.sender_ext_dleq.c,
-            extracted_public.compliance.sender_ext_dleq.c
+            proving_public.compliance.sender_core.proof.response,
+            extracted_public.compliance.sender_core.proof.response
         );
         assert_eq!(
-            proving_public.compliance.sender_ext_dleq.s,
-            extracted_public.compliance.sender_ext_dleq.s
+            proving_public.compliance.sender_ext.proof.statement,
+            extracted_public.compliance.sender_ext.proof.statement
         );
         assert_eq!(
-            proving_public.compliance.output_core_dleq.c,
-            extracted_public.compliance.output_core_dleq.c
+            proving_public.compliance.sender_ext.proof.challenge,
+            extracted_public.compliance.sender_ext.proof.challenge
         );
         assert_eq!(
-            proving_public.compliance.output_core_dleq.s,
-            extracted_public.compliance.output_core_dleq.s
+            proving_public.compliance.sender_ext.proof.response,
+            extracted_public.compliance.sender_ext.proof.response
         );
         assert_eq!(
-            proving_public.compliance.output_ext_dleq.c,
-            extracted_public.compliance.output_ext_dleq.c
+            proving_public.compliance.output_core.proof.statement,
+            extracted_public.compliance.output_core.proof.statement
         );
         assert_eq!(
-            proving_public.compliance.output_ext_dleq.s,
-            extracted_public.compliance.output_ext_dleq.s
+            proving_public.compliance.output_core.proof.challenge,
+            extracted_public.compliance.output_core.proof.challenge
+        );
+        assert_eq!(
+            proving_public.compliance.output_core.proof.response,
+            extracted_public.compliance.output_core.proof.response
+        );
+        assert_eq!(
+            proving_public.compliance.output_ext.proof.statement,
+            extracted_public.compliance.output_ext.proof.statement
+        );
+        assert_eq!(
+            proving_public.compliance.output_ext.proof.challenge,
+            extracted_public.compliance.output_ext.proof.challenge
+        );
+        assert_eq!(
+            proving_public.compliance.output_ext.proof.response,
+            extracted_public.compliance.output_ext.proof.response
         );
 
         assert_eq!(

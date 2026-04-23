@@ -9,7 +9,7 @@ use orbis_common::blockchain::{
 use orbis_proto::{
     dkg_service::{dkg_service_client::DkgServiceClient, StartDkgRequest},
     info_service::{info_service_client::InfoServiceClient, GetNodeInfoRequest},
-    pre_service::{pre_service_client::PreServiceClient, StartPreRequest},
+    pre_service::{pre_service_client::PreServiceClient, StartPreRequest, TimestampRange},
     store_secret_service::{
         store_secret_service_client::StoreSecretServiceClient, StoreSecretRequest,
     },
@@ -19,11 +19,9 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     auth::{default_reader_did_pk, deterministic_jwt_signer},
-    pre::prepare_secret,
-    types::{
-        DkgResult, NodeInfo, PreResult, PreparedSecret, RingInfo, SecretEnvelope, StoreSecretResult,
-    },
+    types::{DkgResult, NodeInfo, PreResult, RingInfo, StoreSecretResult},
 };
+use penumbra_sdk_compliance::{OrbisEncryptedSeedUploadPackage, OrbisSecretEnvelope};
 
 const TEST_POLICY_YAML: &str = r#"
 name: test-policy
@@ -45,7 +43,6 @@ resources:
 
 const ORBIS_NAMESPACE: &str = "orbis";
 const ORBIS_RESOURCE: &str = "document";
-const ORBIS_PERMISSION: &str = "read";
 
 #[derive(Debug, Deserialize)]
 struct RingPayload {
@@ -55,7 +52,7 @@ struct RingPayload {
 #[derive(Debug, Deserialize)]
 struct PreResponse {
     xnc_cmt: String,
-    secret: SecretEnvelope,
+    secret: OrbisSecretEnvelope,
 }
 
 pub struct OrbisClient {
@@ -252,53 +249,50 @@ impl OrbisClient {
             .ok_or_else(|| anyhow!("no policy IDs found after policy creation"))
     }
 
-    pub async fn store_secret(
+    pub async fn store_encrypted_seed_package(
         &self,
-        ring_pk_hex: &str,
         ring_id: &str,
-        policy_id: &str,
-        derivation_hex: &str,
+        package: &OrbisEncryptedSeedUploadPackage,
     ) -> Result<StoreSecretResult> {
-        let prepared = self.prepare_secret(ring_pk_hex, derivation_hex, policy_id)?;
         let mut client = StoreSecretServiceClient::connect(self.endpoint.clone())
             .await
             .map_err(|e| anyhow!("failed to connect to Orbis store-secret endpoint: {}", e))?;
 
         let request = StoreSecretRequest {
-            encrypted_document: prepared.encrypted_document.clone(),
-            enc_cmt: prepared.enc_cmt.clone(),
+            encrypted_document: package.encrypted_document.clone(),
+            enc_cmt: package.enc_cmt.clone(),
             ring_id: ring_id.to_string(),
             namespace: ORBIS_NAMESPACE.to_string(),
-            policy_id: policy_id.to_string(),
-            resource: ORBIS_RESOURCE.to_string(),
-            permission: ORBIS_PERMISSION.to_string(),
-            shared_point: prepared.shared_point.clone(),
-            challenge: prepared.challenge.clone(),
-            response: prepared.response.clone(),
-            derived_pk: prepared.derived_pk.clone(),
+            policy_id: package.policy_id.clone(),
+            resource: package.resource.clone(),
+            permission: package.permission.clone(),
+            shared_point: package.shared_point.clone(),
+            challenge: package.challenge.clone(),
+            response: package.response.clone(),
+            derived_pk: Some(package.derived_pk.clone()),
             with_proof: false,
-            tier: None,
-            timestamp: None,
-            metadata_hash: Some(prepared.metadata.clone()),
+            tier: Some(package.tier_label.clone()),
+            timestamp: Some(package.timestamp),
+            metadata_hash: Some(package.metadata_hash.clone()),
         };
 
         let token = deterministic_jwt_signer(default_reader_did_pk())
             .create_store_secret_jwt(
-                prepared.encrypted_document,
-                prepared.enc_cmt.clone(),
+                package.encrypted_document.clone(),
+                package.enc_cmt.clone(),
                 ring_id,
                 ORBIS_NAMESPACE,
-                policy_id,
-                ORBIS_RESOURCE,
-                ORBIS_PERMISSION,
-                prepared.shared_point,
-                prepared.challenge,
-                prepared.response,
-                prepared.derived_pk,
+                &package.policy_id,
+                &package.resource,
+                &package.permission,
+                package.shared_point.clone(),
+                package.challenge.clone(),
+                package.response.clone(),
+                Some(package.derived_pk.clone()),
                 false,
-                None,
-                None,
-                Some(prepared.metadata),
+                Some(package.tier_label.clone()),
+                Some(package.timestamp),
+                Some(package.metadata_hash.clone()),
             )
             .map_err(|e| anyhow!("failed to create Orbis store-secret JWT: {}", e))?;
 
@@ -315,7 +309,6 @@ impl OrbisClient {
             object_id: response.object_id,
             ring_id: response.ring_id,
             signature: response.signature,
-            enc_cmt_hex: hex::encode(prepared.enc_cmt),
         })
     }
 
@@ -326,18 +319,29 @@ impl OrbisClient {
             id: object_id.to_string(),
         };
 
-        let result = client
-            .acp_register_object(policy_id, document)
-            .await
-            .map_err(|e| anyhow!("failed to register object in ACP: {}", e))?;
-        if result.code != 0 {
-            bail!(
-                "register_object tx failed: code={} log={}",
-                result.code,
-                result.log
-            );
+        match client.acp_register_object(policy_id, document).await {
+            Ok(result) if result.code == 0 => Ok(()),
+            Ok(result) => {
+                let log = result.log;
+                if log.contains("object already registered") || log.contains("already exists") {
+                    Ok(())
+                } else {
+                    bail!(
+                        "register_object tx failed: code={} log={}",
+                        result.code,
+                        log
+                    );
+                }
+            }
+            Err(error) => {
+                let msg = error.to_string();
+                if msg.contains("object already registered") || msg.contains("already exists") {
+                    Ok(())
+                } else {
+                    Err(anyhow!("failed to register object in ACP: {}", error))
+                }
+            }
         }
-        Ok(())
     }
 
     pub async fn set_relationship(&self, policy_id: &str, object_id: &str) -> Result<()> {
@@ -356,32 +360,45 @@ impl OrbisClient {
             }),
         };
 
-        let result = client
-            .acp_set_relationship(policy_id, relationship)
-            .await
-            .map_err(|e| anyhow!("failed to set ACP relationship: {}", e))?;
-        if result.code != 0 {
-            bail!(
-                "set_relationship tx failed: code={} log={}",
-                result.code,
-                result.log
-            );
+        match client.acp_set_relationship(policy_id, relationship).await {
+            Ok(result) if result.code == 0 => Ok(()),
+            Ok(result) => {
+                let log = result.log;
+                if log.contains("relationship already exists") || log.contains("already exists") {
+                    Ok(())
+                } else {
+                    bail!(
+                        "set_relationship tx failed: code={} log={}",
+                        result.code,
+                        log
+                    );
+                }
+            }
+            Err(error) => {
+                let msg = error.to_string();
+                if msg.contains("relationship already exists") || msg.contains("already exists") {
+                    Ok(())
+                } else {
+                    Err(anyhow!("failed to set ACP relationship: {}", error))
+                }
+            }
         }
-        Ok(())
     }
 
-    pub async fn pre_xnc_only(
+    pub async fn start_pre(
         &self,
         reader_pk_hex: &str,
         object_id: &str,
         derivation_hex: &str,
+        salt: Option<&str>,
+        timestamp: Option<u64>,
     ) -> Result<PreResult> {
         let mut client = PreServiceClient::connect(self.endpoint.clone())
             .await
             .map_err(|e| anyhow!("failed to connect to Orbis PRE endpoint: {}", e))?;
 
         let reader_pk_bytes =
-            hex::decode(reader_pk_hex).context("failed to decode adjusted reader key hex")?;
+            hex::decode(reader_pk_hex).context("failed to decode reader key hex")?;
         let derivation_bytes =
             hex::decode(derivation_hex).context("failed to decode derivation hex")?;
 
@@ -390,8 +407,8 @@ impl OrbisClient {
             object_id: object_id.to_string(),
             namespace: ORBIS_NAMESPACE.to_string(),
             derivation: Some(derivation_bytes.clone()),
-            salt: None,
-            valid_window: None,
+            salt: salt.map(str::to_owned),
+            valid_window: timestamp.map(|ts| TimestampRange { start: ts, end: ts }),
         };
 
         let token = deterministic_jwt_signer(default_reader_did_pk())
@@ -400,7 +417,7 @@ impl OrbisClient {
                 ORBIS_NAMESPACE,
                 object_id,
                 Some(derivation_bytes),
-                None,
+                salt.map(str::to_owned),
             )
             .map_err(|e| anyhow!("failed to create Orbis PRE JWT: {}", e))?;
 
@@ -417,28 +434,10 @@ impl OrbisClient {
         let pre_response: PreResponse = serde_json::from_slice(&response.encrypted_secret)
             .map_err(|e| anyhow!("failed to parse PRE response JSON: {}", e))?;
 
-        let _ = pre_response.secret;
         Ok(PreResult {
             xnc_cmt_hex: pre_response.xnc_cmt,
+            secret: pre_response.secret,
         })
-    }
-
-    fn prepare_secret(
-        &self,
-        ring_pk_hex: &str,
-        derivation_hex: &str,
-        policy_id: &str,
-    ) -> Result<PreparedSecret> {
-        prepare_secret(
-            ring_pk_hex,
-            derivation_hex,
-            policy_id,
-            ORBIS_RESOURCE,
-            ORBIS_PERMISSION,
-            None,
-            None,
-            None,
-        )
     }
 
     async fn signing_client(&self) -> Result<SourceHubClient> {

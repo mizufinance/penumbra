@@ -2,54 +2,39 @@ package compliance
 
 import (
 	"fmt"
+
 	"golang.org/x/crypto/blake2b"
-	"math/big"
 
 	"github.com/consensys/gnark/frontend"
 	gnarkte "github.com/consensys/gnark/std/algebra/native/twistededwards"
 	"github.com/mizufinance/penumbra/tools/gnark/internal/primitives"
 )
 
-func blackHoleACKScalar() (*big.Int, error) {
-	hash := blake2b.Sum512([]byte("penumbra.compliance.black_hole_ack"))
-	scalar := primitives.LittleEndianBytesToBigInt(hash[:])
+const (
+	unregulatedDKPubDomain  = "penumbra.compliance.unregulated.dk-pub.v1"
+	unregulatedRingPKDomain = "penumbra.compliance.unregulated.ring-pk.v1"
+)
 
-	vectors, err := primitives.LoadPrototypeVectors()
+func deriveUnregulatedSinkPoint(domain string) (gnarkte.Point, error) {
+	hash := blake2b.Sum512([]byte(domain))
+	pointDomain := primitives.LittleEndianBytesToBigInt(hash[:])
+	point, err := primitives.Decaf377EncodeToCurveNative(pointDomain)
 	if err != nil {
-		return nil, fmt.Errorf("load prototype vectors: %w", err)
+		return gnarkte.Point{}, fmt.Errorf("derive unregulated sink point for %q: %w", domain, err)
 	}
-
-	order := primitives.MustBigInt(vectors.Decaf377CompanionCurve.Order)
-	scalar.Mod(scalar, order)
-	return scalar, nil
+	return point, nil
 }
 
 func UnregulatedComplianceKeys() (gnarkte.Point, gnarkte.Point, error) {
-	generator, err := decafGeneratorPoint()
+	dkPub, err := deriveUnregulatedSinkPoint(unregulatedDKPubDomain)
 	if err != nil {
 		return gnarkte.Point{}, gnarkte.Point{}, err
 	}
-
-	vectors, err := primitives.LoadPrototypeVectors()
+	ringPK, err := deriveUnregulatedSinkPoint(unregulatedRingPKDomain)
 	if err != nil {
 		return gnarkte.Point{}, gnarkte.Point{}, err
 	}
-
-	blackHoleScalar, err := blackHoleACKScalar()
-	if err != nil {
-		return gnarkte.Point{}, gnarkte.Point{}, err
-	}
-
-	blackHoleACK, err := primitives.ScalarMulNative(
-		generator,
-		blackHoleScalar,
-		primitives.MustBigInt(vectors.Decaf377CompanionCurve.Order).BitLen(),
-	)
-	if err != nil {
-		return gnarkte.Point{}, gnarkte.Point{}, fmt.Errorf("derive black hole ACK: %w", err)
-	}
-
-	return blackHoleACK, generator, nil
+	return ringPK, dkPub, nil
 }
 
 func SelectPoint(

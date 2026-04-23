@@ -2,9 +2,9 @@
 //!
 //! This module intentionally does not model Orbis as an in-process service.
 //! Penumbra owns the deterministic math needed to:
-//! - verify Orbis-compatible DLEQ material,
-//! - compute adjusted reader keys for PRE requests,
-//! - recover transfer seeds from Orbis re-encryption commitments.
+//! - verify the canonical Penumbra transfer-tier DLEQ material,
+//! - recover transfer seeds from Orbis re-encryption commitments when needed for
+//!   Penumbra-side validation.
 
 use anyhow::Result;
 use decaf377::{Element, Fq, Fr};
@@ -34,7 +34,7 @@ pub fn compute_reencrypt_commitment(
     (*pk_issuer + *epk_tier) * (d_fr * *sk_ring)
 }
 
-/// Verify Orbis-compatible DLEQ material for a PRE request.
+/// Verify the canonical Penumbra transfer-tier DLEQ for one PRE request.
 pub fn verify_reencrypt_proof(
     ack_tier: &Element,
     epk_tier: &Element,
@@ -53,7 +53,7 @@ pub fn verify_reencrypt_proof(
     )
 }
 
-/// Verify the proof material for a tier and, on success, compute `xnc_cmt`.
+/// Verify the transfer-tier proof material and, on success, compute `xnc_cmt`.
 pub fn verify_and_compute_reencrypt_commitment(
     sk_ring: &Fr,
     epk_tier: &Element,
@@ -84,15 +84,6 @@ pub fn recover_seed(xnc_cmt: &Element, sk_issuer: &Fr, ack_tier: &Element, c2: &
     let p = *xnc_cmt - (*ack_tier * *sk_issuer);
     let shared_fq = p.vartime_compress_to_field();
     *c2 - shared_fq
-}
-
-/// Compute the adjusted reader public key for bridging Penumbra EPKs into Orbis PRE.
-pub fn compute_adjusted_reader_pk(
-    pk_issuer: &Element,
-    epk_chain: &Element,
-    enc_cmt_orbis: &Element,
-) -> Element {
-    *pk_issuer + *epk_chain - *enc_cmt_orbis
 }
 
 #[cfg(test)]

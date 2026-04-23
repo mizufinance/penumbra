@@ -72,12 +72,22 @@ pub struct TransferComplianceDleqProofs {
 }
 
 #[derive(Clone, Debug)]
+pub struct TierSecretMaterial {
+    pub seed: Fq,
+    pub r: Fr,
+}
+
+#[derive(Clone, Debug)]
+pub struct PartyTierMaterial {
+    pub core: TierSecretMaterial,
+    pub ext: TierSecretMaterial,
+}
+
+#[derive(Clone, Debug)]
 pub struct TransferEncryptionResult {
     pub ciphertext: TransferComplianceCiphertext,
-    pub sender_r_core: Fr,
-    pub sender_r_ext: Fr,
-    pub output_r_core: Fr,
-    pub output_r_ext: Fr,
+    pub sender: PartyTierMaterial,
+    pub output: PartyTierMaterial,
 }
 
 impl TransferComplianceCiphertext {
@@ -260,48 +270,59 @@ pub fn encrypt_transfer(
     is_flagged: bool,
     detection_salt: Fq,
 ) -> Result<TransferEncryptionResult> {
-    let sender_r_core = Fr::rand(&mut rng);
-    let sender_r_ext = Fr::rand(&mut rng);
-    let output_r_core = Fr::rand(&mut rng);
-    let output_r_ext = Fr::rand(&mut rng);
+    let sender = PartyTierMaterial {
+        core: TierSecretMaterial {
+            seed: Fq::rand(&mut rng),
+            r: Fr::rand(&mut rng),
+        },
+        ext: TierSecretMaterial {
+            seed: Fq::rand(&mut rng),
+            r: Fr::rand(&mut rng),
+        },
+    };
+    let output = PartyTierMaterial {
+        core: TierSecretMaterial {
+            seed: Fq::rand(&mut rng),
+            r: Fr::rand(&mut rng),
+        },
+        ext: TierSecretMaterial {
+            seed: Fq::rand(&mut rng),
+            r: Fr::rand(&mut rng),
+        },
+    };
 
-    let sender_core_epk = Element::GENERATOR * sender_r_core;
-    let sender_ext_epk = Element::GENERATOR * sender_r_ext;
-    let output_core_epk = Element::GENERATOR * output_r_core;
-    let output_ext_epk = Element::GENERATOR * output_r_ext;
-
-    let sender_core_seed = Fq::rand(&mut rng);
-    let sender_ext_seed = Fq::rand(&mut rng);
-    let output_core_seed = Fq::rand(&mut rng);
-    let output_ext_seed = Fq::rand(&mut rng);
+    let sender_core_epk = Element::GENERATOR * sender.core.r;
+    let sender_ext_epk = Element::GENERATOR * sender.ext.r;
+    let output_core_epk = Element::GENERATOR * output.core.r;
+    let output_ext_epk = Element::GENERATOR * output.ext.r;
 
     let sender_core_shared = if is_flagged {
-        *dk_pub * sender_r_core
+        *dk_pub * sender.core.r
     } else {
-        *ack_sender * sender_r_core
+        *ack_sender * sender.core.r
     };
     let sender_ext_shared = if is_flagged {
-        *dk_pub * sender_r_ext
+        *dk_pub * sender.ext.r
     } else {
-        *ack_sender * sender_r_ext
+        *ack_sender * sender.ext.r
     };
     let output_core_shared = if is_flagged {
-        *dk_pub * output_r_core
+        *dk_pub * output.core.r
     } else {
-        *ack_receiver * output_r_core
+        *ack_receiver * output.core.r
     };
     let output_ext_shared = if is_flagged {
-        *dk_pub * output_r_ext
+        *dk_pub * output.ext.r
     } else {
-        *ack_receiver * output_r_ext
+        *ack_receiver * output.ext.r
     };
 
-    let sender_core_c2 = sender_core_seed + sender_core_shared.vartime_compress_to_field();
-    let sender_ext_c2 = sender_ext_seed + sender_ext_shared.vartime_compress_to_field();
-    let output_core_c2 = output_core_seed + output_core_shared.vartime_compress_to_field();
-    let output_ext_c2 = output_ext_seed + output_ext_shared.vartime_compress_to_field();
+    let sender_core_c2 = sender.core.seed + sender_core_shared.vartime_compress_to_field();
+    let sender_ext_c2 = sender.ext.seed + sender_ext_shared.vartime_compress_to_field();
+    let output_core_c2 = output.core.seed + output_core_shared.vartime_compress_to_field();
+    let output_ext_c2 = output.ext.seed + output_ext_shared.vartime_compress_to_field();
 
-    let ss_detection = *dk_pub * sender_r_core;
+    let ss_detection = *dk_pub * sender.core.r;
     let sender_core_epk_fq = sender_core_epk.vartime_compress_to_field();
     let seed_detection = poseidon377::hash_2(
         &ISSUER_DETECTION_DOMAIN,
@@ -317,19 +338,19 @@ pub fn encrypt_transfer(
 
     let amount_bytes = receiver_value.amount.to_le_bytes();
     let encrypted_sender_core: [u8; FQ_BYTES * TRANSFER_CORE_CIPHERTEXT_FQS] =
-        encrypt_tier_bytes(&amount_bytes, sender_core_seed)
+        encrypt_tier_bytes(&amount_bytes, sender.core.seed)
             .try_into()
             .map_err(|_| anyhow!("sender_core ciphertext must be one Fq"))?;
     let encrypted_sender_ext: [u8; FQ_BYTES * TRANSFER_EXT_CIPHERTEXT_FQS] =
-        encrypt_tier_bytes(&address_bytes(receiver_address), sender_ext_seed)
+        encrypt_tier_bytes(&address_bytes(receiver_address), sender.ext.seed)
             .try_into()
             .map_err(|_| anyhow!("sender_ext ciphertext must be three Fqs"))?;
     let encrypted_output_core: [u8; FQ_BYTES * TRANSFER_CORE_CIPHERTEXT_FQS] =
-        encrypt_tier_bytes(&amount_bytes, output_core_seed)
+        encrypt_tier_bytes(&amount_bytes, output.core.seed)
             .try_into()
             .map_err(|_| anyhow!("output_core ciphertext must be one Fq"))?;
     let encrypted_output_ext: [u8; FQ_BYTES * TRANSFER_EXT_CIPHERTEXT_FQS] =
-        encrypt_tier_bytes(&address_bytes(sender_address), output_ext_seed)
+        encrypt_tier_bytes(&address_bytes(sender_address), output.ext.seed)
             .try_into()
             .map_err(|_| anyhow!("output_ext ciphertext must be three Fqs"))?;
 
@@ -349,18 +370,14 @@ pub fn encrypt_transfer(
             encrypted_output_core,
             encrypted_output_ext,
         },
-        sender_r_core,
-        sender_r_ext,
-        output_r_core,
-        output_r_ext,
+        sender,
+        output,
     })
 }
 
 pub fn compute_transfer_dleqs(
-    sender_r_core: Fr,
-    sender_r_ext: Fr,
-    output_r_core: Fr,
-    output_r_ext: Fr,
+    sender: &PartyTierMaterial,
+    output: &PartyTierMaterial,
     sender_k_core: Fr,
     sender_k_ext: Fr,
     output_k_core: Fr,
@@ -376,10 +393,10 @@ pub fn compute_transfer_dleqs(
     output_ext_salt: Fq,
     target_timestamp: u64,
 ) -> TransferComplianceDleqProofs {
-    let sender_core_epk = Element::GENERATOR * sender_r_core;
-    let sender_ext_epk = Element::GENERATOR * sender_r_ext;
-    let output_core_epk = Element::GENERATOR * output_r_core;
-    let output_ext_epk = Element::GENERATOR * output_r_ext;
+    let sender_core_epk = Element::GENERATOR * sender.core.r;
+    let sender_ext_epk = Element::GENERATOR * sender.ext.r;
+    let output_core_epk = Element::GENERATOR * output.core.r;
+    let output_ext_epk = Element::GENERATOR * output.ext.r;
 
     let sender_core_metadata = compute_metadata_hash(
         policy_id_hash,
@@ -416,28 +433,28 @@ pub fn compute_transfer_dleqs(
 
     TransferComplianceDleqProofs {
         sender_core: compute_dleq_native(
-            sender_r_core,
+            sender.core.r,
             sender_k_core,
             ack_sender,
             &sender_core_epk,
             sender_core_metadata,
         ),
         sender_ext: compute_dleq_native(
-            sender_r_ext,
+            sender.ext.r,
             sender_k_ext,
             ack_sender,
             &sender_ext_epk,
             sender_ext_metadata,
         ),
         output_core: compute_dleq_native(
-            output_r_core,
+            output.core.r,
             output_k_core,
             ack_receiver,
             &output_core_epk,
             output_core_metadata,
         ),
         output_ext: compute_dleq_native(
-            output_r_ext,
+            output.ext.r,
             output_k_ext,
             ack_receiver,
             &output_ext_epk,

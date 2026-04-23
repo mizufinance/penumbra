@@ -1,5 +1,5 @@
 #![deny(clippy::unwrap_used)]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 //! Facilities for proxying gRPC requests to an upstream Tendermint/CometBFT RPC.
 //!

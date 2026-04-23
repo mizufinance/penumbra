@@ -115,7 +115,7 @@ impl EventBatch {
 
     /// Check if this batch has no blocks in it.
     ///
-    /// Most commonly, this is the result when [`start_later`] is called with a height
+    /// Most commonly, this is the result when [`Self::start_later`] is called with a height
     /// past that inside the batch.
     pub fn empty(&self) -> bool {
         self.first_height > self.last_height

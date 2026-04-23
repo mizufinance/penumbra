@@ -273,7 +273,7 @@ impl ComplianceMerkleProofsData {
 impl<T: ViewClient + ?Sized> ViewClientComplianceExt for T {}
 
 use decaf377::Fr;
-use penumbra_sdk_compliance::{ComplianceProofProvider, MerklePath};
+use penumbra_sdk_compliance::{AssetPolicy, ComplianceProofProvider, MerklePath};
 use penumbra_sdk_transaction::plan::{ActionPlan, TransactionPlan};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -337,6 +337,19 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
             proofs.asset_indexed_leaf,
             proofs.is_regulated,
         ))
+    }
+
+    async fn get_asset_policy(&self, asset_id: asset::Id) -> Result<Option<AssetPolicy>> {
+        let future = {
+            let mut view = self.view.lock().await;
+            view.compliance_asset_policy(asset_id)
+        };
+        let response = future.await?;
+        response
+            .asset_policy
+            .map(AssetPolicy::try_from)
+            .transpose()
+            .map_err(Into::into)
     }
 
     async fn get_user_proof(
@@ -426,6 +439,7 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
             asset::Id,
             (MerklePath, u64, penumbra_sdk_compliance::IndexedLeaf, bool),
         > = BTreeMap::new();
+        let mut asset_policies = BTreeMap::new();
         let mut user_proofs: BTreeMap<(Address, asset::Id), (MerklePath, u64, ComplianceLeaf)> =
             BTreeMap::new();
 
@@ -489,6 +503,17 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
                         result.is_regulated,
                     ),
                 );
+                if result.is_regulated {
+                    let future = {
+                        let mut view = self.view.lock().await;
+                        view.compliance_asset_policy(*asset_id)
+                    };
+                    let response = future.await?;
+                    let policy_proto = response.asset_policy.ok_or_else(|| {
+                        anyhow::anyhow!("missing asset_policy for regulated asset {}", asset_id)
+                    })?;
+                    asset_policies.insert(*asset_id, AssetPolicy::try_from(policy_proto)?);
+                }
             }
 
             // Build user proof with leaf
@@ -535,6 +560,7 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
             compliance_anchor,
             asset_anchor,
             asset_proofs,
+            asset_policies,
             user_proofs,
         })
     }
@@ -784,6 +810,22 @@ async fn enrich_transfer_family_with_compliance<P: ComplianceProofProvider>(
         spend.compliance_position = sender_compliance_position;
         spend.is_regulated = is_regulated;
         spend.target_timestamp = target_timestamp;
+        spend.asset_policy = if is_regulated {
+            Some(
+                batch_data
+                    .asset_policies
+                    .get(&spend_asset_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "missing asset policy for regulated transfer spend asset {}",
+                            spend_asset_id
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
         spend.set_compliance_details(rng)?;
         if let Some(nonce) = *tx_blinding_nonce {
             spend.tx_blinding_nonce = nonce;
@@ -854,6 +896,22 @@ async fn enrich_transfer_family_with_compliance<P: ComplianceProofProvider>(
             output.compliance_position = recipient_compliance_position;
             output.is_regulated = is_regulated;
             output.target_timestamp = target_timestamp;
+            output.asset_policy = if is_regulated {
+                Some(
+                    batch_data
+                        .asset_policies
+                        .get(&output_asset_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "missing asset policy for regulated transfer output asset {}",
+                                output_asset_id
+                            )
+                        })?,
+                )
+            } else {
+                None
+            };
             output.set_compliance_details(rng, &recipient_leaf, sender_leaf_for_output, nonce)?;
         }
     }
@@ -926,6 +984,22 @@ async fn enrich_internal_funding_with_compliance<P: ComplianceProofProvider>(
         spend.compliance_position = sender_compliance_position;
         spend.is_regulated = is_regulated;
         spend.target_timestamp = target_timestamp;
+        spend.asset_policy = if is_regulated {
+            Some(
+                batch_data
+                    .asset_policies
+                    .get(&spend_asset_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "missing asset policy for regulated fee funding spend asset {}",
+                            spend_asset_id
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
         spend.set_compliance_details(rng)?;
         if let Some(nonce) = *tx_blinding_nonce {
             spend.tx_blinding_nonce = nonce;
@@ -984,6 +1058,22 @@ async fn enrich_internal_funding_with_compliance<P: ComplianceProofProvider>(
             output.compliance_position = recipient_compliance_position;
             output.is_regulated = is_regulated;
             output.target_timestamp = target_timestamp;
+            output.asset_policy = if is_regulated {
+                Some(
+                    batch_data
+                        .asset_policies
+                        .get(&output_asset_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "missing asset policy for regulated fee funding output asset {}",
+                                output_asset_id
+                            )
+                        })?,
+                )
+            } else {
+                None
+            };
             output.set_compliance_details(rng, &recipient_leaf, sender_leaf_for_output, nonce)?;
         }
     }

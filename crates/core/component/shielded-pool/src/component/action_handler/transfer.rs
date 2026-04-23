@@ -49,11 +49,6 @@ fn transfer_check_lengths(transfer: &Transfer) -> Result<()> {
             "transfer input {} compliance ciphertext must be empty",
             index + 1
         );
-        anyhow::ensure!(
-            input.dleq_proof.is_empty(),
-            "transfer input {} DLEQ proof must be empty",
-            index + 1
-        );
     }
     let _ = parse_transfer_output_compliance(&transfer.body.outputs)?;
     Ok(())
@@ -74,7 +69,7 @@ pub fn transfer_extract_public(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let (ciphertext, dleqs) = parse_transfer_output_compliance(&transfer.body.outputs)?;
+    let (ciphertext, bundle) = parse_transfer_output_compliance(&transfer.body.outputs)?;
     let outputs = transfer
         .body
         .outputs
@@ -94,7 +89,7 @@ pub fn transfer_extract_public(
         target_timestamp: decaf377::Fq::from(transfer.body.target_timestamp),
         inputs,
         outputs,
-        compliance: transfer_compliance_public_from_parts(&ciphertext, &dleqs),
+        compliance: transfer_compliance_public_from_parts(&ciphertext, &bundle)?,
     };
     public
         .validate_shape()

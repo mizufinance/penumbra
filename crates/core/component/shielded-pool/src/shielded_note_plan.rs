@@ -2,7 +2,7 @@ use decaf377::{Fq, Fr};
 use decaf377_ka as ka;
 use decaf377_rdsa::{SpendAuth, VerificationKey};
 use penumbra_sdk_asset::{Balance, Value};
-use penumbra_sdk_compliance::MerklePath;
+use penumbra_sdk_compliance::{AssetPolicy, MerklePath};
 use penumbra_sdk_keys::{
     keys::{IncomingViewingKey, OutgoingViewingKey},
     symmetric::{OvkWrappedKey, WrappedMemoKey},
@@ -16,6 +16,12 @@ use serde::{Deserialize, Serialize};
 use std::convert::{TryFrom, TryInto};
 
 use crate::{Backref, Note, Rseed, TransferInputBody};
+
+// Bare shielded plan constructors are used heavily by tests, vector generation,
+// and mock flows before wallet code overwrites the target timestamp with a live
+// value. Keep the placeholder non-zero so downstream compliance metadata remains
+// structurally valid; stateful freshness checks will still reject stale values.
+const DEFAULT_PLACEHOLDER_TARGET_TIMESTAMP: u64 = 1_700_000_000;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(try_from = "pb::ShieldedInputPlan", into = "pb::ShieldedInputPlan")]
@@ -67,6 +73,8 @@ pub struct ShieldedInputPlan {
     pub dleq_s: Fq,
     #[serde(skip)]
     pub target_timestamp: u64,
+    #[serde(skip)]
+    pub asset_policy: Option<AssetPolicy>,
 }
 
 impl ShieldedInputPlan {
@@ -164,7 +172,8 @@ impl ShieldedInputPlan {
             dleq_k: Fr::from(0u64),
             dleq_c: Fq::from(0u64),
             dleq_s: Fq::from(0u64),
-            target_timestamp: 0u64,
+            target_timestamp: DEFAULT_PLACEHOLDER_TARGET_TIMESTAMP,
+            asset_policy: None,
         }
     }
 
@@ -172,16 +181,11 @@ impl ShieldedInputPlan {
         let backref = Backref::new(self.note.commit());
         let encrypted_backref = backref.encrypt(&fvk.backref_key(), &self.nullifier(fvk));
 
-        let mut dleq_proof = Vec::with_capacity(64);
-        dleq_proof.extend_from_slice(&self.dleq_c.to_bytes());
-        dleq_proof.extend_from_slice(&self.dleq_s.to_bytes());
-
         TransferInputBody {
             nullifier: self.nullifier(fvk),
             rk: self.rk(fvk),
             encrypted_backref,
             compliance_ciphertext: self.compliance_ciphertext.clone(),
-            dleq_proof,
         }
     }
 
@@ -273,6 +277,8 @@ pub struct ShieldedOutputPlan {
     pub dleq_s_3: Fq,
     #[serde(skip)]
     pub target_timestamp: u64,
+    #[serde(skip)]
+    pub asset_policy: Option<AssetPolicy>,
 }
 
 impl ShieldedOutputPlan {
@@ -385,7 +391,8 @@ impl ShieldedOutputPlan {
             dleq_s_2: Fq::from(0u64),
             dleq_c_3: Fq::from(0u64),
             dleq_s_3: Fq::from(0u64),
-            target_timestamp: 0u64,
+            target_timestamp: DEFAULT_PLACEHOLDER_TARGET_TIMESTAMP,
+            asset_policy: None,
         }
     }
 
@@ -457,6 +464,7 @@ impl From<ShieldedInputPlan> for pb::ShieldedInputPlan {
             ring_pk: msg.ring_pk.vartime_compress().0.to_vec(),
             dk_pub: msg.dk_pub.vartime_compress().0.to_vec(),
             threshold: msg.threshold.to_le_bytes().to_vec(),
+            asset_policy: msg.asset_policy.map(Into::into),
         }
     }
 }
@@ -530,6 +538,7 @@ impl TryFrom<pb::ShieldedInputPlan> for ShieldedInputPlan {
             dleq_c: parse_fq_or_zero("dleq_c", &msg.dleq_c)?,
             dleq_s: parse_fq_or_zero("dleq_s", &msg.dleq_s)?,
             target_timestamp: msg.target_timestamp,
+            asset_policy: msg.asset_policy.map(TryInto::try_into).transpose()?,
         })
     }
 }
@@ -590,6 +599,7 @@ impl From<ShieldedOutputPlan> for pb::ShieldedOutputPlan {
             is_flagged: msg.is_flagged,
             r_2: msg.r_2.map(|x| x.to_bytes().to_vec()).unwrap_or_default(),
             r_3: msg.r_3.map(|x| x.to_bytes().to_vec()).unwrap_or_default(),
+            asset_policy: msg.asset_policy.map(Into::into),
         }
     }
 }
@@ -687,6 +697,7 @@ impl TryFrom<pb::ShieldedOutputPlan> for ShieldedOutputPlan {
             dleq_c_3: parse_fq_or_zero("dleq_c_3", &msg.dleq_c_3)?,
             dleq_s_3: parse_fq_or_zero("dleq_s_3", &msg.dleq_s_3)?,
             target_timestamp: msg.target_timestamp,
+            asset_policy: msg.asset_policy.map(TryInto::try_into).transpose()?,
         })
     }
 }

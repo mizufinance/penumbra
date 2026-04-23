@@ -92,7 +92,7 @@ impl ExpandedClueKey {
     ///
     /// # Errors
     ///
-    /// `precision_bits` must be smaller than [`MAX_PRECISION`].
+    /// `precision_bits` must be smaller than [`Precision::MAX`](crate::Precision::MAX).
     #[allow(non_snake_case)]
     pub fn create_clue_deterministic(
         &self,
@@ -159,7 +159,7 @@ impl ExpandedClueKey {
     ///
     /// # Errors
     ///
-    /// `precision_bits` must be smaller than [`MAX_PRECISION`].
+    /// `precision_bits` must be smaller than [`Precision::MAX`](crate::Precision::MAX).
     #[allow(non_snake_case)]
     pub fn create_clue<R: RngCore + CryptoRng>(
         &self,

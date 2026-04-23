@@ -4,7 +4,7 @@
 #![deny(clippy::unwrap_used)]
 #![allow(unreachable_patterns)]
 // Requires nightly
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[cfg(feature = "component")]
 pub mod component;

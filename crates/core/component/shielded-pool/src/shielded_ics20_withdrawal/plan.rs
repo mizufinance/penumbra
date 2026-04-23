@@ -272,7 +272,6 @@ impl ShieldedIcs20WithdrawalPlan {
                 >::from(Fr::from(0u64))),
                 encrypted_backref: crate::EncryptedBackref::dummy(),
                 compliance_ciphertext: Vec::new(),
-                dleq_proof: Vec::new(),
             })
             .collect::<Vec<_>>();
         let padder = self.padder();
@@ -282,7 +281,6 @@ impl ShieldedIcs20WithdrawalPlan {
                 rk: padder.synthetic_dummy_verification_key(slot),
                 encrypted_backref: crate::EncryptedBackref::dummy(),
                 compliance_ciphertext: Vec::new(),
-                dleq_proof: Vec::new(),
             }
         });
 
@@ -475,7 +473,6 @@ impl ShieldedIcs20WithdrawalPlan {
             .map(|spend| {
                 let mut input = spend.action_input_body(fvk);
                 input.compliance_ciphertext.clear();
-                input.dleq_proof.clear();
                 input
             })
             .collect::<Vec<_>>();
@@ -486,7 +483,6 @@ impl ShieldedIcs20WithdrawalPlan {
                 rk: padder.synthetic_dummy_verification_key(slot),
                 encrypted_backref: crate::EncryptedBackref::dummy(),
                 compliance_ciphertext: Vec::new(),
-                dleq_proof: Vec::new(),
             }
         });
 

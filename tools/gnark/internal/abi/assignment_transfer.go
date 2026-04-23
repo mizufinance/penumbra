@@ -137,9 +137,22 @@ func transferCoreTierFields(
 	fields := circuits.TransferComplianceCoreFields{
 		Epk: point2DString(tier.EPKAffine),
 		C2:  fqString(tier.C2),
-		Dleq: circuits.DLEQFields{
-			C: fqString(tier.DleqC),
-			S: fqString(tier.DleqS),
+		Proof: circuits.TransferComplianceProofFields{
+			Statement: circuits.TransferComplianceStatementFields{
+				SubjectBD:       fqString(tier.SubjectBD),
+				RingIDHash:      fqString(tier.RingIDHash),
+				PolicyIDHash:    fqString(tier.PolicyIDHash),
+				ResourceHash:    fqString(tier.ResourceHash),
+				PermissionHash:  fqString(tier.PermissionHash),
+				Tier:            tier.Tier,
+				TargetTimestamp: fqString(tier.StatementTimestamp),
+				Salt:            fqString(tier.Salt),
+			},
+			Challenge:   fqString(tier.Challenge),
+			Response:    fqString(tier.Response),
+			DerivedPK:   point2DString(tier.DerivedPKAffine),
+			EncCmt:      point2DString(tier.EncCmtAffine),
+			SharedPoint: point2DString(tier.SharedPointAffine),
 		},
 	}
 	for i := range tier.Ciphertext {
@@ -162,9 +175,22 @@ func transferExtTierFields(
 	fields := circuits.TransferComplianceExtFields{
 		Epk: point2DString(tier.EPKAffine),
 		C2:  fqString(tier.C2),
-		Dleq: circuits.DLEQFields{
-			C: fqString(tier.DleqC),
-			S: fqString(tier.DleqS),
+		Proof: circuits.TransferComplianceProofFields{
+			Statement: circuits.TransferComplianceStatementFields{
+				SubjectBD:       fqString(tier.SubjectBD),
+				RingIDHash:      fqString(tier.RingIDHash),
+				PolicyIDHash:    fqString(tier.PolicyIDHash),
+				ResourceHash:    fqString(tier.ResourceHash),
+				PermissionHash:  fqString(tier.PermissionHash),
+				Tier:            tier.Tier,
+				TargetTimestamp: fqString(tier.StatementTimestamp),
+				Salt:            fqString(tier.Salt),
+			},
+			Challenge:   fqString(tier.Challenge),
+			Response:    fqString(tier.Response),
+			DerivedPK:   point2DString(tier.DerivedPKAffine),
+			EncCmt:      point2DString(tier.EncCmtAffine),
+			SharedPoint: point2DString(tier.SharedPointAffine),
 		},
 	}
 	for i := range tier.Ciphertext {

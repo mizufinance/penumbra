@@ -373,9 +373,6 @@ pub struct TransferInputBody {
     /// Compliance ciphertext encrypting spent note details for the asset issuer.
     #[prost(bytes = "vec", tag = "4")]
     pub compliance_ciphertext: ::prost::alloc::vec::Vec<u8>,
-    /// DLEQ proof bundle for the spend-side policy binding.
-    #[prost(bytes = "vec", tag = "5")]
-    pub dleq_proof: ::prost::alloc::vec::Vec<u8>,
 }
 impl ::prost::Name for TransferInputBody {
     const NAME: &'static str = "TransferInputBody";
@@ -401,9 +398,9 @@ pub struct TransferOutputBody {
     /// Compliance ciphertext encrypting created note details for the asset issuer.
     #[prost(bytes = "vec", tag = "4")]
     pub compliance_ciphertext: ::prost::alloc::vec::Vec<u8>,
-    /// DLEQ proof bundle for the output-side policy binding.
+    /// Orbis-compatible encrypted-seed upload bundle for the receiver output only.
     #[prost(bytes = "vec", tag = "5")]
-    pub dleq_proofs: ::prost::alloc::vec::Vec<u8>,
+    pub orbis_upload_bundle: ::prost::alloc::vec::Vec<u8>,
 }
 impl ::prost::Name for TransferOutputBody {
     const NAME: &'static str = "TransferOutputBody";
@@ -1312,6 +1309,9 @@ pub struct ShieldedInputPlan {
     /// Threshold for flagging (in base units).
     #[prost(bytes = "vec", tag = "29")]
     pub threshold: ::prost::alloc::vec::Vec<u8>,
+    /// Full compliance asset policy for regulated assets.
+    #[prost(message, optional, tag = "30")]
+    pub asset_policy: ::core::option::Option<super::super::compliance::v1::AssetPolicy>,
 }
 impl ::prost::Name for ShieldedInputPlan {
     const NAME: &'static str = "ShieldedInputPlan";
@@ -1448,6 +1448,9 @@ pub struct ShieldedOutputPlan {
     /// Ephemeral secret for spend extension tier (r_3, needed by circuit).
     #[prost(bytes = "vec", tag = "38")]
     pub r_3: ::prost::alloc::vec::Vec<u8>,
+    /// Full compliance asset policy for regulated assets.
+    #[prost(message, optional, tag = "39")]
+    pub asset_policy: ::core::option::Option<super::super::compliance::v1::AssetPolicy>,
 }
 impl ::prost::Name for ShieldedOutputPlan {
     const NAME: &'static str = "ShieldedOutputPlan";
