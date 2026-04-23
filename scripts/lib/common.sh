@@ -387,6 +387,56 @@ ensure_docker_daemon() {
     return 1
 }
 
+ensure_orbis_runtime_checkout() {
+    local repo_url="${ORBIS_RUNTIME_REPO:-https://github.com/sourcenetwork/orbis-rs.git}"
+    local ref="${ORBIS_RUNTIME_REF:-d5889bd777bbac7bf97a8e89a2556116f2740ceb}"
+    local default_checkout_dir="$COMPLIANCE_TMP/orbis-rs"
+    local checkout_dir="${ORBIS_RUNTIME_CONTEXT:-$default_checkout_dir}"
+    local current_ref=""
+
+    if [ -n "${ORBIS_RUNTIME_CONTEXT:-}" ]; then
+        if [ ! -f "$checkout_dir/docker/Dockerfile" ]; then
+            log_error "ORBIS_RUNTIME_CONTEXT is set but $checkout_dir/docker/Dockerfile is missing"
+            return 1
+        fi
+        export ORBIS_RUNTIME_CONTEXT="$checkout_dir"
+        return 0
+    fi
+
+    command -v git >/dev/null 2>&1 || {
+        log_error "git not found in PATH; cannot prepare Orbis runtime checkout"
+        return 1
+    }
+
+    if [ -d "$checkout_dir/.git" ]; then
+        current_ref="$(git -C "$checkout_dir" rev-parse HEAD 2>/dev/null || true)"
+    fi
+    if [ "$current_ref" = "$ref" ] && [ -f "$checkout_dir/docker/Dockerfile" ]; then
+        export ORBIS_RUNTIME_CONTEXT="$checkout_dir"
+        return 0
+    fi
+
+    rm -rf "$default_checkout_dir"
+    mkdir -p "$(dirname "$checkout_dir")"
+
+    log_info "Preparing Orbis runtime checkout at $checkout_dir ($ref)"
+    run_quiet git clone --filter=blob:none "$repo_url" "$checkout_dir" || {
+        log_error "Failed to clone Orbis runtime repo from $repo_url"
+        return 1
+    }
+    run_quiet git -C "$checkout_dir" checkout "$ref" || {
+        log_error "Failed to checkout Orbis runtime ref $ref"
+        return 1
+    }
+
+    if [ ! -f "$checkout_dir/docker/Dockerfile" ]; then
+        log_error "Expected Orbis Dockerfile missing at $checkout_dir/docker/Dockerfile"
+        return 1
+    fi
+
+    export ORBIS_RUNTIME_CONTEXT="$checkout_dir"
+}
+
 run_orbis_compose() {
     local compose_file="$1"
     shift

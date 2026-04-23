@@ -31,7 +31,7 @@ services:
 
   node1:
     build:
-      context: https://github.com/sourcenetwork/orbis-rs.git#d5889bd777bbac7bf97a8e89a2556116f2740ceb
+      context: ${ORBIS_RUNTIME_CONTEXT:?set by scripts/orbis-stack.sh}
       dockerfile: docker/Dockerfile
       args:
         ENABLE_INTEGRATION_TEST: "true"
@@ -59,7 +59,7 @@ services:
 
   node2:
     build:
-      context: https://github.com/sourcenetwork/orbis-rs.git#d5889bd777bbac7bf97a8e89a2556116f2740ceb
+      context: ${ORBIS_RUNTIME_CONTEXT:?set by scripts/orbis-stack.sh}
       dockerfile: docker/Dockerfile
       args:
         ENABLE_INTEGRATION_TEST: "true"
@@ -87,7 +87,7 @@ services:
 
   node3:
     build:
-      context: https://github.com/sourcenetwork/orbis-rs.git#d5889bd777bbac7bf97a8e89a2556116f2740ceb
+      context: ${ORBIS_RUNTIME_CONTEXT:?set by scripts/orbis-stack.sh}
       dockerfile: docker/Dockerfile
       args:
         ENABLE_INTEGRATION_TEST: "true"

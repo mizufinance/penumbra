@@ -16,6 +16,7 @@ case "$ACTION" in
     up)
         print_banner "Orbis Runtime Bring-Up" "sourcehub + 3 nodes via vendored runtime contract"
         ensure_docker_daemon
+        ensure_orbis_runtime_checkout
         run_orbis_compose "$COMPOSE_FILE" up -d --build
         wait_for_orbis_stack
         log_success "Orbis stack ready"
