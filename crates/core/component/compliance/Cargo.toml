@@ -22,6 +22,7 @@ default = ["component"]
 test-helpers = ["decaf377-fmd", "decaf377-ka"]
 
 [dependencies]
+aes-gcm = "0.10"
 anyhow = {workspace = true}
 ark-ff = {workspace = true}
 base64 = {workspace = true}
@@ -51,6 +52,8 @@ serde_json = {workspace = true}
 sha2 = {workspace = true}
 blake2b_simd = {workspace = true}
 chacha20poly1305 = {workspace = true}
+hex = {workspace = true}
+hkdf = "0.12"
 rand_core = {workspace = true}
 rusqlite = {version = "0.32", optional = true}
 tendermint = {workspace = true}

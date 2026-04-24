@@ -6,7 +6,7 @@
 
 #![deny(clippy::unwrap_used)]
 // Requires nightly.
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #[macro_use]
 extern crate serde_with;
 

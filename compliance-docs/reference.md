@@ -103,10 +103,11 @@ Clients cache trees locally (like SCT). SQLite tables:
 
 ---
 
-## DLEQ Proof
+## Transfer DLEQ
 
-In-circuit Chaum-Pedersen proof binding each ciphertext to policy metadata.
-Computed inside the SNARK, output as `(c, s)` per tier.
+In-circuit Chaum-Pedersen proof binding each transfer tier to the canonical
+Penumbra metadata statement. Computed inside the SNARK, output as `(c, s)` per
+tier.
 
 ### Math (Orbis sign convention)
 
@@ -124,10 +125,9 @@ s    = k + c × r
 `policy_id_hash`, `resource_hash`, `permission_hash` are reused from IMT leaf
 commitment verification (zero additional cost).
 
-**Verifier (Orbis, at PRE time):**
+**Canonical verifier (Penumbra-side / future public tier object validator):**
 
 ```
-S    = d × sk_ring × EPK              (MPC computation)
 ACK  = d × ring_pk
 R    = s × G   - c × EPK
 R'   = s × ACK - c × S
@@ -135,14 +135,28 @@ c_check = Poseidon(ACK, EPK, S, R, R', M)
 Accept if c_check == c
 ```
 
+`S` must be supplied alongside the public tier object if the verifier does not
+know `sk_ring`. The proof binds the metadata statement to the ACK/EPK relation;
+it does not by itself prove that `C2` encrypts a valid seed. `C2` correctness
+remains a Penumbra zk-circuit property.
+
+### Current Orbis Stored-Secret Proof
+
+Current Orbis `store_secret` / `start_pre` does not consume the transfer DLEQ
+above. It verifies the stored-secret encryption proof for the Orbis-compatible
+encrypted-seed object uploaded for each transfer tier. That proof binds the
+stored object to Orbis metadata
+`{policy_id, resource, permission, tier, timestamp, salt}`, not directly to the
+canonical Penumbra transfer-tier statement.
+
 ### Tier Binding
 
 | Proof | DLEQ instance | Tier constant |
 |-------|---------------|---------------|
-| Spend | core | `Fq::from(1)` |
-| Output | core (r_1, ACK_receiver) | `Fq::from(1)` |
-| Output | ext (r_2, ACK_receiver) | `Fq::from(2)` |
-| Output | sext (r_3, ACK_sender) | `Fq::from(3)` |
+| Transfer | sender_core (r_sender_core, ACK_sender) | `Fq::from(1)` |
+| Transfer | sender_ext (r_sender_ext, ACK_sender) | `Fq::from(2)` |
+| Transfer | output_core (r_output_core, ACK_receiver) | `Fq::from(3)` |
+| Transfer | output_ext (r_output_ext, ACK_receiver) | `Fq::from(4)` |
 
 Tier is a circuit constant — Alice cannot lie about it.
 
@@ -194,6 +208,11 @@ IBC channel whitelist must be set at registration time.
 
 **Cross-tier independence**: Each ACK-tier uses independent ephemeral scalar.
 Enforced by ZK circuit. Issuer cannot derive one tier from another.
+
+**Current PRE path is encrypted-seed-object based**: Orbis PRE operates on the
+stored encrypted seed object for each transfer tier. It authorizes by stored
+object metadata plus request scope, and the PRE request must carry a
+`valid_window` whenever the stored object includes a timestamp.
 
 **decaf377 curve**: Orbis supports decaf377 natively — no cross-curve bridge.
 

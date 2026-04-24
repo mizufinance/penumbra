@@ -112,8 +112,24 @@ pub use leaf_binding::{
     blind_counterparty_leaf, blind_sender_leaf, DOMAIN_SEP_COUNTERPARTY, DOMAIN_SEP_SENDER,
 };
 
-pub mod orbis;
-pub use orbis::{compute_adjusted_reader_pk, recover_seed, OrbisReencryptor, SimulatedOrbis};
+pub mod decode_object;
+pub use decode_object::{
+    PublicTransferTierDecodeObject, TransferTierKind, TransferTierMetadataStatement,
+};
+
+pub mod upload_package;
+pub use upload_package::{
+    build_orbis_encrypted_seed_upload_package,
+    build_orbis_encrypted_seed_upload_package_with_randomness, decrypt_orbis_reencrypted_seed,
+    encode_orbis_policy_metadata, OrbisEncryptedSeedUploadPackage, OrbisSecretEnvelope,
+    TransferOrbisUploadBundle,
+};
+
+pub mod orbis_interop;
+pub use orbis_interop::{
+    compute_reencrypt_commitment, compute_ring_pk, recover_seed,
+    verify_and_compute_reencrypt_commitment, verify_reencrypt_proof,
+};
 
 /// Create valid IMT non-membership proof for an unregulated asset.
 ///

@@ -5,7 +5,7 @@ use crate::{
         binary::{encode_vec_32, put_bytes, put_u32, put_u64, put_u8, BinaryCursor},
         transfer_witness::{
             TransferComplianceCiphertextWitnessV1, TransferOutputWitnessV1, TransferSpendWitnessV1,
-            TransferWitnessV1,
+            TransferTierRandomizersWitnessV1, TransferWitnessV1,
         },
         typed::{
             decode_indexed_leaf, encode_indexed_leaf, encode_merkle_path, encode_point_affine,
@@ -15,7 +15,7 @@ use crate::{
 };
 
 const TRANSFER_WITNESS_MAGIC: &[u8; 4] = b"PTWG";
-const TRANSFER_WITNESS_VERSION: u32 = 6;
+const TRANSFER_WITNESS_VERSION: u32 = 7;
 
 impl TransferWitnessV1 {
     pub fn encode(&self) -> Result<Vec<u8>> {
@@ -49,10 +49,8 @@ impl TransferWitnessV1 {
         encode_compliance_tier(&mut buf, &self.sender_ext)?;
         encode_compliance_tier(&mut buf, &self.output_core)?;
         encode_compliance_tier(&mut buf, &self.output_ext)?;
-        put_bytes(&mut buf, &self.sender_r_core);
-        put_bytes(&mut buf, &self.sender_r_ext);
-        put_bytes(&mut buf, &self.output_r_core);
-        put_bytes(&mut buf, &self.output_r_ext);
+        encode_randomizers(&mut buf, &self.sender_randomizers);
+        encode_randomizers(&mut buf, &self.output_randomizers);
 
         for spend in &self.spends {
             encode_spend(&mut buf, spend)?;
@@ -127,10 +125,8 @@ impl TransferWitnessV1 {
         let sender_ext = decode_compliance_tier(&mut cursor)?;
         let output_core = decode_compliance_tier(&mut cursor)?;
         let output_ext = decode_compliance_tier(&mut cursor)?;
-        let sender_r_core = cursor.read_fixed::<32>()?;
-        let sender_r_ext = cursor.read_fixed::<32>()?;
-        let output_r_core = cursor.read_fixed::<32>()?;
-        let output_r_ext = cursor.read_fixed::<32>()?;
+        let sender_randomizers = decode_randomizers(&mut cursor)?;
+        let output_randomizers = decode_randomizers(&mut cursor)?;
 
         let spends = (0..n_in)
             .map(|_| decode_spend(&mut cursor))
@@ -167,10 +163,8 @@ impl TransferWitnessV1 {
             sender_ext,
             output_core,
             output_ext,
-            sender_r_core,
-            sender_r_ext,
-            output_r_core,
-            output_r_ext,
+            sender_randomizers,
+            output_randomizers,
             spends,
             outputs,
             balance_commitment_affine: cursor.read_point_affine()?,
@@ -192,9 +186,20 @@ fn encode_compliance_tier(
 ) -> Result<()> {
     put_bytes(buf, &tier.c2);
     encode_vec_32(buf, &tier.ciphertext)?;
-    put_bytes(buf, &tier.dleq_c);
-    put_bytes(buf, &tier.dleq_s);
+    put_bytes(buf, &tier.subject_b_d);
+    put_bytes(buf, &tier.ring_id_hash);
+    put_bytes(buf, &tier.policy_id_hash);
+    put_bytes(buf, &tier.resource_hash);
+    put_bytes(buf, &tier.permission_hash);
+    put_u64(buf, tier.tier);
+    put_bytes(buf, &tier.statement_target_timestamp);
+    put_bytes(buf, &tier.salt);
+    put_bytes(buf, &tier.challenge);
+    put_bytes(buf, &tier.response);
     encode_point_affine(buf, &tier.epk_affine);
+    encode_point_affine(buf, &tier.derived_pk_affine);
+    encode_point_affine(buf, &tier.enc_cmt_affine);
+    encode_point_affine(buf, &tier.shared_point_affine);
     Ok(())
 }
 
@@ -204,9 +209,32 @@ fn decode_compliance_tier(
     Ok(TransferComplianceCiphertextWitnessV1 {
         c2: cursor.read_fixed::<32>()?,
         ciphertext: cursor.read_vec_32()?,
-        dleq_c: cursor.read_fixed::<32>()?,
-        dleq_s: cursor.read_fixed::<32>()?,
+        subject_b_d: cursor.read_fixed::<32>()?,
+        ring_id_hash: cursor.read_fixed::<32>()?,
+        policy_id_hash: cursor.read_fixed::<32>()?,
+        resource_hash: cursor.read_fixed::<32>()?,
+        permission_hash: cursor.read_fixed::<32>()?,
+        tier: cursor.read_u64()?,
+        statement_target_timestamp: cursor.read_fixed::<32>()?,
+        salt: cursor.read_fixed::<32>()?,
+        challenge: cursor.read_fixed::<32>()?,
+        response: cursor.read_fixed::<32>()?,
         epk_affine: cursor.read_point_affine()?,
+        derived_pk_affine: cursor.read_point_affine()?,
+        enc_cmt_affine: cursor.read_point_affine()?,
+        shared_point_affine: cursor.read_point_affine()?,
+    })
+}
+
+fn encode_randomizers(buf: &mut Vec<u8>, randomizers: &TransferTierRandomizersWitnessV1) {
+    put_bytes(buf, &randomizers.core);
+    put_bytes(buf, &randomizers.ext);
+}
+
+fn decode_randomizers(cursor: &mut BinaryCursor<'_>) -> Result<TransferTierRandomizersWitnessV1> {
+    Ok(TransferTierRandomizersWitnessV1 {
+        core: cursor.read_fixed::<32>()?,
+        ext: cursor.read_fixed::<32>()?,
     })
 }
 

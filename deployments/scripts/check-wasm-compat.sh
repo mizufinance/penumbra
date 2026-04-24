@@ -9,6 +9,12 @@
 # target will help ensure compat.
 set -euo pipefail
 
+repo_root="$(git rev-parse --show-toplevel)"
+cd "${repo_root}"
+
+run_cargo() {
+    cargo "$@"
+}
 
 # Consider checking the web repo's wasm Cargo.toml periodically:
 #
@@ -43,7 +49,7 @@ packages=(
 # Ostensibly this would be slow, but in CI with a warm cache it's quick.
 for p in "${packages[@]}" ; do
     echo "Checking package for wasm compat: $p ..."
-    if ! cargo check --release --target wasm32-unknown-unknown --no-default-features --package "$p" ; then
+    if ! run_cargo check --release --target wasm32-unknown-unknown --no-default-features --package "$p" ; then
         >&2 echo "ERROR: package appears not to be wasm-compatible: '$p'"
         exit 1
     fi

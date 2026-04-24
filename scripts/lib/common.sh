@@ -5,6 +5,8 @@
 # --- Repo-local tmp directory for all artifacts ---
 COMPLIANCE_TMP="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tmp"
 COMPLIANCE_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+COMPLIANCE_STACK_HOME="${PENUMBRA_ORBIS_HOME:-$COMPLIANCE_TMP/penumbra-home}"
+COMPLIANCE_NETWORK_DATA_DIR="${COMPLIANCE_STACK_HOME}/network_data"
 mkdir -p "$COMPLIANCE_TMP"
 
 gnark_lib_ext() {
@@ -36,7 +38,13 @@ export_demo_gnark_env() {
     export PENUMBRA_GNARK_SHIELDED_ICS20_WITHDRAWAL_ARTIFACT_DIR="$COMPLIANCE_REPO_ROOT/tools/gnark/artifacts/shielded_ics20_withdrawal"
 }
 
-export_demo_gnark_env
+export_compliance_rust_log() {
+    if [ -z "${RUST_LOG:-}" ]; then
+        export RUST_LOG="info"
+    fi
+}
+
+export_compliance_rust_log
 
 gnark_symbol_grep() {
     local lib_path="$1"
@@ -143,6 +151,39 @@ log_success() { echo -e "${GREEN}[OK]${NC} $*"; }
 log_warning() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $*"; }
 
+is_tcp_port_in_use() {
+    local port="$1"
+
+    if command -v nc >/dev/null 2>&1; then
+        nc -z 127.0.0.1 "$port" >/dev/null 2>&1
+        return $?
+    fi
+
+    (echo > /dev/tcp/127.0.0.1/"$port") >/dev/null 2>&1
+}
+
+ensure_ports_available() {
+    local has_conflict=0
+    local port
+
+    for port in "$@"; do
+        if ! is_tcp_port_in_use "$port"; then
+            continue
+        fi
+
+        log_error "TCP port $port is already in use"
+        if command -v lsof >/dev/null 2>&1; then
+            lsof -nP -iTCP:"$port" -sTCP:LISTEN >&2 || true
+        fi
+        has_conflict=1
+    done
+
+    if [ "$has_conflict" -eq 1 ]; then
+        log_error "Free the conflicting ports or run ./scripts/penumbra-down.sh and ./scripts/orbis-stack.sh down"
+        return 1
+    fi
+}
+
 # --- Test counters ---
 PASSED=0
 FAILED=0
@@ -218,6 +259,229 @@ wait_for_grpc() {
     done
 }
 
+wait_for_tcp_port() {
+    local port="$1"
+    local max_attempts="${2:-30}"
+    local interval="${3:-2}"
+    wait_for_grpc "$port" "$max_attempts" "$interval"
+}
+
+extract_toml_string() {
+    local file="$1"
+    local key="$2"
+
+    awk -F'"' -v key="$key" '$1 == key " = " { print $2; exit }' "$file"
+}
+
+set_pcli_view_url() {
+    local config_path="$1"
+    local view_url="$2"
+    local tmpfile
+    tmpfile=$(mktemp)
+
+    awk -v view_url="$view_url" '
+        BEGIN { updated = 0 }
+        /^view_url = / {
+            print "view_url = \"" view_url "\""
+            updated = 1
+            next
+        }
+        /^grpc_url = / {
+            print
+            if (!updated) {
+                print "view_url = \"" view_url "\""
+                updated = 1
+            }
+            next
+        }
+        { print }
+        END {
+            if (!updated) {
+                print "view_url = \"" view_url "\""
+            }
+        }
+    ' "$config_path" > "$tmpfile"
+
+    mv "$tmpfile" "$config_path"
+}
+
+configure_wallet_view_service() {
+    local wallet_name="$1"
+    local wallet_home="$2"
+    local daemon_home="$3"
+    local bind_port="$4"
+    local pcli_bin="$5"
+    local pclientd_bin="$6"
+    local pid_file="$7"
+    local config_path="$wallet_home/config.toml"
+    local fvk
+    local grpc_url
+    local view_url="http://127.0.0.1:${bind_port}"
+    local daemon_log="$COMPLIANCE_TMP/${wallet_name}-pclientd.log"
+    local daemon_pid
+
+    fvk="$(extract_toml_string "$config_path" "full_viewing_key")"
+    grpc_url="$(extract_toml_string "$config_path" "grpc_url")"
+
+    if [ -z "$fvk" ] || [ -z "$grpc_url" ]; then
+        log_error "failed to read wallet config for $wallet_name from $config_path"
+        return 1
+    fi
+
+    rm -rf "$daemon_home"
+    mkdir -p "$daemon_home"
+
+    printf '%s\n' "$fvk" | "$pclientd_bin" --home "$daemon_home" init \
+        --view \
+        --grpc-url "$grpc_url" \
+        --bind-addr "127.0.0.1:${bind_port}" >/dev/null
+
+    set_pcli_view_url "$config_path" "$view_url"
+
+    "$pclientd_bin" --home "$daemon_home" start > "$daemon_log" 2>&1 &
+    daemon_pid=$!
+    echo "${wallet_name}_PCLIENTD_PID=$daemon_pid" >> "$pid_file"
+
+    wait_for_tcp_port "$bind_port" 30 1
+
+    for attempt in $(seq 1 30); do
+        if ! kill -0 "$daemon_pid" 2>/dev/null; then
+            log_error "$wallet_name pclientd exited early"
+            tail -n 50 "$daemon_log" >&2 || true
+            return 1
+        fi
+
+        if "$pcli_bin" --home "$wallet_home" view balance >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+
+    log_error "$wallet_name pclientd did not become ready"
+    tail -n 50 "$daemon_log" >&2 || true
+    return 1
+}
+
+docker_compose_flavor() {
+    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        printf 'docker-compose-v2\n'
+        return 0
+    fi
+    if command -v docker-compose >/dev/null 2>&1; then
+        printf 'docker-compose-v1\n'
+        return 0
+    fi
+    log_error "docker compose not found"
+    return 1
+}
+
+docker_daemon_ready() {
+    command -v docker >/dev/null 2>&1 || return 1
+    docker info >/dev/null 2>&1
+}
+
+ensure_docker_daemon() {
+    docker_daemon_ready && return 0
+    log_error "Docker daemon is not running"
+    log_error "Start Docker Desktop or your local Docker service, then rerun the command"
+    return 1
+}
+
+ensure_orbis_runtime_checkout() {
+    local repo_url="${ORBIS_RUNTIME_REPO:-https://github.com/sourcenetwork/orbis-rs.git}"
+    local ref="${ORBIS_RUNTIME_REF:-d5889bd777bbac7bf97a8e89a2556116f2740ceb}"
+    local default_checkout_dir="$COMPLIANCE_TMP/orbis-rs"
+    local checkout_dir="${ORBIS_RUNTIME_CONTEXT:-$default_checkout_dir}"
+    local current_ref=""
+
+    if [ -n "${ORBIS_RUNTIME_CONTEXT:-}" ]; then
+        if [ ! -f "$checkout_dir/docker/Dockerfile" ]; then
+            log_error "ORBIS_RUNTIME_CONTEXT is set but $checkout_dir/docker/Dockerfile is missing"
+            return 1
+        fi
+        export ORBIS_RUNTIME_CONTEXT="$checkout_dir"
+        return 0
+    fi
+
+    command -v git >/dev/null 2>&1 || {
+        log_error "git not found in PATH; cannot prepare Orbis runtime checkout"
+        return 1
+    }
+
+    if [ -d "$checkout_dir/.git" ]; then
+        current_ref="$(git -C "$checkout_dir" rev-parse HEAD 2>/dev/null || true)"
+    fi
+    if [ "$current_ref" = "$ref" ] && [ -f "$checkout_dir/docker/Dockerfile" ]; then
+        export ORBIS_RUNTIME_CONTEXT="$checkout_dir"
+        return 0
+    fi
+
+    rm -rf "$default_checkout_dir"
+    mkdir -p "$(dirname "$checkout_dir")"
+
+    log_info "Preparing Orbis runtime checkout at $checkout_dir ($ref)"
+    run_quiet git clone --filter=blob:none "$repo_url" "$checkout_dir" || {
+        log_error "Failed to clone Orbis runtime repo from $repo_url"
+        return 1
+    }
+    run_quiet git -C "$checkout_dir" checkout "$ref" || {
+        log_error "Failed to checkout Orbis runtime ref $ref"
+        return 1
+    }
+
+    if [ ! -f "$checkout_dir/docker/Dockerfile" ]; then
+        log_error "Expected Orbis Dockerfile missing at $checkout_dir/docker/Dockerfile"
+        return 1
+    fi
+
+    export ORBIS_RUNTIME_CONTEXT="$checkout_dir"
+}
+
+run_orbis_compose() {
+    local compose_file="$1"
+    shift
+    local flavor
+    flavor="$(docker_compose_flavor)" || return 1
+    case "$flavor" in
+        docker-compose-v2)
+            docker compose -f "$compose_file" "$@"
+            ;;
+        docker-compose-v1)
+            docker-compose -f "$compose_file" "$@"
+            ;;
+    esac
+}
+
+wait_for_orbis_stack() {
+    wait_for_url "http://127.0.0.1:26657/status" 60 2 || return 1
+    wait_for_tcp_port 50051 60 2 || return 1
+    wait_for_tcp_port 50052 60 2 || return 1
+    wait_for_tcp_port 50053 60 2 || return 1
+}
+
+wait_for_penumbra_stack() {
+    wait_for_penumbra 16657 45 2 5 || return 1
+    wait_for_tcp_port 8080 30 1 || return 1
+}
+
+kill_tracked_pids() {
+    local pid_file="$1"
+
+    [ -f "$pid_file" ] || return 0
+
+    while IFS='=' read -r _ pid; do
+        [ -n "${pid:-}" ] || continue
+        kill "$pid" 2>/dev/null || true
+    done < "$pid_file"
+
+    while IFS='=' read -r _ pid; do
+        [ -n "${pid:-}" ] || continue
+        wait "$pid" 2>/dev/null || true
+    done < "$pid_file"
+
+    rm -f "$pid_file"
+}
+
 # --- Wait for Penumbra node to be fully ready (blocks producing) ---
 wait_for_penumbra() {
     local cometbft_port="${1:-16657}"
@@ -277,7 +541,7 @@ load_env() {
     local env_file="${1:-$COMPLIANCE_TMP/compliance-demo.env}"
     if [ ! -f "$env_file" ]; then
         log_error "Environment file not found: $env_file"
-        log_error "Run scripts/setup-penumbra.sh first"
+        log_error "Run `just orbis-integration-up` first"
         exit 1
     fi
     source "$env_file"
@@ -324,3 +588,15 @@ print_phase() {
     echo "$line"
     echo ""
 }
+
+maybe_enable_demo_gnark_env() {
+    if [ "${PENUMBRA_ORBIS_USE_DEMO_GNARK:-0}" != "1" ]; then
+        return 0
+    fi
+
+    log_info "PENUMBRA_ORBIS_USE_DEMO_GNARK=1 enabled; validating demo gnark runtimes"
+    ensure_demo_gnark_libs
+    export_demo_gnark_env
+}
+
+maybe_enable_demo_gnark_env

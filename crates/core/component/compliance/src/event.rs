@@ -4,7 +4,7 @@ use penumbra_sdk_proto::{core::component::compliance::v1 as pb, DomainType, Name
 use penumbra_sdk_tct::StateCommitment;
 
 use crate::indexed_tree::IndexedLeaf;
-use crate::structs::ComplianceLeaf;
+use crate::structs::{AssetPolicy, ComplianceLeaf};
 
 /// Create a user registration event proto for emitting via record_proto.
 pub fn user_registered(
@@ -27,6 +27,7 @@ pub fn asset_registered(
     indexed_leaf: IndexedLeaf,
     low_leaf_position: u64,
     updated_low_leaf: IndexedLeaf,
+    asset_policy: AssetPolicy,
 ) -> pb::EventAssetRegistered {
     pb::EventAssetRegistered {
         asset_id: Some(asset_id.into()),
@@ -35,7 +36,7 @@ pub fn asset_registered(
         indexed_leaf: Some(indexed_leaf.into()),
         low_leaf_position,
         updated_low_leaf: Some(updated_low_leaf.into()),
-        asset_policy: None,
+        asset_policy: Some(asset_policy.into()),
     }
 }
 
@@ -104,6 +105,7 @@ pub struct EventAssetRegistered {
     pub indexed_leaf: IndexedLeaf,
     pub low_leaf_position: u64,
     pub updated_low_leaf: IndexedLeaf,
+    pub asset_policy: AssetPolicy,
 }
 
 impl DomainType for EventAssetRegistered {
@@ -131,6 +133,10 @@ impl TryFrom<pb::EventAssetRegistered> for EventAssetRegistered {
                     .updated_low_leaf
                     .ok_or(anyhow!("missing `updated_low_leaf`"))?
                     .try_into()?,
+                asset_policy: value
+                    .asset_policy
+                    .ok_or(anyhow!("missing `asset_policy`"))?
+                    .try_into()?,
             })
         }
         inner(value).context(format!("parsing {}", pb::EventAssetRegistered::NAME))
@@ -146,7 +152,7 @@ impl From<EventAssetRegistered> for pb::EventAssetRegistered {
             indexed_leaf: Some(value.indexed_leaf.into()),
             low_leaf_position: value.low_leaf_position,
             updated_low_leaf: Some(value.updated_low_leaf.into()),
-            asset_policy: None,
+            asset_policy: Some(value.asset_policy.into()),
         }
     }
 }

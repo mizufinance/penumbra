@@ -6,7 +6,7 @@ use decaf377_rdsa::{Signature, SpendAuth, VerificationKey};
 use decaf377_rdsa::{SpendAuth, VerificationKey};
 use penumbra_sdk_asset::{asset, Balance};
 #[cfg(any(unix, windows))]
-use penumbra_sdk_compliance::ComplianceLeaf;
+use penumbra_sdk_compliance::{AssetPolicy, ComplianceLeaf};
 use penumbra_sdk_keys::Address;
 #[cfg(any(unix, windows))]
 use penumbra_sdk_keys::{
@@ -239,7 +239,6 @@ impl TransferPlan {
                 >::from(Fr::from(0u64))),
                 encrypted_backref: crate::EncryptedBackref::dummy(),
                 compliance_ciphertext: Vec::new(),
-                dleq_proof: Vec::new(),
             })
             .collect::<Vec<_>>();
         pad_to_len(&mut inputs, PADDED_TRANSFER_INPUTS, |slot| {
@@ -248,7 +247,6 @@ impl TransferPlan {
                 rk: self.synthetic_dummy_verification_key(slot),
                 encrypted_backref: crate::EncryptedBackref::dummy(),
                 compliance_ciphertext: Vec::new(),
-                dleq_proof: Vec::new(),
             }
         });
 
@@ -260,7 +258,7 @@ impl TransferPlan {
                 wrapped_memo_key: penumbra_sdk_keys::symmetric::WrappedMemoKey([0u8; 48]),
                 ovk_wrapped_key: penumbra_sdk_keys::symmetric::OvkWrappedKey([0u8; 48]),
                 compliance_ciphertext: Vec::new(),
-                dleq_proofs: Vec::new(),
+                orbis_upload_bundle: Vec::new(),
             })
             .collect::<Vec<_>>();
         pad_to_len(&mut outputs, PADDED_TRANSFER_OUTPUTS, |slot| {
@@ -269,7 +267,7 @@ impl TransferPlan {
                 wrapped_memo_key: penumbra_sdk_keys::symmetric::WrappedMemoKey([0u8; 48]),
                 ovk_wrapped_key: penumbra_sdk_keys::symmetric::OvkWrappedKey([0u8; 48]),
                 compliance_ciphertext: Vec::new(),
-                dleq_proofs: Vec::new(),
+                orbis_upload_bundle: Vec::new(),
             }
         });
 
@@ -281,6 +279,27 @@ impl TransferPlan {
             target_timestamp: self.spends[0].target_timestamp,
             compliance_anchor: self.spends[0].compliance_anchor,
             asset_anchor: self.spends[0].asset_anchor,
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    fn upload_asset_policy(&self) -> anyhow::Result<AssetPolicy> {
+        let plan_policy = self
+            .outputs
+            .first()
+            .and_then(|output| output.asset_policy.as_ref())
+            .or_else(|| {
+                self.spends
+                    .first()
+                    .and_then(|spend| spend.asset_policy.as_ref())
+            })
+            .cloned();
+
+        if self.first_spend().is_regulated {
+            plan_policy
+                .ok_or_else(|| anyhow!("transfer missing asset policy for Orbis upload bundle"))
+        } else {
+            Ok(plan_policy.unwrap_or_else(AssetPolicy::default_unregulated))
         }
     }
 
@@ -383,9 +402,11 @@ impl TransferPlan {
                 .first()
                 .ok_or_else(|| anyhow!("transfer requires at least one spend"))?,
         );
-        let (grouped_ciphertext, grouped_dleqs, _, _) = build_transfer_compliance(
+        let asset_policy = self.upload_asset_policy()?;
+        let (grouped_ciphertext, grouped_bundle, _, _) = build_transfer_compliance(
             &self.outputs,
             &sender_leaf,
+            &asset_policy,
             &self.spends[0].asset_indexed_leaf,
             self.spends[0].target_timestamp,
             self.spends[0].tx_blinding_nonce,
@@ -397,7 +418,6 @@ impl TransferPlan {
             .map(|spend| {
                 let mut input = spend.action_input_body(fvk);
                 input.compliance_ciphertext.clear();
-                input.dleq_proof.clear();
                 input
             })
             .collect::<Vec<_>>();
@@ -408,7 +428,6 @@ impl TransferPlan {
                 rk: self.synthetic_dummy_verification_key(slot),
                 encrypted_backref: crate::EncryptedBackref::dummy(),
                 compliance_ciphertext: Vec::new(),
-                dleq_proof: Vec::new(),
             }
         });
 
@@ -419,8 +438,8 @@ impl TransferPlan {
             .map(|(index, output)| {
                 let (note_payload, wrapped_memo_key, ovk_wrapped_key) =
                     output.action_output_parts(fvk.outgoing(), memo_key);
-                let (compliance_ciphertext, dleq_proofs) = if index == 0 {
-                    receiver_output_transfer_compliance(&grouped_ciphertext, &grouped_dleqs)
+                let (compliance_ciphertext, orbis_upload_bundle) = if index == 0 {
+                    receiver_output_transfer_compliance(&grouped_ciphertext, &grouped_bundle)
                 } else {
                     change_output_transfer_compliance()
                 };
@@ -429,7 +448,7 @@ impl TransferPlan {
                     wrapped_memo_key,
                     ovk_wrapped_key,
                     compliance_ciphertext,
-                    dleq_proofs,
+                    orbis_upload_bundle,
                 }
             })
             .collect::<Vec<_>>();
@@ -444,7 +463,7 @@ impl TransferPlan {
                 wrapped_memo_key: WrappedMemoKey([0u8; 48]),
                 ovk_wrapped_key: penumbra_sdk_keys::symmetric::OvkWrappedKey([0u8; 48]),
                 compliance_ciphertext: Vec::new(),
-                dleq_proofs: Vec::new(),
+                orbis_upload_bundle: Vec::new(),
             }
         });
 
@@ -495,9 +514,13 @@ impl TransferPlan {
             }
         }
         let sender_leaf = sender_leaf(&self.spends[0]);
+        let asset_policy = self
+            .upload_asset_policy()
+            .map_err(|e| crate::ProofError::InvalidPublicInput(e.to_string()))?;
         let (_, _, compliance_public, compliance_private) = build_transfer_compliance(
             &self.outputs,
             &sender_leaf,
+            &asset_policy,
             &self.spends[0].asset_indexed_leaf,
             self.spends[0].target_timestamp,
             self.spends[0].tx_blinding_nonce,

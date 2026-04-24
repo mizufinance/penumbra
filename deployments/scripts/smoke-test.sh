@@ -2,6 +2,9 @@
 # Run smoke test suite, via process-compose config.
 set -euo pipefail
 
+cargo_cmd() {
+    cargo "$@"
+}
 
 # Fail fast if network dir exists, otherwise `cargo run ...` will block
 # for a while, masking the error.
@@ -10,6 +13,7 @@ set -euo pipefail
 # a fresh devnet has been created specifically for the test run. In the future
 # we should make this a temp dir so it can always run regardless of pre-existing state.
 repo_root="$(git rev-parse --show-toplevel)"
+cd "${repo_root}"
 smoke_test_dir="$(mktemp -d "${TMPDIR:-/tmp}/penumbra-smoke.XXXXXX")"
 temp_root="${TMPDIR:-/tmp}"
 temp_root="${temp_root%/}"
@@ -44,7 +48,7 @@ fi
 
 >&2 echo "Building all test targets before running smoke tests..."
 # We want a warm cache before the tests run
-cargo build --release --bins
+cargo_cmd build --release --bins
 
 have_postgres_tooling=true
 for postgres_tool in postgres psql pg_ctl createdb createuser; do
@@ -143,14 +147,14 @@ sleep 10
 pcli_test_home="${smoke_test_dir}/pcli-test"
 mkdir -p "$pcli_test_home"
 echo "comfort ten front cycle churn burger oak absent rice ice urge result art couple benefit cabbage frequent obscure hurry trick segment cool job debate" | \
-    cargo run --release --bin pcli -- --home "$pcli_test_home" init --grpc-url "http://127.0.0.1:8080" soft-kms import-phrase
+    cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" init --grpc-url "http://127.0.0.1:8080" soft-kms import-phrase
 
 # --- Compliance smoke test setup ---
 # Use regulated_usd (already allocated in genesis) as the unified regulated token.
 # Generate a DK, register the asset and user, then send a transfer so the
 # detection scan integration test has on-chain data to find.
 >&2 echo "Setting up compliance smoke test environment..."
-dk_output=$(cargo run --release --bin pcli -- --home "$pcli_test_home" tx compliance generate-dk 2>&1) || true
+dk_output=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" tx compliance generate-dk 2>&1) || true
 dk_hex=$(echo "$dk_output" | grep "DK (hex):" | awk '{print $NF}')
 dk_pub_hex=$(echo "$dk_output" | grep "DK_pub (hex):" | awk '{print $NF}')
 
@@ -158,24 +162,24 @@ if [ -n "$dk_hex" ] && [ -n "$dk_pub_hex" ]; then
     >&2 echo "  DK generated successfully."
 
     # Register regulated_usd as a regulated asset with the generated DK
-    cargo run --release --bin pcli -- --home "$pcli_test_home" \
+    cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" \
         tx compliance register-asset regulated_usd \
         --regulated --dk-pub-hex "$dk_pub_hex" --threshold 500000000000000000000
     >&2 echo "  regulated_usd registered as regulated asset."
 
     # Register the test user for regulated_usd
-    cargo run --release --bin pcli -- --home "$pcli_test_home" \
+    cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" \
         tx compliance register-user regulated_usd
-    cargo run --release --bin pcli -- --home "$pcli_test_home" \
+    cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" \
         tx compliance register-user regulated_usd --address-index 1
     >&2 echo "  User registered for regulated_usd."
 
     # Send a transfer so the detection scan has something to find
-    cargo run --release --bin pcli -- --home "$pcli_test_home" view sync
+    cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" view sync
     >&2 echo "  DEBUG: balance before send:"
-    cargo run --release --bin pcli -- --home "$pcli_test_home" view balance 2>&1 | tee /dev/stderr || true
-    smoke_addr=$(cargo run --release --bin pcli -- --home "$pcli_test_home" view address 1)
-    cargo run --release --bin pcli -- --home "$pcli_test_home" \
+    cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" view balance 2>&1 | tee /dev/stderr || true
+    smoke_addr=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" view address 1)
+    cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" \
         tx transfer 100regulated_usd --to "$smoke_addr"
     >&2 echo "  Compliance transfer sent."
 

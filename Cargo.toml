@@ -9,6 +9,7 @@ members = [
   "crates/bench-support",
   "crates/bench",
   "crates/bin/orbis-audit",
+  "crates/bin/orbis-integration",
   "crates/bin/pcli",
   "crates/bin/pclientd",
   "crates/bin/pd",
@@ -50,6 +51,7 @@ members = [
   "crates/util/tendermint-proxy",
   "crates/util/tower-trace",
   "crates/util/cometindex",
+  "crates/util/orbis-client",
   "crates/view",
   "crates/wallet",
   "tools/picturesque",
@@ -193,6 +195,7 @@ penumbra-sdk-transaction             = { default-features = false, version = "2.
 penumbra-sdk-txhash                  = { default-features = false, version = "2.1.0", path = "crates/core/txhash" }
 penumbra-sdk-view                    = { version = "2.1.0", path = "crates/view" }
 penumbra-sdk-wallet                  = { version = "2.1.0", path = "crates/wallet" }
+penumbra-orbis-client                = { version = "2.1.0", path = "crates/util/orbis-client" }
 pin-project                      = { version = "1.0.12" }
 pin-project-lite                 = { version = "0.2.9" }
 poseidon377                      = { version = "1.2.0" }

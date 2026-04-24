@@ -1703,7 +1703,7 @@ impl ViewService for ViewServer {
             .map_err(|e| tonic::Status::internal(format!("failed to get asset policy: {e}")))?;
         let is_regulated = policy.is_some();
 
-        let (dk_pub, threshold, has_policy) = match policy {
+        let (dk_pub, threshold, has_policy) = match &policy {
             Some(p) => (
                 p.dk_pub().vartime_compress().0.to_vec(),
                 p.threshold().to_le_bytes().to_vec(),
@@ -1726,6 +1726,7 @@ impl ViewService for ViewServer {
             is_regulated,
             dk_pub,
             threshold,
+            asset_policy: policy.map(Into::into),
         }))
     }
 

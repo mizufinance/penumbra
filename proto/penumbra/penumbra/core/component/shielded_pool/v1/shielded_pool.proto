@@ -139,8 +139,6 @@ message TransferInputBody {
   bytes encrypted_backref = 3;
   // Compliance ciphertext encrypting spent note details for the asset issuer.
   bytes compliance_ciphertext = 4;
-  // DLEQ proof bundle for the spend-side policy binding.
-  bytes dleq_proof = 5;
 }
 
 message TransferOutputBody {
@@ -152,8 +150,8 @@ message TransferOutputBody {
   bytes ovk_wrapped_key = 3;
   // Compliance ciphertext encrypting created note details for the asset issuer.
   bytes compliance_ciphertext = 4;
-  // DLEQ proof bundle for the output-side policy binding.
-  bytes dleq_proofs = 5;
+  // Orbis-compatible encrypted-seed upload bundle for the receiver output only.
+  bytes orbis_upload_bundle = 5;
 }
 
 // Transfers shielded notes into new shielded notes as a single action.
@@ -506,6 +504,8 @@ message ShieldedInputPlan {
   bytes dk_pub = 28;
   // Threshold for flagging (in base units).
   bytes threshold = 29;
+  // Full compliance asset policy for regulated assets.
+  compliance.v1.AssetPolicy asset_policy = 30;
 }
 
 message ShieldedOutputPlan {
@@ -580,6 +580,8 @@ message ShieldedOutputPlan {
   bytes r_2 = 37;
   // Ephemeral secret for spend extension tier (r_3, needed by circuit).
   bytes r_3 = 38;
+  // Full compliance asset policy for regulated assets.
+  compliance.v1.AssetPolicy asset_policy = 39;
 }
 
 // Query operations for the shielded pool component.

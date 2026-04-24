@@ -13,7 +13,8 @@ use penumbra_sdk_proto::core::app::v1::{
 use penumbra_sdk_proto::util::tendermint_proxy::v1::{
     tendermint_proxy_service_client::TendermintProxyServiceClient, GetStatusRequest,
 };
-use penumbra_sdk_transaction::{ActionPlan, TransactionPlan};
+use penumbra_sdk_proto::{DomainType, Message};
+use penumbra_sdk_transaction::{ActionPlan, Transaction, TransactionPlan};
 use penumbra_sdk_view::{NoteManager, TransferPlanningResult};
 use serde::{Deserialize, Serialize};
 use tonic::transport::Channel;
@@ -89,6 +90,18 @@ pub enum ComplianceCmd {
         /// In production, this comes from the Orbis DKG ceremony.
         #[clap(long)]
         ring_pk_hex: Option<String>,
+        /// Orbis ring identifier.
+        #[clap(long, default_value = "")]
+        ring_id: String,
+        /// Orbis policy identifier used for PRE authorization.
+        #[clap(long, default_value = "")]
+        policy_id: String,
+        /// Orbis permission name used for PRE authorization.
+        #[clap(long, default_value = "")]
+        permission: String,
+        /// Orbis resource name used for PRE authorization.
+        #[clap(long, default_value = "")]
+        resource: String,
         /// The selected fee tier to multiply the fee amount by.
         #[clap(short, long, default_value_t)]
         fee_tier: FeeTier,
@@ -373,7 +386,15 @@ impl ComplianceCmd {
                     let transactions = fetch_transactions(channel.clone(), height).await?;
 
                     for (tx_idx, tx) in transactions.iter().enumerate() {
-                        let tx_hash = format!("tx{}", tx_idx);
+                        let tx_hash = Transaction::decode(tx.encode_to_vec().as_slice())
+                            .with_context(|| {
+                                format!(
+                                    "failed to decode transaction at height {} index {}",
+                                    height, tx_idx
+                                )
+                            })?
+                            .id()
+                            .to_string();
 
                         if let Some(ref body) = tx.body {
                             for (action_idx, action) in body.actions.iter().enumerate() {
@@ -607,6 +628,10 @@ impl ComplianceCmd {
                 dk_pub_hex,
                 threshold,
                 ring_pk_hex,
+                ring_id,
+                policy_id,
+                permission,
+                resource,
                 fee_tier,
             } => {
                 // Determine regulation status
@@ -668,10 +693,10 @@ impl ComplianceCmd {
                     threshold: *threshold,
                     allowed_channels: vec![],
                     ring_pk,
-                    ring_id: String::new(),
-                    policy_id: String::new(),
-                    permission: String::new(),
-                    resource: String::new(),
+                    ring_id: ring_id.clone(),
+                    policy_id: policy_id.clone(),
+                    permission: permission.clone(),
+                    resource: resource.clone(),
                 };
 
                 // Build transaction plan

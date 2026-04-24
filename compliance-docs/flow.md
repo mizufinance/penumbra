@@ -203,7 +203,8 @@ statement material.
 
 ### DLEQ Proof
 
-Each ciphertext carries an in-circuit DLEQ proof binding it to policy metadata.
+Each ciphertext carries an in-circuit DLEQ proof binding it to canonical
+Penumbra transfer metadata.
 The proof is computed inside the SNARK and output as `(c, s)` per tier.
 
 ```
@@ -221,7 +222,10 @@ Public outputs: (c, s) per tier
 `target_timestamp` is Unix UTC seconds, set by client to `now()`, validator
 enforces ±1 hour of block time.
 
-Transfer exposes one DLEQ proof per transfer compliance tier.
+Transfer exposes one DLEQ proof per transfer compliance tier. This is the
+canonical metadata-binding artifact for Penumbra. It proves the ACK/EPK/shared
+point relation for the tier statement; it does not by itself prove `C2`
+correctness. `C2` correctness remains a zk-circuit responsibility.
 
 For unregulated assets, DLEQ uses zeroed policy fields — valid but useless
 (no Orbis ring exists).
@@ -284,85 +288,95 @@ prevents cross-tier derivation).
 
 ```
 Governance grants ACP permission on SourceHub:
-  → (issuer, user_address, [core/ext/sext], scope)
+  → (issuer, user_address, [sender_core/sender_ext/output_core/output_ext], scope)
   → Stored as ACP relationship
 ```
 
-### Step 2: Issuer Setup + PRE Request
+### Step 2: Encrypted-Seed Upload Package
 
-One-time setup per (user, ring): issuer stores a dummy secret via Orbis
-`store_secret` → receives `enc_cmt_orbis`. This is reused for all PRE calls
-for that user.
+For each auditable transfer tier, the sender produces an Orbis-compatible
+encrypted-seed upload package alongside the Penumbra ciphertext. The issuer is
+only a relay: it uploads that package later and does not need the plaintext
+seed at store time.
+
+The stored object follows the current Orbis `store_secret` contract:
+
+```
+encrypted_document
+enc_cmt
+shared_point
+challenge
+response
+derived_pk
+policy/resource/permission
+tier
+timestamp
+salt
+metadata_hash
+```
+
+### Step 3: Store-Time Verification
+
+```
+ACP verifies: object/policy wiring exists
+Orbis verifies the stored-secret encryption proof for the encrypted seed object
+Orbis binds the object to policy metadata, tier, timestamp, and salt
+```
+
+The runtime Orbis storage proof is therefore the proof over the stored
+encrypted seed object, not the Penumbra transfer-tier DLEQ from the zk circuit.
+
+### Step 4: PRE Request
 
 ```
 Issuer posts PRE request to Orbis:
-  → adjusted_pk = pk_issuer + EPK_tier - enc_cmt_orbis   (see Step 4)
-  → B_d (from user's ComplianceLeaf)
-  → tier label ("core", "ext", or "sext")
-  → (c, s) from the DLEQ proof on-chain
-  → M (metadata hash, computed by issuer using own policy fields + decrypted salt)
-  → ACP permission link
-  → object_id (from store_secret)
+  → reader public key
+  → object_id (stored encrypted seed object)
+  → authorized derivation bytes
+  → salt
+  → valid_window matching the stored timestamp scope
 ```
 
-### Step 3: Orbis Verification
+Current Orbis policy access checks are driven by the stored object metadata.
+Because the stored object carries a timestamp, the PRE request must also carry
+the matching `valid_window`.
+
+### Step 5: PRE Result
 
 ```
-ACP verifies: permission exists and is in scope
-Orbis verifies: policy_id matches ring, ACP permission is valid
-Orbis verifies DLEQ:
-  S = d × sk_ring × EPK                              (MPC, same computation as PRE)
-  ACK = d × ring_pk
-  R_rec  = s × G   - c × EPK       must equal R
-  R'_rec = s × ACK - c × S         must equal R'
-  c_check = Poseidon(ACK, EPK, S, R_rec, R'_rec, M)  must equal c
+Orbis verifies:
+  → JWT claims match the request
+  → ACP permission exists for the caller
+  → derivation is consistent with the stored proof
+  → stored object metadata matches the PRE scope
+
+Orbis returns:
+  → xnc_cmt
+  → re-encrypted secret envelope
 ```
 
-DLEQ verification is free — Orbis already computes S as part of PRE.
+There is no adjusted reader key and no separate anchor object in the supported
+path.
 
-### Step 4: PRE (Adjusted Reader Key)
+### Step 6: Issuer Recovers Seed
 
-Chain EPKs are already on-chain and cannot be encrypted through the Orbis
-`encrypt_secret` pipeline. The **adjusted reader key trick** bridges them:
+The issuer decrypts the returned Orbis secret envelope using its reader secret
+key and the returned `xnc_cmt`, yielding the tier seed. It then uses that seed
+to decrypt the Penumbra tier payload locally.
 
-```
-d        = SHA256("elgamal-derivation-v1\0\0" || b_d_fq)
-EPK_tier = r_tier × G                                     (from ciphertext)
+**One Orbis object per transfer tier.** Cross-tier isolation is preserved
+because each tier uses an independent seed and its own stored encrypted-seed
+package.
 
-Issuer computes adjusted reader key:
-  adjusted_pk = pk_issuer + EPK_tier - enc_cmt_orbis
+### Target Contract
 
-Each Orbis node computes:
-  d × sk_i × (adjusted_pk + enc_cmt_orbis)
-= d × sk_i × (pk_issuer + EPK_tier)                       (enc_cmt_orbis cancels)
-
-Threshold combination:
-  xnc_cmt = d × sk_ring × (pk_issuer + EPK_tier)
-```
-
-Orbis uses `--xnc-only` mode: it returns `xnc_cmt` without attempting AES
-decryption (which would fail since the dummy secret doesn't match the chain
-ciphertext).
-
-For core/ext: use receiver's `d`. For sext: use sender's `d`.
-
-### Step 5: Issuer Recovers Seed
-
-```
-ACK = d × ring_pk                                    (public, derivable)
-
-P = xnc_cmt - sk_issuer × ACK
-  = d × sk_ring × (pk_issuer + EPK_tier) - sk_issuer × d × ring_pk
-  = d × sk_ring × pk_issuer + d × sk_ring × EPK_tier - d × sk_ring × sk_issuer × G
-  = d × sk_ring × EPK_tier                           (pk_issuer terms cancel)
-  = r_tier × ACK                                      (matches C2 encryption)
-
-seed = C2 - P.compress()
-```
-
-**One Orbis call per (user, tier).** Cross-tier isolation is both
-cryptographically enforced (DLP on independent r) and policy-enforced (ACP
-governance per tier).
+The current supported contract is already one Orbis-compatible encrypted-seed
+object per transfer tier. Penumbra still owns the canonical transfer-tier
+statement
+`{subject B_d, policy/resource/permission hashes, tier, target_timestamp, salt,
+EPK_tier, C2_tier, transfer DLEQ}` and may validate it locally, but current
+Orbis APIs consume the stored encrypted-seed proof/material above rather than
+the Penumbra transfer DLEQ directly.
 
 ### Access Summary
 

@@ -21,7 +21,7 @@
 #![allow(clippy::needless_borrow)]
 #![allow(clippy::unwrap_used)]
 #![allow(non_snake_case)]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub use prost::{Message, Name};
 

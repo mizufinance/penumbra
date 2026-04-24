@@ -267,25 +267,69 @@ mod tests {
     fn bless_transfer_witness_v1_fixtures() {
         use std::path::PathBuf;
 
-        let fixtures = [(0x0000_0054_5832_5832u64, "transfer_witness_v1.bin")];
+        let fixtures = [
+            (0x0000_0054_5832_5832u64, true, "transfer_witness_v1.bin"),
+            (
+                0x0000_0054_5832_5833u64,
+                false,
+                "transfer_witness_v1_unregulated.bin",
+            ),
+        ];
 
         let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../../tools/gnark/internal/primitives/vectors");
         std::fs::create_dir_all(&out_dir)
             .unwrap_or_else(|e| panic!("create transfer testdata dir {out_dir:?}: {e}"));
 
-        for (seed, filename) in fixtures {
+        for (seed, is_regulated, filename) in fixtures {
             let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-            let (public, private) =
-                crate::test_proof_helpers::proof_test_helpers::build_transfer_roundtrip_inputs_with_rng(
-                    &mut rng,
-                    true,
-                );
+            let (public, private) = crate::test_proof_helpers::proof_test_helpers::
+                build_transfer_roundtrip_inputs_with_rng(&mut rng, is_regulated);
             let encoded = encode_transfer_witness_v1(&public, &private)
                 .expect("encode transfer witness fixture");
             let path = out_dir.join(filename);
             std::fs::write(&path, &encoded)
                 .unwrap_or_else(|e| panic!("write transfer witness fixture {path:?}: {e}"));
+            eprintln!("wrote {} bytes to {path:?}", encoded.len());
+        }
+    }
+
+    #[test]
+    #[ignore = "debug: write hidden-arity transfer witnesses for gnark replay"]
+    fn bless_transfer_hidden_arity_debug_witnesses() {
+        use std::path::PathBuf;
+
+        let fixtures = [
+            (
+                "transfer_hidden_arity_unregulated_sender_to_other.bin",
+                crate::test_proof_helpers::proof_test_helpers::build_transfer_hidden_arity_roundtrip_inputs_with_rng(
+                    &mut rand::thread_rng(),
+                    false,
+                    false,
+                ),
+            ),
+            (
+                "transfer_hidden_arity_regulated_sender_to_other.bin",
+                crate::test_proof_helpers::proof_test_helpers::build_transfer_hidden_arity_roundtrip_inputs_with_rng(
+                    &mut rand::thread_rng(),
+                    true,
+                    false,
+                ),
+            ),
+        ];
+
+        let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../tools/gnark/internal/primitives/vectors");
+        std::fs::create_dir_all(&out_dir)
+            .unwrap_or_else(|e| panic!("create transfer debug witness dir {out_dir:?}: {e}"));
+
+        for (filename, (public, private)) in fixtures {
+            let encoded = encode_transfer_witness_v1(&public, &private)
+                .expect("encode transfer hidden-arity debug witness");
+            let path = out_dir.join(filename);
+            std::fs::write(&path, &encoded).unwrap_or_else(|e| {
+                panic!("write transfer hidden-arity debug witness {path:?}: {e}")
+            });
             eprintln!("wrote {} bytes to {path:?}", encoded.len());
         }
     }

@@ -1619,23 +1619,21 @@ impl Storage {
         .await?
     }
 
-    /// Store an asset policy (threshold and DK_pub).
+    /// Store a full asset policy.
     pub async fn store_asset_policy(
         &self,
         asset_id: &asset::Id,
-        dk_pub: &decaf377::Element,
-        threshold: u128,
+        policy: &penumbra_sdk_compliance::structs::AssetPolicy,
     ) -> anyhow::Result<()> {
         let pool = self.pool.clone();
         let asset_bytes = asset_id.to_bytes().to_vec();
-        let dk_pub_bytes = dk_pub.vartime_compress().0.to_vec();
-        let threshold_bytes = threshold.to_le_bytes().to_vec();
+        let policy_bytes = policy.to_bytes();
 
         spawn_blocking(move || {
             let conn = pool.get()?;
             conn.execute(
-                "INSERT OR REPLACE INTO compliance_asset_policies (asset_id, dk_pub, threshold) VALUES (?1, ?2, ?3)",
-                (asset_bytes.as_slice(), dk_pub_bytes.as_slice(), threshold_bytes.as_slice()),
+                "INSERT OR REPLACE INTO compliance_asset_policies (asset_id, policy) VALUES (?1, ?2)",
+                (asset_bytes.as_slice(), policy_bytes.as_slice()),
             )?;
             Ok::<(), anyhow::Error>(())
         })
@@ -1652,38 +1650,18 @@ impl Storage {
 
         spawn_blocking(move || {
             let conn = pool.get()?;
-            let result: Option<(Vec<u8>, Vec<u8>)> = conn
+            let result: Option<Vec<u8>> = conn
                 .query_row(
-                    "SELECT dk_pub, threshold FROM compliance_asset_policies WHERE asset_id = ?1",
+                    "SELECT policy FROM compliance_asset_policies WHERE asset_id = ?1",
                     [asset_bytes.as_slice()],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| row.get(0),
                 )
                 .optional()?;
 
             match result {
-                Some((dk_pub_bytes, threshold_bytes)) => {
-                    let dk_pub_arr: [u8; 32] = dk_pub_bytes.try_into().map_err(|v: Vec<u8>| {
-                        anyhow::anyhow!("dk_pub must be 32 bytes, got {}", v.len())
-                    })?;
-                    let dk_pub = decaf377::Encoding(dk_pub_arr)
-                        .vartime_decompress()
-                        .map_err(|_| anyhow::anyhow!("invalid dk_pub encoding"))?;
-                    let threshold_arr: [u8; 16] =
-                        threshold_bytes.try_into().map_err(|v: Vec<u8>| {
-                            anyhow::anyhow!("threshold must be 16 bytes, got {}", v.len())
-                        })?;
-                    let threshold = u128::from_le_bytes(threshold_arr);
-                    Ok(Some(penumbra_sdk_compliance::structs::AssetPolicy::new(
-                        dk_pub,
-                        threshold,
-                        vec![],
-                        String::new(),
-                        decaf377::Element::default(),
-                        String::new(),
-                        String::new(),
-                        String::new(),
-                    )))
-                }
+                Some(policy_bytes) => Ok(Some(
+                    penumbra_sdk_compliance::structs::AssetPolicy::from_bytes(&policy_bytes)?,
+                )),
                 None => Ok(None),
             }
         })

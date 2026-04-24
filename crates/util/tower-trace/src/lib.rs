@@ -1,5 +1,5 @@
 #![deny(clippy::unwrap_used)]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 /// A vendored copy of the unpublished `tracing-tower` crate.
 pub mod trace;

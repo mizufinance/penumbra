@@ -176,6 +176,9 @@ pub struct ComplianceAssetStatusResponse {
     /// u128::MAX means never flag.
     #[prost(bytes = "vec", tag = "5")]
     pub threshold: ::prost::alloc::vec::Vec<u8>,
+    /// Full asset policy for regulated assets.
+    #[prost(message, optional, tag = "6")]
+    pub asset_policy: ::core::option::Option<AssetPolicy>,
 }
 impl ::prost::Name for ComplianceAssetStatusResponse {
     const NAME: &'static str = "ComplianceAssetStatusResponse";

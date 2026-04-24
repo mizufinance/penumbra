@@ -60,11 +60,11 @@ pub mod proof_test_helpers {
             dk_pub,
             u128::MAX,
             vec![],
-            String::new(),
+            "test-ring-id".to_string(),
             ring_pk,
-            String::new(),
-            String::new(),
-            String::new(),
+            "test-policy-id".to_string(),
+            "read".to_string(),
+            "document".to_string(),
         );
         tree.insert(asset_id, &policy)
             .expect("should be able to insert asset");
@@ -135,6 +135,7 @@ pub mod proof_test_helpers {
         pub compliance_position: u64,
         pub salt: Fq,
         pub target_timestamp: u64,
+        pub asset_policy: penumbra_sdk_compliance::AssetPolicy,
     }
 
     /// Generate the shared fixture data used by all proof-family tests.
@@ -196,6 +197,20 @@ pub mod proof_test_helpers {
         } else {
             create_imt_non_membership_proof(asset_id_fq)
         };
+        let asset_policy = if is_regulated {
+            penumbra_sdk_compliance::AssetPolicy::new(
+                dk_pub,
+                asset_indexed_leaf.params.threshold,
+                vec![],
+                "test-ring-id".to_string(),
+                ring_pk,
+                "test-policy-id".to_string(),
+                "read".to_string(),
+                "document".to_string(),
+            )
+        } else {
+            penumbra_sdk_compliance::AssetPolicy::default_unregulated()
+        };
 
         // Receiver ACK
         let b_d_fq = address.diversified_generator().vartime_compress_to_field();
@@ -246,6 +261,7 @@ pub mod proof_test_helpers {
             compliance_position,
             salt: Fq::rand(&mut *rng),
             target_timestamp: 1_700_000_000,
+            asset_policy,
         }
     }
 
@@ -327,6 +343,7 @@ pub mod proof_test_helpers {
             spend.is_regulated = is_regulated;
             spend.target_timestamp = base.target_timestamp;
             spend.tx_blinding_nonce = tx_blinding_nonce;
+            spend.asset_policy = Some(base.asset_policy.clone());
             spend
                 .set_compliance_details(rng)
                 .expect("set transfer spend compliance details");
@@ -357,6 +374,7 @@ pub mod proof_test_helpers {
             output.is_regulated = is_regulated;
             output.target_timestamp = base.target_timestamp;
             output.tx_blinding_nonce = tx_blinding_nonce;
+            output.asset_policy = Some(base.asset_policy.clone());
             output
                 .set_compliance_details(rng, &sender_leaf, sender_leaf.clone(), tx_blinding_nonce)
                 .expect("set transfer output compliance details");
@@ -448,12 +466,10 @@ pub mod proof_test_helpers {
         spend.asset_path = base.asset_path.clone();
         spend.asset_position = base.asset_position;
         spend.asset_anchor = base.asset_anchor;
-        spend.compliance_anchor = base.compliance_anchor;
-        spend.compliance_path = base.compliance_path.clone();
-        spend.compliance_position = base.compliance_position;
         spend.is_regulated = is_regulated;
         spend.target_timestamp = base.target_timestamp;
         spend.tx_blinding_nonce = tx_blinding_nonce;
+        spend.asset_policy = Some(base.asset_policy.clone());
         spend
             .set_compliance_details(rng)
             .expect("set hidden-arity transfer spend compliance details");
@@ -472,8 +488,49 @@ pub mod proof_test_helpers {
             asset_id,
             recipient_d,
         );
-        let (recipient_compliance_anchor, recipient_compliance_path, recipient_compliance_position) =
-            create_user_tree_proof(&recipient_leaf);
+        let (
+            shared_compliance_anchor,
+            sender_compliance_path,
+            sender_compliance_position,
+            recipient_compliance_path,
+            recipient_compliance_position,
+        ) = if send_to_self {
+            (
+                base.compliance_anchor,
+                base.compliance_path.clone(),
+                base.compliance_position,
+                base.compliance_path.clone(),
+                base.compliance_position,
+            )
+        } else {
+            let mut user_tree = penumbra_sdk_compliance::QuadTree::new();
+            user_tree
+                .update(base.compliance_position, base.user_leaf.commit())
+                .expect("insert hidden-arity sender compliance leaf");
+            let recipient_position = base
+                .compliance_position
+                .checked_add(1)
+                .expect("recipient compliance position fits");
+            user_tree
+                .update(recipient_position, recipient_leaf.commit())
+                .expect("insert hidden-arity recipient compliance leaf");
+            let sender_auth_path = user_tree
+                .auth_path(base.compliance_position)
+                .expect("sender hidden-arity auth path");
+            let recipient_auth_path = user_tree
+                .auth_path(recipient_position)
+                .expect("recipient hidden-arity auth path");
+            (
+                tct::StateCommitment(user_tree.root().0),
+                MerklePath::from_auth_path(sender_auth_path),
+                base.compliance_position,
+                MerklePath::from_auth_path(recipient_auth_path),
+                recipient_position,
+            )
+        };
+        spend.compliance_anchor = shared_compliance_anchor;
+        spend.compliance_path = sender_compliance_path;
+        spend.compliance_position = sender_compliance_position;
 
         let mut output = ShieldedOutputPlan::new(
             rng,
@@ -487,12 +544,13 @@ pub mod proof_test_helpers {
         output.asset_path = base.asset_path.clone();
         output.asset_position = base.asset_position;
         output.asset_anchor = base.asset_anchor;
-        output.compliance_anchor = recipient_compliance_anchor;
+        output.compliance_anchor = shared_compliance_anchor;
         output.compliance_path = recipient_compliance_path;
         output.compliance_position = recipient_compliance_position;
         output.is_regulated = is_regulated;
         output.target_timestamp = base.target_timestamp;
         output.tx_blinding_nonce = tx_blinding_nonce;
+        output.asset_policy = Some(base.asset_policy.clone());
         output
             .set_compliance_details(rng, &recipient_leaf, sender_leaf, tx_blinding_nonce)
             .expect("set hidden-arity transfer output compliance details");
@@ -580,6 +638,7 @@ pub mod proof_test_helpers {
             spend.is_regulated = is_regulated;
             spend.target_timestamp = base.target_timestamp;
             spend.tx_blinding_nonce = tx_blinding_nonce;
+            spend.asset_policy = Some(base.asset_policy.clone());
             spend
                 .set_compliance_details(&mut rng)
                 .expect("set transfer spend compliance details");
@@ -610,6 +669,7 @@ pub mod proof_test_helpers {
             output.is_regulated = is_regulated;
             output.target_timestamp = base.target_timestamp;
             output.tx_blinding_nonce = tx_blinding_nonce;
+            output.asset_policy = Some(base.asset_policy.clone());
             output
                 .set_compliance_details(
                     &mut rng,

@@ -10,15 +10,26 @@ import (
 
 const (
 	transferWitnessV1Magic   = "PTWG"
-	transferWitnessV1Version = 6
+	transferWitnessV1Version = 7
 )
 
 type TransferComplianceCiphertextWitnessV1Binary struct {
-	C2         [32]byte
-	Ciphertext [][32]byte
-	DleqC      [32]byte
-	DleqS      [32]byte
-	EPKAffine  PointAffineBinary
+	C2                 [32]byte
+	Ciphertext         [][32]byte
+	SubjectBD          [32]byte
+	RingIDHash         [32]byte
+	PolicyIDHash       [32]byte
+	ResourceHash       [32]byte
+	PermissionHash     [32]byte
+	Tier               uint64
+	StatementTimestamp [32]byte
+	Salt               [32]byte
+	Challenge          [32]byte
+	Response           [32]byte
+	EPKAffine          PointAffineBinary
+	DerivedPKAffine    PointAffineBinary
+	EncCmtAffine       PointAffineBinary
+	SharedPointAffine  PointAffineBinary
 }
 
 type TransferSpendWitnessV1Binary struct {
@@ -409,13 +420,46 @@ func readTransferComplianceTier(reader *bytes.Reader) (TransferComplianceCiphert
 	if tier.Ciphertext, err = readVec32(reader); err != nil {
 		return tier, err
 	}
-	if tier.DleqC, err = read32(reader); err != nil {
+	if tier.SubjectBD, err = read32(reader); err != nil {
 		return tier, err
 	}
-	if tier.DleqS, err = read32(reader); err != nil {
+	if tier.RingIDHash, err = read32(reader); err != nil {
+		return tier, err
+	}
+	if tier.PolicyIDHash, err = read32(reader); err != nil {
+		return tier, err
+	}
+	if tier.ResourceHash, err = read32(reader); err != nil {
+		return tier, err
+	}
+	if tier.PermissionHash, err = read32(reader); err != nil {
+		return tier, err
+	}
+	if tier.Tier, err = readU64(reader); err != nil {
+		return tier, err
+	}
+	if tier.StatementTimestamp, err = read32(reader); err != nil {
+		return tier, err
+	}
+	if tier.Salt, err = read32(reader); err != nil {
+		return tier, err
+	}
+	if tier.Challenge, err = read32(reader); err != nil {
+		return tier, err
+	}
+	if tier.Response, err = read32(reader); err != nil {
 		return tier, err
 	}
 	if tier.EPKAffine, err = readPointAffine(reader); err != nil {
+		return tier, err
+	}
+	if tier.DerivedPKAffine, err = readPointAffine(reader); err != nil {
+		return tier, err
+	}
+	if tier.EncCmtAffine, err = readPointAffine(reader); err != nil {
+		return tier, err
+	}
+	if tier.SharedPointAffine, err = readPointAffine(reader); err != nil {
 		return tier, err
 	}
 	return tier, nil

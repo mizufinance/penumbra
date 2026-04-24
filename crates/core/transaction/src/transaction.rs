@@ -764,7 +764,6 @@ mod tests {
                         )
                         .expect("valid encrypted backref"),
                         compliance_ciphertext: vec![1, 2, 3],
-                        dleq_proof: vec![13, 14],
                     },
                     penumbra_sdk_shielded_pool::TransferInputBody {
                         nullifier: Nullifier(decaf377::Fq::from(30u64)),
@@ -776,7 +775,6 @@ mod tests {
                         )
                         .expect("valid encrypted backref"),
                         compliance_ciphertext: vec![],
-                        dleq_proof: vec![],
                     },
                 ],
                 outputs: vec![
@@ -791,7 +789,7 @@ mod tests {
                         wrapped_memo_key: WrappedMemoKey([8u8; 48]),
                         ovk_wrapped_key: OvkWrappedKey([9u8; 48]),
                         compliance_ciphertext: vec![4, 5, 6],
-                        dleq_proofs: vec![15, 16],
+                        orbis_upload_bundle: vec![15, 16],
                     },
                     penumbra_sdk_shielded_pool::TransferOutputBody {
                         note_payload: penumbra_sdk_shielded_pool::NotePayload {
@@ -804,7 +802,7 @@ mod tests {
                         wrapped_memo_key: WrappedMemoKey([80u8; 48]),
                         ovk_wrapped_key: OvkWrappedKey([90u8; 48]),
                         compliance_ciphertext: vec![],
-                        dleq_proofs: vec![],
+                        orbis_upload_bundle: vec![],
                     },
                 ],
                 target_timestamp: 10,
@@ -920,7 +918,6 @@ mod tests {
                                         encrypted_backref:
                                             penumbra_sdk_shielded_pool::EncryptedBackref::dummy(),
                                         compliance_ciphertext: vec![],
-                                        dleq_proof: vec![],
                                     },
                                     penumbra_sdk_shielded_pool::TransferInputBody {
                                         nullifier: Nullifier(decaf377::Fq::from(25u64)),
@@ -930,7 +927,6 @@ mod tests {
                                         encrypted_backref:
                                             penumbra_sdk_shielded_pool::EncryptedBackref::dummy(),
                                         compliance_ciphertext: vec![],
-                                        dleq_proof: vec![],
                                     },
                                 ],
                                 withdrawal: penumbra_sdk_shielded_pool::Ics20Withdrawal {

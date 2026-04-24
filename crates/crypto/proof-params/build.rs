@@ -17,6 +17,7 @@ include!("src/gen/gnark/transfer_families_build.rs");
 
 fn main() {
     emit_transfer_family_rerun_hints().expect("emit transfer family rerun-if-changed hints");
+    emit_gnark_runtime_rerun_hints().expect("emit gnark runtime rerun-if-changed hints");
 
     let mut proving_parameter_files = vec![
         "src/gen/nullifier_derivation_pk.bin".to_owned(),
@@ -64,6 +65,37 @@ fn main() {
     }
 
     write_bundled_gnark_runtime_paths().expect("failed while preparing bundled gnark runtime");
+}
+
+fn emit_gnark_runtime_rerun_hints() -> anyhow::Result<()> {
+    let repo_root = repo_root()?;
+    let gnark_root = repo_root.join("tools/gnark");
+    emit_rerun_hints_recursive(&gnark_root)?;
+    Ok(())
+}
+
+fn emit_rerun_hints_recursive(path: &Path) -> anyhow::Result<()> {
+    if path.is_dir() {
+        for entry in
+            std::fs::read_dir(path).with_context(|| format!("read directory {}", path.display()))?
+        {
+            let entry = entry.with_context(|| format!("read entry in {}", path.display()))?;
+            emit_rerun_hints_recursive(&entry.path())?;
+        }
+        return Ok(());
+    }
+
+    let should_watch = matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("go") | Some("json")
+    ) || matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("go.mod") | Some("go.sum")
+    );
+    if should_watch {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+    Ok(())
 }
 
 fn emit_transfer_family_rerun_hints() -> anyhow::Result<()> {
@@ -236,6 +268,7 @@ fn build_gnark_library(
         .env("GOOS", goos)
         .env("GOARCH", goarch)
         .arg("build")
+        .arg("-buildvcs=false")
         .arg("-buildmode=c-shared")
         .arg("-o")
         .arg(output_path)

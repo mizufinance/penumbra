@@ -2209,6 +2209,9 @@ impl serde::Serialize for ComplianceAssetStatusResponse {
         if !self.threshold.is_empty() {
             len += 1;
         }
+        if self.asset_policy.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.view.v1.ComplianceAssetStatusResponse", len)?;
         if let Some(v) = self.asset_id.as_ref() {
             struct_ser.serialize_field("assetId", v)?;
@@ -2229,6 +2232,9 @@ impl serde::Serialize for ComplianceAssetStatusResponse {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("threshold", pbjson::private::base64::encode(&self.threshold).as_str())?;
         }
+        if let Some(v) = self.asset_policy.as_ref() {
+            struct_ser.serialize_field("assetPolicy", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -2248,6 +2254,8 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
             "dk_pub",
             "dkPub",
             "threshold",
+            "asset_policy",
+            "assetPolicy",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -2257,6 +2265,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
             IsRegulated,
             DkPub,
             Threshold,
+            AssetPolicy,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -2284,6 +2293,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
                             "isRegulated" | "is_regulated" => Ok(GeneratedField::IsRegulated),
                             "dkPub" | "dk_pub" => Ok(GeneratedField::DkPub),
                             "threshold" => Ok(GeneratedField::Threshold),
+                            "assetPolicy" | "asset_policy" => Ok(GeneratedField::AssetPolicy),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -2308,6 +2318,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
                 let mut is_regulated__ = None;
                 let mut dk_pub__ = None;
                 let mut threshold__ = None;
+                let mut asset_policy__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::AssetId => {
@@ -2344,6 +2355,12 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::AssetPolicy => {
+                            if asset_policy__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetPolicy"));
+                            }
+                            asset_policy__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -2355,6 +2372,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
                     is_regulated: is_regulated__.unwrap_or_default(),
                     dk_pub: dk_pub__.unwrap_or_default(),
                     threshold: threshold__.unwrap_or_default(),
+                    asset_policy: asset_policy__,
                 })
             }
         }

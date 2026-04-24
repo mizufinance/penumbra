@@ -101,6 +101,7 @@ impl Component for Compliance {
                 indexed_leaf: result.indexed_leaf,
                 low_leaf_position: result.low_leaf_position,
                 updated_low_leaf: result.updated_low_leaf,
+                asset_policy: crate::structs::AssetPolicy::default_unregulated(),
             };
 
             state.record_proto(event::asset_registered(
@@ -110,6 +111,7 @@ impl Component for Compliance {
                 event.indexed_leaf.clone(),
                 event.low_leaf_position,
                 event.updated_low_leaf.clone(),
+                event.asset_policy.clone(),
             ));
             state.record_pending_asset_registration(event);
         }
@@ -138,6 +140,7 @@ impl Component for Compliance {
                     (crate::structs::AssetPolicy::default_unregulated(), false)
                 };
 
+                let event_policy = policy.clone();
                 if let Some(result) = state
                     .register_asset_in_imt(registration.asset_id, policy, is_regulated)
                     .await
@@ -150,6 +153,7 @@ impl Component for Compliance {
                         indexed_leaf: result.indexed_leaf,
                         low_leaf_position: result.low_leaf_position,
                         updated_low_leaf: result.updated_low_leaf,
+                        asset_policy: event_policy,
                     };
 
                     state.record_proto(event::asset_registered(
@@ -159,6 +163,7 @@ impl Component for Compliance {
                         event.indexed_leaf.clone(),
                         event.low_leaf_position,
                         event.updated_low_leaf.clone(),
+                        event.asset_policy.clone(),
                     ));
                     state.record_pending_asset_registration(event);
                     tracing::info!(
@@ -305,6 +310,7 @@ impl ActionHandler for MsgRegisterAsset {
             (crate::structs::AssetPolicy::default_unregulated(), false)
         };
 
+        let event_policy = policy.clone();
         if let Some(result) = state
             .register_asset_in_imt(self.asset_id, policy, is_regulated)
             .await?
@@ -316,6 +322,7 @@ impl ActionHandler for MsgRegisterAsset {
                 indexed_leaf: result.indexed_leaf,
                 low_leaf_position: result.low_leaf_position,
                 updated_low_leaf: result.updated_low_leaf,
+                asset_policy: event_policy,
             };
 
             state.record_proto(event::asset_registered(
@@ -325,6 +332,7 @@ impl ActionHandler for MsgRegisterAsset {
                 event.indexed_leaf.clone(),
                 event.low_leaf_position,
                 event.updated_low_leaf.clone(),
+                event.asset_policy.clone(),
             ));
 
             state.record_pending_asset_registration(event);

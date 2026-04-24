@@ -1896,6 +1896,7 @@ mod tests {
                     is_regulated: false,
                     dk_pub: vec![0u8; 32],
                     threshold: u128::MAX.to_le_bytes().to_vec(),
+                    asset_policy: None,
                 })
             }
             .boxed()

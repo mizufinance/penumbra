@@ -1146,6 +1146,11 @@ pub struct ComplianceAssetStatusResponse {
     /// Amount threshold for flagging (16 bytes, little-endian u128).
     #[prost(bytes = "vec", tag = "5")]
     pub threshold: ::prost::alloc::vec::Vec<u8>,
+    /// Full compliance asset policy for regulated assets.
+    #[prost(message, optional, tag = "6")]
+    pub asset_policy: ::core::option::Option<
+        super::super::core::component::compliance::v1::AssetPolicy,
+    >,
 }
 impl ::prost::Name for ComplianceAssetStatusResponse {
     const NAME: &'static str = "ComplianceAssetStatusResponse";

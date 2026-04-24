@@ -21,7 +21,6 @@ pub struct TransferInputBody {
     pub rk: VerificationKey<SpendAuth>,
     pub encrypted_backref: EncryptedBackref,
     pub compliance_ciphertext: Vec<u8>,
-    pub dleq_proof: Vec<u8>,
 }
 
 impl TransferInputBody {
@@ -37,7 +36,7 @@ pub struct TransferOutputBody {
     pub wrapped_memo_key: WrappedMemoKey,
     pub ovk_wrapped_key: OvkWrappedKey,
     pub compliance_ciphertext: Vec<u8>,
-    pub dleq_proofs: Vec<u8>,
+    pub orbis_upload_bundle: Vec<u8>,
 }
 
 impl TransferOutputBody {
@@ -98,11 +97,10 @@ impl EffectingData for TransferBody {
         // the full transaction auth hash still commits to the serialized body.
         for input in &mut effecting.inputs {
             input.compliance_ciphertext.clear();
-            input.dleq_proof.clear();
         }
         for output in &mut effecting.outputs {
             output.compliance_ciphertext.clear();
-            output.dleq_proofs.clear();
+            output.orbis_upload_bundle.clear();
         }
         EffectHash::from_proto_effecting_data(&effecting.to_proto())
     }
@@ -175,7 +173,6 @@ impl From<TransferInputBody> for pb::TransferInputBody {
             rk: Some(msg.rk.into()),
             encrypted_backref: msg.encrypted_backref.into(),
             compliance_ciphertext: msg.compliance_ciphertext,
-            dleq_proof: msg.dleq_proof,
         }
     }
 }
@@ -210,7 +207,6 @@ impl TryFrom<pb::TransferInputBody> for TransferInputBody {
                 .context("malformed rk")?,
             encrypted_backref,
             compliance_ciphertext: proto.compliance_ciphertext,
-            dleq_proof: proto.dleq_proof,
         })
     }
 }
@@ -226,7 +222,7 @@ impl From<TransferOutputBody> for pb::TransferOutputBody {
             wrapped_memo_key: msg.wrapped_memo_key.0.to_vec(),
             ovk_wrapped_key: msg.ovk_wrapped_key.0.to_vec(),
             compliance_ciphertext: msg.compliance_ciphertext,
-            dleq_proofs: msg.dleq_proofs,
+            orbis_upload_bundle: msg.orbis_upload_bundle,
         }
     }
 }
@@ -248,7 +244,7 @@ impl TryFrom<pb::TransferOutputBody> for TransferOutputBody {
                 .try_into()
                 .context("malformed ovk wrapped key")?,
             compliance_ciphertext: proto.compliance_ciphertext,
-            dleq_proofs: proto.dleq_proofs,
+            orbis_upload_bundle: proto.orbis_upload_bundle,
         })
     }
 }

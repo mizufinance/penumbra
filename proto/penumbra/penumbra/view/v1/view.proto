@@ -538,6 +538,8 @@ message ComplianceAssetStatusResponse {
   bytes dk_pub = 4;
   // Amount threshold for flagging (16 bytes, little-endian u128).
   bytes threshold = 5;
+  // Full compliance asset policy for regulated assets.
+  core.component.compliance.v1.AssetPolicy asset_policy = 6;
 }
 
 // Request for querying the current compliance tree anchors.

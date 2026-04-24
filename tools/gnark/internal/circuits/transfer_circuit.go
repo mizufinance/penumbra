@@ -567,7 +567,7 @@ func (c *TransferCircuit) verifyTransferComplianceCiphertexts(
 		}
 	}
 
-	ssDetection, senderCoreUser, senderCoreShared, err := DeriveSharedSecretsSpend(
+	ssDetection, _, senderCoreShared, err := DeriveSharedSecretsSpend(
 		api,
 		c.Compliance.SenderRCore,
 		shared.senderAck,
@@ -578,7 +578,7 @@ func (c *TransferCircuit) verifyTransferComplianceCiphertexts(
 	if err != nil {
 		return err
 	}
-	_, senderExtUser, senderExtShared, err := DeriveSharedSecretsSpend(
+	_, _, senderExtShared, err := DeriveSharedSecretsSpend(
 		api,
 		c.Compliance.SenderRExt,
 		shared.senderAck,
@@ -589,7 +589,7 @@ func (c *TransferCircuit) verifyTransferComplianceCiphertexts(
 	if err != nil {
 		return err
 	}
-	_, outputCoreUser, outputCoreShared, err := DeriveSharedSecretsSpend(
+	_, _, outputCoreShared, err := DeriveSharedSecretsSpend(
 		api,
 		c.Compliance.OutputRCore,
 		statementData.receiverAck,
@@ -600,7 +600,7 @@ func (c *TransferCircuit) verifyTransferComplianceCiphertexts(
 	if err != nil {
 		return err
 	}
-	_, outputExtUser, outputExtShared, err := DeriveSharedSecretsSpend(
+	_, _, outputExtShared, err := DeriveSharedSecretsSpend(
 		api,
 		c.Compliance.OutputRExt,
 		statementData.receiverAck,
@@ -667,31 +667,86 @@ func (c *TransferCircuit) verifyTransferComplianceCiphertexts(
 		return err
 	}
 
-	metadataHashes := [4]frontend.Variable{}
-	for i, salt := range salts[1:] {
-		metadataHashes[i], err = ComputeMetadataHash(
+	AssertDecafEquivalent(api, gnarkte.Point{X: c.Compliance.SenderCore.Epk.X, Y: c.Compliance.SenderCore.Epk.Y}, gnarkte.Point{X: c.Compliance.SenderCore.Proof.EncCmt.X, Y: c.Compliance.SenderCore.Proof.EncCmt.Y})
+	AssertDecafEquivalent(api, gnarkte.Point{X: c.Compliance.SenderExt.Epk.X, Y: c.Compliance.SenderExt.Epk.Y}, gnarkte.Point{X: c.Compliance.SenderExt.Proof.EncCmt.X, Y: c.Compliance.SenderExt.Proof.EncCmt.Y})
+	AssertDecafEquivalent(api, gnarkte.Point{X: c.Compliance.OutputCore.Epk.X, Y: c.Compliance.OutputCore.Epk.Y}, gnarkte.Point{X: c.Compliance.OutputCore.Proof.EncCmt.X, Y: c.Compliance.OutputCore.Proof.EncCmt.Y})
+	AssertDecafEquivalent(api, gnarkte.Point{X: c.Compliance.OutputExt.Epk.X, Y: c.Compliance.OutputExt.Epk.Y}, gnarkte.Point{X: c.Compliance.OutputExt.Proof.EncCmt.X, Y: c.Compliance.OutputExt.Proof.EncCmt.Y})
+	AssertDecafEquivalent(api, shared.senderAck, gnarkte.Point{X: c.Compliance.SenderCore.Proof.DerivedPK.X, Y: c.Compliance.SenderCore.Proof.DerivedPK.Y})
+	AssertDecafEquivalent(api, shared.senderAck, gnarkte.Point{X: c.Compliance.SenderExt.Proof.DerivedPK.X, Y: c.Compliance.SenderExt.Proof.DerivedPK.Y})
+	AssertDecafEquivalent(api, statementData.receiverAck, gnarkte.Point{X: c.Compliance.OutputCore.Proof.DerivedPK.X, Y: c.Compliance.OutputCore.Proof.DerivedPK.Y})
+	AssertDecafEquivalent(api, statementData.receiverAck, gnarkte.Point{X: c.Compliance.OutputExt.Proof.DerivedPK.X, Y: c.Compliance.OutputExt.Proof.DerivedPK.Y})
+
+	verifyProofStatement := func(
+		proof TransferComplianceProofFields,
+		expectedSubjectBD frontend.Variable,
+		expectedTier frontend.Variable,
+		expectedSalt frontend.Variable,
+	) (frontend.Variable, error) {
+		api.AssertIsEqual(proof.Statement.SubjectBD, expectedSubjectBD)
+		api.AssertIsEqual(proof.Statement.RingIDHash, shared.indexedLeaf.RingIDHash)
+		api.AssertIsEqual(proof.Statement.PolicyIDHash, shared.indexedLeaf.PolicyIDHash)
+		api.AssertIsEqual(proof.Statement.ResourceHash, shared.indexedLeaf.ResourceHash)
+		api.AssertIsEqual(proof.Statement.PermissionHash, shared.indexedLeaf.PermissionHash)
+		api.AssertIsEqual(proof.Statement.Tier, expectedTier)
+		api.AssertIsEqual(proof.Statement.TargetTimestamp, c.TargetTimestamp)
+		api.AssertIsEqual(proof.Statement.Salt, expectedSalt)
+		return ComputeMetadataHash(
 			api,
-			c.Asset.Leaf.PolicyIDHash,
-			c.Asset.Leaf.ResourceHash,
-			c.Asset.Leaf.PermissionHash,
-			i+1,
-			c.TargetTimestamp,
-			salt,
+			proof.Statement.PolicyIDHash,
+			proof.Statement.ResourceHash,
+			proof.Statement.PermissionHash,
+			proof.Statement.Tier,
+			proof.Statement.TargetTimestamp,
+			proof.Statement.Salt,
 		)
-		if err != nil {
-			return err
-		}
+	}
+
+	senderCoreMetadataHash, err := verifyProofStatement(
+		c.Compliance.SenderCore.Proof,
+		shared.senderDivGenFq,
+		1,
+		salts[1],
+	)
+	if err != nil {
+		return err
+	}
+	senderExtMetadataHash, err := verifyProofStatement(
+		c.Compliance.SenderExt.Proof,
+		shared.senderDivGenFq,
+		2,
+		salts[2],
+	)
+	if err != nil {
+		return err
+	}
+	outputCoreMetadataHash, err := verifyProofStatement(
+		c.Compliance.OutputCore.Proof,
+		statementData.receiverDivGenFq,
+		3,
+		salts[3],
+	)
+	if err != nil {
+		return err
+	}
+	outputExtMetadataHash, err := verifyProofStatement(
+		c.Compliance.OutputExt.Proof,
+		statementData.receiverDivGenFq,
+		4,
+		salts[4],
+	)
+	if err != nil {
+		return err
 	}
 
 	if err := VerifyDLEQ(
 		api,
 		c.Compliance.SenderRCore,
-		shared.senderAck,
-		senderCoreUser,
-		senderCoreEPK,
-		metadataHashes[0],
-		c.Compliance.SenderCore.Dleq.C,
-		c.Compliance.SenderCore.Dleq.S,
+		gnarkte.Point{X: c.Compliance.SenderCore.Proof.DerivedPK.X, Y: c.Compliance.SenderCore.Proof.DerivedPK.Y},
+		gnarkte.Point{X: c.Compliance.SenderCore.Proof.SharedPoint.X, Y: c.Compliance.SenderCore.Proof.SharedPoint.Y},
+		gnarkte.Point{X: c.Compliance.SenderCore.Proof.EncCmt.X, Y: c.Compliance.SenderCore.Proof.EncCmt.Y},
+		senderCoreMetadataHash,
+		c.Compliance.SenderCore.Proof.Challenge,
+		c.Compliance.SenderCore.Proof.Response,
 		c.IsRegulated,
 	); err != nil {
 		return err
@@ -699,12 +754,12 @@ func (c *TransferCircuit) verifyTransferComplianceCiphertexts(
 	if err := VerifyDLEQ(
 		api,
 		c.Compliance.SenderRExt,
-		shared.senderAck,
-		senderExtUser,
-		senderExtEPK,
-		metadataHashes[1],
-		c.Compliance.SenderExt.Dleq.C,
-		c.Compliance.SenderExt.Dleq.S,
+		gnarkte.Point{X: c.Compliance.SenderExt.Proof.DerivedPK.X, Y: c.Compliance.SenderExt.Proof.DerivedPK.Y},
+		gnarkte.Point{X: c.Compliance.SenderExt.Proof.SharedPoint.X, Y: c.Compliance.SenderExt.Proof.SharedPoint.Y},
+		gnarkte.Point{X: c.Compliance.SenderExt.Proof.EncCmt.X, Y: c.Compliance.SenderExt.Proof.EncCmt.Y},
+		senderExtMetadataHash,
+		c.Compliance.SenderExt.Proof.Challenge,
+		c.Compliance.SenderExt.Proof.Response,
 		c.IsRegulated,
 	); err != nil {
 		return err
@@ -712,12 +767,12 @@ func (c *TransferCircuit) verifyTransferComplianceCiphertexts(
 	if err := VerifyDLEQ(
 		api,
 		c.Compliance.OutputRCore,
-		statementData.receiverAck,
-		outputCoreUser,
-		outputCoreEPK,
-		metadataHashes[2],
-		c.Compliance.OutputCore.Dleq.C,
-		c.Compliance.OutputCore.Dleq.S,
+		gnarkte.Point{X: c.Compliance.OutputCore.Proof.DerivedPK.X, Y: c.Compliance.OutputCore.Proof.DerivedPK.Y},
+		gnarkte.Point{X: c.Compliance.OutputCore.Proof.SharedPoint.X, Y: c.Compliance.OutputCore.Proof.SharedPoint.Y},
+		gnarkte.Point{X: c.Compliance.OutputCore.Proof.EncCmt.X, Y: c.Compliance.OutputCore.Proof.EncCmt.Y},
+		outputCoreMetadataHash,
+		c.Compliance.OutputCore.Proof.Challenge,
+		c.Compliance.OutputCore.Proof.Response,
 		c.IsRegulated,
 	); err != nil {
 		return err
@@ -725,12 +780,12 @@ func (c *TransferCircuit) verifyTransferComplianceCiphertexts(
 	if err := VerifyDLEQ(
 		api,
 		c.Compliance.OutputRExt,
-		statementData.receiverAck,
-		outputExtUser,
-		outputExtEPK,
-		metadataHashes[3],
-		c.Compliance.OutputExt.Dleq.C,
-		c.Compliance.OutputExt.Dleq.S,
+		gnarkte.Point{X: c.Compliance.OutputExt.Proof.DerivedPK.X, Y: c.Compliance.OutputExt.Proof.DerivedPK.Y},
+		gnarkte.Point{X: c.Compliance.OutputExt.Proof.SharedPoint.X, Y: c.Compliance.OutputExt.Proof.SharedPoint.Y},
+		gnarkte.Point{X: c.Compliance.OutputExt.Proof.EncCmt.X, Y: c.Compliance.OutputExt.Proof.EncCmt.Y},
+		outputExtMetadataHash,
+		c.Compliance.OutputExt.Proof.Challenge,
+		c.Compliance.OutputExt.Proof.Response,
 		c.IsRegulated,
 	); err != nil {
 		return err
@@ -784,23 +839,64 @@ func (c *TransferCircuit) buildTransferStatementFields(
 		fields = append(fields, epkFq, tier.C2)
 		fields = append(fields, tier.Ciphertext[:]...)
 	}
+	appendProofTier := func(proof TransferComplianceProofFields) error {
+		derivedPKFq, err := Decaf377CompressToField(
+			api,
+			gnarkte.Point{X: proof.DerivedPK.X, Y: proof.DerivedPK.Y},
+		)
+		if err != nil {
+			return err
+		}
+		encCmtFq, err := Decaf377CompressToField(
+			api,
+			gnarkte.Point{X: proof.EncCmt.X, Y: proof.EncCmt.Y},
+		)
+		if err != nil {
+			return err
+		}
+		sharedPointFq, err := Decaf377CompressToField(
+			api,
+			gnarkte.Point{X: proof.SharedPoint.X, Y: proof.SharedPoint.Y},
+		)
+		if err != nil {
+			return err
+		}
+		fields = append(
+			fields,
+			proof.Statement.SubjectBD,
+			proof.Statement.RingIDHash,
+			proof.Statement.PolicyIDHash,
+			proof.Statement.ResourceHash,
+			proof.Statement.PermissionHash,
+			proof.Statement.Tier,
+			proof.Statement.TargetTimestamp,
+			proof.Statement.Salt,
+			derivedPKFq,
+			encCmtFq,
+			sharedPointFq,
+			proof.Challenge,
+			proof.Response,
+		)
+		return nil
+	}
 
 	appendCoreTier(statementData.senderCoreEPKFq, c.Compliance.SenderCore)
 	appendExtTier(statementData.senderExtEPKFq, c.Compliance.SenderExt)
 	appendCoreTier(statementData.outputCoreEPKFq, c.Compliance.OutputCore)
 	appendExtTier(statementData.outputExtEPKFq, c.Compliance.OutputExt)
 	fields = append(fields, c.TargetTimestamp)
-	fields = append(
-		fields,
-		c.Compliance.SenderCore.Dleq.C,
-		c.Compliance.SenderCore.Dleq.S,
-		c.Compliance.SenderExt.Dleq.C,
-		c.Compliance.SenderExt.Dleq.S,
-		c.Compliance.OutputCore.Dleq.C,
-		c.Compliance.OutputCore.Dleq.S,
-		c.Compliance.OutputExt.Dleq.C,
-		c.Compliance.OutputExt.Dleq.S,
-	)
+	if err := appendProofTier(c.Compliance.SenderCore.Proof); err != nil {
+		return nil, err
+	}
+	if err := appendProofTier(c.Compliance.SenderExt.Proof); err != nil {
+		return nil, err
+	}
+	if err := appendProofTier(c.Compliance.OutputCore.Proof); err != nil {
+		return nil, err
+	}
+	if err := appendProofTier(c.Compliance.OutputExt.Proof); err != nil {
+		return nil, err
+	}
 
 	expected := transferStatementFieldCount()
 	if len(fields) != expected {

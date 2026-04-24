@@ -66,7 +66,7 @@ func testCircuitFamilies() []circuitFamily {
 			},
 			mutateCompliance: func(assignment frontend.Circuit) {
 				a := assignment.(*circuits.TransferCircuit)
-				a.Compliance.SenderCore.Dleq.C = mutateFieldByOne(a.Compliance.SenderCore.Dleq.C)
+				a.Compliance.SenderCore.Proof.Challenge = mutateFieldByOne(a.Compliance.SenderCore.Proof.Challenge)
 			},
 		},
 	}
