@@ -27,6 +27,7 @@ case "$ACTION" in
             log_warning "Docker daemon is not running; skipping Orbis compose teardown"
             exit 0
         fi
+        ensure_orbis_runtime_checkout
         run_orbis_compose "$COMPOSE_FILE" down -v
         log_success "Orbis stack stopped"
         ;;

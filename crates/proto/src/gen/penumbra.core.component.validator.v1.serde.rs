@@ -1921,9 +1921,15 @@ impl<'de> serde::Deserialize<'de> for ValidatorParameters {
                     }
                 }
                 Ok(ValidatorParameters {
+                    unbonding_epochs: 0,
                     active_validator_limit: active_validator_limit__.unwrap_or_default(),
+                    base_reward_rate: 0,
+                    slashing_penalty_misbehavior: 0,
+                    slashing_penalty_downtime: 0,
                     signed_blocks_window_len: signed_blocks_window_len__.unwrap_or_default(),
                     missed_blocks_maximum: missed_blocks_maximum__.unwrap_or_default(),
+                    min_validator_stake: None,
+                    unbonding_delay: 0,
                 })
             }
         }

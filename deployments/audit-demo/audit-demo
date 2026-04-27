@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="$(readlink -f "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  setup)
+    exec "$SCRIPT_DIR/setup.sh" "$@"
+    ;;
+  scanner)
+    exec "$SCRIPT_DIR/scanner.sh" "$@"
+    ;;
+  audit-user)
+    exec "$SCRIPT_DIR/audit-user.sh" "$@"
+    ;;
+  *)
+    echo "Usage: audit-demo {setup|scanner|audit-user <name>}" >&2
+    exit 2
+    ;;
+esac

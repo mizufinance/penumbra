@@ -10,6 +10,7 @@
 
 # localnet for 'pd testnet generate' defaults
 !deployments/000-localnet/
+!deployments/audit-demo/
 # cometbft config template and CI validators
 !testnets/
 # metrics containers
@@ -20,5 +21,15 @@
 !tools/summonerd/
 # parameter setup tool, for wrangling circuit configuration
 !tools/parameter-setup/
+# gnark circuit metadata and proving/verifying keys required by proof-params
+!tools/gnark/
+!tools/gnark/artifacts/
+!tools/gnark/artifacts/**
+!tools/gnark/internal/
+!tools/gnark/internal/generated/
+!tools/gnark/internal/generated/**
+!tools/gnark/transfer_families.json
+tools/gnark/rust-vectors/target/
+tools/gnark/rust-vectors/target/**
 # picturesque setup tool, for wrangling node configs
 !tools/picturesque/

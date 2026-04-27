@@ -1,7 +1,8 @@
-use std::collections::HashSet;
-use std::fs::File;
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, File};
 use std::io::{BufReader, Write};
 use std::path::PathBuf;
+use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
@@ -14,6 +15,7 @@ use penumbra_sdk_compliance::{
 use penumbra_sdk_keys::Address;
 use penumbra_sdk_num::Amount;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tonic::transport::Channel;
 use url::Url;
 
@@ -39,13 +41,25 @@ struct Args {
     tier: String,
 
     #[clap(long)]
-    sender_address: String,
+    sender_address: Option<String>,
+
+    #[clap(long = "subject-address")]
+    subject_addresses: Vec<String>,
 
     #[clap(long)]
     orbis_endpoint: String,
 
     #[clap(long = "known-address")]
     known_addresses: Vec<String>,
+
+    #[clap(long)]
+    timings_json: Option<PathBuf>,
+
+    #[clap(long)]
+    object_cache: Option<PathBuf>,
+
+    #[clap(long)]
+    prepare_only: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -77,6 +91,18 @@ struct AuditEntry {
 struct PackageObjectContext {
     object_id: String,
     package: OrbisEncryptedSeedUploadPackage,
+    cache_key: String,
+    from_cache: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct ObjectCache {
+    objects: HashMap<String, CachedObject>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CachedObject {
+    object_id: String,
 }
 
 #[derive(Clone)]
@@ -85,6 +111,7 @@ struct AuditContext<'a> {
     dk: &'a Fr,
     dk_pub: &'a Element,
     subject_transmission_key_hex: &'a str,
+    subject_b_d_bytes: &'a [u8; 32],
     known_transmission_keys: &'a HashSet<String>,
     tier_mode: &'a str,
 }
@@ -92,6 +119,42 @@ struct AuditContext<'a> {
 #[derive(Clone, Debug)]
 struct AddressData {
     transmission_key_hex: String,
+}
+
+#[derive(Clone, Debug)]
+struct SubjectData {
+    transmission_key_hex: String,
+    subject_b_d_bytes: [u8; 32],
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct AuditTimings {
+    tier: String,
+    candidate_refs: u64,
+    skipped_flagged: u64,
+    no_ciphertext: u64,
+    transaction_fetch_ms: u128,
+    ciphertext_extraction_ms: u128,
+    package_store_ms: u128,
+    object_registration_ms: u128,
+    relationship_setup_ms: u128,
+    start_pre_ms: u128,
+    seed_decrypt_ms: u128,
+    amount_decrypt_ms: u128,
+    address_decrypt_ms: u128,
+    issuer_db_update_ms: u128,
+    pre_calls: u64,
+    total_pre_ms: u128,
+    avg_pre_ms: u128,
+    p95_pre_ms: u128,
+    total_ms: u128,
+    decrypted: u64,
+    object_cache_hits: u64,
+    object_cache_misses: u64,
+    object_cache_stale: u64,
+    subject_mismatch: u64,
+    #[serde(skip)]
+    pre_call_samples_ms: Vec<u128>,
 }
 
 #[derive(Clone, Debug)]
@@ -117,14 +180,12 @@ async fn main() -> Result<()> {
     let dk = parse_fr(&args.dk_hex, "DK")?;
     let dk_pub = Element::GENERATOR * dk;
 
-    let subject_address: Address = args
-        .sender_address
-        .parse()
-        .context("failed to parse --sender-address as Penumbra address")?;
-    let subject_transmission_key_hex = hex::encode(subject_address.transmission_key().0);
+    let subjects = parse_subjects(&args)?;
 
     let mut known_transmission_keys = HashSet::new();
-    known_transmission_keys.insert(subject_transmission_key_hex.clone());
+    for subject in &subjects {
+        known_transmission_keys.insert(subject.transmission_key_hex.clone());
+    }
     for address in &args.known_addresses {
         let address: Address = address
             .parse()
@@ -134,8 +195,12 @@ async fn main() -> Result<()> {
 
     let cli = OrbisClient::new(args.orbis_endpoint.clone());
     eprintln!(
-        "orbis-audit: target={}...",
-        &subject_transmission_key_hex[..16]
+        "orbis-audit: targets={}...",
+        subjects
+            .iter()
+            .map(|subject| &subject.transmission_key_hex[..16])
+            .collect::<Vec<_>>()
+            .join(",")
     );
 
     let file = File::open(&args.input).context("failed to open input file")?;
@@ -147,15 +212,12 @@ async fn main() -> Result<()> {
     );
 
     let channel = connect_to_node(&args.node).await?;
-    let ctx = AuditContext {
-        cli: &cli,
-        dk: &dk,
-        dk_pub: &dk_pub,
-        subject_transmission_key_hex: &subject_transmission_key_hex,
-        known_transmission_keys: &known_transmission_keys,
-        tier_mode,
+    let total_started = Instant::now();
+    let mut object_cache = load_object_cache(args.object_cache.as_ref())?;
+    let mut timings = AuditTimings {
+        tier: args.tier.clone(),
+        ..Default::default()
     };
-
     let mut results = Vec::new();
     let mut attempted = 0u64;
     let mut decrypted = 0u64;
@@ -163,10 +225,14 @@ async fn main() -> Result<()> {
 
     for tx_ref in &scan.detected {
         if tx_ref.is_flagged {
+            timings.skipped_flagged += 1;
             continue;
         }
-        attempted += 1;
+        attempted += subjects.len() as u64;
+        timings.candidate_refs += subjects.len() as u64;
+        let started = Instant::now();
         let transactions = fetch_transactions(channel.clone(), tx_ref.height).await?;
+        timings.transaction_fetch_ms += started.elapsed().as_millis();
 
         for tx in &transactions {
             let Some(body) = tx.body.as_ref() else {
@@ -177,14 +243,36 @@ async fn main() -> Result<()> {
             }
 
             let action = &body.actions[tx_ref.action_index];
+            let started = Instant::now();
             let Some((ct, bundle)) = extract_transfer_data(action) else {
+                timings.ciphertext_extraction_ms += started.elapsed().as_millis();
                 no_ciphertext += 1;
+                timings.no_ciphertext += 1;
                 continue;
             };
+            timings.ciphertext_extraction_ms += started.elapsed().as_millis();
 
-            if let Some(entry) = audit_transfer(tx_ref, &ct, &bundle, &ctx).await? {
-                decrypted += 1;
-                results.push(entry);
+            for subject in &subjects {
+                let ctx = AuditContext {
+                    cli: &cli,
+                    dk: &dk,
+                    dk_pub: &dk_pub,
+                    subject_transmission_key_hex: &subject.transmission_key_hex,
+                    subject_b_d_bytes: &subject.subject_b_d_bytes,
+                    known_transmission_keys: &known_transmission_keys,
+                    tier_mode,
+                };
+                if args.prepare_only {
+                    prepare_transfer(&bundle, &ctx, &mut timings, &mut object_cache).await?;
+                    continue;
+                }
+                if let Some(entry) =
+                    audit_transfer(tx_ref, &ct, &bundle, &ctx, &mut timings, &mut object_cache)
+                        .await?
+                {
+                    decrypted += 1;
+                    results.push(entry);
+                }
             }
         }
     }
@@ -203,9 +291,75 @@ async fn main() -> Result<()> {
             no_ciphertext
         );
     }
+    timings.decrypted = decrypted;
+    timings.total_ms = total_started.elapsed().as_millis();
+    timings.pre_calls = timings.pre_call_samples_ms.len() as u64;
+    timings.total_pre_ms = timings.pre_call_samples_ms.iter().sum();
+    timings.avg_pre_ms = if timings.pre_calls == 0 {
+        0
+    } else {
+        timings.total_pre_ms / timings.pre_calls as u128
+    };
+    timings.p95_pre_ms = percentile(&timings.pre_call_samples_ms, 95);
+    if let Some(path) = &args.timings_json {
+        let json = serde_json::to_string_pretty(&timings)?;
+        let mut out_file = File::create(path)?;
+        out_file.write_all(json.as_bytes())?;
+    }
+    save_object_cache(args.object_cache.as_ref(), &object_cache)?;
+    eprintln!(
+        "orbis-audit: PRE calls={} total_pre_ms={} avg_pre_ms={} p95_pre_ms={} object_cache_hits={} object_cache_misses={} object_cache_stale={}",
+        timings.pre_calls,
+        timings.total_pre_ms,
+        timings.avg_pre_ms,
+        timings.p95_pre_ms,
+        timings.object_cache_hits,
+        timings.object_cache_misses,
+        timings.object_cache_stale
+    );
     println!("Results saved to: {}", args.output.display());
 
     Ok(())
+}
+
+fn percentile(samples: &[u128], percentile: usize) -> u128 {
+    if samples.is_empty() {
+        return 0;
+    }
+    let mut values = samples.to_vec();
+    values.sort_unstable();
+    let index = ((values.len() - 1) * percentile) / 100;
+    values[index]
+}
+
+fn parse_subjects(args: &Args) -> Result<Vec<SubjectData>> {
+    let mut subject_addresses = args.subject_addresses.clone();
+    if let Some(sender_address) = &args.sender_address {
+        subject_addresses.push(sender_address.clone());
+    }
+    if subject_addresses.is_empty() {
+        anyhow::bail!("at least one --subject-address or --sender-address is required");
+    }
+
+    let mut seen = HashSet::new();
+    let mut subjects = Vec::new();
+    for subject_address in subject_addresses {
+        let address: Address = subject_address
+            .parse()
+            .with_context(|| format!("failed to parse subject address {subject_address}"))?;
+        let transmission_key_hex = hex::encode(address.transmission_key().0);
+        if seen.insert(transmission_key_hex.clone()) {
+            let subject_b_d_bytes = address
+                .diversified_generator()
+                .vartime_compress_to_field()
+                .to_bytes();
+            subjects.push(SubjectData {
+                transmission_key_hex,
+                subject_b_d_bytes,
+            });
+        }
+    }
+    Ok(subjects)
 }
 
 async fn audit_transfer(
@@ -213,20 +367,56 @@ async fn audit_transfer(
     ct: &TransferComplianceCiphertext,
     bundle: &TransferOrbisUploadBundle,
     ctx: &AuditContext<'_>,
+    timings: &mut AuditTimings,
+    object_cache: &mut ObjectCache,
 ) -> Result<Option<AuditEntry>> {
-    if let Some(candidate) = try_receiver_match(ct, bundle, ctx).await? {
+    if let Some(candidate) = try_receiver_match(ct, bundle, ctx, timings, object_cache).await? {
         return Ok(Some(candidate_to_entry(tx_ref, candidate, ctx)));
     }
-    if let Some(candidate) = try_sender_match(ct, bundle, ctx).await? {
+    if let Some(candidate) = try_sender_match(ct, bundle, ctx, timings, object_cache).await? {
         return Ok(Some(candidate_to_entry(tx_ref, candidate, ctx)));
     }
     Ok(None)
+}
+
+async fn prepare_transfer(
+    bundle: &TransferOrbisUploadBundle,
+    ctx: &AuditContext<'_>,
+    timings: &mut AuditTimings,
+    object_cache: &mut ObjectCache,
+) -> Result<()> {
+    let TransferOrbisUploadBundle {
+        output_core,
+        output_ext,
+        sender_core,
+        sender_ext,
+    } = bundle.clone();
+
+    if output_core.derivation_bytes() == *ctx.subject_b_d_bytes {
+        let ring_id = output_core.ring_id.clone();
+        ensure_package_object(ctx.cli, &ring_id, output_core, timings, object_cache).await?;
+        ensure_package_object(ctx.cli, &ring_id, output_ext, timings, object_cache).await?;
+    } else {
+        timings.subject_mismatch += 1;
+    }
+
+    if sender_core.derivation_bytes() == *ctx.subject_b_d_bytes {
+        let ring_id = sender_core.ring_id.clone();
+        ensure_package_object(ctx.cli, &ring_id, sender_core, timings, object_cache).await?;
+        ensure_package_object(ctx.cli, &ring_id, sender_ext, timings, object_cache).await?;
+    } else {
+        timings.subject_mismatch += 1;
+    }
+
+    Ok(())
 }
 
 async fn try_receiver_match(
     ct: &TransferComplianceCiphertext,
     bundle: &TransferOrbisUploadBundle,
     ctx: &AuditContext<'_>,
+    timings: &mut AuditTimings,
+    object_cache: &mut ObjectCache,
 ) -> Result<Option<TransferMatch>> {
     let ring_id = bundle.output_core.ring_id.clone();
     let TransferOrbisUploadBundle {
@@ -234,15 +424,44 @@ async fn try_receiver_match(
         output_ext,
         ..
     } = bundle.clone();
-    let output_core_seed =
-        pre_package_seed(ctx.cli, &ring_id, output_core, ctx.dk, ctx.dk_pub).await?;
+    if output_core.derivation_bytes() != *ctx.subject_b_d_bytes {
+        timings.subject_mismatch += 1;
+        return Ok(None);
+    }
+    let output_core_seed = pre_package_seed(
+        ctx.cli,
+        &ring_id,
+        output_core,
+        ctx.dk,
+        ctx.dk_pub,
+        timings,
+        object_cache,
+    )
+    .await?;
+    let started = Instant::now();
     let amount = decrypt_amount_with_seed(output_core_seed, &ct.encrypted_output_core)?;
+    timings.amount_decrypt_ms += started.elapsed().as_millis();
 
-    let output_ext_seed =
-        pre_package_seed(ctx.cli, &ring_id, output_ext, ctx.dk, ctx.dk_pub).await?;
+    let output_ext_seed = pre_package_seed(
+        ctx.cli,
+        &ring_id,
+        output_ext,
+        ctx.dk,
+        ctx.dk_pub,
+        timings,
+        object_cache,
+    )
+    .await?;
+    let started = Instant::now();
     let sender = match decrypt_address_with_seed(output_ext_seed, &ct.encrypted_output_ext) {
-        Ok(sender) => sender,
-        Err(_) => return Ok(None),
+        Ok(sender) => {
+            timings.address_decrypt_ms += started.elapsed().as_millis();
+            sender
+        }
+        Err(_) => {
+            timings.address_decrypt_ms += started.elapsed().as_millis();
+            return Ok(None);
+        }
     };
 
     if !ctx
@@ -259,6 +478,8 @@ async fn try_sender_match(
     ct: &TransferComplianceCiphertext,
     bundle: &TransferOrbisUploadBundle,
     ctx: &AuditContext<'_>,
+    timings: &mut AuditTimings,
+    object_cache: &mut ObjectCache,
 ) -> Result<Option<TransferMatch>> {
     let ring_id = bundle.sender_core.ring_id.clone();
     let TransferOrbisUploadBundle {
@@ -266,15 +487,44 @@ async fn try_sender_match(
         sender_ext,
         ..
     } = bundle.clone();
-    let sender_core_seed =
-        pre_package_seed(ctx.cli, &ring_id, sender_core, ctx.dk, ctx.dk_pub).await?;
+    if sender_core.derivation_bytes() != *ctx.subject_b_d_bytes {
+        timings.subject_mismatch += 1;
+        return Ok(None);
+    }
+    let sender_core_seed = pre_package_seed(
+        ctx.cli,
+        &ring_id,
+        sender_core,
+        ctx.dk,
+        ctx.dk_pub,
+        timings,
+        object_cache,
+    )
+    .await?;
+    let started = Instant::now();
     let amount = decrypt_amount_with_seed(sender_core_seed, &ct.encrypted_sender_core)?;
+    timings.amount_decrypt_ms += started.elapsed().as_millis();
 
-    let sender_ext_seed =
-        pre_package_seed(ctx.cli, &ring_id, sender_ext, ctx.dk, ctx.dk_pub).await?;
+    let sender_ext_seed = pre_package_seed(
+        ctx.cli,
+        &ring_id,
+        sender_ext,
+        ctx.dk,
+        ctx.dk_pub,
+        timings,
+        object_cache,
+    )
+    .await?;
+    let started = Instant::now();
     let receiver = match decrypt_address_with_seed(sender_ext_seed, &ct.encrypted_sender_ext) {
-        Ok(receiver) => receiver,
-        Err(_) => return Ok(None),
+        Ok(receiver) => {
+            timings.address_decrypt_ms += started.elapsed().as_millis();
+            receiver
+        }
+        Err(_) => {
+            timings.address_decrypt_ms += started.elapsed().as_millis();
+            return Ok(None);
+        }
     };
 
     if !ctx
@@ -346,20 +596,84 @@ fn decrypt_address_with_seed(seed: Fq, encrypted: &[u8]) -> Result<AddressData> 
     })
 }
 
+fn load_object_cache(path: Option<&PathBuf>) -> Result<ObjectCache> {
+    let Some(path) = path else {
+        return Ok(ObjectCache::default());
+    };
+    if !path.exists() {
+        return Ok(ObjectCache::default());
+    }
+    let file = File::open(path)
+        .with_context(|| format!("failed to open object cache {}", path.display()))?;
+    serde_json::from_reader(BufReader::new(file))
+        .with_context(|| format!("failed to parse object cache {}", path.display()))
+}
+
+fn save_object_cache(path: Option<&PathBuf>, cache: &ObjectCache) -> Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create object cache dir {}", parent.display()))?;
+    }
+    let json = serde_json::to_string_pretty(cache)?;
+    let mut file = File::create(path)
+        .with_context(|| format!("failed to write object cache {}", path.display()))?;
+    file.write_all(json.as_bytes())?;
+    Ok(())
+}
+
+fn package_cache_key(ring_id: &str, package: &OrbisEncryptedSeedUploadPackage) -> Result<String> {
+    let mut hasher = Sha256::new();
+    hasher.update(ring_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(serde_json::to_vec(package)?);
+    Ok(hex::encode(hasher.finalize()))
+}
+
 async fn ensure_package_object(
     cli: &OrbisClient,
     ring_id: &str,
     package: OrbisEncryptedSeedUploadPackage,
+    timings: &mut AuditTimings,
+    object_cache: &mut ObjectCache,
 ) -> Result<PackageObjectContext> {
     package.validate()?;
+    let cache_key = package_cache_key(ring_id, &package)?;
+    if let Some(cached) = object_cache.objects.get(&cache_key) {
+        timings.object_cache_hits += 1;
+        return Ok(PackageObjectContext {
+            object_id: cached.object_id.clone(),
+            package,
+            cache_key,
+            from_cache: true,
+        });
+    }
+
+    timings.object_cache_misses += 1;
+    let started = Instant::now();
     let stored = cli.store_encrypted_seed_package(ring_id, &package).await?;
+    timings.package_store_ms += started.elapsed().as_millis();
+    let started = Instant::now();
     cli.register_object(&package.policy_id, &stored.object_id)
         .await?;
+    timings.object_registration_ms += started.elapsed().as_millis();
+    let started = Instant::now();
     cli.set_relationship(&package.policy_id, &stored.object_id)
         .await?;
+    timings.relationship_setup_ms += started.elapsed().as_millis();
+    object_cache.objects.insert(
+        cache_key.clone(),
+        CachedObject {
+            object_id: stored.object_id.clone(),
+        },
+    );
     Ok(PackageObjectContext {
-        object_id: stored.object_id,
+        object_id: stored.object_id.clone(),
         package,
+        cache_key: cache_key.clone(),
+        from_cache: false,
     })
 }
 
@@ -369,9 +683,12 @@ async fn pre_package_seed(
     package: OrbisEncryptedSeedUploadPackage,
     reader_sk: &Fr,
     reader_pk: &Element,
+    timings: &mut AuditTimings,
+    object_cache: &mut ObjectCache,
 ) -> Result<Fq> {
-    let object = ensure_package_object(cli, ring_id, package).await?;
-    let pre = cli
+    let mut object = ensure_package_object(cli, ring_id, package, timings, object_cache).await?;
+    let started = Instant::now();
+    let mut pre_result = cli
         .start_pre(
             &hex::encode(reader_pk.vartime_compress().0),
             &object.object_id,
@@ -379,8 +696,28 @@ async fn pre_package_seed(
             Some(&object.package.salt),
             Some(object.package.timestamp),
         )
-        .await?;
+        .await;
+    if pre_result.is_err() && object.from_cache {
+        timings.object_cache_stale += 1;
+        object_cache.objects.remove(&object.cache_key);
+        object = ensure_package_object(cli, ring_id, object.package.clone(), timings, object_cache)
+            .await?;
+        pre_result = cli
+            .start_pre(
+                &hex::encode(reader_pk.vartime_compress().0),
+                &object.object_id,
+                &hex::encode(object.package.derivation_bytes()),
+                Some(&object.package.salt),
+                Some(object.package.timestamp),
+            )
+            .await;
+    }
+    let pre = pre_result?;
+    let pre_ms = started.elapsed().as_millis();
+    timings.start_pre_ms += pre_ms;
+    timings.pre_call_samples_ms.push(pre_ms);
 
+    let started = Instant::now();
     let xnc_bytes = hex::decode(&pre.xnc_cmt_hex).context("invalid xnc_cmt hex from PRE")?;
     let xnc_arr: [u8; 32] = xnc_bytes
         .try_into()
@@ -388,7 +725,9 @@ async fn pre_package_seed(
     let xnc_cmt = decaf377::Encoding(xnc_arr)
         .vartime_decompress()
         .map_err(|_| anyhow!("invalid xnc_cmt curve point"))?;
-    decrypt_orbis_reencrypted_seed(&object.package, reader_sk, &xnc_cmt, &pre.secret)
+    let seed = decrypt_orbis_reencrypted_seed(&object.package, reader_sk, &xnc_cmt, &pre.secret)?;
+    timings.seed_decrypt_ms += started.elapsed().as_millis();
+    Ok(seed)
 }
 
 fn parse_fr(hex_str: &str, label: &str) -> Result<Fr> {

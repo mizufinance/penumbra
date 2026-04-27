@@ -13,7 +13,7 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use penumbra_orbis_client::{NodeInfo, OrbisClient};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const NODE1_ENDPOINT: &str = "http://127.0.0.1:50051";
 const NODE2_ENDPOINT: &str = "http://127.0.0.1:50052";
@@ -24,6 +24,22 @@ const NODE3_CONTAINER: &str = "orbis-integration-node-3";
 const ORBIS_NAMESPACE: &str = "orbis";
 const ORBIS_RESOURCE: &str = "document";
 const ORBIS_PERMISSION: &str = "read";
+
+fn node_endpoint(env_key: &str, default: &str) -> String {
+    env::var(env_key).unwrap_or_else(|_| default.to_string())
+}
+
+fn node_container(env_key: &str, default: &str) -> String {
+    env::var(env_key).unwrap_or_else(|_| default.to_string())
+}
+
+fn node_endpoints() -> (String, String, String) {
+    (
+        node_endpoint("ORBIS_NODE1_ENDPOINT", NODE1_ENDPOINT),
+        node_endpoint("ORBIS_NODE2_ENDPOINT", NODE2_ENDPOINT),
+        node_endpoint("ORBIS_NODE3_ENDPOINT", NODE3_ENDPOINT),
+    )
+}
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -47,6 +63,12 @@ enum CommandKind {
     Seed,
     /// Run the read-only verification phase against a seeded stack.
     Verify,
+    /// Set up an Orbis ring and policy for an already running Orbis stack.
+    SetupRing {
+        /// Path to write ring/policy details as JSON.
+        #[clap(long)]
+        output_json: PathBuf,
+    },
 }
 
 #[derive(Debug)]
@@ -72,21 +94,110 @@ struct ScanOutput {
     detected: Vec<DetectedTxRef>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct DetectedTxRef {
+    height: u64,
+    action_index: usize,
     is_flagged: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct AuditEntry {
+    height: u64,
+    action_index: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RingSetupOutput {
+    ring_pk_hex: String,
+    ring_id: String,
+    policy_id: String,
+    resource: String,
+    permission: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let repo = RepoPaths::discover()?;
 
     match args.command {
-        CommandKind::Run { keep_on_fail } => run_full_flow(&repo, keep_on_fail).await,
-        CommandKind::Seed => seed(&repo).await,
-        CommandKind::Verify => verify(&repo).await,
+        CommandKind::Run { keep_on_fail } => {
+            let repo = RepoPaths::discover()?;
+            run_full_flow(&repo, keep_on_fail).await
+        }
+        CommandKind::Seed => {
+            let repo = RepoPaths::discover()?;
+            seed(&repo).await
+        }
+        CommandKind::Verify => {
+            let repo = RepoPaths::discover()?;
+            verify(&repo).await
+        }
+        CommandKind::SetupRing { output_json } => setup_ring(&output_json).await,
     }
+}
+
+async fn setup_ring(output_json: &Path) -> Result<()> {
+    let (node1_endpoint, node2_endpoint, node3_endpoint) = node_endpoints();
+    for endpoint in [&node1_endpoint, &node2_endpoint, &node3_endpoint] {
+        wait_for_tcp_endpoint(endpoint, 60, Duration::from_secs(2))?;
+    }
+
+    let node1 = OrbisClient::new(node1_endpoint);
+    let node2 = OrbisClient::new(node2_endpoint);
+    let node3 = OrbisClient::new(node3_endpoint);
+
+    let info1 = wait_for_node_info(&node1, "node1").await?;
+    let info2 = wait_for_node_info(&node2, "node2").await?;
+    let info3 = wait_for_node_info(&node3, "node3").await?;
+
+    node1.register_bulletin_namespace(ORBIS_NAMESPACE).await?;
+    for info in [&info1, &info2, &info3] {
+        node1
+            .add_bulletin_collaborator(ORBIS_NAMESPACE, &info.public_address)
+            .await?;
+    }
+
+    let peer_ids = vec![
+        docker_peer_id(
+            &info1,
+            &node_container("ORBIS_NODE1_CONTAINER", NODE1_CONTAINER),
+        )?,
+        docker_peer_id(
+            &info2,
+            &node_container("ORBIS_NODE2_CONTAINER", NODE2_CONTAINER),
+        )?,
+        docker_peer_id(
+            &info3,
+            &node_container("ORBIS_NODE3_CONTAINER", NODE3_CONTAINER),
+        )?,
+    ];
+    let dkg = node1.start_dkg(2, &peer_ids).await?;
+    eprintln!(
+        "orbis-integration: DKG session started: {} ({})",
+        dkg.session_id, dkg.status
+    );
+    eprintln!("orbis-integration: DKG message: {}", dkg.message);
+
+    let ring = wait_for_latest_ring(&node1).await?;
+    let policy_id = node1.add_policy().await?;
+    let output = RingSetupOutput {
+        ring_pk_hex: ring.ring_pk_hex,
+        ring_id: ring.ring_id,
+        policy_id,
+        resource: ORBIS_RESOURCE.to_string(),
+        permission: ORBIS_PERMISSION.to_string(),
+    };
+
+    if let Some(parent) = output_json.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(output_json, serde_json::to_string_pretty(&output)?)
+        .with_context(|| format!("failed to write {}", output_json.display()))?;
+    println!("{}", output_json.display());
+    Ok(())
 }
 
 async fn run_full_flow(repo: &RepoPaths, keep_on_fail: bool) -> Result<()> {
@@ -132,9 +243,10 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
     wait_for_tcp("127.0.0.1:50052", 60, Duration::from_secs(2))?;
     wait_for_tcp("127.0.0.1:50053", 60, Duration::from_secs(2))?;
 
-    let node1 = OrbisClient::new(NODE1_ENDPOINT);
-    let node2 = OrbisClient::new(NODE2_ENDPOINT);
-    let node3 = OrbisClient::new(NODE3_ENDPOINT);
+    let (node1_endpoint, node2_endpoint, node3_endpoint) = node_endpoints();
+    let node1 = OrbisClient::new(node1_endpoint);
+    let node2 = OrbisClient::new(node2_endpoint);
+    let node3 = OrbisClient::new(node3_endpoint);
 
     let info1 = wait_for_node_info(&node1, "node1").await?;
     let info2 = wait_for_node_info(&node2, "node2").await?;
@@ -445,9 +557,10 @@ async fn verify(repo: &RepoPaths) -> Result<()> {
         &repo.issuer_dk_file,
         "run `just orbis-integration-seed` before `just orbis-integration-verify`",
     )?;
-    let node1 = OrbisClient::new(NODE1_ENDPOINT);
-    let node2 = OrbisClient::new(NODE2_ENDPOINT);
-    let node3 = OrbisClient::new(NODE3_ENDPOINT);
+    let (node1_endpoint, node2_endpoint, node3_endpoint) = node_endpoints();
+    let node1 = OrbisClient::new(node1_endpoint);
+    let node2 = OrbisClient::new(node2_endpoint);
+    let node3 = OrbisClient::new(node3_endpoint);
     let current_peer_ids = format!(
         "{},{},{}",
         wait_for_node_info(&node1, "node1").await?.peer_id,
@@ -550,58 +663,47 @@ async fn verify(repo: &RepoPaths) -> Result<()> {
         )?;
     }
 
-    for (tier, suffix) in [("default", "audit"), ("extension", "ext-audit")] {
-        for (user_name, address_key) in [("Alice", "ALICE_ADDRESS"), ("Bob", "BOB_ADDRESS")] {
-            let audit_file = repo
-                .tmp
-                .join(format!("{}-{}.json", user_name.to_lowercase(), suffix));
-            run_command(
-                Command::new(&repo.orbis_audit_bin)
-                    .current_dir(&repo.root)
-                    .arg("--input")
-                    .arg(&repo.detected_file)
-                    .arg("--dk-hex")
-                    .arg(issuer.get("REGULATED_DK")?)
-                    .arg("--node")
-                    .arg(env.get("PENUMBRA_NODE_PD_URL")?)
-                    .arg("--output")
-                    .arg(&audit_file)
-                    .arg("--tier")
-                    .arg(tier)
-                    .arg("--sender-address")
-                    .arg(env.get(address_key)?)
-                    .arg("--known-address")
-                    .arg(env.get("ALICE_ADDRESS")?)
-                    .arg("--known-address")
-                    .arg(env.get("BOB_ADDRESS")?)
-                    .arg("--known-address")
-                    .arg(env.get("CHARLIE_ADDRESS")?)
-                    .arg("--orbis-endpoint")
-                    .arg(NODE1_ENDPOINT),
-            )?;
+    for (user_name, address_key) in [("Alice", "ALICE_ADDRESS"), ("Bob", "BOB_ADDRESS")] {
+        let default_audit_file = repo
+            .tmp
+            .join(format!("{}-audit.json", user_name.to_lowercase()));
+        run_orbis_audit(
+            repo,
+            &env,
+            &issuer,
+            &repo.detected_file,
+            &default_audit_file,
+            "default",
+            user_name,
+            env.get(address_key)?,
+        )?;
+        update_issuer_db_from_audit(repo, &env, user_name, &default_audit_file)?;
 
-            let audit_count = count_json_array(&audit_file)?;
-            if audit_count > 0 {
-                run_pcli(
-                    repo,
-                    &env,
-                    [
-                        "--home",
-                        env.get("ALICE_HOME")?,
-                        "tx",
-                        "compliance",
-                        "issuer-db",
-                        "update",
-                        "--db",
-                        repo.issuer_db_file.to_str().unwrap(),
-                        "--audit-output",
-                        audit_file.to_str().unwrap(),
-                        "--audit-subject",
-                        user_name,
-                    ],
-                )?;
-            }
+        let extension_input = repo
+            .tmp
+            .join(format!("{}-ext-input.json", user_name.to_lowercase()));
+        write_extension_input(&repo.detected_file, &default_audit_file, &extension_input)?;
+        if count_detected_refs(&extension_input)? == 0 {
+            eprintln!(
+                "orbis-integration: skipping {user_name} extension audit; default decoded no refs"
+            );
+            continue;
         }
+
+        let extension_audit_file = repo
+            .tmp
+            .join(format!("{}-ext-audit.json", user_name.to_lowercase()));
+        run_orbis_audit(
+            repo,
+            &env,
+            &issuer,
+            &extension_input,
+            &extension_audit_file,
+            "extension",
+            user_name,
+            env.get(address_key)?,
+        )?;
+        update_issuer_db_from_audit(repo, &env, user_name, &extension_audit_file)?;
     }
 
     let show = capture_pcli(
@@ -621,6 +723,119 @@ async fn verify(repo: &RepoPaths) -> Result<()> {
     println!("{show}");
     eprintln!("orbis-integration: verify phase completed");
     Ok(())
+}
+
+fn run_orbis_audit(
+    repo: &RepoPaths,
+    env: &DemoEnv,
+    issuer: &DemoEnv,
+    input: &Path,
+    output: &Path,
+    tier: &str,
+    user_name: &str,
+    subject_address: &str,
+) -> Result<()> {
+    run_command(
+        Command::new(&repo.orbis_audit_bin)
+            .current_dir(&repo.root)
+            .arg("--input")
+            .arg(input)
+            .arg("--dk-hex")
+            .arg(issuer.get("REGULATED_DK")?)
+            .arg("--node")
+            .arg(env.get("PENUMBRA_NODE_PD_URL")?)
+            .arg("--output")
+            .arg(output)
+            .arg("--object-cache")
+            .arg(repo.tmp.join("orbis-audit-object-cache.json"))
+            .arg("--tier")
+            .arg(tier)
+            .arg("--subject-address")
+            .arg(subject_address)
+            .arg("--known-address")
+            .arg(env.get("ALICE_ADDRESS")?)
+            .arg("--known-address")
+            .arg(env.get("BOB_ADDRESS")?)
+            .arg("--known-address")
+            .arg(env.get("CHARLIE_ADDRESS")?)
+            .arg("--timings-json")
+            .arg(repo.tmp.join(format!(
+                "{}-{}-timings.json",
+                user_name.to_lowercase(),
+                tier
+            )))
+            .arg("--orbis-endpoint")
+            .arg(node_endpoint("ORBIS_NODE1_ENDPOINT", NODE1_ENDPOINT)),
+    )
+}
+
+fn update_issuer_db_from_audit(
+    repo: &RepoPaths,
+    env: &DemoEnv,
+    user_name: &str,
+    audit_file: &Path,
+) -> Result<()> {
+    let audit_count = count_json_array(audit_file)?;
+    if audit_count == 0 {
+        return Ok(());
+    }
+    run_pcli(
+        repo,
+        env,
+        [
+            "--home",
+            env.get("ALICE_HOME")?,
+            "tx",
+            "compliance",
+            "issuer-db",
+            "update",
+            "--db",
+            repo.issuer_db_file.to_str().unwrap(),
+            "--audit-output",
+            audit_file.to_str().unwrap(),
+            "--audit-subject",
+            user_name,
+        ],
+    )
+}
+
+fn write_extension_input(
+    detected_file: &Path,
+    default_audit_file: &Path,
+    output: &Path,
+) -> Result<()> {
+    let scan: ScanOutput = serde_json::from_slice(
+        &fs::read(detected_file)
+            .with_context(|| format!("failed to read {}", detected_file.display()))?,
+    )?;
+    let audit_entries: Vec<AuditEntry> = serde_json::from_slice(
+        &fs::read(default_audit_file)
+            .with_context(|| format!("failed to read {}", default_audit_file.display()))?,
+    )?;
+    let refs = audit_entries
+        .into_iter()
+        .map(|entry| (entry.height, entry.action_index))
+        .collect::<std::collections::BTreeSet<_>>();
+    let detected = scan
+        .detected
+        .into_iter()
+        .filter(|tx_ref| !tx_ref.is_flagged)
+        .filter(|tx_ref| refs.contains(&(tx_ref.height, tx_ref.action_index)))
+        .collect::<Vec<_>>();
+    let output_json = serde_json::json!({
+        "scan_info": {},
+        "detected": detected,
+    });
+    fs::write(output, serde_json::to_vec_pretty(&output_json)?)
+        .with_context(|| format!("failed to write {}", output.display()))?;
+    Ok(())
+}
+
+fn count_detected_refs(path: &Path) -> Result<usize> {
+    let scan: ScanOutput = serde_json::from_slice(
+        &fs::read(path).with_context(|| format!("failed to read {}", path.display()))?,
+    )?;
+    Ok(scan.detected.len())
 }
 
 fn capture_orbis_logs(repo: &RepoPaths) -> Result<()> {
@@ -791,6 +1006,19 @@ fn wait_for_tcp(addr: &str, attempts: usize, interval: Duration) -> Result<()> {
         thread::sleep(interval);
     }
     bail!("timed out waiting for TCP service at {addr}");
+}
+
+fn wait_for_tcp_endpoint(endpoint: &str, attempts: usize, interval: Duration) -> Result<()> {
+    let without_scheme = endpoint
+        .strip_prefix("http://")
+        .or_else(|| endpoint.strip_prefix("https://"))
+        .unwrap_or(endpoint);
+    let addr = without_scheme
+        .split('/')
+        .next()
+        .filter(|addr| !addr.is_empty())
+        .ok_or_else(|| anyhow!("invalid endpoint: {endpoint}"))?;
+    wait_for_tcp(addr, attempts, interval)
 }
 
 async fn wait_for_node_info(client: &OrbisClient, label: &str) -> Result<NodeInfo> {

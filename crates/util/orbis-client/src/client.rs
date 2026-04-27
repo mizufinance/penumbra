@@ -1,3 +1,5 @@
+use std::env;
+
 use anyhow::{anyhow, bail, Context, Result};
 use decaf377::Encoding;
 use did_key::{generate, Ed25519KeyPair as DidEd25519KeyPair, Fingerprint};
@@ -64,7 +66,7 @@ impl OrbisClient {
     pub fn new(endpoint: impl Into<String>) -> Self {
         Self {
             endpoint: endpoint.into(),
-            chain_config: ChainConfig::local(),
+            chain_config: sourcehub_chain_config(),
         }
     }
 
@@ -201,11 +203,15 @@ impl OrbisClient {
             .await
             .map_err(|e| anyhow!("failed to list Orbis ring posts: {}", e))?;
 
-        let post = posts
-            .last()
+        let (post, ring_payload) = posts
+            .iter()
+            .rev()
+            .find_map(|post| {
+                serde_json::from_slice::<RingPayload>(&post.payload)
+                    .ok()
+                    .map(|payload| (post, payload))
+            })
             .ok_or_else(|| anyhow!("no Orbis ring posts found; run DKG first"))?;
-        let ring_payload: RingPayload = serde_json::from_slice(&post.payload)
-            .map_err(|e| anyhow!("failed to parse Orbis ring payload: {}", e))?;
 
         let ring_pk_hex = ring_payload.ring_pk;
         let bytes = hex::decode(&ring_pk_hex).context("invalid Orbis ring_pk hex")?;
@@ -447,6 +453,16 @@ impl OrbisClient {
             .await
             .map_err(|e| anyhow!("failed to create signed SourceHub client: {}", e))
     }
+}
+
+fn sourcehub_chain_config() -> ChainConfig {
+    ChainConfig::builder()
+        .chain_id(env::var("ORBIS_SOURCEHUB_CHAIN_ID").ok())
+        .rpc_url(env::var("ORBIS_SOURCEHUB_RPC").ok())
+        .rest_url(env::var("ORBIS_SOURCEHUB_REST").ok())
+        .grpc_url(env::var("ORBIS_SOURCEHUB_GRPC").ok())
+        .denom(env::var("ORBIS_SOURCEHUB_DENOM").ok())
+        .build()
 }
 
 fn did_seed(s: &str) -> [u8; 32] {

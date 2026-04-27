@@ -162,7 +162,7 @@ pub enum TxCmd {
     ///
     /// For a withdrawal to be processed on the counterparty, IBC packets must be relayed between
     /// the two chains. Relaying is out of scope for the `pcli` tool.
-    #[clap(name = "shielded-ics20-withdrawal", display_order = 250)]
+    #[clap(name = "withdraw", display_order = 250)]
     ShieldedIcs20Withdrawal {
         /// Address on the receiving chain,
         /// e.g. cosmos1grgelyng2v6v3t8z87wu3sxgt9m5s03xvslewd. The chain_id for the counterparty

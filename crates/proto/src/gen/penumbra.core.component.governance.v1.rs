@@ -663,6 +663,9 @@ pub struct GovernanceParameters {
     /// The number of blocks during which a proposal is voted on.
     #[prost(uint64, tag = "1")]
     pub proposal_voting_blocks: u64,
+    /// TODO(compliance-demo): remove after Hermes no longer requires legacy proposal deposits.
+    #[prost(message, optional, tag = "2")]
+    pub proposal_deposit_amount: ::core::option::Option<super::super::super::num::v1::Amount>,
     /// The quorum required for a proposal to be considered valid, as a fraction of the total stake
     /// weight of the network.
     #[prost(string, tag = "3")]

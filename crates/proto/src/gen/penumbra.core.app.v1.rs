@@ -48,6 +48,9 @@ pub struct AppParameters {
     pub sct_params: ::core::option::Option<
         super::super::component::sct::v1::SctParameters,
     >,
+    /// TODO(compliance-demo): remove after Hermes no longer requires legacy app params.
+    #[prost(message, optional, tag = "3")]
+    pub community_pool_params: ::core::option::Option<DeprecatedAppParameters>,
     /// Governance module parameters.
     #[prost(message, optional, tag = "4")]
     pub governance_params: ::core::option::Option<
@@ -68,11 +71,27 @@ pub struct AppParameters {
     pub fee_params: ::core::option::Option<
         super::super::component::fee::v1::FeeParameters,
     >,
+    /// TODO(compliance-demo): remove after Hermes no longer requires legacy app params.
+    #[prost(message, optional, tag = "8")]
+    pub distributions_params: ::core::option::Option<DeprecatedAppParameters>,
+    /// TODO(compliance-demo): remove after Hermes no longer requires legacy app params.
+    #[prost(message, optional, tag = "9")]
+    pub funding_params: ::core::option::Option<DeprecatedAppParameters>,
     /// Shielded pool module parameters.
     #[prost(message, optional, tag = "10")]
     pub shielded_pool_params: ::core::option::Option<
         super::super::component::shielded_pool::v1::ShieldedPoolParameters,
     >,
+    /// TODO(compliance-demo): remove after Hermes no longer requires legacy app params.
+    #[prost(message, optional, tag = "11")]
+    pub dex_params: ::core::option::Option<DeprecatedAppParameters>,
+    /// TODO(compliance-demo): remove after Hermes no longer requires legacy auction params.
+    #[prost(message, optional, tag = "12")]
+    pub auction_params: ::core::option::Option<DeprecatedAppParameters>,
+}
+/// Empty wire-compatible placeholder for removed app parameter components.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeprecatedAppParameters {
 }
 impl ::prost::Name for AppParameters {
     const NAME: &'static str = "AppParameters";

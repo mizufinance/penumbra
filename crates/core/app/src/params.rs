@@ -71,6 +71,13 @@ impl From<AppParameters> for pb::AppParameters {
             sct_params: Some(params.sct_params.into()),
             shielded_pool_params: Some(params.shielded_pool_params.into()),
             validator_params: Some(params.validator_params.into()),
+            // TODO(compliance-demo): remove once the local Hermes build no longer expects
+            // legacy component params at protobuf tags 3, 8, 9, 11, and 12.
+            community_pool_params: Some(Default::default()),
+            distributions_params: Some(Default::default()),
+            funding_params: Some(Default::default()),
+            dex_params: Some(Default::default()),
+            auction_params: Some(Default::default()),
         }
     }
 }
