@@ -1142,7 +1142,12 @@ fn extract_clear_withdraw_event(
     }
 
     let amount: penumbra_sdk_num::Amount = withdrawal.amount.as_ref()?.clone().try_into().ok()?;
-    let return_address: Address = withdrawal.return_address.as_ref()?.clone().try_into().ok()?;
+    let return_address: Address = withdrawal
+        .return_address
+        .as_ref()?
+        .clone()
+        .try_into()
+        .ok()?;
 
     Some(ClearDetectedFlow {
         asset_id: denom.id(),
@@ -1916,7 +1921,9 @@ fn audited_subjects_for(
          WHERE height = ?1 AND tx_hash = ?2 AND action_index = ?3 \
          ORDER BY subject",
     )?;
-    let rows = stmt.query_map(rusqlite::params![height, tx_hash, action_index], |row| row.get(0))?;
+    let rows = stmt.query_map(rusqlite::params![height, tx_hash, action_index], |row| {
+        row.get(0)
+    })?;
     rows.collect()
 }
 

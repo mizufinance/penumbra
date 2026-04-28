@@ -846,7 +846,9 @@ fn write_extension_input(
         .detected
         .into_iter()
         .filter(|tx_ref| !tx_ref.is_flagged)
-        .filter(|tx_ref| refs.contains(&(tx_ref.height, tx_ref.tx_hash.clone(), tx_ref.action_index)))
+        .filter(|tx_ref| {
+            refs.contains(&(tx_ref.height, tx_ref.tx_hash.clone(), tx_ref.action_index))
+        })
         .collect::<Vec<_>>();
     let output_json = serde_json::json!({
         "scan_info": {},
@@ -1268,9 +1270,7 @@ impl AuditDemo {
                     .unwrap_or(false)
             })
             .filter(|row| {
-                row.get("flow_type")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("private_transfer")
+                row.get("flow_type").and_then(serde_json::Value::as_str) == Some("private_transfer")
             })
             .filter(|row| {
                 let height = row.get("height").and_then(serde_json::Value::as_i64);
@@ -1346,9 +1346,7 @@ impl AuditDemo {
                     .unwrap_or(false)
             })
             .filter(|row| {
-                row.get("flow_type")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("private_transfer")
+                row.get("flow_type").and_then(serde_json::Value::as_str) == Some("private_transfer")
             })
             .filter(|row| {
                 let Some(height) = row.get("height").and_then(serde_json::Value::as_i64) else {
