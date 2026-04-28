@@ -118,6 +118,8 @@ struct DetectedTxRef {
     height: u64,
     tx_hash: String,
     action_index: usize,
+    #[serde(default)]
+    asset_id: String,
     is_flagged: bool,
 }
 
