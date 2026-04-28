@@ -660,11 +660,11 @@ async fn ensure_package_object(
     let stored = cli.store_encrypted_seed_package(ring_id, &package).await?;
     timings.package_store_ms += started.elapsed().as_millis();
     let started = Instant::now();
-    cli.register_object(&package.policy_id, &stored.object_id)
+    cli.register_object(&package.policy_id, &package.resource, &stored.object_id)
         .await?;
     timings.object_registration_ms += started.elapsed().as_millis();
     let started = Instant::now();
-    cli.set_relationship(&package.policy_id, &stored.object_id)
+    cli.set_relationship(&package.policy_id, &package.resource, &stored.object_id)
         .await?;
     timings.relationship_setup_ms += started.elapsed().as_millis();
     object_cache.objects.insert(

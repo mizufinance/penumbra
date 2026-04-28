@@ -1,4 +1,4 @@
-use std::env;
+use std::{collections::HashSet, env};
 
 use anyhow::{anyhow, bail, Context, Result};
 use decaf377::Encoding;
@@ -231,6 +231,11 @@ impl OrbisClient {
 
     pub async fn add_policy(&self) -> Result<String> {
         let client = self.signing_client().await?;
+        let existing_ids = client
+            .acp_list_policy_ids()
+            .await
+            .map(|ids| ids.ids.into_iter().collect::<HashSet<_>>())
+            .unwrap_or_default();
 
         let create_result = client
             .acp_create_policy(TEST_POLICY_YAML, 1)
@@ -248,11 +253,23 @@ impl OrbisClient {
             .acp_list_policy_ids()
             .await
             .map_err(|e| anyhow!("failed to list policy IDs: {}", e))?;
-        policy_ids
+        let mut candidate_ids = policy_ids
             .ids
-            .last()
+            .iter()
+            .filter(|id| !existing_ids.contains(*id))
             .cloned()
-            .ok_or_else(|| anyhow!("no policy IDs found after policy creation"))
+            .collect::<Vec<_>>();
+        if candidate_ids.is_empty() {
+            candidate_ids = policy_ids.ids.clone();
+        }
+
+        for policy_id in candidate_ids {
+            if self.policy_defines_resource(&client, &policy_id).await? {
+                return Ok(policy_id);
+            }
+        }
+
+        bail!("created ACP policy, but could not find a policy defining resource {ORBIS_RESOURCE}")
     }
 
     pub async fn store_encrypted_seed_package(
@@ -318,10 +335,15 @@ impl OrbisClient {
         })
     }
 
-    pub async fn register_object(&self, policy_id: &str, object_id: &str) -> Result<()> {
+    pub async fn register_object(
+        &self,
+        policy_id: &str,
+        resource: &str,
+        object_id: &str,
+    ) -> Result<()> {
         let client = self.signing_client().await?;
         let document = Object {
-            resource: ORBIS_RESOURCE.to_string(),
+            resource: resource.to_string(),
             id: object_id.to_string(),
         };
 
@@ -350,14 +372,19 @@ impl OrbisClient {
         }
     }
 
-    pub async fn set_relationship(&self, policy_id: &str, object_id: &str) -> Result<()> {
+    pub async fn set_relationship(
+        &self,
+        policy_id: &str,
+        resource: &str,
+        object_id: &str,
+    ) -> Result<()> {
         let client = self.signing_client().await?;
         let key_pair = generate::<DidEd25519KeyPair>(Some(&did_seed(default_reader_did_pk())));
         let did_uri = format!("did:key:{}", key_pair.fingerprint());
 
         let relationship = Relationship {
             object: Some(Object {
-                resource: ORBIS_RESOURCE.to_string(),
+                resource: resource.to_string(),
                 id: object_id.to_string(),
             }),
             relation: "reader".to_string(),
@@ -452,6 +479,30 @@ impl OrbisClient {
         SourceHubClient::with_signer(self.chain_config.clone(), signer)
             .await
             .map_err(|e| anyhow!("failed to create signed SourceHub client: {}", e))
+    }
+
+    async fn policy_defines_resource(
+        &self,
+        client: &SourceHubClient,
+        policy_id: &str,
+    ) -> Result<bool> {
+        let policy = client
+            .acp_query_policy(policy_id)
+            .await
+            .map_err(|e| anyhow!("failed to query created policy {policy_id}: {}", e))?;
+        Ok(policy
+            .record
+            .and_then(|record| record.policy)
+            .map(|policy| {
+                policy.resources.iter().any(|resource| {
+                    resource.name == ORBIS_RESOURCE
+                        && resource
+                            .permissions
+                            .iter()
+                            .any(|permission| permission.name == "read")
+                })
+            })
+            .unwrap_or(false))
     }
 }
 
