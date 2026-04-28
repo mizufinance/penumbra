@@ -195,12 +195,7 @@ impl<'de> serde::Deserialize<'de> for AppParameters {
                     ibc_params: ibc_params__,
                     validator_params: validator_params__,
                     fee_params: fee_params__,
-                    community_pool_params: None,
-                    distributions_params: None,
-                    funding_params: None,
                     shielded_pool_params: shielded_pool_params__,
-                    dex_params: None,
-                    auction_params: None,
                 })
             }
         }

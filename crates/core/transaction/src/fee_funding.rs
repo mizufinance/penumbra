@@ -2,7 +2,6 @@
 use anyhow::Context;
 use anyhow::{anyhow, Error, Result};
 use penumbra_sdk_asset::balance;
-#[cfg(any(unix, windows))]
 use penumbra_sdk_keys::FullViewingKey;
 use penumbra_sdk_proto::{core::transaction::v1 as pbt, DomainType};
 use penumbra_sdk_shielded_pool::{Transfer, TransferPlan, TransferView};
@@ -69,7 +68,6 @@ impl FeeFundingPlan {
         self.transfer.value_blinding
     }
 
-    #[cfg(any(unix, windows))]
     pub fn effect_hash(
         &self,
         fvk: &FullViewingKey,

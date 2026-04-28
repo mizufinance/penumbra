@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     event, indexed_tree,
-    indexed_tree::{IndexedLeaf, IndexedMerkleTree},
+    indexed_tree::{IndexedLeaf, IndexedMerkleTree, InsertResult},
     state_key,
     structs::{AssetPolicy, ComplianceLeaf, MerklePath},
     tree::QuadTree,
@@ -509,8 +509,26 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     ) -> Result<Option<indexed_tree::InsertResult>> {
         let mut tree = self.get_asset_imt_for_write().await?;
 
-        // Check if already exists - be idempotent
+        // Check if already exists. IBC assets can be seen before the issuer
+        // registers them, which inserts an explicit unregulated leaf. In that
+        // case, allow the issuer to attach the regulated policy later.
         if let Some(position) = tree.get_position(asset_id.0) {
+            if is_regulated && self.get_asset_policy(asset_id).await?.is_none() {
+                let updated_leaf = tree.update_policy(asset_id.0, &policy)?;
+                let tree_bytes = bincode::serialize(&tree)?;
+                self.put_raw(state_key::asset_imt().to_string(), tree_bytes);
+                self.put(state_key::asset_imt_root().to_string(), tree.root());
+                self.write_asset_imt_cache(tree.clone());
+                self.mark_compliance_trees_modified();
+                self.set_asset_policy(asset_id, policy);
+                tracing::debug!(?asset_id, position, "upgraded existing asset to regulated");
+                return Ok(Some(InsertResult {
+                    position,
+                    indexed_leaf: updated_leaf.clone(),
+                    low_leaf_position: position,
+                    updated_low_leaf: updated_leaf,
+                }));
+            }
             tracing::debug!(?asset_id, position, "asset already in IMT, skipping");
             return Ok(None);
         }

@@ -1,31 +1,23 @@
 use anyhow::{anyhow, ensure, Error};
-#[cfg(any(unix, windows))]
 use decaf377::Fq;
 use decaf377::Fr;
-#[cfg(any(unix, windows))]
 use decaf377_rdsa::{Signature, SpendAuth};
 use penumbra_sdk_asset::{asset, Balance};
-#[cfg(any(unix, windows))]
 use penumbra_sdk_keys::symmetric::PayloadKey;
-#[cfg(any(unix, windows))]
 use penumbra_sdk_keys::FullViewingKey;
 use penumbra_sdk_keys::{symmetric::WrappedMemoKey, Address};
 use penumbra_sdk_proto::{core::component::shielded_pool::v1 as pb, DomainType};
 use penumbra_sdk_tct as tct;
-#[cfg(any(unix, windows))]
 use penumbra_sdk_txhash::EffectingData;
 use serde::{Deserialize, Serialize};
 
-#[cfg(any(unix, windows))]
 use crate::note_reshape::dummy_spend_auth_sig;
-#[cfg(any(unix, windows))]
 use crate::note_reshape::dummy_state_commitment_proof;
 use crate::note_reshape::{pad_to_len, HiddenArityPadder};
 use crate::{
     Ics20Withdrawal, ShieldedIcs20WithdrawalChangeBody, ShieldedInputPlan, ShieldedOutputPlan,
     TransferInputBody,
 };
-#[cfg(any(unix, windows))]
 use crate::{
     ShieldedIcs20Withdrawal, ShieldedIcs20WithdrawalChangePrivate,
     ShieldedIcs20WithdrawalChangePublic, ShieldedIcs20WithdrawalInputPrivate,
@@ -313,7 +305,6 @@ impl ShieldedIcs20WithdrawalPlan {
         }
     }
 
-    #[cfg(any(unix, windows))]
     fn sender_leaf(&self) -> penumbra_sdk_compliance::ComplianceLeaf {
         let spend = self.first_spend();
         spend.compliance_leaf.clone().unwrap_or_else(|| {
@@ -331,7 +322,6 @@ impl ShieldedIcs20WithdrawalPlan {
         })
     }
 
-    #[cfg(any(unix, windows))]
     fn withdrawal_effect_hash_limbs(&self) -> (Fq, Fq) {
         let effect_hash = self.withdrawal.effect_hash();
         let bytes = effect_hash.as_bytes();
@@ -341,7 +331,6 @@ impl ShieldedIcs20WithdrawalPlan {
         )
     }
 
-    #[cfg(any(unix, windows))]
     pub fn shielded_ics20_withdrawal_public_private(
         &self,
         fvk: &FullViewingKey,
@@ -458,7 +447,6 @@ impl ShieldedIcs20WithdrawalPlan {
         ))
     }
 
-    #[cfg(any(unix, windows))]
     pub fn action_body(
         &self,
         fvk: &FullViewingKey,
@@ -559,7 +547,48 @@ impl ShieldedIcs20WithdrawalPlan {
         })
     }
 
-    #[cfg(any(unix, windows))]
+    pub fn shielded_ics20_withdrawal_witness_payload(
+        &self,
+        fvk: &FullViewingKey,
+        state_commitment_proofs: Vec<tct::Proof>,
+        anchor: tct::Root,
+    ) -> Result<Vec<u8>, crate::ProofError> {
+        let (public, private) =
+            self.shielded_ics20_withdrawal_public_private(fvk, &state_commitment_proofs, anchor)?;
+        crate::gnark::encode_shielded_ics20_withdrawal_witness_v1(&public, &private)
+            .map_err(|e| crate::ProofError::InvalidPublicInput(e.to_string()))
+    }
+
+    pub fn shielded_ics20_withdrawal_with_proof(
+        &self,
+        fvk: &FullViewingKey,
+        auth_sigs: Vec<Signature<SpendAuth>>,
+        anchor: tct::Root,
+        memo_key: &PayloadKey,
+        proof: ShieldedIcs20WithdrawalProof,
+    ) -> Result<ShieldedIcs20Withdrawal, crate::ProofError> {
+        let body = self
+            .action_body(fvk, memo_key, anchor)
+            .map_err(|e| crate::ProofError::InvalidPublicInput(e.to_string()))?;
+        if auth_sigs.len() != self.spends.len() {
+            return Err(crate::ProofError::InvalidPublicInput(format!(
+                "shielded ICS-20 withdrawal expected {} auth sigs, got {}",
+                self.spends.len(),
+                auth_sigs.len()
+            )));
+        }
+        let mut auth_sigs = auth_sigs;
+        while auth_sigs.len() < PADDED_ICS20_WITHDRAWAL_INPUTS {
+            auth_sigs.push(dummy_spend_auth_sig());
+        }
+
+        Ok(ShieldedIcs20Withdrawal {
+            body,
+            auth_sigs,
+            proof,
+        })
+    }
+
     pub fn synthetic_dummy_auth_sig(
         &self,
         slot: usize,

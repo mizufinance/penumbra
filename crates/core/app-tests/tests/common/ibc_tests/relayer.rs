@@ -176,7 +176,7 @@ impl MockRelayer {
     /// Establish a connection between the two chains owned by the mock relayer.
     pub async fn _connection_handshake(&mut self) -> Result<(), anyhow::Error> {
         // The IBC connection handshake has four steps (Init, Try, Ack, Confirm).
-        // https://github.com/penumbra-zone/hermes/blob/a34a11fec76de3b573b539c237927e79cb74ec00/crates/relayer/src/connection.rs#L672
+        // https://github.com/mizufinance/hermes/blob/a34a11fec76de3b573b539c237927e79cb74ec00/crates/relayer/src/connection.rs#L672
         // https://github.com/cosmos/ibc/blob/main/spec/core/ics-003-connection-semantics/README.md#opening-handshake
 
         self._sync_chains().await?;
@@ -237,7 +237,7 @@ impl MockRelayer {
     /// Establish a channel between the two chains owned by the mock relayer.
     pub async fn _channel_handshake(&mut self) -> Result<(), anyhow::Error> {
         // The IBC channel handshake has four steps (Init, Try, Ack, Confirm).
-        // https://github.com/penumbra-zone/hermes/blob/a34a11fec76de3b573b539c237927e79cb74ec00/crates/relayer/src/channel.rs#L712
+        // https://github.com/mizufinance/hermes/blob/a34a11fec76de3b573b539c237927e79cb74ec00/crates/relayer/src/channel.rs#L712
         // https://github.com/cosmos/ibc/blob/main/spec/core/ics-004-channel-and-packet-semantics/README.md
 
         self._sync_chains().await?;
@@ -852,7 +852,7 @@ impl MockRelayer {
     }
 
     // Send an ACK message to chain A
-    // https://github.com/penumbra-zone/hermes/blob/a34a11fec76de3b573b539c237927e79cb74ec00/crates/relayer/src/connection.rs#L1126
+    // https://github.com/mizufinance/hermes/blob/a34a11fec76de3b573b539c237927e79cb74ec00/crates/relayer/src/connection.rs#L1126
     pub async fn _build_and_send_connection_open_ack(&mut self) -> Result<()> {
         // This is a load-bearing block execution that should be removed
         self.chain_a_ibc.node.block().execute().await?;
@@ -1208,7 +1208,7 @@ impl MockRelayer {
         self.chain_b_ibc.node.block().execute().await?;
         self._sync_chains().await?;
 
-        // https://github.com/penumbra-zone/hermes/blob/a34a11fec76de3b573b539c237927e79cb74ec00/crates/relayer/src/connection.rs#L1296
+        // https://github.com/mizufinance/hermes/blob/a34a11fec76de3b573b539c237927e79cb74ec00/crates/relayer/src/connection.rs#L1296
         let chain_b_connection_id = self.chain_b_ibc.connection_id.clone();
         let connection_of_b_on_a_response = self
             .chain_a_ibc
@@ -1313,7 +1313,7 @@ impl MockRelayer {
         self.chain_b_ibc.node.block().execute().await?;
         self._sync_chains().await?;
 
-        // https://github.com/penumbra-zone/hermes/blob/a34a11fec76de3b573b539c237927e79cb74ec00/crates/relayer/src/connection.rs#L1296
+        // https://github.com/mizufinance/hermes/blob/a34a11fec76de3b573b539c237927e79cb74ec00/crates/relayer/src/connection.rs#L1296
         let chan_end_on_a_response = self
             .chain_a_ibc
             .ibc_channel_query_client

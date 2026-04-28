@@ -7,6 +7,13 @@
 !Cargo.lock
 !.cargo/
 !rust-toolchain.toml
+!web/
+!web/packages/
+!web/packages/wasm/
+!web/packages/wasm/crate/
+!web/packages/wasm/crate/Cargo.toml
+!web/packages/wasm/crate/src/
+!web/packages/wasm/crate/src/lib.rs
 
 # localnet for 'pd testnet generate' defaults
 !deployments/000-localnet/
@@ -23,6 +30,7 @@
 !tools/parameter-setup/
 # gnark circuit metadata and proving/verifying keys required by proof-params
 !tools/gnark/
+!tools/gnark/**
 !tools/gnark/artifacts/
 !tools/gnark/artifacts/**
 !tools/gnark/internal/

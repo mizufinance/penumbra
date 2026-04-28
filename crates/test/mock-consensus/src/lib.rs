@@ -26,7 +26,7 @@
 //! [cargo-test]: https://doc.rust-lang.org/cargo/commands/cargo-test.html
 //! [cometbft]: https://github.com/cometbft/cometbft
 //! [cometmock]: https://github.com/informalsystems/CometMock
-//! [penumbra]: https://github.com/penumbra-zone/penumbra
+//! [penumbra]: https://github.com/mizufinance/penumbra
 //! [tendermint]: https://github.com/tendermint/tendermint
 
 use {

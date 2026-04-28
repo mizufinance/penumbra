@@ -26,7 +26,7 @@ check_no_match \
 
 check_no_match \
   "legacy command examples are still present in tests/docs/scripts" \
-  'tx send\b|tx sweep\b|tx withdraw\b|send-multi\b' \
+  'tx send\b|tx sweep\b|send-multi\b' \
   crates/bin/pcli/tests deployments/scripts docs deployments/000-localnet \
   -g '!crates/bin/pcli/tests/cli_surface.rs' \
   -g '!deployments/scripts/check-reduced-surface.sh'

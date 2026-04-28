@@ -3,7 +3,7 @@
 
 fn main() -> anyhow::Result<()> {
     // Disabled until (if) we re-enable LFS for the proto descriptor file.
-    // https://github.com/penumbra-zone/penumbra/issues/3038#issuecomment-1722534133
+    // https://github.com/mizufinance/penumbra/issues/3038#issuecomment-1722534133
     /*
     let f = "src/gen/proto_descriptor.bin";
     check_file_is_not_lfs_pointer(f)?;

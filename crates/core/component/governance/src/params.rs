@@ -52,9 +52,6 @@ impl From<GovernanceParameters> for pb::GovernanceParameters {
     fn from(params: GovernanceParameters) -> Self {
         pb::GovernanceParameters {
             proposal_voting_blocks: params.proposal_voting_blocks,
-            // TODO(compliance-demo): remove once the local Hermes build no longer expects
-            // the legacy proposal deposit field at protobuf tag 2.
-            proposal_deposit_amount: Some(Default::default()),
             proposal_valid_quorum: params.proposal_valid_quorum.to_string(),
             proposal_pass_threshold: params.proposal_pass_threshold.to_string(),
             proposal_slash_threshold: params.proposal_slash_threshold.to_string(),

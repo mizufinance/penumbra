@@ -802,6 +802,31 @@ impl IndexedMerkleTree {
         self.leaves.get(&position)
     }
 
+    /// Update the policy data for an existing value and recompute its Merkle path.
+    pub fn update_policy(&mut self, value: Fq, policy: &AssetPolicy) -> Result<IndexedLeaf> {
+        let position = *self.value_index.get(&value.to_bytes()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "IMT policy update failed: value {:?} not found",
+                value.to_bytes()
+            )
+        })?;
+        let current_leaf = self.leaves.get(&position).ok_or_else(|| {
+            anyhow::anyhow!(
+                "IMT internal error: leaf not found at position {}",
+                position
+            )
+        })?;
+        let updated_leaf = IndexedLeaf::from_policy(
+            value,
+            current_leaf.next_index,
+            current_leaf.next_value,
+            policy,
+        );
+        self.leaves.insert(position, updated_leaf.clone());
+        self.update_path(position, updated_leaf.commit());
+        Ok(updated_leaf)
+    }
+
     /// Insert a new value into the IMT with the given policy.
     pub fn insert(&mut self, value: Fq, policy: &AssetPolicy) -> Result<InsertResult> {
         if self.contains(value) {
@@ -890,6 +915,11 @@ impl IndexedMerkleTree {
         let value = new_leaf.value;
 
         if self.contains(value) {
+            let position = self.get_position(value).ok_or_else(|| {
+                anyhow::anyhow!("IMT sync failed: value index missing for existing value")
+            })?;
+            self.leaves.insert(position, new_leaf.clone());
+            self.update_path(position, new_leaf.commit());
             return Ok(());
         }
 

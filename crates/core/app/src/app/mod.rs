@@ -3807,7 +3807,7 @@ impl App {
         // This means that indexers are responsible for parsing genesis data and bootstrapping
         // their initial state before processing chronological events.
         //
-        // See: https://github.com/penumbra-zone/penumbra/pull/4449#discussion_r1636868800
+        // See: https://github.com/mizufinance/penumbra/pull/4449#discussion_r1636868800
 
         state_tx.apply();
     }
@@ -6446,7 +6446,7 @@ pub trait StateWriteExt: StateWrite {
         // Ignore writes to the chain_id
         // TODO(erwan): we are momentarily not supporting chain_id changes
         // until the IBC host chain changes land.
-        // See: https://github.com/penumbra-zone/penumbra/issues/3617#issuecomment-1917708221
+        // See: https://github.com/mizufinance/penumbra/issues/3617#issuecomment-1917708221
         std::mem::drop(chain_id);
 
         self.put_fee_params(fee_params);

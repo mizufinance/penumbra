@@ -909,7 +909,6 @@ impl<'de> serde::Deserialize<'de> for GovernanceParameters {
                 }
                 Ok(GovernanceParameters {
                     proposal_voting_blocks: proposal_voting_blocks__.unwrap_or_default(),
-                    proposal_deposit_amount: None,
                     proposal_valid_quorum: proposal_valid_quorum__.unwrap_or_default(),
                     proposal_pass_threshold: proposal_pass_threshold__.unwrap_or_default(),
                     proposal_slash_threshold: proposal_slash_threshold__.unwrap_or_default(),

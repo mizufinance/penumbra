@@ -38,6 +38,7 @@ COPY . .
 # Use `--bins` flag to force dependency resolution per-binary, rather than once for the workspace.
 # Doing so ensures the minimal feature set is used, leaving ledger support for pcli as off by default.
 RUN cargo build --release --bins
+RUN cd tools/gnark && go build -o /usr/src/penumbra/target/release/proverdaemon ./cmd/proverdaemon
 
 # Runtime image.
 FROM docker.io/debian:bookworm-slim
@@ -63,17 +64,18 @@ COPY --from=build-env \
             /usr/src/penumbra/target/release/pclientd \
             /usr/src/penumbra/target/release/pd \
             /usr/src/penumbra/target/release/pindexer \
+            /usr/src/penumbra/target/release/proverdaemon \
             /usr/src/penumbra/target/release/tct-live-edit \
             /usr/bin/
-
-COPY deployments/audit-demo /usr/lib/audit-demo
-USER root
-RUN chmod +x /usr/lib/audit-demo/* && ln -s /usr/lib/audit-demo/audit-demo /usr/bin/audit-demo
 
 # pcli loads gnark proof libraries from the compile-time OUT_DIR path.
 COPY --from=build-env \
             /usr/src/penumbra/target/release/build \
             /usr/src/penumbra/target/release/build
+
+COPY --from=build-env \
+            /usr/src/penumbra/tools/gnark/artifacts \
+            /usr/share/penumbra/gnark/artifacts
 
 WORKDIR /home/${USERNAME}
 USER ${USERNAME}

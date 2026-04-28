@@ -40,15 +40,9 @@ impl TryFrom<pb::ValidatorParameters> for ValidatorParameters {
 impl From<ValidatorParameters> for pb::ValidatorParameters {
     fn from(params: ValidatorParameters) -> Self {
         pb::ValidatorParameters {
-            unbonding_epochs: 1,
             active_validator_limit: params.active_validator_limit,
-            base_reward_rate: 0,
-            slashing_penalty_misbehavior: 0,
-            slashing_penalty_downtime: 0,
             signed_blocks_window_len: params.signed_blocks_window_len,
             missed_blocks_maximum: params.missed_blocks_maximum,
-            min_validator_stake: Some(Default::default()),
-            unbonding_delay: 100,
         }
     }
 }

@@ -4,12 +4,9 @@ use anyhow::Result;
 use decaf377_fmd::Precision;
 use penumbra_sdk_governance::{ProposalSubmit, ValidatorVote};
 use penumbra_sdk_ibc::IbcRelay;
-#[cfg(any(unix, windows))]
-use penumbra_sdk_keys::FullViewingKey;
-use penumbra_sdk_keys::{Address, PayloadKey};
+use penumbra_sdk_keys::{Address, FullViewingKey, PayloadKey};
 use penumbra_sdk_proto::{core::transaction::v1 as pb, DomainType};
 use penumbra_sdk_shielded_pool::{Ics20Withdrawal, ShieldedIcs20WithdrawalPlan, TransferPlan};
-#[cfg(any(unix, windows))]
 use penumbra_sdk_txhash::{EffectHash, EffectingData};
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
@@ -47,7 +44,6 @@ impl TransactionPlan {
         self.actions.sort_by_key(ActionPlan::variant_index);
     }
 
-    #[cfg(any(unix, windows))]
     pub fn effect_hash(&self, fvk: &FullViewingKey) -> Result<EffectHash> {
         let mut state = blake2b_simd::Params::new()
             .personal(b"PenumbraEfHs")

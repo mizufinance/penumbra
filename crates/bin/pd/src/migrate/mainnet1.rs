@@ -77,7 +77,7 @@ async fn lost_transfers(state: &StateDelta<Snapshot>) -> anyhow::Result<Vec<Pack
 async fn replace_lost_packets(delta: &mut StateDelta<Snapshot>) -> anyhow::Result<()> {
     let lost_packets = lost_transfers(delta).await?;
     for packet in lost_packets {
-        // This will undo what happens in https://github.com/penumbra-zone/penumbra/blob/882a061bd69ce14b01711041bbc0c0ce209e2823/crates/core/component/ibc/src/component/msg_handler/acknowledgement.rs#L99.
+        // This will undo what happens in https://github.com/mizufinance/penumbra/blob/882a061bd69ce14b01711041bbc0c0ce209e2823/crates/core/component/ibc/src/component/msg_handler/acknowledgement.rs#L99.
         delta.put_packet_commitment(&packet);
     }
     Ok(())

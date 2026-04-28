@@ -15,7 +15,7 @@ The (evolving) protocol spec is rendered at [protocol.penumbra.zone][protocol].
 
 The (evolving) API documentation is rendered at [rustdoc.penumbra.zone][rustdoc].
 
-The (evolving) protobuf documentation is rendered at [buf.build/penumbra-zone/penumbra][protobuf].
+The (evolving) protobuf documentation is rendered at [buf.build/mizufinance/penumbra][protobuf].
 
 To participate in our test network, use Penumbra command line client [`pcli`][pcli].
 
@@ -47,8 +47,8 @@ For a high-level view of current work-in-progress and future items, check out ou
 - [Tracking issues][Tracking]
 - [Backlog][Backlog]
 
-[Tracking]: https://github.com/orgs/penumbra-zone/projects/23/views/4
-[Backlog]: https://github.com/orgs/penumbra-zone/projects/23/views/1
+[Tracking]: https://github.com/orgs/mizufinance/projects/23/views/4
+[Backlog]: https://github.com/orgs/mizufinance/projects/23/views/1
 [Discord]: https://discord.gg/hKvkrqa3zC
 [Penumbra]: https://penumbra.zone
 [protocol]: https://protocol.penumbra.zone
@@ -57,7 +57,7 @@ For a high-level view of current work-in-progress and future items, check out ou
 [pd]: https://guide.penumbra.zone/main/pd.html
 [mdBook]: https://github.com/rust-lang/mdBook
 [rustdoc]: https://rustdoc.penumbra.zone
-[protobuf]: https://buf.build/penumbra-zone/penumbra
+[protobuf]: https://buf.build/mizufinance/penumbra
 [tm-install]: https://github.com/tendermint/tendermint/blob/master/docs/introduction/install.md#from-source
 
 

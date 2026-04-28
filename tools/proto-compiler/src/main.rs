@@ -14,7 +14,7 @@ fn main() -> anyhow::Result<()> {
 
     println!("target_dir: {}", target_dir.display());
 
-    // https://github.com/penumbra-zone/penumbra/issues/3038#issuecomment-1722534133
+    // https://github.com/mizufinance/penumbra/issues/3038#issuecomment-1722534133
     // Using the "no_lfs" suffix prevents matching a catch-all LFS rule.
     let descriptor_file_name = "proto_descriptor.bin.no_lfs";
 

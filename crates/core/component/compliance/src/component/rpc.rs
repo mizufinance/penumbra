@@ -95,16 +95,26 @@ impl QueryService for Server {
             "queried asset regulation status"
         );
 
-        // With IMT, all assets are always "queryable" - regulated via membership, unregulated via non-membership
-        // Note: dk_pub and threshold are client-side data stored in the view service,
-        // not available on the node. Clients should use the view service for policy data.
+        let policy = state
+            .get_asset_policy(asset_id)
+            .await
+            .map_err(|e| Status::internal(format!("failed to query asset policy: {e}")))?;
+        let (dk_pub, threshold) = match &policy {
+            Some(policy) => (
+                policy.dk_pub().vartime_compress().0.to_vec(),
+                policy.threshold().to_le_bytes().to_vec(),
+            ),
+            None => (vec![], vec![]),
+        };
+
+        // With IMT, all assets are always "queryable" - regulated via membership, unregulated via non-membership.
         let response = ComplianceAssetStatusResponse {
             asset_id: Some(asset_id.into()),
             is_registered: true, // With IMT, we can always answer the query
             is_regulated: proof_data.is_regulated,
-            dk_pub: vec![],    // Policy data not available from node
-            threshold: vec![], // Policy data not available from node
-            asset_policy: None,
+            dk_pub,
+            threshold,
+            asset_policy: policy.map(Into::into),
         };
 
         Ok(tonic::Response::new(response))

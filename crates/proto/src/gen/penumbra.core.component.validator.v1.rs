@@ -62,40 +62,16 @@ impl ::prost::Name for ValidatorDefinition {
 /// Validator management configuration data.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ValidatorParameters {
-    // TODO(compliance-demo): remove legacy wire tags once the bankD relayer uses
-    // Penumbra's current validator params protobuf.
-    #[prost(uint64, tag = "1")]
-    pub unbonding_epochs: u64,
     /// The maximum number of validators in the consensus set.
-    #[prost(uint64, tag = "2")]
+    #[prost(uint64, tag = "1")]
     pub active_validator_limit: u64,
-    // TODO(compliance-demo): remove legacy wire tags once the bankD relayer uses
-    // Penumbra's current validator params protobuf.
-    #[prost(uint64, tag = "3")]
-    pub base_reward_rate: u64,
-    // TODO(compliance-demo): remove legacy wire tags once the bankD relayer uses
-    // Penumbra's current validator params protobuf.
-    #[prost(uint64, tag = "4")]
-    pub slashing_penalty_misbehavior: u64,
-    // TODO(compliance-demo): remove legacy wire tags once the bankD relayer uses
-    // Penumbra's current validator params protobuf.
-    #[prost(uint64, tag = "5")]
-    pub slashing_penalty_downtime: u64,
     /// The number of blocks in the window to check for downtime.
-    #[prost(uint64, tag = "6")]
+    #[prost(uint64, tag = "2")]
     pub signed_blocks_window_len: u64,
     /// The maximum number of blocks in the window each validator can miss signing
     /// before validator enforcement triggers.
-    #[prost(uint64, tag = "7")]
+    #[prost(uint64, tag = "3")]
     pub missed_blocks_maximum: u64,
-    // TODO(compliance-demo): remove legacy wire tags once the bankD relayer uses
-    // Penumbra's current validator params protobuf.
-    #[prost(message, optional, tag = "8")]
-    pub min_validator_stake: ::core::option::Option<super::super::super::num::v1::Amount>,
-    // TODO(compliance-demo): remove legacy wire tags once the bankD relayer uses
-    // Penumbra's current validator params protobuf.
-    #[prost(uint64, tag = "9")]
-    pub unbonding_delay: u64,
 }
 impl ::prost::Name for ValidatorParameters {
     const NAME: &'static str = "ValidatorParameters";

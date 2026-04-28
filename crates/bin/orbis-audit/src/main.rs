@@ -80,6 +80,7 @@ struct DetectedTxRef {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct AuditEntry {
     height: u64,
+    tx_hash: String,
     action_index: usize,
     amount: String,
     self_address: String,
@@ -546,6 +547,7 @@ fn candidate_to_entry(
         ("default", TransferMatch::Receiver { amount, .. })
         | ("default", TransferMatch::Sender { amount, .. }) => AuditEntry {
             height: tx_ref.height,
+            tx_hash: tx_ref.tx_hash.clone(),
             action_index: tx_ref.action_index,
             amount: amount.value().to_string(),
             self_address: ctx.subject_transmission_key_hex.to_string(),
@@ -554,6 +556,7 @@ fn candidate_to_entry(
         },
         ("extension", TransferMatch::Receiver { amount, sender }) => AuditEntry {
             height: tx_ref.height,
+            tx_hash: tx_ref.tx_hash.clone(),
             action_index: tx_ref.action_index,
             amount: amount.value().to_string(),
             self_address: ctx.subject_transmission_key_hex.to_string(),
@@ -562,6 +565,7 @@ fn candidate_to_entry(
         },
         ("extension", TransferMatch::Sender { amount, receiver }) => AuditEntry {
             height: tx_ref.height,
+            tx_hash: tx_ref.tx_hash.clone(),
             action_index: tx_ref.action_index,
             amount: amount.value().to_string(),
             self_address: ctx.subject_transmission_key_hex.to_string(),
@@ -875,6 +879,7 @@ mod tests {
             dk,
             dk_pub,
             subject_transmission_key_hex: subject,
+            subject_b_d_bytes: &[0u8; 32],
             known_transmission_keys,
             tier_mode,
         }
