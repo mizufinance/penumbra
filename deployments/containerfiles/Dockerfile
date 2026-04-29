@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
         pkg-config \
         libssl-dev \
         clang \
+        lld \
         protobuf-compiler
 
 RUN curl -fsSL "https://go.dev/dl/go1.25.4.linux-${TARGETARCH}.tar.gz" \
