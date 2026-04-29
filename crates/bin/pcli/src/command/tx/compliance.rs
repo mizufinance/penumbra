@@ -1,8 +1,10 @@
 use std::fs::File;
 use std::io::{BufReader, Write};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
+use ibc_proto::ibc::core::channel::v1::MsgRecvPacket as RawMsgRecvPacket;
 use penumbra_sdk_asset::asset;
 use penumbra_sdk_compliance::structs::{MsgRegisterAsset, MsgRegisterUser};
 use penumbra_sdk_compliance::{decrypt_full_flagged, TransferComplianceCiphertext};
@@ -13,10 +15,11 @@ use penumbra_sdk_proto::core::app::v1::{
 use penumbra_sdk_proto::util::tendermint_proxy::v1::{
     tendermint_proxy_service_client::TendermintProxyServiceClient, GetStatusRequest,
 };
-use penumbra_sdk_proto::{DomainType, Message};
+use penumbra_sdk_proto::{DomainType, Message, Name};
 use penumbra_sdk_transaction::{ActionPlan, Transaction, TransactionPlan};
 use penumbra_sdk_view::{NoteManager, TransferPlanningResult};
 use serde::{Deserialize, Serialize};
+use tokio::time::sleep;
 use tonic::transport::Channel;
 use tracing::info;
 use url::Url;
@@ -36,6 +39,25 @@ pub struct DetectedTxRef {
     pub asset_id: String,
     /// Whether the transfer is flagged (threshold exceeded).
     pub is_flagged: bool,
+    /// Product-level flow type: shield, private_transfer, or withdraw.
+    #[serde(default = "default_flow_type")]
+    pub flow_type: String,
+    /// Clear amount, when the audited flow is public by construction.
+    #[serde(default)]
+    pub amount: Option<String>,
+    /// Clear subject transmission key, when available without PRE.
+    #[serde(default)]
+    pub self_address: Option<String>,
+    /// Clear counterparty marker or transmission key, when available without PRE.
+    #[serde(default)]
+    pub counterparty: Option<String>,
+    /// Public-side wallet address for shield/withdraw flows, when available.
+    #[serde(default)]
+    pub public_address: Option<String>,
+}
+
+fn default_flow_type() -> String {
+    "private_transfer".to_string()
 }
 
 /// Scan output format for JSON serialization.
@@ -58,6 +80,11 @@ pub struct ScanInfo {
     pub end_height: u64,
     /// Timestamp when scan was performed.
     pub scan_time: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ScannerState {
+    pub last_height: u64,
 }
 
 /// Compliance-related transaction commands.
@@ -114,8 +141,13 @@ pub enum ComplianceCmd {
     RegisterUser {
         /// The asset ID to register for (e.g., "uusdc").
         asset_id: String,
+        /// Penumbra address to register. If omitted, derives the address from
+        /// this wallet using --address-index.
+        #[clap(long)]
+        address: Option<String>,
         /// Address index to register (default: 0).
-        /// Each address has a different ACK for privacy.
+        /// Each address has a different ACK for privacy. When --address is
+        /// provided, this index is only used as the fee funding source.
         #[clap(long, default_value = "0")]
         address_index: u32,
         /// The selected fee tier to multiply the fee amount by.
@@ -155,6 +187,33 @@ pub enum ComplianceCmd {
         /// Output file for detected TX list (JSON format).
         #[clap(long, default_value = "/tmp/detected_txs.json")]
         output: PathBuf,
+
+        /// Keep scanning as new blocks are produced.
+        #[clap(long)]
+        follow: bool,
+
+        /// Number of tip blocks to leave unscanned in --follow mode.
+        ///
+        /// This avoids marking very recent heights complete before transaction
+        /// data is consistently queryable.
+        #[clap(long, default_value_t = 3)]
+        follow_lag_blocks: u64,
+
+        /// Scanner resume state file. Stores the last successfully scanned height.
+        #[clap(long)]
+        state_file: Option<PathBuf>,
+
+        /// Poll interval for --follow mode.
+        #[clap(long, default_value = "2000")]
+        poll_interval_ms: u64,
+
+        /// Import detected transfers into the issuer ledger after each scan.
+        #[clap(long)]
+        issuer_db: Option<PathBuf>,
+
+        /// Merge newly detected transfers into the existing output file.
+        #[clap(long)]
+        merge_output: bool,
     },
 
     /// Decrypt previously detected transactions.
@@ -233,6 +292,9 @@ pub enum IssuerDbCmd {
         /// Path to the SQLite database file.
         #[clap(long, default_value = "/tmp/issuer-ledger.db")]
         db: PathBuf,
+        /// Emit structured JSON instead of a human-readable table.
+        #[clap(long)]
+        json: bool,
     },
 
     /// Update ledger rows with decrypted data from an Orbis PRE audit.
@@ -248,6 +310,29 @@ pub enum IssuerDbCmd {
         /// Name of the audited user (prefixed to Via column, e.g. "Alice core").
         #[clap(long)]
         audit_subject: Option<String>,
+    },
+
+    /// Mark an existing ledger row as audited for a subject.
+    MarkAudited {
+        /// Path to the SQLite database file.
+        #[clap(long, default_value = "/tmp/issuer-ledger.db")]
+        db: PathBuf,
+
+        /// Block height for the detected row.
+        #[clap(long)]
+        height: i64,
+
+        /// Transaction hash for the detected row.
+        #[clap(long)]
+        tx_hash: String,
+
+        /// Action index for the detected row.
+        #[clap(long)]
+        action_index: i64,
+
+        /// Name of the audited issuer subject.
+        #[clap(long)]
+        audit_subject: String,
     },
 
     /// Register an address alias (maps a Penumbra address to a human-readable name).
@@ -344,6 +429,12 @@ impl ComplianceCmd {
                 dk_hex,
                 scan_asset_id,
                 output,
+                follow,
+                follow_lag_blocks,
+                state_file,
+                poll_interval_ms,
+                issuer_db,
+                merge_output,
             } => {
                 // Determine key type and parse key
                 let (key_type_str, issuer_dk) = if let Some(hex) = dk_hex {
@@ -367,39 +458,60 @@ impl ComplianceCmd {
 
                 // Connect to node directly (no wallet required)
                 let channel = connect_to_node(node).await?;
-                let end = if let Some(h) = end_height {
-                    *h
-                } else {
-                    get_latest_height(channel.clone()).await?
-                };
+                loop {
+                    let end = if let Some(h) = end_height {
+                        *h
+                    } else {
+                        let latest = get_latest_height(channel.clone()).await?;
+                        if *follow {
+                            latest.saturating_sub(*follow_lag_blocks)
+                        } else {
+                            latest
+                        }
+                    };
+                    let effective_start = state_file
+                        .as_ref()
+                        .and_then(|path| File::open(path).ok())
+                        .and_then(|file| serde_json::from_reader::<_, ScannerState>(file).ok())
+                        .map(|state| state.last_height.saturating_add(1).max(*start_height))
+                        .unwrap_or(*start_height);
 
-                eprintln!("Scanning blocks {} to {} ...", start_height, end);
+                    if effective_start > end {
+                        if !*follow {
+                            println!("No new blocks to scan.");
+                            break;
+                        }
+                        sleep(Duration::from_millis(*poll_interval_ms)).await;
+                        continue;
+                    }
 
-                let mut detected_txs: Vec<DetectedTxRef> = Vec::new();
-                let mut total_outputs = 0u64;
-                let mut total_detected = 0u64;
-                let mut total_flagged = 0u64;
+                    eprintln!("Scanning blocks {} to {} ...", effective_start, end);
 
-                // Scan each block
-                for height in *start_height..=end {
-                    // Fetch transactions for this block
-                    let transactions = fetch_transactions(channel.clone(), height).await?;
+                    let mut detected_txs: Vec<DetectedTxRef> = Vec::new();
+                    let mut total_outputs = 0u64;
+                    let mut total_detected = 0u64;
+                    let mut total_flagged = 0u64;
 
-                    for (tx_idx, tx) in transactions.iter().enumerate() {
-                        let tx_hash = Transaction::decode(tx.encode_to_vec().as_slice())
-                            .with_context(|| {
-                                format!(
-                                    "failed to decode transaction at height {} index {}",
-                                    height, tx_idx
-                                )
-                            })?
-                            .id()
-                            .to_string();
+                    // Scan each block
+                    for height in effective_start..=end {
+                        // Fetch transactions for this block
+                        let transactions = fetch_transactions(channel.clone(), height).await?;
 
-                        if let Some(ref body) = tx.body {
-                            for (action_idx, action) in body.actions.iter().enumerate() {
-                                // Count all output actions
-                                if let Some(
+                        for (tx_idx, tx) in transactions.iter().enumerate() {
+                            let tx_hash = Transaction::decode(tx.encode_to_vec().as_slice())
+                                .with_context(|| {
+                                    format!(
+                                        "failed to decode transaction at height {} index {}",
+                                        height, tx_idx
+                                    )
+                                })?
+                                .id()
+                                .to_string();
+
+                            if let Some(ref body) = tx.body {
+                                for (action_idx, action) in body.actions.iter().enumerate() {
+                                    // Count all output actions
+                                    if let Some(
                                     penumbra_sdk_proto::core::transaction::v1::action::Action::Transfer(
                                         transfer,
                                     ),
@@ -410,85 +522,156 @@ impl ComplianceCmd {
                                     }
                                 }
 
-                                if let Some(ciphertext) = extract_compliance_ciphertext(action) {
-                                    let detection_result = if let Some(ref dk) = issuer_dk {
-                                        use penumbra_sdk_compliance::issuer_keys::DetectionKey;
-                                        let dk_obj = DetectionKey::new(*dk);
-                                        let expected = expected_asset_id.as_ref().unwrap();
-                                        match dk_obj.try_decrypt_detection(
-                                            &ciphertext.sender_core_epk,
-                                            &ciphertext.sender_core_epk,
-                                            &ciphertext.detection_tag,
-                                            expected,
-                                        ) {
-                                            Ok((asset_id, is_flagged, _salt)) => {
-                                                Some((asset_id, is_flagged))
+                                    if let Some((ciphertext, flow_type)) =
+                                        extract_compliance_ciphertext(action)
+                                    {
+                                        let detection_result = if let Some(ref dk) = issuer_dk {
+                                            use penumbra_sdk_compliance::issuer_keys::DetectionKey;
+                                            let dk_obj = DetectionKey::new(*dk);
+                                            let expected = expected_asset_id.as_ref().unwrap();
+                                            match dk_obj.try_decrypt_detection(
+                                                &ciphertext.sender_core_epk,
+                                                &ciphertext.sender_core_epk,
+                                                &ciphertext.detection_tag,
+                                                expected,
+                                            ) {
+                                                Ok((asset_id, is_flagged, _salt)) => {
+                                                    Some((asset_id, is_flagged))
+                                                }
+                                                Err(_) => None,
                                             }
-                                            Err(_) => None,
-                                        }
-                                    } else {
-                                        None
-                                    };
+                                        } else {
+                                            None
+                                        };
 
-                                    if let Some((asset_id, is_flagged)) = detection_result {
-                                        total_detected += 1;
-                                        if is_flagged {
-                                            total_flagged += 1;
+                                        if let Some((asset_id, is_flagged)) = detection_result {
+                                            total_detected += 1;
+                                            if is_flagged {
+                                                total_flagged += 1;
+                                            }
+                                            detected_txs.push(DetectedTxRef {
+                                                height,
+                                                tx_hash: tx_hash.clone(),
+                                                action_index: action_idx,
+                                                asset_id: asset_id.to_string(),
+                                                is_flagged,
+                                                flow_type,
+                                                amount: None,
+                                                self_address: None,
+                                                counterparty: None,
+                                                public_address: None,
+                                            });
                                         }
+                                    } else if let Some(clear) = extract_clear_shield_event(
+                                        action,
+                                        expected_asset_id.as_ref().unwrap(),
+                                    ) {
+                                        total_detected += 1;
                                         detected_txs.push(DetectedTxRef {
                                             height,
                                             tx_hash: tx_hash.clone(),
                                             action_index: action_idx,
-                                            asset_id: asset_id.to_string(),
-                                            is_flagged,
+                                            asset_id: clear.asset_id.to_string(),
+                                            is_flagged: false,
+                                            flow_type: clear.flow_type,
+                                            amount: Some(clear.amount),
+                                            self_address: Some(clear.self_address),
+                                            counterparty: Some(clear.counterparty),
+                                            public_address: clear.public_address,
+                                        });
+                                    } else if let Some(clear) = extract_clear_withdraw_event(
+                                        action,
+                                        expected_asset_id.as_ref().unwrap(),
+                                    ) {
+                                        total_detected += 1;
+                                        detected_txs.push(DetectedTxRef {
+                                            height,
+                                            tx_hash: tx_hash.clone(),
+                                            action_index: action_idx,
+                                            asset_id: clear.asset_id.to_string(),
+                                            is_flagged: false,
+                                            flow_type: clear.flow_type,
+                                            amount: Some(clear.amount),
+                                            self_address: Some(clear.self_address),
+                                            counterparty: Some(clear.counterparty),
+                                            public_address: clear.public_address,
                                         });
                                     }
                                 }
                             }
                         }
+
+                        // Progress indicator every 100 blocks
+                        if height % 100 == 0 {
+                            info!(height, "scanning progress...");
+                        }
                     }
 
-                    // Progress indicator every 100 blocks
-                    if height % 100 == 0 {
-                        info!(height, "scanning progress...");
-                    }
-                }
+                    eprintln!(
+                        "Scanned {} outputs, {} detected.",
+                        total_outputs, total_detected
+                    );
 
-                eprintln!(
-                    "Scanned {} outputs, {} detected.",
-                    total_outputs, total_detected
-                );
-
-                // Build output
-                let scan_output = ScanOutput {
-                    scan_info: ScanInfo {
-                        key_type: key_type_str,
-                        start_height: *start_height,
-                        end_height: end,
-                        scan_time: {
-                            use std::time::{SystemTime, UNIX_EPOCH};
-                            let duration = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap_or_default();
-                            format!("{}s", duration.as_secs())
+                    // Build output
+                    let scan_output = ScanOutput {
+                        scan_info: ScanInfo {
+                            key_type: key_type_str.clone(),
+                            start_height: effective_start,
+                            end_height: end,
+                            scan_time: {
+                                use std::time::{SystemTime, UNIX_EPOCH};
+                                let duration = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap_or_default();
+                                format!("{}s", duration.as_secs())
+                            },
                         },
-                    },
-                    detected: detected_txs.clone(),
-                };
+                        detected: detected_txs.clone(),
+                    };
 
-                // Write to file
-                let json = serde_json::to_string_pretty(&scan_output)?;
-                let mut file = File::create(output)?;
-                file.write_all(json.as_bytes())?;
+                    let scan_output = if *merge_output {
+                        merge_scan_output(output, scan_output)?
+                    } else {
+                        scan_output
+                    };
 
-                let non_flagged = total_detected - total_flagged;
-                println!(
-                    "\nDetected {} transfers ({} flagged, {} normal).",
-                    detected_txs.len(),
-                    total_flagged,
-                    non_flagged
-                );
-                println!("Results saved to: {}", output.display());
+                    // Write to file
+                    let json = serde_json::to_string_pretty(&scan_output)?;
+                    let mut file = File::create(output)?;
+                    file.write_all(json.as_bytes())?;
+
+                    if let Some(path) = state_file {
+                        let state = ScannerState { last_height: end };
+                        let json = serde_json::to_string_pretty(&state)?;
+                        let mut file = File::create(path)?;
+                        file.write_all(json.as_bytes())?;
+                    }
+
+                    if let Some(db) = issuer_db {
+                        IssuerDbCmd::Import {
+                            db: db.clone(),
+                            scan_output: output.clone(),
+                            dk_hex: dk_hex.clone().expect("validated above"),
+                            node: node.clone(),
+                        }
+                        .exec()
+                        .await?;
+                    }
+
+                    let non_flagged = total_detected - total_flagged;
+                    println!(
+                        "\nDetected {} transfers ({} flagged, {} normal).",
+                        detected_txs.len(),
+                        total_flagged,
+                        non_flagged
+                    );
+                    println!("Results saved to: {}", output.display());
+
+                    if !*follow {
+                        break;
+                    }
+                    sleep(Duration::from_millis(*poll_interval_ms)).await;
+                }
 
                 Ok(())
             }
@@ -549,7 +732,9 @@ impl ComplianceCmd {
                         if let Some(ref body) = tx.body {
                             if tx_ref.action_index < body.actions.len() {
                                 let action = &body.actions[tx_ref.action_index];
-                                if let Some(ciphertext) = extract_compliance_ciphertext(action) {
+                                if let Some((ciphertext, _flow_type)) =
+                                    extract_compliance_ciphertext(action)
+                                {
                                     // Parse asset_id from the scan output
                                     let asset_id: asset::Id = tx_ref
                                         .asset_id
@@ -734,6 +919,7 @@ impl ComplianceCmd {
 
             ComplianceCmd::RegisterUser {
                 asset_id,
+                address,
                 address_index,
                 fee_tier,
             } => {
@@ -743,9 +929,16 @@ impl ComplianceCmd {
                 // Get user's full viewing key
                 let fvk = app.config.full_viewing_key.clone();
 
-                // Get address at specified index
+                // Get address at specified index, or register an explicitly
+                // supplied address while using the selected index for funding.
                 let address_index = penumbra_sdk_keys::keys::AddressIndex::new(*address_index);
-                let (address, _detection_key) = fvk.payment_address(address_index);
+                let address = match address {
+                    Some(address) => address.parse().context("invalid Penumbra address")?,
+                    None => {
+                        let (address, _detection_key) = fvk.payment_address(address_index);
+                        address
+                    }
+                };
 
                 // Create compliance leaf for this address and asset
                 use penumbra_sdk_compliance::{derive_compliance_scalar, ComplianceLeaf};
@@ -843,19 +1036,27 @@ fn parse_dk_from_hex(hex: &str) -> Result<decaf377::Fr> {
 /// Extract transfer compliance ciphertext from an action.
 fn extract_compliance_ciphertext(
     action: &penumbra_sdk_proto::core::transaction::v1::Action,
-) -> Option<TransferComplianceCiphertext> {
+) -> Option<(TransferComplianceCiphertext, String)> {
     use penumbra_sdk_proto::core::transaction::v1::action::Action as ActionEnum;
 
     let action_inner = action.action.as_ref()?;
 
-    let cc_bytes = match action_inner {
+    let (cc_bytes, flow_type) = match action_inner {
         ActionEnum::Transfer(transfer) => {
             let body = transfer.body.as_ref()?;
             let output = body
                 .outputs
                 .iter()
                 .find(|output| !output.compliance_ciphertext.is_empty())?;
-            &output.compliance_ciphertext
+            (&output.compliance_ciphertext, "private_transfer")
+        }
+        ActionEnum::ShieldedIcs20Withdrawal(withdrawal) => {
+            let body = withdrawal.body.as_ref()?;
+            let input = body
+                .inputs
+                .iter()
+                .find(|input| !input.compliance_ciphertext.is_empty())?;
+            (&input.compliance_ciphertext, "withdraw")
         }
         _ => return None,
     };
@@ -865,7 +1066,7 @@ fn extract_compliance_ciphertext(
     }
 
     match TransferComplianceCiphertext::from_bytes(cc_bytes) {
-        Ok(ct) => Some(ct),
+        Ok(ct) => Some((ct, flow_type.to_string())),
         Err(e) => {
             eprintln!(
                 "scan: ciphertext deserialization failed ({} bytes): {}",
@@ -875,6 +1076,100 @@ fn extract_compliance_ciphertext(
             None
         }
     }
+}
+
+struct ClearDetectedFlow {
+    asset_id: asset::Id,
+    amount: String,
+    self_address: String,
+    counterparty: String,
+    public_address: Option<String>,
+    flow_type: String,
+}
+
+/// Extract auditable public IBC receive flows.
+///
+/// A bankD/EVM -> Penumbra shield is represented on Penumbra as an IBC
+/// `MsgRecvPacket`, not as a shielded transfer action. There is no compliance
+/// ciphertext to decrypt here: the packet already contains the public amount and
+/// the Penumbra receiver, so the issuer ledger can record it directly.
+fn extract_clear_shield_event(
+    action: &penumbra_sdk_proto::core::transaction::v1::Action,
+    expected_asset_id: &asset::Id,
+) -> Option<ClearDetectedFlow> {
+    use penumbra_sdk_proto::core::transaction::v1::action::Action as ActionEnum;
+
+    let ActionEnum::IbcRelayAction(ibc_relay) = action.action.as_ref()? else {
+        return None;
+    };
+    let raw_action = ibc_relay.raw_action.as_ref()?;
+    if raw_action.type_url != RawMsgRecvPacket::type_url() {
+        return None;
+    }
+
+    let recv_packet = RawMsgRecvPacket::decode(&raw_action.value[..]).ok()?;
+    let packet = recv_packet.packet.as_ref()?;
+    let packet_data: penumbra_sdk_proto::core::component::ibc::v1::FungibleTokenPacketData =
+        serde_json::from_slice(packet.data.as_slice()).ok()?;
+
+    let prefixed_denomination = format!(
+        "{}/{}/{}",
+        packet.destination_port, packet.destination_channel, packet_data.denom
+    );
+    let denom: asset::Metadata = prefixed_denomination.as_str().try_into().ok()?;
+    if &denom.id() != expected_asset_id {
+        return None;
+    }
+
+    let receiver: Address = packet_data.receiver.parse().ok()?;
+    Some(ClearDetectedFlow {
+        asset_id: denom.id(),
+        amount: packet_data.amount,
+        self_address: hex::encode(receiver.transmission_key().0),
+        counterparty: "Public Wallet".to_string(),
+        public_address: Some(packet_data.sender),
+        flow_type: "shield".to_string(),
+    })
+}
+
+/// Extract auditable public IBC withdrawal flows.
+///
+/// A Penumbra -> bankD/EVM withdrawal exposes the withdrawn denom, amount, and
+/// Penumbra return address in the action body. The issuer can therefore record
+/// the public movement directly and resolve the return address to a known user
+/// without asking Orbis PRE.
+fn extract_clear_withdraw_event(
+    action: &penumbra_sdk_proto::core::transaction::v1::Action,
+    expected_asset_id: &asset::Id,
+) -> Option<ClearDetectedFlow> {
+    use penumbra_sdk_proto::core::transaction::v1::action::Action as ActionEnum;
+
+    let ActionEnum::ShieldedIcs20Withdrawal(withdrawal) = action.action.as_ref()? else {
+        return None;
+    };
+    let body = withdrawal.body.as_ref()?;
+    let withdrawal = body.withdrawal.as_ref()?;
+    let denom: asset::Metadata = withdrawal.denom.as_ref()?.denom.as_str().try_into().ok()?;
+    if &denom.id() != expected_asset_id {
+        return None;
+    }
+
+    let amount: penumbra_sdk_num::Amount = withdrawal.amount.as_ref()?.clone().try_into().ok()?;
+    let return_address: Address = withdrawal
+        .return_address
+        .as_ref()?
+        .clone()
+        .try_into()
+        .ok()?;
+
+    Some(ClearDetectedFlow {
+        asset_id: denom.id(),
+        amount: u128::from(amount).to_string(),
+        self_address: hex::encode(return_address.transmission_key().0),
+        counterparty: "Public Wallet".to_string(),
+        public_address: Some(withdrawal.destination_chain_address.clone()),
+        flow_type: "withdraw".to_string(),
+    })
 }
 
 /// Connect to a Penumbra node directly (no wallet required).
@@ -926,15 +1221,68 @@ async fn fetch_transactions(
     Ok(response.into_inner().transactions)
 }
 
+fn merge_scan_output(output: &PathBuf, mut next: ScanOutput) -> Result<ScanOutput> {
+    let Ok(file) = File::open(output) else {
+        return Ok(next);
+    };
+    let prior_value: serde_json::Value = serde_json::from_reader(BufReader::new(file))
+        .context("failed to parse existing scan output JSON for merge")?;
+    let prior_detected = if prior_value.get("scan_info").is_some() {
+        serde_json::from_value::<ScanOutput>(prior_value)
+            .context("failed to parse existing scan output JSON for merge")?
+            .detected
+    } else {
+        serde_json::from_value::<Vec<DetectedTxRef>>(
+            prior_value
+                .get("detected")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+        )
+        .context("failed to parse existing detected refs for merge")?
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut detected = Vec::new();
+    for tx_ref in prior_detected.into_iter().chain(next.detected.into_iter()) {
+        if seen.insert((tx_ref.height, tx_ref.tx_hash.clone(), tx_ref.action_index)) {
+            detected.push(tx_ref);
+        }
+    }
+    detected.sort_by_key(|tx_ref| (tx_ref.height, tx_ref.action_index));
+    next.detected = detected;
+    Ok(next)
+}
+
 /// A single decrypted entry from the compliance audit pipeline.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuditEntry {
     pub height: u64,
+    pub tx_hash: String,
     pub action_index: usize,
     pub amount: String,
     pub self_address: String,
     pub counterparty: String,
     pub decrypted_via: String,
+}
+
+/// Structured issuer ledger row for machine consumers.
+#[derive(Clone, Debug, Serialize)]
+pub struct LedgerRow {
+    pub height: i64,
+    pub tx_hash: String,
+    pub action_index: i64,
+    pub flow_type: String,
+    pub detected_at: Option<String>,
+    pub asset_id: String,
+    pub is_flagged: bool,
+    pub amount: Option<String>,
+    pub self_address: Option<String>,
+    pub counterparty: Option<String>,
+    pub public_address: Option<String>,
+    pub decrypted_at: Option<String>,
+    pub decrypted_via: Option<String>,
+    pub self_alias: Option<String>,
+    pub counterparty_alias: Option<String>,
+    pub audited_subjects: Vec<String>,
 }
 
 impl IssuerDbCmd {
@@ -950,21 +1298,33 @@ impl IssuerDbCmd {
                         height          INTEGER NOT NULL,
                         tx_hash         TEXT NOT NULL,
                         action_index    INTEGER NOT NULL,
+                        flow_type       TEXT NOT NULL DEFAULT 'private_transfer',
+                        detected_at     TEXT,
                         asset_id        TEXT NOT NULL,
                         is_flagged      BOOLEAN NOT NULL,
                         amount          TEXT,
                         self_address    TEXT,
                         counterparty    TEXT,
+                        public_address  TEXT,
                         decrypted_at    TEXT,
                         decrypted_via   TEXT,
-                        UNIQUE(height, action_index)
+                        UNIQUE(height, tx_hash, action_index)
                     );
                     CREATE TABLE IF NOT EXISTS address_aliases (
                         transmission_key_hex TEXT PRIMARY KEY,
                         name                 TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS row_audits (
+                        height       INTEGER NOT NULL,
+                        tx_hash      TEXT NOT NULL,
+                        action_index INTEGER NOT NULL,
+                        subject      TEXT NOT NULL,
+                        audited_at   TEXT NOT NULL,
+                        UNIQUE(height, tx_hash, action_index, subject)
                     );",
                 )
                 .context("failed to create tables")?;
+                migrate_issuer_db(&conn)?;
 
                 println!("Issuer ledger initialized at: {}", db.display());
                 Ok(())
@@ -987,6 +1347,7 @@ impl IssuerDbCmd {
 
                 let conn = rusqlite::Connection::open(db)
                     .context("failed to open issuer ledger database")?;
+                migrate_issuer_db(&conn)?;
 
                 // Connect to node for fetching flagged tx ciphertexts
                 let channel = connect_to_node(node).await?;
@@ -998,17 +1359,47 @@ impl IssuerDbCmd {
                     // Insert the row with NULLs for undecrypted fields
                     conn.execute(
                         "INSERT OR IGNORE INTO compliance_ledger \
-                         (height, tx_hash, action_index, asset_id, is_flagged) \
-                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                         (height, tx_hash, action_index, flow_type, detected_at, asset_id, is_flagged) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                         rusqlite::params![
                             tx_ref.height as i64,
-                            tx_ref.tx_hash,
+                            tx_ref.tx_hash.as_str(),
                             tx_ref.action_index as i64,
+                            tx_ref.flow_type,
+                            chrono_now(),
                             tx_ref.asset_id,
                             tx_ref.is_flagged,
                         ],
                     )?;
                     inserted += 1;
+
+                    if tx_ref.amount.is_some()
+                        || tx_ref.self_address.is_some()
+                        || tx_ref.counterparty.is_some()
+                        || tx_ref.public_address.is_some()
+                    {
+                        let now = chrono_now();
+                        conn.execute(
+                            "UPDATE compliance_ledger SET \
+                             amount = COALESCE(?1, amount), \
+                             self_address = COALESCE(?2, self_address), \
+                             counterparty = COALESCE(?3, counterparty), \
+                             public_address = COALESCE(?4, public_address), \
+                             decrypted_at = COALESCE(decrypted_at, ?5), \
+                             decrypted_via = COALESCE(decrypted_via, 'public') \
+                             WHERE height = ?6 AND tx_hash = ?7 AND action_index = ?8",
+                            rusqlite::params![
+                                tx_ref.amount.as_deref(),
+                                tx_ref.self_address.as_deref(),
+                                tx_ref.counterparty.as_deref(),
+                                tx_ref.public_address.as_deref(),
+                                now,
+                                tx_ref.height as i64,
+                                tx_ref.tx_hash.as_str(),
+                                tx_ref.action_index as i64,
+                            ],
+                        )?;
+                    }
 
                     // Auto-decrypt flagged transactions
                     if tx_ref.is_flagged {
@@ -1019,7 +1410,9 @@ impl IssuerDbCmd {
                             if let Some(ref body) = tx.body {
                                 if tx_ref.action_index < body.actions.len() {
                                     let action = &body.actions[tx_ref.action_index];
-                                    if let Some(ct) = extract_compliance_ciphertext(action) {
+                                    if let Some((ct, _flow_type)) =
+                                        extract_compliance_ciphertext(action)
+                                    {
                                         let asset_id = tx_ref
                                             .asset_id
                                             .parse()
@@ -1033,7 +1426,7 @@ impl IssuerDbCmd {
                                                  amount = ?1, self_address = ?2, \
                                                  counterparty = ?3, decrypted_at = ?4, \
                                                  decrypted_via = 'flagged' \
-                                                 WHERE height = ?5 AND action_index = ?6",
+                                                 WHERE height = ?5 AND tx_hash = ?6 AND action_index = ?7",
                                                 rusqlite::params![
                                                     data.amount.value().to_string(),
                                                     hex::encode(
@@ -1044,6 +1437,7 @@ impl IssuerDbCmd {
                                                     ),
                                                     now,
                                                     tx_ref.height as i64,
+                                                    tx_ref.tx_hash.as_str(),
                                                     tx_ref.action_index as i64,
                                                 ],
                                             )?;
@@ -1063,9 +1457,10 @@ impl IssuerDbCmd {
                 Ok(())
             }
 
-            IssuerDbCmd::Show { db } => {
+            IssuerDbCmd::Show { db, json } => {
                 let conn = rusqlite::Connection::open(db)
                     .context("failed to open issuer ledger database")?;
+                migrate_issuer_db(&conn)?;
 
                 // Load address aliases for display
                 let aliases: std::collections::HashMap<String, String> = {
@@ -1112,25 +1507,54 @@ impl IssuerDbCmd {
                 };
 
                 let mut stmt = conn.prepare(
-                    "SELECT height, tx_hash, action_index, asset_id, is_flagged, \
-                     amount, self_address, counterparty, decrypted_at, decrypted_via \
+                    "SELECT height, tx_hash, action_index, flow_type, detected_at, asset_id, is_flagged, \
+                     amount, self_address, counterparty, public_address, decrypted_at, decrypted_via \
                      FROM compliance_ledger ORDER BY height, action_index",
                 )?;
 
-                let rows = stmt.query_map([], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, bool>(4)?,
-                        row.get::<_, Option<String>>(5)?,
-                        row.get::<_, Option<String>>(6)?,
-                        row.get::<_, Option<String>>(7)?,
-                        row.get::<_, Option<String>>(8)?,
-                        row.get::<_, Option<String>>(9)?,
-                    ))
-                })?;
+                let rows = stmt
+                    .query_map([], |row| {
+                        let height = row.get::<_, i64>(0)?;
+                        let tx_hash = row.get::<_, String>(1)?;
+                        let action_index = row.get::<_, i64>(2)?;
+                        let self_address = row.get::<_, Option<String>>(8)?;
+                        let counterparty = row.get::<_, Option<String>>(9)?;
+                        let public_address = row.get::<_, Option<String>>(10)?;
+                        let self_alias = self_address
+                            .as_deref()
+                            .filter(|s| !s.is_empty())
+                            .and_then(|s| aliases.get(s).cloned());
+                        let counterparty_alias = counterparty
+                            .as_deref()
+                            .filter(|s| !s.is_empty())
+                            .and_then(|s| aliases.get(s).cloned());
+                        let audited_subjects =
+                            audited_subjects_for(&conn, height, &tx_hash, action_index)?;
+                        Ok(LedgerRow {
+                            height,
+                            tx_hash,
+                            action_index,
+                            flow_type: row.get::<_, String>(3)?,
+                            detected_at: row.get::<_, Option<String>>(4)?,
+                            asset_id: row.get::<_, String>(5)?,
+                            is_flagged: row.get::<_, bool>(6)?,
+                            amount: row.get::<_, Option<String>>(7)?,
+                            self_address,
+                            counterparty,
+                            public_address,
+                            decrypted_at: row.get::<_, Option<String>>(11)?,
+                            decrypted_via: row.get::<_, Option<String>>(12)?,
+                            self_alias,
+                            counterparty_alias,
+                            audited_subjects,
+                        })
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+
+                if *json {
+                    println!("{}", serde_json::to_string_pretty(&rows)?);
+                    return Ok(());
+                }
 
                 // Header
                 println!(
@@ -1154,46 +1578,39 @@ impl IssuerDbCmd {
 
                 let mut display_rows: Vec<DisplayRow> = Vec::new();
                 for row in rows {
-                    let (
-                        height,
-                        _tx_hash,
-                        action_idx,
-                        _asset_id,
-                        is_flagged,
-                        amount,
-                        self_addr,
-                        counterparty,
-                        decrypted_at,
-                        decrypted_via,
-                    ) = row?;
                     let dash = "---".to_string();
                     display_rows.push(DisplayRow {
-                        height,
-                        action_idx,
-                        is_flagged,
-                        has_amount: amount.is_some(),
-                        amount_str: amount
+                        height: row.height,
+                        action_idx: row.action_index,
+                        is_flagged: row.is_flagged,
+                        has_amount: row.amount.is_some(),
+                        amount_str: row
+                            .amount
                             .as_deref()
                             .map(|s| format_display_amount(s))
                             .map(|s| fit_cell(s, 12))
                             .unwrap_or_else(|| dash.clone()),
-                        self_str: self_addr
+                        self_str: row
+                            .self_address
                             .as_deref()
                             .filter(|s| !s.is_empty())
                             .map(|s| resolve_alias(s))
                             .map(|s| fit_cell(s, 14))
                             .unwrap_or_else(|| dash.clone()),
-                        cp_str: counterparty
+                        cp_str: row
+                            .counterparty
                             .as_deref()
                             .filter(|s| !s.is_empty())
                             .map(|s| resolve_alias(s))
                             .map(|s| fit_cell(s, 14))
                             .unwrap_or_else(|| dash.clone()),
-                        via_str: decrypted_via
+                        via_str: row
+                            .decrypted_via
                             .map(format_via)
                             .map(|s| fit_cell(s, 14))
                             .unwrap_or_else(|| dash.clone()),
-                        when_str: decrypted_at
+                        when_str: row
+                            .decrypted_at
                             .as_deref()
                             .map(|s| format_timestamp(s))
                             .unwrap_or_else(|| dash.clone()),
@@ -1250,6 +1667,7 @@ impl IssuerDbCmd {
 
                 let conn = rusqlite::Connection::open(db)
                     .context("failed to open issuer ledger database")?;
+                migrate_issuer_db(&conn)?;
 
                 // Build set of known addresses from alias table for extension validation.
                 // Sender-side PRE has no auth tag, so ~50% of wrong-key decryptions produce
@@ -1298,16 +1716,27 @@ impl IssuerDbCmd {
                             "UPDATE compliance_ledger SET \
                              amount = ?1, self_address = ?2, \
                              decrypted_at = ?3, decrypted_via = ?4 \
-                             WHERE height = ?5 AND action_index = ?6 AND amount IS NULL",
+                             WHERE height = ?5 AND tx_hash = ?6 AND action_index = ?7 AND amount IS NULL",
                             rusqlite::params![
                                 entry.amount,
                                 entry.self_address,
                                 now,
                                 via,
                                 entry.height as i64,
+                                entry.tx_hash.as_str(),
                                 entry.action_index as i64,
                             ],
                         )?;
+                        if changes > 0 {
+                            insert_row_audit(
+                                &conn,
+                                entry.height as i64,
+                                entry.tx_hash.as_str(),
+                                entry.action_index as i64,
+                                audit_subject.as_deref(),
+                                &now,
+                            )?;
+                        }
                         updated += changes as u64;
                     } else {
                         // Full audit: try upgrading a core-only row (add counterparty)
@@ -1315,7 +1744,7 @@ impl IssuerDbCmd {
                         let changes = conn.execute(
                             "UPDATE compliance_ledger SET \
                              self_address = ?1, counterparty = ?2, decrypted_at = ?3, decrypted_via = ?4 \
-                             WHERE height = ?5 AND action_index = ?6 \
+                             WHERE height = ?5 AND tx_hash = ?6 AND action_index = ?7 \
                              AND amount IS NOT NULL AND (counterparty IS NULL OR counterparty = '')",
                             rusqlite::params![
                                 entry.self_address,
@@ -1323,9 +1752,20 @@ impl IssuerDbCmd {
                                 now,
                                 via,
                                 entry.height as i64,
+                                entry.tx_hash.as_str(),
                                 entry.action_index as i64,
                             ],
                         )?;
+                        if changes > 0 {
+                            insert_row_audit(
+                                &conn,
+                                entry.height as i64,
+                                entry.tx_hash.as_str(),
+                                entry.action_index as i64,
+                                audit_subject.as_deref(),
+                                &now,
+                            )?;
+                        }
 
                         if changes == 0 {
                             // No prior core-only row; do a first-time full insert
@@ -1333,7 +1773,7 @@ impl IssuerDbCmd {
                                 "UPDATE compliance_ledger SET \
                                  amount = ?1, self_address = ?2, counterparty = ?3, \
                                  decrypted_at = ?4, decrypted_via = ?5 \
-                                 WHERE height = ?6 AND action_index = ?7 AND amount IS NULL",
+                                 WHERE height = ?6 AND tx_hash = ?7 AND action_index = ?8 AND amount IS NULL",
                                 rusqlite::params![
                                     entry.amount,
                                     entry.self_address,
@@ -1341,9 +1781,20 @@ impl IssuerDbCmd {
                                     now,
                                     via,
                                     entry.height as i64,
+                                    entry.tx_hash.as_str(),
                                     entry.action_index as i64,
                                 ],
                             )?;
+                            if changes > 0 {
+                                insert_row_audit(
+                                    &conn,
+                                    entry.height as i64,
+                                    entry.tx_hash.as_str(),
+                                    entry.action_index as i64,
+                                    audit_subject.as_deref(),
+                                    &now,
+                                )?;
+                            }
                             updated += changes as u64;
                         } else {
                             updated += changes as u64;
@@ -1360,12 +1811,47 @@ impl IssuerDbCmd {
                 Ok(())
             }
 
+            IssuerDbCmd::MarkAudited {
+                db,
+                height,
+                tx_hash,
+                action_index,
+                audit_subject,
+            } => {
+                let conn = rusqlite::Connection::open(db)
+                    .context("failed to open issuer ledger database")?;
+                migrate_issuer_db(&conn)?;
+                let exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM compliance_ledger \
+                     WHERE height = ?1 AND tx_hash = ?2 AND action_index = ?3",
+                    rusqlite::params![height, tx_hash, action_index],
+                    |row| row.get(0),
+                )?;
+                if exists == 0 {
+                    anyhow::bail!("ledger row not found");
+                }
+                insert_row_audit(
+                    &conn,
+                    *height,
+                    tx_hash.as_str(),
+                    *action_index,
+                    Some(audit_subject.as_str()),
+                    &chrono_now(),
+                )?;
+                println!(
+                    "Marked audited: {}:{}:{} for {}",
+                    height, tx_hash, action_index, audit_subject
+                );
+                Ok(())
+            }
+
             IssuerDbCmd::Alias { db, address, name } => {
                 let addr: Address = address.parse().context("invalid Penumbra address")?;
                 let tk_hex = hex::encode(addr.transmission_key().0);
 
                 let conn = rusqlite::Connection::open(db)
                     .context("failed to open issuer ledger database")?;
+                migrate_issuer_db(&conn)?;
 
                 conn.execute(
                     "INSERT OR REPLACE INTO address_aliases (transmission_key_hex, name) \
@@ -1378,6 +1864,80 @@ impl IssuerDbCmd {
             }
         }
     }
+}
+
+fn migrate_issuer_db(conn: &rusqlite::Connection) -> Result<()> {
+    let columns = {
+        let mut stmt = conn.prepare("PRAGMA table_info(compliance_ledger)")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        rows.collect::<std::result::Result<std::collections::HashSet<_>, _>>()?
+    };
+    if !columns.contains("flow_type") {
+        conn.execute(
+            "ALTER TABLE compliance_ledger ADD COLUMN flow_type TEXT NOT NULL DEFAULT 'private_transfer'",
+            [],
+        )?;
+    }
+    if !columns.contains("detected_at") {
+        conn.execute(
+            "ALTER TABLE compliance_ledger ADD COLUMN detected_at TEXT",
+            [],
+        )?;
+    }
+    if !columns.contains("public_address") {
+        conn.execute(
+            "ALTER TABLE compliance_ledger ADD COLUMN public_address TEXT",
+            [],
+        )?;
+    }
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS row_audits (
+            height       INTEGER NOT NULL,
+            tx_hash      TEXT NOT NULL,
+            action_index INTEGER NOT NULL,
+            subject      TEXT NOT NULL,
+            audited_at   TEXT NOT NULL,
+            UNIQUE(height, tx_hash, action_index, subject)
+        );",
+    )?;
+    Ok(())
+}
+
+fn insert_row_audit(
+    conn: &rusqlite::Connection,
+    height: i64,
+    tx_hash: &str,
+    action_index: i64,
+    subject: Option<&str>,
+    audited_at: &str,
+) -> Result<()> {
+    let Some(subject) = subject.filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+    conn.execute(
+        "INSERT OR IGNORE INTO row_audits \
+         (height, tx_hash, action_index, subject, audited_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![height, tx_hash, action_index, subject, audited_at],
+    )?;
+    Ok(())
+}
+
+fn audited_subjects_for(
+    conn: &rusqlite::Connection,
+    height: i64,
+    tx_hash: &str,
+    action_index: i64,
+) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT subject FROM row_audits \
+         WHERE height = ?1 AND tx_hash = ?2 AND action_index = ?3 \
+         ORDER BY subject",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![height, tx_hash, action_index], |row| {
+        row.get(0)
+    })?;
+    rows.collect()
 }
 
 fn truncate_hex(s: &str, max_len: usize) -> String {

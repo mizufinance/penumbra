@@ -1,8 +1,6 @@
 use blake2b_simd;
 use decaf377::{Fq, Fr};
-#[cfg(any(unix, windows))]
-use decaf377_rdsa::Signature;
-use decaf377_rdsa::{SigningKey, SpendAuth, VerificationKey};
+use decaf377_rdsa::{Signature, SigningKey, SpendAuth, VerificationKey};
 use penumbra_sdk_asset::asset;
 use penumbra_sdk_keys::Address;
 use penumbra_sdk_num::Amount;
@@ -74,7 +72,6 @@ impl HiddenArityPadder {
         VerificationKey::from(randomized)
     }
 
-    #[cfg(any(unix, windows))]
     pub fn synthetic_dummy_auth_sig(
         &self,
         slot: usize,
@@ -131,7 +128,6 @@ pub(crate) fn dummy_state_commitment_proof(commitment: tct::StateCommitment) -> 
     )
 }
 
-#[cfg(any(unix, windows))]
 pub(crate) fn dummy_spend_auth_sig() -> Signature<SpendAuth> {
     [0u8; 64].into()
 }

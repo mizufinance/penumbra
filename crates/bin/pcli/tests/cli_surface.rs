@@ -11,7 +11,7 @@ fn tx_help_exposes_only_reduced_surface_commands() {
         .stdout(predicate::str::is_match(r"(?m)^\s+transfer\s").unwrap())
         .stdout(predicate::str::is_match(r"(?m)^\s+consolidate\s").unwrap())
         .stdout(predicate::str::is_match(r"(?m)^\s+split\s").unwrap())
-        .stdout(predicate::str::is_match(r"(?m)^\s+shielded-ics20-withdrawal\s").unwrap())
+        .stdout(predicate::str::is_match(r"(?m)^\s+withdraw\s").unwrap())
         .stdout(predicate::str::is_match(r"(?m)^\s+proposal\s").unwrap())
         .stdout(predicate::str::is_match(r"(?m)^\s+compliance\s").unwrap())
         .stdout(
@@ -30,10 +30,11 @@ fn tx_help_exposes_only_reduced_surface_commands() {
                 .not(),
         )
         .stdout(
-            predicate::str::is_match(r"(?m)^\s+withdraw(?:\s|$)")
+            predicate::str::is_match(r"(?m)^\s+withdrawal(?:\s|$)")
                 .unwrap()
                 .not(),
-        );
+        )
+        .stdout(predicate::str::contains("shielded-ics20-withdrawal").not());
 }
 
 #[test]

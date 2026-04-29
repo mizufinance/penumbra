@@ -1,22 +1,17 @@
 use anyhow::Result;
-#[cfg(any(unix, windows))]
 use ark_ff::Zero;
-#[cfg(any(unix, windows))]
 use decaf377::Fr;
-#[cfg(any(unix, windows))]
 use decaf377_rdsa as rdsa;
 #[cfg(all(feature = "parallel", any(unix, windows)))]
 use penumbra_sdk_keys::symmetric::PayloadKey;
 #[cfg(any(unix, windows))]
 use penumbra_sdk_keys::FullViewingKey;
-#[cfg(any(unix, windows))]
 use penumbra_sdk_txhash::{AuthorizingData, EffectingData};
 #[cfg(all(feature = "parallel", any(unix, windows)))]
 use tokio::sync::oneshot;
 
 use super::TransactionPlan;
 use crate::ActionPlan;
-#[cfg(any(unix, windows))]
 use crate::AuthorizationData;
 use crate::{action::Action, Transaction, TransactionBody, WitnessData};
 
@@ -48,7 +43,6 @@ impl TransactionPlan {
         })
     }
 
-    #[cfg(any(unix, windows))]
     pub fn apply_auth_data(
         &self,
         auth_data: &AuthorizationData,

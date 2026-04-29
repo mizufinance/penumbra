@@ -313,5 +313,5 @@ pub mod cosmos {
 }
 
 #[cfg(feature = "rpc")]
-// https://github.com/penumbra-zone/penumbra/issues/3038#issuecomment-1722534133
+// https://github.com/mizufinance/penumbra/issues/3038#issuecomment-1722534133
 pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!("gen/proto_descriptor.bin.no_lfs");

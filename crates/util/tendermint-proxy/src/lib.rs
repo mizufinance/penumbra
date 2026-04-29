@@ -6,7 +6,7 @@
 //! Most importantly, this crate provides [`TendermintProxy`], which implements Penumbra's
 //! [`tendermint_proxy`][proxy-proto] RPC.
 //!
-//! [proxy-proto]: https://buf.build/penumbra-zone/penumbra/docs/main:penumbra.util.tendermint_proxy.v1
+//! [proxy-proto]: https://buf.build/mizufinance/penumbra/docs/main:penumbra.util.tendermint_proxy.v1
 
 mod tendermint_proxy;
 

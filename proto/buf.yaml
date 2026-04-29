@@ -1,7 +1,7 @@
 version: v2
 modules:
   - path: penumbra
-    name: buf.build/penumbra-zone/penumbra
+    name: buf.build/mizufinance/penumbra
 deps:
   - buf.build/cosmos/cosmos-sdk:e7a85cef453e4b999ad9aff8714ae05f
   - buf.build/cosmos/ibc:7ab44ae956a0488ea04e04511efa5f70

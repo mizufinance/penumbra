@@ -168,7 +168,7 @@ unset FINAL_NOBLE_BALANCE
 unset FINAL_PENUMBRA_BALANCE
 
 PENUMBRA_CHANNEL_NUMBER=${COUNTERPARTY_CHANNEL_ID#*-}
-pcli tx shielded-ics20-withdrawal --to "$NOBLE_ADDRESS" --channel "$PENUMBRA_CHANNEL_NUMBER" "1transfer/${COUNTERPARTY_CHANNEL_ID}/uusdc"
+pcli tx withdraw --to "$NOBLE_ADDRESS" --channel "$PENUMBRA_CHANNEL_NUMBER" "1transfer/${COUNTERPARTY_CHANNEL_ID}/uusdc"
 
 sleep 20
 

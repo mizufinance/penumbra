@@ -6,7 +6,7 @@ managed:
       module: buf.build/cosmos/ibc
   override:
     - file_option: go_package_prefix
-      value: github.com/penumbra-zone/penumbra/proto/go/gen
+      value: github.com/mizufinance/penumbra/proto/go/gen
 plugins:
   - remote: buf.build/protocolbuffers/go
     out: go/gen

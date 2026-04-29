@@ -2,7 +2,7 @@
 
 Encrypting a note plaintext involves the following steps:
 
-1. Derive Ephemeral Secret Key: Use [decaf377-ka](https://github.com/penumbra-zone/decaf377-ka) to derive an ephemeral secret key *esk*.
+1. Derive Ephemeral Secret Key: Use [decaf377-ka](https://github.com/mizufinance/decaf377-ka) to derive an ephemeral secret key *esk*.
 
 2. Derive Diversified Public Key: Generate a diversified public key from the secret key *epk*.
 

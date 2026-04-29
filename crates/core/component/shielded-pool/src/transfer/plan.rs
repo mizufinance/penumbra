@@ -1,14 +1,9 @@
 use anyhow::{anyhow, ensure, Error};
 use decaf377::{Fq, Fr};
-#[cfg(any(unix, windows))]
 use decaf377_rdsa::{Signature, SpendAuth, VerificationKey};
-#[cfg(not(any(unix, windows)))]
-use decaf377_rdsa::{SpendAuth, VerificationKey};
 use penumbra_sdk_asset::{asset, Balance};
-#[cfg(any(unix, windows))]
 use penumbra_sdk_compliance::{AssetPolicy, ComplianceLeaf};
 use penumbra_sdk_keys::Address;
-#[cfg(any(unix, windows))]
 use penumbra_sdk_keys::{
     symmetric::{PayloadKey, WrappedMemoKey},
     FullViewingKey,
@@ -18,17 +13,13 @@ use penumbra_sdk_tct as tct;
 use serde::{Deserialize, Serialize};
 use std::convert::{TryFrom, TryInto};
 
-#[cfg(any(unix, windows))]
 use super::compliance::{
     build_transfer_compliance, change_output_transfer_compliance,
     receiver_output_transfer_compliance,
 };
-#[cfg(any(unix, windows))]
 use crate::note_reshape::dummy_spend_auth_sig;
-#[cfg(any(unix, windows))]
 use crate::note_reshape::dummy_state_commitment_proof;
 use crate::note_reshape::{pad_to_len, HiddenArityPadder};
-#[cfg(any(unix, windows))]
 use crate::transfer::{
     Transfer, TransferOutputPrivate, TransferOutputPublic, TransferProof, TransferProofPrivate,
     TransferProofPublic, TransferSpendPrivate, TransferSpendPublic,
@@ -211,7 +202,6 @@ impl TransferPlan {
         self.padder().synthetic_dummy_verification_key(slot)
     }
 
-    #[cfg(any(unix, windows))]
     pub fn synthetic_dummy_auth_sig(
         &self,
         slot: usize,
@@ -282,7 +272,6 @@ impl TransferPlan {
         }
     }
 
-    #[cfg(any(unix, windows))]
     fn upload_asset_policy(&self) -> anyhow::Result<AssetPolicy> {
         let plan_policy = self
             .outputs
@@ -389,7 +378,6 @@ impl TransferPlan {
         Ok(())
     }
 
-    #[cfg(any(unix, windows))]
     pub fn transfer_body(
         &self,
         fvk: &FullViewingKey,
@@ -478,7 +466,6 @@ impl TransferPlan {
         })
     }
 
-    #[cfg(any(unix, windows))]
     pub fn transfer_public_private(
         &self,
         fvk: &FullViewingKey,
@@ -680,6 +667,48 @@ impl TransferPlan {
             proof,
         })
     }
+
+    pub fn transfer_witness_payload(
+        &self,
+        fvk: &FullViewingKey,
+        state_commitment_proofs: Vec<tct::Proof>,
+        anchor: tct::Root,
+    ) -> Result<Vec<u8>, crate::ProofError> {
+        let (public, private) =
+            self.transfer_public_private(fvk, &state_commitment_proofs, anchor)?;
+        crate::gnark::encode_transfer_witness_v1(&public, &private)
+            .map_err(|e| crate::ProofError::InvalidPublicInput(e.to_string()))
+    }
+
+    pub fn transfer_with_proof(
+        &self,
+        fvk: &FullViewingKey,
+        auth_sigs: Vec<Signature<decaf377_rdsa::SpendAuth>>,
+        anchor: tct::Root,
+        memo_key: &PayloadKey,
+        proof: TransferProof,
+    ) -> Result<Transfer, crate::ProofError> {
+        let body = self
+            .transfer_body(fvk, memo_key, anchor)
+            .map_err(|e| crate::ProofError::InvalidPublicInput(e.to_string()))?;
+        if auth_sigs.len() != self.spends.len() {
+            return Err(crate::ProofError::InvalidPublicInput(format!(
+                "transfer expected {} auth sigs, got {}",
+                self.spends.len(),
+                auth_sigs.len()
+            )));
+        }
+        let mut auth_sigs = auth_sigs;
+        while auth_sigs.len() < PADDED_TRANSFER_INPUTS {
+            auth_sigs.push(dummy_spend_auth_sig());
+        }
+
+        Ok(Transfer {
+            body,
+            auth_sigs,
+            proof,
+        })
+    }
 }
 
 impl DomainType for TransferPlan {
@@ -732,7 +761,6 @@ impl TryFrom<pb::TransferPlan> for TransferPlan {
     }
 }
 
-#[cfg(any(unix, windows))]
 fn sender_leaf(spend: &ShieldedInputPlan) -> ComplianceLeaf {
     spend.compliance_leaf.clone().unwrap_or_else(|| {
         let b_d_fq = spend
@@ -749,7 +777,6 @@ fn sender_leaf(spend: &ShieldedInputPlan) -> ComplianceLeaf {
     })
 }
 
-#[cfg(any(unix, windows))]
 fn recipient_leaf(output: &ShieldedOutputPlan, created_note: &crate::Note) -> ComplianceLeaf {
     output.compliance_leaf.clone().unwrap_or_else(|| {
         let b_d_fq = created_note

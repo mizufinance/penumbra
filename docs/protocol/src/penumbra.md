@@ -28,8 +28,8 @@ Press `s` or use the magnifying glass icon for full-text search.
 If you're interested in technical discussion about the project, why not
 
 - join [the discord](https://discord.gg/hKvkrqa3zC),
-- check out [the repo and issue tracker](https://github.com/penumbra-zone/penumbra),
-- view the [roadmap goals](https://github.com/orgs/penumbra-zone/projects),
+- check out [the repo and issue tracker](https://github.com/mizufinance/penumbra),
+- view the [roadmap goals](https://github.com/orgs/mizufinance/projects),
 - or [follow the project on Twitter](https://twitter.com/penumbrazone) for updates.
 
 ## Private Transactions

@@ -172,7 +172,7 @@
                 pname = "penumbra";
                 src = cleanSourceWith {
                   src = if penumbraRelease == null then craneLib.path ./. else fetchFromGitHub {
-                    owner = "penumbra-zone";
+                    owner = "mizufinance";
                     repo = "penumbra";
                     rev = "v${penumbraRelease.version}";
                     sha256 = "${penumbraRelease.sha256}";

@@ -1,6 +1,4 @@
-#[cfg(any(unix, windows))]
 use crate::Action;
-#[cfg(any(unix, windows))]
 use crate::WitnessData;
 use anyhow::anyhow;
 #[cfg(any(unix, windows))]
@@ -11,13 +9,11 @@ use penumbra_sdk_asset::Balance;
 use penumbra_sdk_compliance::structs::{MsgRegisterAsset, MsgRegisterUser};
 use penumbra_sdk_governance::{ProposalSubmit, ValidatorVote};
 use penumbra_sdk_ibc::IbcRelay;
-#[cfg(any(unix, windows))]
 use penumbra_sdk_keys::{symmetric::PayloadKey, FullViewingKey};
 use penumbra_sdk_proto::{core::transaction::v1 as pb_t, DomainType};
 use penumbra_sdk_shielded_pool::{
     ConsolidatePlan, ShieldedIcs20WithdrawalPlan, SplitPlan, TransferPlan,
 };
-#[cfg(any(unix, windows))]
 use penumbra_sdk_txhash::{EffectHash, EffectingData};
 use serde::{Deserialize, Serialize};
 
@@ -224,7 +220,6 @@ impl ActionPlan {
     }
 
     /// Compute the effect hash of the action this plan will produce.
-    #[cfg(any(unix, windows))]
     pub fn effect_hash(
         &self,
         fvk: &FullViewingKey,

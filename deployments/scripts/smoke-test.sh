@@ -6,6 +6,13 @@ cargo_cmd() {
     cargo "$@"
 }
 
+pcli_tx_cmd() {
+    # pcli prints the transaction plan and asks for an enter press before
+    # signing. Smoke tests run non-interactively, so acknowledge that prompt
+    # explicitly instead of depending on an attached terminal.
+    printf '\n' | cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" "$@"
+}
+
 # Fail fast if network dir exists, otherwise `cargo run ...` will block
 # for a while, masking the error.
 #
@@ -162,16 +169,13 @@ if [ -n "$dk_hex" ] && [ -n "$dk_pub_hex" ]; then
     >&2 echo "  DK generated successfully."
 
     # Register regulated_usd as a regulated asset with the generated DK
-    cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" \
-        tx compliance register-asset regulated_usd \
+    pcli_tx_cmd tx compliance register-asset regulated_usd \
         --regulated --dk-pub-hex "$dk_pub_hex" --threshold 500000000000000000000
     >&2 echo "  regulated_usd registered as regulated asset."
 
     # Register the test user for regulated_usd
-    cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" \
-        tx compliance register-user regulated_usd
-    cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" \
-        tx compliance register-user regulated_usd --address-index 1
+    pcli_tx_cmd tx compliance register-user regulated_usd
+    pcli_tx_cmd tx compliance register-user regulated_usd --address-index 1
     >&2 echo "  User registered for regulated_usd."
 
     # Send a transfer so the detection scan has something to find
@@ -179,8 +183,7 @@ if [ -n "$dk_hex" ] && [ -n "$dk_pub_hex" ]; then
     >&2 echo "  DEBUG: balance before send:"
     cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" view balance 2>&1 | tee /dev/stderr || true
     smoke_addr=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" view address 1)
-    cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" \
-        tx transfer 100regulated_usd --to "$smoke_addr"
+    pcli_tx_cmd tx transfer 100regulated_usd --to "$smoke_addr"
     >&2 echo "  Compliance transfer sent."
 
     # Export env vars for integration tests

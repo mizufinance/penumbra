@@ -3,13 +3,16 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/consensys/gnark/backend/groth16"
@@ -51,6 +54,10 @@ type daemonReady struct {
 }
 
 type proveFunc func([]byte) ([]byte, error)
+type proverEntry struct {
+	ready *daemonReady
+	prove proveFunc
+}
 
 type circuitConfig struct {
 	name          string
@@ -171,7 +178,17 @@ func main() {
 
 	circuit := flag.String("circuit", "", "transferNxM, consolidateN, splitN, or shielded-ics20-withdrawalN family label")
 	artifactDir := flag.String("artifact-dir", "", "directory containing gnark artifacts")
+	artifactRoot := flag.String("artifact-root", "/usr/share/penumbra/gnark/artifacts", "root directory containing per-family gnark artifact directories for HTTP mode")
+	httpListen := flag.String("http-listen", "", "optional address for local dev HTTP proof service")
 	flag.Parse()
+
+	if *httpListen != "" {
+		if err := serveHTTP(*httpListen, *artifactRoot); err != nil {
+			fmt.Fprintf(os.Stderr, "http prover: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if *circuit == "" || *artifactDir == "" {
 		fmt.Fprintln(os.Stderr, "--circuit and --artifact-dir are required")
@@ -223,6 +240,95 @@ func main() {
 			}
 		}
 	}
+}
+
+func serveHTTP(addr, artifactRoot string) error {
+	var mu sync.Mutex
+	cache := map[string]proverEntry{}
+
+	getProver := func(family string) (proverEntry, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if entry, ok := cache[family]; ok {
+			return entry, nil
+		}
+		if _, ok := circuitConfigs[family]; !ok {
+			return proverEntry{}, fmt.Errorf("unsupported circuit %q", family)
+		}
+		artifactDir := filepath.Join(artifactRoot, family)
+		ready, prove, err := initProver(family, artifactDir)
+		if err != nil {
+			return proverEntry{}, err
+		}
+		entry := proverEntry{ready: ready, prove: prove}
+		cache[family] = entry
+		return entry, nil
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+	mux.HandleFunc("/prove", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+		var req struct {
+			Family  string `json:"family"`
+			Witness string `json:"witness"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestSize)).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("decode request: %v", err)})
+			return
+		}
+		witness, err := base64.StdEncoding.DecodeString(req.Witness)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("decode witness: %v", err)})
+			return
+		}
+		entry, err := getProver(req.Family)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		start := time.Now()
+		result, err := entry.prove(witness)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"family":           req.Family,
+			"result":           base64.StdEncoding.EncodeToString(result),
+			"proof":            base64.StdEncoding.EncodeToString(result),
+			"proveMs":          time.Since(start).Seconds() * 1000,
+			"verifyingKeyId":   entry.ready.VerifyingKeyID,
+			"provingKeySHA256": entry.ready.ProvingKeySHA256,
+		})
+	})
+
+	fmt.Fprintf(os.Stderr, "penumbra gnark HTTP prover listening on %s with artifacts %s\n", addr, artifactRoot)
+	return http.ListenAndServe(addr, withDevCORS(mux))
+}
+
+func withDevCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("access-control-allow-origin", "*")
+		w.Header().Set("access-control-allow-methods", "GET, POST, OPTIONS")
+		w.Header().Set("access-control-allow-headers", "content-type")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("content-type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func initProver(circuit, artifactDir string) (*daemonReady, proveFunc, error) {

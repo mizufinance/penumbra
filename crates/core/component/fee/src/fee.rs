@@ -55,7 +55,7 @@ impl Fee {
 
     pub fn apply_tier(self, fee_tier: FeeTier) -> Self {
         // TODO: this could be fingerprinted since fees are public; it would be ideal to apply
-        // some sampling distribution, see https://github.com/penumbra-zone/penumbra/issues/3153
+        // some sampling distribution, see https://github.com/mizufinance/penumbra/issues/3153
         match fee_tier {
             FeeTier::Low => {
                 let amount = (self.amount() * FEE_TIER_LOW_MULTIPLIER.into()) / 100u32.into();

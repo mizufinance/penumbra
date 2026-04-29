@@ -1,19 +1,12 @@
-#[cfg(any(unix, windows))]
 use anyhow::Result;
-#[cfg(any(unix, windows))]
 use rand::{CryptoRng, RngCore};
 
-#[cfg(any(unix, windows))]
 use penumbra_sdk_keys::keys::SpendKey;
 
-#[cfg(not(any(unix, windows)))]
-use crate::TransactionPlan;
-#[cfg(any(unix, windows))]
 use crate::{AuthorizationData, TransactionPlan};
 
 impl TransactionPlan {
     /// Authorize this [`TransactionPlan`] with the provided [`SpendKey`].
-    #[cfg(any(unix, windows))]
     pub fn authorize<R: RngCore + CryptoRng>(
         &self,
         mut rng: R,

@@ -168,7 +168,7 @@ mod address_as_string {
 /// Because Go's encoding/json will encode byte[] as base64-encoded strings,
 /// and Go's Ed25519 keys are byte[] values, this hopefully makes it easier to
 /// copy-paste pre-authorization keys from Go programs into the Rust config.
-// TODO: remove this after <https://github.com/penumbra-zone/ed25519-consensus/issues/7>
+// TODO: remove this after <https://github.com/mizufinance/ed25519-consensus/issues/7>
 mod ed25519_vec_base64 {
     use base64::prelude::*;
 
