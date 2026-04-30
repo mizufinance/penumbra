@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use ark_ec::{AffineRepr, CurveGroup};
-use penumbra_sdk_compliance::{ComplianceLeaf, IndexedLeaf, MerklePath, MerklePathLayer};
-use penumbra_sdk_keys::Address;
+use penumbra_sdk_compliance::{ComplianceLeaf, IndexedLeaf, MerklePath};
 
 use crate::gnark::binary::{put_bytes, put_u32, BinaryCursor};
 
@@ -109,19 +108,6 @@ pub(crate) fn merkle_path_from_typed(path: &MerklePath) -> Result<MerklePathBina
     Ok(MerklePathBinary { layers })
 }
 
-#[allow(dead_code)]
-pub(crate) fn merkle_path_to_typed(path: &MerklePathBinary) -> MerklePath {
-    MerklePath {
-        layers: path
-            .layers
-            .iter()
-            .map(|layer| MerklePathLayer {
-                siblings: layer.iter().map(|sibling| sibling.to_vec()).collect(),
-            })
-            .collect(),
-    }
-}
-
 pub(crate) fn indexed_leaf_from_typed(leaf: &IndexedLeaf) -> IndexedLeafBinary {
     IndexedLeafBinary {
         value: leaf.value.to_bytes(),
@@ -154,15 +140,6 @@ pub(crate) fn compliance_leaf_from_typed(
         asset_id: leaf.asset_id.0.to_bytes(),
         d: leaf.d.to_bytes(),
     })
-}
-
-#[allow(dead_code)]
-pub(crate) fn compliance_leaf_to_typed(leaf: &ComplianceLeafBinary) -> Result<ComplianceLeaf> {
-    Ok(ComplianceLeaf::new(
-        Address::try_from(leaf.address.to_vec()).context("decode compliance leaf address")?,
-        penumbra_sdk_asset::asset::Id(decaf377::Fq::from_le_bytes_mod_order(&leaf.asset_id)),
-        decaf377::Fq::from_le_bytes_mod_order(&leaf.d),
-    ))
 }
 
 pub(crate) fn point_affine_bytes(point: decaf377::Element) -> Result<PointAffineBytes> {

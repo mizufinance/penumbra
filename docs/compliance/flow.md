@@ -179,8 +179,12 @@ regulated and handles compliance automatically.
 
 ### Ciphertext Construction
 
-Transfer compliance uses the transfer ciphertext and transfer DLEQ bundle.
-The receiver leg carries the compliance bytes; sender-owned change outputs carry none.
+Transfer compliance uses a unified 576-byte ciphertext and a 256-byte DLEQ
+bundle (`TRANSFER_WIRE_BYTES` / `TRANSFER_DLEQ_BYTES` in
+`compliance/src/transfer.rs`). The receiver `TransferOutputBody` carries both;
+all `TransferInputBody.compliance_ciphertext` and change-output fields are
+empty. The bundle has 4 independent EPKs — one per tier — and a single
+detection tag (encrypted to `DK_pub`) covering the whole bundle.
 
 ### 4-Tier Encryption
 

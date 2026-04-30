@@ -14,9 +14,7 @@ pub mod structs;
 pub use structs::{
     AssetParams,
     AssetPolicy,
-    ComplianceCiphertext,
     ComplianceLeaf,
-    CompliancePayload,
     DleqProof,
     MerklePath,
     MerklePathLayer,
@@ -29,15 +27,10 @@ pub use structs::{
     ASSET_ID_BYTES,
     C2_BYTES,
     DETECTION_TAG_BYTES,
-    ENCRYPTED_TIER_BYTES,
     EPK_BYTES,
     FQ_BYTES,
     GENERATOR_BYTES,
     KEY_BYTES,
-    TOTAL_PLAINTEXT_BYTES,
-    TRANSFER_INPUT_CIPHERTEXT_FQS,
-    TRANSFER_INPUT_DLEQ_BYTES,
-    TRANSFER_INPUT_WIRE_BYTES,
 };
 
 pub mod transfer;

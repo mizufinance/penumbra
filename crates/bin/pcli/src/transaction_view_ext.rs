@@ -1,35 +1,14 @@
 use comfy_table::presets;
 use comfy_table::Table;
-use penumbra_sdk_asset::asset::Id;
-use penumbra_sdk_asset::asset::Metadata;
-use penumbra_sdk_asset::Value;
 use penumbra_sdk_asset::ValueView;
 use penumbra_sdk_fee::Fee;
 use penumbra_sdk_keys::AddressView;
-use penumbra_sdk_num::Amount;
 use penumbra_sdk_transaction::TransactionView;
 
 // Issues identified:
 // TODO: FeeView
 // TODO: TradingPairView
 // Implemented some helper functions which may make more sense as methods on existing Structs
-
-// helper function to create a value view from a value and optional metadata
-#[allow(dead_code)]
-fn create_value_view(value: Value, metadata: Option<Metadata>) -> ValueView {
-    match metadata {
-        Some(metadata) => ValueView::KnownAssetId {
-            amount: value.amount,
-            metadata,
-            equivalent_values: Vec::new(),
-            extended_metadata: None,
-        },
-        None => ValueView::UnknownAssetId {
-            amount: value.amount,
-            asset_id: value.asset_id,
-        },
-    }
-}
 
 // a helper function to create pretty placeholders for encrypted information
 fn format_opaque_bytes(bytes: &[u8]) -> String {
@@ -130,52 +109,9 @@ fn format_value_view(value_view: &ValueView) -> String {
     }
 }
 
-#[allow(dead_code)]
-fn format_amount_range(
-    start: Amount,
-    stop: Amount,
-    asset_id: &Id,
-    metadata: Option<&Metadata>,
-) -> String {
-    match metadata {
-        Some(denom) => {
-            let unit = denom.default_unit();
-            format!(
-                "({}..{}){}",
-                unit.format_value(start),
-                unit.format_value(stop),
-                unit
-            )
-        }
-        None => format!("({}..{}){}", start, stop, asset_id),
-    }
-}
-
 fn format_fee(fee: &Fee) -> String {
     // TODO: Implement FeeView to show decrypted fee.
     format!("{}", fee.amount())
-}
-
-#[allow(dead_code)]
-fn format_asset_id(asset_id: &Id) -> String {
-    // TODO: Implement TradingPairView to show decrypted .asset_id()
-    let input = &asset_id.to_string();
-    let truncated = &input[0..10]; //passet1
-    let ellipsis = "...";
-    let end = &input[(input.len() - 3)..];
-    format!("{}{}{}", truncated, ellipsis, end)
-}
-
-// When handling ValueViews inside of a Visible variant of an ActionView, handling both cases might be needlessly verbose
-// potentially this makes sense as a method on the ValueView enum
-// propose moving this to core/asset/src/value.rs
-#[allow(dead_code)]
-fn value_view_amount(value_view: &ValueView) -> Amount {
-    match value_view {
-        ValueView::KnownAssetId { amount, .. } | ValueView::UnknownAssetId { amount, .. } => {
-            *amount
-        }
-    }
 }
 
 pub trait TransactionViewExt {
