@@ -41,6 +41,9 @@ jobs:
     needs: changes
     if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.smoke == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2204
+    concurrency:
+      group: blacksmith-local-devnet-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
