@@ -1,6 +1,7 @@
 package compliance
 
 import (
+	decafgnark "github.com/mizufinance/decaf377-go/gnark"
 	"math/big"
 
 	curves "github.com/consensys/gnark-crypto/ecc/twistededwards"
@@ -19,7 +20,7 @@ func DeriveACKFromLeafDNative(ringPK gnarkte.Point, d *big.Int) (gnarkte.Point, 
 	if err != nil {
 		return gnarkte.Point{}, err
 	}
-	return primitives.ScalarMulNative(ringPK, d, primitives.MustBigInt(vectors.Decaf377CompanionCurve.Order).BitLen())
+	return decafgnark.ScalarMulNative(ringPK, d, primitives.MustBigInt(vectors.Decaf377CompanionCurve.Order).BitLen())
 }
 
 func DeriveACKFromLeafD(api frontend.API, ringPK gnarkte.Point, d frontend.Variable) (gnarkte.Point, error) {

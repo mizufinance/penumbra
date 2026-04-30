@@ -3,6 +3,7 @@ package compliance
 import (
 	"encoding/base64"
 	"fmt"
+	decafgnark "github.com/mizufinance/decaf377-go/gnark"
 	"math/big"
 
 	"github.com/consensys/gnark/frontend"
@@ -92,7 +93,7 @@ func IndexedLeafCommitmentNative(inputs IndexedLeafInputs) (*big.Int, error) {
 		return nil, err
 	}
 
-	dkPubFq, err := primitives.Decaf377CompressToFieldNative(inputs.DKPub)
+	dkPubFq, err := decafgnark.CompressToFieldNative(inputs.DKPub)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +105,7 @@ func IndexedLeafCommitmentNative(inputs IndexedLeafInputs) (*big.Int, error) {
 		return nil, err
 	}
 
-	ringPKFq, err := primitives.Decaf377CompressToFieldNative(inputs.RingPK)
+	ringPKFq, err := decafgnark.CompressToFieldNative(inputs.RingPK)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +141,7 @@ func IndexedLeafCommitment(api frontend.API, inputs IndexedLeafInputs) (frontend
 		return nil, err
 	}
 
-	dkPubFq, err := primitives.Decaf377CompressToField(api, inputs.DKPub)
+	dkPubFq, err := decafgnark.CompressToField(api, inputs.DKPub)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +154,7 @@ func IndexedLeafCommitment(api frontend.API, inputs IndexedLeafInputs) (frontend
 		return nil, err
 	}
 
-	ringPKFq, err := primitives.Decaf377CompressToField(api, inputs.RingPK)
+	ringPKFq, err := decafgnark.CompressToField(api, inputs.RingPK)
 	if err != nil {
 		return nil, err
 	}

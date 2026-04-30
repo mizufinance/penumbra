@@ -2,6 +2,7 @@ package circuits
 
 import (
 	"fmt"
+	decafgnark "github.com/mizufinance/decaf377-go/gnark"
 
 	"github.com/consensys/gnark/frontend"
 	gnarkte "github.com/consensys/gnark/std/algebra/native/twistededwards"
@@ -111,8 +112,8 @@ func (c *NoteReshapeCircuit) Define(api frontend.API) error {
 	if err != nil {
 		return err
 	}
-	AssertDecafEquivalent(api, balanceCommitmentPoint, claimedBalanceCommitment)
-	balanceCommitmentFq, err := Decaf377CompressToField(api, balanceCommitmentPoint)
+	decafgnark.AssertEquivalent(api, balanceCommitmentPoint, claimedBalanceCommitment)
+	balanceCommitmentFq, err := decafgnark.CompressToField(api, balanceCommitmentPoint)
 	if err != nil {
 		return err
 	}
@@ -158,7 +159,7 @@ func (c *NoteReshapeCircuit) verifyNoteReshapeSpend(
 	spentTransmission := gnarkte.Point{X: spend.Note.Transmission.X, Y: spend.Note.Transmission.Y}
 	rkClaimed := gnarkte.Point{X: spend.RK.X, Y: spend.RK.Y}
 
-	spentDivGenFq, err := Decaf377CompressToField(api, spentDivGen)
+	spentDivGenFq, err := decafgnark.CompressToField(api, spentDivGen)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -194,8 +195,8 @@ func (c *NoteReshapeCircuit) verifyNoteReshapeSpend(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	AssertDecafEquivalent(api, computedRK, rkClaimed)
-	rkCompressed, err := Decaf377CompressToField(api, rkClaimed)
+	decafgnark.AssertEquivalent(api, computedRK, rkClaimed)
+	rkCompressed, err := decafgnark.CompressToField(api, rkClaimed)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -211,9 +212,9 @@ func (c *NoteReshapeCircuit) verifyNoteReshapeSpend(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	AssertDecafEquivalent(api, computedTransmission, spentTransmission)
-	AssertDecafEquivalent(api, spentDivGen, sharedDivGen)
-	AssertDecafEquivalent(api, spentTransmission, sharedTransmission)
+	decafgnark.AssertEquivalent(api, computedTransmission, spentTransmission)
+	decafgnark.AssertEquivalent(api, spentDivGen, sharedDivGen)
+	decafgnark.AssertEquivalent(api, spentTransmission, sharedTransmission)
 	api.AssertIsEqual(spend.Note.AssetID, sharedAssetID)
 
 	return spend.Note.Amount, nullifier, rkCompressed, nil
@@ -230,7 +231,7 @@ func (c *NoteReshapeCircuit) verifyNoteReshapeOutput(
 	createdDivGen := gnarkte.Point{X: output.Note.DivGen.X, Y: output.Note.DivGen.Y}
 	createdTransmission := gnarkte.Point{X: output.Note.Transmission.X, Y: output.Note.Transmission.Y}
 
-	createdDivGenFq, err := Decaf377CompressToField(api, createdDivGen)
+	createdDivGenFq, err := decafgnark.CompressToField(api, createdDivGen)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -259,9 +260,9 @@ func (c *NoteReshapeCircuit) verifyNoteReshapeOutput(
 	if err != nil {
 		return nil, nil, err
 	}
-	AssertDecafEquivalent(api, computedTransmission, createdTransmission)
-	AssertDecafEquivalent(api, createdDivGen, sharedDivGen)
-	AssertDecafEquivalent(api, createdTransmission, sharedTransmission)
+	decafgnark.AssertEquivalent(api, computedTransmission, createdTransmission)
+	decafgnark.AssertEquivalent(api, createdDivGen, sharedDivGen)
+	decafgnark.AssertEquivalent(api, createdTransmission, sharedTransmission)
 	api.AssertIsEqual(output.Note.AssetID, sharedAssetID)
 
 	return output.Note.Amount, noteCommitment, nil

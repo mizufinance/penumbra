@@ -2,6 +2,7 @@ package compliance
 
 import (
 	"fmt"
+	decafgnark "github.com/mizufinance/decaf377-go/gnark"
 
 	"golang.org/x/crypto/blake2b"
 
@@ -18,7 +19,7 @@ const (
 func deriveUnregulatedSinkPoint(domain string) (gnarkte.Point, error) {
 	hash := blake2b.Sum512([]byte(domain))
 	pointDomain := primitives.LittleEndianBytesToBigInt(hash[:])
-	point, err := primitives.Decaf377EncodeToCurveNative(pointDomain)
+	point, err := decafgnark.EncodeToCurveNative(pointDomain)
 	if err != nil {
 		return gnarkte.Point{}, fmt.Errorf("derive unregulated sink point for %q: %w", domain, err)
 	}

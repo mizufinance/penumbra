@@ -1,6 +1,7 @@
 package circuits
 
 import (
+	decafgnark "github.com/mizufinance/decaf377-go/gnark"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -9,7 +10,6 @@ import (
 	gnarkte "github.com/consensys/gnark/std/algebra/native/twistededwards"
 	"github.com/mizufinance/penumbra/tools/gnark/internal/compliance"
 	"github.com/mizufinance/penumbra/tools/gnark/internal/generated"
-	"github.com/mizufinance/penumbra/tools/gnark/internal/primitives"
 )
 
 type noteCommitmentProfileCircuit struct {
@@ -83,7 +83,7 @@ type pointCompressionProfileCircuit struct {
 }
 
 func (c *pointCompressionProfileCircuit) Define(api frontend.API) error {
-	_, err := primitives.Decaf377CompressToField(api, gnarkte.Point{X: c.X, Y: c.Y})
+	_, err := decafgnark.CompressToField(api, gnarkte.Point{X: c.X, Y: c.Y})
 	return err
 }
 

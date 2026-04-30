@@ -3,6 +3,7 @@ package circuits
 import (
 	"encoding/hex"
 	"fmt"
+	decafgnark "github.com/mizufinance/decaf377-go/gnark"
 	"math/big"
 
 	curves "github.com/consensys/gnark-crypto/ecc/twistededwards"
@@ -34,7 +35,7 @@ func NoteCommitmentFromFixtureNative(fixture SpendFixture) (*big.Int, error) {
 	}
 
 	diversifiedGenerator := PointAffineToNative(fixture.Private.DiversifiedGeneratorAffine)
-	diversifiedGeneratorFq, err := Decaf377CompressToFieldNative(diversifiedGenerator)
+	diversifiedGeneratorFq, err := decafgnark.CompressToFieldNative(diversifiedGenerator)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +66,7 @@ func NoteCommitment(
 	transmissionKeyS frontend.Variable,
 	clueKey frontend.Variable,
 ) (frontend.Variable, error) {
-	diversifiedGeneratorFq, err := Decaf377CompressToField(api, diversifiedGenerator)
+	diversifiedGeneratorFq, err := decafgnark.CompressToField(api, diversifiedGenerator)
 	if err != nil {
 		return nil, err
 	}
@@ -115,13 +116,13 @@ func ComplianceLeafCommitmentFromFixtureNative(fixture SpendFixture) (*big.Int, 
 		return nil, err
 	}
 
-	diversifiedGeneratorFq, err := Decaf377CompressToFieldNative(
+	diversifiedGeneratorFq, err := decafgnark.CompressToFieldNative(
 		PointAffineToNative(fixture.Private.UserDiversifiedGeneratorAffine),
 	)
 	if err != nil {
 		return nil, err
 	}
-	transmissionKeyFq, err := Decaf377CompressToFieldNative(
+	transmissionKeyFq, err := decafgnark.CompressToFieldNative(
 		PointAffineToNative(fixture.Private.UserTransmissionKeyAffine),
 	)
 	if err != nil {
@@ -146,11 +147,11 @@ func ComplianceLeafCommitment(
 	assetID frontend.Variable,
 	d frontend.Variable,
 ) (frontend.Variable, error) {
-	diversifiedGeneratorFq, err := Decaf377CompressToField(api, diversifiedGenerator)
+	diversifiedGeneratorFq, err := decafgnark.CompressToField(api, diversifiedGenerator)
 	if err != nil {
 		return nil, err
 	}
-	transmissionKeyFq, err := Decaf377CompressToField(api, transmissionKey)
+	transmissionKeyFq, err := decafgnark.CompressToField(api, transmissionKey)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +236,7 @@ func ValueGeneratorNative(assetID *big.Int) (gnarkte.Point, error) {
 	if err != nil {
 		return gnarkte.Point{}, err
 	}
-	return Decaf377EncodeToCurveNative(hashedAssetID)
+	return decafgnark.EncodeToCurveNative(hashedAssetID)
 }
 
 func ValueBlindingGeneratorNative() (gnarkte.Point, error) {
@@ -259,15 +260,15 @@ func BalanceCommitmentFromFixtureNative(fixture SpendFixture) (gnarkte.Point, er
 		return gnarkte.Point{}, err
 	}
 
-	valuePoint, err := ScalarMulNative(valueGenerator, MustBigInt(fixture.Private.NoteAmount), 128)
+	valuePoint, err := decafgnark.ScalarMulNative(valueGenerator, MustBigInt(fixture.Private.NoteAmount), 128)
 	if err != nil {
 		return gnarkte.Point{}, err
 	}
-	blindingPoint, err := ScalarMulNative(valueBlindingGenerator, MustBigInt(fixture.Private.VBlinding), 256)
+	blindingPoint, err := decafgnark.ScalarMulNative(valueBlindingGenerator, MustBigInt(fixture.Private.VBlinding), 256)
 	if err != nil {
 		return gnarkte.Point{}, err
 	}
-	return PointAddNative(valuePoint, blindingPoint)
+	return decafgnark.PointAddNative(valuePoint, blindingPoint)
 }
 
 func BalanceCommitment(
@@ -289,7 +290,7 @@ func BalanceCommitment(
 	if err != nil {
 		return gnarkte.Point{}, err
 	}
-	valueGenerator, err := Decaf377EncodeToCurve(api, hashedAssetID)
+	valueGenerator, err := decafgnark.EncodeToCurve(api, hashedAssetID)
 	if err != nil {
 		return gnarkte.Point{}, err
 	}
