@@ -1,6 +1,7 @@
 package primitives
 
 import (
+	decafgnark "github.com/mizufinance/decaf377-go/gnark"
 	"math/big"
 	"testing"
 
@@ -79,7 +80,7 @@ func (c *decaf377CompressToFieldCircuit) Define(api frontend.API) error {
 		X: c.X,
 		Y: c.Y,
 	}
-	result, err := Decaf377CompressToField(api, point)
+	result, err := decafgnark.CompressToField(api, point)
 	if err != nil {
 		return err
 	}
@@ -96,31 +97,18 @@ type decaf377EncodeToCurveCircuit struct {
 }
 
 func (c *decaf377EncodeToCurveCircuit) Define(api frontend.API) error {
-	point, err := Decaf377EncodeToCurve(api, c.Input)
+	point, err := decafgnark.EncodeToCurve(api, c.Input)
 	if err != nil {
 		return err
 	}
 	api.AssertIsEqual(point.X, c.ExpectedX)
 	api.AssertIsEqual(point.Y, c.ExpectedY)
 
-	compressed, err := Decaf377CompressToField(api, point)
+	compressed, err := decafgnark.CompressToField(api, point)
 	if err != nil {
 		return err
 	}
 	api.AssertIsEqual(compressed, c.ExpectedCompress)
-	return nil
-}
-
-type decaf377IsqrtZeroCircuit struct {
-	ExpectedWasSquare frontend.Variable `gnark:",public"`
-}
-
-func (c *decaf377IsqrtZeroCircuit) Define(api frontend.API) error {
-	wasSquare, _, err := decaf377Isqrt(api, 0)
-	if err != nil {
-		return err
-	}
-	api.AssertIsEqual(wasSquare, c.ExpectedWasSquare)
 	return nil
 }
 
@@ -190,7 +178,7 @@ func TestDecaf377EncodeToCurveNativeMatchesPenumbraVectors(t *testing.T) {
 	}
 
 	for _, vector := range vectors.Decaf377Encode {
-		point, err := Decaf377EncodeToCurveNative(MustBigInt(vector.Input))
+		point, err := decafgnark.EncodeToCurveNative(MustBigInt(vector.Input))
 		if err != nil {
 			t.Fatalf("encode_to_curve(%s): %v", vector.Input, err)
 		}
@@ -214,19 +202,5 @@ func TestDecaf377EncodeToCurveCompiles(t *testing.T) {
 	_, err := frontend.Compile(ecc.BLS12_377.ScalarField(), r1cs.NewBuilder, &decaf377EncodeToCurveCircuit{})
 	if err != nil {
 		t.Fatalf("compile decaf377 encode_to_curve circuit: %v", err)
-	}
-}
-
-func TestDecaf377IsqrtZeroAllowsNonSquareBranch(t *testing.T) {
-	assignment := &decaf377IsqrtZeroCircuit{ExpectedWasSquare: 0}
-	if err := test.IsSolved(&decaf377IsqrtZeroCircuit{}, assignment, ecc.BLS12_377.ScalarField()); err != nil {
-		t.Fatalf("expected den=0 isqrt to solve with wasSquare=0: %v", err)
-	}
-}
-
-func TestDecaf377IsqrtZeroRejectsSquareBranch(t *testing.T) {
-	assignment := &decaf377IsqrtZeroCircuit{ExpectedWasSquare: 1}
-	if err := test.IsSolved(&decaf377IsqrtZeroCircuit{}, assignment, ecc.BLS12_377.ScalarField()); err == nil {
-		t.Fatalf("expected den=0 isqrt to reject wasSquare=1")
 	}
 }

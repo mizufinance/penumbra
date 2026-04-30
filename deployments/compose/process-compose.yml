@@ -19,13 +19,13 @@ log_location: deployments/logs/dev-env-combined.log
 processes:
   # Run pd validator based on generated network.
   pd:
-    command: cargo run --release --bin pd -- start --home ${PENUMBRA_DEVNET_HOME}/network_data/node0/pd --cometbft-addr http://127.0.0.1:16657
+    command: cargo run --release --bin pd -- start --home ${PENUMBRA_DEVNET_HOME}/network_data/node0/pd --grpc-bind 0.0.0.0:${PENUMBRA_PD_GRPC_PORT} --cometbft-addr ${PENUMBRA_NODE_CMT_URL}
     readiness_probe:
       http_get:
         host: 127.0.0.1
         scheme: http
         path: "/"
-        port: 8080
+        port: ${PENUMBRA_PD_GRPC_PORT}
       failure_threshold: 2
       initial_delay_seconds: 5
       period_seconds: 5
@@ -38,7 +38,7 @@ processes:
         host: 127.0.0.1
         scheme: http
         path: "/"
-        port: 16657
+        port: ${PENUMBRA_COMETBFT_RPC_PORT}
       failure_threshold: 2
       initial_delay_seconds: 5
       period_seconds: 5

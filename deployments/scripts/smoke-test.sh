@@ -21,6 +21,7 @@ pcli_tx_cmd() {
 # we should make this a temp dir so it can always run regardless of pre-existing state.
 repo_root="$(git rev-parse --show-toplevel)"
 cd "${repo_root}"
+source "${repo_root}/scripts/lib/common.sh"
 smoke_test_dir="$(mktemp -d "${TMPDIR:-/tmp}/penumbra-smoke.XXXXXX")"
 temp_root="${TMPDIR:-/tmp}"
 temp_root="${temp_root%/}"
@@ -125,7 +126,7 @@ max_attempts=120
 attempt=0
 while true; do
     # Query the latest block height via the tendermint RPC
-    height_response=$(curl -s http://127.0.0.1:16657/status 2>&1) || true
+    height_response=$(curl -s "${PENUMBRA_NODE_CMT_URL}/status" 2>&1) || true
     # Extract the block height from the JSON response
     height=$(echo "$height_response" | grep -o '"latest_block_height":"[0-9]*"' | grep -o '[0-9]*' | head -1) || true
 
@@ -154,7 +155,7 @@ sleep 10
 pcli_test_home="${smoke_test_dir}/pcli-test"
 mkdir -p "$pcli_test_home"
 echo "comfort ten front cycle churn burger oak absent rice ice urge result art couple benefit cabbage frequent obscure hurry trick segment cool job debate" | \
-    cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" init --grpc-url "http://127.0.0.1:8080" soft-kms import-phrase
+    cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" init --grpc-url "$PENUMBRA_NODE_PD_URL" soft-kms import-phrase
 
 # --- Compliance smoke test setup ---
 # Use regulated_usd (already allocated in genesis) as the unified regulated token.
@@ -203,8 +204,8 @@ bash "${repo_root}/deployments/scripts/check-reduced-surface.sh"
 # Must match values in run-local-devnet.sh.
 export UNBONDING_DELAY=201
 export PENUMBRA_REDUCED_ACTION_SURFACE=1
-export PENUMBRA_NODE_PD_URL="http://127.0.0.1:8080"
-export PENUMBRA_NODE_CMT_URL="http://127.0.0.1:16657"
+export PENUMBRA_NODE_PD_URL
+export PENUMBRA_NODE_CMT_URL
 
 # Run the integration tests. Using `just` targets so that the exact
 # invocations are easily reusable on the CLI in dev loops.

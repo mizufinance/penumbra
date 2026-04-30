@@ -6,17 +6,20 @@ on:
   workflow_call:
   workflow_dispatch:
 jobs:
-  # Ensure there are no breaking changes to the protocol specs,
-  # by running the "buf lint" action against the changes in this PR.
-  backwards-compatibility:
-    runs-on: ubuntu-latest
+  check:
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout the source code
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
       - uses: bufbuild/buf-setup-action@v1
         with:
           buf_api_token: ${{ secrets.BUF_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Ensure the protocol specs lint cleanly and the buf module lockfile is current.
       - uses: bufbuild/buf-lint-action@v1
         with:
           input: "proto"
@@ -52,22 +55,6 @@ jobs:
       #   with:
       #     input: "proto"
       #     against: "https://github.com/mizufinance/penumbra.git#branch=dev,subdir=proto"
-
-  # Run our bespoke tooling for codegen, consuming the protocol buffer definitions
-  # and emitting generated code. Afterward, there should be no uncommitted changes.
-  build:
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout the source code
-        uses: actions/checkout@v4
-        with:
-          lfs: true
-
-      - uses: bufbuild/buf-setup-action@v1
-        with:
-          buf_api_token: ${{ secrets.BUF_TOKEN }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          # input: 'proto'
 
       - name: Install protobuf compiler
         shell: bash

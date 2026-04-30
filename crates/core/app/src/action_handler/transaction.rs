@@ -281,14 +281,6 @@ struct TxExecutionContext {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
-struct BlockExecutionCache {
-    block_height: u64,
-    block_timestamp: u64,
-    validated_anchor_pairs: BTreeSet<(StateCommitment, StateCommitment)>,
-}
-
-#[derive(Clone, Debug)]
 pub(crate) struct HistoricalCheckContext {
     pub chain_id: String,
     pub block_height: u64,
@@ -342,89 +334,6 @@ impl HistoricalCheckContext {
             committed_nullifier_filter,
         })
     }
-}
-
-const BLOCK_EXECUTION_CACHE_KEY: &str = "penumbra.app.block_execution_cache";
-
-pub(crate) fn clear_block_execution_cache<S: StateWrite>(state: &mut S) {
-    state.object_delete(BLOCK_EXECUTION_CACHE_KEY);
-}
-
-async fn load_block_execution_cache<S: StateWrite>(state: &mut S) -> Result<BlockExecutionCache> {
-    if let Some(cache) = state.object_get(BLOCK_EXECUTION_CACHE_KEY) {
-        return Ok(cache);
-    }
-
-    let block_time = state.get_current_block_timestamp().await?;
-    let block_unix = block_time.unix_timestamp();
-    anyhow::ensure!(block_unix >= 0, "block timestamp is negative");
-
-    let cache = BlockExecutionCache {
-        block_height: state.get_block_height().await?,
-        block_timestamp: block_unix as u64,
-        validated_anchor_pairs: BTreeSet::new(),
-    };
-    state.object_put(BLOCK_EXECUTION_CACHE_KEY, cache.clone());
-    Ok(cache)
-}
-
-#[allow(dead_code)]
-async fn validate_compliance_anchors_with_cache<S: StateWrite>(
-    state: &mut S,
-    user_anchor: &StateCommitment,
-    asset_anchor: &StateCommitment,
-    block_cache: &mut BlockExecutionCache,
-) -> Result<()> {
-    let anchor_pair = (*user_anchor, *asset_anchor);
-    if block_cache.validated_anchor_pairs.contains(&anchor_pair) {
-        return Ok(());
-    }
-
-    let user_anchor_height = state
-        .check_user_anchor(user_anchor)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("invalid user compliance anchor: not found in history"))?;
-    if block_cache.block_height
-        > user_anchor_height + penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS
-    {
-        anyhow::bail!(
-            "user compliance anchor too old: height {} is more than {} blocks behind current height {}",
-            user_anchor_height,
-            penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS,
-            block_cache.block_height
-        );
-    }
-
-    let asset_anchor_height = state
-        .check_asset_anchor(asset_anchor)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("invalid asset compliance anchor: not found in history"))?;
-    if block_cache.block_height
-        > asset_anchor_height + penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS
-    {
-        anyhow::bail!(
-            "asset compliance anchor too old: height {} is more than {} blocks behind current height {}",
-            asset_anchor_height,
-            penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS,
-            block_cache.block_height
-        );
-    }
-
-    block_cache.validated_anchor_pairs.insert(anchor_pair);
-    Ok(())
-}
-
-#[allow(dead_code)]
-async fn check_nullifier_with_context<S>(
-    state: &mut S,
-    nullifier: penumbra_sdk_sct::Nullifier,
-) -> Result<f64>
-where
-    S: StateWrite,
-{
-    let committed_check_start = Instant::now();
-    state.check_nullifier_unspent(nullifier).await?;
-    Ok(committed_check_start.elapsed().as_secs_f64() * 1000.0)
 }
 
 async fn check_nullifier_read_only<S>(
@@ -776,7 +685,6 @@ where
     let effects = TxExecutionEffects::default();
     let tx_id = tx.id();
     let action_spans_enabled = tracing::enabled!(tracing::Level::INFO);
-    let block_cache = load_block_execution_cache(&mut state).await?;
 
     let set_source_start = Instant::now();
     state.put_current_source(Some(tx_id.clone()));
@@ -812,7 +720,6 @@ where
         profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
     }
     profile.action_execute_ms = action_execute_start.elapsed().as_secs_f64() * 1000.0;
-    state.object_put(BLOCK_EXECUTION_CACHE_KEY, block_cache);
 
     if record_clues {
         let record_clues_start = Instant::now();

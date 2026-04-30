@@ -1,6 +1,7 @@
 package compliance
 
 import (
+	decafgnark "github.com/mizufinance/decaf377-go/gnark"
 	"math/big"
 	"testing"
 
@@ -52,7 +53,7 @@ func loadDLEQAssignment(metadata string, isRegulated int) (*dleqVerifyCircuit, e
 		return nil, err
 	}
 	orderBitLen := primitives.MustBigInt(vectors.Decaf377CompanionCurve.Order).BitLen()
-	sPoint, err := primitives.ScalarMulNative(
+	sPoint, err := decafgnark.ScalarMulNative(
 		gnarkte.Point{
 			X: primitives.MustBigInt(vectors.DleqFixture.AckX),
 			Y: primitives.MustBigInt(vectors.DleqFixture.AckY),
@@ -161,10 +162,10 @@ func (c *scalarMulEquivalenceCircuit) Define(api frontend.API) error {
 	p1 := point(c.P1X, c.P1Y)
 	p2 := point(c.P2X, c.P2Y)
 	newResult := curve.DoubleBaseScalarMul(p1, p2, c.S1, c.S2)
-	oldLeft := scalarMulLENaiveForTest(api, curve, p1, c.S1, primitives.Decaf377FieldBits)
-	oldRight := scalarMulLENaiveForTest(api, curve, p2, c.S2, primitives.Decaf377FieldBits)
+	oldLeft := scalarMulLENaiveForTest(api, curve, p1, c.S1, decafgnark.FieldBits)
+	oldRight := scalarMulLENaiveForTest(api, curve, p2, c.S2, decafgnark.FieldBits)
 	oldResult := curve.Add(oldLeft, oldRight)
-	primitives.AssertDecafEquivalent(api, newResult, oldResult)
+	decafgnark.AssertEquivalent(api, newResult, oldResult)
 	return nil
 }
 

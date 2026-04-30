@@ -1,23 +1,6 @@
 name: orbis-integration
 on:
   pull_request:
-    paths:
-      - '.github/workflows/orbis-integration.yml'
-      - 'justfile'
-      - 'compliance-docs/testing.md'
-      - 'crates/bin/orbis-audit/**'
-      - 'crates/bin/orbis-integration/**'
-      - 'crates/bin/pcli/**'
-      - 'crates/bin/pclientd/**'
-      - 'crates/bin/pd/**'
-      - 'crates/core/component/compliance/**'
-      - 'crates/core/component/shielded-pool/**'
-      - 'crates/crypto/proof-params/**'
-      - 'crates/util/orbis-client/**'
-      - 'deployments/orbis/**'
-      - 'scripts/**'
-      - 'testnets/validators-single.json'
-      - 'tools/gnark/**'
   workflow_dispatch:
 
 concurrency:
@@ -25,37 +8,83 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  orbis-integration:
+  paths:
     runs-on: ubuntu-24.04
+    outputs:
+      orbis: ${{ steps.filter.outputs.orbis }}
     steps:
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+      - uses: actions/checkout@v4
         with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
+          lfs: false
 
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            orbis:
+              - '.github/actions/setup-nix-rust/**'
+              - '.github/workflows/orbis-integration.yml'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'compliance-docs/testing.md'
+              - 'crates/bin/orbis-audit/**'
+              - 'crates/bin/orbis-integration/**'
+              - 'crates/bin/pcli/**'
+              - 'crates/bin/pclientd/**'
+              - 'crates/bin/pd/**'
+              - 'crates/core/component/compliance/**'
+              - 'crates/core/component/shielded-pool/**'
+              - 'crates/crypto/proof-params/**'
+              - 'crates/util/orbis-client/**'
+              - 'deployments/orbis/**'
+              - 'flake.lock'
+              - 'flake.nix'
+              - 'justfile'
+              - 'scripts/lib/**'
+              - 'scripts/orbis-*.sh'
+              - 'scripts/penumbra-*.sh'
+              - 'testnets/validators-single.json'
+              - 'tools/gnark/**'
+
+  flow:
+    needs: paths
+    if: github.event_name == 'workflow_dispatch' || needs.paths.outputs.orbis == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    env:
+      COMPLIANCE_TMP: /tmp/orbis-${{ github.run_id }}-${{ github.run_attempt }}
+      PENUMBRA_PD_GRPC_PORT: "28080"
+      PENUMBRA_COMETBFT_RPC_PORT: "27657"
+      PENUMBRA_COMETBFT_P2P_PORT: "27656"
+      PENUMBRA_PCLIENTD_PORT_BASE: "28081"
+      ORBIS_COMPOSE_PROJECT_NAME: orbis-${{ github.run_id }}-${{ github.run_attempt }}
+      ORBIS_SOURCEHUB_RPC_PORT: "36657"
+      ORBIS_SOURCEHUB_P2P_PORT: "36656"
+      ORBIS_SOURCEHUB_REST_PORT: "31317"
+      ORBIS_SOURCEHUB_GRPC_PORT: "49090"
+      ORBIS_SOURCEHUB_RPC: http://127.0.0.1:36657
+      ORBIS_SOURCEHUB_REST: http://127.0.0.1:31317
+      ORBIS_SOURCEHUB_GRPC: http://127.0.0.1:49090
+      ORBIS_NODE1_GRPC_PORT: "35051"
+      ORBIS_NODE2_GRPC_PORT: "35052"
+      ORBIS_NODE3_GRPC_PORT: "35053"
+      ORBIS_NODE1_METRICS_PORT: "39091"
+      ORBIS_NODE2_METRICS_PORT: "39092"
+      ORBIS_NODE3_METRICS_PORT: "39093"
+      ORBIS_NODE1_ENDPOINT: http://127.0.0.1:35051
+      ORBIS_NODE2_ENDPOINT: http://127.0.0.1:35052
+      ORBIS_NODE3_ENDPOINT: http://127.0.0.1:35053
+    steps:
       - name: Checkout Penumbra
         uses: actions/checkout@v4
         with:
           path: penumbra
           lfs: true
 
-      - name: install nix
-        uses: nixbuild/nix-quick-install-action@v28
-
-      - name: setup nix cache
-        uses: nix-community/cache-nix-action@v5
+      - uses: ./penumbra/.github/actions/setup-nix-rust
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('penumbra/**/*.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-
-      - name: Load rust cache
-        uses: Swatinem/rust-cache@v2
+          free-disk: "true"
+          nix-cache-glob: "penumbra/**/*.nix"
+          rust-workspaces: "penumbra"
 
       - name: Run Penumbra Orbis integration flow
         working-directory: penumbra
@@ -65,8 +94,8 @@ jobs:
         if: failure()
         working-directory: penumbra
         run: |
-          mkdir -p tmp
-          ./scripts/orbis-stack.sh logs > tmp/orbis-docker.log || true
+          mkdir -p "$COMPLIANCE_TMP"
+          ./scripts/orbis-stack.sh logs > "$COMPLIANCE_TMP/orbis-docker.log" || true
 
       - name: Upload integration artifacts
         if: failure()
@@ -74,4 +103,30 @@ jobs:
         with:
           name: orbis-integration-artifacts
           path: |
-            penumbra/tmp/**
+            ${{ env.COMPLIANCE_TMP }}/**
+
+  summary:
+    needs: [paths, flow]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check Orbis integration result
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SHOULD_RUN: ${{ needs.paths.outputs.orbis }}
+          PATHS_RESULT: ${{ needs.paths.result }}
+          ORBIS_RESULT: ${{ needs.flow.result }}
+        run: |
+          if [ "$PATHS_RESULT" != "success" ]; then
+            echo "path filtering failed: $PATHS_RESULT"
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$SHOULD_RUN" = "true" ]; then
+            if [ "$ORBIS_RESULT" != "success" ]; then
+              echo "flow did not pass: $ORBIS_RESULT"
+              exit 1
+            fi
+            echo "flow passed"
+          else
+            echo "flow skipped for unrelated changes"
+          fi

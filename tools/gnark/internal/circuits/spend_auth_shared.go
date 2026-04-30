@@ -1,6 +1,7 @@
 package circuits
 
 import (
+	decafgnark "github.com/mizufinance/decaf377-go/gnark"
 	"math/big"
 
 	curves "github.com/consensys/gnark-crypto/ecc/twistededwards"
@@ -40,7 +41,7 @@ func IncomingViewingKey(
 		return nil, err
 	}
 
-	akFq, err := Decaf377CompressToField(api, ak)
+	akFq, err := decafgnark.CompressToField(api, ak)
 	if err != nil {
 		return nil, err
 	}
@@ -62,14 +63,14 @@ func IncomingViewingKey(
 	}
 	api.AssertIsEqual(poly, 0)
 
-	isLess, err := IsLessThanConstant(api, ivkReduced, rModulus)
+	isLess, err := decafgnark.IsLessThanConstant(api, ivkReduced, rModulus)
 	if err != nil {
 		return nil, err
 	}
 	api.AssertIsEqual(isLess, 1)
 
 	qMinus4R := new(big.Int).Sub(ScalarField(), new(big.Int).Mul(big.NewInt(4), rModulus))
-	isLessThanQMinus4R, err := IsLessThanConstant(api, ivkReduced, qMinus4R)
+	isLessThanQMinus4R, err := decafgnark.IsLessThanConstant(api, ivkReduced, qMinus4R)
 	if err != nil {
 		return nil, err
 	}

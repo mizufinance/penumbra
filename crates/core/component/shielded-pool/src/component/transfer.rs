@@ -71,30 +71,6 @@ fn is_source(
 pub struct Ics20Transfer {}
 
 #[async_trait]
-#[allow(dead_code)]
-pub trait Ics20TransferReadExt: StateRead {
-    async fn withdrawal_check(
-        &self,
-        withdrawal: &Ics20Withdrawal,
-        current_block_time: Time,
-    ) -> Result<()> {
-        // create packet
-        let packet: IBCPacket<Unchecked> = withdrawal.clone().into();
-
-        // send packet
-        self.send_packet_check(packet, current_block_time).await?;
-
-        // TODO(compliance-demo): restore regulated asset IBC channel allowlist enforcement.
-        // Temporarily disabled so the bankD local compliance demo can withdraw regulated
-        // assets back over IBC before register-asset exposes allowed channel setup.
-
-        Ok(())
-    }
-}
-
-impl<T: StateRead + ?Sized> Ics20TransferReadExt for T {}
-
-#[async_trait]
 pub trait Ics20TransferExecutionExt: StateWrite {
     async fn withdrawal_check_cached(
         &mut self,

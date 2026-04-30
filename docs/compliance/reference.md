@@ -7,50 +7,47 @@ walkthrough.
 
 ## Ciphertext Wire Formats
 
-### Spend (224 bytes)
+### Transfer Compliance Ciphertext (576 bytes)
+
+Carried on the receiver `TransferOutputBody.compliance_ciphertext` of a
+`Transfer` action. Change outputs and `TransferInputBody.compliance_ciphertext`
+are empty. Layout (`crates/core/component/compliance/src/transfer.rs`):
 
 ```
-[  0.. 32] EPK          r_s × G
-[ 32.. 64] c2_core      ElGamal envelope (core tier seed)
-[ 64..128] Detection    2 Fq: (asset_id + flag<<252), salt
-[128..224] Core         3 Fq: amount + sender address
+[  0.. 32] EPK_sender_core     r × G (sender core tier)
+[ 32.. 64] EPK_sender_ext      r × G (sender extension tier)
+[ 64.. 96] EPK_output_core     r × G (receiver core tier)
+[ 96..128] EPK_output_ext      r × G (receiver extension tier)
+[128..160] c2_sender_core      ElGamal envelope
+[160..192] c2_sender_ext       ElGamal envelope
+[192..224] c2_output_core      ElGamal envelope
+[224..256] c2_output_ext       ElGamal envelope
+[256..320] Detection           2 Fq: (asset_id + flag<<252), salt
+[320..352] Encrypted sender_core    1 Fq: amount
+[352..448] Encrypted sender_ext     3 Fq: receiver address (sender's view)
+[448..480] Encrypted output_core    1 Fq: amount
+[480..576] Encrypted output_ext     3 Fq: sender address (receiver's view)
 ```
 
-1 EPK. Detection shares `r_s` with core (safe: DK vs ACK are unrelated key
-families).
-
-### Output (544 bytes)
-
-```
-[  0.. 32] EPK_1        r_1 × G (detection + receiver core)
-[ 32.. 64] EPK_2        r_2 × G (receiver extension)
-[ 64.. 96] EPK_3        r_3 × G (sender extension)
-[ 96..128] c2_core      ElGamal envelope (core tier seed)
-[128..160] c2_ext       ElGamal envelope (extension tier seed)
-[160..192] c2_sext      ElGamal envelope (spend extension tier seed)
-[192..256] Detection    2 Fq: (asset_id + flag<<252), salt
-[256..352] Core         3 Fq: amount + receiver address
-[352..448] Output Ext   3 Fq: counterparty address
-[448..544] Spend Ext    3 Fq: sender's counterparty info
-```
-
-3 independent EPKs. All counterparty data lives on the Output action (both
-receiver's and sender's perspectives).
+4 independent EPKs — one per tier. The single detection tier (encrypted to
+`DK_pub`) covers the whole bundle. Both perspectives (sender's view of the
+counterparty and receiver's view of the counterparty) are carried, so each
+side's daily extension key reveals only their own counterparty data.
 
 ### IBC Compliance Metadata
 
-When a regulated asset crosses IBC, the planner injects compliance metadata
-into the ICS-20 memo:
+The legacy IBC compliance memo path still exists in
+`crates/core/component/compliance/src/ibc.rs`, but it is not the current
+transfer compliance wire. Current `Transfer` actions require empty input
+compliance bytes and carry the unified transfer compliance ciphertext on the
+receiver output.
 
 ```
 IbcComplianceMetadata {
-    compliance_ciphertext: Vec<u8>,  // Spend ciphertext (224 bytes)
+    compliance_ciphertext: Vec<u8>,
     asset_id: asset::Id,
 }
 ```
-
-Encoded as base64 protobuf in a JSON memo field. The issuer decrypts directly
-with DK — no Merkle proofs needed.
 
 ---
 
@@ -182,17 +179,19 @@ Included in metadata hash M. Prevents brute-force of M even under full
 
 ### Cost
 
-| Proof | Additional constraints | Additional public outputs |
-|-------|----------------------|--------------------------|
-| Spend | ~4,050 | +2 Fq (c, s) = 64 bytes |
-| Output | ~11,350 | +6 Fq (c1, s1, c2, s2, c3, s3) = 192 bytes |
+| Proof | Additional public outputs |
+|-------|--------------------------|
+| Transfer | +8 Fq (4 × (c, s)) = 256 bytes (`TRANSFER_DLEQ_BYTES`) |
+| IBC memo (out-of-circuit) | None — DK-only detection tier |
 
 ---
 
 ## Restrictions
 
-**Flagging is per-note**: Flag triggers when the spent note's value >= threshold,
-even if the actual transfer amount is small. The change output inherits the flag.
+**Flagging is per-transfer**: A single `is_flagged = (receiver_amount >= threshold)`
+is computed once per `Transfer` and applied to the unified compliance bundle on
+the receiver output. The flag is based on the actual transfer (receiver) amount,
+not on the value of the spent input notes.
 
 **No send/receive distinction**: Issuers see the same data for both sides.
 
@@ -227,8 +226,10 @@ object metadata plus request scope, and the PRE request must carry a
 | Data structures | `compliance/src/structs.rs` |
 | Registry / trees | `compliance/src/registry.rs`, `tree.rs`, `indexed_tree.rs` |
 | Statement hash helpers | `shielded-pool/src/public_input_hash.rs` |
-| Spend proof | `shielded-pool/src/spend/proof.rs`, `plan.rs`, `action.rs` |
-| Output proof | `shielded-pool/src/output/proof.rs`, `plan.rs`, `action.rs` |
+| Transfer action | `shielded-pool/src/transfer/action.rs`, `plan.rs`, `proof.rs`, `compliance.rs` |
+| Split / Consolidate actions | `shielded-pool/src/split/`, `shielded-pool/src/consolidate/` (no compliance bytes) |
+| Transfer ciphertext / DLEQ | `compliance/src/transfer.rs`, `structs.rs` |
+| Proof aggregation (`AggregateBundle`) | `crates/core/component/proof-aggregation/` |
 | View service | `crates/view/src/service.rs` |
 | Compliance client | `crates/view/src/client_compliance.rs` |
 | Local storage | `view/src/storage/compliance.rs` |

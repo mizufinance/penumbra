@@ -60,17 +60,23 @@ fi
 
 if [ "$check_ports_free" -eq 1 ]; then
     ensure_ports_available \
-        8080 \
-        16656 \
-        16657 \
-        18081 \
-        18082 \
-        18083 \
-        18084 \
-        26657 \
-        50051 \
-        50052 \
-        50053
+        "$PENUMBRA_PD_GRPC_PORT" \
+        "$PENUMBRA_COMETBFT_P2P_PORT" \
+        "$PENUMBRA_COMETBFT_RPC_PORT" \
+        "$PENUMBRA_PCLIENTD_PORT_BASE" \
+        "$((PENUMBRA_PCLIENTD_PORT_BASE + 1))" \
+        "$((PENUMBRA_PCLIENTD_PORT_BASE + 2))" \
+        "$((PENUMBRA_PCLIENTD_PORT_BASE + 3))" \
+        "${ORBIS_SOURCEHUB_RPC_PORT:-26657}" \
+        "${ORBIS_SOURCEHUB_P2P_PORT:-26656}" \
+        "${ORBIS_SOURCEHUB_REST_PORT:-1317}" \
+        "${ORBIS_SOURCEHUB_GRPC_PORT:-9090}" \
+        "${ORBIS_NODE1_GRPC_PORT:-50051}" \
+        "${ORBIS_NODE2_GRPC_PORT:-50052}" \
+        "${ORBIS_NODE3_GRPC_PORT:-50053}" \
+        "${ORBIS_NODE1_METRICS_PORT:-9091}" \
+        "${ORBIS_NODE2_METRICS_PORT:-9092}" \
+        "${ORBIS_NODE3_METRICS_PORT:-9093}"
     log_success "Required TCP ports are available"
 fi
 

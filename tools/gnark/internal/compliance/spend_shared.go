@@ -4,6 +4,7 @@ import (
 	curves "github.com/consensys/gnark-crypto/ecc/twistededwards"
 	"github.com/consensys/gnark/frontend"
 	gnarkte "github.com/consensys/gnark/std/algebra/native/twistededwards"
+	decafgnark "github.com/mizufinance/decaf377-go/gnark"
 	"github.com/mizufinance/penumbra/tools/gnark/internal/primitives"
 )
 
@@ -31,7 +32,7 @@ func DeriveSharedSecretsSpend(
 	nBits := primitives.MustBigInt(vectors.Decaf377CompanionCurve.Order).BitLen()
 
 	computedEPK := ScalarMulLE(api, curve, generator, esk, nBits)
-	primitives.AssertDecafEquivalent(api, computedEPK, publishedEPK)
+	decafgnark.AssertEquivalent(api, computedEPK, publishedEPK)
 
 	ssCoreUser := ScalarMulLE(api, curve, ackCore, esk, nBits)
 	ssIssuer := ScalarMulLE(api, curve, dkPub, esk, nBits)

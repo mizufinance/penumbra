@@ -16,18 +16,7 @@ jobs:
         with:
           lfs: true
 
-      - name: install nix
-        uses: nixbuild/nix-quick-install-action@v28
-
-      - name: setup nix cache
-        uses: nix-community/cache-nix-action@v5
-        with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-
-      # Loading cache takes ~15s, but saves us minutes of build.
-      - name: Load rust cache
-        uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-nix-rust
 
       # Building with warm cache takes ~40s, depending on changes.
       - name: Build rustdocs

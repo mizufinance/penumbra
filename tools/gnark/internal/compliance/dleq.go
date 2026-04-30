@@ -3,6 +3,7 @@ package compliance
 import (
 	"errors"
 	"fmt"
+	decafgnark "github.com/mizufinance/decaf377-go/gnark"
 	"math/big"
 
 	curves "github.com/consensys/gnark-crypto/ecc/twistededwards"
@@ -105,23 +106,23 @@ func VerifyDLEQ(
 
 	rpRec := curve.DoubleBaseScalarMul(ack, curve.Neg(sPoint), publishedS, publishedC)
 
-	ackFq, err := primitives.Decaf377CompressToField(api, ack)
+	ackFq, err := decafgnark.CompressToField(api, ack)
 	if err != nil {
 		return err
 	}
-	epkFq, err := primitives.Decaf377CompressToField(api, epk)
+	epkFq, err := decafgnark.CompressToField(api, epk)
 	if err != nil {
 		return err
 	}
-	sFq, err := primitives.Decaf377CompressToField(api, sPoint)
+	sFq, err := decafgnark.CompressToField(api, sPoint)
 	if err != nil {
 		return err
 	}
-	rFq, err := primitives.Decaf377CompressToField(api, rRec)
+	rFq, err := decafgnark.CompressToField(api, rRec)
 	if err != nil {
 		return err
 	}
-	rpFq, err := primitives.Decaf377CompressToField(api, rpRec)
+	rpFq, err := decafgnark.CompressToField(api, rpRec)
 	if err != nil {
 		return err
 	}
@@ -143,12 +144,12 @@ func VerifyDLEQ(
 	if keepBits <= 0 {
 		return errors.New("invalid DLEQ challenge bit length")
 	}
-	if keepBits > primitives.Decaf377FieldBits {
-		return fmt.Errorf("invalid DLEQ challenge bit length %d for field bit length %d", keepBits, primitives.Decaf377FieldBits)
+	if keepBits > decafgnark.FieldBits {
+		return fmt.Errorf("invalid DLEQ challenge bit length %d for field bit length %d", keepBits, decafgnark.FieldBits)
 	}
 
-	cBits := api.ToBinary(publishedC, primitives.Decaf377FieldBits)
-	computedBits := api.ToBinary(challenge, primitives.Decaf377FieldBits)
+	cBits := api.ToBinary(publishedC, decafgnark.FieldBits)
+	computedBits := api.ToBinary(challenge, decafgnark.FieldBits)
 
 	for _, bit := range cBits[keepBits:] {
 		api.AssertIsEqual(api.Mul(bit, isRegulated), 0)

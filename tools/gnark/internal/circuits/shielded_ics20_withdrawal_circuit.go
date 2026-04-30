@@ -2,6 +2,7 @@ package circuits
 
 import (
 	"fmt"
+	decafgnark "github.com/mizufinance/decaf377-go/gnark"
 	"math/big"
 
 	curves "github.com/consensys/gnark-crypto/ecc/twistededwards"
@@ -87,8 +88,8 @@ func (c *ShieldedIcs20WithdrawalCircuit) Define(api frontend.API) error {
 	if err != nil {
 		return err
 	}
-	AssertDecafEquivalent(api, balanceCommitmentPoint, shared.claimedBalanceCommitment)
-	balanceCommitmentFq, err := Decaf377CompressToField(api, balanceCommitmentPoint)
+	decafgnark.AssertEquivalent(api, balanceCommitmentPoint, shared.claimedBalanceCommitment)
+	balanceCommitmentFq, err := decafgnark.CompressToField(api, balanceCommitmentPoint)
 	if err != nil {
 		return err
 	}
@@ -148,11 +149,11 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifySharedContext(
 		sharedAssetID:      c.Spends[0].Note.AssetID,
 	}
 
-	senderDivGenFq, err := Decaf377CompressToField(api, shared.senderDivGen)
+	senderDivGenFq, err := decafgnark.CompressToField(api, shared.senderDivGen)
 	if err != nil {
 		return shieldedIcs20WithdrawalSharedContext{}, err
 	}
-	senderTransmissionFq, err := Decaf377CompressToField(api, shared.senderTransmission)
+	senderTransmissionFq, err := decafgnark.CompressToField(api, shared.senderTransmission)
 	if err != nil {
 		return shieldedIcs20WithdrawalSharedContext{}, err
 	}
@@ -246,7 +247,7 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifySpend(
 	api.AssertIsBoolean(spend.IsDummy)
 	isNotDummy := api.Sub(1, spend.IsDummy)
 
-	spentDivGenFq, err := Decaf377CompressToField(api, spentDivGen)
+	spentDivGenFq, err := decafgnark.CompressToField(api, spentDivGen)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -304,8 +305,8 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifySpend(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	AssertDecafEquivalentIf(api, computedRK, rkClaimed, isNotDummy)
-	AssertDecafEquivalentIf(api, dummyRK, rkClaimed, spend.IsDummy)
+	decafgnark.AssertEquivalentIf(api, computedRK, rkClaimed, isNotDummy)
+	decafgnark.AssertEquivalentIf(api, dummyRK, rkClaimed, spend.IsDummy)
 
 	computedTransmission, err := DiversifiedTransmissionKey(
 		api,
@@ -318,15 +319,15 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifySpend(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	AssertDecafEquivalentIf(api, computedTransmission, spentTransmission, isNotDummy)
+	decafgnark.AssertEquivalentIf(api, computedTransmission, spentTransmission, isNotDummy)
 	AssertEqualIf(api, spend.Note.Amount, 0, spend.IsDummy)
 
 	api.AssertIsEqual(spend.Note.AssetID, shared.sharedAssetID)
 	api.AssertIsEqual(c.Sender.AssetID, spend.Note.AssetID)
-	AssertDecafEquivalentIf(api, shared.senderDivGen, spentDivGen, 1)
-	AssertDecafEquivalentIf(api, shared.senderTransmission, spentTransmission, 1)
+	decafgnark.AssertEquivalentIf(api, shared.senderDivGen, spentDivGen, 1)
+	decafgnark.AssertEquivalentIf(api, shared.senderTransmission, spentTransmission, 1)
 
-	rkFq, err := Decaf377CompressToField(api, rkClaimed)
+	rkFq, err := decafgnark.CompressToField(api, rkClaimed)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -341,7 +342,7 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifyChangeOutput(
 	createdDivGen := gnarkte.Point{X: output.Note.DivGen.X, Y: output.Note.DivGen.Y}
 	createdTransmission := gnarkte.Point{X: output.Note.Transmission.X, Y: output.Note.Transmission.Y}
 
-	createdDivGenFq, err := Decaf377CompressToField(api, createdDivGen)
+	createdDivGenFq, err := decafgnark.CompressToField(api, createdDivGen)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -370,10 +371,10 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifyChangeOutput(
 	if err != nil {
 		return nil, nil, err
 	}
-	AssertDecafEquivalentIf(api, computedTransmission, createdTransmission, 1)
+	decafgnark.AssertEquivalentIf(api, computedTransmission, createdTransmission, 1)
 	api.AssertIsEqual(output.Note.AssetID, shared.sharedAssetID)
-	AssertDecafEquivalentIf(api, createdDivGen, shared.senderDivGen, 1)
-	AssertDecafEquivalentIf(api, createdTransmission, shared.senderTransmission, 1)
+	decafgnark.AssertEquivalentIf(api, createdDivGen, shared.senderDivGen, 1)
+	decafgnark.AssertEquivalentIf(api, createdTransmission, shared.senderTransmission, 1)
 
 	return output.Note.Amount, output.NoteCommitment, nil
 }

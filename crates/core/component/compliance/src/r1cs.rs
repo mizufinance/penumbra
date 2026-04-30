@@ -1059,10 +1059,7 @@ pub fn verify_dleq_r1cs(
     Ok(())
 }
 
-/// Simplified threshold flag verification for spend circuit.
-///
-/// Unlike `verify_threshold_flag` (used by outputs), this version has NO self-transfer check.
-/// The spend no longer knows the counterparty, so it always flags if `amount >= threshold`.
+/// Threshold flag verification: enforces `is_flagged == (amount >= threshold)`.
 pub fn verify_threshold_flag_simple(
     _cs: ConstraintSystemRef<Fq>,
     amount: &FqVar,
@@ -1075,7 +1072,7 @@ pub fn verify_threshold_flag_simple(
     Ok(())
 }
 
-/// Derive shared secrets for spend circuit.
+/// Derive shared secrets for the single-EPK reduced ciphertext (detection + core).
 ///
 /// Single r_s: EPK = r_s × G. Detection: r_s × dk_pub. Core: r_s × ack_core (or dk_pub if flagged).
 /// Returns `(ss_detection, ss_core, r_s_bits)`.
@@ -1100,7 +1097,7 @@ pub fn derive_shared_secrets_spend(
     Ok((ss_detection, ss_core, r_s_bits))
 }
 
-/// Derive shared secrets for output circuit with 3 independent ephemeral scalars.
+/// Derive shared secrets for the multi-tier ciphertext with 3 independent ephemeral scalars.
 ///
 /// r_1 → detection + core, r_2 → ext, r_3 → sext. All EPKs on G.
 /// Core/ext use `ack_receiver`, sext uses `ack_sender` for counterparty disclosure.
@@ -1163,7 +1160,7 @@ pub fn derive_shared_secrets_output(
     ))
 }
 
-/// Verify Poseidon encryption for spend circuit (detection + core only).
+/// Verify Poseidon encryption for the reduced ciphertext (detection + core only).
 ///
 /// Expected ciphertext layout: [detection: 2] [core: 3] = 5 Fq elements.
 /// Detection slot 0: asset_id+flag. Detection slot 1: salt.

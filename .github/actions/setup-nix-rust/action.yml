@@ -1,0 +1,59 @@
+name: Setup Nix and Rust cache
+description: Shared CI setup for jobs that run Rust commands through the Nix dev shell.
+inputs:
+  free-disk:
+    description: Run disk cleanup before installing Nix.
+    required: false
+    default: "false"
+  nix-cache-glob:
+    description: Glob used to key the Nix cache.
+    required: false
+    default: "**/*.nix"
+  rust-cache:
+    description: Enable Rust target/cache restoration.
+    required: false
+    default: "true"
+  rust-cache-prefix:
+    description: Optional Swatinem/rust-cache prefix-key.
+    required: false
+    default: ""
+  rust-workspaces:
+    description: Workspace paths for Swatinem/rust-cache.
+    required: false
+    default: "."
+runs:
+  using: composite
+  steps:
+    - name: Free disk space
+      if: inputs.free-disk == 'true'
+      uses: jlumbroso/free-disk-space@main
+      with:
+        tool-cache: true
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        docker-images: true
+        swap-storage: true
+
+    - name: install nix
+      uses: nixbuild/nix-quick-install-action@v28
+
+    - name: setup nix cache
+      uses: nix-community/cache-nix-action@v5
+      with:
+        primary-key: nix-${{ runner.os }}-${{ hashFiles(inputs.nix-cache-glob) }}
+        restore-prefixes-first-match: nix-${{ runner.os }}-
+
+    - name: Load rust cache
+      if: inputs.rust-cache == 'true' && inputs.rust-cache-prefix == ''
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: ${{ inputs.rust-workspaces }}
+
+    - name: Load rust cache
+      if: inputs.rust-cache == 'true' && inputs.rust-cache-prefix != ''
+      uses: Swatinem/rust-cache@v2
+      with:
+        prefix-key: ${{ inputs.rust-cache-prefix }}
+        workspaces: ${{ inputs.rust-workspaces }}

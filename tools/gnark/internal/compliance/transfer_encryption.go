@@ -1,6 +1,7 @@
 package compliance
 
 import (
+	decafgnark "github.com/mizufinance/decaf377-go/gnark"
 	"math/big"
 
 	"github.com/consensys/gnark/frontend"
@@ -62,7 +63,7 @@ func VerifyPoseidonEncryptionTransferDetection(
 	if err != nil {
 		return err
 	}
-	ssDetectionFq, err := primitives.Decaf377CompressToField(api, ssDetection)
+	ssDetectionFq, err := decafgnark.CompressToField(api, ssDetection)
 	if err != nil {
 		return err
 	}
@@ -100,7 +101,7 @@ func VerifyPoseidonEncryptionTransferAmount(
 ) error {
 	api.AssertIsBoolean(isRegulated)
 
-	sharedSecretFq, err := primitives.Decaf377CompressToField(api, sharedSecret)
+	sharedSecretFq, err := decafgnark.CompressToField(api, sharedSecret)
 	if err != nil {
 		return err
 	}
@@ -124,7 +125,7 @@ func VerifyPoseidonEncryptionTransferAddress(
 ) error {
 	api.AssertIsBoolean(isRegulated)
 
-	sharedSecretFq, err := primitives.Decaf377CompressToField(api, sharedSecret)
+	sharedSecretFq, err := decafgnark.CompressToField(api, sharedSecret)
 	if err != nil {
 		return err
 	}

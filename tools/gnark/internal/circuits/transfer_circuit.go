@@ -2,6 +2,7 @@ package circuits
 
 import (
 	"fmt"
+	decafgnark "github.com/mizufinance/decaf377-go/gnark"
 	"math/big"
 
 	curves "github.com/consensys/gnark-crypto/ecc/twistededwards"
@@ -177,7 +178,7 @@ func computeTransferNetBalanceCommitment(
 	if err != nil {
 		return gnarkte.Point{}, err
 	}
-	valueGenerator, err := Decaf377EncodeToCurve(api, hashedAssetID)
+	valueGenerator, err := decafgnark.EncodeToCurve(api, hashedAssetID)
 	if err != nil {
 		return gnarkte.Point{}, err
 	}
@@ -232,11 +233,11 @@ func (c *TransferCircuit) verifySharedTransferContext(api frontend.API) (transfe
 	shared.effectiveRingPK = SelectPoint(api, c.IsRegulated, shared.indexedLeaf.RingPK, unregulatedRingPK)
 	shared.effectiveDKPub = SelectPoint(api, c.IsRegulated, shared.indexedLeaf.DKPub, unregulatedDKPub)
 
-	shared.senderDivGenFq, err = Decaf377CompressToField(api, shared.senderDivGen)
+	shared.senderDivGenFq, err = decafgnark.CompressToField(api, shared.senderDivGen)
 	if err != nil {
 		return transferSharedContext{}, err
 	}
-	shared.senderTransmissionFq, err = Decaf377CompressToField(api, shared.senderTransmission)
+	shared.senderTransmissionFq, err = decafgnark.CompressToField(api, shared.senderTransmission)
 	if err != nil {
 		return transferSharedContext{}, err
 	}
@@ -350,7 +351,7 @@ func (c *TransferCircuit) verifyTransferSpend(
 	api.AssertIsBoolean(spend.IsDummy)
 	isNotDummy := api.Sub(1, spend.IsDummy)
 
-	spentDivGenFq, err := Decaf377CompressToField(api, spentDivGen)
+	spentDivGenFq, err := decafgnark.CompressToField(api, spentDivGen)
 	if err != nil {
 		return err
 	}
@@ -401,8 +402,8 @@ func (c *TransferCircuit) verifyTransferSpend(
 	if err != nil {
 		return err
 	}
-	AssertDecafEquivalentIf(api, computedRK, rkClaimed, isNotDummy)
-	AssertDecafEquivalentIf(api, dummyRK, rkClaimed, spend.IsDummy)
+	decafgnark.AssertEquivalentIf(api, computedRK, rkClaimed, isNotDummy)
+	decafgnark.AssertEquivalentIf(api, dummyRK, rkClaimed, spend.IsDummy)
 
 	computedSpentTransmission, err := DiversifiedTransmissionKey(
 		api,
@@ -415,17 +416,17 @@ func (c *TransferCircuit) verifyTransferSpend(
 	if err != nil {
 		return err
 	}
-	AssertDecafEquivalentIf(api, computedSpentTransmission, spentTransmission, isNotDummy)
+	decafgnark.AssertEquivalentIf(api, computedSpentTransmission, spentTransmission, isNotDummy)
 	AssertEqualIf(api, spend.Note.Amount, 0, spend.IsDummy)
 
 	api.AssertIsEqual(spend.Note.AssetID, shared.sharedAssetID)
 	api.AssertIsEqual(c.Sender.AssetID, spend.Note.AssetID)
-	AssertDecafEquivalentIf(api, shared.senderDivGen, spentDivGen, 1)
-	AssertDecafEquivalentIf(api, shared.senderTransmission, spentTransmission, 1)
+	decafgnark.AssertEquivalentIf(api, shared.senderDivGen, spentDivGen, 1)
+	decafgnark.AssertEquivalentIf(api, shared.senderTransmission, spentTransmission, 1)
 
 	statementData.inputAmounts = append(statementData.inputAmounts, spend.Note.Amount)
 	statementData.nullifiersAndRKs = append(statementData.nullifiersAndRKs, spend.Nullifier)
-	rkFq, err := Decaf377CompressToField(api, rkClaimed)
+	rkFq, err := decafgnark.CompressToField(api, rkClaimed)
 	if err != nil {
 		return err
 	}
@@ -452,11 +453,11 @@ func (c *TransferCircuit) verifyTransferOutput(
 	api.AssertIsEqual(output.IsReceiver, expectedReceiver)
 	isDummy := api.IsZero(output.Note.Amount)
 
-	createdDivGenFq, err := Decaf377CompressToField(api, createdDivGen)
+	createdDivGenFq, err := decafgnark.CompressToField(api, createdDivGen)
 	if err != nil {
 		return err
 	}
-	createdTransmissionFq, err := Decaf377CompressToField(api, createdTransmission)
+	createdTransmissionFq, err := decafgnark.CompressToField(api, createdTransmission)
 	if err != nil {
 		return err
 	}
@@ -477,8 +478,8 @@ func (c *TransferCircuit) verifyTransferOutput(
 
 	api.AssertIsEqual(output.Note.AssetID, shared.sharedAssetID)
 	api.AssertIsEqual(output.Recipient.AssetID, output.Note.AssetID)
-	AssertDecafEquivalentIf(api, recipientDivGen, createdDivGen, 1)
-	AssertDecafEquivalentIf(api, recipientTransmission, createdTransmission, 1)
+	decafgnark.AssertEquivalentIf(api, recipientDivGen, createdDivGen, 1)
+	decafgnark.AssertEquivalentIf(api, recipientTransmission, createdTransmission, 1)
 
 	recipientLeafCommitment, err := ComplianceLeafCommitmentFromCompressed(
 		api,
@@ -514,8 +515,8 @@ func (c *TransferCircuit) verifyTransferOutput(
 
 	api.AssertIsEqual(output.Recipient.AssetID, c.Sender.AssetID)
 	api.AssertIsEqual(output.Recipient.D, c.Sender.D)
-	AssertDecafEquivalentIf(api, recipientDivGen, shared.senderDivGen, 1)
-	AssertDecafEquivalentIf(api, recipientTransmission, shared.senderTransmission, 1)
+	decafgnark.AssertEquivalentIf(api, recipientDivGen, shared.senderDivGen, 1)
+	decafgnark.AssertEquivalentIf(api, recipientTransmission, shared.senderTransmission, 1)
 	return nil
 }
 
@@ -531,19 +532,19 @@ func (c *TransferCircuit) verifyTransferComplianceCiphertexts(
 	outputCoreEPK := gnarkte.Point{X: c.Compliance.OutputCore.Epk.X, Y: c.Compliance.OutputCore.Epk.Y}
 	outputExtEPK := gnarkte.Point{X: c.Compliance.OutputExt.Epk.X, Y: c.Compliance.OutputExt.Epk.Y}
 
-	senderCoreEPKFq, err := Decaf377CompressToField(api, senderCoreEPK)
+	senderCoreEPKFq, err := decafgnark.CompressToField(api, senderCoreEPK)
 	if err != nil {
 		return err
 	}
-	senderExtEPKFq, err := Decaf377CompressToField(api, senderExtEPK)
+	senderExtEPKFq, err := decafgnark.CompressToField(api, senderExtEPK)
 	if err != nil {
 		return err
 	}
-	outputCoreEPKFq, err := Decaf377CompressToField(api, outputCoreEPK)
+	outputCoreEPKFq, err := decafgnark.CompressToField(api, outputCoreEPK)
 	if err != nil {
 		return err
 	}
-	outputExtEPKFq, err := Decaf377CompressToField(api, outputExtEPK)
+	outputExtEPKFq, err := decafgnark.CompressToField(api, outputExtEPK)
 	if err != nil {
 		return err
 	}
@@ -667,14 +668,14 @@ func (c *TransferCircuit) verifyTransferComplianceCiphertexts(
 		return err
 	}
 
-	AssertDecafEquivalent(api, gnarkte.Point{X: c.Compliance.SenderCore.Epk.X, Y: c.Compliance.SenderCore.Epk.Y}, gnarkte.Point{X: c.Compliance.SenderCore.Proof.EncCmt.X, Y: c.Compliance.SenderCore.Proof.EncCmt.Y})
-	AssertDecafEquivalent(api, gnarkte.Point{X: c.Compliance.SenderExt.Epk.X, Y: c.Compliance.SenderExt.Epk.Y}, gnarkte.Point{X: c.Compliance.SenderExt.Proof.EncCmt.X, Y: c.Compliance.SenderExt.Proof.EncCmt.Y})
-	AssertDecafEquivalent(api, gnarkte.Point{X: c.Compliance.OutputCore.Epk.X, Y: c.Compliance.OutputCore.Epk.Y}, gnarkte.Point{X: c.Compliance.OutputCore.Proof.EncCmt.X, Y: c.Compliance.OutputCore.Proof.EncCmt.Y})
-	AssertDecafEquivalent(api, gnarkte.Point{X: c.Compliance.OutputExt.Epk.X, Y: c.Compliance.OutputExt.Epk.Y}, gnarkte.Point{X: c.Compliance.OutputExt.Proof.EncCmt.X, Y: c.Compliance.OutputExt.Proof.EncCmt.Y})
-	AssertDecafEquivalent(api, shared.senderAck, gnarkte.Point{X: c.Compliance.SenderCore.Proof.DerivedPK.X, Y: c.Compliance.SenderCore.Proof.DerivedPK.Y})
-	AssertDecafEquivalent(api, shared.senderAck, gnarkte.Point{X: c.Compliance.SenderExt.Proof.DerivedPK.X, Y: c.Compliance.SenderExt.Proof.DerivedPK.Y})
-	AssertDecafEquivalent(api, statementData.receiverAck, gnarkte.Point{X: c.Compliance.OutputCore.Proof.DerivedPK.X, Y: c.Compliance.OutputCore.Proof.DerivedPK.Y})
-	AssertDecafEquivalent(api, statementData.receiverAck, gnarkte.Point{X: c.Compliance.OutputExt.Proof.DerivedPK.X, Y: c.Compliance.OutputExt.Proof.DerivedPK.Y})
+	decafgnark.AssertEquivalent(api, gnarkte.Point{X: c.Compliance.SenderCore.Epk.X, Y: c.Compliance.SenderCore.Epk.Y}, gnarkte.Point{X: c.Compliance.SenderCore.Proof.EncCmt.X, Y: c.Compliance.SenderCore.Proof.EncCmt.Y})
+	decafgnark.AssertEquivalent(api, gnarkte.Point{X: c.Compliance.SenderExt.Epk.X, Y: c.Compliance.SenderExt.Epk.Y}, gnarkte.Point{X: c.Compliance.SenderExt.Proof.EncCmt.X, Y: c.Compliance.SenderExt.Proof.EncCmt.Y})
+	decafgnark.AssertEquivalent(api, gnarkte.Point{X: c.Compliance.OutputCore.Epk.X, Y: c.Compliance.OutputCore.Epk.Y}, gnarkte.Point{X: c.Compliance.OutputCore.Proof.EncCmt.X, Y: c.Compliance.OutputCore.Proof.EncCmt.Y})
+	decafgnark.AssertEquivalent(api, gnarkte.Point{X: c.Compliance.OutputExt.Epk.X, Y: c.Compliance.OutputExt.Epk.Y}, gnarkte.Point{X: c.Compliance.OutputExt.Proof.EncCmt.X, Y: c.Compliance.OutputExt.Proof.EncCmt.Y})
+	decafgnark.AssertEquivalent(api, shared.senderAck, gnarkte.Point{X: c.Compliance.SenderCore.Proof.DerivedPK.X, Y: c.Compliance.SenderCore.Proof.DerivedPK.Y})
+	decafgnark.AssertEquivalent(api, shared.senderAck, gnarkte.Point{X: c.Compliance.SenderExt.Proof.DerivedPK.X, Y: c.Compliance.SenderExt.Proof.DerivedPK.Y})
+	decafgnark.AssertEquivalent(api, statementData.receiverAck, gnarkte.Point{X: c.Compliance.OutputCore.Proof.DerivedPK.X, Y: c.Compliance.OutputCore.Proof.DerivedPK.Y})
+	decafgnark.AssertEquivalent(api, statementData.receiverAck, gnarkte.Point{X: c.Compliance.OutputExt.Proof.DerivedPK.X, Y: c.Compliance.OutputExt.Proof.DerivedPK.Y})
 
 	verifyProofStatement := func(
 		proof TransferComplianceProofFields,
@@ -809,9 +810,9 @@ func (c *TransferCircuit) assertTransferNetBalanceCommitment(
 	if err != nil {
 		return nil, err
 	}
-	AssertDecafEquivalent(api, netBalanceCommitment, shared.claimedBalanceCommitment)
+	decafgnark.AssertEquivalent(api, netBalanceCommitment, shared.claimedBalanceCommitment)
 
-	balanceCommitmentFq, err := Decaf377CompressToField(api, netBalanceCommitment)
+	balanceCommitmentFq, err := decafgnark.CompressToField(api, netBalanceCommitment)
 	if err != nil {
 		return nil, err
 	}
@@ -840,21 +841,21 @@ func (c *TransferCircuit) buildTransferStatementFields(
 		fields = append(fields, tier.Ciphertext[:]...)
 	}
 	appendProofTier := func(proof TransferComplianceProofFields) error {
-		derivedPKFq, err := Decaf377CompressToField(
+		derivedPKFq, err := decafgnark.CompressToField(
 			api,
 			gnarkte.Point{X: proof.DerivedPK.X, Y: proof.DerivedPK.Y},
 		)
 		if err != nil {
 			return err
 		}
-		encCmtFq, err := Decaf377CompressToField(
+		encCmtFq, err := decafgnark.CompressToField(
 			api,
 			gnarkte.Point{X: proof.EncCmt.X, Y: proof.EncCmt.Y},
 		)
 		if err != nil {
 			return err
 		}
-		sharedPointFq, err := Decaf377CompressToField(
+		sharedPointFq, err := decafgnark.CompressToField(
 			api,
 			gnarkte.Point{X: proof.SharedPoint.X, Y: proof.SharedPoint.Y},
 		)

@@ -78,7 +78,7 @@ use tokio::time::sleep;
 use tracing::{instrument, Instrument};
 
 use crate::action_handler::transaction::{
-    check_and_execute_profiled, check_historical_with_context, clear_block_execution_cache,
+    check_and_execute_profiled, check_historical_with_context,
     prepare_candidate_read_blocking_profiled, prepare_candidate_read_profiled,
     supports_parallel_prepare, HistoricalCheckContext, PreparedCandidateRead,
 };
@@ -768,10 +768,6 @@ impl ArtifactBuildBreakdown {
 
 #[derive(Clone, Debug)]
 pub struct CheckTxSharedContext {
-    #[allow(dead_code)]
-    pub(crate) snapshot_version: jmt::Version,
-    #[allow(dead_code)]
-    pub(crate) block_height: u64,
     pub(crate) sct_base_position: penumbra_sdk_tct::Position,
     pub(crate) base_gas_prices: GasPrices,
     pub(crate) historical_check_context: Arc<HistoricalCheckContext>,
@@ -779,18 +775,6 @@ pub struct CheckTxSharedContext {
 
 impl CheckTxSharedContext {
     pub async fn load(snapshot: &Snapshot) -> Result<Self> {
-        let snapshot_version = snapshot.version();
-        let block_height = match snapshot.get_block_height().await {
-            Ok(block_height) => block_height,
-            Err(error) if error.to_string().contains("Missing block_height") => {
-                tracing::debug!(
-                    ?snapshot_version,
-                    "CheckTxSharedContext::load defaulting missing block_height to genesis height 0"
-                );
-                0
-            }
-            Err(error) => return Err(error),
-        };
         let sct_base_position = snapshot
             .get_sct()
             .await
@@ -801,8 +785,6 @@ impl CheckTxSharedContext {
             Arc::new(HistoricalCheckContext::load_for_checktx(snapshot).await?);
 
         Ok(Self {
-            snapshot_version,
-            block_height,
             sct_base_position,
             base_gas_prices,
             historical_check_context,
@@ -1420,20 +1402,6 @@ impl App {
         }
     }
 
-    #[allow(dead_code)]
-    fn handle_aggregate_verification_result(
-        context: &'static str,
-        result: Result<()>,
-    ) -> Result<()> {
-        match result {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                tracing::debug!(?error, context, "aggregate verification failed");
-                Err(error)
-            }
-        }
-    }
-
     async fn collect_consensus_proof_items_with_artifacts(
         txs: &[Arc<Transaction>],
     ) -> Result<(
@@ -1703,17 +1671,6 @@ impl App {
         Ok((artifacts, profile))
     }
 
-    async fn build_tx_artifact_profiled(
-        tx: Arc<Transaction>,
-    ) -> Result<(Arc<TxArtifact>, ArtifactBuildBreakdown)> {
-        let (mut artifacts, profile) =
-            Self::build_tx_artifacts_profiled(std::slice::from_ref(&tx)).await?;
-        artifacts
-            .pop()
-            .context("single transaction artifact missing")
-            .map(|artifact| (artifact, profile))
-    }
-
     async fn build_tx_artifact_extracted_profiled(
         tx: Arc<Transaction>,
     ) -> Result<(Arc<TxArtifact>, ArtifactBuildBreakdown)> {
@@ -1735,15 +1692,6 @@ impl App {
         result
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn build_tx_artifacts_for_stage_public(
-        stage: &'static str,
-        txs: &[Arc<Transaction>],
-    ) -> Result<Vec<Arc<TxArtifact>>> {
-        let (artifacts, _) = Self::build_tx_artifacts_for_stage(stage, txs).await?;
-        Ok(artifacts)
-    }
-
     pub async fn build_tx_artifacts_extracted_for_stage_public(
         stage: &'static str,
         txs: &[Arc<Transaction>],
@@ -1762,17 +1710,6 @@ impl App {
         let start = Instant::now();
         let result = Self::build_tx_artifacts_extracted_profiled(txs).await;
         Self::record_artifact_build(stage, txs.len(), start.elapsed(), result.is_ok());
-        result
-    }
-
-    #[allow(dead_code)]
-    async fn build_tx_artifact_for_stage(
-        stage: &'static str,
-        tx: Arc<Transaction>,
-    ) -> Result<(Arc<TxArtifact>, ArtifactBuildBreakdown)> {
-        let start = Instant::now();
-        let result = Self::build_tx_artifact_profiled(tx).await;
-        Self::record_artifact_build(stage, 1, start.elapsed(), result.is_ok());
         result
     }
 
@@ -1931,21 +1868,6 @@ impl App {
         }
 
         Ok(estimates)
-    }
-
-    #[allow(dead_code)]
-    fn aggregate_bundle_family_estimates_for_ready_families(
-        families: &[FamilyAggregate],
-    ) -> Vec<AggregateBundleFamilyEstimate> {
-        families
-            .iter()
-            .map(|family| AggregateBundleFamilyEstimate {
-                family_id: family.family_id,
-                real_count: family.real_count,
-                padded_count: family.padded_count,
-                aggregate_proof_bytes: family.aggregate_proof.len(),
-            })
-            .collect()
     }
 
     fn estimate_aggregate_bundle_tx_size_bytes(
@@ -4512,7 +4434,6 @@ impl App {
             }
         }
 
-        clear_block_execution_cache(&mut state_tx);
         clear_block_fee_price_cache(&mut state_tx);
 
         // Run each of the begin block handlers for each component, in sequence:
@@ -4776,119 +4697,6 @@ impl App {
             + execute_profile.apply_ms;
     }
 
-    #[allow(dead_code)]
-    async fn deliver_tx_with_stateless_caching_profiled(
-        &mut self,
-        tx: Arc<Transaction>,
-        cache: &StatelessCache,
-        hash: [u8; 32],
-    ) -> Result<(Vec<abci::Event>, CheckTxProfile)> {
-        let mut profile = CheckTxProfile::default();
-        let supports_fast_path =
-            supports_parallel_prepare(tx.as_ref()) && self.checktx_shared_context.is_some();
-        let tx2 = tx.clone();
-        let handle = tokio::runtime::Handle::current();
-        let span = tracing::Span::current();
-        let stateless_spawn_started = Instant::now();
-        let stateless = tokio::task::spawn_blocking(move || {
-            span.in_scope(|| {
-                let queue_wait_ms = stateless_spawn_started.elapsed().as_secs_f64() * 1000.0;
-                let start = Instant::now();
-                let result = handle.block_on(async move {
-                    Self::build_tx_artifact_for_stage("checktx", tx2).await
-                });
-                let blocking_total_ms = start.elapsed().as_secs_f64() * 1000.0;
-                (result, queue_wait_ms, blocking_total_ms)
-            })
-        });
-        let stateful = if supports_fast_path {
-            None
-        } else {
-            let tx2 = tx.clone();
-            let state2 = self.state.clone();
-            Some(tokio::spawn(
-                async move {
-                    let start = Instant::now();
-                    let result = tx2.check_historical(state2).await;
-                    (result, start.elapsed().as_secs_f64() * 1000.0)
-                }
-                .instrument(tracing::Span::current()),
-            ))
-        };
-
-        let stateless_join_start = Instant::now();
-        let (artifact_result, stateless_artifact_queue_wait_ms, stateless_artifact_ms) = stateless
-            .await
-            .context("waiting for check_stateless task")?;
-        profile.stateless_task_join_wall_ms = stateless_join_start.elapsed().as_secs_f64() * 1000.0;
-        profile.stateless_artifact_queue_wait_ms = stateless_artifact_queue_wait_ms;
-        profile.stateless_artifact_blocking_total_ms = stateless_artifact_ms;
-        profile.stateless_artifact_ms = stateless_artifact_ms;
-        let initial_cache_insert_start = Instant::now();
-        match &artifact_result {
-            Ok((artifact, _)) => cache.insert_fully_verified(hash, artifact.clone()),
-            Err(_) => cache.insert_invalid(hash),
-        }
-        profile.stateless_initial_cache_insert_ms =
-            initial_cache_insert_start.elapsed().as_secs_f64() * 1000.0;
-        let (artifact, artifact_profile) = artifact_result.context("check_stateless failed")?;
-        profile.stateless_artifact_precheck_ms = artifact_profile.precheck_ms;
-        profile.stateless_artifact_action_extract_ms = artifact_profile.action_extract_ms;
-        profile.stateless_artifact_action_auth_sig_ms = artifact_profile.action_auth_sig_ms;
-        profile.stateless_artifact_action_extract_public_ms =
-            artifact_profile.action_extract_public_ms;
-        profile.stateless_artifact_action_to_batch_item_ms =
-            artifact_profile.action_to_batch_item_ms;
-        profile.stateless_artifact_batch_verify_ms = artifact_profile.batch_verify_ms;
-        let (events, execute_profile) = if supports_fast_path {
-            let historical_stamp_start = Instant::now();
-            let historical_stamp =
-                self.current_historical_validation_stamp(Arc::as_ref(&artifact.tx));
-            profile.stateless_historical_stamp_ms =
-                historical_stamp_start.elapsed().as_secs_f64() * 1000.0;
-            let execute_fast_start = Instant::now();
-            let (events, execute_profile) = self.execute_checktx_fast_profiled(tx, false).await?;
-            profile.checktx_execute_fast_wall_ms =
-                execute_fast_start.elapsed().as_secs_f64() * 1000.0;
-            let historical_mark_start = Instant::now();
-            let artifact = artifact.with_historical_validation_owned(historical_stamp);
-            profile.stateless_historical_mark_ms =
-                historical_mark_start.elapsed().as_secs_f64() * 1000.0;
-            let final_cache_insert_start = Instant::now();
-            cache.insert_fully_verified(hash, artifact.clone());
-            profile.stateless_final_cache_insert_ms =
-                final_cache_insert_start.elapsed().as_secs_f64() * 1000.0;
-            profile.check_historical_ms = execute_profile.check_historical_ms;
-            (events, execute_profile)
-        } else {
-            let (stateful_result, check_historical_ms) = stateful
-                .expect("stateful task is present on legacy path")
-                .await
-                .context("waiting for check_stateful task")?;
-            profile.check_historical_ms = check_historical_ms;
-            stateful_result.context("check_stateful failed")?;
-
-            let historical_stamp_start = Instant::now();
-            let historical_stamp =
-                self.current_historical_validation_stamp(Arc::as_ref(&artifact.tx));
-            profile.stateless_historical_stamp_ms =
-                historical_stamp_start.elapsed().as_secs_f64() * 1000.0;
-            let historical_mark_start = Instant::now();
-            let artifact = artifact.with_historical_validation_owned(historical_stamp);
-            profile.stateless_historical_mark_ms =
-                historical_mark_start.elapsed().as_secs_f64() * 1000.0;
-            let final_cache_insert_start = Instant::now();
-            cache.insert_fully_verified(hash, artifact.clone());
-            profile.stateless_final_cache_insert_ms =
-                final_cache_insert_start.elapsed().as_secs_f64() * 1000.0;
-
-            self.execute_tx_checked_historical_profiled(artifact.tx.clone())
-                .await?
-        };
-        Self::fill_checktx_execute_profile(&mut profile, &execute_profile);
-        Ok((events, profile))
-    }
-
     async fn deliver_tx_with_stateless_extraction_caching_profiled(
         &mut self,
         tx_bytes: &[u8],
@@ -5122,12 +4930,6 @@ impl App {
         };
         Self::fill_checktx_execute_profile(&mut profile, &execute_profile);
         Ok((events, profile))
-    }
-
-    #[allow(dead_code)]
-    async fn deliver_tx(&mut self, tx: Arc<Transaction>) -> Result<Vec<abci::Event>> {
-        let (events, _) = self.deliver_tx_profiled(tx).await?;
-        Ok(events)
     }
 
     async fn deliver_tx_profiled(
@@ -7006,7 +6808,6 @@ mod tests {
         let shared_context = CheckTxSharedContext::load(&snapshot).await?;
         let direct_context = HistoricalCheckContext::load(&snapshot).await?;
 
-        assert_eq!(shared_context.snapshot_version, snapshot.version());
         assert_eq!(
             shared_context.historical_check_context.chain_id,
             direct_context.chain_id

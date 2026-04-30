@@ -509,11 +509,28 @@ impl OrbisClient {
 fn sourcehub_chain_config() -> ChainConfig {
     ChainConfig::builder()
         .chain_id(env::var("ORBIS_SOURCEHUB_CHAIN_ID").ok())
-        .rpc_url(env::var("ORBIS_SOURCEHUB_RPC").ok())
-        .rest_url(env::var("ORBIS_SOURCEHUB_REST").ok())
-        .grpc_url(env::var("ORBIS_SOURCEHUB_GRPC").ok())
+        .rpc_url(sourcehub_url(
+            "ORBIS_SOURCEHUB_RPC",
+            "ORBIS_SOURCEHUB_RPC_PORT",
+        ))
+        .rest_url(sourcehub_url(
+            "ORBIS_SOURCEHUB_REST",
+            "ORBIS_SOURCEHUB_REST_PORT",
+        ))
+        .grpc_url(sourcehub_url(
+            "ORBIS_SOURCEHUB_GRPC",
+            "ORBIS_SOURCEHUB_GRPC_PORT",
+        ))
         .denom(env::var("ORBIS_SOURCEHUB_DENOM").ok())
         .build()
+}
+
+fn sourcehub_url(url_key: &str, port_key: &str) -> Option<String> {
+    env::var(url_key).ok().or_else(|| {
+        env::var(port_key)
+            .ok()
+            .map(|port| format!("http://127.0.0.1:{port}"))
+    })
 }
 
 fn did_seed(s: &str) -> [u8; 32] {
@@ -533,5 +550,24 @@ mod tests {
         };
         assert_eq!(info.peer_id, "12D3KooWExample");
         assert!(info.p2p_address.contains("4001"));
+    }
+
+    #[test]
+    fn sourcehub_url_prefers_explicit_url_over_port() {
+        env::set_var("ORBIS_SOURCEHUB_TEST_URL", "http://127.0.0.1:1234");
+        env::set_var("ORBIS_SOURCEHUB_TEST_PORT", "5678");
+        let url = sourcehub_url("ORBIS_SOURCEHUB_TEST_URL", "ORBIS_SOURCEHUB_TEST_PORT");
+        env::remove_var("ORBIS_SOURCEHUB_TEST_URL");
+        env::remove_var("ORBIS_SOURCEHUB_TEST_PORT");
+        assert_eq!(url.as_deref(), Some("http://127.0.0.1:1234"));
+    }
+
+    #[test]
+    fn sourcehub_url_can_be_derived_from_port() {
+        env::remove_var("ORBIS_SOURCEHUB_TEST_URL");
+        env::set_var("ORBIS_SOURCEHUB_TEST_PORT", "31317");
+        let url = sourcehub_url("ORBIS_SOURCEHUB_TEST_URL", "ORBIS_SOURCEHUB_TEST_PORT");
+        env::remove_var("ORBIS_SOURCEHUB_TEST_PORT");
+        assert_eq!(url.as_deref(), Some("http://127.0.0.1:31317"));
     }
 }
