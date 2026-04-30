@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  changes:
+  paths:
     runs-on: ubuntu-24.04
     outputs:
       smoke: ${{ steps.filter.outputs.smoke }}
@@ -37,13 +37,15 @@ jobs:
               - 'testnets/**'
               - 'tools/gnark/**'
 
-  smoke-flow:
-    needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.smoke == 'true'
+  smoke:
+    needs: paths
+    if: github.event_name == 'workflow_dispatch' || needs.paths.outputs.smoke == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    concurrency:
-      group: blacksmith-local-devnet-${{ github.ref }}
-      cancel-in-progress: false
+    env:
+      PENUMBRA_PD_GRPC_PORT: "18080"
+      PENUMBRA_COMETBFT_RPC_PORT: "17657"
+      PENUMBRA_COMETBFT_P2P_PORT: "17656"
+      PENUMBRA_POSTGRES_PORT: "15432"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,30 +60,30 @@ jobs:
       - name: run the smoke-test suite
         run: nix develop --command just smoke
 
-  smoke:
-    needs: [changes, smoke-flow]
+  summary:
+    needs: [paths, smoke]
     if: always()
     runs-on: ubuntu-24.04
     steps:
-      - name: Check smoke result
+      - name: Check integration result
         env:
           EVENT_NAME: ${{ github.event_name }}
-          SHOULD_RUN: ${{ needs.changes.outputs.smoke }}
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          SMOKE_RESULT: ${{ needs['smoke-flow'].result }}
+          SHOULD_RUN: ${{ needs.paths.outputs.smoke }}
+          PATHS_RESULT: ${{ needs.paths.result }}
+          SMOKE_RESULT: ${{ needs.smoke.result }}
         run: |
-          if [ "$CHANGES_RESULT" != "success" ]; then
-            echo "path filtering failed: $CHANGES_RESULT"
+          if [ "$PATHS_RESULT" != "success" ]; then
+            echo "path filtering failed: $PATHS_RESULT"
             exit 1
           fi
           if [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$SHOULD_RUN" = "true" ]; then
             if [ "$SMOKE_RESULT" != "success" ]; then
-              echo "smoke-flow did not pass: $SMOKE_RESULT"
+              echo "smoke did not pass: $SMOKE_RESULT"
               exit 1
             fi
-            echo "smoke-flow passed"
+            echo "smoke passed"
           else
-            echo "smoke-flow skipped for unrelated changes"
+            echo "smoke skipped for unrelated changes"
           fi
 
   # Integration tests that run against the public testnet endpoints.

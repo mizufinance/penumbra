@@ -18,9 +18,9 @@ PCLIENTD="${PCLIENTD:-$repo_root/target/release/pclientd}"
 PD="${PD:-$repo_root/target/release/pd}"
 PENUMBRA_DEVNET_HOME="${PENUMBRA_DEVNET_HOME:-$COMPLIANCE_STACK_HOME}"
 NETWORK_DATA_DIR="${PENUMBRA_DEVNET_HOME}/network_data"
-PENUMBRA_NODE_PD_URL="${PENUMBRA_NODE_PD_URL:-http://localhost:8080}"
 export PENUMBRA_DEVNET_HOME
 export PENUMBRA_NODE_PD_URL
+export PENUMBRA_NODE_CMT_URL
 
 ALICE_HOME="$COMPLIANCE_TMP/alice-wallet"
 BOB_HOME="$COMPLIANCE_TMP/bob-wallet"
@@ -30,10 +30,14 @@ ALICE_PCLIENTD_HOME="$COMPLIANCE_TMP/alice-pclientd"
 BOB_PCLIENTD_HOME="$COMPLIANCE_TMP/bob-pclientd"
 CHARLIE_PCLIENTD_HOME="$COMPLIANCE_TMP/charlie-pclientd"
 UNREGISTERED_PCLIENTD_HOME="$COMPLIANCE_TMP/unregistered-pclientd"
-ALICE_VIEW_URL="http://127.0.0.1:18081"
-BOB_VIEW_URL="http://127.0.0.1:18082"
-CHARLIE_VIEW_URL="http://127.0.0.1:18083"
-UNREGISTERED_VIEW_URL="http://127.0.0.1:18084"
+ALICE_PCLIENTD_PORT="$PENUMBRA_PCLIENTD_PORT_BASE"
+BOB_PCLIENTD_PORT=$((PENUMBRA_PCLIENTD_PORT_BASE + 1))
+CHARLIE_PCLIENTD_PORT=$((PENUMBRA_PCLIENTD_PORT_BASE + 2))
+UNREGISTERED_PCLIENTD_PORT=$((PENUMBRA_PCLIENTD_PORT_BASE + 3))
+ALICE_VIEW_URL="http://127.0.0.1:$ALICE_PCLIENTD_PORT"
+BOB_VIEW_URL="http://127.0.0.1:$BOB_PCLIENTD_PORT"
+CHARLIE_VIEW_URL="http://127.0.0.1:$CHARLIE_PCLIENTD_PORT"
+UNREGISTERED_VIEW_URL="http://127.0.0.1:$UNREGISTERED_PCLIENTD_PORT"
 
 ENV_FILE="$COMPLIANCE_TMP/compliance-demo.env"
 PID_FILE="$COMPLIANCE_TMP/penumbra-pids.txt"
@@ -52,7 +56,14 @@ log_success "All dependencies found"
 log_info "Resetting previous Penumbra state..."
 kill_tracked_pids "$PID_FILE"
 sleep 2
-ensure_ports_available 8080 16656 16657 18081 18082 18083 18084
+ensure_ports_available \
+    "$PENUMBRA_PD_GRPC_PORT" \
+    "$PENUMBRA_COMETBFT_P2P_PORT" \
+    "$PENUMBRA_COMETBFT_RPC_PORT" \
+    "$ALICE_PCLIENTD_PORT" \
+    "$BOB_PCLIENTD_PORT" \
+    "$CHARLIE_PCLIENTD_PORT" \
+    "$UNREGISTERED_PCLIENTD_PORT"
 
 rm -rf \
     "$PENUMBRA_DEVNET_HOME" \
@@ -62,7 +73,7 @@ rm -f "$ENV_FILE" "$PID_FILE"
 mkdir -p "$PENUMBRA_DEVNET_HOME"
 
 log_info "Initializing Alice wallet..."
-echo | "$PCLI" --home "$ALICE_HOME" init soft-kms generate >/dev/null 2>&1
+echo | "$PCLI" --home "$ALICE_HOME" init --grpc-url "$PENUMBRA_NODE_PD_URL" soft-kms generate >/dev/null 2>&1
 ALICE_ADDRESS=$("$PCLI" --home "$ALICE_HOME" view address 0)
 
 log_info "Generating Penumbra network..."
@@ -72,14 +83,15 @@ run_quiet "$PD" network --network-dir "$NETWORK_DATA_DIR" generate \
     --proposal-voting-blocks 50 \
     --gas-price-simple 1000 \
     --timeout-commit 500ms \
-    --tendermint-rpc-bind 0.0.0.0:16657 \
-    --tendermint-p2p-bind 0.0.0.0:16656 \
+    --tendermint-rpc-bind "0.0.0.0:$PENUMBRA_COMETBFT_RPC_PORT" \
+    --tendermint-p2p-bind "0.0.0.0:$PENUMBRA_COMETBFT_P2P_PORT" \
     --validators-input-file "$repo_root/testnets/validators-single.json" \
     --allocation-address "$ALICE_ADDRESS"
 
 log_info "Starting pd..."
 "$PD" start --home "$NETWORK_DATA_DIR/node0/pd" \
-    --cometbft-addr http://127.0.0.1:16657 > "$COMPLIANCE_TMP/pd.log" 2>&1 &
+    --grpc-bind "0.0.0.0:$PENUMBRA_PD_GRPC_PORT" \
+    --cometbft-addr "$PENUMBRA_NODE_CMT_URL" > "$COMPLIANCE_TMP/pd.log" 2>&1 &
 PD_PID=$!
 echo "PD_PID=$PD_PID" >> "$PID_FILE"
 
@@ -93,15 +105,15 @@ wait_for_penumbra_stack
 log_success "Penumbra infra ready"
 
 log_info "Initializing remaining wallets..."
-echo | "$PCLI" --home "$BOB_HOME" init soft-kms generate >/dev/null 2>&1
-echo | "$PCLI" --home "$CHARLIE_HOME" init soft-kms generate >/dev/null 2>&1
-echo | "$PCLI" --home "$UNREGISTERED_HOME" init soft-kms generate >/dev/null 2>&1
+echo | "$PCLI" --home "$BOB_HOME" init --grpc-url "$PENUMBRA_NODE_PD_URL" soft-kms generate >/dev/null 2>&1
+echo | "$PCLI" --home "$CHARLIE_HOME" init --grpc-url "$PENUMBRA_NODE_PD_URL" soft-kms generate >/dev/null 2>&1
+echo | "$PCLI" --home "$UNREGISTERED_HOME" init --grpc-url "$PENUMBRA_NODE_PD_URL" soft-kms generate >/dev/null 2>&1
 
 log_info "Starting persistent wallet view daemons..."
-configure_wallet_view_service "ALICE" "$ALICE_HOME" "$ALICE_PCLIENTD_HOME" 18081 "$PCLI" "$PCLIENTD" "$PID_FILE"
-configure_wallet_view_service "BOB" "$BOB_HOME" "$BOB_PCLIENTD_HOME" 18082 "$PCLI" "$PCLIENTD" "$PID_FILE"
-configure_wallet_view_service "CHARLIE" "$CHARLIE_HOME" "$CHARLIE_PCLIENTD_HOME" 18083 "$PCLI" "$PCLIENTD" "$PID_FILE"
-configure_wallet_view_service "UNREGISTERED" "$UNREGISTERED_HOME" "$UNREGISTERED_PCLIENTD_HOME" 18084 "$PCLI" "$PCLIENTD" "$PID_FILE"
+configure_wallet_view_service "ALICE" "$ALICE_HOME" "$ALICE_PCLIENTD_HOME" "$ALICE_PCLIENTD_PORT" "$PCLI" "$PCLIENTD" "$PID_FILE"
+configure_wallet_view_service "BOB" "$BOB_HOME" "$BOB_PCLIENTD_HOME" "$BOB_PCLIENTD_PORT" "$PCLI" "$PCLIENTD" "$PID_FILE"
+configure_wallet_view_service "CHARLIE" "$CHARLIE_HOME" "$CHARLIE_PCLIENTD_HOME" "$CHARLIE_PCLIENTD_PORT" "$PCLI" "$PCLIENTD" "$PID_FILE"
+configure_wallet_view_service "UNREGISTERED" "$UNREGISTERED_HOME" "$UNREGISTERED_PCLIENTD_HOME" "$UNREGISTERED_PCLIENTD_PORT" "$PCLI" "$PCLIENTD" "$PID_FILE"
 
 log_info "Syncing wallets through persistent view daemons..."
 run_quiet "$PCLI" --home "$ALICE_HOME" view sync
@@ -133,6 +145,7 @@ export PCLI="$PCLI"
 export PCLIENTD="$PCLIENTD"
 export PENUMBRA_DEVNET_HOME="$PENUMBRA_DEVNET_HOME"
 export PENUMBRA_NODE_PD_URL="$PENUMBRA_NODE_PD_URL"
+export PENUMBRA_NODE_CMT_URL="$PENUMBRA_NODE_CMT_URL"
 export ALICE_PCLIENTD_HOME="$ALICE_PCLIENTD_HOME"
 export BOB_PCLIENTD_HOME="$BOB_PCLIENTD_HOME"
 export CHARLIE_PCLIENTD_HOME="$CHARLIE_PCLIENTD_HOME"

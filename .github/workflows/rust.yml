@@ -130,3 +130,36 @@ jobs:
 
       - name: Run gnark-backed Rust proof tests
         run: nix develop --command just ci-gnark-proof-tests
+
+  summary:
+    needs: [lint, features, test, go-gnark, gnark-rust]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check Rust workflow result
+        env:
+          LINT_RESULT: ${{ needs.lint.result }}
+          FEATURES_RESULT: ${{ needs.features.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          GO_GNARK_RESULT: ${{ needs['go-gnark'].result }}
+          GNARK_RUST_RESULT: ${{ needs['gnark-rust'].result }}
+        run: |
+          failed=0
+          for job in \
+            "lint:$LINT_RESULT" \
+            "features:$FEATURES_RESULT" \
+            "test:$TEST_RESULT" \
+            "go-gnark:$GO_GNARK_RESULT" \
+            "gnark-rust:$GNARK_RUST_RESULT"
+          do
+            name="${job%%:*}"
+            result="${job#*:}"
+            if [ "$result" != "success" ]; then
+              echo "$name did not pass: $result"
+              failed=1
+            else
+              echo "$name passed"
+            fi
+          done
+
+          exit "$failed"

@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 const NODE1_ENDPOINT: &str = "http://127.0.0.1:50051";
 const NODE2_ENDPOINT: &str = "http://127.0.0.1:50052";
 const NODE3_ENDPOINT: &str = "http://127.0.0.1:50053";
-const NODE1_CONTAINER: &str = "orbis-integration-node-1";
-const NODE2_CONTAINER: &str = "orbis-integration-node-2";
-const NODE3_CONTAINER: &str = "orbis-integration-node-3";
+const NODE1_DIAL_HOST: &str = "node1";
+const NODE2_DIAL_HOST: &str = "node2";
+const NODE3_DIAL_HOST: &str = "node3";
 const ORBIS_NAMESPACE: &str = "orbis";
 const ORBIS_RESOURCE: &str = "document";
 const ORBIS_PERMISSION: &str = "read";
@@ -30,7 +30,7 @@ fn node_endpoint(env_key: &str, default: &str) -> String {
     env::var(env_key).unwrap_or_else(|_| default.to_string())
 }
 
-fn node_container(env_key: &str, default: &str) -> String {
+fn node_dial_host(env_key: &str, default: &str) -> String {
     env::var(env_key).unwrap_or_else(|_| default.to_string())
 }
 
@@ -190,15 +190,15 @@ async fn setup_ring(output_json: &Path) -> Result<()> {
     let peer_ids = vec![
         docker_peer_id(
             &info1,
-            &node_container("ORBIS_NODE1_CONTAINER", NODE1_CONTAINER),
+            &node_dial_host("ORBIS_NODE1_DIAL_HOST", NODE1_DIAL_HOST),
         )?,
         docker_peer_id(
             &info2,
-            &node_container("ORBIS_NODE2_CONTAINER", NODE2_CONTAINER),
+            &node_dial_host("ORBIS_NODE2_DIAL_HOST", NODE2_DIAL_HOST),
         )?,
         docker_peer_id(
             &info3,
-            &node_container("ORBIS_NODE3_CONTAINER", NODE3_CONTAINER),
+            &node_dial_host("ORBIS_NODE3_DIAL_HOST", NODE3_DIAL_HOST),
         )?,
     ];
     let dkg = node1.start_dkg(2, &peer_ids).await?;
@@ -266,12 +266,12 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
         &repo.env_file,
         "run `just orbis-integration-up` before `just orbis-integration-seed`",
     )?;
-    wait_for_tcp("127.0.0.1:8080", 30, Duration::from_secs(1))?;
-    wait_for_tcp("127.0.0.1:50051", 60, Duration::from_secs(2))?;
-    wait_for_tcp("127.0.0.1:50052", 60, Duration::from_secs(2))?;
-    wait_for_tcp("127.0.0.1:50053", 60, Duration::from_secs(2))?;
-
     let (node1_endpoint, node2_endpoint, node3_endpoint) = node_endpoints();
+    wait_for_tcp_endpoint(env.get("PENUMBRA_NODE_PD_URL")?, 30, Duration::from_secs(1))?;
+    wait_for_tcp_endpoint(&node1_endpoint, 60, Duration::from_secs(2))?;
+    wait_for_tcp_endpoint(&node2_endpoint, 60, Duration::from_secs(2))?;
+    wait_for_tcp_endpoint(&node3_endpoint, 60, Duration::from_secs(2))?;
+
     let node1 = OrbisClient::new(node1_endpoint);
     let node2 = OrbisClient::new(node2_endpoint);
     let node3 = OrbisClient::new(node3_endpoint);
@@ -288,9 +288,18 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
     }
 
     let peer_ids = vec![
-        docker_peer_id(&info1, NODE1_CONTAINER)?,
-        docker_peer_id(&info2, NODE2_CONTAINER)?,
-        docker_peer_id(&info3, NODE3_CONTAINER)?,
+        docker_peer_id(
+            &info1,
+            &node_dial_host("ORBIS_NODE1_DIAL_HOST", NODE1_DIAL_HOST),
+        )?,
+        docker_peer_id(
+            &info2,
+            &node_dial_host("ORBIS_NODE2_DIAL_HOST", NODE2_DIAL_HOST),
+        )?,
+        docker_peer_id(
+            &info3,
+            &node_dial_host("ORBIS_NODE3_DIAL_HOST", NODE3_DIAL_HOST),
+        )?,
     ];
     let dkg = node1.start_dkg(2, &peer_ids).await?;
     eprintln!(
@@ -1089,7 +1098,7 @@ fn parse_key_value_line(output: &str, prefix: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("failed to find '{prefix}' in command output"))
 }
 
-fn docker_peer_id(info: &NodeInfo, container_name: &str) -> Result<String> {
+fn docker_peer_id(info: &NodeInfo, dial_host: &str) -> Result<String> {
     let (peer_id, socket_addr) = info
         .p2p_address
         .split_once('@')
@@ -1097,7 +1106,7 @@ fn docker_peer_id(info: &NodeInfo, container_name: &str) -> Result<String> {
     let (_, port) = socket_addr
         .rsplit_once(':')
         .ok_or_else(|| anyhow!("missing port in p2p address: {}", info.p2p_address))?;
-    Ok(format!("{peer_id}@{container_name}:{port}"))
+    Ok(format!("{peer_id}@{dial_host}:{port}"))
 }
 
 fn count_json_array(path: &Path) -> Result<usize> {
@@ -1152,7 +1161,12 @@ impl AuditDemo {
                 .unwrap_or_else(|_| "transfer/channel-0/ubrl".to_string()),
             threshold: env::var("AUDIT_DEMO_THRESHOLD").unwrap_or_else(|_| "500000000".to_string()),
             penumbra_grpc: env::var("PENUMBRA_GRPC")
-                .unwrap_or_else(|_| "http://localhost:8080".to_string()),
+                .or_else(|_| env::var("PENUMBRA_NODE_PD_URL"))
+                .unwrap_or_else(|_| {
+                    let port =
+                        env::var("PENUMBRA_PD_GRPC_PORT").unwrap_or_else(|_| "8080".to_string());
+                    format!("http://127.0.0.1:{port}")
+                }),
             orbis_endpoint: env::var("ORBIS_ENDPOINT")
                 .unwrap_or_else(|_| node_endpoint("ORBIS_NODE1_ENDPOINT", NODE1_ENDPOINT)),
         })
@@ -2127,7 +2141,9 @@ impl RepoPaths {
             .join("../../..")
             .canonicalize()
             .context("failed to locate repo root")?;
-        let tmp = root.join("tmp");
+        let tmp = env::var("COMPLIANCE_TMP")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| root.join("tmp"));
         fs::create_dir_all(&tmp).with_context(|| format!("failed to create {}", tmp.display()))?;
 
         Ok(Self {
@@ -2184,7 +2200,16 @@ mod tests {
             p2p_address: "peerid@127.0.0.1:4001".to_string(),
         };
 
-        let peer = docker_peer_id(&info, "orbis-node-1").expect("peer id should rewrite");
-        assert_eq!(peer, "peerid@orbis-node-1:4001");
+        let peer = docker_peer_id(&info, "node1").expect("peer id should rewrite");
+        assert_eq!(peer, "peerid@node1:4001");
+    }
+
+    #[test]
+    fn node_dial_host_can_be_env_configured() {
+        let key = "ORBIS_NODE_DIAL_HOST_TEST";
+        env::set_var(key, "custom-node-1");
+        let host = node_dial_host(key, "node1");
+        env::remove_var(key);
+        assert_eq!(host, "custom-node-1");
     }
 }

@@ -3,11 +3,28 @@
 # Source this file: source "$(dirname "$0")/lib/common.sh"
 
 # --- Repo-local tmp directory for all artifacts ---
-COMPLIANCE_TMP="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tmp"
 COMPLIANCE_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+COMPLIANCE_TMP="${COMPLIANCE_TMP:-$COMPLIANCE_REPO_ROOT/tmp}"
 COMPLIANCE_STACK_HOME="${PENUMBRA_ORBIS_HOME:-$COMPLIANCE_TMP/penumbra-home}"
 COMPLIANCE_NETWORK_DATA_DIR="${COMPLIANCE_STACK_HOME}/network_data"
 mkdir -p "$COMPLIANCE_TMP"
+
+PENUMBRA_PD_GRPC_PORT="${PENUMBRA_PD_GRPC_PORT:-8080}"
+PENUMBRA_COMETBFT_RPC_PORT="${PENUMBRA_COMETBFT_RPC_PORT:-16657}"
+PENUMBRA_COMETBFT_P2P_PORT="${PENUMBRA_COMETBFT_P2P_PORT:-16656}"
+PENUMBRA_POSTGRES_PORT="${PENUMBRA_POSTGRES_PORT:-5432}"
+PENUMBRA_PCLIENTD_PORT_BASE="${PENUMBRA_PCLIENTD_PORT_BASE:-18081}"
+PENUMBRA_NODE_PD_URL="${PENUMBRA_NODE_PD_URL:-http://127.0.0.1:$PENUMBRA_PD_GRPC_PORT}"
+PENUMBRA_NODE_CMT_URL="${PENUMBRA_NODE_CMT_URL:-http://127.0.0.1:$PENUMBRA_COMETBFT_RPC_PORT}"
+
+export COMPLIANCE_TMP
+export PENUMBRA_PD_GRPC_PORT
+export PENUMBRA_COMETBFT_RPC_PORT
+export PENUMBRA_COMETBFT_P2P_PORT
+export PENUMBRA_POSTGRES_PORT
+export PENUMBRA_PCLIENTD_PORT_BASE
+export PENUMBRA_NODE_PD_URL
+export PENUMBRA_NODE_CMT_URL
 
 gnark_lib_ext() {
     if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -442,26 +459,27 @@ run_orbis_compose() {
     shift
     local flavor
     flavor="$(docker_compose_flavor)" || return 1
+    local project_name="${ORBIS_COMPOSE_PROJECT_NAME:-penumbra-orbis-integration}"
     case "$flavor" in
         docker-compose-v2)
-            docker compose -f "$compose_file" "$@"
+            docker compose -p "$project_name" -f "$compose_file" "$@"
             ;;
         docker-compose-v1)
-            docker-compose -f "$compose_file" "$@"
+            docker-compose -p "$project_name" -f "$compose_file" "$@"
             ;;
     esac
 }
 
 wait_for_orbis_stack() {
-    wait_for_url "http://127.0.0.1:26657/status" 60 2 || return 1
-    wait_for_tcp_port 50051 60 2 || return 1
-    wait_for_tcp_port 50052 60 2 || return 1
-    wait_for_tcp_port 50053 60 2 || return 1
+    wait_for_url "http://127.0.0.1:${ORBIS_SOURCEHUB_RPC_PORT:-26657}/status" 60 2 || return 1
+    wait_for_tcp_port "${ORBIS_NODE1_GRPC_PORT:-50051}" 60 2 || return 1
+    wait_for_tcp_port "${ORBIS_NODE2_GRPC_PORT:-50052}" 60 2 || return 1
+    wait_for_tcp_port "${ORBIS_NODE3_GRPC_PORT:-50053}" 60 2 || return 1
 }
 
 wait_for_penumbra_stack() {
-    wait_for_penumbra 16657 45 2 5 || return 1
-    wait_for_tcp_port 8080 30 1 || return 1
+    wait_for_penumbra "$PENUMBRA_COMETBFT_RPC_PORT" 45 2 5 || return 1
+    wait_for_tcp_port "$PENUMBRA_PD_GRPC_PORT" 30 1 || return 1
 }
 
 kill_tracked_pids() {

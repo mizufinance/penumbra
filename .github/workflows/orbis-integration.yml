@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  changes:
+  paths:
     runs-on: ubuntu-24.04
     outputs:
       orbis: ${{ steps.filter.outputs.orbis }}
@@ -46,13 +46,33 @@ jobs:
               - 'testnets/validators-single.json'
               - 'tools/gnark/**'
 
-  orbis-integration-flow:
-    needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.orbis == 'true'
+  flow:
+    needs: paths
+    if: github.event_name == 'workflow_dispatch' || needs.paths.outputs.orbis == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    concurrency:
-      group: blacksmith-local-devnet-${{ github.ref }}
-      cancel-in-progress: false
+    env:
+      COMPLIANCE_TMP: /tmp/orbis-${{ github.run_id }}-${{ github.run_attempt }}
+      PENUMBRA_PD_GRPC_PORT: "28080"
+      PENUMBRA_COMETBFT_RPC_PORT: "27657"
+      PENUMBRA_COMETBFT_P2P_PORT: "27656"
+      PENUMBRA_PCLIENTD_PORT_BASE: "28081"
+      ORBIS_COMPOSE_PROJECT_NAME: orbis-${{ github.run_id }}-${{ github.run_attempt }}
+      ORBIS_SOURCEHUB_RPC_PORT: "36657"
+      ORBIS_SOURCEHUB_P2P_PORT: "36656"
+      ORBIS_SOURCEHUB_REST_PORT: "31317"
+      ORBIS_SOURCEHUB_GRPC_PORT: "49090"
+      ORBIS_SOURCEHUB_RPC: http://127.0.0.1:36657
+      ORBIS_SOURCEHUB_REST: http://127.0.0.1:31317
+      ORBIS_SOURCEHUB_GRPC: http://127.0.0.1:49090
+      ORBIS_NODE1_GRPC_PORT: "35051"
+      ORBIS_NODE2_GRPC_PORT: "35052"
+      ORBIS_NODE3_GRPC_PORT: "35053"
+      ORBIS_NODE1_METRICS_PORT: "39091"
+      ORBIS_NODE2_METRICS_PORT: "39092"
+      ORBIS_NODE3_METRICS_PORT: "39093"
+      ORBIS_NODE1_ENDPOINT: http://127.0.0.1:35051
+      ORBIS_NODE2_ENDPOINT: http://127.0.0.1:35052
+      ORBIS_NODE3_ENDPOINT: http://127.0.0.1:35053
     steps:
       - name: Checkout Penumbra
         uses: actions/checkout@v4
@@ -74,8 +94,8 @@ jobs:
         if: failure()
         working-directory: penumbra
         run: |
-          mkdir -p tmp
-          ./scripts/orbis-stack.sh logs > tmp/orbis-docker.log || true
+          mkdir -p "$COMPLIANCE_TMP"
+          ./scripts/orbis-stack.sh logs > "$COMPLIANCE_TMP/orbis-docker.log" || true
 
       - name: Upload integration artifacts
         if: failure()
@@ -83,30 +103,30 @@ jobs:
         with:
           name: orbis-integration-artifacts
           path: |
-            penumbra/tmp/**
+            ${{ env.COMPLIANCE_TMP }}/**
 
-  orbis-integration:
-    needs: [changes, orbis-integration-flow]
+  summary:
+    needs: [paths, flow]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - name: Check Orbis integration result
         env:
           EVENT_NAME: ${{ github.event_name }}
-          SHOULD_RUN: ${{ needs.changes.outputs.orbis }}
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          ORBIS_RESULT: ${{ needs['orbis-integration-flow'].result }}
+          SHOULD_RUN: ${{ needs.paths.outputs.orbis }}
+          PATHS_RESULT: ${{ needs.paths.result }}
+          ORBIS_RESULT: ${{ needs.flow.result }}
         run: |
-          if [ "$CHANGES_RESULT" != "success" ]; then
-            echo "path filtering failed: $CHANGES_RESULT"
+          if [ "$PATHS_RESULT" != "success" ]; then
+            echo "path filtering failed: $PATHS_RESULT"
             exit 1
           fi
           if [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$SHOULD_RUN" = "true" ]; then
             if [ "$ORBIS_RESULT" != "success" ]; then
-              echo "orbis-integration-flow did not pass: $ORBIS_RESULT"
+              echo "flow did not pass: $ORBIS_RESULT"
               exit 1
             fi
-            echo "orbis-integration-flow passed"
+            echo "flow passed"
           else
-            echo "orbis-integration-flow skipped for unrelated changes"
+            echo "flow skipped for unrelated changes"
           fi

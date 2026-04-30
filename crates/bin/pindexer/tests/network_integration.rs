@@ -12,13 +12,23 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use tokio::time::{sleep, Duration};
 
-/// Hardcoded URL to the local PostgreSQL database for CometBFT ABCI events.
-const COMETBFT_DATABASE_URL: &str =
-    "postgresql://penumbra:penumbra@localhost:5432/penumbra_cometbft?sslmode=disable";
+fn postgres_port() -> String {
+    std::env::var("PENUMBRA_POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string())
+}
 
-/// Hardcoded URL to the local PostgreSQL database for pindexer.
-const PINDEXER_DATABASE_URL: &str =
-    "postgresql://penumbra:penumbra@localhost:5432/penumbra_pindexer?sslmode=disable";
+fn cometbft_database_url() -> String {
+    format!(
+        "postgresql://penumbra:penumbra@localhost:{}/penumbra_cometbft?sslmode=disable",
+        postgres_port()
+    )
+}
+
+fn pindexer_database_url() -> String {
+    format!(
+        "postgresql://penumbra:penumbra@localhost:{}/penumbra_pindexer?sslmode=disable",
+        postgres_port()
+    )
+}
 
 /// Reusable fn to connect to target postgres db, based on DATABASE_URL connection string.
 async fn get_db_handle(database_url: &str) -> anyhow::Result<PgPool> {
@@ -32,7 +42,7 @@ async fn get_db_handle(database_url: &str) -> anyhow::Result<PgPool> {
 async fn get_current_height() -> anyhow::Result<u64> {
     let client = reqwest::Client::new();
     let cmt_url =
-        std::env::var("PENUMBRA_NODE_CMT_URL").unwrap_or("http://localhost:26657".to_string());
+        std::env::var("PENUMBRA_NODE_CMT_URL").unwrap_or("http://localhost:16657".to_string());
     let r = client.get(format!("{}/status", cmt_url)).send().await?;
 
     assert_eq!(r.status(), reqwest::StatusCode::OK);
@@ -53,7 +63,7 @@ async fn get_current_height() -> anyhow::Result<u64> {
 
 /// Query the CometBFT PostgreSQL database, and report its highest known block.
 async fn get_highest_indexed_block_from_cometbft_db() -> anyhow::Result<u64> {
-    let conn = get_db_handle(COMETBFT_DATABASE_URL).await?;
+    let conn = get_db_handle(&cometbft_database_url()).await?;
 
     // Execute query and parse result as u64
     let row = sqlx::query("SELECT height FROM blocks ORDER BY height DESC LIMIT 1")
@@ -69,7 +79,7 @@ async fn get_highest_indexed_block_from_cometbft_db() -> anyhow::Result<u64> {
 
 /// Query the pindexer PostgreSQL database, and report its highest known block.
 async fn get_highest_indexed_block_from_pindexer_db() -> anyhow::Result<u64> {
-    let conn = get_db_handle(PINDEXER_DATABASE_URL).await?;
+    let conn = get_db_handle(&pindexer_database_url()).await?;
 
     // Execute query and parse result as u64
     let row = sqlx::query("SELECT height FROM block_details ORDER BY height DESC LIMIT 1")
@@ -129,7 +139,7 @@ async fn cometbft_indexing_is_working() -> anyhow::Result<()> {
 /// be sure that pd is in fact emitting properly constructed ABCI Events
 /// unless we check what's in the db.
 async fn cometbft_events_are_not_null(#[case] query: &str) -> anyhow::Result<()> {
-    let conn = get_db_handle(COMETBFT_DATABASE_URL).await?;
+    let conn = get_db_handle(&cometbft_database_url()).await?;
 
     // Execute query and parse result as u64
     let row = sqlx::query(query)
