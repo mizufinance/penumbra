@@ -20,17 +20,7 @@ jobs:
         with:
           lfs: true
 
-      - name: install nix
-        uses: nixbuild/nix-quick-install-action@v28
-
-      - name: setup nix cache
-        uses: nix-community/cache-nix-action@v5
-        with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-
-      - name: Load rust cache
-        uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-nix-rust
 
       # The `rust-toolchain.toml` file dictates which version of rust to setup.
       - name: check rust version
@@ -57,34 +47,15 @@ jobs:
   # As of 2025Q1, the "features" job is the slowest in the CI suite.
   # Consider moving to a scheduled job on main, rather than running on PRs.
   features:
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-16vcpu-ubuntu-2204
     steps:
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
       - uses: actions/checkout@v4
         with:
           lfs: true
 
-      - name: install nix
-        uses: nixbuild/nix-quick-install-action@v28
-
-      - name: setup nix cache
-        uses: nix-community/cache-nix-action@v5
+      - uses: ./.github/actions/setup-nix-rust
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-
-      - name: Load rust cache
-        uses: Swatinem/rust-cache@v2
+          free-disk: "true"
 
       # Build each crate separately, to validate that the feature-gating is working.
       # This is a lighter-weight version of `cargo check-all-features --workspace --release`.
@@ -95,34 +66,15 @@ jobs:
         run: nix develop --command ./deployments/scripts/check-wasm-compat.sh
 
   test:
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-16vcpu-ubuntu-2204
     steps:
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
       - uses: actions/checkout@v4
         with:
           lfs: true
 
-      - name: install nix
-        uses: nixbuild/nix-quick-install-action@v28
-
-      - name: setup nix cache
-        uses: nix-community/cache-nix-action@v5
+      - uses: ./.github/actions/setup-nix-rust
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-
-      - name: Load rust cache
-        uses: Swatinem/rust-cache@v2
+          free-disk: "true"
 
       - name: Run tests with nextest
         run: nix develop --command just ci-test
@@ -134,52 +86,47 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          lfs: true
+          lfs: false
 
-      - name: install nix
-        uses: nixbuild/nix-quick-install-action@v28
-
-      - name: setup nix cache
-        uses: nix-community/cache-nix-action@v5
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
+          go-version-file: tools/gnark/go.mod
+          cache-dependency-path: tools/gnark/go.sum
 
-      - name: Load rust cache
-        uses: Swatinem/rust-cache@v2
+      - name: Check Go formatting
+        working-directory: tools/gnark
+        shell: bash
+        run: |
+          files="$(gofmt -l .)"
+          if test -n "$files"; then
+            echo "unformatted Go files:"
+            printf "%s\n" "$files"
+            exit 1
+          fi
 
-      - name: Run gnark Go checks
-        run: nix develop --command just ci-go-check
+      - name: Build gnark Go module
+        working-directory: tools/gnark
+        run: go build ./...
+
+      - name: Test gnark Go module
+        working-directory: tools/gnark
+        run: go test ./...
+
+      - name: Vet gnark Go module
+        working-directory: tools/gnark
+        run: go vet ./...
 
   gnark-rust:
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-16vcpu-ubuntu-2204
     steps:
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
       - uses: actions/checkout@v4
         with:
           lfs: true
 
-      - name: install nix
-        uses: nixbuild/nix-quick-install-action@v28
-
-      - name: setup nix cache
-        uses: nix-community/cache-nix-action@v5
+      - uses: ./.github/actions/setup-nix-rust
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-
-      - name: Load rust cache
-        uses: Swatinem/rust-cache@v2
+          free-disk: "true"
 
       - name: Run gnark-backed Rust proof tests
         run: nix develop --command just ci-gnark-proof-tests

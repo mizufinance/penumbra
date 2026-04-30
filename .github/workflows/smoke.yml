@@ -1,9 +1,6 @@
 name: integration
 on:
   pull_request:
-    # Don't run Rust tests if only docs changed.
-    paths-ignore:
-      - 'docs/**'
   # Also support ad-hoc calls for workflow.
   workflow_call:
   workflow_dispatch:
@@ -13,41 +10,76 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  smoke:
+  changes:
     runs-on: ubuntu-24.04
+    outputs:
+      smoke: ${{ steps.filter.outputs.smoke }}
     steps:
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+      - uses: actions/checkout@v4
         with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
+          lfs: false
 
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            smoke:
+              - '.github/actions/setup-nix-rust/**'
+              - '.github/workflows/smoke.yml'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'crates/**'
+              - 'deployments/**'
+              - 'flake.lock'
+              - 'flake.nix'
+              - 'justfile'
+              - 'scripts/**'
+              - 'testnets/**'
+              - 'tools/gnark/**'
+
+  smoke-flow:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.smoke == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    steps:
       - uses: actions/checkout@v4
         with:
           lfs: true
 
-      - name: install nix
-        uses: nixbuild/nix-quick-install-action@v28
-
-      - name: setup nix cache
-        uses: nix-community/cache-nix-action@v5
+      - uses: ./.github/actions/setup-nix-rust
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-
-      - name: Load rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
+          free-disk: "true"
           # bust cache with unique key; increment the integer in `^v(\d+)` to force fresh cache
-          prefix-key: "v0-rust-smoke"
+          rust-cache-prefix: "v0-rust-smoke"
 
       - name: run the smoke-test suite
         run: nix develop --command just smoke
+
+  smoke:
+    needs: [changes, smoke-flow]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check smoke result
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SHOULD_RUN: ${{ needs.changes.outputs.smoke }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          SMOKE_RESULT: ${{ needs['smoke-flow'].result }}
+        run: |
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "path filtering failed: $CHANGES_RESULT"
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$SHOULD_RUN" = "true" ]; then
+            if [ "$SMOKE_RESULT" != "success" ]; then
+              echo "smoke-flow did not pass: $SMOKE_RESULT"
+              exit 1
+            fi
+            echo "smoke-flow passed"
+          else
+            echo "smoke-flow skipped for unrelated changes"
+          fi
 
   # Integration tests that run against the public testnet endpoints.
   # Temporarily disabling these in CI, as the testnet endpoints are

@@ -1,23 +1,6 @@
 name: orbis-integration
 on:
   pull_request:
-    paths:
-      - '.github/workflows/orbis-integration.yml'
-      - 'justfile'
-      - 'compliance-docs/testing.md'
-      - 'crates/bin/orbis-audit/**'
-      - 'crates/bin/orbis-integration/**'
-      - 'crates/bin/pcli/**'
-      - 'crates/bin/pclientd/**'
-      - 'crates/bin/pd/**'
-      - 'crates/core/component/compliance/**'
-      - 'crates/core/component/shielded-pool/**'
-      - 'crates/crypto/proof-params/**'
-      - 'crates/util/orbis-client/**'
-      - 'deployments/orbis/**'
-      - 'scripts/**'
-      - 'testnets/validators-single.json'
-      - 'tools/gnark/**'
   workflow_dispatch:
 
 concurrency:
@@ -25,37 +8,60 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  orbis-integration:
+  changes:
     runs-on: ubuntu-24.04
+    outputs:
+      orbis: ${{ steps.filter.outputs.orbis }}
     steps:
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+      - uses: actions/checkout@v4
         with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
+          lfs: false
 
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            orbis:
+              - '.github/actions/setup-nix-rust/**'
+              - '.github/workflows/orbis-integration.yml'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'compliance-docs/testing.md'
+              - 'crates/bin/orbis-audit/**'
+              - 'crates/bin/orbis-integration/**'
+              - 'crates/bin/pcli/**'
+              - 'crates/bin/pclientd/**'
+              - 'crates/bin/pd/**'
+              - 'crates/core/component/compliance/**'
+              - 'crates/core/component/shielded-pool/**'
+              - 'crates/crypto/proof-params/**'
+              - 'crates/util/orbis-client/**'
+              - 'deployments/orbis/**'
+              - 'flake.lock'
+              - 'flake.nix'
+              - 'justfile'
+              - 'scripts/lib/**'
+              - 'scripts/orbis-*.sh'
+              - 'scripts/penumbra-*.sh'
+              - 'testnets/validators-single.json'
+              - 'tools/gnark/**'
+
+  orbis-integration-flow:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.orbis == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    steps:
       - name: Checkout Penumbra
         uses: actions/checkout@v4
         with:
           path: penumbra
           lfs: true
 
-      - name: install nix
-        uses: nixbuild/nix-quick-install-action@v28
-
-      - name: setup nix cache
-        uses: nix-community/cache-nix-action@v5
+      - uses: ./penumbra/.github/actions/setup-nix-rust
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('penumbra/**/*.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-
-      - name: Load rust cache
-        uses: Swatinem/rust-cache@v2
+          free-disk: "true"
+          nix-cache-glob: "penumbra/**/*.nix"
+          rust-workspaces: "penumbra"
 
       - name: Run Penumbra Orbis integration flow
         working-directory: penumbra
@@ -75,3 +81,29 @@ jobs:
           name: orbis-integration-artifacts
           path: |
             penumbra/tmp/**
+
+  orbis-integration:
+    needs: [changes, orbis-integration-flow]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check Orbis integration result
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SHOULD_RUN: ${{ needs.changes.outputs.orbis }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          ORBIS_RESULT: ${{ needs['orbis-integration-flow'].result }}
+        run: |
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "path filtering failed: $CHANGES_RESULT"
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$SHOULD_RUN" = "true" ]; then
+            if [ "$ORBIS_RESULT" != "success" ]; then
+              echo "orbis-integration-flow did not pass: $ORBIS_RESULT"
+              exit 1
+            fi
+            echo "orbis-integration-flow passed"
+          else
+            echo "orbis-integration-flow skipped for unrelated changes"
+          fi
