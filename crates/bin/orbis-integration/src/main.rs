@@ -14,6 +14,11 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use penumbra_orbis_client::{NodeInfo, OrbisClient};
+use penumbra_sdk_compliance::{
+    decrypt_flagged_rows, export_ledger_rows_json, export_scan_json, import_orbis_audit_entries,
+    mark_row_audited, record_address_alias, scanner_health_json, DetectionKey, OrbisAuditEntry,
+    SqliteScannerStore,
+};
 use serde::{Deserialize, Serialize};
 
 const NODE1_ENDPOINT: &str = "http://127.0.0.1:50051";
@@ -119,6 +124,8 @@ struct DetectedTxRef {
     tx_hash: String,
     action_index: usize,
     #[serde(default)]
+    output_index: usize,
+    #[serde(default)]
     asset_id: String,
     is_flagged: bool,
 }
@@ -128,6 +135,8 @@ struct AuditEntry {
     height: u64,
     tx_hash: String,
     action_index: usize,
+    #[serde(default)]
+    output_index: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -617,15 +626,31 @@ async fn verify(repo: &RepoPaths) -> Result<()> {
             "tx",
             "compliance",
             "scan",
+            "catch-up",
             "--dk-hex",
             issuer.get("REGULATED_DK")?,
             "--scan-asset-id",
             "regulated_usd",
             "--node",
             env.get("PENUMBRA_NODE_PD_URL")?,
-            "--output",
-            repo.detected_file.to_str().unwrap(),
+            "--db",
+            repo.issuer_db_file.to_str().unwrap(),
         ],
+    )?;
+
+    let store = SqliteScannerStore::new(&repo.issuer_db_file)?;
+    let dk = detection_key_from_hex(issuer.get("REGULATED_DK")?)?;
+    let _ = decrypt_flagged_rows(&store, &dk)?;
+    for (name, key) in [
+        ("Alice", "ALICE_ADDRESS"),
+        ("Bob", "BOB_ADDRESS"),
+        ("Charlie", "CHARLIE_ADDRESS"),
+    ] {
+        record_address_alias(&store, env.get(key)?, name)?;
+    }
+    fs::write(
+        &repo.detected_file,
+        serde_json::to_vec_pretty(&export_scan_json(&store)?)?,
     )?;
 
     let scan: ScanOutput = serde_json::from_slice(
@@ -639,66 +664,6 @@ async fn verify(repo: &RepoPaths) -> Result<()> {
         scan.detected.len(),
         flagged
     );
-
-    let _ = fs::remove_file(&repo.issuer_db_file);
-    run_pcli(
-        repo,
-        &env,
-        [
-            "--home",
-            env.get("ALICE_HOME")?,
-            "tx",
-            "compliance",
-            "issuer-db",
-            "init",
-            "--db",
-            repo.issuer_db_file.to_str().unwrap(),
-        ],
-    )?;
-    run_pcli(
-        repo,
-        &env,
-        [
-            "--home",
-            env.get("ALICE_HOME")?,
-            "tx",
-            "compliance",
-            "issuer-db",
-            "import",
-            "--db",
-            repo.issuer_db_file.to_str().unwrap(),
-            "--scan-output",
-            repo.detected_file.to_str().unwrap(),
-            "--dk-hex",
-            issuer.get("REGULATED_DK")?,
-            "--node",
-            env.get("PENUMBRA_NODE_PD_URL")?,
-        ],
-    )?;
-    for (name, key) in [
-        ("Alice", "ALICE_ADDRESS"),
-        ("Bob", "BOB_ADDRESS"),
-        ("Charlie", "CHARLIE_ADDRESS"),
-    ] {
-        run_pcli(
-            repo,
-            &env,
-            [
-                "--home",
-                env.get("ALICE_HOME")?,
-                "tx",
-                "compliance",
-                "issuer-db",
-                "alias",
-                "--db",
-                repo.issuer_db_file.to_str().unwrap(),
-                "--address",
-                env.get(key)?,
-                "--name",
-                name,
-            ],
-        )?;
-    }
 
     for (user_name, address_key) in [("Alice", "ALICE_ADDRESS"), ("Bob", "BOB_ADDRESS")] {
         let default_audit_file = repo
@@ -743,21 +708,11 @@ async fn verify(repo: &RepoPaths) -> Result<()> {
         update_issuer_db_from_audit(repo, &env, user_name, &extension_audit_file)?;
     }
 
-    let show = capture_pcli(
-        repo,
-        &env,
-        [
-            "--home",
-            env.get("ALICE_HOME")?,
-            "tx",
-            "compliance",
-            "issuer-db",
-            "show",
-            "--db",
-            repo.issuer_db_file.to_str().unwrap(),
-        ],
-    )?;
-    println!("{show}");
+    let store = SqliteScannerStore::new(&repo.issuer_db_file)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&export_ledger_rows_json(&store)?)?
+    );
     eprintln!("orbis-integration: verify phase completed");
     Ok(())
 }
@@ -808,32 +763,21 @@ fn run_orbis_audit(
 
 fn update_issuer_db_from_audit(
     repo: &RepoPaths,
-    env: &DemoEnv,
+    _env: &DemoEnv,
     user_name: &str,
     audit_file: &Path,
 ) -> Result<()> {
-    let audit_count = count_json_array(audit_file)?;
-    if audit_count == 0 {
+    let entries: Vec<OrbisAuditEntry> = serde_json::from_slice(
+        &fs::read(audit_file)
+            .with_context(|| format!("failed to read {}", audit_file.display()))?,
+    )
+    .context("failed to parse orbis-audit output")?;
+    if entries.is_empty() {
         return Ok(());
     }
-    run_pcli(
-        repo,
-        env,
-        [
-            "--home",
-            env.get("ALICE_HOME")?,
-            "tx",
-            "compliance",
-            "issuer-db",
-            "update",
-            "--db",
-            repo.issuer_db_file.to_str().unwrap(),
-            "--audit-output",
-            audit_file.to_str().unwrap(),
-            "--audit-subject",
-            user_name,
-        ],
-    )
+    let store = SqliteScannerStore::new(&repo.issuer_db_file)?;
+    import_orbis_audit_entries(&store, &entries, Some(user_name))?;
+    Ok(())
 }
 
 fn write_extension_input(
@@ -851,14 +795,26 @@ fn write_extension_input(
     )?;
     let refs = audit_entries
         .into_iter()
-        .map(|entry| (entry.height, entry.tx_hash, entry.action_index))
+        .map(|entry| {
+            (
+                entry.height,
+                entry.tx_hash,
+                entry.action_index,
+                entry.output_index,
+            )
+        })
         .collect::<std::collections::BTreeSet<_>>();
     let detected = scan
         .detected
         .into_iter()
         .filter(|tx_ref| !tx_ref.is_flagged)
         .filter(|tx_ref| {
-            refs.contains(&(tx_ref.height, tx_ref.tx_hash.clone(), tx_ref.action_index))
+            refs.contains(&(
+                tx_ref.height,
+                tx_ref.tx_hash.clone(),
+                tx_ref.action_index,
+                tx_ref.output_index,
+            ))
         })
         .collect::<Vec<_>>();
     let output_json = serde_json::json!({
@@ -1098,6 +1054,18 @@ fn parse_key_value_line(output: &str, prefix: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("failed to find '{prefix}' in command output"))
 }
 
+fn detection_key_from_hex(hex_str: &str) -> Result<DetectionKey> {
+    let bytes = hex::decode(hex_str).context("invalid issuer DK hex")?;
+    if bytes.len() != 32 {
+        bail!("issuer DK must be exactly 32 bytes");
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Ok(DetectionKey::new(decaf377::Fr::from_le_bytes_mod_order(
+        &arr,
+    )))
+}
+
 fn docker_peer_id(info: &NodeInfo, dial_host: &str) -> Result<String> {
     let (peer_id, socket_addr) = info
         .p2p_address
@@ -1107,17 +1075,6 @@ fn docker_peer_id(info: &NodeInfo, dial_host: &str) -> Result<String> {
         .rsplit_once(':')
         .ok_or_else(|| anyhow!("missing port in p2p address: {}", info.p2p_address))?;
     Ok(format!("{peer_id}@{dial_host}:{port}"))
-}
-
-fn count_json_array(path: &Path) -> Result<usize> {
-    let value: serde_json::Value = serde_json::from_slice(
-        &fs::read(path).with_context(|| format!("failed to read {}", path.display()))?,
-    )
-    .with_context(|| format!("failed to parse {}", path.display()))?;
-    value
-        .as_array()
-        .map(|items| items.len())
-        .ok_or_else(|| anyhow!("expected JSON array in {}", path.display()))
 }
 
 #[derive(Debug, Clone)]
@@ -1207,15 +1164,9 @@ impl AuditDemo {
         let refresh_handle = thread::spawn(move || loop {
             let _ = refresh_demo.refresh_outputs();
             let last_height = refresh_demo
-                .demo_dir
-                .join("scanner-state.json")
-                .exists()
-                .then(|| {
-                    refresh_demo
-                        .read_json(refresh_demo.demo_dir.join("scanner-state.json"))
-                        .ok()
-                })
-                .flatten()
+                .scanner_store()
+                .ok()
+                .and_then(|store| scanner_health_json(&store).ok())
                 .and_then(|v| v.get("last_height").and_then(serde_json::Value::as_u64));
             let _ = refresh_demo.write_health(true, "Scanner running", last_height);
             thread::sleep(Duration::from_secs(2));
@@ -1228,20 +1179,15 @@ impl AuditDemo {
                 "tx",
                 "compliance",
                 "scan",
+                "run",
                 "--node",
                 &self.penumbra_grpc,
                 "--dk-hex",
                 &dk,
                 "--scan-asset-id",
                 &self.asset,
-                "--output",
-                &format!("{}/detected-txs.json", self.demo_dir_rel),
-                "--state-file",
-                &format!("{}/scanner-state.json", self.demo_dir_rel),
-                "--issuer-db",
+                "--db",
                 &self.issuer_db_rel,
-                "--merge-output",
-                "--follow",
             ])
             .status()
             .context("failed to run pcli compliance scanner")?;
@@ -1292,11 +1238,12 @@ impl AuditDemo {
                 let height = row.get("height").and_then(serde_json::Value::as_i64);
                 let tx_hash = row.get("tx_hash").and_then(serde_json::Value::as_str);
                 let action_index = row.get("action_index").and_then(serde_json::Value::as_i64);
+                let output_index = row.get("output_index").and_then(serde_json::Value::as_i64);
                 !ledger.iter().any(|ledger_row| {
-                    same_ref(ledger_row, height, tx_hash, action_index)
+                    same_ref(ledger_row, height, tx_hash, action_index, output_index)
                         && ledger_row_fully_known(ledger_row)
                 }) && !ledger.iter().any(|ledger_row| {
-                    same_ref(ledger_row, height, tx_hash, action_index)
+                    same_ref(ledger_row, height, tx_hash, action_index, output_index)
                         && alias_matches(ledger_row.get("self_alias"), &subject.name)
                         && !ledger_row
                             .get("amount")
@@ -1351,6 +1298,9 @@ impl AuditDemo {
                     row.get("height")?.as_i64()?,
                     row.get("tx_hash")?.as_str()?.to_string(),
                     row.get("action_index")?.as_i64()?,
+                    row.get("output_index")
+                        .and_then(serde_json::Value::as_i64)
+                        .unwrap_or_default(),
                 ))
             })
             .collect::<std::collections::BTreeSet<_>>();
@@ -1376,10 +1326,19 @@ impl AuditDemo {
                 else {
                     return false;
                 };
-                decoded_refs.contains(&(height, tx_hash.to_string(), action_index))
+                let output_index = row
+                    .get("output_index")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or_default();
+                decoded_refs.contains(&(height, tx_hash.to_string(), action_index, output_index))
                     && !ledger.iter().any(|ledger_row| {
-                        same_ref(ledger_row, Some(height), Some(tx_hash), Some(action_index))
-                            && alias_matches(ledger_row.get("self_alias"), &subject.name)
+                        same_ref(
+                            ledger_row,
+                            Some(height),
+                            Some(tx_hash),
+                            Some(action_index),
+                            Some(output_index),
+                        ) && alias_matches(ledger_row.get("self_alias"), &subject.name)
                             && ledger_row
                                 .get("counterparty_alias")
                                 .and_then(serde_json::Value::as_str)
@@ -1428,19 +1387,7 @@ impl AuditDemo {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
         {
-            if !self.issuer_db_abs.exists() {
-                self.run_pcli(
-                    "alice",
-                    [
-                        "tx",
-                        "compliance",
-                        "issuer-db",
-                        "init",
-                        "--db",
-                        &self.issuer_db_rel,
-                    ],
-                )?;
-            }
+            let _ = self.scanner_store()?;
             return Ok(());
         }
 
@@ -1480,19 +1427,7 @@ impl AuditDemo {
         // refresh Alice's view before registering subjects.
         thread::sleep(Duration::from_secs(2));
         self.sync_wallet("alice")?;
-        if !self.issuer_db_abs.exists() {
-            self.run_pcli(
-                "alice",
-                [
-                    "tx",
-                    "compliance",
-                    "issuer-db",
-                    "init",
-                    "--db",
-                    &self.issuer_db_rel,
-                ],
-            )?;
-        }
+        let _ = self.scanner_store()?;
         self.update_state(|state| {
             state["ring"] = ring;
             state["issuer"] = serde_json::json!({
@@ -1537,37 +1472,10 @@ impl AuditDemo {
                 "0",
             ],
         )?;
-        self.run_pcli(
-            "alice",
-            [
-                "tx",
-                "compliance",
-                "issuer-db",
-                "alias",
-                "--db",
-                &self.issuer_db_rel,
-                "--address",
-                &address,
-                "--name",
-                name,
-            ],
-        )?;
+        let store = self.scanner_store()?;
+        record_address_alias(&store, &address, name)?;
         let transparent_address = self.address_for_transparent(slug)?;
-        self.run_pcli(
-            "alice",
-            [
-                "tx",
-                "compliance",
-                "issuer-db",
-                "alias",
-                "--db",
-                &self.issuer_db_rel,
-                "--address",
-                &transparent_address,
-                "--name",
-                name,
-            ],
-        )?;
+        record_address_alias(&store, &transparent_address, name)?;
         self.update_state(|state| {
             let user = serde_json::json!({
                 "name": name,
@@ -1694,28 +1602,19 @@ impl AuditDemo {
     }
 
     fn update_issuer_db_from_audit(&self, name: &str, audit_file: &Path) -> Result<()> {
-        if self
+        let entries = self
             .read_json_array(audit_file)
             .unwrap_or_default()
-            .is_empty()
-        {
+            .into_iter()
+            .map(serde_json::from_value::<OrbisAuditEntry>)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("failed to parse orbis-audit output")?;
+        if entries.is_empty() {
             return Ok(());
         }
-        self.run_pcli(
-            "alice",
-            [
-                "tx",
-                "compliance",
-                "issuer-db",
-                "update",
-                "--db",
-                &self.issuer_db_rel,
-                "--audit-output",
-                audit_file.to_str().unwrap_or_default(),
-                "--audit-subject",
-                name,
-            ],
-        )
+        let store = self.scanner_store()?;
+        import_orbis_audit_entries(&store, &entries, Some(name))?;
+        Ok(())
     }
 
     fn mark_clear_rows_audited(
@@ -1753,25 +1652,19 @@ impl AuditDemo {
             else {
                 continue;
             };
+            let output_index = row
+                .get("output_index")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or_default();
 
-            self.run_pcli(
-                "alice",
-                vec![
-                    "tx".to_string(),
-                    "compliance".to_string(),
-                    "issuer-db".to_string(),
-                    "mark-audited".to_string(),
-                    "--db".to_string(),
-                    self.issuer_db_rel.clone(),
-                    "--height".to_string(),
-                    height.to_string(),
-                    "--tx-hash".to_string(),
-                    tx_hash.to_string(),
-                    "--action-index".to_string(),
-                    action_index.to_string(),
-                    "--audit-subject".to_string(),
-                    subject.name.clone(),
-                ],
+            let store = self.scanner_store()?;
+            mark_row_audited(
+                &store,
+                height as u64,
+                tx_hash,
+                action_index as u32,
+                output_index as u32,
+                &subject.name,
             )?;
         }
         Ok(())
@@ -1783,30 +1676,20 @@ impl AuditDemo {
             self.write_health(false, "Scanner not started", None)?;
         }
         let detected = self.demo_dir.join("detected-txs.json");
-        if !detected.exists() {
-            fs::write(&detected, br#"{"detected":[]}"#)?;
-        }
         let ledger_path = self.demo_dir.join("ledger.json");
-        if self.issuer_db_abs.exists() {
-            match self.capture_pcli(
-                "alice",
-                [
-                    "tx",
-                    "compliance",
-                    "issuer-db",
-                    "show",
-                    "--json",
-                    "--db",
-                    &self.issuer_db_rel,
-                ],
-            ) {
-                Ok(output) => fs::write(&ledger_path, output)?,
-                Err(_) if !ledger_path.exists() => fs::write(&ledger_path, b"[]")?,
-                Err(error) => return Err(error),
-            }
-        } else if !ledger_path.exists() {
-            fs::write(&ledger_path, b"[]")?;
+        let store = self.scanner_store()?;
+        if let Ok(dk_hex) = self.issuer_dk() {
+            let dk = detection_key_from_hex(&dk_hex)?;
+            let _ = decrypt_flagged_rows(&store, &dk)?;
         }
+        fs::write(
+            &detected,
+            serde_json::to_vec_pretty(&export_scan_json(&store)?)?,
+        )?;
+        fs::write(
+            &ledger_path,
+            serde_json::to_vec_pretty(&export_ledger_rows_json(&store)?)?,
+        )?;
 
         let detected_json = self.read_json(&detected)?;
         let ledger_json = self.read_json_array(&ledger_path).unwrap_or_default();
@@ -1933,6 +1816,15 @@ impl AuditDemo {
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| anyhow!("issuer DK is missing; run audit-demo setup first"))
+    }
+
+    fn scanner_store(&self) -> Result<SqliteScannerStore> {
+        SqliteScannerStore::new(&self.issuer_db_abs).with_context(|| {
+            format!(
+                "failed to open audit-demo scanner database {}",
+                self.issuer_db_abs.display()
+            )
+        })
     }
 
     fn subjects(&self) -> Result<Vec<AuditSubject>> {
@@ -2096,10 +1988,16 @@ fn same_ref(
     height: Option<i64>,
     tx_hash: Option<&str>,
     action_index: Option<i64>,
+    output_index: Option<i64>,
 ) -> bool {
     row.get("height").and_then(serde_json::Value::as_i64) == height
         && row.get("tx_hash").and_then(serde_json::Value::as_str) == tx_hash
         && row.get("action_index").and_then(serde_json::Value::as_i64) == action_index
+        && row
+            .get("output_index")
+            .and_then(serde_json::Value::as_i64)
+            .or(Some(0))
+            == output_index.or(Some(0))
 }
 
 fn alias_matches(alias: Option<&serde_json::Value>, name: &str) -> bool {

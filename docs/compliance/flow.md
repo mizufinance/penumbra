@@ -251,10 +251,66 @@ Ciphertexts are stored on-chain after broadcast.
 
 ---
 
+## Operational Stages
+
+Compliance visibility is intentionally split into stages that share one
+persistent scanner database. The database is the spine: scanning writes raw
+chain material into it, screening annotates those rows, and decryption/audit
+workers read and update the same keyed rows.
+
+| Stage | Component | What Happens | External Dependency |
+|-------|-----------|--------------|---------------------|
+| 1. Blockchain scanning | `IssuerComplianceWorker` | Streams compact blocks, fetches block identity, handles reorgs, fetches full transactions, extracts raw transfer output compliance ciphertexts and clear public flows | Penumbra node |
+| 2. Screening | `ComplianceScreener` | DK-decrypts the detection tier and marks each raw ciphertext as detected, irrelevant, or invalid | Issuer DK |
+| 3. Audit-tier decryption | Audit library / `orbis-audit` | For each detected row, flagged transfers decrypt fully with DK; unflagged transfers go through ACP/Orbis PRE | Issuer DK or ACP + Orbis |
+| 4. Audit ledger projection | Audit library | Normalizes private detections and public shield/withdraw flows into ledger rows | Scanner DB |
+| 5. Exporters | Audit-demo, reports, Orbis input | Produce `state.json`, report JSON, or `orbis-audit` input from the audit ledger | Scanner DB |
+
+The chain shape is:
+
+```
+Chain
+  -> Scan: extract raw OutputRef ciphertexts and clear public flows
+  -> Scanner DB spine
+  -> Screen: detection-tier DK decrypt marks Detected / Irrelevant / Invalid
+  -> Decrypt audit tiers per detected output:
+       flagged:   full-tier issuer DK decrypt
+       unflagged: Orbis PRE decrypt
+  -> Audit ledger projection
+  -> Exporters: audit-demo JSON, reports, Orbis audit input
+```
+
+---
+
 ## 5. Detection Scanning
 
-The issuer scans the chain using their static detection key (DK). No Orbis
-involvement.
+The issuer scanner is a typed, persistent pipeline. Detection uses the issuer's
+static detection key (DK). It does not use Orbis, ACP, audit grants, or PRE.
+
+```
+compact block stream
+  -> block identity lookup
+  -> parent-hash reorg check / rollback
+  -> full transaction fetch for the height
+  -> transfer output compliance ciphertext extraction
+  -> raw scanner_ciphertexts row
+  -> ComplianceScreener status update
+  -> audit_rows projection
+  -> SqliteScannerStore commit
+```
+
+The screener is intentionally pure:
+
+```
+ExtractedComplianceCiphertext
+  -> Irrelevant
+  -> Detected(DetectionEvent)
+  -> InvalidCiphertext
+```
+
+It only parses transfer compliance ciphertexts and DK-detects the detection
+tier. Persistence, block fetches, reorg handling, and audit enrichment stay
+outside the screener.
 
 ```
 For each compliance ciphertext:
@@ -262,13 +318,28 @@ For each compliance ciphertext:
 2. Compute S = DK × EPK
 3. Derive seed, decrypt detection tier
 4. If valid asset_id: match found
-5. Check flag bit: is_flagged = (plaintext >> 252) & 1
+5. Check whether plaintext is `asset_id` or `asset_id + FLAG_SENTINEL`
 ```
 
 ```bash
-pcli tx compliance scan --dk-hex <hex> --scan-asset-id <id> \
-  --node <url> --start-height <height>
+pcli tx compliance scan run \
+  --node <url> \
+  --db /path/to/compliance-scanner.db \
+  --dk-hex <hex> \
+  --scan-asset-id <id>
+
+pcli tx compliance scan catch-up \
+  --node <url> \
+  --db /path/to/compliance-scanner.db \
+  --dk-hex <hex> \
+  --scan-asset-id <id>
 ```
+
+The scanner resumes from `scanner_sync.last_height`. Each committed block stores
+its height, block hash, parent hash, optional block time, raw ciphertext rows,
+screening statuses, detections, capped invalid ciphertext rows, clear flows,
+audit projections, and sync state in a single SQLite transaction. Empty blocks
+are committed too; header compaction is deferred.
 
 Detection tier is always encrypted to DK_pub, so the issuer always gets:
 asset_id, flag status, and salt.
@@ -276,9 +347,9 @@ asset_id, flag status, and salt.
 **Flagged** (amount >= threshold): All tiers encrypted to DK_pub. Issuer
 decrypts everything directly. Done.
 
-**Unflagged** (amount < threshold): Only detection tier decryptable. Issuer
-stores transaction references (block height, tx hash, action index, EPK values)
-for decryption via governance + Orbis PRE.
+**Unflagged** (amount < threshold): Only detection tier decrypts. The scanner
+persists the detected output reference and raw compliance ciphertext. Governance
++ Orbis PRE enrichment is downstream work and is not part of the scanner core.
 
 ---
 

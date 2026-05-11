@@ -98,6 +98,51 @@ proofs.
 Clients cache trees locally (like SCT). SQLite tables:
 `compliance_user_positions`, `compliance_user_hashes`, `compliance_anchors`.
 
+### Issuer Scanner Store
+
+Issuer scanning uses a separate SQLite store from wallet local sync. The
+scanner stores typed chain references:
+
+```rust
+BlockRef { height, block_hash, parent_hash, block_time_unix }
+TxRef { block, tx_index, tx_hash }
+ActionRef { tx, action_index }
+OutputRef { action, output_index }
+ExtractedComplianceCiphertext { output_ref, raw_bytes }
+```
+
+`tx_hash` is the canonical Penumbra `TransactionId`, computed from the same
+canonical protobuf transaction bytes as `Transaction::id()`. The transaction
+crate has a parity test so scanner hashing changes fail loudly.
+
+SQLite tables:
+
+| Table | Purpose |
+|-------|---------|
+| `scanner_blocks` | Committed block identity: height, block hash, parent hash, block time, scan status |
+| `scanner_ciphertexts` | Raw extracted transfer output ciphertexts keyed by `OutputRef`, plus `screen_status` and `screen_reason` |
+| `scanner_detections` | Detected transfer output ciphertexts keyed by height, tx hash, action index, output index |
+| `scanner_invalid_ciphertexts` | First 256 malformed ciphertexts per block |
+| `scanner_invalid_ciphertext_summaries` | Overflow count for additional malformed ciphertexts in a block |
+| `scanner_clear_flows` | Public shield and withdrawal rows extracted from IBC receive and shielded ICS20 withdrawal actions |
+| `audit_rows` | Normalized audit ledger projection for private detections and public clear flows |
+| `audit_address_aliases` | Optional address/transmission-key labels used by audit-demo and reports |
+| `audit_row_audits` | Idempotent subject audit marks for ledger rows |
+| `audit_decryption_failures` | Non-destructive record of failed issuer-DK or Orbis decrypt attempts |
+| `audit_orbis_receipts` | Stored PRE receipt JSON keyed by output and tier |
+| `scanner_sync` | Single-row sync cursor with last height and last block hash |
+
+`commit_block` writes block metadata, raw ciphertexts, screening results,
+detections, invalid ciphertexts, invalid summary, clear flows, audit rows, and
+sync cursor atomically. Reorg handling compares each live block's parent hash
+against the stored hash at `height - 1`; on mismatch, the scanner walks
+backward to the common ancestor, rolls back later scanner and audit rows, and
+replays from `ancestor + 1`.
+
+Screening is detection-tier DK decryption. Full-tier DK decryption is a
+separate audit branch used only for flagged rows. Orbis PRE is the audit branch
+for unflagged private rows; it updates the same `audit_rows` key.
+
 ---
 
 ## Transfer DLEQ
@@ -229,6 +274,7 @@ object metadata plus request scope, and the PRE request must carry a
 | Transfer action | `shielded-pool/src/transfer/action.rs`, `plan.rs`, `proof.rs`, `compliance.rs` |
 | Split / Consolidate actions | `shielded-pool/src/split/`, `shielded-pool/src/consolidate/` (no compliance bytes) |
 | Transfer ciphertext / DLEQ | `compliance/src/transfer.rs`, `structs.rs` |
+| Issuer scanner refs/extractor/screener/store/worker | `compliance/src/scanner/types.rs`, `sync.rs`, `screener.rs`, `storage.rs`, `worker.rs` |
 | Proof aggregation (`AggregateBundle`) | `crates/core/component/proof-aggregation/` |
 | View service | `crates/view/src/service.rs` |
 | Compliance client | `crates/view/src/client_compliance.rs` |

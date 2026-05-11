@@ -826,6 +826,16 @@ mod tests {
     }
 
     #[test]
+    fn compliance_scanner_transaction_id_matches_canonical_transaction_id() {
+        let tx = Transaction::default();
+        let proto: penumbra_sdk_proto::core::transaction::v1::Transaction = (&tx).into();
+        assert_eq!(
+            penumbra_sdk_compliance::scanner_transaction_id_from_proto(&proto),
+            tx.id()
+        );
+    }
+
+    #[test]
     fn num_proofs_counts_new_shielded_action_families() {
         let tx = Transaction {
             transaction_body: TransactionBody {
