@@ -1,7 +1,7 @@
 use penumbra_sdk_asset::asset;
-use penumbra_sdk_txhash::TransactionId;
 
 use crate::transfer::TransferComplianceCiphertext;
+pub use crate::{ActionRef, BlockRef, OutputRef, TxRef};
 
 pub const FLOW_TYPE_PRIVATE_TRANSFER: &str = "private_transfer";
 pub const FLOW_TYPE_SHIELD: &str = "shield";
@@ -9,38 +9,17 @@ pub const FLOW_TYPE_WITHDRAW: &str = "withdraw";
 pub const DECRYPTED_VIA_ISSUER_DK: &str = "issuer_dk";
 pub const DECRYPTED_VIA_ORBIS_PRE: &str = "orbis_pre";
 pub const DECRYPTED_VIA_PUBLIC: &str = "public";
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BlockRef {
-    pub height: u64,
-    pub block_hash: [u8; 32],
-    pub parent_hash: [u8; 32],
-    pub block_time_unix: Option<i64>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TxRef {
-    pub block: BlockRef,
-    pub tx_index: u32,
-    pub tx_hash: TransactionId,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ActionRef {
-    pub tx: TxRef,
-    pub action_index: u32,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OutputRef {
-    pub action: ActionRef,
-    pub output_index: u32,
-}
+pub const AUDIT_STATUS_PENDING: &str = "pending";
+pub const AUDIT_STATUS_EVIDENCE_VALID: &str = "evidence_valid";
+pub const AUDIT_STATUS_EVIDENCE_INVALID: &str = "evidence_invalid";
+pub const AUDIT_STATUS_DECRYPT_FAILED: &str = "decrypt_failed";
+pub const AUDIT_STATUS_AUDIT_COMPLETE: &str = "audit_complete";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExtractedComplianceCiphertext {
     pub output_ref: OutputRef,
     pub raw_bytes: Vec<u8>,
+    pub upload_bundle_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

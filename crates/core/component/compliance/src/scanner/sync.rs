@@ -37,6 +37,8 @@ pub fn extract_compliance_ciphertexts(
                     output_index: output_index as u32,
                 },
                 raw_bytes: output.compliance_ciphertext.clone(),
+                upload_bundle_bytes: (!output.orbis_upload_bundle.is_empty())
+                    .then(|| output.orbis_upload_bundle.clone()),
             });
         }
     }
@@ -190,6 +192,7 @@ mod tests {
                                     TransferOutputBody::default(),
                                     TransferOutputBody {
                                         compliance_ciphertext: vec![1, 2, 3, 4],
+                                        orbis_upload_bundle: vec![9, 9],
                                         ..Default::default()
                                     },
                                     TransferOutputBody {
@@ -218,6 +221,7 @@ mod tests {
         assert_eq!(extracted.len(), 2);
         assert_eq!(extracted[0].output_ref.action.action_index, 1);
         assert_eq!(extracted[0].output_ref.output_index, 1);
+        assert_eq!(extracted[0].upload_bundle_bytes, Some(vec![9, 9]));
         assert_eq!(extracted[0].raw_bytes, vec![1, 2, 3, 4]);
         assert_eq!(extracted[1].output_ref.action.action_index, 1);
         assert_eq!(extracted[1].output_ref.output_index, 2);

@@ -88,13 +88,23 @@ pub use crypto::{
 pub mod scanning;
 pub use scanning::{decrypt_full_flagged, AddressData, FullComplianceData};
 
+pub mod refs;
+pub use refs::{ActionRef, BlockRef, OutputRef, TxRef};
+
+pub mod evidence;
+pub use evidence::{ComplianceEvidenceObject, EvidenceObjectType, COMPLIANCE_EVIDENCE_VERSION};
+
+pub mod audit_validation;
+pub use audit_validation::{validate_audit_evidence, AuditValidationInput, AuditValidationStatus};
+
 #[cfg(feature = "component")]
 pub mod audit;
 #[cfg(feature = "component")]
 pub use audit::{
     decrypt_flagged_rows, export_detected_refs, export_ledger_rows, export_ledger_rows_json,
     export_orbis_pending_scan, export_scan_json, import_orbis_audit_entries, mark_row_audited,
-    record_address_alias, scanner_health_json, AuditDetectedRef, AuditScanExport, OrbisAuditEntry,
+    record_address_alias, record_evidence_failure, scanner_health_json,
+    validate_and_save_evidence_object, AuditDetectedRef, AuditScanExport, OrbisAuditEntry,
 };
 
 mod tx_id;
@@ -105,11 +115,12 @@ pub use tx_id::scanner_transaction_id_from_proto;
 pub mod scanner;
 #[cfg(feature = "component")]
 pub use scanner::{
-    extract_clear_flows, extract_compliance_ciphertexts, ActionRef, AuditLedgerRow, AuditRowKey,
-    BlockIdentityProvider, BlockRef, ClearFlowEvent, ClearFlowKind, ComplianceScreener,
+    extract_clear_flows, extract_compliance_ciphertexts, AuditAdviceProvider, AuditLedgerRow,
+    AuditRowKey, BlockIdentityProvider, ClearFlowEvent, ClearFlowKind, ComplianceScreener,
     DetectionEvent, ExtractedComplianceCiphertext, InvalidCiphertext, IssuerComplianceWorker,
-    OutputRef, ScannerStore, ScreeningResult, SqliteScannerStore,
-    TendermintProxyBlockIdentityProvider, TxRef, WorkerHandle, MAX_INVALID_CIPHERTEXTS_PER_BLOCK,
+    NoopAuditAdviceProvider, RingInfo, RpcAuditAdviceProvider, ScannerStore, ScreeningResult,
+    SqliteScannerStore, TendermintProxyBlockIdentityProvider, WorkerHandle,
+    MAX_INVALID_CIPHERTEXTS_PER_BLOCK,
 };
 
 pub mod ibc;

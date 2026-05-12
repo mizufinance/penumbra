@@ -1,18 +1,28 @@
 use anyhow::{anyhow, Context, Result};
 use penumbra_sdk_asset::asset;
 use penumbra_sdk_keys::Address;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::scanner::storage::SqliteScannerStore;
 use crate::scanner::types::{
-    AuditLedgerRow, DECRYPTED_VIA_ISSUER_DK, DECRYPTED_VIA_ORBIS_PRE, FLOW_TYPE_PRIVATE_TRANSFER,
+    AuditLedgerRow, AUDIT_STATUS_AUDIT_COMPLETE, AUDIT_STATUS_DECRYPT_FAILED,
+    AUDIT_STATUS_EVIDENCE_INVALID, AUDIT_STATUS_EVIDENCE_VALID, AUDIT_STATUS_PENDING,
+    DECRYPTED_VIA_ISSUER_DK, DECRYPTED_VIA_ORBIS_PRE, FLOW_TYPE_PRIVATE_TRANSFER,
 };
 use crate::scanning::decrypt_full_flagged;
 use crate::transfer::TransferComplianceCiphertext;
-use crate::DetectionKey;
+use crate::{
+    validate_audit_evidence, AuditValidationInput, AuditValidationStatus, ComplianceEvidenceObject,
+    DetectionKey, OutputRef, TransferOrbisUploadBundle,
+};
+
+pub const EVIDENCE_STAGE_BUILD: &str = "build_evidence";
+pub const EVIDENCE_STAGE_VALIDATE: &str = "validate_evidence";
+pub const EVIDENCE_STAGE_UPLOAD_BUNDLE: &str = "validate_upload_bundle";
+pub const EVIDENCE_STAGE_ORBIS_IMPORT: &str = "validate_orbis_import";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuditDetectedRef {
@@ -105,26 +115,34 @@ pub fn decrypt_flagged_rows(store: &SqliteScannerStore, dk: &DetectionKey) -> Re
           AND a.action_index = d.action_index
           AND a.output_index = d.output_index
          WHERE d.is_flagged = 1
+           AND d.audit_status IN (?2, ?3)
            AND a.flow_type = ?1
            AND a.amount IS NULL",
     )?;
     let pending = rows
-        .query_map(params![FLOW_TYPE_PRIVATE_TRANSFER], |row| {
-            let height: i64 = row.get(0)?;
-            let tx_hash: Vec<u8> = row.get(1)?;
-            let action_index: i64 = row.get(2)?;
-            let output_index: i64 = row.get(3)?;
-            let asset_id: String = row.get(4)?;
-            let ciphertext_bytes: Vec<u8> = row.get(5)?;
-            Ok((
-                height as u64,
-                tx_hash,
-                action_index as u32,
-                output_index as u32,
-                asset_id,
-                ciphertext_bytes,
-            ))
-        })?
+        .query_map(
+            params![
+                FLOW_TYPE_PRIVATE_TRANSFER,
+                AUDIT_STATUS_EVIDENCE_VALID,
+                AUDIT_STATUS_DECRYPT_FAILED
+            ],
+            |row| {
+                let height: i64 = row.get(0)?;
+                let tx_hash: Vec<u8> = row.get(1)?;
+                let action_index: i64 = row.get(2)?;
+                let output_index: i64 = row.get(3)?;
+                let asset_id: String = row.get(4)?;
+                let ciphertext_bytes: Vec<u8> = row.get(5)?;
+                Ok((
+                    height as u64,
+                    tx_hash,
+                    action_index as u32,
+                    output_index as u32,
+                    asset_id,
+                    ciphertext_bytes,
+                ))
+            },
+        )?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     drop(rows);
 
@@ -153,6 +171,21 @@ pub fn decrypt_flagged_rows(store: &SqliteScannerStore, dk: &DetectionKey) -> Re
                         hex::encode(data.sender_address.transmission_key),
                         DECRYPTED_VIA_ISSUER_DK,
                         now_unix(),
+                        height as i64,
+                        tx_hash.as_slice(),
+                        action_index as i64,
+                        output_index as i64,
+                    ],
+                )?;
+                tx.execute(
+                    "UPDATE scanner_detections
+                     SET audit_status = ?1
+                     WHERE height = ?2
+                       AND tx_hash = ?3
+                       AND action_index = ?4
+                       AND output_index = ?5",
+                    params![
+                        AUDIT_STATUS_AUDIT_COMPLETE,
                         height as i64,
                         tx_hash.as_slice(),
                         action_index as i64,
@@ -190,10 +223,39 @@ pub fn decrypt_flagged_rows(store: &SqliteScannerStore, dk: &DetectionKey) -> Re
 }
 
 pub fn export_orbis_pending_scan(store: &SqliteScannerStore) -> Result<AuditScanExport> {
-    let detected = export_detected_refs(store)?
-        .into_iter()
-        .filter(|row| !row.is_flagged && row.flow_type == FLOW_TYPE_PRIVATE_TRANSFER)
-        .collect::<Vec<_>>();
+    let conn = store.lock_conn()?;
+    let mut rows = conn.prepare(
+        "SELECT height, tx_hash, action_index, output_index, asset_id, is_flagged, ?1
+         FROM scanner_detections
+         WHERE is_flagged = 0
+           AND audit_status = ?2
+         ORDER BY height, tx_hash, action_index, output_index",
+    )?;
+    let detected = rows
+        .query_map(
+            params![FLOW_TYPE_PRIVATE_TRANSFER, AUDIT_STATUS_EVIDENCE_VALID],
+            |row| {
+                let height: i64 = row.get(0)?;
+                let tx_hash: Vec<u8> = row.get(1)?;
+                let action_index: i64 = row.get(2)?;
+                let output_index: i64 = row.get(3)?;
+                let asset_id: String = row.get(4)?;
+                let is_flagged: i64 = row.get(5)?;
+                let flow_type: String = row.get(6)?;
+                Ok(AuditDetectedRef {
+                    height: height as u64,
+                    tx_hash: hex::encode(tx_hash),
+                    action_index: action_index as u32,
+                    output_index: output_index as u32,
+                    asset_id,
+                    is_flagged: is_flagged != 0,
+                    flow_type,
+                })
+            },
+        )?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(rows);
+    drop(conn);
     Ok(AuditScanExport {
         scan_info: scan_info(store)?,
         detected,
@@ -210,6 +272,50 @@ pub fn import_orbis_audit_entries(
     let mut updated = 0u64;
     for entry in entries {
         let tx_hash = decode_tx_hash(&entry.tx_hash)?;
+        let row_status: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT audit_status, is_flagged
+                 FROM scanner_detections
+                 WHERE height = ?1 AND tx_hash = ?2 AND action_index = ?3 AND output_index = ?4",
+                params![
+                    entry.height as i64,
+                    tx_hash.as_slice(),
+                    entry.action_index as i64,
+                    entry.output_index as i64,
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        match row_status {
+            Some((status, 0))
+                if status == AUDIT_STATUS_EVIDENCE_VALID
+                    || status == AUDIT_STATUS_DECRYPT_FAILED
+                    || status == AUDIT_STATUS_AUDIT_COMPLETE => {}
+            Some((status, _)) => {
+                record_evidence_failure_tx(
+                    &tx,
+                    entry.height,
+                    tx_hash.as_slice(),
+                    entry.action_index,
+                    entry.output_index,
+                    EVIDENCE_STAGE_ORBIS_IMPORT,
+                    &format!("row is not an evidence-valid unflagged detection: {status}"),
+                )?;
+                continue;
+            }
+            None => {
+                record_evidence_failure_tx(
+                    &tx,
+                    entry.height,
+                    tx_hash.as_slice(),
+                    entry.action_index,
+                    entry.output_index,
+                    EVIDENCE_STAGE_ORBIS_IMPORT,
+                    "detected row not found",
+                )?;
+                continue;
+            }
+        }
         let changed = tx.execute(
             "UPDATE audit_rows
              SET amount = ?1,
@@ -240,6 +346,21 @@ pub fn import_orbis_audit_entries(
             ],
         )?;
         if changed > 0 {
+            tx.execute(
+                "UPDATE scanner_detections
+                 SET audit_status = ?1
+                 WHERE height = ?2
+                   AND tx_hash = ?3
+                   AND action_index = ?4
+                   AND output_index = ?5",
+                params![
+                    AUDIT_STATUS_AUDIT_COMPLETE,
+                    entry.height as i64,
+                    tx_hash.as_slice(),
+                    entry.action_index as i64,
+                    entry.output_index as i64,
+                ],
+            )?;
             updated += 1;
             if let Some(subject) = subject {
                 tx.execute(
@@ -260,6 +381,258 @@ pub fn import_orbis_audit_entries(
     }
     tx.commit()?;
     Ok(updated)
+}
+
+pub fn record_evidence_failure(
+    store: &SqliteScannerStore,
+    output_ref: &OutputRef,
+    stage: &str,
+    reason: &str,
+) -> Result<()> {
+    let tx_ref = &output_ref.action.tx;
+    let conn = store.lock_conn()?;
+    let tx = conn.unchecked_transaction()?;
+    record_evidence_failure_tx(
+        &tx,
+        tx_ref.block.height,
+        tx_ref.tx_hash.as_ref(),
+        output_ref.action.action_index,
+        output_ref.output_index,
+        stage,
+        reason,
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn validate_and_save_evidence_object(
+    store: &SqliteScannerStore,
+    evidence: &ComplianceEvidenceObject,
+    upload_bundle: &TransferOrbisUploadBundle,
+    ring_pk: &decaf377::Element,
+) -> Result<[u8; 32]> {
+    let output_ref = &evidence.output_ref;
+    let tx_ref = &output_ref.action.tx;
+    let conn = store.lock_conn()?;
+    let tx = conn.unchecked_transaction()?;
+
+    if let Err(error) = evidence.validate_payload_hash() {
+        record_evidence_failure_tx(
+            &tx,
+            tx_ref.block.height,
+            tx_ref.tx_hash.as_ref(),
+            output_ref.action.action_index,
+            output_ref.output_index,
+            EVIDENCE_STAGE_VALIDATE,
+            &error.to_string(),
+        )?;
+        tx.commit()?;
+        return Err(error);
+    }
+
+    let persisted_raw_bytes: Option<Vec<u8>> = tx
+        .query_row(
+            "SELECT raw_bytes
+             FROM scanner_ciphertexts
+             WHERE height = ?1 AND tx_hash = ?2 AND action_index = ?3 AND output_index = ?4",
+            params![
+                tx_ref.block.height as i64,
+                tx_ref.tx_hash.as_ref(),
+                output_ref.action.action_index as i64,
+                output_ref.output_index as i64,
+            ],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let transfer_bytes = evidence.transfer_ciphertext.to_bytes();
+    if persisted_raw_bytes.as_deref() != Some(transfer_bytes.as_slice()) {
+        let reason = "evidence ciphertext does not match persisted scanner ciphertext";
+        record_evidence_failure_tx(
+            &tx,
+            tx_ref.block.height,
+            tx_ref.tx_hash.as_ref(),
+            output_ref.action.action_index,
+            output_ref.output_index,
+            EVIDENCE_STAGE_VALIDATE,
+            reason,
+        )?;
+        tx.commit()?;
+        anyhow::bail!(reason);
+    }
+
+    let persisted_upload_bundle_bytes: Option<Vec<u8>> = tx
+        .query_row(
+            "SELECT orbis_upload_bundle_bytes
+             FROM scanner_ciphertexts
+             WHERE height = ?1 AND tx_hash = ?2 AND action_index = ?3 AND output_index = ?4",
+            params![
+                tx_ref.block.height as i64,
+                tx_ref.tx_hash.as_ref(),
+                output_ref.action.action_index as i64,
+                output_ref.output_index as i64,
+            ],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    let upload_bundle_bytes = upload_bundle.to_bytes()?;
+    if persisted_upload_bundle_bytes.as_deref() != Some(upload_bundle_bytes.as_slice()) {
+        let reason = "evidence upload bundle does not match persisted scanner upload bundle";
+        record_evidence_failure_tx(
+            &tx,
+            tx_ref.block.height,
+            tx_ref.tx_hash.as_ref(),
+            output_ref.action.action_index,
+            output_ref.output_index,
+            EVIDENCE_STAGE_UPLOAD_BUNDLE,
+            reason,
+        )?;
+        tx.commit()?;
+        anyhow::bail!(reason);
+    }
+
+    let detected: Option<(String, i64, Vec<u8>)> = tx
+        .query_row(
+            "SELECT asset_id, is_flagged, salt
+             FROM scanner_detections
+             WHERE height = ?1 AND tx_hash = ?2 AND action_index = ?3 AND output_index = ?4",
+            params![
+                tx_ref.block.height as i64,
+                tx_ref.tx_hash.as_ref(),
+                output_ref.action.action_index as i64,
+                output_ref.output_index as i64,
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let detected_matches = detected.is_some_and(|(asset_id, is_flagged, salt)| {
+        asset_id == evidence.asset_id.to_string()
+            && (is_flagged != 0) == evidence.is_flagged
+            && salt == evidence.detection_salt.to_bytes()
+    });
+    if !detected_matches {
+        let reason = "evidence asset, flag, or salt does not match scanner detection";
+        record_evidence_failure_tx(
+            &tx,
+            tx_ref.block.height,
+            tx_ref.tx_hash.as_ref(),
+            output_ref.action.action_index,
+            output_ref.output_index,
+            EVIDENCE_STAGE_VALIDATE,
+            reason,
+        )?;
+        tx.commit()?;
+        anyhow::bail!(reason);
+    }
+
+    match validate_audit_evidence(AuditValidationInput {
+        evidence: evidence.clone(),
+        upload_bundle: Some(upload_bundle.clone()),
+        ring_pk: *ring_pk,
+    }) {
+        AuditValidationStatus::Valid => {}
+        AuditValidationStatus::MissingUploadBundle => {
+            let reason = "missing upload bundle";
+            record_evidence_failure_tx(
+                &tx,
+                tx_ref.block.height,
+                tx_ref.tx_hash.as_ref(),
+                output_ref.action.action_index,
+                output_ref.output_index,
+                EVIDENCE_STAGE_UPLOAD_BUNDLE,
+                reason,
+            )?;
+            tx.commit()?;
+            anyhow::bail!(reason);
+        }
+        AuditValidationStatus::InvalidEvidence(reason) => {
+            record_evidence_failure_tx(
+                &tx,
+                tx_ref.block.height,
+                tx_ref.tx_hash.as_ref(),
+                output_ref.action.action_index,
+                output_ref.output_index,
+                EVIDENCE_STAGE_VALIDATE,
+                &reason,
+            )?;
+            tx.commit()?;
+            anyhow::bail!(reason);
+        }
+        AuditValidationStatus::InvalidOrbisPackage(reason) => {
+            record_evidence_failure_tx(
+                &tx,
+                tx_ref.block.height,
+                tx_ref.tx_hash.as_ref(),
+                output_ref.action.action_index,
+                output_ref.output_index,
+                EVIDENCE_STAGE_UPLOAD_BUNDLE,
+                &reason,
+            )?;
+            tx.commit()?;
+            anyhow::bail!(reason);
+        }
+    }
+
+    let object_hash = evidence.object_hash();
+    let object_bytes = evidence.to_bytes();
+    tx.execute(
+        "INSERT OR REPLACE INTO compliance_evidence_objects
+         (object_hash, height, tx_hash, action_index, output_index, object_bytes, created_at_unix)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            object_hash.as_slice(),
+            tx_ref.block.height as i64,
+            tx_ref.tx_hash.as_ref(),
+            output_ref.action.action_index as i64,
+            output_ref.output_index as i64,
+            object_bytes.as_slice(),
+            now_unix(),
+        ],
+    )?;
+    tx.execute(
+        "UPDATE scanner_detections
+             SET evidence_object_hash = ?1,
+                 audit_status = CASE
+                     WHEN audit_status = ?6 THEN ?6
+                     WHEN audit_status = ?8 THEN ?8
+                     ELSE ?7
+                 END
+         WHERE height = ?2 AND tx_hash = ?3 AND action_index = ?4 AND output_index = ?5",
+        params![
+            object_hash.as_slice(),
+            tx_ref.block.height as i64,
+            tx_ref.tx_hash.as_ref(),
+            output_ref.action.action_index as i64,
+            output_ref.output_index as i64,
+            AUDIT_STATUS_AUDIT_COMPLETE,
+            AUDIT_STATUS_EVIDENCE_VALID,
+            AUDIT_STATUS_DECRYPT_FAILED,
+        ],
+    )?;
+    tx.execute(
+        "UPDATE audit_rows
+         SET evidence_object_hash = ?1
+         WHERE height = ?2 AND tx_hash = ?3 AND action_index = ?4 AND output_index = ?5",
+        params![
+            object_hash.as_slice(),
+            tx_ref.block.height as i64,
+            tx_ref.tx_hash.as_ref(),
+            output_ref.action.action_index as i64,
+            output_ref.output_index as i64,
+        ],
+    )?;
+    tx.execute(
+        "DELETE FROM audit_evidence_failures
+         WHERE height = ?1 AND tx_hash = ?2 AND action_index = ?3 AND output_index = ?4",
+        params![
+            tx_ref.block.height as i64,
+            tx_ref.tx_hash.as_ref(),
+            output_ref.action.action_index as i64,
+            output_ref.output_index as i64,
+        ],
+    )?;
+    tx.commit()?;
+    Ok(object_hash)
 }
 
 pub fn export_detected_refs(store: &SqliteScannerStore) -> Result<Vec<AuditDetectedRef>> {
@@ -460,6 +833,62 @@ fn record_failure_tx(
             now_unix(),
         ],
     )?;
+    tx.execute(
+        "UPDATE scanner_detections
+         SET audit_status = ?1
+         WHERE height = ?2 AND tx_hash = ?3 AND action_index = ?4 AND output_index = ?5
+           AND audit_status IN (?6, ?7)",
+        params![
+            AUDIT_STATUS_DECRYPT_FAILED,
+            height as i64,
+            tx_hash,
+            action_index as i64,
+            output_index as i64,
+            AUDIT_STATUS_EVIDENCE_VALID,
+            AUDIT_STATUS_DECRYPT_FAILED,
+        ],
+    )?;
+    Ok(())
+}
+
+fn record_evidence_failure_tx(
+    tx: &rusqlite::Transaction<'_>,
+    height: u64,
+    tx_hash: &[u8],
+    action_index: u32,
+    output_index: u32,
+    stage: &str,
+    reason: &str,
+) -> Result<()> {
+    tx.execute(
+        "INSERT OR REPLACE INTO audit_evidence_failures
+         (height, tx_hash, action_index, output_index, stage, reason, failed_at_unix)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            height as i64,
+            tx_hash,
+            action_index as i64,
+            output_index as i64,
+            stage,
+            reason,
+            now_unix(),
+        ],
+    )?;
+    tx.execute(
+        "UPDATE scanner_detections
+         SET audit_status = ?1
+         WHERE height = ?2 AND tx_hash = ?3 AND action_index = ?4 AND output_index = ?5
+           AND audit_status IN (?6, ?7)",
+        params![
+            AUDIT_STATUS_EVIDENCE_INVALID,
+            height as i64,
+            tx_hash,
+            action_index as i64,
+            output_index as i64,
+            AUDIT_STATUS_PENDING,
+            AUDIT_STATUS_EVIDENCE_INVALID,
+        ],
+    )?;
     Ok(())
 }
 
@@ -480,6 +909,7 @@ fn now_unix() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scanner::{DetectionEvent, ExtractedComplianceCiphertext, ScannerStore};
 
     #[test]
     fn alias_records_transmission_key_for_penumbra_address() {
@@ -504,5 +934,233 @@ mod tests {
         let scan = export_scan_json(&store).unwrap();
         assert!(scan.get("scan_info").is_some());
         assert_eq!(scan.get("detected").unwrap().as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn evidence_object_is_persisted_by_hash() {
+        let store = SqliteScannerStore::new(":memory:").unwrap();
+        let (evidence, bundle, ring_pk) = crate::evidence::tests::valid_evidence_fixture();
+        persist_evidence_detection(&store, &evidence, &bundle, false).await;
+        let object_hash =
+            validate_and_save_evidence_object(&store, &evidence, &bundle, &ring_pk).unwrap();
+
+        let conn = store.lock_conn().unwrap();
+        let stored_len: i64 = conn
+            .query_row(
+                "SELECT length(object_bytes) FROM compliance_evidence_objects WHERE object_hash = ?1",
+                params![object_hash.as_slice()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_len as usize, evidence.to_bytes().len());
+        drop(conn);
+        assert_eq!(audit_status(&store, &evidence), AUDIT_STATUS_EVIDENCE_VALID);
+    }
+
+    #[tokio::test]
+    async fn evidence_object_rejects_mismatched_persisted_ciphertext() {
+        let store = SqliteScannerStore::new(":memory:").unwrap();
+        let (evidence, bundle, ring_pk) = crate::evidence::tests::valid_evidence_fixture();
+        persist_evidence_detection(&store, &evidence, &bundle, true).await;
+
+        let error =
+            validate_and_save_evidence_object(&store, &evidence, &bundle, &ring_pk).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("evidence ciphertext does not match persisted scanner ciphertext"));
+
+        let conn = store.lock_conn().unwrap();
+        let (status, reason): (String, String) = conn
+            .query_row(
+                "SELECT d.audit_status, f.reason
+                 FROM scanner_detections d
+                 JOIN audit_evidence_failures f
+                   ON f.height = d.height
+                  AND f.tx_hash = d.tx_hash
+                  AND f.action_index = d.action_index
+                  AND f.output_index = d.output_index",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, AUDIT_STATUS_EVIDENCE_INVALID);
+        assert!(reason.contains("persisted scanner ciphertext"));
+    }
+
+    #[tokio::test]
+    async fn orbis_export_requires_valid_evidence() {
+        let store = SqliteScannerStore::new(":memory:").unwrap();
+        let (evidence, bundle, ring_pk) = crate::evidence::tests::valid_evidence_fixture();
+        persist_evidence_detection(&store, &evidence, &bundle, false).await;
+
+        assert_eq!(export_orbis_pending_scan(&store).unwrap().detected.len(), 0);
+
+        validate_and_save_evidence_object(&store, &evidence, &bundle, &ring_pk).unwrap();
+        let export = export_orbis_pending_scan(&store).unwrap();
+        assert_eq!(export.detected.len(), 1);
+        assert_eq!(
+            export.detected[0].output_index,
+            evidence.output_ref.output_index
+        );
+    }
+
+    #[tokio::test]
+    async fn orbis_import_requires_valid_evidence() {
+        let store = SqliteScannerStore::new(":memory:").unwrap();
+        let (evidence, bundle, ring_pk) = crate::evidence::tests::valid_evidence_fixture();
+        persist_evidence_detection(&store, &evidence, &bundle, false).await;
+        let entry = orbis_entry(&evidence);
+
+        assert_eq!(
+            import_orbis_audit_entries(&store, std::slice::from_ref(&entry), Some("alice"))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            audit_status(&store, &evidence),
+            AUDIT_STATUS_EVIDENCE_INVALID
+        );
+
+        validate_and_save_evidence_object(&store, &evidence, &bundle, &ring_pk).unwrap();
+        assert_eq!(
+            import_orbis_audit_entries(&store, &[entry], Some("alice")).unwrap(),
+            1
+        );
+        assert_eq!(audit_status(&store, &evidence), AUDIT_STATUS_AUDIT_COMPLETE);
+    }
+
+    #[tokio::test]
+    async fn flagged_decrypt_requires_valid_evidence() {
+        let store = SqliteScannerStore::new(":memory:").unwrap();
+        let (evidence, bundle, _ring_pk) = crate::evidence::tests::valid_evidence_fixture();
+        persist_evidence_detection(&store, &evidence, &bundle, false).await;
+        let conn = store.lock_conn().unwrap();
+        conn.execute(
+            "UPDATE scanner_detections SET is_flagged = 1
+             WHERE height = ?1 AND tx_hash = ?2 AND action_index = ?3 AND output_index = ?4",
+            params![
+                evidence.output_ref.action.tx.block.height as i64,
+                evidence.output_ref.action.tx.tx_hash.as_ref(),
+                evidence.output_ref.action.action_index as i64,
+                evidence.output_ref.output_index as i64,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE audit_rows SET is_flagged = 1
+             WHERE height = ?1 AND tx_hash = ?2 AND action_index = ?3 AND output_index = ?4",
+            params![
+                evidence.output_ref.action.tx.block.height as i64,
+                evidence.output_ref.action.tx.tx_hash.as_ref(),
+                evidence.output_ref.action.action_index as i64,
+                evidence.output_ref.output_index as i64,
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        assert_eq!(
+            decrypt_flagged_rows(&store, &DetectionKey::demo()).unwrap(),
+            0
+        );
+        assert_eq!(audit_status(&store, &evidence), AUDIT_STATUS_PENDING);
+    }
+
+    #[tokio::test]
+    async fn rollback_removes_evidence_objects_and_failures() {
+        let store = SqliteScannerStore::new(":memory:").unwrap();
+        let (evidence, bundle, ring_pk) = crate::evidence::tests::valid_evidence_fixture();
+        persist_evidence_detection(&store, &evidence, &bundle, false).await;
+        validate_and_save_evidence_object(&store, &evidence, &bundle, &ring_pk).unwrap();
+        record_evidence_failure(
+            &store,
+            &evidence.output_ref,
+            EVIDENCE_STAGE_BUILD,
+            "synthetic failure after valid evidence",
+        )
+        .unwrap();
+
+        store
+            .rollback_to_height(evidence.output_ref.action.tx.block.height - 1)
+            .await
+            .unwrap();
+
+        let conn = store.lock_conn().unwrap();
+        for table in [
+            "compliance_evidence_objects",
+            "audit_evidence_failures",
+            "scanner_detections",
+            "audit_rows",
+        ] {
+            let count: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 0, "{table} should be empty after rollback");
+        }
+    }
+
+    async fn persist_evidence_detection(
+        store: &SqliteScannerStore,
+        evidence: &ComplianceEvidenceObject,
+        bundle: &TransferOrbisUploadBundle,
+        tamper_ciphertext: bool,
+    ) {
+        let block = evidence.output_ref.action.tx.block.clone();
+        let mut raw_bytes = evidence.transfer_ciphertext.to_bytes();
+        if tamper_ciphertext {
+            raw_bytes[0] ^= 1;
+        }
+        store.begin_block(&block).await.unwrap();
+        store
+            .save_ciphertext(&ExtractedComplianceCiphertext {
+                output_ref: evidence.output_ref.clone(),
+                raw_bytes,
+                upload_bundle_bytes: Some(bundle.to_bytes().unwrap()),
+            })
+            .await
+            .unwrap();
+        store
+            .save_detection(&DetectionEvent {
+                output_ref: evidence.output_ref.clone(),
+                asset_id: evidence.asset_id,
+                is_flagged: evidence.is_flagged,
+                salt: evidence.detection_salt,
+                ciphertext: evidence.transfer_ciphertext.clone(),
+                raw_bytes: evidence.transfer_ciphertext.to_bytes(),
+            })
+            .await
+            .unwrap();
+        store.commit_block(&block).await.unwrap();
+    }
+
+    fn audit_status(store: &SqliteScannerStore, evidence: &ComplianceEvidenceObject) -> String {
+        let conn = store.lock_conn().unwrap();
+        conn.query_row(
+            "SELECT audit_status FROM scanner_detections
+             WHERE height = ?1 AND tx_hash = ?2 AND action_index = ?3 AND output_index = ?4",
+            params![
+                evidence.output_ref.action.tx.block.height as i64,
+                evidence.output_ref.action.tx.tx_hash.as_ref(),
+                evidence.output_ref.action.action_index as i64,
+                evidence.output_ref.output_index as i64,
+            ],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    fn orbis_entry(evidence: &ComplianceEvidenceObject) -> OrbisAuditEntry {
+        OrbisAuditEntry {
+            height: evidence.output_ref.action.tx.block.height,
+            tx_hash: hex::encode(evidence.output_ref.action.tx.tx_hash.as_ref()),
+            action_index: evidence.output_ref.action.action_index,
+            output_index: evidence.output_ref.output_index,
+            amount: "1234".to_string(),
+            self_address: "receiver".to_string(),
+            counterparty: "sender".to_string(),
+            decrypted_via: DECRYPTED_VIA_ORBIS_PRE.to_string(),
+        }
     }
 }

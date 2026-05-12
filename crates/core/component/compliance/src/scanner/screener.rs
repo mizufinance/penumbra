@@ -103,6 +103,7 @@ mod tests {
         ExtractedComplianceCiphertext {
             output_ref,
             raw_bytes,
+            upload_bundle_bytes: None,
         }
     }
 

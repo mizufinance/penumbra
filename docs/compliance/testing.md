@@ -40,12 +40,26 @@ Use these when changing issuer compliance scanning:
 ```bash
 cargo test -p penumbra-sdk-compliance --lib scanner::
 cargo test -p penumbra-sdk-compliance --lib audit::
+cargo test -p penumbra-sdk-compliance --lib evidence::
+cargo test -p penumbra-sdk-compliance --lib audit_validation::
 cargo test -p penumbra-sdk-transaction compliance_scanner_transaction_id_matches_canonical_transaction_id --lib
 cargo check -p penumbra-sdk-compliance -p penumbra-sdk-transaction -p pcli -p orbis-audit -p orbis-integration
+cd tools/gnark && go test ./internal/circuits ./internal/compliance
 ```
 
 The transaction parity test is mandatory: the scanner-side transaction hash
 helper must continue to match `Transaction::id()`.
+
+Proof-generating Rust round trips still require a release build with real
+proving keys:
+
+```bash
+cargo test --release -p penumbra-sdk-shielded-pool --features bundled-proving-keys transfer_proof_roundtrip --lib
+```
+
+If a CI lane does not provide bundled proving keys, treat that command as
+optional coverage and rely on the mandatory gnark assignment metamorphic tests
+above for semantic mutation coverage.
 
 Smoke the scanner CLI shape with:
 
@@ -54,9 +68,9 @@ pcli tx compliance scan run --node http://127.0.0.1:8080 --db /tmp/compliance-sc
 pcli tx compliance scan catch-up --node http://127.0.0.1:8080 --db /tmp/compliance-scanner.db --dk-hex <hex> --scan-asset-id <asset>
 ```
 
-There is no legacy JSON scan-output or issuer-db command surface. Audit-demo
-exports frontend-compatible `scan`, `scanner`, `ledgerRows`, and `audits` state
-from the scanner DB.
+Only the DB-backed scanner commands above are supported. Audit-demo exports
+frontend-compatible `scan`, `scanner`, `ledgerRows`, and `audits` state from the
+scanner DB.
 
 ## Standard Preflight
 

@@ -103,7 +103,7 @@ struct RepoPaths {
     ring_info_file: PathBuf,
     issuer_dk_file: PathBuf,
     detected_file: PathBuf,
-    issuer_db_file: PathBuf,
+    scanner_db_file: PathBuf,
     orbis_audit_bin: PathBuf,
     pcli_bin: PathBuf,
 }
@@ -634,11 +634,11 @@ async fn verify(repo: &RepoPaths) -> Result<()> {
             "--node",
             env.get("PENUMBRA_NODE_PD_URL")?,
             "--db",
-            repo.issuer_db_file.to_str().unwrap(),
+            repo.scanner_db_file.to_str().unwrap(),
         ],
     )?;
 
-    let store = SqliteScannerStore::new(&repo.issuer_db_file)?;
+    let store = SqliteScannerStore::new(&repo.scanner_db_file)?;
     let dk = detection_key_from_hex(issuer.get("REGULATED_DK")?)?;
     let _ = decrypt_flagged_rows(&store, &dk)?;
     for (name, key) in [
@@ -679,7 +679,7 @@ async fn verify(repo: &RepoPaths) -> Result<()> {
             user_name,
             env.get(address_key)?,
         )?;
-        update_issuer_db_from_audit(repo, &env, user_name, &default_audit_file)?;
+        update_scanner_db_from_audit(repo, &env, user_name, &default_audit_file)?;
 
         let extension_input = repo
             .tmp
@@ -705,10 +705,10 @@ async fn verify(repo: &RepoPaths) -> Result<()> {
             user_name,
             env.get(address_key)?,
         )?;
-        update_issuer_db_from_audit(repo, &env, user_name, &extension_audit_file)?;
+        update_scanner_db_from_audit(repo, &env, user_name, &extension_audit_file)?;
     }
 
-    let store = SqliteScannerStore::new(&repo.issuer_db_file)?;
+    let store = SqliteScannerStore::new(&repo.scanner_db_file)?;
     println!(
         "{}",
         serde_json::to_string_pretty(&export_ledger_rows_json(&store)?)?
@@ -761,7 +761,7 @@ fn run_orbis_audit(
     )
 }
 
-fn update_issuer_db_from_audit(
+fn update_scanner_db_from_audit(
     repo: &RepoPaths,
     _env: &DemoEnv,
     user_name: &str,
@@ -775,7 +775,7 @@ fn update_issuer_db_from_audit(
     if entries.is_empty() {
         return Ok(());
     }
-    let store = SqliteScannerStore::new(&repo.issuer_db_file)?;
+    let store = SqliteScannerStore::new(&repo.scanner_db_file)?;
     import_orbis_audit_entries(&store, &entries, Some(user_name))?;
     Ok(())
 }
@@ -1084,8 +1084,8 @@ struct AuditDemo {
     demo_dir_rel: String,
     status_file: PathBuf,
     state_file: PathBuf,
-    issuer_db_rel: String,
-    issuer_db_abs: PathBuf,
+    scanner_db_rel: String,
+    scanner_db_abs: PathBuf,
     scanner_health_file: PathBuf,
     asset: String,
     threshold: String,
@@ -1104,16 +1104,16 @@ impl AuditDemo {
         let demo_dir = root.join(&demo_dir_rel);
         fs::create_dir_all(demo_dir.join("wallets"))
             .with_context(|| format!("failed to create {}", demo_dir.display()))?;
-        let issuer_db_rel = format!("{demo_dir_rel}/issuer-ledger.db");
+        let scanner_db_rel = format!("{demo_dir_rel}/scanner.db");
         Ok(Self {
             status_file: demo_dir.join("status.json"),
             state_file: demo_dir.join("state.json"),
-            issuer_db_abs: demo_dir.join("issuer-ledger.db"),
+            scanner_db_abs: demo_dir.join("scanner.db"),
             scanner_health_file: demo_dir.join("scanner-health.json"),
             root,
             demo_dir,
             demo_dir_rel,
-            issuer_db_rel,
+            scanner_db_rel,
             asset: env::var("AUDIT_DEMO_ASSET")
                 .unwrap_or_else(|_| "transfer/channel-0/ubrl".to_string()),
             threshold: env::var("AUDIT_DEMO_THRESHOLD").unwrap_or_else(|_| "500000000".to_string()),
@@ -1187,7 +1187,7 @@ impl AuditDemo {
                 "--scan-asset-id",
                 &self.asset,
                 "--db",
-                &self.issuer_db_rel,
+                &self.scanner_db_rel,
             ])
             .status()
             .context("failed to run pcli compliance scanner")?;
@@ -1271,7 +1271,7 @@ impl AuditDemo {
             .demo_dir
             .join(format!("{}-default-audit.json", subject.slug));
         self.run_subject_audit(&subject, "default", &default_input, &default_output)?;
-        self.update_issuer_db_from_audit(&subject.name, &default_output)?;
+        self.update_scanner_db_from_audit(&subject.name, &default_output)?;
 
         let default_audit = self.read_json_array(&default_output).unwrap_or_default();
         if default_audit.is_empty() {
@@ -1359,7 +1359,7 @@ impl AuditDemo {
                 .join(format!("{}-extension-input.json", subject.slug));
             self.write_scan_input(&extension_input, extension_refs)?;
             self.run_subject_audit(&subject, "extension", &extension_input, &extension_output)?;
-            self.update_issuer_db_from_audit(&subject.name, &extension_output)?;
+            self.update_scanner_db_from_audit(&subject.name, &extension_output)?;
         }
 
         self.refresh_outputs()?;
@@ -1601,7 +1601,7 @@ impl AuditDemo {
         result
     }
 
-    fn update_issuer_db_from_audit(&self, name: &str, audit_file: &Path) -> Result<()> {
+    fn update_scanner_db_from_audit(&self, name: &str, audit_file: &Path) -> Result<()> {
         let entries = self
             .read_json_array(audit_file)
             .unwrap_or_default()
@@ -1819,10 +1819,10 @@ impl AuditDemo {
     }
 
     fn scanner_store(&self) -> Result<SqliteScannerStore> {
-        SqliteScannerStore::new(&self.issuer_db_abs).with_context(|| {
+        SqliteScannerStore::new(&self.scanner_db_abs).with_context(|| {
             format!(
                 "failed to open audit-demo scanner database {}",
-                self.issuer_db_abs.display()
+                self.scanner_db_abs.display()
             )
         })
     }
@@ -2049,7 +2049,7 @@ impl RepoPaths {
             ring_info_file: tmp.join("ring-info.env"),
             issuer_dk_file: tmp.join("issuer-dk.env"),
             detected_file: tmp.join("detected_txs.json"),
-            issuer_db_file: tmp.join("issuer-ledger.db"),
+            scanner_db_file: tmp.join("scanner.db"),
             orbis_audit_bin: root.join("target/release/orbis-audit"),
             pcli_bin: root.join("target/release/pcli"),
             root,

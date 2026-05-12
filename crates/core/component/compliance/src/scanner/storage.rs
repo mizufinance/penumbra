@@ -1,27 +1,43 @@
 use anyhow::{anyhow, Context, Result};
+use async_trait::async_trait;
+use decaf377::Element;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use super::types::{
     BlockRef, ClearFlowEvent, DetectionEvent, ExtractedComplianceCiphertext, InvalidCiphertext,
-    OutputRef, DECRYPTED_VIA_PUBLIC, FLOW_TYPE_PRIVATE_TRANSFER,
+    OutputRef, AUDIT_STATUS_PENDING, DECRYPTED_VIA_PUBLIC, FLOW_TYPE_PRIVATE_TRANSFER,
 };
+use crate::{ComplianceEvidenceObject, TransferOrbisUploadBundle};
 
 pub const MAX_INVALID_CIPHERTEXTS_PER_BLOCK: usize = 256;
 
+#[async_trait]
 pub trait ScannerStore: Send + Sync {
-    fn last_scanned_block(&self) -> Result<Option<BlockRef>>;
-    fn block_by_height(&self, height: u64) -> Result<Option<BlockRef>>;
-    fn begin_block(&self, block: &BlockRef) -> Result<()>;
-    fn save_ciphertext(&self, ciphertext: &ExtractedComplianceCiphertext) -> Result<()>;
-    fn mark_ciphertext_irrelevant(&self, output_ref: &OutputRef) -> Result<()>;
-    fn save_detection(&self, event: &DetectionEvent) -> Result<()>;
-    fn save_invalid_ciphertext(&self, invalid: &InvalidCiphertext) -> Result<()>;
-    fn save_clear_flow(&self, event: &ClearFlowEvent) -> Result<()>;
-    fn commit_block(&self, block: &BlockRef) -> Result<()>;
-    fn rollback_to_height(&self, height: u64) -> Result<()>;
-    fn detection_count(&self) -> Result<u64>;
+    async fn last_scanned_block(&self) -> Result<Option<BlockRef>>;
+    async fn block_by_height(&self, height: u64) -> Result<Option<BlockRef>>;
+    async fn begin_block(&self, block: &BlockRef) -> Result<()>;
+    async fn save_ciphertext(&self, ciphertext: &ExtractedComplianceCiphertext) -> Result<()>;
+    async fn mark_ciphertext_irrelevant(&self, output_ref: &OutputRef) -> Result<()>;
+    async fn save_detection(&self, event: &DetectionEvent) -> Result<()>;
+    async fn save_invalid_ciphertext(&self, invalid: &InvalidCiphertext) -> Result<()>;
+    async fn save_clear_flow(&self, event: &ClearFlowEvent) -> Result<()>;
+    async fn validate_and_save_evidence(
+        &self,
+        evidence: &ComplianceEvidenceObject,
+        upload_bundle: &TransferOrbisUploadBundle,
+        ring_pk: &Element,
+    ) -> Result<[u8; 32]>;
+    async fn record_evidence_failure(
+        &self,
+        output_ref: &OutputRef,
+        stage: &str,
+        reason: &str,
+    ) -> Result<()>;
+    async fn commit_block(&self, block: &BlockRef) -> Result<()>;
+    async fn rollback_to_height(&self, height: u64) -> Result<()>;
+    async fn detection_count(&self) -> Result<u64>;
 }
 
 #[derive(Default)]
@@ -73,6 +89,9 @@ impl SqliteScannerStore {
                 is_flagged INTEGER NOT NULL,
                 salt BLOB NOT NULL,
                 ciphertext_bytes BLOB NOT NULL,
+                detection_status TEXT NOT NULL DEFAULT 'detected',
+                audit_status TEXT NOT NULL DEFAULT 'pending',
+                evidence_object_hash BLOB,
                 PRIMARY KEY(height, tx_hash, action_index, output_index)
             );
 
@@ -87,6 +106,7 @@ impl SqliteScannerStore {
                 action_index INTEGER NOT NULL,
                 output_index INTEGER NOT NULL,
                 raw_bytes BLOB NOT NULL,
+                orbis_upload_bundle_bytes BLOB,
                 screen_status TEXT NOT NULL,
                 screen_reason TEXT,
                 PRIMARY KEY(height, tx_hash, action_index, output_index)
@@ -144,6 +164,7 @@ impl SqliteScannerStore {
                 counterparty_address TEXT,
                 public_address TEXT,
                 decrypted_via TEXT,
+                evidence_object_hash BLOB,
                 updated_at_unix INTEGER,
                 PRIMARY KEY(height, tx_hash, action_index, output_index)
             );
@@ -177,6 +198,17 @@ impl SqliteScannerStore {
                 PRIMARY KEY(height, tx_hash, action_index, output_index, branch)
             );
 
+            CREATE TABLE IF NOT EXISTS audit_evidence_failures (
+                height INTEGER NOT NULL,
+                tx_hash BLOB NOT NULL,
+                action_index INTEGER NOT NULL,
+                output_index INTEGER NOT NULL,
+                stage TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                failed_at_unix INTEGER NOT NULL,
+                PRIMARY KEY(height, tx_hash, action_index, output_index, stage)
+            );
+
             CREATE TABLE IF NOT EXISTS audit_orbis_receipts (
                 height INTEGER NOT NULL,
                 tx_hash BLOB NOT NULL,
@@ -186,6 +218,16 @@ impl SqliteScannerStore {
                 receipt_json TEXT NOT NULL,
                 created_at_unix INTEGER,
                 PRIMARY KEY(height, tx_hash, action_index, output_index, tier)
+            );
+
+            CREATE TABLE IF NOT EXISTS compliance_evidence_objects (
+                object_hash BLOB PRIMARY KEY,
+                height INTEGER NOT NULL,
+                tx_hash BLOB NOT NULL,
+                action_index INTEGER NOT NULL,
+                output_index INTEGER NOT NULL,
+                object_bytes BLOB NOT NULL,
+                created_at_unix INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS scanner_sync (
@@ -236,8 +278,9 @@ impl SqliteScannerStore {
     }
 }
 
+#[async_trait]
 impl ScannerStore for SqliteScannerStore {
-    fn last_scanned_block(&self) -> Result<Option<BlockRef>> {
+    async fn last_scanned_block(&self) -> Result<Option<BlockRef>> {
         let conn = self.lock_conn()?;
         let last_height: i64 = conn.query_row(
             "SELECT last_height FROM scanner_sync WHERE id = 1",
@@ -249,10 +292,17 @@ impl ScannerStore for SqliteScannerStore {
         if last_height <= 0 {
             return Ok(None);
         }
-        self.block_by_height(last_height as u64)
+        let conn = self.lock_conn()?;
+        conn.query_row(
+            "SELECT height, block_hash, parent_hash, block_time_unix FROM scanner_blocks WHERE height = ?1",
+            params![last_height],
+            block_ref_from_row,
+        )
+        .optional()
+        .with_context(|| format!("read scanner block at height {last_height}"))
     }
 
-    fn block_by_height(&self, height: u64) -> Result<Option<BlockRef>> {
+    async fn block_by_height(&self, height: u64) -> Result<Option<BlockRef>> {
         let conn = self.lock_conn()?;
         conn.query_row(
             "SELECT height, block_hash, parent_hash, block_time_unix FROM scanner_blocks WHERE height = ?1",
@@ -263,7 +313,7 @@ impl ScannerStore for SqliteScannerStore {
         .with_context(|| format!("read scanner block at height {height}"))
     }
 
-    fn begin_block(&self, block: &BlockRef) -> Result<()> {
+    async fn begin_block(&self, block: &BlockRef) -> Result<()> {
         let mut pending = self.lock_pending()?;
         *pending = PendingBlock {
             block: Some(block.clone()),
@@ -278,28 +328,28 @@ impl ScannerStore for SqliteScannerStore {
         Ok(())
     }
 
-    fn save_ciphertext(&self, ciphertext: &ExtractedComplianceCiphertext) -> Result<()> {
+    async fn save_ciphertext(&self, ciphertext: &ExtractedComplianceCiphertext) -> Result<()> {
         let mut pending = self.lock_pending()?;
         ensure_pending_block(&pending, &ciphertext.output_ref.action.tx.block)?;
         pending.ciphertexts.push(ciphertext.clone());
         Ok(())
     }
 
-    fn mark_ciphertext_irrelevant(&self, output_ref: &OutputRef) -> Result<()> {
+    async fn mark_ciphertext_irrelevant(&self, output_ref: &OutputRef) -> Result<()> {
         let mut pending = self.lock_pending()?;
         ensure_pending_block(&pending, &output_ref.action.tx.block)?;
         pending.irrelevant_ciphertexts.push(output_ref.clone());
         Ok(())
     }
 
-    fn save_detection(&self, event: &DetectionEvent) -> Result<()> {
+    async fn save_detection(&self, event: &DetectionEvent) -> Result<()> {
         let mut pending = self.lock_pending()?;
         ensure_pending_block(&pending, &event.output_ref.action.tx.block)?;
         pending.detections.push(event.clone());
         Ok(())
     }
 
-    fn save_invalid_ciphertext(&self, invalid: &InvalidCiphertext) -> Result<()> {
+    async fn save_invalid_ciphertext(&self, invalid: &InvalidCiphertext) -> Result<()> {
         let mut pending = self.lock_pending()?;
         ensure_pending_block(&pending, &invalid.output_ref.action.tx.block)?;
         pending.invalid_statuses.push(invalid.clone());
@@ -311,14 +361,32 @@ impl ScannerStore for SqliteScannerStore {
         Ok(())
     }
 
-    fn save_clear_flow(&self, event: &ClearFlowEvent) -> Result<()> {
+    async fn save_clear_flow(&self, event: &ClearFlowEvent) -> Result<()> {
         let mut pending = self.lock_pending()?;
         ensure_pending_block(&pending, &event.output_ref.action.tx.block)?;
         pending.clear_flows.push(event.clone());
         Ok(())
     }
 
-    fn commit_block(&self, block: &BlockRef) -> Result<()> {
+    async fn validate_and_save_evidence(
+        &self,
+        evidence: &ComplianceEvidenceObject,
+        upload_bundle: &TransferOrbisUploadBundle,
+        ring_pk: &Element,
+    ) -> Result<[u8; 32]> {
+        crate::audit::validate_and_save_evidence_object(self, evidence, upload_bundle, ring_pk)
+    }
+
+    async fn record_evidence_failure(
+        &self,
+        output_ref: &OutputRef,
+        stage: &str,
+        reason: &str,
+    ) -> Result<()> {
+        crate::audit::record_evidence_failure(self, output_ref, stage, reason)
+    }
+
+    async fn commit_block(&self, block: &BlockRef) -> Result<()> {
         let mut pending = self.lock_pending()?;
         ensure_pending_block(&pending, block)?;
 
@@ -343,8 +411,8 @@ impl ScannerStore for SqliteScannerStore {
             tx.execute(
                 "INSERT OR IGNORE INTO scanner_ciphertexts
                  (height, block_hash, tx_index, tx_hash, action_index, output_index,
-                  raw_bytes, screen_status, screen_reason)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', NULL)",
+                  raw_bytes, orbis_upload_bundle_bytes, screen_status, screen_reason)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', NULL)",
                 params![
                     tx_ref.block.height as i64,
                     tx_ref.block.block_hash.as_slice(),
@@ -353,6 +421,7 @@ impl ScannerStore for SqliteScannerStore {
                     output_ref.action.action_index as i64,
                     output_ref.output_index as i64,
                     ciphertext.raw_bytes.as_slice(),
+                    ciphertext.upload_bundle_bytes.as_deref(),
                 ],
             )?;
         }
@@ -367,8 +436,8 @@ impl ScannerStore for SqliteScannerStore {
             tx.execute(
                 "INSERT OR IGNORE INTO scanner_ciphertexts
                  (height, block_hash, tx_index, tx_hash, action_index, output_index,
-                  raw_bytes, screen_status, screen_reason)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', NULL)",
+                  raw_bytes, orbis_upload_bundle_bytes, screen_status, screen_reason)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, 'pending', NULL)",
                 params![
                     tx_ref.block.height as i64,
                     tx_ref.block.block_hash.as_slice(),
@@ -383,8 +452,8 @@ impl ScannerStore for SqliteScannerStore {
             tx.execute(
                 "INSERT OR IGNORE INTO scanner_detections
                  (height, block_hash, tx_index, tx_hash, action_index, output_index,
-                  asset_id, is_flagged, salt, ciphertext_bytes)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                  asset_id, is_flagged, salt, ciphertext_bytes, detection_status, audit_status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'detected', ?11)",
                 params![
                     tx_ref.block.height as i64,
                     tx_ref.block.block_hash.as_slice(),
@@ -396,6 +465,7 @@ impl ScannerStore for SqliteScannerStore {
                     if event.is_flagged { 1i64 } else { 0i64 },
                     event.salt.to_bytes().as_slice(),
                     event.raw_bytes.as_slice(),
+                    AUDIT_STATUS_PENDING,
                 ],
             )?;
             tx.execute(
@@ -515,9 +585,17 @@ impl ScannerStore for SqliteScannerStore {
         Ok(())
     }
 
-    fn rollback_to_height(&self, height: u64) -> Result<()> {
+    async fn rollback_to_height(&self, height: u64) -> Result<()> {
         let conn = self.lock_conn()?;
         let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM compliance_evidence_objects WHERE height > ?1",
+            params![height as i64],
+        )?;
+        tx.execute(
+            "DELETE FROM audit_evidence_failures WHERE height > ?1",
+            params![height as i64],
+        )?;
         tx.execute(
             "DELETE FROM audit_orbis_receipts WHERE height > ?1",
             params![height as i64],
@@ -581,7 +659,7 @@ impl ScannerStore for SqliteScannerStore {
         Ok(())
     }
 
-    fn detection_count(&self) -> Result<u64> {
+    async fn detection_count(&self) -> Result<u64> {
         let conn = self.lock_conn()?;
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM scanner_detections", [], |row| {
             row.get(0)
@@ -694,6 +772,7 @@ mod tests {
         ExtractedComplianceCiphertext {
             output_ref: output_ref(height, 1, 2, output_index),
             raw_bytes: vec![output_index as u8, 9],
+            upload_bundle_bytes: Some(vec![8, output_index as u8]),
         }
     }
 
@@ -722,34 +801,40 @@ mod tests {
         }
     }
 
-    #[test]
-    fn sqlite_store_commits_block_and_detection_atomically() {
+    #[tokio::test]
+    async fn sqlite_store_commits_block_and_detection_atomically() {
         let temp_file = NamedTempFile::new().unwrap();
         let store = SqliteScannerStore::new(temp_file.path()).unwrap();
         let scanner_block = block(10);
-        store.begin_block(&scanner_block).unwrap();
-        store.save_detection(&detection(10)).unwrap();
-        store.commit_block(&scanner_block).unwrap();
+        store.begin_block(&scanner_block).await.unwrap();
+        store.save_detection(&detection(10)).await.unwrap();
+        store.commit_block(&scanner_block).await.unwrap();
 
-        assert_eq!(store.detection_count().unwrap(), 1);
-        assert_eq!(store.last_scanned_block().unwrap(), Some(scanner_block));
+        assert_eq!(store.detection_count().await.unwrap(), 1);
+        assert_eq!(
+            store.last_scanned_block().await.unwrap(),
+            Some(scanner_block)
+        );
 
-        store.begin_block(&block(10)).unwrap();
-        store.save_detection(&detection(10)).unwrap();
-        store.commit_block(&block(10)).unwrap();
-        assert_eq!(store.detection_count().unwrap(), 1);
+        store.begin_block(&block(10)).await.unwrap();
+        store.save_detection(&detection(10)).await.unwrap();
+        store.commit_block(&block(10)).await.unwrap();
+        assert_eq!(store.detection_count().await.unwrap(), 1);
     }
 
-    #[test]
-    fn sqlite_store_caps_invalid_ciphertexts_per_block() {
+    #[tokio::test]
+    async fn sqlite_store_caps_invalid_ciphertexts_per_block() {
         let temp_file = NamedTempFile::new().unwrap();
         let store = SqliteScannerStore::new(temp_file.path()).unwrap();
         let block = block(20);
-        store.begin_block(&block).unwrap();
+        store.begin_block(&block).await.unwrap();
         for i in 0..(MAX_INVALID_CIPHERTEXTS_PER_BLOCK as u32 + 7) {
-            store.save_invalid_ciphertext(&invalid(20, i)).unwrap();
+            store
+                .save_invalid_ciphertext(&invalid(20, i))
+                .await
+                .unwrap();
         }
-        store.commit_block(&block).unwrap();
+        store.commit_block(&block).await.unwrap();
 
         assert_eq!(
             store.invalid_ciphertext_count().unwrap(),
@@ -758,46 +843,51 @@ mod tests {
         assert_eq!(store.skipped_invalid_ciphertext_count(20).unwrap(), 7);
     }
 
-    #[test]
-    fn sqlite_store_persists_raw_ciphertext_screening_status() {
+    #[tokio::test]
+    async fn sqlite_store_persists_raw_ciphertext_screening_status() {
         let temp_file = NamedTempFile::new().unwrap();
         let store = SqliteScannerStore::new(temp_file.path()).unwrap();
         let block = block(25);
         let ciphertext = ciphertext(25, 4);
-        store.begin_block(&block).unwrap();
-        store.save_ciphertext(&ciphertext).unwrap();
+        store.begin_block(&block).await.unwrap();
+        store.save_ciphertext(&ciphertext).await.unwrap();
         store
             .mark_ciphertext_irrelevant(&ciphertext.output_ref)
+            .await
             .unwrap();
-        store.commit_block(&block).unwrap();
+        store.commit_block(&block).await.unwrap();
 
         let conn = store.lock_conn().unwrap();
-        let status: String = conn
+        let (status, bundle): (String, Vec<u8>) = conn
             .query_row(
-                "SELECT screen_status FROM scanner_ciphertexts WHERE height = 25",
+                "SELECT screen_status, orbis_upload_bundle_bytes FROM scanner_ciphertexts WHERE height = 25",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
         assert_eq!(status, "irrelevant");
+        assert_eq!(bundle, vec![8, 4]);
     }
 
-    #[test]
-    fn sqlite_store_rolls_back_later_scanner_state() {
+    #[tokio::test]
+    async fn sqlite_store_rolls_back_later_scanner_state() {
         let temp_file = NamedTempFile::new().unwrap();
         let store = SqliteScannerStore::new(temp_file.path()).unwrap();
         for height in 1..=3 {
             let block = block(height);
-            store.begin_block(&block).unwrap();
-            store.save_detection(&detection(height)).unwrap();
-            store.save_invalid_ciphertext(&invalid(height, 0)).unwrap();
-            store.commit_block(&block).unwrap();
+            store.begin_block(&block).await.unwrap();
+            store.save_detection(&detection(height)).await.unwrap();
+            store
+                .save_invalid_ciphertext(&invalid(height, 0))
+                .await
+                .unwrap();
+            store.commit_block(&block).await.unwrap();
         }
 
-        store.rollback_to_height(1).unwrap();
-        assert_eq!(store.last_scanned_block().unwrap(), Some(block(1)));
-        assert_eq!(store.detection_count().unwrap(), 1);
-        assert!(store.block_by_height(2).unwrap().is_none());
+        store.rollback_to_height(1).await.unwrap();
+        assert_eq!(store.last_scanned_block().await.unwrap(), Some(block(1)));
+        assert_eq!(store.detection_count().await.unwrap(), 1);
+        assert!(store.block_by_height(2).await.unwrap().is_none());
         assert_eq!(store.invalid_ciphertext_count().unwrap(), 1);
 
         let conn = store.lock_conn().unwrap();

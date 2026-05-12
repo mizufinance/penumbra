@@ -1,11 +1,11 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
 use penumbra_sdk_asset::asset;
 use penumbra_sdk_compliance::structs::{MsgRegisterAsset, MsgRegisterUser};
 use penumbra_sdk_compliance::{
     derive_compliance_scalar, issuer_keys::DetectionKey, ComplianceLeaf, IssuerComplianceWorker,
-    SqliteScannerStore,
+    RpcAuditAdviceProvider, SqliteScannerStore, TendermintProxyBlockIdentityProvider,
 };
 use penumbra_sdk_proto::util::tendermint_proxy::v1::{
     tendermint_proxy_service_client::TendermintProxyServiceClient, GetStatusRequest,
@@ -127,8 +127,15 @@ impl ComplianceCmd {
         let storage = SqliteScannerStore::new(db)
             .with_context(|| format!("failed to open scanner database {}", db.display()))?;
         let channel = connect_to_node(node).await?;
-        let (worker, handle) =
-            IssuerComplianceWorker::new(detection_key, target_asset_id, storage, channel.clone());
+        let (worker, handle) = IssuerComplianceWorker::new(
+            detection_key,
+            target_asset_id,
+            Arc::new(storage),
+            Arc::new(TendermintProxyBlockIdentityProvider::new(channel.clone())),
+            Arc::new(RpcAuditAdviceProvider::new(channel.clone())),
+            channel.clone(),
+        )
+        .await?;
 
         println!(
             "Starting issuer compliance scanner at height {} (db: {})",

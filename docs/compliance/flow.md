@@ -1,278 +1,113 @@
 # Compliance Flow
 
-Penumbra compliance adds selective regulatory visibility for regulated assets.
-Issuers can detect and audit transactions involving their assets, while
-unregulated assets retain full vanilla privacy. The system uses threshold MPC
-(Orbis), tiered encryption, and zero-knowledge proofs.
+Penumbra compliance gives issuers selective visibility into regulated-asset
+activity while leaving unregulated assets on the normal private path. The chain
+still validates asset integrity with Penumbra circuits; Orbis/ACP/Defra are
+confidentiality and authorization services, not balance-integrity authorities.
 
-External systems: 
-**Orbis** (MPC,PRE)
-**Defra** (DefraDB storage for KYC),
-**SourceHub** (Cosmoschain — ACP policies, bulletin board, verify Defra updates).
+External systems:
 
----
+- **Orbis**: MPC ring key, encrypted-seed storage, and PRE for authorized audit.
+- **Defra**: off-chain KYC document storage.
+- **SourceHub**: ACP policies, bulletin board, and Defra proof verification.
 
-## 1. Ring Creation (DKG)
+For low-level formats, schema, and source files, see `reference.md`.
 
-The issuer initiates distributed key generation with Orbis to create a
-threshold-shared signing key for the asset.
+## Registration
 
-```
-Issuer → Orbis DKG
-  → ring_pk = sk_ring × G   (public, stored on-chain)
-  → sk_ring                  (threshold-shared across Orbis MPC nodes, never leaves Orbis)
-```
+1. **Ring creation**: issuer creates an Orbis ring.
 
-`ring_pk` is the aggregate public key of the Orbis ring. `sk_ring` is used for
-FROST signing (user registration) and PRE (decryption). One ring per
-issuer/asset.
-
----
-
-## 2. Asset Registration
-
-The issuer creates a policy on SourceHub and registers the asset on Penumbra.
-
-```
-1. Issuer creates policy_id on SourceHub (ACP policy)
-   → Defines KYC requirements, permissions, resources
-
-2. Issuer registers ring on SourceHub bulletin
-   → {ring_id, policy_id, permission, resource}
-
-3. Issuer submits RegisterAsset tx to Penumbra
-   → IMT inserts IndexedLeaf (sorted linked list)
-   → AssetPolicy stored (immutable):
-     {dk_pub, ring_pk, threshold, allowed_channels, policy_id}
+```text
+Issuer -> Orbis DKG
+  -> ring_pk public on Penumbra
+  -> sk_ring threshold-shared inside Orbis
 ```
 
-```bash
-pcli tx compliance register-asset <asset_id> --regulated \
-  --dk-pub-hex <hex> --threshold <base_units> \
-  [--allowed-channels channel-0,channel-3]
+2. **Asset registration**: issuer creates SourceHub policy metadata and submits
+   `RegisterAsset` on Penumbra.
+
+```text
+AssetPolicy {
+  dk_pub,
+  ring_pk,
+  threshold,
+  allowed_channels,
+  ring_id,
+  policy_id,
+  permission,
+  resource
+}
 ```
 
-**Asset Registry (IMT)**: Indexed Merkle Tree with sorted linked list. It always
-contains a structural zero-value sentinel and the protocol also seeds the
-neutral base asset as an explicit unregulated entry. Additional regulated assets
-are inserted explicitly. Membership proof: `leaf.value == asset_id`.
-Non-membership (gap) proof: `low.value < asset_id < low.next_value`. Both use
-identical circuit structure — validators cannot distinguish them.
+Regulated assets are inserted into the indexed asset tree. Unregistered assets
+are treated as unregulated through non-membership proofs. Channel whitelist
+enforcement is first-hop only and immutable after registration.
 
-**IBC channel whitelist**: Empty = IBC blocked entirely. Non-empty = only listed
-channels allowed. Unregulated = no restrictions. First-hop enforcement only.
-Immutable after registration.
+3. **User registration**: user completes KYC with Defra, publishes a hidden-doc
+   proof through SourceHub/Orbis, then registers a `(address, asset)` compliance
+   leaf on Penumbra.
 
-**Chain action surface** for regulated assets: `Transfer`, `Consolidate`,
-`Split`, `ProposalSubmit`, `ValidatorVote`, `ValidatorDefinition`,
-`ShieldedIcs20Withdrawal` (subject to channel whitelist), and compliance
-registration actions. DEX, staking, community-pool, delegator-vote, and
-proposal-withdraw/deposit-claim actions are removed from this chain.
-
-Unregistered assets default to unregulated.
-
----
-
-## 3. User Registration
-
-Users register per (address, asset) pair after completing KYC with Defra.
-Both sender and receiver must be registered for a regulated transfer.
-
-### ACK Derivation
-
-Single derivation scalar per address:
-
-```
-d = SHA256("elgamal-derivation-v1\0\0" || b_d_fq)   per-address scalar
-ACK = d × ring_pk                                    per-address, publicly computable
+```text
+d   = SHA256("elgamal-derivation-v1\0\0" || B_d)
+ACK = d * ring_pk
 ```
 
-`d` is stored in the ComplianceLeaf. ACK is not stored — it is derivable from
-`ring_pk` (in AssetPolicy) and `B_d` (from the address). Different addresses
-produce different `d` values and therefore different ACKs. Different assets use
-different `ring_pk`, so ACKs differ across assets even for the same address.
+`d` is stored in the compliance leaf. `ACK` is derivable from the public address
+diversifier and the asset's `ring_pk`; it is not stored.
 
-Transfer uses sender and receiver ACKs across its transfer compliance bundle.
-`Split` and `Consolidate` do not carry compliance ciphertext.
+## Transfer
 
-For unregulated assets, Penumbra uses two fixed protocol sink public keys:
-one for issuer detection routing and one for ring/ACK routing. Both are
-domain-separated hash-to-curve points with no corresponding private key, so
-the issuer ciphertext keeps the same wire shape but is effectively undecryptable.
-IMT non-membership proof still proves unregulated status.
-
-### ZK Proof of Storage
-
-Registration requires a zero-knowledge proof that the user's `B_d` is stored
-in a KYC document linked to the ring's `policy_id`, without revealing the
-document identity.
-
-```
-Public:  B_d, policy_id, sourcehub_state_root
-Private: doc_id, merkle_paths
-
-Proves:
-  1. B_d exists in document(doc_id) in DefraDB
-  2. (policy_id, "kyc", doc_id, "verified") exists in ACP state on SourceHub
-```
-
-The `doc_id` stays hidden — no one can link multiple `B_d` values to the same
-KYC document.
-
-### Flow
-
-```
-1. Alice completes KYC with Defra
-   → Defra stores KYC in DefraDB → doc_id (private, only Alice and Defra know it)
-
-2. Alice appends B_d to her KYC document
-   → Defra generates ZK proof: B_d exists in a doc under policy_id (doc_id hidden)
-   → Defra publishes proof on SourceHub
-
-3. Alice publishes (B_d, policy_id) on the Orbis bulletin
-   → Orbis verifies proof on SourceHub
-   → Orbis FROST-signs the bulletin post
-
-4. Alice submits RegisterUser tx to Penumbra
-   → Penumbra verifies FROST sig against ring_pk (from AssetPolicy)
-   → ComplianceLeaf {address, asset_id} stored in QuadTree
-```
-
-```bash
-pcli tx compliance register-user <asset_id> --address-index <index>
-```
-
-**User Registry (QuadTree)**: Arity-4, depth-16, Poseidon377 hashing. Max ~4
-billion leaves. Both registries emit historical anchors per block (like SCT), so
-proofs remain valid across tree updates.
-
-**Trust chain**: Defra verifies KYC → generates ZK proof → publishes on
-SourceHub. Orbis verifies proof → FROST-signs bulletin post. Penumbra verifies
-FROST sig → stores leaf.
-
-| Scenario | Result |
-|----------|--------|
-| Asset not registered | Unregulated. IMT non-membership proof. Full privacy. |
-| User not registered | Transaction rejected. |
-| Sender registered, receiver not | Transaction rejected (transfer compliance check fails). |
-
----
-
-## 4. Transfer
-
-The user runs the same command as vanilla Penumbra:
+Users run normal transfers:
 
 ```bash
 pcli tx transfer --to <recipient> <amount><asset>
 ```
 
-No compliance-specific flags needed. The planner detects whether the asset is
-regulated and handles compliance automatically.
+The planner detects regulated assets and adds the transfer compliance bundle.
+Both sender and receiver must have compliance leaves for the regulated asset.
 
-### Planner
-
-1. Fetches sender + receiver ComplianceLeaf from QuadTree
-2. Looks up `dk_pub`, `ring_pk`, `threshold` from AssetPolicy (IMT)
-3. Derives ACKs: `ack_receiver = d_receiver × ring_pk`, `ack_sender = d_sender × ring_pk`
-4. Computes `is_flagged = (amount >= threshold)`
-5. Generates the transfer compliance ephemeral scalars and EPKs
-
-### Ciphertext Construction
-
-Transfer compliance uses a unified 576-byte ciphertext and a 256-byte DLEQ
-bundle (`TRANSFER_WIRE_BYTES` / `TRANSFER_DLEQ_BYTES` in
-`compliance/src/transfer.rs`). The receiver `TransferOutputBody` carries both;
-all `TransferInputBody.compliance_ciphertext` and change-output fields are
-empty. The bundle has 4 independent EPKs — one per tier — and a single
-detection tag (encrypted to `DK_pub`) covering the whole bundle.
-
-### 4-Tier Encryption
-
-| Tier | Content | Encrypted To (unflagged) | Encrypted To (flagged) |
-|------|---------|--------------------------|------------------------|
-| Detection | asset_id + flag + salt | DK_pub (always) | DK_pub (always) |
-| Core | amount + self address | ACK via ElGamal | DK_pub |
-| Extension | counterparty address | ack_receiver via ElGamal | DK_pub |
-| Sext | sender's counterparty | ack_sender via ElGamal | DK_pub |
-
-Each non-detection tier uses an ElGamal envelope (c2) containing the encrypted
-seed, plus stream-cipher-encrypted data. The issuer unlocks c2 via Orbis PRE
-to recover the stream cipher seed.
-
-**Flagging**: When amount >= threshold, all tiers encrypt to DK_pub directly.
-The issuer decrypts flagged transactions without Orbis.
-
-Each transfer compliance tier is bound independently with its own salt and DLEQ
-statement material.
-
-### DLEQ Proof
-
-Each ciphertext carries an in-circuit DLEQ proof binding it to canonical
-Penumbra transfer metadata.
-The proof is computed inside the SNARK and output as `(c, s)` per tier.
-
-```
-S    = r × ACK
-R    = k × G
-R'   = k × ACK
-M    = Poseidon(policy_id_hash, resource_hash, permission_hash, tier, target_timestamp, salt)
-c    = Poseidon(ACK, EPK, S, R, R', M)    Fiat-Shamir challenge
-s    = k + c × r                           response
-
-Public outputs: (c, s) per tier
+```text
+planner:
+  fetch sender/receiver compliance leaves
+  fetch AssetPolicy
+  derive sender/receiver ACKs
+  set is_flagged = amount >= threshold
+  create one receiver-output compliance ciphertext
 ```
 
-`salt` is random, encrypted in the detection tier (only issuer's DK can decrypt).
-`target_timestamp` is Unix UTC seconds, set by client to `now()`, validator
-enforces ±1 hour of block time.
+The receiver output carries a unified transfer compliance ciphertext and a DLEQ
+bundle. Inputs and change outputs carry no compliance ciphertext.
 
-Transfer exposes one DLEQ proof per transfer compliance tier. This is the
-canonical metadata-binding artifact for Penumbra. It proves the ACK/EPK/shared
-point relation for the tier statement; it does not by itself prove `C2`
-correctness. `C2` correctness remains a zk-circuit responsibility.
+| Tier | Content | Unflagged Encryption | Flagged Encryption |
+|------|---------|----------------------|--------------------|
+| Detection | asset id, flag, salt | `DK_pub` | `DK_pub` |
+| Sender core | amount | sender ACK | `DK_pub` |
+| Sender ext | receiver address | sender ACK | `DK_pub` |
+| Output core | amount | receiver ACK | `DK_pub` |
+| Output ext | sender address | receiver ACK | `DK_pub` |
 
-For unregulated assets, DLEQ uses zeroed policy fields — valid but useless
-(no Orbis ring exists).
+Detection is always issuer-DK decryptable. For flagged transfers, every audit
+tier is issuer-DK decryptable. For unflagged transfers, audit tiers require
+authorized Orbis PRE.
 
-### ZK Proofs and Validation
+The transfer circuit owns value/nullifier/note/balance soundness. Compliance
+owns asset-policy binding, threshold flag correctness, ciphertext construction,
+detection tag correctness, tier metadata, and DLEQ binding. See:
 
-**Transfer compliance circuit** validates: QuadTree membership,
-IMT membership/non-membership, encryption correctness, flag correctness,
-per-tier DLEQ proofs, and binding to `{policy_id, permission, resource}`.
+- `docs/compliance/constraint-checklist.md`
+- `docs/transfer-circuit/constraint-checklist.md`
 
-**Split** and **Consolidate** do not participate in compliance encryption or
-binding checks.
+## Scanner And Audit Pipeline
 
-**Stateful checks** (validator): compliance_anchor in history, asset_anchor in
-history, target_timestamp within ±1hr of block time, and FROST signature valid
-for `ComplianceRegisterUser`.
+The scanner DB is the spine. It is not a stage. Scanning, screening, evidence
+validation, decryption, audit projection, and exporters all share keyed rows.
 
-Ciphertexts are stored on-chain after broadcast.
-
----
-
-## Operational Stages
-
-Compliance visibility is intentionally split into stages that share one
-persistent scanner database. The database is the spine: scanning writes raw
-chain material into it, screening annotates those rows, and decryption/audit
-workers read and update the same keyed rows.
-
-| Stage | Component | What Happens | External Dependency |
-|-------|-----------|--------------|---------------------|
-| 1. Blockchain scanning | `IssuerComplianceWorker` | Streams compact blocks, fetches block identity, handles reorgs, fetches full transactions, extracts raw transfer output compliance ciphertexts and clear public flows | Penumbra node |
-| 2. Screening | `ComplianceScreener` | DK-decrypts the detection tier and marks each raw ciphertext as detected, irrelevant, or invalid | Issuer DK |
-| 3. Audit-tier decryption | Audit library / `orbis-audit` | For each detected row, flagged transfers decrypt fully with DK; unflagged transfers go through ACP/Orbis PRE | Issuer DK or ACP + Orbis |
-| 4. Audit ledger projection | Audit library | Normalizes private detections and public shield/withdraw flows into ledger rows | Scanner DB |
-| 5. Exporters | Audit-demo, reports, Orbis input | Produce `state.json`, report JSON, or `orbis-audit` input from the audit ledger | Scanner DB |
-
-The chain shape is:
-
-```
+```text
 Chain
   -> Scan: extract raw OutputRef ciphertexts and clear public flows
   -> Scanner DB spine
-  -> Screen: detection-tier DK decrypt marks Detected / Irrelevant / Invalid
+  -> Screen: detection-tier DK decrypt marks detected / irrelevant / invalid
+  -> Validate evidence: persisted ciphertext + upload bundle + policy/ring binding
   -> Decrypt audit tiers per detected output:
        flagged:   full-tier issuer DK decrypt
        unflagged: Orbis PRE decrypt
@@ -280,46 +115,20 @@ Chain
   -> Exporters: audit-demo JSON, reports, Orbis audit input
 ```
 
----
+`ComplianceScreener` is pure. It parses transfer ciphertexts and DK-decrypts the
+detection tier only. It does not persist, fetch blocks, call Orbis, consult ACP,
+or mutate audit state.
 
-## 5. Detection Scanning
-
-The issuer scanner is a typed, persistent pipeline. Detection uses the issuer's
-static detection key (DK). It does not use Orbis, ACP, audit grants, or PRE.
-
-```
-compact block stream
-  -> block identity lookup
-  -> parent-hash reorg check / rollback
-  -> full transaction fetch for the height
-  -> transfer output compliance ciphertext extraction
-  -> raw scanner_ciphertexts row
-  -> ComplianceScreener status update
-  -> audit_rows projection
-  -> SqliteScannerStore commit
-```
-
-The screener is intentionally pure:
-
-```
+```text
 ExtractedComplianceCiphertext
   -> Irrelevant
   -> Detected(DetectionEvent)
   -> InvalidCiphertext
 ```
 
-It only parses transfer compliance ciphertexts and DK-detects the detection
-tier. Persistence, block fetches, reorg handling, and audit enrichment stay
-outside the screener.
-
-```
-For each compliance ciphertext:
-1. Read EPK from ciphertext (on G)
-2. Compute S = DK × EPK
-3. Derive seed, decrypt detection tier
-4. If valid asset_id: match found
-5. Check whether plaintext is `asset_id` or `asset_id + FLAG_SENTINEL`
-```
+The scanner is reorg-safe: each block row stores `height`, `block_hash`, and
+`parent_hash`. A parent mismatch rolls back to the common ancestor and replays.
+Invalid ciphertext persistence is capped per block.
 
 ```bash
 pcli tx compliance scan run \
@@ -335,129 +144,47 @@ pcli tx compliance scan catch-up \
   --scan-asset-id <id>
 ```
 
-The scanner resumes from `scanner_sync.last_height`. Each committed block stores
-its height, block hash, parent hash, optional block time, raw ciphertext rows,
-screening statuses, detections, capped invalid ciphertext rows, clear flows,
-audit projections, and sync state in a single SQLite transaction. Empty blocks
-are committed too; header compaction is deferred.
+## Audit Branches
 
-Detection tier is always encrypted to DK_pub, so the issuer always gets:
-asset_id, flag status, and salt.
+Detected private rows start as `pending`. Audit completion requires validated
+evidence first.
 
-**Flagged** (amount >= threshold): All tiers encrypted to DK_pub. Issuer
-decrypts everything directly. Done.
-
-**Unflagged** (amount < threshold): Only detection tier decrypts. The scanner
-persists the detected output reference and raw compliance ciphertext. Governance
-+ Orbis PRE enrichment is downstream work and is not part of the scanner core.
-
----
-
-## 6. Decryption (Governance + Orbis PRE)
-
-For unflagged transactions, the issuer must obtain governance approval before
-Orbis will re-encrypt. Each tier requires a separate PRE call (independent r
-prevents cross-tier derivation).
-
-### Step 1: Governance Grant
-
-```
-Governance grants ACP permission on SourceHub:
-  → (issuer, user_address, [sender_core/sender_ext/output_core/output_ext], scope)
-  → Stored as ACP relationship
+```text
+pending -> evidence_valid
+pending -> evidence_invalid
+evidence_invalid -> evidence_valid
+evidence_valid -> decrypt_failed
+decrypt_failed -> audit_complete
+evidence_valid -> audit_complete
+audit_complete -> audit_complete
 ```
 
-### Step 2: Encrypted-Seed Upload Package
+Forbidden:
 
-For each auditable transfer tier, the sender produces an Orbis-compatible
-encrypted-seed upload package alongside the Penumbra ciphertext. The issuer is
-only a relay: it uploads that package later and does not need the plaintext
-seed at store time.
-
-The stored object follows the current Orbis `store_secret` contract:
-
-```
-encrypted_document
-enc_cmt
-shared_point
-challenge
-response
-derived_pk
-policy/resource/permission
-tier
-timestamp
-salt
-metadata_hash
+```text
+pending -> audit_complete
+evidence_invalid -> audit_complete
 ```
 
-### Step 3: Store-Time Verification
+### Flagged
 
-```
-ACP verifies: object/policy wiring exists
-Orbis verifies the stored-secret encryption proof for the encrypted seed object
-Orbis binds the object to policy metadata, tier, timestamp, and salt
-```
+If `amount >= threshold`, all tiers are encrypted to `DK_pub`. The issuer can
+decrypt locally after evidence validates. Orbis is not used.
 
-The runtime Orbis storage proof is therefore the proof over the stored
-encrypted seed object, not the Penumbra transfer-tier DLEQ from the zk circuit.
+### Unflagged
 
-### Step 4: PRE Request
+Only the detection tier decrypts locally. Audit tiers require governance/ACP
+authorization and Orbis PRE. Each tier has an independent encrypted-seed upload
+package and independent PRE path.
 
-```
-Issuer posts PRE request to Orbis:
-  → reader public key
-  → object_id (stored encrypted seed object)
-  → authorized derivation bytes
-  → salt
-  → valid_window matching the stored timestamp scope
+```text
+ACP grant
+  -> Orbis validates stored encrypted-seed package and policy metadata
+  -> issuer requests PRE for authorized tier
+  -> issuer recovers tier seed
+  -> issuer decrypts Penumbra tier payload locally
 ```
 
-Current Orbis policy access checks are driven by the stored object metadata.
-Because the stored object carries a timestamp, the PRE request must also carry
-the matching `valid_window`.
-
-### Step 5: PRE Result
-
-```
-Orbis verifies:
-  → JWT claims match the request
-  → ACP permission exists for the caller
-  → derivation is consistent with the stored proof
-  → stored object metadata matches the PRE scope
-
-Orbis returns:
-  → xnc_cmt
-  → re-encrypted secret envelope
-```
-
-There is no adjusted reader key and no separate anchor object in the supported
-path.
-
-### Step 6: Issuer Recovers Seed
-
-The issuer decrypts the returned Orbis secret envelope using its reader secret
-key and the returned `xnc_cmt`, yielding the tier seed. It then uses that seed
-to decrypt the Penumbra tier payload locally.
-
-**One Orbis object per transfer tier.** Cross-tier isolation is preserved
-because each tier uses an independent seed and its own stored encrypted-seed
-package.
-
-### Target Contract
-
-The current supported contract is already one Orbis-compatible encrypted-seed
-object per transfer tier. Penumbra still owns the canonical transfer-tier
-statement
-`{subject B_d, policy/resource/permission hashes, tier, target_timestamp, salt,
-EPK_tier, C2_tier, transfer DLEQ}` and may validate it locally, but current
-Orbis APIs consume the stored encrypted-seed proof/material above rather than
-the Penumbra transfer DLEQ directly.
-
-### Access Summary
-
-| Tier | Content | Flagged | Unflagged |
-|------|---------|---------|-----------|
-| Detection | asset_id + flag + salt | Direct (DK) | Direct (DK) |
-| Core | amount + self address | Direct (DK) | Governance + Orbis PRE |
-| Extension | counterparty address | Direct (DK) | Governance + Orbis PRE |
-| Sext | sender's counterparty | Direct (DK) | Governance + Orbis PRE (EPK_3, sender's d) |
+Audit-demo and reports are exporters over the scanner DB. The frontend state
+shape remains `scan`, `scanner`, `ledgerRows`, and `audits`; backend state comes
+from the DB.

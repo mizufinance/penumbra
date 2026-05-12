@@ -1,9 +1,11 @@
+pub mod advice;
 pub mod screener;
 pub mod storage;
 pub mod sync;
 pub mod types;
 pub mod worker;
 
+pub use advice::{AuditAdviceProvider, NoopAuditAdviceProvider, RingInfo, RpcAuditAdviceProvider};
 pub use screener::{ComplianceScreener, ScreeningResult};
 pub use storage::{ScannerStore, SqliteScannerStore, MAX_INVALID_CIPHERTEXTS_PER_BLOCK};
 pub use sync::{extract_clear_flows, extract_compliance_ciphertexts};

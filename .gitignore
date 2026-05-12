@@ -1,4 +1,5 @@
 *wallet.dat
+!CLAUDE.md
 wallet-next/pwalletd-db.sqlite
 wallet-next/pwalletd-db.sqlite-shm
 wallet-next/pwalletd-db.sqlite-wal
