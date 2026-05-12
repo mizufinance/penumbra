@@ -20,6 +20,7 @@ component = [
     "tonic",
 ]
 default = ["component"]
+sqlite-bundled = ["rusqlite/bundled"]
 test-helpers = ["decaf377-fmd", "decaf377-ka"]
 
 [dependencies]

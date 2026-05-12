@@ -13,6 +13,7 @@ aliases, compatibility flags, or half-finished abstractions.
 - When something goes sideways, stop and re-evaluate instead of pushing through.
 - Follow impact through all affected layers: circuits, domain logic, storage,
   services, CLI, tests, and docs.
+- Don’t fight errors! Whenever you encounter the same error twice, research the web and find 3-5 possible ways to fix it. Then choose the most efficient solution and implement it."
 
 ## Architecture Pattern
 

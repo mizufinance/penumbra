@@ -13,7 +13,7 @@ clap = { workspace = true, features = ["derive"] }
 decaf377 = { workspace = true, default-features = true }
 hex = { workspace = true }
 penumbra-orbis-client = { workspace = true }
-penumbra-sdk-compliance = { workspace = true, features = ["component"] }
+penumbra-sdk-compliance = { workspace = true, features = ["component", "sqlite-bundled"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
