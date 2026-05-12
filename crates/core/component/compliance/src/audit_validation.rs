@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use decaf377::Element;
 use sha2::{Digest, Sha256};
 
@@ -7,12 +7,18 @@ use crate::{
     ComplianceEvidenceObject, EvidenceObjectType, TransferOrbisUploadBundle,
 };
 
+/// Input required to validate a compliance audit evidence object.
+/// Includes the evidence payload, optional Orbis upload bundle, and ring public
+/// key used to verify tier bindings.
 pub struct AuditValidationInput {
     pub evidence: ComplianceEvidenceObject,
     pub upload_bundle: Option<TransferOrbisUploadBundle>,
     pub ring_pk: Element,
 }
 
+/// Possible outcomes of audit evidence validation.
+/// Invalid evidence and invalid Orbis packages carry the validation failure
+/// detail for persistence and diagnostics.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuditValidationStatus {
     Valid,
@@ -21,6 +27,8 @@ pub enum AuditValidationStatus {
     InvalidOrbisPackage(String),
 }
 
+/// Validate audit evidence and its optional upload bundle, returning an
+/// `AuditValidationStatus` that classifies success or the failure type.
 pub fn validate_audit_evidence(input: AuditValidationInput) -> AuditValidationStatus {
     if let Err(error) = validate_evidence_shape(&input.evidence, &input.ring_pk) {
         return AuditValidationStatus::InvalidEvidence(error.to_string());
@@ -164,9 +172,6 @@ fn validate_upload_bundle(
         "output_ext Orbis statement mismatch"
     );
 
-    if objects.is_empty() {
-        bail!("missing tier objects");
-    }
     Ok(())
 }
 

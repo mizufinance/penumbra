@@ -387,10 +387,10 @@ impl ScannerStore for SqliteScannerStore {
     }
 
     async fn commit_block(&self, block: &BlockRef) -> Result<()> {
+        let conn = self.lock_conn()?;
         let mut pending = self.lock_pending()?;
         ensure_pending_block(&pending, block)?;
 
-        let conn = self.lock_conn()?;
         let tx = conn.unchecked_transaction()?;
 
         tx.execute(

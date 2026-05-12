@@ -148,9 +148,7 @@ impl IssuerComplianceWorker {
         let error_slot = Arc::new(Mutex::new(None));
         let last_height = storage
             .last_scanned_block()
-            .await
-            .ok()
-            .flatten()
+            .await?
             .map(|block| block.height)
             .unwrap_or(0);
         let (sync_height_tx, sync_height_rx) = watch::channel(last_height);

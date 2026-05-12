@@ -54,8 +54,10 @@ aliases, compatibility flags, or half-finished abstractions.
 - Drop redundant module/crate names from function names.
 - Standard crypto abbreviations are fine: `ss`, `ct`, `pt`, `esk`, `epk`, `dk`,
   `fq`.
-- Comments should be succinct and factual. No `CRITICAL`, `TODO`, `NOTE`, or
-  design history in comments.
-- Module docs should be 5-8 lines max. Struct docs 1-3 lines. Function docs
-  1-2 lines.
+- Comments and docs should be succinct and factual. Add public API docs when
+  they explain ownership, invariants, inputs, outputs, or failure modes; avoid
+  comments that only repeat names or implementation history.
+- As a rule of thumb, module docs should stay under 5-8 lines, public type docs
+  under 1-3 lines, and function docs under 1-2 lines unless the API has real
+  safety or protocol nuance.
 - Do not duplicate docs across files. Define once, reference elsewhere.

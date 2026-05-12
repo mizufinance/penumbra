@@ -68,6 +68,7 @@ pub struct InvalidCiphertext {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AuditRowKey {
     pub height: u64,
+    #[serde(rename = "tx_hash")]
     pub tx_hash_hex: String,
     pub action_index: u32,
     pub output_index: u32,

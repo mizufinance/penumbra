@@ -16,6 +16,7 @@ use crate::{
 };
 
 pub const COMPLIANCE_EVIDENCE_VERSION: u32 = 1;
+const MAX_EVIDENCE_TIER_COUNT: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EvidenceObjectType {
@@ -185,6 +186,10 @@ impl ComplianceEvidenceObject {
         let transfer_dleq_bundle =
             TransferComplianceDleqProofs::from_bytes(reader.read_slice(TRANSFER_DLEQ_BYTES)?)?;
         let tier_count = reader.read_u32()? as usize;
+        ensure!(
+            tier_count <= MAX_EVIDENCE_TIER_COUNT,
+            "evidence tier count {tier_count} exceeds maximum {MAX_EVIDENCE_TIER_COUNT}"
+        );
         let mut tier_objects = Vec::with_capacity(tier_count);
         for _ in 0..tier_count {
             tier_objects.push(read_tier_object(&mut reader)?);

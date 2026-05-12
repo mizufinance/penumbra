@@ -22,7 +22,23 @@ func loadTransferAssignment(t *testing.T) *circuits.TransferCircuit {
 	if err != nil {
 		t.Fatalf("decode transfer witness fixture: %v", err)
 	}
+	validateTransferMutationFixture(t, assignment)
 	return assignment
+}
+
+func validateTransferMutationFixture(t *testing.T, assignment *circuits.TransferCircuit) {
+	t.Helper()
+	// These metamorphic tests assume the fixed 2-input, 2-output transfer fixture
+	// used by the transfer circuit and mutate the first spend/output path directly.
+	if len(assignment.Spends) == 0 {
+		t.Fatalf("transfer witness fixture must contain at least one spend")
+	}
+	if len(assignment.Outputs) < 2 {
+		t.Fatalf("transfer witness fixture must contain at least two outputs")
+	}
+	if len(assignment.Spends[0].StateProof.Path) == 0 {
+		t.Fatalf("transfer witness fixture first spend must contain a state path")
+	}
 }
 
 func assertTransferMutationRejected(t *testing.T, mutation transferMutation) {

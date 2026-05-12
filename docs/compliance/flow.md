@@ -45,15 +45,18 @@ enforcement is first-hop only and immutable after registration.
 
 3. **User registration**: user completes KYC with Defra, publishes a hidden-doc
    proof through SourceHub/Orbis, then registers a `(address, asset)` compliance
-   leaf on Penumbra.
+   leaf on Penumbra. A hidden-doc proof shows that the address diversifier
+   appears in an authorized KYC document without revealing the document id.
 
 ```text
 d   = SHA256("elgamal-derivation-v1\0\0" || B_d)
 ACK = d * ring_pk
 ```
 
-`d` is stored in the compliance leaf. `ACK` is derivable from the public address
-diversifier and the asset's `ring_pk`; it is not stored.
+`B_d` is the public diversified address base point. `ACK` means Audit
+Compliance Key: it is the per-address key used for audit-tier encryption.
+`d` is stored in the compliance leaf; `ACK` is derivable from `B_d` and the
+asset's `ring_pk`, but is not stored.
 
 ## Transfer
 
@@ -76,19 +79,23 @@ planner:
 ```
 
 The receiver output carries a unified transfer compliance ciphertext and a DLEQ
-bundle. Inputs and change outputs carry no compliance ciphertext.
+(Discrete Logarithm Equality) bundle, which binds each audit tier to its
+metadata. Inputs and change outputs carry no compliance ciphertext.
 
 | Tier | Content | Unflagged Encryption | Flagged Encryption |
 |------|---------|----------------------|--------------------|
-| Detection | asset id, flag, salt | `DK_pub` | `DK_pub` |
-| Sender core | amount | sender ACK | `DK_pub` |
-| Sender ext | receiver address | sender ACK | `DK_pub` |
-| Output core | amount | receiver ACK | `DK_pub` |
-| Output ext | sender address | receiver ACK | `DK_pub` |
+| Detection | asset id, flag, salt | `dk_pub` | `dk_pub` |
+| Sender core | amount | sender ACK | `dk_pub` |
+| Sender ext | receiver address | sender ACK | `dk_pub` |
+| Output core | amount | receiver ACK | `dk_pub` |
+| Output ext | sender address | receiver ACK | `dk_pub` |
 
-Detection is always issuer-DK decryptable. For flagged transfers, every audit
-tier is issuer-DK decryptable. For unflagged transfers, audit tiers require
-authorized Orbis PRE.
+`dk_pub` is the issuer Detection Key public key from `AssetPolicy`. Detection
+is always issuer-DK decryptable. ACK encryption routes unflagged audit tiers to
+authorized subject/ring access through Orbis PRE; flagged transfers encrypt all
+audit tiers to issuer `dk_pub` directly. Core tiers carry values such as amount;
+extension tiers carry address/counterparty data so authorization can separate
+value access from address metadata access.
 
 The transfer circuit owns value/nullifier/note/balance soundness. Compliance
 owns asset-policy binding, threshold flag correctness, ciphertext construction,
@@ -118,6 +125,11 @@ Chain
 `ComplianceScreener` is pure. It parses transfer ciphertexts and DK-decrypts the
 detection tier only. It does not persist, fetch blocks, call Orbis, consult ACP,
 or mutate audit state.
+
+An upload bundle is the client-produced set of per-tier encrypted-seed upload
+packages: encrypted seed material, tier metadata, policy/ring binding, and
+proofs needed by Orbis storage/PRE. "Encrypted-seed upload package" refers to
+one tier inside the bundle. See `reference.md` for the canonical fields.
 
 ```text
 ExtractedComplianceCiphertext
@@ -168,7 +180,7 @@ evidence_invalid -> audit_complete
 
 ### Flagged
 
-If `amount >= threshold`, all tiers are encrypted to `DK_pub`. The issuer can
+If `amount >= threshold`, all tiers are encrypted to `dk_pub`. The issuer can
 decrypt locally after evidence validates. Orbis is not used.
 
 ### Unflagged
