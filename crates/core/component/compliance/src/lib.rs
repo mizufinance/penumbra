@@ -88,13 +88,39 @@ pub use crypto::{
 pub mod scanning;
 pub use scanning::{decrypt_full_flagged, AddressData, FullComplianceData};
 
+pub mod refs;
+pub use refs::{ActionRef, BlockRef, OutputRef, TxRef};
+
+pub mod evidence;
+pub use evidence::{ComplianceEvidenceObject, EvidenceObjectType, COMPLIANCE_EVIDENCE_VERSION};
+
+pub mod audit_validation;
+pub use audit_validation::{validate_audit_evidence, AuditValidationInput, AuditValidationStatus};
+
+#[cfg(feature = "component")]
+pub mod audit;
+#[cfg(feature = "component")]
+pub use audit::{
+    decrypt_flagged_rows, export_detected_refs, export_ledger_rows, export_ledger_rows_json,
+    export_orbis_pending_scan, export_scan_json, import_orbis_audit_entries, mark_row_audited,
+    record_address_alias, record_evidence_failure, scanner_health_json,
+    validate_and_save_evidence_object, AuditDetectedRef, AuditScanExport, OrbisAuditEntry,
+};
+
+mod tx_id;
+pub use tx_id::scanner_transaction_id_from_proto;
+
 // Scanner requires tokio and rusqlite for async storage
 #[cfg(feature = "component")]
 pub mod scanner;
 #[cfg(feature = "component")]
 pub use scanner::{
-    detect_scan_transaction, detect_scan_transactions, ComplianceStorage, DetectedCiphertext,
-    DetectedTransfer, IssuerComplianceWorker, PartialAddress, WorkerHandle,
+    extract_clear_flows, extract_compliance_ciphertexts, AuditAdviceProvider, AuditLedgerRow,
+    AuditRowKey, BlockIdentityProvider, ClearFlowEvent, ClearFlowKind, ComplianceScreener,
+    DetectionEvent, ExtractedComplianceCiphertext, InvalidCiphertext, IssuerComplianceWorker,
+    NoopAuditAdviceProvider, RingInfo, RpcAuditAdviceProvider, ScannerStore, ScreeningResult,
+    SqliteScannerStore, TendermintProxyBlockIdentityProvider, WorkerHandle,
+    MAX_INVALID_CIPHERTEXTS_PER_BLOCK,
 };
 
 pub mod ibc;
@@ -552,21 +578,37 @@ mod tests {
             ..Default::default()
         };
 
+        let tx_ref = scanner::TxRef {
+            block: scanner::BlockRef {
+                height: 100,
+                block_hash: [1u8; 32],
+                parent_hash: [0u8; 32],
+                block_time_unix: None,
+            },
+            tx_index: 0,
+            tx_hash: scanner_transaction_id_from_proto(&tx),
+        };
+        let extracted = scanner::extract_compliance_ciphertexts(&tx_ref, &tx);
+        let screener = scanner::ComplianceScreener::new(issuer_dk.clone(), asset_id);
         let mut detected_ciphertexts = Vec::new();
-        let matches = detect_scan_transaction(&issuer_dk, asset_id, &tx, 100, 0, |d| {
-            detected_ciphertexts.push(d.ciphertext);
-            Ok(())
-        })
-        .unwrap();
-        assert_eq!(matches, 1);
+        for extracted in extracted {
+            if let scanner::ScreeningResult::Detected(d) = screener.screen(extracted) {
+                detected_ciphertexts.push(d.ciphertext);
+            }
+        }
+        assert_eq!(detected_ciphertexts.len(), 1);
 
         let wrong_dk = DetectionKey::from_seed(&[99u8; 32]);
-        let mut wrong_detected = 0;
-        detect_scan_transaction(&wrong_dk, asset_id, &tx, 100, 0, |_| {
-            wrong_detected += 1;
-            Ok(())
-        })
-        .unwrap();
+        let wrong_screener = scanner::ComplianceScreener::new(wrong_dk, asset_id);
+        let wrong_detected = scanner::extract_compliance_ciphertexts(&tx_ref, &tx)
+            .into_iter()
+            .filter(|extracted| {
+                matches!(
+                    wrong_screener.screen(extracted.clone()),
+                    scanner::ScreeningResult::Detected(_)
+                )
+            })
+            .count();
         assert_eq!(wrong_detected, 0);
 
         let decrypted = decrypt_full_flagged(issuer_dk.inner(), &detected_ciphertexts[0], asset_id)

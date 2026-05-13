@@ -285,14 +285,8 @@ impl TxCmd {
             if compliance_cmd.is_scan() {
                 return compliance_cmd.exec_scan().await;
             }
-            if compliance_cmd.is_decrypt() {
-                return compliance_cmd.exec_decrypt().await;
-            }
             if compliance_cmd.is_generate_dk() {
                 return compliance_cmd.exec_generate_dk();
-            }
-            if compliance_cmd.is_issuer_db() {
-                return compliance_cmd.exec_issuer_db().await;
             }
         }
 

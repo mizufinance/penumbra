@@ -73,6 +73,8 @@ struct DetectedTxRef {
     height: u64,
     tx_hash: String,
     action_index: usize,
+    #[serde(default)]
+    output_index: usize,
     asset_id: String,
     is_flagged: bool,
 }
@@ -82,6 +84,8 @@ struct AuditEntry {
     height: u64,
     tx_hash: String,
     action_index: usize,
+    #[serde(default)]
+    output_index: usize,
     amount: String,
     self_address: String,
     counterparty: String,
@@ -245,7 +249,7 @@ async fn main() -> Result<()> {
 
             let action = &body.actions[tx_ref.action_index];
             let started = Instant::now();
-            let Some((ct, bundle)) = extract_transfer_data(action) else {
+            let Some((ct, bundle)) = extract_transfer_data(action, tx_ref.output_index) else {
                 timings.ciphertext_extraction_ms += started.elapsed().as_millis();
                 no_ciphertext += 1;
                 timings.no_ciphertext += 1;
@@ -549,6 +553,7 @@ fn candidate_to_entry(
             height: tx_ref.height,
             tx_hash: tx_ref.tx_hash.clone(),
             action_index: tx_ref.action_index,
+            output_index: tx_ref.output_index,
             amount: amount.value().to_string(),
             self_address: ctx.subject_transmission_key_hex.to_string(),
             counterparty: String::new(),
@@ -558,6 +563,7 @@ fn candidate_to_entry(
             height: tx_ref.height,
             tx_hash: tx_ref.tx_hash.clone(),
             action_index: tx_ref.action_index,
+            output_index: tx_ref.output_index,
             amount: amount.value().to_string(),
             self_address: ctx.subject_transmission_key_hex.to_string(),
             counterparty: sender.transmission_key_hex,
@@ -567,6 +573,7 @@ fn candidate_to_entry(
             height: tx_ref.height,
             tx_hash: tx_ref.tx_hash.clone(),
             action_index: tx_ref.action_index,
+            output_index: tx_ref.output_index,
             amount: amount.value().to_string(),
             self_address: ctx.subject_transmission_key_hex.to_string(),
             counterparty: receiver.transmission_key_hex,
@@ -749,6 +756,7 @@ fn parse_fr(hex_str: &str, label: &str) -> Result<Fr> {
 
 fn extract_transfer_data(
     action: &penumbra_sdk_proto::core::transaction::v1::Action,
+    output_index: usize,
 ) -> Option<(TransferComplianceCiphertext, TransferOrbisUploadBundle)> {
     use penumbra_sdk_proto::core::transaction::v1::action::Action as ActionEnum;
 
@@ -756,10 +764,10 @@ fn extract_transfer_data(
         return None;
     };
     let body = transfer.body.as_ref()?;
-    let output = body
-        .outputs
-        .iter()
-        .find(|output| !output.compliance_ciphertext.is_empty())?;
+    let output = body.outputs.get(output_index)?;
+    if output.compliance_ciphertext.is_empty() {
+        return None;
+    }
 
     let ct = match TransferComplianceCiphertext::from_bytes(&output.compliance_ciphertext) {
         Ok(ct) => ct,
@@ -900,8 +908,8 @@ mod tests {
             })),
         };
 
-        assert!(extract_transfer_data(&split_action).is_none());
-        assert!(extract_transfer_data(&consolidate_action).is_none());
+        assert!(extract_transfer_data(&split_action, 0).is_none());
+        assert!(extract_transfer_data(&consolidate_action, 0).is_none());
     }
 
     fn make_upload_bundle_bytes() -> Vec<u8> {
@@ -1022,7 +1030,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_transfer_data_reads_first_non_empty_transfer_output() {
+    fn extract_transfer_data_reads_requested_transfer_output() {
         let ciphertext_bytes = make_transfer_ciphertext_bytes();
         let bundle_bytes = make_upload_bundle_bytes();
         let transfer_action = penumbra_sdk_proto::core::transaction::v1::Action {
@@ -1043,7 +1051,7 @@ mod tests {
         };
 
         let (ciphertext, bundle) =
-            extract_transfer_data(&transfer_action).expect("transfer action should expose data");
+            extract_transfer_data(&transfer_action, 1).expect("transfer action should expose data");
         assert_eq!(ciphertext.to_bytes(), ciphertext_bytes);
         assert_eq!(
             bundle.to_bytes().expect("bundle should serialize"),
@@ -1057,6 +1065,7 @@ mod tests {
             height: 290,
             tx_hash: "tx".to_string(),
             action_index: 1,
+            output_index: 2,
             asset_id: "asset".to_string(),
             is_flagged: false,
         };
@@ -1075,6 +1084,7 @@ mod tests {
             &default_ctx,
         );
         assert_eq!(default_entry.amount, "400");
+        assert_eq!(default_entry.output_index, 2);
         assert_eq!(default_entry.self_address, self_tk);
         assert_eq!(default_entry.counterparty, "");
         assert_eq!(default_entry.decrypted_via, "core");

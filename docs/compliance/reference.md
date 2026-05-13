@@ -1,237 +1,193 @@
 # Compliance Reference
 
-Technical specifications and lookup material. See `flow.md` for end-to-end
+Technical lookup material for compliance. See `flow.md` for the end-to-end
 walkthrough.
 
----
+## Transfer Wire Format
 
-## Ciphertext Wire Formats
+The receiver `TransferOutputBody.compliance_ciphertext` carries the unified
+transfer compliance ciphertext. Transfer inputs and change outputs must carry
+empty compliance bytes.
 
-### Transfer Compliance Ciphertext (576 bytes)
+```text
+TransferComplianceCiphertext: 576 bytes
+  0..128    4 EPKs: sender_core, sender_ext, output_core, output_ext
+  128..256  4 C2 envelopes, one per audit tier
+  256..320  detection tier: asset id + flag, salt
+  320..352  encrypted sender_core amount
+  352..448  encrypted sender_ext receiver address
+  448..480  encrypted output_core amount
+  480..576  encrypted output_ext sender address
 
-Carried on the receiver `TransferOutputBody.compliance_ciphertext` of a
-`Transfer` action. Change outputs and `TransferInputBody.compliance_ciphertext`
-are empty. Layout (`crates/core/component/compliance/src/transfer.rs`):
-
-```
-[  0.. 32] EPK_sender_core     r × G (sender core tier)
-[ 32.. 64] EPK_sender_ext      r × G (sender extension tier)
-[ 64.. 96] EPK_output_core     r × G (receiver core tier)
-[ 96..128] EPK_output_ext      r × G (receiver extension tier)
-[128..160] c2_sender_core      ElGamal envelope
-[160..192] c2_sender_ext       ElGamal envelope
-[192..224] c2_output_core      ElGamal envelope
-[224..256] c2_output_ext       ElGamal envelope
-[256..320] Detection           2 Fq: (asset_id + flag<<252), salt
-[320..352] Encrypted sender_core    1 Fq: amount
-[352..448] Encrypted sender_ext     3 Fq: receiver address (sender's view)
-[448..480] Encrypted output_core    1 Fq: amount
-[480..576] Encrypted output_ext     3 Fq: sender address (receiver's view)
+TransferComplianceDleqProofs: 256 bytes
+  4 * (challenge, response)
 ```
 
-4 independent EPKs — one per tier. The single detection tier (encrypted to
-`DK_pub`) covers the whole bundle. Both perspectives (sender's view of the
-counterparty and receiver's view of the counterparty) are carried, so each
-side's daily extension key reveals only their own counterparty data.
-
-### IBC Compliance Metadata
-
-The legacy IBC compliance memo path still exists in
-`crates/core/component/compliance/src/ibc.rs`, but it is not the current
-transfer compliance wire. Current `Transfer` actions require empty input
-compliance bytes and carry the unified transfer compliance ciphertext on the
-receiver output.
-
-```
-IbcComplianceMetadata {
-    compliance_ciphertext: Vec<u8>,
-    asset_id: asset::Id,
-}
-```
-
----
+The legacy IBC memo type remains in `compliance/src/ibc.rs`, but it is not the
+current transfer compliance wire.
 
 ## Registry Trees
 
-### QuadTree (User Registry)
+| Tree | Purpose | Notes |
+|------|---------|-------|
+| QuadTree | `(address, asset) -> ComplianceLeaf` | Arity 4, depth 16, Poseidon377 |
+| Indexed asset tree | asset regulation status | Membership for regulated assets, non-membership gap proof for unregulated assets |
 
-Maps (address, asset) → ComplianceLeaf.
+Both trees emit historical anchors per block. Clients cache tree state locally;
+issuer scanning uses a separate scanner DB and does not share wallet sync
+tables.
 
-```rust
-ComplianceLeaf { address, asset_id }
-```
-
-Commitment: `poseidon_hash_3(domain, g_d, pk_d, asset_id)`
-
-ACK is not stored — derivable from `ring_pk` + `B_d`.
-
-| Property | Value |
-|----------|-------|
-| Arity | 4 |
-| Depth | 16 |
-| Max leaves | ~4 billion |
-| Hash | Poseidon377 |
-
-### IMT (Asset Registry)
-
-Contains a structural zero-value sentinel plus explicitly inserted asset
-entries. The protocol seeds the base asset as an explicit unregulated entry,
-regulated assets are inserted explicitly, and other unregulated assets use
-non-membership gap proofs.
+## Scanner References
 
 ```rust
-IndexedLeaf { value: Fq, next_index: u64, next_value: Fq }
-AssetPolicy { dk_pub, ring_pk, threshold, allowed_channels, policy_id }
+BlockRef { height, block_hash, parent_hash, block_time_unix }
+TxRef { block, tx_index, tx_hash }
+ActionRef { tx, action_index }
+OutputRef { action, output_index }
+ExtractedComplianceCiphertext { output_ref, raw_bytes, upload_bundle_bytes }
 ```
 
-Membership: `leaf.value == asset_id`. Non-membership: `low.value < asset_id < low.next_value`. Both use identical circuit (indistinguishable).
+`tx_hash` must match Penumbra `TransactionId`. If a helper computes it outside
+the transaction crate, keep the transaction-crate parity test mandatory.
 
-### Historical Anchors
+The scanner DB schema is not migration-compatible with earlier prototype DBs.
+Delete and rebuild old local scanner DBs.
 
-Both trees emit per-block anchors (same pattern as SCT). Bidirectional lookups:
-`anchor_by_height(h) → root`, `anchor_lookup(root) → height`. Transactions
-reference past tree states, so new registrations don't invalidate in-flight
-proofs.
+## Scanner DB Tables
 
-### Local Sync
+| Table | Purpose |
+|-------|---------|
+| `scanner_blocks` | committed block identity and scan status |
+| `scanner_ciphertexts` | raw extracted output ciphertexts and screening status |
+| `scanner_detections` | DK-detected private transfer outputs and audit status |
+| `scanner_invalid_ciphertexts` | first capped malformed ciphertext rows per block |
+| `scanner_invalid_ciphertext_summaries` | overflow count for invalid rows above cap |
+| `scanner_clear_flows` | public shield/withdraw rows |
+| `scanner_sync` | single-row height/hash cursor |
+| `audit_rows` | normalized ledger projection |
+| `audit_address_aliases` | optional labels for UI/reporting |
+| `audit_row_audits` | idempotent subject audit marks |
+| `audit_decryption_failures` | failed issuer-DK or Orbis decrypt attempts |
+| `audit_evidence_failures` | evidence build/validation/import failures |
+| `audit_orbis_receipts` | stored PRE receipt JSON |
+| `compliance_evidence_objects` | canonical encrypted evidence object bytes |
 
-Clients cache trees locally (like SCT). SQLite tables:
-`compliance_user_positions`, `compliance_user_hashes`, `compliance_anchors`.
+`commit_block` atomically writes block identity, raw ciphertexts, screening
+results, detections, invalid summaries, clear flows, audit projections, and
+sync state. Reorg handling compares live parent hash to stored `height - 1`,
+rolls back to a common ancestor, and replays.
 
----
+## Scanner Boundaries
+
+- `ScannerStore`: async storage boundary. SQLite is current; Postgres or remote
+  stores should not change worker logic.
+- `ComplianceScreener`: pure parse + detection-tier DK decrypt. No persistence,
+  Orbis, ACP, audit, or chain I/O.
+- `AuditAdviceProvider`: policy/ring/label lookup boundary. SourceHub, Orbis,
+  ACP, and caches stay outside scanner logic.
+
+## Evidence And Audit Status
+
+`ComplianceEvidenceObject` is the canonical encrypted evidence payload for a
+detected transfer:
+
+```text
+output ref
+asset id, flag, detection salt
+transfer ciphertext
+transfer DLEQ bundle
+public tier decode objects
+optional Orbis upload-bundle hash
+payload hash
+```
+
+`AuditValidationInput` checks payload hash, canonical tier order, ciphertext and
+proof byte consistency, tier DLEQ validation against `ring_pk`, and upload
+bundle validation when present.
+
+Valid audit states:
+
+```text
+pending
+evidence_valid
+evidence_invalid
+decrypt_failed
+audit_complete
+```
+
+Allowed transitions:
+
+```text
+pending -> evidence_valid
+pending -> evidence_invalid
+evidence_invalid -> evidence_valid
+evidence_valid -> decrypt_failed
+decrypt_failed -> audit_complete
+evidence_valid -> audit_complete
+audit_complete -> audit_complete
+```
+
+Both flagged issuer-DK decrypt and unflagged Orbis PRE import require
+`evidence_valid`.
 
 ## Transfer DLEQ
 
-In-circuit Chaum-Pedersen proof binding each transfer tier to the canonical
-Penumbra metadata statement. Computed inside the SNARK, output as `(c, s)` per
-tier.
+Each audit tier has an in-circuit Chaum-Pedersen proof binding the tier to
+Penumbra metadata:
 
-### Math (Orbis sign convention)
-
-**Prover (circuit):**
-
-```
-S    = r × ACK
-R    = k × G
-R'   = k × ACK
-M    = Poseidon(policy_id_hash, resource_hash, permission_hash, tier, target_timestamp, salt)
-c    = Poseidon(ACK, EPK, S, R, R', M)
-s    = k + c × r
+```text
+S  = r * ACK
+R  = k * G
+R' = k * ACK
+M  = Poseidon(policy_id_hash, resource_hash, permission_hash, tier, timestamp, salt)
+c  = Poseidon(ACK, EPK, S, R, R', M)
+s  = k + c * r
 ```
 
-`policy_id_hash`, `resource_hash`, `permission_hash` are reused from IMT leaf
-commitment verification (zero additional cost).
+Verifier reconstruction:
 
-**Canonical verifier (Penumbra-side / future public tier object validator):**
-
-```
-ACK  = d × ring_pk
-R    = s × G   - c × EPK
-R'   = s × ACK - c × S
+```text
+R       = s * G   - c * EPK
+R'      = s * ACK - c * S
 c_check = Poseidon(ACK, EPK, S, R, R', M)
-Accept if c_check == c
 ```
 
-`S` must be supplied alongside the public tier object if the verifier does not
-know `sk_ring`. The proof binds the metadata statement to the ACK/EPK relation;
-it does not by itself prove that `C2` encrypts a valid seed. `C2` correctness
-remains a Penumbra zk-circuit property.
+Tier constants:
 
-### Current Orbis Stored-Secret Proof
+| Tier | Constant |
+|------|----------|
+| sender_core | 1 |
+| sender_ext | 2 |
+| output_core | 3 |
+| output_ext | 4 |
 
-Current Orbis `store_secret` / `start_pre` does not consume the transfer DLEQ
-above. It verifies the stored-secret encryption proof for the Orbis-compatible
-encrypted-seed object uploaded for each transfer tier. That proof binds the
-stored object to Orbis metadata
-`{policy_id, resource, permission, tier, timestamp, salt}`, not directly to the
-canonical Penumbra transfer-tier statement.
-
-### Tier Binding
-
-| Proof | DLEQ instance | Tier constant |
-|-------|---------------|---------------|
-| Transfer | sender_core (r_sender_core, ACK_sender) | `Fq::from(1)` |
-| Transfer | sender_ext (r_sender_ext, ACK_sender) | `Fq::from(2)` |
-| Transfer | output_core (r_output_core, ACK_receiver) | `Fq::from(3)` |
-| Transfer | output_ext (r_output_ext, ACK_receiver) | `Fq::from(4)` |
-
-Tier is a circuit constant — Alice cannot lie about it.
-
-### Timestamp Binding
-
-`target_timestamp`: Unix UTC seconds. Client sets `SystemTime::now().as_secs()`.
-Validator enforces `|target_timestamp - block_timestamp| <= 3600` (±1 hour)
-via `check_timestamp_freshness()`. Prevents replay of old proofs under changed
-policies.
-
-### Salt
-
-Random Fq, encrypted in the detection tier (only issuer DK can decrypt).
-Included in metadata hash M. Prevents brute-force of M even under full
-`sk_ring` compromise.
-
-### Privacy (two layers)
-
-| Layer | Protects against | Mechanism |
-|-------|------------------|-----------|
-| S-blinding | Public observers | `c = Poseidon(..., S, ...)` — S has 256-bit entropy |
-| Salt | `sk_ring` compromise | `M = Poseidon(..., salt)` — salt only recoverable with DK |
-
-### Cost
-
-| Proof | Additional public outputs |
-|-------|--------------------------|
-| Transfer | +8 Fq (4 × (c, s)) = 256 bytes (`TRANSFER_DLEQ_BYTES`) |
-| IBC memo (out-of-circuit) | None — DK-only detection tier |
-
----
+The DLEQ binds ACK/EPK/shared-point metadata. `C2` correctness remains a
+Penumbra circuit property. Current Orbis PRE validates the encrypted-seed
+upload package and its policy metadata; it does not consume the transfer DLEQ
+directly.
 
 ## Restrictions
 
-**Flagging is per-transfer**: A single `is_flagged = (receiver_amount >= threshold)`
-is computed once per `Transfer` and applied to the unified compliance bundle on
-the receiver output. The flag is based on the actual transfer (receiver) amount,
-not on the value of the spent input notes.
-
-**No send/receive distinction**: Issuers see the same data for both sides.
-
-**Defra holds KYC**: KYC data in DefraDB, not on-chain. Issuer knows registered
-addresses; KYC-to-identity link is held by Defra only.
-
-**Immutable registrations**: ComplianceLeaf and AssetPolicy cannot be updated.
-IBC channel whitelist must be set at registration time.
-
-**IBC first-hop only**: Channel whitelist enforced at withdrawal, not multi-hop.
-
-**No key rotation**: No protocol for rotating compromised ring_pk or DK.
-
-**Cross-tier independence**: Each ACK-tier uses independent ephemeral scalar.
-Enforced by ZK circuit. Issuer cannot derive one tier from another.
-
-**Current PRE path is encrypted-seed-object based**: Orbis PRE operates on the
-stored encrypted seed object for each transfer tier. It authorizes by stored
-object metadata plus request scope, and the PRE request must carry a
-`valid_window` whenever the stored object includes a timestamp.
-
-**decaf377 curve**: Orbis supports decaf377 natively — no cross-curve bridge.
-
----
+- Flagging is per transfer receiver amount: `amount >= threshold`.
+- Split and consolidate do not carry compliance ciphertexts.
+- Registrations and asset policies are immutable.
+- Channel whitelist enforcement is first-hop only.
+- No key rotation is currently defined.
+- Cross-tier independence is mandatory: independent EPK/randomness per tier.
+- Orbis PRE operates on one encrypted-seed object per tier.
+- Transfer-circuit constraints that compliance assumes are tracked separately in
+  `../transfer-circuit/constraint-checklist.md`.
 
 ## Source Files
 
 | Component | Location |
 |-----------|----------|
-| Encryption / DLEQ | `compliance/src/crypto.rs` |
-| R1CS circuits | `compliance/src/r1cs.rs` |
-| Data structures | `compliance/src/structs.rs` |
-| Registry / trees | `compliance/src/registry.rs`, `tree.rs`, `indexed_tree.rs` |
-| Statement hash helpers | `shielded-pool/src/public_input_hash.rs` |
-| Transfer action | `shielded-pool/src/transfer/action.rs`, `plan.rs`, `proof.rs`, `compliance.rs` |
-| Split / Consolidate actions | `shielded-pool/src/split/`, `shielded-pool/src/consolidate/` (no compliance bytes) |
-| Transfer ciphertext / DLEQ | `compliance/src/transfer.rs`, `structs.rs` |
-| Proof aggregation (`AggregateBundle`) | `crates/core/component/proof-aggregation/` |
-| View service | `crates/view/src/service.rs` |
-| Compliance client | `crates/view/src/client_compliance.rs` |
-| Local storage | `view/src/storage/compliance.rs` |
-| IBC metadata | `compliance/src/ibc.rs` |
-| State keys | `compliance/src/state_key.rs` |
+| Transfer ciphertext/DLEQ | `crates/core/component/compliance/src/transfer.rs` |
+| Crypto helpers | `crates/core/component/compliance/src/crypto.rs` |
+| Compliance circuits | `crates/core/component/compliance/src/r1cs.rs` |
+| Registry/trees | `crates/core/component/compliance/src/registry.rs`, `tree.rs`, `indexed_tree.rs` |
+| Scanner | `crates/core/component/compliance/src/scanner/` |
+| Evidence/audit | `crates/core/component/compliance/src/evidence.rs`, `audit.rs`, `audit_validation.rs` |
+| Transfer planning/proofs | `crates/core/component/shielded-pool/src/transfer/` |
+| Local compliance sync | `crates/view/src/storage/compliance.rs`, `crates/view/src/client_compliance.rs` |
+| Audit bridge | `crates/bin/orbis-audit/src/main.rs` |

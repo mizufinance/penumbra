@@ -1,124 +1,141 @@
-//! Compliance scanning for regulated asset transfers.
-//!
-//! Note: Detection (asset_id) is now handled by the issuer's DetectionKey.
-//! See `detector.rs` for the issuer detection workflow.
-//!
-//! This module provides user-side decryption of core and extension tiers
-//! once the asset is known (from issuer detection or context).
-
-use anyhow::Result;
-use decaf377::Element;
-use penumbra_sdk_asset::asset;
-use penumbra_sdk_num::Amount;
-use penumbra_sdk_proto::core::component::sct::v1::Nullifier;
 use penumbra_sdk_proto::core::transaction::v1::Transaction as ProtoTransaction;
-use serde::{Deserialize, Serialize};
+use penumbra_sdk_proto::Message;
 
-/// Partial address from decrypted compliance data.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PartialAddress {
-    pub diversified_generator: [u8; 32],
-    pub transmission_key: [u8; 32],
-}
+use super::types::{
+    ActionRef, ClearFlowEvent, ClearFlowKind, ExtractedComplianceCiphertext, OutputRef, TxRef,
+};
 
-impl PartialAddress {
-    pub fn new(diversified_generator: Element, transmission_key: [u8; 32]) -> Self {
-        Self {
-            diversified_generator: diversified_generator.vartime_compress().0,
-            transmission_key,
-        }
-    }
-}
-
-impl std::fmt::Display for PartialAddress {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "g_d:{:02x}{:02x}..{:02x}{:02x},pk:{:02x}{:02x}..{:02x}{:02x}",
-            self.diversified_generator[0],
-            self.diversified_generator[1],
-            self.diversified_generator[30],
-            self.diversified_generator[31],
-            self.transmission_key[0],
-            self.transmission_key[1],
-            self.transmission_key[30],
-            self.transmission_key[31],
-        )
-    }
-}
-
-/// A detected transfer of a regulated asset.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DetectedTransfer {
-    pub height: u64,
-    pub action_index: usize,
-    pub asset_id: asset::Id,
-    pub amount: Amount,
-    pub self_address: PartialAddress,
-    pub counterparty_address: PartialAddress,
-    pub nullifier: Option<Nullifier>,
-}
-
-impl std::fmt::Display for DetectedTransfer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "height={}, action={}, asset={}, amount={}, self={}, counterparty={}",
-            self.height,
-            self.action_index,
-            self.asset_id,
-            self.amount,
-            self.self_address,
-            self.counterparty_address,
-        )
-    }
-}
-
-/// Extracted ciphertext data from a transaction action.
-#[derive(Clone, Debug)]
-pub struct ExtractedCiphertext {
-    /// The action index within the transaction.
-    pub action_index: usize,
-    /// The compliance ciphertext bytes.
-    pub compliance_ciphertext: Vec<u8>,
-}
-
-/// Extract compliance ciphertexts from a transaction.
-pub fn extract_ciphertexts(tx: &ProtoTransaction) -> Result<Vec<(usize, Vec<u8>)>> {
-    Ok(extract_ciphertexts_full(tx)?
-        .into_iter()
-        .map(|e| (e.action_index, e.compliance_ciphertext))
-        .collect())
-}
-
-/// Extract transfer compliance ciphertexts from a transaction.
-pub fn extract_ciphertexts_full(tx: &ProtoTransaction) -> Result<Vec<ExtractedCiphertext>> {
+pub fn extract_compliance_ciphertexts(
+    tx_ref: &TxRef,
+    tx: &ProtoTransaction,
+) -> Vec<ExtractedComplianceCiphertext> {
     use penumbra_sdk_proto::core::transaction::v1::action::Action;
 
-    let actions = match &tx.body {
-        Some(body) => &body.actions,
-        None => return Ok(vec![]),
+    let Some(body) = &tx.body else {
+        return vec![];
     };
 
     let mut results = Vec::new();
-    for (idx, action) in actions.iter().enumerate() {
-        match &action.action {
-            Some(Action::Transfer(transfer)) => {
-                if let Some(body) = &transfer.body {
-                    for output in &body.outputs {
-                        if !output.compliance_ciphertext.is_empty() {
-                            results.push(ExtractedCiphertext {
-                                action_index: idx,
-                                compliance_ciphertext: output.compliance_ciphertext.clone(),
-                            });
-                        }
-                    }
+    for (action_index, action) in body.actions.iter().enumerate() {
+        let Some(Action::Transfer(transfer)) = action.action.as_ref() else {
+            continue;
+        };
+        let Some(body) = transfer.body.as_ref() else {
+            continue;
+        };
+
+        for (output_index, output) in body.outputs.iter().enumerate() {
+            if output.compliance_ciphertext.is_empty() {
+                continue;
+            }
+            results.push(ExtractedComplianceCiphertext {
+                output_ref: OutputRef {
+                    action: ActionRef {
+                        tx: tx_ref.clone(),
+                        action_index: action_index as u32,
+                    },
+                    output_index: output_index as u32,
+                },
+                raw_bytes: output.compliance_ciphertext.clone(),
+                upload_bundle_bytes: (!output.orbis_upload_bundle.is_empty())
+                    .then(|| output.orbis_upload_bundle.clone()),
+            });
+        }
+    }
+
+    results
+}
+
+pub fn extract_clear_flows(tx_ref: &TxRef, tx: &ProtoTransaction) -> Vec<ClearFlowEvent> {
+    use penumbra_sdk_proto::core::transaction::v1::action::Action;
+
+    let Some(body) = &tx.body else {
+        return vec![];
+    };
+
+    let mut results = Vec::new();
+    for (action_index, action) in body.actions.iter().enumerate() {
+        let output_ref = OutputRef {
+            action: ActionRef {
+                tx: tx_ref.clone(),
+                action_index: action_index as u32,
+            },
+            output_index: 0,
+        };
+
+        match action.action.as_ref() {
+            Some(Action::IbcRelayAction(relay)) => {
+                if let Some(event) = extract_ibc_shield(&output_ref, relay) {
+                    results.push(event);
+                }
+            }
+            Some(Action::ShieldedIcs20Withdrawal(withdrawal)) => {
+                if let Some(event) = extract_ics20_withdrawal(&output_ref, withdrawal) {
+                    results.push(event);
                 }
             }
             _ => {}
         }
     }
-    Ok(results)
+
+    results
+}
+
+fn extract_ibc_shield(
+    output_ref: &OutputRef,
+    relay: &penumbra_sdk_proto::core::component::ibc::v1::IbcRelay,
+) -> Option<ClearFlowEvent> {
+    let raw_action = relay.raw_action.as_ref()?;
+    if !raw_action
+        .type_url
+        .ends_with("ibc.core.channel.v1.MsgRecvPacket")
+    {
+        return None;
+    }
+    let msg =
+        ibc_proto::ibc::core::channel::v1::MsgRecvPacket::decode(raw_action.value.as_ref()).ok()?;
+    let packet = msg.packet?;
+    let packet_data: penumbra_sdk_proto::core::component::ibc::v1::FungibleTokenPacketData =
+        serde_json::from_slice(packet.data.as_slice()).ok()?;
+    let metadata: penumbra_sdk_asset::asset::Metadata =
+        packet_data.denom.as_str().try_into().ok()?;
+    let amount: penumbra_sdk_num::Amount = packet_data.amount.try_into().ok()?;
+
+    Some(ClearFlowEvent {
+        output_ref: output_ref.clone(),
+        kind: ClearFlowKind::Shield,
+        asset_id: metadata.id(),
+        amount,
+        self_address: Some(packet_data.receiver),
+        counterparty: Some(packet_data.sender.clone()),
+        public_address: Some(packet_data.sender),
+    })
+}
+
+fn extract_ics20_withdrawal(
+    output_ref: &OutputRef,
+    withdrawal: &penumbra_sdk_proto::core::component::shielded_pool::v1::ShieldedIcs20Withdrawal,
+) -> Option<ClearFlowEvent> {
+    let body = withdrawal.body.as_ref()?;
+    let payload = body.withdrawal.as_ref()?;
+    let denom = payload.denom.clone()?;
+    let metadata: penumbra_sdk_asset::asset::Metadata = denom.denom.as_str().try_into().ok()?;
+    let amount: penumbra_sdk_num::Amount = payload.amount.clone()?.try_into().ok()?;
+    let return_address = payload
+        .return_address
+        .clone()
+        .and_then(|address| penumbra_sdk_keys::Address::try_from(address).ok())
+        .map(|address| address.to_string());
+
+    Some(ClearFlowEvent {
+        output_ref: output_ref.clone(),
+        kind: ClearFlowKind::Withdraw,
+        asset_id: metadata.id(),
+        amount,
+        self_address: return_address,
+        counterparty: Some(payload.destination_chain_address.clone()),
+        public_address: Some(payload.destination_chain_address.clone()),
+    })
 }
 
 #[cfg(test)]
@@ -127,11 +144,26 @@ mod tests {
     use penumbra_sdk_proto::core::component::shielded_pool::v1::{
         Consolidate, ConsolidateBody, Split, SplitBody, Transfer, TransferBody, TransferOutputBody,
     };
-    use penumbra_sdk_proto::core::transaction::v1::TransactionBody;
-    use penumbra_sdk_proto::core::transaction::v1::{action::Action, Action as ActionProto};
+    use penumbra_sdk_proto::core::transaction::v1::{
+        action::Action, Action as ActionProto, TransactionBody,
+    };
+    use penumbra_sdk_txhash::TransactionId;
+
+    fn tx_ref() -> TxRef {
+        TxRef {
+            block: crate::scanner::BlockRef {
+                height: 10,
+                block_hash: [1u8; 32],
+                parent_hash: [2u8; 32],
+                block_time_unix: None,
+            },
+            tx_index: 3,
+            tx_hash: TransactionId([4u8; 32]),
+        }
+    }
 
     #[test]
-    fn test_extract_empty() {
+    fn extract_empty_transaction() {
         let tx = ProtoTransaction {
             body: Some(TransactionBody {
                 actions: vec![],
@@ -139,11 +171,11 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert_eq!(extract_ciphertexts(&tx).unwrap().len(), 0);
+        assert!(extract_compliance_ciphertexts(&tx_ref(), &tx).is_empty());
     }
 
     #[test]
-    fn test_extract_ciphertexts_full_only_reads_transfer_outputs() {
+    fn extract_ciphertexts_includes_action_and_output_indices() {
         let tx = ProtoTransaction {
             body: Some(TransactionBody {
                 actions: vec![
@@ -160,6 +192,11 @@ mod tests {
                                     TransferOutputBody::default(),
                                     TransferOutputBody {
                                         compliance_ciphertext: vec![1, 2, 3, 4],
+                                        orbis_upload_bundle: vec![9, 9],
+                                        ..Default::default()
+                                    },
+                                    TransferOutputBody {
+                                        compliance_ciphertext: vec![5, 6],
                                         ..Default::default()
                                     },
                                 ],
@@ -180,9 +217,14 @@ mod tests {
             ..Default::default()
         };
 
-        let extracted = extract_ciphertexts_full(&tx).expect("transfer extraction should succeed");
-        assert_eq!(extracted.len(), 1);
-        assert_eq!(extracted[0].action_index, 1);
-        assert_eq!(extracted[0].compliance_ciphertext, vec![1, 2, 3, 4]);
+        let extracted = extract_compliance_ciphertexts(&tx_ref(), &tx);
+        assert_eq!(extracted.len(), 2);
+        assert_eq!(extracted[0].output_ref.action.action_index, 1);
+        assert_eq!(extracted[0].output_ref.output_index, 1);
+        assert_eq!(extracted[0].upload_bundle_bytes, Some(vec![9, 9]));
+        assert_eq!(extracted[0].raw_bytes, vec![1, 2, 3, 4]);
+        assert_eq!(extracted[1].output_ref.action.action_index, 1);
+        assert_eq!(extracted[1].output_ref.output_index, 2);
+        assert_eq!(extracted[1].raw_bytes, vec![5, 6]);
     }
 }

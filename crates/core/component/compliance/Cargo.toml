@@ -11,6 +11,7 @@ edition = {workspace = true}
 component = [
     "cnidarium",
     "cnidarium-component",
+    "ibc-proto",
     "penumbra-sdk-proto/cnidarium",
     "penumbra-sdk-proto/rpc",
     "penumbra-sdk-sct/component",
@@ -19,6 +20,7 @@ component = [
     "tonic",
 ]
 default = ["component"]
+sqlite-bundled = ["rusqlite/bundled"]
 test-helpers = ["decaf377-fmd", "decaf377-ka"]
 
 [dependencies]
@@ -54,6 +56,7 @@ blake2b_simd = {workspace = true}
 chacha20poly1305 = {workspace = true}
 hex = {workspace = true}
 hkdf = "0.12"
+ibc-proto = {workspace = true, optional = true, default-features = false}
 rand_core = {workspace = true}
 rusqlite = {version = "0.32", optional = true}
 tendermint = {workspace = true}

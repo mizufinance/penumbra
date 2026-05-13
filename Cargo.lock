@@ -5437,7 +5437,10 @@ version = "2.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "decaf377",
+ "hex",
  "penumbra-orbis-client",
+ "penumbra-sdk-compliance",
  "serde",
  "serde_json",
  "tokio",
@@ -6348,6 +6351,7 @@ dependencies = [
  "decaf377-ka",
  "hex",
  "hkdf 0.12.4",
+ "ibc-proto",
  "once_cell",
  "penumbra-sdk-asset",
  "penumbra-sdk-keys",
