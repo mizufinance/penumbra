@@ -25,6 +25,13 @@ pub struct ShieldedIcs20WithdrawalChangeBody {
     pub ovk_wrapped_key: OvkWrappedKey,
 }
 
+impl ShieldedIcs20WithdrawalChangeBody {
+    #[cfg(feature = "component")]
+    pub(crate) fn is_dummy(&self) -> bool {
+        self.wrapped_memo_key.0 == [0u8; 48] && self.ovk_wrapped_key.0 == [0u8; 48]
+    }
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(
     try_from = "pb::ShieldedIcs20WithdrawalBody",

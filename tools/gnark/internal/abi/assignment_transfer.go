@@ -74,11 +74,6 @@ func newTransferSharedAssignmentParts(
 	if err != nil {
 		return zeroPoint, zeroAuth, zeroAsset, zeroSender, fmt.Errorf("decode transfer sender compliance path: %w", err)
 	}
-	indexedLeaf := indexedLeafInputsFromIndexedLeafBinary(
-		witness.AssetIndexedLeaf,
-		witness.AssetIndexedLeafDKPub,
-		witness.AssetIndexedLeafRingPK,
-	)
 	ivkReduced, quotientA, err := incomingViewingKeyReductionFromBinary(witness.NK, witness.AK)
 	if err != nil {
 		return zeroPoint, zeroAuth, zeroAsset, zeroSender, fmt.Errorf("compute transfer ivk reduction from binary witness: %w", err)
@@ -92,20 +87,10 @@ func newTransferSharedAssignmentParts(
 		IVKQuotientA: quotientA,
 	}
 	asset := circuits.AssetTreeFields{
-		Leaf: indexedLeafFields(
-			indexedLeaf.Value,
-			indexedLeaf.NextValue,
-			indexedLeaf.Threshold,
-			indexedLeaf.ChannelsHash,
-			indexedLeaf.NextIndex,
-			fqString(witness.AssetIndexedLeafDKPub.X),
-			fqString(witness.AssetIndexedLeafDKPub.Y),
-			fqString(witness.AssetIndexedLeafRingPK.X),
-			fqString(witness.AssetIndexedLeafRingPK.Y),
-			indexedLeaf.RingIDHash,
-			indexedLeaf.PolicyIDHash,
-			indexedLeaf.PermissionHash,
-			indexedLeaf.ResourceHash,
+		Leaf: indexedLeafFieldsFromIndexedLeafBinary(
+			witness.AssetIndexedLeaf,
+			witness.AssetIndexedLeafDKPub,
+			witness.AssetIndexedLeafRingPK,
 		),
 		Path:     assetPath,
 		Position: witness.AssetPosition,
@@ -135,25 +120,9 @@ func transferCoreTierFields(
 		)
 	}
 	fields := circuits.TransferComplianceCoreFields{
-		Epk: point2DString(tier.EPKAffine),
-		C2:  fqString(tier.C2),
-		Proof: circuits.TransferComplianceProofFields{
-			Statement: circuits.TransferComplianceStatementFields{
-				SubjectBD:       fqString(tier.SubjectBD),
-				RingIDHash:      fqString(tier.RingIDHash),
-				PolicyIDHash:    fqString(tier.PolicyIDHash),
-				ResourceHash:    fqString(tier.ResourceHash),
-				PermissionHash:  fqString(tier.PermissionHash),
-				Tier:            tier.Tier,
-				TargetTimestamp: fqString(tier.StatementTimestamp),
-				Salt:            fqString(tier.Salt),
-			},
-			Challenge:   fqString(tier.Challenge),
-			Response:    fqString(tier.Response),
-			DerivedPK:   point2DString(tier.DerivedPKAffine),
-			EncCmt:      point2DString(tier.EncCmtAffine),
-			SharedPoint: point2DString(tier.SharedPointAffine),
-		},
+		Epk:   point2DString(tier.EPKAffine),
+		C2:    fqString(tier.C2),
+		Proof: transferTierProofFields(tier),
 	}
 	for i := range tier.Ciphertext {
 		fields.Ciphertext[i] = fqString(tier.Ciphertext[i])
@@ -173,30 +142,36 @@ func transferExtTierFields(
 		)
 	}
 	fields := circuits.TransferComplianceExtFields{
-		Epk: point2DString(tier.EPKAffine),
-		C2:  fqString(tier.C2),
-		Proof: circuits.TransferComplianceProofFields{
-			Statement: circuits.TransferComplianceStatementFields{
-				SubjectBD:       fqString(tier.SubjectBD),
-				RingIDHash:      fqString(tier.RingIDHash),
-				PolicyIDHash:    fqString(tier.PolicyIDHash),
-				ResourceHash:    fqString(tier.ResourceHash),
-				PermissionHash:  fqString(tier.PermissionHash),
-				Tier:            tier.Tier,
-				TargetTimestamp: fqString(tier.StatementTimestamp),
-				Salt:            fqString(tier.Salt),
-			},
-			Challenge:   fqString(tier.Challenge),
-			Response:    fqString(tier.Response),
-			DerivedPK:   point2DString(tier.DerivedPKAffine),
-			EncCmt:      point2DString(tier.EncCmtAffine),
-			SharedPoint: point2DString(tier.SharedPointAffine),
-		},
+		Epk:   point2DString(tier.EPKAffine),
+		C2:    fqString(tier.C2),
+		Proof: transferTierProofFields(tier),
 	}
 	for i := range tier.Ciphertext {
 		fields.Ciphertext[i] = fqString(tier.Ciphertext[i])
 	}
 	return fields, nil
+}
+
+func transferTierProofFields(
+	tier *TransferComplianceCiphertextWitnessV1Binary,
+) circuits.TransferComplianceProofFields {
+	return circuits.TransferComplianceProofFields{
+		Statement: circuits.TransferComplianceStatementFields{
+			SubjectBD:       fqString(tier.SubjectBD),
+			RingIDHash:      fqString(tier.RingIDHash),
+			PolicyIDHash:    fqString(tier.PolicyIDHash),
+			ResourceHash:    fqString(tier.ResourceHash),
+			PermissionHash:  fqString(tier.PermissionHash),
+			Tier:            tier.Tier,
+			TargetTimestamp: fqString(tier.StatementTimestamp),
+			Salt:            fqString(tier.Salt),
+		},
+		Challenge:   fqString(tier.Challenge),
+		Response:    fqString(tier.Response),
+		DerivedPK:   point2DString(tier.DerivedPKAffine),
+		EncCmt:      point2DString(tier.EncCmtAffine),
+		SharedPoint: point2DString(tier.SharedPointAffine),
+	}
 }
 
 func newTransferComplianceFields(

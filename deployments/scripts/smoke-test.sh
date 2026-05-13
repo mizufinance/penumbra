@@ -214,4 +214,8 @@ just integration-pcli
 # The pd tests come later, as they need work to have been performed for metrics to be emitted.
 just integration-pd
 # Finally, pindexer tests, to make assertions about emitted events.
-just integration-pindexer
+if [ "$have_postgres_tooling" = true ]; then
+    just integration-pindexer
+else
+    >&2 echo "Skipping pindexer smoke tests; local PostgreSQL tooling is unavailable."
+fi

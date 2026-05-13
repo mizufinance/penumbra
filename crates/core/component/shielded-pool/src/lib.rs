@@ -26,7 +26,6 @@ pub use rseed::Rseed;
 pub use shielded_note_plan::{ShieldedInputPlan, ShieldedOutputPlan};
 
 pub mod consolidate;
-pub mod nullifier_derivation;
 pub mod public_input_hash;
 pub mod r1cs;
 pub mod shielded_ics20_withdrawal;
@@ -46,10 +45,6 @@ pub use consolidate::{
     ConsolidateInputPrivate, ConsolidateInputPublic, ConsolidateOutputBody,
     ConsolidateOutputPrivate, ConsolidateOutputPublic, ConsolidatePlan, ConsolidateProof,
     ConsolidateProofPrivate, ConsolidateProofPublic, ConsolidateView, CONSOLIDATE_FAMILY_SPECS,
-};
-pub use nullifier_derivation::{
-    NullifierDerivationCircuit, NullifierDerivationProof, NullifierDerivationProofPrivate,
-    NullifierDerivationProofPublic,
 };
 pub use shielded_ics20_withdrawal::{
     ShieldedIcs20Withdrawal, ShieldedIcs20WithdrawalBody, ShieldedIcs20WithdrawalChangeBody,

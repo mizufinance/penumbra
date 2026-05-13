@@ -3,10 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::scanner::types::{
-    AUDIT_STATUS_AUDIT_COMPLETE, AUDIT_STATUS_DECRYPT_FAILED, AUDIT_STATUS_EVIDENCE_VALID,
-    FLOW_TYPE_PRIVATE_TRANSFER,
-};
+use crate::audit_status::{AuditStatus, DecryptedVia, FlowType};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuditDetectedRef {
@@ -18,7 +15,7 @@ pub struct AuditDetectedRef {
     pub asset_id: String,
     pub is_flagged: bool,
     #[serde(default = "private_transfer_flow_type")]
-    pub flow_type: String,
+    pub flow_type: FlowType,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -37,12 +34,12 @@ pub struct OrbisAuditEntry {
     pub amount: String,
     pub self_address: String,
     pub counterparty: String,
-    pub decrypted_via: String,
+    pub decrypted_via: DecryptedVia,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuditImportRow {
-    pub audit_status: String,
+    pub audit_status: AuditStatus,
     pub is_flagged: bool,
 }
 
@@ -60,16 +57,16 @@ pub struct DetectedRefRowParts {
     pub output_index: u32,
     pub asset_id: String,
     pub is_flagged: bool,
-    pub flow_type: String,
+    pub flow_type: FlowType,
 }
 
 pub fn classify_orbis_import_row(row: Option<AuditImportRow>) -> OrbisImportEligibility {
     match row {
         Some(row)
             if !row.is_flagged
-                && (row.audit_status == AUDIT_STATUS_EVIDENCE_VALID
-                    || row.audit_status == AUDIT_STATUS_DECRYPT_FAILED
-                    || row.audit_status == AUDIT_STATUS_AUDIT_COMPLETE) =>
+                && (row.audit_status == AuditStatus::EvidenceValid
+                    || row.audit_status == AuditStatus::DecryptFailed
+                    || row.audit_status == AuditStatus::AuditComplete) =>
         {
             OrbisImportEligibility::Eligible
         }
@@ -97,18 +94,16 @@ pub fn detected_ref_from_row_parts(row: DetectedRefRowParts) -> AuditDetectedRef
     }
 }
 
-fn private_transfer_flow_type() -> String {
-    FLOW_TYPE_PRIVATE_TRANSFER.to_string()
+fn private_transfer_flow_type() -> FlowType {
+    FlowType::PrivateTransfer
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scanner::types::{AUDIT_STATUS_EVIDENCE_INVALID, AUDIT_STATUS_PENDING};
-
-    fn row(audit_status: &str, is_flagged: bool) -> AuditImportRow {
+    fn row(audit_status: AuditStatus, is_flagged: bool) -> AuditImportRow {
         AuditImportRow {
-            audit_status: audit_status.to_owned(),
+            audit_status,
             is_flagged,
         }
     }
@@ -116,9 +111,9 @@ mod tests {
     #[test]
     fn unflagged_valid_orbis_statuses_are_eligible() {
         for status in [
-            AUDIT_STATUS_EVIDENCE_VALID,
-            AUDIT_STATUS_DECRYPT_FAILED,
-            AUDIT_STATUS_AUDIT_COMPLETE,
+            AuditStatus::EvidenceValid,
+            AuditStatus::DecryptFailed,
+            AuditStatus::AuditComplete,
         ] {
             assert_eq!(
                 classify_orbis_import_row(Some(row(status, false))),
@@ -130,9 +125,9 @@ mod tests {
     #[test]
     fn flagged_or_invalid_orbis_rows_are_ineligible_with_status_reason() {
         for (status, is_flagged) in [
-            (AUDIT_STATUS_EVIDENCE_VALID, true),
-            (AUDIT_STATUS_PENDING, false),
-            (AUDIT_STATUS_EVIDENCE_INVALID, false),
+            (AuditStatus::EvidenceValid, true),
+            (AuditStatus::Pending, false),
+            (AuditStatus::EvidenceInvalid, false),
         ] {
             assert_eq!(
                 classify_orbis_import_row(Some(row(status, is_flagged))),
@@ -162,7 +157,7 @@ mod tests {
             output_index: 3,
             asset_id: "asset".to_owned(),
             is_flagged: true,
-            flow_type: "private_transfer".to_owned(),
+            flow_type: FlowType::PrivateTransfer,
         });
 
         assert_eq!(detected.height, 42);
@@ -171,6 +166,26 @@ mod tests {
         assert_eq!(detected.output_index, 3);
         assert_eq!(detected.asset_id, "asset");
         assert!(detected.is_flagged);
-        assert_eq!(detected.flow_type, "private_transfer");
+        assert_eq!(detected.flow_type, FlowType::PrivateTransfer);
+    }
+
+    #[test]
+    fn orbis_audit_entries_accept_orbis_pre_decryption_label() {
+        for label in ["orbis_pre"] {
+            let entry: OrbisAuditEntry = serde_json::from_value(serde_json::json!({
+                "height": 42,
+                "tx_hash": "abcd",
+                "action_index": 0,
+                "output_index": 0,
+                "amount": "1234",
+                "self_address": "receiver",
+                "counterparty": "sender",
+                "decrypted_via": label,
+            }))
+            .expect("orbis-audit output should parse");
+
+            assert_eq!(entry.decrypted_via, DecryptedVia::OrbisPre);
+            assert_eq!(entry.decrypted_via.as_str(), label);
+        }
     }
 }

@@ -19,10 +19,8 @@ fn main() {
     emit_transfer_family_rerun_hints().expect("emit transfer family rerun-if-changed hints");
     emit_gnark_runtime_rerun_hints().expect("emit gnark runtime rerun-if-changed hints");
 
-    let mut proving_parameter_files = vec![
-        "src/gen/nullifier_derivation_pk.bin".to_owned(),
-        "../../../tools/gnark/artifacts/shielded_ics20_withdrawal/proving_key.bin".to_owned(),
-    ];
+    let mut proving_parameter_files =
+        vec!["../../../tools/gnark/artifacts/shielded_ics20_withdrawal/proving_key.bin".to_owned()];
     proving_parameter_files.extend(GENERATED_TRANSFER_FAMILIES.iter().map(|family| {
         format!(
             "../../../tools/gnark/artifacts/{}/proving_key.bin",
@@ -31,7 +29,6 @@ fn main() {
     }));
 
     let mut verification_parameter_files = vec![
-        "src/gen/nullifier_derivation_vk.param".to_owned(),
         "../../../tools/gnark/artifacts/shielded_ics20_withdrawal/verifying_key.json".to_owned(),
         "../../../tools/gnark/artifacts/shielded_ics20_withdrawal/circuit_metadata.json".to_owned(),
     ];

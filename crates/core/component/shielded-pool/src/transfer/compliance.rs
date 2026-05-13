@@ -1,14 +1,17 @@
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, Result};
 use decaf377::Fr;
 use penumbra_sdk_asset::Value;
+#[cfg(feature = "component")]
+use penumbra_sdk_compliance::TRANSFER_WIRE_BYTES;
 use penumbra_sdk_compliance::{
     build_orbis_encrypted_seed_upload_package_with_randomness, derive_transfer_salt,
     encrypt_transfer, AssetPolicy, IndexedLeaf, TransferComplianceCiphertext,
     TransferCompliancePublicInputs, TransferOrbisUploadBundle, TransferTierKind,
-    TransferTierMetadataStatement, TRANSFER_WIRE_BYTES,
+    TransferTierMetadataStatement,
 };
 use rand::{rngs::StdRng, SeedableRng};
 
+#[cfg(feature = "component")]
 use super::TransferOutputBody;
 use crate::{
     transfer::{
@@ -45,12 +48,7 @@ pub(crate) fn build_transfer_compliance(
     asset_indexed_leaf: &IndexedLeaf,
     target_timestamp: u64,
     transfer_nonce_root: Fr,
-) -> Result<(
-    TransferComplianceCiphertext,
-    TransferOrbisUploadBundle,
-    TransferCompliancePublic,
-    TransferCompliancePrivate,
-)> {
+) -> Result<BuildTransferComplianceResult> {
     // Transfer compliance always describes output 0, the external receiver leg.
     // Output 1, when present, is sender-owned change and contributes to balance
     // correctness but not to compliance plaintext construction.
@@ -224,25 +222,46 @@ pub(crate) fn build_transfer_compliance(
         is_flagged,
     };
 
-    Ok((encryption.ciphertext, bundle, public, private))
+    Ok(BuildTransferComplianceResult {
+        ciphertext: encryption.ciphertext,
+        bundle,
+        public,
+        private,
+    })
+}
+
+pub(crate) struct BuildTransferComplianceResult {
+    pub ciphertext: TransferComplianceCiphertext,
+    pub bundle: TransferOrbisUploadBundle,
+    pub public: TransferCompliancePublic,
+    pub private: TransferCompliancePrivate,
+}
+
+pub(crate) struct TransferOutputComplianceBytes {
+    pub compliance_ciphertext: Vec<u8>,
+    pub orbis_upload_bundle: Vec<u8>,
 }
 
 pub(crate) fn receiver_output_transfer_compliance(
     ciphertext: &TransferComplianceCiphertext,
     bundle: &TransferOrbisUploadBundle,
-) -> (Vec<u8>, Vec<u8>) {
-    (
-        ciphertext.to_bytes(),
-        bundle
+) -> TransferOutputComplianceBytes {
+    TransferOutputComplianceBytes {
+        compliance_ciphertext: ciphertext.to_bytes(),
+        orbis_upload_bundle: bundle
             .to_bytes()
             .expect("Orbis upload bundle should serialize"),
-    )
+    }
 }
 
-pub(crate) fn change_output_transfer_compliance() -> (Vec<u8>, Vec<u8>) {
-    (Vec::new(), Vec::new())
+pub(crate) fn change_output_transfer_compliance() -> TransferOutputComplianceBytes {
+    TransferOutputComplianceBytes {
+        compliance_ciphertext: Vec::new(),
+        orbis_upload_bundle: Vec::new(),
+    }
 }
 
+#[cfg(feature = "component")]
 pub(crate) fn parse_transfer_output_compliance(
     outputs: &[TransferOutputBody],
 ) -> Result<(TransferComplianceCiphertext, TransferOrbisUploadBundle)> {
@@ -251,18 +270,18 @@ pub(crate) fn parse_transfer_output_compliance(
     let receiver_output = outputs
         .first()
         .ok_or_else(|| anyhow!("transfer requires at least one output"))?;
-    ensure!(
+    anyhow::ensure!(
         receiver_output.compliance_ciphertext.len() == TRANSFER_WIRE_BYTES,
         "receiver output transfer compliance ciphertext must be {TRANSFER_WIRE_BYTES} bytes, got {}",
         receiver_output.compliance_ciphertext.len()
     );
     for (index, output) in outputs.iter().enumerate().skip(1) {
-        ensure!(
+        anyhow::ensure!(
             output.compliance_ciphertext.is_empty(),
             "change output {} transfer compliance ciphertext must be empty",
             index
         );
-        ensure!(
+        anyhow::ensure!(
             output.orbis_upload_bundle.is_empty(),
             "change output {} Orbis upload bundle must be empty",
             index

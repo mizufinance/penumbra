@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     event, indexed_tree,
-    indexed_tree::{IndexedLeaf, IndexedMerkleTree, InsertResult},
+    indexed_tree::{IndexedMerkleTree, InsertResult},
     state_key,
     structs::{AssetPolicy, ComplianceLeaf, MerklePath},
     tree::QuadTree,
@@ -47,25 +47,7 @@ pub fn check_timestamp_freshness(target_timestamp: u64, block_timestamp: u64) ->
 // Re-export bincode for serialization
 use bincode;
 
-/// Proof data for an asset in the IMT.
-/// Contains all information needed for membership or non-membership proofs.
-///
-/// Regulation status is derived from the stored policy entry, not from mere
-/// membership in the IMT. This allows explicit entries beyond regulated assets,
-/// including the protocol-seeded unregulated base asset, to use stable
-/// membership proofs without being treated as regulated by the
-/// transfer/compliance path.
-#[derive(Clone, Debug)]
-pub struct AssetProofData {
-    /// The indexed leaf (for membership or non-membership proof).
-    pub indexed_leaf: IndexedLeaf,
-    /// Position of the leaf in the IMT.
-    pub position: u64,
-    /// Authentication path from leaf to root.
-    pub auth_path: MerklePath,
-    /// Whether the asset is regulated according to stored policy metadata.
-    pub is_regulated: bool,
-}
+pub use crate::enrichment::AssetProofData;
 
 /// Extension trait for reading compliance registry state.
 #[async_trait]

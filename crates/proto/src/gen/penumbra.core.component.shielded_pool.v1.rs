@@ -341,22 +341,6 @@ impl ::prost::Name for ZkShieldedIcs20WithdrawalProof {
         "/penumbra.core.component.shielded_pool.v1.ZKShieldedIcs20WithdrawalProof".into()
     }
 }
-/// A Penumbra ZK nullifier derivation proof.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ZkNullifierDerivationProof {
-    #[prost(bytes = "vec", tag = "1")]
-    pub inner: ::prost::alloc::vec::Vec<u8>,
-}
-impl ::prost::Name for ZkNullifierDerivationProof {
-    const NAME: &'static str = "ZKNullifierDerivationProof";
-    const PACKAGE: &'static str = "penumbra.core.component.shielded_pool.v1";
-    fn full_name() -> ::prost::alloc::string::String {
-        "penumbra.core.component.shielded_pool.v1.ZKNullifierDerivationProof".into()
-    }
-    fn type_url() -> ::prost::alloc::string::String {
-        "/penumbra.core.component.shielded_pool.v1.ZKNullifierDerivationProof".into()
-    }
-}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TransferInputBody {
     /// The nullifier of the spent note.

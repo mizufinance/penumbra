@@ -54,6 +54,16 @@ type daemonReady struct {
 }
 
 type proveFunc func([]byte) ([]byte, error)
+
+type proveResponse struct {
+	Family           string  `json:"family"`
+	Result           string  `json:"result"`
+	Proof            string  `json:"proof"`
+	ProveMs          float64 `json:"proveMs"`
+	VerifyingKeyID   string  `json:"verifyingKeyId"`
+	ProvingKeySHA256 string  `json:"provingKeySHA256"`
+}
+
 type proverEntry struct {
 	ready *daemonReady
 	prove proveFunc
@@ -302,13 +312,14 @@ func serveHTTP(addr, artifactRoot string) error {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"family":           req.Family,
-			"result":           base64.StdEncoding.EncodeToString(result),
-			"proof":            base64.StdEncoding.EncodeToString(result),
-			"proveMs":          time.Since(start).Seconds() * 1000,
-			"verifyingKeyId":   entry.ready.VerifyingKeyID,
-			"provingKeySHA256": entry.ready.ProvingKeySHA256,
+		encodedProof := base64.StdEncoding.EncodeToString(result)
+		writeJSON(w, http.StatusOK, proveResponse{
+			Family:           req.Family,
+			Result:           encodedProof,
+			Proof:            encodedProof,
+			ProveMs:          time.Since(start).Seconds() * 1000,
+			VerifyingKeyID:   entry.ready.VerifyingKeyID,
+			ProvingKeySHA256: entry.ready.ProvingKeySHA256,
 		})
 	})
 

@@ -19,6 +19,8 @@ use sha2::{Digest, Sha256};
 use tonic::transport::Channel;
 use url::Url;
 
+const DECRYPTED_VIA_ORBIS_PRE: &str = "orbis_pre";
+
 #[derive(Parser, Debug)]
 #[clap(
     name = "orbis-audit",
@@ -557,7 +559,7 @@ fn candidate_to_entry(
             amount: amount.value().to_string(),
             self_address: ctx.subject_transmission_key_hex.to_string(),
             counterparty: String::new(),
-            decrypted_via: "core".to_string(),
+            decrypted_via: DECRYPTED_VIA_ORBIS_PRE.to_string(),
         },
         ("extension", TransferMatch::Receiver { amount, sender }) => AuditEntry {
             height: tx_ref.height,
@@ -567,7 +569,7 @@ fn candidate_to_entry(
             amount: amount.value().to_string(),
             self_address: ctx.subject_transmission_key_hex.to_string(),
             counterparty: sender.transmission_key_hex,
-            decrypted_via: "ext".to_string(),
+            decrypted_via: DECRYPTED_VIA_ORBIS_PRE.to_string(),
         },
         ("extension", TransferMatch::Sender { amount, receiver }) => AuditEntry {
             height: tx_ref.height,
@@ -577,7 +579,7 @@ fn candidate_to_entry(
             amount: amount.value().to_string(),
             self_address: ctx.subject_transmission_key_hex.to_string(),
             counterparty: receiver.transmission_key_hex,
-            decrypted_via: "ext".to_string(),
+            decrypted_via: DECRYPTED_VIA_ORBIS_PRE.to_string(),
         },
         _ => unreachable!("tier already validated"),
     }
@@ -1087,7 +1089,7 @@ mod tests {
         assert_eq!(default_entry.output_index, 2);
         assert_eq!(default_entry.self_address, self_tk);
         assert_eq!(default_entry.counterparty, "");
-        assert_eq!(default_entry.decrypted_via, "core");
+        assert_eq!(default_entry.decrypted_via, DECRYPTED_VIA_ORBIS_PRE);
 
         let extension_ctx = dummy_context("extension", &self_tk);
         let extension_entry = candidate_to_entry(
@@ -1103,6 +1105,6 @@ mod tests {
         assert_eq!(extension_entry.amount, "600");
         assert_eq!(extension_entry.self_address, self_tk);
         assert_eq!(extension_entry.counterparty, counterparty_tk);
-        assert_eq!(extension_entry.decrypted_via, "ext");
+        assert_eq!(extension_entry.decrypted_via, DECRYPTED_VIA_ORBIS_PRE);
     }
 }

@@ -3,7 +3,7 @@ package abi
 import (
 	"testing"
 
-	"github.com/mizufinance/penumbra/tools/gnark/internal/primitives"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/testfixtures"
 )
 
 type witnessFamily struct {
@@ -16,7 +16,7 @@ func testWitnessFamilies() []witnessFamily {
 	return []witnessFamily{
 		{
 			name:    "transfer",
-			payload: func(t *testing.T) []byte { return primitives.LoadTransferWitnessV1("transfer") },
+			payload: func(t *testing.T) []byte { return testfixtures.LoadTransferWitnessV1("transfer") },
 			decode: func(payload []byte) error {
 				_, _, err := DecodeTransferWitnessV1(payload)
 				return err

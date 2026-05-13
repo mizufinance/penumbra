@@ -273,7 +273,9 @@ impl ComplianceMerkleProofsData {
 impl<T: ViewClient + ?Sized> ViewClientComplianceExt for T {}
 
 use decaf377::Fr;
-use penumbra_sdk_compliance::{AssetPolicy, ComplianceProofProvider, MerklePath};
+use penumbra_sdk_compliance::{
+    AssetPolicy, AssetProofData, ComplianceProofProvider, MerklePath, UserProofData,
+};
 use penumbra_sdk_transaction::plan::{ActionPlan, TransactionPlan};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -319,10 +321,7 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
         Ok(asset_anchor)
     }
 
-    async fn get_asset_proof(
-        &self,
-        asset_id: asset::Id,
-    ) -> Result<(MerklePath, u64, penumbra_sdk_compliance::IndexedLeaf, bool)> {
+    async fn get_asset_proof(&self, asset_id: asset::Id) -> Result<AssetProofData> {
         // Use a dummy address - we only need asset info, not user-specific data
         let dummy_address = Address::dummy(&mut rand::thread_rng());
         let future = {
@@ -331,12 +330,12 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
         };
         let proofs = future.await?;
 
-        Ok((
-            proofs.asset_path,
-            proofs.asset_position,
-            proofs.asset_indexed_leaf,
-            proofs.is_regulated,
-        ))
+        Ok(AssetProofData {
+            auth_path: proofs.asset_path,
+            position: proofs.asset_position,
+            indexed_leaf: proofs.asset_indexed_leaf,
+            is_regulated: proofs.is_regulated,
+        })
     }
 
     async fn get_asset_policy(&self, asset_id: asset::Id) -> Result<Option<AssetPolicy>> {
@@ -356,7 +355,7 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
         &self,
         address: &Address,
         asset_id: asset::Id,
-    ) -> Result<(MerklePath, u64, ComplianceLeaf)> {
+    ) -> Result<UserProofData> {
         let proofs_future = {
             let mut view = self.view.lock().await;
             view.get_compliance_merkle_proofs(address.clone(), asset_id)
@@ -369,7 +368,11 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
                 view.get_compliance_leaf(address.clone(), asset_id)
             };
             let leaf = leaf_future.await?;
-            return Ok((proofs.compliance_path, proofs.compliance_position, leaf));
+            return Ok(UserProofData {
+                auth_path: proofs.compliance_path,
+                position: proofs.compliance_position,
+                leaf,
+            });
         }
 
         if !proofs.is_regulated {
@@ -380,7 +383,11 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
                 asset_id,
                 d,
             };
-            return Ok((MerklePath::default(), 0, synthetic_leaf));
+            return Ok(UserProofData {
+                auth_path: MerklePath::default(),
+                position: 0,
+                leaf: synthetic_leaf,
+            });
         }
 
         anyhow::bail!(
@@ -435,13 +442,9 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
                 .map_err(|e| anyhow::anyhow!("batch response: invalid asset_anchor: {}", e))?,
         );
 
-        let mut asset_proofs: BTreeMap<
-            asset::Id,
-            (MerklePath, u64, penumbra_sdk_compliance::IndexedLeaf, bool),
-        > = BTreeMap::new();
+        let mut asset_proofs: BTreeMap<asset::Id, AssetProofData> = BTreeMap::new();
         let mut asset_policies = BTreeMap::new();
-        let mut user_proofs: BTreeMap<(Address, asset::Id), (MerklePath, u64, ComplianceLeaf)> =
-            BTreeMap::new();
+        let mut user_proofs: BTreeMap<(Address, asset::Id), UserProofData> = BTreeMap::new();
 
         // Match results with queries - parse directly since individual results don't have anchors
         for (i, result) in batch_response.results.into_iter().enumerate() {
@@ -496,12 +499,12 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
 
                 asset_proofs.insert(
                     *asset_id,
-                    (
-                        asset_path.clone(),
-                        result.asset_position,
+                    AssetProofData {
+                        auth_path: asset_path.clone(),
+                        position: result.asset_position,
                         indexed_leaf,
-                        result.is_regulated,
-                    ),
+                        is_regulated: result.is_regulated,
+                    },
                 );
                 if result.is_regulated {
                     let future = {
@@ -536,7 +539,14 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
                         };
                         leaf_future.await?
                     };
-                    user_proofs.insert(key, (compliance_path, result.compliance_position, leaf));
+                    user_proofs.insert(
+                        key,
+                        UserProofData {
+                            auth_path: compliance_path,
+                            position: result.compliance_position,
+                            leaf,
+                        },
+                    );
                 } else if !result.is_regulated {
                     let b_d_fq = address.diversified_generator().vartime_compress_to_field();
                     let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
@@ -545,7 +555,14 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
                         asset_id: *asset_id,
                         d,
                     };
-                    user_proofs.insert(key, (MerklePath::default(), 0, synthetic_leaf));
+                    user_proofs.insert(
+                        key,
+                        UserProofData {
+                            auth_path: MerklePath::default(),
+                            position: 0,
+                            leaf: synthetic_leaf,
+                        },
+                    );
                 } else {
                     anyhow::bail!(
                         "user not registered in compliance tree for address {:?} and asset {:?}",
@@ -776,13 +793,13 @@ async fn enrich_transfer_family_with_compliance<P: ComplianceProofProvider>(
             spend_index,
         } = spend_location;
 
-        let (asset_path, asset_position, asset_indexed_leaf, is_regulated) = batch_data
+        let asset_proof = batch_data
             .asset_proofs
             .get(&spend_asset_id)
             .cloned()
             .unwrap_or_else(default_unregulated_asset_proof);
 
-        let (sender_compliance_path, sender_compliance_position, _) = batch_data
+        let sender_proof = batch_data
             .user_proofs
             .get(&(spend_address.clone(), spend_asset_id))
             .cloned()
@@ -801,16 +818,16 @@ async fn enrich_transfer_family_with_compliance<P: ComplianceProofProvider>(
             unreachable!()
         };
         let spend = &mut transfer.spends[spend_index];
-        spend.asset_indexed_leaf = asset_indexed_leaf;
-        spend.asset_path = asset_path;
-        spend.asset_position = asset_position;
+        spend.asset_indexed_leaf = asset_proof.indexed_leaf;
+        spend.asset_path = asset_proof.auth_path;
+        spend.asset_position = asset_proof.position;
         spend.asset_anchor = asset_anchor;
         spend.compliance_anchor = compliance_anchor;
-        spend.compliance_path = sender_compliance_path;
-        spend.compliance_position = sender_compliance_position;
-        spend.is_regulated = is_regulated;
+        spend.compliance_path = sender_proof.auth_path;
+        spend.compliance_position = sender_proof.position;
+        spend.is_regulated = asset_proof.is_regulated;
         spend.target_timestamp = target_timestamp;
-        spend.asset_policy = if is_regulated {
+        spend.asset_policy = if asset_proof.is_regulated {
             Some(
                 batch_data
                     .asset_policies
@@ -848,29 +865,28 @@ async fn enrich_transfer_family_with_compliance<P: ComplianceProofProvider>(
                 output_index,
             } = output_location;
 
-            let (asset_path, asset_position, asset_indexed_leaf, is_regulated) = batch_data
+            let asset_proof = batch_data
                 .asset_proofs
                 .get(&output_asset_id)
                 .cloned()
                 .unwrap_or_else(default_unregulated_asset_proof);
 
-            let (recipient_compliance_path, recipient_compliance_position, recipient_leaf) =
-                batch_data
-                    .user_proofs
-                    .get(&(recipient_address.clone(), output_asset_id))
-                    .cloned()
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "missing user proof for transfer output at action {} output {}: \
-                             recipient may not be registered for asset {} \
-                             (recipient must be registered for regulated assets)",
-                            action_index,
-                            output_index,
-                            output_asset_id
-                        )
-                    })?;
+            let recipient_proof = batch_data
+                .user_proofs
+                .get(&(recipient_address.clone(), output_asset_id))
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing user proof for transfer output at action {} output {}: \
+                         recipient may not be registered for asset {} \
+                         (recipient must be registered for regulated assets)",
+                        action_index,
+                        output_index,
+                        output_asset_id
+                    )
+                })?;
 
-            let (_, _, sender_leaf_for_output) = batch_data
+            let sender_proof = batch_data
                 .user_proofs
                 .get(&(sender_address.clone(), spend_binding_asset_id))
                 .cloned()
@@ -887,16 +903,16 @@ async fn enrich_transfer_family_with_compliance<P: ComplianceProofProvider>(
                 unreachable!()
             };
             let output = &mut transfer.outputs[output_index];
-            output.asset_indexed_leaf = asset_indexed_leaf;
-            output.asset_path = asset_path;
-            output.asset_position = asset_position;
+            output.asset_indexed_leaf = asset_proof.indexed_leaf;
+            output.asset_path = asset_proof.auth_path;
+            output.asset_position = asset_proof.position;
             output.asset_anchor = asset_anchor;
             output.compliance_anchor = compliance_anchor;
-            output.compliance_path = recipient_compliance_path;
-            output.compliance_position = recipient_compliance_position;
-            output.is_regulated = is_regulated;
+            output.compliance_path = recipient_proof.auth_path;
+            output.compliance_position = recipient_proof.position;
+            output.is_regulated = asset_proof.is_regulated;
             output.target_timestamp = target_timestamp;
-            output.asset_policy = if is_regulated {
+            output.asset_policy = if asset_proof.is_regulated {
                 Some(
                     batch_data
                         .asset_policies
@@ -912,7 +928,7 @@ async fn enrich_transfer_family_with_compliance<P: ComplianceProofProvider>(
             } else {
                 None
             };
-            output.set_compliance_details(rng, &recipient_leaf, sender_leaf_for_output, nonce)?;
+            output.set_compliance_details(rng, &recipient_proof.leaf, sender_proof.leaf, nonce)?;
         }
     }
 
@@ -957,13 +973,13 @@ async fn enrich_internal_funding_with_compliance<P: ComplianceProofProvider>(
         .iter_mut()
         .zip(spend_identities.iter().cloned())
     {
-        let (asset_path, asset_position, asset_indexed_leaf, is_regulated) = batch_data
+        let asset_proof = batch_data
             .asset_proofs
             .get(&spend_asset_id)
             .cloned()
             .unwrap_or_else(default_unregulated_asset_proof);
 
-        let (sender_compliance_path, sender_compliance_position, _) = batch_data
+        let sender_proof = batch_data
             .user_proofs
             .get(&(spend_address.clone(), spend_asset_id))
             .cloned()
@@ -975,16 +991,16 @@ async fn enrich_internal_funding_with_compliance<P: ComplianceProofProvider>(
                 )
             })?;
 
-        spend.asset_indexed_leaf = asset_indexed_leaf;
-        spend.asset_path = asset_path;
-        spend.asset_position = asset_position;
+        spend.asset_indexed_leaf = asset_proof.indexed_leaf;
+        spend.asset_path = asset_proof.auth_path;
+        spend.asset_position = asset_proof.position;
         spend.asset_anchor = asset_anchor;
         spend.compliance_anchor = compliance_anchor;
-        spend.compliance_path = sender_compliance_path;
-        spend.compliance_position = sender_compliance_position;
-        spend.is_regulated = is_regulated;
+        spend.compliance_path = sender_proof.auth_path;
+        spend.compliance_position = sender_proof.position;
+        spend.is_regulated = asset_proof.is_regulated;
         spend.target_timestamp = target_timestamp;
-        spend.asset_policy = if is_regulated {
+        spend.asset_policy = if asset_proof.is_regulated {
             Some(
                 batch_data
                     .asset_policies
@@ -1018,26 +1034,25 @@ async fn enrich_internal_funding_with_compliance<P: ComplianceProofProvider>(
             .iter_mut()
             .zip(output_identities.iter().cloned())
         {
-            let (asset_path, asset_position, asset_indexed_leaf, is_regulated) = batch_data
+            let asset_proof = batch_data
                 .asset_proofs
                 .get(&output_asset_id)
                 .cloned()
                 .unwrap_or_else(default_unregulated_asset_proof);
 
-            let (recipient_compliance_path, recipient_compliance_position, recipient_leaf) =
-                batch_data
-                    .user_proofs
-                    .get(&(recipient_address.clone(), output_asset_id))
-                    .cloned()
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "missing user proof for fee funding output: \
-                             recipient may not be registered for asset {}",
-                            output_asset_id
-                        )
-                    })?;
+            let recipient_proof = batch_data
+                .user_proofs
+                .get(&(recipient_address.clone(), output_asset_id))
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing user proof for fee funding output: \
+                         recipient may not be registered for asset {}",
+                        output_asset_id
+                    )
+                })?;
 
-            let (_, _, sender_leaf_for_output) = batch_data
+            let sender_proof = batch_data
                 .user_proofs
                 .get(&(sender_address.clone(), spend_binding_asset_id))
                 .cloned()
@@ -1049,16 +1064,16 @@ async fn enrich_internal_funding_with_compliance<P: ComplianceProofProvider>(
                     )
                 })?;
 
-            output.asset_indexed_leaf = asset_indexed_leaf;
-            output.asset_path = asset_path;
-            output.asset_position = asset_position;
+            output.asset_indexed_leaf = asset_proof.indexed_leaf;
+            output.asset_path = asset_proof.auth_path;
+            output.asset_position = asset_proof.position;
             output.asset_anchor = asset_anchor;
             output.compliance_anchor = compliance_anchor;
-            output.compliance_path = recipient_compliance_path;
-            output.compliance_position = recipient_compliance_position;
-            output.is_regulated = is_regulated;
+            output.compliance_path = recipient_proof.auth_path;
+            output.compliance_position = recipient_proof.position;
+            output.is_regulated = asset_proof.is_regulated;
             output.target_timestamp = target_timestamp;
-            output.asset_policy = if is_regulated {
+            output.asset_policy = if asset_proof.is_regulated {
                 Some(
                     batch_data
                         .asset_policies
@@ -1074,7 +1089,7 @@ async fn enrich_internal_funding_with_compliance<P: ComplianceProofProvider>(
             } else {
                 None
             };
-            output.set_compliance_details(rng, &recipient_leaf, sender_leaf_for_output, nonce)?;
+            output.set_compliance_details(rng, &recipient_proof.leaf, sender_proof.leaf, nonce)?;
         }
     }
 
@@ -1140,13 +1155,13 @@ async fn enrich_shielded_ics20_withdrawals_with_compliance<P: ComplianceProofPro
             spend_index,
         } = spend_location;
 
-        let (asset_path, asset_position, asset_indexed_leaf, is_regulated) = batch_data
+        let asset_proof = batch_data
             .asset_proofs
             .get(&spend_asset_id)
             .cloned()
             .unwrap_or_else(default_unregulated_asset_proof);
 
-        let (sender_compliance_path, sender_compliance_position, _) = batch_data
+        let sender_proof = batch_data
             .user_proofs
             .get(&(spend_address.clone(), spend_asset_id))
             .cloned()
@@ -1166,14 +1181,14 @@ async fn enrich_shielded_ics20_withdrawals_with_compliance<P: ComplianceProofPro
             unreachable!()
         };
         let spend = &mut withdrawal.spends[spend_index];
-        spend.asset_indexed_leaf = asset_indexed_leaf;
-        spend.asset_path = asset_path;
-        spend.asset_position = asset_position;
+        spend.asset_indexed_leaf = asset_proof.indexed_leaf;
+        spend.asset_path = asset_proof.auth_path;
+        spend.asset_position = asset_proof.position;
         spend.asset_anchor = asset_anchor;
         spend.compliance_anchor = compliance_anchor;
-        spend.compliance_path = sender_compliance_path;
-        spend.compliance_position = sender_compliance_position;
-        spend.is_regulated = is_regulated;
+        spend.compliance_path = sender_proof.auth_path;
+        spend.compliance_position = sender_proof.position;
+        spend.is_regulated = asset_proof.is_regulated;
         spend.target_timestamp = target_timestamp;
         spend.set_compliance_details(rng)?;
         if let Some(nonce) = *tx_blinding_nonce {
@@ -1216,12 +1231,16 @@ async fn enrich_shielded_ics20_withdrawals_with_compliance<P: ComplianceProofPro
     Ok(())
 }
 
-fn default_unregulated_asset_proof() -> (MerklePath, u64, penumbra_sdk_compliance::IndexedLeaf, bool)
-{
+fn default_unregulated_asset_proof() -> AssetProofData {
     let default_leaf = penumbra_sdk_compliance::IndexedLeaf::with_default_policy(
         decaf377::Fq::from(0u64),
         0,
         penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
     );
-    (MerklePath::default(), 0, default_leaf, false)
+    AssetProofData {
+        indexed_leaf: default_leaf,
+        position: 0,
+        auth_path: MerklePath::default(),
+        is_regulated: false,
+    }
 }

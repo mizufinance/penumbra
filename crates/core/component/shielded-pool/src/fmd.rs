@@ -77,13 +77,33 @@ pub struct SlidingWindow {
     targeted_detections_per_window: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClueCountDelta {
+    previous: u64,
+    current: u64,
+}
+
+impl ClueCountDelta {
+    pub fn new(previous: u64, current: u64) -> Result<Self> {
+        anyhow::ensure!(
+            current >= previous,
+            "decreasing clue count: previous={previous} current={current}"
+        );
+        Ok(Self { previous, current })
+    }
+
+    fn new_clues_in_period(self) -> u64 {
+        self.current - self.previous
+    }
+}
+
 impl SlidingWindow {
-    pub fn updated_fmd_params(
+    fn transition(
         &self,
         old: &Parameters,
         state: MetaParametersAlgorithmState,
         height: u64,
-        clue_count_delta: (u64, u64),
+        clue_count_delta: ClueCountDelta,
     ) -> (Parameters, MetaParametersAlgorithmState) {
         // An edge case, which should act as a constant.
         if self.window == 0 {
@@ -95,7 +115,7 @@ impl SlidingWindow {
             );
         }
 
-        let new_clues_in_period = clue_count_delta.1.saturating_sub(clue_count_delta.0);
+        let new_clues_in_period = clue_count_delta.new_clues_in_period();
 
         let projected_clue_count = u64::from(self.window) * new_clues_in_period;
         let old_approximate_clue_count = match state {
@@ -291,6 +311,37 @@ impl Default for MetaParametersAlgorithmState {
     }
 }
 
+pub struct FmdTransitionEvent<'a> {
+    pub old: &'a Parameters,
+    pub state: MetaParametersAlgorithmState,
+    pub height: u64,
+    pub clue_count_delta: ClueCountDelta,
+}
+
+pub struct FmdStateMachine {
+    pub meta_params: MetaParameters,
+}
+
+impl FmdStateMachine {
+    pub fn transition(
+        &self,
+        event: FmdTransitionEvent<'_>,
+    ) -> Result<(Parameters, MetaParametersAlgorithmState)> {
+        Ok(match (self.meta_params.algorithm, event.state) {
+            (MetaParametersAlgorithm::Fixed(precision), _) => (
+                Parameters {
+                    precision,
+                    as_of_block_height: event.height,
+                },
+                MetaParametersAlgorithmState::Fixed,
+            ),
+            (MetaParametersAlgorithm::SlidingWindow(window), state) => {
+                window.transition(event.old, state, event.height, event.clue_count_delta)
+            }
+        })
+    }
+}
+
 impl MetaParameters {
     pub fn updated_fmd_params(
         &self,
@@ -298,26 +349,86 @@ impl MetaParameters {
         state: MetaParametersAlgorithmState,
         height: u64,
         clue_count_delta: (u64, u64),
-    ) -> (Parameters, MetaParametersAlgorithmState) {
-        if clue_count_delta.1 < clue_count_delta.0 {
-            tracing::warn!(
-                "decreasing clue count at height {}: {} then {}",
-                height,
-                clue_count_delta.0,
-                clue_count_delta.1
-            );
+    ) -> Result<(Parameters, MetaParametersAlgorithmState)> {
+        let clue_count_delta = ClueCountDelta::new(clue_count_delta.0, clue_count_delta.1)?;
+        FmdStateMachine { meta_params: *self }.transition(FmdTransitionEvent {
+            old,
+            state,
+            height,
+            clue_count_delta,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fmd_state_machine_transition_table_covers_algorithms_and_states() {
+        let old = Parameters::default();
+        let height = 32;
+        let delta = ClueCountDelta::new(10, 14).unwrap();
+        let fixed = FmdStateMachine {
+            meta_params: MetaParameters {
+                fmd_grace_period_blocks: FMD_GRACE_PERIOD_BLOCKS_DEFAULT,
+                algorithm: MetaParametersAlgorithm::Fixed(Precision::new(3).unwrap()),
+            },
+        };
+        for state in [
+            MetaParametersAlgorithmState::Nothing,
+            MetaParametersAlgorithmState::Fixed,
+            MetaParametersAlgorithmState::SlidingWindow {
+                approximate_clue_count: 7,
+            },
+        ] {
+            let (params, next_state) = fixed
+                .transition(FmdTransitionEvent {
+                    old: &old,
+                    state,
+                    height,
+                    clue_count_delta: delta,
+                })
+                .unwrap();
+            assert_eq!(params.precision, Precision::new(3).unwrap());
+            assert_eq!(params.as_of_block_height, height);
+            assert_eq!(next_state, MetaParametersAlgorithmState::Fixed);
         }
-        match self.algorithm {
-            MetaParametersAlgorithm::Fixed(precision) => (
-                Parameters {
-                    precision,
-                    as_of_block_height: height,
-                },
-                MetaParametersAlgorithmState::Fixed,
-            ),
-            MetaParametersAlgorithm::SlidingWindow(w) => {
-                w.updated_fmd_params(old, state, height, clue_count_delta)
-            }
+
+        let sliding = FmdStateMachine {
+            meta_params: MetaParameters {
+                fmd_grace_period_blocks: FMD_GRACE_PERIOD_BLOCKS_DEFAULT,
+                algorithm: MetaParametersAlgorithm::SlidingWindow(SlidingWindow {
+                    window: 2,
+                    targeted_detections_per_window: 4,
+                }),
+            },
+        };
+        for state in [
+            MetaParametersAlgorithmState::Nothing,
+            MetaParametersAlgorithmState::Fixed,
+            MetaParametersAlgorithmState::SlidingWindow {
+                approximate_clue_count: 7,
+            },
+        ] {
+            let (params, next_state) = sliding
+                .transition(FmdTransitionEvent {
+                    old: &old,
+                    state,
+                    height,
+                    clue_count_delta: delta,
+                })
+                .unwrap();
+            assert_eq!(params.as_of_block_height, height);
+            assert!(matches!(
+                next_state,
+                MetaParametersAlgorithmState::SlidingWindow { .. }
+            ));
         }
+    }
+
+    #[test]
+    fn clue_count_delta_rejects_decreasing_counts() {
+        assert!(ClueCountDelta::new(5, 4).is_err());
     }
 }

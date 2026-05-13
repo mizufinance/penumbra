@@ -28,35 +28,6 @@ func CompressedLEHexToBigInt(value string) (*big.Int, error) {
 	return new(big.Int).SetBytes(reversed), nil
 }
 
-func NoteCommitmentFromFixtureNative(fixture SpendFixture) (*big.Int, error) {
-	vectors, err := LoadPrototypeVectors()
-	if err != nil {
-		return nil, err
-	}
-
-	diversifiedGenerator := PointAffineToNative(fixture.Private.DiversifiedGeneratorAffine)
-	diversifiedGeneratorFq, err := decafgnark.CompressToFieldNative(diversifiedGenerator)
-	if err != nil {
-		return nil, err
-	}
-	transmissionKeyS, err := CompressedLEHexToBigInt(fixture.Private.TransmissionKeyHex)
-	if err != nil {
-		return nil, err
-	}
-
-	return Poseidon377Hash6Native(
-		MustBigInt(vectors.Poseidon377.NoteCommitDomain),
-		[6]*big.Int{
-			MustBigInt(fixture.Private.NoteBlinding),
-			MustBigInt(fixture.Private.NoteAmount),
-			MustBigInt(fixture.Private.NoteAssetID),
-			diversifiedGeneratorFq,
-			transmissionKeyS,
-			MustBigInt(fixture.Private.ClueKey),
-		},
-	)
-}
-
 func NoteCommitment(
 	api frontend.API,
 	noteBlinding frontend.Variable,

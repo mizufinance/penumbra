@@ -8,12 +8,14 @@ pub mod parameters {
     }
 }
 
+#[cfg(feature = "component")]
 pub(crate) mod meta_parameters {
     pub fn algorithm_state() -> &'static str {
         "shielded_pool/fmd_meta_parameters/algorithm_state"
     }
 }
 
+#[cfg(feature = "component")]
 pub(crate) mod clue_count {
     pub fn current() -> &'static str {
         "shielded_pool/fmd_clue_count/current"

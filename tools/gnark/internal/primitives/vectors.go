@@ -3,7 +3,6 @@ package primitives
 import (
 	_ "embed"
 	"encoding/json"
-	"fmt"
 	"github.com/consensys/gnark-crypto/ecc"
 	"math/big"
 	"sync"
@@ -11,9 +10,6 @@ import (
 
 //go:embed vectors/phase05_vectors.json
 var embeddedPhase05Vectors []byte
-
-//go:embed vectors/transfer_witness_v1.bin
-var embeddedTransferWitnessV1 []byte
 
 type CurveVectors struct {
 	A                                     string `json:"a"`
@@ -238,19 +234,6 @@ func LoadPrototypeVectors() (PrototypeVectors, error) {
 		vectorsErr = json.Unmarshal(embeddedPhase05Vectors, &vectorsData)
 	})
 	return vectorsData, vectorsErr
-}
-
-func LoadSpendFixture() (SpendFixture, error) {
-	return SpendFixture{}, fmt.Errorf("legacy spend fixture removed")
-}
-
-func LoadTransferWitnessV1(label string) []byte {
-	switch label {
-	case "transfer":
-		return embeddedTransferWitnessV1
-	default:
-		panic("unknown transfer witness label: " + label)
-	}
 }
 
 func MustBigInt(decimal string) *big.Int {

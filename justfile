@@ -77,7 +77,6 @@ gnark-proof-tests-fast:
 
 # Run the slow end-to-end gnark proof-generation suite.
 gnark-proof-tests-slow:
-    cargo test --release -p pcli --test proof
     cargo test --release -p penumbra-sdk-shielded-pool --features bundled-proving-keys transfer_proof_roundtrip --lib
     cargo test --release -p penumbra-sdk-shielded-pool --lib
 
@@ -254,7 +253,7 @@ integration-pcli:
 # Run integration tests for pindexer. Assumes specific dev env is already running.
 integration-pindexer:
     if cargo nextest --version >/dev/null 2>&1; then \
-      cargo nextest run --release -p pindexer --features network-integration; \
+      cargo nextest run --release -p pindexer --features network-integration --run-ignored ignored-only --test-threads 1; \
     else \
       cargo test --release -p pindexer --features network-integration -- --ignored --test-threads 1 --nocapture; \
     fi

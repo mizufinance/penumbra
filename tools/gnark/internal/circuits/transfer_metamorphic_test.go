@@ -7,7 +7,7 @@ import (
 	"github.com/consensys/gnark/test"
 	"github.com/mizufinance/penumbra/tools/gnark/internal/abi"
 	"github.com/mizufinance/penumbra/tools/gnark/internal/circuits"
-	"github.com/mizufinance/penumbra/tools/gnark/internal/primitives"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/testfixtures"
 )
 
 type transferMutation struct {
@@ -17,7 +17,7 @@ type transferMutation struct {
 
 func loadTransferAssignment(t *testing.T) *circuits.TransferCircuit {
 	t.Helper()
-	fixtureBytes := primitives.LoadTransferWitnessV1("transfer")
+	fixtureBytes := testfixtures.LoadTransferWitnessV1("transfer")
 	assignment, _, err := abi.NewTransferCircuitAssignmentFromWitnessV1(fixtureBytes)
 	if err != nil {
 		t.Fatalf("decode transfer witness fixture: %v", err)
