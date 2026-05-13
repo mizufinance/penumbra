@@ -27,7 +27,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Obsolete internal paths from the refactor are removed, with no compatibility aliases, speculative provider traits, or scanner-name mimicry added.
   4. Focused tests demonstrate preserved behavior for the selected boundary and make the refactored flow easier to exercise directly.
   5. Relevant compliance tests, formatting, and the narrowest useful compile/test checks pass, with any intentionally unrun broad checks documented.
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 01-01-PLAN.md — Select audit/export with source evidence and extract pure typed audit records.
+- [ ] 01-02-PLAN.md — Wire the audit facade through the pure boundary and run phase verification.
 
 ## Progress
 
@@ -37,4 +40,3 @@ Phases execute in numeric order: 1
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Compliance Boundary MVP | 0/TBD | Not started | - |
-
