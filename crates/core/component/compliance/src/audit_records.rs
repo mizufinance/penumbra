@@ -168,4 +168,24 @@ mod tests {
         assert!(detected.is_flagged);
         assert_eq!(detected.flow_type, FlowType::PrivateTransfer);
     }
+
+    #[test]
+    fn orbis_audit_entries_accept_orbis_pre_decryption_label() {
+        for label in ["orbis_pre"] {
+            let entry: OrbisAuditEntry = serde_json::from_value(serde_json::json!({
+                "height": 42,
+                "tx_hash": "abcd",
+                "action_index": 0,
+                "output_index": 0,
+                "amount": "1234",
+                "self_address": "receiver",
+                "counterparty": "sender",
+                "decrypted_via": label,
+            }))
+            .expect("orbis-audit output should parse");
+
+            assert_eq!(entry.decrypted_via, DecryptedVia::OrbisPre);
+            assert_eq!(entry.decrypted_via.as_str(), label);
+        }
+    }
 }
