@@ -10,32 +10,26 @@ use crate::{
     SplitOutputBody, SplitOutputPublic, SplitProofPublic,
 };
 
-impl note_reshape::NoteReshapeInputBody for SplitInputBody {
-    fn nullifier(&self) -> penumbra_sdk_sct::Nullifier {
-        self.nullifier
-    }
-
-    fn rk(&self) -> &decaf377_rdsa::VerificationKey<decaf377_rdsa::SpendAuth> {
-        &self.rk
-    }
-}
-
-impl note_reshape::NoteReshapeOutputBody for SplitOutputBody {
-    fn note_payload(&self) -> &crate::NotePayload {
-        &self.note_payload
-    }
-}
-
 pub fn split_verify_auth_sigs(split: &Split, context: &TransactionContext) -> Result<()> {
-    note_reshape::verify_auth_sigs("split", &split.body.inputs, &split.auth_sigs, context)
+    note_reshape::verify_auth_sigs(
+        "split",
+        &split.body.inputs,
+        &split.auth_sigs,
+        context,
+        |input| &input.rk,
+    )
 }
 
 pub fn split_extract_public(
     split: &Split,
     context: &TransactionContext,
 ) -> Result<SplitProofPublic> {
-    let (inputs, outputs) =
-        note_reshape::extract_public_parts(&split.body.inputs, &split.body.outputs);
+    let (inputs, outputs) = note_reshape::extract_public_parts(
+        &split.body.inputs,
+        &split.body.outputs,
+        |input| (input.nullifier, &input.rk),
+        |output| &output.note_payload,
+    );
 
     let public = SplitProofPublic {
         family_id: split.body.family_id,
@@ -89,6 +83,15 @@ impl ActionHandler for Split {
     }
 
     async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        note_reshape::execute(&mut state, &self.body.inputs, &self.body.outputs).await
+        note_reshape::execute(
+            &mut state,
+            &self.body.inputs,
+            &self.body.outputs,
+            |input| input.nullifier,
+            SplitInputBody::is_dummy,
+            |output| &output.note_payload,
+            SplitOutputBody::is_dummy,
+        )
+        .await
     }
 }

@@ -474,8 +474,8 @@ impl TryFrom<pb::ShieldedInputPlan> for ShieldedInputPlan {
 
     fn try_from(msg: pb::ShieldedInputPlan) -> Result<Self, Self::Error> {
         use crate::compliance_helpers::{
-            compliance_leaf_from_proto, parse_ephemeral_secret, parse_indexed_leaf_or_default,
-            parse_merkle_path_or_default, parse_state_commitment_or_default,
+            compliance_leaf_from_proto, default_indexed_leaf, default_state_commitment,
+            parse_ephemeral_secret, parse_indexed_leaf, parse_merkle_path, parse_state_commitment,
             parse_tx_blinding_nonce,
         };
 
@@ -484,12 +484,16 @@ impl TryFrom<pb::ShieldedInputPlan> for ShieldedInputPlan {
             .map(|leaf| compliance_leaf_from_proto(leaf, "compliance leaf"))
             .transpose()?;
         let compliance_ephemeral_secret = parse_ephemeral_secret(&msg.compliance_ephemeral_secret)?;
-        let tx_blinding_nonce = parse_tx_blinding_nonce(&msg.tx_blinding_nonce)?;
-        let compliance_anchor = parse_state_commitment_or_default(msg.compliance_anchor)?;
-        let asset_anchor = parse_state_commitment_or_default(msg.asset_anchor)?;
-        let compliance_path = parse_merkle_path_or_default(msg.compliance_path)?;
-        let asset_path = parse_merkle_path_or_default(msg.asset_path)?;
-        let asset_indexed_leaf = parse_indexed_leaf_or_default(msg.asset_indexed_leaf)?;
+        let tx_blinding_nonce =
+            parse_tx_blinding_nonce(&msg.tx_blinding_nonce)?.unwrap_or_else(|| Fr::from(0u64));
+        let compliance_anchor =
+            parse_state_commitment(msg.compliance_anchor)?.unwrap_or_else(default_state_commitment);
+        let asset_anchor =
+            parse_state_commitment(msg.asset_anchor)?.unwrap_or_else(default_state_commitment);
+        let compliance_path = parse_merkle_path(msg.compliance_path)?.unwrap_or_default();
+        let asset_path = parse_merkle_path(msg.asset_path)?.unwrap_or_default();
+        let asset_indexed_leaf =
+            parse_indexed_leaf(msg.asset_indexed_leaf)?.unwrap_or_else(default_indexed_leaf);
 
         Ok(Self {
             note: msg
@@ -609,8 +613,8 @@ impl TryFrom<pb::ShieldedOutputPlan> for ShieldedOutputPlan {
 
     fn try_from(msg: pb::ShieldedOutputPlan) -> Result<Self, Self::Error> {
         use crate::compliance_helpers::{
-            compliance_leaf_from_proto, parse_ephemeral_secret, parse_indexed_leaf_or_default,
-            parse_merkle_path_or_default, parse_state_commitment_or_default,
+            compliance_leaf_from_proto, default_indexed_leaf, default_state_commitment,
+            parse_ephemeral_secret, parse_indexed_leaf, parse_merkle_path, parse_state_commitment,
             parse_tx_blinding_nonce,
         };
 
@@ -623,12 +627,16 @@ impl TryFrom<pb::ShieldedOutputPlan> for ShieldedOutputPlan {
             .map(|leaf| compliance_leaf_from_proto(leaf, "counterparty leaf"))
             .transpose()?;
         let compliance_ephemeral_secret = parse_ephemeral_secret(&msg.compliance_ephemeral_secret)?;
-        let tx_blinding_nonce = parse_tx_blinding_nonce(&msg.tx_blinding_nonce)?;
-        let compliance_anchor = parse_state_commitment_or_default(msg.compliance_anchor)?;
-        let asset_anchor = parse_state_commitment_or_default(msg.asset_anchor)?;
-        let compliance_path = parse_merkle_path_or_default(msg.compliance_path)?;
-        let asset_path = parse_merkle_path_or_default(msg.asset_path)?;
-        let asset_indexed_leaf = parse_indexed_leaf_or_default(msg.asset_indexed_leaf)?;
+        let tx_blinding_nonce =
+            parse_tx_blinding_nonce(&msg.tx_blinding_nonce)?.unwrap_or_else(|| Fr::from(0u64));
+        let compliance_anchor =
+            parse_state_commitment(msg.compliance_anchor)?.unwrap_or_else(default_state_commitment);
+        let asset_anchor =
+            parse_state_commitment(msg.asset_anchor)?.unwrap_or_else(default_state_commitment);
+        let compliance_path = parse_merkle_path(msg.compliance_path)?.unwrap_or_default();
+        let asset_path = parse_merkle_path(msg.asset_path)?.unwrap_or_default();
+        let asset_indexed_leaf =
+            parse_indexed_leaf(msg.asset_indexed_leaf)?.unwrap_or_else(default_indexed_leaf);
 
         Ok(Self {
             value: msg

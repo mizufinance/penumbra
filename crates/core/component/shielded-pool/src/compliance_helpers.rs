@@ -64,52 +64,50 @@ pub fn parse_ephemeral_secret(bytes: &[u8]) -> Result<Option<Fr>> {
     Ok(Some(fr))
 }
 
-/// Parse a tx_blinding_nonce (Fr) from proto bytes, defaulting to zero if empty.
-pub fn parse_tx_blinding_nonce(bytes: &[u8]) -> Result<Fr> {
+/// Parse a tx_blinding_nonce (Fr) from proto bytes.
+pub fn parse_tx_blinding_nonce(bytes: &[u8]) -> Result<Option<Fr>> {
     if bytes.is_empty() {
-        return Ok(Fr::from(0u64));
+        return Ok(None);
     }
     let arr: [u8; 32] = bytes
         .try_into()
         .map_err(|_| anyhow::anyhow!("invalid tx_blinding_nonce length"))?;
-    Fr::from_bytes_checked(&arr).map_err(|_| anyhow::anyhow!("invalid tx_blinding_nonce bytes"))
+    Fr::from_bytes_checked(&arr)
+        .map(Some)
+        .map_err(|_| anyhow::anyhow!("invalid tx_blinding_nonce bytes"))
 }
 
-/// Parse a StateCommitment from an optional proto, defaulting to zero commitment if absent.
-pub fn parse_state_commitment_or_default(
+/// Parse a StateCommitment from an optional proto.
+pub fn parse_state_commitment(
     proto: Option<penumbra_sdk_proto::penumbra::crypto::tct::v1::StateCommitment>,
-) -> Result<StateCommitment> {
-    proto
-        .map(|c| c.try_into())
-        .transpose()?
-        .ok_or(())
-        .or_else(|_| Ok(StateCommitment(Fq::from(0u64))))
+) -> Result<Option<StateCommitment>> {
+    proto.map(|c| c.try_into().map_err(Into::into)).transpose()
 }
 
-/// Parse a MerklePath from an optional proto, defaulting to empty path if absent.
-pub fn parse_merkle_path_or_default(
+/// Parse a MerklePath from an optional proto.
+pub fn parse_merkle_path(
     proto: Option<compliance_pb::MerklePath>,
-) -> Result<penumbra_sdk_compliance::MerklePath> {
-    proto
-        .map(|p| p.try_into())
-        .transpose()?
-        .ok_or(())
-        .or_else(|_| Ok(penumbra_sdk_compliance::MerklePath::default()))
+) -> Result<Option<penumbra_sdk_compliance::MerklePath>> {
+    proto.map(|p| p.try_into()).transpose()
 }
 
-/// Parse an IndexedLeaf from an optional proto, defaulting to sentinel if absent.
-pub fn parse_indexed_leaf_or_default(
+/// Parse an IndexedLeaf from an optional proto.
+pub fn parse_indexed_leaf(
     proto: Option<compliance_pb::IndexedLeafData>,
-) -> Result<penumbra_sdk_compliance::IndexedLeaf> {
+) -> Result<Option<penumbra_sdk_compliance::IndexedLeaf>> {
     proto
         .map(penumbra_sdk_compliance::IndexedLeaf::try_from)
-        .transpose()?
-        .ok_or(())
-        .or_else(|_| {
-            Ok(penumbra_sdk_compliance::IndexedLeaf::with_default_policy(
-                Fq::from(0u64),
-                0,
-                penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
-            ))
-        })
+        .transpose()
+}
+
+pub fn default_state_commitment() -> StateCommitment {
+    StateCommitment(Fq::from(0u64))
+}
+
+pub fn default_indexed_leaf() -> penumbra_sdk_compliance::IndexedLeaf {
+    penumbra_sdk_compliance::IndexedLeaf::with_default_policy(
+        Fq::from(0u64),
+        0,
+        penumbra_sdk_compliance::indexed_tree::FQ_MAX.clone(),
+    )
 }

@@ -11,11 +11,13 @@ use crate::audit_records::{
     classify_orbis_import_row, detected_ref_from_row_parts, AuditImportRow, DetectedRefRowParts,
     OrbisImportEligibility,
 };
+use crate::audit_status::{AuditStatus, DecryptedVia, FlowType};
 use crate::scanner::storage::SqliteScannerStore;
+use crate::scanner::types::AuditLedgerRow;
+#[cfg(test)]
 use crate::scanner::types::{
-    AuditLedgerRow, AUDIT_STATUS_AUDIT_COMPLETE, AUDIT_STATUS_DECRYPT_FAILED,
-    AUDIT_STATUS_EVIDENCE_INVALID, AUDIT_STATUS_EVIDENCE_VALID, AUDIT_STATUS_PENDING,
-    DECRYPTED_VIA_ISSUER_DK, DECRYPTED_VIA_ORBIS_PRE, FLOW_TYPE_PRIVATE_TRANSFER,
+    AUDIT_STATUS_AUDIT_COMPLETE, AUDIT_STATUS_EVIDENCE_INVALID, AUDIT_STATUS_EVIDENCE_VALID,
+    AUDIT_STATUS_PENDING,
 };
 use crate::scanning::decrypt_full_flagged;
 use crate::transfer::TransferComplianceCiphertext;
@@ -28,6 +30,13 @@ pub const EVIDENCE_STAGE_BUILD: &str = "build_evidence";
 pub const EVIDENCE_STAGE_VALIDATE: &str = "validate_evidence";
 pub const EVIDENCE_STAGE_UPLOAD_BUNDLE: &str = "validate_upload_bundle";
 pub const EVIDENCE_STAGE_ORBIS_IMPORT: &str = "validate_orbis_import";
+
+fn validate_audit_status_transitions(transitions: &[(AuditStatus, AuditStatus)]) -> Result<()> {
+    for (from, to) in transitions {
+        AuditStatus::try_advance(*from, *to)?;
+    }
+    Ok(())
+}
 
 pub fn record_address_alias(store: &SqliteScannerStore, address: &str, name: &str) -> Result<()> {
     let conn = store.lock_conn()?;
@@ -91,9 +100,9 @@ pub fn decrypt_flagged_rows(store: &SqliteScannerStore, dk: &DetectionKey) -> Re
     let pending = rows
         .query_map(
             params![
-                FLOW_TYPE_PRIVATE_TRANSFER,
-                AUDIT_STATUS_EVIDENCE_VALID,
-                AUDIT_STATUS_DECRYPT_FAILED
+                FlowType::PrivateTransfer.as_str(),
+                AuditStatus::EvidenceValid.as_str(),
+                AuditStatus::DecryptFailed.as_str()
             ],
             |row| {
                 let height: i64 = row.get(0)?;
@@ -114,6 +123,11 @@ pub fn decrypt_flagged_rows(store: &SqliteScannerStore, dk: &DetectionKey) -> Re
         )?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     drop(rows);
+
+    validate_audit_status_transitions(&[
+        (AuditStatus::EvidenceValid, AuditStatus::AuditComplete),
+        (AuditStatus::DecryptFailed, AuditStatus::AuditComplete),
+    ])?;
 
     let mut updated = 0u64;
     for (height, tx_hash, action_index, output_index, asset_id, ciphertext_bytes) in pending {
@@ -138,7 +152,7 @@ pub fn decrypt_flagged_rows(store: &SqliteScannerStore, dk: &DetectionKey) -> Re
                         data.amount.value().to_string(),
                         hex::encode(data.receiver_address.transmission_key),
                         hex::encode(data.sender_address.transmission_key),
-                        DECRYPTED_VIA_ISSUER_DK,
+                        DecryptedVia::IssuerDetectionKey.as_str(),
                         now_unix(),
                         height as i64,
                         tx_hash.as_slice(),
@@ -154,7 +168,7 @@ pub fn decrypt_flagged_rows(store: &SqliteScannerStore, dk: &DetectionKey) -> Re
                        AND action_index = ?4
                        AND output_index = ?5",
                     params![
-                        AUDIT_STATUS_AUDIT_COMPLETE,
+                        AuditStatus::AuditComplete.as_str(),
                         height as i64,
                         tx_hash.as_slice(),
                         action_index as i64,
@@ -170,7 +184,7 @@ pub fn decrypt_flagged_rows(store: &SqliteScannerStore, dk: &DetectionKey) -> Re
                     &tx_hash,
                     action_index,
                     output_index,
-                    DECRYPTED_VIA_ISSUER_DK,
+                    DecryptedVia::IssuerDetectionKey.as_str(),
                     "ciphertext was not flagged",
                 )?;
             }
@@ -181,7 +195,7 @@ pub fn decrypt_flagged_rows(store: &SqliteScannerStore, dk: &DetectionKey) -> Re
                     &tx_hash,
                     action_index,
                     output_index,
-                    DECRYPTED_VIA_ISSUER_DK,
+                    DecryptedVia::IssuerDetectionKey.as_str(),
                     &error.to_string(),
                 )?;
             }
@@ -202,7 +216,10 @@ pub fn export_orbis_pending_scan(store: &SqliteScannerStore) -> Result<AuditScan
     )?;
     let detected = rows
         .query_map(
-            params![FLOW_TYPE_PRIVATE_TRANSFER, AUDIT_STATUS_EVIDENCE_VALID],
+            params![
+                FlowType::PrivateTransfer.as_str(),
+                AuditStatus::EvidenceValid.as_str()
+            ],
             |row| {
                 let height: i64 = row.get(0)?;
                 let tx_hash: Vec<u8> = row.get(1)?;
@@ -218,7 +235,13 @@ pub fn export_orbis_pending_scan(store: &SqliteScannerStore) -> Result<AuditScan
                     output_index: output_index as u32,
                     asset_id,
                     is_flagged: is_flagged != 0,
-                    flow_type,
+                    flow_type: FlowType::from_str(&flow_type).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            6,
+                            rusqlite::types::Type::Text,
+                            error.into(),
+                        )
+                    })?,
                 }))
             },
         )?
@@ -255,12 +278,21 @@ pub fn import_orbis_audit_entries(
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        let row = row_status.map(|(audit_status, is_flagged)| AuditImportRow {
-            audit_status,
-            is_flagged: is_flagged != 0,
-        });
+        let row = row_status
+            .map(|(audit_status, is_flagged)| {
+                Ok::<AuditImportRow, anyhow::Error>(AuditImportRow {
+                    audit_status: AuditStatus::from_str(&audit_status)?,
+                    is_flagged: is_flagged != 0,
+                })
+            })
+            .transpose()?;
+        let current_status = row.as_ref().map(|row| row.audit_status);
         match classify_orbis_import_row(row) {
-            OrbisImportEligibility::Eligible => {}
+            OrbisImportEligibility::Eligible => {
+                if let Some(status) = current_status {
+                    AuditStatus::try_advance(status, AuditStatus::AuditComplete)?;
+                }
+            }
             OrbisImportEligibility::Ineligible { reason } => {
                 record_evidence_failure_tx(
                     &tx,
@@ -295,7 +327,7 @@ pub fn import_orbis_audit_entries(
                 entry.amount,
                 entry.self_address,
                 entry.counterparty,
-                DECRYPTED_VIA_ORBIS_PRE,
+                entry.decrypted_via.as_str(),
                 now_unix(),
                 entry.height as i64,
                 tx_hash.as_slice(),
@@ -312,7 +344,7 @@ pub fn import_orbis_audit_entries(
                    AND action_index = ?4
                    AND output_index = ?5",
                 params![
-                    AUDIT_STATUS_AUDIT_COMPLETE,
+                    AuditStatus::AuditComplete.as_str(),
                     entry.height as i64,
                     tx_hash.as_slice(),
                     entry.action_index as i64,
@@ -547,6 +579,13 @@ pub fn validate_and_save_evidence_object(
             now_unix(),
         ],
     )?;
+    validate_audit_status_transitions(&[
+        (AuditStatus::AuditComplete, AuditStatus::AuditComplete),
+        (AuditStatus::DecryptFailed, AuditStatus::DecryptFailed),
+        (AuditStatus::Pending, AuditStatus::EvidenceValid),
+        (AuditStatus::EvidenceInvalid, AuditStatus::EvidenceValid),
+        (AuditStatus::EvidenceValid, AuditStatus::EvidenceValid),
+    ])?;
     tx.execute(
         "UPDATE scanner_detections
              SET evidence_object_hash = ?1,
@@ -562,9 +601,9 @@ pub fn validate_and_save_evidence_object(
             tx_ref.tx_hash.as_ref(),
             output_ref.action.action_index as i64,
             output_ref.output_index as i64,
-            AUDIT_STATUS_AUDIT_COMPLETE,
-            AUDIT_STATUS_EVIDENCE_VALID,
-            AUDIT_STATUS_DECRYPT_FAILED,
+            AuditStatus::AuditComplete.as_str(),
+            AuditStatus::EvidenceValid.as_str(),
+            AuditStatus::DecryptFailed.as_str(),
         ],
     )?;
     tx.execute(
@@ -604,7 +643,7 @@ pub fn export_detected_refs(store: &SqliteScannerStore) -> Result<Vec<AuditDetec
          ORDER BY height, tx_hash, action_index, output_index",
     )?;
     let refs = rows
-        .query_map(params![FLOW_TYPE_PRIVATE_TRANSFER], |row| {
+        .query_map(params![FlowType::PrivateTransfer.as_str()], |row| {
             let height: i64 = row.get(0)?;
             let tx_hash: Vec<u8> = row.get(1)?;
             let action_index: i64 = row.get(2)?;
@@ -619,7 +658,13 @@ pub fn export_detected_refs(store: &SqliteScannerStore) -> Result<Vec<AuditDetec
                 output_index: output_index as u32,
                 asset_id,
                 is_flagged: is_flagged != 0,
-                flow_type,
+                flow_type: FlowType::from_str(&flow_type).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        6,
+                        rusqlite::types::Type::Text,
+                        error.into(),
+                    )
+                })?,
             }))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -791,19 +836,23 @@ fn record_failure_tx(
             now_unix(),
         ],
     )?;
+    validate_audit_status_transitions(&[
+        (AuditStatus::EvidenceValid, AuditStatus::DecryptFailed),
+        (AuditStatus::DecryptFailed, AuditStatus::DecryptFailed),
+    ])?;
     tx.execute(
         "UPDATE scanner_detections
          SET audit_status = ?1
          WHERE height = ?2 AND tx_hash = ?3 AND action_index = ?4 AND output_index = ?5
            AND audit_status IN (?6, ?7)",
         params![
-            AUDIT_STATUS_DECRYPT_FAILED,
+            AuditStatus::DecryptFailed.as_str(),
             height as i64,
             tx_hash,
             action_index as i64,
             output_index as i64,
-            AUDIT_STATUS_EVIDENCE_VALID,
-            AUDIT_STATUS_DECRYPT_FAILED,
+            AuditStatus::EvidenceValid.as_str(),
+            AuditStatus::DecryptFailed.as_str(),
         ],
     )?;
     Ok(())
@@ -832,19 +881,23 @@ fn record_evidence_failure_tx(
             now_unix(),
         ],
     )?;
+    validate_audit_status_transitions(&[
+        (AuditStatus::Pending, AuditStatus::EvidenceInvalid),
+        (AuditStatus::EvidenceInvalid, AuditStatus::EvidenceInvalid),
+    ])?;
     tx.execute(
         "UPDATE scanner_detections
          SET audit_status = ?1
          WHERE height = ?2 AND tx_hash = ?3 AND action_index = ?4 AND output_index = ?5
            AND audit_status IN (?6, ?7)",
         params![
-            AUDIT_STATUS_EVIDENCE_INVALID,
+            AuditStatus::EvidenceInvalid.as_str(),
             height as i64,
             tx_hash,
             action_index as i64,
             output_index as i64,
-            AUDIT_STATUS_PENDING,
-            AUDIT_STATUS_EVIDENCE_INVALID,
+            AuditStatus::Pending.as_str(),
+            AuditStatus::EvidenceInvalid.as_str(),
         ],
     )?;
     Ok(())
@@ -1118,7 +1171,7 @@ mod tests {
             amount: "1234".to_string(),
             self_address: "receiver".to_string(),
             counterparty: "sender".to_string(),
-            decrypted_via: DECRYPTED_VIA_ORBIS_PRE.to_string(),
+            decrypted_via: DecryptedVia::OrbisPre,
         }
     }
 }

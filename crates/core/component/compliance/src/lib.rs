@@ -1,5 +1,5 @@
 pub mod enrichment;
-pub use enrichment::{BatchComplianceData, ComplianceProofProvider};
+pub use enrichment::{AssetProofData, BatchComplianceData, ComplianceProofProvider, UserProofData};
 
 pub mod event;
 
@@ -96,6 +96,11 @@ pub use evidence::{ComplianceEvidenceObject, EvidenceObjectType, COMPLIANCE_EVID
 
 pub mod audit_validation;
 pub use audit_validation::{validate_audit_evidence, AuditValidationInput, AuditValidationStatus};
+
+#[cfg(feature = "component")]
+pub mod audit_status;
+#[cfg(feature = "component")]
+pub use audit_status::{AuditStatus, DecryptedVia, FlowType};
 
 #[cfg(feature = "component")]
 pub mod audit_records;

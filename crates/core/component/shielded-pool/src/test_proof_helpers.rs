@@ -9,7 +9,7 @@ pub mod proof_test_helpers {
     /// Test asset ID for unregulated assets
     pub const UNREGULATED_ASSET_ID: u64 = 2;
 
-    use decaf377::{Bls12_377, Fq, Fr};
+    use decaf377::{Fq, Fr};
     use penumbra_sdk_asset::{asset, Balance, Value};
     use penumbra_sdk_compliance::{IndexedLeaf, IndexedMerkleTree, MerklePath};
     use penumbra_sdk_keys::{
@@ -74,35 +74,6 @@ pub mod proof_test_helpers {
         let merkle_path = MerklePath::from_auth_path(auth_path);
         let anchor = tct::StateCommitment(tree.root().0);
         (anchor, indexed_leaf, merkle_path, position)
-    }
-
-    /// Setup Arkworks Groth16 proving and verifying keys for a circuit.
-    ///
-    /// Comparison-only helper for tests and benchmarks that still measure the
-    /// old Arkworks proving path against the canonical gnark path.
-    pub fn setup_arkworks_groth16_keys<C>() -> (
-        ark_groth16::ProvingKey<Bls12_377>,
-        ark_groth16::PreparedVerifyingKey<Bls12_377>,
-        Fq,
-        Fq,
-    )
-    where
-        C: penumbra_sdk_proof_params::DummyWitness + Clone,
-    {
-        use ark_groth16::Groth16;
-        use ark_snark::SNARK;
-
-        let mut rng = rand::thread_rng();
-
-        let circuit_template = C::with_dummy_witness();
-        let (pk, vk) = Groth16::<Bls12_377>::circuit_specific_setup(circuit_template, &mut rng)
-            .expect("cannot perform setup");
-        let pvk = ark_groth16::prepare_verifying_key(&vk);
-
-        let blinding_r = Fq::rand(&mut rng);
-        let blinding_s = Fq::rand(&mut rng);
-
-        (pk, pvk, blinding_r, blinding_s)
     }
 
     /// Circuit type for unified testing

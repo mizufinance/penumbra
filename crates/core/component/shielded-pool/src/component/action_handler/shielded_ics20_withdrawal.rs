@@ -20,22 +20,6 @@ use crate::{
     ShieldedIcs20WithdrawalProofPublic, TransferInputBody,
 };
 
-impl note_reshape::NoteReshapeInputBody for TransferInputBody {
-    fn nullifier(&self) -> penumbra_sdk_sct::Nullifier {
-        self.nullifier
-    }
-
-    fn rk(&self) -> &decaf377_rdsa::VerificationKey<decaf377_rdsa::SpendAuth> {
-        &self.rk
-    }
-}
-
-impl note_reshape::NoteReshapeOutputBody for ShieldedIcs20WithdrawalChangeBody {
-    fn note_payload(&self) -> &crate::NotePayload {
-        &self.note_payload
-    }
-}
-
 pub fn shielded_ics20_withdrawal_verify_auth_sigs(
     action: &ShieldedIcs20Withdrawal,
     context: &TransactionContext,
@@ -45,6 +29,7 @@ pub fn shielded_ics20_withdrawal_verify_auth_sigs(
         &action.body.inputs,
         &action.auth_sigs,
         context,
+        |input| &input.rk,
     )
 }
 
@@ -150,6 +135,10 @@ impl ActionHandler for ShieldedIcs20Withdrawal {
             &mut state,
             &self.body.inputs,
             std::slice::from_ref(&self.body.change_output),
+            |input| input.nullifier,
+            TransferInputBody::is_dummy,
+            |output| &output.note_payload,
+            ShieldedIcs20WithdrawalChangeBody::is_dummy,
         )
         .await?;
         state.withdrawal_execute(&self.body.withdrawal).await

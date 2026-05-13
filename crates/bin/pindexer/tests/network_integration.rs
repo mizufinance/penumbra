@@ -18,14 +18,14 @@ fn postgres_port() -> String {
 
 fn cometbft_database_url() -> String {
     format!(
-        "postgresql://penumbra:penumbra@localhost:{}/penumbra_cometbft?sslmode=disable",
+        "postgresql://penumbra:penumbra@127.0.0.1:{}/penumbra_cometbft?sslmode=disable",
         postgres_port()
     )
 }
 
 fn pindexer_database_url() -> String {
     format!(
-        "postgresql://penumbra:penumbra@localhost:{}/penumbra_pindexer?sslmode=disable",
+        "postgresql://penumbra:penumbra@127.0.0.1:{}/penumbra_pindexer?sslmode=disable",
         postgres_port()
     )
 }

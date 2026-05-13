@@ -118,29 +118,6 @@ type TransferWitnessV1Binary struct {
 }
 
 func DecodeTransferWitnessV1(payload []byte) (*TransferWitnessV1Binary, generated.TransferFamilySpec, error) {
-	reader := bytes.NewReader(payload)
-
-	magic, err := readExact(reader, 4)
-	if err != nil {
-		return nil, generated.TransferFamilySpec{}, err
-	}
-	if string(magic) != transferWitnessV1Magic {
-		return nil, generated.TransferFamilySpec{}, fmt.Errorf("invalid TransferWitnessV1 magic %q", string(magic))
-	}
-	version, err := readU32(reader)
-	if err != nil {
-		return nil, generated.TransferFamilySpec{}, err
-	}
-	if version != transferWitnessV1Version {
-		return nil, generated.TransferFamilySpec{}, fmt.Errorf("unsupported TransferWitnessV1 version %d", version)
-	}
-	totalLength, err := readU32(reader)
-	if err != nil {
-		return nil, generated.TransferFamilySpec{}, err
-	}
-	if totalLength != uint32(len(payload)) {
-		return nil, generated.TransferFamilySpec{}, fmt.Errorf("payload length mismatch: header=%d actual=%d", totalLength, len(payload))
-	}
 	family, ok := generated.TransferFamilyByLabel("transfer")
 	if !ok {
 		return nil, generated.TransferFamilySpec{}, fmt.Errorf("missing generated transfer spec")

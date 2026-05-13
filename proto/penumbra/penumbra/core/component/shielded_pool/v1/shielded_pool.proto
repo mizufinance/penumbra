@@ -125,11 +125,6 @@ message ZKShieldedIcs20WithdrawalProof {
   bytes inner = 1;
 }
 
-// A Penumbra ZK nullifier derivation proof.
-message ZKNullifierDerivationProof {
-  bytes inner = 1;
-}
-
 message TransferInputBody {
   // The nullifier of the spent note.
   sct.v1.Nullifier nullifier = 1;

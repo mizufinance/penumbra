@@ -13,6 +13,30 @@ use std::collections::BTreeMap;
 
 use crate::{indexed_tree::IndexedLeaf, structs::AssetPolicy, ComplianceLeaf, MerklePath};
 
+/// Proof data for an asset in the indexed asset tree.
+#[derive(Clone, Debug)]
+pub struct AssetProofData {
+    /// The indexed leaf used for membership or non-membership proofs.
+    pub indexed_leaf: IndexedLeaf,
+    /// Position of the leaf in the tree.
+    pub position: u64,
+    /// Authentication path from leaf to root.
+    pub auth_path: MerklePath,
+    /// Whether the asset is regulated according to stored policy metadata.
+    pub is_regulated: bool,
+}
+
+/// Proof data for a user compliance leaf.
+#[derive(Clone, Debug)]
+pub struct UserProofData {
+    /// Authentication path from leaf to root.
+    pub auth_path: MerklePath,
+    /// Position of the leaf in the user tree.
+    pub position: u64,
+    /// Compliance leaf proven by the path.
+    pub leaf: ComplianceLeaf,
+}
+
 /// Result of a batch compliance query, containing all data needed for enrichment.
 #[derive(Debug, Clone)]
 pub struct BatchComplianceData {
@@ -20,12 +44,12 @@ pub struct BatchComplianceData {
     pub compliance_anchor: StateCommitment,
     /// Asset tree anchor
     pub asset_anchor: StateCommitment,
-    /// Per-asset proof data: (merkle_path, position, indexed_leaf, is_regulated)
-    pub asset_proofs: BTreeMap<asset::Id, (MerklePath, u64, IndexedLeaf, bool)>,
+    /// Per-asset proof data.
+    pub asset_proofs: BTreeMap<asset::Id, AssetProofData>,
     /// Per-asset policy data for regulated assets.
     pub asset_policies: BTreeMap<asset::Id, AssetPolicy>,
-    /// Per-(address, asset) user proof data: (merkle_path, position, leaf)
-    pub user_proofs: BTreeMap<(Address, asset::Id), (MerklePath, u64, ComplianceLeaf)>,
+    /// Per-(address, asset) user proof data.
+    pub user_proofs: BTreeMap<(Address, asset::Id), UserProofData>,
 }
 
 impl Default for BatchComplianceData {
@@ -52,25 +76,19 @@ pub trait ComplianceProofProvider: Send + Sync {
     /// Get the asset compliance tree root (anchor) as StateCommitment.
     async fn get_asset_anchor(&self) -> Result<StateCommitment>;
 
-    /// Get asset proof information: (merkle_path, position, indexed_leaf, is_regulated).
+    /// Get asset proof information.
     /// For IMT, the indexed_leaf is used for membership/non-membership proofs.
-    async fn get_asset_proof(
-        &self,
-        asset_id: asset::Id,
-    ) -> Result<(MerklePath, u64, IndexedLeaf, bool)>;
+    async fn get_asset_proof(&self, asset_id: asset::Id) -> Result<AssetProofData>;
 
     /// Get the full asset policy, when the asset is regulated.
     async fn get_asset_policy(&self, asset_id: asset::Id) -> Result<Option<AssetPolicy>>;
 
-    /// Get user proof and leaf: (merkle_path, position, leaf).
+    /// Get user proof and leaf.
     /// For unregulated assets, implementations should return the normal synthetic
     /// non-membership/default data path; no issuer-readable registration is required.
     /// Returns error if user is not registered for this asset.
-    async fn get_user_proof(
-        &self,
-        address: &Address,
-        asset_id: asset::Id,
-    ) -> Result<(MerklePath, u64, ComplianceLeaf)>;
+    async fn get_user_proof(&self, address: &Address, asset_id: asset::Id)
+        -> Result<UserProofData>;
 
     /// Batch fetch all compliance data for multiple (address, asset) pairs.
     ///
@@ -93,7 +111,7 @@ pub trait ComplianceProofProvider: Send + Sync {
         for (address, asset_id) in queries {
             if !asset_proofs.contains_key(asset_id) {
                 let proof = self.get_asset_proof(*asset_id).await?;
-                if proof.3 {
+                if proof.is_regulated {
                     let policy = self.get_asset_policy(*asset_id).await?.ok_or_else(|| {
                         anyhow::anyhow!("missing asset policy for regulated asset {}", asset_id)
                     })?;

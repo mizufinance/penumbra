@@ -108,8 +108,9 @@ impl Component for ShieldedPool {
                 .get_fmd_algorithm_state()
                 .await
                 .expect("should be able to read state");
-            let (new, algorithm_state) =
-                meta_params.updated_fmd_params(&old, algorithm_state, height, clue_count_delta);
+            let (new, algorithm_state) = meta_params
+                .updated_fmd_params(&old, algorithm_state, height, clue_count_delta)
+                .expect("FMD clue count should be monotonic within a block");
             state.put_previous_fmd_parameters(old);
             state.put_current_fmd_parameters(new);
             state.put_fmd_algorithm_state(algorithm_state);

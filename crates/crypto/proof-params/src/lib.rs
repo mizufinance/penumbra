@@ -5,12 +5,11 @@
 
 use anyhow::{bail, Result};
 use ark_ec::{pairing::Pairing, AffineRepr};
-use ark_groth16::{PreparedVerifyingKey, ProvingKey, VerifyingKey};
-use ark_serialize::CanonicalDeserialize;
+use ark_groth16::{PreparedVerifyingKey, VerifyingKey};
 use decaf377::Bls12_377;
-use once_cell::sync::{Lazy, OnceCell};
+use once_cell::sync::Lazy;
 use serde::Deserialize;
-use std::{fs, ops::Deref, path::Path, str::FromStr};
+use std::{fs, path::Path, str::FromStr};
 
 /// The length of our Groth16 proofs in bytes.
 pub const GROTH16_PROOF_LENGTH_BYTES: usize = 192;
@@ -26,116 +25,10 @@ pub use traits::{
 
 include!(concat!(env!("OUT_DIR"), "/gnark_bundled.rs"));
 
-/// A wrapper around a proving key that can be lazily loaded.
-///
-/// One instance of this struct is created for each proving key.
-///
-/// The behavior of those instances is controlled by the `bundled-proving-keys`
-/// feature. When the feature is enabled, the proving key data is bundled into
-/// the binary at compile time, and the proving key is loaded from the bundled
-/// data on first use.  When the feature is not enabled, the proving key must be
-/// loaded using `try_load` prior to its first use.
-///
-/// The `bundled-proving-keys` feature needs access to proving keys at build
-/// time.  When pulling the crate as a dependency, these may not be available.
-/// To address this, the `download-proving-keys` feature will download them from
-/// the network at build time. All proving keys are checked against hardcoded hashes
-/// to ensure they have not been tampered with.
-#[derive(Debug, Default)]
-pub struct LazyProvingKey {
-    pk_id: &'static str,
-    inner: OnceCell<ProvingKey<Bls12_377>>,
-}
-
-impl LazyProvingKey {
-    // Not making this pub means only the statically defined proving keys can exist.
-    fn new(pk_id: &'static str) -> Self {
-        LazyProvingKey {
-            pk_id,
-            inner: OnceCell::new(),
-        }
-    }
-
-    /// Attempt to load the proving key from the given bytes.
-    ///
-    /// The provided bytes are validated against a hardcoded hash of the expected proving key,
-    /// so passing the wrong proving key will fail.
-    ///
-    /// If the proving key is already loaded, this method is a no-op.
-    pub fn try_load(&self, bytes: &[u8]) -> Result<&ProvingKey<Bls12_377>> {
-        self.inner.get_or_try_init(|| {
-            let pk = ProvingKey::deserialize_uncompressed_unchecked(bytes)?;
-
-            let pk_id = pk.debug_id();
-            if pk_id != self.pk_id {
-                bail!(
-                    "proving key ID mismatch: expected {}, loaded {}",
-                    self.pk_id,
-                    pk_id
-                );
-            }
-
-            Ok(pk)
-        })
-    }
-
-    /// Attempt to load the proving key from the given bytes.
-    ///
-    /// This method bypasses the validation checks against the hardcoded
-    /// hash of the expected proving key.
-    pub fn try_load_unchecked(&self, bytes: &[u8]) -> Result<&ProvingKey<Bls12_377>> {
-        self.inner.get_or_try_init(|| {
-            let pk = ProvingKey::deserialize_uncompressed_unchecked(bytes)?;
-
-            Ok(pk)
-        })
-    }
-}
-
-impl Deref for LazyProvingKey {
-    type Target = ProvingKey<Bls12_377>;
-
-    fn deref(&self) -> &Self::Target {
-        self.inner.get().expect("Proving key cannot be loaded!")
-    }
-}
-
-// Note: Conditionally load the proving key objects if the
-// bundled-proving-keys is present.
-
 include!("gen/gnark/transfer_registry.rs");
 include!("gen/gnark/consolidate_registry.rs");
 include!("gen/gnark/split_registry.rs");
 include!("gen/gnark/shielded_ics20_withdrawal_registry.rs");
-
-/// Proving key for the nullifier derivation proof.
-pub static NULLIFIER_DERIVATION_PROOF_PROVING_KEY: Lazy<LazyProvingKey> = Lazy::new(|| {
-    let nullifier_proving_key = LazyProvingKey::new(nullifier_derivation::PROVING_KEY_ID);
-
-    #[cfg(feature = "bundled-proving-keys")]
-    nullifier_proving_key
-        .try_load(include_bytes!("gen/nullifier_derivation_pk.bin"))
-        .expect("bundled proving key is valid");
-
-    nullifier_proving_key
-});
-
-/// Verification key for the nullifier derivation proof.
-pub static NULLIFIER_DERIVATION_PROOF_VERIFICATION_KEY: Lazy<PreparedVerifyingKey<Bls12_377>> =
-    Lazy::new(|| nullifier_derivation_verification_parameters().into());
-
-pub mod nullifier_derivation {
-    include!("gen/nullifier_derivation_id.rs");
-}
-
-// Note: Here we are using `CanonicalDeserialize::deserialize_uncompressed_unchecked` as the
-// parameters are being loaded from a trusted source (our source code).
-
-fn nullifier_derivation_verification_parameters() -> VerifyingKey<Bls12_377> {
-    let vk_params = include_bytes!("gen/nullifier_derivation_vk.param");
-    VerifyingKey::deserialize_uncompressed_unchecked(&vk_params[..])
-        .expect("can deserialize VerifyingKey")
-}
 
 type ProofG1 = <Bls12_377 as Pairing>::G1Affine;
 type ProofG2 = <Bls12_377 as Pairing>::G2Affine;
@@ -257,15 +150,4 @@ fn parse_g2(point: &G2PointJson) -> Result<ProofG2> {
         bail!("G2 point is not in the correct subgroup");
     }
     Ok(point)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bundled_keys_smoke_load() {
-        let _ = &*NULLIFIER_DERIVATION_PROOF_PROVING_KEY;
-        let _ = &*NULLIFIER_DERIVATION_PROOF_VERIFICATION_KEY;
-    }
 }

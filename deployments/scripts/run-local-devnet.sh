@@ -37,7 +37,7 @@ else
         --allocation-address "penumbra1cvp32r5wp4lfnnww3g3fytxccqnu2xcj0r2qm0sa8ekjdezlm3gzk34qtg2xscqx9r6yrhz24k3l6j88q98rexyp7dnupq66cxllvpp9v0lw0xuqf0yfhv5ksfxzv0m968tmxn"
 
     # opt in to cometbft abci indexing to postgres
-    postgresql_db_url="postgresql://penumbra:penumbra@localhost:${PENUMBRA_POSTGRES_PORT}/penumbra_cometbft?sslmode=disable"
+    postgresql_db_url="postgresql://penumbra:penumbra@127.0.0.1:${PENUMBRA_POSTGRES_PORT}/penumbra_cometbft?sslmode=disable"
     sed -i -e "s#^indexer.*#indexer = \"psql\"\\npsql-conn = \"$postgresql_db_url\"#" "$network_data_dir/node0/cometbft/config/config.toml"
 fi
 

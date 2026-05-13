@@ -358,7 +358,7 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
     async fn get_asset_proof(
         &self,
         asset_id: penumbra_sdk_asset::asset::Id,
-    ) -> anyhow::Result<(MerklePath, u64, penumbra_sdk_compliance::IndexedLeaf, bool)> {
+    ) -> anyhow::Result<penumbra_sdk_compliance::AssetProofData> {
         // Use the IMT-based get_asset_proof_data for proper indexed leaf
         let proof_data = self.state.get_asset_proof_data(asset_id).await?;
 
@@ -372,12 +372,12 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
                 })
                 .collect(),
         };
-        Ok((
-            path,
-            proof_data.position,
-            proof_data.indexed_leaf,
-            proof_data.is_regulated,
-        ))
+        Ok(penumbra_sdk_compliance::AssetProofData {
+            auth_path: path,
+            position: proof_data.position,
+            indexed_leaf: proof_data.indexed_leaf,
+            is_regulated: proof_data.is_regulated,
+        })
     }
 
     async fn get_asset_policy(
@@ -391,7 +391,7 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
         &self,
         address: &penumbra_sdk_keys::Address,
         asset_id: penumbra_sdk_asset::asset::Id,
-    ) -> anyhow::Result<(MerklePath, u64, ComplianceLeaf)> {
+    ) -> anyhow::Result<penumbra_sdk_compliance::UserProofData> {
         if let Some(position) = self.state.get_user_leaf_position(address, asset_id).await? {
             let path_layers = self.state.get_user_auth_path(position).await?;
             let leaf = self
@@ -415,12 +415,16 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
                     .collect(),
             };
 
-            return Ok((path, position, leaf));
+            return Ok(penumbra_sdk_compliance::UserProofData {
+                auth_path: path,
+                position,
+                leaf,
+            });
         }
 
         // Unregulated assets can still build without a registered user leaf.
-        let (_, _, _, is_regulated) = self.get_asset_proof(asset_id).await?;
-        if !is_regulated {
+        let asset_proof = self.get_asset_proof(asset_id).await?;
+        if !asset_proof.is_regulated {
             let b_d_fq = address.diversified_generator().vartime_compress_to_field();
             let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
             let synthetic_leaf = ComplianceLeaf {
@@ -428,7 +432,11 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
                 asset_id,
                 d,
             };
-            return Ok((MerklePath::default(), 0, synthetic_leaf));
+            return Ok(penumbra_sdk_compliance::UserProofData {
+                auth_path: MerklePath::default(),
+                position: 0,
+                leaf: synthetic_leaf,
+            });
         }
 
         Err(anyhow::anyhow!(
@@ -448,7 +456,9 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
         &self,
         queries: &[(penumbra_sdk_keys::Address, penumbra_sdk_asset::asset::Id)],
     ) -> anyhow::Result<penumbra_sdk_compliance::BatchComplianceData> {
-        use penumbra_sdk_compliance::{BatchComplianceData, IndexedMerkleTree};
+        use penumbra_sdk_compliance::{
+            AssetProofData, BatchComplianceData, IndexedMerkleTree, UserProofData,
+        };
         use std::collections::BTreeMap;
 
         // Read trees ONCE to ensure consistency between anchors and proofs
@@ -515,13 +525,21 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
                     asset_policies.insert(*asset_id, policy);
                 }
 
-                asset_proofs.insert(*asset_id, (path, position, indexed_leaf, is_regulated));
+                asset_proofs.insert(
+                    *asset_id,
+                    AssetProofData {
+                        auth_path: path,
+                        position,
+                        indexed_leaf,
+                        is_regulated,
+                    },
+                );
             }
 
             // Generate user proof
             let key = (address.clone(), *asset_id);
             if !user_proofs.contains_key(&key) {
-                let (_, _, _, is_regulated) = asset_proofs.get(asset_id).unwrap();
+                let is_regulated = asset_proofs.get(asset_id).unwrap().is_regulated;
 
                 let user_proof = if let Some(position) = self
                     .state
@@ -553,7 +571,11 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
                             .collect(),
                     };
 
-                    (path, position, leaf)
+                    UserProofData {
+                        auth_path: path,
+                        position,
+                        leaf,
+                    }
                 } else if !is_regulated {
                     // Unregulated fallback: synthetic leaf with real d so leaf commitment
                     // matches what generate_compliance_details creates.
@@ -564,7 +586,11 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
                         asset_id: *asset_id,
                         d,
                     };
-                    (MerklePath::default(), 0u64, synthetic_leaf)
+                    UserProofData {
+                        auth_path: MerklePath::default(),
+                        position: 0,
+                        leaf: synthetic_leaf,
+                    }
                 } else {
                     return Err(anyhow::anyhow!(
                         "user not registered for address {:?} and asset {:?}",

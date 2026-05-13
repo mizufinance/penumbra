@@ -391,7 +391,7 @@ impl TransferPlan {
                 .ok_or_else(|| anyhow!("transfer requires at least one spend"))?,
         );
         let asset_policy = self.upload_asset_policy()?;
-        let (grouped_ciphertext, grouped_bundle, _, _) = build_transfer_compliance(
+        let compliance = build_transfer_compliance(
             &self.outputs,
             &sender_leaf,
             &asset_policy,
@@ -426,8 +426,8 @@ impl TransferPlan {
             .map(|(index, output)| {
                 let (note_payload, wrapped_memo_key, ovk_wrapped_key) =
                     output.action_output_parts(fvk.outgoing(), memo_key);
-                let (compliance_ciphertext, orbis_upload_bundle) = if index == 0 {
-                    receiver_output_transfer_compliance(&grouped_ciphertext, &grouped_bundle)
+                let compliance_bytes = if index == 0 {
+                    receiver_output_transfer_compliance(&compliance.ciphertext, &compliance.bundle)
                 } else {
                     change_output_transfer_compliance()
                 };
@@ -435,8 +435,8 @@ impl TransferPlan {
                     note_payload,
                     wrapped_memo_key,
                     ovk_wrapped_key,
-                    compliance_ciphertext,
-                    orbis_upload_bundle,
+                    compliance_ciphertext: compliance_bytes.compliance_ciphertext,
+                    orbis_upload_bundle: compliance_bytes.orbis_upload_bundle,
                 }
             })
             .collect::<Vec<_>>();
@@ -504,7 +504,7 @@ impl TransferPlan {
         let asset_policy = self
             .upload_asset_policy()
             .map_err(|e| crate::ProofError::InvalidPublicInput(e.to_string()))?;
-        let (_, _, compliance_public, compliance_private) = build_transfer_compliance(
+        let compliance = build_transfer_compliance(
             &self.outputs,
             &sender_leaf,
             &asset_policy,
@@ -614,7 +614,7 @@ impl TransferPlan {
                 target_timestamp: Fq::from(self.spends[0].target_timestamp),
                 inputs: input_publics,
                 outputs: output_publics,
-                compliance: compliance_public,
+                compliance: compliance.public,
             },
             TransferProofPrivate {
                 action_balance_blinding: self.value_blinding,
@@ -627,7 +627,7 @@ impl TransferPlan {
                 sender_compliance_path: self.spends[0].compliance_path.clone(),
                 sender_compliance_position: self.spends[0].compliance_position,
                 sender_leaf,
-                compliance: compliance_private,
+                compliance: compliance.private,
                 inputs: input_privates,
                 outputs: output_privates,
             },

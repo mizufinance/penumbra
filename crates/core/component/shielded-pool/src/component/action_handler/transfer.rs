@@ -16,8 +16,9 @@ use crate::transfer::compliance::{
     parse_transfer_output_compliance, transfer_compliance_public_from_parts,
 };
 use crate::{
-    component::NoteManager, event, Transfer, TransferOutputPublic, TransferProofPublic,
-    TransferSpendPublic,
+    component::{action_handler::note_reshape, NoteManager},
+    event, Transfer, TransferInputBody, TransferOutputBody, TransferOutputPublic,
+    TransferProofPublic, TransferSpendPublic,
 };
 
 pub fn transfer_verify_auth_sigs(transfer: &Transfer, context: &TransactionContext) -> Result<()> {
@@ -151,7 +152,7 @@ impl ActionHandler for Transfer {
             .get_current_source()
             .ok_or_else(|| anyhow::anyhow!("source should be set during execution"))?;
 
-        for input in self.body.inputs.iter().filter(|input| !input.is_dummy()) {
+        for input in note_reshape::real_items(&self.body.inputs, TransferInputBody::is_dummy) {
             state.nullify(input.nullifier, source.into()).await;
             state.record_proto(
                 event::EventNullifierSpent {
@@ -160,7 +161,7 @@ impl ActionHandler for Transfer {
                 .to_proto(),
             );
         }
-        for output in self.body.outputs.iter().filter(|output| !output.is_dummy()) {
+        for output in note_reshape::real_items(&self.body.outputs, TransferOutputBody::is_dummy) {
             state
                 .add_note_payload(output.note_payload.clone(), source.into())
                 .await;

@@ -1,6 +1,8 @@
 use std::convert::TryInto;
 
 use anyhow::{Context, Error};
+#[cfg(feature = "component")]
+use decaf377::Fq;
 use decaf377_rdsa::{Signature, SpendAuth, VerificationKey};
 use penumbra_sdk_asset::balance;
 use penumbra_sdk_keys::symmetric::{OvkWrappedKey, WrappedMemoKey};
@@ -32,6 +34,20 @@ pub struct ConsolidateOutputBody {
     pub note_payload: NotePayload,
     pub wrapped_memo_key: WrappedMemoKey,
     pub ovk_wrapped_key: OvkWrappedKey,
+}
+
+impl ConsolidateInputBody {
+    #[cfg(feature = "component")]
+    pub(crate) fn is_dummy(&self) -> bool {
+        self.encrypted_backref.is_empty() || self.nullifier.0 == Fq::from(0u64)
+    }
+}
+
+impl ConsolidateOutputBody {
+    #[cfg(feature = "component")]
+    pub(crate) fn is_dummy(&self) -> bool {
+        self.wrapped_memo_key.0 == [0u8; 48] && self.ovk_wrapped_key.0 == [0u8; 48]
+    }
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]

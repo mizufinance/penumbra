@@ -10,22 +10,6 @@ use crate::{
     ConsolidateInputPublic, ConsolidateOutputBody, ConsolidateOutputPublic, ConsolidateProofPublic,
 };
 
-impl note_reshape::NoteReshapeInputBody for ConsolidateInputBody {
-    fn nullifier(&self) -> penumbra_sdk_sct::Nullifier {
-        self.nullifier
-    }
-
-    fn rk(&self) -> &decaf377_rdsa::VerificationKey<decaf377_rdsa::SpendAuth> {
-        &self.rk
-    }
-}
-
-impl note_reshape::NoteReshapeOutputBody for ConsolidateOutputBody {
-    fn note_payload(&self) -> &crate::NotePayload {
-        &self.note_payload
-    }
-}
-
 pub fn consolidate_verify_auth_sigs(
     consolidate: &Consolidate,
     context: &TransactionContext,
@@ -35,6 +19,7 @@ pub fn consolidate_verify_auth_sigs(
         &consolidate.body.inputs,
         &consolidate.auth_sigs,
         context,
+        |input| &input.rk,
     )
 }
 
@@ -42,8 +27,12 @@ pub fn consolidate_extract_public(
     consolidate: &Consolidate,
     context: &TransactionContext,
 ) -> Result<ConsolidateProofPublic> {
-    let (inputs, outputs) =
-        note_reshape::extract_public_parts(&consolidate.body.inputs, &consolidate.body.outputs);
+    let (inputs, outputs) = note_reshape::extract_public_parts(
+        &consolidate.body.inputs,
+        &consolidate.body.outputs,
+        |input| (input.nullifier, &input.rk),
+        |output| &output.note_payload,
+    );
 
     let public = ConsolidateProofPublic {
         family_id: consolidate.body.family_id,
@@ -100,6 +89,15 @@ impl ActionHandler for Consolidate {
     }
 
     async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        note_reshape::execute(&mut state, &self.body.inputs, &self.body.outputs).await
+        note_reshape::execute(
+            &mut state,
+            &self.body.inputs,
+            &self.body.outputs,
+            |input| input.nullifier,
+            ConsolidateInputBody::is_dummy,
+            |output| &output.note_payload,
+            ConsolidateOutputBody::is_dummy,
+        )
+        .await
     }
 }

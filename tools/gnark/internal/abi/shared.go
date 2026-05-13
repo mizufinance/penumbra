@@ -73,6 +73,32 @@ func indexedLeafInputsFromIndexedLeafBinary(
 	}
 }
 
+func indexedLeafFieldsFromIndexedLeafBinary(
+	leaf IndexedLeafBinary,
+	dkPub PointAffineBinary,
+	ringPK PointAffineBinary,
+) circuits.IndexedLeafFields {
+	return circuits.IndexedLeafFields{
+		Value:     primitives.LittleEndianBytesToBigInt(leaf.Value[:]).String(),
+		NextIndex: leaf.NextIndex,
+		NextValue: primitives.LittleEndianBytesToBigInt(leaf.NextValue[:]).String(),
+		DKPub: circuits.Point2D{
+			X: primitives.LittleEndianBytesToBigInt(dkPub.X[:]).String(),
+			Y: primitives.LittleEndianBytesToBigInt(dkPub.Y[:]).String(),
+		},
+		Threshold:    primitives.LittleEndianBytesToBigInt(leaf.Threshold[:]).String(),
+		ChannelsHash: primitives.LittleEndianBytesToBigInt(leaf.ChannelsHash[:]).String(),
+		RingPK: circuits.Point2D{
+			X: primitives.LittleEndianBytesToBigInt(ringPK.X[:]).String(),
+			Y: primitives.LittleEndianBytesToBigInt(ringPK.Y[:]).String(),
+		},
+		RingIDHash:     primitives.LittleEndianBytesToBigInt(leaf.RingIDHash[:]).String(),
+		PolicyIDHash:   primitives.LittleEndianBytesToBigInt(leaf.PolicyIDHash[:]).String(),
+		PermissionHash: primitives.LittleEndianBytesToBigInt(leaf.PermissionHash[:]).String(),
+		ResourceHash:   primitives.LittleEndianBytesToBigInt(leaf.ResourceHash[:]).String(),
+	}
+}
+
 func statePathFromBinary(path [][3][32]byte) ([circuits.StateCommitmentDepth][3]frontend.Variable, error) {
 	var out [circuits.StateCommitmentDepth][3]frontend.Variable
 	for i := 0; i < circuits.StateCommitmentDepth; i++ {
