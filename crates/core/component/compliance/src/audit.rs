@@ -2,10 +2,13 @@ use anyhow::{anyhow, Context, Result};
 use penumbra_sdk_asset::asset;
 use penumbra_sdk_keys::Address;
 use rusqlite::{params, OptionalExtension};
-use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::audit_records::{
+    detected_ref_from_row_parts, AuditDetectedRef, AuditImportRow, AuditScanExport,
+    DetectedRefRowParts, OrbisAuditEntry, OrbisImportEligibility,
+};
 use crate::scanner::storage::SqliteScannerStore;
 use crate::scanner::types::{
     AuditLedgerRow, AUDIT_STATUS_AUDIT_COMPLETE, AUDIT_STATUS_DECRYPT_FAILED,
@@ -23,42 +26,6 @@ pub const EVIDENCE_STAGE_BUILD: &str = "build_evidence";
 pub const EVIDENCE_STAGE_VALIDATE: &str = "validate_evidence";
 pub const EVIDENCE_STAGE_UPLOAD_BUNDLE: &str = "validate_upload_bundle";
 pub const EVIDENCE_STAGE_ORBIS_IMPORT: &str = "validate_orbis_import";
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AuditDetectedRef {
-    pub height: u64,
-    pub tx_hash: String,
-    pub action_index: u32,
-    #[serde(default)]
-    pub output_index: u32,
-    pub asset_id: String,
-    pub is_flagged: bool,
-    #[serde(default = "private_transfer_flow_type")]
-    pub flow_type: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AuditScanExport {
-    pub scan_info: serde_json::Value,
-    pub detected: Vec<AuditDetectedRef>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct OrbisAuditEntry {
-    pub height: u64,
-    pub tx_hash: String,
-    pub action_index: u32,
-    #[serde(default)]
-    pub output_index: u32,
-    pub amount: String,
-    pub self_address: String,
-    pub counterparty: String,
-    pub decrypted_via: String,
-}
-
-fn private_transfer_flow_type() -> String {
-    FLOW_TYPE_PRIVATE_TRANSFER.to_string()
-}
 
 pub fn record_address_alias(store: &SqliteScannerStore, address: &str, name: &str) -> Result<()> {
     let conn = store.lock_conn()?;
@@ -242,15 +209,15 @@ pub fn export_orbis_pending_scan(store: &SqliteScannerStore) -> Result<AuditScan
                 let asset_id: String = row.get(4)?;
                 let is_flagged: i64 = row.get(5)?;
                 let flow_type: String = row.get(6)?;
-                Ok(AuditDetectedRef {
+                Ok(detected_ref_from_row_parts(DetectedRefRowParts {
                     height: height as u64,
-                    tx_hash: hex::encode(tx_hash),
+                    tx_hash,
                     action_index: action_index as u32,
                     output_index: output_index as u32,
                     asset_id,
                     is_flagged: is_flagged != 0,
                     flow_type,
-                })
+                }))
             },
         )?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -286,12 +253,13 @@ pub fn import_orbis_audit_entries(
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        match row_status {
-            Some((status, 0))
-                if status == AUDIT_STATUS_EVIDENCE_VALID
-                    || status == AUDIT_STATUS_DECRYPT_FAILED
-                    || status == AUDIT_STATUS_AUDIT_COMPLETE => {}
-            Some((status, _)) => {
+        let row = row_status.map(|(audit_status, is_flagged)| AuditImportRow {
+            audit_status,
+            is_flagged: is_flagged != 0,
+        });
+        match crate::audit_records::classify_orbis_import_row(row) {
+            OrbisImportEligibility::Eligible => {}
+            OrbisImportEligibility::Ineligible { reason } => {
                 record_evidence_failure_tx(
                     &tx,
                     entry.height,
@@ -299,19 +267,7 @@ pub fn import_orbis_audit_entries(
                     entry.action_index,
                     entry.output_index,
                     EVIDENCE_STAGE_ORBIS_IMPORT,
-                    &format!("row is not an evidence-valid unflagged detection: {status}"),
-                )?;
-                continue;
-            }
-            None => {
-                record_evidence_failure_tx(
-                    &tx,
-                    entry.height,
-                    tx_hash.as_slice(),
-                    entry.action_index,
-                    entry.output_index,
-                    EVIDENCE_STAGE_ORBIS_IMPORT,
-                    "detected row not found",
+                    &reason,
                 )?;
                 continue;
             }
@@ -654,15 +610,15 @@ pub fn export_detected_refs(store: &SqliteScannerStore) -> Result<Vec<AuditDetec
             let asset_id: String = row.get(4)?;
             let is_flagged: i64 = row.get(5)?;
             let flow_type: String = row.get(6)?;
-            Ok(AuditDetectedRef {
+            Ok(detected_ref_from_row_parts(DetectedRefRowParts {
                 height: height as u64,
-                tx_hash: hex::encode(tx_hash),
+                tx_hash,
                 action_index: action_index as u32,
                 output_index: output_index as u32,
                 asset_id,
                 is_flagged: is_flagged != 0,
                 flow_type,
-            })
+            }))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(refs)
