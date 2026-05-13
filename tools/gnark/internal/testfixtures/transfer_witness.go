@@ -8,7 +8,7 @@ var embeddedTransferWitnessV1 []byte
 func LoadTransferWitnessV1(label string) []byte {
 	switch label {
 	case "transfer":
-		return embeddedTransferWitnessV1
+		return append([]byte(nil), embeddedTransferWitnessV1...)
 	default:
 		panic("unknown transfer witness label: " + label)
 	}

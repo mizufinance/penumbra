@@ -253,7 +253,7 @@ integration-pcli:
 # Run integration tests for pindexer. Assumes specific dev env is already running.
 integration-pindexer:
     if cargo nextest --version >/dev/null 2>&1; then \
-      cargo nextest run --release -p pindexer --features network-integration --test-threads 1; \
+      cargo nextest run --release -p pindexer --features network-integration --run-ignored ignored-only --test-threads 1; \
     else \
       cargo test --release -p pindexer --features network-integration -- --ignored --test-threads 1 --nocapture; \
     fi
