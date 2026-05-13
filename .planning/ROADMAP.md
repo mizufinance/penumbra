@@ -18,7 +18,6 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 ### Phase 1: Compliance Boundary MVP
 **Goal**: Compliance code has clearer ownership boundaries in the highest-payoff selected area while preserving existing behavior.
-**Mode:** mvp
 **Depends on**: Nothing (first phase)
 **Requirements**: EVID-01, EVID-02, EVID-03, ARCH-01, ARCH-02, ARCH-03, ARCH-04, IMPL-01, IMPL-02, IMPL-03, IMPL-04, VERI-01, VERI-02, VERI-03
 **Success Criteria** (what must be TRUE):
