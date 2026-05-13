@@ -1,10 +1,5 @@
 //! Typed audit/export records and pure audit row classification.
 //!
-//! Audit/export is the selected MVP boundary for D-01/D-03 because `audit.rs`
-//! mixes SQLite effects, export DTO construction, Orbis import eligibility,
-//! and failure recording. Registry/state is rejected here because it already
-//! uses the component state traits, while its highest-risk storage and security
-//! items are deferred.
 
 use serde::{Deserialize, Serialize};
 

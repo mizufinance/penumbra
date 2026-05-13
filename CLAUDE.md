@@ -36,6 +36,6 @@ Delete obsolete paths; do not keep aliases, flags, or half-finished abstractions
 - Modularity and simplicity over cleverness.
 - Drop redundant module/crate names from function names.
 - Standard crypto abbreviations fine: `ss`, `ct`, `pt`, `esk`, `epk`, `dk`, `fq`.
-- Docs succinct and factual: module ≤5-8 lines, public type ≤1-3, function ≤1-2 unless real protocol nuance.
+- Docs succinct and factual: module ≤8 lines, public type ≤3, function ≤2 unless real protocol nuance. Do not force docs, some things do not need it.
 - Document ownership, invariants, inputs, outputs, failure modes. Do not restate names or history.
 - Define docs once; reference elsewhere.
