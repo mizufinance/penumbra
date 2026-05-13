@@ -6,8 +6,8 @@ use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::audit_records::{
-    detected_ref_from_row_parts, AuditDetectedRef, AuditImportRow, AuditScanExport,
-    DetectedRefRowParts, OrbisAuditEntry, OrbisImportEligibility,
+    classify_orbis_import_row, detected_ref_from_row_parts, AuditDetectedRef, AuditImportRow,
+    AuditScanExport, DetectedRefRowParts, OrbisAuditEntry, OrbisImportEligibility,
 };
 use crate::scanner::storage::SqliteScannerStore;
 use crate::scanner::types::{
@@ -257,7 +257,7 @@ pub fn import_orbis_audit_entries(
             audit_status,
             is_flagged: is_flagged != 0,
         });
-        match crate::audit_records::classify_orbis_import_row(row) {
+        match classify_orbis_import_row(row) {
             OrbisImportEligibility::Eligible => {}
             OrbisImportEligibility::Ineligible { reason } => {
                 record_evidence_failure_tx(
