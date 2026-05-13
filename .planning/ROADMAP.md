@@ -12,7 +12,7 @@ Deliver a single MVP refactor phase that uses source evidence to select the high
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Compliance Boundary MVP** - Select, refactor, and verify one or two high-payoff compliance boundaries without expanding behavior.
+- [x] **Phase 1: Compliance Boundary MVP** - Select, refactor, and verify one or two high-payoff compliance boundaries without expanding behavior.
 
 ## Phase Details
 
@@ -29,8 +29,8 @@ Decimal phases appear between their surrounding integers in numeric order.
   5. Relevant compliance tests, formatting, and the narrowest useful compile/test checks pass, with any intentionally unrun broad checks documented.
 **Plans**: 2 plans
 Plans:
-- [ ] 01-01-PLAN.md — Select audit/export with source evidence and extract pure typed audit records.
-- [ ] 01-02-PLAN.md — Wire the audit facade through the pure boundary and run phase verification.
+- [x] 01-01-PLAN.md — Select audit/export with source evidence and extract pure typed audit records.
+- [x] 01-02-PLAN.md — Wire the audit facade through the pure boundary and run phase verification.
 
 ## Progress
 
@@ -39,4 +39,4 @@ Phases execute in numeric order: 1
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Compliance Boundary MVP | 0/2 | Not started | - |
+| 1. Compliance Boundary MVP | 2/2 | Complete | 2026-05-13 |

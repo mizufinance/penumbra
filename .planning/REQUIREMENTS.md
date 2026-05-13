@@ -9,29 +9,29 @@ Requirements for the one-phase refactor. Each maps to the initial roadmap phase.
 
 ### Evidence
 
-- [ ] **EVID-01**: The implementation phase identifies the compliance area or areas with the highest boundary-cleanup payoff using source evidence from `crates/core/component/compliance/src/`.
-- [ ] **EVID-02**: The selected target area is justified against at least one rejected alternative, such as registry/state versus audit/export.
-- [ ] **EVID-03**: The refactor scope is limited to one or two compliance boundaries unless implementation evidence shows that a broader change is necessary.
+- [x] **EVID-01**: The implementation phase identifies the compliance area or areas with the highest boundary-cleanup payoff using source evidence from `crates/core/component/compliance/src/`.
+- [x] **EVID-02**: The selected target area is justified against at least one rejected alternative, such as registry/state versus audit/export.
+- [x] **EVID-03**: The refactor scope is limited to one or two compliance boundaries unless implementation evidence shows that a broader change is necessary.
 
 ### Architecture
 
-- [ ] **ARCH-01**: The selected compliance area separates durable state access from pure validation, classification, projection, or domain-record construction where the current code mixes those concerns.
-- [ ] **ARCH-02**: New or moved modules expose narrow, purposeful APIs that match existing Penumbra Rust patterns and do not duplicate scanner names mechanically.
-- [ ] **ARCH-03**: The refactor removes or reduces mixed-responsibility code in the selected area without adding compatibility shims, redundant aliases, or speculative provider traits.
-- [ ] **ARCH-04**: Existing public behavior is preserved unless a focused failing test demonstrates an existing bug that must be fixed as part of the boundary cleanup.
+- [x] **ARCH-01**: The selected compliance area separates durable state access from pure validation, classification, projection, or domain-record construction where the current code mixes those concerns.
+- [x] **ARCH-02**: New or moved modules expose narrow, purposeful APIs that match existing Penumbra Rust patterns and do not duplicate scanner names mechanically.
+- [x] **ARCH-03**: The refactor removes or reduces mixed-responsibility code in the selected area without adding compatibility shims, redundant aliases, or speculative provider traits.
+- [x] **ARCH-04**: Existing public behavior is preserved unless a focused failing test demonstrates an existing bug that must be fixed as part of the boundary cleanup.
 
 ### Implementation
 
-- [ ] **IMPL-01**: Product code changes are primarily contained within `crates/core/component/compliance/src/`, with caller updates limited to required compile fixes or direct API consumers.
-- [ ] **IMPL-02**: The scanner architecture is used as a reference for typed records and effect boundaries, not as a template that forces unnecessary abstractions.
-- [ ] **IMPL-03**: Obsolete internal paths created by the refactor are removed rather than preserved as aliases.
-- [ ] **IMPL-04**: The resulting module boundaries make the selected compliance flow easier to test directly than before the refactor.
+- [x] **IMPL-01**: Product code changes are primarily contained within `crates/core/component/compliance/src/`, with caller updates limited to required compile fixes or direct API consumers.
+- [x] **IMPL-02**: The scanner architecture is used as a reference for typed records and effect boundaries, not as a template that forces unnecessary abstractions.
+- [x] **IMPL-03**: Obsolete internal paths created by the refactor are removed rather than preserved as aliases.
+- [x] **IMPL-04**: The resulting module boundaries make the selected compliance flow easier to test directly than before the refactor.
 
 ### Verification
 
-- [ ] **VERI-01**: Focused tests cover the selected compliance boundary before and after the refactor so behavior preservation is demonstrated.
-- [ ] **VERI-02**: The relevant compliance crate tests pass after implementation.
-- [ ] **VERI-03**: Formatting and the narrowest relevant compile/test checks pass, with any unrun broad checks explicitly documented.
+- [x] **VERI-01**: Focused tests cover the selected compliance boundary before and after the refactor so behavior preservation is demonstrated.
+- [x] **VERI-02**: The relevant compliance crate tests pass after implementation.
+- [x] **VERI-03**: Formatting and the narrowest relevant compile/test checks pass, with any unrun broad checks explicitly documented.
 
 ## v2 Requirements
 
@@ -67,20 +67,20 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EVID-01 | Phase 1 | Pending |
-| EVID-02 | Phase 1 | Pending |
-| EVID-03 | Phase 1 | Pending |
-| ARCH-01 | Phase 1 | Pending |
-| ARCH-02 | Phase 1 | Pending |
-| ARCH-03 | Phase 1 | Pending |
-| ARCH-04 | Phase 1 | Pending |
-| IMPL-01 | Phase 1 | Pending |
-| IMPL-02 | Phase 1 | Pending |
-| IMPL-03 | Phase 1 | Pending |
-| IMPL-04 | Phase 1 | Pending |
-| VERI-01 | Phase 1 | Pending |
-| VERI-02 | Phase 1 | Pending |
-| VERI-03 | Phase 1 | Pending |
+| EVID-01 | Phase 1 | Complete |
+| EVID-02 | Phase 1 | Complete |
+| EVID-03 | Phase 1 | Complete |
+| ARCH-01 | Phase 1 | Complete |
+| ARCH-02 | Phase 1 | Complete |
+| ARCH-03 | Phase 1 | Complete |
+| ARCH-04 | Phase 1 | Complete |
+| IMPL-01 | Phase 1 | Complete |
+| IMPL-02 | Phase 1 | Complete |
+| IMPL-03 | Phase 1 | Complete |
+| IMPL-04 | Phase 1 | Complete |
+| VERI-01 | Phase 1 | Complete |
+| VERI-02 | Phase 1 | Complete |
+| VERI-03 | Phase 1 | Complete |
 
 **Coverage:**
 - v1 requirements: 14 total
