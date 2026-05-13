@@ -39,4 +39,4 @@ Phases execute in numeric order: 1
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Compliance Boundary MVP | 0/TBD | Not started | - |
+| 1. Compliance Boundary MVP | 0/2 | Not started | - |

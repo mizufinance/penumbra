@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-12)
 ## Current Position
 
 Phase: 1 of 1 (Compliance Boundary MVP)
-Plan: 0 of TBD in current phase
+Plan: 0 of 2 in current phase
 Status: Ready to execute
 Last activity: 2026-05-13 -- Phase 01 planning complete
 
@@ -44,7 +44,7 @@ Progress: [----------] 0%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| Compliance Boundary MVP | 0/TBD | n/a | n/a |
+| Compliance Boundary MVP | 0/2 | n/a | n/a |
 
 **Recent Trend:**
 

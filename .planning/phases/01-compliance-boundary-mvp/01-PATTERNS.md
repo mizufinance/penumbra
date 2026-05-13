@@ -11,7 +11,8 @@
 | `crates/core/component/compliance/src/audit_records.rs` | model, utility | transform | `crates/core/component/compliance/src/scanner/types.rs` + `crates/core/component/compliance/src/audit_validation.rs` | exact |
 | `crates/core/component/compliance/src/audit.rs` | service, facade | CRUD, file-I/O, transform | `crates/core/component/compliance/src/scanner/storage.rs` + existing `audit.rs` | exact |
 | `crates/core/component/compliance/src/lib.rs` | config, facade | request-response export surface | `crates/core/component/compliance/src/scanner/mod.rs` + existing `lib.rs` | exact |
-| `crates/core/component/compliance/src/audit_records.rs` tests or `audit.rs` tests | test | transform, CRUD | `crates/core/component/compliance/src/audit_validation.rs` tests + `audit.rs` tests | exact |
+| `crates/core/component/compliance/src/audit_records.rs` inline `#[cfg(test)]` module | test | transform | `crates/core/component/compliance/src/audit_validation.rs` tests | exact |
+| `crates/core/component/compliance/src/audit.rs` inline `#[cfg(test)]` module | test | CRUD, transform | existing `crates/core/component/compliance/src/audit.rs` tests | exact |
 
 ## Pattern Assignments
 
@@ -332,7 +333,7 @@ pub use audit::{
 };
 ```
 
-**Apply to modified module:** If `audit_records.rs` is added, expose it behind the same `#[cfg(feature = "component")]` gate as `audit.rs` only if external callers need the moved types. Prefer keeping public exports stable by re-exporting the same public DTO names from `audit.rs` or `lib.rs`; do not add alias modules or compatibility names.
+**Apply to modified module:** Add `audit_records.rs` behind the same `#[cfg(feature = "component")]` gate as `audit.rs`. Move pure public DTOs there unconditionally, then keep public exports stable by re-exporting `AuditDetectedRef`, `AuditScanExport`, and `OrbisAuditEntry` from `lib.rs`; do not add alias modules or compatibility names.
 
 ---
 
