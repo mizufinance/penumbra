@@ -98,13 +98,18 @@ pub mod audit_validation;
 pub use audit_validation::{validate_audit_evidence, AuditValidationInput, AuditValidationStatus};
 
 #[cfg(feature = "component")]
+pub mod audit_records;
+#[cfg(feature = "component")]
+pub use audit_records::{AuditDetectedRef, AuditScanExport, OrbisAuditEntry};
+
+#[cfg(feature = "component")]
 pub mod audit;
 #[cfg(feature = "component")]
 pub use audit::{
     decrypt_flagged_rows, export_detected_refs, export_ledger_rows, export_ledger_rows_json,
     export_orbis_pending_scan, export_scan_json, import_orbis_audit_entries, mark_row_audited,
     record_address_alias, record_evidence_failure, scanner_health_json,
-    validate_and_save_evidence_object, AuditDetectedRef, AuditScanExport, OrbisAuditEntry,
+    validate_and_save_evidence_object,
 };
 
 mod tx_id;
