@@ -2,7 +2,7 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: complete
+status: milestone_complete
 stopped_at: Completed 01-02-PLAN.md
 last_updated: "2026-05-13T13:04:54.989Z"
 last_activity: 2026-05-13
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-12)
 
 Phase: 01 (compliance-boundary-mvp) — COMPLETE
 Plan: 2 of 2
-Status: Completed Phase 01
+Status: Milestone complete
 Last activity: 2026-05-13
 
 Progress: [██████████] 100%
