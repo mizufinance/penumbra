@@ -316,17 +316,15 @@ pub use audit::{
 |---|-------|---------|---------------|
 | A1 | New single-implementation provider traits are usually not useful for this phase. | Common Pitfalls | Planner might reject all traits categorically, even if an actual external effect appears during implementation. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Should the helper module be named `audit_records.rs`, `audit_projection.rs`, or something else?**
    - What we know: Existing names are short, factual, snake_case, and avoid redundant module names. [VERIFIED: CONVENTIONS.md]
-   - What's unclear: The exact extracted helper set is implementation-dependent. [VERIFIED: `audit.rs`]
-   - Recommendation: Let the implementer choose after extraction; prefer `audit_records.rs` if the module owns DTO construction, or `audit_flow.rs` if it owns status transitions. [ASSUMED]
+   - Resolution: Use `audit_records.rs`. The planned module owns typed audit/export/import records plus pure projection and import classification helpers, so `audit_records` is the narrowest factual name and avoids scanner-name mimicry. [RESOLVED: CONTEXT D-04/D-05/D-08; PATTERNS.md]
 
 2. **Should public audit function signatures change?**
    - What we know: Binaries import existing public functions from the compliance crate. [VERIFIED: caller grep]
-   - What's unclear: A signature change may be justified if a helper returns typed intents that simplify callers. [ASSUMED]
-   - Recommendation: Preserve public signatures unless compile-driven simplification is clearly smaller than adapter churn. [VERIFIED: AGENTS.md; caller grep]
+   - Resolution: Preserve public audit facade signatures and public DTO names. The refactor should move pure construction/classification behind the facade and keep caller-facing functions stable unless compilation proves a direct local import update is smaller than maintaining an obsolete internal path. [RESOLVED: AGENTS.md; CONTEXT D-07/D-11; caller grep]
 
 ## Environment Availability
 
