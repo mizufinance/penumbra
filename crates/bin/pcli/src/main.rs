@@ -64,6 +64,23 @@ async fn run() -> Result<()> {
         return Ok(());
     }
 
+    if let Command::Transaction(tx_cmd) = &opt.cmd {
+        if let TxCmd::Compliance(compliance_cmd) = &tx_cmd.cmd {
+            if compliance_cmd.is_scan() {
+                compliance_cmd.exec_scan().await?;
+                return Ok(());
+            }
+            if compliance_cmd.is_generate_dk() {
+                compliance_cmd.exec_generate_dk()?;
+                return Ok(());
+            }
+            if compliance_cmd.is_sign_grant() {
+                compliance_cmd.exec_sign_grant()?;
+                return Ok(());
+            }
+        }
+    }
+
     let (mut app, cmd) = opt.into_app().await?;
 
     if !cmd.offline() {

@@ -32,6 +32,8 @@ const ORBIS_RESOURCE: &str = "document";
 const ORBIS_PERMISSION: &str = "read";
 const DEFAULT_COMPLIANCE_DEV_REGISTRAR_SK_HEX: &str =
     "0100000000000000000000000000000000000000000000000000000000000000";
+const DEFAULT_COMPLIANCE_DEV_REGISTRAR_VK_HEX: &str =
+    "0800000000000000000000000000000000000000000000000000000000000000";
 const DEFAULT_COMPLIANCE_DEV_AUTHORITY_SK_HEX: &str =
     "0200000000000000000000000000000000000000000000000000000000000000";
 const DEFAULT_COMPLIANCE_DEV_AUTHORITY_VK_HEX: &str =
@@ -248,7 +250,7 @@ async fn run_full_flow(repo: &RepoPaths, keep_on_fail: bool) -> Result<()> {
     let mut started_penumbra = false;
     let mut started_orbis = false;
     let result = async {
-        run_script(repo, "scripts/penumbra-up.sh")?;
+        run_script_with_env(repo, "scripts/penumbra-up.sh", &[], &compliance_dev_env())?;
         started_penumbra = true;
 
         run_script_with_args(repo, "scripts/orbis-stack.sh", &["up"])?;
@@ -1051,6 +1053,40 @@ fn run_script(repo: &RepoPaths, script: &str) -> Result<()> {
 }
 
 fn run_script_with_args(repo: &RepoPaths, script: &str, args: &[&str]) -> Result<()> {
+    run_script_with_env(repo, script, args, &[])
+}
+
+fn compliance_dev_env() -> Vec<(&'static str, String)> {
+    vec![
+        (
+            "COMPLIANCE_DEV_REGISTRAR_SK_HEX",
+            env::var("COMPLIANCE_DEV_REGISTRAR_SK_HEX")
+                .unwrap_or_else(|_| DEFAULT_COMPLIANCE_DEV_REGISTRAR_SK_HEX.to_string()),
+        ),
+        (
+            "COMPLIANCE_DEV_REGISTRAR_VK_HEX",
+            env::var("COMPLIANCE_DEV_REGISTRAR_VK_HEX")
+                .unwrap_or_else(|_| DEFAULT_COMPLIANCE_DEV_REGISTRAR_VK_HEX.to_string()),
+        ),
+        (
+            "COMPLIANCE_DEV_AUTHORITY_SK_HEX",
+            env::var("COMPLIANCE_DEV_AUTHORITY_SK_HEX")
+                .unwrap_or_else(|_| DEFAULT_COMPLIANCE_DEV_AUTHORITY_SK_HEX.to_string()),
+        ),
+        (
+            "COMPLIANCE_DEV_AUTHORITY_VK_HEX",
+            env::var("COMPLIANCE_DEV_AUTHORITY_VK_HEX")
+                .unwrap_or_else(|_| DEFAULT_COMPLIANCE_DEV_AUTHORITY_VK_HEX.to_string()),
+        ),
+    ]
+}
+
+fn run_script_with_env(
+    repo: &RepoPaths,
+    script: &str,
+    args: &[&str],
+    envs: &[(&str, String)],
+) -> Result<()> {
     let script_path = repo.root.join(script);
     eprintln!(
         "orbis-integration: running {} {}",
@@ -1060,6 +1096,9 @@ fn run_script_with_args(repo: &RepoPaths, script: &str, args: &[&str]) -> Result
     let mut command = Command::new(script_path);
     command.current_dir(&repo.root);
     command.args(args);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
     run_command(&mut command)
 }
 

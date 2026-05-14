@@ -10,7 +10,6 @@ use jmt::{
 use penumbra_sdk_proto::DomainType as _;
 use sha2::Sha256;
 use std::{collections::BTreeMap, future::Future};
-use tokio::runtime::{Handle, RuntimeFlavor};
 
 use crate::{state_key, NullificationInfo, Nullifier};
 
@@ -79,30 +78,18 @@ where
     F: Future<Output = Result<T>> + Send + 'static,
     T: Send + 'static,
 {
-    fn run_current_thread<F, T>(future: F) -> Result<T>
-    where
-        F: Future<Output = Result<T>> + Send + 'static,
-        T: Send + 'static,
-    {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .context("build nullifier tree state-read runtime")?;
-        runtime.block_on(future)
-    }
-
-    match Handle::try_current() {
-        Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {
-            tokio::task::block_in_place(|| handle.block_on(future))
-        }
-        Ok(_) => std::thread::Builder::new()
-            .name("nullifier-tree-state-read".to_string())
-            .spawn(move || run_current_thread(future))
-            .context("spawn nullifier tree state-read thread")?
-            .join()
-            .map_err(|_| anyhow!("nullifier tree state-read thread panicked"))?,
-        Err(_) => run_current_thread(future),
-    }
+    std::thread::Builder::new()
+        .name("nullifier-tree-state-read".to_string())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .context("build nullifier tree state-read runtime")?;
+            runtime.block_on(future)
+        })
+        .context("spawn nullifier tree state-read thread")?
+        .join()
+        .map_err(|_| anyhow!("nullifier tree state-read thread panicked"))?
 }
 
 fn read_rightmost_leaf_sync<S: StateRead + ?Sized>(state: &S) -> Result<Option<(NodeKey, Node)>> {

@@ -13,6 +13,7 @@ component = [
     "cnidarium-component",
     "penumbra-sdk-proto/cnidarium",
     "penumbra-sdk-proto/rpc",
+    "tokio",
     "tonic",
 ]
 default = ["std", "component"]
@@ -51,7 +52,7 @@ rand_core = {workspace = true, features = ["getrandom"]}
 serde = {workspace = true, features = ["derive"]}
 sha2 = {workspace = true}
 tendermint = {workspace = true}
-tokio = {workspace = true, features = ["rt", "rt-multi-thread"]}
+tokio = {workspace = true, optional = true, features = ["rt"]}
 tonic = {workspace = true, optional = true}
 tracing = {workspace = true}
 chrono = { workspace = true, default-features = false, features = ["serde", "now"] }
