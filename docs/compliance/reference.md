@@ -41,10 +41,10 @@ Tree roots are committed in the app-state JMT. Tree nodes and leaves are stored
 in nonverifiable storage as deterministic materialization and are checked
 against committed roots at node readiness.
 
-The asset tree remains an IMT because regulated-asset proofs need both
-membership and non-membership. The nullifier set uses a dedicated JMT-style
-sparse tree instead because nullifier insertion is validator-executed, not
-proved inside a circuit.
+The asset tree remains an IMT because the compliance system needs membership
+proofs for regulated assets and non-membership proofs for unregulated assets.
+The nullifier set uses a dedicated JMT-style sparse tree instead because
+nullifier insertion is validator-executed, not proved inside a circuit.
 
 ## Scanner References
 

@@ -98,15 +98,16 @@ impl TryFrom<pb::NativeAssetRegistration> for NativeAssetRegistration {
                 Some(
                     value
                         .dk_pub
+                        .as_slice()
                         .try_into()
-                        .map_err(|_| anyhow::anyhow!("genesis dk_pub must be 32 bytes"))?,
+                        .map_err(|e| anyhow::anyhow!("genesis dk_pub must be 32 bytes: {e}"))?,
                 )
             },
             registration_authority_vk: value
                 .registration_authority_vk
                 .map(TryInto::try_into)
                 .transpose()
-                .map_err(|_| anyhow::anyhow!("invalid genesis registration_authority_vk"))?,
+                .map_err(|e| anyhow::anyhow!("invalid genesis registration_authority_vk: {e}"))?,
         })
     }
 }

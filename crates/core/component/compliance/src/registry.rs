@@ -107,10 +107,7 @@ pub trait ComplianceRegistryRead: StateRead {
         if nodes.is_empty() {
             Ok(QuadTree::new())
         } else {
-            Ok(QuadTree::from_sparse_nodes(
-                crate::tree::DEFAULT_DEPTH,
-                nodes,
-            ))
+            QuadTree::try_from_sparse_nodes(crate::tree::DEFAULT_DEPTH, nodes)
         }
     }
 

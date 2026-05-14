@@ -28,8 +28,11 @@ fn nullifier_key(index: usize) -> [u8; 32] {
 }
 
 fn info(index: usize) -> NullificationInfo {
+    let mut id = [0u8; 32];
+    let bytes = index.to_le_bytes();
+    id[..bytes.len()].copy_from_slice(&bytes);
     NullificationInfo {
-        id: [index as u8; 32],
+        id,
         spend_height: index as u64,
     }
 }
@@ -48,16 +51,18 @@ fn bench_nullifier_storage(c: &mut Criterion) {
             .block_on(nullifier_tree::initialize(&mut state))
             .unwrap();
 
+        let mut nullifier_entries = Vec::with_capacity(size);
         for index in 0..size {
             let nf = nullifier(index);
             let key = nullifier_key(index);
             let info = info(index);
-            runtime
-                .block_on(nullifier_tree::insert_batch(&mut state, [(nf, info)]))
-                .unwrap();
+            nullifier_entries.push((nf, info));
             flat.insert(key, info);
             ordered.insert(key, info);
         }
+        runtime
+            .block_on(nullifier_tree::insert_batch(&mut state, nullifier_entries))
+            .unwrap();
 
         let hit_index = size / 2;
         let hit_key = nullifier_key(hit_index);
@@ -85,6 +90,12 @@ fn bench_nullifier_storage(c: &mut Criterion) {
             BenchmarkId::new("flat_hash_miss", size),
             &miss_key,
             |b, key| b.iter(|| flat.get(key)),
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("flat_ordered_miss", size),
+            &miss_key,
+            |b, key| b.iter(|| ordered.get(key)),
         );
     }
 

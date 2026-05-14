@@ -99,10 +99,7 @@ impl<'de> Deserialize<'de> for QuadTree {
             })
             .collect::<Result<_, D::Error>>()?;
 
-        Ok(QuadTree {
-            depth: helper.depth,
-            nodes,
-        })
+        QuadTree::try_from_sparse_nodes(helper.depth, nodes).map_err(serde::de::Error::custom)
     }
 }
 
@@ -133,15 +130,39 @@ impl QuadTree {
         }
     }
 
+    /// Reconstruct a tree from validated sparse stored nodes.
+    pub fn try_from_sparse_nodes(depth: u8, nodes: BTreeMap<u64, StateCommitment>) -> Result<Self> {
+        if depth > DEFAULT_DEPTH {
+            bail!("depth {} exceeds maximum of {}", depth, DEFAULT_DEPTH);
+        }
+
+        for &key in nodes.keys() {
+            let encoded_level = key >> 48;
+            if encoded_level > u8::MAX as u64 {
+                bail!("sparse node key {key} encodes invalid level {encoded_level}");
+            }
+            let level = encoded_level as u8;
+            if level > depth {
+                bail!("sparse node key {key} has level {level} above depth {depth}");
+            }
+
+            let position = key & ((1u64 << 48) - 1);
+            let max_positions = 1u64 << (((depth - level) as u32) * 2);
+            if position >= max_positions {
+                bail!(
+                    "sparse node key {key} has position {position} outside level {level} bound {max_positions}"
+                );
+            }
+        }
+
+        Ok(Self { depth, nodes })
+    }
+
     /// Reconstruct a tree from sparse stored nodes.
+    ///
+    /// Panics if stored keys are outside the tree depth/position bounds.
     pub fn from_sparse_nodes(depth: u8, nodes: BTreeMap<u64, StateCommitment>) -> Self {
-        assert!(
-            depth <= DEFAULT_DEPTH,
-            "depth {} exceeds maximum of {}",
-            depth,
-            DEFAULT_DEPTH
-        );
-        Self { depth, nodes }
+        Self::try_from_sparse_nodes(depth, nodes).expect("valid sparse QuadTree nodes")
     }
 
     /// Return the packed storage key for a node.

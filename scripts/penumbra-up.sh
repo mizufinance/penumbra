@@ -38,10 +38,10 @@ ALICE_VIEW_URL="http://127.0.0.1:$ALICE_PCLIENTD_PORT"
 BOB_VIEW_URL="http://127.0.0.1:$BOB_PCLIENTD_PORT"
 CHARLIE_VIEW_URL="http://127.0.0.1:$CHARLIE_PCLIENTD_PORT"
 UNREGISTERED_VIEW_URL="http://127.0.0.1:$UNREGISTERED_PCLIENTD_PORT"
-COMPLIANCE_DEV_REGISTRAR_SK_HEX="${COMPLIANCE_DEV_REGISTRAR_SK_HEX:-0100000000000000000000000000000000000000000000000000000000000000}"
-COMPLIANCE_DEV_REGISTRAR_VK_HEX="${COMPLIANCE_DEV_REGISTRAR_VK_HEX:-0800000000000000000000000000000000000000000000000000000000000000}"
-COMPLIANCE_DEV_AUTHORITY_SK_HEX="${COMPLIANCE_DEV_AUTHORITY_SK_HEX:-0200000000000000000000000000000000000000000000000000000000000000}"
-COMPLIANCE_DEV_AUTHORITY_VK_HEX="${COMPLIANCE_DEV_AUTHORITY_VK_HEX:-b2ecf9b9082d6306538be73b0d6ee741141f3222152da78685d6596efc8c1506}"
+COMPLIANCE_DEV_REGISTRAR_SK_HEX="${COMPLIANCE_DEV_REGISTRAR_SK_HEX:-}"
+COMPLIANCE_DEV_REGISTRAR_VK_HEX="${COMPLIANCE_DEV_REGISTRAR_VK_HEX:-}"
+COMPLIANCE_DEV_AUTHORITY_SK_HEX="${COMPLIANCE_DEV_AUTHORITY_SK_HEX:-}"
+COMPLIANCE_DEV_AUTHORITY_VK_HEX="${COMPLIANCE_DEV_AUTHORITY_VK_HEX:-}"
 COMPLIANCE_GRANT_VALID_UNTIL_UNIX="${COMPLIANCE_GRANT_VALID_UNTIL_UNIX:-4102444800}"
 
 ENV_FILE="$COMPLIANCE_TMP/compliance-demo.env"
@@ -57,6 +57,59 @@ for bin in cometbft jq; do
     command -v "$bin" >/dev/null 2>&1 || { log_error "$bin not found in PATH"; exit 1; }
 done
 log_success "All dependencies found"
+
+require_env_secret() {
+    local name="$1"
+    if [ -z "${!name:-}" ]; then
+        log_error "$name must be set; scripts/penumbra-up.sh does not provide default secret keys"
+        exit 1
+    fi
+}
+
+is_hex_value() {
+    local value="$1"
+    [[ "$value" =~ ^[0-9A-Fa-f]+$ ]] && [ $(( ${#value} % 2 )) -eq 0 ]
+}
+
+derive_spend_vk_hex() {
+    "$PCLI" tx compliance derive-spend-vk --signing-key-hex "$1"
+}
+
+validate_or_fill_spend_vk() {
+    local sk_var="$1"
+    local vk_var="$2"
+    local label="$3"
+    local sk_hex="${!sk_var}"
+    local vk_hex="${!vk_var:-}"
+    local derived_vk
+
+    is_hex_value "$sk_hex" || {
+        log_error "$sk_var must be even-length hex"
+        exit 1
+    }
+
+    derived_vk="$(derive_spend_vk_hex "$sk_hex")"
+    is_hex_value "$derived_vk" || {
+        log_error "failed to derive $label verification key from $sk_var"
+        exit 1
+    }
+
+    if [ -z "$vk_hex" ]; then
+        printf -v "$vk_var" '%s' "$derived_vk"
+        return
+    fi
+
+    if [ "$(printf '%s' "$derived_vk" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$vk_hex" | tr '[:upper:]' '[:lower:]')" ]; then
+        log_error "$label signing key does not match configured verification key"
+        log_error "derived=$derived_vk configured=$vk_hex"
+        exit 1
+    fi
+}
+
+require_env_secret COMPLIANCE_DEV_REGISTRAR_SK_HEX
+require_env_secret COMPLIANCE_DEV_AUTHORITY_SK_HEX
+validate_or_fill_spend_vk COMPLIANCE_DEV_REGISTRAR_SK_HEX COMPLIANCE_DEV_REGISTRAR_VK_HEX "registrar"
+validate_or_fill_spend_vk COMPLIANCE_DEV_AUTHORITY_SK_HEX COMPLIANCE_DEV_AUTHORITY_VK_HEX "authority"
 
 log_info "Resetting previous Penumbra state..."
 kill_tracked_pids "$PID_FILE"
@@ -161,6 +214,7 @@ export BOB_VIEW_URL="$BOB_VIEW_URL"
 export CHARLIE_VIEW_URL="$CHARLIE_VIEW_URL"
 export UNREGISTERED_VIEW_URL="$UNREGISTERED_VIEW_URL"
 export COMPLIANCE_DEV_REGISTRAR_SK_HEX="$COMPLIANCE_DEV_REGISTRAR_SK_HEX"
+export COMPLIANCE_DEV_REGISTRAR_VK_HEX="$COMPLIANCE_DEV_REGISTRAR_VK_HEX"
 export COMPLIANCE_DEV_AUTHORITY_SK_HEX="$COMPLIANCE_DEV_AUTHORITY_SK_HEX"
 export COMPLIANCE_DEV_AUTHORITY_VK_HEX="$COMPLIANCE_DEV_AUTHORITY_VK_HEX"
 export COMPLIANCE_GRANT_VALID_UNTIL_UNIX="$COMPLIANCE_GRANT_VALID_UNTIL_UNIX"

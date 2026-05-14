@@ -148,8 +148,12 @@ message NullifierRequest {
 
 message NullifierResponse {
   bool spent = 1;
+  // Present only when spent = true.
   NullificationInfo nullification_info = 2;
+  // The committed nullifier tree root used for this lookup; always present
+  // when the server has initialized SCT state.
   bytes nullifier_root = 3;
+  // Present only when NullifierRequest.with_proof = true.
   // Borsh-encoded JMT SparseMerkleProof<Sha256>.
   bytes proof = 4;
 }

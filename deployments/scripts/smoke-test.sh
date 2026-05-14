@@ -26,10 +26,17 @@ smoke_test_dir="$(mktemp -d "${TMPDIR:-/tmp}/penumbra-smoke.XXXXXX")"
 temp_root="${TMPDIR:-/tmp}"
 temp_root="${temp_root%/}"
 devnet_pid=""
+# Dev-only compliance keys for the isolated smoke devnet. These are public test
+# fixtures and must never be used for production or persistent deployments.
 compliance_dev_registrar_sk_hex="${COMPLIANCE_DEV_REGISTRAR_SK_HEX:-0100000000000000000000000000000000000000000000000000000000000000}"
+compliance_dev_registrar_vk_hex="${COMPLIANCE_DEV_REGISTRAR_VK_HEX:-0800000000000000000000000000000000000000000000000000000000000000}"
 compliance_dev_authority_sk_hex="${COMPLIANCE_DEV_AUTHORITY_SK_HEX:-0200000000000000000000000000000000000000000000000000000000000000}"
 compliance_dev_authority_vk_hex="${COMPLIANCE_DEV_AUTHORITY_VK_HEX:-b2ecf9b9082d6306538be73b0d6ee741141f3222152da78685d6596efc8c1506}"
 compliance_grant_valid_until_unix="${COMPLIANCE_GRANT_VALID_UNTIL_UNIX:-4102444800}"
+if [ "${PENUMBRA_PRODUCTION:-0}" = "1" ]; then
+    >&2 echo "ERROR: smoke-test.sh uses dev-only compliance keys and must not run with PENUMBRA_PRODUCTION=1"
+    exit 1
+fi
 
 # Run the full smoke environment against an isolated Penumbra state directory so
 # local developer state does not interfere with the devnet/process-compose paths.
@@ -61,6 +68,64 @@ fi
 >&2 echo "Building all test targets before running smoke tests..."
 # We want a warm cache before the tests run
 cargo_cmd build --release --bins
+
+is_hex_value() {
+    local value="$1"
+    [[ "$value" =~ ^[0-9A-Fa-f]+$ ]] && [ $(( ${#value} % 2 )) -eq 0 ]
+}
+
+require_hex_output() {
+    local name="$1"
+    local value="$2"
+    local raw_output="$3"
+    local command_name="$4"
+
+    if [ -z "${value//[[:space:]]/}" ] || ! is_hex_value "$value"; then
+        >&2 echo "ERROR: $name from '$command_name' is empty or not even-length hex"
+        if [ -n "$raw_output" ]; then
+            >&2 echo "=== raw $command_name output ==="
+            >&2 printf '%s\n' "$raw_output"
+            >&2 echo "=== end raw output ==="
+        fi
+        exit 1
+    fi
+}
+
+require_address_output() {
+    local name="$1"
+    local value="$2"
+    local command_name="$3"
+
+    if [ -z "${value//[[:space:]]/}" ] || [[ ! "$value" =~ ^penumbra[a-z0-9]+$ ]]; then
+        >&2 echo "ERROR: $name from '$command_name' is empty or not a Penumbra address"
+        >&2 echo "  $name=$value"
+        exit 1
+    fi
+}
+
+derive_spend_vk_hex() {
+    cargo_cmd run --release --bin pcli -- tx compliance derive-spend-vk --signing-key-hex "$1" | tail -1
+}
+
+validate_dev_spend_key_pair() {
+    local label="$1"
+    local sk_hex="$2"
+    local vk_hex="$3"
+    local derived_vk
+
+    derived_vk="$(derive_spend_vk_hex "$sk_hex")"
+    require_hex_output "${label}_derived_vk_hex" "$derived_vk" "$derived_vk" "tx compliance derive-spend-vk"
+    if [ "$(printf '%s' "$derived_vk" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$vk_hex" | tr '[:upper:]' '[:lower:]')" ]; then
+        >&2 echo "ERROR: $label compliance signing key does not match configured verification key"
+        >&2 echo "  derived=$derived_vk"
+        >&2 echo "  configured=$vk_hex"
+        exit 1
+    fi
+}
+
+validate_dev_spend_key_pair "registrar" "$compliance_dev_registrar_sk_hex" "$compliance_dev_registrar_vk_hex"
+validate_dev_spend_key_pair "authority" "$compliance_dev_authority_sk_hex" "$compliance_dev_authority_vk_hex"
+export COMPLIANCE_DEV_REGISTRAR_VK_HEX="$compliance_dev_registrar_vk_hex"
 
 have_postgres_tooling=true
 for postgres_tool in postgres psql pg_ctl createdb createuser; do
@@ -173,14 +238,20 @@ dk_pub_hex=$(echo "$dk_output" | grep "DK_pub (hex):" | awk '{print $NF}')
 if [ -n "$dk_hex" ] && [ -n "$dk_pub_hex" ]; then
     >&2 echo "  DK generated successfully."
 
-    asset_grant_hex=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" tx compliance sign-asset-grant regulated_usd \
+    asset_grant_output=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" tx compliance sign-asset-grant regulated_usd \
         --regulated \
         --dk-pub-hex "$dk_pub_hex" \
         --threshold 500000000000000000000 \
         --registration-authority-vk-hex "$compliance_dev_authority_vk_hex" \
         --registrar-sk-hex "$compliance_dev_registrar_sk_hex" \
         --valid-until-unix "$compliance_grant_valid_until_unix" \
-        | tail -1)
+        2>&1) || {
+        >&2 echo "ERROR: tx compliance sign-asset-grant failed"
+        >&2 printf '%s\n' "$asset_grant_output"
+        exit 1
+    }
+    asset_grant_hex=$(printf '%s\n' "$asset_grant_output" | tail -1)
+    require_hex_output "asset_grant_hex" "$asset_grant_hex" "$asset_grant_output" "tx compliance sign-asset-grant"
 
     # Register regulated_usd as a regulated asset with the generated DK
     pcli_tx_cmd tx compliance register-asset regulated_usd \
@@ -193,17 +264,31 @@ if [ -n "$dk_hex" ] && [ -n "$dk_pub_hex" ]; then
 
     # Register the test user for regulated_usd
     smoke_addr_0=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" view address 0)
+    require_address_output "smoke_addr_0" "$smoke_addr_0" "view address 0"
     smoke_addr_1=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" view address 1)
-    user_grant_0=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" tx compliance sign-user-grant regulated_usd \
+    require_address_output "smoke_addr_1" "$smoke_addr_1" "view address 1"
+    user_grant_0_output=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" tx compliance sign-user-grant regulated_usd \
         --address "$smoke_addr_0" \
         --registration-authority-sk-hex "$compliance_dev_authority_sk_hex" \
         --valid-until-unix "$compliance_grant_valid_until_unix" \
-        | tail -1)
-    user_grant_1=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" tx compliance sign-user-grant regulated_usd \
+        2>&1) || {
+        >&2 echo "ERROR: tx compliance sign-user-grant failed for smoke_addr_0"
+        >&2 printf '%s\n' "$user_grant_0_output"
+        exit 1
+    }
+    user_grant_0=$(printf '%s\n' "$user_grant_0_output" | tail -1)
+    require_hex_output "user_grant_0" "$user_grant_0" "$user_grant_0_output" "tx compliance sign-user-grant smoke_addr_0"
+    user_grant_1_output=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" tx compliance sign-user-grant regulated_usd \
         --address "$smoke_addr_1" \
         --registration-authority-sk-hex "$compliance_dev_authority_sk_hex" \
         --valid-until-unix "$compliance_grant_valid_until_unix" \
-        | tail -1)
+        2>&1) || {
+        >&2 echo "ERROR: tx compliance sign-user-grant failed for smoke_addr_1"
+        >&2 printf '%s\n' "$user_grant_1_output"
+        exit 1
+    }
+    user_grant_1=$(printf '%s\n' "$user_grant_1_output" | tail -1)
+    require_hex_output "user_grant_1" "$user_grant_1" "$user_grant_1_output" "tx compliance sign-user-grant smoke_addr_1"
     pcli_tx_cmd tx compliance register-user regulated_usd --user-registration-grant-hex "$user_grant_0"
     pcli_tx_cmd tx compliance register-user regulated_usd --address-index 1 --user-registration-grant-hex "$user_grant_1"
     >&2 echo "  User registered for regulated_usd."

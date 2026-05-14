@@ -123,8 +123,9 @@ impl TryFrom<pb::GenesisContent> for Content {
                 .try_into()?,
             compliance_content: msg
                 .compliance_content
-                .ok_or_else(|| anyhow::anyhow!("proto response missing compliance content"))?
-                .try_into()?,
+                .map(TryInto::try_into)
+                .transpose()?
+                .unwrap_or_default(),
             ibc_content: msg
                 .ibc_content
                 .ok_or_else(|| anyhow::anyhow!("proto response missing ibc content"))?
@@ -180,6 +181,21 @@ mod test {
             ..Default::default()
         };
         assert!(a.validator_content.validators.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn missing_compliance_content_uses_default() -> anyhow::Result<()> {
+        let mut proto: pb::GenesisContent = Content::default().into();
+        proto.compliance_content = None;
+
+        let content = Content::try_from(proto)?;
+
+        assert!(content.compliance_content.native_assets.is_empty());
+        assert!(content
+            .compliance_content
+            .compliance_registrar_vk
+            .is_empty());
         Ok(())
     }
 }

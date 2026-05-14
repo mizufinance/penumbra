@@ -1,7 +1,7 @@
 use anyhow::{anyhow, ensure, Context, Result};
 use borsh::BorshDeserialize;
 use cnidarium::{StateRead, StateWrite};
-use futures::{executor::block_on, StreamExt};
+use futures::StreamExt;
 use jmt::{
     proof::SparseMerkleProof,
     storage::{LeafNode, Node, NodeKey, TreeReader},
@@ -9,7 +9,8 @@ use jmt::{
 };
 use penumbra_sdk_proto::DomainType as _;
 use sha2::Sha256;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, future::Future};
+use tokio::runtime::{Handle, RuntimeFlavor};
 
 use crate::{state_key, NullificationInfo, Nullifier};
 
@@ -71,6 +72,53 @@ fn decode_node_key(bytes: &[u8]) -> Result<NodeKey> {
 
 fn encode_node_key(node_key: &NodeKey) -> Result<Vec<u8>> {
     borsh::to_vec(node_key).context("encode nullifier JMT node key")
+}
+
+fn wait_state_read<F, T>(future: F) -> Result<T>
+where
+    F: Future<Output = Result<T>> + Send + 'static,
+    T: Send + 'static,
+{
+    fn run_current_thread<F, T>(future: F) -> Result<T>
+    where
+        F: Future<Output = Result<T>> + Send + 'static,
+        T: Send + 'static,
+    {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("build nullifier tree state-read runtime")?;
+        runtime.block_on(future)
+    }
+
+    match Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| handle.block_on(future))
+        }
+        Ok(_) => std::thread::Builder::new()
+            .name("nullifier-tree-state-read".to_string())
+            .spawn(move || run_current_thread(future))
+            .context("spawn nullifier tree state-read thread")?
+            .join()
+            .map_err(|_| anyhow!("nullifier tree state-read thread panicked"))?,
+        Err(_) => run_current_thread(future),
+    }
+}
+
+fn read_rightmost_leaf_sync<S: StateRead + ?Sized>(state: &S) -> Result<Option<(NodeKey, Node)>> {
+    let Some(raw_key) = wait_state_read(
+        state.nonverifiable_get_raw(state_key::nullifier_set::rightmost_leaf_node_key()),
+    )?
+    else {
+        return Ok(None);
+    };
+    let Some(raw_node) = wait_state_read(
+        state.nonverifiable_get_raw(state_key::nullifier_set::rightmost_leaf_node()),
+    )?
+    else {
+        return Ok(None);
+    };
+    Ok(Some((decode_node_key(&raw_key)?, decode_node(raw_node)?)))
 }
 
 fn decode_root(bytes: Vec<u8>) -> Result<RootHash> {
@@ -282,7 +330,7 @@ pub async fn insert_batch<S: StateWrite + ?Sized>(
 
 impl<S: StateRead + ?Sized> TreeReader for NvJmtReader<'_, S> {
     fn get_node_option(&self, node_key: &NodeKey) -> Result<Option<Node>> {
-        block_on(
+        wait_state_read(
             self.state
                 .nonverifiable_get_raw(&state_key::nullifier_set::tree_node(node_key)),
         )?
@@ -295,42 +343,50 @@ impl<S: StateRead + ?Sized> TreeReader for NvJmtReader<'_, S> {
         _max_version: Version,
         key_hash: KeyHash,
     ) -> Result<Option<Vec<u8>>> {
-        block_on(
+        wait_state_read(
             self.state
                 .nonverifiable_get_raw(&state_key::nullifier_set::value(key_hash)),
         )
     }
 
     fn get_rightmost_leaf(&self) -> Result<Option<(NodeKey, LeafNode)>> {
-        if let Some((node_key, Node::Leaf(leaf))) = block_on(read_rightmost_leaf(self.state))? {
+        if let Some((node_key, Node::Leaf(leaf))) = read_rightmost_leaf_sync(self.state)? {
             return Ok(Some((node_key, leaf)));
         }
 
+        // Defensive recovery path for a missing/corrupt rightmost-leaf cache.
+        // Operators should investigate if this appears outside repair/replay.
+        tracing::warn!(
+            prefix = ?state_key::nullifier_set::tree_node_prefix(),
+            "nullifier tree rightmost leaf cache missing; scanning NV tree nodes"
+        );
         let stream = self.state.nonverifiable_range_raw(
             Some(state_key::nullifier_set::tree_node_prefix()),
             Vec::new()..,
         )?;
-        futures::pin_mut!(stream);
-        let mut rightmost: Option<(NodeKey, LeafNode)> = None;
-        while let Some(item) = block_on(stream.next()) {
-            let (key, bytes) = item?;
-            let Some(suffix) = key.strip_prefix(state_key::nullifier_set::tree_node_prefix())
-            else {
-                continue;
-            };
-            let node_key = decode_node_key(suffix)?;
-            if let Node::Leaf(leaf) = decode_node(bytes)? {
-                rightmost = match rightmost {
-                    Some((existing_key, existing_leaf))
-                        if existing_leaf.key_hash() >= leaf.key_hash() =>
-                    {
-                        Some((existing_key, existing_leaf))
-                    }
-                    _ => Some((node_key, leaf)),
+        wait_state_read(async move {
+            futures::pin_mut!(stream);
+            let mut rightmost: Option<(NodeKey, LeafNode)> = None;
+            while let Some(item) = stream.next().await {
+                let (key, bytes) = item?;
+                let Some(suffix) = key.strip_prefix(state_key::nullifier_set::tree_node_prefix())
+                else {
+                    continue;
                 };
+                let node_key = decode_node_key(suffix)?;
+                if let Node::Leaf(leaf) = decode_node(bytes)? {
+                    rightmost = match rightmost {
+                        Some((existing_key, existing_leaf))
+                            if existing_leaf.key_hash() >= leaf.key_hash() =>
+                        {
+                            Some((existing_key, existing_leaf))
+                        }
+                        _ => Some((node_key, leaf)),
+                    }
+                }
             }
-        }
-        Ok(rightmost)
+            Ok(rightmost)
+        })
     }
 }
 

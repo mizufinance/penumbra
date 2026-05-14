@@ -427,10 +427,14 @@ impl ::prost::Name for NullifierRequest {
 pub struct NullifierResponse {
     #[prost(bool, tag = "1")]
     pub spent: bool,
+    /// Present only when spent = true.
     #[prost(message, optional, tag = "2")]
     pub nullification_info: ::core::option::Option<NullificationInfo>,
+    /// The committed nullifier tree root used for this lookup; always present
+    /// when the server has initialized SCT state.
     #[prost(bytes = "vec", tag = "3")]
     pub nullifier_root: ::prost::alloc::vec::Vec<u8>,
+    /// Present only when NullifierRequest.with_proof = true.
     /// Borsh-encoded JMT SparseMerkleProof<Sha256>.
     #[prost(bytes = "vec", tag = "4")]
     pub proof: ::prost::alloc::vec::Vec<u8>,

@@ -334,7 +334,9 @@ impl SqliteScannerStore {
             .read_pool
             .lock()
             .map_err(|e| anyhow!("scanner store read pool mutex poisoned: {e}"))?;
-        pool.push(conn);
+        if pool.len() < READ_POOL_SIZE {
+            pool.push(conn);
+        }
         result
     }
 
