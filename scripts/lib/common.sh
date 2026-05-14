@@ -404,9 +404,38 @@ ensure_docker_daemon() {
     return 1
 }
 
+orbis_pinned_rev_from_cargo() {
+    local cargo_toml="$COMPLIANCE_REPO_ROOT/crates/util/orbis-client/Cargo.toml"
+    if [ ! -f "$cargo_toml" ]; then
+        log_error "Cannot derive Orbis pin: $cargo_toml not found"
+        return 1
+    fi
+    # All three orbis-rs git deps must share one rev; extract the first one and
+    # verify the others match so a stray edit can't silently drift.
+    local revs
+    revs="$(grep -oE 'orbis-rs", rev = "[0-9a-f]{40}"' "$cargo_toml" | grep -oE '[0-9a-f]{40}' | sort -u)"
+    local count
+    count="$(printf '%s\n' "$revs" | grep -c '^[0-9a-f]')"
+    if [ "$count" -ne 1 ]; then
+        log_error "Orbis Cargo.toml rev pins are inconsistent: $revs"
+        return 1
+    fi
+    printf '%s' "$revs"
+}
+
+# Pinned SourceHub image. Bumped in lockstep with the Orbis runtime ref above.
+# Override at the call site with SOURCEHUB_IMAGE=... for ad-hoc testing.
+SOURCEHUB_IMAGE_DEFAULT="ghcr.io/sourcenetwork/sourcehub@sha256:4f6b71d12a10eb6d433a4b73c7b8ab25d6d8a6242f673fed12da2e254e734f0e"
+export SOURCEHUB_IMAGE="${SOURCEHUB_IMAGE:-$SOURCEHUB_IMAGE_DEFAULT}"
+
 ensure_orbis_runtime_checkout() {
     local repo_url="${ORBIS_RUNTIME_REPO:-https://github.com/sourcenetwork/orbis-rs.git}"
-    local ref="${ORBIS_RUNTIME_REF:-60be66516c9e0c1fe88fadf7dc8577a3d489004d}"
+    local ref
+    if [ -n "${ORBIS_RUNTIME_REF:-}" ]; then
+        ref="$ORBIS_RUNTIME_REF"
+    else
+        ref="$(orbis_pinned_rev_from_cargo)" || return 1
+    fi
     local default_checkout_dir="$COMPLIANCE_TMP/orbis-rs"
     local checkout_dir="${ORBIS_RUNTIME_CONTEXT:-$default_checkout_dir}"
     local current_ref=""
