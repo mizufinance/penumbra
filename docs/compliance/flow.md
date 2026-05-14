@@ -42,6 +42,8 @@ AssetPolicy {
 Regulated assets are inserted into the indexed asset tree. Unregistered assets
 are treated as unregulated through non-membership proofs. Channel whitelist
 enforcement is first-hop only and immutable after registration.
+The tree root is committed in app state; large node/leaf materialization lives
+in NV storage and is checked at readiness.
 
 3. **User registration**: user completes KYC with Defra, publishes a hidden-doc
    proof through SourceHub/Orbis, then registers a `(address, asset)` compliance

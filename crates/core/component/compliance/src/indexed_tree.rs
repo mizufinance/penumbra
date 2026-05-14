@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Result};
-use ark_ff::PrimeField;
+use ark_ff::{BigInteger, PrimeField};
 use decaf377::Fq;
 use once_cell::sync::Lazy;
 use penumbra_sdk_proto::{core::component::compliance::v1 as pb, DomainType};
@@ -10,12 +10,26 @@ use std::collections::BTreeMap;
 use crate::structs::{AssetParams, AssetPolicy, RingData};
 use crate::tree::DEFAULT_DEPTH;
 
-/// Compare two Fq values numerically using their BigInteger representation.
+/// Canonical numeric ordering key for `Fq`.
+///
+/// `into_bigint()` returns canonical non-Montgomery limbs. Serializing those
+/// limbs big-endian makes lexicographic byte ordering equal numeric ordering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FqOrdKey([u8; 32]);
+
+impl From<Fq> for FqOrdKey {
+    fn from(value: Fq) -> Self {
+        let bytes = value.into_bigint().to_bytes_be();
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&bytes);
+        Self(key)
+    }
+}
+
+#[cfg(test)]
 #[inline]
 fn fq_less_than(a: &Fq, b: &Fq) -> bool {
-    let a_bigint = a.into_bigint();
-    let b_bigint = b.into_bigint();
-    a_bigint < b_bigint
+    FqOrdKey::from(*a) < FqOrdKey::from(*b)
 }
 
 // --- Domain separators ---
@@ -519,6 +533,8 @@ pub struct IndexedMerkleTree {
     leaves: BTreeMap<u64, IndexedLeaf>,
     /// Reverse index: value -> position for O(1) lookup.
     value_index: BTreeMap<[u8; 32], u64>,
+    /// Ordered value -> position index for predecessor lookups.
+    predecessor_index: BTreeMap<FqOrdKey, u64>,
     /// Current number of leaves (including sentinel).
     leaf_count: u64,
 }
@@ -653,12 +669,14 @@ impl<'de> Deserialize<'de> for IndexedMerkleTree {
             .collect::<Result<_, D::Error>>()?;
 
         let value_index: BTreeMap<[u8; 32], u64> = helper.value_index.into_iter().collect();
+        let predecessor_index = Self::build_predecessor_index(&leaves);
 
         Ok(IndexedMerkleTree {
             depth: helper.depth,
             nodes,
             leaves,
             value_index,
+            predecessor_index,
             leaf_count: helper.leaf_count,
         })
     }
@@ -672,12 +690,15 @@ impl IndexedMerkleTree {
             nodes: BTreeMap::new(),
             leaves: BTreeMap::new(),
             value_index: BTreeMap::new(),
+            predecessor_index: BTreeMap::new(),
             leaf_count: 0,
         };
 
         let sentinel = IndexedLeaf::with_default_policy(Fq::from(0u64), 0, *FQ_MAX);
 
         let commitment = sentinel.commit();
+        tree.predecessor_index
+            .insert(FqOrdKey::from(sentinel.value), 0);
         tree.leaves.insert(0, sentinel);
         // Sentinel (value=0) is not added to value_index, matching load_leaf() which skips value==0.
         tree.leaf_count = 1;
@@ -699,18 +720,95 @@ impl IndexedMerkleTree {
             nodes: BTreeMap::new(),
             leaves: BTreeMap::new(),
             value_index: BTreeMap::new(),
+            predecessor_index: BTreeMap::new(),
             leaf_count: 0,
         };
 
         let sentinel = IndexedLeaf::with_default_policy(Fq::from(0u64), 0, *FQ_MAX);
 
         let commitment = sentinel.commit();
+        tree.predecessor_index
+            .insert(FqOrdKey::from(sentinel.value), 0);
         tree.leaves.insert(0, sentinel);
         // Sentinel (value=0) is not added to value_index, matching load_leaf() which skips value==0.
         tree.leaf_count = 1;
         tree.update_path(0, commitment);
 
         tree
+    }
+
+    /// Reconstruct an IMT from sparse stored nodes and leaves.
+    pub fn from_sparse_parts(
+        depth: u8,
+        nodes: BTreeMap<u64, StateCommitment>,
+        leaves: BTreeMap<u64, IndexedLeaf>,
+        leaf_count: u64,
+    ) -> Self {
+        assert!(
+            depth <= DEFAULT_DEPTH,
+            "depth {} exceeds maximum of {}",
+            depth,
+            DEFAULT_DEPTH
+        );
+        let value_index = leaves
+            .iter()
+            .filter_map(|(&position, leaf)| {
+                (leaf.value != Fq::from(0u64)).then_some((leaf.value.to_bytes(), position))
+            })
+            .collect();
+        let predecessor_index = Self::build_predecessor_index(&leaves);
+        Self {
+            depth,
+            nodes,
+            leaves,
+            value_index,
+            predecessor_index,
+            leaf_count,
+        }
+    }
+
+    /// Return the packed storage key for a node.
+    pub fn packed_node_key(level: u8, position: u64) -> u64 {
+        Self::node_key(level, position)
+    }
+
+    /// Return node entries along the leaf-to-root path for a position.
+    pub fn nodes_on_path(&self, position: u64) -> Result<Vec<(u8, u64, StateCommitment)>> {
+        let max_leaves = Self::max_leaves_for_depth(self.depth);
+        if position >= max_leaves {
+            bail!(
+                "Position {} exceeds maximum leaves {} for depth {}",
+                position,
+                max_leaves,
+                self.depth
+            );
+        }
+
+        let mut entries = Vec::with_capacity(self.depth as usize + 1);
+        let mut current_position = position;
+        for level in 0..=self.depth {
+            entries.push((
+                level,
+                current_position,
+                self.get_node(level, current_position),
+            ));
+            current_position /= 4;
+        }
+        Ok(entries)
+    }
+
+    /// Iterate over explicitly stored non-zero nodes.
+    pub fn stored_nodes(&self) -> impl Iterator<Item = (u8, u64, StateCommitment)> + '_ {
+        self.nodes.iter().map(|(&key, &hash)| {
+            let level = (key >> 48) as u8;
+            let position = key & ((1u64 << 48) - 1);
+            (level, position, hash)
+        })
+    }
+
+    /// Iterate over stored leaves.
+    pub fn stored_leaves(&self) -> impl Iterator<Item = (u64, &IndexedLeaf)> + '_ {
+        self.leaves.iter().map(|(&position, leaf)| (position, leaf))
     }
 
     #[inline]
@@ -722,6 +820,13 @@ impl IndexedMerkleTree {
     fn max_leaves_for_depth(depth: u8) -> u64 {
         debug_assert!(depth <= 31, "depth must be <= 31 to avoid shift overflow");
         1u64 << ((depth as u32) * 2)
+    }
+
+    fn build_predecessor_index(leaves: &BTreeMap<u64, IndexedLeaf>) -> BTreeMap<FqOrdKey, u64> {
+        leaves
+            .iter()
+            .map(|(&position, leaf)| (FqOrdKey::from(leaf.value), position))
+            .collect()
     }
 
     fn get_node(&self, level: u8, position: u64) -> StateCommitment {
@@ -778,8 +883,11 @@ impl IndexedMerkleTree {
             return Some((pos, leaf.clone()));
         }
 
-        for (&pos, leaf) in &self.leaves {
-            if fq_less_than(&leaf.value, &target) && fq_less_than(&target, &leaf.next_value) {
+        let target_key = FqOrdKey::from(target);
+        if let Some((_, &pos)) = self.predecessor_index.range(..target_key).next_back() {
+            let leaf = self.leaves.get(&pos)?;
+            let next_key = FqOrdKey::from(leaf.next_value);
+            if target_key < next_key {
                 return Some((pos, leaf.clone()));
             }
         }
@@ -890,6 +998,8 @@ impl IndexedMerkleTree {
 
         self.leaves.insert(new_pos, new_leaf);
         self.value_index.insert(value.to_bytes(), new_pos);
+        self.predecessor_index
+            .insert(FqOrdKey::from(value), new_pos);
         self.leaf_count += 1;
         self.leaves.insert(low_pos, updated_low_leaf);
 
@@ -932,6 +1042,8 @@ impl IndexedMerkleTree {
 
         self.leaves.insert(new_position, new_leaf);
         self.value_index.insert(value.to_bytes(), new_position);
+        self.predecessor_index
+            .insert(FqOrdKey::from(value), new_position);
 
         if new_position >= self.leaf_count {
             self.leaf_count = new_position + 1;
@@ -949,6 +1061,8 @@ impl IndexedMerkleTree {
     pub fn load_leaf(&mut self, position: u64, leaf: IndexedLeaf) {
         let value = leaf.value;
         self.leaves.insert(position, leaf);
+        self.predecessor_index
+            .insert(FqOrdKey::from(value), position);
         if value != Fq::from(0u64) {
             self.value_index.insert(value.to_bytes(), position);
         }
@@ -1058,7 +1172,10 @@ impl IndexedMerkleTree {
             )
         })?;
 
-        if low_leaf.value >= value || value >= low_leaf.next_value {
+        let value_key = FqOrdKey::from(value);
+        if FqOrdKey::from(low_leaf.value) >= value_key
+            || value_key >= FqOrdKey::from(low_leaf.next_value)
+        {
             bail!(
                 "IMT non-membership proof failed: value {:?} not in gap [{:?}, {:?})",
                 value.to_bytes(),
@@ -1438,6 +1555,69 @@ mod tests {
 
         let (_, leaf) = tree.find_low_leaf(Fq::from(100u64)).unwrap();
         assert_eq!(leaf.value, Fq::from(100u64));
+    }
+
+    #[test]
+    fn test_fq_ord_key_numeric_order() {
+        let ordered = [
+            Fq::from(0u64),
+            Fq::from(1u64),
+            Fq::from(2u64),
+            Fq::from(10u64),
+            Fq::from(u64::MAX),
+            *FQ_MAX,
+        ];
+
+        for window in ordered.windows(2) {
+            assert!(FqOrdKey::from(window[0]) < FqOrdKey::from(window[1]));
+        }
+    }
+
+    #[test]
+    fn test_imt_predecessor_index_matches_linear_scan() {
+        let mut tree = IndexedMerkleTree::new();
+        let policy = test_policy();
+        for value in [400u64, 100, 900, 250, 700] {
+            tree.insert(Fq::from(value), &policy).unwrap();
+        }
+
+        let linear_low_leaf = |target: Fq| -> Option<(u64, IndexedLeaf)> {
+            if let Some(&pos) = tree.value_index.get(&target.to_bytes()) {
+                return tree.leaves.get(&pos).cloned().map(|leaf| (pos, leaf));
+            }
+            let target_key = FqOrdKey::from(target);
+            tree.leaves
+                .iter()
+                .find(|(_, leaf)| {
+                    FqOrdKey::from(leaf.value) < target_key
+                        && target_key < FqOrdKey::from(leaf.next_value)
+                })
+                .map(|(&pos, leaf)| (pos, leaf.clone()))
+        };
+
+        for target in [
+            Fq::from(1u64),
+            Fq::from(100u64),
+            Fq::from(101u64),
+            Fq::from(399u64),
+            Fq::from(700u64),
+            Fq::from(800u64),
+            *FQ_MAX - Fq::from(1u64),
+        ] {
+            let indexed = tree.find_low_leaf(target).unwrap();
+            let linear = linear_low_leaf(target).unwrap();
+            assert_eq!(indexed.0, linear.0);
+            assert_eq!(indexed.1.value, linear.1.value);
+            assert_eq!(indexed.1.next_value, linear.1.next_value);
+        }
+
+        let mut changed_policy = test_policy();
+        changed_policy.params.threshold = 42;
+        tree.update_policy(Fq::from(400u64), &changed_policy)
+            .unwrap();
+        let (_, leaf) = tree.find_low_leaf(Fq::from(450u64)).unwrap();
+        assert_eq!(leaf.value, Fq::from(400u64));
+        assert_eq!(leaf.threshold(), 42);
     }
 
     #[test]

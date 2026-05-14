@@ -120,7 +120,7 @@ where
     for input in inputs {
         if let Padded::Real(input) = Padded::classify(input, &input_is_dummy) {
             let nullifier = input_nullifier(input);
-            state.nullify(nullifier, source.into()).await;
+            state.nullify(nullifier, source.into()).await?;
             state.record_proto(event::EventNullifierSpent { nullifier }.to_proto());
         }
     }

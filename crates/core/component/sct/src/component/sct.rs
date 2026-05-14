@@ -8,7 +8,7 @@ use penumbra_sdk_proto::{StateReadProto, StateWriteProto};
 use tendermint::v0_37::abci;
 use tracing::instrument;
 
-use crate::{epoch::Epoch, genesis, params::SctParameters, state_key};
+use crate::{epoch::Epoch, genesis, nullifier_tree, params::SctParameters, state_key};
 
 use super::clock::EpochManager;
 
@@ -41,6 +41,9 @@ impl Component for Sct {
                         start_height: 0,
                     },
                 );
+                nullifier_tree::initialize(&mut state)
+                    .await
+                    .expect("initialize nullifier tree");
             }
             None => { /* no-op until an upgrade occurs */ }
         }

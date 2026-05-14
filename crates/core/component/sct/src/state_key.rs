@@ -33,14 +33,38 @@ pub mod epoch_manager {
 }
 
 pub mod nullifier_set {
-    use crate::Nullifier;
+    use jmt::{storage::NodeKey, KeyHash};
 
-    pub fn spent_nullifier_lookup_prefix() -> &'static str {
-        "sct/nullifier_set/spent_nullifier_lookup/"
+    pub fn root() -> &'static str {
+        "sct/nullifier_set/root"
     }
 
-    pub fn spent_nullifier_lookup(nullifier: &Nullifier) -> String {
-        format!("{}{}", spent_nullifier_lookup_prefix(), nullifier)
+    pub fn tree_node_prefix() -> &'static [u8] {
+        b"sct/nullifier_set/jmt/node/"
+    }
+
+    pub fn tree_node(node_key: &NodeKey) -> Vec<u8> {
+        let mut key = tree_node_prefix().to_vec();
+        key.extend(borsh::to_vec(node_key).expect("JMT node key serialization is infallible"));
+        key
+    }
+
+    pub fn value_prefix() -> &'static [u8] {
+        b"sct/nullifier_set/jmt/value/"
+    }
+
+    pub fn value(key_hash: KeyHash) -> Vec<u8> {
+        let mut key = value_prefix().to_vec();
+        key.extend_from_slice(&key_hash.0);
+        key
+    }
+
+    pub fn rightmost_leaf_node_key() -> &'static [u8] {
+        b"sct/nullifier_set/jmt/meta/rightmost_leaf_node_key"
+    }
+
+    pub fn rightmost_leaf_node() -> &'static [u8] {
+        b"sct/nullifier_set/jmt/meta/rightmost_leaf_node"
     }
 
     pub fn pending_nullifiers() -> &'static str {
@@ -49,6 +73,43 @@ pub mod nullifier_set {
 }
 
 pub mod tree {
+    pub fn incremental_prefix() -> &'static str {
+        "sct/tree/incremental/"
+    }
+
+    pub fn incremental_position() -> &'static str {
+        "sct/tree/incremental/meta/position"
+    }
+
+    pub fn incremental_forgotten() -> &'static str {
+        "sct/tree/incremental/meta/forgotten"
+    }
+
+    pub fn incremental_hash_prefix() -> &'static str {
+        "sct/tree/incremental/hash/"
+    }
+
+    pub fn incremental_hash(position: penumbra_sdk_tct::Position, height: u8) -> String {
+        format!(
+            "{}{:020}/{:03}",
+            incremental_hash_prefix(),
+            u64::from(position),
+            height
+        )
+    }
+
+    pub fn incremental_commitment_prefix() -> &'static str {
+        "sct/tree/incremental/commitment/"
+    }
+
+    pub fn incremental_commitment(position: penumbra_sdk_tct::Position) -> String {
+        format!(
+            "{}{:020}",
+            incremental_commitment_prefix(),
+            u64::from(position)
+        )
+    }
+
     pub fn anchor_by_height(height: u64) -> String {
         format!("sct/tree/anchor_by_height/{}", height)
     }

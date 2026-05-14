@@ -14,6 +14,7 @@ use metrics_util::layers::Stack;
 
 use anyhow::{anyhow, Context};
 use cnidarium::Storage;
+use decaf377_rdsa::{SpendAuth, VerificationKey};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use pd::{
     cli::{MigrateCommand, NetworkCommand, Opt, RootCommand},
@@ -54,6 +55,15 @@ fn default_grpc_bind(
             HTTP_DEFAULT
         }
     })
+}
+
+fn parse_spend_vk_hex(value: &str) -> anyhow::Result<VerificationKey<SpendAuth>> {
+    let bytes = hex::decode(value).context("invalid --compliance-registrar-vk-hex")?;
+    if bytes.len() != 32 {
+        anyhow::bail!("--compliance-registrar-vk-hex must be exactly 64 hex chars");
+    }
+    VerificationKey::<SpendAuth>::try_from(bytes.as_slice())
+        .map_err(|_| anyhow!("invalid --compliance-registrar-vk-hex encoding"))
 }
 
 #[tokio::main]
@@ -356,6 +366,7 @@ async fn main() -> anyhow::Result<()> {
                     validators_input_file,
                     chain_id,
                     gas_price_simple,
+                    compliance_registrar_vk_hex,
                     preserve_chain_id,
                     external_addresses,
                     proposal_voting_blocks,
@@ -404,6 +415,10 @@ async fn main() -> anyhow::Result<()> {
                 };
 
             let external_addresses = external_addresses?;
+            let compliance_registrar_vk = compliance_registrar_vk_hex
+                .iter()
+                .map(|vk| parse_spend_vk_hex(vk))
+                .collect::<anyhow::Result<Vec<_>>>()?;
 
             // Build and write local configs based on input flags.
             tracing::info!(?chain_id, "Generating network config");
@@ -420,6 +435,7 @@ async fn main() -> anyhow::Result<()> {
                 epoch_duration,
                 proposal_voting_blocks,
                 gas_price_simple,
+                compliance_registrar_vk,
                 tendermint_rpc_bind,
                 tendermint_p2p_bind,
             )?;

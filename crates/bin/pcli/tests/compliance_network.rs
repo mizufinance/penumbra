@@ -24,6 +24,13 @@ use tempfile::{tempdir, TempDir};
 use tonic::transport::Channel;
 
 const TIMEOUT_COMMAND_SECONDS: u64 = 120;
+const DEFAULT_COMPLIANCE_DEV_REGISTRAR_SK_HEX: &str =
+    "0100000000000000000000000000000000000000000000000000000000000000";
+const DEFAULT_COMPLIANCE_DEV_AUTHORITY_SK_HEX: &str =
+    "0200000000000000000000000000000000000000000000000000000000000000";
+const DEFAULT_COMPLIANCE_DEV_AUTHORITY_VK_HEX: &str =
+    "b2ecf9b9082d6306538be73b0d6ee741141f3222152da78685d6596efc8c1506";
+const DEFAULT_COMPLIANCE_GRANT_VALID_UNTIL_UNIX: &str = "4102444800";
 
 /// Import the wallet from seed phrase into a temporary directory.
 fn load_wallet_into_tmpdir() -> TempDir {
@@ -79,6 +86,91 @@ fn wallet_address(tmpdir: &TempDir, index: u32) -> Address {
     let output = cmd.assert().success().get_output().stdout.clone();
     let address = String::from_utf8(output).expect("address output should be utf8");
     address.trim().parse().expect("address output should parse")
+}
+
+fn env_or_default(key: &str, default: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+fn sign_asset_grant(
+    tmpdir: &TempDir,
+    asset_denom: &str,
+    dk_pub_hex: &str,
+    threshold: &str,
+) -> String {
+    let registrar_sk = env_or_default(
+        "COMPLIANCE_DEV_REGISTRAR_SK_HEX",
+        DEFAULT_COMPLIANCE_DEV_REGISTRAR_SK_HEX,
+    );
+    let authority_vk = env_or_default(
+        "COMPLIANCE_DEV_AUTHORITY_VK_HEX",
+        DEFAULT_COMPLIANCE_DEV_AUTHORITY_VK_HEX,
+    );
+    let valid_until = env_or_default(
+        "COMPLIANCE_GRANT_VALID_UNTIL_UNIX",
+        DEFAULT_COMPLIANCE_GRANT_VALID_UNTIL_UNIX,
+    );
+    let mut cmd = Command::cargo_bin("pcli").unwrap();
+    cmd.args([
+        "--home",
+        tmpdir.path().to_str().unwrap(),
+        "tx",
+        "compliance",
+        "sign-asset-grant",
+        asset_denom,
+        "--regulated",
+        "--dk-pub-hex",
+        dk_pub_hex,
+        "--threshold",
+        threshold,
+        "--registration-authority-vk-hex",
+        &authority_vk,
+        "--registrar-sk-hex",
+        &registrar_sk,
+        "--valid-until-unix",
+        &valid_until,
+    ])
+    .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    String::from_utf8(output)
+        .expect("asset grant should be utf8")
+        .trim()
+        .to_string()
+}
+
+fn sign_user_grant(tmpdir: &TempDir, asset_denom: &str, address: Address) -> String {
+    let authority_sk = env_or_default(
+        "COMPLIANCE_DEV_AUTHORITY_SK_HEX",
+        DEFAULT_COMPLIANCE_DEV_AUTHORITY_SK_HEX,
+    );
+    let valid_until = env_or_default(
+        "COMPLIANCE_GRANT_VALID_UNTIL_UNIX",
+        DEFAULT_COMPLIANCE_GRANT_VALID_UNTIL_UNIX,
+    );
+    let address = address.to_string();
+    let mut cmd = Command::cargo_bin("pcli").unwrap();
+    cmd.args([
+        "--home",
+        tmpdir.path().to_str().unwrap(),
+        "tx",
+        "compliance",
+        "sign-user-grant",
+        asset_denom,
+        "--address",
+        &address,
+        "--registration-authority-sk-hex",
+        &authority_sk,
+        "--valid-until-unix",
+        &valid_until,
+    ])
+    .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    String::from_utf8(output)
+        .expect("user grant should be utf8")
+        .trim()
+        .to_string()
 }
 
 fn query_asset_status(
@@ -212,6 +304,12 @@ fn compliance_register_asset() {
         .find(|l| l.contains("DK_pub (hex):"))
         .and_then(|l| l.split_whitespace().last())
         .expect("should have dk_pub");
+    let threshold = "1000000000000000000000";
+    let grant = sign_asset_grant(&tmpdir, "smoke_test_asset_2", dk_pub_hex, threshold);
+    let authority_vk = env_or_default(
+        "COMPLIANCE_DEV_AUTHORITY_VK_HEX",
+        DEFAULT_COMPLIANCE_DEV_AUTHORITY_VK_HEX,
+    );
 
     // Register a new asset as regulated
     let mut reg_cmd = Command::cargo_bin("pcli").unwrap();
@@ -227,7 +325,11 @@ fn compliance_register_asset() {
             "--dk-pub-hex",
             dk_pub_hex,
             "--threshold",
-            "1000000000000000000000",
+            threshold,
+            "--registration-authority-vk-hex",
+            &authority_vk,
+            "--asset-registration-grant-hex",
+            &grant,
         ])
         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
     reg_cmd.assert().success();
@@ -259,6 +361,7 @@ fn compliance_register_user() {
 
     let smoke_asset =
         std::env::var("COMPLIANCE_SMOKE_ASSET").unwrap_or_else(|_| "regulated_usd".to_string());
+    let grant = sign_user_grant(&tmpdir, &smoke_asset, address.clone());
 
     let mut cmd = Command::cargo_bin("pcli").unwrap();
     cmd.args([
@@ -268,6 +371,8 @@ fn compliance_register_user() {
         "compliance",
         "register-user",
         &smoke_asset,
+        "--user-registration-grant-hex",
+        &grant,
     ])
     .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
     cmd.assert().success();

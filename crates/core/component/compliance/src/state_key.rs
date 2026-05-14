@@ -18,6 +18,33 @@ pub fn asset_imt_root() -> &'static str {
     "compliance/asset_imt_root"
 }
 
+/// Nonverifiable tree node storage.
+pub mod tree_storage {
+    pub fn user_node_prefix() -> &'static str {
+        "compliance/tree/user/node/"
+    }
+
+    pub fn user_node(level: u8, position: u64) -> String {
+        format!("{}{:03}/{:020}", user_node_prefix(), level, position)
+    }
+
+    pub fn asset_node_prefix() -> &'static str {
+        "compliance/tree/asset/node/"
+    }
+
+    pub fn asset_node(level: u8, position: u64) -> String {
+        format!("{}{:03}/{:020}", asset_node_prefix(), level, position)
+    }
+
+    pub fn asset_leaf_prefix() -> &'static str {
+        "compliance/tree/asset/leaf/"
+    }
+
+    pub fn asset_leaf(position: u64) -> String {
+        format!("{}{:020}", asset_leaf_prefix(), position)
+    }
+}
+
 /// State key for the user count (number of registered users)
 pub fn user_count() -> &'static str {
     "compliance/user_count"
@@ -26,6 +53,22 @@ pub fn user_count() -> &'static str {
 /// State key for the asset count (number of registered assets)
 pub fn asset_count() -> &'static str {
     "compliance/asset_count"
+}
+
+/// Prefix for compliance registrar verification keys.
+pub fn compliance_registrar_vk_prefix() -> &'static str {
+    "compliance/registrar/vk/"
+}
+
+/// State key for a compliance registrar verification key.
+pub fn compliance_registrar_vk(
+    vk: &decaf377_rdsa::VerificationKey<decaf377_rdsa::SpendAuth>,
+) -> String {
+    format!(
+        "{}{}",
+        compliance_registrar_vk_prefix(),
+        hex::encode(vk.to_bytes())
+    )
 }
 
 /// Object-store keys for compliance in-block caches.

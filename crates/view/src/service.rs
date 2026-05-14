@@ -63,6 +63,9 @@ type BroadcastTransactionStream = Pin<
     Box<dyn futures::Stream<Item = Result<pb::BroadcastTransactionResponse, tonic::Status>> + Send>,
 >;
 
+const BROADCAST_NULLIFIER_DETECTION_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(180);
+
 /// A service that synchronizes private chain state and responds to queries
 /// about it.
 ///
@@ -277,7 +280,7 @@ impl ViewServer {
                 if let Some(nullifier) = nullifier {
                     tracing::info!(?nullifier, "waiting for detection of nullifier");
                     let detection = self2.storage.nullifier_status(nullifier, true);
-                    tokio::time::timeout(std::time::Duration::from_secs(20), detection)
+                    tokio::time::timeout(BROADCAST_NULLIFIER_DETECTION_TIMEOUT, detection)
                         .await
                         .map_err(|_| {
                             tonic::Status::unavailable(

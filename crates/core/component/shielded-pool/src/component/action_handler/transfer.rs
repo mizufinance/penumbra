@@ -153,7 +153,7 @@ impl ActionHandler for Transfer {
             .ok_or_else(|| anyhow::anyhow!("source should be set during execution"))?;
 
         for input in note_reshape::real_items(&self.body.inputs, TransferInputBody::is_dummy) {
-            state.nullify(input.nullifier, source.into()).await;
+            state.nullify(input.nullifier, source.into()).await?;
             state.record_proto(
                 event::EventNullifierSpent {
                     nullifier: input.nullifier,

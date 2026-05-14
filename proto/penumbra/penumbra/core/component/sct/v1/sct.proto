@@ -9,6 +9,8 @@ import "ibc/core/commitment/v1/commitment.proto";
 message SctParameters {
   // The default duration of each epoch, in number of blocks.
   uint64 epoch_duration = 1;
+  // Number of recent SCT anchors and historical timestamps retained for witness refresh.
+  uint64 sct_anchor_retention_blocks = 2;
 }
 
 // Sct-specific genesis content.
@@ -139,10 +141,28 @@ message SctFrontierResponse {
   .ibc.core.commitment.v1.MerkleProof proof = 4;
 }
 
+message NullifierRequest {
+  Nullifier nullifier = 1;
+  bool with_proof = 2;
+}
+
+message NullifierResponse {
+  bool spent = 1;
+  // Present only when spent = true.
+  NullificationInfo nullification_info = 2;
+  // The committed nullifier tree root used for this lookup; always present
+  // when the server has initialized SCT state.
+  bytes nullifier_root = 3;
+  // Present only when NullifierRequest.with_proof = true.
+  // Borsh-encoded JMT SparseMerkleProof<Sha256>.
+  bytes proof = 4;
+}
+
 // Query operations for the SCT component.
 service QueryService {
   rpc AnchorByHeight(AnchorByHeightRequest) returns (AnchorByHeightResponse);
   rpc EpochByHeight(EpochByHeightRequest) returns (EpochByHeightResponse);
   rpc TimestampByHeight(TimestampByHeightRequest) returns (TimestampByHeightResponse);
   rpc SctFrontier(SctFrontierRequest) returns (SctFrontierResponse);
+  rpc Nullifier(NullifierRequest) returns (NullifierResponse);
 }

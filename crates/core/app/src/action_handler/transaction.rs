@@ -3,12 +3,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
-use bitvec::vec::BitVec;
 use cnidarium::{Snapshot, StateRead, StateWrite};
 use cnidarium_component::ActionHandler as _;
-use futures::{pin_mut, StreamExt};
 use penumbra_sdk_compact_block::StatePayload;
 use penumbra_sdk_compliance::registry::{check_timestamp_freshness, ComplianceRegistryRead as _};
 use penumbra_sdk_fee::component::FeePay as _;
@@ -21,7 +19,6 @@ use penumbra_sdk_shielded_pool::fmd;
 use penumbra_sdk_tct::StateCommitment;
 use penumbra_sdk_transaction::{gas::GasCost as _, Action, Transaction};
 use penumbra_sdk_txhash::TransactionId;
-use sha2::{Digest as _, Sha256};
 use tokio::sync::OnceCell;
 use tokio::task::JoinSet;
 use tracing::{instrument, Instrument};
@@ -93,90 +90,11 @@ pub(crate) struct PreparedCandidateRead {
 
 type AnchorPair = (StateCommitment, StateCommitment);
 type ClaimedAnchorKey = penumbra_sdk_tct::Root;
-const NULLIFIER_FILTER_BITS_PER_ENTRY: usize = 12;
-const NULLIFIER_FILTER_HASH_FUNCTIONS: usize = 8;
-const NULLIFIER_FILTER_MIN_BITS: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct HistoricalCheckProfile {
     pub total_ms: f64,
     pub await_ms: f64,
-}
-
-#[derive(Clone, Debug)]
-struct CommittedNullifierFilter {
-    bits: BitVec,
-    hash_function_count: usize,
-}
-
-impl CommittedNullifierFilter {
-    async fn load<S: StateRead>(state: &S) -> Result<Self> {
-        let prefix = penumbra_sdk_sct::state_key::nullifier_set::spent_nullifier_lookup_prefix();
-        let key_stream = state.prefix_keys(prefix);
-        pin_mut!(key_stream);
-        let mut hashes = Vec::new();
-
-        while let Some(entry) = key_stream.next().await {
-            let key = entry?;
-            let suffix = key
-                .strip_prefix(prefix)
-                .with_context(|| format!("spent nullifier key {key} missing expected prefix"))?;
-            let nullifier = Nullifier::parse_hex(suffix)
-                .with_context(|| format!("failed to parse nullifier from state key {key}"))?;
-            hashes.push(Self::hash_pair(&nullifier));
-        }
-
-        let bit_len = (hashes.len() * NULLIFIER_FILTER_BITS_PER_ENTRY)
-            .max(NULLIFIER_FILTER_MIN_BITS)
-            .max(1);
-        let mut filter = Self {
-            bits: BitVec::repeat(false, bit_len),
-            hash_function_count: NULLIFIER_FILTER_HASH_FUNCTIONS,
-        };
-
-        for (hash1, hash2) in hashes {
-            filter.insert_hashes(hash1, hash2);
-        }
-
-        Ok(filter)
-    }
-
-    fn might_contain(&self, nullifier: &Nullifier) -> bool {
-        let (hash1, hash2) = Self::hash_pair(nullifier);
-        self.contains_hashes(hash1, hash2)
-    }
-
-    fn insert_hashes(&mut self, hash1: u64, hash2: u64) {
-        let bit_len = self.bits.len() as u64;
-        for i in 0..self.hash_function_count {
-            let combined = hash1.wrapping_add((i as u64).wrapping_mul(hash2));
-            let index = (combined % bit_len) as usize;
-            self.bits.set(index, true);
-        }
-    }
-
-    fn contains_hashes(&self, hash1: u64, hash2: u64) -> bool {
-        self.positions(hash1, hash2)
-            .all(|index| self.bits.get(index).map(|bit| *bit).unwrap_or(false))
-    }
-
-    fn positions(&self, hash1: u64, hash2: u64) -> impl Iterator<Item = usize> + '_ {
-        let bit_len = self.bits.len() as u64;
-        (0..self.hash_function_count).map(move |i| {
-            let combined = hash1.wrapping_add((i as u64).wrapping_mul(hash2));
-            (combined % bit_len) as usize
-        })
-    }
-
-    fn hash_pair(nullifier: &Nullifier) -> (u64, u64) {
-        let digest = Sha256::digest(nullifier.to_bytes());
-        let hash1 = u64::from_le_bytes(digest[0..8].try_into().expect("digest slice length"));
-        let mut hash2 = u64::from_le_bytes(digest[8..16].try_into().expect("digest slice length"));
-        if hash2 == 0 {
-            hash2 = 1;
-        }
-        (hash1, hash2)
-    }
 }
 
 #[derive(Debug, Default)]
@@ -290,31 +208,22 @@ pub(crate) struct HistoricalCheckContext {
     pub current_fmd_parameters: fmd::Parameters,
     pub anchor_cache: Arc<AnchorValidationCache>,
     pub claimed_anchor_cache: Arc<ClaimedAnchorValidationCache>,
-    committed_nullifier_filter: Option<Arc<CommittedNullifierFilter>>,
 }
 
 impl HistoricalCheckContext {
     pub(crate) async fn load<S: StateRead>(state: &S) -> Result<Self> {
-        Self::load_inner(state, false).await
+        Self::load_inner(state).await
     }
 
     pub(crate) async fn load_for_checktx<S: StateRead>(state: &S) -> Result<Self> {
-        Self::load_inner(state, true).await
+        Self::load_inner(state).await
     }
 
-    async fn load_inner<S: StateRead>(
-        state: &S,
-        load_committed_nullifier_filter: bool,
-    ) -> Result<Self> {
+    async fn load_inner<S: StateRead>(state: &S) -> Result<Self> {
         let shielded_pool_params = state
             .get_shielded_pool_params()
             .await
             .expect("chain params request must succeed");
-        let committed_nullifier_filter = if load_committed_nullifier_filter {
-            Some(Arc::new(CommittedNullifierFilter::load(state).await?))
-        } else {
-            None
-        };
 
         Ok(Self {
             chain_id: state.get_chain_id().await?,
@@ -331,25 +240,19 @@ impl HistoricalCheckContext {
                 .expect("chain params request must succeed"),
             anchor_cache: Arc::new(AnchorValidationCache::default()),
             claimed_anchor_cache: Arc::new(ClaimedAnchorValidationCache::default()),
-            committed_nullifier_filter,
         })
     }
 }
 
 async fn check_nullifier_read_only<S>(
     state: &S,
-    context: &HistoricalCheckContext,
+    _context: &HistoricalCheckContext,
     nullifier: penumbra_sdk_sct::Nullifier,
 ) -> Result<f64>
 where
     S: StateRead,
 {
     let committed_check_start = Instant::now();
-    if let Some(filter) = &context.committed_nullifier_filter {
-        if !filter.might_contain(&nullifier) {
-            return Ok(committed_check_start.elapsed().as_secs_f64() * 1000.0);
-        }
-    }
     state.check_nullifier_unspent(nullifier).await?;
     Ok(committed_check_start.elapsed().as_secs_f64() * 1000.0)
 }
@@ -449,23 +352,11 @@ fn action_requires_historical_check(action: &Action) -> bool {
 fn check_nullifier_read_only_sync(
     handle: &tokio::runtime::Handle,
     snapshot: &Snapshot,
-    context: &HistoricalCheckContext,
+    _context: &HistoricalCheckContext,
     nullifier: penumbra_sdk_sct::Nullifier,
 ) -> Result<f64> {
     let committed_check_start = Instant::now();
-    if let Some(filter) = &context.committed_nullifier_filter {
-        if !filter.might_contain(&nullifier) {
-            return Ok(committed_check_start.elapsed().as_secs_f64() * 1000.0);
-        }
-    }
-    if handle
-        .block_on(snapshot.get_raw(
-            &penumbra_sdk_sct::state_key::nullifier_set::spent_nullifier_lookup(&nullifier),
-        ))?
-        .is_some()
-    {
-        anyhow::bail!("nullifier {} was already spent", nullifier);
-    }
+    handle.block_on(snapshot.check_nullifier_unspent(nullifier))?;
     Ok(committed_check_start.elapsed().as_secs_f64() * 1000.0)
 }
 

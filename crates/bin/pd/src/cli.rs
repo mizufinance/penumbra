@@ -215,6 +215,9 @@ pub enum NetworkCommand {
         /// so `--gas-price-simple=1000` means all resources will have a cost of 1upenumbra.
         #[clap(long)]
         gas_price_simple: Option<u64>,
+        /// Compliance registrar verification key to authorize asset registration grants.
+        #[clap(long = "compliance-registrar-vk-hex")]
+        compliance_registrar_vk_hex: Vec<String>,
         /// Base hostname for a validator's p2p service. If multiple validators
         /// exist in the genesis, e.g. via `--validators-input-file`, then
         /// numeric suffixes are automatically added, e.g. "-0", "-1", etc.

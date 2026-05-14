@@ -99,10 +99,7 @@ impl<'de> Deserialize<'de> for QuadTree {
             })
             .collect::<Result<_, D::Error>>()?;
 
-        Ok(QuadTree {
-            depth: helper.depth,
-            nodes,
-        })
+        QuadTree::try_from_sparse_nodes(helper.depth, nodes).map_err(serde::de::Error::custom)
     }
 }
 
@@ -131,6 +128,80 @@ impl QuadTree {
             depth,
             nodes: BTreeMap::new(),
         }
+    }
+
+    /// Reconstruct a tree from validated sparse stored nodes.
+    pub fn try_from_sparse_nodes(depth: u8, nodes: BTreeMap<u64, StateCommitment>) -> Result<Self> {
+        if depth > DEFAULT_DEPTH {
+            bail!("depth {} exceeds maximum of {}", depth, DEFAULT_DEPTH);
+        }
+
+        for &key in nodes.keys() {
+            let encoded_level = key >> 48;
+            if encoded_level > u8::MAX as u64 {
+                bail!("sparse node key {key} encodes invalid level {encoded_level}");
+            }
+            let level = encoded_level as u8;
+            if level > depth {
+                bail!("sparse node key {key} has level {level} above depth {depth}");
+            }
+
+            let position = key & ((1u64 << 48) - 1);
+            let max_positions = 1u64 << (((depth - level) as u32) * 2);
+            if position >= max_positions {
+                bail!(
+                    "sparse node key {key} has position {position} outside level {level} bound {max_positions}"
+                );
+            }
+        }
+
+        Ok(Self { depth, nodes })
+    }
+
+    /// Reconstruct a tree from sparse stored nodes.
+    ///
+    /// Panics if stored keys are outside the tree depth/position bounds.
+    pub fn from_sparse_nodes(depth: u8, nodes: BTreeMap<u64, StateCommitment>) -> Self {
+        Self::try_from_sparse_nodes(depth, nodes).expect("valid sparse QuadTree nodes")
+    }
+
+    /// Return the packed storage key for a node.
+    pub fn packed_node_key(level: u8, position: u64) -> u64 {
+        Self::node_key(level, position)
+    }
+
+    /// Return node entries along the leaf-to-root path for a position.
+    pub fn nodes_on_path(&self, position: u64) -> Result<Vec<(u8, u64, StateCommitment)>> {
+        let max_leaves = Self::max_leaves_for_depth(self.depth);
+        if position >= max_leaves {
+            bail!(
+                "Position {} exceeds maximum leaves {} for depth {}",
+                position,
+                max_leaves,
+                self.depth
+            );
+        }
+
+        let mut entries = Vec::with_capacity(self.depth as usize + 1);
+        let mut current_position = position;
+        for level in 0..=self.depth {
+            entries.push((
+                level,
+                current_position,
+                self.get_node(level, current_position),
+            ));
+            current_position /= 4;
+        }
+        Ok(entries)
+    }
+
+    /// Iterate over explicitly stored non-zero nodes.
+    pub fn stored_nodes(&self) -> impl Iterator<Item = (u8, u64, StateCommitment)> + '_ {
+        self.nodes.iter().map(|(&key, &hash)| {
+            let level = (key >> 48) as u8;
+            let position = key & ((1u64 << 48) - 1);
+            (level, position, hash)
+        })
     }
 
     /// Compute max leaves safely, avoiding overflow in shift operations.

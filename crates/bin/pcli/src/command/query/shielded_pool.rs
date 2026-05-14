@@ -36,9 +36,7 @@ impl ShieldedPool {
                 unreachable!("should be handled at outer level via rpc");
             }
             ShieldedPool::Commitment { commitment } => sct_state_key::tree::note_source(commitment),
-            ShieldedPool::Nullifier { nullifier } => {
-                sct_state_key::nullifier_set::spent_nullifier_lookup(nullifier)
-            }
+            ShieldedPool::Nullifier { .. } => unreachable!("nullifier queries use SCT RPC"),
         }
     }
 

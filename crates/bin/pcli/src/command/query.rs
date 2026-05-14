@@ -131,6 +131,23 @@ impl QueryCmd {
             return Ok(());
         }
 
+        if let QueryCmd::ShieldedPool(ShieldedPool::Nullifier { nullifier }) = self {
+            use penumbra_sdk_proto::core::component::sct::v1::{
+                query_service_client::QueryServiceClient as SctQueryServiceClient, NullifierRequest,
+            };
+            let mut client = SctQueryServiceClient::new(app.pd_channel().await?);
+            let response = client
+                .nullifier(NullifierRequest {
+                    nullifier: Some((*nullifier).into()),
+                    with_proof: true,
+                })
+                .await?
+                .into_inner();
+            let json = serde_json::to_string_pretty(&response)?;
+            println!("{}", json.to_colored_json_auto()?);
+            return Ok(());
+        }
+
         let (key, storage_backend) = match self {
             QueryCmd::Tx(_)
             | QueryCmd::Chain(_)

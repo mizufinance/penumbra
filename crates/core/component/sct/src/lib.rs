@@ -7,6 +7,8 @@ pub mod component;
 pub mod epoch;
 pub mod event;
 pub mod genesis;
+#[cfg(feature = "component")]
+pub mod nullifier_tree;
 pub mod params;
 pub mod state_key;
 

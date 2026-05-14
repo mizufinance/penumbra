@@ -2707,16 +2707,7 @@ impl App {
                         stateful_start.elapsed().as_secs_f64() * 1000.0;
                     return Ok((verdict, profile));
                 }
-                if self
-                    .state
-                    .get_raw(
-                        &penumbra_sdk_sct::state_key::nullifier_set::spent_nullifier_lookup(
-                            nullifier,
-                        ),
-                    )
-                    .await?
-                    .is_some()
-                {
+                if self.state.spend_info(*nullifier).await?.is_some() {
                     reject_stateful(
                         &mut verdict,
                         ValidationRejectReason::CommittedNullifierConflict,
@@ -3305,7 +3296,7 @@ impl App {
                 historical_context.clone(),
                 &mut profile,
             )
-            .await
+            .await?
         } else {
             let mut included_candidates = Vec::new();
             for candidate in deduped {
@@ -3654,7 +3645,22 @@ impl App {
         // If the chain is halted, we are not ready to start the application.
         // This is a safety mechanism to prevent the chain from starting if it
         // is in a halted state.
-        !state.is_chain_halted().await
+        if state.is_chain_halted().await {
+            return false;
+        }
+        if let Err(error) = penumbra_sdk_sct::nullifier_tree::verify_committed_root(&state).await {
+            tracing::error!(?error, "nullifier tree root check failed");
+            return false;
+        }
+        if let Err(error) = state.verify_committed_sct_root().await {
+            tracing::error!(?error, "SCT root check failed");
+            return false;
+        }
+        if let Err(error) = state.verify_committed_tree_roots().await {
+            tracing::error!(?error, "compliance tree root check failed");
+            return false;
+        }
+        true
     }
 
     // StateDelta::apply only works when the StateDelta wraps an underlying
@@ -3701,11 +3707,7 @@ impl App {
                 FeeComponent::init_chain(&mut state_tx, Some(&genesis.fee_content)).await;
                 // Initialize compliance component with empty trees for anchor tracking.
                 // Unregulated assets don't need registration (proven via non-membership).
-                Compliance::init_chain(
-                    &mut state_tx,
-                    Some(&penumbra_sdk_compliance::genesis::Content::default()),
-                )
-                .await;
+                Compliance::init_chain(&mut state_tx, Some(&genesis.compliance_content)).await;
 
                 state_tx
                     .finish_block()
@@ -5261,7 +5263,7 @@ impl App {
         let nullifier_insert_start = Instant::now();
         state_tx
             .nullify_all(&prepared.effects.spend_nullifiers, tx_id.clone().into())
-            .await;
+            .await?;
         profile.serial_nullifier_insert_ms =
             nullifier_insert_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -5542,14 +5544,14 @@ impl App {
         deduped: Vec<Candidate>,
         historical_context: HistoricalCheckContext,
         profile: &mut PrepareProposalProfile,
-    ) -> Vec<Candidate> {
+    ) -> Result<Vec<Candidate>> {
         let concurrency = Self::prepare_proposal_filter_concurrency();
         if concurrency <= 1
             || !deduped
                 .iter()
                 .all(|candidate| supports_parallel_prepare(candidate.tx()))
         {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let snapshot = Arc::new(self.committed_snapshot.clone());
@@ -5594,7 +5596,7 @@ impl App {
                     Ok(result) => result,
                     Err(error) => {
                         tracing::warn!(?error, "parallel prepare candidate task failed");
-                        return Vec::new();
+                        return Ok(Vec::new());
                     }
                 };
                 prepared_results[index] = Some(result);
@@ -5663,18 +5665,18 @@ impl App {
             &block_state.staged_nullifiers,
             profile,
         )
-        .await;
+        .await?;
 
-        included_candidates
+        Ok(included_candidates)
     }
 
     async fn apply_prepare_proposal_nullifier_batch_profiled(
         &mut self,
         entries: &[(Nullifier, CommitmentSource)],
         profile: &mut PrepareProposalProfile,
-    ) {
+    ) -> Result<()> {
         if entries.is_empty() {
-            return;
+            return Ok(());
         }
 
         let serial_apply_start = Instant::now();
@@ -5686,7 +5688,7 @@ impl App {
         let begin_state_tx_ms = begin_state_tx_start.elapsed().as_secs_f64() * 1000.0;
 
         let insert_start = Instant::now();
-        let batch_profile = state_tx.nullify_proposal_batch(entries).await;
+        let batch_profile = state_tx.nullify_proposal_batch(entries).await?;
         let insert_total_ms = insert_start.elapsed().as_secs_f64() * 1000.0;
 
         let apply_start = Instant::now();
@@ -5702,6 +5704,7 @@ impl App {
             batch_profile.pending_stage_ms;
         profile.stateful_filter_serial_state_delta_apply_ms += apply_ms;
         profile.stateful_filter_apply_ms += apply_ms;
+        Ok(())
     }
 
     async fn append_block_transaction_to_state<S>(
@@ -6268,12 +6271,15 @@ mod tests {
     use std::sync::Arc;
 
     use anyhow::{anyhow, Context, Result};
-    use cnidarium::{StateDelta, StateRead, TempStorage};
+    use cnidarium::{StateDelta, StateRead, StateWrite, TempStorage};
     use decaf377::{Fq, Fr};
-    use penumbra_sdk_asset::{Value, BASE_ASSET_DENOM, BASE_ASSET_ID};
+    use futures::StreamExt as _;
+    use penumbra_sdk_asset::{asset, Value, BASE_ASSET_DENOM, BASE_ASSET_ID};
     use penumbra_sdk_compact_block::StatePayload;
+    use penumbra_sdk_compliance::registry::ComplianceRegistryWrite as _;
+    use penumbra_sdk_compliance::{AssetPolicy, ComplianceLeaf};
     use penumbra_sdk_fee::Fee;
-    use penumbra_sdk_keys::test_keys;
+    use penumbra_sdk_keys::{test_keys, Address};
     use penumbra_sdk_mock_client::MockClient;
     use penumbra_sdk_mock_consensus::TestNode;
     use penumbra_sdk_num::Amount;
@@ -6281,7 +6287,10 @@ mod tests {
     use penumbra_sdk_proto::DomainType;
     use penumbra_sdk_sct::component::clock::{EpochManager as _, EpochRead as _};
     use penumbra_sdk_sct::component::tree::{SctManager as _, SctRead as _};
-    use penumbra_sdk_sct::{CommitmentSource, Nullifier};
+    use penumbra_sdk_sct::component::StateWriteExt as _;
+    use penumbra_sdk_sct::epoch::Epoch;
+    use penumbra_sdk_sct::params::SctParameters;
+    use penumbra_sdk_sct::{CommitmentSource, NullificationInfo, Nullifier};
     use penumbra_sdk_shielded_pool::component::NoteManager as _;
     use penumbra_sdk_shielded_pool::{
         genesis::Allocation, ShieldedInputPlan, ShieldedOutputPlan, TransferPlan,
@@ -6320,6 +6329,25 @@ mod tests {
             source: CommitmentSource::transaction(),
             commitment: tct::StateCommitment(Fq::from(value)),
         }
+    }
+
+    async fn delete_nv_prefix<S>(state: &mut S, prefix: &[u8]) -> Result<()>
+    where
+        S: StateRead + StateWrite + ?Sized,
+    {
+        let mut keys = Vec::new();
+        {
+            let stream = state.nonverifiable_prefix_raw(prefix);
+            futures::pin_mut!(stream);
+            while let Some(item) = stream.next().await {
+                let (key, _) = item?;
+                keys.push(key);
+            }
+        }
+        for key in keys {
+            state.nonverifiable_delete(key);
+        }
+        Ok(())
     }
 
     async fn setup_test_txs(
@@ -6931,12 +6959,12 @@ mod tests {
         let mut repeated = StateDelta::new(snapshot.clone());
         repeated.put_block_height(42);
         for nullifier in &nullifiers {
-            repeated.nullify(*nullifier, source.clone()).await;
+            repeated.nullify(*nullifier, source.clone()).await?;
         }
 
         let mut batched = StateDelta::new(snapshot);
         batched.put_block_height(42);
-        batched.nullify_all(&nullifiers, source).await;
+        batched.nullify_all(&nullifiers, source).await?;
 
         assert_eq!(repeated.pending_nullifiers(), batched.pending_nullifiers());
 
@@ -6979,12 +7007,12 @@ mod tests {
         let mut sequential = StateDelta::new(snapshot.clone());
         sequential.put_block_height(42);
         for (nullifier, source) in &entries {
-            sequential.nullify(*nullifier, source.clone()).await;
+            sequential.nullify(*nullifier, source.clone()).await?;
         }
 
         let mut proposal_batch = StateDelta::new(snapshot);
         proposal_batch.put_block_height(42);
-        let _profile = proposal_batch.nullify_proposal_batch(&entries).await;
+        let _profile = proposal_batch.nullify_proposal_batch(&entries).await?;
 
         assert_eq!(
             sequential.pending_nullifiers(),
@@ -6997,6 +7025,122 @@ mod tests {
                 proposal_batch.spend_info(*nullifier).await?,
             );
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn app_readiness_fails_on_corrupted_nullifier_tree_nv() -> Result<()> {
+        let storage = TempStorage::new_with_prefixes(SUBSTORE_PREFIXES.to_vec()).await?;
+        let mut state = StateDelta::new(storage.latest_snapshot());
+        penumbra_sdk_sct::nullifier_tree::insert_batch(
+            &mut state,
+            [(
+                Nullifier(Fq::from(91u64)),
+                NullificationInfo {
+                    id: [9u8; 32],
+                    spend_height: 7,
+                },
+            )],
+        )
+        .await?;
+        storage.commit(state).await?;
+        assert!(App::is_ready(storage.latest_snapshot()).await);
+
+        let mut corrupt = StateDelta::new(storage.latest_snapshot());
+        let mut stream = corrupt.nonverifiable_prefix_raw(
+            penumbra_sdk_sct::state_key::nullifier_set::tree_node_prefix(),
+        );
+        let mut keys = Vec::new();
+        while let Some(item) = stream.next().await {
+            let (key, _) = item?;
+            keys.push(key);
+        }
+        drop(stream);
+        for key in keys {
+            corrupt.nonverifiable_delete(key);
+        }
+        storage.commit(corrupt).await?;
+
+        assert!(!App::is_ready(storage.latest_snapshot()).await);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn app_readiness_fails_on_corrupted_sct_nv() -> Result<()> {
+        let storage = TempStorage::new_with_prefixes(SUBSTORE_PREFIXES.to_vec()).await?;
+        let mut state = StateDelta::new(storage.latest_snapshot());
+        state.put_sct_params(SctParameters {
+            epoch_duration: 10,
+            sct_anchor_retention_blocks: 100,
+        });
+        state.put_block_height(1);
+        state.put_block_timestamp(1, Time::parse_from_rfc3339("2026-01-01T00:00:00Z")?);
+        state.put_epoch_by_height(
+            1,
+            Epoch {
+                index: 0,
+                start_height: 0,
+            },
+        );
+
+        let mut tree = tct::Tree::new();
+        tree.insert(
+            tct::Witness::Forget,
+            tct::StateCommitment::try_from([11u8; 32])?,
+        )?;
+        let block_root = tree.end_block()?;
+        state.write_sct(1, tree, block_root, None).await;
+        storage.commit(state).await?;
+        assert!(App::is_ready(storage.latest_snapshot()).await);
+
+        let mut corrupt = StateDelta::new(storage.latest_snapshot());
+        delete_nv_prefix(
+            &mut corrupt,
+            penumbra_sdk_sct::state_key::tree::incremental_prefix().as_bytes(),
+        )
+        .await?;
+        storage.commit(corrupt).await?;
+
+        assert!(!App::is_ready(storage.latest_snapshot()).await);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn app_readiness_fails_on_corrupted_compliance_nv() -> Result<()> {
+        let storage = TempStorage::new_with_prefixes(SUBSTORE_PREFIXES.to_vec()).await?;
+        let mut state = StateDelta::new(storage.latest_snapshot());
+        state
+            .add_compliance_leaf(ComplianceLeaf::new(
+                Address::dummy(&mut rand::thread_rng()),
+                asset::Id(Fq::from(123u64)),
+                Fq::from(7u64),
+            ))
+            .await?;
+        state
+            .register_regulated_asset(
+                asset::Id(Fq::from(456u64)),
+                AssetPolicy::simple(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
+            .await?;
+        storage.commit(state).await?;
+        assert!(App::is_ready(storage.latest_snapshot()).await);
+
+        let mut corrupt = StateDelta::new(storage.latest_snapshot());
+        delete_nv_prefix(
+            &mut corrupt,
+            penumbra_sdk_compliance::state_key::tree_storage::user_node_prefix().as_bytes(),
+        )
+        .await?;
+        storage.commit(corrupt).await?;
+
+        assert!(!App::is_ready(storage.latest_snapshot()).await);
 
         Ok(())
     }
