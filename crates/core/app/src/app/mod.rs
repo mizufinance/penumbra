@@ -2707,16 +2707,7 @@ impl App {
                         stateful_start.elapsed().as_secs_f64() * 1000.0;
                     return Ok((verdict, profile));
                 }
-                if self
-                    .state
-                    .get_raw(
-                        &penumbra_sdk_sct::state_key::nullifier_set::spent_nullifier_lookup(
-                            nullifier,
-                        ),
-                    )
-                    .await?
-                    .is_some()
-                {
+                if self.state.spend_info(*nullifier).await?.is_some() {
                     reject_stateful(
                         &mut verdict,
                         ValidationRejectReason::CommittedNullifierConflict,
@@ -3305,7 +3296,7 @@ impl App {
                 historical_context.clone(),
                 &mut profile,
             )
-            .await
+            .await?
         } else {
             let mut included_candidates = Vec::new();
             for candidate in deduped {
@@ -3654,7 +3645,14 @@ impl App {
         // If the chain is halted, we are not ready to start the application.
         // This is a safety mechanism to prevent the chain from starting if it
         // is in a halted state.
-        !state.is_chain_halted().await
+        if state.is_chain_halted().await {
+            return false;
+        }
+        if let Err(error) = penumbra_sdk_sct::nullifier_tree::verify_committed_root(&state).await {
+            tracing::error!(?error, "nullifier tree root check failed");
+            return false;
+        }
+        true
     }
 
     // StateDelta::apply only works when the StateDelta wraps an underlying
@@ -5257,7 +5255,7 @@ impl App {
         let nullifier_insert_start = Instant::now();
         state_tx
             .nullify_all(&prepared.effects.spend_nullifiers, tx_id.clone().into())
-            .await;
+            .await?;
         profile.serial_nullifier_insert_ms =
             nullifier_insert_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -5538,14 +5536,14 @@ impl App {
         deduped: Vec<Candidate>,
         historical_context: HistoricalCheckContext,
         profile: &mut PrepareProposalProfile,
-    ) -> Vec<Candidate> {
+    ) -> Result<Vec<Candidate>> {
         let concurrency = Self::prepare_proposal_filter_concurrency();
         if concurrency <= 1
             || !deduped
                 .iter()
                 .all(|candidate| supports_parallel_prepare(candidate.tx()))
         {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let snapshot = Arc::new(self.committed_snapshot.clone());
@@ -5590,7 +5588,7 @@ impl App {
                     Ok(result) => result,
                     Err(error) => {
                         tracing::warn!(?error, "parallel prepare candidate task failed");
-                        return Vec::new();
+                        return Ok(Vec::new());
                     }
                 };
                 prepared_results[index] = Some(result);
@@ -5659,18 +5657,18 @@ impl App {
             &block_state.staged_nullifiers,
             profile,
         )
-        .await;
+        .await?;
 
-        included_candidates
+        Ok(included_candidates)
     }
 
     async fn apply_prepare_proposal_nullifier_batch_profiled(
         &mut self,
         entries: &[(Nullifier, CommitmentSource)],
         profile: &mut PrepareProposalProfile,
-    ) {
+    ) -> Result<()> {
         if entries.is_empty() {
-            return;
+            return Ok(());
         }
 
         let serial_apply_start = Instant::now();
@@ -5682,7 +5680,7 @@ impl App {
         let begin_state_tx_ms = begin_state_tx_start.elapsed().as_secs_f64() * 1000.0;
 
         let insert_start = Instant::now();
-        let batch_profile = state_tx.nullify_proposal_batch(entries).await;
+        let batch_profile = state_tx.nullify_proposal_batch(entries).await?;
         let insert_total_ms = insert_start.elapsed().as_secs_f64() * 1000.0;
 
         let apply_start = Instant::now();
@@ -5698,6 +5696,7 @@ impl App {
             batch_profile.pending_stage_ms;
         profile.stateful_filter_serial_state_delta_apply_ms += apply_ms;
         profile.stateful_filter_apply_ms += apply_ms;
+        Ok(())
     }
 
     async fn append_block_transaction_to_state<S>(
@@ -6264,8 +6263,9 @@ mod tests {
     use std::sync::Arc;
 
     use anyhow::{anyhow, Context, Result};
-    use cnidarium::{StateDelta, StateRead, TempStorage};
+    use cnidarium::{StateDelta, StateRead, StateWrite, TempStorage};
     use decaf377::{Fq, Fr};
+    use futures::StreamExt as _;
     use penumbra_sdk_asset::{Value, BASE_ASSET_DENOM, BASE_ASSET_ID};
     use penumbra_sdk_compact_block::StatePayload;
     use penumbra_sdk_fee::Fee;
@@ -6277,7 +6277,7 @@ mod tests {
     use penumbra_sdk_proto::DomainType;
     use penumbra_sdk_sct::component::clock::{EpochManager as _, EpochRead as _};
     use penumbra_sdk_sct::component::tree::{SctManager as _, SctRead as _};
-    use penumbra_sdk_sct::{CommitmentSource, Nullifier};
+    use penumbra_sdk_sct::{CommitmentSource, NullificationInfo, Nullifier};
     use penumbra_sdk_shielded_pool::component::NoteManager as _;
     use penumbra_sdk_shielded_pool::{
         genesis::Allocation, ShieldedInputPlan, ShieldedOutputPlan, TransferPlan,
@@ -6927,12 +6927,12 @@ mod tests {
         let mut repeated = StateDelta::new(snapshot.clone());
         repeated.put_block_height(42);
         for nullifier in &nullifiers {
-            repeated.nullify(*nullifier, source.clone()).await;
+            repeated.nullify(*nullifier, source.clone()).await?;
         }
 
         let mut batched = StateDelta::new(snapshot);
         batched.put_block_height(42);
-        batched.nullify_all(&nullifiers, source).await;
+        batched.nullify_all(&nullifiers, source).await?;
 
         assert_eq!(repeated.pending_nullifiers(), batched.pending_nullifiers());
 
@@ -6975,12 +6975,12 @@ mod tests {
         let mut sequential = StateDelta::new(snapshot.clone());
         sequential.put_block_height(42);
         for (nullifier, source) in &entries {
-            sequential.nullify(*nullifier, source.clone()).await;
+            sequential.nullify(*nullifier, source.clone()).await?;
         }
 
         let mut proposal_batch = StateDelta::new(snapshot);
         proposal_batch.put_block_height(42);
-        let _profile = proposal_batch.nullify_proposal_batch(&entries).await;
+        let _profile = proposal_batch.nullify_proposal_batch(&entries).await?;
 
         assert_eq!(
             sequential.pending_nullifiers(),
@@ -6993,6 +6993,44 @@ mod tests {
                 proposal_batch.spend_info(*nullifier).await?,
             );
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn app_readiness_fails_on_corrupted_nullifier_tree_nv() -> Result<()> {
+        let storage = TempStorage::new_with_prefixes(SUBSTORE_PREFIXES.to_vec()).await?;
+        let mut state = StateDelta::new(storage.latest_snapshot());
+        penumbra_sdk_sct::nullifier_tree::insert_batch(
+            &mut state,
+            [(
+                Nullifier(Fq::from(91u64)),
+                NullificationInfo {
+                    id: [9u8; 32],
+                    spend_height: 7,
+                },
+            )],
+        )
+        .await?;
+        storage.commit(state).await?;
+        assert!(App::is_ready(storage.latest_snapshot()).await);
+
+        let mut corrupt = StateDelta::new(storage.latest_snapshot());
+        let mut stream = corrupt.nonverifiable_prefix_raw(
+            penumbra_sdk_sct::state_key::nullifier_set::tree_node_prefix(),
+        );
+        let mut keys = Vec::new();
+        while let Some(item) = stream.next().await {
+            let (key, _) = item?;
+            keys.push(key);
+        }
+        drop(stream);
+        for key in keys {
+            corrupt.nonverifiable_delete(key);
+        }
+        storage.commit(corrupt).await?;
+
+        assert!(!App::is_ready(storage.latest_snapshot()).await);
 
         Ok(())
     }

@@ -33,14 +33,38 @@ pub mod epoch_manager {
 }
 
 pub mod nullifier_set {
-    use crate::Nullifier;
+    use jmt::{storage::NodeKey, KeyHash};
 
-    pub fn spent_nullifier_lookup_prefix() -> &'static str {
-        "sct/nullifier_set/spent_nullifier_lookup/"
+    pub fn root() -> &'static str {
+        "sct/nullifier_set/root"
     }
 
-    pub fn spent_nullifier_lookup(nullifier: &Nullifier) -> String {
-        format!("{}{}", spent_nullifier_lookup_prefix(), nullifier)
+    pub fn tree_node_prefix() -> &'static [u8] {
+        b"sct/nullifier_set/jmt/node/"
+    }
+
+    pub fn tree_node(node_key: &NodeKey) -> Vec<u8> {
+        let mut key = tree_node_prefix().to_vec();
+        key.extend(borsh::to_vec(node_key).expect("JMT node key serialization is infallible"));
+        key
+    }
+
+    pub fn value_prefix() -> &'static [u8] {
+        b"sct/nullifier_set/jmt/value/"
+    }
+
+    pub fn value(key_hash: KeyHash) -> Vec<u8> {
+        let mut key = value_prefix().to_vec();
+        key.extend_from_slice(&key_hash.0);
+        key
+    }
+
+    pub fn rightmost_leaf_node_key() -> &'static [u8] {
+        b"sct/nullifier_set/jmt/meta/rightmost_leaf_node_key"
+    }
+
+    pub fn rightmost_leaf_node() -> &'static [u8] {
+        b"sct/nullifier_set/jmt/meta/rightmost_leaf_node"
     }
 
     pub fn pending_nullifiers() -> &'static str {

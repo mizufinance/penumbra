@@ -15,7 +15,7 @@ use tracing::instrument;
 
 use crate::{
     component::{clock::EpochRead, sct::StateReadExt},
-    event, state_key, CommitmentSource, NullificationInfo, Nullifier,
+    event, nullifier_tree, state_key, CommitmentSource, NullificationInfo, Nullifier,
 };
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -318,10 +318,7 @@ pub trait SctRead: StateRead {
 
     /// Return metadata on the specified nullifier, if it has been spent.
     async fn spend_info(&self, nullifier: Nullifier) -> Result<Option<NullificationInfo>> {
-        self.get(&state_key::nullifier_set::spent_nullifier_lookup(
-            &nullifier,
-        ))
-        .await
+        nullifier_tree::spend_info(self, nullifier).await
     }
 
     /// Return the set of nullifiers that have been spent in the current block.
@@ -457,35 +454,38 @@ pub trait SctManager: StateWrite {
 
     #[instrument(skip(self, source))]
     /// Record a nullifier as spent in the verifiable storage.
-    async fn nullify(&mut self, nullifier: Nullifier, source: CommitmentSource) {
+    async fn nullify(&mut self, nullifier: Nullifier, source: CommitmentSource) -> Result<()> {
         tracing::debug!("marking as spent");
         self.nullify_all(std::slice::from_ref(&nullifier), source)
-            .await;
+            .await
     }
 
     #[instrument(skip(self, source, nullifiers))]
     /// Record a batch of nullifiers as spent in the verifiable storage.
-    async fn nullify_all(&mut self, nullifiers: &[Nullifier], source: CommitmentSource) {
+    async fn nullify_all(
+        &mut self,
+        nullifiers: &[Nullifier],
+        source: CommitmentSource,
+    ) -> Result<()> {
         if nullifiers.is_empty() {
-            return;
+            return Ok(());
         }
 
         tracing::debug!(count = nullifiers.len(), "marking batch as spent");
 
-        let spend_info = NullificationInfo {
-            id: source
-                .id()
-                .expect("nullifiers are only consumed by transactions"),
-            spend_height: self.get_block_height().await.expect("block height is set"),
-        };
+        let id = source
+            .id()
+            .expect("nullifiers are only consumed by transactions");
+        let spend_height = self.get_block_height().await.expect("block height is set");
 
-        // Record each nullifier as spent in the JMT (to prevent double spends).
-        for nullifier in nullifiers {
-            self.put(
-                state_key::nullifier_set::spent_nullifier_lookup(nullifier),
-                spend_info.clone(),
-            );
-        }
+        nullifier_tree::insert_batch(
+            self,
+            nullifiers
+                .iter()
+                .copied()
+                .map(|nullifier| (nullifier, NullificationInfo { id, spend_height })),
+        )
+        .await?;
 
         // Record the nullifiers to be inserted into the compact block in one object-store rewrite.
         let mut pending_nullifiers = self.pending_nullifiers();
@@ -494,6 +494,8 @@ pub trait SctManager: StateWrite {
             state_key::nullifier_set::pending_nullifiers(),
             pending_nullifiers,
         );
+
+        Ok(())
     }
 
     #[instrument(skip(self, entries))]
@@ -504,9 +506,9 @@ pub trait SctManager: StateWrite {
     async fn nullify_proposal_batch(
         &mut self,
         entries: &[(Nullifier, CommitmentSource)],
-    ) -> ProposalNullifierBatchProfile {
+    ) -> Result<ProposalNullifierBatchProfile> {
         if entries.is_empty() {
-            return ProposalNullifierBatchProfile::default();
+            return Ok(ProposalNullifierBatchProfile::default());
         }
 
         tracing::debug!(
@@ -518,18 +520,21 @@ pub trait SctManager: StateWrite {
         let mut profile = ProposalNullifierBatchProfile::default();
 
         let lookup_write_start = std::time::Instant::now();
-        for (nullifier, source) in entries {
-            let spend_info = NullificationInfo {
-                id: source
-                    .id()
-                    .expect("nullifiers are only consumed by transactions"),
-                spend_height,
-            };
-            self.put(
-                state_key::nullifier_set::spent_nullifier_lookup(nullifier),
-                spend_info,
-            );
-        }
+        nullifier_tree::insert_batch(
+            self,
+            entries.iter().map(|(nullifier, source)| {
+                (
+                    *nullifier,
+                    NullificationInfo {
+                        id: source
+                            .id()
+                            .expect("nullifiers are only consumed by transactions"),
+                        spend_height,
+                    },
+                )
+            }),
+        )
+        .await?;
         profile.lookup_write_ms = lookup_write_start.elapsed().as_secs_f64() * 1000.0;
 
         let pending_stage_start = std::time::Instant::now();
@@ -541,7 +546,7 @@ pub trait SctManager: StateWrite {
         );
         profile.pending_stage_ms = pending_stage_start.elapsed().as_secs_f64() * 1000.0;
 
-        profile
+        Ok(profile)
     }
 
     /// Seal the current block in the SCT, and produce an epoch root if
@@ -626,12 +631,7 @@ pub trait VerificationExt: StateRead {
     }
 
     async fn check_nullifier_unspent(&self, nullifier: Nullifier) -> Result<()> {
-        if let Some(info) = self
-            .get::<NullificationInfo>(&state_key::nullifier_set::spent_nullifier_lookup(
-                &nullifier,
-            ))
-            .await?
-        {
+        if let Some(info) = self.spend_info(nullifier).await? {
             anyhow::bail!(
                 "nullifier {} was already spent in {:?}",
                 nullifier,

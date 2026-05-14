@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use penumbra_sdk_proto::{StateReadProto, StateWriteProto};
-use penumbra_sdk_sct::{state_key, NullificationInfo, Nullifier};
+use penumbra_sdk_sct::{
+    component::tree::SctRead as _, nullifier_tree, NullificationInfo, Nullifier,
+};
 
 fn configured_sizes() -> Vec<usize> {
     std::env::var("PENUMBRA_NULLIFIER_BENCH_SIZES")
@@ -33,40 +34,6 @@ fn info(index: usize) -> NullificationInfo {
     }
 }
 
-struct TinyBloom {
-    bits: Vec<u64>,
-    mask: usize,
-}
-
-impl TinyBloom {
-    fn new(entries: usize) -> Self {
-        let bit_count = entries.next_power_of_two().max(64) * 16;
-        Self {
-            bits: vec![0; bit_count / 64],
-            mask: bit_count - 1,
-        }
-    }
-
-    fn indexes(key: &[u8; 32], mask: usize) -> [usize; 3] {
-        let a = u64::from_le_bytes(key[0..8].try_into().unwrap()) as usize;
-        let b = u64::from_le_bytes(key[8..16].try_into().unwrap()) as usize;
-        let c = u64::from_le_bytes(key[16..24].try_into().unwrap()) as usize;
-        [a & mask, b & mask, c & mask]
-    }
-
-    fn insert(&mut self, key: &[u8; 32]) {
-        for index in Self::indexes(key, self.mask) {
-            self.bits[index / 64] |= 1u64 << (index % 64);
-        }
-    }
-
-    fn may_contain(&self, key: &[u8; 32]) -> bool {
-        Self::indexes(key, self.mask)
-            .iter()
-            .all(|index| self.bits[index / 64] & (1u64 << (index % 64)) != 0)
-    }
-}
-
 fn bench_nullifier_storage(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let mut group = c.benchmark_group("nullifier_storage_lookup");
@@ -77,16 +44,19 @@ fn bench_nullifier_storage(c: &mut Criterion) {
         let mut state = cnidarium::StateDelta::new(snapshot);
         let mut flat = HashMap::with_capacity(size);
         let mut ordered = BTreeMap::new();
-        let mut bloom = TinyBloom::new(size);
+        runtime
+            .block_on(nullifier_tree::initialize(&mut state))
+            .unwrap();
 
         for index in 0..size {
             let nf = nullifier(index);
             let key = nullifier_key(index);
             let info = info(index);
-            state.put(state_key::nullifier_set::spent_nullifier_lookup(&nf), info);
+            runtime
+                .block_on(nullifier_tree::insert_batch(&mut state, [(nf, info)]))
+                .unwrap();
             flat.insert(key, info);
             ordered.insert(key, info);
-            bloom.insert(&key);
         }
 
         let hit_index = size / 2;
@@ -94,15 +64,11 @@ fn bench_nullifier_storage(c: &mut Criterion) {
         let hit_nf = nullifier(hit_index);
         let miss_key = nullifier_key(size + 1);
 
-        group.bench_with_input(BenchmarkId::new("jmt_hit", size), &hit_nf, |b, nf| {
-            b.iter(|| {
-                runtime
-                    .block_on(state.get::<NullificationInfo>(
-                        &state_key::nullifier_set::spent_nullifier_lookup(nf),
-                    ))
-                    .unwrap()
-            })
-        });
+        group.bench_with_input(
+            BenchmarkId::new("dedicated_jmt_hit", size),
+            &hit_nf,
+            |b, nf| b.iter(|| runtime.block_on(state.spend_info(*nf)).unwrap()),
+        );
 
         group.bench_with_input(
             BenchmarkId::new("flat_hash_hit", size),
@@ -115,11 +81,10 @@ fn bench_nullifier_storage(c: &mut Criterion) {
             &hit_key,
             |b, key| b.iter(|| ordered.get(key)),
         );
-
         group.bench_with_input(
-            BenchmarkId::new("bloom_then_flat_miss", size),
+            BenchmarkId::new("flat_hash_miss", size),
             &miss_key,
-            |b, key| b.iter(|| bloom.may_contain(key).then(|| flat.get(key)).flatten()),
+            |b, key| b.iter(|| flat.get(key)),
         );
     }
 

@@ -141,10 +141,24 @@ message SctFrontierResponse {
   .ibc.core.commitment.v1.MerkleProof proof = 4;
 }
 
+message NullifierRequest {
+  Nullifier nullifier = 1;
+  bool with_proof = 2;
+}
+
+message NullifierResponse {
+  bool spent = 1;
+  NullificationInfo nullification_info = 2;
+  bytes nullifier_root = 3;
+  // Borsh-encoded JMT SparseMerkleProof<Sha256>.
+  bytes proof = 4;
+}
+
 // Query operations for the SCT component.
 service QueryService {
   rpc AnchorByHeight(AnchorByHeightRequest) returns (AnchorByHeightResponse);
   rpc EpochByHeight(EpochByHeightRequest) returns (EpochByHeightResponse);
   rpc TimestampByHeight(TimestampByHeightRequest) returns (TimestampByHeightResponse);
   rpc SctFrontier(SctFrontierRequest) returns (SctFrontierResponse);
+  rpc Nullifier(NullifierRequest) returns (NullifierResponse);
 }
