@@ -1,4 +1,5 @@
 use decaf377::{Fq, Fr};
+use decaf377_rdsa::{Signature, SpendAuth, VerificationKey};
 use once_cell::sync::Lazy;
 use penumbra_sdk_asset::asset;
 use penumbra_sdk_keys::Address;
@@ -39,6 +40,17 @@ pub const TRANSFER_OUTPUT_WIRE_BYTES: usize =
     EPK_BYTES * 3 + C2_BYTES * 3 + DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES * 3; // 544 bytes
 pub const TRANSFER_OUTPUT_CIPHERTEXT_FQS: usize =
     (DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES * 3) / 32; // 11
+
+const ASSET_REGISTRATION_GRANT_DOMAIN: &[u8] = b"penumbra.compliance.asset_registration_grant.v1";
+const USER_REGISTRATION_GRANT_DOMAIN: &[u8] = b"penumbra.compliance.user_registration_grant.v1";
+
+fn grant_signing_bytes(domain: &[u8], body_bytes: Vec<u8>) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(domain.len() + 1 + body_bytes.len());
+    bytes.extend_from_slice(domain);
+    bytes.push(0);
+    bytes.extend_from_slice(&body_bytes);
+    bytes
+}
 
 /// DLEQ proof wire format: (c, s) per tier. Transfer-input has 1 tier, transfer-output has 3.
 pub const FQ_BYTES: usize = 32;
@@ -243,6 +255,7 @@ pub struct RingData {
 pub struct AssetPolicy {
     pub params: AssetParams,
     pub ring: RingData,
+    pub registration_authority_vk: Option<VerificationKey<SpendAuth>>,
 }
 
 impl AssetPolicy {
@@ -270,7 +283,13 @@ impl AssetPolicy {
                 permission,
                 resource,
             },
+            registration_authority_vk: None,
         }
+    }
+
+    pub fn with_registration_authority(mut self, vk: VerificationKey<SpendAuth>) -> Self {
+        self.registration_authority_vk = Some(vk);
+        self
     }
 
     /// Create a simple policy with just dk_pub, threshold, and ring_pk.
@@ -305,6 +324,7 @@ impl AssetPolicy {
                 permission: String::new(),
                 resource: String::new(),
             },
+            registration_authority_vk: None,
         }
     }
 
@@ -354,6 +374,12 @@ impl AssetPolicy {
         write_string(&mut bytes, &self.ring.policy_id);
         write_string(&mut bytes, &self.ring.permission);
         write_string(&mut bytes, &self.ring.resource);
+        if let Some(vk) = &self.registration_authority_vk {
+            bytes.push(1);
+            bytes.extend_from_slice(&vk.to_bytes());
+        } else {
+            bytes.push(0);
+        }
         bytes
     }
 
@@ -422,6 +448,22 @@ impl AssetPolicy {
         let policy_id = read_string(bytes, &mut offset)?;
         let permission = read_string(bytes, &mut offset)?;
         let resource = read_string(bytes, &mut offset)?;
+        let registration_authority_vk = if offset < bytes.len() {
+            let has_vk = bytes[offset];
+            offset += 1;
+            if has_vk == 0 {
+                None
+            } else {
+                if offset + 32 > bytes.len() {
+                    anyhow::bail!("truncated registration_authority_vk");
+                }
+                let vk = VerificationKey::<SpendAuth>::try_from(&bytes[offset..offset + 32])
+                    .map_err(|_| anyhow::anyhow!("invalid registration_authority_vk"))?;
+                Some(vk)
+            }
+        } else {
+            None
+        };
 
         Ok(Self {
             params: AssetParams {
@@ -436,6 +478,7 @@ impl AssetPolicy {
                 permission,
                 resource,
             },
+            registration_authority_vk,
         })
     }
 }
@@ -481,6 +524,11 @@ impl TryFrom<pb::AssetPolicy> for AssetPolicy {
                 .vartime_decompress()
                 .map_err(|_| anyhow::anyhow!("invalid ring_pk encoding"))?
         };
+        let registration_authority_vk = value
+            .registration_authority_vk
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("invalid registration_authority_vk"))?;
 
         Ok(AssetPolicy {
             params: AssetParams {
@@ -495,6 +543,7 @@ impl TryFrom<pb::AssetPolicy> for AssetPolicy {
                 permission: value.permission,
                 resource: value.resource,
             },
+            registration_authority_vk,
         })
     }
 }
@@ -510,8 +559,274 @@ impl From<AssetPolicy> for pb::AssetPolicy {
             policy_id: value.ring.policy_id,
             permission: value.ring.permission,
             resource: value.ring.resource,
+            registration_authority_vk: value.registration_authority_vk.map(Into::into),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    try_from = "pb::AssetRegistrationGrantBody",
+    into = "pb::AssetRegistrationGrantBody"
+)]
+pub struct AssetRegistrationGrantBody {
+    pub asset_id: asset::Id,
+    pub is_regulated: bool,
+    pub dk_pub: Option<decaf377::Element>,
+    pub threshold: Option<u128>,
+    pub allowed_channels: Vec<String>,
+    pub ring_pk: Option<decaf377::Element>,
+    pub ring_id: String,
+    pub policy_id: String,
+    pub permission: String,
+    pub resource: String,
+    pub registration_authority_vk: Option<VerificationKey<SpendAuth>>,
+    pub valid_until_unix: u64,
+}
+
+impl DomainType for AssetRegistrationGrantBody {
+    type Proto = pb::AssetRegistrationGrantBody;
+}
+
+impl AssetRegistrationGrantBody {
+    pub fn signing_bytes(&self) -> Vec<u8> {
+        grant_signing_bytes(ASSET_REGISTRATION_GRANT_DOMAIN, self.encode_to_vec())
+    }
+}
+
+impl TryFrom<pb::AssetRegistrationGrantBody> for AssetRegistrationGrantBody {
+    type Error = anyhow::Error;
+
+    fn try_from(value: pb::AssetRegistrationGrantBody) -> Result<Self, Self::Error> {
+        let dk_pub = decode_optional_element(value.dk_pub, "dk_pub")?;
+        let threshold = if value.threshold.is_empty() {
+            None
+        } else {
+            let bytes: [u8; 16] = value.threshold.try_into().map_err(|v: Vec<u8>| {
+                anyhow::anyhow!("threshold must be 16 bytes, got {}", v.len())
+            })?;
+            Some(u128::from_le_bytes(bytes))
+        };
+        let ring_pk = decode_optional_element(value.ring_pk, "ring_pk")?;
+        let registration_authority_vk = value
+            .registration_authority_vk
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("invalid registration_authority_vk"))?;
+
+        Ok(Self {
+            asset_id: value
+                .asset_id
+                .ok_or_else(|| anyhow::anyhow!("missing asset_id"))?
+                .try_into()?,
+            is_regulated: value.is_regulated,
+            dk_pub,
+            threshold,
+            allowed_channels: value.allowed_channels,
+            ring_pk,
+            ring_id: value.ring_id,
+            policy_id: value.policy_id,
+            permission: value.permission,
+            resource: value.resource,
+            registration_authority_vk,
+            valid_until_unix: value.valid_until_unix,
+        })
+    }
+}
+
+impl From<AssetRegistrationGrantBody> for pb::AssetRegistrationGrantBody {
+    fn from(value: AssetRegistrationGrantBody) -> Self {
+        Self {
+            asset_id: Some(value.asset_id.into()),
+            is_regulated: value.is_regulated,
+            dk_pub: value
+                .dk_pub
+                .map(|e| e.vartime_compress().0.to_vec())
+                .unwrap_or_default(),
+            threshold: value
+                .threshold
+                .map(|t| t.to_le_bytes().to_vec())
+                .unwrap_or_default(),
+            allowed_channels: value.allowed_channels,
+            ring_pk: value
+                .ring_pk
+                .map(|e| e.vartime_compress().0.to_vec())
+                .unwrap_or_default(),
+            ring_id: value.ring_id,
+            policy_id: value.policy_id,
+            permission: value.permission,
+            resource: value.resource,
+            registration_authority_vk: value.registration_authority_vk.map(Into::into),
+            valid_until_unix: value.valid_until_unix,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    try_from = "pb::AssetRegistrationGrant",
+    into = "pb::AssetRegistrationGrant"
+)]
+pub struct AssetRegistrationGrant {
+    pub body: AssetRegistrationGrantBody,
+    pub registrar_vk: VerificationKey<SpendAuth>,
+    pub signature: Signature<SpendAuth>,
+}
+
+impl DomainType for AssetRegistrationGrant {
+    type Proto = pb::AssetRegistrationGrant;
+}
+
+impl AssetRegistrationGrant {
+    pub fn verify(&self) -> anyhow::Result<()> {
+        self.registrar_vk
+            .verify(&self.body.signing_bytes(), &self.signature)
+            .map_err(|_| anyhow::anyhow!("asset registration grant signature failed to verify"))
+    }
+}
+
+impl TryFrom<pb::AssetRegistrationGrant> for AssetRegistrationGrant {
+    type Error = anyhow::Error;
+
+    fn try_from(value: pb::AssetRegistrationGrant) -> Result<Self, Self::Error> {
+        Ok(Self {
+            body: value
+                .body
+                .ok_or_else(|| anyhow::anyhow!("missing asset registration grant body"))?
+                .try_into()?,
+            registrar_vk: value
+                .registrar_vk
+                .ok_or_else(|| anyhow::anyhow!("missing asset registration registrar_vk"))?
+                .try_into()?,
+            signature: value
+                .signature
+                .ok_or_else(|| anyhow::anyhow!("missing asset registration grant signature"))?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<AssetRegistrationGrant> for pb::AssetRegistrationGrant {
+    fn from(value: AssetRegistrationGrant) -> Self {
+        Self {
+            body: Some(value.body.into()),
+            registrar_vk: Some(value.registrar_vk.into()),
+            signature: Some(value.signature.into()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    try_from = "pb::UserRegistrationGrantBody",
+    into = "pb::UserRegistrationGrantBody"
+)]
+pub struct UserRegistrationGrantBody {
+    pub leaf: ComplianceLeaf,
+    pub policy_id: String,
+    pub valid_until_unix: u64,
+    pub nonce: Vec<u8>,
+}
+
+impl DomainType for UserRegistrationGrantBody {
+    type Proto = pb::UserRegistrationGrantBody;
+}
+
+impl UserRegistrationGrantBody {
+    pub fn signing_bytes(&self) -> Vec<u8> {
+        grant_signing_bytes(USER_REGISTRATION_GRANT_DOMAIN, self.encode_to_vec())
+    }
+}
+
+impl TryFrom<pb::UserRegistrationGrantBody> for UserRegistrationGrantBody {
+    type Error = anyhow::Error;
+
+    fn try_from(value: pb::UserRegistrationGrantBody) -> Result<Self, Self::Error> {
+        Ok(Self {
+            leaf: value
+                .leaf
+                .ok_or_else(|| anyhow::anyhow!("missing user registration grant leaf"))?
+                .try_into()?,
+            policy_id: value.policy_id,
+            valid_until_unix: value.valid_until_unix,
+            nonce: value.nonce,
+        })
+    }
+}
+
+impl From<UserRegistrationGrantBody> for pb::UserRegistrationGrantBody {
+    fn from(value: UserRegistrationGrantBody) -> Self {
+        Self {
+            leaf: Some(value.leaf.into()),
+            policy_id: value.policy_id,
+            valid_until_unix: value.valid_until_unix,
+            nonce: value.nonce,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    try_from = "pb::UserRegistrationGrant",
+    into = "pb::UserRegistrationGrant"
+)]
+pub struct UserRegistrationGrant {
+    pub body: UserRegistrationGrantBody,
+    pub signature: Signature<SpendAuth>,
+}
+
+impl DomainType for UserRegistrationGrant {
+    type Proto = pb::UserRegistrationGrant;
+}
+
+impl UserRegistrationGrant {
+    pub fn verify(&self, vk: &VerificationKey<SpendAuth>) -> anyhow::Result<()> {
+        vk.verify(&self.body.signing_bytes(), &self.signature)
+            .map_err(|_| anyhow::anyhow!("user registration grant signature failed to verify"))
+    }
+}
+
+impl TryFrom<pb::UserRegistrationGrant> for UserRegistrationGrant {
+    type Error = anyhow::Error;
+
+    fn try_from(value: pb::UserRegistrationGrant) -> Result<Self, Self::Error> {
+        Ok(Self {
+            body: value
+                .body
+                .ok_or_else(|| anyhow::anyhow!("missing user registration grant body"))?
+                .try_into()?,
+            signature: value
+                .signature
+                .ok_or_else(|| anyhow::anyhow!("missing user registration grant signature"))?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<UserRegistrationGrant> for pb::UserRegistrationGrant {
+    fn from(value: UserRegistrationGrant) -> Self {
+        Self {
+            body: Some(value.body.into()),
+            signature: Some(value.signature.into()),
+        }
+    }
+}
+
+fn decode_optional_element(
+    bytes: Vec<u8>,
+    field: &'static str,
+) -> anyhow::Result<Option<decaf377::Element>> {
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("{field} must be exactly 32 bytes"))?;
+    Ok(Some(
+        decaf377::Encoding(bytes)
+            .vartime_decompress()
+            .map_err(|_| anyhow::anyhow!("invalid {field} encoding"))?,
+    ))
 }
 
 /// Message to register an asset as regulated or non-regulated.
@@ -538,6 +853,10 @@ pub struct MsgRegisterAsset {
     pub permission: String,
     /// ACP resource type.
     pub resource: String,
+    /// Immutable authority key that signs user registration grants for this asset.
+    pub registration_authority_vk: Option<VerificationKey<SpendAuth>>,
+    /// Registrar authorization for this asset registration.
+    pub asset_registration_grant: Option<AssetRegistrationGrant>,
 }
 
 impl DomainType for MsgRegisterAsset {
@@ -548,19 +867,7 @@ impl TryFrom<pb::MsgRegisterAsset> for MsgRegisterAsset {
     type Error = anyhow::Error;
 
     fn try_from(value: pb::MsgRegisterAsset) -> Result<Self, Self::Error> {
-        let dk_pub = if value.dk_pub.is_empty() {
-            None
-        } else {
-            let bytes: [u8; 32] = value
-                .dk_pub
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("dk_pub must be exactly 32 bytes"))?;
-            Some(
-                decaf377::Encoding(bytes)
-                    .vartime_decompress()
-                    .map_err(|_| anyhow::anyhow!("invalid dk_pub encoding"))?,
-            )
-        };
+        let dk_pub = decode_optional_element(value.dk_pub, "dk_pub")?;
 
         let threshold = if value.threshold.is_empty() {
             None
@@ -571,19 +878,16 @@ impl TryFrom<pb::MsgRegisterAsset> for MsgRegisterAsset {
             Some(u128::from_le_bytes(threshold_bytes))
         };
 
-        let ring_pk = if value.ring_pk.is_empty() {
-            None
-        } else {
-            let bytes: [u8; 32] = value
-                .ring_pk
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("ring_pk must be exactly 32 bytes"))?;
-            Some(
-                decaf377::Encoding(bytes)
-                    .vartime_decompress()
-                    .map_err(|_| anyhow::anyhow!("invalid ring_pk encoding"))?,
-            )
-        };
+        let ring_pk = decode_optional_element(value.ring_pk, "ring_pk")?;
+        let registration_authority_vk = value
+            .registration_authority_vk
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("invalid registration_authority_vk"))?;
+        let asset_registration_grant = value
+            .asset_registration_grant
+            .map(TryInto::try_into)
+            .transpose()?;
 
         Ok(MsgRegisterAsset {
             asset_id: value
@@ -599,6 +903,8 @@ impl TryFrom<pb::MsgRegisterAsset> for MsgRegisterAsset {
             policy_id: value.policy_id,
             permission: value.permission,
             resource: value.resource,
+            registration_authority_vk,
+            asset_registration_grant,
         })
     }
 }
@@ -625,6 +931,27 @@ impl From<MsgRegisterAsset> for pb::MsgRegisterAsset {
             policy_id: value.policy_id,
             permission: value.permission,
             resource: value.resource,
+            registration_authority_vk: value.registration_authority_vk.map(Into::into),
+            asset_registration_grant: value.asset_registration_grant.map(Into::into),
+        }
+    }
+}
+
+impl MsgRegisterAsset {
+    pub fn registration_grant_body(&self, valid_until_unix: u64) -> AssetRegistrationGrantBody {
+        AssetRegistrationGrantBody {
+            asset_id: self.asset_id,
+            is_regulated: self.is_regulated,
+            dk_pub: self.dk_pub,
+            threshold: self.threshold,
+            allowed_channels: self.allowed_channels.clone(),
+            ring_pk: self.ring_pk,
+            ring_id: self.ring_id.clone(),
+            policy_id: self.policy_id.clone(),
+            permission: self.permission.clone(),
+            resource: self.resource.clone(),
+            registration_authority_vk: self.registration_authority_vk,
+            valid_until_unix,
         }
     }
 }
@@ -643,8 +970,8 @@ impl penumbra_sdk_txhash::EffectingData for MsgRegisterAsset {
 pub struct MsgRegisterUser {
     /// The compliance leaf containing the user's registration information.
     pub leaf: ComplianceLeaf,
-    /// Signature authorizing this registration.
-    pub signature: Vec<u8>,
+    /// Grant authorizing this registration.
+    pub grant: Option<UserRegistrationGrant>,
 }
 
 impl DomainType for MsgRegisterUser {
@@ -660,7 +987,7 @@ impl TryFrom<pb::MsgRegisterUser> for MsgRegisterUser {
                 .leaf
                 .ok_or_else(|| anyhow::anyhow!("missing leaf"))?
                 .try_into()?,
-            signature: value.signature,
+            grant: value.grant.map(TryInto::try_into).transpose()?,
         })
     }
 }
@@ -669,7 +996,7 @@ impl From<MsgRegisterUser> for pb::MsgRegisterUser {
     fn from(value: MsgRegisterUser) -> pb::MsgRegisterUser {
         pb::MsgRegisterUser {
             leaf: Some(value.leaf.into()),
-            signature: value.signature,
+            grant: value.grant.map(Into::into),
         }
     }
 }

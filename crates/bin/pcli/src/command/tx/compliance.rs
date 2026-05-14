@@ -1,15 +1,21 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
+use decaf377_rdsa::{SigningKey, SpendAuth, VerificationKey};
 use penumbra_sdk_asset::asset;
-use penumbra_sdk_compliance::structs::{MsgRegisterAsset, MsgRegisterUser};
+use penumbra_sdk_compliance::structs::{
+    AssetRegistrationGrant, AssetRegistrationGrantBody, MsgRegisterAsset, MsgRegisterUser,
+    UserRegistrationGrant, UserRegistrationGrantBody,
+};
 use penumbra_sdk_compliance::{
     derive_compliance_scalar, issuer_keys::DetectionKey, ComplianceLeaf, IssuerComplianceWorker,
     RpcAuditAdviceProvider, SqliteScannerStore, TendermintProxyBlockIdentityProvider,
 };
+use penumbra_sdk_keys::Address;
 use penumbra_sdk_proto::util::tendermint_proxy::v1::{
     tendermint_proxy_service_client::TendermintProxyServiceClient, GetStatusRequest,
 };
+use penumbra_sdk_proto::DomainType;
 use penumbra_sdk_transaction::{ActionPlan, TransactionPlan};
 use penumbra_sdk_view::{NoteManager, TransferPlanningResult};
 use tonic::transport::Channel;
@@ -51,6 +57,12 @@ pub enum ComplianceCmd {
         /// Orbis resource name used for PRE authorization.
         #[clap(long, default_value = "")]
         resource: String,
+        /// Registration-authority verification key for regulated user grants, hex-encoded.
+        #[clap(long)]
+        registration_authority_vk_hex: Option<String>,
+        /// Asset registration grant, hex-encoded protobuf bytes.
+        #[clap(long)]
+        asset_registration_grant_hex: String,
         /// The selected fee tier to multiply the fee amount by.
         #[clap(short, long, default_value_t)]
         fee_tier: FeeTier,
@@ -67,6 +79,9 @@ pub enum ComplianceCmd {
         /// Address index to register (default: 0).
         #[clap(long, default_value = "0")]
         address_index: u32,
+        /// User registration grant, hex-encoded protobuf bytes.
+        #[clap(long)]
+        user_registration_grant_hex: String,
         /// The selected fee tier to multiply the fee amount by.
         #[clap(short, long, default_value_t)]
         fee_tier: FeeTier,
@@ -78,6 +93,73 @@ pub enum ComplianceCmd {
 
     /// Generate a new issuer detection key pair.
     GenerateDk,
+
+    /// Sign an asset registration grant.
+    SignAssetGrant {
+        /// The asset ID authorized by this grant.
+        asset_id: String,
+        /// Mark this asset as regulated.
+        #[clap(long)]
+        regulated: bool,
+        /// Mark this asset as unregulated.
+        #[clap(long, conflicts_with = "regulated")]
+        unregulated: bool,
+        /// Issuer's detection key public (hex, 64 chars = 32 bytes).
+        #[clap(long)]
+        dk_pub_hex: Option<String>,
+        /// Amount threshold for flagging, in base units.
+        #[clap(long)]
+        threshold: Option<u128>,
+        /// Orbis ring public key (hex, 64 chars = 32 bytes compressed).
+        #[clap(long)]
+        ring_pk_hex: Option<String>,
+        /// Orbis ring identifier.
+        #[clap(long, default_value = "")]
+        ring_id: String,
+        /// Orbis policy identifier used for PRE authorization.
+        #[clap(long, default_value = "")]
+        policy_id: String,
+        /// Orbis permission name used for PRE authorization.
+        #[clap(long, default_value = "")]
+        permission: String,
+        /// Orbis resource name used for PRE authorization.
+        #[clap(long, default_value = "")]
+        resource: String,
+        /// Registration-authority verification key for regulated user grants, hex-encoded.
+        #[clap(long)]
+        registration_authority_vk_hex: Option<String>,
+        /// Registrar signing key authorized in genesis, hex-encoded.
+        #[clap(long)]
+        registrar_sk_hex: String,
+        /// Grant expiration as Unix seconds.
+        #[clap(long)]
+        valid_until_unix: u64,
+    },
+
+    /// Sign a user registration grant.
+    SignUserGrant {
+        /// The asset ID authorized by this grant.
+        asset_id: String,
+        /// Penumbra address authorized by this grant.
+        #[clap(long)]
+        address: Address,
+        /// SourceHub policy ID bound to this grant.
+        #[clap(long, default_value = "")]
+        policy_id: String,
+        /// Registration-authority signing key for this asset, hex-encoded.
+        #[clap(long)]
+        registration_authority_sk_hex: String,
+        /// Grant expiration as Unix seconds.
+        #[clap(long)]
+        valid_until_unix: u64,
+    },
+
+    /// Derive a spend verification key from a spend signing key.
+    DeriveSpendVk {
+        /// Spend signing key, hex-encoded.
+        #[clap(long)]
+        signing_key_hex: String,
+    },
 }
 
 impl ComplianceCmd {
@@ -88,6 +170,9 @@ impl ComplianceCmd {
             ComplianceCmd::RegisterUser { .. } => false,
             ComplianceCmd::Scan(_) => true,
             ComplianceCmd::GenerateDk => true,
+            ComplianceCmd::SignAssetGrant { .. } => true,
+            ComplianceCmd::SignUserGrant { .. } => true,
+            ComplianceCmd::DeriveSpendVk { .. } => true,
         }
     }
 
@@ -99,6 +184,15 @@ impl ComplianceCmd {
     /// Check if this command is a generate-dk command.
     pub fn is_generate_dk(&self) -> bool {
         matches!(self, ComplianceCmd::GenerateDk)
+    }
+
+    pub fn is_sign_grant(&self) -> bool {
+        matches!(
+            self,
+            ComplianceCmd::SignAssetGrant { .. }
+                | ComplianceCmd::SignUserGrant { .. }
+                | ComplianceCmd::DeriveSpendVk { .. }
+        )
     }
 
     /// Execute the persistent issuer scanner.
@@ -180,6 +274,115 @@ impl ComplianceCmd {
         }
     }
 
+    /// Execute offline grant-signing commands.
+    pub fn exec_sign_grant(&self) -> Result<()> {
+        match self {
+            ComplianceCmd::SignAssetGrant {
+                asset_id,
+                regulated,
+                unregulated,
+                dk_pub_hex,
+                threshold,
+                ring_pk_hex,
+                ring_id,
+                policy_id,
+                permission,
+                resource,
+                registration_authority_vk_hex,
+                registrar_sk_hex,
+                valid_until_unix,
+            } => {
+                let is_regulated = if *regulated {
+                    true
+                } else if *unregulated {
+                    false
+                } else {
+                    anyhow::bail!("Must specify either --regulated or --unregulated");
+                };
+                let asset_id = Self::parse_asset_id(asset_id)?;
+                let dk_pub = if let Some(hex_str) = dk_pub_hex {
+                    Some(parse_decaf377_element(hex_str, "dk_pub_hex")?)
+                } else if is_regulated {
+                    anyhow::bail!("--dk-pub-hex is required for regulated assets");
+                } else {
+                    None
+                };
+                let ring_pk = ring_pk_hex
+                    .as_ref()
+                    .map(|hex_str| parse_decaf377_element(hex_str, "ring_pk_hex"))
+                    .transpose()?;
+                let registration_authority_vk = registration_authority_vk_hex
+                    .as_ref()
+                    .map(|hex_str| parse_spend_vk(hex_str, "registration_authority_vk_hex"))
+                    .transpose()?;
+                if is_regulated && registration_authority_vk.is_none() {
+                    anyhow::bail!(
+                        "--registration-authority-vk-hex is required for regulated assets"
+                    );
+                }
+                let registrar_sk = parse_spend_sk(registrar_sk_hex, "registrar_sk_hex")?;
+                let body = AssetRegistrationGrantBody {
+                    asset_id,
+                    is_regulated,
+                    dk_pub,
+                    threshold: *threshold,
+                    allowed_channels: vec![],
+                    ring_pk,
+                    ring_id: ring_id.clone(),
+                    policy_id: policy_id.clone(),
+                    permission: permission.clone(),
+                    resource: resource.clone(),
+                    registration_authority_vk,
+                    valid_until_unix: *valid_until_unix,
+                };
+                let grant = AssetRegistrationGrant {
+                    signature: registrar_sk.sign(rand_core::OsRng, &body.signing_bytes()),
+                    registrar_vk: VerificationKey::from(&registrar_sk),
+                    body,
+                };
+                println!("{}", hex::encode(grant.encode_to_vec()));
+                Ok(())
+            }
+            ComplianceCmd::SignUserGrant {
+                asset_id,
+                address,
+                policy_id,
+                registration_authority_sk_hex,
+                valid_until_unix,
+            } => {
+                let asset_id = Self::parse_asset_id(asset_id)?;
+                let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+                let d = derive_compliance_scalar(b_d_fq);
+                let leaf = ComplianceLeaf::new(address.clone(), asset_id, d);
+                let mut nonce = vec![0u8; 16];
+                rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut nonce);
+                let authority_sk = parse_spend_sk(
+                    registration_authority_sk_hex,
+                    "registration_authority_sk_hex",
+                )?;
+                let body = UserRegistrationGrantBody {
+                    leaf,
+                    policy_id: policy_id.clone(),
+                    valid_until_unix: *valid_until_unix,
+                    nonce,
+                };
+                let grant = UserRegistrationGrant {
+                    signature: authority_sk.sign(rand_core::OsRng, &body.signing_bytes()),
+                    body,
+                };
+                println!("{}", hex::encode(grant.encode_to_vec()));
+                Ok(())
+            }
+            ComplianceCmd::DeriveSpendVk { signing_key_hex } => {
+                let signing_key = parse_spend_sk(signing_key_hex, "signing_key_hex")?;
+                let vk = VerificationKey::from(&signing_key);
+                println!("{}", hex::encode(vk.to_bytes()));
+                Ok(())
+            }
+            _ => anyhow::bail!("exec_sign_grant called on non-grant command"),
+        }
+    }
+
     /// Create the transaction plan for this compliance command.
     pub async fn plan(
         &self,
@@ -198,6 +401,8 @@ impl ComplianceCmd {
                 policy_id,
                 permission,
                 resource,
+                registration_authority_vk_hex,
+                asset_registration_grant_hex,
                 fee_tier,
             } => {
                 let is_regulated = if *regulated {
@@ -225,6 +430,18 @@ impl ComplianceCmd {
                     .as_ref()
                     .map(|hex_str| parse_decaf377_element(hex_str, "ring_pk_hex"))
                     .transpose()?;
+                let registration_authority_vk = registration_authority_vk_hex
+                    .as_ref()
+                    .map(|hex_str| parse_spend_vk(hex_str, "registration_authority_vk_hex"))
+                    .transpose()?;
+                if is_regulated && registration_authority_vk.is_none() {
+                    anyhow::bail!(
+                        "--registration-authority-vk-hex is required for regulated assets"
+                    );
+                }
+                let asset_registration_grant =
+                    decode_asset_registration_grant(asset_registration_grant_hex)
+                        .context("invalid --asset-registration-grant-hex")?;
 
                 let msg = MsgRegisterAsset {
                     asset_id,
@@ -237,6 +454,8 @@ impl ComplianceCmd {
                     policy_id: policy_id.clone(),
                     permission: permission.clone(),
                     resource: resource.clone(),
+                    registration_authority_vk,
+                    asset_registration_grant: Some(asset_registration_grant),
                 };
 
                 let mut note_manager = NoteManager::new(rand_core::OsRng);
@@ -257,6 +476,7 @@ impl ComplianceCmd {
                 asset_id,
                 address,
                 address_index,
+                user_registration_grant_hex,
                 fee_tier,
             } => {
                 let asset_id = Self::parse_asset_id(asset_id)?;
@@ -273,9 +493,11 @@ impl ComplianceCmd {
                 let b_d_fq = address.diversified_generator().vartime_compress_to_field();
                 let d = derive_compliance_scalar(b_d_fq);
                 let leaf = ComplianceLeaf::new(address, asset_id, d);
+                let grant = decode_user_registration_grant(user_registration_grant_hex)
+                    .context("invalid --user-registration-grant-hex")?;
                 let msg = MsgRegisterUser {
                     leaf,
-                    signature: vec![],
+                    grant: Some(grant),
                 };
 
                 let mut note_manager = NoteManager::new(rand_core::OsRng);
@@ -301,6 +523,12 @@ impl ComplianceCmd {
                     "GenerateDk command doesn't create a transaction - use exec_generate_dk instead"
                 )
             }
+
+            ComplianceCmd::SignAssetGrant { .. }
+            | ComplianceCmd::SignUserGrant { .. }
+            | ComplianceCmd::DeriveSpendVk { .. } => anyhow::bail!(
+                "offline compliance helper commands don't create transactions - use exec_sign_grant instead"
+            ),
         }
     }
 
@@ -396,6 +624,34 @@ fn parse_decaf377_element(hex_str: &str, label: &str) -> Result<decaf377::Elemen
     decaf377::Encoding(arr)
         .vartime_decompress()
         .map_err(|_| anyhow::anyhow!("invalid {label} encoding"))
+}
+
+fn parse_spend_vk(hex_str: &str, label: &str) -> Result<VerificationKey<SpendAuth>> {
+    let bytes = hex::decode(hex_str).with_context(|| format!("invalid {label}: must be hex"))?;
+    if bytes.len() != 32 {
+        anyhow::bail!("{label} must be exactly 64 hex chars (32 bytes)");
+    }
+    VerificationKey::<SpendAuth>::try_from(bytes.as_slice())
+        .map_err(|_| anyhow::anyhow!("invalid {label} encoding"))
+}
+
+fn parse_spend_sk(hex_str: &str, label: &str) -> Result<SigningKey<SpendAuth>> {
+    let bytes = hex::decode(hex_str).with_context(|| format!("invalid {label}: must be hex"))?;
+    if bytes.len() != 32 {
+        anyhow::bail!("{label} must be exactly 64 hex chars (32 bytes)");
+    }
+    SigningKey::<SpendAuth>::try_from(bytes.as_slice())
+        .map_err(|_| anyhow::anyhow!("invalid {label} encoding"))
+}
+
+fn decode_asset_registration_grant(hex_str: &str) -> Result<AssetRegistrationGrant> {
+    let bytes = hex::decode(hex_str).context("value must be hex-encoded protobuf bytes")?;
+    AssetRegistrationGrant::decode(bytes.as_slice())
+}
+
+fn decode_user_registration_grant(hex_str: &str) -> Result<UserRegistrationGrant> {
+    let bytes = hex::decode(hex_str).context("value must be hex-encoded protobuf bytes")?;
+    UserRegistrationGrant::decode(bytes.as_slice())
 }
 
 /// Parse issuer Detection Key (DK) from hex string (32 bytes).

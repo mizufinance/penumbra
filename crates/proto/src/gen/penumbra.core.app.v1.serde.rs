@@ -611,6 +611,9 @@ impl serde::Serialize for GenesisContent {
         if self.fee_content.is_some() {
             len += 1;
         }
+        if self.compliance_content.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.app.v1.GenesisContent", len)?;
         if !self.chain_id.is_empty() {
             struct_ser.serialize_field("chainId", &self.chain_id)?;
@@ -632,6 +635,9 @@ impl serde::Serialize for GenesisContent {
         }
         if let Some(v) = self.fee_content.as_ref() {
             struct_ser.serialize_field("feeContent", v)?;
+        }
+        if let Some(v) = self.compliance_content.as_ref() {
+            struct_ser.serialize_field("complianceContent", v)?;
         }
         struct_ser.end()
     }
@@ -657,6 +663,8 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
             "sctContent",
             "fee_content",
             "feeContent",
+            "compliance_content",
+            "complianceContent",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -668,6 +676,7 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
             IbcContent,
             SctContent,
             FeeContent,
+            ComplianceContent,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -697,6 +706,7 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
                             "ibcContent" | "ibc_content" => Ok(GeneratedField::IbcContent),
                             "sctContent" | "sct_content" => Ok(GeneratedField::SctContent),
                             "feeContent" | "fee_content" => Ok(GeneratedField::FeeContent),
+                            "complianceContent" | "compliance_content" => Ok(GeneratedField::ComplianceContent),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -723,6 +733,7 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
                 let mut ibc_content__ = None;
                 let mut sct_content__ = None;
                 let mut fee_content__ = None;
+                let mut compliance_content__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ChainId => {
@@ -767,6 +778,12 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
                             }
                             fee_content__ = map_.next_value()?;
                         }
+                        GeneratedField::ComplianceContent => {
+                            if compliance_content__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("complianceContent"));
+                            }
+                            compliance_content__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -780,6 +797,7 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
                     ibc_content: ibc_content__,
                     sct_content: sct_content__,
                     fee_content: fee_content__,
+                    compliance_content: compliance_content__,
                 })
             }
         }

@@ -1,9 +1,10 @@
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use decaf377::Element;
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
-use std::path::Path;
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use super::types::{
     BlockRef, ClearFlowEvent, DetectionEvent, ExtractedComplianceCiphertext, InvalidCiphertext,
@@ -12,6 +13,9 @@ use super::types::{
 use crate::{ComplianceEvidenceObject, TransferOrbisUploadBundle};
 
 pub const MAX_INVALID_CIPHERTEXTS_PER_BLOCK: usize = 256;
+const READ_POOL_SIZE: usize = 4;
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+const WAL_AUTOCHECKPOINT_PAGES: i64 = 1_000;
 
 #[async_trait]
 pub trait ScannerStore: Send + Sync {
@@ -53,18 +57,53 @@ struct PendingBlock {
 }
 
 pub struct SqliteScannerStore {
-    conn: Arc<Mutex<Connection>>,
+    db_path: Arc<PathBuf>,
+    writer: Arc<Mutex<Connection>>,
+    read_pool: Arc<Mutex<Vec<Connection>>>,
     pending: Arc<Mutex<PendingBlock>>,
 }
 
 impl SqliteScannerStore {
     pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self> {
-        let conn = Connection::open(db_path)?;
+        let db_path = db_path.as_ref().to_path_buf();
+        let conn = Connection::open(&db_path)?;
+        Self::configure_writer(&conn)?;
         Self::initialize_schema(&conn)?;
+        let read_pool = if db_path.as_os_str() == ":memory:" {
+            Vec::new()
+        } else {
+            (0..READ_POOL_SIZE)
+                .map(|_| Self::open_read_conn(&db_path))
+                .collect::<Result<Vec<_>>>()?
+        };
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            db_path: Arc::new(db_path),
+            writer: Arc::new(Mutex::new(conn)),
+            read_pool: Arc::new(Mutex::new(read_pool)),
             pending: Arc::new(Mutex::new(PendingBlock::default())),
         })
+    }
+
+    fn configure_writer(conn: &Connection) -> Result<()> {
+        conn.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
+        conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
+        conn.execute_batch("VACUUM;")?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "wal_autocheckpoint", WAL_AUTOCHECKPOINT_PAGES)?;
+        Ok(())
+    }
+
+    fn configure_reader(conn: &Connection) -> Result<()> {
+        conn.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
+        conn.pragma_update(None, "query_only", "ON")?;
+        Ok(())
+    }
+
+    fn open_read_conn(db_path: &Path) -> Result<Connection> {
+        let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        Self::configure_reader(&conn)?;
+        Ok(conn)
     }
 
     fn initialize_schema(conn: &Connection) -> Result<()> {
@@ -244,31 +283,64 @@ impl SqliteScannerStore {
     }
 
     pub fn invalid_ciphertext_count(&self) -> Result<u64> {
-        let conn = self.lock_conn()?;
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM scanner_invalid_ciphertexts",
-            [],
-            |row| row.get(0),
-        )?;
-        Ok(count as u64)
+        self.with_read_conn(|conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM scanner_invalid_ciphertexts",
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(count as u64)
+        })
     }
 
     pub fn skipped_invalid_ciphertext_count(&self, height: u64) -> Result<u64> {
-        let conn = self.lock_conn()?;
-        let count: Option<i64> = conn
-            .query_row(
-                "SELECT skipped_count FROM scanner_invalid_ciphertext_summaries WHERE height = ?1",
-                params![height as i64],
-                |row| row.get(0),
-            )
-            .optional()?;
-        Ok(count.unwrap_or_default() as u64)
+        self.with_read_conn(|conn| {
+            let count: Option<i64> = conn
+                .query_row(
+                    "SELECT skipped_count FROM scanner_invalid_ciphertext_summaries WHERE height = ?1",
+                    params![height as i64],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(count.unwrap_or_default() as u64)
+        })
     }
 
     pub(crate) fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
-        self.conn
+        self.writer
             .lock()
-            .map_err(|e| anyhow!("scanner store connection mutex poisoned: {e}"))
+            .map_err(|e| anyhow!("scanner store writer connection mutex poisoned: {e}"))
+    }
+
+    fn with_read_conn<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        if self.db_path.as_os_str() == ":memory:" {
+            let conn = self.lock_conn()?;
+            return f(&conn);
+        }
+
+        let conn = {
+            let mut pool = self
+                .read_pool
+                .lock()
+                .map_err(|e| anyhow!("scanner store read pool mutex poisoned: {e}"))?;
+            pool.pop()
+        }
+        .map(Ok)
+        .unwrap_or_else(|| Self::open_read_conn(&self.db_path))?;
+
+        let result = f(&conn);
+
+        let mut pool = self
+            .read_pool
+            .lock()
+            .map_err(|e| anyhow!("scanner store read pool mutex poisoned: {e}"))?;
+        pool.push(conn);
+        result
+    }
+
+    fn checkpoint_wal(conn: &Connection) -> Result<()> {
+        conn.execute_batch("PRAGMA incremental_vacuum; PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
     }
 
     fn lock_pending(&self) -> Result<std::sync::MutexGuard<'_, PendingBlock>> {
@@ -281,36 +353,36 @@ impl SqliteScannerStore {
 #[async_trait]
 impl ScannerStore for SqliteScannerStore {
     async fn last_scanned_block(&self) -> Result<Option<BlockRef>> {
-        let conn = self.lock_conn()?;
-        let last_height: i64 = conn.query_row(
-            "SELECT last_height FROM scanner_sync WHERE id = 1",
-            [],
-            |row| row.get(0),
-        )?;
-        drop(conn);
+        self.with_read_conn(|conn| {
+            let last_height: i64 = conn.query_row(
+                "SELECT last_height FROM scanner_sync WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )?;
 
-        if last_height <= 0 {
-            return Ok(None);
-        }
-        let conn = self.lock_conn()?;
-        conn.query_row(
-            "SELECT height, block_hash, parent_hash, block_time_unix FROM scanner_blocks WHERE height = ?1",
-            params![last_height],
-            block_ref_from_row,
-        )
-        .optional()
-        .with_context(|| format!("read scanner block at height {last_height}"))
+            if last_height <= 0 {
+                return Ok(None);
+            }
+            conn.query_row(
+                "SELECT height, block_hash, parent_hash, block_time_unix FROM scanner_blocks WHERE height = ?1",
+                params![last_height],
+                block_ref_from_row,
+            )
+            .optional()
+            .with_context(|| format!("read scanner block at height {last_height}"))
+        })
     }
 
     async fn block_by_height(&self, height: u64) -> Result<Option<BlockRef>> {
-        let conn = self.lock_conn()?;
-        conn.query_row(
-            "SELECT height, block_hash, parent_hash, block_time_unix FROM scanner_blocks WHERE height = ?1",
-            params![height as i64],
-            block_ref_from_row,
-        )
-        .optional()
-        .with_context(|| format!("read scanner block at height {height}"))
+        self.with_read_conn(|conn| {
+            conn.query_row(
+                "SELECT height, block_hash, parent_hash, block_time_unix FROM scanner_blocks WHERE height = ?1",
+                params![height as i64],
+                block_ref_from_row,
+            )
+            .optional()
+            .with_context(|| format!("read scanner block at height {height}"))
+        })
     }
 
     async fn begin_block(&self, block: &BlockRef) -> Result<()> {
@@ -582,6 +654,7 @@ impl ScannerStore for SqliteScannerStore {
 
         tx.commit()?;
         *pending = PendingBlock::default();
+        Self::checkpoint_wal(&conn)?;
         Ok(())
     }
 
@@ -653,6 +726,7 @@ impl ScannerStore for SqliteScannerStore {
             params![height as i64, last_hash],
         )?;
         tx.commit()?;
+        Self::checkpoint_wal(&conn)?;
 
         let mut pending = self.lock_pending()?;
         *pending = PendingBlock::default();
@@ -660,11 +734,13 @@ impl ScannerStore for SqliteScannerStore {
     }
 
     async fn detection_count(&self) -> Result<u64> {
-        let conn = self.lock_conn()?;
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM scanner_detections", [], |row| {
-            row.get(0)
-        })?;
-        Ok(count as u64)
+        self.with_read_conn(|conn| {
+            let count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM scanner_detections", [], |row| {
+                    row.get(0)
+                })?;
+            Ok(count as u64)
+        })
     }
 }
 
@@ -867,6 +943,74 @@ mod tests {
             .unwrap();
         assert_eq!(status, "irrelevant");
         assert_eq!(bundle, vec![8, 4]);
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_enables_wal_and_bounded_checkpointing() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let store = SqliteScannerStore::new(temp_file.path()).unwrap();
+
+        {
+            let conn = store.lock_conn().unwrap();
+            let journal_mode: String = conn
+                .pragma_query_value(None, "journal_mode", |row| row.get(0))
+                .unwrap();
+            let synchronous: i64 = conn
+                .pragma_query_value(None, "synchronous", |row| row.get(0))
+                .unwrap();
+            let auto_vacuum: i64 = conn
+                .pragma_query_value(None, "auto_vacuum", |row| row.get(0))
+                .unwrap();
+            let wal_autocheckpoint: i64 = conn
+                .pragma_query_value(None, "wal_autocheckpoint", |row| row.get(0))
+                .unwrap();
+
+            assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+            assert_eq!(synchronous, 1);
+            assert_eq!(auto_vacuum, 2);
+            assert_eq!(wal_autocheckpoint, WAL_AUTOCHECKPOINT_PAGES);
+        }
+
+        for height in 1..=5 {
+            let block = block(height);
+            store.begin_block(&block).await.unwrap();
+            store.save_detection(&detection(height)).await.unwrap();
+            store.commit_block(&block).await.unwrap();
+        }
+
+        let wal_path = PathBuf::from(format!("{}-wal", temp_file.path().display()));
+        let wal_size = std::fs::metadata(wal_path).map(|m| m.len()).unwrap_or(0);
+        assert!(wal_size < 1024 * 1024, "WAL file grew to {wal_size} bytes");
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_allows_concurrent_readers_during_writes() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let store = Arc::new(SqliteScannerStore::new(temp_file.path()).unwrap());
+
+        let mut readers = Vec::new();
+        for _ in 0..READ_POOL_SIZE {
+            let store = Arc::clone(&store);
+            readers.push(tokio::spawn(async move {
+                for _ in 0..50 {
+                    store.detection_count().await.unwrap();
+                    store.last_scanned_block().await.unwrap();
+                }
+            }));
+        }
+
+        for height in 1..=20 {
+            let block = block(height);
+            store.begin_block(&block).await.unwrap();
+            store.save_detection(&detection(height)).await.unwrap();
+            store.commit_block(&block).await.unwrap();
+        }
+
+        for reader in readers {
+            reader.await.unwrap();
+        }
+
+        assert_eq!(store.detection_count().await.unwrap(), 20);
     }
 
     #[tokio::test]

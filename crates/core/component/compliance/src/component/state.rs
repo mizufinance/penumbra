@@ -6,6 +6,7 @@ use cnidarium::StateWrite;
 use cnidarium_component::{ActionHandler, Component};
 use penumbra_sdk_asset::BASE_ASSET_ID;
 use penumbra_sdk_proto::{StateReadProto, StateWriteProto};
+use penumbra_sdk_sct::component::clock::EpochRead;
 use tendermint::v0_37::abci;
 use tracing::instrument;
 
@@ -40,9 +41,6 @@ impl Component for Compliance {
         // so we just need to handle errors and ensure we persist the initial state.
         match state.get_user_tree().await {
             Ok(tree) => {
-                // Persist the tree (may be new or existing)
-                let tree_bytes = bincode::serialize(&tree).expect("serialization should not fail");
-                state.put_raw(crate::state_key::user_tree().to_string(), tree_bytes);
                 state.put(crate::state_key::user_tree_root().to_string(), tree.root());
                 state.write_user_tree_cache(tree);
                 // Initialize count if not set
@@ -66,9 +64,6 @@ impl Component for Compliance {
         // Note: get_asset_imt() returns a new empty tree if nothing is stored.
         match state.get_asset_imt().await {
             Ok(tree) => {
-                // Persist the tree (may be new or existing)
-                let tree_bytes = bincode::serialize(&tree).expect("serialization should not fail");
-                state.put_raw(crate::state_key::asset_imt().to_string(), tree_bytes);
                 state.put(crate::state_key::asset_imt_root().to_string(), tree.root());
                 state.write_asset_imt_cache(tree);
             }
@@ -118,12 +113,19 @@ impl Component for Compliance {
 
         // Register native assets from genesis configuration.
         if let Some(genesis) = app_state {
+            for registrar_vk in &genesis.compliance_registrar_vk {
+                state.put_compliance_registrar(*registrar_vk);
+            }
+
             for registration in &genesis.native_assets {
                 let (policy, is_regulated) = if registration.is_regulated {
                     // Regulated assets MUST have a detection key.
                     let dk_pub_bytes = registration
                         .dk_pub
                         .expect("regulated asset in genesis must have dk_pub");
+                    let registration_authority_vk = registration
+                        .registration_authority_vk
+                        .expect("regulated asset in genesis must have registration_authority_vk");
                     let dk_pub = decaf377::Encoding(dk_pub_bytes)
                         .vartime_decompress()
                         .expect("invalid dk_pub encoding in genesis");
@@ -133,7 +135,8 @@ impl Component for Compliance {
                             dk_pub,
                             u128::MAX,
                             decaf377::Element::GENERATOR,
-                        ),
+                        )
+                        .with_registration_authority(registration_authority_vk),
                         true,
                     )
                 } else {
@@ -220,8 +223,14 @@ impl ActionHandler for MsgRegisterUser {
     type CheckStatelessContext = ();
 
     async fn check_stateless(&self, _context: ()) -> Result<()> {
-        // TODO(compliance): Verify signature proving ownership of address address.
-        // The signature should be over a canonical message including the leaf commitment.
+        let grant = self
+            .grant
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing user registration grant"))?;
+        anyhow::ensure!(
+            grant.body.leaf == self.leaf,
+            "user registration grant leaf does not match action leaf"
+        );
         Ok(())
     }
 
@@ -231,6 +240,31 @@ impl ActionHandler for MsgRegisterUser {
             "cannot register user for unregulated asset {}",
             self.leaf.asset_id
         );
+        let policy = state
+            .get_asset_policy(self.leaf.asset_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing regulated asset policy"))?;
+        let authority_vk = policy.registration_authority_vk.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("regulated asset policy missing registration authority")
+        })?;
+        let grant = self
+            .grant
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing user registration grant"))?;
+        anyhow::ensure!(
+            grant.body.policy_id == policy.ring.policy_id,
+            "user registration grant policy_id does not match asset policy"
+        );
+        let current_unix = state.get_current_block_timestamp().await?.unix_timestamp();
+        anyhow::ensure!(
+            current_unix >= 0,
+            "current block timestamp is before Unix epoch"
+        );
+        anyhow::ensure!(
+            (current_unix as u64) <= grant.body.valid_until_unix,
+            "user registration grant expired"
+        );
+        grant.verify(authority_vk)?;
 
         // Check if user is already registered for this asset (idempotent)
         if let Some(existing_position) = state
@@ -280,15 +314,50 @@ impl ActionHandler for MsgRegisterAsset {
     type CheckStatelessContext = ();
 
     async fn check_stateless(&self, _context: ()) -> Result<()> {
-        // TODO(compliance): Add governance authorization check.
-        // Only authorized parties (e.g., asset issuer) should be able to register assets.
+        let grant = self
+            .asset_registration_grant
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing asset registration grant"))?;
+        let expected_body = self.registration_grant_body(grant.body.valid_until_unix);
+        anyhow::ensure!(
+            grant.body == expected_body,
+            "asset registration grant body does not match action"
+        );
+        if self.is_regulated {
+            anyhow::ensure!(
+                self.registration_authority_vk.is_some(),
+                "regulated assets require registration_authority_vk"
+            );
+        }
+        grant.verify()?;
         Ok(())
     }
 
     async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
+        let grant = self
+            .asset_registration_grant
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing asset registration grant"))?;
+        anyhow::ensure!(
+            state.is_compliance_registrar(&grant.registrar_vk).await?,
+            "asset registration grant signed by unauthorized registrar"
+        );
+        let current_unix = state.get_current_block_timestamp().await?.unix_timestamp();
+        anyhow::ensure!(
+            current_unix >= 0,
+            "current block timestamp is before Unix epoch"
+        );
+        anyhow::ensure!(
+            (current_unix as u64) <= grant.body.valid_until_unix,
+            "asset registration grant expired"
+        );
+
         let (policy, is_regulated) = if self.is_regulated {
             let dk_pub = self.dk_pub.ok_or_else(|| {
                 anyhow::anyhow!("regulated assets require a detection key (dk_pub)")
+            })?;
+            let registration_authority_vk = self.registration_authority_vk.ok_or_else(|| {
+                anyhow::anyhow!("regulated assets require registration_authority_vk")
             })?;
 
             let threshold = self.threshold.unwrap_or(u128::MAX);
@@ -303,7 +372,8 @@ impl ActionHandler for MsgRegisterAsset {
                     self.policy_id.clone(),
                     self.permission.clone(),
                     self.resource.clone(),
-                ),
+                )
+                .with_registration_authority(registration_authority_vk),
                 true,
             )
         } else {
@@ -348,11 +418,85 @@ mod tests {
     use super::*;
     use cnidarium::{StateRead, TempStorage};
     use decaf377::Fq;
+    use decaf377_rdsa::{SigningKey, SpendAuth, VerificationKey};
     use penumbra_sdk_asset::{asset, BASE_ASSET_ID};
     use penumbra_sdk_keys::Address;
+    use penumbra_sdk_sct::component::clock::EpochManager;
+    use rand_core::OsRng;
 
     use crate::genesis::NativeAssetRegistration;
-    use crate::structs::ComplianceLeaf;
+    use crate::structs::{
+        AssetRegistrationGrant, ComplianceLeaf, MsgRegisterAsset, UserRegistrationGrant,
+        UserRegistrationGrantBody,
+    };
+
+    const TEST_BLOCK_UNIX: i64 = 1_700_000_000;
+    const TEST_VALID_UNTIL_UNIX: u64 = TEST_BLOCK_UNIX as u64 + 300;
+
+    fn set_test_block_time<S: cnidarium::StateWrite>(state: &mut S, unix: i64) {
+        let timestamp =
+            tendermint::Time::from_unix_timestamp(unix, 0).expect("test timestamp is valid");
+        state.put_block_timestamp(1, timestamp);
+    }
+
+    fn registrar_genesis(registrar_vk: VerificationKey<SpendAuth>) -> genesis::Content {
+        genesis::Content {
+            native_assets: vec![],
+            compliance_registrar_vk: vec![registrar_vk],
+        }
+    }
+
+    fn sign_asset_registration(
+        mut msg: MsgRegisterAsset,
+        registrar_sk: &SigningKey<SpendAuth>,
+        valid_until_unix: u64,
+    ) -> MsgRegisterAsset {
+        let body = msg.registration_grant_body(valid_until_unix);
+        msg.asset_registration_grant = Some(AssetRegistrationGrant {
+            registrar_vk: VerificationKey::from(registrar_sk),
+            signature: registrar_sk.sign(OsRng, &body.signing_bytes()),
+            body,
+        });
+        msg
+    }
+
+    fn regulated_asset_msg(
+        asset_id: asset::Id,
+        authority_vk: VerificationKey<SpendAuth>,
+    ) -> MsgRegisterAsset {
+        MsgRegisterAsset {
+            asset_id,
+            is_regulated: true,
+            dk_pub: Some(decaf377::Element::GENERATOR),
+            threshold: None,
+            allowed_channels: vec![],
+            ring_pk: None,
+            ring_id: String::new(),
+            policy_id: "test-policy".to_string(),
+            permission: String::new(),
+            resource: String::new(),
+            registration_authority_vk: Some(authority_vk),
+            asset_registration_grant: None,
+        }
+    }
+
+    fn user_registration_grant(
+        leaf: ComplianceLeaf,
+        policy_id: String,
+        authority_sk: &SigningKey<SpendAuth>,
+        valid_until_unix: u64,
+    ) -> UserRegistrationGrant {
+        let body = UserRegistrationGrantBody {
+            leaf,
+            policy_id,
+            valid_until_unix,
+            nonce: vec![1, 2, 3, 4],
+        };
+        UserRegistrationGrant {
+            signature: authority_sk.sign(OsRng, &body.signing_bytes()),
+            body,
+        }
+    }
 
     #[tokio::test]
     async fn test_init_chain() {
@@ -412,7 +556,11 @@ mod tests {
                 asset_id: custom_asset,
                 is_regulated: true,
                 dk_pub: Some(dk_pub_bytes),
+                registration_authority_vk: Some(VerificationKey::from(
+                    &SigningKey::<SpendAuth>::new(OsRng),
+                )),
             }],
+            compliance_registrar_vk: vec![],
         };
 
         Compliance::init_chain(&mut state, Some(&genesis)).await;
@@ -428,34 +576,36 @@ mod tests {
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
 
-        // Initialize component with defaults
-        let genesis = genesis::Content::default();
+        let registrar_sk = SigningKey::<SpendAuth>::new(OsRng);
+        let authority_sk = SigningKey::<SpendAuth>::new(OsRng);
+        let authority_vk = VerificationKey::from(&authority_sk);
+        let genesis = registrar_genesis(VerificationKey::from(&registrar_sk));
         Compliance::init_chain(&mut state, Some(&genesis)).await;
+        set_test_block_time(&mut state, TEST_BLOCK_UNIX);
 
         let asset_id = asset::Id(Fq::from(1u64));
-        MsgRegisterAsset {
-            asset_id,
-            is_regulated: true,
-            dk_pub: Some(decaf377::Element::GENERATOR),
-            threshold: None,
-            allowed_channels: vec![],
-            ring_pk: None,
-            ring_id: String::new(),
-            policy_id: String::new(),
-            permission: String::new(),
-            resource: String::new(),
-        }
+        sign_asset_registration(
+            regulated_asset_msg(asset_id, authority_vk),
+            &registrar_sk,
+            TEST_VALID_UNTIL_UNIX,
+        )
         .check_and_execute(&mut state)
         .await
         .unwrap();
 
+        let leaf = ComplianceLeaf {
+            address: Address::dummy(&mut rand::thread_rng()),
+            asset_id,
+            d: Fq::from(0u64),
+        };
         let msg = MsgRegisterUser {
-            leaf: ComplianceLeaf {
-                address: Address::dummy(&mut rand::thread_rng()),
-                asset_id,
-                d: Fq::from(0u64),
-            },
-            signature: vec![0u8; 64], // Dummy signature
+            leaf: leaf.clone(),
+            grant: Some(user_registration_grant(
+                leaf,
+                "test-policy".to_string(),
+                &authority_sk,
+                TEST_VALID_UNTIL_UNIX,
+            )),
         };
 
         // Execute the action directly on state
@@ -483,7 +633,7 @@ mod tests {
                 asset_id: *BASE_ASSET_ID,
                 d: Fq::from(0u64),
             },
-            signature: vec![0u8; 64],
+            grant: None,
         };
 
         let error = msg.check_and_execute(&mut state).await.expect_err(
@@ -518,7 +668,7 @@ mod tests {
                 asset_id: asset::Id(Fq::from(999_999u64)),
                 d: Fq::from(0u64),
             },
-            signature: vec![0u8; 64],
+            grant: None,
         };
 
         let error = msg
@@ -546,9 +696,12 @@ mod tests {
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
 
-        // Initialize component
-        let genesis = genesis::Content::default();
+        let registrar_sk = SigningKey::<SpendAuth>::new(OsRng);
+        let authority_sk = SigningKey::<SpendAuth>::new(OsRng);
+        let authority_vk = VerificationKey::from(&authority_sk);
+        let genesis = registrar_genesis(VerificationKey::from(&registrar_sk));
         Compliance::init_chain(&mut state, Some(&genesis)).await;
+        set_test_block_time(&mut state, TEST_BLOCK_UNIX);
 
         // Initially the asset is unregulated (not in IMT)
         let asset_id = asset::Id(Fq::from(123u64));
@@ -557,18 +710,9 @@ mod tests {
 
         // Create a register asset message (regulated) - requires dk_pub
         let dk_pub = Some(decaf377::Element::GENERATOR);
-        let msg = MsgRegisterAsset {
-            asset_id,
-            is_regulated: true,
-            dk_pub,
-            threshold: None,
-            allowed_channels: vec![],
-            ring_pk: None,
-            ring_id: String::new(),
-            policy_id: String::new(),
-            permission: String::new(),
-            resource: String::new(),
-        };
+        let mut msg = regulated_asset_msg(asset_id, authority_vk);
+        msg.dk_pub = dk_pub;
+        let msg = sign_asset_registration(msg, &registrar_sk, TEST_VALID_UNTIL_UNIX);
 
         // Execute the action
         msg.check_and_execute(&mut state).await.unwrap();
@@ -582,29 +726,212 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_asset_registration_rejects_unauthorized_registrar() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        let authorized_registrar_sk = SigningKey::<SpendAuth>::new(OsRng);
+        let unauthorized_registrar_sk = SigningKey::<SpendAuth>::new(OsRng);
+        let authority_sk = SigningKey::<SpendAuth>::new(OsRng);
+        Compliance::init_chain(
+            &mut state,
+            Some(&registrar_genesis(VerificationKey::from(
+                &authorized_registrar_sk,
+            ))),
+        )
+        .await;
+        set_test_block_time(&mut state, TEST_BLOCK_UNIX);
+
+        let msg = sign_asset_registration(
+            regulated_asset_msg(
+                asset::Id(Fq::from(321u64)),
+                VerificationKey::from(&authority_sk),
+            ),
+            &unauthorized_registrar_sk,
+            TEST_VALID_UNTIL_UNIX,
+        );
+
+        let error = msg
+            .check_and_execute(&mut state)
+            .await
+            .expect_err("unauthorized registrar must be rejected");
+        assert!(
+            error.to_string().contains("unauthorized registrar"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_asset_registration_rejects_forged_grant() {
+        let registrar_sk = SigningKey::<SpendAuth>::new(OsRng);
+        let forger_sk = SigningKey::<SpendAuth>::new(OsRng);
+        let authority_sk = SigningKey::<SpendAuth>::new(OsRng);
+        let mut msg = regulated_asset_msg(
+            asset::Id(Fq::from(322u64)),
+            VerificationKey::from(&authority_sk),
+        );
+        let body = msg.registration_grant_body(TEST_VALID_UNTIL_UNIX);
+        msg.asset_registration_grant = Some(AssetRegistrationGrant {
+            registrar_vk: VerificationKey::from(&registrar_sk),
+            signature: forger_sk.sign(OsRng, &body.signing_bytes()),
+            body,
+        });
+
+        let error = msg
+            .check_stateless(())
+            .await
+            .expect_err("forged grant must be rejected");
+        assert!(
+            error.to_string().contains("signature failed"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_asset_registration_rejects_expired_grant() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        let registrar_sk = SigningKey::<SpendAuth>::new(OsRng);
+        let authority_sk = SigningKey::<SpendAuth>::new(OsRng);
+        Compliance::init_chain(
+            &mut state,
+            Some(&registrar_genesis(VerificationKey::from(&registrar_sk))),
+        )
+        .await;
+        set_test_block_time(&mut state, TEST_BLOCK_UNIX);
+
+        let msg = sign_asset_registration(
+            regulated_asset_msg(
+                asset::Id(Fq::from(323u64)),
+                VerificationKey::from(&authority_sk),
+            ),
+            &registrar_sk,
+            TEST_BLOCK_UNIX as u64 - 1,
+        );
+
+        let error = msg
+            .check_and_execute(&mut state)
+            .await
+            .expect_err("expired grant must be rejected");
+        assert!(
+            error.to_string().contains("expired"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_user_registration_rejects_missing_wrong_and_expired_grants() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        let registrar_sk = SigningKey::<SpendAuth>::new(OsRng);
+        let authority_sk = SigningKey::<SpendAuth>::new(OsRng);
+        let wrong_authority_sk = SigningKey::<SpendAuth>::new(OsRng);
+        let asset_id = asset::Id(Fq::from(324u64));
+        Compliance::init_chain(
+            &mut state,
+            Some(&registrar_genesis(VerificationKey::from(&registrar_sk))),
+        )
+        .await;
+        set_test_block_time(&mut state, TEST_BLOCK_UNIX);
+
+        sign_asset_registration(
+            regulated_asset_msg(asset_id, VerificationKey::from(&authority_sk)),
+            &registrar_sk,
+            TEST_VALID_UNTIL_UNIX,
+        )
+        .check_and_execute(&mut state)
+        .await
+        .unwrap();
+
+        let leaf = ComplianceLeaf {
+            address: Address::dummy(&mut rand::thread_rng()),
+            asset_id,
+            d: Fq::from(0u64),
+        };
+
+        let missing_grant = MsgRegisterUser {
+            leaf: leaf.clone(),
+            grant: None,
+        };
+        assert!(missing_grant.check_stateless(()).await.is_err());
+
+        let wrong_grant = MsgRegisterUser {
+            leaf: leaf.clone(),
+            grant: Some(user_registration_grant(
+                leaf.clone(),
+                "test-policy".to_string(),
+                &wrong_authority_sk,
+                TEST_VALID_UNTIL_UNIX,
+            )),
+        };
+        let error = wrong_grant
+            .check_and_execute(&mut state)
+            .await
+            .expect_err("wrong authority must be rejected");
+        assert!(
+            error.to_string().contains("signature failed"),
+            "unexpected error: {error}"
+        );
+
+        let expired_grant = MsgRegisterUser {
+            leaf: leaf.clone(),
+            grant: Some(user_registration_grant(
+                leaf,
+                "test-policy".to_string(),
+                &authority_sk,
+                TEST_BLOCK_UNIX as u64 - 1,
+            )),
+        };
+        let error = expired_grant
+            .check_and_execute(&mut state)
+            .await
+            .expect_err("expired user grant must be rejected");
+        assert!(
+            error.to_string().contains("expired"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_msg_register_unregulated_asset_is_noop() {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
 
-        // Initialize component
-        Compliance::init_chain(&mut state, None).await;
+        let registrar_sk = SigningKey::<SpendAuth>::new(OsRng);
+        Compliance::init_chain(
+            &mut state,
+            Some(&registrar_genesis(VerificationKey::from(&registrar_sk))),
+        )
+        .await;
+        set_test_block_time(&mut state, TEST_BLOCK_UNIX);
 
         let asset_id = asset::Id(Fq::from(456u64));
 
         // Create a register asset message (unregulated)
-        let msg = MsgRegisterAsset {
-            asset_id,
-            is_regulated: false,
-            dk_pub: None,
-            threshold: None,
-            allowed_channels: vec![],
-            ring_pk: None,
-            ring_id: String::new(),
-            policy_id: String::new(),
-            permission: String::new(),
-            resource: String::new(),
-        };
+        let msg = sign_asset_registration(
+            MsgRegisterAsset {
+                asset_id,
+                is_regulated: false,
+                dk_pub: None,
+                threshold: None,
+                allowed_channels: vec![],
+                ring_pk: None,
+                ring_id: String::new(),
+                policy_id: String::new(),
+                permission: String::new(),
+                resource: String::new(),
+                registration_authority_vk: None,
+                asset_registration_grant: None,
+            },
+            &registrar_sk,
+            TEST_VALID_UNTIL_UNIX,
+        );
 
         // Execute the action - should be a no-op
         msg.check_and_execute(&mut state).await.unwrap();
@@ -623,24 +950,37 @@ mod tests {
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
 
-        // Initialize component
-        Compliance::init_chain(&mut state, None).await;
+        let registrar_sk = SigningKey::<SpendAuth>::new(OsRng);
+        let authority_sk = SigningKey::<SpendAuth>::new(OsRng);
+        let authority_vk = VerificationKey::from(&authority_sk);
+        Compliance::init_chain(
+            &mut state,
+            Some(&registrar_genesis(VerificationKey::from(&registrar_sk))),
+        )
+        .await;
+        set_test_block_time(&mut state, TEST_BLOCK_UNIX);
 
         let asset_id = asset::Id(Fq::from(789u64));
 
         // Create a register asset message (regulated but missing dk_pub)
-        let msg = MsgRegisterAsset {
-            asset_id,
-            is_regulated: true,
-            dk_pub: None, // Missing!
-            threshold: None,
-            allowed_channels: vec![],
-            ring_pk: None,
-            ring_id: String::new(),
-            policy_id: String::new(),
-            permission: String::new(),
-            resource: String::new(),
-        };
+        let msg = sign_asset_registration(
+            MsgRegisterAsset {
+                asset_id,
+                is_regulated: true,
+                dk_pub: None, // Missing!
+                threshold: None,
+                allowed_channels: vec![],
+                ring_pk: None,
+                ring_id: String::new(),
+                policy_id: String::new(),
+                permission: String::new(),
+                resource: String::new(),
+                registration_authority_vk: Some(authority_vk),
+                asset_registration_grant: None,
+            },
+            &registrar_sk,
+            TEST_VALID_UNTIL_UNIX,
+        );
 
         // Execute the action - should fail
         let result = msg.check_and_execute(&mut state).await;

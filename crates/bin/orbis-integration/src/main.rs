@@ -30,6 +30,13 @@ const NODE3_DIAL_HOST: &str = "node3";
 const ORBIS_NAMESPACE: &str = "orbis";
 const ORBIS_RESOURCE: &str = "document";
 const ORBIS_PERMISSION: &str = "read";
+const DEFAULT_COMPLIANCE_DEV_REGISTRAR_SK_HEX: &str =
+    "0100000000000000000000000000000000000000000000000000000000000000";
+const DEFAULT_COMPLIANCE_DEV_AUTHORITY_SK_HEX: &str =
+    "0200000000000000000000000000000000000000000000000000000000000000";
+const DEFAULT_COMPLIANCE_DEV_AUTHORITY_VK_HEX: &str =
+    "b2ecf9b9082d6306538be73b0d6ee741141f3222152da78685d6596efc8c1506";
+const DEFAULT_COMPLIANCE_GRANT_VALID_UNTIL_UNIX: &str = "4102444800";
 
 fn node_endpoint(env_key: &str, default: &str) -> String {
     env::var(env_key).unwrap_or_else(|_| default.to_string())
@@ -353,6 +360,60 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
     )
     .with_context(|| format!("failed to write {}", repo.issuer_dk_file.display()))?;
 
+    let registrar_sk = demo_env_or_default(
+        &env,
+        "COMPLIANCE_DEV_REGISTRAR_SK_HEX",
+        DEFAULT_COMPLIANCE_DEV_REGISTRAR_SK_HEX,
+    );
+    let authority_vk = demo_env_or_default(
+        &env,
+        "COMPLIANCE_DEV_AUTHORITY_VK_HEX",
+        DEFAULT_COMPLIANCE_DEV_AUTHORITY_VK_HEX,
+    );
+    let authority_sk = demo_env_or_default(
+        &env,
+        "COMPLIANCE_DEV_AUTHORITY_SK_HEX",
+        DEFAULT_COMPLIANCE_DEV_AUTHORITY_SK_HEX,
+    );
+    let grant_valid_until = demo_env_or_default(
+        &env,
+        "COMPLIANCE_GRANT_VALID_UNTIL_UNIX",
+        DEFAULT_COMPLIANCE_GRANT_VALID_UNTIL_UNIX,
+    );
+    let asset_grant = capture_pcli(
+        repo,
+        &env,
+        [
+            "--home",
+            env.get("ALICE_HOME")?,
+            "tx",
+            "compliance",
+            "sign-asset-grant",
+            "regulated_usd",
+            "--regulated",
+            "--dk-pub-hex",
+            &regulated_dk_pub,
+            "--threshold",
+            "500000000000000000000",
+            "--ring-pk-hex",
+            &ring.ring_pk_hex,
+            "--ring-id",
+            &ring.ring_id,
+            "--policy-id",
+            &policy_id,
+            "--resource",
+            ORBIS_RESOURCE,
+            "--permission",
+            ORBIS_PERMISSION,
+            "--registration-authority-vk-hex",
+            &authority_vk,
+            "--registrar-sk-hex",
+            &registrar_sk,
+            "--valid-until-unix",
+            &grant_valid_until,
+        ],
+    )?;
+
     run_pcli(
         repo,
         &env,
@@ -378,6 +439,10 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
             ORBIS_RESOURCE,
             "--permission",
             ORBIS_PERMISSION,
+            "--registration-authority-vk-hex",
+            &authority_vk,
+            "--asset-registration-grant-hex",
+            &asset_grant,
         ],
     )?;
     sync_wallets(repo, &env, &["ALICE_HOME", "BOB_HOME", "CHARLIE_HOME"])?;
@@ -389,6 +454,46 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
     )?
     .trim()
     .to_string();
+    let alice_grant_0 = capture_pcli(
+        repo,
+        &env,
+        [
+            "--home",
+            env.get("ALICE_HOME")?,
+            "tx",
+            "compliance",
+            "sign-user-grant",
+            "regulated_usd",
+            "--address",
+            env.get("ALICE_ADDRESS")?,
+            "--policy-id",
+            &policy_id,
+            "--registration-authority-sk-hex",
+            &authority_sk,
+            "--valid-until-unix",
+            &grant_valid_until,
+        ],
+    )?;
+    let alice_grant_1 = capture_pcli(
+        repo,
+        &env,
+        [
+            "--home",
+            env.get("ALICE_HOME")?,
+            "tx",
+            "compliance",
+            "sign-user-grant",
+            "regulated_usd",
+            "--address",
+            &alice_address_1,
+            "--policy-id",
+            &policy_id,
+            "--registration-authority-sk-hex",
+            &authority_sk,
+            "--valid-until-unix",
+            &grant_valid_until,
+        ],
+    )?;
 
     run_pcli(
         repo,
@@ -400,6 +505,8 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
             "compliance",
             "register-user",
             "regulated_usd",
+            "--user-registration-grant-hex",
+            &alice_grant_0,
         ],
     )?;
     run_pcli(
@@ -427,9 +534,32 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
             "regulated_usd",
             "--address-index",
             "1",
+            "--user-registration-grant-hex",
+            &alice_grant_1,
         ],
     )?;
     for who in ["BOB_HOME", "CHARLIE_HOME"] {
+        let address_key = who.trim_end_matches("_HOME").to_string() + "_ADDRESS";
+        let grant = capture_pcli(
+            repo,
+            &env,
+            [
+                "--home",
+                env.get(who)?,
+                "tx",
+                "compliance",
+                "sign-user-grant",
+                "regulated_usd",
+                "--address",
+                env.get(&address_key)?,
+                "--policy-id",
+                &policy_id,
+                "--registration-authority-sk-hex",
+                &authority_sk,
+                "--valid-until-unix",
+                &grant_valid_until,
+            ],
+        )?;
         run_pcli(
             repo,
             &env,
@@ -440,6 +570,8 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
                 "compliance",
                 "register-user",
                 "regulated_usd",
+                "--user-registration-grant-hex",
+                &grant,
             ],
         )?;
     }
@@ -1054,6 +1186,18 @@ fn parse_key_value_line(output: &str, prefix: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("failed to find '{prefix}' in command output"))
 }
 
+fn demo_env_or_default(env: &DemoEnv, key: &str, default: &str) -> String {
+    env.values
+        .get(key)
+        .cloned()
+        .or_else(|| std::env::var(key).ok())
+        .unwrap_or_else(|| default.to_string())
+}
+
+fn process_env_or_default(key: &str, default: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
 fn detection_key_from_hex(hex_str: &str) -> Result<DetectionKey> {
     let bytes = hex::decode(hex_str).context("invalid issuer DK hex")?;
     if bytes.len() != 32 {
@@ -1397,6 +1541,48 @@ impl AuditDemo {
         let dk_output = self.capture_pcli("alice", ["tx", "compliance", "generate-dk"])?;
         let dk_hex = parse_key_value_line(&dk_output, "DK (hex): ")?;
         let dk_pub_hex = parse_key_value_line(&dk_output, "DK_pub (hex): ")?;
+        let registrar_sk = process_env_or_default(
+            "COMPLIANCE_DEV_REGISTRAR_SK_HEX",
+            DEFAULT_COMPLIANCE_DEV_REGISTRAR_SK_HEX,
+        );
+        let authority_vk = process_env_or_default(
+            "COMPLIANCE_DEV_AUTHORITY_VK_HEX",
+            DEFAULT_COMPLIANCE_DEV_AUTHORITY_VK_HEX,
+        );
+        let valid_until = process_env_or_default(
+            "COMPLIANCE_GRANT_VALID_UNTIL_UNIX",
+            DEFAULT_COMPLIANCE_GRANT_VALID_UNTIL_UNIX,
+        );
+        let asset_grant = self.capture_pcli(
+            "alice",
+            [
+                "tx",
+                "compliance",
+                "sign-asset-grant",
+                &self.asset,
+                "--regulated",
+                "--dk-pub-hex",
+                &dk_pub_hex,
+                "--threshold",
+                &self.threshold,
+                "--ring-pk-hex",
+                required_str(&ring, "ringPkHex")?,
+                "--ring-id",
+                required_str(&ring, "ringId")?,
+                "--policy-id",
+                required_str(&ring, "policyId")?,
+                "--resource",
+                required_str(&ring, "resource")?,
+                "--permission",
+                required_str(&ring, "permission")?,
+                "--registration-authority-vk-hex",
+                &authority_vk,
+                "--registrar-sk-hex",
+                &registrar_sk,
+                "--valid-until-unix",
+                &valid_until,
+            ],
+        )?;
         self.run_pcli(
             "alice",
             [
@@ -1419,6 +1605,10 @@ impl AuditDemo {
                 required_str(&ring, "resource")?,
                 "--permission",
                 required_str(&ring, "permission")?,
+                "--registration-authority-vk-hex",
+                &authority_vk,
+                "--asset-registration-grant-hex",
+                &asset_grant,
             ],
         )?;
         // The registration transaction is confirmed before the next setup step,
@@ -1461,6 +1651,37 @@ impl AuditDemo {
             self.sync_wallet(slug)?;
         }
         let address = self.address_for(slug, 0)?;
+        let state = self.state_value()?;
+        let policy_id = state
+            .pointer("/ring/policyId")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow!("audit demo ring policyId missing"))?
+            .to_string();
+        let authority_sk = process_env_or_default(
+            "COMPLIANCE_DEV_AUTHORITY_SK_HEX",
+            DEFAULT_COMPLIANCE_DEV_AUTHORITY_SK_HEX,
+        );
+        let valid_until = process_env_or_default(
+            "COMPLIANCE_GRANT_VALID_UNTIL_UNIX",
+            DEFAULT_COMPLIANCE_GRANT_VALID_UNTIL_UNIX,
+        );
+        let user_grant = self.capture_pcli(
+            slug,
+            [
+                "tx",
+                "compliance",
+                "sign-user-grant",
+                &self.asset,
+                "--address",
+                &address,
+                "--policy-id",
+                &policy_id,
+                "--registration-authority-sk-hex",
+                &authority_sk,
+                "--valid-until-unix",
+                &valid_until,
+            ],
+        )?;
         self.run_pcli(
             slug,
             [
@@ -1470,6 +1691,8 @@ impl AuditDemo {
                 &self.asset,
                 "--address-index",
                 "0",
+                "--user-registration-grant-hex",
+                &user_grant,
             ],
         )?;
         let store = self.scanner_store()?;

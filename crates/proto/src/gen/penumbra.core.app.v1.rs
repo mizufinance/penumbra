@@ -172,6 +172,11 @@ pub struct GenesisContent {
     pub fee_content: ::core::option::Option<
         super::super::component::fee::v1::GenesisContent,
     >,
+    /// Compliance module genesis state.
+    #[prost(message, optional, tag = "9")]
+    pub compliance_content: ::core::option::Option<
+        super::super::component::compliance::v1::GenesisContent,
+    >,
 }
 impl ::prost::Name for GenesisContent {
     const NAME: &'static str = "GenesisContent";

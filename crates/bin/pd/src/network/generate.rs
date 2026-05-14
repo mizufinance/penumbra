@@ -3,11 +3,13 @@
 //! for Penumbra.
 use crate::network::config::{get_network_dir, NetworkTendermintConfig, ValidatorKeys};
 use anyhow::{Context, Result};
+use decaf377_rdsa::{SpendAuth, VerificationKey};
 use penumbra_sdk_app::{
     app::{MAX_BLOCK_TXS_PAYLOAD_BYTES, MAX_EVIDENCE_SIZE_BYTES},
     params::AppParameters,
 };
 use penumbra_sdk_asset::BASE_ASSET_ID;
+use penumbra_sdk_compliance::genesis::Content as ComplianceContent;
 use penumbra_sdk_fee::genesis::Content as FeeContent;
 use penumbra_sdk_governance::genesis::Content as GovernanceContent;
 use penumbra_sdk_keys::{
@@ -83,6 +85,7 @@ impl NetworkConfig {
         epoch_duration: Option<u64>,
         proposal_voting_blocks: Option<u64>,
         gas_price_simple: Option<u64>,
+        compliance_registrar_vk: Vec<VerificationKey<SpendAuth>>,
         tendermint_rpc_bind: SocketAddr,
         tendermint_p2p_bind: SocketAddr,
     ) -> anyhow::Result<NetworkConfig> {
@@ -115,6 +118,7 @@ impl NetworkConfig {
             epoch_duration,
             proposal_voting_blocks,
             gas_price_simple,
+            compliance_registrar_vk,
         )?;
         let genesis = Self::make_genesis(app_state)?;
 
@@ -205,6 +209,7 @@ impl NetworkConfig {
         epoch_duration: Option<u64>,
         proposal_voting_blocks: Option<u64>,
         gas_price_simple: Option<u64>,
+        compliance_registrar_vk: Vec<VerificationKey<SpendAuth>>,
     ) -> anyhow::Result<penumbra_sdk_app::genesis::Content> {
         let default_gov_params = penumbra_sdk_governance::params::GovernanceParameters::default();
 
@@ -244,6 +249,10 @@ impl NetworkConfig {
             governance_content: GovernanceContent {
                 governance_params: gov_params,
             },
+            compliance_content: ComplianceContent {
+                compliance_registrar_vk,
+                ..Default::default()
+            },
             shielded_pool_content: ShieldedPoolContent {
                 shielded_pool_params: ShieldedPoolParameters::default(),
                 allocations: allocations.clone(),
@@ -252,6 +261,9 @@ impl NetworkConfig {
                 sct_params: SctParameters {
                     epoch_duration: epoch_duration
                         .unwrap_or(default_app_params.sct_params.epoch_duration),
+                    sct_anchor_retention_blocks: default_app_params
+                        .sct_params
+                        .sct_anchor_retention_blocks,
                 },
             },
             ..Default::default()
@@ -385,6 +397,7 @@ pub fn network_generate(
     allocation_address: Option<Address>,
     proposal_voting_blocks: Option<u64>,
     gas_price_simple: Option<u64>,
+    compliance_registrar_vk: Vec<VerificationKey<SpendAuth>>,
     tendermint_rpc_bind: SocketAddr,
     tendermint_p2p_bind: SocketAddr,
 ) -> anyhow::Result<()> {
@@ -402,6 +415,7 @@ pub fn network_generate(
         epoch_duration,
         proposal_voting_blocks,
         gas_price_simple,
+        compliance_registrar_vk,
         tendermint_rpc_bind,
         tendermint_p2p_bind,
     )?;
@@ -776,6 +790,7 @@ mod tests {
             None,
             None,
             None,
+            vec![],
             SocketAddr::from_str("0.0.0.0:26657")?,
             SocketAddr::from_str("0.0.0.0:26656")?,
         )?;
@@ -819,6 +834,7 @@ mod tests {
             None,
             None,
             None,
+            vec![],
             SocketAddr::from_str("0.0.0.0:26657")?,
             SocketAddr::from_str("0.0.0.0:26656")?,
         )?;

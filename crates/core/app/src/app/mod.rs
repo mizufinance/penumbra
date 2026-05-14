@@ -3701,11 +3701,7 @@ impl App {
                 FeeComponent::init_chain(&mut state_tx, Some(&genesis.fee_content)).await;
                 // Initialize compliance component with empty trees for anchor tracking.
                 // Unregulated assets don't need registration (proven via non-membership).
-                Compliance::init_chain(
-                    &mut state_tx,
-                    Some(&penumbra_sdk_compliance::genesis::Content::default()),
-                )
-                .await;
+                Compliance::init_chain(&mut state_tx, Some(&genesis.compliance_content)).await;
 
                 state_tx
                     .finish_block()

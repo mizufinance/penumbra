@@ -49,6 +49,43 @@ pub mod nullifier_set {
 }
 
 pub mod tree {
+    pub fn incremental_prefix() -> &'static str {
+        "sct/tree/incremental/"
+    }
+
+    pub fn incremental_position() -> &'static str {
+        "sct/tree/incremental/meta/position"
+    }
+
+    pub fn incremental_forgotten() -> &'static str {
+        "sct/tree/incremental/meta/forgotten"
+    }
+
+    pub fn incremental_hash_prefix() -> &'static str {
+        "sct/tree/incremental/hash/"
+    }
+
+    pub fn incremental_hash(position: penumbra_sdk_tct::Position, height: u8) -> String {
+        format!(
+            "{}{:020}/{:03}",
+            incremental_hash_prefix(),
+            u64::from(position),
+            height
+        )
+    }
+
+    pub fn incremental_commitment_prefix() -> &'static str {
+        "sct/tree/incremental/commitment/"
+    }
+
+    pub fn incremental_commitment(position: penumbra_sdk_tct::Position) -> String {
+        format!(
+            "{}{:020}",
+            incremental_commitment_prefix(),
+            u64::from(position)
+        )
+    }
+
     pub fn anchor_by_height(height: u64) -> String {
         format!("sct/tree/anchor_by_height/{}", height)
     }

@@ -52,6 +52,11 @@ name = "snarkpack"
 path = "benches/vanilla/snarkpack.rs"
 harness = false
 
+[[bench]]
+name = "nullifier_storage"
+path = "benches/state/nullifier_storage.rs"
+harness = false
+
 
 [dependencies]
 anyhow = {workspace = true}

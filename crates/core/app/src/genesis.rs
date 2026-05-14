@@ -1,3 +1,4 @@
+use penumbra_sdk_compliance::genesis::Content as ComplianceContent;
 use penumbra_sdk_fee::genesis::Content as FeeContent;
 use penumbra_sdk_governance::genesis::Content as GovernanceContent;
 use penumbra_sdk_ibc::genesis::Content as IBCContent;
@@ -34,6 +35,8 @@ pub struct Content {
     pub chain_id: String,
     /// Fee module genesis state.
     pub fee_content: FeeContent,
+    /// Compliance module genesis state.
+    pub compliance_content: ComplianceContent,
     /// Governance module genesis state.
     pub governance_content: GovernanceContent,
     /// IBC module genesis state.
@@ -76,6 +79,7 @@ impl From<Content> for pb::GenesisContent {
         pb::GenesisContent {
             chain_id: genesis.chain_id,
             fee_content: Some(genesis.fee_content.into()),
+            compliance_content: Some(genesis.compliance_content.into()),
             governance_content: Some(genesis.governance_content.into()),
             ibc_content: Some(genesis.ibc_content.into()),
             sct_content: Some(genesis.sct_content.into()),
@@ -117,6 +121,10 @@ impl TryFrom<pb::GenesisContent> for Content {
                 .fee_content
                 .ok_or_else(|| anyhow::anyhow!("proto response missing fee content"))?
                 .try_into()?,
+            compliance_content: msg
+                .compliance_content
+                .ok_or_else(|| anyhow::anyhow!("proto response missing compliance content"))?
+                .try_into()?,
             ibc_content: msg
                 .ibc_content
                 .ok_or_else(|| anyhow::anyhow!("proto response missing ibc content"))?
@@ -149,7 +157,10 @@ impl Content {
     pub fn with_epoch_duration(self, epoch_duration: u64) -> Self {
         Self {
             sct_content: penumbra_sdk_sct::genesis::Content {
-                sct_params: penumbra_sdk_sct::params::SctParameters { epoch_duration },
+                sct_params: penumbra_sdk_sct::params::SctParameters {
+                    epoch_duration,
+                    ..Default::default()
+                },
             },
             ..self
         }

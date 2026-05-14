@@ -3,6 +3,7 @@ package penumbra.core.component.compliance.v1;
 
 import "penumbra/core/asset/v1/asset.proto";
 import "penumbra/core/keys/v1/keys.proto";
+import "penumbra/crypto/decaf377_rdsa/v1/decaf377_rdsa.proto";
 
 // Crypto Structures
 
@@ -45,14 +46,55 @@ message MsgRegisterAsset {
   string permission = 9;
   // ACP resource type.
   string resource = 10;
+  // Immutable authority key that signs user registration grants for this asset.
+  crypto.decaf377_rdsa.v1.SpendVerificationKey registration_authority_vk = 11;
+  // Registrar authorization for this asset registration.
+  AssetRegistrationGrant asset_registration_grant = 12;
+}
+
+// Body signed by a chain compliance registrar to authorize an asset policy.
+message AssetRegistrationGrantBody {
+  asset.v1.AssetId asset_id = 1;
+  bool is_regulated = 2;
+  bytes dk_pub = 3;
+  bytes threshold = 4;
+  repeated string allowed_channels = 5;
+  bytes ring_pk = 6;
+  string ring_id = 7;
+  string policy_id = 8;
+  string permission = 9;
+  string resource = 10;
+  crypto.decaf377_rdsa.v1.SpendVerificationKey registration_authority_vk = 11;
+  uint64 valid_until_unix = 12;
+}
+
+// Chain-registrar authorization for an asset registration.
+message AssetRegistrationGrant {
+  AssetRegistrationGrantBody body = 1;
+  crypto.decaf377_rdsa.v1.SpendVerificationKey registrar_vk = 2;
+  crypto.decaf377_rdsa.v1.SpendAuthSignature signature = 3;
+}
+
+// Body signed by an asset's registration authority to authorize one user leaf.
+message UserRegistrationGrantBody {
+  ComplianceLeaf leaf = 1;
+  string policy_id = 2;
+  uint64 valid_until_unix = 3;
+  bytes nonce = 4;
+}
+
+// Asset-authority authorization for a user registration.
+message UserRegistrationGrant {
+  UserRegistrationGrantBody body = 1;
+  crypto.decaf377_rdsa.v1.SpendAuthSignature signature = 2;
 }
 
 // Message to register a user's compliance viewing key for a regulated asset.
 message MsgRegisterUser {
   // The compliance leaf containing the user's registration information.
   ComplianceLeaf leaf = 1;
-  // Signature authorizing this registration.
-  bytes signature = 2;
+  // Grant authorizing this registration.
+  UserRegistrationGrant grant = 2;
 }
 
 // ZK Data (Quad Tree Path)
@@ -251,6 +293,21 @@ message AssetPolicy {
   string policy_id = 6;
   string permission = 7;
   string resource = 8;
+  crypto.decaf377_rdsa.v1.SpendVerificationKey registration_authority_vk = 9;
+}
+
+// Genesis configuration for the compliance component.
+message GenesisContent {
+  repeated NativeAssetRegistration native_assets = 1;
+  repeated crypto.decaf377_rdsa.v1.SpendVerificationKey compliance_registrar_vk = 2;
+}
+
+// Native asset registration configured at genesis.
+message NativeAssetRegistration {
+  asset.v1.AssetId asset_id = 1;
+  bool is_regulated = 2;
+  bytes dk_pub = 3;
+  crypto.decaf377_rdsa.v1.SpendVerificationKey registration_authority_vk = 4;
 }
 
 // Emitted when a user is registered in the compliance tree.

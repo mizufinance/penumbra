@@ -2050,11 +2050,19 @@ impl serde::Serialize for SctParameters {
         if self.epoch_duration != 0 {
             len += 1;
         }
+        if self.sct_anchor_retention_blocks != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.sct.v1.SctParameters", len)?;
         if self.epoch_duration != 0 {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("epochDuration", ToString::to_string(&self.epoch_duration).as_str())?;
+        }
+        if self.sct_anchor_retention_blocks != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("sctAnchorRetentionBlocks", ToString::to_string(&self.sct_anchor_retention_blocks).as_str())?;
         }
         struct_ser.end()
     }
@@ -2068,11 +2076,14 @@ impl<'de> serde::Deserialize<'de> for SctParameters {
         const FIELDS: &[&str] = &[
             "epoch_duration",
             "epochDuration",
+            "sct_anchor_retention_blocks",
+            "sctAnchorRetentionBlocks",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             EpochDuration,
+            SctAnchorRetentionBlocks,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -2096,6 +2107,7 @@ impl<'de> serde::Deserialize<'de> for SctParameters {
                     {
                         match value {
                             "epochDuration" | "epoch_duration" => Ok(GeneratedField::EpochDuration),
+                            "sctAnchorRetentionBlocks" | "sct_anchor_retention_blocks" => Ok(GeneratedField::SctAnchorRetentionBlocks),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -2116,6 +2128,7 @@ impl<'de> serde::Deserialize<'de> for SctParameters {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut epoch_duration__ = None;
+                let mut sct_anchor_retention_blocks__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::EpochDuration => {
@@ -2126,6 +2139,14 @@ impl<'de> serde::Deserialize<'de> for SctParameters {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::SctAnchorRetentionBlocks => {
+                            if sct_anchor_retention_blocks__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sctAnchorRetentionBlocks"));
+                            }
+                            sct_anchor_retention_blocks__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -2133,6 +2154,7 @@ impl<'de> serde::Deserialize<'de> for SctParameters {
                 }
                 Ok(SctParameters {
                     epoch_duration: epoch_duration__.unwrap_or_default(),
+                    sct_anchor_retention_blocks: sct_anchor_retention_blocks__.unwrap_or_default(),
                 })
             }
         }

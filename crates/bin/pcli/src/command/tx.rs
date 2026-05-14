@@ -288,6 +288,9 @@ impl TxCmd {
             if compliance_cmd.is_generate_dk() {
                 return compliance_cmd.exec_generate_dk();
             }
+            if compliance_cmd.is_sign_grant() {
+                return compliance_cmd.exec_sign_grant();
+            }
         }
 
         // The reduced chain prices gas only in the base asset.

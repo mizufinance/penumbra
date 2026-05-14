@@ -2288,10 +2288,7 @@ mod tests {
             address.diversified_generator().vartime_compress_to_field(),
         );
         let leaf = penumbra_sdk_compliance::ComplianceLeaf::new(address, *BASE_ASSET_ID, d);
-        let msg = penumbra_sdk_compliance::structs::MsgRegisterUser {
-            leaf,
-            signature: vec![],
-        };
+        let msg = penumbra_sdk_compliance::structs::MsgRegisterUser { leaf, grant: None };
 
         let mut note_manager = NoteManager::new(OsRng);
         note_manager.set_gas_prices(GasPrices::zero());

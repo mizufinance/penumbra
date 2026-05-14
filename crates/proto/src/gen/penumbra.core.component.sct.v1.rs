@@ -5,6 +5,9 @@ pub struct SctParameters {
     /// The default duration of each epoch, in number of blocks.
     #[prost(uint64, tag = "1")]
     pub epoch_duration: u64,
+    /// Number of recent SCT anchors and historical timestamps retained for witness refresh.
+    #[prost(uint64, tag = "2")]
+    pub sct_anchor_retention_blocks: u64,
 }
 impl ::prost::Name for SctParameters {
     const NAME: &'static str = "SctParameters";

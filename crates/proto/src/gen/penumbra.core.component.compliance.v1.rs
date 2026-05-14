@@ -71,6 +71,14 @@ pub struct MsgRegisterAsset {
     /// ACP resource type.
     #[prost(string, tag = "10")]
     pub resource: ::prost::alloc::string::String,
+    /// Immutable authority key that signs user registration grants for this asset.
+    #[prost(message, optional, tag = "11")]
+    pub registration_authority_vk: ::core::option::Option<
+        super::super::super::super::crypto::decaf377_rdsa::v1::SpendVerificationKey,
+    >,
+    /// Registrar authorization for this asset registration.
+    #[prost(message, optional, tag = "12")]
+    pub asset_registration_grant: ::core::option::Option<AssetRegistrationGrant>,
 }
 impl ::prost::Name for MsgRegisterAsset {
     const NAME: &'static str = "MsgRegisterAsset";
@@ -82,15 +90,121 @@ impl ::prost::Name for MsgRegisterAsset {
         "/penumbra.core.component.compliance.v1.MsgRegisterAsset".into()
     }
 }
+/// Body signed by a chain compliance registrar to authorize an asset policy.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AssetRegistrationGrantBody {
+    #[prost(message, optional, tag = "1")]
+    pub asset_id: ::core::option::Option<super::super::super::asset::v1::AssetId>,
+    #[prost(bool, tag = "2")]
+    pub is_regulated: bool,
+    #[prost(bytes = "vec", tag = "3")]
+    pub dk_pub: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "4")]
+    pub threshold: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, repeated, tag = "5")]
+    pub allowed_channels: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(bytes = "vec", tag = "6")]
+    pub ring_pk: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "7")]
+    pub ring_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "8")]
+    pub policy_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "9")]
+    pub permission: ::prost::alloc::string::String,
+    #[prost(string, tag = "10")]
+    pub resource: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "11")]
+    pub registration_authority_vk: ::core::option::Option<
+        super::super::super::super::crypto::decaf377_rdsa::v1::SpendVerificationKey,
+    >,
+    #[prost(uint64, tag = "12")]
+    pub valid_until_unix: u64,
+}
+impl ::prost::Name for AssetRegistrationGrantBody {
+    const NAME: &'static str = "AssetRegistrationGrantBody";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.AssetRegistrationGrantBody".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.AssetRegistrationGrantBody".into()
+    }
+}
+/// Chain-registrar authorization for an asset registration.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AssetRegistrationGrant {
+    #[prost(message, optional, tag = "1")]
+    pub body: ::core::option::Option<AssetRegistrationGrantBody>,
+    #[prost(message, optional, tag = "2")]
+    pub registrar_vk: ::core::option::Option<
+        super::super::super::super::crypto::decaf377_rdsa::v1::SpendVerificationKey,
+    >,
+    #[prost(message, optional, tag = "3")]
+    pub signature: ::core::option::Option<
+        super::super::super::super::crypto::decaf377_rdsa::v1::SpendAuthSignature,
+    >,
+}
+impl ::prost::Name for AssetRegistrationGrant {
+    const NAME: &'static str = "AssetRegistrationGrant";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.AssetRegistrationGrant".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.AssetRegistrationGrant".into()
+    }
+}
+/// Body signed by an asset's registration authority to authorize one user leaf.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UserRegistrationGrantBody {
+    #[prost(message, optional, tag = "1")]
+    pub leaf: ::core::option::Option<ComplianceLeaf>,
+    #[prost(string, tag = "2")]
+    pub policy_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "3")]
+    pub valid_until_unix: u64,
+    #[prost(bytes = "vec", tag = "4")]
+    pub nonce: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for UserRegistrationGrantBody {
+    const NAME: &'static str = "UserRegistrationGrantBody";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.UserRegistrationGrantBody".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.UserRegistrationGrantBody".into()
+    }
+}
+/// Asset-authority authorization for a user registration.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UserRegistrationGrant {
+    #[prost(message, optional, tag = "1")]
+    pub body: ::core::option::Option<UserRegistrationGrantBody>,
+    #[prost(message, optional, tag = "2")]
+    pub signature: ::core::option::Option<
+        super::super::super::super::crypto::decaf377_rdsa::v1::SpendAuthSignature,
+    >,
+}
+impl ::prost::Name for UserRegistrationGrant {
+    const NAME: &'static str = "UserRegistrationGrant";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.UserRegistrationGrant".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.UserRegistrationGrant".into()
+    }
+}
 /// Message to register a user's compliance viewing key for a regulated asset.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MsgRegisterUser {
     /// The compliance leaf containing the user's registration information.
     #[prost(message, optional, tag = "1")]
     pub leaf: ::core::option::Option<ComplianceLeaf>,
-    /// Signature authorizing this registration.
-    #[prost(bytes = "vec", tag = "2")]
-    pub signature: ::prost::alloc::vec::Vec<u8>,
+    /// Grant authorizing this registration.
+    #[prost(message, optional, tag = "2")]
+    pub grant: ::core::option::Option<UserRegistrationGrant>,
 }
 impl ::prost::Name for MsgRegisterUser {
     const NAME: &'static str = "MsgRegisterUser";
@@ -467,6 +581,10 @@ pub struct AssetPolicy {
     pub permission: ::prost::alloc::string::String,
     #[prost(string, tag = "8")]
     pub resource: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "9")]
+    pub registration_authority_vk: ::core::option::Option<
+        super::super::super::super::crypto::decaf377_rdsa::v1::SpendVerificationKey,
+    >,
 }
 impl ::prost::Name for AssetPolicy {
     const NAME: &'static str = "AssetPolicy";
@@ -476,6 +594,50 @@ impl ::prost::Name for AssetPolicy {
     }
     fn type_url() -> ::prost::alloc::string::String {
         "/penumbra.core.component.compliance.v1.AssetPolicy".into()
+    }
+}
+/// Genesis configuration for the compliance component.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GenesisContent {
+    #[prost(message, repeated, tag = "1")]
+    pub native_assets: ::prost::alloc::vec::Vec<NativeAssetRegistration>,
+    #[prost(message, repeated, tag = "2")]
+    pub compliance_registrar_vk: ::prost::alloc::vec::Vec<
+        super::super::super::super::crypto::decaf377_rdsa::v1::SpendVerificationKey,
+    >,
+}
+impl ::prost::Name for GenesisContent {
+    const NAME: &'static str = "GenesisContent";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.GenesisContent".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.GenesisContent".into()
+    }
+}
+/// Native asset registration configured at genesis.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NativeAssetRegistration {
+    #[prost(message, optional, tag = "1")]
+    pub asset_id: ::core::option::Option<super::super::super::asset::v1::AssetId>,
+    #[prost(bool, tag = "2")]
+    pub is_regulated: bool,
+    #[prost(bytes = "vec", tag = "3")]
+    pub dk_pub: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "4")]
+    pub registration_authority_vk: ::core::option::Option<
+        super::super::super::super::crypto::decaf377_rdsa::v1::SpendVerificationKey,
+    >,
+}
+impl ::prost::Name for NativeAssetRegistration {
+    const NAME: &'static str = "NativeAssetRegistration";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.NativeAssetRegistration".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.NativeAssetRegistration".into()
     }
 }
 /// Emitted when a user is registered in the compliance tree.

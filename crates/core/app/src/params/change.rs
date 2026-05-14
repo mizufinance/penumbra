@@ -69,7 +69,11 @@ impl AppParameters {
                     inbound_ics20_transfers_enabled: _,
                     outbound_ics20_transfers_enabled: _,
                 },
-            sct_params: SctParameters { epoch_duration },
+            sct_params:
+                SctParameters {
+                    epoch_duration,
+                    sct_anchor_retention_blocks: _,
+                },
             shielded_pool_params: ShieldedPoolParameters { fmd_meta_params: _ },
             validator_params:
                 ValidatorParameters {
@@ -141,7 +145,11 @@ impl AppParameters {
                     inbound_ics20_transfers_enabled,
                     outbound_ics20_transfers_enabled,
                 },
-            sct_params: SctParameters { epoch_duration },
+            sct_params:
+                SctParameters {
+                    epoch_duration,
+                    sct_anchor_retention_blocks,
+                },
             shielded_pool_params: ShieldedPoolParameters { fmd_meta_params: _ },
             validator_params:
                 ValidatorParameters {
@@ -157,6 +165,10 @@ impl AppParameters {
             (
                 *epoch_duration >= 1,
                 "epoch duration must be at least one block",
+            ),
+            (
+                *sct_anchor_retention_blocks >= 1,
+                "SCT anchor retention must be at least one block",
             ),
             (
                 *active_validator_limit > 3,

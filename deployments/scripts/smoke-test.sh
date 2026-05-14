@@ -26,6 +26,10 @@ smoke_test_dir="$(mktemp -d "${TMPDIR:-/tmp}/penumbra-smoke.XXXXXX")"
 temp_root="${TMPDIR:-/tmp}"
 temp_root="${temp_root%/}"
 devnet_pid=""
+compliance_dev_registrar_sk_hex="${COMPLIANCE_DEV_REGISTRAR_SK_HEX:-0100000000000000000000000000000000000000000000000000000000000000}"
+compliance_dev_authority_sk_hex="${COMPLIANCE_DEV_AUTHORITY_SK_HEX:-0200000000000000000000000000000000000000000000000000000000000000}"
+compliance_dev_authority_vk_hex="${COMPLIANCE_DEV_AUTHORITY_VK_HEX:-b2ecf9b9082d6306538be73b0d6ee741141f3222152da78685d6596efc8c1506}"
+compliance_grant_valid_until_unix="${COMPLIANCE_GRANT_VALID_UNTIL_UNIX:-4102444800}"
 
 # Run the full smoke environment against an isolated Penumbra state directory so
 # local developer state does not interfere with the devnet/process-compose paths.
@@ -169,14 +173,39 @@ dk_pub_hex=$(echo "$dk_output" | grep "DK_pub (hex):" | awk '{print $NF}')
 if [ -n "$dk_hex" ] && [ -n "$dk_pub_hex" ]; then
     >&2 echo "  DK generated successfully."
 
+    asset_grant_hex=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" tx compliance sign-asset-grant regulated_usd \
+        --regulated \
+        --dk-pub-hex "$dk_pub_hex" \
+        --threshold 500000000000000000000 \
+        --registration-authority-vk-hex "$compliance_dev_authority_vk_hex" \
+        --registrar-sk-hex "$compliance_dev_registrar_sk_hex" \
+        --valid-until-unix "$compliance_grant_valid_until_unix" \
+        | tail -1)
+
     # Register regulated_usd as a regulated asset with the generated DK
     pcli_tx_cmd tx compliance register-asset regulated_usd \
-        --regulated --dk-pub-hex "$dk_pub_hex" --threshold 500000000000000000000
+        --regulated \
+        --dk-pub-hex "$dk_pub_hex" \
+        --threshold 500000000000000000000 \
+        --registration-authority-vk-hex "$compliance_dev_authority_vk_hex" \
+        --asset-registration-grant-hex "$asset_grant_hex"
     >&2 echo "  regulated_usd registered as regulated asset."
 
     # Register the test user for regulated_usd
-    pcli_tx_cmd tx compliance register-user regulated_usd
-    pcli_tx_cmd tx compliance register-user regulated_usd --address-index 1
+    smoke_addr_0=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" view address 0)
+    smoke_addr_1=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" view address 1)
+    user_grant_0=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" tx compliance sign-user-grant regulated_usd \
+        --address "$smoke_addr_0" \
+        --registration-authority-sk-hex "$compliance_dev_authority_sk_hex" \
+        --valid-until-unix "$compliance_grant_valid_until_unix" \
+        | tail -1)
+    user_grant_1=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" tx compliance sign-user-grant regulated_usd \
+        --address "$smoke_addr_1" \
+        --registration-authority-sk-hex "$compliance_dev_authority_sk_hex" \
+        --valid-until-unix "$compliance_grant_valid_until_unix" \
+        | tail -1)
+    pcli_tx_cmd tx compliance register-user regulated_usd --user-registration-grant-hex "$user_grant_0"
+    pcli_tx_cmd tx compliance register-user regulated_usd --address-index 1 --user-registration-grant-hex "$user_grant_1"
     >&2 echo "  User registered for regulated_usd."
 
     # Send a transfer so the detection scan has something to find
@@ -191,6 +220,10 @@ if [ -n "$dk_hex" ] && [ -n "$dk_pub_hex" ]; then
     export COMPLIANCE_DK_HEX="$dk_hex"
     export COMPLIANCE_DK_PUB_HEX="$dk_pub_hex"
     export COMPLIANCE_SMOKE_ASSET="regulated_usd"
+    export COMPLIANCE_DEV_REGISTRAR_SK_HEX="$compliance_dev_registrar_sk_hex"
+    export COMPLIANCE_DEV_AUTHORITY_SK_HEX="$compliance_dev_authority_sk_hex"
+    export COMPLIANCE_DEV_AUTHORITY_VK_HEX="$compliance_dev_authority_vk_hex"
+    export COMPLIANCE_GRANT_VALID_UNTIL_UNIX="$compliance_grant_valid_until_unix"
     >&2 echo "  Compliance env vars exported."
 else
     >&2 echo "ERROR: DK generation failed during compliance smoke setup."

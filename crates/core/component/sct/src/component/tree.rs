@@ -1,19 +1,248 @@
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use async_trait::async_trait;
 use cnidarium::{StateRead, StateWrite};
+use futures::{Stream, StreamExt};
 use penumbra_sdk_proto::{DomainType as _, StateReadProto, StateWriteProto};
 use penumbra_sdk_tct as tct;
+use std::{
+    ops::{Range, RangeFrom},
+    pin::Pin,
+};
 use tct::builder::{block, epoch};
+use tct::storage::{AsyncRead as TctAsyncRead, AsyncWrite as TctAsyncWrite, StoredPosition};
+use tct::structure::Hash;
 use tracing::instrument;
 
 use crate::{
-    component::clock::EpochRead, event, state_key, CommitmentSource, NullificationInfo, Nullifier,
+    component::{clock::EpochRead, sct::StateReadExt},
+    event, state_key, CommitmentSource, NullificationInfo, Nullifier,
 };
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ProposalNullifierBatchProfile {
     pub lookup_write_ms: f64,
     pub pending_stage_ms: f64,
+}
+
+struct SctNvStorage<'a, S: ?Sized> {
+    state: &'a mut S,
+}
+
+impl<'a, S: ?Sized> SctNvStorage<'a, S> {
+    fn new(state: &'a mut S) -> Self {
+        Self { state }
+    }
+}
+
+fn decode_stored_position(bytes: Option<Vec<u8>>) -> Result<StoredPosition> {
+    bytes
+        .map(|bytes| bincode::deserialize(&bytes).context("decode SCT stored position"))
+        .transpose()
+        .map(|position| position.unwrap_or_default())
+}
+
+fn decode_forgotten(bytes: Option<Vec<u8>>) -> Result<tct::Forgotten> {
+    bytes
+        .map(|bytes| bincode::deserialize(&bytes).context("decode SCT forgotten version"))
+        .transpose()
+        .map(|forgotten| forgotten.unwrap_or_default())
+}
+
+fn decode_hash_value(bytes: Vec<u8>) -> Result<Hash> {
+    let bytes: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        anyhow!("stored SCT hash must be 32 bytes, got {}", bytes.len())
+    })?;
+    Hash::from_bytes(bytes).map_err(|_| anyhow!("stored SCT hash is not a field element"))
+}
+
+fn decode_commitment_value(bytes: Vec<u8>) -> Result<tct::StateCommitment> {
+    let bytes: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        anyhow!(
+            "stored SCT commitment must be 32 bytes, got {}",
+            bytes.len()
+        )
+    })?;
+    tct::StateCommitment::try_from(bytes)
+        .map_err(|_| anyhow!("stored SCT commitment is not a field element"))
+}
+
+fn decode_hash_row(key: &[u8], bytes: Vec<u8>) -> Result<(tct::Position, u8, Hash)> {
+    let key = std::str::from_utf8(key).context("SCT hash key is not UTF-8")?;
+    let suffix = key
+        .strip_prefix(state_key::tree::incremental_hash_prefix())
+        .unwrap_or(key);
+    let (position, height) = suffix
+        .split_once('/')
+        .ok_or_else(|| anyhow!("SCT hash key missing height: {key}"))?;
+    Ok((
+        position.parse::<u64>()?.into(),
+        height.parse::<u8>()?,
+        decode_hash_value(bytes)?,
+    ))
+}
+
+fn decode_commitment_row(
+    key: &[u8],
+    bytes: Vec<u8>,
+) -> Result<(tct::Position, tct::StateCommitment)> {
+    let key = std::str::from_utf8(key).context("SCT commitment key is not UTF-8")?;
+    let suffix = key
+        .strip_prefix(state_key::tree::incremental_commitment_prefix())
+        .unwrap_or(key);
+    Ok((
+        suffix.parse::<u64>()?.into(),
+        decode_commitment_value(bytes)?,
+    ))
+}
+
+fn prefix_range(prefix: &str) -> RangeFrom<Vec<u8>> {
+    let _ = prefix;
+    Vec::new()..
+}
+
+#[async_trait]
+impl<S: StateRead + Send + Sync + ?Sized> TctAsyncRead for SctNvStorage<'_, S> {
+    type Error = anyhow::Error;
+
+    type HashesStream<'b>
+        = Pin<Box<dyn Stream<Item = Result<(tct::Position, u8, Hash)>> + Send + 'b>>
+    where
+        Self: 'b;
+
+    type CommitmentsStream<'b>
+        = Pin<Box<dyn Stream<Item = Result<(tct::Position, tct::StateCommitment)>> + Send + 'b>>
+    where
+        Self: 'b;
+
+    async fn position(&mut self) -> Result<StoredPosition> {
+        decode_stored_position(
+            self.state
+                .nonverifiable_get_raw(state_key::tree::incremental_position().as_bytes())
+                .await?,
+        )
+    }
+
+    async fn forgotten(&mut self) -> Result<tct::Forgotten> {
+        decode_forgotten(
+            self.state
+                .nonverifiable_get_raw(state_key::tree::incremental_forgotten().as_bytes())
+                .await?,
+        )
+    }
+
+    async fn hash(&mut self, position: tct::Position, height: u8) -> Result<Option<Hash>> {
+        self.state
+            .nonverifiable_get_raw(state_key::tree::incremental_hash(position, height).as_bytes())
+            .await?
+            .map(decode_hash_value)
+            .transpose()
+    }
+
+    fn hashes(&mut self) -> Self::HashesStream<'_> {
+        self.state
+            .nonverifiable_range_raw(
+                Some(state_key::tree::incremental_hash_prefix().as_bytes()),
+                prefix_range(state_key::tree::incremental_hash_prefix()),
+            )
+            .expect("valid SCT hash storage range")
+            .map(|result| result.and_then(|(key, bytes)| decode_hash_row(&key, bytes)))
+            .boxed()
+    }
+
+    async fn commitment(
+        &mut self,
+        position: tct::Position,
+    ) -> Result<Option<tct::StateCommitment>> {
+        self.state
+            .nonverifiable_get_raw(state_key::tree::incremental_commitment(position).as_bytes())
+            .await?
+            .map(decode_commitment_value)
+            .transpose()
+    }
+
+    fn commitments(&mut self) -> Self::CommitmentsStream<'_> {
+        self.state
+            .nonverifiable_range_raw(
+                Some(state_key::tree::incremental_commitment_prefix().as_bytes()),
+                prefix_range(state_key::tree::incremental_commitment_prefix()),
+            )
+            .expect("valid SCT commitment storage range")
+            .map(|result| result.and_then(|(key, bytes)| decode_commitment_row(&key, bytes)))
+            .boxed()
+    }
+}
+
+#[async_trait]
+impl<S: StateWrite + Send + Sync + ?Sized> TctAsyncWrite for SctNvStorage<'_, S> {
+    async fn add_hash(
+        &mut self,
+        position: tct::Position,
+        height: u8,
+        hash: Hash,
+        _essential: bool,
+    ) -> Result<()> {
+        self.state.nonverifiable_put_raw(
+            state_key::tree::incremental_hash(position, height).into_bytes(),
+            hash.to_bytes().to_vec(),
+        );
+        Ok(())
+    }
+
+    async fn add_commitment(
+        &mut self,
+        position: tct::Position,
+        commitment: tct::StateCommitment,
+    ) -> Result<()> {
+        let key = state_key::tree::incremental_commitment(position);
+        if let Some(existing) = self.state.nonverifiable_get_raw(key.as_bytes()).await? {
+            anyhow::ensure!(
+                existing == commitment.0.to_bytes().to_vec(),
+                "refusing to overwrite SCT commitment at position {}",
+                u64::from(position)
+            );
+            return Ok(());
+        }
+        self.state
+            .nonverifiable_put_raw(key.into_bytes(), commitment.0.to_bytes().to_vec());
+        Ok(())
+    }
+
+    async fn delete_range(
+        &mut self,
+        below_height: u8,
+        positions: Range<tct::Position>,
+    ) -> Result<()> {
+        let start = u64::from(positions.start);
+        let end = u64::from(positions.end);
+        for position in start..end {
+            let position = tct::Position::from(position);
+            self.state.nonverifiable_delete(
+                state_key::tree::incremental_commitment(position).into_bytes(),
+            );
+            for height in 0..below_height {
+                self.state.nonverifiable_delete(
+                    state_key::tree::incremental_hash(position, height).into_bytes(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    async fn set_position(&mut self, position: StoredPosition) -> Result<()> {
+        self.state.nonverifiable_put_raw(
+            state_key::tree::incremental_position().as_bytes().to_vec(),
+            bincode::serialize(&position)?,
+        );
+        Ok(())
+    }
+
+    async fn set_forgotten(&mut self, forgotten: tct::Forgotten) -> Result<()> {
+        self.state.nonverifiable_put_raw(
+            state_key::tree::incremental_forgotten().as_bytes().to_vec(),
+            bincode::serialize(&forgotten)?,
+        );
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -27,16 +256,58 @@ pub trait SctRead: StateRead {
             return tree;
         }
 
-        match self
-            .nonverifiable_get_raw(state_key::tree::state_commitment_tree().as_bytes())
+        let position = decode_stored_position(
+            self.nonverifiable_get_raw(state_key::tree::incremental_position().as_bytes())
+                .await
+                .expect("able to read SCT stored position"),
+        )
+        .expect("able to decode SCT stored position");
+        let forgotten = decode_forgotten(
+            self.nonverifiable_get_raw(state_key::tree::incremental_forgotten().as_bytes())
+                .await
+                .expect("able to read SCT forgotten version"),
+        )
+        .expect("able to decode SCT forgotten version");
+
+        let mut commitments = tct::Tree::load(position, forgotten);
+        let commitment_stream = self
+            .nonverifiable_range_raw(
+                Some(state_key::tree::incremental_commitment_prefix().as_bytes()),
+                prefix_range(state_key::tree::incremental_commitment_prefix()),
+            )
+            .expect("valid SCT commitment storage range");
+        futures::pin_mut!(commitment_stream);
+        while let Some((key, bytes)) = commitment_stream
+            .next()
             .await
-            .expect("able to retrieve state commitment tree from nonverifiable storage")
+            .transpose()
+            .expect("able to stream SCT commitments")
         {
-            Some(bytes) => bincode::deserialize(&bytes).expect(
-                "able to deserialize stored state commitment tree from nonverifiable storage",
-            ),
-            None => tct::Tree::new(),
+            let (position, commitment) =
+                decode_commitment_row(&key, bytes).expect("able to decode SCT commitment");
+            commitments.insert(position, commitment);
         }
+        drop(commitment_stream);
+
+        let mut hashes = commitments.load_hashes();
+        let hash_stream = self
+            .nonverifiable_range_raw(
+                Some(state_key::tree::incremental_hash_prefix().as_bytes()),
+                prefix_range(state_key::tree::incremental_hash_prefix()),
+            )
+            .expect("valid SCT hash storage range");
+        futures::pin_mut!(hash_stream);
+        while let Some((key, bytes)) = hash_stream
+            .next()
+            .await
+            .transpose()
+            .expect("able to stream SCT hashes")
+        {
+            let (position, height, hash) =
+                decode_hash_row(&key, bytes).expect("able to decode SCT hash");
+            hashes.insert(position, height, hash);
+        }
+        hashes.finish()
     }
 
     /// Return the SCT root for the given height, if it exists.
@@ -116,8 +387,36 @@ pub trait SctManager: StateWrite {
             );
         }
 
+        self.prune_sct_history(height).await;
         self.write_sct_cache(sct);
-        self.persist_sct_cache();
+        self.persist_sct_cache().await;
+    }
+
+    /// Prune SCT anchors and height-indexed metadata outside the configured retention window.
+    async fn prune_sct_history(&mut self, current_height: u64) {
+        let retention = self
+            .get_sct_params()
+            .await
+            .expect("SCT parameters must be set")
+            .sct_anchor_retention_blocks;
+        if let Some(expired_height) = current_height.checked_sub(retention.saturating_add(1)) {
+            if let Ok(Some(expired_anchor)) = self.get_anchor_by_height(expired_height).await {
+                self.delete(state_key::tree::anchor_by_height(expired_height));
+                if self
+                    .get_proto::<u64>(&state_key::tree::anchor_lookup(expired_anchor))
+                    .await
+                    .expect("able to read SCT anchor lookup")
+                    == Some(expired_height)
+                {
+                    self.delete(state_key::tree::anchor_lookup(expired_anchor));
+                }
+            }
+
+            self.delete(state_key::epoch_manager::epoch_by_height(expired_height));
+            self.nonverifiable_delete(
+                state_key::block_manager::block_timestamp(expired_height).into_bytes(),
+            );
+        }
     }
 
     /// Add a state commitment into the SCT, emitting an event recording its
@@ -290,17 +589,15 @@ pub trait SctManager: StateWrite {
     ///  
     /// # Panics
     /// This method panics if a serialization failure occurs.
-    fn persist_sct_cache(&mut self) {
+    async fn persist_sct_cache(&mut self) {
         // If the cached tree is dirty, flush it to storage
         if let Some(tree) =
             self.object_get::<tct::Tree>(state_key::cache::cached_state_commitment_tree())
         {
-            let bytes = bincode::serialize(&tree)
-                .expect("able to serialize state commitment tree to bincode");
-            self.nonverifiable_put_raw(
-                state_key::tree::state_commitment_tree().as_bytes().to_vec(),
-                bytes,
-            );
+            let mut storage = SctNvStorage::new(self);
+            tree.to_async_writer(&mut storage)
+                .await
+                .expect("able to persist state commitment tree to incremental NV storage");
         }
     }
 }
@@ -346,3 +643,147 @@ pub trait VerificationExt: StateRead {
 }
 
 impl<T: StateRead + ?Sized> VerificationExt for T {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        component::{
+            clock::{EpochManager, EpochRead},
+            sct::StateWriteExt,
+        },
+        epoch::Epoch,
+        params::SctParameters,
+    };
+    use cnidarium::TempStorage;
+    use futures::StreamExt;
+    use penumbra_sdk_proto::StateReadProto;
+    use std::str::FromStr;
+
+    async fn write_test_anchor(
+        state: &mut cnidarium::StateDelta<cnidarium::Snapshot>,
+        height: u64,
+        tree: &mut tct::Tree,
+    ) -> tct::Root {
+        state.put_block_timestamp(
+            height,
+            tendermint::Time::from_str("2026-01-01T00:00:00Z").unwrap(),
+        );
+        state.put_epoch_by_height(
+            height,
+            Epoch {
+                index: 0,
+                start_height: 0,
+            },
+        );
+        let commitment = tct::StateCommitment::try_from([height as u8; 32]).unwrap();
+        tree.insert(tct::Witness::Forget, commitment).unwrap();
+        let block_root = tree.end_block().unwrap();
+        let anchor = tree.root();
+        state
+            .write_sct(height, tree.clone(), block_root, None)
+            .await;
+        anchor
+    }
+
+    #[tokio::test]
+    async fn sct_retention_prunes_only_after_window_boundary() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+        state.put_sct_params(SctParameters {
+            epoch_duration: 10,
+            sct_anchor_retention_blocks: 2,
+        });
+
+        let mut tree = tct::Tree::new();
+        let anchor_0 = write_test_anchor(&mut state, 0, &mut tree).await;
+        let anchor_1 = write_test_anchor(&mut state, 1, &mut tree).await;
+        write_test_anchor(&mut state, 2, &mut tree).await;
+
+        assert_eq!(state.get_anchor_by_height(0).await.unwrap(), Some(anchor_0));
+        assert!(state.get_block_timestamp(0).await.is_ok());
+        assert!(state.get_epoch_by_height(0).await.is_ok());
+
+        write_test_anchor(&mut state, 3, &mut tree).await;
+
+        assert_eq!(state.get_anchor_by_height(0).await.unwrap(), None);
+        assert!(state.get_block_timestamp(0).await.is_err());
+        assert!(state.get_epoch_by_height(0).await.is_err());
+        assert_eq!(state.get_anchor_by_height(1).await.unwrap(), Some(anchor_1));
+        assert!(state.get_block_timestamp(1).await.is_ok());
+        assert!(state.get_epoch_by_height(1).await.is_ok());
+        assert_eq!(
+            state
+                .get_proto::<u64>(&state_key::tree::anchor_lookup(anchor_0))
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn sct_incremental_nv_persistence_roundtrips_without_full_blob() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+        state.put_sct_params(SctParameters {
+            epoch_duration: 10,
+            sct_anchor_retention_blocks: 100,
+        });
+        state.put_block_timestamp(
+            1,
+            tendermint::Time::from_str("2026-01-01T00:00:00Z").unwrap(),
+        );
+        state.put_epoch_by_height(
+            1,
+            Epoch {
+                index: 0,
+                start_height: 0,
+            },
+        );
+
+        let mut reference = tct::Tree::new();
+        for i in 1..=8u8 {
+            reference
+                .insert(
+                    tct::Witness::Keep,
+                    tct::StateCommitment::try_from([i; 32]).unwrap(),
+                )
+                .unwrap();
+        }
+        let block_root = reference.end_block().unwrap();
+        let expected_root = reference.root();
+
+        state
+            .write_sct(1, reference.clone(), block_root, None)
+            .await;
+
+        assert!(state
+            .nonverifiable_get_raw(state_key::tree::state_commitment_tree().as_bytes())
+            .await
+            .unwrap()
+            .is_none());
+
+        let loaded = state.get_sct().await;
+        assert_eq!(loaded.root(), expected_root);
+
+        let mut count = 0usize;
+        let stream = state
+            .nonverifiable_range_raw(
+                Some(state_key::tree::incremental_prefix().as_bytes()),
+                Vec::new()..,
+            )
+            .unwrap();
+        futures::pin_mut!(stream);
+        while let Some(entry) = stream.next().await {
+            entry.unwrap();
+            count += 1;
+        }
+        assert!(count > 0, "incremental SCT storage wrote no keys");
+        assert!(
+            count < 128,
+            "incremental SCT storage wrote too many keys for one small block: {count}"
+        );
+    }
+}

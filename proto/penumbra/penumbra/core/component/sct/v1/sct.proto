@@ -9,6 +9,8 @@ import "ibc/core/commitment/v1/commitment.proto";
 message SctParameters {
   // The default duration of each epoch, in number of blocks.
   uint64 epoch_duration = 1;
+  // Number of recent SCT anchors and historical timestamps retained for witness refresh.
+  uint64 sct_anchor_retention_blocks = 2;
 }
 
 // Sct-specific genesis content.

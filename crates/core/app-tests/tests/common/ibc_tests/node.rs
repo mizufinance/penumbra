@@ -221,6 +221,8 @@ impl TestNodeWithIBC {
                 policy_id: String::new(),
                 permission: String::new(),
                 resource: String::new(),
+                registration_authority_vk: None,
+                asset_registration_grant: None,
             };
             actions.push(Action::ComplianceRegisterAsset(msg));
         }
@@ -235,10 +237,7 @@ impl TestNodeWithIBC {
                     asset_id,
                     d,
                 };
-                let msg = MsgRegisterUser {
-                    leaf,
-                    signature: vec![], // Signature validation is TODO/skipped
-                };
+                let msg = MsgRegisterUser { leaf, grant: None };
                 actions.push(Action::ComplianceRegisterUser(msg));
             }
         }
