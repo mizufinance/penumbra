@@ -101,12 +101,8 @@ pub trait ComplianceRegistryRead: StateRead {
         Ok(nodes)
     }
 
-    /// Get the user compliance tree from state.
-    async fn get_user_tree(&self) -> Result<QuadTree> {
-        if let Some(tree) = self.object_get(state_key::cache::cached_user_tree()) {
-            return Ok(tree);
-        }
-
+    /// Reconstruct the user compliance tree from nonverifiable storage.
+    async fn load_user_tree_from_nv(&self) -> Result<QuadTree> {
         let nodes = self.load_user_tree_nodes().await?;
         if nodes.is_empty() {
             Ok(QuadTree::new())
@@ -116,6 +112,15 @@ pub trait ComplianceRegistryRead: StateRead {
                 nodes,
             ))
         }
+    }
+
+    /// Get the user compliance tree from state.
+    async fn get_user_tree(&self) -> Result<QuadTree> {
+        if let Some(tree) = self.object_get(state_key::cache::cached_user_tree()) {
+            return Ok(tree);
+        }
+
+        self.load_user_tree_from_nv().await
     }
 
     /// Load asset IMT nodes from nonverifiable storage.
@@ -152,12 +157,8 @@ pub trait ComplianceRegistryRead: StateRead {
         Ok(leaves)
     }
 
-    /// Get the asset Indexed Merkle Tree (IMT) from state.
-    async fn get_asset_imt(&self) -> Result<IndexedMerkleTree> {
-        if let Some(tree) = self.object_get(state_key::cache::cached_asset_imt()) {
-            return Ok(tree);
-        }
-
+    /// Reconstruct the asset indexed Merkle tree from nonverifiable storage.
+    async fn load_asset_imt_from_nv(&self) -> Result<IndexedMerkleTree> {
         let nodes = self.load_asset_imt_nodes().await?;
         let leaves = self.load_asset_imt_leaves().await?;
         if leaves.is_empty() {
@@ -180,6 +181,15 @@ pub trait ComplianceRegistryRead: StateRead {
         }
     }
 
+    /// Get the asset Indexed Merkle Tree (IMT) from state.
+    async fn get_asset_imt(&self) -> Result<IndexedMerkleTree> {
+        if let Some(tree) = self.object_get(state_key::cache::cached_asset_imt()) {
+            return Ok(tree);
+        }
+
+        self.load_asset_imt_from_nv().await
+    }
+
     /// Get the asset IMT root hash.
     async fn get_asset_imt_root(&self) -> Result<StateCommitment> {
         if let Some(root) = self.get(state_key::asset_imt_root()).await? {
@@ -187,6 +197,37 @@ pub trait ComplianceRegistryRead: StateRead {
         }
         let tree = self.get_asset_imt().await?;
         Ok(tree.root())
+    }
+
+    /// Verify that compliance trees materialized in NV storage match committed roots.
+    async fn verify_committed_tree_roots(&self) -> Result<()> {
+        if let Some(committed) = self
+            .get::<StateCommitment>(state_key::user_tree_root())
+            .await?
+        {
+            let reconstructed = self.load_user_tree_from_nv().await?.root();
+            anyhow::ensure!(
+                reconstructed == committed,
+                "compliance user tree root mismatch: committed {:?}, NV {:?}",
+                committed,
+                reconstructed
+            );
+        }
+
+        if let Some(committed) = self
+            .get::<StateCommitment>(state_key::asset_imt_root())
+            .await?
+        {
+            let reconstructed = self.load_asset_imt_from_nv().await?.root();
+            anyhow::ensure!(
+                reconstructed == committed,
+                "compliance asset IMT root mismatch: committed {:?}, NV {:?}",
+                committed,
+                reconstructed
+            );
+        }
+
+        Ok(())
     }
 
     /// Get proof data for an asset using the IMT.
@@ -908,6 +949,26 @@ mod tests {
         count
     }
 
+    async fn delete_nv_prefix(
+        state: &mut cnidarium::StateDelta<cnidarium::Snapshot>,
+        prefix: &'static str,
+    ) {
+        let mut keys = Vec::new();
+        {
+            let stream = state
+                .nonverifiable_range_raw(Some(prefix.as_bytes()), Vec::new()..)
+                .unwrap();
+            futures::pin_mut!(stream);
+            while let Some(entry) = stream.next().await {
+                let (key, _) = entry.unwrap();
+                keys.push(key);
+            }
+        }
+        for key in keys {
+            state.nonverifiable_delete(key);
+        }
+    }
+
     #[tokio::test]
     async fn test_add_compliance_leaf() {
         let storage = TempStorage::new().await.unwrap();
@@ -960,6 +1021,29 @@ mod tests {
         state.object_delete(state_key::cache::cached_user_tree());
         let reloaded = state.get_user_tree().await.unwrap();
         assert_eq!(reloaded.root(), root);
+    }
+
+    #[tokio::test]
+    async fn test_user_tree_root_check_fails_on_missing_nv_nodes() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        let leaf = ComplianceLeaf::new(
+            Address::dummy(&mut rand::thread_rng()),
+            asset::Id(Fq::from(1u64)),
+            Fq::from(7u64),
+        );
+        state.add_compliance_leaf(leaf).await.unwrap();
+        state.verify_committed_tree_roots().await.unwrap();
+
+        delete_nv_prefix(&mut state, state_key::tree_storage::user_node_prefix()).await;
+
+        let err = state
+            .verify_committed_tree_roots()
+            .await
+            .expect_err("missing user-tree NV nodes should fail root verification");
+        assert!(err.to_string().contains("user tree root mismatch"));
     }
 
     #[tokio::test]
@@ -1042,6 +1126,34 @@ mod tests {
             proof_before.indexed_leaf.value
         );
         assert_eq!(proof_after.position, proof_before.position);
+    }
+
+    #[tokio::test]
+    async fn test_asset_imt_root_check_fails_on_missing_nv_leaves() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        state
+            .register_regulated_asset(
+                asset::Id(Fq::from(777u64)),
+                AssetPolicy::simple(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
+            .await
+            .unwrap();
+        state.verify_committed_tree_roots().await.unwrap();
+
+        delete_nv_prefix(&mut state, state_key::tree_storage::asset_leaf_prefix()).await;
+
+        let err = state
+            .verify_committed_tree_roots()
+            .await
+            .expect_err("missing asset-IMT NV leaves should fail root verification");
+        assert!(err.to_string().contains("asset IMT root mismatch"));
     }
 
     #[tokio::test]

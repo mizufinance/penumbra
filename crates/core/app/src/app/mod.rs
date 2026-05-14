@@ -3652,6 +3652,14 @@ impl App {
             tracing::error!(?error, "nullifier tree root check failed");
             return false;
         }
+        if let Err(error) = state.verify_committed_sct_root().await {
+            tracing::error!(?error, "SCT root check failed");
+            return false;
+        }
+        if let Err(error) = state.verify_committed_tree_roots().await {
+            tracing::error!(?error, "compliance tree root check failed");
+            return false;
+        }
         true
     }
 
@@ -6266,10 +6274,12 @@ mod tests {
     use cnidarium::{StateDelta, StateRead, StateWrite, TempStorage};
     use decaf377::{Fq, Fr};
     use futures::StreamExt as _;
-    use penumbra_sdk_asset::{Value, BASE_ASSET_DENOM, BASE_ASSET_ID};
+    use penumbra_sdk_asset::{asset, Value, BASE_ASSET_DENOM, BASE_ASSET_ID};
     use penumbra_sdk_compact_block::StatePayload;
+    use penumbra_sdk_compliance::registry::ComplianceRegistryWrite as _;
+    use penumbra_sdk_compliance::{AssetPolicy, ComplianceLeaf};
     use penumbra_sdk_fee::Fee;
-    use penumbra_sdk_keys::test_keys;
+    use penumbra_sdk_keys::{test_keys, Address};
     use penumbra_sdk_mock_client::MockClient;
     use penumbra_sdk_mock_consensus::TestNode;
     use penumbra_sdk_num::Amount;
@@ -6277,6 +6287,9 @@ mod tests {
     use penumbra_sdk_proto::DomainType;
     use penumbra_sdk_sct::component::clock::{EpochManager as _, EpochRead as _};
     use penumbra_sdk_sct::component::tree::{SctManager as _, SctRead as _};
+    use penumbra_sdk_sct::component::StateWriteExt as _;
+    use penumbra_sdk_sct::epoch::Epoch;
+    use penumbra_sdk_sct::params::SctParameters;
     use penumbra_sdk_sct::{CommitmentSource, NullificationInfo, Nullifier};
     use penumbra_sdk_shielded_pool::component::NoteManager as _;
     use penumbra_sdk_shielded_pool::{
@@ -6316,6 +6329,25 @@ mod tests {
             source: CommitmentSource::transaction(),
             commitment: tct::StateCommitment(Fq::from(value)),
         }
+    }
+
+    async fn delete_nv_prefix<S>(state: &mut S, prefix: &[u8]) -> Result<()>
+    where
+        S: StateRead + StateWrite + ?Sized,
+    {
+        let mut keys = Vec::new();
+        {
+            let stream = state.nonverifiable_prefix_raw(prefix);
+            futures::pin_mut!(stream);
+            while let Some(item) = stream.next().await {
+                let (key, _) = item?;
+                keys.push(key);
+            }
+        }
+        for key in keys {
+            state.nonverifiable_delete(key);
+        }
+        Ok(())
     }
 
     async fn setup_test_txs(
@@ -7028,6 +7060,84 @@ mod tests {
         for key in keys {
             corrupt.nonverifiable_delete(key);
         }
+        storage.commit(corrupt).await?;
+
+        assert!(!App::is_ready(storage.latest_snapshot()).await);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn app_readiness_fails_on_corrupted_sct_nv() -> Result<()> {
+        let storage = TempStorage::new_with_prefixes(SUBSTORE_PREFIXES.to_vec()).await?;
+        let mut state = StateDelta::new(storage.latest_snapshot());
+        state.put_sct_params(SctParameters {
+            epoch_duration: 10,
+            sct_anchor_retention_blocks: 100,
+        });
+        state.put_block_height(1);
+        state.put_block_timestamp(1, Time::parse_from_rfc3339("2026-01-01T00:00:00Z")?);
+        state.put_epoch_by_height(
+            1,
+            Epoch {
+                index: 0,
+                start_height: 0,
+            },
+        );
+
+        let mut tree = tct::Tree::new();
+        tree.insert(
+            tct::Witness::Forget,
+            tct::StateCommitment::try_from([11u8; 32])?,
+        )?;
+        let block_root = tree.end_block()?;
+        state.write_sct(1, tree, block_root, None).await;
+        storage.commit(state).await?;
+        assert!(App::is_ready(storage.latest_snapshot()).await);
+
+        let mut corrupt = StateDelta::new(storage.latest_snapshot());
+        delete_nv_prefix(
+            &mut corrupt,
+            penumbra_sdk_sct::state_key::tree::incremental_prefix().as_bytes(),
+        )
+        .await?;
+        storage.commit(corrupt).await?;
+
+        assert!(!App::is_ready(storage.latest_snapshot()).await);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn app_readiness_fails_on_corrupted_compliance_nv() -> Result<()> {
+        let storage = TempStorage::new_with_prefixes(SUBSTORE_PREFIXES.to_vec()).await?;
+        let mut state = StateDelta::new(storage.latest_snapshot());
+        state
+            .add_compliance_leaf(ComplianceLeaf::new(
+                Address::dummy(&mut rand::thread_rng()),
+                asset::Id(Fq::from(123u64)),
+                Fq::from(7u64),
+            ))
+            .await?;
+        state
+            .register_regulated_asset(
+                asset::Id(Fq::from(456u64)),
+                AssetPolicy::simple(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+            )
+            .await?;
+        storage.commit(state).await?;
+        assert!(App::is_ready(storage.latest_snapshot()).await);
+
+        let mut corrupt = StateDelta::new(storage.latest_snapshot());
+        delete_nv_prefix(
+            &mut corrupt,
+            penumbra_sdk_compliance::state_key::tree_storage::user_node_prefix().as_bytes(),
+        )
+        .await?;
         storage.commit(corrupt).await?;
 
         assert!(!App::is_ready(storage.latest_snapshot()).await);

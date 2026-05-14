@@ -248,72 +248,79 @@ impl<S: StateWrite + Send + Sync + ?Sized> TctAsyncWrite for SctNvStorage<'_, S>
 #[async_trait]
 /// Provides read access to the state commitment tree and related data.
 pub trait SctRead: StateRead {
-    /// Fetch the state commitment tree from nonverifiable storage, preferring the cached tree if
-    /// it exists.
-    async fn get_sct(&self) -> tct::Tree {
-        // If we have a cached tree, use that.
-        if let Some(tree) = self.object_get(state_key::cache::cached_state_commitment_tree()) {
-            return tree;
-        }
-
+    /// Fallibly reconstruct the state commitment tree from nonverifiable storage.
+    async fn load_sct_from_nv(&self) -> Result<tct::Tree> {
         let position = decode_stored_position(
             self.nonverifiable_get_raw(state_key::tree::incremental_position().as_bytes())
-                .await
-                .expect("able to read SCT stored position"),
-        )
-        .expect("able to decode SCT stored position");
+                .await?,
+        )?;
         let forgotten = decode_forgotten(
             self.nonverifiable_get_raw(state_key::tree::incremental_forgotten().as_bytes())
-                .await
-                .expect("able to read SCT forgotten version"),
-        )
-        .expect("able to decode SCT forgotten version");
+                .await?,
+        )?;
 
         let mut commitments = tct::Tree::load(position, forgotten);
-        let commitment_stream = self
-            .nonverifiable_range_raw(
-                Some(state_key::tree::incremental_commitment_prefix().as_bytes()),
-                prefix_range(state_key::tree::incremental_commitment_prefix()),
-            )
-            .expect("valid SCT commitment storage range");
+        let commitment_stream = self.nonverifiable_range_raw(
+            Some(state_key::tree::incremental_commitment_prefix().as_bytes()),
+            prefix_range(state_key::tree::incremental_commitment_prefix()),
+        )?;
         futures::pin_mut!(commitment_stream);
-        while let Some((key, bytes)) = commitment_stream
-            .next()
-            .await
-            .transpose()
-            .expect("able to stream SCT commitments")
-        {
-            let (position, commitment) =
-                decode_commitment_row(&key, bytes).expect("able to decode SCT commitment");
+        while let Some((key, bytes)) = commitment_stream.next().await.transpose()? {
+            let (position, commitment) = decode_commitment_row(&key, bytes)?;
             commitments.insert(position, commitment);
         }
         drop(commitment_stream);
 
         let mut hashes = commitments.load_hashes();
-        let hash_stream = self
-            .nonverifiable_range_raw(
-                Some(state_key::tree::incremental_hash_prefix().as_bytes()),
-                prefix_range(state_key::tree::incremental_hash_prefix()),
-            )
-            .expect("valid SCT hash storage range");
+        let hash_stream = self.nonverifiable_range_raw(
+            Some(state_key::tree::incremental_hash_prefix().as_bytes()),
+            prefix_range(state_key::tree::incremental_hash_prefix()),
+        )?;
         futures::pin_mut!(hash_stream);
-        while let Some((key, bytes)) = hash_stream
-            .next()
-            .await
-            .transpose()
-            .expect("able to stream SCT hashes")
-        {
-            let (position, height, hash) =
-                decode_hash_row(&key, bytes).expect("able to decode SCT hash");
+        while let Some((key, bytes)) = hash_stream.next().await.transpose()? {
+            let (position, height, hash) = decode_hash_row(&key, bytes)?;
             hashes.insert(position, height, hash);
         }
-        hashes.finish()
+        Ok(hashes.finish())
+    }
+
+    /// Fallibly fetch the state commitment tree, preferring the in-memory cache.
+    async fn try_get_sct(&self) -> Result<tct::Tree> {
+        if let Some(tree) = self.object_get(state_key::cache::cached_state_commitment_tree()) {
+            return Ok(tree);
+        }
+
+        self.load_sct_from_nv().await
+    }
+
+    /// Fetch the state commitment tree from nonverifiable storage, preferring the cached tree if
+    /// it exists.
+    async fn get_sct(&self) -> tct::Tree {
+        self.try_get_sct()
+            .await
+            .expect("able to load SCT from incremental NV storage")
     }
 
     /// Return the SCT root for the given height, if it exists.
     /// If the height is not found, return `None`.
     async fn get_anchor_by_height(&self, height: u64) -> Result<Option<tct::Root>> {
         self.get(&state_key::tree::anchor_by_height(height)).await
+    }
+
+    /// Verify that the SCT materialized in NV storage matches the committed root.
+    async fn verify_committed_sct_root(&self) -> Result<()> {
+        let Ok(height) = self.get_block_height().await else {
+            return Ok(());
+        };
+        let Some(committed) = self.get_anchor_by_height(height).await? else {
+            return Ok(());
+        };
+        let reconstructed = self.load_sct_from_nv().await?.root();
+        ensure!(
+            reconstructed == committed,
+            "SCT root mismatch at height {height}: committed {committed}, NV {reconstructed}"
+        );
+        Ok(())
     }
 
     /// Return metadata on the specified nullifier, if it has been spent.
@@ -660,6 +667,24 @@ mod tests {
     use penumbra_sdk_proto::StateReadProto;
     use std::str::FromStr;
 
+    async fn delete_nv_prefix<S>(state: &mut S, prefix: &[u8])
+    where
+        S: cnidarium::StateRead + cnidarium::StateWrite + ?Sized,
+    {
+        let mut keys = Vec::new();
+        {
+            let stream = state.nonverifiable_prefix_raw(prefix);
+            futures::pin_mut!(stream);
+            while let Some(entry) = stream.next().await {
+                let (key, _) = entry.unwrap();
+                keys.push(key);
+            }
+        }
+        for key in keys {
+            state.nonverifiable_delete(key);
+        }
+    }
+
     async fn write_test_anchor(
         state: &mut cnidarium::StateDelta<cnidarium::Snapshot>,
         height: u64,
@@ -785,5 +810,29 @@ mod tests {
             count < 128,
             "incremental SCT storage wrote too many keys for one small block: {count}"
         );
+    }
+
+    #[tokio::test]
+    async fn sct_committed_root_check_fails_on_missing_nv_state() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+        state.put_sct_params(SctParameters {
+            epoch_duration: 10,
+            sct_anchor_retention_blocks: 100,
+        });
+        state.put_block_height(1);
+
+        let mut tree = tct::Tree::new();
+        write_test_anchor(&mut state, 1, &mut tree).await;
+        state.verify_committed_sct_root().await.unwrap();
+
+        delete_nv_prefix(&mut state, state_key::tree::incremental_prefix().as_bytes()).await;
+
+        let err = state
+            .verify_committed_sct_root()
+            .await
+            .expect_err("missing SCT NV state should fail root verification");
+        assert!(err.to_string().contains("SCT root mismatch"));
     }
 }
