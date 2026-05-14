@@ -406,7 +406,7 @@ ensure_docker_daemon() {
 
 ensure_orbis_runtime_checkout() {
     local repo_url="${ORBIS_RUNTIME_REPO:-https://github.com/sourcenetwork/orbis-rs.git}"
-    local ref="${ORBIS_RUNTIME_REF:-d5889bd777bbac7bf97a8e89a2556116f2740ceb}"
+    local ref="${ORBIS_RUNTIME_REF:-60be66516c9e0c1fe88fadf7dc8577a3d489004d}"
     local default_checkout_dir="$COMPLIANCE_TMP/orbis-rs"
     local checkout_dir="${ORBIS_RUNTIME_CONTEXT:-$default_checkout_dir}"
     local current_ref=""

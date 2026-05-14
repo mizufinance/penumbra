@@ -118,7 +118,33 @@ impl OrbisClient {
             return Ok(());
         }
 
-        match client.bulletin_register_namespace(namespace).await {
+        let signer = TxSigner::from_hex_key(TEST_ACCOUNT_HEX_KEY, self.chain_config.clone())
+            .map_err(|e| anyhow!("failed to create signer: {}", e))?;
+        let client = SourceHubClient::with_signer(self.chain_config.clone(), signer)
+            .await
+            .map_err(|e| anyhow!("failed to create signed SourceHub client: {}", e))?;
+
+        // The integration-test Orbis nodes concurrently fund themselves from the
+        // shared TEST account; their sequence bumps can race our first signed tx.
+        // Resync on sequence-mismatch and retry — orbis-rs's `fund` helper does
+        // the same thing for the same reason.
+        let mut attempt = 0u32;
+        let result = loop {
+            match client.bulletin_register_namespace(namespace).await {
+                Err(e)
+                    if attempt < 10
+                        && e.to_string().to_ascii_lowercase().contains("sequence mismatch") =>
+                {
+                    attempt += 1;
+                    let _ = client.resync_nonce().await;
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    continue;
+                }
+                other => break other,
+            }
+        };
+
+        match result {
             Ok(result) if result.code == 0 => Ok(()),
             Ok(result) => {
                 let log = result.log;

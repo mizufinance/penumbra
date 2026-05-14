@@ -6,7 +6,7 @@ on `cli-tool`.
 
 Current contract line:
 
-- Orbis source ref: `d5889bd777bbac7bf97a8e89a2556116f2740ceb`
+- Orbis source ref: `60be66516c9e0c1fe88fadf7dc8577a3d489004d`
 - Crypto feature: `decaf377`
 - SourceHub image default: `ghcr.io/sourcenetwork/sourcehub:dev`
 
