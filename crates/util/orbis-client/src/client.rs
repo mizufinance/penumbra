@@ -89,9 +89,10 @@ impl OrbisClient {
             threshold,
             peer_ids: peer_ids.to_vec(),
             pss_interval: None,
+            namespace: ORBIS_NAMESPACE.to_string(),
         };
         let token = jwt_signer
-            .create_dkg_jwt(threshold, peer_ids, None)
+            .create_dkg_jwt(threshold, peer_ids, None, ORBIS_NAMESPACE)
             .map_err(|e| anyhow!("failed to create DKG JWT: {}", e))?;
         let request = create_authenticated_request(request, &token)
             .map_err(|e| anyhow!("failed to create authenticated DKG request: {}", e))?;
@@ -276,16 +277,14 @@ impl OrbisClient {
             shared_point: package.shared_point.clone(),
             challenge: package.orbis_challenge.clone(),
             response: package.orbis_response.clone(),
-            derived_pk: Some(package.derived_pk.clone()),
             with_proof: false,
             tier: Some(package.tier_label.clone()),
             timestamp: Some(package.timestamp),
-            metadata_hash: Some(package.metadata_hash.clone()),
         };
 
         let token = jwt_signer
             .create_store_secret_jwt(
-                package.encrypted_document.clone(),
+                &package.encrypted_document,
                 package.enc_cmt.clone(),
                 ring_id,
                 namespace,
@@ -295,11 +294,9 @@ impl OrbisClient {
                 package.shared_point.clone(),
                 package.orbis_challenge.clone(),
                 package.orbis_response.clone(),
-                Some(package.derived_pk.clone()),
                 false,
                 Some(package.tier_label.clone()),
                 Some(package.timestamp),
-                Some(package.metadata_hash.clone()),
             )
             .map_err(|e| anyhow!("failed to create Orbis store-secret JWT: {}", e))?;
 
