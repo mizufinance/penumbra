@@ -5,11 +5,9 @@ use rusqlite::{params, OptionalExtension};
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub use crate::audit_records::{AuditDetectedRef, AuditScanExport, OrbisAuditEntry};
-
 use crate::audit_records::{
-    classify_orbis_import_row, detected_ref_from_row_parts, AuditImportRow, DetectedRefRowParts,
-    OrbisImportEligibility,
+    classify_orbis_import_row, detected_ref_from_row_parts, AuditDetectedRef, AuditImportRow,
+    AuditScanExport, DetectedRefRowParts, OrbisAuditEntry, OrbisImportEligibility,
 };
 use crate::audit_status::{AuditStatus, DecryptedVia, FlowType};
 use crate::scanner::storage::SqliteScannerStore;

@@ -23,9 +23,7 @@ fn read_fvk() -> Result<FullViewingKey> {
 
 fn parse_range(s: &str) -> Result<std::ops::Range<u32>> {
     let parts: Vec<&str> = s.split("..").collect();
-    if parts.len() != 2 {
-        return Err(anyhow!("Invalid range format. Expected format: start..end"));
-    }
+    anyhow::ensure!(parts.len() == 2, "Invalid range format. Expected format: start..end");
 
     let start = parts[0]
         .parse::<u32>()
@@ -34,9 +32,7 @@ fn parse_range(s: &str) -> Result<std::ops::Range<u32>> {
         .parse::<u32>()
         .context("Invalid end value in range")?;
 
-    if start >= end {
-        return Err(anyhow!("Invalid range: start must be less than end"));
-    }
+    anyhow::ensure!(start < end, "Invalid range: start must be less than end");
 
     Ok(start..end)
 }

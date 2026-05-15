@@ -54,20 +54,6 @@ fn validate_evidence_shape(evidence: &ComplianceEvidenceObject, ring_pk: &Elemen
         "unsupported evidence object type"
     );
     ensure!(
-        crate::transfer::TransferComplianceCiphertext::from_bytes(
-            &evidence.transfer_ciphertext.to_bytes()
-        )
-        .is_ok(),
-        "transfer ciphertext does not round-trip"
-    );
-    ensure!(
-        crate::transfer::TransferComplianceDleqProofs::from_bytes(
-            &evidence.transfer_dleq_bundle.to_bytes()
-        )
-        .is_ok(),
-        "transfer DLEQ bundle does not round-trip"
-    );
-    ensure!(
         evidence.tier_objects.len() == 4,
         "transfer evidence must contain exactly four tier objects"
     );

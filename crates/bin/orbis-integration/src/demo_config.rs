@@ -10,7 +10,7 @@ pub const NODE1_DIAL_HOST: &str = "node1";
 pub const NODE2_DIAL_HOST: &str = "node2";
 pub const NODE3_DIAL_HOST: &str = "node3";
 
-pub const ORBIS_NAMESPACE: &str = "orbis";
+pub use penumbra_orbis_client::ORBIS_NAMESPACE;
 pub const ORBIS_RESOURCE: &str = "document";
 pub const ORBIS_PERMISSION: &str = "read";
 pub const ORBIS_POLICY_MARSHAL_TYPE_YAML: i32 = 1;

@@ -1323,45 +1323,31 @@ impl ViewService for ViewServer {
                         .expect("TransactionPlan should exist in request")
                 });
 
-        let requested_note_commitments: Vec<StateCommitment> = tx_plan
-            .actions
-            .iter()
-            .flat_map(|action| match action {
-                penumbra_sdk_transaction::ActionPlan::Transfer(plan) => plan
-                    .spends
-                    .iter()
-                    .filter(|spend| spend.note.amount() != 0u64.into())
-                    .map(|spend| spend.note.commit().into())
-                    .collect::<Vec<_>>(),
-                penumbra_sdk_transaction::ActionPlan::Consolidate(plan) => plan
-                    .spends
-                    .iter()
-                    .filter(|spend| spend.note.amount() != 0u64.into())
-                    .map(|spend| spend.note.commit().into())
-                    .collect::<Vec<_>>(),
-                penumbra_sdk_transaction::ActionPlan::Split(plan) => plan
-                    .spends
-                    .iter()
-                    .filter(|spend| spend.note.amount() != 0u64.into())
-                    .map(|spend| spend.note.commit().into())
-                    .collect::<Vec<_>>(),
-                penumbra_sdk_transaction::ActionPlan::ShieldedIcs20Withdrawal(plan) => plan
-                    .spends
-                    .iter()
-                    .filter(|spend| spend.note.amount() != 0u64.into())
-                    .map(|spend| spend.note.commit().into())
-                    .collect::<Vec<_>>(),
-                _ => Vec::new(),
-            })
-            .chain(tx_plan.fee_funding.iter().flat_map(|fee_funding| {
-                fee_funding
-                    .transfer
-                    .spends
-                    .iter()
-                    .filter(|spend| spend.note.amount() != 0u64.into())
-                    .map(|spend| spend.note.commit().into())
-                    .collect::<Vec<_>>()
-            }))
+        fn action_spend_notes(
+            action: &penumbra_sdk_transaction::ActionPlan,
+        ) -> &[penumbra_sdk_shielded_pool::ShieldedInputPlan] {
+            use penumbra_sdk_transaction::ActionPlan;
+            match action {
+                ActionPlan::Transfer(p) => &p.spends,
+                ActionPlan::Consolidate(p) => &p.spends,
+                ActionPlan::Split(p) => &p.spends,
+                ActionPlan::ShieldedIcs20Withdrawal(p) => &p.spends,
+                _ => &[],
+            }
+        }
+
+        let zero_amount = 0u64.into();
+        let all_spend_notes = || {
+            tx_plan
+                .actions
+                .iter()
+                .flat_map(action_spend_notes)
+                .chain(tx_plan.fee_funding.iter().flat_map(|f| &f.transfer.spends))
+        };
+
+        let requested_note_commitments: Vec<StateCommitment> = all_spend_notes()
+            .filter(|spend| spend.note.amount() != zero_amount)
+            .map(|spend| spend.note.commit().into())
             .collect();
 
         tracing::debug!(?requested_note_commitments);
@@ -1390,45 +1376,9 @@ impl ViewService for ViewServer {
 
         // Now we need to augment the witness data with dummy proofs such that
         // note commitments corresponding to dummy spends also have proofs.
-        for nc in tx_plan
-            .actions
-            .iter()
-            .flat_map(|action| match action {
-                penumbra_sdk_transaction::ActionPlan::Transfer(plan) => plan
-                    .spends
-                    .iter()
-                    .filter(|spend| spend.note.amount() == 0u64.into())
-                    .map(|spend| spend.note.commit())
-                    .collect::<Vec<_>>(),
-                penumbra_sdk_transaction::ActionPlan::Consolidate(plan) => plan
-                    .spends
-                    .iter()
-                    .filter(|spend| spend.note.amount() == 0u64.into())
-                    .map(|spend| spend.note.commit())
-                    .collect::<Vec<_>>(),
-                penumbra_sdk_transaction::ActionPlan::Split(plan) => plan
-                    .spends
-                    .iter()
-                    .filter(|spend| spend.note.amount() == 0u64.into())
-                    .map(|spend| spend.note.commit())
-                    .collect::<Vec<_>>(),
-                penumbra_sdk_transaction::ActionPlan::ShieldedIcs20Withdrawal(plan) => plan
-                    .spends
-                    .iter()
-                    .filter(|spend| spend.note.amount() == 0u64.into())
-                    .map(|spend| spend.note.commit())
-                    .collect::<Vec<_>>(),
-                _ => Vec::new(),
-            })
-            .chain(tx_plan.fee_funding.iter().flat_map(|fee_funding| {
-                fee_funding
-                    .transfer
-                    .spends
-                    .iter()
-                    .filter(|spend| spend.note.amount() == 0u64.into())
-                    .map(|spend| spend.note.commit())
-                    .collect::<Vec<_>>()
-            }))
+        for nc in all_spend_notes()
+            .filter(|spend| spend.note.amount() == zero_amount)
+            .map(|spend| spend.note.commit())
         {
             witness_data.add_proof(nc, Proof::dummy(&mut OsRng, nc));
         }

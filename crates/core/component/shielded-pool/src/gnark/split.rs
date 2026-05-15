@@ -281,29 +281,29 @@ mod tests {
         }
     }
 
-    #[test]
-    fn split_witness_v1_rejects_bad_magic() {
+    fn corrupt() -> Vec<u8> {
         let (public, private) =
             proof_test_helpers::build_split_roundtrip_inputs(SplitFamilyId::OneByFour);
-        let mut encoded = encode_split_witness_v1(&public, &private).expect("encode split witness");
+        encode_split_witness_v1(&public, &private).expect("encode split witness")
+    }
+
+    #[test]
+    fn split_witness_v1_rejects_bad_magic() {
+        let mut encoded = corrupt();
         encoded[0] = b'X';
         assert!(decode_split_witness_v1(&encoded).is_err());
     }
 
     #[test]
     fn split_witness_v1_rejects_bad_version() {
-        let (public, private) =
-            proof_test_helpers::build_split_roundtrip_inputs(SplitFamilyId::OneByFour);
-        let mut encoded = encode_split_witness_v1(&public, &private).expect("encode split witness");
+        let mut encoded = corrupt();
         encoded[4..8].copy_from_slice(&2u32.to_le_bytes());
         assert!(decode_split_witness_v1(&encoded).is_err());
     }
 
     #[test]
     fn split_witness_v1_rejects_bad_length() {
-        let (public, private) =
-            proof_test_helpers::build_split_roundtrip_inputs(SplitFamilyId::OneByFour);
-        let mut encoded = encode_split_witness_v1(&public, &private).expect("encode split witness");
+        let mut encoded = corrupt();
         let wrong_len = (encoded.len() as u32).saturating_sub(1);
         encoded[8..12].copy_from_slice(&wrong_len.to_le_bytes());
         assert!(decode_split_witness_v1(&encoded).is_err());

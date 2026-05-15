@@ -93,41 +93,26 @@ impl TransactionPerspective {}
 
 impl From<TransactionPerspective> for pb::TransactionPerspective {
     fn from(msg: TransactionPerspective) -> Self {
-        let mut payload_keys = Vec::new();
-        let mut spend_nullifiers = Vec::new();
-        let mut advice_notes = Vec::new();
-        let mut address_views = Vec::new();
-        let mut denoms = Vec::new();
-
-        for (commitment, payload_key) in msg.payload_keys {
-            payload_keys.push(PayloadKeyWithCommitment {
-                payload_key: Some(payload_key.to_owned().into()),
-                commitment: Some(commitment.to_owned().into()),
-            });
-        }
-
-        for (nullifier, note) in msg.spend_nullifiers {
-            spend_nullifiers.push(NullifierWithNote {
-                nullifier: Some(nullifier.into()),
-                note: Some(note.into()),
-            })
-        }
-        for note in msg.advice_notes.into_values() {
-            advice_notes.push(note.into());
-        }
-        for address_view in msg.address_views {
-            address_views.push(address_view.into());
-        }
-        for denom in msg.denoms.values() {
-            denoms.push(denom.clone().into());
-        }
-
         Self {
-            payload_keys,
-            spend_nullifiers,
-            advice_notes,
-            address_views,
-            denoms,
+            payload_keys: msg
+                .payload_keys
+                .into_iter()
+                .map(|(commitment, payload_key)| PayloadKeyWithCommitment {
+                    payload_key: Some(payload_key.into()),
+                    commitment: Some(commitment.into()),
+                })
+                .collect(),
+            spend_nullifiers: msg
+                .spend_nullifiers
+                .into_iter()
+                .map(|(nullifier, note)| NullifierWithNote {
+                    nullifier: Some(nullifier.into()),
+                    note: Some(note.into()),
+                })
+                .collect(),
+            advice_notes: msg.advice_notes.into_values().map(Into::into).collect(),
+            address_views: msg.address_views.into_iter().map(Into::into).collect(),
+            denoms: msg.denoms.values().map(|d| d.clone().into()).collect(),
             transaction_id: Some(msg.transaction_id.into()),
             prices: msg.prices.into_iter().map(Into::into).collect(),
             extended_metadata: msg

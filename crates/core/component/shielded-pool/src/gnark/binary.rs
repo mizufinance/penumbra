@@ -22,9 +22,7 @@ impl<'a> BinaryCursor<'a> {
 
     pub(crate) fn finish(self, label: &str) -> Result<()> {
         let remaining = self.inner.get_ref().len() - (self.inner.position() as usize);
-        if remaining != 0 {
-            return Err(anyhow!("{label} has {remaining} trailing bytes"));
-        }
+        anyhow::ensure!(remaining == 0, "{label} has {remaining} trailing bytes");
         Ok(())
     }
 
@@ -54,19 +52,19 @@ impl<'a> BinaryCursor<'a> {
 
     pub(crate) fn read_vec_32(&mut self) -> Result<Vec<[u8; 32]>> {
         let len = self.read_u32()? as usize;
-        if len > MAX_VEC32_LENGTH {
-            return Err(anyhow!("vec32 length {len} exceeds max {MAX_VEC32_LENGTH}"));
-        }
+        anyhow::ensure!(
+            len <= MAX_VEC32_LENGTH,
+            "vec32 length {len} exceeds max {MAX_VEC32_LENGTH}"
+        );
         (0..len).map(|_| self.read_fixed::<32>()).collect()
     }
 
     pub(crate) fn read_triple_path_32(&mut self) -> Result<Vec<[[u8; 32]; 3]>> {
         let len = self.read_u32()? as usize;
-        if len > MAX_TRIPLE_PATH_LENGTH {
-            return Err(anyhow!(
-                "triple path length {len} exceeds max {MAX_TRIPLE_PATH_LENGTH}"
-            ));
-        }
+        anyhow::ensure!(
+            len <= MAX_TRIPLE_PATH_LENGTH,
+            "triple path length {len} exceeds max {MAX_TRIPLE_PATH_LENGTH}"
+        );
         let mut out = Vec::with_capacity(len);
         for _ in 0..len {
             out.push([
@@ -80,22 +78,17 @@ impl<'a> BinaryCursor<'a> {
 
     pub(crate) fn read_merkle_path(&mut self) -> Result<MerklePathBinary> {
         let layers = self.read_u32()? as usize;
-        if layers > MAX_MERKLE_PATH_LAYERS {
-            return Err(anyhow!(
-                "merkle path layer count {layers} exceeds max {MAX_MERKLE_PATH_LAYERS}"
-            ));
-        }
+        anyhow::ensure!(
+            layers <= MAX_MERKLE_PATH_LAYERS,
+            "merkle path layer count {layers} exceeds max {MAX_MERKLE_PATH_LAYERS}"
+        );
         let mut out = Vec::with_capacity(layers);
         for _ in 0..layers {
             let siblings = self.read_u32()? as usize;
-            if siblings > MAX_MERKLE_PATH_SIBLINGS {
-                return Err(anyhow!(
-                    "merkle path sibling count {siblings} exceeds max {MAX_MERKLE_PATH_SIBLINGS}"
-                ));
-            }
-            if siblings != MAX_MERKLE_PATH_SIBLINGS {
-                return Err(anyhow!("expected 3 merkle siblings, got {siblings}"));
-            }
+            anyhow::ensure!(
+                siblings == MAX_MERKLE_PATH_SIBLINGS,
+                "merkle path sibling count {siblings} must equal {MAX_MERKLE_PATH_SIBLINGS}"
+            );
             out.push([
                 self.read_fixed::<32>()?,
                 self.read_fixed::<32>()?,
