@@ -52,7 +52,10 @@ impl<'a> BinaryCursor<'a> {
 
     pub(crate) fn read_vec_32(&mut self) -> Result<Vec<[u8; 32]>> {
         let len = self.read_u32()? as usize;
-        anyhow::ensure!(len <= MAX_VEC32_LENGTH, "vec32 length {len} exceeds max {MAX_VEC32_LENGTH}");
+        anyhow::ensure!(
+            len <= MAX_VEC32_LENGTH,
+            "vec32 length {len} exceeds max {MAX_VEC32_LENGTH}"
+        );
         (0..len).map(|_| self.read_fixed::<32>()).collect()
     }
 

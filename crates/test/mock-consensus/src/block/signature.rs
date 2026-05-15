@@ -46,7 +46,6 @@ mod sign {
             signature: Some(signature.into()),
         }
     }
-
 }
 
 // === impl TestNode ===

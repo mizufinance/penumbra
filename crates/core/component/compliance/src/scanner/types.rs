@@ -1,6 +1,5 @@
 use penumbra_sdk_asset::asset;
 
-use crate::transfer::TransferComplianceCiphertext;
 pub use crate::audit_status::{
     AUDIT_STATUS_AUDIT_COMPLETE, AUDIT_STATUS_DECRYPT_FAILED, AUDIT_STATUS_EVIDENCE_INVALID,
     AUDIT_STATUS_EVIDENCE_VALID, AUDIT_STATUS_PENDING, DECRYPTED_VIA_ISSUER_DK,
@@ -8,6 +7,7 @@ pub use crate::audit_status::{
     FLOW_TYPE_PRIVATE_TRANSFER, FLOW_TYPE_SHIELD, FLOW_TYPE_WITHDRAW, SCREEN_STATUS_DETECTED,
     SCREEN_STATUS_INVALID, SCREEN_STATUS_IRRELEVANT, SCREEN_STATUS_PENDING,
 };
+use crate::transfer::TransferComplianceCiphertext;
 pub use crate::{ActionRef, BlockRef, OutputRef, TxRef};
 
 #[derive(Clone, Debug, PartialEq, Eq)]

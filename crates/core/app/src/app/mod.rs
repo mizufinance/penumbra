@@ -2935,9 +2935,7 @@ impl App {
             label: &'static str,
         ) -> Result<()>
         where
-            I: IntoIterator<
-                Item = &'a penumbra_sdk_proto::core::component::sct::v1::Nullifier,
-            >,
+            I: IntoIterator<Item = &'a penumbra_sdk_proto::core::component::sct::v1::Nullifier>,
         {
             for n in nullifiers {
                 out.push(Nullifier::try_from(n.clone()).context(label)?);
@@ -2956,36 +2954,36 @@ impl App {
                 Some(ProtoAction::Transfer(t)) => {
                     push_nullifiers(
                         &mut spend_nullifiers,
-                        t.body.iter().flat_map(|b| {
-                            b.inputs.iter().filter_map(|i| i.nullifier.as_ref())
-                        }),
+                        t.body
+                            .iter()
+                            .flat_map(|b| b.inputs.iter().filter_map(|i| i.nullifier.as_ref())),
                         "converting proto transfer nullifier",
                     )?;
                 }
                 Some(ProtoAction::Consolidate(c)) => {
                     push_nullifiers(
                         &mut spend_nullifiers,
-                        c.body.iter().flat_map(|b| {
-                            b.inputs.iter().filter_map(|i| i.nullifier.as_ref())
-                        }),
+                        c.body
+                            .iter()
+                            .flat_map(|b| b.inputs.iter().filter_map(|i| i.nullifier.as_ref())),
                         "converting proto consolidate nullifier",
                     )?;
                 }
                 Some(ProtoAction::Split(s)) => {
                     push_nullifiers(
                         &mut spend_nullifiers,
-                        s.body.iter().flat_map(|b| {
-                            b.inputs.iter().filter_map(|i| i.nullifier.as_ref())
-                        }),
+                        s.body
+                            .iter()
+                            .flat_map(|b| b.inputs.iter().filter_map(|i| i.nullifier.as_ref())),
                         "converting proto split nullifier",
                     )?;
                 }
                 Some(ProtoAction::ShieldedIcs20Withdrawal(w)) => {
                     push_nullifiers(
                         &mut spend_nullifiers,
-                        w.body.iter().flat_map(|b| {
-                            b.inputs.iter().filter_map(|i| i.nullifier.as_ref())
-                        }),
+                        w.body
+                            .iter()
+                            .flat_map(|b| b.inputs.iter().filter_map(|i| i.nullifier.as_ref())),
                         "converting proto shielded ICS-20 withdrawal nullifier",
                     )?;
                 }

@@ -233,7 +233,8 @@ async fn main() -> Result<()> {
 
     let file = File::open(&args.input).context("failed to open input file")?;
     let reader = BufReader::new(file);
-    let scan: AuditScanExport = serde_json::from_reader(reader).context("failed to parse scan JSON")?;
+    let scan: AuditScanExport =
+        serde_json::from_reader(reader).context("failed to parse scan JSON")?;
     eprintln!(
         "orbis-audit: Processing {} detected transactions",
         scan.detected.len()
@@ -790,10 +791,10 @@ async fn fetch_transactions(
 mod tests {
     use super::*;
     use crate::extract::ExtractionSkip;
-    use penumbra_sdk_compliance::DecryptedVia;
     use decaf377::{Element, Fr};
     use penumbra_sdk_asset::{asset, Value};
     use penumbra_sdk_compliance::transfer::encrypt_transfer;
+    use penumbra_sdk_compliance::DecryptedVia;
     use penumbra_sdk_compliance::{derive_compliance_scalar, issuer_keys::DetectionKey};
     use penumbra_sdk_keys::{keys::AddressIndex, test_keys};
     use penumbra_sdk_num::Amount;

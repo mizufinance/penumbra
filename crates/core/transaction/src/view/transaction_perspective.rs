@@ -110,11 +110,7 @@ impl From<TransactionPerspective> for pb::TransactionPerspective {
                     note: Some(note.into()),
                 })
                 .collect(),
-            advice_notes: msg
-                .advice_notes
-                .into_values()
-                .map(Into::into)
-                .collect(),
+            advice_notes: msg.advice_notes.into_values().map(Into::into).collect(),
             address_views: msg.address_views.into_iter().map(Into::into).collect(),
             denoms: msg.denoms.values().map(|d| d.clone().into()).collect(),
             transaction_id: Some(msg.transaction_id.into()),
