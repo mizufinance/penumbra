@@ -42,12 +42,19 @@ pub const DEFAULT_COMPLIANCE_DEV_AUTHORITY_VK_HEX: &str =
     "b2ecf9b9082d6306538be73b0d6ee741141f3222152da78685d6596efc8c1506";
 pub const DEFAULT_COMPLIANCE_GRANT_VALID_UNTIL_UNIX: &str = "4102444800";
 
+fn env_or_default(env_key: &str, default: &str) -> String {
+    match env::var(env_key) {
+        Ok(s) if !s.is_empty() => s,
+        _ => default.to_string(),
+    }
+}
+
 pub fn node_endpoint(env_key: &str, default: &str) -> String {
-    env::var(env_key).unwrap_or_else(|_| default.to_string())
+    env_or_default(env_key, default)
 }
 
 pub fn node_dial_host(env_key: &str, default: &str) -> String {
-    env::var(env_key).unwrap_or_else(|_| default.to_string())
+    env_or_default(env_key, default)
 }
 
 pub fn node_endpoints() -> (String, String, String) {
@@ -78,11 +85,15 @@ fn sourcehub_chain_config() -> ChainConfig {
 }
 
 fn sourcehub_url(url_key: &str, port_key: &str) -> Option<String> {
-    env::var(url_key).ok().or_else(|| {
-        env::var(port_key)
-            .ok()
-            .map(|port| format!("http://127.0.0.1:{port}"))
-    })
+    env::var(url_key)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            env::var(port_key)
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|port| format!("http://127.0.0.1:{port}"))
+        })
 }
 
 pub async fn sourcehub_client() -> Result<SourceHubClient> {
@@ -128,7 +139,7 @@ pub fn compliance_dev_env() -> Vec<(&'static str, String)> {
 }
 
 pub fn process_env_or_default(key: &str, default: &str) -> String {
-    env::var(key).unwrap_or_else(|_| default.to_string())
+    env_or_default(key, default)
 }
 
 #[cfg(test)]
@@ -143,5 +154,14 @@ mod tests {
         let host = node_dial_host(key, "node1");
         env::remove_var(key);
         assert_eq!(host, "custom-node-1");
+    }
+
+    #[test]
+    fn node_dial_host_empty_env_uses_default() {
+        let key = "ORBIS_NODE_DIAL_HOST_EMPTY_TEST";
+        env::set_var(key, "");
+        let host = node_dial_host(key, "node1");
+        env::remove_var(key);
+        assert_eq!(host, "node1");
     }
 }

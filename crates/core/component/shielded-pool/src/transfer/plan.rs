@@ -920,6 +920,43 @@ mod tests {
         assert_eq!(plan.body.target_timestamp, spend.target_timestamp);
     }
 
+    // Regression: the fee-funding enricher mutates spend/output anchors after
+    // `TransferPlan::new` and must call `refresh_body_public_inputs` to
+    // re-sync the body, otherwise `validate_invariants` rejects the plan.
+    #[test]
+    fn refresh_body_public_inputs_resyncs_after_anchor_mutation() {
+        let (spend, output, _, _) = transfer_parts(100, 100);
+        let mut plan = TransferPlan::new(vec![spend], vec![output], Fr::from(5u64))
+            .expect("transfer plan should be valid");
+
+        let new_asset_anchor = tct::StateCommitment(Fq::from(0xA55E7u64));
+        let new_compliance_anchor = tct::StateCommitment(Fq::from(0xC0FF1u64));
+        let new_timestamp = plan.spends[0].target_timestamp + 42;
+        for spend in &mut plan.spends {
+            spend.asset_anchor = new_asset_anchor;
+            spend.compliance_anchor = new_compliance_anchor;
+            spend.target_timestamp = new_timestamp;
+        }
+        for output in &mut plan.outputs {
+            output.asset_anchor = new_asset_anchor;
+            output.compliance_anchor = new_compliance_anchor;
+            output.target_timestamp = new_timestamp;
+        }
+
+        let err = plan
+            .validate_invariants()
+            .expect_err("stale body must be rejected before refresh");
+        assert!(err
+            .to_string()
+            .contains("transfer body asset anchor must match spends"));
+
+        plan.refresh_body_public_inputs()
+            .expect("refresh should reconcile body with mutated spends");
+        assert_eq!(plan.body.asset_anchor, new_asset_anchor);
+        assert_eq!(plan.body.compliance_anchor, new_compliance_anchor);
+        assert_eq!(plan.body.target_timestamp, new_timestamp);
+    }
+
     #[test]
     fn receiver_and_change_output_indices_are_explicit() {
         let (spend, receiver, proof, anchor) = transfer_parts(100, 60);

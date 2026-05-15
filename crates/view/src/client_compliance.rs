@@ -1099,6 +1099,8 @@ async fn enrich_internal_funding_with_compliance<P: ComplianceProofProvider>(
         }
     }
 
+    fee_funding.transfer.refresh_body_public_inputs()?;
+
     Ok(())
 }
 
