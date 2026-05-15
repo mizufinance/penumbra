@@ -1,24 +1,14 @@
 use penumbra_sdk_asset::asset;
 
 use crate::transfer::TransferComplianceCiphertext;
+pub use crate::audit_status::{
+    AUDIT_STATUS_AUDIT_COMPLETE, AUDIT_STATUS_DECRYPT_FAILED, AUDIT_STATUS_EVIDENCE_INVALID,
+    AUDIT_STATUS_EVIDENCE_VALID, AUDIT_STATUS_PENDING, DECRYPTED_VIA_ISSUER_DK,
+    DECRYPTED_VIA_ORBIS_PRE, DECRYPTED_VIA_PUBLIC, DETECTION_STATUS_DETECTED,
+    FLOW_TYPE_PRIVATE_TRANSFER, FLOW_TYPE_SHIELD, FLOW_TYPE_WITHDRAW, SCREEN_STATUS_DETECTED,
+    SCREEN_STATUS_INVALID, SCREEN_STATUS_IRRELEVANT, SCREEN_STATUS_PENDING,
+};
 pub use crate::{ActionRef, BlockRef, OutputRef, TxRef};
-
-pub const FLOW_TYPE_PRIVATE_TRANSFER: &str = "private_transfer";
-pub const FLOW_TYPE_SHIELD: &str = "shield";
-pub const FLOW_TYPE_WITHDRAW: &str = "withdraw";
-pub const DECRYPTED_VIA_ISSUER_DK: &str = "issuer_dk";
-pub const DECRYPTED_VIA_ORBIS_PRE: &str = "orbis_pre";
-pub const DECRYPTED_VIA_PUBLIC: &str = "public";
-pub const AUDIT_STATUS_PENDING: &str = "pending";
-pub const AUDIT_STATUS_EVIDENCE_VALID: &str = "evidence_valid";
-pub const AUDIT_STATUS_EVIDENCE_INVALID: &str = "evidence_invalid";
-pub const AUDIT_STATUS_DECRYPT_FAILED: &str = "decrypt_failed";
-pub const AUDIT_STATUS_AUDIT_COMPLETE: &str = "audit_complete";
-pub const SCREEN_STATUS_PENDING: &str = "pending";
-pub const SCREEN_STATUS_IRRELEVANT: &str = "irrelevant";
-pub const SCREEN_STATUS_DETECTED: &str = "detected";
-pub const SCREEN_STATUS_INVALID: &str = "invalid";
-pub const DETECTION_STATUS_DETECTED: &str = "detected";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExtractedComplianceCiphertext {

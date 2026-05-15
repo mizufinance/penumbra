@@ -155,12 +155,11 @@ impl Opt {
 
     fn check_home_nonempty(&self) -> Result<()> {
         if self.home.exists() {
-            if !self.home.is_dir() {
-                return Err(anyhow::anyhow!(
-                    "The home directory {:?} is not a directory.",
-                    self.home
-                ));
-            }
+            anyhow::ensure!(
+                self.home.is_dir(),
+                "The home directory {:?} is not a directory.",
+                self.home
+            );
             let mut entries = fs::read_dir(&self.home)?.peekable();
             if entries.peek().is_some() {
                 return Err(anyhow::anyhow!(
@@ -448,12 +447,11 @@ async fn download_registry_to_temp_file(url: &str) -> Result<NamedTempFile> {
             .await
             .with_context(|| format!("Failed to download registry from: {}", url))?;
 
-        if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "Failed to download registry: HTTP {}",
-                response.status()
-            ));
-        }
+        anyhow::ensure!(
+            response.status().is_success(),
+            "Failed to download registry: HTTP {}",
+            response.status()
+        );
 
         let content = response
             .text()

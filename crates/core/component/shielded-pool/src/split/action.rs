@@ -118,7 +118,6 @@ impl TryFrom<pb::Split> for Split {
             .ok_or_else(|| anyhow::anyhow!("missing split body"))?
             .try_into()
             .context("malformed split body")?;
-        body.validate_shape()?;
 
         let auth_sigs = proto
             .auth_sigs

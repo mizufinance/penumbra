@@ -865,11 +865,7 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     /// The events are accumulated and drained when building the CompactBlock.
     fn record_pending_user_registration(&mut self, event: event::EventUserRegistered) {
         let key = state_key::pending_user_registrations();
-        let mut pending: Vec<event::EventUserRegistered> =
-            self.object_get(key).unwrap_or_else(|| {
-                // Empty vec is the expected initial state - no need to log
-                Vec::new()
-            });
+        let mut pending: Vec<event::EventUserRegistered> = self.object_get(key).unwrap_or_default();
         pending.push(event);
         self.object_put(key, pending);
     }
@@ -881,12 +877,23 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     fn record_pending_asset_registration(&mut self, event: event::EventAssetRegistered) {
         let key = state_key::pending_asset_registrations();
         let mut pending: Vec<event::EventAssetRegistered> =
-            self.object_get(key).unwrap_or_else(|| {
-                // Empty vec is the expected initial state - no need to log
-                Vec::new()
-            });
+            self.object_get(key).unwrap_or_default();
         pending.push(event);
         self.object_put(key, pending);
+    }
+
+    /// Emit an asset registration event proto and buffer it for the CompactBlock.
+    fn emit_asset_registered(&mut self, event: event::EventAssetRegistered) {
+        self.record_proto(event::asset_registered(
+            event.asset_id,
+            event.is_regulated,
+            event.position,
+            event.indexed_leaf.clone(),
+            event.low_leaf_position,
+            event.updated_low_leaf.clone(),
+            event.asset_policy.clone(),
+        ));
+        self.record_pending_asset_registration(event);
     }
 
     /// Retrieve and clear all pending user registrations.

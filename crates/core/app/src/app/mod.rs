@@ -2929,62 +2929,65 @@ impl App {
     ) -> Result<Vec<Nullifier>> {
         use penumbra_sdk_proto::core::transaction::v1::action::Action as ProtoAction;
 
+        fn push_nullifiers<'a, I>(
+            out: &mut Vec<Nullifier>,
+            nullifiers: I,
+            label: &'static str,
+        ) -> Result<()>
+        where
+            I: IntoIterator<
+                Item = &'a penumbra_sdk_proto::core::component::sct::v1::Nullifier,
+            >,
+        {
+            for n in nullifiers {
+                out.push(Nullifier::try_from(n.clone()).context(label)?);
+            }
+            Ok(())
+        }
+
         let mut spend_nullifiers = Vec::new();
-        for action in proto_tx
+        let actions = proto_tx
             .body
             .as_ref()
             .into_iter()
-            .flat_map(|body| body.actions.iter())
-        {
+            .flat_map(|body| body.actions.iter());
+        for action in actions {
             match &action.action {
-                Some(ProtoAction::Transfer(transfer)) => {
-                    if let Some(body) = &transfer.body {
-                        for input in &body.inputs {
-                            if let Some(nullifier) = &input.nullifier {
-                                spend_nullifiers.push(
-                                    Nullifier::try_from(nullifier.clone())
-                                        .context("converting proto transfer nullifier")?,
-                                );
-                            }
-                        }
-                    }
+                Some(ProtoAction::Transfer(t)) => {
+                    push_nullifiers(
+                        &mut spend_nullifiers,
+                        t.body.iter().flat_map(|b| {
+                            b.inputs.iter().filter_map(|i| i.nullifier.as_ref())
+                        }),
+                        "converting proto transfer nullifier",
+                    )?;
                 }
-                Some(ProtoAction::Consolidate(consolidate)) => {
-                    if let Some(body) = &consolidate.body {
-                        for input in &body.inputs {
-                            if let Some(nullifier) = &input.nullifier {
-                                spend_nullifiers.push(
-                                    Nullifier::try_from(nullifier.clone())
-                                        .context("converting proto consolidate nullifier")?,
-                                );
-                            }
-                        }
-                    }
+                Some(ProtoAction::Consolidate(c)) => {
+                    push_nullifiers(
+                        &mut spend_nullifiers,
+                        c.body.iter().flat_map(|b| {
+                            b.inputs.iter().filter_map(|i| i.nullifier.as_ref())
+                        }),
+                        "converting proto consolidate nullifier",
+                    )?;
                 }
-                Some(ProtoAction::Split(split)) => {
-                    if let Some(body) = &split.body {
-                        for input in &body.inputs {
-                            if let Some(nullifier) = &input.nullifier {
-                                spend_nullifiers.push(
-                                    Nullifier::try_from(nullifier.clone())
-                                        .context("converting proto split nullifier")?,
-                                );
-                            }
-                        }
-                    }
+                Some(ProtoAction::Split(s)) => {
+                    push_nullifiers(
+                        &mut spend_nullifiers,
+                        s.body.iter().flat_map(|b| {
+                            b.inputs.iter().filter_map(|i| i.nullifier.as_ref())
+                        }),
+                        "converting proto split nullifier",
+                    )?;
                 }
-                Some(ProtoAction::ShieldedIcs20Withdrawal(withdrawal)) => {
-                    if let Some(body) = &withdrawal.body {
-                        for input in &body.inputs {
-                            if let Some(nullifier) = &input.nullifier {
-                                spend_nullifiers.push(
-                                    Nullifier::try_from(nullifier.clone()).context(
-                                        "converting proto shielded ICS-20 withdrawal nullifier",
-                                    )?,
-                                );
-                            }
-                        }
-                    }
+                Some(ProtoAction::ShieldedIcs20Withdrawal(w)) => {
+                    push_nullifiers(
+                        &mut spend_nullifiers,
+                        w.body.iter().flat_map(|b| {
+                            b.inputs.iter().filter_map(|i| i.nullifier.as_ref())
+                        }),
+                        "converting proto shielded ICS-20 withdrawal nullifier",
+                    )?;
                 }
                 _ => {}
             }

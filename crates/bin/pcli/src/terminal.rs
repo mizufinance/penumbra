@@ -5,7 +5,6 @@ use decaf377_rdsa::{Domain, Signature};
 use penumbra_sdk_asset::asset::Cache;
 use penumbra_sdk_custody::threshold::{SigningRequest, Terminal};
 use penumbra_sdk_keys::FullViewingKey;
-use penumbra_sdk_shielded_pool::{Note, NoteView};
 use penumbra_sdk_tct::structure::Hash;
 use penumbra_sdk_transaction::{view, ActionPlan, ActionView, TransactionPlan, TransactionView};
 use termion::{color, input::TermRead};
@@ -39,15 +38,6 @@ fn pretty_print_transaction_plan(
 ) -> anyhow::Result<()> {
     fn dummy_sig<D: Domain>() -> Signature<D> {
         Signature::from([0u8; 64])
-    }
-
-    #[allow(dead_code)]
-    fn convert_note(cache: &Cache, fvk: &FullViewingKey, note: &Note) -> NoteView {
-        NoteView {
-            value: note.value().view_with_cache(cache),
-            rseed: note.rseed(),
-            address: fvk.view_address(note.address()),
-        }
     }
 
     fn convert_action(

@@ -13,28 +13,25 @@ use extract::{extract_transfer_data, TransferExtraction};
 use match_rows::{candidate_to_entry, AddressData, TransferMatch};
 use orbis_authn::JwtSigner;
 use orbis_common::blockchain::{ChainConfig, SourceHubClient, TxSigner, TEST_ACCOUNT_HEX_KEY};
-use output::AuditEntry;
 use penumbra_orbis_client::OrbisClient;
 use penumbra_sdk_compliance::{
-    decrypt_orbis_reencrypted_seed, decrypt_tier_bytes, OrbisEncryptedSeedUploadPackage,
-    TransferComplianceCiphertext, TransferOrbisUploadBundle,
+    decrypt_orbis_reencrypted_seed, decrypt_tier_bytes, AuditDetectedRef, AuditScanExport,
+    OrbisAuditEntry, OrbisEncryptedSeedUploadPackage, TransferComplianceCiphertext,
+    TransferOrbisUploadBundle,
 };
 use penumbra_sdk_keys::Address;
 use penumbra_sdk_num::Amount;
-use scan::{DetectedTxRef, ScanOutput};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tonic::transport::Channel;
 use url::Url;
 
-const ORBIS_NAMESPACE: &str = "orbis";
+use penumbra_orbis_client::ORBIS_NAMESPACE;
 const ORBIS_READER_RELATION: &str = "reader";
 const ORBIS_DEMO_READER_DID_PK: &str = "test_jwt";
 
 mod extract;
 mod match_rows;
-mod output;
-mod scan;
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -236,7 +233,7 @@ async fn main() -> Result<()> {
 
     let file = File::open(&args.input).context("failed to open input file")?;
     let reader = BufReader::new(file);
-    let scan: ScanOutput = serde_json::from_reader(reader).context("failed to parse scan JSON")?;
+    let scan: AuditScanExport = serde_json::from_reader(reader).context("failed to parse scan JSON")?;
     eprintln!(
         "orbis-audit: Processing {} detected transactions",
         scan.detected.len()
@@ -269,13 +266,14 @@ async fn main() -> Result<()> {
             let Some(body) = tx.body.as_ref() else {
                 continue;
             };
-            if tx_ref.action_index >= body.actions.len() {
+            let action_index = tx_ref.action_index as usize;
+            if action_index >= body.actions.len() {
                 continue;
             }
 
-            let action = &body.actions[tx_ref.action_index];
+            let action = &body.actions[action_index];
             let started = Instant::now();
-            let (ct, bundle) = match extract_transfer_data(action, tx_ref.output_index) {
+            let (ct, bundle) = match extract_transfer_data(action, tx_ref.output_index as usize) {
                 TransferExtraction::Found(extracted) => (extracted.ciphertext, extracted.bundle),
                 TransferExtraction::Skipped(reason) => {
                     timings.ciphertext_extraction_ms += started.elapsed().as_millis();
@@ -403,13 +401,13 @@ fn parse_subjects(args: &Args) -> Result<Vec<SubjectData>> {
 }
 
 async fn audit_transfer(
-    tx_ref: &DetectedTxRef,
+    tx_ref: &AuditDetectedRef,
     ct: &TransferComplianceCiphertext,
     bundle: &TransferOrbisUploadBundle,
     ctx: &AuditContext<'_>,
     timings: &mut AuditTimings,
     object_cache: &mut ObjectCache,
-) -> Result<Option<AuditEntry>> {
+) -> Result<Option<OrbisAuditEntry>> {
     if let Some(candidate) = try_receiver_match(ct, bundle, ctx, timings, object_cache).await? {
         return Ok(Some(candidate_to_entry(
             tx_ref,
@@ -792,7 +790,7 @@ async fn fetch_transactions(
 mod tests {
     use super::*;
     use crate::extract::ExtractionSkip;
-    use crate::output::DecryptedVia;
+    use penumbra_sdk_compliance::DecryptedVia;
     use decaf377::{Element, Fr};
     use penumbra_sdk_asset::{asset, Value};
     use penumbra_sdk_compliance::transfer::encrypt_transfer;
@@ -1064,13 +1062,14 @@ mod tests {
 
     #[test]
     fn candidate_to_entry_uses_semantic_transfer_rendering() {
-        let tx_ref = DetectedTxRef {
+        let tx_ref = AuditDetectedRef {
             height: 290,
             tx_hash: "tx".to_string(),
             action_index: 1,
             output_index: 2,
             asset_id: "asset".to_string(),
             is_flagged: false,
+            flow_type: penumbra_sdk_compliance::FlowType::PrivateTransfer,
         };
         let self_tk = "aa".repeat(32);
         let counterparty_tk = "bb".repeat(32);
@@ -1087,10 +1086,10 @@ mod tests {
             default_ctx.tier_mode,
             default_ctx.subject_transmission_key_hex,
         );
-        assert_eq!(default_entry.amount.0, "400");
+        assert_eq!(default_entry.amount, "400");
         assert_eq!(default_entry.output_index, 2);
-        assert_eq!(default_entry.self_address.0, self_tk);
-        assert_eq!(default_entry.counterparty.0, "");
+        assert_eq!(default_entry.self_address, self_tk);
+        assert_eq!(default_entry.counterparty, "");
         assert_eq!(default_entry.decrypted_via, DecryptedVia::OrbisPre);
 
         let extension_ctx = dummy_context("extension", &self_tk);
@@ -1105,9 +1104,9 @@ mod tests {
             extension_ctx.tier_mode,
             extension_ctx.subject_transmission_key_hex,
         );
-        assert_eq!(extension_entry.amount.0, "600");
-        assert_eq!(extension_entry.self_address.0, self_tk);
-        assert_eq!(extension_entry.counterparty.0, counterparty_tk);
+        assert_eq!(extension_entry.amount, "600");
+        assert_eq!(extension_entry.self_address, self_tk);
+        assert_eq!(extension_entry.counterparty, counterparty_tk);
         assert_eq!(extension_entry.decrypted_via, DecryptedVia::OrbisPre);
     }
 }

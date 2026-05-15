@@ -99,16 +99,7 @@ impl Component for Compliance {
                 asset_policy: crate::structs::AssetPolicy::default_unregulated(),
             };
 
-            state.record_proto(event::asset_registered(
-                event.asset_id,
-                event.is_regulated,
-                event.position,
-                event.indexed_leaf.clone(),
-                event.low_leaf_position,
-                event.updated_low_leaf.clone(),
-                event.asset_policy.clone(),
-            ));
-            state.record_pending_asset_registration(event);
+            state.emit_asset_registered(event);
         }
 
         // Register native assets from genesis configuration.
@@ -164,16 +155,7 @@ impl Component for Compliance {
                         asset_policy: event_policy,
                     };
 
-                    state.record_proto(event::asset_registered(
-                        event.asset_id,
-                        event.is_regulated,
-                        event.position,
-                        event.indexed_leaf.clone(),
-                        event.low_leaf_position,
-                        event.updated_low_leaf.clone(),
-                        event.asset_policy.clone(),
-                    ));
-                    state.record_pending_asset_registration(event);
+                    state.emit_asset_registered(event);
                     tracing::info!(
                         ?registration.asset_id,
                         is_regulated,
@@ -400,17 +382,7 @@ impl ActionHandler for MsgRegisterAsset {
                 asset_policy: event_policy,
             };
 
-            state.record_proto(event::asset_registered(
-                event.asset_id,
-                event.is_regulated,
-                event.position,
-                event.indexed_leaf.clone(),
-                event.low_leaf_position,
-                event.updated_low_leaf.clone(),
-                event.asset_policy.clone(),
-            ));
-
-            state.record_pending_asset_registration(event);
+            state.emit_asset_registered(event);
         }
         // If None, asset was already registered — policy is immutable, skip.
 

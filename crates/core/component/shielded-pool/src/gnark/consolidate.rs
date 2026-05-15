@@ -295,32 +295,29 @@ mod tests {
         }
     }
 
-    #[test]
-    fn consolidate_witness_v1_rejects_bad_magic() {
+    fn corrupt() -> Vec<u8> {
         let (public, private) =
             proof_test_helpers::build_consolidate_roundtrip_inputs(ConsolidateFamilyId::TwoByOne);
-        let mut encoded =
-            encode_consolidate_witness_v1(&public, &private).expect("encode consolidate witness");
+        encode_consolidate_witness_v1(&public, &private).expect("encode consolidate witness")
+    }
+
+    #[test]
+    fn consolidate_witness_v1_rejects_bad_magic() {
+        let mut encoded = corrupt();
         encoded[0] = b'X';
         assert!(decode_consolidate_witness_v1(&encoded).is_err());
     }
 
     #[test]
     fn consolidate_witness_v1_rejects_bad_version() {
-        let (public, private) =
-            proof_test_helpers::build_consolidate_roundtrip_inputs(ConsolidateFamilyId::TwoByOne);
-        let mut encoded =
-            encode_consolidate_witness_v1(&public, &private).expect("encode consolidate witness");
+        let mut encoded = corrupt();
         encoded[4..8].copy_from_slice(&2u32.to_le_bytes());
         assert!(decode_consolidate_witness_v1(&encoded).is_err());
     }
 
     #[test]
     fn consolidate_witness_v1_rejects_bad_length() {
-        let (public, private) =
-            proof_test_helpers::build_consolidate_roundtrip_inputs(ConsolidateFamilyId::TwoByOne);
-        let mut encoded =
-            encode_consolidate_witness_v1(&public, &private).expect("encode consolidate witness");
+        let mut encoded = corrupt();
         let wrong_len = (encoded.len() as u32).saturating_sub(1);
         encoded[8..12].copy_from_slice(&wrong_len.to_le_bytes());
         assert!(decode_consolidate_witness_v1(&encoded).is_err());

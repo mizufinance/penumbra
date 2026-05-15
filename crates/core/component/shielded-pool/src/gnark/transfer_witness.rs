@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use decaf377::{Encoding, Fq};
 use penumbra_sdk_compliance::TransferTierMetadataStatement;
 
@@ -172,9 +172,9 @@ impl TransferWitnessV1 {
         private.validate_shape()?;
 
         let claimed_statement_hash = transfer_statement_hash_from_public(public)
-            .map_err(|e| anyhow!("compute {TRANSFER_PROOF_LABEL} statement hash: {e}"))?;
+            .with_context(|| format!("compute {TRANSFER_PROOF_LABEL} statement hash"))?;
         let statement_fields = transfer_statement_fields(public)
-            .map_err(|e| anyhow!("compute {TRANSFER_PROOF_LABEL} statement fields: {e}"))?;
+            .with_context(|| format!("compute {TRANSFER_PROOF_LABEL} statement fields"))?;
 
         let sender_leaf = compliance_leaf_from_typed(&private.sender_leaf)?;
         let (_, sender_asset_id, sender_d) = compliance_leaf_parts(&sender_leaf);

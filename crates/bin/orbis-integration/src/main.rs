@@ -32,10 +32,10 @@ use orbis_common::blockchain::SourceHubClient;
 use penumbra_orbis_client::{NodeInfo, OrbisClient};
 use penumbra_sdk_compliance::{
     decrypt_flagged_rows, export_ledger_rows_json, export_scan_json, import_orbis_audit_entries,
-    mark_row_audited, record_address_alias, scanner_health_json, DetectionKey, OrbisAuditEntry,
-    SqliteScannerStore,
+    mark_row_audited, record_address_alias, scanner_health_json, AuditScanExport, DetectionKey,
+    OrbisAuditEntry, SqliteScannerStore,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 mod command;
 mod demo_auth;
@@ -106,32 +106,6 @@ struct RepoPaths {
 #[derive(Debug)]
 struct DemoEnv {
     values: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ScanOutput {
-    detected: Vec<DetectedTxRef>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct DetectedTxRef {
-    height: u64,
-    tx_hash: String,
-    action_index: usize,
-    #[serde(default)]
-    output_index: usize,
-    #[serde(default)]
-    asset_id: String,
-    is_flagged: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct AuditEntry {
-    height: u64,
-    tx_hash: String,
-    action_index: usize,
-    #[serde(default)]
-    output_index: usize,
 }
 
 #[tokio::main]
@@ -764,7 +738,12 @@ async fn verify(repo: &RepoPaths) -> Result<()> {
             "--node",
             env.get("PENUMBRA_NODE_PD_URL")?,
             "--db",
-            repo.scanner_db_file.to_str().unwrap(),
+            repo.scanner_db_file.to_str().with_context(|| {
+                format!(
+                    "scanner_db_file path is not valid UTF-8: {:?}",
+                    repo.scanner_db_file
+                )
+            })?,
         ],
     )?;
 
@@ -783,11 +762,7 @@ async fn verify(repo: &RepoPaths) -> Result<()> {
         serde_json::to_vec_pretty(&export_scan_json(&store)?)?,
     )?;
 
-    let scan: ScanOutput = serde_json::from_slice(
-        &fs::read(&repo.detected_file)
-            .with_context(|| format!("failed to read {}", repo.detected_file.display()))?,
-    )
-    .context("failed to parse detected scan output")?;
+    let scan: AuditScanExport = read_json(&repo.detected_file)?;
     let flagged = scan.detected.iter().filter(|tx| tx.is_flagged).count();
     eprintln!(
         "orbis-integration: detected {} transfer entries ({} flagged)",
@@ -897,11 +872,7 @@ fn update_scanner_db_from_audit(
     user_name: &str,
     audit_file: &Path,
 ) -> Result<()> {
-    let entries: Vec<OrbisAuditEntry> = serde_json::from_slice(
-        &fs::read(audit_file)
-            .with_context(|| format!("failed to read {}", audit_file.display()))?,
-    )
-    .context("failed to parse orbis-audit output")?;
+    let entries: Vec<OrbisAuditEntry> = read_json(audit_file)?;
     if entries.is_empty() {
         return Ok(());
     }
@@ -915,14 +886,8 @@ fn write_extension_input(
     default_audit_file: &Path,
     output: &Path,
 ) -> Result<()> {
-    let scan: ScanOutput = serde_json::from_slice(
-        &fs::read(detected_file)
-            .with_context(|| format!("failed to read {}", detected_file.display()))?,
-    )?;
-    let audit_entries: Vec<AuditEntry> = serde_json::from_slice(
-        &fs::read(default_audit_file)
-            .with_context(|| format!("failed to read {}", default_audit_file.display()))?,
-    )?;
+    let scan: AuditScanExport = read_json(detected_file)?;
+    let audit_entries: Vec<OrbisAuditEntry> = read_json(default_audit_file)?;
     let refs = audit_entries
         .into_iter()
         .map(|entry| {
@@ -957,9 +922,7 @@ fn write_extension_input(
 }
 
 fn count_detected_refs(path: &Path) -> Result<usize> {
-    let scan: ScanOutput = serde_json::from_slice(
-        &fs::read(path).with_context(|| format!("failed to read {}", path.display()))?,
-    )?;
+    let scan: AuditScanExport = read_json(path)?;
     Ok(scan.detected.len())
 }
 

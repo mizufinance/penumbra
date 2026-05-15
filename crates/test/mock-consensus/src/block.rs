@@ -85,11 +85,6 @@ impl<'e, C> Builder<'e, C> {
         self
     }
 
-    /// Sets the evidence [`List`][evidence::List] for this block.
-    pub fn with_evidence(self, evidence: evidence::List) -> Self {
-        Self { evidence, ..self }
-    }
-
     /// Disables producing commit signatures for this block.
     pub fn without_signatures(self) -> Self {
         Self {
