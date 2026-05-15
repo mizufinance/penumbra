@@ -18,6 +18,7 @@ use penumbra_sdk_compliance::{ComplianceLeaf, ComplianceRegistryRead, Compliance
 use penumbra_sdk_keys::Address;
 use penumbra_sdk_shielded_pool::{ShieldedInputPlan, ShieldedOutputPlan};
 
+#[allow(dead_code)]
 pub fn align_transfer_planning_metadata(
     spends: &mut [ShieldedInputPlan],
     outputs: &mut [ShieldedOutputPlan],
