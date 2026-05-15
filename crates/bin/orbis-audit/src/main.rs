@@ -9,8 +9,11 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use decaf377::{Element, Fq, Fr};
 use did_key::{generate, Ed25519KeyPair as DidEd25519KeyPair, Fingerprint};
+use extract::{extract_transfer_data, TransferExtraction};
+use match_rows::{candidate_to_entry, AddressData, TransferMatch};
 use orbis_authn::JwtSigner;
 use orbis_common::blockchain::{ChainConfig, SourceHubClient, TxSigner, TEST_ACCOUNT_HEX_KEY};
+use output::AuditEntry;
 use penumbra_orbis_client::OrbisClient;
 use penumbra_sdk_compliance::{
     decrypt_orbis_reencrypted_seed, decrypt_tier_bytes, OrbisEncryptedSeedUploadPackage,
@@ -18,15 +21,20 @@ use penumbra_sdk_compliance::{
 };
 use penumbra_sdk_keys::Address;
 use penumbra_sdk_num::Amount;
+use scan::{DetectedTxRef, ScanOutput};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tonic::transport::Channel;
 use url::Url;
 
-const DECRYPTED_VIA_ORBIS_PRE: &str = "orbis_pre";
 const ORBIS_NAMESPACE: &str = "orbis";
 const ORBIS_READER_RELATION: &str = "reader";
 const ORBIS_DEMO_READER_DID_PK: &str = "test_jwt";
+
+mod extract;
+mod match_rows;
+mod output;
+mod scan;
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -121,36 +129,6 @@ fn demo_did_seed(s: &str) -> [u8; 32] {
     Sha256::digest(s.as_bytes()).into()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct ScanOutput {
-    scan_info: serde_json::Value,
-    detected: Vec<DetectedTxRef>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct DetectedTxRef {
-    height: u64,
-    tx_hash: String,
-    action_index: usize,
-    #[serde(default)]
-    output_index: usize,
-    asset_id: String,
-    is_flagged: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct AuditEntry {
-    height: u64,
-    tx_hash: String,
-    action_index: usize,
-    #[serde(default)]
-    output_index: usize,
-    amount: String,
-    self_address: String,
-    counterparty: String,
-    decrypted_via: String,
-}
-
 #[derive(Clone)]
 struct PackageObjectContext {
     object_id: String,
@@ -181,11 +159,6 @@ struct AuditContext<'a> {
     subject_b_d_bytes: &'a [u8; 32],
     known_transmission_keys: &'a HashSet<String>,
     tier_mode: &'a str,
-}
-
-#[derive(Clone, Debug)]
-struct AddressData {
-    transmission_key_hex: String,
 }
 
 #[derive(Clone, Debug)]
@@ -222,18 +195,6 @@ struct AuditTimings {
     subject_mismatch: u64,
     #[serde(skip)]
     pre_call_samples_ms: Vec<u128>,
-}
-
-#[derive(Clone, Debug)]
-enum TransferMatch {
-    Sender {
-        amount: Amount,
-        receiver: AddressData,
-    },
-    Receiver {
-        amount: Amount,
-        sender: AddressData,
-    },
 }
 
 #[tokio::main]
@@ -314,11 +275,17 @@ async fn main() -> Result<()> {
 
             let action = &body.actions[tx_ref.action_index];
             let started = Instant::now();
-            let Some((ct, bundle)) = extract_transfer_data(action, tx_ref.output_index) else {
-                timings.ciphertext_extraction_ms += started.elapsed().as_millis();
-                no_ciphertext += 1;
-                timings.no_ciphertext += 1;
-                continue;
+            let (ct, bundle) = match extract_transfer_data(action, tx_ref.output_index) {
+                TransferExtraction::Found(extracted) => (extracted.ciphertext, extracted.bundle),
+                TransferExtraction::Skipped(reason) => {
+                    timings.ciphertext_extraction_ms += started.elapsed().as_millis();
+                    no_ciphertext += 1;
+                    timings.no_ciphertext += 1;
+                    if reason.is_malformed() {
+                        eprintln!("orbis-audit: malformed transfer data: {reason:?}");
+                    }
+                    continue;
+                }
             };
             timings.ciphertext_extraction_ms += started.elapsed().as_millis();
 
@@ -444,10 +411,20 @@ async fn audit_transfer(
     object_cache: &mut ObjectCache,
 ) -> Result<Option<AuditEntry>> {
     if let Some(candidate) = try_receiver_match(ct, bundle, ctx, timings, object_cache).await? {
-        return Ok(Some(candidate_to_entry(tx_ref, candidate, ctx)));
+        return Ok(Some(candidate_to_entry(
+            tx_ref,
+            candidate,
+            ctx.tier_mode,
+            ctx.subject_transmission_key_hex,
+        )));
     }
     if let Some(candidate) = try_sender_match(ct, bundle, ctx, timings, object_cache).await? {
-        return Ok(Some(candidate_to_entry(tx_ref, candidate, ctx)));
+        return Ok(Some(candidate_to_entry(
+            tx_ref,
+            candidate,
+            ctx.tier_mode,
+            ctx.subject_transmission_key_hex,
+        )));
     }
     Ok(None)
 }
@@ -576,47 +553,6 @@ async fn try_sender_match(
     }
 
     Ok(Some(TransferMatch::Sender { amount, receiver }))
-}
-
-fn candidate_to_entry(
-    tx_ref: &DetectedTxRef,
-    candidate: TransferMatch,
-    ctx: &AuditContext<'_>,
-) -> AuditEntry {
-    match (ctx.tier_mode, candidate) {
-        ("default", TransferMatch::Receiver { amount, .. })
-        | ("default", TransferMatch::Sender { amount, .. }) => AuditEntry {
-            height: tx_ref.height,
-            tx_hash: tx_ref.tx_hash.clone(),
-            action_index: tx_ref.action_index,
-            output_index: tx_ref.output_index,
-            amount: amount.value().to_string(),
-            self_address: ctx.subject_transmission_key_hex.to_string(),
-            counterparty: String::new(),
-            decrypted_via: DECRYPTED_VIA_ORBIS_PRE.to_string(),
-        },
-        ("extension", TransferMatch::Receiver { amount, sender }) => AuditEntry {
-            height: tx_ref.height,
-            tx_hash: tx_ref.tx_hash.clone(),
-            action_index: tx_ref.action_index,
-            output_index: tx_ref.output_index,
-            amount: amount.value().to_string(),
-            self_address: ctx.subject_transmission_key_hex.to_string(),
-            counterparty: sender.transmission_key_hex,
-            decrypted_via: DECRYPTED_VIA_ORBIS_PRE.to_string(),
-        },
-        ("extension", TransferMatch::Sender { amount, receiver }) => AuditEntry {
-            height: tx_ref.height,
-            tx_hash: tx_ref.tx_hash.clone(),
-            action_index: tx_ref.action_index,
-            output_index: tx_ref.output_index,
-            amount: amount.value().to_string(),
-            self_address: ctx.subject_transmission_key_hex.to_string(),
-            counterparty: receiver.transmission_key_hex,
-            decrypted_via: DECRYPTED_VIA_ORBIS_PRE.to_string(),
-        },
-        _ => unreachable!("tier already validated"),
-    }
 }
 
 fn decrypt_amount_with_seed(seed: Fq, encrypted: &[u8]) -> Result<Amount> {
@@ -821,46 +757,6 @@ fn parse_fr(hex_str: &str, label: &str) -> Result<Fr> {
     Ok(Fr::from_le_bytes_mod_order(&arr))
 }
 
-fn extract_transfer_data(
-    action: &penumbra_sdk_proto::core::transaction::v1::Action,
-    output_index: usize,
-) -> Option<(TransferComplianceCiphertext, TransferOrbisUploadBundle)> {
-    use penumbra_sdk_proto::core::transaction::v1::action::Action as ActionEnum;
-
-    let ActionEnum::Transfer(transfer) = action.action.as_ref()? else {
-        return None;
-    };
-    let body = transfer.body.as_ref()?;
-    let output = body.outputs.get(output_index)?;
-    if output.compliance_ciphertext.is_empty() {
-        return None;
-    }
-
-    let ct = match TransferComplianceCiphertext::from_bytes(&output.compliance_ciphertext) {
-        Ok(ct) => ct,
-        Err(error) => {
-            eprintln!(
-                "orbis-audit: ciphertext deserialization failed ({} bytes): {}",
-                output.compliance_ciphertext.len(),
-                error
-            );
-            return None;
-        }
-    };
-    let bundle = match TransferOrbisUploadBundle::from_bytes(&output.orbis_upload_bundle) {
-        Ok(bundle) => bundle,
-        Err(error) => {
-            eprintln!(
-                "orbis-audit: upload bundle deserialization failed ({} bytes): {}",
-                output.orbis_upload_bundle.len(),
-                error
-            );
-            return None;
-        }
-    };
-    Some((ct, bundle))
-}
-
 async fn connect_to_node(node_url: &Url) -> Result<Channel> {
     let endpoint = tonic::transport::Endpoint::from_shared(node_url.to_string())
         .context("invalid node URL")?
@@ -895,6 +791,8 @@ async fn fetch_transactions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extract::ExtractionSkip;
+    use crate::output::DecryptedVia;
     use decaf377::{Element, Fr};
     use penumbra_sdk_asset::{asset, Value};
     use penumbra_sdk_compliance::transfer::encrypt_transfer;
@@ -980,8 +878,14 @@ mod tests {
             })),
         };
 
-        assert!(extract_transfer_data(&split_action, 0).is_none());
-        assert!(extract_transfer_data(&consolidate_action, 0).is_none());
+        assert!(matches!(
+            extract_transfer_data(&split_action, 0),
+            TransferExtraction::Skipped(ExtractionSkip::NonTransferAction)
+        ));
+        assert!(matches!(
+            extract_transfer_data(&consolidate_action, 0),
+            TransferExtraction::Skipped(ExtractionSkip::NonTransferAction)
+        ));
     }
 
     fn make_upload_bundle_bytes() -> Vec<u8> {
@@ -1122,13 +1026,40 @@ mod tests {
             })),
         };
 
-        let (ciphertext, bundle) =
-            extract_transfer_data(&transfer_action, 1).expect("transfer action should expose data");
-        assert_eq!(ciphertext.to_bytes(), ciphertext_bytes);
+        let TransferExtraction::Found(extracted) = extract_transfer_data(&transfer_action, 1)
+        else {
+            panic!("transfer action should expose data");
+        };
+        assert_eq!(extracted.ciphertext.to_bytes(), ciphertext_bytes);
         assert_eq!(
-            bundle.to_bytes().expect("bundle should serialize"),
+            extracted
+                .bundle
+                .to_bytes()
+                .expect("bundle should serialize"),
             bundle_bytes
         );
+    }
+
+    #[test]
+    fn extract_transfer_data_classifies_malformed_ciphertext() {
+        let transfer_action = penumbra_sdk_proto::core::transaction::v1::Action {
+            action: Some(Action::Transfer(Transfer {
+                body: Some(TransferBody {
+                    outputs: vec![TransferOutputBody {
+                        compliance_ciphertext: vec![1, 2, 3],
+                        orbis_upload_bundle: Vec::new(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+        };
+
+        assert!(matches!(
+            extract_transfer_data(&transfer_action, 0),
+            TransferExtraction::Skipped(ExtractionSkip::InvalidComplianceCiphertext { len: 3, .. })
+        ));
     }
 
     #[test]
@@ -1153,13 +1084,14 @@ mod tests {
                     transmission_key_hex: counterparty_tk.clone(),
                 },
             },
-            &default_ctx,
+            default_ctx.tier_mode,
+            default_ctx.subject_transmission_key_hex,
         );
-        assert_eq!(default_entry.amount, "400");
+        assert_eq!(default_entry.amount.0, "400");
         assert_eq!(default_entry.output_index, 2);
-        assert_eq!(default_entry.self_address, self_tk);
-        assert_eq!(default_entry.counterparty, "");
-        assert_eq!(default_entry.decrypted_via, DECRYPTED_VIA_ORBIS_PRE);
+        assert_eq!(default_entry.self_address.0, self_tk);
+        assert_eq!(default_entry.counterparty.0, "");
+        assert_eq!(default_entry.decrypted_via, DecryptedVia::OrbisPre);
 
         let extension_ctx = dummy_context("extension", &self_tk);
         let extension_entry = candidate_to_entry(
@@ -1170,11 +1102,12 @@ mod tests {
                     transmission_key_hex: counterparty_tk.clone(),
                 },
             },
-            &extension_ctx,
+            extension_ctx.tier_mode,
+            extension_ctx.subject_transmission_key_hex,
         );
-        assert_eq!(extension_entry.amount, "600");
-        assert_eq!(extension_entry.self_address, self_tk);
-        assert_eq!(extension_entry.counterparty, counterparty_tk);
-        assert_eq!(extension_entry.decrypted_via, DECRYPTED_VIA_ORBIS_PRE);
+        assert_eq!(extension_entry.amount.0, "600");
+        assert_eq!(extension_entry.self_address.0, self_tk);
+        assert_eq!(extension_entry.counterparty.0, counterparty_tk);
+        assert_eq!(extension_entry.decrypted_via, DecryptedVia::OrbisPre);
     }
 }
