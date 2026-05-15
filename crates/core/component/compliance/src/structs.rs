@@ -186,16 +186,15 @@ impl TryFrom<pb::ComplianceLeaf> for ComplianceLeaf {
     type Error = anyhow::Error;
 
     fn try_from(value: pb::ComplianceLeaf) -> Result<Self, Self::Error> {
-        let d = if value.d.is_empty() {
-            Fq::from(0u64)
-        } else {
-            let bytes: [u8; 32] = value
-                .d
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("d must be 32 bytes"))?;
-            Fq::from_bytes_checked(&bytes)
-                .map_err(|_| anyhow::anyhow!("invalid d field element"))?
-        };
+        if value.d.is_empty() {
+            anyhow::bail!("missing d");
+        }
+        let bytes: [u8; 32] = value
+            .d
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("d must be 32 bytes"))?;
+        let d = Fq::from_bytes_checked(&bytes)
+            .map_err(|_| anyhow::anyhow!("invalid d field element"))?;
         Ok(ComplianceLeaf {
             address: value
                 .address
@@ -328,19 +327,6 @@ impl AssetPolicy {
         }
     }
 
-    /// Convenience accessors for backwards compatibility.
-    pub fn dk_pub(&self) -> &decaf377::Element {
-        &self.params.dk_pub
-    }
-
-    pub fn threshold(&self) -> u128 {
-        self.params.threshold
-    }
-
-    pub fn ring_pk(&self) -> &decaf377::Element {
-        &self.ring.ring_pk
-    }
-
     /// Serialize to bytes for storage.
     ///
     /// Format: [dk_pub: 32] [threshold: 16] [ring_pk: 32]
@@ -349,7 +335,7 @@ impl AssetPolicy {
     ///         [policy_id_len: 2] [policy_id bytes]
     ///         [permission_len: 2] [permission bytes]
     ///         [resource_len: 2] [resource bytes]
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> anyhow::Result<Vec<u8>> {
         let mut bytes = Vec::with_capacity(128);
         // AssetParams
         bytes.extend_from_slice(&self.params.dk_pub.vartime_compress().0);
@@ -357,30 +343,39 @@ impl AssetPolicy {
         // RingData - ring_pk
         bytes.extend_from_slice(&self.ring.ring_pk.vartime_compress().0);
         // Channels
-        let count = self.params.allowed_channels.len() as u16;
+        let count = u16::try_from(self.params.allowed_channels.len()).map_err(|_| {
+            anyhow::anyhow!(
+                "too many allowed channels: {}",
+                self.params.allowed_channels.len()
+            )
+        })?;
         bytes.extend_from_slice(&count.to_le_bytes());
         for channel in &self.params.allowed_channels {
-            let len = channel.len() as u8;
+            let len = u8::try_from(channel.len()).map_err(|_| {
+                anyhow::anyhow!("allowed channel name too long: {} bytes", channel.len())
+            })?;
             bytes.push(len);
             bytes.extend_from_slice(channel.as_bytes());
         }
         // String fields
-        fn write_string(bytes: &mut Vec<u8>, s: &str) {
-            let len = s.len() as u16;
+        fn write_string(bytes: &mut Vec<u8>, s: &str, field: &str) -> anyhow::Result<()> {
+            let len = u16::try_from(s.len())
+                .map_err(|_| anyhow::anyhow!("{field} too long: {} bytes", s.len()))?;
             bytes.extend_from_slice(&len.to_le_bytes());
             bytes.extend_from_slice(s.as_bytes());
+            Ok(())
         }
-        write_string(&mut bytes, &self.ring.ring_id);
-        write_string(&mut bytes, &self.ring.policy_id);
-        write_string(&mut bytes, &self.ring.permission);
-        write_string(&mut bytes, &self.ring.resource);
+        write_string(&mut bytes, &self.ring.ring_id, "ring_id")?;
+        write_string(&mut bytes, &self.ring.policy_id, "policy_id")?;
+        write_string(&mut bytes, &self.ring.permission, "permission")?;
+        write_string(&mut bytes, &self.ring.resource, "resource")?;
         if let Some(vk) = &self.registration_authority_vk {
             bytes.push(1);
             bytes.extend_from_slice(&vk.to_bytes());
         } else {
             bytes.push(0);
         }
-        bytes
+        Ok(bytes)
     }
 
     /// Deserialize from bytes.
@@ -405,65 +400,68 @@ impl AssetPolicy {
         let mut offset = 80;
 
         // Parse channels
-        let allowed_channels = if offset + 2 <= bytes.len() {
-            let count = u16::from_le_bytes(bytes[offset..offset + 2].try_into()?) as usize;
-            offset += 2;
-            let mut channels = Vec::with_capacity(count);
-            for _ in 0..count {
-                if offset >= bytes.len() {
-                    anyhow::bail!("truncated allowed_channels data");
-                }
-                let len = bytes[offset] as usize;
-                offset += 1;
-                if offset + len > bytes.len() {
-                    anyhow::bail!("truncated channel string");
-                }
-                let channel = std::str::from_utf8(&bytes[offset..offset + len])
-                    .map_err(|_| anyhow::anyhow!("invalid UTF-8 in channel name"))?;
-                channels.push(channel.to_string());
-                offset += len;
+        if offset + 2 > bytes.len() {
+            anyhow::bail!("missing allowed_channels count");
+        }
+        let count = u16::from_le_bytes(bytes[offset..offset + 2].try_into()?) as usize;
+        offset += 2;
+        let mut allowed_channels = Vec::with_capacity(count);
+        for _ in 0..count {
+            if offset >= bytes.len() {
+                anyhow::bail!("truncated allowed_channels data");
             }
-            channels
-        } else {
-            vec![]
-        };
+            let len = bytes[offset] as usize;
+            offset += 1;
+            if offset + len > bytes.len() {
+                anyhow::bail!("truncated channel string");
+            }
+            let channel = std::str::from_utf8(&bytes[offset..offset + len])
+                .map_err(|_| anyhow::anyhow!("invalid UTF-8 in channel name"))?;
+            allowed_channels.push(channel.to_string());
+            offset += len;
+        }
 
         // Parse string fields
-        fn read_string(bytes: &[u8], offset: &mut usize) -> anyhow::Result<String> {
+        fn read_string(bytes: &[u8], offset: &mut usize, field: &str) -> anyhow::Result<String> {
             if *offset + 2 > bytes.len() {
-                return Ok(String::new());
+                anyhow::bail!("missing {field}");
             }
             let len = u16::from_le_bytes(bytes[*offset..*offset + 2].try_into()?) as usize;
             *offset += 2;
             if *offset + len > bytes.len() {
-                anyhow::bail!("truncated string field");
+                anyhow::bail!("truncated {field}");
             }
             let s = std::str::from_utf8(&bytes[*offset..*offset + len])
-                .map_err(|_| anyhow::anyhow!("invalid UTF-8 in string field"))?;
+                .map_err(|_| anyhow::anyhow!("invalid UTF-8 in {field}"))?;
             *offset += len;
             Ok(s.to_string())
         }
 
-        let ring_id = read_string(bytes, &mut offset)?;
-        let policy_id = read_string(bytes, &mut offset)?;
-        let permission = read_string(bytes, &mut offset)?;
-        let resource = read_string(bytes, &mut offset)?;
-        let registration_authority_vk = if offset < bytes.len() {
-            let has_vk = bytes[offset];
-            offset += 1;
-            if has_vk == 0 {
-                None
-            } else {
-                if offset + 32 > bytes.len() {
-                    anyhow::bail!("truncated registration_authority_vk");
-                }
-                let vk = VerificationKey::<SpendAuth>::try_from(&bytes[offset..offset + 32])
-                    .map_err(|_| anyhow::anyhow!("invalid registration_authority_vk"))?;
-                Some(vk)
-            }
-        } else {
+        let ring_id = read_string(bytes, &mut offset, "ring_id")?;
+        let policy_id = read_string(bytes, &mut offset, "policy_id")?;
+        let permission = read_string(bytes, &mut offset, "permission")?;
+        let resource = read_string(bytes, &mut offset, "resource")?;
+        if offset >= bytes.len() {
+            anyhow::bail!("missing registration_authority_vk flag");
+        }
+        let has_vk = bytes[offset];
+        offset += 1;
+        let registration_authority_vk = if has_vk == 0 {
             None
+        } else if has_vk == 1 {
+            if offset + 32 > bytes.len() {
+                anyhow::bail!("truncated registration_authority_vk");
+            }
+            let vk = VerificationKey::<SpendAuth>::try_from(&bytes[offset..offset + 32])
+                .map_err(|_| anyhow::anyhow!("invalid registration_authority_vk"))?;
+            offset += 32;
+            Some(vk)
+        } else {
+            anyhow::bail!("invalid registration_authority_vk flag: {has_vk}");
         };
+        if offset != bytes.len() {
+            anyhow::bail!("trailing bytes after AssetPolicy");
+        }
 
         Ok(Self {
             params: AssetParams {
@@ -492,38 +490,36 @@ impl TryFrom<pb::AssetPolicy> for AssetPolicy {
     type Error = anyhow::Error;
 
     fn try_from(value: pb::AssetPolicy) -> Result<Self, Self::Error> {
-        let dk_pub = if value.dk_pub.is_empty() {
-            decaf377::Element::default()
-        } else {
-            let bytes: [u8; 32] = value
-                .dk_pub
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("dk_pub must be 32 bytes"))?;
-            decaf377::Encoding(bytes)
-                .vartime_decompress()
-                .map_err(|_| anyhow::anyhow!("invalid dk_pub encoding"))?
-        };
+        if value.dk_pub.is_empty() {
+            anyhow::bail!("missing dk_pub");
+        }
+        let bytes: [u8; 32] = value
+            .dk_pub
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("dk_pub must be 32 bytes"))?;
+        let dk_pub = decaf377::Encoding(bytes)
+            .vartime_decompress()
+            .map_err(|_| anyhow::anyhow!("invalid dk_pub encoding"))?;
 
-        let threshold = if value.threshold.is_empty() {
-            u128::MAX
-        } else {
-            let bytes: [u8; 16] = value.threshold.try_into().map_err(|v: Vec<u8>| {
-                anyhow::anyhow!("threshold must be 16 bytes, got {}", v.len())
-            })?;
-            u128::from_le_bytes(bytes)
-        };
+        if value.threshold.is_empty() {
+            anyhow::bail!("missing threshold");
+        }
+        let bytes: [u8; 16] = value
+            .threshold
+            .try_into()
+            .map_err(|v: Vec<u8>| anyhow::anyhow!("threshold must be 16 bytes, got {}", v.len()))?;
+        let threshold = u128::from_le_bytes(bytes);
 
-        let ring_pk = if value.ring_pk.is_empty() {
-            decaf377::Element::default()
-        } else {
-            let bytes: [u8; 32] = value
-                .ring_pk
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("ring_pk must be 32 bytes"))?;
-            decaf377::Encoding(bytes)
-                .vartime_decompress()
-                .map_err(|_| anyhow::anyhow!("invalid ring_pk encoding"))?
-        };
+        if value.ring_pk.is_empty() {
+            anyhow::bail!("missing ring_pk");
+        }
+        let bytes: [u8; 32] = value
+            .ring_pk
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("ring_pk must be 32 bytes"))?;
+        let ring_pk = decaf377::Encoding(bytes)
+            .vartime_decompress()
+            .map_err(|_| anyhow::anyhow!("invalid ring_pk encoding"))?;
         let registration_authority_vk = value
             .registration_authority_vk
             .map(TryInto::try_into)
@@ -1065,6 +1061,23 @@ mod tests {
     }
 
     #[test]
+    fn test_compliance_leaf_proto_rejects_missing_d() {
+        let mut rng = rand::thread_rng();
+        let proto = pb::ComplianceLeaf {
+            address: Some(Address::dummy(&mut rng).into()),
+            asset_id: Some(asset::Id(decaf377::Fq::from(999u64)).into()),
+            d: vec![],
+        };
+
+        let err = ComplianceLeaf::try_from(proto).expect_err("missing d should fail");
+
+        assert!(
+            err.to_string().contains("missing d"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
     fn test_asset_policy_bytes_roundtrip() {
         let dk = decaf377::Fr::from(42u64);
         let dk_pub = decaf377::Element::GENERATOR * dk;
@@ -1082,7 +1095,7 @@ mod tests {
             "document".to_string(),
         );
 
-        let bytes = policy.to_bytes();
+        let bytes = policy.to_bytes().unwrap();
         let recovered = AssetPolicy::from_bytes(&bytes).unwrap();
 
         assert_eq!(policy.params.dk_pub, recovered.params.dk_pub);
@@ -1118,6 +1131,116 @@ mod tests {
         let recovered = AssetPolicy::try_from(proto).unwrap();
 
         assert_eq!(policy, recovered);
+    }
+
+    #[test]
+    fn test_asset_policy_to_bytes_rejects_overlong_channel() {
+        let dk_pub = decaf377::Element::GENERATOR * decaf377::Fr::from(42u64);
+        let ring_pk = decaf377::Element::GENERATOR * decaf377::Fr::from(999u64);
+        let policy = AssetPolicy::new(
+            dk_pub,
+            500,
+            vec!["x".repeat(usize::from(u8::MAX) + 1)],
+            "ring-id".to_string(),
+            ring_pk,
+            "pol-id".to_string(),
+            "perm".to_string(),
+            "res".to_string(),
+        );
+
+        let err = policy.to_bytes().expect_err("overlong channel should fail");
+
+        assert!(
+            err.to_string().contains("allowed channel name too long"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn test_asset_policy_to_bytes_rejects_overlong_string() {
+        let dk_pub = decaf377::Element::GENERATOR * decaf377::Fr::from(42u64);
+        let ring_pk = decaf377::Element::GENERATOR * decaf377::Fr::from(999u64);
+        let policy = AssetPolicy::new(
+            dk_pub,
+            500,
+            vec![],
+            "r".repeat(usize::from(u16::MAX) + 1),
+            ring_pk,
+            "pol-id".to_string(),
+            "perm".to_string(),
+            "res".to_string(),
+        );
+
+        let err = policy.to_bytes().expect_err("overlong ring_id should fail");
+
+        assert!(
+            err.to_string().contains("ring_id too long"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn test_asset_policy_from_bytes_rejects_missing_storage_fields() {
+        let dk_pub = decaf377::Element::GENERATOR * decaf377::Fr::from(42u64);
+        let ring_pk = decaf377::Element::GENERATOR * decaf377::Fr::from(999u64);
+        let policy = AssetPolicy::new(
+            dk_pub,
+            500,
+            vec![],
+            "ring-id".to_string(),
+            ring_pk,
+            "pol-id".to_string(),
+            "perm".to_string(),
+            "res".to_string(),
+        );
+        let bytes = policy.to_bytes().unwrap();
+
+        let err = AssetPolicy::from_bytes(&bytes[..80]).expect_err("truncated policy should fail");
+
+        assert!(
+            err.to_string().contains("missing allowed_channels count"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn test_asset_policy_proto_rejects_missing_required_fields() {
+        let dk_pub = decaf377::Element::GENERATOR * decaf377::Fr::from(42u64);
+        let ring_pk = decaf377::Element::GENERATOR * decaf377::Fr::from(999u64);
+        let mut proto: pb::AssetPolicy = AssetPolicy::new(
+            dk_pub,
+            500,
+            vec![],
+            "ring-id".to_string(),
+            ring_pk,
+            "pol-id".to_string(),
+            "perm".to_string(),
+            "res".to_string(),
+        )
+        .into();
+
+        proto.dk_pub.clear();
+        let err = AssetPolicy::try_from(proto.clone()).expect_err("missing dk_pub should fail");
+        assert!(
+            err.to_string().contains("missing dk_pub"),
+            "unexpected error: {err:#}"
+        );
+
+        proto.dk_pub = dk_pub.vartime_compress().0.to_vec();
+        proto.threshold.clear();
+        let err = AssetPolicy::try_from(proto.clone()).expect_err("missing threshold should fail");
+        assert!(
+            err.to_string().contains("missing threshold"),
+            "unexpected error: {err:#}"
+        );
+
+        proto.threshold = 500u128.to_le_bytes().to_vec();
+        proto.ring_pk.clear();
+        let err = AssetPolicy::try_from(proto).expect_err("missing ring_pk should fail");
+        assert!(
+            err.to_string().contains("missing ring_pk"),
+            "unexpected error: {err:#}"
+        );
     }
 
     #[test]

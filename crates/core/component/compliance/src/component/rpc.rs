@@ -101,8 +101,8 @@ impl QueryService for Server {
             .map_err(|e| Status::internal(format!("failed to query asset policy: {e}")))?;
         let (dk_pub, threshold) = match &policy {
             Some(policy) => (
-                policy.dk_pub().vartime_compress().0.to_vec(),
-                policy.threshold().to_le_bytes().to_vec(),
+                policy.params.dk_pub.vartime_compress().0.to_vec(),
+                policy.params.threshold.to_le_bytes().to_vec(),
             ),
             None => (vec![], vec![]),
         };
