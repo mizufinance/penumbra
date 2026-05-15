@@ -21,12 +21,7 @@ typedef struct {
 import "C"
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sync"
 	"time"
 	"unsafe"
 
@@ -40,14 +35,12 @@ import (
 	"github.com/mizufinance/penumbra/tools/gnark/internal/abi"
 	"github.com/mizufinance/penumbra/tools/gnark/internal/artifacts"
 	"github.com/mizufinance/penumbra/tools/gnark/internal/circuits"
+	"github.com/mizufinance/penumbra/tools/gnark/internal/cshared"
 	"github.com/mizufinance/penumbra/tools/gnark/internal/generated"
 	"github.com/mizufinance/penumbra/tools/gnark/internal/primitives"
 )
 
-const (
-	consolidateProofResultMagic   = "PCPR"
-	consolidateProofResultVersion = 1
-)
+const consolidateProofResultMagic = "PCPR"
 
 type proverContext struct {
 	circuitName string
@@ -56,66 +49,7 @@ type proverContext struct {
 	pk          *groth16bls.ProvingKey
 }
 
-var (
-	contextMu  sync.RWMutex
-	nextHandle uint64 = 1
-	contexts          = make(map[uint64]*proverContext)
-)
-
-func setError(out *C.PenumbraGnarkInitResult, err error) {
-	if out == nil || err == nil {
-		return
-	}
-	bytes := []byte(err.Error())
-	out.err_ptr = C.CBytes(bytes)
-	out.err_len = C.size_t(len(bytes))
-}
-
-func setBytesResult(out *C.PenumbraGnarkBytesResult, status C.uint32_t, payload []byte, proveMS float64) {
-	if out == nil {
-		return
-	}
-	out.status = status
-	out.prove_ms = C.double(proveMS)
-	if len(payload) == 0 {
-		out.ptr = nil
-		out.len = 0
-		return
-	}
-	out.ptr = C.CBytes(payload)
-	out.len = C.size_t(len(payload))
-}
-
-func safeGoBytes(ptr unsafe.Pointer, n C.size_t) ([]byte, error) {
-	if ptr == nil && n != 0 {
-		return nil, fmt.Errorf("nil pointer with non-zero length %d", uint64(n))
-	}
-	if uint64(n) > uint64(^uint32(0)>>1) {
-		return nil, fmt.Errorf("byte slice length %d exceeds C.int max", uint64(n))
-	}
-	return C.GoBytes(ptr, C.int(n)), nil
-}
-
-func loadProvingKey(path string) (*groth16bls.ProvingKey, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	pk := new(groth16bls.ProvingKey)
-	if _, err := pk.ReadFrom(file); err != nil {
-		return nil, err
-	}
-	return pk, nil
-}
-
-func loadProvingKeyFromBytes(data []byte) (*groth16bls.ProvingKey, error) {
-	pk := new(groth16bls.ProvingKey)
-	if _, err := pk.ReadFrom(bytes.NewReader(data)); err != nil {
-		return nil, err
-	}
-	return pk, nil
-}
+var contexts = cshared.NewRegistry[proverContext]()
 
 func compileConsolidateCircuit(family generated.ConsolidateFamilySpec) (constraint.ConstraintSystem, error) {
 	return frontend.Compile(
@@ -134,39 +68,11 @@ func consolidateFamilyForCircuit(circuit string) (generated.ConsolidateFamilySpe
 }
 
 func packProofResult(witnessPayload []byte, proof *groth16bls.Proof, proveMS float64) ([]byte, error) {
-	buf := bytes.NewBuffer(make([]byte, 0, 4+4+4+4+8+32+384))
-	buf.WriteString(consolidateProofResultMagic)
-	_ = binary.Write(buf, binary.LittleEndian, uint32(consolidateProofResultVersion))
-	_ = binary.Write(buf, binary.LittleEndian, uint32(0))
-	_ = binary.Write(buf, binary.LittleEndian, uint32(0))
-	_ = binary.Write(buf, binary.LittleEndian, uint64(proveMS*1000))
-
 	witness, _, err := abi.DecodeConsolidateWitnessV1(witnessPayload)
 	if err != nil {
 		return nil, fmt.Errorf("decode consolidate witness: %w", err)
 	}
-	buf.Write(witness.ClaimedStatementHash[:])
-
-	ax := proof.Ar.X.Bytes()
-	ay := proof.Ar.Y.Bytes()
-	bxa0 := proof.Bs.X.A0.Bytes()
-	bxa1 := proof.Bs.X.A1.Bytes()
-	bya0 := proof.Bs.Y.A0.Bytes()
-	bya1 := proof.Bs.Y.A1.Bytes()
-	cx := proof.Krs.X.Bytes()
-	cy := proof.Krs.Y.Bytes()
-	buf.Write(ax[:])
-	buf.Write(ay[:])
-	buf.Write(bxa0[:])
-	buf.Write(bxa1[:])
-	buf.Write(bya0[:])
-	buf.Write(bya1[:])
-	buf.Write(cx[:])
-	buf.Write(cy[:])
-
-	out := buf.Bytes()
-	binary.LittleEndian.PutUint32(out[8:12], uint32(len(out)))
-	return out, nil
+	return cshared.PackProofResult(consolidateProofResultMagic, witness.ClaimedStatementHash, proof, proveMS)
 }
 
 func initContext(circuit string, pk *groth16bls.ProvingKey, metadata *artifacts.CircuitMetadataJSON) (*proverContext, error) {
@@ -194,40 +100,13 @@ func penumbra_gnark_consolidate_init(artifactDir *C.char, artifactDirLen C.size_
 	if out == nil {
 		return
 	}
-	*out = C.PenumbraGnarkInitResult{}
 	logger.Disable()
-
-	dirBytes, err := safeGoBytes(unsafe.Pointer(artifactDir), artifactDirLen)
-	if err != nil {
-		setError(out, fmt.Errorf("read artifact dir: %w", err))
-		return
-	}
-	dir := string(dirBytes)
-	start := time.Now()
-	metadata, err := artifacts.LoadCircuitMetadata(dir)
-	if err != nil {
-		setError(out, fmt.Errorf("load circuit metadata: %w", err))
-		return
-	}
-	pk, err := loadProvingKey(filepath.Join(dir, "proving_key.bin"))
-	if err != nil {
-		setError(out, fmt.Errorf("load proving key: %w", err))
-		return
-	}
-	ctx, err := initContext(metadata.Circuit, pk, metadata)
-	if err != nil {
-		setError(out, err)
-		return
-	}
-
-	contextMu.Lock()
-	handle := nextHandle
-	nextHandle++
-	contexts[handle] = ctx
-	contextMu.Unlock()
-
-	out.handle = C.uint64_t(handle)
-	out.init_ms = C.double(time.Since(start).Seconds() * 1000)
+	writeInitResult(out, cshared.InitFromDir(
+		contexts,
+		unsafe.Pointer(artifactDir),
+		uint64(artifactDirLen),
+		initContext,
+	))
 }
 
 //export penumbra_gnark_consolidate_init_from_bytes
@@ -241,47 +120,16 @@ func penumbra_gnark_consolidate_init_from_bytes(
 	if out == nil {
 		return
 	}
-	*out = C.PenumbraGnarkInitResult{}
 	logger.Disable()
-
-	start := time.Now()
-	metadataBytes, err := safeGoBytes(metadataData, metadataLen)
-	if err != nil {
-		setError(out, fmt.Errorf("read metadata bytes: %w", err))
-		return
-	}
-	metadata, err := artifacts.LoadCircuitMetadataBytes(
-		metadataBytes,
+	writeInitResult(out, cshared.InitFromBytes(
+		contexts,
+		pkData,
+		uint64(pkLen),
+		metadataData,
+		uint64(metadataLen),
 		"bundled consolidate circuit_metadata.json",
-	)
-	if err != nil {
-		setError(out, fmt.Errorf("load circuit metadata from bytes: %w", err))
-		return
-	}
-	pkBytes, err := safeGoBytes(pkData, pkLen)
-	if err != nil {
-		setError(out, fmt.Errorf("read proving key bytes: %w", err))
-		return
-	}
-	pk, err := loadProvingKeyFromBytes(pkBytes)
-	if err != nil {
-		setError(out, fmt.Errorf("load proving key from bytes: %w", err))
-		return
-	}
-	ctx, err := initContext(metadata.Circuit, pk, metadata)
-	if err != nil {
-		setError(out, err)
-		return
-	}
-
-	contextMu.Lock()
-	handle := nextHandle
-	nextHandle++
-	contexts[handle] = ctx
-	contextMu.Unlock()
-
-	out.handle = C.uint64_t(handle)
-	out.init_ms = C.double(time.Since(start).Seconds() * 1000)
+		initContext,
+	))
 }
 
 //export penumbra_gnark_consolidate_prove
@@ -289,75 +137,88 @@ func penumbra_gnark_consolidate_prove(handle C.uint64_t, witnessPtr unsafe.Point
 	if out == nil {
 		return
 	}
-	*out = C.PenumbraGnarkBytesResult{}
+	logger.Disable()
+	writeBytesResult(out, cshared.Prove(contexts, uint64(handle), witnessPtr, uint64(witnessLen), proveContext))
+}
 
-	contextMu.RLock()
-	ctx := contexts[uint64(handle)]
-	contextMu.RUnlock()
-	if ctx == nil {
-		setBytesResult(out, 1, []byte("unknown prover handle"), 0)
-		return
-	}
-
-	witnessPayload, err := safeGoBytes(witnessPtr, witnessLen)
-	if err != nil {
-		setBytesResult(out, 1, []byte(fmt.Sprintf("read witness: %v", err)), 0)
-		return
-	}
+func proveContext(ctx *proverContext, witnessPayload []byte) ([]byte, float64, error) {
 	assignment, family, err := abi.NewConsolidateCircuitAssignmentFromWitnessV1(witnessPayload)
 	if err != nil {
-		setBytesResult(out, 1, []byte(fmt.Sprintf("decode witness: %v", err)), 0)
-		return
+		return nil, 0, fmt.Errorf("decode witness: %w", err)
 	}
 	if family.ID != ctx.familyID {
-		setBytesResult(
-			out,
-			1,
-			[]byte(fmt.Sprintf("consolidate witness family mismatch: got %s (%d), expected %s (%d)", family.Label, family.ID, ctx.circuitName, ctx.familyID)),
-			0,
+		return nil, 0, fmt.Errorf(
+			"consolidate witness family mismatch: got %s (%d), expected %s (%d)",
+			family.Label,
+			family.ID,
+			ctx.circuitName,
+			ctx.familyID,
 		)
-		return
 	}
 
 	fullWitness, err := frontend.NewWitness(assignment, primitives.ScalarField())
 	if err != nil {
-		setBytesResult(out, 1, []byte(fmt.Sprintf("construct gnark witness: %v", err)), 0)
-		return
+		return nil, 0, fmt.Errorf("construct gnark witness: %w", err)
 	}
 
 	start := time.Now()
 	proofIface, err := groth16.Prove(ctx.ccs, ctx.pk, fullWitness)
 	proveMS := time.Since(start).Seconds() * 1000
 	if err != nil {
-		setBytesResult(out, 1, []byte(fmt.Sprintf("prove %s: %v", ctx.circuitName, err)), proveMS)
-		return
+		return nil, proveMS, fmt.Errorf("prove %s: %w", ctx.circuitName, err)
 	}
 	proof, ok := proofIface.(*groth16bls.Proof)
 	if !ok {
-		setBytesResult(out, 1, []byte(fmt.Sprintf("unexpected proof type %T", proofIface)), proveMS)
-		return
+		return nil, proveMS, fmt.Errorf("unexpected proof type %T", proofIface)
 	}
 
 	payload, err := packProofResult(witnessPayload, proof, proveMS)
 	if err != nil {
-		setBytesResult(out, 1, []byte(fmt.Sprintf("pack proof result: %v", err)), proveMS)
-		return
+		return nil, proveMS, fmt.Errorf("pack proof result: %w", err)
 	}
-	setBytesResult(out, 0, payload, proveMS)
+	return payload, proveMS, nil
 }
 
 //export penumbra_gnark_consolidate_free
 func penumbra_gnark_consolidate_free(ptr unsafe.Pointer, _ C.size_t) {
-	if ptr != nil {
-		C.free(ptr)
-	}
+	cshared.Free(ptr)
 }
 
 //export penumbra_gnark_consolidate_shutdown
 func penumbra_gnark_consolidate_shutdown(handle C.uint64_t) {
-	contextMu.Lock()
-	delete(contexts, uint64(handle))
-	contextMu.Unlock()
+	contexts.Delete(uint64(handle))
+}
+
+func writeInitResult(out *C.PenumbraGnarkInitResult, result cshared.InitResult) {
+	*out = C.PenumbraGnarkInitResult{}
+	out.handle = C.uint64_t(result.Handle)
+	out.init_ms = C.double(result.InitMS)
+	if len(result.Err) == 0 {
+		return
+	}
+	ptr, n, err := cshared.AllocBytes(result.Err)
+	if err != nil {
+		ptr, n, _ = cshared.AllocBytes([]byte(err.Error()))
+	}
+	out.err_ptr = ptr
+	out.err_len = C.size_t(n)
+}
+
+func writeBytesResult(out *C.PenumbraGnarkBytesResult, result cshared.BytesResult) {
+	*out = C.PenumbraGnarkBytesResult{}
+	out.status = C.uint32_t(result.Status)
+	out.prove_ms = C.double(result.ProveMS)
+	if len(result.Payload) == 0 {
+		return
+	}
+	ptr, n, err := cshared.AllocBytes(result.Payload)
+	if err != nil {
+		result = cshared.Failure(err, result.ProveMS)
+		out.status = C.uint32_t(result.Status)
+		ptr, n, _ = cshared.AllocBytes(result.Payload)
+	}
+	out.ptr = ptr
+	out.len = C.size_t(n)
 }
 
 func main() {}
