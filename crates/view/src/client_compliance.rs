@@ -932,6 +932,12 @@ async fn enrich_transfer_family_with_compliance<P: ComplianceProofProvider>(
         }
     }
 
+    for action in &mut plan.actions {
+        if let ActionPlan::Transfer(transfer) = action {
+            transfer.refresh_body_public_inputs()?;
+        }
+    }
+
     Ok(())
 }
 

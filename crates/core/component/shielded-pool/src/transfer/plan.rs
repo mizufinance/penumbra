@@ -134,6 +134,18 @@ impl TransferPlan {
         self.balance.clone()
     }
 
+    pub fn refresh_body_public_inputs(&mut self) -> anyhow::Result<()> {
+        let first_spend = self
+            .spends
+            .first()
+            .ok_or_else(|| anyhow!("transfer requires at least one spend"))?;
+        self.body.balance_commitment = self.balance.commit(self.value_blinding);
+        self.body.target_timestamp = first_spend.target_timestamp;
+        self.body.compliance_anchor = first_spend.compliance_anchor;
+        self.body.asset_anchor = first_spend.asset_anchor;
+        self.validate_invariants()
+    }
+
     fn first_spend(&self) -> &ShieldedInputPlan {
         self.spends
             .first()

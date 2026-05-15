@@ -6410,7 +6410,7 @@ mod tests {
             );
             let send_amount = Amount::from(1u64);
             let change_amount = note.amount() - send_amount;
-            let output = ShieldedOutputPlan::new(
+            let mut output = ShieldedOutputPlan::new(
                 &mut OsRng,
                 Value {
                     amount: send_amount,
@@ -6418,7 +6418,7 @@ mod tests {
                 },
                 test_keys::ADDRESS_1.deref().clone(),
             );
-            let change = ShieldedOutputPlan::new(
+            let mut change = ShieldedOutputPlan::new(
                 &mut OsRng,
                 Value {
                     amount: change_amount,
@@ -6426,6 +6426,17 @@ mod tests {
                 },
                 note.address(),
             );
+            for output in [&mut output, &mut change] {
+                output.asset_anchor = spend.asset_anchor;
+                output.compliance_anchor = spend.compliance_anchor;
+                output.target_timestamp = spend.target_timestamp;
+                output.is_regulated = spend.is_regulated;
+                output.tx_blinding_nonce = spend.tx_blinding_nonce;
+                output.asset_indexed_leaf = spend.asset_indexed_leaf.clone();
+                output.asset_path = spend.asset_path.clone();
+                output.asset_position = spend.asset_position;
+                output.asset_policy = spend.asset_policy.clone();
+            }
             let mut plan = TransactionPlan {
                 actions: vec![TransferPlan::new(
                     vec![spend.into()],
