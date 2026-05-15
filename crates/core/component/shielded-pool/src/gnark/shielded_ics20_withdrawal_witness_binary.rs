@@ -2,7 +2,9 @@ use anyhow::{bail, Context, Result};
 
 use crate::{
     gnark::{
-        binary::{encode_vec_32, put_bytes, put_u32, put_u64, put_u8, BinaryCursor},
+        binary::{
+            encode_triple_path_32, encode_vec_32, put_bytes, put_u32, put_u64, put_u8, BinaryCursor,
+        },
         shielded_ics20_withdrawal_witness::{
             ShieldedIcs20WithdrawalChangeWitnessV1, ShieldedIcs20WithdrawalSpendWitnessV1,
             ShieldedIcs20WithdrawalWitnessV1,
@@ -145,16 +147,7 @@ fn encode_spend(buf: &mut Vec<u8>, spend: &ShieldedIcs20WithdrawalSpendWitnessV1
     put_bytes(buf, &spend.spent_clue_key);
     put_bytes(buf, &spend.state_commitment_commitment);
     put_u64(buf, spend.state_commitment_position);
-    put_u32(
-        buf,
-        u32::try_from(spend.state_commitment_auth_path.len())
-            .context("state commitment path length exceeds u32")?,
-    );
-    for siblings in &spend.state_commitment_auth_path {
-        for sibling in siblings {
-            put_bytes(buf, sibling);
-        }
-    }
+    encode_triple_path_32(buf, &spend.state_commitment_auth_path)?;
     put_bytes(buf, &spend.spend_auth_randomizer);
     put_u8(buf, u8::from(spend.is_dummy));
     put_bytes(buf, &spend.dummy_nullifier_seed);
@@ -175,18 +168,7 @@ fn decode_spend(cursor: &mut BinaryCursor<'_>) -> Result<ShieldedIcs20Withdrawal
         spent_clue_key: cursor.read_fixed::<32>()?,
         state_commitment_commitment: cursor.read_fixed::<32>()?,
         state_commitment_position: cursor.read_u64()?,
-        state_commitment_auth_path: {
-            let path_len = cursor.read_u32()? as usize;
-            let mut state_commitment_auth_path = Vec::with_capacity(path_len);
-            for _ in 0..path_len {
-                state_commitment_auth_path.push([
-                    cursor.read_fixed::<32>()?,
-                    cursor.read_fixed::<32>()?,
-                    cursor.read_fixed::<32>()?,
-                ]);
-            }
-            state_commitment_auth_path
-        },
+        state_commitment_auth_path: cursor.read_triple_path_32()?,
         spend_auth_randomizer: cursor.read_fixed::<32>()?,
         is_dummy: cursor.read_u8()? != 0,
         dummy_nullifier_seed: cursor.read_fixed::<32>()?,

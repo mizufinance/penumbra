@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::{
     gnark::{
-        binary::{encode_vec_32, put_bytes, put_u32, put_u64, BinaryCursor},
+        binary::{encode_triple_path_32, encode_vec_32, put_bytes, put_u32, put_u64, BinaryCursor},
         note_reshape_witness::{
             ConsolidateWitnessV1, NoteReshapeOutputWitnessV1, NoteReshapeSpendWitnessV1,
             SplitWitnessV1,
@@ -256,16 +256,7 @@ fn encode_spend(buf: &mut Vec<u8>, spend: &NoteReshapeSpendWitnessV1) -> Result<
     put_bytes(buf, &spend.spent_clue_key);
     put_bytes(buf, &spend.state_commitment_commitment);
     put_u64(buf, spend.state_commitment_position);
-    put_u32(
-        buf,
-        u32::try_from(spend.state_commitment_auth_path.len())
-            .context("state commitment path length exceeds u32")?,
-    );
-    for siblings in &spend.state_commitment_auth_path {
-        for sibling in siblings {
-            put_bytes(buf, sibling);
-        }
-    }
+    encode_triple_path_32(buf, &spend.state_commitment_auth_path)?;
     put_bytes(buf, &spend.spend_auth_randomizer);
     encode_point_affine(buf, &spend.rk_affine);
     encode_point_affine(buf, &spend.spent_diversified_generator_affine);
@@ -283,18 +274,7 @@ fn decode_spend(cursor: &mut BinaryCursor<'_>) -> Result<NoteReshapeSpendWitness
         spent_clue_key: cursor.read_fixed::<32>()?,
         state_commitment_commitment: cursor.read_fixed::<32>()?,
         state_commitment_position: cursor.read_u64()?,
-        state_commitment_auth_path: {
-            let path_len = cursor.read_u32()? as usize;
-            let mut state_commitment_auth_path = Vec::with_capacity(path_len);
-            for _ in 0..path_len {
-                state_commitment_auth_path.push([
-                    cursor.read_fixed::<32>()?,
-                    cursor.read_fixed::<32>()?,
-                    cursor.read_fixed::<32>()?,
-                ]);
-            }
-            state_commitment_auth_path
-        },
+        state_commitment_auth_path: cursor.read_triple_path_32()?,
         spend_auth_randomizer: cursor.read_fixed::<32>()?,
         rk_affine: cursor.read_point_affine()?,
         spent_diversified_generator_affine: cursor.read_point_affine()?,
