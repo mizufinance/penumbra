@@ -1257,19 +1257,65 @@ mod tests {
         output.compliance_position = 0;
     }
 
+    fn align_transfer_compliance_for_test<R: rand_core::RngCore + rand_core::CryptoRng>(
+        rng: &mut R,
+        spends: &mut [&mut ShieldedInputPlan],
+        outputs: &mut [&mut ShieldedOutputPlan],
+    ) {
+        let tx_blinding_nonce = Fr::rand(rng);
+        let leaves = spends
+            .iter()
+            .map(|spend| {
+                spend
+                    .compliance_leaf
+                    .clone()
+                    .expect("test spend has compliance leaf")
+            })
+            .chain(outputs.iter().map(|output| {
+                output
+                    .compliance_leaf
+                    .clone()
+                    .expect("test output has compliance leaf")
+            }))
+            .collect::<Vec<_>>();
+
+        let mut user_tree = QuadTree::new();
+        for (position, leaf) in leaves.iter().enumerate() {
+            user_tree
+                .update(position as u64, leaf.commit())
+                .expect("can update test compliance tree");
+        }
+        let compliance_anchor = tct::StateCommitment(user_tree.root().0);
+
+        for (position, spend) in spends.iter_mut().enumerate() {
+            let auth_path = user_tree
+                .auth_path(position as u64)
+                .expect("can get spend compliance path");
+            spend.compliance_anchor = compliance_anchor;
+            spend.compliance_path = MerklePath::from_auth_path(auth_path);
+            spend.compliance_position = position as u64;
+            spend.tx_blinding_nonce = tx_blinding_nonce;
+        }
+        for (index, output) in outputs.iter_mut().enumerate() {
+            let position = spends.len() + index;
+            let auth_path = user_tree
+                .auth_path(position as u64)
+                .expect("can get output compliance path");
+            output.compliance_anchor = compliance_anchor;
+            output.compliance_path = MerklePath::from_auth_path(auth_path);
+            output.compliance_position = position as u64;
+            output.tx_blinding_nonce = tx_blinding_nonce;
+        }
+    }
+
     #[tokio::test]
     async fn check_stateless_succeeds_on_valid_spend() -> Result<()> {
-        // Generate two notes controlled by the test address.
+        // Generate a note controlled by the test address.
         let value = Value {
             amount: 100u64.into(),
             asset_id: *BASE_ASSET_ID,
         };
         let note = Note::generate(&mut OsRng, &test_keys::ADDRESS_0, value);
-        let value2 = Value {
-            amount: 50u64.into(),
-            asset_id: *BASE_ASSET_ID,
-        };
-        let note2 = Note::generate(&mut OsRng, &test_keys::ADDRESS_0, value2);
 
         // Record that note in an SCT, where we can generate an auth path.
         let mut sct = tct::Tree::new();
@@ -1280,32 +1326,26 @@ mod tests {
                 .unwrap();
         }
         sct.insert(tct::Witness::Keep, note.commit()).unwrap();
-        sct.insert(tct::Witness::Keep, note2.commit()).unwrap();
         // Do we want to seal the SCT block here?
         let auth_path = sct.witness(note.commit()).unwrap();
-        let auth_path2 = sct.witness(note2.commit()).unwrap();
 
         // Create plans and enrich with compliance data
         let mut spend1 = ShieldedInputPlan::new(&mut OsRng, note, auth_path.position());
-        let mut spend2 = ShieldedInputPlan::new(&mut OsRng, note2, auth_path2.position());
         let mut output1 =
             ShieldedOutputPlan::new(&mut OsRng, value, test_keys::ADDRESS_1.deref().clone());
 
         enrich_spend_for_test(&mut OsRng, &mut spend1, &test_keys::ADDRESS_0);
-        enrich_spend_for_test(&mut OsRng, &mut spend2, &test_keys::ADDRESS_0);
         enrich_output_for_test(
             &mut OsRng,
             &mut output1,
             &test_keys::ADDRESS_0,
             value.asset_id,
         );
+        align_transfer_compliance_for_test(&mut OsRng, &mut [&mut spend1], &mut [&mut output1]);
 
-        let transfer = TransferPlan::new(
-            vec![spend1.into(), spend2.into()],
-            vec![output1.into()],
-            Fr::rand(&mut OsRng),
-        )
-        .expect("valid transfer plan");
+        let transfer =
+            TransferPlan::from_spend_output(spend1.into(), output1.into(), Fr::rand(&mut OsRng))
+                .expect("valid transfer plan");
 
         let plan = TransactionPlan {
             transaction_parameters: TransactionParameters {
@@ -1385,6 +1425,7 @@ mod tests {
             &test_keys::ADDRESS_0,
             value.asset_id,
         );
+        align_transfer_compliance_for_test(&mut OsRng, &mut [&mut spend1], &mut [&mut output1]);
 
         let transfer =
             TransferPlan::from_spend_output(spend1.into(), output1.into(), Fr::rand(&mut OsRng))
