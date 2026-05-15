@@ -3,16 +3,19 @@ use async_trait::async_trait;
 use decaf377::Element;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::types::{
     BlockRef, ClearFlowEvent, DetectionEvent, ExtractedComplianceCiphertext, InvalidCiphertext,
-    OutputRef, AUDIT_STATUS_PENDING, DECRYPTED_VIA_PUBLIC, FLOW_TYPE_PRIVATE_TRANSFER,
+    OutputRef, DECRYPTED_VIA_PUBLIC, FLOW_TYPE_PRIVATE_TRANSFER,
 };
+use crate::audit_status::{AuditStatus, DetectionStatus, ScreenStatus};
 use crate::{ComplianceEvidenceObject, TransferOrbisUploadBundle};
 
 pub const MAX_INVALID_CIPHERTEXTS_PER_BLOCK: usize = 256;
+const SCANNER_DB_SCHEMA_VERSION: i64 = 1;
 const READ_POOL_SIZE: usize = 4;
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const WAL_AUTOCHECKPOINT_PAGES: i64 = 1_000;
@@ -107,14 +110,20 @@ impl SqliteScannerStore {
     }
 
     fn initialize_schema(conn: &Connection) -> Result<()> {
+        Self::ensure_supported_schema(conn)?;
         conn.execute_batch(
             r#"
+            CREATE TABLE IF NOT EXISTS scanner_schema_version (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                version INTEGER NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS scanner_blocks (
                 height INTEGER PRIMARY KEY,
                 block_hash BLOB NOT NULL,
                 parent_hash BLOB NOT NULL,
                 block_time_unix INTEGER,
-                scan_status TEXT NOT NULL
+                scan_status TEXT NOT NULL CHECK (scan_status IN ('committed'))
             );
 
             CREATE TABLE IF NOT EXISTS scanner_detections (
@@ -128,8 +137,10 @@ impl SqliteScannerStore {
                 is_flagged INTEGER NOT NULL,
                 salt BLOB NOT NULL,
                 ciphertext_bytes BLOB NOT NULL,
-                detection_status TEXT NOT NULL DEFAULT 'detected',
-                audit_status TEXT NOT NULL DEFAULT 'pending',
+                detection_status TEXT NOT NULL DEFAULT 'detected'
+                    CHECK (detection_status IN ('detected')),
+                audit_status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (audit_status IN ('pending', 'evidence_valid', 'evidence_invalid', 'decrypt_failed', 'audit_complete')),
                 evidence_object_hash BLOB,
                 PRIMARY KEY(height, tx_hash, action_index, output_index)
             );
@@ -146,7 +157,8 @@ impl SqliteScannerStore {
                 output_index INTEGER NOT NULL,
                 raw_bytes BLOB NOT NULL,
                 orbis_upload_bundle_bytes BLOB,
-                screen_status TEXT NOT NULL,
+                screen_status TEXT NOT NULL
+                    CHECK (screen_status IN ('pending', 'irrelevant', 'detected', 'invalid')),
                 screen_reason TEXT,
                 PRIMARY KEY(height, tx_hash, action_index, output_index)
             );
@@ -277,9 +289,64 @@ impl SqliteScannerStore {
 
             INSERT OR IGNORE INTO scanner_sync (id, last_height, last_block_hash)
             VALUES (1, 0, NULL);
+
+            INSERT OR IGNORE INTO scanner_schema_version (id, version)
+            VALUES (1, 1);
             "#,
         )?;
+        let version = Self::schema_version(conn)?.context("scanner DB schema version missing")?;
+        anyhow::ensure!(
+            version == SCANNER_DB_SCHEMA_VERSION,
+            "unsupported scanner DB schema version {version}; recreate the scanner DB"
+        );
         Ok(())
+    }
+
+    fn ensure_supported_schema(conn: &Connection) -> Result<()> {
+        match Self::schema_version(conn)? {
+            Some(version) => {
+                anyhow::ensure!(
+                    version == SCANNER_DB_SCHEMA_VERSION,
+                    "unsupported scanner DB schema version {version}; recreate the scanner DB"
+                );
+                Ok(())
+            }
+            None => {
+                let user_table_count: i64 = conn.query_row(
+                    "SELECT COUNT(*)
+                     FROM sqlite_master
+                     WHERE type = 'table'
+                       AND name NOT LIKE 'sqlite_%'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                anyhow::ensure!(
+                    user_table_count == 0,
+                    "scanner DB schema is unversioned; recreate the scanner DB"
+                );
+                Ok(())
+            }
+        }
+    }
+
+    fn schema_version(conn: &Connection) -> Result<Option<i64>> {
+        let has_version_table: Option<i64> = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scanner_schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if has_version_table.is_none() {
+            return Ok(None);
+        }
+        conn.query_row(
+            "SELECT version FROM scanner_schema_version WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .context("read scanner DB schema version")
     }
 
     pub fn invalid_ciphertext_count(&self) -> Result<u64> {
@@ -486,7 +553,7 @@ impl ScannerStore for SqliteScannerStore {
                 "INSERT OR IGNORE INTO scanner_ciphertexts
                  (height, block_hash, tx_index, tx_hash, action_index, output_index,
                   raw_bytes, orbis_upload_bundle_bytes, screen_status, screen_reason)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', NULL)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)",
                 params![
                     tx_ref.block.height as i64,
                     tx_ref.block.block_hash.as_slice(),
@@ -496,12 +563,13 @@ impl ScannerStore for SqliteScannerStore {
                     output_ref.output_index as i64,
                     ciphertext.raw_bytes.as_slice(),
                     ciphertext.upload_bundle_bytes.as_deref(),
+                    ScreenStatus::Pending.as_str(),
                 ],
             )?;
         }
 
         for output_ref in &pending.irrelevant_ciphertexts {
-            update_ciphertext_status(&tx, output_ref, "irrelevant", None)?;
+            update_ciphertext_status(&tx, output_ref, ScreenStatus::Irrelevant, None)?;
         }
 
         for event in &pending.detections {
@@ -511,7 +579,7 @@ impl ScannerStore for SqliteScannerStore {
                 "INSERT OR IGNORE INTO scanner_ciphertexts
                  (height, block_hash, tx_index, tx_hash, action_index, output_index,
                   raw_bytes, orbis_upload_bundle_bytes, screen_status, screen_reason)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, 'pending', NULL)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, NULL)",
                 params![
                     tx_ref.block.height as i64,
                     tx_ref.block.block_hash.as_slice(),
@@ -520,14 +588,15 @@ impl ScannerStore for SqliteScannerStore {
                     output_ref.action.action_index as i64,
                     output_ref.output_index as i64,
                     event.raw_bytes.as_slice(),
+                    ScreenStatus::Pending.as_str(),
                 ],
             )?;
-            update_ciphertext_status(&tx, output_ref, "detected", None)?;
+            update_ciphertext_status(&tx, output_ref, ScreenStatus::Detected, None)?;
             tx.execute(
                 "INSERT OR IGNORE INTO scanner_detections
                  (height, block_hash, tx_index, tx_hash, action_index, output_index,
                   asset_id, is_flagged, salt, ciphertext_bytes, detection_status, audit_status)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'detected', ?11)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     tx_ref.block.height as i64,
                     tx_ref.block.block_hash.as_slice(),
@@ -539,7 +608,8 @@ impl ScannerStore for SqliteScannerStore {
                     if event.is_flagged { 1i64 } else { 0i64 },
                     event.salt.to_bytes().as_slice(),
                     event.raw_bytes.as_slice(),
-                    AUDIT_STATUS_PENDING,
+                    DetectionStatus::Detected.as_str(),
+                    AuditStatus::Pending.as_str(),
                 ],
             )?;
             tx.execute(
@@ -564,12 +634,18 @@ impl ScannerStore for SqliteScannerStore {
         }
 
         for invalid in &pending.invalid_statuses {
-            update_ciphertext_status(&tx, &invalid.output_ref, "invalid", Some(&invalid.reason))?;
+            update_ciphertext_status(
+                &tx,
+                &invalid.output_ref,
+                ScreenStatus::Invalid,
+                Some(&invalid.reason),
+            )?;
         }
 
         for invalid in &pending.invalid_ciphertexts {
             let output_ref = &invalid.output_ref;
             let tx_ref = &output_ref.action.tx;
+            let reason = crate::audit::bounded_failure_reason(&invalid.reason);
             tx.execute(
                 "INSERT OR IGNORE INTO scanner_invalid_ciphertexts
                  (height, block_hash, tx_index, tx_hash, action_index, output_index, reason, raw_bytes)
@@ -581,7 +657,7 @@ impl ScannerStore for SqliteScannerStore {
                     tx_ref.tx_hash.as_ref(),
                     output_ref.action.action_index as i64,
                     output_ref.output_index as i64,
-                    invalid.reason.as_str(),
+                    reason.as_str(),
                     invalid.raw_bytes.as_slice(),
                 ],
             )?;
@@ -763,17 +839,35 @@ fn ensure_pending_block(pending: &PendingBlock, block: &BlockRef) -> Result<()> 
 fn update_ciphertext_status(
     tx: &Transaction<'_>,
     output_ref: &OutputRef,
-    status: &str,
+    status: ScreenStatus,
     reason: Option<&str>,
 ) -> Result<()> {
     let tx_ref = &output_ref.action.tx;
+    let current: Option<String> = tx
+        .query_row(
+            "SELECT screen_status
+             FROM scanner_ciphertexts
+             WHERE height = ?1 AND tx_hash = ?2 AND action_index = ?3 AND output_index = ?4",
+            params![
+                tx_ref.block.height as i64,
+                tx_ref.tx_hash.as_ref(),
+                output_ref.action.action_index as i64,
+                output_ref.output_index as i64,
+            ],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(current) = current {
+        ScreenStatus::try_advance(ScreenStatus::from_str(&current)?, status)?;
+    }
+    let reason = reason.map(crate::audit::bounded_failure_reason);
     tx.execute(
         "UPDATE scanner_ciphertexts
          SET screen_status = ?1, screen_reason = ?2
          WHERE height = ?3 AND tx_hash = ?4 AND action_index = ?5 AND output_index = ?6",
         params![
-            status,
-            reason,
+            status.as_str(),
+            reason.as_deref(),
             tx_ref.block.height as i64,
             tx_ref.tx_hash.as_ref(),
             output_ref.action.action_index as i64,
@@ -945,6 +1039,137 @@ mod tests {
             .unwrap();
         assert_eq!(status, "irrelevant");
         assert_eq!(bundle, vec![8, 4]);
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_rejects_illegal_screen_status_transition() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let store = SqliteScannerStore::new(temp_file.path()).unwrap();
+        let block = block(26);
+        let ciphertext = ciphertext(26, 4);
+        store.begin_block(&block).await.unwrap();
+        store.save_ciphertext(&ciphertext).await.unwrap();
+        store
+            .mark_ciphertext_irrelevant(&ciphertext.output_ref)
+            .await
+            .unwrap();
+        store.commit_block(&block).await.unwrap();
+
+        let conn = store.lock_conn().unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        let err =
+            update_ciphertext_status(&tx, &ciphertext.output_ref, ScreenStatus::Detected, None)
+                .expect_err("irrelevant ciphertext cannot become detected");
+
+        assert!(
+            err.to_string().contains("illegal screen status transition"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn sqlite_store_rejects_unversioned_db() {
+        let temp_file = NamedTempFile::new().unwrap();
+        {
+            let conn = Connection::open(temp_file.path()).unwrap();
+            conn.execute(
+                "CREATE TABLE scanner_sync (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    last_height INTEGER NOT NULL,
+                    last_block_hash BLOB
+                )",
+                [],
+            )
+            .unwrap();
+        }
+
+        let err = match SqliteScannerStore::new(temp_file.path()) {
+            Ok(_) => panic!("unversioned scanner DB should fail to open"),
+            Err(error) => error,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("scanner DB schema is unversioned; recreate the scanner DB"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn sqlite_store_status_constraints_reject_invalid_values() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let store = SqliteScannerStore::new(temp_file.path()).unwrap();
+        let conn = store.lock_conn().unwrap();
+        let block_hash = [1u8; 32];
+        let tx_hash = [2u8; 32];
+        let salt = [3u8; 32];
+        let err = conn
+            .execute(
+                "INSERT INTO scanner_ciphertexts
+                 (height, block_hash, tx_index, tx_hash, action_index, output_index,
+                  raw_bytes, screen_status)
+                 VALUES (1, ?1, 0, ?2, 0, 0, x'00', 'unknown')",
+                params![block_hash.as_slice(), tx_hash.as_slice()],
+            )
+            .expect_err("invalid screen status should fail");
+        assert!(
+            err.to_string().contains("CHECK constraint failed"),
+            "unexpected error: {err:#}"
+        );
+
+        let err = conn
+            .execute(
+                "INSERT INTO scanner_detections
+                 (height, block_hash, tx_index, tx_hash, action_index, output_index,
+                  asset_id, is_flagged, salt, ciphertext_bytes, detection_status, audit_status)
+                 VALUES (1, ?1, 0, ?2, 0, 0, 'asset', 0, ?3, x'00', 'detected', 'unknown')",
+                params![block_hash.as_slice(), tx_hash.as_slice(), salt.as_slice()],
+            )
+            .expect_err("invalid audit status should fail");
+        assert!(
+            err.to_string().contains("CHECK constraint failed"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_bounds_invalid_ciphertext_reasons() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let store = SqliteScannerStore::new(temp_file.path()).unwrap();
+        let block = block(27);
+        let ciphertext = ciphertext(27, 4);
+        let long_reason = "x".repeat(crate::audit::MAX_FAILURE_REASON_BYTES + 100);
+        let invalid = InvalidCiphertext {
+            output_ref: ciphertext.output_ref.clone(),
+            reason: long_reason,
+            raw_bytes: vec![1, 2, 3],
+        };
+
+        store.begin_block(&block).await.unwrap();
+        store.save_ciphertext(&ciphertext).await.unwrap();
+        store.save_invalid_ciphertext(&invalid).await.unwrap();
+        store.commit_block(&block).await.unwrap();
+
+        let conn = store.lock_conn().unwrap();
+        let (screen_reason, invalid_reason): (String, String) = conn
+            .query_row(
+                "SELECT c.screen_reason, i.reason
+                 FROM scanner_ciphertexts c
+                 JOIN scanner_invalid_ciphertexts i
+                   ON i.height = c.height
+                  AND i.tx_hash = c.tx_hash
+                  AND i.action_index = c.action_index
+                  AND i.output_index = c.output_index
+                 WHERE c.height = 27",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert!(screen_reason.len() <= crate::audit::MAX_FAILURE_REASON_BYTES);
+        assert!(invalid_reason.len() <= crate::audit::MAX_FAILURE_REASON_BYTES);
+        assert!(screen_reason.ends_with("[truncated]"));
+        assert!(invalid_reason.ends_with("[truncated]"));
     }
 
     #[tokio::test]
