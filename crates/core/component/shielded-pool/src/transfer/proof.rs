@@ -448,13 +448,27 @@ mod tests {
             .expect("witness base-asset test note");
         let anchor = sct.root();
 
-        let spend = ShieldedInputPlan::new(
+        let (
+            _sender_leaf,
+            _recipient_leaf,
+            compliance_anchor,
+            sender_compliance_path,
+            recipient_compliance_path,
+        ) = sender_recipient_compliance_witnesses();
+        let mut spend = ShieldedInputPlan::new(
             &mut rng,
             input_note.clone(),
             state_commitment_proof.position(),
         );
-        let output =
+        spend.compliance_anchor = compliance_anchor;
+        spend.compliance_path = sender_compliance_path;
+        spend.compliance_position = 0;
+        let mut output =
             ShieldedOutputPlan::new(&mut rng, input_note.value(), test_keys::ADDRESS_1.clone());
+        output.compliance_anchor = compliance_anchor;
+        output.compliance_path = recipient_compliance_path;
+        output.compliance_position = 1;
+        output.tx_blinding_nonce = spend.tx_blinding_nonce;
         let transfer = TransferPlan::new(vec![spend], vec![output], Fr::rand(&mut rng))
             .expect("build test-key transfer plan");
         let (public, private) = transfer
