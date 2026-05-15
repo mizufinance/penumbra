@@ -131,10 +131,15 @@ impl Component for Compliance {
                         .expect("invalid dk_pub encoding in genesis");
 
                     (
-                        crate::structs::AssetPolicy::simple(
+                        crate::structs::AssetPolicy::new(
                             dk_pub,
                             u128::MAX,
+                            vec![],
+                            String::new(),
                             decaf377::Element::GENERATOR,
+                            String::new(),
+                            String::new(),
+                            String::new(),
                         )
                         .with_registration_authority(registration_authority_vk),
                         true,

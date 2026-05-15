@@ -1,4 +1,3 @@
-mod auth;
 mod client;
 mod types;
 

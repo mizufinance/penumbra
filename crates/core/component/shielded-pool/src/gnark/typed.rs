@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use ark_ec::{AffineRepr, CurveGroup};
 use penumbra_sdk_compliance::{ComplianceLeaf, IndexedLeaf, MerklePath};
 
-use crate::gnark::binary::{put_bytes, put_u32, BinaryCursor};
+use crate::gnark::binary::{put_bytes, put_u32, BinaryCursor, MAX_MERKLE_PATH_LAYERS};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PointAffineBytes {
@@ -43,6 +43,12 @@ pub(crate) fn encode_point_affine(buf: &mut Vec<u8>, point: &PointAffineBytes) {
 }
 
 pub(crate) fn encode_merkle_path(buf: &mut Vec<u8>, path: &MerklePathBinary) -> Result<()> {
+    if path.layers.len() > MAX_MERKLE_PATH_LAYERS {
+        return Err(anyhow!(
+            "merkle path layer count {} exceeds max {MAX_MERKLE_PATH_LAYERS}",
+            path.layers.len()
+        ));
+    }
     put_u32(
         buf,
         u32::try_from(path.layers.len()).context("merkle layer count exceeds u32")?,
@@ -87,6 +93,12 @@ pub(crate) fn decode_indexed_leaf(cursor: &mut BinaryCursor<'_>) -> Result<Index
 }
 
 pub(crate) fn merkle_path_from_typed(path: &MerklePath) -> Result<MerklePathBinary> {
+    if path.layers.len() > MAX_MERKLE_PATH_LAYERS {
+        return Err(anyhow!(
+            "merkle path layer count {} exceeds max {MAX_MERKLE_PATH_LAYERS}",
+            path.layers.len()
+        ));
+    }
     let mut layers = Vec::with_capacity(path.layers.len());
     for layer in &path.layers {
         if layer.siblings.len() != 3 {

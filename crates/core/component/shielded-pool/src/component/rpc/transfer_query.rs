@@ -1,4 +1,3 @@
-use anyhow::Context;
 use async_trait::async_trait;
 use futures::StreamExt;
 use ibc_proto::ibc::applications::transfer::v1::query_server::Query as TransferQuery;
@@ -14,6 +13,19 @@ use penumbra_sdk_proto::StateReadProto as _;
 use crate::state_key;
 
 use super::Server;
+
+fn denom_trace_item(
+    item: anyhow::Result<(String, Metadata)>,
+) -> Option<anyhow::Result<DenomTrace>> {
+    let (_key, denom) = match item {
+        Ok(item) => item,
+        Err(error) => return Some(Err(error.context("bad denom in state"))),
+    };
+
+    denom
+        .best_effort_ibc_transfer_parse()
+        .map(|(path, base_denom)| Ok(DenomTrace { path, base_denom }))
+}
 
 #[async_trait]
 impl TransferQuery for Server {
@@ -61,18 +73,9 @@ impl TransferQuery for Server {
         let snapshot = self.storage.latest_snapshot();
         let s = snapshot.prefix(state_key::denom_metadata_by_asset::prefix());
         let denom_traces = s
-            .filter_map(move |i: anyhow::Result<(String, Metadata)>| async move {
-                if i.is_err() {
-                    return Some(Err(i.context("bad denom in state").err().unwrap()));
-                }
-                let (_key, denom) = i.expect("should not be an error");
-
-                // Convert the key to an IBC asset path
-                match denom.best_effort_ibc_transfer_parse() {
-                    None => return None,
-                    Some((path, base_denom)) => Some(Ok(DenomTrace { path, base_denom })),
-                }
-            })
+            .filter_map(
+                move |i: anyhow::Result<(String, Metadata)>| async move { denom_trace_item(i) },
+            )
             .collect::<Vec<_>>()
             .await
             .into_iter()
@@ -83,5 +86,21 @@ impl TransferQuery for Server {
             // pagination disabled for now
             pagination: None,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transfer_query_stream_errors_propagate() {
+        let err = denom_trace_item(Err(anyhow::anyhow!("storage failed")))
+            .expect("stream item should be retained")
+            .expect_err("storage error should propagate");
+        assert!(
+            err.to_string().contains("bad denom in state"),
+            "unexpected error: {err:#}"
+        );
     }
 }

@@ -13,6 +13,22 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
+use command::{collect_args, command_output, format_captured_output, render_args, run_command};
+use demo_auth::dkg_signer;
+use demo_config::{
+    compliance_dev_env, node_dial_host, node_endpoint, node_endpoints, process_env_or_default,
+    sourcehub_client, DEFAULT_COMPLIANCE_DEV_AUTHORITY_SK_HEX,
+    DEFAULT_COMPLIANCE_DEV_AUTHORITY_VK_HEX, DEFAULT_COMPLIANCE_DEV_REGISTRAR_SK_HEX,
+    DEFAULT_COMPLIANCE_GRANT_VALID_UNTIL_UNIX, NODE1_DIAL_HOST, NODE1_ENDPOINT, NODE2_DIAL_HOST,
+    NODE3_DIAL_HOST, ORBIS_NAMESPACE, ORBIS_PERMISSION, ORBIS_POLICY_MARSHAL_TYPE_YAML,
+    ORBIS_POLICY_YAML, ORBIS_RESOURCE,
+};
+use demo_state::{
+    missing_ring, now_string, read_json, write_json, AuditDemoState, AuditRecord, AuditSubject,
+    DetectedRow, DetectedScanFile, IssuerState, LedgerRow, RingState, RowRef, ScannerState,
+    StatusDocument, UserState,
+};
+use orbis_common::blockchain::SourceHubClient;
 use penumbra_orbis_client::{NodeInfo, OrbisClient};
 use penumbra_sdk_compliance::{
     decrypt_flagged_rows, export_ledger_rows_json, export_scan_json, import_orbis_audit_entries,
@@ -21,40 +37,10 @@ use penumbra_sdk_compliance::{
 };
 use serde::{Deserialize, Serialize};
 
-const NODE1_ENDPOINT: &str = "http://127.0.0.1:50051";
-const NODE2_ENDPOINT: &str = "http://127.0.0.1:50052";
-const NODE3_ENDPOINT: &str = "http://127.0.0.1:50053";
-const NODE1_DIAL_HOST: &str = "node1";
-const NODE2_DIAL_HOST: &str = "node2";
-const NODE3_DIAL_HOST: &str = "node3";
-const ORBIS_NAMESPACE: &str = "orbis";
-const ORBIS_RESOURCE: &str = "document";
-const ORBIS_PERMISSION: &str = "read";
-const DEFAULT_COMPLIANCE_DEV_REGISTRAR_SK_HEX: &str =
-    "0100000000000000000000000000000000000000000000000000000000000000";
-const DEFAULT_COMPLIANCE_DEV_REGISTRAR_VK_HEX: &str =
-    "0800000000000000000000000000000000000000000000000000000000000000";
-const DEFAULT_COMPLIANCE_DEV_AUTHORITY_SK_HEX: &str =
-    "0200000000000000000000000000000000000000000000000000000000000000";
-const DEFAULT_COMPLIANCE_DEV_AUTHORITY_VK_HEX: &str =
-    "b2ecf9b9082d6306538be73b0d6ee741141f3222152da78685d6596efc8c1506";
-const DEFAULT_COMPLIANCE_GRANT_VALID_UNTIL_UNIX: &str = "4102444800";
-
-fn node_endpoint(env_key: &str, default: &str) -> String {
-    env::var(env_key).unwrap_or_else(|_| default.to_string())
-}
-
-fn node_dial_host(env_key: &str, default: &str) -> String {
-    env::var(env_key).unwrap_or_else(|_| default.to_string())
-}
-
-fn node_endpoints() -> (String, String, String) {
-    (
-        node_endpoint("ORBIS_NODE1_ENDPOINT", NODE1_ENDPOINT),
-        node_endpoint("ORBIS_NODE2_ENDPOINT", NODE2_ENDPOINT),
-        node_endpoint("ORBIS_NODE3_ENDPOINT", NODE3_ENDPOINT),
-    )
-}
+mod command;
+mod demo_auth;
+mod demo_config;
+mod demo_state;
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -148,16 +134,6 @@ struct AuditEntry {
     output_index: usize,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RingSetupOutput {
-    ring_pk_hex: String,
-    ring_id: String,
-    policy_id: String,
-    resource: String,
-    permission: String,
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -190,18 +166,18 @@ async fn setup_ring(output_json: &Path) -> Result<()> {
         wait_for_tcp_endpoint(endpoint, 60, Duration::from_secs(2))?;
     }
 
-    let node1 = OrbisClient::new(node1_endpoint);
-    let node2 = OrbisClient::new(node2_endpoint);
-    let node3 = OrbisClient::new(node3_endpoint);
+    let node1 = OrbisClient::new(node1_endpoint)?;
+    let node2 = OrbisClient::new(node2_endpoint)?;
+    let node3 = OrbisClient::new(node3_endpoint)?;
 
     let info1 = wait_for_node_info(&node1, "node1").await?;
     let info2 = wait_for_node_info(&node2, "node2").await?;
     let info3 = wait_for_node_info(&node3, "node3").await?;
 
-    node1.register_bulletin_namespace(ORBIS_NAMESPACE).await?;
+    let sourcehub = sourcehub_client().await?;
+    OrbisClient::register_bulletin_namespace(&sourcehub, ORBIS_NAMESPACE).await?;
     for info in [&info1, &info2, &info3] {
-        node1
-            .add_bulletin_collaborator(ORBIS_NAMESPACE, &info.public_address)
+        OrbisClient::add_bulletin_collaborator(&sourcehub, ORBIS_NAMESPACE, &info.public_address)
             .await?;
     }
 
@@ -219,16 +195,24 @@ async fn setup_ring(output_json: &Path) -> Result<()> {
             &node_dial_host("ORBIS_NODE3_DIAL_HOST", NODE3_DIAL_HOST),
         )?,
     ];
-    let dkg = node1.start_dkg(2, &peer_ids).await?;
+    let dkg_signer = dkg_signer();
+    let dkg = node1.start_dkg(2, &peer_ids, &dkg_signer).await?;
     eprintln!(
         "orbis-integration: DKG session started: {} ({})",
         dkg.session_id, dkg.status
     );
     eprintln!("orbis-integration: DKG message: {}", dkg.message);
 
-    let ring = wait_for_latest_ring(&node1).await?;
-    let policy_id = node1.add_policy().await?;
-    let output = RingSetupOutput {
+    let ring = wait_for_latest_ring(&sourcehub).await?;
+    let policy_id = OrbisClient::add_policy(
+        &sourcehub,
+        ORBIS_POLICY_YAML,
+        ORBIS_POLICY_MARSHAL_TYPE_YAML,
+        ORBIS_RESOURCE,
+        ORBIS_PERMISSION,
+    )
+    .await?;
+    let output = RingState {
         ring_pk_hex: ring.ring_pk_hex,
         ring_id: ring.ring_id,
         policy_id,
@@ -290,18 +274,18 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
     wait_for_tcp_endpoint(&node2_endpoint, 60, Duration::from_secs(2))?;
     wait_for_tcp_endpoint(&node3_endpoint, 60, Duration::from_secs(2))?;
 
-    let node1 = OrbisClient::new(node1_endpoint);
-    let node2 = OrbisClient::new(node2_endpoint);
-    let node3 = OrbisClient::new(node3_endpoint);
+    let node1 = OrbisClient::new(node1_endpoint)?;
+    let node2 = OrbisClient::new(node2_endpoint)?;
+    let node3 = OrbisClient::new(node3_endpoint)?;
 
     let info1 = wait_for_node_info(&node1, "node1").await?;
     let info2 = wait_for_node_info(&node2, "node2").await?;
     let info3 = wait_for_node_info(&node3, "node3").await?;
 
-    node1.register_bulletin_namespace(ORBIS_NAMESPACE).await?;
+    let sourcehub = sourcehub_client().await?;
+    OrbisClient::register_bulletin_namespace(&sourcehub, ORBIS_NAMESPACE).await?;
     for info in [&info1, &info2, &info3] {
-        node1
-            .add_bulletin_collaborator(ORBIS_NAMESPACE, &info.public_address)
+        OrbisClient::add_bulletin_collaborator(&sourcehub, ORBIS_NAMESPACE, &info.public_address)
             .await?;
     }
 
@@ -319,14 +303,22 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
             &node_dial_host("ORBIS_NODE3_DIAL_HOST", NODE3_DIAL_HOST),
         )?,
     ];
-    let dkg = node1.start_dkg(2, &peer_ids).await?;
+    let dkg_signer = dkg_signer();
+    let dkg = node1.start_dkg(2, &peer_ids, &dkg_signer).await?;
     eprintln!(
         "orbis-integration: DKG session started: {} ({})",
         dkg.session_id, dkg.status
     );
     eprintln!("orbis-integration: DKG message: {}", dkg.message);
-    let ring = wait_for_latest_ring(&node1).await?;
-    let policy_id = node1.add_policy().await?;
+    let ring = wait_for_latest_ring(&sourcehub).await?;
+    let policy_id = OrbisClient::add_policy(
+        &sourcehub,
+        ORBIS_POLICY_YAML,
+        ORBIS_POLICY_MARSHAL_TYPE_YAML,
+        ORBIS_RESOURCE,
+        ORBIS_PERMISSION,
+    )
+    .await?;
     fs::write(
         &repo.ring_info_file,
         format!(
@@ -738,9 +730,9 @@ async fn verify(repo: &RepoPaths) -> Result<()> {
         "run `just orbis-integration-seed` before `just orbis-integration-verify`",
     )?;
     let (node1_endpoint, node2_endpoint, node3_endpoint) = node_endpoints();
-    let node1 = OrbisClient::new(node1_endpoint);
-    let node2 = OrbisClient::new(node2_endpoint);
-    let node3 = OrbisClient::new(node3_endpoint);
+    let node1 = OrbisClient::new(node1_endpoint)?;
+    let node2 = OrbisClient::new(node2_endpoint)?;
+    let node3 = OrbisClient::new(node3_endpoint)?;
     let current_peer_ids = format!(
         "{},{},{}",
         wait_for_node_info(&node1, "node1").await?.peer_id,
@@ -1056,31 +1048,6 @@ fn run_script_with_args(repo: &RepoPaths, script: &str, args: &[&str]) -> Result
     run_script_with_env(repo, script, args, &[])
 }
 
-fn compliance_dev_env() -> Vec<(&'static str, String)> {
-    vec![
-        (
-            "COMPLIANCE_DEV_REGISTRAR_SK_HEX",
-            env::var("COMPLIANCE_DEV_REGISTRAR_SK_HEX")
-                .unwrap_or_else(|_| DEFAULT_COMPLIANCE_DEV_REGISTRAR_SK_HEX.to_string()),
-        ),
-        (
-            "COMPLIANCE_DEV_REGISTRAR_VK_HEX",
-            env::var("COMPLIANCE_DEV_REGISTRAR_VK_HEX")
-                .unwrap_or_else(|_| DEFAULT_COMPLIANCE_DEV_REGISTRAR_VK_HEX.to_string()),
-        ),
-        (
-            "COMPLIANCE_DEV_AUTHORITY_SK_HEX",
-            env::var("COMPLIANCE_DEV_AUTHORITY_SK_HEX")
-                .unwrap_or_else(|_| DEFAULT_COMPLIANCE_DEV_AUTHORITY_SK_HEX.to_string()),
-        ),
-        (
-            "COMPLIANCE_DEV_AUTHORITY_VK_HEX",
-            env::var("COMPLIANCE_DEV_AUTHORITY_VK_HEX")
-                .unwrap_or_else(|_| DEFAULT_COMPLIANCE_DEV_AUTHORITY_VK_HEX.to_string()),
-        ),
-    ]
-}
-
 fn run_script_with_env(
     repo: &RepoPaths,
     script: &str,
@@ -1100,68 +1067,6 @@ fn run_script_with_env(
         command.env(key, value);
     }
     run_command(&mut command)
-}
-
-fn run_command(command: &mut Command) -> Result<()> {
-    let description = format!("{command:?}");
-    let status = command
-        .status()
-        .with_context(|| format!("failed to run {description}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        bail!("command failed with status {status}: {description}")
-    }
-}
-
-fn command_output(command: &mut Command) -> Result<std::process::Output> {
-    command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .with_context(|| format!("failed to run {:?}", command))
-}
-
-fn collect_args<I, S>(args: I) -> Vec<String>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    args.into_iter()
-        .map(|arg| arg.as_ref().to_string_lossy().into_owned())
-        .collect()
-}
-
-fn render_args<S>(args: &[S]) -> String
-where
-    S: AsRef<str>,
-{
-    args.iter()
-        .map(|arg| shell_escape(arg.as_ref()))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn shell_escape(arg: &str) -> String {
-    if arg
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || "/._:-".contains(ch))
-    {
-        arg.to_string()
-    } else {
-        format!("{arg:?}")
-    }
-}
-
-fn format_captured_output(output: &std::process::Output) -> String {
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    match (stdout.is_empty(), stderr.is_empty()) {
-        (false, false) => format!("stdout:\n{stdout}\n\nstderr:\n{stderr}"),
-        (false, true) => format!("stdout:\n{stdout}"),
-        (true, false) => format!("stderr:\n{stderr}"),
-        (true, true) => String::from("<no captured output>"),
-    }
 }
 
 fn wait_for_tcp(addr: &str, attempts: usize, interval: Duration) -> Result<()> {
@@ -1202,10 +1107,10 @@ async fn wait_for_node_info(client: &OrbisClient, label: &str) -> Result<NodeInf
         .with_context(|| format!("timed out waiting for {label} info endpoint"))
 }
 
-async fn wait_for_latest_ring(client: &OrbisClient) -> Result<penumbra_orbis_client::RingInfo> {
+async fn wait_for_latest_ring(client: &SourceHubClient) -> Result<penumbra_orbis_client::RingInfo> {
     let mut last_error = None;
     for _ in 0..60 {
-        match client.get_latest_ring().await {
+        match OrbisClient::get_latest_ring(client, ORBIS_NAMESPACE).await {
             Ok(ring) => return Ok(ring),
             Err(error) => {
                 last_error = Some(error);
@@ -1231,10 +1136,6 @@ fn demo_env_or_default(env: &DemoEnv, key: &str, default: &str) -> String {
         .cloned()
         .or_else(|| std::env::var(key).ok())
         .unwrap_or_else(|| default.to_string())
-}
-
-fn process_env_or_default(key: &str, default: &str) -> String {
-    std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
 fn detection_key_from_hex(hex_str: &str) -> Result<DetectionKey> {
@@ -1322,8 +1223,8 @@ impl AuditDemo {
         self.register_subject("Bob", "bob", None, true)?;
         self.register_subject("Charlie", "charlie", Some(Self::CHARLIE_PHRASE), true)?;
         self.update_state(|state| {
-            state["setup"]["initialized"] = serde_json::Value::Bool(true);
-            state["setup"]["updatedAt"] = now_json();
+            state.setup.initialized = true;
+            state.setup.updated_at = Some(now_string());
         })?;
         self.refresh_outputs()?;
         self.write_status("complete", "setup", "Audit setup ready")?;
@@ -1332,12 +1233,7 @@ impl AuditDemo {
 
     fn scanner(&self) -> Result<()> {
         self.init_state_file()?;
-        if !self
-            .state_value()?
-            .pointer("/setup/initialized")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-        {
+        if !self.state()?.setup.initialized {
             self.write_health(false, "Audit setup is not ready", None)?;
             bail!("audit setup is not ready");
         }
@@ -1395,44 +1291,27 @@ impl AuditDemo {
         self.refresh_outputs()?;
         let detected_path = self.demo_dir.join("detected-txs.json");
         if !detected_path.exists() {
-            fs::write(&detected_path, br#"{"detected":[]}"#)?;
+            write_json(&detected_path, &DetectedScanFile::empty())?;
         }
-        let detected_json = self.read_json(&detected_path)?;
-        let detected = detected_json
-            .get("detected")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let detected = self.read_json::<DetectedScanFile>(&detected_path)?.detected;
         let ledger = self.ledger_rows()?;
         self.mark_clear_rows_audited(&subject, &ledger)?;
         self.refresh_outputs()?;
         let ledger = self.ledger_rows()?;
         let default_refs = detected
             .iter()
+            .filter(|row| !row.is_flagged)
+            .filter(|row| row.is_private_transfer())
             .filter(|row| {
-                !row.get("is_flagged")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
-            })
-            .filter(|row| {
-                row.get("flow_type").and_then(serde_json::Value::as_str) == Some("private_transfer")
-            })
-            .filter(|row| {
-                let height = row.get("height").and_then(serde_json::Value::as_i64);
-                let tx_hash = row.get("tx_hash").and_then(serde_json::Value::as_str);
-                let action_index = row.get("action_index").and_then(serde_json::Value::as_i64);
-                let output_index = row.get("output_index").and_then(serde_json::Value::as_i64);
-                !ledger.iter().any(|ledger_row| {
-                    same_ref(ledger_row, height, tx_hash, action_index, output_index)
-                        && ledger_row_fully_known(ledger_row)
-                }) && !ledger.iter().any(|ledger_row| {
-                    same_ref(ledger_row, height, tx_hash, action_index, output_index)
-                        && alias_matches(ledger_row.get("self_alias"), &subject.name)
-                        && !ledger_row
-                            .get("amount")
-                            .unwrap_or(&serde_json::Value::Null)
-                            .is_null()
-                })
+                let row_ref = row.row_ref();
+                !ledger
+                    .iter()
+                    .any(|ledger_row| ledger_row.matches_ref(&row_ref) && ledger_row.fully_known())
+                    && !ledger.iter().any(|ledger_row| {
+                        ledger_row.matches_ref(&row_ref)
+                            && ledger_row.self_alias_matches(&subject.name)
+                            && ledger_row.has_amount()
+                    })
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -1476,56 +1355,19 @@ impl AuditDemo {
         let ledger = self.ledger_rows()?;
         let decoded_refs = default_audit
             .iter()
-            .filter_map(|row| {
-                Some((
-                    row.get("height")?.as_i64()?,
-                    row.get("tx_hash")?.as_str()?.to_string(),
-                    row.get("action_index")?.as_i64()?,
-                    row.get("output_index")
-                        .and_then(serde_json::Value::as_i64)
-                        .unwrap_or_default(),
-                ))
-            })
+            .filter_map(RowRef::from_value)
             .collect::<std::collections::BTreeSet<_>>();
         let extension_refs = detected
             .iter()
+            .filter(|row| !row.is_flagged)
+            .filter(|row| row.is_private_transfer())
             .filter(|row| {
-                !row.get("is_flagged")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
-            })
-            .filter(|row| {
-                row.get("flow_type").and_then(serde_json::Value::as_str) == Some("private_transfer")
-            })
-            .filter(|row| {
-                let Some(height) = row.get("height").and_then(serde_json::Value::as_i64) else {
-                    return false;
-                };
-                let Some(tx_hash) = row.get("tx_hash").and_then(serde_json::Value::as_str) else {
-                    return false;
-                };
-                let Some(action_index) =
-                    row.get("action_index").and_then(serde_json::Value::as_i64)
-                else {
-                    return false;
-                };
-                let output_index = row
-                    .get("output_index")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or_default();
-                decoded_refs.contains(&(height, tx_hash.to_string(), action_index, output_index))
+                let row_ref = row.row_ref();
+                decoded_refs.contains(&row_ref)
                     && !ledger.iter().any(|ledger_row| {
-                        same_ref(
-                            ledger_row,
-                            Some(height),
-                            Some(tx_hash),
-                            Some(action_index),
-                            Some(output_index),
-                        ) && alias_matches(ledger_row.get("self_alias"), &subject.name)
-                            && ledger_row
-                                .get("counterparty_alias")
-                                .and_then(serde_json::Value::as_str)
-                                .is_some_and(|alias| !alias.is_empty())
+                        ledger_row.matches_ref(&row_ref)
+                            && ledger_row.self_alias_matches(&subject.name)
+                            && ledger_row.counterparty_alias_known()
                     })
             })
             .cloned()
@@ -1547,13 +1389,12 @@ impl AuditDemo {
 
         self.refresh_outputs()?;
         self.update_state(|state| {
-            let audit = serde_json::json!({
-                "userSlug": subject.slug,
-                "userName": subject.name,
-                "at": now_json(),
+            state.audits.push(AuditRecord {
+                user_slug: subject.slug.clone(),
+                user_name: subject.name.clone(),
+                at: now_string(),
             });
-            push_json_array(&mut state["audits"], audit);
-            state["setup"]["updatedAt"] = now_json();
+            state.setup.updated_at = Some(now_string());
         })?;
         self.write_status(
             "complete",
@@ -1564,19 +1405,15 @@ impl AuditDemo {
     }
 
     async fn setup_asset(&self) -> Result<()> {
-        let state = self.state_value()?;
-        if state
-            .pointer("/setup/assetRegistered")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-        {
+        let state = self.state()?;
+        if state.setup.asset_registered {
             let _ = self.scanner_store()?;
             return Ok(());
         }
 
         let ring_file = self.demo_dir.join("ring.json");
         setup_ring(&ring_file).await?;
-        let ring = self.read_json(&ring_file)?;
+        let ring = self.read_json::<RingState>(&ring_file)?;
         let dk_output = self.capture_pcli("alice", ["tx", "compliance", "generate-dk"])?;
         let dk_hex = parse_key_value_line(&dk_output, "DK (hex): ")?;
         let dk_pub_hex = parse_key_value_line(&dk_output, "DK_pub (hex): ")?;
@@ -1605,15 +1442,15 @@ impl AuditDemo {
                 "--threshold",
                 &self.threshold,
                 "--ring-pk-hex",
-                required_str(&ring, "ringPkHex")?,
+                &ring.ring_pk_hex,
                 "--ring-id",
-                required_str(&ring, "ringId")?,
+                &ring.ring_id,
                 "--policy-id",
-                required_str(&ring, "policyId")?,
+                &ring.policy_id,
                 "--resource",
-                required_str(&ring, "resource")?,
+                &ring.resource,
                 "--permission",
-                required_str(&ring, "permission")?,
+                &ring.permission,
                 "--registration-authority-vk-hex",
                 &authority_vk,
                 "--registrar-sk-hex",
@@ -1635,15 +1472,15 @@ impl AuditDemo {
                 "--threshold",
                 &self.threshold,
                 "--ring-pk-hex",
-                required_str(&ring, "ringPkHex")?,
+                &ring.ring_pk_hex,
                 "--ring-id",
-                required_str(&ring, "ringId")?,
+                &ring.ring_id,
                 "--policy-id",
-                required_str(&ring, "policyId")?,
+                &ring.policy_id,
                 "--resource",
-                required_str(&ring, "resource")?,
+                &ring.resource,
                 "--permission",
-                required_str(&ring, "permission")?,
+                &ring.permission,
                 "--registration-authority-vk-hex",
                 &authority_vk,
                 "--asset-registration-grant-hex",
@@ -1658,13 +1495,10 @@ impl AuditDemo {
         self.sync_wallet("alice")?;
         let _ = self.scanner_store()?;
         self.update_state(|state| {
-            state["ring"] = ring;
-            state["issuer"] = serde_json::json!({
-                "dkHex": dk_hex,
-                "dkPubHex": dk_pub_hex,
-            });
-            state["setup"]["assetRegistered"] = serde_json::Value::Bool(true);
-            state["setup"]["updatedAt"] = now_json();
+            state.ring = Some(ring);
+            state.issuer = Some(IssuerState { dk_hex, dk_pub_hex });
+            state.setup.asset_registered = true;
+            state.setup.updated_at = Some(now_string());
         })?;
         Ok(())
     }
@@ -1690,12 +1524,13 @@ impl AuditDemo {
             self.sync_wallet(slug)?;
         }
         let address = self.address_for(slug, 0)?;
-        let state = self.state_value()?;
-        let policy_id = state
-            .pointer("/ring/policyId")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| anyhow!("audit demo ring policyId missing"))?
-            .to_string();
+        let policy_id = self
+            .state()?
+            .ring
+            .as_ref()
+            .ok_or_else(missing_ring)?
+            .policy_id
+            .clone();
         let authority_sk = process_env_or_default(
             "COMPLIANCE_DEV_AUTHORITY_SK_HEX",
             DEFAULT_COMPLIANCE_DEV_AUTHORITY_SK_HEX,
@@ -1739,24 +1574,10 @@ impl AuditDemo {
         let transparent_address = self.address_for_transparent(slug)?;
         record_address_alias(&store, &transparent_address, name)?;
         self.update_state(|state| {
-            let user = serde_json::json!({
-                "name": name,
-                "slug": slug,
-                "home": format!("{}/wallets/{}", self.demo_dir_rel, slug),
-                "addresses": [{ "index": 0, "address": address }],
-                "default": true,
-                "createdAt": now_json(),
-            });
-            let users = state["users"].as_array_mut();
-            if let Some(users) = users {
-                users.retain(|user| {
-                    user.get("slug").and_then(serde_json::Value::as_str) != Some(slug)
-                });
-                users.push(user);
-            } else {
-                state["users"] = serde_json::Value::Array(vec![user]);
-            }
-            state["setup"]["updatedAt"] = now_json();
+            let user = UserState::new(name, slug, self.wallet_home_rel(slug), address);
+            state.users.retain(|user| user.slug != slug);
+            state.users.push(user);
+            state.setup.updated_at = Some(now_string());
         })?;
         Ok(())
     }
@@ -1879,53 +1700,26 @@ impl AuditDemo {
         Ok(())
     }
 
-    fn mark_clear_rows_audited(
-        &self,
-        subject: &AuditSubject,
-        ledger: &[serde_json::Value],
-    ) -> Result<()> {
+    fn mark_clear_rows_audited(&self, subject: &AuditSubject, ledger: &[LedgerRow]) -> Result<()> {
         for row in ledger {
-            let flow_type = row.get("flow_type").and_then(serde_json::Value::as_str);
-            if !matches!(flow_type, Some("shield" | "withdraw")) {
+            if !row.is_clear_flow_for(&subject.name) {
                 continue;
             }
-            if !alias_matches(row.get("self_alias"), &subject.name) {
-                continue;
-            }
-            let already_audited = row
-                .get("audited_subjects")
-                .and_then(serde_json::Value::as_array)
-                .is_some_and(|subjects| {
-                    subjects
-                        .iter()
-                        .any(|value| value.as_str() == Some(subject.name.as_str()))
-                });
-            if already_audited {
+            if row.audited_for(&subject.name) {
                 continue;
             }
 
-            let Some(height) = row.get("height").and_then(serde_json::Value::as_i64) else {
+            let Some(row_ref) = row.row_ref() else {
                 continue;
             };
-            let Some(tx_hash) = row.get("tx_hash").and_then(serde_json::Value::as_str) else {
-                continue;
-            };
-            let Some(action_index) = row.get("action_index").and_then(serde_json::Value::as_i64)
-            else {
-                continue;
-            };
-            let output_index = row
-                .get("output_index")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or_default();
 
             let store = self.scanner_store()?;
             mark_row_audited(
                 &store,
-                height as u64,
-                tx_hash,
-                action_index as u32,
-                output_index as u32,
+                row_ref.height as u64,
+                &row_ref.tx_hash,
+                row_ref.action_index as u32,
+                row_ref.output_index as u32,
                 &subject.name,
             )?;
         }
@@ -1953,71 +1747,55 @@ impl AuditDemo {
             serde_json::to_vec_pretty(&export_ledger_rows_json(&store)?)?,
         )?;
 
-        let detected_json = self.read_json(&detected)?;
-        let ledger_json = self.read_json_array(&ledger_path).unwrap_or_default();
-        let scanner_json = self.read_json(&self.scanner_health_file)?;
+        let detected_json = self.read_json::<DetectedScanFile>(&detected)?;
+        let ledger_rows = self
+            .read_json_array::<LedgerRow>(&ledger_path)
+            .unwrap_or_default();
+        let scanner = self.read_json::<ScannerState>(&self.scanner_health_file)?;
         self.update_state(|state| {
-            let detected_rows = detected_json
-                .get("detected")
-                .and_then(serde_json::Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let flagged = detected_rows
+            let detected_rows = detected_json.detected;
+            let flagged = detected_rows.iter().filter(|row| row.is_flagged).count();
+            let audited = ledger_rows
                 .iter()
-                .filter(|row| row.get("is_flagged").and_then(serde_json::Value::as_bool).unwrap_or(false))
+                .filter(|row| !row.is_flagged && row.has_amount())
                 .count();
-            let audited = ledger_json
-                .iter()
-                .filter(|row| {
-                    !row.get("is_flagged").and_then(serde_json::Value::as_bool).unwrap_or(false)
-                        && !row.get("amount").unwrap_or(&serde_json::Value::Null).is_null()
-                })
-                .count();
-            state["scan"] = serde_json::json!({
-                "detected": detected_rows,
-                "scanTime": detected_json.pointer("/scan_info/scan_time").cloned().unwrap_or(serde_json::Value::Null),
-                "detectedCount": detected_rows.len(),
-                "flaggedCount": flagged,
-                "auditedCount": audited,
-            });
-            state["scanner"] = scanner_json;
-            state["ledgerRows"] = serde_json::Value::Array(ledger_json);
-            state["setup"]["updatedAt"] = now_json();
+            state.scan.detected_count = detected_rows.len();
+            state.scan.flagged_count = flagged;
+            state.scan.audited_count = audited;
+            state.scan.scan_time = detected_json.scan_info.get("scan_time").cloned();
+            state.scan.detected = detected_rows;
+            state.scanner = scanner;
+            state.ledger_rows = ledger_rows;
+            state.setup.updated_at = Some(now_string());
         })
     }
 
-    fn write_scan_input(&self, path: &Path, refs: Vec<serde_json::Value>) -> Result<()> {
-        fs::write(
+    fn write_scan_input(&self, path: &Path, refs: Vec<DetectedRow>) -> Result<()> {
+        write_json(
             path,
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "scan_info": {},
-                "detected": refs,
-            }))?,
+            &DetectedScanFile {
+                scan_info: serde_json::json!({}),
+                detected: refs,
+            },
         )
-        .with_context(|| format!("failed to write {}", path.display()))
     }
 
     fn write_status(&self, state: &str, step: &str, message: &str) -> Result<()> {
-        self.write_json(
+        write_json(
             &self.status_file,
-            serde_json::json!({
-                "state": state,
-                "step": step,
-                "message": message,
-                "updatedAt": now_json(),
-            }),
+            &StatusDocument::new(state, step, message),
         )
     }
 
     fn write_health(&self, running: bool, message: &str, last_height: Option<u64>) -> Result<()> {
-        self.write_json(
+        write_json(
             &self.scanner_health_file,
-            serde_json::json!({
-                "running": running,
-                "message": message,
-                "lastHeight": last_height,
-                "updatedAt": now_json(),
-            }),
+            &ScannerState {
+                running,
+                message: Some(message.to_string()),
+                last_height,
+                updated_at: Some(now_string()),
+            },
         )
     }
 
@@ -2025,58 +1803,33 @@ impl AuditDemo {
         if self.state_file.exists() {
             return Ok(());
         }
-        self.write_json(
+        write_json(
             &self.state_file,
-            serde_json::json!({
-                "setup": {
-                    "initialized": false,
-                    "assetRegistered": false,
-                    "updatedAt": now_json(),
-                },
-                "endpoints": {
-                    "penumbraGrpc": self.penumbra_grpc,
-                },
-                "asset": {
-                    "denom": self.asset,
-                    "threshold": self.threshold,
-                },
-                "users": [],
-                "scan": {
-                    "detected": [],
-                    "detectedCount": 0,
-                    "flaggedCount": 0,
-                    "auditedCount": 0,
-                },
-                "scanner": {
-                    "running": false,
-                    "lastHeight": null,
-                    "updatedAt": null,
-                },
-                "ledgerRows": [],
-                "audits": [],
-                "events": [],
-            }),
+            &AuditDemoState::new(
+                self.penumbra_grpc.clone(),
+                self.asset.clone(),
+                self.threshold.clone(),
+            ),
         )
     }
 
-    fn state_value(&self) -> Result<serde_json::Value> {
+    fn state(&self) -> Result<AuditDemoState> {
         self.read_json(&self.state_file)
     }
 
     fn update_state<F>(&self, mutate: F) -> Result<()>
     where
-        F: FnOnce(&mut serde_json::Value),
+        F: FnOnce(&mut AuditDemoState),
     {
-        let mut state = self.state_value()?;
+        let mut state = self.state()?;
         mutate(&mut state);
-        self.write_json(&self.state_file, state)
+        write_json(&self.state_file, &state)
     }
 
     fn issuer_dk(&self) -> Result<String> {
-        self.state_value()?
-            .pointer("/issuer/dkHex")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string)
+        self.state()?
+            .issuer
+            .map(|issuer| issuer.dk_hex)
             .ok_or_else(|| anyhow!("issuer DK is missing; run audit-demo setup first"))
     }
 
@@ -2091,23 +1844,18 @@ impl AuditDemo {
 
     fn subjects(&self) -> Result<Vec<AuditSubject>> {
         Ok(self
-            .state_value()?
-            .get("users")
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(AuditSubject::from_value)
+            .state()?
+            .users
+            .iter()
+            .filter_map(|user| user.clone().subject())
             .collect())
     }
 
     fn subject(&self, name_or_slug: &str) -> Result<Option<AuditSubject>> {
-        let slug = slugify(name_or_slug);
-        Ok(self.subjects()?.into_iter().find(|subject| {
-            subject.slug == slug || subject.name.eq_ignore_ascii_case(name_or_slug)
-        }))
+        Ok(self.state()?.subject(name_or_slug))
     }
 
-    fn ledger_rows(&self) -> Result<Vec<serde_json::Value>> {
+    fn ledger_rows(&self) -> Result<Vec<LedgerRow>> {
         self.read_json_array(self.demo_dir.join("ledger.json"))
     }
 
@@ -2156,135 +1904,15 @@ impl AuditDemo {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
-    fn read_json<P: AsRef<Path>>(&self, path: P) -> Result<serde_json::Value> {
-        let path = path.as_ref();
-        serde_json::from_slice(
-            &fs::read(path).with_context(|| format!("failed to read {}", path.display()))?,
-        )
-        .with_context(|| format!("failed to parse {}", path.display()))
+    fn read_json<T: for<'de> Deserialize<'de>>(&self, path: impl AsRef<Path>) -> Result<T> {
+        read_json(path.as_ref())
     }
 
-    fn read_json_array<P: AsRef<Path>>(&self, path: P) -> Result<Vec<serde_json::Value>> {
-        let value = self.read_json(path)?;
-        Ok(value.as_array().cloned().unwrap_or_default())
-    }
-
-    fn write_json(&self, path: &Path, value: serde_json::Value) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let tmp = path.with_extension("tmp");
-        fs::write(&tmp, serde_json::to_vec_pretty(&value)?)?;
-        fs::rename(&tmp, path)?;
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone)]
-struct AuditSubject {
-    name: String,
-    slug: String,
-    address: String,
-}
-
-impl AuditSubject {
-    fn from_value(value: &serde_json::Value) -> Option<Self> {
-        Some(Self {
-            name: value.get("name")?.as_str()?.to_string(),
-            slug: value.get("slug")?.as_str()?.to_string(),
-            address: value
-                .get("addresses")?
-                .as_array()?
-                .first()?
-                .get("address")?
-                .as_str()?
-                .to_string(),
-        })
-    }
-}
-
-fn now_json() -> serde_json::Value {
-    serde_json::Value::String(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_secs().to_string())
-            .unwrap_or_else(|_| "0".to_string()),
-    )
-}
-
-fn slugify(value: &str) -> String {
-    let mut slug = String::new();
-    let mut previous_dash = false;
-    for ch in value.to_ascii_lowercase().chars() {
-        if ch.is_ascii_alphanumeric() {
-            slug.push(ch);
-            previous_dash = false;
-        } else if !previous_dash && !slug.is_empty() {
-            slug.push('-');
-            previous_dash = true;
-        }
-    }
-    while slug.ends_with('-') {
-        slug.pop();
-    }
-    slug.chars().take(48).collect()
-}
-
-fn required_str<'a>(value: &'a serde_json::Value, key: &str) -> Result<&'a str> {
-    value
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| anyhow!("missing {key}"))
-}
-
-fn push_json_array(target: &mut serde_json::Value, item: serde_json::Value) {
-    if let Some(array) = target.as_array_mut() {
-        array.push(item);
-    } else {
-        *target = serde_json::Value::Array(vec![item]);
-    }
-}
-
-fn same_ref(
-    row: &serde_json::Value,
-    height: Option<i64>,
-    tx_hash: Option<&str>,
-    action_index: Option<i64>,
-    output_index: Option<i64>,
-) -> bool {
-    row.get("height").and_then(serde_json::Value::as_i64) == height
-        && row.get("tx_hash").and_then(serde_json::Value::as_str) == tx_hash
-        && row.get("action_index").and_then(serde_json::Value::as_i64) == action_index
-        && row
-            .get("output_index")
-            .and_then(serde_json::Value::as_i64)
-            .or(Some(0))
-            == output_index.or(Some(0))
-}
-
-fn alias_matches(alias: Option<&serde_json::Value>, name: &str) -> bool {
-    alias
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|alias| alias == name || alias.starts_with(&format!("{name} ")))
-}
-
-fn ledger_row_fully_known(row: &serde_json::Value) -> bool {
-    let has_amount = !row
-        .get("amount")
-        .unwrap_or(&serde_json::Value::Null)
-        .is_null();
-    let has_self = row
-        .get("self_alias")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|alias| !alias.is_empty());
-    let has_counterparty = row
-        .get("counterparty_alias")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|alias| !alias.is_empty());
-
-    match row.get("flow_type").and_then(serde_json::Value::as_str) {
-        Some("shield" | "withdraw") => has_amount && has_self,
-        _ => has_amount && has_self && has_counterparty,
+    fn read_json_array<T: for<'de> Deserialize<'de>>(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<Vec<T>> {
+        read_json(path.as_ref())
     }
 }
 
@@ -2362,14 +1990,5 @@ mod tests {
 
         let peer = docker_peer_id(&info, "node1").expect("peer id should rewrite");
         assert_eq!(peer, "peerid@node1:4001");
-    }
-
-    #[test]
-    fn node_dial_host_can_be_env_configured() {
-        let key = "ORBIS_NODE_DIAL_HOST_TEST";
-        env::set_var(key, "custom-node-1");
-        let host = node_dial_host(key, "node1");
-        env::remove_var(key);
-        assert_eq!(host, "custom-node-1");
     }
 }

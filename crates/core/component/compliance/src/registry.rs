@@ -686,7 +686,7 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
                 self.put(state_key::asset_imt_root().to_string(), tree.root());
                 self.write_asset_imt_cache(tree.clone());
                 self.mark_compliance_trees_modified();
-                self.set_asset_policy(asset_id, policy);
+                self.set_asset_policy(asset_id, policy)?;
                 tracing::debug!(?asset_id, position, "upgraded existing asset to regulated");
                 return Ok(Some(InsertResult {
                     position,
@@ -714,7 +714,7 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
 
         // Only regulated assets need an asset-policy entry for later lookup and gating.
         if is_regulated {
-            self.set_asset_policy(asset_id, policy);
+            self.set_asset_policy(asset_id, policy)?;
         }
 
         // Update the persisted asset count
@@ -758,9 +758,10 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     /// Set the compliance policy for an asset.
     ///
     /// Stores the issuer's detection key and threshold for flagged transfers.
-    fn set_asset_policy(&mut self, asset_id: asset::Id, policy: AssetPolicy) {
+    fn set_asset_policy(&mut self, asset_id: asset::Id, policy: AssetPolicy) -> Result<()> {
         let key = state_key::asset_policy(&asset_id);
-        self.put_raw(key, policy.to_bytes());
+        self.put_raw(key, policy.to_bytes()?);
+        Ok(())
     }
 
     /// Store a compliance registrar verification key.

@@ -8,9 +8,9 @@ use std::{
 #[cfg(any(unix, windows))]
 use std::{ffi::CString, ptr};
 
-use anyhow::{anyhow, Result};
 #[cfg(any(unix, windows))]
-use anyhow::{bail, Context};
+use anyhow::Context;
+use anyhow::{anyhow, bail, Result};
 use ark_groth16::PreparedVerifyingKey;
 use decaf377::Bls12_377;
 #[cfg(any(unix, windows))]
@@ -23,7 +23,10 @@ use crate::gnark::artifacts::{
 };
 #[cfg(any(unix, windows))]
 use crate::gnark::artifacts::{sha256_hex, GnarkArtifactMetadata};
-use crate::gnark::runtime::{sha256_hex_path, validate_daemon_ready, GnarkDaemonProcess};
+use crate::gnark::runtime::{
+    sha256_hex_path, validate_daemon_ready, GnarkDaemonProcess, GNARK_MAX_REQUEST_BYTES,
+    GNARK_MAX_RESULT_BYTES,
+};
 
 #[repr(C)]
 pub(crate) struct PenumbraGnarkInitResult {
@@ -58,6 +61,7 @@ pub(crate) enum GnarkTransport {
         free: PenumbraGnarkFree,
         shutdown: PenumbraGnarkShutdown,
         handle: u64,
+        prove_mutex: Mutex<()>,
     },
     Daemon {
         process: Mutex<GnarkDaemonProcess>,
@@ -120,6 +124,7 @@ pub(crate) fn load_library_transport(
     if !init_result.err_ptr.is_null() {
         let err_bytes = take_returned_bytes(init_result.err_ptr, init_result.err_len);
         unsafe { free(init_result.err_ptr, init_result.err_len) };
+        let err_bytes = err_bytes?;
         bail!(
             "gnark {} init failed: {}",
             config.family,
@@ -135,6 +140,7 @@ pub(crate) fn load_library_transport(
             free,
             shutdown,
             handle: init_result.handle,
+            prove_mutex: Mutex::new(()),
         },
         pvk,
     ))
@@ -233,6 +239,7 @@ pub(crate) fn load_bundled_transport(
     if !init_result.err_ptr.is_null() {
         let err_bytes = take_returned_bytes(init_result.err_ptr, init_result.err_len);
         unsafe { free(init_result.err_ptr, init_result.err_len) };
+        let err_bytes = err_bytes?;
         bail!(
             "gnark {} init_from_bytes failed: {}",
             config.family,
@@ -246,6 +253,7 @@ pub(crate) fn load_bundled_transport(
         free,
         shutdown,
         handle: init_result.handle,
+        prove_mutex: Mutex::new(()),
     })
 }
 
@@ -254,14 +262,19 @@ pub(crate) fn prove_with_transport(
     witness: &[u8],
     family: &str,
 ) -> Result<Vec<u8>> {
+    validate_prove_request_len(family, witness)?;
     match transport {
         #[cfg(any(unix, windows))]
         GnarkTransport::Library {
             prove,
             free,
             handle,
+            prove_mutex,
             ..
         } => {
+            let _guard = prove_mutex
+                .lock()
+                .map_err(|_| anyhow!("gnark {family} library mutex poisoned"))?;
             let mut prove_result = PenumbraGnarkBytesResult {
                 ptr: ptr::null_mut(),
                 len: 0,
@@ -280,6 +293,7 @@ pub(crate) fn prove_with_transport(
             if !prove_result.ptr.is_null() {
                 unsafe { (free)(prove_result.ptr, prove_result.len) };
             }
+            let payload = payload?;
             if prove_result.status != 0 {
                 bail!(
                     "gnark {family} prove failed: {}",
@@ -324,17 +338,17 @@ pub(crate) fn auto_lib_path(lib_basename: &str) -> Option<PathBuf> {
     if let Some(p) = find_in(exe_dir) {
         return Some(p);
     }
-    let mut ancestor = exe_dir;
-    loop {
-        if let Some(p) = find_in(&ancestor.join("tools/gnark")) {
-            return Some(p);
-        }
-        match ancestor.parent() {
-            Some(a) => ancestor = a,
-            None => break,
-        }
-    }
     None
+}
+
+pub(crate) fn validate_prove_request_len(family: &str, witness: &[u8]) -> Result<()> {
+    if witness.len() > GNARK_MAX_REQUEST_BYTES {
+        bail!(
+            "gnark {family} prove request {} bytes exceeds limit {GNARK_MAX_REQUEST_BYTES}",
+            witness.len()
+        );
+    }
+    Ok(())
 }
 
 pub(crate) fn load_from_env_paths(
@@ -348,9 +362,66 @@ pub(crate) fn load_from_env_paths(
     Ok((artifact_dir, lib_path, daemon_path))
 }
 
-fn take_returned_bytes(ptr: *mut c_void, len: usize) -> Vec<u8> {
-    if ptr.is_null() || len == 0 {
-        return Vec::new();
+fn take_returned_bytes(ptr: *mut c_void, len: usize) -> Result<Vec<u8>> {
+    if len > GNARK_MAX_RESULT_BYTES {
+        bail!("gnark library returned {len} bytes, limit {GNARK_MAX_RESULT_BYTES}");
     }
-    unsafe { slice::from_raw_parts(ptr as *const u8, len) }.to_vec()
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    if ptr.is_null() {
+        bail!("gnark library returned null pointer with {len} bytes");
+    }
+    Ok(unsafe { slice::from_raw_parts(ptr as *const u8, len) }.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ptr::NonNull;
+
+    use super::*;
+
+    #[test]
+    fn validate_prove_request_len_rejects_oversized_request() {
+        let witness = vec![0u8; GNARK_MAX_REQUEST_BYTES + 1];
+        let err = validate_prove_request_len("transfer", &witness)
+            .expect_err("oversized request should fail");
+
+        assert!(
+            err.to_string().contains("prove request"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn take_returned_bytes_rejects_oversized_result_before_copying() {
+        let ptr = NonNull::<u8>::dangling().as_ptr() as *mut c_void;
+        let err = take_returned_bytes(ptr, GNARK_MAX_RESULT_BYTES + 1)
+            .expect_err("oversized result should fail");
+
+        assert!(
+            err.to_string().contains("gnark library returned"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn take_returned_bytes_rejects_null_pointer_with_nonzero_length() {
+        let err = take_returned_bytes(std::ptr::null_mut(), 1)
+            .expect_err("null pointer with data length should fail");
+
+        assert!(
+            err.to_string().contains("null pointer"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn take_returned_bytes_copies_bounded_bytes() {
+        let bytes = [1u8, 2, 3];
+        let copied = take_returned_bytes(bytes.as_ptr() as *mut c_void, bytes.len())
+            .expect("bounded bytes should copy");
+
+        assert_eq!(copied, bytes);
+    }
 }

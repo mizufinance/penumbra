@@ -932,6 +932,12 @@ async fn enrich_transfer_family_with_compliance<P: ComplianceProofProvider>(
         }
     }
 
+    for action in &mut plan.actions {
+        if let ActionPlan::Transfer(transfer) = action {
+            transfer.refresh_body_public_inputs()?;
+        }
+    }
+
     Ok(())
 }
 
@@ -1092,6 +1098,8 @@ async fn enrich_internal_funding_with_compliance<P: ComplianceProofProvider>(
             output.set_compliance_details(rng, &recipient_proof.leaf, sender_proof.leaf, nonce)?;
         }
     }
+
+    fee_funding.transfer.refresh_body_public_inputs()?;
 
     Ok(())
 }

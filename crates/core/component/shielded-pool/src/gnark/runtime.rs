@@ -15,8 +15,10 @@ const DAEMON_RESPONSE_MAGIC: &[u8; 4] = b"PGRS";
 const DAEMON_PROTOCOL_VERSION: u32 = 1;
 const DAEMON_OP_PROVE: u32 = 1;
 const DAEMON_OP_SHUTDOWN: u32 = 2;
+// Witness payloads are a few KB; match the Go daemon cap.
+pub(crate) const GNARK_MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 // Gnark proofs are a few hundred bytes; cap response payloads at 1 MiB.
-const MAX_PAYLOAD_LEN: usize = 1024 * 1024;
+pub(crate) const GNARK_MAX_RESULT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct GnarkDaemonReady {
@@ -180,6 +182,12 @@ pub(crate) fn sha256_hex_path(path: &Path) -> Result<String> {
 }
 
 fn write_frame(mut writer: impl Write, op: u32, payload: &[u8]) -> Result<()> {
+    if payload.len() > GNARK_MAX_REQUEST_BYTES {
+        bail!(
+            "gnark daemon request payload {} bytes exceeds limit {GNARK_MAX_REQUEST_BYTES}",
+            payload.len()
+        );
+    }
     let total_len =
         u32::try_from(16usize + payload.len()).context("gnark daemon request too large")?;
     writer.write_all(DAEMON_REQUEST_MAGIC)?;
@@ -206,10 +214,47 @@ fn read_frame(mut reader: impl Read) -> Result<(u32, Vec<u8>)> {
     }
     let status = u32::from_le_bytes(header[12..16].try_into().expect("slice length"));
     let payload_len = total_len - 16;
-    if payload_len > MAX_PAYLOAD_LEN {
-        bail!("gnark daemon response payload {payload_len} bytes exceeds limit {MAX_PAYLOAD_LEN}");
+    if payload_len > GNARK_MAX_RESULT_BYTES {
+        bail!(
+            "gnark daemon response payload {payload_len} bytes exceeds limit {GNARK_MAX_RESULT_BYTES}"
+        );
     }
     let mut payload = vec![0u8; payload_len];
     reader.read_exact(&mut payload)?;
     Ok((status, payload))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn write_frame_rejects_oversized_request() {
+        let payload = vec![0u8; GNARK_MAX_REQUEST_BYTES + 1];
+        let err = write_frame(Vec::new(), DAEMON_OP_PROVE, &payload)
+            .expect_err("oversized daemon request should fail");
+
+        assert!(
+            err.to_string().contains("gnark daemon request payload"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn read_frame_rejects_oversized_response_before_payload_allocation() {
+        let total_len = 16usize + GNARK_MAX_RESULT_BYTES + 1;
+        let mut header = Vec::new();
+        header.extend_from_slice(DAEMON_RESPONSE_MAGIC);
+        header.extend_from_slice(&DAEMON_PROTOCOL_VERSION.to_le_bytes());
+        header.extend_from_slice(&(total_len as u32).to_le_bytes());
+        header.extend_from_slice(&0u32.to_le_bytes());
+
+        let err = read_frame(Cursor::new(header)).expect_err("oversized response should fail");
+
+        assert!(
+            err.to_string().contains("gnark daemon response payload"),
+            "unexpected error: {err:#}"
+        );
+    }
 }

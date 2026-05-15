@@ -14,6 +14,11 @@ pub const AUDIT_STATUS_EVIDENCE_VALID: &str = "evidence_valid";
 pub const AUDIT_STATUS_EVIDENCE_INVALID: &str = "evidence_invalid";
 pub const AUDIT_STATUS_DECRYPT_FAILED: &str = "decrypt_failed";
 pub const AUDIT_STATUS_AUDIT_COMPLETE: &str = "audit_complete";
+pub const SCREEN_STATUS_PENDING: &str = "pending";
+pub const SCREEN_STATUS_IRRELEVANT: &str = "irrelevant";
+pub const SCREEN_STATUS_DETECTED: &str = "detected";
+pub const SCREEN_STATUS_INVALID: &str = "invalid";
+pub const DETECTION_STATUS_DETECTED: &str = "detected";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExtractedComplianceCiphertext {

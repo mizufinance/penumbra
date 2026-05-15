@@ -30,12 +30,96 @@ pub const EVIDENCE_STAGE_BUILD: &str = "build_evidence";
 pub const EVIDENCE_STAGE_VALIDATE: &str = "validate_evidence";
 pub const EVIDENCE_STAGE_UPLOAD_BUNDLE: &str = "validate_upload_bundle";
 pub const EVIDENCE_STAGE_ORBIS_IMPORT: &str = "validate_orbis_import";
+pub(crate) const MAX_FAILURE_REASON_BYTES: usize = 1024;
+
+const FAILURE_TRUNCATION_SUFFIX: &str = "...[truncated]";
+
+pub(crate) fn bounded_failure_reason(reason: &str) -> String {
+    if reason.len() <= MAX_FAILURE_REASON_BYTES {
+        return reason.to_owned();
+    }
+    let mut end = MAX_FAILURE_REASON_BYTES - FAILURE_TRUNCATION_SUFFIX.len();
+    while !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{}", &reason[..end], FAILURE_TRUNCATION_SUFFIX)
+}
 
 fn validate_audit_status_transitions(transitions: &[(AuditStatus, AuditStatus)]) -> Result<()> {
     for (from, to) in transitions {
         AuditStatus::try_advance(*from, *to)?;
     }
     Ok(())
+}
+
+fn update_audit_status_tx(
+    tx: &rusqlite::Transaction<'_>,
+    height: u64,
+    tx_hash: &[u8],
+    action_index: u32,
+    output_index: u32,
+    to: AuditStatus,
+    allowed_current: &[AuditStatus],
+) -> Result<usize> {
+    anyhow::ensure!(
+        !allowed_current.is_empty() && allowed_current.len() <= 3,
+        "audit status helper supports one to three current statuses"
+    );
+    for from in allowed_current {
+        AuditStatus::try_advance(*from, to)?;
+    }
+    let height = height as i64;
+    let action_index = action_index as i64;
+    let output_index = output_index as i64;
+    let changed = match allowed_current {
+        [a] => tx.execute(
+            "UPDATE scanner_detections
+             SET audit_status = ?1
+             WHERE height = ?2 AND tx_hash = ?3 AND action_index = ?4 AND output_index = ?5
+               AND audit_status IN (?6)",
+            params![
+                to.as_str(),
+                height,
+                tx_hash,
+                action_index,
+                output_index,
+                a.as_str(),
+            ],
+        )?,
+        [a, b] => tx.execute(
+            "UPDATE scanner_detections
+             SET audit_status = ?1
+             WHERE height = ?2 AND tx_hash = ?3 AND action_index = ?4 AND output_index = ?5
+               AND audit_status IN (?6, ?7)",
+            params![
+                to.as_str(),
+                height,
+                tx_hash,
+                action_index,
+                output_index,
+                a.as_str(),
+                b.as_str(),
+            ],
+        )?,
+        [a, b, c] => tx.execute(
+            "UPDATE scanner_detections
+             SET audit_status = ?1
+             WHERE height = ?2 AND tx_hash = ?3 AND action_index = ?4 AND output_index = ?5
+               AND audit_status IN (?6, ?7, ?8)",
+            params![
+                to.as_str(),
+                height,
+                tx_hash,
+                action_index,
+                output_index,
+                a.as_str(),
+                b.as_str(),
+                c.as_str(),
+            ],
+        )?,
+        _ => unreachable!("allowed_current length checked above"),
+    };
+    Ok(changed)
 }
 
 pub fn record_address_alias(store: &SqliteScannerStore, address: &str, name: &str) -> Result<()> {
@@ -160,20 +244,14 @@ pub fn decrypt_flagged_rows(store: &SqliteScannerStore, dk: &DetectionKey) -> Re
                         output_index as i64,
                     ],
                 )?;
-                tx.execute(
-                    "UPDATE scanner_detections
-                     SET audit_status = ?1
-                     WHERE height = ?2
-                       AND tx_hash = ?3
-                       AND action_index = ?4
-                       AND output_index = ?5",
-                    params![
-                        AuditStatus::AuditComplete.as_str(),
-                        height as i64,
-                        tx_hash.as_slice(),
-                        action_index as i64,
-                        output_index as i64,
-                    ],
+                update_audit_status_tx(
+                    &tx,
+                    height,
+                    tx_hash.as_slice(),
+                    action_index,
+                    output_index,
+                    AuditStatus::AuditComplete,
+                    &[AuditStatus::EvidenceValid, AuditStatus::DecryptFailed],
                 )?;
                 updated += 1;
             }
@@ -336,19 +414,17 @@ pub fn import_orbis_audit_entries(
             ],
         )?;
         if changed > 0 {
-            tx.execute(
-                "UPDATE scanner_detections
-                 SET audit_status = ?1
-                 WHERE height = ?2
-                   AND tx_hash = ?3
-                   AND action_index = ?4
-                   AND output_index = ?5",
-                params![
-                    AuditStatus::AuditComplete.as_str(),
-                    entry.height as i64,
-                    tx_hash.as_slice(),
-                    entry.action_index as i64,
-                    entry.output_index as i64,
+            update_audit_status_tx(
+                &tx,
+                entry.height,
+                tx_hash.as_slice(),
+                entry.action_index,
+                entry.output_index,
+                AuditStatus::AuditComplete,
+                &[
+                    AuditStatus::EvidenceValid,
+                    AuditStatus::DecryptFailed,
+                    AuditStatus::AuditComplete,
                 ],
             )?;
             updated += 1;
@@ -395,6 +471,85 @@ pub fn record_evidence_failure(
     Ok(())
 }
 
+struct PersistedEvidenceFacts {
+    raw_bytes: Option<Vec<u8>>,
+    upload_bundle_bytes: Option<Vec<u8>>,
+    detection: Option<(String, i64, Vec<u8>)>,
+}
+
+struct EvidenceValidationFailure {
+    stage: &'static str,
+    reason: String,
+}
+
+fn classify_evidence_for_persistence(
+    evidence: &ComplianceEvidenceObject,
+    upload_bundle: &TransferOrbisUploadBundle,
+    ring_pk: &decaf377::Element,
+    facts: &PersistedEvidenceFacts,
+) -> Result<Option<EvidenceValidationFailure>> {
+    if let Err(error) = evidence.validate_payload_hash() {
+        return Ok(Some(EvidenceValidationFailure {
+            stage: EVIDENCE_STAGE_VALIDATE,
+            reason: error.to_string(),
+        }));
+    }
+
+    let transfer_bytes = evidence.transfer_ciphertext.to_bytes();
+    if facts.raw_bytes.as_deref() != Some(transfer_bytes.as_slice()) {
+        return Ok(Some(EvidenceValidationFailure {
+            stage: EVIDENCE_STAGE_VALIDATE,
+            reason: "evidence ciphertext does not match persisted scanner ciphertext".to_owned(),
+        }));
+    }
+
+    let upload_bundle_bytes = upload_bundle.to_bytes()?;
+    if facts.upload_bundle_bytes.as_deref() != Some(upload_bundle_bytes.as_slice()) {
+        return Ok(Some(EvidenceValidationFailure {
+            stage: EVIDENCE_STAGE_UPLOAD_BUNDLE,
+            reason: "evidence upload bundle does not match persisted scanner upload bundle"
+                .to_owned(),
+        }));
+    }
+
+    let detected_matches = facts
+        .detection
+        .as_ref()
+        .is_some_and(|(asset_id, is_flagged, salt)| {
+            asset_id == &evidence.asset_id.to_string()
+                && (*is_flagged != 0) == evidence.is_flagged
+                && *salt == evidence.detection_salt.to_bytes()
+        });
+    if !detected_matches {
+        return Ok(Some(EvidenceValidationFailure {
+            stage: EVIDENCE_STAGE_VALIDATE,
+            reason: "evidence asset, flag, or salt does not match scanner detection".to_owned(),
+        }));
+    }
+
+    let status = validate_audit_evidence(AuditValidationInput {
+        evidence: evidence.clone(),
+        upload_bundle: Some(upload_bundle.clone()),
+        ring_pk: *ring_pk,
+    });
+    let failure = match status {
+        AuditValidationStatus::Valid => None,
+        AuditValidationStatus::MissingUploadBundle => Some(EvidenceValidationFailure {
+            stage: EVIDENCE_STAGE_UPLOAD_BUNDLE,
+            reason: "missing upload bundle".to_owned(),
+        }),
+        AuditValidationStatus::InvalidEvidence(reason) => Some(EvidenceValidationFailure {
+            stage: EVIDENCE_STAGE_VALIDATE,
+            reason,
+        }),
+        AuditValidationStatus::InvalidOrbisPackage(reason) => Some(EvidenceValidationFailure {
+            stage: EVIDENCE_STAGE_UPLOAD_BUNDLE,
+            reason,
+        }),
+    };
+    Ok(failure)
+}
+
 pub fn validate_and_save_evidence_object(
     store: &SqliteScannerStore,
     evidence: &ComplianceEvidenceObject,
@@ -405,20 +560,6 @@ pub fn validate_and_save_evidence_object(
     let tx_ref = &output_ref.action.tx;
     let conn = store.lock_conn()?;
     let tx = conn.unchecked_transaction()?;
-
-    if let Err(error) = evidence.validate_payload_hash() {
-        record_evidence_failure_tx(
-            &tx,
-            tx_ref.block.height,
-            tx_ref.tx_hash.as_ref(),
-            output_ref.action.action_index,
-            output_ref.output_index,
-            EVIDENCE_STAGE_VALIDATE,
-            &error.to_string(),
-        )?;
-        tx.commit()?;
-        return Err(error);
-    }
 
     let persisted_raw_bytes: Option<Vec<u8>> = tx
         .query_row(
@@ -434,21 +575,6 @@ pub fn validate_and_save_evidence_object(
             |row| row.get(0),
         )
         .optional()?;
-    let transfer_bytes = evidence.transfer_ciphertext.to_bytes();
-    if persisted_raw_bytes.as_deref() != Some(transfer_bytes.as_slice()) {
-        let reason = "evidence ciphertext does not match persisted scanner ciphertext";
-        record_evidence_failure_tx(
-            &tx,
-            tx_ref.block.height,
-            tx_ref.tx_hash.as_ref(),
-            output_ref.action.action_index,
-            output_ref.output_index,
-            EVIDENCE_STAGE_VALIDATE,
-            reason,
-        )?;
-        tx.commit()?;
-        anyhow::bail!(reason);
-    }
 
     let persisted_upload_bundle_bytes: Option<Vec<u8>> = tx
         .query_row(
@@ -465,21 +591,6 @@ pub fn validate_and_save_evidence_object(
         )
         .optional()?
         .flatten();
-    let upload_bundle_bytes = upload_bundle.to_bytes()?;
-    if persisted_upload_bundle_bytes.as_deref() != Some(upload_bundle_bytes.as_slice()) {
-        let reason = "evidence upload bundle does not match persisted scanner upload bundle";
-        record_evidence_failure_tx(
-            &tx,
-            tx_ref.block.height,
-            tx_ref.tx_hash.as_ref(),
-            output_ref.action.action_index,
-            output_ref.output_index,
-            EVIDENCE_STAGE_UPLOAD_BUNDLE,
-            reason,
-        )?;
-        tx.commit()?;
-        anyhow::bail!(reason);
-    }
 
     let detected: Option<(String, i64, Vec<u8>)> = tx
         .query_row(
@@ -495,72 +606,25 @@ pub fn validate_and_save_evidence_object(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    let detected_matches = detected.is_some_and(|(asset_id, is_flagged, salt)| {
-        asset_id == evidence.asset_id.to_string()
-            && (is_flagged != 0) == evidence.is_flagged
-            && salt == evidence.detection_salt.to_bytes()
-    });
-    if !detected_matches {
-        let reason = "evidence asset, flag, or salt does not match scanner detection";
+    let facts = PersistedEvidenceFacts {
+        raw_bytes: persisted_raw_bytes,
+        upload_bundle_bytes: persisted_upload_bundle_bytes,
+        detection: detected,
+    };
+    if let Some(failure) =
+        classify_evidence_for_persistence(evidence, upload_bundle, ring_pk, &facts)?
+    {
         record_evidence_failure_tx(
             &tx,
             tx_ref.block.height,
             tx_ref.tx_hash.as_ref(),
             output_ref.action.action_index,
             output_ref.output_index,
-            EVIDENCE_STAGE_VALIDATE,
-            reason,
+            failure.stage,
+            &failure.reason,
         )?;
         tx.commit()?;
-        anyhow::bail!(reason);
-    }
-
-    match validate_audit_evidence(AuditValidationInput {
-        evidence: evidence.clone(),
-        upload_bundle: Some(upload_bundle.clone()),
-        ring_pk: *ring_pk,
-    }) {
-        AuditValidationStatus::Valid => {}
-        AuditValidationStatus::MissingUploadBundle => {
-            let reason = "missing upload bundle";
-            record_evidence_failure_tx(
-                &tx,
-                tx_ref.block.height,
-                tx_ref.tx_hash.as_ref(),
-                output_ref.action.action_index,
-                output_ref.output_index,
-                EVIDENCE_STAGE_UPLOAD_BUNDLE,
-                reason,
-            )?;
-            tx.commit()?;
-            anyhow::bail!(reason);
-        }
-        AuditValidationStatus::InvalidEvidence(reason) => {
-            record_evidence_failure_tx(
-                &tx,
-                tx_ref.block.height,
-                tx_ref.tx_hash.as_ref(),
-                output_ref.action.action_index,
-                output_ref.output_index,
-                EVIDENCE_STAGE_VALIDATE,
-                &reason,
-            )?;
-            tx.commit()?;
-            anyhow::bail!(reason);
-        }
-        AuditValidationStatus::InvalidOrbisPackage(reason) => {
-            record_evidence_failure_tx(
-                &tx,
-                tx_ref.block.height,
-                tx_ref.tx_hash.as_ref(),
-                output_ref.action.action_index,
-                output_ref.output_index,
-                EVIDENCE_STAGE_UPLOAD_BUNDLE,
-                &reason,
-            )?;
-            tx.commit()?;
-            anyhow::bail!(reason);
-        }
+        anyhow::bail!(failure.reason);
     }
 
     let object_hash = evidence.object_hash();
@@ -579,21 +643,9 @@ pub fn validate_and_save_evidence_object(
             now_unix(),
         ],
     )?;
-    validate_audit_status_transitions(&[
-        (AuditStatus::AuditComplete, AuditStatus::AuditComplete),
-        (AuditStatus::DecryptFailed, AuditStatus::DecryptFailed),
-        (AuditStatus::Pending, AuditStatus::EvidenceValid),
-        (AuditStatus::EvidenceInvalid, AuditStatus::EvidenceValid),
-        (AuditStatus::EvidenceValid, AuditStatus::EvidenceValid),
-    ])?;
     tx.execute(
         "UPDATE scanner_detections
-             SET evidence_object_hash = ?1,
-                 audit_status = CASE
-                     WHEN audit_status = ?6 THEN ?6
-                     WHEN audit_status = ?8 THEN ?8
-                     ELSE ?7
-                 END
+             SET evidence_object_hash = ?1
          WHERE height = ?2 AND tx_hash = ?3 AND action_index = ?4 AND output_index = ?5",
         params![
             object_hash.as_slice(),
@@ -601,9 +653,19 @@ pub fn validate_and_save_evidence_object(
             tx_ref.tx_hash.as_ref(),
             output_ref.action.action_index as i64,
             output_ref.output_index as i64,
-            AuditStatus::AuditComplete.as_str(),
-            AuditStatus::EvidenceValid.as_str(),
-            AuditStatus::DecryptFailed.as_str(),
+        ],
+    )?;
+    update_audit_status_tx(
+        &tx,
+        tx_ref.block.height,
+        tx_ref.tx_hash.as_ref(),
+        output_ref.action.action_index,
+        output_ref.output_index,
+        AuditStatus::EvidenceValid,
+        &[
+            AuditStatus::Pending,
+            AuditStatus::EvidenceInvalid,
+            AuditStatus::EvidenceValid,
         ],
     )?;
     tx.execute(
@@ -822,6 +884,7 @@ fn record_failure_tx(
     branch: &str,
     reason: &str,
 ) -> Result<()> {
+    let reason = bounded_failure_reason(reason);
     tx.execute(
         "INSERT OR REPLACE INTO audit_decryption_failures
          (height, tx_hash, action_index, output_index, branch, reason, failed_at_unix)
@@ -832,28 +895,18 @@ fn record_failure_tx(
             action_index as i64,
             output_index as i64,
             branch,
-            reason,
+            reason.as_str(),
             now_unix(),
         ],
     )?;
-    validate_audit_status_transitions(&[
-        (AuditStatus::EvidenceValid, AuditStatus::DecryptFailed),
-        (AuditStatus::DecryptFailed, AuditStatus::DecryptFailed),
-    ])?;
-    tx.execute(
-        "UPDATE scanner_detections
-         SET audit_status = ?1
-         WHERE height = ?2 AND tx_hash = ?3 AND action_index = ?4 AND output_index = ?5
-           AND audit_status IN (?6, ?7)",
-        params![
-            AuditStatus::DecryptFailed.as_str(),
-            height as i64,
-            tx_hash,
-            action_index as i64,
-            output_index as i64,
-            AuditStatus::EvidenceValid.as_str(),
-            AuditStatus::DecryptFailed.as_str(),
-        ],
+    update_audit_status_tx(
+        tx,
+        height,
+        tx_hash,
+        action_index,
+        output_index,
+        AuditStatus::DecryptFailed,
+        &[AuditStatus::EvidenceValid, AuditStatus::DecryptFailed],
     )?;
     Ok(())
 }
@@ -867,6 +920,7 @@ fn record_evidence_failure_tx(
     stage: &str,
     reason: &str,
 ) -> Result<()> {
+    let reason = bounded_failure_reason(reason);
     tx.execute(
         "INSERT OR REPLACE INTO audit_evidence_failures
          (height, tx_hash, action_index, output_index, stage, reason, failed_at_unix)
@@ -877,28 +931,18 @@ fn record_evidence_failure_tx(
             action_index as i64,
             output_index as i64,
             stage,
-            reason,
+            reason.as_str(),
             now_unix(),
         ],
     )?;
-    validate_audit_status_transitions(&[
-        (AuditStatus::Pending, AuditStatus::EvidenceInvalid),
-        (AuditStatus::EvidenceInvalid, AuditStatus::EvidenceInvalid),
-    ])?;
-    tx.execute(
-        "UPDATE scanner_detections
-         SET audit_status = ?1
-         WHERE height = ?2 AND tx_hash = ?3 AND action_index = ?4 AND output_index = ?5
-           AND audit_status IN (?6, ?7)",
-        params![
-            AuditStatus::EvidenceInvalid.as_str(),
-            height as i64,
-            tx_hash,
-            action_index as i64,
-            output_index as i64,
-            AuditStatus::Pending.as_str(),
-            AuditStatus::EvidenceInvalid.as_str(),
-        ],
+    update_audit_status_tx(
+        tx,
+        height,
+        tx_hash,
+        action_index,
+        output_index,
+        AuditStatus::EvidenceInvalid,
+        &[AuditStatus::Pending, AuditStatus::EvidenceInvalid],
     )?;
     Ok(())
 }
@@ -945,6 +989,36 @@ mod tests {
         let scan = export_scan_json(&store).unwrap();
         assert!(scan.get("scan_info").is_some());
         assert_eq!(scan.get("detected").unwrap().as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn persisted_audit_failure_reasons_are_bounded() {
+        let store = SqliteScannerStore::new(":memory:").unwrap();
+        let conn = store.lock_conn().unwrap();
+        let tx_hash = [7u8; 32];
+        let long_reason = "x".repeat(MAX_FAILURE_REASON_BYTES + 100);
+        let tx = conn.unchecked_transaction().unwrap();
+
+        record_failure_tx(&tx, 1, &tx_hash, 2, 3, "issuer_dk", &long_reason).unwrap();
+        record_evidence_failure_tx(&tx, 1, &tx_hash, 2, 3, EVIDENCE_STAGE_BUILD, &long_reason)
+            .unwrap();
+        tx.commit().unwrap();
+
+        let decryption_reason: String = conn
+            .query_row("SELECT reason FROM audit_decryption_failures", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let evidence_reason: String = conn
+            .query_row("SELECT reason FROM audit_evidence_failures", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        assert!(decryption_reason.len() <= MAX_FAILURE_REASON_BYTES);
+        assert!(evidence_reason.len() <= MAX_FAILURE_REASON_BYTES);
+        assert!(decryption_reason.ends_with("[truncated]"));
+        assert!(evidence_reason.ends_with("[truncated]"));
     }
 
     #[tokio::test]

@@ -5,8 +5,9 @@ use std::{fmt, str::FromStr};
 use crate::scanner::types::{
     AUDIT_STATUS_AUDIT_COMPLETE, AUDIT_STATUS_DECRYPT_FAILED, AUDIT_STATUS_EVIDENCE_INVALID,
     AUDIT_STATUS_EVIDENCE_VALID, AUDIT_STATUS_PENDING, DECRYPTED_VIA_ISSUER_DK,
-    DECRYPTED_VIA_ORBIS_PRE, DECRYPTED_VIA_PUBLIC, FLOW_TYPE_PRIVATE_TRANSFER, FLOW_TYPE_SHIELD,
-    FLOW_TYPE_WITHDRAW,
+    DECRYPTED_VIA_ORBIS_PRE, DECRYPTED_VIA_PUBLIC, DETECTION_STATUS_DETECTED,
+    FLOW_TYPE_PRIVATE_TRANSFER, FLOW_TYPE_SHIELD, FLOW_TYPE_WITHDRAW, SCREEN_STATUS_DETECTED,
+    SCREEN_STATUS_INVALID, SCREEN_STATUS_IRRELEVANT, SCREEN_STATUS_PENDING,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +89,106 @@ impl FromStr for DecryptedVia {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScreenStatus {
+    #[serde(rename = "pending")]
+    Pending,
+    #[serde(rename = "irrelevant")]
+    Irrelevant,
+    #[serde(rename = "detected")]
+    Detected,
+    #[serde(rename = "invalid")]
+    Invalid,
+}
+
+impl ScreenStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => SCREEN_STATUS_PENDING,
+            Self::Irrelevant => SCREEN_STATUS_IRRELEVANT,
+            Self::Detected => SCREEN_STATUS_DETECTED,
+            Self::Invalid => SCREEN_STATUS_INVALID,
+        }
+    }
+
+    pub fn try_advance(from: Self, to: Self) -> Result<()> {
+        if from == to {
+            return Ok(());
+        }
+        let allowed = matches!(
+            (from, to),
+            (Self::Pending, Self::Irrelevant)
+                | (Self::Pending, Self::Detected)
+                | (Self::Pending, Self::Invalid)
+        );
+        anyhow::ensure!(
+            allowed,
+            "illegal screen status transition {} -> {}",
+            from,
+            to
+        );
+        Ok(())
+    }
+}
+
+impl fmt::Display for ScreenStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ScreenStatus {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            SCREEN_STATUS_PENDING => Ok(Self::Pending),
+            SCREEN_STATUS_IRRELEVANT => Ok(Self::Irrelevant),
+            SCREEN_STATUS_DETECTED => Ok(Self::Detected),
+            SCREEN_STATUS_INVALID => Ok(Self::Invalid),
+            _ => Err(anyhow!("unknown screen status {value:?}")),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DetectionStatus {
+    #[serde(rename = "detected")]
+    Detected,
+}
+
+impl DetectionStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Detected => DETECTION_STATUS_DETECTED,
+        }
+    }
+
+    pub fn try_advance(from: Self, to: Self) -> Result<()> {
+        if from == to {
+            return Ok(());
+        }
+        anyhow::bail!("illegal detection status transition {} -> {}", from, to)
+    }
+}
+
+impl fmt::Display for DetectionStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for DetectionStatus {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            DETECTION_STATUS_DETECTED => Ok(Self::Detected),
+            _ => Err(anyhow!("unknown detection status {value:?}")),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuditStatus {
     #[serde(rename = "pending")]
     Pending,
@@ -159,7 +260,7 @@ impl FromStr for AuditStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::AuditStatus;
+    use super::{AuditStatus, DetectionStatus, ScreenStatus};
 
     #[test]
     fn audit_status_transition_table_is_explicit() {
@@ -195,5 +296,43 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn screen_status_transition_table_is_explicit() {
+        let statuses = [
+            ScreenStatus::Pending,
+            ScreenStatus::Irrelevant,
+            ScreenStatus::Detected,
+            ScreenStatus::Invalid,
+        ];
+        let allowed = [
+            (ScreenStatus::Pending, ScreenStatus::Pending),
+            (ScreenStatus::Pending, ScreenStatus::Irrelevant),
+            (ScreenStatus::Pending, ScreenStatus::Detected),
+            (ScreenStatus::Pending, ScreenStatus::Invalid),
+            (ScreenStatus::Irrelevant, ScreenStatus::Irrelevant),
+            (ScreenStatus::Detected, ScreenStatus::Detected),
+            (ScreenStatus::Invalid, ScreenStatus::Invalid),
+        ];
+
+        for from in statuses {
+            for to in statuses {
+                let is_allowed = allowed.contains(&(from, to));
+                assert_eq!(
+                    ScreenStatus::try_advance(from, to).is_ok(),
+                    is_allowed,
+                    "transition {from} -> {to}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn detection_status_transition_table_is_explicit() {
+        assert!(
+            DetectionStatus::try_advance(DetectionStatus::Detected, DetectionStatus::Detected)
+                .is_ok()
+        );
     }
 }

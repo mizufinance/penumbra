@@ -16,6 +16,35 @@ use cnidarium::StateWrite;
 use penumbra_sdk_asset::asset;
 use penumbra_sdk_compliance::{ComplianceLeaf, ComplianceRegistryRead, ComplianceRegistryWrite};
 use penumbra_sdk_keys::Address;
+use penumbra_sdk_shielded_pool::{ShieldedInputPlan, ShieldedOutputPlan};
+
+#[allow(dead_code)]
+pub fn align_transfer_planning_metadata(
+    spends: &mut [ShieldedInputPlan],
+    outputs: &mut [ShieldedOutputPlan],
+) {
+    let Some(first_spend) = spends.first().cloned() else {
+        return;
+    };
+    for spend in spends.iter_mut() {
+        spend.asset_anchor = first_spend.asset_anchor;
+        spend.compliance_anchor = first_spend.compliance_anchor;
+        spend.target_timestamp = first_spend.target_timestamp;
+        spend.is_regulated = first_spend.is_regulated;
+        spend.tx_blinding_nonce = first_spend.tx_blinding_nonce;
+    }
+    for output in outputs {
+        output.asset_anchor = first_spend.asset_anchor;
+        output.compliance_anchor = first_spend.compliance_anchor;
+        output.target_timestamp = first_spend.target_timestamp;
+        output.is_regulated = first_spend.is_regulated;
+        output.tx_blinding_nonce = first_spend.tx_blinding_nonce;
+        output.asset_indexed_leaf = first_spend.asset_indexed_leaf.clone();
+        output.asset_path = first_spend.asset_path.clone();
+        output.asset_position = first_spend.asset_position;
+        output.asset_policy = first_spend.asset_policy.clone();
+    }
+}
 
 /// Register assets as unregulated in the compliance registry.
 ///

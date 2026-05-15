@@ -21,6 +21,17 @@ use crate::{
     ShieldedOutputPlan,
 };
 
+pub(crate) const RECEIVER_OUTPUT_INDEX: usize = 0;
+pub(crate) const CHANGE_OUTPUT_INDEX: usize = 1;
+
+pub(crate) fn is_receiver_output_index(index: usize) -> bool {
+    index == RECEIVER_OUTPUT_INDEX
+}
+
+pub(crate) fn is_change_output_index(index: usize) -> bool {
+    index == CHANGE_OUTPUT_INDEX
+}
+
 fn transfer_compliance_rng_seed(transfer_nonce_root: Fr) -> [u8; 32] {
     let hash = blake2b_simd::Params::new()
         .hash_length(32)
@@ -49,11 +60,8 @@ pub(crate) fn build_transfer_compliance(
     target_timestamp: u64,
     transfer_nonce_root: Fr,
 ) -> Result<BuildTransferComplianceResult> {
-    // Transfer compliance always describes output 0, the external receiver leg.
-    // Output 1, when present, is sender-owned change and contributes to balance
-    // correctness but not to compliance plaintext construction.
     let receiver_output = outputs
-        .first()
+        .get(RECEIVER_OUTPUT_INDEX)
         .ok_or_else(|| anyhow!("transfer requires at least one output"))?;
     let receiver_note = receiver_output.output_note();
     let receiver_leaf = receiver_output
@@ -245,13 +253,11 @@ pub(crate) struct TransferOutputComplianceBytes {
 pub(crate) fn receiver_output_transfer_compliance(
     ciphertext: &TransferComplianceCiphertext,
     bundle: &TransferOrbisUploadBundle,
-) -> TransferOutputComplianceBytes {
-    TransferOutputComplianceBytes {
+) -> Result<TransferOutputComplianceBytes> {
+    Ok(TransferOutputComplianceBytes {
         compliance_ciphertext: ciphertext.to_bytes(),
-        orbis_upload_bundle: bundle
-            .to_bytes()
-            .expect("Orbis upload bundle should serialize"),
-    }
+        orbis_upload_bundle: bundle.to_bytes()?,
+    })
 }
 
 pub(crate) fn change_output_transfer_compliance() -> TransferOutputComplianceBytes {
@@ -265,17 +271,15 @@ pub(crate) fn change_output_transfer_compliance() -> TransferOutputComplianceByt
 pub(crate) fn parse_transfer_output_compliance(
     outputs: &[TransferOutputBody],
 ) -> Result<(TransferComplianceCiphertext, TransferOrbisUploadBundle)> {
-    // Output 0 carries the receiver-leg compliance bundle. Output 1, when
-    // present, is sender-owned change and must not carry transfer compliance bytes.
     let receiver_output = outputs
-        .first()
+        .get(RECEIVER_OUTPUT_INDEX)
         .ok_or_else(|| anyhow!("transfer requires at least one output"))?;
     anyhow::ensure!(
         receiver_output.compliance_ciphertext.len() == TRANSFER_WIRE_BYTES,
         "receiver output transfer compliance ciphertext must be {TRANSFER_WIRE_BYTES} bytes, got {}",
         receiver_output.compliance_ciphertext.len()
     );
-    for (index, output) in outputs.iter().enumerate().skip(1) {
+    for (index, output) in outputs.iter().enumerate().skip(CHANGE_OUTPUT_INDEX) {
         anyhow::ensure!(
             output.compliance_ciphertext.is_empty(),
             "change output {} transfer compliance ciphertext must be empty",

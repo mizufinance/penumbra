@@ -4,6 +4,11 @@ use anyhow::{anyhow, Context, Result};
 
 use crate::gnark::typed::{MerklePathBinary, PointAffineBytes};
 
+pub(crate) const MAX_VEC32_LENGTH: usize = crate::transfer::TRANSFER_STATEMENT_FIELD_COUNT;
+pub(crate) const MAX_TRIPLE_PATH_LENGTH: usize = 24;
+pub(crate) const MAX_MERKLE_PATH_LAYERS: usize = penumbra_sdk_compliance::DEFAULT_DEPTH as usize;
+pub(crate) const MAX_MERKLE_PATH_SIBLINGS: usize = 3;
+
 pub(crate) struct BinaryCursor<'a> {
     inner: Cursor<&'a [u8]>,
 }
@@ -49,15 +54,46 @@ impl<'a> BinaryCursor<'a> {
 
     pub(crate) fn read_vec_32(&mut self) -> Result<Vec<[u8; 32]>> {
         let len = self.read_u32()? as usize;
+        if len > MAX_VEC32_LENGTH {
+            return Err(anyhow!("vec32 length {len} exceeds max {MAX_VEC32_LENGTH}"));
+        }
         (0..len).map(|_| self.read_fixed::<32>()).collect()
+    }
+
+    pub(crate) fn read_triple_path_32(&mut self) -> Result<Vec<[[u8; 32]; 3]>> {
+        let len = self.read_u32()? as usize;
+        if len > MAX_TRIPLE_PATH_LENGTH {
+            return Err(anyhow!(
+                "triple path length {len} exceeds max {MAX_TRIPLE_PATH_LENGTH}"
+            ));
+        }
+        let mut out = Vec::with_capacity(len);
+        for _ in 0..len {
+            out.push([
+                self.read_fixed::<32>()?,
+                self.read_fixed::<32>()?,
+                self.read_fixed::<32>()?,
+            ]);
+        }
+        Ok(out)
     }
 
     pub(crate) fn read_merkle_path(&mut self) -> Result<MerklePathBinary> {
         let layers = self.read_u32()? as usize;
+        if layers > MAX_MERKLE_PATH_LAYERS {
+            return Err(anyhow!(
+                "merkle path layer count {layers} exceeds max {MAX_MERKLE_PATH_LAYERS}"
+            ));
+        }
         let mut out = Vec::with_capacity(layers);
         for _ in 0..layers {
             let siblings = self.read_u32()? as usize;
-            if siblings != 3 {
+            if siblings > MAX_MERKLE_PATH_SIBLINGS {
+                return Err(anyhow!(
+                    "merkle path sibling count {siblings} exceeds max {MAX_MERKLE_PATH_SIBLINGS}"
+                ));
+            }
+            if siblings != MAX_MERKLE_PATH_SIBLINGS {
                 return Err(anyhow!("expected 3 merkle siblings, got {siblings}"));
             }
             out.push([
@@ -94,6 +130,12 @@ pub(crate) fn put_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
 }
 
 pub(crate) fn encode_vec_32(buf: &mut Vec<u8>, values: &[[u8; 32]]) -> Result<()> {
+    if values.len() > MAX_VEC32_LENGTH {
+        return Err(anyhow!(
+            "vec32 length {} exceeds max {MAX_VEC32_LENGTH}",
+            values.len()
+        ));
+    }
     put_u32(
         buf,
         u32::try_from(values.len()).context("vector length exceeds u32")?,
@@ -102,4 +144,105 @@ pub(crate) fn encode_vec_32(buf: &mut Vec<u8>, values: &[[u8; 32]]) -> Result<()
         put_bytes(buf, value);
     }
     Ok(())
+}
+
+pub(crate) fn encode_triple_path_32(buf: &mut Vec<u8>, path: &[[[u8; 32]; 3]]) -> Result<()> {
+    if path.len() > MAX_TRIPLE_PATH_LENGTH {
+        return Err(anyhow!(
+            "triple path length {} exceeds max {MAX_TRIPLE_PATH_LENGTH}",
+            path.len()
+        ));
+    }
+    put_u32(
+        buf,
+        u32::try_from(path.len()).context("triple path length exceeds u32")?,
+    );
+    for siblings in path {
+        for sibling in siblings {
+            put_bytes(buf, sibling);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_vec_32_rejects_oversized_length_before_allocation() {
+        let bytes = ((MAX_VEC32_LENGTH + 1) as u32).to_le_bytes();
+        let err = BinaryCursor::new(&bytes)
+            .read_vec_32()
+            .expect_err("oversized vec32 should fail");
+
+        assert!(
+            err.to_string().contains("vec32 length"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn encode_vec_32_rejects_oversized_length() {
+        let values = vec![[0u8; 32]; MAX_VEC32_LENGTH + 1];
+        let err = encode_vec_32(&mut Vec::new(), &values).expect_err("oversized vec32 should fail");
+
+        assert!(
+            err.to_string().contains("vec32 length"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn read_triple_path_32_rejects_oversized_length_before_allocation() {
+        let bytes = ((MAX_TRIPLE_PATH_LENGTH + 1) as u32).to_le_bytes();
+        let err = BinaryCursor::new(&bytes)
+            .read_triple_path_32()
+            .expect_err("oversized triple path should fail");
+
+        assert!(
+            err.to_string().contains("triple path length"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn encode_triple_path_32_rejects_oversized_length() {
+        let path = vec![[[0u8; 32]; 3]; MAX_TRIPLE_PATH_LENGTH + 1];
+        let err = encode_triple_path_32(&mut Vec::new(), &path)
+            .expect_err("oversized triple path should fail");
+
+        assert!(
+            err.to_string().contains("triple path length"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn read_merkle_path_rejects_oversized_layer_count_before_allocation() {
+        let bytes = ((MAX_MERKLE_PATH_LAYERS + 1) as u32).to_le_bytes();
+        let err = BinaryCursor::new(&bytes)
+            .read_merkle_path()
+            .expect_err("oversized merkle path should fail");
+
+        assert!(
+            err.to_string().contains("merkle path layer count"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn read_merkle_path_rejects_oversized_sibling_count_before_allocation() {
+        let mut bytes = Vec::new();
+        put_u32(&mut bytes, 1);
+        put_u32(&mut bytes, (MAX_MERKLE_PATH_SIBLINGS + 1) as u32);
+        let err = BinaryCursor::new(&bytes)
+            .read_merkle_path()
+            .expect_err("oversized merkle sibling count should fail");
+
+        assert!(
+            err.to_string().contains("merkle path sibling count"),
+            "unexpected error: {err:#}"
+        );
+    }
 }
