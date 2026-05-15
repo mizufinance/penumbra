@@ -1,12 +1,11 @@
-use std::{collections::HashSet, env};
+use std::collections::HashSet;
 
 use anyhow::{anyhow, bail, Context, Result};
 use decaf377::Encoding;
-use did_key::{generate, Ed25519KeyPair as DidEd25519KeyPair, Fingerprint};
 use orbis_authn::{create_authenticated_request, JwtSigner};
 use orbis_common::blockchain::{
     acp::{Actor, Object, Relationship, Subject, SubjectKind},
-    ChainConfig, SourceHubClient, TxSigner, TEST_ACCOUNT_HEX_KEY,
+    SourceHubClient,
 };
 use orbis_proto::{
     dkg_service::{dkg_service_client::DkgServiceClient, StartDkgRequest},
@@ -16,35 +15,11 @@ use orbis_proto::{
         store_secret_service_client::StoreSecretServiceClient, StoreSecretRequest,
     },
 };
+use orbis_tonic::transport::Endpoint;
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
-use crate::{
-    auth::{default_reader_did_pk, deterministic_jwt_signer},
-    types::{DkgResult, NodeInfo, PreResult, RingInfo, StoreSecretResult},
-};
+use crate::types::{DkgResult, NodeInfo, PreResult, RingInfo, StoreSecretResult};
 use penumbra_sdk_compliance::{OrbisEncryptedSeedUploadPackage, OrbisSecretEnvelope};
-
-const TEST_POLICY_YAML: &str = r#"
-name: test-policy
-resources:
-  - name: document
-    relations:
-      - name: creator
-        types:
-          - actor
-      - name: reader
-        types:
-          - actor
-    permissions:
-      - name: read
-        expr: creator + reader
-      - name: write
-        expr: creator
-"#;
-
-const ORBIS_NAMESPACE: &str = "orbis";
-const ORBIS_RESOURCE: &str = "document";
 
 #[derive(Debug, Deserialize)]
 struct RingPayload {
@@ -58,22 +33,25 @@ struct PreResponse {
 }
 
 pub struct OrbisClient {
-    endpoint: String,
-    chain_config: ChainConfig,
+    endpoint: Endpoint,
 }
 
 impl OrbisClient {
-    pub fn new(endpoint: impl Into<String>) -> Self {
-        Self {
-            endpoint: endpoint.into(),
-            chain_config: sourcehub_chain_config(),
-        }
+    pub fn new(endpoint: impl Into<String>) -> Result<Self> {
+        let endpoint = endpoint.into();
+        let endpoint = Endpoint::from_shared(endpoint.clone())
+            .with_context(|| format!("invalid Orbis endpoint {endpoint:?}"))?;
+        Ok(Self { endpoint })
     }
 
     pub async fn query_node_info(&self) -> Result<NodeInfo> {
-        let mut client = InfoServiceClient::connect(self.endpoint.clone())
+        let channel = self
+            .endpoint
+            .clone()
+            .connect()
             .await
-            .map_err(|e| anyhow!("failed to connect to {}: {}", self.endpoint, e))?;
+            .map_err(|e| anyhow!("failed to connect to Orbis info endpoint: {}", e))?;
+        let mut client = InfoServiceClient::new(channel);
 
         let response = client
             .get_node_info(GetNodeInfoRequest {})
@@ -88,22 +66,30 @@ impl OrbisClient {
         })
     }
 
-    pub async fn start_dkg(&self, threshold: u32, peer_ids: &[String]) -> Result<DkgResult> {
+    pub async fn start_dkg(
+        &self,
+        threshold: u32,
+        peer_ids: &[String],
+        jwt_signer: &JwtSigner,
+    ) -> Result<DkgResult> {
         let total_nodes = peer_ids.len() as u32;
         if threshold > total_nodes {
             bail!("threshold ({threshold}) cannot be greater than total nodes ({total_nodes})");
         }
 
-        let mut client = DkgServiceClient::connect(self.endpoint.clone())
+        let channel = self
+            .endpoint
+            .clone()
+            .connect()
             .await
-            .map_err(|e| anyhow!("failed to connect to {}: {}", self.endpoint, e))?;
+            .map_err(|e| anyhow!("failed to connect to Orbis DKG endpoint: {}", e))?;
+        let mut client = DkgServiceClient::new(channel);
 
         let request = StartDkgRequest {
             threshold,
             peer_ids: peer_ids.to_vec(),
             pss_interval: None,
         };
-        let jwt_signer = JwtSigner::new();
         let token = jwt_signer
             .create_dkg_jwt(threshold, peer_ids, None)
             .map_err(|e| anyhow!("failed to create DKG JWT: {}", e))?;
@@ -123,20 +109,13 @@ impl OrbisClient {
         })
     }
 
-    pub async fn register_bulletin_namespace(&self, namespace: &str) -> Result<()> {
-        let read_client = SourceHubClient::new(self.chain_config.clone())
-            .await
-            .map_err(|e| anyhow!("failed to create chain client: {}", e))?;
-
-        if read_client.bulletin_get_namespace(namespace).await.is_ok() {
+    pub async fn register_bulletin_namespace(
+        client: &SourceHubClient,
+        namespace: &str,
+    ) -> Result<()> {
+        if client.bulletin_get_namespace(namespace).await.is_ok() {
             return Ok(());
         }
-
-        let signer = TxSigner::from_hex_key(TEST_ACCOUNT_HEX_KEY, self.chain_config.clone())
-            .map_err(|e| anyhow!("failed to create signer: {}", e))?;
-        let client = SourceHubClient::with_signer(self.chain_config.clone(), signer)
-            .await
-            .map_err(|e| anyhow!("failed to create signed SourceHub client: {}", e))?;
 
         match client.bulletin_register_namespace(namespace).await {
             Ok(result) if result.code == 0 => Ok(()),
@@ -163,12 +142,10 @@ impl OrbisClient {
     }
 
     pub async fn add_bulletin_collaborator(
-        &self,
+        client: &SourceHubClient,
         namespace: &str,
         collaborator_address: &str,
     ) -> Result<()> {
-        let client = self.signing_client().await?;
-
         match client
             .bulletin_add_collaborator(namespace, collaborator_address)
             .await
@@ -193,13 +170,9 @@ impl OrbisClient {
         }
     }
 
-    pub async fn get_latest_ring(&self) -> Result<RingInfo> {
-        let client = SourceHubClient::new(self.chain_config.clone())
-            .await
-            .map_err(|e| anyhow!("failed to create SourceHub client: {}", e))?;
-
+    pub async fn get_latest_ring(client: &SourceHubClient, namespace: &str) -> Result<RingInfo> {
         let posts = client
-            .bulletin_list_posts(ORBIS_NAMESPACE)
+            .bulletin_list_posts(namespace)
             .await
             .map_err(|e| anyhow!("failed to list Orbis ring posts: {}", e))?;
 
@@ -229,8 +202,13 @@ impl OrbisClient {
         })
     }
 
-    pub async fn add_policy(&self) -> Result<String> {
-        let client = self.signing_client().await?;
+    pub async fn add_policy(
+        client: &SourceHubClient,
+        policy_yaml: &str,
+        marshal_type: i32,
+        resource: &str,
+        permission: &str,
+    ) -> Result<String> {
         let existing_ids = client
             .acp_list_policy_ids()
             .await
@@ -238,7 +216,7 @@ impl OrbisClient {
             .unwrap_or_default();
 
         let create_result = client
-            .acp_create_policy(TEST_POLICY_YAML, 1)
+            .acp_create_policy(policy_yaml, marshal_type)
             .await
             .map_err(|e| anyhow!("failed to create policy: {}", e))?;
         if create_result.code != 0 {
@@ -264,28 +242,34 @@ impl OrbisClient {
         }
 
         for policy_id in candidate_ids {
-            if self.policy_defines_resource(&client, &policy_id).await? {
+            if Self::policy_defines_resource(client, &policy_id, resource, permission).await? {
                 return Ok(policy_id);
             }
         }
 
-        bail!("created ACP policy, but could not find a policy defining resource {ORBIS_RESOURCE}")
+        bail!("created ACP policy, but could not find a policy defining {resource}/{permission}")
     }
 
     pub async fn store_encrypted_seed_package(
         &self,
+        namespace: &str,
         ring_id: &str,
         package: &OrbisEncryptedSeedUploadPackage,
+        jwt_signer: &JwtSigner,
     ) -> Result<StoreSecretResult> {
-        let mut client = StoreSecretServiceClient::connect(self.endpoint.clone())
+        let channel = self
+            .endpoint
+            .clone()
+            .connect()
             .await
             .map_err(|e| anyhow!("failed to connect to Orbis store-secret endpoint: {}", e))?;
+        let mut client = StoreSecretServiceClient::new(channel);
 
         let request = StoreSecretRequest {
             encrypted_document: package.encrypted_document.clone(),
             enc_cmt: package.enc_cmt.clone(),
             ring_id: ring_id.to_string(),
-            namespace: ORBIS_NAMESPACE.to_string(),
+            namespace: namespace.to_string(),
             policy_id: package.policy_id.clone(),
             resource: package.resource.clone(),
             permission: package.permission.clone(),
@@ -299,12 +283,12 @@ impl OrbisClient {
             metadata_hash: Some(package.metadata_hash.clone()),
         };
 
-        let token = deterministic_jwt_signer(default_reader_did_pk())
+        let token = jwt_signer
             .create_store_secret_jwt(
                 package.encrypted_document.clone(),
                 package.enc_cmt.clone(),
                 ring_id,
-                ORBIS_NAMESPACE,
+                namespace,
                 &package.policy_id,
                 &package.resource,
                 &package.permission,
@@ -336,12 +320,11 @@ impl OrbisClient {
     }
 
     pub async fn register_object(
-        &self,
+        client: &SourceHubClient,
         policy_id: &str,
         resource: &str,
         object_id: &str,
     ) -> Result<()> {
-        let client = self.signing_client().await?;
         let document = Object {
             resource: resource.to_string(),
             id: object_id.to_string(),
@@ -373,23 +356,23 @@ impl OrbisClient {
     }
 
     pub async fn set_relationship(
-        &self,
+        client: &SourceHubClient,
         policy_id: &str,
         resource: &str,
         object_id: &str,
+        relation: &str,
+        reader_did_uri: &str,
     ) -> Result<()> {
-        let client = self.signing_client().await?;
-        let key_pair = generate::<DidEd25519KeyPair>(Some(&did_seed(default_reader_did_pk())));
-        let did_uri = format!("did:key:{}", key_pair.fingerprint());
-
         let relationship = Relationship {
             object: Some(Object {
                 resource: resource.to_string(),
                 id: object_id.to_string(),
             }),
-            relation: "reader".to_string(),
+            relation: relation.to_string(),
             subject: Some(Subject {
-                kind: Some(SubjectKind::Actor(Actor { id: did_uri })),
+                kind: Some(SubjectKind::Actor(Actor {
+                    id: reader_did_uri.to_string(),
+                })),
             }),
         };
 
@@ -420,15 +403,21 @@ impl OrbisClient {
 
     pub async fn start_pre(
         &self,
+        namespace: &str,
         reader_pk_hex: &str,
         object_id: &str,
         derivation_hex: &str,
         salt: Option<&str>,
         timestamp: Option<u64>,
+        jwt_signer: &JwtSigner,
     ) -> Result<PreResult> {
-        let mut client = PreServiceClient::connect(self.endpoint.clone())
+        let channel = self
+            .endpoint
+            .clone()
+            .connect()
             .await
             .map_err(|e| anyhow!("failed to connect to Orbis PRE endpoint: {}", e))?;
+        let mut client = PreServiceClient::new(channel);
 
         let reader_pk_bytes =
             hex::decode(reader_pk_hex).context("failed to decode reader key hex")?;
@@ -438,16 +427,16 @@ impl OrbisClient {
         let request = StartPreRequest {
             rdr_pk: reader_pk_bytes.clone(),
             object_id: object_id.to_string(),
-            namespace: ORBIS_NAMESPACE.to_string(),
+            namespace: namespace.to_string(),
             derivation: Some(derivation_bytes.clone()),
             salt: salt.map(str::to_owned),
             valid_window: timestamp.map(|ts| TimestampRange { start: ts, end: ts }),
         };
 
-        let token = deterministic_jwt_signer(default_reader_did_pk())
+        let token = jwt_signer
             .create_pre_jwt(
                 reader_pk_bytes,
-                ORBIS_NAMESPACE,
+                namespace,
                 object_id,
                 Some(derivation_bytes),
                 salt.map(str::to_owned),
@@ -473,18 +462,11 @@ impl OrbisClient {
         })
     }
 
-    async fn signing_client(&self) -> Result<SourceHubClient> {
-        let signer = TxSigner::from_hex_key(TEST_ACCOUNT_HEX_KEY, self.chain_config.clone())
-            .map_err(|e| anyhow!("failed to create SourceHub signer: {}", e))?;
-        SourceHubClient::with_signer(self.chain_config.clone(), signer)
-            .await
-            .map_err(|e| anyhow!("failed to create signed SourceHub client: {}", e))
-    }
-
     async fn policy_defines_resource(
-        &self,
         client: &SourceHubClient,
         policy_id: &str,
+        resource_name: &str,
+        permission_name: &str,
     ) -> Result<bool> {
         let policy = client
             .acp_query_policy(policy_id)
@@ -495,46 +477,15 @@ impl OrbisClient {
             .and_then(|record| record.policy)
             .map(|policy| {
                 policy.resources.iter().any(|resource| {
-                    resource.name == ORBIS_RESOURCE
+                    resource.name == resource_name
                         && resource
                             .permissions
                             .iter()
-                            .any(|permission| permission.name == "read")
+                            .any(|permission| permission.name == permission_name)
                 })
             })
             .unwrap_or(false))
     }
-}
-
-fn sourcehub_chain_config() -> ChainConfig {
-    ChainConfig::builder()
-        .chain_id(env::var("ORBIS_SOURCEHUB_CHAIN_ID").ok())
-        .rpc_url(sourcehub_url(
-            "ORBIS_SOURCEHUB_RPC",
-            "ORBIS_SOURCEHUB_RPC_PORT",
-        ))
-        .rest_url(sourcehub_url(
-            "ORBIS_SOURCEHUB_REST",
-            "ORBIS_SOURCEHUB_REST_PORT",
-        ))
-        .grpc_url(sourcehub_url(
-            "ORBIS_SOURCEHUB_GRPC",
-            "ORBIS_SOURCEHUB_GRPC_PORT",
-        ))
-        .denom(env::var("ORBIS_SOURCEHUB_DENOM").ok())
-        .build()
-}
-
-fn sourcehub_url(url_key: &str, port_key: &str) -> Option<String> {
-    env::var(url_key).ok().or_else(|| {
-        env::var(port_key)
-            .ok()
-            .map(|port| format!("http://127.0.0.1:{port}"))
-    })
-}
-
-fn did_seed(s: &str) -> [u8; 32] {
-    Sha256::digest(s.as_bytes()).into()
 }
 
 #[cfg(test)]
@@ -553,21 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn sourcehub_url_prefers_explicit_url_over_port() {
-        env::set_var("ORBIS_SOURCEHUB_TEST_URL", "http://127.0.0.1:1234");
-        env::set_var("ORBIS_SOURCEHUB_TEST_PORT", "5678");
-        let url = sourcehub_url("ORBIS_SOURCEHUB_TEST_URL", "ORBIS_SOURCEHUB_TEST_PORT");
-        env::remove_var("ORBIS_SOURCEHUB_TEST_URL");
-        env::remove_var("ORBIS_SOURCEHUB_TEST_PORT");
-        assert_eq!(url.as_deref(), Some("http://127.0.0.1:1234"));
-    }
-
-    #[test]
-    fn sourcehub_url_can_be_derived_from_port() {
-        env::remove_var("ORBIS_SOURCEHUB_TEST_URL");
-        env::set_var("ORBIS_SOURCEHUB_TEST_PORT", "31317");
-        let url = sourcehub_url("ORBIS_SOURCEHUB_TEST_URL", "ORBIS_SOURCEHUB_TEST_PORT");
-        env::remove_var("ORBIS_SOURCEHUB_TEST_PORT");
-        assert_eq!(url.as_deref(), Some("http://127.0.0.1:31317"));
+    fn invalid_endpoint_is_rejected() {
+        assert!(OrbisClient::new("not a valid endpoint").is_err());
     }
 }

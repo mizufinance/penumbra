@@ -15,12 +15,9 @@ poseidon377 = { workspace = true }
 rand_core = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-tonic = { workspace = true }
 
 aes-gcm = "0.10"
-did-key = "0.2.1"
 hkdf = "0.12"
 
 penumbra-sdk-compliance = { workspace = true, default-features = false }
@@ -28,6 +25,7 @@ penumbra-sdk-compliance = { workspace = true, default-features = false }
 orbis-authn = { package = "authn", git = "https://github.com/sourcenetwork/orbis-rs", rev = "d5889bd777bbac7bf97a8e89a2556116f2740ceb" }
 orbis-common = { package = "common", git = "https://github.com/sourcenetwork/orbis-rs", rev = "d5889bd777bbac7bf97a8e89a2556116f2740ceb" }
 orbis-proto = { package = "proto", git = "https://github.com/sourcenetwork/orbis-rs", rev = "d5889bd777bbac7bf97a8e89a2556116f2740ceb" }
+orbis-tonic = { package = "tonic", version = "0.14.5", features = ["transport"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }

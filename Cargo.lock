@@ -5412,8 +5412,11 @@ name = "orbis-audit"
 version = "2.1.0"
 dependencies = [
  "anyhow",
+ "authn",
  "clap",
+ "common",
  "decaf377",
+ "did-key",
  "hex",
  "penumbra-orbis-client",
  "penumbra-sdk-asset",
@@ -5436,7 +5439,9 @@ name = "orbis-integration"
 version = "2.1.0"
 dependencies = [
  "anyhow",
+ "authn",
  "clap",
+ "common",
  "decaf377",
  "hex",
  "penumbra-orbis-client",
@@ -5957,7 +5962,6 @@ dependencies = [
  "authn",
  "common",
  "decaf377",
- "did-key",
  "hex",
  "hkdf 0.12.4",
  "penumbra-sdk-compliance",
@@ -5966,9 +5970,8 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "serde_json",
- "sha2 0.10.8",
  "tokio",
- "tonic 0.12.3",
+ "tonic 0.14.5",
 ]
 
 [[package]]

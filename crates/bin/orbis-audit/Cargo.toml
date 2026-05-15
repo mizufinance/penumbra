@@ -16,7 +16,10 @@ demo = ["penumbra-sdk-keys/demo"]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
 decaf377 = { workspace = true, default-features = true }
+did-key = "0.2.1"
 hex = { workspace = true }
+orbis-authn = { package = "authn", git = "https://github.com/sourcenetwork/orbis-rs", rev = "d5889bd777bbac7bf97a8e89a2556116f2740ceb" }
+orbis-common = { package = "common", git = "https://github.com/sourcenetwork/orbis-rs", rev = "d5889bd777bbac7bf97a8e89a2556116f2740ceb" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

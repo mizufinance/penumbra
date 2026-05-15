@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::env;
 use std::fs::{self, File};
 use std::io::{BufReader, Write};
 use std::path::PathBuf;
@@ -7,6 +8,9 @@ use std::time::Instant;
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use decaf377::{Element, Fq, Fr};
+use did_key::{generate, Ed25519KeyPair as DidEd25519KeyPair, Fingerprint};
+use orbis_authn::JwtSigner;
+use orbis_common::blockchain::{ChainConfig, SourceHubClient, TxSigner, TEST_ACCOUNT_HEX_KEY};
 use penumbra_orbis_client::OrbisClient;
 use penumbra_sdk_compliance::{
     decrypt_orbis_reencrypted_seed, decrypt_tier_bytes, OrbisEncryptedSeedUploadPackage,
@@ -20,6 +24,9 @@ use tonic::transport::Channel;
 use url::Url;
 
 const DECRYPTED_VIA_ORBIS_PRE: &str = "orbis_pre";
+const ORBIS_NAMESPACE: &str = "orbis";
+const ORBIS_READER_RELATION: &str = "reader";
+const ORBIS_DEMO_READER_DID_PK: &str = "test_jwt";
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -62,6 +69,56 @@ struct Args {
 
     #[clap(long)]
     prepare_only: bool,
+}
+
+fn sourcehub_chain_config() -> ChainConfig {
+    ChainConfig::builder()
+        .chain_id(env::var("ORBIS_SOURCEHUB_CHAIN_ID").ok())
+        .rpc_url(sourcehub_url(
+            "ORBIS_SOURCEHUB_RPC",
+            "ORBIS_SOURCEHUB_RPC_PORT",
+        ))
+        .rest_url(sourcehub_url(
+            "ORBIS_SOURCEHUB_REST",
+            "ORBIS_SOURCEHUB_REST_PORT",
+        ))
+        .grpc_url(sourcehub_url(
+            "ORBIS_SOURCEHUB_GRPC",
+            "ORBIS_SOURCEHUB_GRPC_PORT",
+        ))
+        .denom(env::var("ORBIS_SOURCEHUB_DENOM").ok())
+        .build()
+}
+
+fn sourcehub_url(url_key: &str, port_key: &str) -> Option<String> {
+    env::var(url_key).ok().or_else(|| {
+        env::var(port_key)
+            .ok()
+            .map(|port| format!("http://127.0.0.1:{port}"))
+    })
+}
+
+async fn sourcehub_client() -> Result<SourceHubClient> {
+    let config = sourcehub_chain_config();
+    let signer = TxSigner::from_hex_key(TEST_ACCOUNT_HEX_KEY, config.clone())
+        .map_err(|e| anyhow!("failed to create demo SourceHub signer: {}", e))?;
+    SourceHubClient::with_signer(config, signer)
+        .await
+        .map_err(|e| anyhow!("failed to create signed SourceHub client: {}", e))
+}
+
+fn demo_jwt_signer() -> JwtSigner {
+    let key_pair = generate::<DidEd25519KeyPair>(Some(&demo_did_seed(ORBIS_DEMO_READER_DID_PK)));
+    JwtSigner::from_key_pair(key_pair)
+}
+
+fn demo_reader_did_uri() -> String {
+    let key_pair = generate::<DidEd25519KeyPair>(Some(&demo_did_seed(ORBIS_DEMO_READER_DID_PK)));
+    format!("did:key:{}", key_pair.fingerprint())
+}
+
+fn demo_did_seed(s: &str) -> [u8; 32] {
+    Sha256::digest(s.as_bytes()).into()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -115,6 +172,9 @@ struct CachedObject {
 #[derive(Clone)]
 struct AuditContext<'a> {
     cli: &'a OrbisClient,
+    sourcehub: Option<&'a SourceHubClient>,
+    jwt_signer: Option<&'a JwtSigner>,
+    reader_did_uri: Option<&'a str>,
     dk: &'a Fr,
     dk_pub: &'a Element,
     subject_transmission_key_hex: &'a str,
@@ -200,7 +260,10 @@ async fn main() -> Result<()> {
         known_transmission_keys.insert(hex::encode(address.transmission_key().0));
     }
 
-    let cli = OrbisClient::new(args.orbis_endpoint.clone());
+    let cli = OrbisClient::new(args.orbis_endpoint.clone())?;
+    let sourcehub = sourcehub_client().await?;
+    let jwt_signer = demo_jwt_signer();
+    let reader_did_uri = demo_reader_did_uri();
     eprintln!(
         "orbis-audit: targets={}...",
         subjects
@@ -262,6 +325,9 @@ async fn main() -> Result<()> {
             for subject in &subjects {
                 let ctx = AuditContext {
                     cli: &cli,
+                    sourcehub: Some(&sourcehub),
+                    jwt_signer: Some(&jwt_signer),
+                    reader_did_uri: Some(&reader_did_uri),
                     dk: &dk,
                     dk_pub: &dk_pub,
                     subject_transmission_key_hex: &subject.transmission_key_hex,
@@ -401,16 +467,16 @@ async fn prepare_transfer(
 
     if output_core.derivation_bytes() == *ctx.subject_b_d_bytes {
         let ring_id = output_core.ring_id.clone();
-        ensure_package_object(ctx.cli, &ring_id, output_core, timings, object_cache).await?;
-        ensure_package_object(ctx.cli, &ring_id, output_ext, timings, object_cache).await?;
+        ensure_package_object(ctx, &ring_id, output_core, timings, object_cache).await?;
+        ensure_package_object(ctx, &ring_id, output_ext, timings, object_cache).await?;
     } else {
         timings.subject_mismatch += 1;
     }
 
     if sender_core.derivation_bytes() == *ctx.subject_b_d_bytes {
         let ring_id = sender_core.ring_id.clone();
-        ensure_package_object(ctx.cli, &ring_id, sender_core, timings, object_cache).await?;
-        ensure_package_object(ctx.cli, &ring_id, sender_ext, timings, object_cache).await?;
+        ensure_package_object(ctx, &ring_id, sender_core, timings, object_cache).await?;
+        ensure_package_object(ctx, &ring_id, sender_ext, timings, object_cache).await?;
     } else {
         timings.subject_mismatch += 1;
     }
@@ -435,30 +501,14 @@ async fn try_receiver_match(
         timings.subject_mismatch += 1;
         return Ok(None);
     }
-    let output_core_seed = pre_package_seed(
-        ctx.cli,
-        &ring_id,
-        output_core,
-        ctx.dk,
-        ctx.dk_pub,
-        timings,
-        object_cache,
-    )
-    .await?;
+    let output_core_seed =
+        pre_package_seed(ctx, &ring_id, output_core, timings, object_cache).await?;
     let started = Instant::now();
     let amount = decrypt_amount_with_seed(output_core_seed, &ct.encrypted_output_core)?;
     timings.amount_decrypt_ms += started.elapsed().as_millis();
 
-    let output_ext_seed = pre_package_seed(
-        ctx.cli,
-        &ring_id,
-        output_ext,
-        ctx.dk,
-        ctx.dk_pub,
-        timings,
-        object_cache,
-    )
-    .await?;
+    let output_ext_seed =
+        pre_package_seed(ctx, &ring_id, output_ext, timings, object_cache).await?;
     let started = Instant::now();
     let sender = match decrypt_address_with_seed(output_ext_seed, &ct.encrypted_output_ext) {
         Ok(sender) => {
@@ -498,30 +548,14 @@ async fn try_sender_match(
         timings.subject_mismatch += 1;
         return Ok(None);
     }
-    let sender_core_seed = pre_package_seed(
-        ctx.cli,
-        &ring_id,
-        sender_core,
-        ctx.dk,
-        ctx.dk_pub,
-        timings,
-        object_cache,
-    )
-    .await?;
+    let sender_core_seed =
+        pre_package_seed(ctx, &ring_id, sender_core, timings, object_cache).await?;
     let started = Instant::now();
     let amount = decrypt_amount_with_seed(sender_core_seed, &ct.encrypted_sender_core)?;
     timings.amount_decrypt_ms += started.elapsed().as_millis();
 
-    let sender_ext_seed = pre_package_seed(
-        ctx.cli,
-        &ring_id,
-        sender_ext,
-        ctx.dk,
-        ctx.dk_pub,
-        timings,
-        object_cache,
-    )
-    .await?;
+    let sender_ext_seed =
+        pre_package_seed(ctx, &ring_id, sender_ext, timings, object_cache).await?;
     let started = Instant::now();
     let receiver = match decrypt_address_with_seed(sender_ext_seed, &ct.encrypted_sender_ext) {
         Ok(receiver) => {
@@ -646,7 +680,7 @@ fn package_cache_key(ring_id: &str, package: &OrbisEncryptedSeedUploadPackage) -
 }
 
 async fn ensure_package_object(
-    cli: &OrbisClient,
+    ctx: &AuditContext<'_>,
     ring_id: &str,
     package: OrbisEncryptedSeedUploadPackage,
     timings: &mut AuditTimings,
@@ -665,16 +699,40 @@ async fn ensure_package_object(
     }
 
     timings.object_cache_misses += 1;
+    let sourcehub = ctx
+        .sourcehub
+        .ok_or_else(|| anyhow!("missing SourceHub client for Orbis object registration"))?;
+    let jwt_signer = ctx
+        .jwt_signer
+        .ok_or_else(|| anyhow!("missing Orbis JWT signer for package storage"))?;
+    let reader_did_uri = ctx
+        .reader_did_uri
+        .ok_or_else(|| anyhow!("missing reader DID URI for Orbis relationship setup"))?;
     let started = Instant::now();
-    let stored = cli.store_encrypted_seed_package(ring_id, &package).await?;
+    let stored = ctx
+        .cli
+        .store_encrypted_seed_package(ORBIS_NAMESPACE, ring_id, &package, jwt_signer)
+        .await?;
     timings.package_store_ms += started.elapsed().as_millis();
     let started = Instant::now();
-    cli.register_object(&package.policy_id, &package.resource, &stored.object_id)
-        .await?;
+    OrbisClient::register_object(
+        sourcehub,
+        &package.policy_id,
+        &package.resource,
+        &stored.object_id,
+    )
+    .await?;
     timings.object_registration_ms += started.elapsed().as_millis();
     let started = Instant::now();
-    cli.set_relationship(&package.policy_id, &package.resource, &stored.object_id)
-        .await?;
+    OrbisClient::set_relationship(
+        sourcehub,
+        &package.policy_id,
+        &package.resource,
+        &stored.object_id,
+        ORBIS_READER_RELATION,
+        reader_did_uri,
+    )
+    .await?;
     timings.relationship_setup_ms += started.elapsed().as_millis();
     object_cache.objects.insert(
         cache_key.clone(),
@@ -691,37 +749,44 @@ async fn ensure_package_object(
 }
 
 async fn pre_package_seed(
-    cli: &OrbisClient,
+    ctx: &AuditContext<'_>,
     ring_id: &str,
     package: OrbisEncryptedSeedUploadPackage,
-    reader_sk: &Fr,
-    reader_pk: &Element,
     timings: &mut AuditTimings,
     object_cache: &mut ObjectCache,
 ) -> Result<Fq> {
-    let mut object = ensure_package_object(cli, ring_id, package, timings, object_cache).await?;
+    let mut object = ensure_package_object(ctx, ring_id, package, timings, object_cache).await?;
+    let jwt_signer = ctx
+        .jwt_signer
+        .ok_or_else(|| anyhow!("missing Orbis JWT signer for PRE"))?;
     let started = Instant::now();
-    let mut pre_result = cli
+    let mut pre_result = ctx
+        .cli
         .start_pre(
-            &hex::encode(reader_pk.vartime_compress().0),
+            ORBIS_NAMESPACE,
+            &hex::encode(ctx.dk_pub.vartime_compress().0),
             &object.object_id,
             &hex::encode(object.package.derivation_bytes()),
             Some(&object.package.salt),
             Some(object.package.timestamp),
+            jwt_signer,
         )
         .await;
     if pre_result.is_err() && object.from_cache {
         timings.object_cache_stale += 1;
         object_cache.objects.remove(&object.cache_key);
-        object = ensure_package_object(cli, ring_id, object.package.clone(), timings, object_cache)
+        object = ensure_package_object(ctx, ring_id, object.package.clone(), timings, object_cache)
             .await?;
-        pre_result = cli
+        pre_result = ctx
+            .cli
             .start_pre(
-                &hex::encode(reader_pk.vartime_compress().0),
+                ORBIS_NAMESPACE,
+                &hex::encode(ctx.dk_pub.vartime_compress().0),
                 &object.object_id,
                 &hex::encode(object.package.derivation_bytes()),
                 Some(&object.package.salt),
                 Some(object.package.timestamp),
+                jwt_signer,
             )
             .await;
     }
@@ -738,7 +803,7 @@ async fn pre_package_seed(
     let xnc_cmt = decaf377::Encoding(xnc_arr)
         .vartime_decompress()
         .map_err(|_| anyhow!("invalid xnc_cmt curve point"))?;
-    let seed = decrypt_orbis_reencrypted_seed(&object.package, reader_sk, &xnc_cmt, &pre.secret)?;
+    let seed = decrypt_orbis_reencrypted_seed(&object.package, ctx.dk, &xnc_cmt, &pre.secret)?;
     timings.seed_decrypt_ms += started.elapsed().as_millis();
     Ok(seed)
 }
@@ -877,7 +942,9 @@ mod tests {
     }
 
     fn dummy_context<'a>(tier_mode: &'a str, subject: &'a str) -> AuditContext<'a> {
-        let cli = Box::leak(Box::new(OrbisClient::new("http://127.0.0.1:8080")));
+        let cli = Box::leak(Box::new(
+            OrbisClient::new("http://127.0.0.1:8080").expect("dummy endpoint should parse"),
+        ));
         let dk = Box::leak(Box::new(Fr::from(3u64)));
         let dk_pub = Box::leak(Box::new(Element::GENERATOR * Fr::from(3u64)));
         let mut known_transmission_keys = HashSet::new();
@@ -886,6 +953,9 @@ mod tests {
 
         AuditContext {
             cli,
+            sourcehub: None,
+            jwt_signer: None,
+            reader_did_uri: None,
             dk,
             dk_pub,
             subject_transmission_key_hex: subject,

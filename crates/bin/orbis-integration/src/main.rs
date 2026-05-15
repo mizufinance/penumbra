@@ -13,6 +13,8 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
+use orbis_authn::JwtSigner;
+use orbis_common::blockchain::{ChainConfig, SourceHubClient, TxSigner, TEST_ACCOUNT_HEX_KEY};
 use penumbra_orbis_client::{NodeInfo, OrbisClient};
 use penumbra_sdk_compliance::{
     decrypt_flagged_rows, export_ledger_rows_json, export_scan_json, import_orbis_audit_entries,
@@ -30,6 +32,24 @@ const NODE3_DIAL_HOST: &str = "node3";
 const ORBIS_NAMESPACE: &str = "orbis";
 const ORBIS_RESOURCE: &str = "document";
 const ORBIS_PERMISSION: &str = "read";
+const ORBIS_POLICY_MARSHAL_TYPE_YAML: i32 = 1;
+const ORBIS_POLICY_YAML: &str = r#"
+name: test-policy
+resources:
+  - name: document
+    relations:
+      - name: creator
+        types:
+          - actor
+      - name: reader
+        types:
+          - actor
+    permissions:
+      - name: read
+        expr: creator + reader
+      - name: write
+        expr: creator
+"#;
 const DEFAULT_COMPLIANCE_DEV_REGISTRAR_SK_HEX: &str =
     "0100000000000000000000000000000000000000000000000000000000000000";
 const DEFAULT_COMPLIANCE_DEV_REGISTRAR_VK_HEX: &str =
@@ -54,6 +74,42 @@ fn node_endpoints() -> (String, String, String) {
         node_endpoint("ORBIS_NODE2_ENDPOINT", NODE2_ENDPOINT),
         node_endpoint("ORBIS_NODE3_ENDPOINT", NODE3_ENDPOINT),
     )
+}
+
+fn sourcehub_chain_config() -> ChainConfig {
+    ChainConfig::builder()
+        .chain_id(env::var("ORBIS_SOURCEHUB_CHAIN_ID").ok())
+        .rpc_url(sourcehub_url(
+            "ORBIS_SOURCEHUB_RPC",
+            "ORBIS_SOURCEHUB_RPC_PORT",
+        ))
+        .rest_url(sourcehub_url(
+            "ORBIS_SOURCEHUB_REST",
+            "ORBIS_SOURCEHUB_REST_PORT",
+        ))
+        .grpc_url(sourcehub_url(
+            "ORBIS_SOURCEHUB_GRPC",
+            "ORBIS_SOURCEHUB_GRPC_PORT",
+        ))
+        .denom(env::var("ORBIS_SOURCEHUB_DENOM").ok())
+        .build()
+}
+
+fn sourcehub_url(url_key: &str, port_key: &str) -> Option<String> {
+    env::var(url_key).ok().or_else(|| {
+        env::var(port_key)
+            .ok()
+            .map(|port| format!("http://127.0.0.1:{port}"))
+    })
+}
+
+async fn sourcehub_client() -> Result<SourceHubClient> {
+    let config = sourcehub_chain_config();
+    let signer = TxSigner::from_hex_key(TEST_ACCOUNT_HEX_KEY, config.clone())
+        .map_err(|e| anyhow!("failed to create demo SourceHub signer: {}", e))?;
+    SourceHubClient::with_signer(config, signer)
+        .await
+        .map_err(|e| anyhow!("failed to create signed SourceHub client: {}", e))
 }
 
 #[derive(Parser, Debug)]
@@ -190,18 +246,18 @@ async fn setup_ring(output_json: &Path) -> Result<()> {
         wait_for_tcp_endpoint(endpoint, 60, Duration::from_secs(2))?;
     }
 
-    let node1 = OrbisClient::new(node1_endpoint);
-    let node2 = OrbisClient::new(node2_endpoint);
-    let node3 = OrbisClient::new(node3_endpoint);
+    let node1 = OrbisClient::new(node1_endpoint)?;
+    let node2 = OrbisClient::new(node2_endpoint)?;
+    let node3 = OrbisClient::new(node3_endpoint)?;
 
     let info1 = wait_for_node_info(&node1, "node1").await?;
     let info2 = wait_for_node_info(&node2, "node2").await?;
     let info3 = wait_for_node_info(&node3, "node3").await?;
 
-    node1.register_bulletin_namespace(ORBIS_NAMESPACE).await?;
+    let sourcehub = sourcehub_client().await?;
+    OrbisClient::register_bulletin_namespace(&sourcehub, ORBIS_NAMESPACE).await?;
     for info in [&info1, &info2, &info3] {
-        node1
-            .add_bulletin_collaborator(ORBIS_NAMESPACE, &info.public_address)
+        OrbisClient::add_bulletin_collaborator(&sourcehub, ORBIS_NAMESPACE, &info.public_address)
             .await?;
     }
 
@@ -219,15 +275,23 @@ async fn setup_ring(output_json: &Path) -> Result<()> {
             &node_dial_host("ORBIS_NODE3_DIAL_HOST", NODE3_DIAL_HOST),
         )?,
     ];
-    let dkg = node1.start_dkg(2, &peer_ids).await?;
+    let dkg_signer = JwtSigner::new();
+    let dkg = node1.start_dkg(2, &peer_ids, &dkg_signer).await?;
     eprintln!(
         "orbis-integration: DKG session started: {} ({})",
         dkg.session_id, dkg.status
     );
     eprintln!("orbis-integration: DKG message: {}", dkg.message);
 
-    let ring = wait_for_latest_ring(&node1).await?;
-    let policy_id = node1.add_policy().await?;
+    let ring = wait_for_latest_ring(&sourcehub).await?;
+    let policy_id = OrbisClient::add_policy(
+        &sourcehub,
+        ORBIS_POLICY_YAML,
+        ORBIS_POLICY_MARSHAL_TYPE_YAML,
+        ORBIS_RESOURCE,
+        ORBIS_PERMISSION,
+    )
+    .await?;
     let output = RingSetupOutput {
         ring_pk_hex: ring.ring_pk_hex,
         ring_id: ring.ring_id,
@@ -290,18 +354,18 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
     wait_for_tcp_endpoint(&node2_endpoint, 60, Duration::from_secs(2))?;
     wait_for_tcp_endpoint(&node3_endpoint, 60, Duration::from_secs(2))?;
 
-    let node1 = OrbisClient::new(node1_endpoint);
-    let node2 = OrbisClient::new(node2_endpoint);
-    let node3 = OrbisClient::new(node3_endpoint);
+    let node1 = OrbisClient::new(node1_endpoint)?;
+    let node2 = OrbisClient::new(node2_endpoint)?;
+    let node3 = OrbisClient::new(node3_endpoint)?;
 
     let info1 = wait_for_node_info(&node1, "node1").await?;
     let info2 = wait_for_node_info(&node2, "node2").await?;
     let info3 = wait_for_node_info(&node3, "node3").await?;
 
-    node1.register_bulletin_namespace(ORBIS_NAMESPACE).await?;
+    let sourcehub = sourcehub_client().await?;
+    OrbisClient::register_bulletin_namespace(&sourcehub, ORBIS_NAMESPACE).await?;
     for info in [&info1, &info2, &info3] {
-        node1
-            .add_bulletin_collaborator(ORBIS_NAMESPACE, &info.public_address)
+        OrbisClient::add_bulletin_collaborator(&sourcehub, ORBIS_NAMESPACE, &info.public_address)
             .await?;
     }
 
@@ -319,14 +383,22 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
             &node_dial_host("ORBIS_NODE3_DIAL_HOST", NODE3_DIAL_HOST),
         )?,
     ];
-    let dkg = node1.start_dkg(2, &peer_ids).await?;
+    let dkg_signer = JwtSigner::new();
+    let dkg = node1.start_dkg(2, &peer_ids, &dkg_signer).await?;
     eprintln!(
         "orbis-integration: DKG session started: {} ({})",
         dkg.session_id, dkg.status
     );
     eprintln!("orbis-integration: DKG message: {}", dkg.message);
-    let ring = wait_for_latest_ring(&node1).await?;
-    let policy_id = node1.add_policy().await?;
+    let ring = wait_for_latest_ring(&sourcehub).await?;
+    let policy_id = OrbisClient::add_policy(
+        &sourcehub,
+        ORBIS_POLICY_YAML,
+        ORBIS_POLICY_MARSHAL_TYPE_YAML,
+        ORBIS_RESOURCE,
+        ORBIS_PERMISSION,
+    )
+    .await?;
     fs::write(
         &repo.ring_info_file,
         format!(
@@ -738,9 +810,9 @@ async fn verify(repo: &RepoPaths) -> Result<()> {
         "run `just orbis-integration-seed` before `just orbis-integration-verify`",
     )?;
     let (node1_endpoint, node2_endpoint, node3_endpoint) = node_endpoints();
-    let node1 = OrbisClient::new(node1_endpoint);
-    let node2 = OrbisClient::new(node2_endpoint);
-    let node3 = OrbisClient::new(node3_endpoint);
+    let node1 = OrbisClient::new(node1_endpoint)?;
+    let node2 = OrbisClient::new(node2_endpoint)?;
+    let node3 = OrbisClient::new(node3_endpoint)?;
     let current_peer_ids = format!(
         "{},{},{}",
         wait_for_node_info(&node1, "node1").await?.peer_id,
@@ -1202,10 +1274,10 @@ async fn wait_for_node_info(client: &OrbisClient, label: &str) -> Result<NodeInf
         .with_context(|| format!("timed out waiting for {label} info endpoint"))
 }
 
-async fn wait_for_latest_ring(client: &OrbisClient) -> Result<penumbra_orbis_client::RingInfo> {
+async fn wait_for_latest_ring(client: &SourceHubClient) -> Result<penumbra_orbis_client::RingInfo> {
     let mut last_error = None;
     for _ in 0..60 {
-        match client.get_latest_ring().await {
+        match OrbisClient::get_latest_ring(client, ORBIS_NAMESPACE).await {
             Ok(ring) => return Ok(ring),
             Err(error) => {
                 last_error = Some(error);
