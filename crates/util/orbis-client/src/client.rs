@@ -70,6 +70,7 @@ impl OrbisClient {
         &self,
         threshold: u32,
         peer_ids: &[String],
+        namespace: &str,
         jwt_signer: &JwtSigner,
     ) -> Result<DkgResult> {
         let total_nodes = peer_ids.len() as u32;
@@ -90,10 +91,10 @@ impl OrbisClient {
             peer_ids: peer_ids.to_vec(),
             pss_interval: None,
             policy_id: None,
-            namespace: ORBIS_NAMESPACE.to_string(),
+            namespace: namespace.to_string(),
         };
         let token = jwt_signer
-            .create_dkg_jwt(threshold, peer_ids, None, None, ORBIS_NAMESPACE)
+            .create_dkg_jwt(threshold, peer_ids, None, None, namespace)
             .map_err(|e| anyhow!("failed to create DKG JWT: {}", e))?;
         let request = create_authenticated_request(request, &token)
             .map_err(|e| anyhow!("failed to create authenticated DKG request: {}", e))?;
@@ -119,51 +120,41 @@ impl OrbisClient {
             return Ok(());
         }
 
-        let signer = TxSigner::from_hex_key(TEST_ACCOUNT_HEX_KEY, self.chain_config.clone())
-            .map_err(|e| anyhow!("failed to create signer: {}", e))?;
-        let client = SourceHubClient::with_signer(self.chain_config.clone(), signer)
-            .await
-            .map_err(|e| anyhow!("failed to create signed SourceHub client: {}", e))?;
-
-        // The integration-test Orbis nodes concurrently fund themselves from the
-        // shared TEST account; their sequence bumps can race our first signed tx.
-        // Resync on sequence-mismatch and retry — orbis-rs's `fund` helper does
-        // the same thing for the same reason.
+        // Orbis integration nodes concurrently fund themselves from the shared
+        // TEST account, and their sequence bumps can race our first signed tx.
+        // Resync on sequence-mismatch / account-not-found and retry — orbis-rs's
+        // `fund` helper does the same thing for the same reason.
         let mut attempt = 0u32;
-        let result = loop {
-            match client.bulletin_register_namespace(namespace).await {
-                Err(e)
-                    if attempt < 10
-                        && e.to_string().to_ascii_lowercase().contains("sequence mismatch") =>
-                {
-                    attempt += 1;
-                    let _ = client.resync_nonce().await;
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    continue;
-                }
-                other => break other,
-            }
-        };
-
-        match result {
-            Ok(result) if result.code == 0 => Ok(()),
-            Ok(result) => {
-                let log = result.log;
-                if log.contains("already exists") || log.contains("namespace already exists") {
-                    Ok(())
-                } else {
+        loop {
+            let outcome = client.bulletin_register_namespace(namespace).await;
+            match outcome {
+                Ok(result) if result.code == 0 => return Ok(()),
+                Ok(result) => {
+                    let log = result.log;
+                    if log.contains("already exists") || log.contains("namespace already exists") {
+                        return Ok(());
+                    }
                     bail!(
                         "register namespace tx failed: code={} log={log}",
                         result.code
                     )
                 }
-            }
-            Err(error) => {
-                let msg = error.to_string();
-                if msg.contains("already exists") || msg.contains("namespace already exists") {
-                    Ok(())
-                } else {
-                    Err(anyhow!("failed to register bulletin namespace: {}", error))
+                Err(error) => {
+                    let msg = error.to_string();
+                    if msg.contains("already exists") || msg.contains("namespace already exists") {
+                        return Ok(());
+                    }
+                    let lower = msg.to_ascii_lowercase();
+                    let transient = lower.contains("sequence mismatch")
+                        || lower.contains("account not found")
+                        || lower.contains("issuedidfromaccountaddr");
+                    if attempt < 30 && transient {
+                        attempt += 1;
+                        let _ = client.resync_nonce().await;
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        continue;
+                    }
+                    return Err(anyhow!("failed to register bulletin namespace: {}", error));
                 }
             }
         }
@@ -174,8 +165,6 @@ impl OrbisClient {
         namespace: &str,
         collaborator_address: &str,
     ) -> Result<()> {
-        let client = self.signing_client().await?;
-
         let mut attempt = 0u32;
         loop {
             let outcome = client
@@ -185,8 +174,7 @@ impl OrbisClient {
                 Ok(result) if result.code == 0 => return Ok(()),
                 Ok(result) => {
                     let log = result.log;
-                    if log.contains("already exists")
-                        || log.contains("collaborator already exists")
+                    if log.contains("already exists") || log.contains("collaborator already exists")
                     {
                         return Ok(());
                     }

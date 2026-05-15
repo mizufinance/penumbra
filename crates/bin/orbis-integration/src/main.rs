@@ -196,7 +196,9 @@ async fn setup_ring(output_json: &Path) -> Result<()> {
         )?,
     ];
     let dkg_signer = dkg_signer();
-    let dkg = node1.start_dkg(2, &peer_ids, &dkg_signer).await?;
+    let dkg = node1
+        .start_dkg(2, &peer_ids, ORBIS_NAMESPACE, &dkg_signer)
+        .await?;
     eprintln!(
         "orbis-integration: DKG session started: {} ({})",
         dkg.session_id, dkg.status
@@ -304,7 +306,9 @@ async fn seed(repo: &RepoPaths) -> Result<()> {
         )?,
     ];
     let dkg_signer = dkg_signer();
-    let dkg = node1.start_dkg(2, &peer_ids, &dkg_signer).await?;
+    let dkg = node1
+        .start_dkg(2, &peer_ids, ORBIS_NAMESPACE, &dkg_signer)
+        .await?;
     eprintln!(
         "orbis-integration: DKG session started: {} ({})",
         dkg.session_id, dkg.status

@@ -22,9 +22,9 @@ hkdf = "0.12"
 
 penumbra-sdk-compliance = { workspace = true, default-features = false }
 
-orbis-authn = { package = "authn", git = "https://github.com/sourcenetwork/orbis-rs", rev = "d5889bd777bbac7bf97a8e89a2556116f2740ceb" }
-orbis-common = { package = "common", git = "https://github.com/sourcenetwork/orbis-rs", rev = "d5889bd777bbac7bf97a8e89a2556116f2740ceb" }
-orbis-proto = { package = "proto", git = "https://github.com/sourcenetwork/orbis-rs", rev = "d5889bd777bbac7bf97a8e89a2556116f2740ceb" }
+orbis-authn = { package = "authn", git = "https://github.com/sourcenetwork/orbis-rs", rev = "e20d30232b4fa65b196d6c0ac7c7d862731a96e8" }
+orbis-common = { package = "common", git = "https://github.com/sourcenetwork/orbis-rs", rev = "e20d30232b4fa65b196d6c0ac7c7d862731a96e8" }
+orbis-proto = { package = "proto", git = "https://github.com/sourcenetwork/orbis-rs", rev = "e20d30232b4fa65b196d6c0ac7c7d862731a96e8" }
 orbis-tonic = { package = "tonic", version = "0.14.5", features = ["transport"] }
 
 [dev-dependencies]
