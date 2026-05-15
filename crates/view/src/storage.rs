@@ -1627,7 +1627,7 @@ impl Storage {
     ) -> anyhow::Result<()> {
         let pool = self.pool.clone();
         let asset_bytes = asset_id.to_bytes().to_vec();
-        let policy_bytes = policy.to_bytes();
+        let policy_bytes = policy.to_bytes()?;
 
         spawn_blocking(move || {
             let conn = pool.get()?;

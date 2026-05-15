@@ -1708,8 +1708,8 @@ impl ViewService for ViewServer {
 
         let (dk_pub, threshold, has_policy) = match &policy {
             Some(p) => (
-                p.dk_pub().vartime_compress().0.to_vec(),
-                p.threshold().to_le_bytes().to_vec(),
+                p.params.dk_pub.vartime_compress().0.to_vec(),
+                p.params.threshold.to_le_bytes().to_vec(),
                 true,
             ),
             None => (vec![], vec![], false),
