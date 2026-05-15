@@ -297,6 +297,44 @@ mod tests {
 
     static TRANSFER_PROOF_TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+    fn compliance_leaf_for(address: &penumbra_sdk_keys::Address) -> ComplianceLeaf {
+        let d = penumbra_sdk_compliance::derive_compliance_scalar(
+            address.diversified_generator().vartime_compress_to_field(),
+        );
+        ComplianceLeaf::new(address.clone(), *BASE_ASSET_ID, d)
+    }
+
+    fn sender_recipient_compliance_witnesses() -> (
+        ComplianceLeaf,
+        ComplianceLeaf,
+        tct::StateCommitment,
+        MerklePath,
+        MerklePath,
+    ) {
+        let sender_leaf = compliance_leaf_for(&test_keys::ADDRESS_0);
+        let recipient_leaf = compliance_leaf_for(&test_keys::ADDRESS_1);
+        let mut user_tree = QuadTree::new();
+        user_tree
+            .update(0, sender_leaf.commit())
+            .expect("insert sender user leaf");
+        user_tree
+            .update(1, recipient_leaf.commit())
+            .expect("insert recipient user leaf");
+        let compliance_anchor = tct::StateCommitment(user_tree.root().0);
+        let sender_compliance_path =
+            MerklePath::from_auth_path(user_tree.auth_path(0).expect("sender auth path"));
+        let recipient_compliance_path =
+            MerklePath::from_auth_path(user_tree.auth_path(1).expect("recipient auth path"));
+
+        (
+            sender_leaf,
+            recipient_leaf,
+            compliance_anchor,
+            sender_compliance_path,
+            recipient_compliance_path,
+        )
+    }
+
     #[test]
     fn transfer_proof_roundtrip_regulated() {
         let _guard = TRANSFER_PROOF_TEST_MUTEX
@@ -463,6 +501,13 @@ mod tests {
 
         let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) =
             penumbra_sdk_compliance::create_default_imt_proof(input_note.asset_id().0);
+        let (
+            sender_leaf,
+            recipient_leaf,
+            compliance_anchor,
+            sender_compliance_path,
+            recipient_compliance_path,
+        ) = sender_recipient_compliance_witnesses();
 
         let mut spend = ShieldedInputPlan::new(
             &mut rng,
@@ -474,6 +519,9 @@ mod tests {
         spend.asset_position = asset_position;
         spend.asset_anchor = asset_anchor;
         spend.is_regulated = false;
+        spend.compliance_anchor = compliance_anchor;
+        spend.compliance_path = sender_compliance_path;
+        spend.compliance_position = 0;
         spend
             .set_compliance_details(&mut rng)
             .expect("set registered base-asset spend compliance details");
@@ -485,14 +533,9 @@ mod tests {
         output.asset_position = asset_position;
         output.asset_anchor = asset_anchor;
         output.is_regulated = false;
-        let sender_leaf = spend
-            .compliance_leaf
-            .clone()
-            .expect("registered base-asset sender leaf");
-        let recipient_leaf = output
-            .compliance_leaf
-            .clone()
-            .expect("registered base-asset recipient leaf");
+        output.compliance_anchor = compliance_anchor;
+        output.compliance_path = recipient_compliance_path;
+        output.compliance_position = 1;
         output
             .set_compliance_details(
                 &mut rng,
@@ -561,6 +604,13 @@ mod tests {
 
         let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) =
             penumbra_sdk_compliance::create_default_imt_proof(input_note.asset_id().0);
+        let (
+            sender_leaf,
+            recipient_leaf,
+            compliance_anchor,
+            sender_compliance_path,
+            recipient_compliance_path,
+        ) = sender_recipient_compliance_witnesses();
 
         let mut spend = ShieldedInputPlan::new(
             &mut rng,
@@ -572,6 +622,9 @@ mod tests {
         spend.asset_position = asset_position;
         spend.asset_anchor = asset_anchor;
         spend.is_regulated = false;
+        spend.compliance_anchor = compliance_anchor;
+        spend.compliance_path = sender_compliance_path;
+        spend.compliance_position = 0;
         spend
             .set_compliance_details(&mut rng)
             .expect("set registered base-asset spend compliance details");
@@ -583,14 +636,9 @@ mod tests {
         output.asset_position = asset_position;
         output.asset_anchor = asset_anchor;
         output.is_regulated = false;
-        let sender_leaf = spend
-            .compliance_leaf
-            .clone()
-            .expect("registered base-asset sender leaf");
-        let recipient_leaf = output
-            .compliance_leaf
-            .clone()
-            .expect("registered base-asset recipient leaf");
+        output.compliance_anchor = compliance_anchor;
+        output.compliance_path = recipient_compliance_path;
+        output.compliance_position = 1;
         output
             .set_compliance_details(
                 &mut rng,
@@ -646,33 +694,13 @@ mod tests {
 
         let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) =
             penumbra_sdk_compliance::create_default_imt_proof(input_note.asset_id().0);
-
-        let sender_d = penumbra_sdk_compliance::derive_compliance_scalar(
-            test_keys::ADDRESS_0
-                .diversified_generator()
-                .vartime_compress_to_field(),
-        );
-        let sender_leaf =
-            ComplianceLeaf::new(test_keys::ADDRESS_0.clone(), *BASE_ASSET_ID, sender_d);
-        let recipient_d = penumbra_sdk_compliance::derive_compliance_scalar(
-            test_keys::ADDRESS_1
-                .diversified_generator()
-                .vartime_compress_to_field(),
-        );
-        let recipient_leaf =
-            ComplianceLeaf::new(test_keys::ADDRESS_1.clone(), *BASE_ASSET_ID, recipient_d);
-        let mut user_tree = QuadTree::new();
-        user_tree
-            .update(0, sender_leaf.commit())
-            .expect("insert sender user leaf");
-        user_tree
-            .update(1, recipient_leaf.commit())
-            .expect("insert recipient user leaf");
-        let compliance_anchor = tct::StateCommitment(user_tree.root().0);
-        let sender_compliance_path =
-            MerklePath::from_auth_path(user_tree.auth_path(0).expect("sender auth path"));
-        let recipient_compliance_path =
-            MerklePath::from_auth_path(user_tree.auth_path(1).expect("recipient auth path"));
+        let (
+            sender_leaf,
+            recipient_leaf,
+            compliance_anchor,
+            sender_compliance_path,
+            recipient_compliance_path,
+        ) = sender_recipient_compliance_witnesses();
 
         let mut spend = ShieldedInputPlan::new(
             &mut rng,
@@ -756,33 +784,13 @@ mod tests {
 
         let (asset_anchor, asset_indexed_leaf, asset_path, asset_position) =
             penumbra_sdk_compliance::create_default_imt_proof(input_note.asset_id().0);
-
-        let sender_d = penumbra_sdk_compliance::derive_compliance_scalar(
-            test_keys::ADDRESS_0
-                .diversified_generator()
-                .vartime_compress_to_field(),
-        );
-        let sender_leaf =
-            ComplianceLeaf::new(test_keys::ADDRESS_0.clone(), *BASE_ASSET_ID, sender_d);
-        let recipient_d = penumbra_sdk_compliance::derive_compliance_scalar(
-            test_keys::ADDRESS_1
-                .diversified_generator()
-                .vartime_compress_to_field(),
-        );
-        let recipient_leaf =
-            ComplianceLeaf::new(test_keys::ADDRESS_1.clone(), *BASE_ASSET_ID, recipient_d);
-        let mut user_tree = QuadTree::new();
-        user_tree
-            .update(0, sender_leaf.commit())
-            .expect("insert sender user leaf");
-        user_tree
-            .update(1, recipient_leaf.commit())
-            .expect("insert recipient user leaf");
-        let compliance_anchor = tct::StateCommitment(user_tree.root().0);
-        let sender_compliance_path =
-            MerklePath::from_auth_path(user_tree.auth_path(0).expect("sender auth path"));
-        let recipient_compliance_path =
-            MerklePath::from_auth_path(user_tree.auth_path(1).expect("recipient auth path"));
+        let (
+            sender_leaf,
+            recipient_leaf,
+            compliance_anchor,
+            sender_compliance_path,
+            recipient_compliance_path,
+        ) = sender_recipient_compliance_witnesses();
 
         let mut spend = ShieldedInputPlan::new(
             &mut rng,
