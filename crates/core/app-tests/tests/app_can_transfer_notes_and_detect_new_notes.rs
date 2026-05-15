@@ -67,6 +67,7 @@ async fn app_can_transfer_notes_and_detect_new_notes() -> anyhow::Result<()> {
         .amount()
         .checked_sub(&send_amount)
         .expect("test input note amount must cover the requested send amount");
+    let mut spend = spend;
     let output = ShieldedOutputPlan::new(
         &mut OsRng,
         Value {
@@ -83,6 +84,9 @@ async fn app_can_transfer_notes_and_detect_new_notes() -> anyhow::Result<()> {
         },
         input_note.address(),
     );
+    let mut outputs = [output, change];
+    common::align_transfer_planning_metadata(std::slice::from_mut(&mut spend), &mut outputs);
+    let [output, change] = outputs;
     let transfer = TransferPlan::new(vec![spend], vec![output, change], Fr::from(1u64))?;
 
     let mut plan = TransactionPlan {

@@ -100,14 +100,18 @@ async fn compliance_enrichment_preserves_sender_diversifier_on_supported_transfe
     )
     .await?;
 
-    let spend = ShieldedInputPlan::new(
+    let mut spend = ShieldedInputPlan::new(
         &mut OsRng,
         note.clone(),
         client
             .position(note.commit())
             .ok_or_else(|| anyhow!("sender note position unknown"))?,
     );
-    let output = ShieldedOutputPlan::new(&mut OsRng, note.value(), recipient.clone());
+    let mut output = ShieldedOutputPlan::new(&mut OsRng, note.value(), recipient.clone());
+    common::align_transfer_planning_metadata(
+        std::slice::from_mut(&mut spend),
+        std::slice::from_mut(&mut output),
+    );
     let transfer = TransferPlan::new(vec![spend], vec![output], Fr::from(1u64))?;
 
     let mut plan = TransactionPlan {
