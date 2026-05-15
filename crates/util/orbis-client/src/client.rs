@@ -70,6 +70,7 @@ impl OrbisClient {
         &self,
         threshold: u32,
         peer_ids: &[String],
+        namespace: &str,
         jwt_signer: &JwtSigner,
     ) -> Result<DkgResult> {
         let total_nodes = peer_ids.len() as u32;
@@ -89,9 +90,11 @@ impl OrbisClient {
             threshold,
             peer_ids: peer_ids.to_vec(),
             pss_interval: None,
+            policy_id: None,
+            namespace: namespace.to_string(),
         };
         let token = jwt_signer
-            .create_dkg_jwt(threshold, peer_ids, None)
+            .create_dkg_jwt(threshold, peer_ids, None, None, namespace)
             .map_err(|e| anyhow!("failed to create DKG JWT: {}", e))?;
         let request = create_authenticated_request(request, &token)
             .map_err(|e| anyhow!("failed to create authenticated DKG request: {}", e))?;
@@ -117,25 +120,41 @@ impl OrbisClient {
             return Ok(());
         }
 
-        match client.bulletin_register_namespace(namespace).await {
-            Ok(result) if result.code == 0 => Ok(()),
-            Ok(result) => {
-                let log = result.log;
-                if log.contains("already exists") || log.contains("namespace already exists") {
-                    Ok(())
-                } else {
+        // Orbis integration nodes concurrently fund themselves from the shared
+        // TEST account, and their sequence bumps can race our first signed tx.
+        // Resync on sequence-mismatch / account-not-found and retry — orbis-rs's
+        // `fund` helper does the same thing for the same reason.
+        let mut attempt = 0u32;
+        loop {
+            let outcome = client.bulletin_register_namespace(namespace).await;
+            match outcome {
+                Ok(result) if result.code == 0 => return Ok(()),
+                Ok(result) => {
+                    let log = result.log;
+                    if log.contains("already exists") || log.contains("namespace already exists") {
+                        return Ok(());
+                    }
                     bail!(
                         "register namespace tx failed: code={} log={log}",
                         result.code
                     )
                 }
-            }
-            Err(error) => {
-                let msg = error.to_string();
-                if msg.contains("already exists") || msg.contains("namespace already exists") {
-                    Ok(())
-                } else {
-                    Err(anyhow!("failed to register bulletin namespace: {}", error))
+                Err(error) => {
+                    let msg = error.to_string();
+                    if msg.contains("already exists") || msg.contains("namespace already exists") {
+                        return Ok(());
+                    }
+                    let lower = msg.to_ascii_lowercase();
+                    let transient = lower.contains("sequence mismatch")
+                        || lower.contains("account not found")
+                        || lower.contains("issuedidfromaccountaddr");
+                    if attempt < 30 && transient {
+                        attempt += 1;
+                        let _ = client.resync_nonce().await;
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        continue;
+                    }
+                    return Err(anyhow!("failed to register bulletin namespace: {}", error));
                 }
             }
         }
@@ -146,25 +165,38 @@ impl OrbisClient {
         namespace: &str,
         collaborator_address: &str,
     ) -> Result<()> {
-        match client
-            .bulletin_add_collaborator(namespace, collaborator_address)
-            .await
-        {
-            Ok(result) if result.code == 0 => Ok(()),
-            Ok(result) => {
-                let log = result.log;
-                if log.contains("already exists") || log.contains("collaborator already exists") {
-                    Ok(())
-                } else {
+        let mut attempt = 0u32;
+        loop {
+            let outcome = client
+                .bulletin_add_collaborator(namespace, collaborator_address)
+                .await;
+            match outcome {
+                Ok(result) if result.code == 0 => return Ok(()),
+                Ok(result) => {
+                    let log = result.log;
+                    if log.contains("already exists") || log.contains("collaborator already exists")
+                    {
+                        return Ok(());
+                    }
                     bail!("add collaborator tx failed: code={} log={log}", result.code)
                 }
-            }
-            Err(error) => {
-                let msg = error.to_string();
-                if msg.contains("already exists") || msg.contains("collaborator already exists") {
-                    Ok(())
-                } else {
-                    Err(anyhow!("failed to add collaborator: {}", error))
+                Err(error) => {
+                    let msg = error.to_string();
+                    if msg.contains("already exists") || msg.contains("collaborator already exists")
+                    {
+                        return Ok(());
+                    }
+                    let lower = msg.to_ascii_lowercase();
+                    let transient = lower.contains("sequence mismatch")
+                        || lower.contains("account not found")
+                        || lower.contains("issuedidfromaccountaddr");
+                    if attempt < 30 && transient {
+                        attempt += 1;
+                        let _ = client.resync_nonce().await;
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        continue;
+                    }
+                    return Err(anyhow!("failed to add collaborator: {}", error));
                 }
             }
         }
@@ -276,16 +308,14 @@ impl OrbisClient {
             shared_point: package.shared_point.clone(),
             challenge: package.orbis_challenge.clone(),
             response: package.orbis_response.clone(),
-            derived_pk: Some(package.derived_pk.clone()),
             with_proof: false,
             tier: Some(package.tier_label.clone()),
             timestamp: Some(package.timestamp),
-            metadata_hash: Some(package.metadata_hash.clone()),
         };
 
         let token = jwt_signer
             .create_store_secret_jwt(
-                package.encrypted_document.clone(),
+                &package.encrypted_document,
                 package.enc_cmt.clone(),
                 ring_id,
                 namespace,
@@ -295,11 +325,9 @@ impl OrbisClient {
                 package.shared_point.clone(),
                 package.orbis_challenge.clone(),
                 package.orbis_response.clone(),
-                Some(package.derived_pk.clone()),
                 false,
                 Some(package.tier_label.clone()),
                 Some(package.timestamp),
-                Some(package.metadata_hash.clone()),
             )
             .map_err(|e| anyhow!("failed to create Orbis store-secret JWT: {}", e))?;
 

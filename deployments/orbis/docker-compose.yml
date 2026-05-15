@@ -1,6 +1,6 @@
 services:
   sourcehub:
-    image: ${SOURCEHUB_IMAGE:-ghcr.io/sourcenetwork/sourcehub:dev}
+    image: ${SOURCEHUB_IMAGE:-ghcr.io/sourcenetwork/sourcehub@sha256:4f6b71d12a10eb6d433a4b73c7b8ab25d6d8a6242f673fed12da2e254e734f0e}
     platform: linux/amd64
     entrypoint: ["/bin/sh", "-c"]
     command:
