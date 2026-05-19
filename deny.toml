@@ -1,0 +1,125 @@
+# cargo-deny configuration
+# Run: cargo deny check
+# Install: cargo install cargo-deny
+
+[graph]
+all-features = false
+
+# ---------------------------------------------------------------------------
+# Licenses
+# ---------------------------------------------------------------------------
+# Anything not in the allow list is denied by default.
+# OR-expressions are evaluated lazily — if Apache-2.0 or MIT appears in the
+# expression, the crate passes even if GPL also appears (e.g. self_cell).
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Unlicense",
+    "CC0-1.0",
+    "Zlib",
+    "BSL-1.0",   # Boost Software License (permissive) — used by ryu via serde_json
+    "MPL-2.0",   # file-level copyleft only; we don't modify these files.
+                 # affects: option-ext (via dirs)
+    "OpenSSL",   # via ring; combined with ISC+MIT, see clarify below
+    "EPL-2.0",   # Eclipse Public License — colored_json (pcli CLI output).
+                 # Weak copyleft: file-level only, we do not modify it.
+]
+
+# Confidence threshold for license text scanning (when SPDX field is absent)
+confidence-threshold = 0.8
+
+# Crates missing the SPDX `license` manifest field. Each entry pins the
+# upstream license expression and the LICENSE file hash so any change to
+# the file forces a re-review.
+[[licenses.clarify]]
+name = "ring"
+# Upstream: https://github.com/briansmith/ring/blob/main/LICENSE
+expression = "ISC AND MIT AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[[licenses.clarify]]
+name = "ark-dh-commitments"
+# Upstream arkworks-rs: dual MIT/Apache-2.0
+expression = "MIT OR Apache-2.0"
+license-files = []
+
+[[licenses.clarify]]
+name = "ark-inner-products"
+expression = "MIT OR Apache-2.0"
+license-files = []
+
+[[licenses.clarify]]
+name = "ark-ip-proofs"
+expression = "MIT OR Apache-2.0"
+license-files = []
+
+# ---------------------------------------------------------------------------
+# Security advisories — every entry has an exit condition.
+# Periodic audit: grep for entries whose exit condition has been met and
+# remove them.
+# ---------------------------------------------------------------------------
+[advisories]
+unmaintained = "none"
+yanked = "allow"
+ignore = [
+    # ed25519-dalek 1.x and curve25519-dalek 3.x are pulled in by did-key 0.2.1
+    # via the orbis-rs `authn` crate. did-key has no patched release.
+    # Exit: did-key drops legacy dalek pins, or orbis-rs drops did-key.
+    "RUSTSEC-2022-0093",  # ed25519-dalek double-signing oracle
+    "RUSTSEC-2024-0344",  # curve25519-dalek timing variability
+
+    # tracing-subscriber 0.2.25 is pinned by ark-relations 0.5.1 (arkworks).
+    # Our own usage is on 0.3.23 (patched). Exit: arkworks upgrades to 0.3.x.
+    "RUSTSEC-2025-0055",
+
+    # rustls-webpki 0.102.8 is pinned by the rustls 0.23 chain (via
+    # rustls-acme, hyper-rustls, axum-server, futures-rustls). Fixes require
+    # majoring up rustls-webpki to 0.103+. Exit: bump the rustls ecosystem.
+    "RUSTSEC-2026-0049",
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+
+    # aws-lc-sys 0.25.x is pinned by aws-lc-rs 1.12.2 (via rustls 0.23,
+    # rustls-acme, axum-server). Fixes require aws-lc-rs >= 1.13 + rustls
+    # bumps. Exit: bump aws-lc-rs / rustls-acme to versions on aws-lc-sys
+    # 0.38+.
+    "RUSTSEC-2026-0045",
+    "RUSTSEC-2026-0046",
+    "RUSTSEC-2026-0047",
+    "RUSTSEC-2026-0048",
+]
+
+# ---------------------------------------------------------------------------
+# Banned crates
+# ---------------------------------------------------------------------------
+[bans]
+# Warn on duplicate versions of the same crate (common with large dep trees).
+# Tightening to "deny" is tracked as a separate cleanup pass.
+multiple-versions = "warn"
+wildcards = "allow"
+
+# ---------------------------------------------------------------------------
+# Source origins
+# ---------------------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# Git origins are pinned per-rev/branch in Cargo.lock; this list gates which
+# origins are permitted at all.
+allow-git = [
+    "https://github.com/mizufinance/decaf377",
+    "https://github.com/mizufinance/decaf377-rdsa",
+    "https://github.com/mizufinance/poseidon377",
+    "https://github.com/sourcenetwork/orbis-rs",
+    "https://github.com/ledger-community/rust-ledger",
+]

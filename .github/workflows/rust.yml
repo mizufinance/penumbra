@@ -44,6 +44,16 @@ jobs:
               echo "OK: no uncommitted changes detected"
           fi
 
+  deny:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
   # As of 2025Q1, the "features" job is the slowest in the CI suite.
   # Consider moving to a scheduled job on main, rather than running on PRs.
   features:
@@ -132,13 +142,14 @@ jobs:
         run: nix develop --command just ci-gnark-proof-tests
 
   summary:
-    needs: [lint, features, test, go-gnark, gnark-rust]
+    needs: [lint, deny, features, test, go-gnark, gnark-rust]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - name: Check Rust workflow result
         env:
           LINT_RESULT: ${{ needs.lint.result }}
+          DENY_RESULT: ${{ needs.deny.result }}
           FEATURES_RESULT: ${{ needs.features.result }}
           TEST_RESULT: ${{ needs.test.result }}
           GO_GNARK_RESULT: ${{ needs['go-gnark'].result }}
@@ -147,6 +158,7 @@ jobs:
           failed=0
           for job in \
             "lint:$LINT_RESULT" \
+            "deny:$DENY_RESULT" \
             "features:$FEATURES_RESULT" \
             "test:$TEST_RESULT" \
             "go-gnark:$GO_GNARK_RESULT" \
