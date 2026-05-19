@@ -4,24 +4,17 @@
 //! node operators must coordinate to perform a chain upgrade.
 //! This module declares how local `pd` state should be altered, if at all,
 //! in order to be compatible with the network post-chain-upgrade.
-mod mainnet1;
-mod mainnet2;
-mod mainnet3;
 mod migrate2;
-mod reset_halt_bit;
-mod simple;
-mod testnet77;
+
+use migrate2::framework::Migration as MigrationTrait;
 
 use anyhow::{ensure, Context};
-use penumbra_sdk_governance::StateReadExt;
+use cnidarium::{StateDelta, Storage};
+use penumbra_sdk_app::SUBSTORE_PREFIXES;
+use penumbra_sdk_governance::{StateReadExt, StateWriteExt as _};
 use penumbra_sdk_sct::component::clock::EpochRead;
 use std::path::{Path, PathBuf};
 use tracing::instrument;
-
-use migrate2::Migration as MigrationTrait;
-
-use cnidarium::Storage;
-use penumbra_sdk_app::SUBSTORE_PREFIXES;
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -32,21 +25,6 @@ use std::fs::File;
 pub enum Migration {
     /// Set the chain's halt bit to `false`.
     ReadyToStart,
-    /// A simple migration: adds a key to the consensus state.
-    /// This is useful for testing upgrade mechanisms, including in production.
-    SimpleMigration,
-    /// Testnet-77 migration:
-    /// - Reset the halt bit
-    Testnet77,
-    /// Mainnet-1 migration:
-    /// - Restore IBC packet commitments for improperly handled withdrawal attempts
-    Mainnet1,
-    /// Mainnet-2 migration:
-    /// - no-op
-    Mainnet2,
-    /// Mainnet-3 migration:
-    /// - no-op
-    Mainnet3,
     /// IBC client recovery
     /// - Swap IBC client state
     IbcClientRecovery,
@@ -102,26 +80,15 @@ impl Migration {
 
         tracing::info!("started migration");
 
-        // We early return :
-        // - using the migration framework (as opposed to legacy migrations)
-        // - using a ready-to-start or ibc-client-recovery recipe.
-
         match self {
-            Migration::SimpleMigration => {
-                simple::migrate(storage, pd_home.clone(), genesis_start).await?
-            }
-            Migration::Mainnet1 => {
-                mainnet1::migrate(storage, pd_home.clone(), genesis_start).await?;
-            }
-            Migration::Mainnet2 => {
-                mainnet2::migrate(storage, pd_home.clone(), genesis_start).await?;
-            }
-            Migration::Mainnet3 => {
-                mainnet3::migrate(storage, pd_home.clone(), genesis_start).await?;
-            }
             Migration::ReadyToStart => {
-                reset_halt_bit::migrate(storage, pd_home, genesis_start).await?;
-                // Early return since we are not producing a new genesis.
+                let mut delta = StateDelta::new(storage.latest_snapshot());
+                delta.ready_to_start();
+                storage.commit_in_place(delta).await?;
+                storage.release().await;
+                tracing::info!(
+                    "migration completed: halt bit is turned off, chain is ready to start"
+                );
                 return Ok(());
             }
             Migration::IbcClientRecovery => {
@@ -177,17 +144,7 @@ impl Migration {
                 // Early return since the new framework handles genesis generation.
                 return Ok(());
             }
-            // We keep historical migrations around for now, this will help inform an abstracted
-            // design. Feel free to remove it if it's causing you trouble.
-            _ => unimplemented!("the specified migration is unimplemented"),
         }
-
-        if let Some(comet_home) = comet_home {
-            let genesis_path = pd_home.join("genesis.json");
-            migrate_comet_data(comet_home, genesis_path).await?;
-        }
-
-        Ok(())
     }
 }
 
