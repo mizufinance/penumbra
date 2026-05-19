@@ -3669,7 +3669,7 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                             if route_policy_hash__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("routePolicyHash"));
                             }
-                            route_policy_hash__ =
+                            route_policy_hash__ = 
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -4627,7 +4627,7 @@ impl<'de> serde::Deserialize<'de> for UpdateAssetIbcPolicy {
                             if expected_route_policy_hash__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expectedRoutePolicyHash"));
                             }
-                            expected_route_policy_hash__ =
+                            expected_route_policy_hash__ = 
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
