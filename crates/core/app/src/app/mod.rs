@@ -6047,21 +6047,26 @@ impl App {
     /// This method also resets `self` as if it were constructed
     /// as an empty state over top of the newly written storage.
     pub async fn commit(&mut self, storage: Storage) -> RootHash {
+        let commit_start = Instant::now();
+        let flush_start = Instant::now();
         self.flush_deferred_block_transactions()
             .await
             .expect("must be able to flush deferred block transactions before commit");
+        let flush_ms = flush_start.elapsed().as_secs_f64() * 1000.0;
         // We need to extract the State we've built up to commit it.  Fill in a dummy state.
         let dummy_state = StateDelta::new(storage.latest_snapshot());
         let mut state = Arc::try_unwrap(std::mem::replace(&mut self.state, Arc::new(dummy_state)))
             .expect("we have exclusive ownership of the State at commit()");
 
         // Check if an emergency halt has been signaled.
+        let halt_check_start = Instant::now();
         let should_halt = state.is_chain_halted().await;
 
         let is_pre_upgrade_height = state
             .is_pre_upgrade_height()
             .await
             .expect("must be able to read upgrade height");
+        let halt_check_ms = halt_check_start.elapsed().as_secs_f64() * 1000.0;
 
         // If the next height is an upgrade height, we signal a halt and turn
         // a `halt_bit` on which will prevent the chain from restarting without
@@ -6072,10 +6077,12 @@ impl App {
         }
 
         // Commit the pending writes, clearing the state.
+        let storage_commit_start = Instant::now();
         let jmt_root = storage
             .commit(state)
             .await
             .expect("must be able to successfully commit to storage");
+        let storage_commit_ms = storage_commit_start.elapsed().as_secs_f64() * 1000.0;
 
         // We want to halt the node, but not before we submit an ABCI `Commit`
         // response to `CometBFT`. To do this, we schedule a process exit in `2s`,
@@ -6092,11 +6099,25 @@ impl App {
         tracing::debug!(?jmt_root, "finished committing state");
 
         // Get the latest version of the state, now that we've committed it.
+        let snapshot_reset_start = Instant::now();
         let latest_snapshot = storage.latest_snapshot();
         self.snapshot_version = latest_snapshot.version();
         self.committed_snapshot = latest_snapshot.clone();
         self.state = Arc::new(StateDelta::new(latest_snapshot));
         self.pending_sct_append_log.clear();
+        let snapshot_reset_ms = snapshot_reset_start.elapsed().as_secs_f64() * 1000.0;
+        let total_ms = commit_start.elapsed().as_secs_f64() * 1000.0;
+        // Stall investigation: surface per-phase timing so we can identify
+        // which step in Commit is responsible when block production stalls
+        // (e.g. the 23s gap between EndBlock and Commit in CI).
+        tracing::info!(
+            commit_total_ms = total_ms,
+            commit_flush_deferred_ms = flush_ms,
+            commit_halt_check_ms = halt_check_ms,
+            commit_storage_commit_ms = storage_commit_ms,
+            commit_snapshot_reset_ms = snapshot_reset_ms,
+            "commit_phase_profile"
+        );
         jmt_root
     }
 
