@@ -33,10 +33,12 @@ case "$ACTION" in
         ;;
     logs)
         ensure_docker_daemon
+        ensure_orbis_runtime_checkout
         run_orbis_compose "$COMPOSE_FILE" logs
         ;;
     ps)
         ensure_docker_daemon
+        ensure_orbis_runtime_checkout
         run_orbis_compose "$COMPOSE_FILE" ps
         ;;
     *)

@@ -90,12 +90,11 @@ jobs:
         working-directory: penumbra
         run: nix develop --command just orbis-integration
 
-      - name: Capture Orbis docker logs
-        if: failure()
-        working-directory: penumbra
-        run: |
-          mkdir -p "$COMPLIANCE_TMP"
-          ./scripts/orbis-stack.sh logs > "$COMPLIANCE_TMP/orbis-docker.log" || true
+      # NOTE: docker logs are captured by orbis-integration itself before it
+      # tears down the stack (see capture_orbis_logs in
+      # crates/bin/orbis-integration/src/main.rs). Running `orbis-stack.sh
+      # logs` here would query already-removed containers and overwrite the
+      # captured file with empty output.
 
       - name: Upload integration artifacts
         if: failure()
