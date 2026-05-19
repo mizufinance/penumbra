@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{str::FromStr, time::Instant};
 
 use crate::{
     component::{AssetRegistry, NoteManager},
@@ -138,24 +138,83 @@ fn received_asset_metadata(
     }
 }
 
+#[derive(Clone)]
+struct Ics20ReceiveContext {
+    packet_data: FungibleTokenPacketData,
+    received_denom: asset::Metadata,
+    returned_to_source: bool,
+    receiver_amount: Amount,
+    receiver_address: Address,
+    compliance_metadata: Option<IbcComplianceMetadata>,
+}
+
+impl Ics20ReceiveContext {
+    fn parse(msg: &MsgRecvPacket) -> Result<Self> {
+        // NOTE: spec says proto but this is actually JSON according to the ibc-go implementation.
+        let packet_data: FungibleTokenPacketData =
+            serde_json::from_slice(msg.packet.data.as_slice())
+                .with_context(|| "failed to decode FTPD packet")?;
+        let packet_denom: asset::Metadata = packet_data
+            .denom
+            .as_str()
+            .try_into()
+            .context("couldnt decode denom in ICS20 transfer")?;
+        let receiver_amount: Amount = packet_data
+            .amount
+            .clone()
+            .try_into()
+            .context("couldnt decode amount in ICS20 transfer")?;
+        let receiver_address = Address::from_str(&packet_data.receiver)?;
+
+        let compliance_metadata = IbcComplianceMetadata::from_memo(&packet_data.memo)
+            .unwrap_or_else(|e| {
+                tracing::debug!(?e, "failed to parse compliance metadata from ICS-20 memo");
+                None
+            });
+
+        let (received_denom, returned_to_source) =
+            received_asset_metadata(msg, &packet_data, &packet_denom)?;
+
+        Ok(Self {
+            packet_data,
+            received_denom,
+            returned_to_source,
+            receiver_amount,
+            receiver_address,
+            compliance_metadata,
+        })
+    }
+}
+
+#[cfg(feature = "benchmark-helpers")]
+pub(crate) fn benchmark_parse_ics20_receive_context(
+    msg: &MsgRecvPacket,
+) -> Result<(asset::Id, bool, Amount)> {
+    let context = Ics20ReceiveContext::parse(msg)?;
+    Ok((
+        context.received_denom.id(),
+        context.returned_to_source,
+        context.receiver_amount,
+    ))
+}
+
 async fn check_regulated_inbound_ics20<S: StateRead>(
     state: &S,
-    msg: &MsgRecvPacket,
-    packet_data: &FungibleTokenPacketData,
-    received_denom: &asset::Metadata,
-    returned_to_source: bool,
-    compliance_metadata: &Option<IbcComplianceMetadata>,
+    route: &IbcRoute,
+    context: &Ics20ReceiveContext,
 ) -> Result<()> {
-    let route = resolve_ibc_route(state, &msg.packet.port_on_b, &msg.packet.chan_on_b).await?;
-    let received_asset_id = received_denom.id();
+    let received_asset_id = context.received_denom.id();
     let mut policy = state.get_asset_policy(received_asset_id).await?;
 
-    if !returned_to_source {
-        if let Some(origin_asset_id) = state.get_ibc_origin_asset_id(&packet_data.denom).await? {
+    if !context.returned_to_source {
+        if let Some(origin_asset_id) = state
+            .get_ibc_origin_asset_id(&context.packet_data.denom)
+            .await?
+        {
             anyhow::ensure!(
                 origin_asset_id == received_asset_id,
                 "regulated IBC origin {} arrived as unexpected asset {}",
-                packet_data.denom,
+                context.packet_data.denom,
                 received_asset_id
             );
             if policy.is_none() {
@@ -164,12 +223,12 @@ async fn check_regulated_inbound_ics20<S: StateRead>(
             anyhow::ensure!(
                 policy.is_some(),
                 "regulated IBC origin {} has no registered asset policy",
-                packet_data.denom
+                context.packet_data.denom
             );
         }
     }
 
-    if let Some(metadata) = compliance_metadata {
+    if let Some(metadata) = &context.compliance_metadata {
         anyhow::ensure!(
             metadata.asset_id == received_asset_id,
             "IBC compliance metadata asset_id does not match received asset"
@@ -181,7 +240,7 @@ async fn check_regulated_inbound_ics20<S: StateRead>(
     }
 
     if let Some(policy) = policy {
-        IbcComplianceMetadata::validate_regulated_memo(&packet_data.memo)?;
+        IbcComplianceMetadata::validate_regulated_memo(&context.packet_data.memo)?;
         anyhow::ensure!(
             policy.permits_ibc_route(&route),
             "regulated asset is not allowed on IBC route {}:{} via {} to {}:{}",
@@ -207,8 +266,15 @@ pub trait Ics20TransferExecutionExt: StateWrite {
         current_block_time: Time,
     ) -> Result<()> {
         let packet: IBCPacket<Unchecked> = withdrawal.clone().into();
+        let send_check_start = Instant::now();
         self.send_packet_check(packet, current_block_time).await?;
+        tracing::debug!(
+            elapsed_us = send_check_start.elapsed().as_micros(),
+            channel = %withdrawal.source_channel,
+            "ibc_outbound_send_packet_check"
+        );
 
+        let route_policy_start = Instant::now();
         if let Some(policy) = self.get_asset_policy(withdrawal.denom.id()).await? {
             IbcComplianceMetadata::validate_regulated_memo(&withdrawal.ics20_memo)?;
             let route =
@@ -223,6 +289,12 @@ pub trait Ics20TransferExecutionExt: StateWrite {
                 route.counterparty_channel
             );
         }
+        tracing::debug!(
+            elapsed_us = route_policy_start.elapsed().as_micros(),
+            asset_id = %withdrawal.denom.id(),
+            channel = %withdrawal.source_channel,
+            "ibc_outbound_route_policy_check"
+        );
 
         Ok(())
     }
@@ -236,6 +308,7 @@ pub trait Ics20TransferWriteExt: StateWrite {
         // create packet, assume it's already checked since the component caller contract calls `check` before `execute`
         let checked_packet = IBCPacket::<Unchecked>::from(withdrawal.clone()).assume_checked();
 
+        let accounting_start = Instant::now();
         let prefix = format!("transfer/{}/", &withdrawal.source_channel);
         if !withdrawal.denom.starts_with(&prefix) {
             // we are the source. add the value balance to the escrow channel.
@@ -334,8 +407,20 @@ pub trait Ics20TransferWriteExt: StateWrite {
                 .to_proto(),
             );
         }
+        tracing::debug!(
+            elapsed_us = accounting_start.elapsed().as_micros(),
+            asset_id = %withdrawal.denom.id(),
+            channel = %withdrawal.source_channel,
+            "ibc_outbound_nullifier_note_accounting"
+        );
 
+        let send_execute_start = Instant::now();
         self.send_packet_execute(checked_packet).await;
+        tracing::debug!(
+            elapsed_us = send_execute_start.elapsed().as_micros(),
+            channel = %withdrawal.source_channel,
+            "ibc_outbound_send_packet_execute"
+        );
 
         Ok(())
     }
@@ -451,51 +536,47 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
     // see this part of the spec for this logic:
     //
     // https://github.com/cosmos/ibc/tree/main/spec/app/ics-020-fungible-token-transfer (onRecvPacket)
-    //
-    // NOTE: spec says proto but this is actually JSON according to the ibc-go implementation
-    let packet_data: FungibleTokenPacketData = serde_json::from_slice(msg.packet.data.as_slice())
-        .with_context(|| "failed to decode FTPD packet")?;
-    let packet_denom: asset::Metadata = packet_data
-        .denom
-        .as_str()
-        .try_into()
-        .context("couldnt decode denom in ICS20 transfer")?;
-    let receiver_amount: Amount = packet_data
-        .amount
-        .clone()
-        .try_into()
-        .context("couldnt decode amount in ICS20 transfer")?;
-    let receiver_address = Address::from_str(&packet_data.receiver)?;
+    let decode_start = Instant::now();
+    let context = Ics20ReceiveContext::parse(msg)?;
+    tracing::debug!(
+        elapsed_us = decode_start.elapsed().as_micros(),
+        sequence = %msg.packet.sequence,
+        returned_to_source = context.returned_to_source,
+        asset_id = %context.received_denom.id(),
+        "ibc_recv_packet_data_decode"
+    );
 
-    // Parse compliance metadata from memo (if present).
-    let compliance_metadata =
-        IbcComplianceMetadata::from_memo(&packet_data.memo).unwrap_or_else(|e| {
-            tracing::debug!(?e, "failed to parse compliance metadata from ICS-20 memo");
-            None
-        });
+    let route_start = Instant::now();
+    let route = resolve_ibc_route(&state, &msg.packet.port_on_b, &msg.packet.chan_on_b).await?;
+    tracing::debug!(
+        elapsed_us = route_start.elapsed().as_micros(),
+        local_port = %route.local_port,
+        local_channel = %route.local_channel,
+        connection_id = %route.connection_id,
+        counterparty_port = %route.counterparty_port,
+        counterparty_channel = %route.counterparty_channel,
+        "ibc_recv_route_resolve"
+    );
 
-    let (received_denom, returned_to_source) =
-        received_asset_metadata(msg, &packet_data, &packet_denom)?;
-    check_regulated_inbound_ics20(
-        &state,
-        msg,
-        &packet_data,
-        &received_denom,
-        returned_to_source,
-        &compliance_metadata,
-    )
-    .await?;
+    let compliance_start = Instant::now();
+    check_regulated_inbound_ics20(&state, &route, &context).await?;
+    tracing::debug!(
+        elapsed_us = compliance_start.elapsed().as_micros(),
+        asset_id = %context.received_denom.id(),
+        "ibc_recv_compliance_check"
+    );
 
     // NOTE: here we assume we are chain A.
 
     // 2. check if we are the source chain for the denom.
-    if returned_to_source {
+    let mint_unescrow_start = Instant::now();
+    if context.returned_to_source {
         // mint tokens to receiver in the amount of packet_data.amount in the denom of denom (with
         // the source removed, since we're the source)
-        let denom = received_denom;
+        let denom = context.received_denom.clone();
 
         let value: Value = Value {
-            amount: receiver_amount,
+            amount: context.receiver_amount,
             asset_id: denom.id(),
         };
 
@@ -509,7 +590,7 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
             .await?
             .unwrap_or_else(Amount::zero);
 
-        if value_balance < receiver_amount {
+        if value_balance < context.receiver_amount {
             // error text here is from the ics20 spec
             anyhow::bail!("transfer coins failed");
         }
@@ -517,12 +598,12 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
         state
             .mint_note(
                 value,
-                &receiver_address,
+                &context.receiver_address,
                 CommitmentSource::Ics20Transfer {
                     packet_seq: msg.packet.sequence.0,
                     // We are chain A
                     channel_id: msg.packet.chan_on_a.0.clone(),
-                    sender: packet_data.sender.clone(),
+                    sender: context.packet_data.sender.clone(),
                 },
             )
             .await
@@ -531,7 +612,7 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
         // update the value balance
         // note: this arithmetic was checked above, but we do it again anyway.
         let new_value_balance = value_balance
-            .checked_sub(&receiver_amount)
+            .checked_sub(&context.receiver_amount)
             .context("underflow subtracing value balance in ics20 transfer")?;
         state.put(
             state_key::ics20_value_balance::by_asset_id(&msg.packet.chan_on_b, &denom.id()),
@@ -540,8 +621,8 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
         state.record_proto(
             event::EventInboundFungibleTokenTransfer {
                 value,
-                sender: packet_data.sender.clone(),
-                receiver: receiver_address,
+                sender: context.packet_data.sender.clone(),
+                receiver: context.receiver_address.clone(),
                 meta: FungibleTokenTransferPacketMetadata {
                     channel: msg.packet.chan_on_a.0.clone(),
                     sequence: msg.packet.sequence.0,
@@ -556,23 +637,23 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
         // prefixedDenomination = prefix + data.denom
         //
         // then mint that denom to packet_data.receiver in packet_data.amount
-        let denom = received_denom;
+        let denom = context.received_denom.clone();
         state.register_denom(&denom).await;
 
         let value = Value {
-            amount: receiver_amount,
+            amount: context.receiver_amount,
             asset_id: denom.id(),
         };
 
         state
             .mint_note(
                 value,
-                &receiver_address,
+                &context.receiver_address,
                 CommitmentSource::Ics20Transfer {
                     packet_seq: msg.packet.sequence.0,
                     // We are chain A
                     channel_id: msg.packet.chan_on_a.0.clone(),
-                    sender: packet_data.sender.clone(),
+                    sender: context.packet_data.sender.clone(),
                 },
             )
             .await
@@ -595,8 +676,8 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
         state.record_proto(
             event::EventInboundFungibleTokenTransfer {
                 value,
-                sender: packet_data.sender.clone(),
-                receiver: receiver_address,
+                sender: context.packet_data.sender.clone(),
+                receiver: context.receiver_address.clone(),
                 meta: FungibleTokenTransferPacketMetadata {
                     channel: msg.packet.chan_on_a.0.clone(),
                     sequence: msg.packet.sequence.0,
@@ -605,9 +686,15 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
             .to_proto(),
         );
     }
+    tracing::debug!(
+        elapsed_us = mint_unescrow_start.elapsed().as_micros(),
+        returned_to_source = context.returned_to_source,
+        asset_id = %context.received_denom.id(),
+        "ibc_recv_mint_unescrow_accounting"
+    );
 
     // Store compliance metadata if present in memo.
-    if let Some(metadata) = compliance_metadata {
+    if let Some(metadata) = context.compliance_metadata {
         use penumbra_sdk_compliance::ComplianceRegistryWrite as _;
         state.store_ibc_compliance_metadata(
             &msg.packet.chan_on_a.0,
@@ -756,6 +843,7 @@ impl AppHandlerExecute for Ics20Transfer {
     async fn chan_close_init_execute<S: StateWrite>(_state: S, _msg: &MsgChannelCloseInit) {}
     async fn recv_packet_execute<S: StateWrite>(mut state: S, msg: &MsgRecvPacket) -> Result<()> {
         // recv packet should never fail a transaction, but it should record a failure acknowledgement.
+        let app_execute_start = Instant::now();
         let ack: Vec<u8> = match recv_transfer_packet_inner(&mut state, msg).await {
             Ok(_) => {
                 // record packet acknowledgement without error
@@ -767,11 +855,22 @@ impl AppHandlerExecute for Ics20Transfer {
                 TokenTransferAcknowledgement::Error(e.to_string()).into()
             }
         };
+        tracing::debug!(
+            elapsed_us = app_execute_start.elapsed().as_micros(),
+            sequence = %msg.packet.sequence,
+            "ibc_recv_app_execute"
+        );
 
+        let ack_start = Instant::now();
         state
             .write_acknowledgement(&msg.packet, &ack)
             .await
             .context("able to write acknowledgement")?;
+        tracing::debug!(
+            elapsed_us = ack_start.elapsed().as_micros(),
+            sequence = %msg.packet.sequence,
+            "ibc_recv_acknowledgement_write"
+        );
 
         Ok(())
     }
@@ -813,3 +912,66 @@ impl AppHandlerExecute for Ics20Transfer {
 }
 
 impl AppHandler for Ics20Transfer {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ibc_types::{
+        core::{
+            channel::{packet::Sequence, TimeoutHeight},
+            client::Height,
+            commitment::MerkleProof,
+        },
+        timestamp::Timestamp,
+    };
+
+    fn test_recv_packet(denom: &str) -> MsgRecvPacket {
+        let mut rng = rand::thread_rng();
+        let receiver = Address::dummy(&mut rng);
+        let packet_data = FungibleTokenPacketData {
+            denom: denom.to_string(),
+            amount: "123".to_string(),
+            sender: "bankd1sender".to_string(),
+            receiver: receiver.to_string(),
+            memo: String::new(),
+        };
+
+        MsgRecvPacket {
+            packet: Packet {
+                sequence: Sequence::from(1),
+                port_on_a: PortId::transfer(),
+                chan_on_a: ChannelId::from_str("channel-0").expect("valid channel"),
+                port_on_b: PortId::transfer(),
+                chan_on_b: ChannelId::from_str("channel-1").expect("valid channel"),
+                data: serde_json::to_vec(&packet_data).expect("encode packet data"),
+                timeout_height_on_b: TimeoutHeight::At(Height::new(0, 100).expect("valid height")),
+                timeout_timestamp_on_b: Timestamp::from_nanoseconds(1_000_000_000)
+                    .expect("valid timestamp"),
+            },
+            proof_commitment_on_a: MerkleProof { proofs: vec![] },
+            proof_height_on_a: Height::new(0, 99).expect("valid proof height"),
+            signer: receiver.to_string(),
+        }
+    }
+
+    #[test]
+    fn receive_context_derives_sink_zone_voucher_denom() {
+        let msg = test_recv_packet("upenumbra");
+        let context = Ics20ReceiveContext::parse(&msg).expect("parse receive context");
+
+        assert!(!context.returned_to_source);
+        assert_eq!(
+            context.received_denom.to_string(),
+            "transfer/channel-1/upenumbra"
+        );
+    }
+
+    #[test]
+    fn receive_context_derives_return_source_base_denom() {
+        let msg = test_recv_packet("transfer/channel-0/upenumbra");
+        let context = Ics20ReceiveContext::parse(&msg).expect("parse receive context");
+
+        assert!(context.returned_to_source);
+        assert_eq!(context.received_denom.to_string(), "upenumbra");
+    }
+}

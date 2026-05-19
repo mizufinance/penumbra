@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use cnidarium::StateWrite;
@@ -38,10 +40,17 @@ impl MsgHandler for MsgRecvPacket {
     ) -> Result<()> {
         tracing::debug!(msg = ?self);
         tracing::debug!(data = ?String::from_utf8_lossy(&self.packet.data));
+        let channel_start = Instant::now();
         let channel = state
             .get_channel(&self.packet.chan_on_b, &self.packet.port_on_b)
             .await?
             .ok_or_else(|| anyhow::anyhow!("channel not found"))?;
+        tracing::debug!(
+            elapsed_us = channel_start.elapsed().as_micros(),
+            port = %self.packet.port_on_b,
+            channel = %self.packet.chan_on_b,
+            "ibc_recv_channel_read"
+        );
         if !channel.state_matches(&ChannelState::Open) {
             anyhow::bail!("channel is not open");
         }
@@ -60,15 +69,22 @@ impl MsgHandler for MsgRecvPacket {
             anyhow::bail!("packet source channel does not match channel");
         }
 
+        let connection_start = Instant::now();
         let connection = state
             .get_connection(&channel.connection_hops[0])
             .await?
             .ok_or_else(|| anyhow::anyhow!("connection not found for channel"))?;
+        tracing::debug!(
+            elapsed_us = connection_start.elapsed().as_micros(),
+            connection_id = %channel.connection_hops[0],
+            "ibc_recv_connection_read"
+        );
 
         if !connection.state_matches(&ConnectionState::Open) {
             anyhow::bail!("connection for channel is not open");
         }
 
+        let timeout_start = Instant::now();
         let block_height = HI::get_block_height(&state).await?;
         let height = IBCHeight::new(HI::get_revision_number(&state).await?, block_height)?;
 
@@ -90,12 +106,24 @@ impl MsgHandler for MsgRecvPacket {
                 );
             }
         }
+        tracing::debug!(
+            elapsed_us = timeout_start.elapsed().as_micros(),
+            sequence = %self.packet.sequence,
+            "ibc_recv_timeout_check"
+        );
 
+        let proof_start = Instant::now();
         state
             .verify_packet_recv_proof::<HI>(&connection, self)
             .await
             .with_context(|| format!("packet {:?} failed to verify", self.packet))?;
+        tracing::debug!(
+            elapsed_us = proof_start.elapsed().as_micros(),
+            sequence = %self.packet.sequence,
+            "ibc_recv_packet_proof_verify"
+        );
 
+        let sequence_start = Instant::now();
         if channel.ordering == ChannelOrder::Ordered {
             let next_sequence_recv = state
                 .get_recv_sequence(&self.packet.chan_on_b, &self.packet.port_on_b)
@@ -107,14 +135,27 @@ impl MsgHandler for MsgRecvPacket {
         } else if state.seen_packet(&self.packet).await? {
             anyhow::bail!("packet has already been processed");
         }
+        tracing::debug!(
+            elapsed_us = sequence_start.elapsed().as_micros(),
+            sequence = %self.packet.sequence,
+            ordering = ?channel.ordering,
+            "ibc_recv_duplicate_sequence_check"
+        );
 
         let transfer = PortId::transfer();
         if self.packet.port_on_b == transfer {
+            let app_check_start = Instant::now();
             AH::recv_packet_check(&mut state, self).await?;
+            tracing::debug!(
+                elapsed_us = app_check_start.elapsed().as_micros(),
+                sequence = %self.packet.sequence,
+                "ibc_recv_app_check"
+            );
         } else {
             anyhow::bail!("invalid port id");
         }
 
+        let receipt_start = Instant::now();
         if channel.ordering == ChannelOrder::Ordered {
             let mut next_sequence_recv = state
                 .get_recv_sequence(&self.packet.chan_on_b, &self.packet.port_on_b)
@@ -132,6 +173,12 @@ impl MsgHandler for MsgRecvPacket {
             // it's just a single store key set to an empty string to indicate that the packet has been received
             state.put_packet_receipt(&self.packet);
         }
+        tracing::debug!(
+            elapsed_us = receipt_start.elapsed().as_micros(),
+            sequence = %self.packet.sequence,
+            ordering = ?channel.ordering,
+            "ibc_recv_sequence_or_receipt_write"
+        );
 
         state.record(
             events::packet::ReceivePacket {
@@ -152,7 +199,13 @@ impl MsgHandler for MsgRecvPacket {
         let transfer = PortId::transfer();
         // todo: should this be part of the app handler logic?
         if self.packet.port_on_b == transfer {
+            let app_execute_start = Instant::now();
             AH::recv_packet_execute(state, self).await?;
+            tracing::debug!(
+                elapsed_us = app_execute_start.elapsed().as_micros(),
+                sequence = %self.packet.sequence,
+                "ibc_recv_app_execute_total"
+            );
         } else {
             anyhow::bail!("invalid port id");
         }

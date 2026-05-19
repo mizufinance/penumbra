@@ -38,7 +38,7 @@ parallel = [
     "tonic",
 ]
 docsrs = []
-benchmark-helpers = []
+benchmark-helpers = ["component"]
 
 [dependencies]
 anyhow = {workspace = true}

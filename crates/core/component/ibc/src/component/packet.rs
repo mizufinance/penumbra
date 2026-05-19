@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use cnidarium::{StateRead, StateWrite};
@@ -101,6 +103,7 @@ pub trait SendPacketRead: StateRead {
         packet: IBCPacket<Unchecked>,
         current_block_time: Time,
     ) -> Result<IBCPacket<Checked>> {
+        let channel_start = Instant::now();
         let channel = self
             .get_channel(&packet.source_channel, &packet.source_port)
             .await?
@@ -111,6 +114,12 @@ pub trait SendPacketRead: StateRead {
                     packet.source_port
                 )
             })?;
+        tracing::debug!(
+            elapsed_us = channel_start.elapsed().as_micros(),
+            port = %packet.source_port,
+            channel = %packet.source_channel,
+            "ibc_send_channel_read"
+        );
 
         if channel.state_matches(&ChannelState::Closed) {
             anyhow::bail!(
@@ -121,14 +130,21 @@ pub trait SendPacketRead: StateRead {
         }
 
         // TODO: should we check dest port & channel here?
+        let connection_start = Instant::now();
         let connection = self
             .get_connection(&channel.connection_hops[0])
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!("connection {} does not exist", channel.connection_hops[0])
             })?;
+        tracing::debug!(
+            elapsed_us = connection_start.elapsed().as_micros(),
+            connection_id = %channel.connection_hops[0],
+            "ibc_send_connection_read"
+        );
 
         // check that the client state is active so we don't do accidental sends on frozen clients.
+        let client_start = Instant::now();
         let client_state = self.get_client_state(&connection.client_id).await?;
         if client_state.is_frozen() {
             anyhow::bail!("client {} is frozen", &connection.client_id);
@@ -143,6 +159,11 @@ pub trait SendPacketRead: StateRead {
         if client_state.expired(time_elapsed) {
             anyhow::bail!("client {} is expired", &connection.client_id);
         }
+        tracing::debug!(
+            elapsed_us = client_start.elapsed().as_micros(),
+            client_id = %connection.client_id,
+            "ibc_send_client_consensus_read"
+        );
 
         let latest_height = client_state.latest_height();
 
@@ -189,12 +210,21 @@ pub trait SendPacketWrite: StateWrite {
     /// the provided packet.
     async fn send_packet_execute(&mut self, packet: IBCPacket<Checked>) {
         // increment the send sequence counter
+        let sequence_start = Instant::now();
         let sequence = self
             .get_send_sequence(&packet.source_channel, &packet.source_port)
             .await
             .expect("able to get send sequence while executing send packet");
         self.put_send_sequence(&packet.source_channel, &packet.source_port, sequence + 1);
+        tracing::debug!(
+            elapsed_us = sequence_start.elapsed().as_micros(),
+            port = %packet.source_port,
+            channel = %packet.source_channel,
+            sequence,
+            "ibc_send_sequence_allocation"
+        );
 
+        let channel_start = Instant::now();
         let channel = self
             .get_channel(&packet.source_channel, &packet.source_port)
             .await
@@ -207,6 +237,12 @@ pub trait SendPacketWrite: StateWrite {
                 )
             })
             .expect("should be able to get channel");
+        tracing::debug!(
+            elapsed_us = channel_start.elapsed().as_micros(),
+            port = %packet.source_port,
+            channel = %packet.source_channel,
+            "ibc_send_execute_channel_read"
+        );
 
         // store commitment to the packet data & packet timeout
         let packet = Packet {
@@ -230,7 +266,15 @@ pub trait SendPacketWrite: StateWrite {
             data: packet.data,
         };
 
+        let commitment_start = Instant::now();
         self.put_packet_commitment(&packet);
+        tracing::debug!(
+            elapsed_us = commitment_start.elapsed().as_micros(),
+            port = %packet.port_on_a,
+            channel = %packet.chan_on_a,
+            sequence = %packet.sequence,
+            "ibc_send_packet_commitment_write"
+        );
 
         self.record(
             events::packet::SendPacket {
@@ -260,6 +304,7 @@ pub trait WriteAcknowledgement: StateWrite {
             anyhow::bail!("acknowledgement cannot be empty");
         }
 
+        let ack_read_start = Instant::now();
         let exists_prev_ack = self
             .get_packet_acknowledgement(
                 &packet.port_on_b,
@@ -282,12 +327,27 @@ pub trait WriteAcknowledgement: StateWrite {
                     packet.port_on_b
                 )
             })?;
+        tracing::debug!(
+            elapsed_us = ack_read_start.elapsed().as_micros(),
+            port = %packet.port_on_b,
+            channel = %packet.chan_on_b,
+            sequence = %packet.sequence,
+            "ibc_acknowledgement_read"
+        );
 
+        let ack_write_start = Instant::now();
         self.put_packet_acknowledgement(
             &packet.port_on_b,
             &packet.chan_on_b,
             packet.sequence.into(),
             ack_bytes,
+        );
+        tracing::debug!(
+            elapsed_us = ack_write_start.elapsed().as_micros(),
+            port = %packet.port_on_b,
+            channel = %packet.chan_on_b,
+            sequence = %packet.sequence,
+            "ibc_acknowledgement_write"
         );
 
         self.record(

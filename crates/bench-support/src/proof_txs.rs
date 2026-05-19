@@ -2,19 +2,22 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use ark_serialize::CanonicalSerialize;
 use cnidarium::TempStorage;
 use penumbra_sdk_app::{
     genesis::{AppState, Content},
     server::consensus::{Consensus, ConsensusService},
     APP_VERSION, SUBSTORE_PREFIXES,
 };
-use penumbra_sdk_asset::BASE_ASSET_DENOM;
+use penumbra_sdk_asset::{Value, BASE_ASSET_DENOM, BASE_ASSET_ID};
 use penumbra_sdk_keys::test_keys;
 use penumbra_sdk_mock_client::MockClient;
 use penumbra_sdk_mock_consensus::TestNode;
+use penumbra_sdk_num::Amount;
 use penumbra_sdk_proto::DomainType;
 use penumbra_sdk_shielded_pool::{
     genesis::Allocation, ShieldedInputPlan, ShieldedOutputPlan, TransferPlan,
@@ -28,8 +31,11 @@ use sha2::Digest as _;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-const POOL_SCHEMA_VERSION: u32 = 2;
-const POOL_TX_SHAPE: &str = "synthetic-preconsensus-transfer-v2";
+const POOL_SCHEMA_VERSION: u32 = 3;
+const POOL_TX_SHAPE: &str = "synthetic-preconsensus-transfer-v3";
+const POOL_PROOF_FAMILY: &str = "transfer";
+const POOL_ACTION_SHAPE: &str = "one_spend_two_outputs_blank_memo";
+const POOL_REGULATED: bool = false;
 const DEFAULT_SHARD_TX_COUNT: usize = 1_000;
 const SYNTHETIC_BENCHMARK_TIME_RFC3339: &str = "2026-01-01T00:00:00Z";
 
@@ -49,6 +55,15 @@ pub struct ProofTxPoolMetadata {
     pub shard_tx_count: usize,
     pub compression: String,
     pub benchmark_time_rfc3339: String,
+    pub proof_family: String,
+    pub action_shape: String,
+    pub regulated: bool,
+    pub verifying_key_digest: String,
+    pub proving_key_digest: String,
+    pub circuit_metadata_digest: String,
+    pub crate_version: String,
+    pub git_commit: Option<String>,
+    pub git_tree_state: String,
     pub compatibility_fingerprint: String,
     pub tx_hashes: Vec<String>,
     pub raw_bytes: usize,
@@ -116,7 +131,16 @@ pub async fn build_proof_transactions(
     storage: &TempStorage,
     n: usize,
 ) -> anyhow::Result<Vec<Vec<u8>>> {
-    let notes: Vec<_> = client.notes.values().cloned().take(n).collect();
+    let notes: Vec<_> = client
+        .notes
+        .values()
+        .filter(|note| {
+            note.asset_id() == *BASE_ASSET_ID
+                && note.address() == test_keys::ADDRESS_0.deref().clone()
+        })
+        .cloned()
+        .take(n)
+        .collect();
     assert_eq!(notes.len(), n, "expected {n} notes, got {}", notes.len());
 
     let permits = Arc::new(Semaphore::new(proof_tx_build_concurrency()));
@@ -134,18 +158,43 @@ pub async fn build_proof_transactions(
                 .expect("proof tx semaphore should not be closed");
             let position = client
                 .position(note.commit())
-                .expect("note position exists");
+                .context("note position exists")?;
+            let spend = ShieldedInputPlan::new(&mut OsRng, note.clone(), position);
+            let send_amount = Amount::from(1u64);
+            let change_amount = note.amount() - send_amount;
+            let mut output = ShieldedOutputPlan::new(
+                &mut OsRng,
+                Value {
+                    amount: send_amount,
+                    asset_id: note.asset_id(),
+                },
+                test_keys::ADDRESS_1.deref().clone(),
+            );
+            let mut change = ShieldedOutputPlan::new(
+                &mut OsRng,
+                Value {
+                    amount: change_amount,
+                    asset_id: note.asset_id(),
+                },
+                note.address(),
+            );
+            for output in [&mut output, &mut change] {
+                output.asset_anchor = spend.asset_anchor;
+                output.compliance_anchor = spend.compliance_anchor;
+                output.target_timestamp = spend.target_timestamp;
+                output.is_regulated = spend.is_regulated;
+                output.tx_blinding_nonce = spend.tx_blinding_nonce;
+                output.asset_indexed_leaf = spend.asset_indexed_leaf.clone();
+                output.asset_path = spend.asset_path.clone();
+                output.asset_position = spend.asset_position;
+                output.asset_policy = spend.asset_policy.clone();
+            }
 
             let mut plan = TransactionPlan {
-                actions: vec![TransferPlan::from_spend_output(
-                    ShieldedInputPlan::new(&mut OsRng, note.clone(), position).into(),
-                    ShieldedOutputPlan::new(
-                        &mut OsRng,
-                        note.value(),
-                        test_keys::ADDRESS_1.deref().clone(),
-                    )
-                    .into(),
-                    Default::default(),
+                actions: vec![TransferPlan::new(
+                    vec![spend.into()],
+                    vec![output.into(), change.into()],
+                    decaf377::Fr::from(1u64),
                 )?
                 .into()],
                 fee_funding: None,
@@ -205,8 +254,9 @@ pub fn build_proof_tx_workload(tx_count: usize, pool: &ProofTxPool) -> Vec<Vec<u
 }
 
 pub fn default_pool_dir(tx_count: usize) -> PathBuf {
-    PathBuf::from("tmp")
-        .join("pre_consensus_pools")
+    PathBuf::from("target")
+        .join("bench")
+        .join("proof_pools")
         .join(tx_count.to_string())
 }
 
@@ -248,6 +298,12 @@ pub fn save_proof_tx_pool(out_dir: &Path, pool: &ProofTxPool) -> Result<ProofTxP
             .len();
     }
 
+    let verifying_key_digest = transfer_verifying_key_digest()?;
+    let proving_key_digest = bytes_digest(penumbra_sdk_proof_params::transfer_proving_key_bytes());
+    let circuit_metadata_digest =
+        bytes_digest(penumbra_sdk_proof_params::transfer_circuit_metadata());
+    let git_commit = git_commit();
+    let git_tree_state = git_tree_state();
     let metadata = ProofTxPoolMetadata {
         schema_version: POOL_SCHEMA_VERSION,
         created_at: unix_ts(),
@@ -258,7 +314,16 @@ pub fn save_proof_tx_pool(out_dir: &Path, pool: &ProofTxPool) -> Result<ProofTxP
         shard_tx_count,
         compression: "zstd".to_string(),
         benchmark_time_rfc3339: SYNTHETIC_BENCHMARK_TIME_RFC3339.to_string(),
-        compatibility_fingerprint: compatibility_fingerprint(pool.txs.len()),
+        proof_family: POOL_PROOF_FAMILY.to_string(),
+        action_shape: POOL_ACTION_SHAPE.to_string(),
+        regulated: POOL_REGULATED,
+        verifying_key_digest,
+        proving_key_digest,
+        circuit_metadata_digest,
+        crate_version: env!("CARGO_PKG_VERSION").to_string(),
+        git_commit,
+        git_tree_state,
+        compatibility_fingerprint: compatibility_fingerprint(pool.txs.len())?,
         tx_hashes,
         raw_bytes,
         compressed_bytes,
@@ -280,7 +345,7 @@ pub fn load_proof_tx_pool(pool_dir: &Path) -> Result<(ProofTxPool, ProofTxPoolMe
         POOL_SCHEMA_VERSION
     );
     anyhow::ensure!(
-        metadata.compatibility_fingerprint == compatibility_fingerprint(metadata.tx_count),
+        metadata.compatibility_fingerprint == compatibility_fingerprint(metadata.tx_count)?,
         "proof pool compatibility fingerprint mismatch"
     );
 
@@ -389,15 +454,61 @@ fn validate_pool(txs: &[Arc<Vec<u8>>], expected_hashes: &[String]) -> Result<()>
     Ok(())
 }
 
-fn compatibility_fingerprint(tx_count: usize) -> String {
+fn compatibility_fingerprint(tx_count: usize) -> Result<String> {
     let mut hasher = sha2::Sha256::new();
     hasher.update(POOL_SCHEMA_VERSION.to_le_bytes());
     hasher.update(TestNode::<()>::CHAIN_ID.as_bytes());
     hasher.update(POOL_TX_SHAPE.as_bytes());
+    hasher.update(POOL_PROOF_FAMILY.as_bytes());
+    hasher.update(POOL_ACTION_SHAPE.as_bytes());
+    hasher.update([POOL_REGULATED as u8]);
     hasher.update(APP_VERSION.to_le_bytes());
     hasher.update(SYNTHETIC_BENCHMARK_TIME_RFC3339.as_bytes());
     hasher.update((tx_count as u64).to_le_bytes());
-    hex::encode(hasher.finalize())
+    hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
+    hasher.update(transfer_verifying_key_digest()?.as_bytes());
+    hasher.update(bytes_digest(penumbra_sdk_proof_params::transfer_proving_key_bytes()).as_bytes());
+    hasher.update(bytes_digest(penumbra_sdk_proof_params::transfer_circuit_metadata()).as_bytes());
+    if let Some(commit) = git_commit() {
+        hasher.update(commit.as_bytes());
+    }
+    hasher.update(git_tree_state().as_bytes());
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn transfer_verifying_key_digest() -> Result<String> {
+    let mut bytes = Vec::new();
+    penumbra_sdk_proof_params::transfer_proof_verification_key()
+        .serialize_compressed(&mut bytes)
+        .context("serializing transfer verifying key")?;
+    Ok(bytes_digest(&bytes))
+}
+
+fn bytes_digest(bytes: &[u8]) -> String {
+    hex::encode(sha2::Sha256::digest(bytes))
+}
+
+fn git_commit() -> Option<String> {
+    git_output(["rev-parse", "HEAD"])
+}
+
+fn git_tree_state() -> String {
+    match git_output(["status", "--porcelain", "--untracked-files=no"]) {
+        Some(output) if output.trim().is_empty() => "clean".to_string(),
+        Some(_) => "dirty".to_string(),
+        None => "unavailable".to_string(),
+    }
+}
+
+fn git_output<const N: usize>(args: [&str; N]) -> Option<String> {
+    let output = Command::new("git").args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn unix_ts() -> u64 {

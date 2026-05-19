@@ -57,9 +57,15 @@ name = "nullifier_storage"
 path = "benches/state/nullifier_storage.rs"
 harness = false
 
+[[bench]]
+name = "ibc_throughput"
+path = "benches/ibc/ibc_throughput.rs"
+harness = false
+
 
 [dependencies]
 anyhow = {workspace = true}
+bytes = {workspace = true}
 camino = {workspace = true}
 clap = {workspace = true, features = ["derive"]}
 penumbra-sdk-bench-support = { path = "../bench-support" }
@@ -80,6 +86,8 @@ decaf377 = {workspace = true, features = ["r1cs"], default-features = true}
 decaf377-rdsa = {workspace = true}
 futures = {workspace = true}
 hex = {workspace = true}
+ibc-types = {workspace = true, features = ["with_serde"], default-features = false}
+ics23 = {workspace = true}
 num-bigint = {workspace = true}
 once_cell = {workspace = true}
 parking_lot = {workspace = true}
@@ -89,6 +97,7 @@ penumbra-sdk-asset = {workspace = true, default-features = true}
 penumbra-sdk-compliance = {workspace = true, default-features = true, features = ["test-helpers"]}
 penumbra-sdk-custody = {workspace = true, default-features = true}
 penumbra-sdk-fee = {workspace = true, default-features = true}
+penumbra-sdk-ibc = {workspace = true, default-features = true}
 penumbra-sdk-keys = {workspace = true, default-features = true}
 penumbra-sdk-mock-client = {workspace = true}
 penumbra-sdk-mock-consensus = {workspace = true}
