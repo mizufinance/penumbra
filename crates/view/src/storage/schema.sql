@@ -141,7 +141,7 @@ CREATE TABLE compliance_asset_leaves (
     next_value BLOB NOT NULL,
     dk_pub BLOB NOT NULL,          -- 32 bytes compressed curve point
     threshold BLOB NOT NULL,       -- 16 bytes little-endian u128
-    channels_hash BLOB NOT NULL,   -- 32 bytes Fq
+    route_policy_hash BLOB NOT NULL,   -- 32 bytes Fq
     ring_pk BLOB NOT NULL,         -- 32 bytes compressed curve point
     ring_id_hash BLOB NOT NULL,    -- 32 bytes Fq
     policy_id_hash BLOB NOT NULL,  -- 32 bytes Fq

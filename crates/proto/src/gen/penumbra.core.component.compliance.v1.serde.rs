@@ -12,7 +12,7 @@ impl serde::Serialize for AssetPolicy {
         if !self.threshold.is_empty() {
             len += 1;
         }
-        if !self.allowed_channels.is_empty() {
+        if !self.allowed_ibc_routes.is_empty() {
             len += 1;
         }
         if !self.ring_id.is_empty() {
@@ -33,6 +33,9 @@ impl serde::Serialize for AssetPolicy {
         if self.registration_authority_vk.is_some() {
             len += 1;
         }
+        if self.ibc_origin.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.AssetPolicy", len)?;
         if !self.dk_pub.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -44,8 +47,8 @@ impl serde::Serialize for AssetPolicy {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("threshold", pbjson::private::base64::encode(&self.threshold).as_str())?;
         }
-        if !self.allowed_channels.is_empty() {
-            struct_ser.serialize_field("allowedChannels", &self.allowed_channels)?;
+        if !self.allowed_ibc_routes.is_empty() {
+            struct_ser.serialize_field("allowedIbcRoutes", &self.allowed_ibc_routes)?;
         }
         if !self.ring_id.is_empty() {
             struct_ser.serialize_field("ringId", &self.ring_id)?;
@@ -67,6 +70,9 @@ impl serde::Serialize for AssetPolicy {
         if let Some(v) = self.registration_authority_vk.as_ref() {
             struct_ser.serialize_field("registrationAuthorityVk", v)?;
         }
+        if let Some(v) = self.ibc_origin.as_ref() {
+            struct_ser.serialize_field("ibcOrigin", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -80,8 +86,8 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
             "dk_pub",
             "dkPub",
             "threshold",
-            "allowed_channels",
-            "allowedChannels",
+            "allowed_ibc_routes",
+            "allowedIbcRoutes",
             "ring_id",
             "ringId",
             "ring_pk",
@@ -92,19 +98,22 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
             "resource",
             "registration_authority_vk",
             "registrationAuthorityVk",
+            "ibc_origin",
+            "ibcOrigin",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             DkPub,
             Threshold,
-            AllowedChannels,
+            AllowedIbcRoutes,
             RingId,
             RingPk,
             PolicyId,
             Permission,
             Resource,
             RegistrationAuthorityVk,
+            IbcOrigin,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -129,13 +138,14 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
                         match value {
                             "dkPub" | "dk_pub" => Ok(GeneratedField::DkPub),
                             "threshold" => Ok(GeneratedField::Threshold),
-                            "allowedChannels" | "allowed_channels" => Ok(GeneratedField::AllowedChannels),
+                            "allowedIbcRoutes" | "allowed_ibc_routes" => Ok(GeneratedField::AllowedIbcRoutes),
                             "ringId" | "ring_id" => Ok(GeneratedField::RingId),
                             "ringPk" | "ring_pk" => Ok(GeneratedField::RingPk),
                             "policyId" | "policy_id" => Ok(GeneratedField::PolicyId),
                             "permission" => Ok(GeneratedField::Permission),
                             "resource" => Ok(GeneratedField::Resource),
                             "registrationAuthorityVk" | "registration_authority_vk" => Ok(GeneratedField::RegistrationAuthorityVk),
+                            "ibcOrigin" | "ibc_origin" => Ok(GeneratedField::IbcOrigin),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -157,13 +167,14 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
             {
                 let mut dk_pub__ = None;
                 let mut threshold__ = None;
-                let mut allowed_channels__ = None;
+                let mut allowed_ibc_routes__ = None;
                 let mut ring_id__ = None;
                 let mut ring_pk__ = None;
                 let mut policy_id__ = None;
                 let mut permission__ = None;
                 let mut resource__ = None;
                 let mut registration_authority_vk__ = None;
+                let mut ibc_origin__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::DkPub => {
@@ -182,11 +193,11 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::AllowedChannels => {
-                            if allowed_channels__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("allowedChannels"));
+                        GeneratedField::AllowedIbcRoutes => {
+                            if allowed_ibc_routes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("allowedIbcRoutes"));
                             }
-                            allowed_channels__ = Some(map_.next_value()?);
+                            allowed_ibc_routes__ = Some(map_.next_value()?);
                         }
                         GeneratedField::RingId => {
                             if ring_id__.is_some() {
@@ -226,6 +237,12 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
                             }
                             registration_authority_vk__ = map_.next_value()?;
                         }
+                        GeneratedField::IbcOrigin => {
+                            if ibc_origin__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ibcOrigin"));
+                            }
+                            ibc_origin__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -234,13 +251,14 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
                 Ok(AssetPolicy {
                     dk_pub: dk_pub__.unwrap_or_default(),
                     threshold: threshold__.unwrap_or_default(),
-                    allowed_channels: allowed_channels__.unwrap_or_default(),
+                    allowed_ibc_routes: allowed_ibc_routes__.unwrap_or_default(),
                     ring_id: ring_id__.unwrap_or_default(),
                     ring_pk: ring_pk__.unwrap_or_default(),
                     policy_id: policy_id__.unwrap_or_default(),
                     permission: permission__.unwrap_or_default(),
                     resource: resource__.unwrap_or_default(),
                     registration_authority_vk: registration_authority_vk__,
+                    ibc_origin: ibc_origin__,
                 })
             }
         }
@@ -397,7 +415,7 @@ impl serde::Serialize for AssetRegistrationGrantBody {
         if !self.threshold.is_empty() {
             len += 1;
         }
-        if !self.allowed_channels.is_empty() {
+        if !self.allowed_ibc_routes.is_empty() {
             len += 1;
         }
         if !self.ring_pk.is_empty() {
@@ -421,6 +439,9 @@ impl serde::Serialize for AssetRegistrationGrantBody {
         if self.valid_until_unix != 0 {
             len += 1;
         }
+        if self.ibc_origin.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.AssetRegistrationGrantBody", len)?;
         if let Some(v) = self.asset_id.as_ref() {
             struct_ser.serialize_field("assetId", v)?;
@@ -438,8 +459,8 @@ impl serde::Serialize for AssetRegistrationGrantBody {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("threshold", pbjson::private::base64::encode(&self.threshold).as_str())?;
         }
-        if !self.allowed_channels.is_empty() {
-            struct_ser.serialize_field("allowedChannels", &self.allowed_channels)?;
+        if !self.allowed_ibc_routes.is_empty() {
+            struct_ser.serialize_field("allowedIbcRoutes", &self.allowed_ibc_routes)?;
         }
         if !self.ring_pk.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -466,6 +487,9 @@ impl serde::Serialize for AssetRegistrationGrantBody {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("validUntilUnix", ToString::to_string(&self.valid_until_unix).as_str())?;
         }
+        if let Some(v) = self.ibc_origin.as_ref() {
+            struct_ser.serialize_field("ibcOrigin", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -483,8 +507,8 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
             "dk_pub",
             "dkPub",
             "threshold",
-            "allowed_channels",
-            "allowedChannels",
+            "allowed_ibc_routes",
+            "allowedIbcRoutes",
             "ring_pk",
             "ringPk",
             "ring_id",
@@ -497,6 +521,8 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
             "registrationAuthorityVk",
             "valid_until_unix",
             "validUntilUnix",
+            "ibc_origin",
+            "ibcOrigin",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -505,7 +531,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
             IsRegulated,
             DkPub,
             Threshold,
-            AllowedChannels,
+            AllowedIbcRoutes,
             RingPk,
             RingId,
             PolicyId,
@@ -513,6 +539,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
             Resource,
             RegistrationAuthorityVk,
             ValidUntilUnix,
+            IbcOrigin,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -539,7 +566,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                             "isRegulated" | "is_regulated" => Ok(GeneratedField::IsRegulated),
                             "dkPub" | "dk_pub" => Ok(GeneratedField::DkPub),
                             "threshold" => Ok(GeneratedField::Threshold),
-                            "allowedChannels" | "allowed_channels" => Ok(GeneratedField::AllowedChannels),
+                            "allowedIbcRoutes" | "allowed_ibc_routes" => Ok(GeneratedField::AllowedIbcRoutes),
                             "ringPk" | "ring_pk" => Ok(GeneratedField::RingPk),
                             "ringId" | "ring_id" => Ok(GeneratedField::RingId),
                             "policyId" | "policy_id" => Ok(GeneratedField::PolicyId),
@@ -547,6 +574,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                             "resource" => Ok(GeneratedField::Resource),
                             "registrationAuthorityVk" | "registration_authority_vk" => Ok(GeneratedField::RegistrationAuthorityVk),
                             "validUntilUnix" | "valid_until_unix" => Ok(GeneratedField::ValidUntilUnix),
+                            "ibcOrigin" | "ibc_origin" => Ok(GeneratedField::IbcOrigin),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -570,7 +598,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                 let mut is_regulated__ = None;
                 let mut dk_pub__ = None;
                 let mut threshold__ = None;
-                let mut allowed_channels__ = None;
+                let mut allowed_ibc_routes__ = None;
                 let mut ring_pk__ = None;
                 let mut ring_id__ = None;
                 let mut policy_id__ = None;
@@ -578,6 +606,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                 let mut resource__ = None;
                 let mut registration_authority_vk__ = None;
                 let mut valid_until_unix__ = None;
+                let mut ibc_origin__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::AssetId => {
@@ -608,11 +637,11 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::AllowedChannels => {
-                            if allowed_channels__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("allowedChannels"));
+                        GeneratedField::AllowedIbcRoutes => {
+                            if allowed_ibc_routes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("allowedIbcRoutes"));
                             }
-                            allowed_channels__ = Some(map_.next_value()?);
+                            allowed_ibc_routes__ = Some(map_.next_value()?);
                         }
                         GeneratedField::RingPk => {
                             if ring_pk__.is_some() {
@@ -660,6 +689,12 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::IbcOrigin => {
+                            if ibc_origin__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ibcOrigin"));
+                            }
+                            ibc_origin__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -670,7 +705,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                     is_regulated: is_regulated__.unwrap_or_default(),
                     dk_pub: dk_pub__.unwrap_or_default(),
                     threshold: threshold__.unwrap_or_default(),
-                    allowed_channels: allowed_channels__.unwrap_or_default(),
+                    allowed_ibc_routes: allowed_ibc_routes__.unwrap_or_default(),
                     ring_pk: ring_pk__.unwrap_or_default(),
                     ring_id: ring_id__.unwrap_or_default(),
                     policy_id: policy_id__.unwrap_or_default(),
@@ -678,6 +713,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                     resource: resource__.unwrap_or_default(),
                     registration_authority_vk: registration_authority_vk__,
                     valid_until_unix: valid_until_unix__.unwrap_or_default(),
+                    ibc_origin: ibc_origin__,
                 })
             }
         }
@@ -2983,6 +3019,119 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
         deserializer.deserialize_struct("penumbra.core.component.compliance.v1.GenesisContent", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for IbcAssetOrigin {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.route.is_some() {
+            len += 1;
+        }
+        if !self.base_denom.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.IbcAssetOrigin", len)?;
+        if let Some(v) = self.route.as_ref() {
+            struct_ser.serialize_field("route", v)?;
+        }
+        if !self.base_denom.is_empty() {
+            struct_ser.serialize_field("baseDenom", &self.base_denom)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for IbcAssetOrigin {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "route",
+            "base_denom",
+            "baseDenom",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Route,
+            BaseDenom,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "route" => Ok(GeneratedField::Route),
+                            "baseDenom" | "base_denom" => Ok(GeneratedField::BaseDenom),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = IbcAssetOrigin;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.compliance.v1.IbcAssetOrigin")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<IbcAssetOrigin, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut route__ = None;
+                let mut base_denom__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Route => {
+                            if route__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("route"));
+                            }
+                            route__ = map_.next_value()?;
+                        }
+                        GeneratedField::BaseDenom => {
+                            if base_denom__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("baseDenom"));
+                            }
+                            base_denom__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(IbcAssetOrigin {
+                    route: route__,
+                    base_denom: base_denom__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.compliance.v1.IbcAssetOrigin", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for IbcComplianceMetadata {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -3101,6 +3250,174 @@ impl<'de> serde::Deserialize<'de> for IbcComplianceMetadata {
         deserializer.deserialize_struct("penumbra.core.component.compliance.v1.IbcComplianceMetadata", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for IbcRoute {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.local_port.is_empty() {
+            len += 1;
+        }
+        if !self.local_channel.is_empty() {
+            len += 1;
+        }
+        if !self.connection_id.is_empty() {
+            len += 1;
+        }
+        if !self.counterparty_port.is_empty() {
+            len += 1;
+        }
+        if !self.counterparty_channel.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.IbcRoute", len)?;
+        if !self.local_port.is_empty() {
+            struct_ser.serialize_field("localPort", &self.local_port)?;
+        }
+        if !self.local_channel.is_empty() {
+            struct_ser.serialize_field("localChannel", &self.local_channel)?;
+        }
+        if !self.connection_id.is_empty() {
+            struct_ser.serialize_field("connectionId", &self.connection_id)?;
+        }
+        if !self.counterparty_port.is_empty() {
+            struct_ser.serialize_field("counterpartyPort", &self.counterparty_port)?;
+        }
+        if !self.counterparty_channel.is_empty() {
+            struct_ser.serialize_field("counterpartyChannel", &self.counterparty_channel)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for IbcRoute {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "local_port",
+            "localPort",
+            "local_channel",
+            "localChannel",
+            "connection_id",
+            "connectionId",
+            "counterparty_port",
+            "counterpartyPort",
+            "counterparty_channel",
+            "counterpartyChannel",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            LocalPort,
+            LocalChannel,
+            ConnectionId,
+            CounterpartyPort,
+            CounterpartyChannel,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "localPort" | "local_port" => Ok(GeneratedField::LocalPort),
+                            "localChannel" | "local_channel" => Ok(GeneratedField::LocalChannel),
+                            "connectionId" | "connection_id" => Ok(GeneratedField::ConnectionId),
+                            "counterpartyPort" | "counterparty_port" => Ok(GeneratedField::CounterpartyPort),
+                            "counterpartyChannel" | "counterparty_channel" => Ok(GeneratedField::CounterpartyChannel),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = IbcRoute;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.compliance.v1.IbcRoute")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<IbcRoute, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut local_port__ = None;
+                let mut local_channel__ = None;
+                let mut connection_id__ = None;
+                let mut counterparty_port__ = None;
+                let mut counterparty_channel__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::LocalPort => {
+                            if local_port__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("localPort"));
+                            }
+                            local_port__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::LocalChannel => {
+                            if local_channel__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("localChannel"));
+                            }
+                            local_channel__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ConnectionId => {
+                            if connection_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("connectionId"));
+                            }
+                            connection_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::CounterpartyPort => {
+                            if counterparty_port__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("counterpartyPort"));
+                            }
+                            counterparty_port__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::CounterpartyChannel => {
+                            if counterparty_channel__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("counterpartyChannel"));
+                            }
+                            counterparty_channel__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(IbcRoute {
+                    local_port: local_port__.unwrap_or_default(),
+                    local_channel: local_channel__.unwrap_or_default(),
+                    connection_id: connection_id__.unwrap_or_default(),
+                    counterparty_port: counterparty_port__.unwrap_or_default(),
+                    counterparty_channel: counterparty_channel__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.compliance.v1.IbcRoute", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for IndexedLeafData {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -3124,7 +3441,7 @@ impl serde::Serialize for IndexedLeafData {
         if !self.threshold.is_empty() {
             len += 1;
         }
-        if !self.channels_hash.is_empty() {
+        if !self.route_policy_hash.is_empty() {
             len += 1;
         }
         if !self.ring_pk.is_empty() {
@@ -3168,10 +3485,10 @@ impl serde::Serialize for IndexedLeafData {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("threshold", pbjson::private::base64::encode(&self.threshold).as_str())?;
         }
-        if !self.channels_hash.is_empty() {
+        if !self.route_policy_hash.is_empty() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("channelsHash", pbjson::private::base64::encode(&self.channels_hash).as_str())?;
+            struct_ser.serialize_field("routePolicyHash", pbjson::private::base64::encode(&self.route_policy_hash).as_str())?;
         }
         if !self.ring_pk.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -3216,8 +3533,8 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
             "dk_pub",
             "dkPub",
             "threshold",
-            "channels_hash",
-            "channelsHash",
+            "route_policy_hash",
+            "routePolicyHash",
             "ring_pk",
             "ringPk",
             "ring_id_hash",
@@ -3237,7 +3554,7 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
             NextValue,
             DkPub,
             Threshold,
-            ChannelsHash,
+            RoutePolicyHash,
             RingPk,
             RingIdHash,
             PolicyIdHash,
@@ -3270,7 +3587,7 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                             "nextValue" | "next_value" => Ok(GeneratedField::NextValue),
                             "dkPub" | "dk_pub" => Ok(GeneratedField::DkPub),
                             "threshold" => Ok(GeneratedField::Threshold),
-                            "channelsHash" | "channels_hash" => Ok(GeneratedField::ChannelsHash),
+                            "routePolicyHash" | "route_policy_hash" => Ok(GeneratedField::RoutePolicyHash),
                             "ringPk" | "ring_pk" => Ok(GeneratedField::RingPk),
                             "ringIdHash" | "ring_id_hash" => Ok(GeneratedField::RingIdHash),
                             "policyIdHash" | "policy_id_hash" => Ok(GeneratedField::PolicyIdHash),
@@ -3300,7 +3617,7 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                 let mut next_value__ = None;
                 let mut dk_pub__ = None;
                 let mut threshold__ = None;
-                let mut channels_hash__ = None;
+                let mut route_policy_hash__ = None;
                 let mut ring_pk__ = None;
                 let mut ring_id_hash__ = None;
                 let mut policy_id_hash__ = None;
@@ -3348,11 +3665,11 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::ChannelsHash => {
-                            if channels_hash__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("channelsHash"));
+                        GeneratedField::RoutePolicyHash => {
+                            if route_policy_hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("routePolicyHash"));
                             }
-                            channels_hash__ = 
+                            route_policy_hash__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -3407,7 +3724,7 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                     next_value: next_value__.unwrap_or_default(),
                     dk_pub: dk_pub__.unwrap_or_default(),
                     threshold: threshold__.unwrap_or_default(),
-                    channels_hash: channels_hash__.unwrap_or_default(),
+                    route_policy_hash: route_policy_hash__.unwrap_or_default(),
                     ring_pk: ring_pk__.unwrap_or_default(),
                     ring_id_hash: ring_id_hash__.unwrap_or_default(),
                     policy_id_hash: policy_id_hash__.unwrap_or_default(),
@@ -3632,7 +3949,7 @@ impl serde::Serialize for MsgRegisterAsset {
         if !self.threshold.is_empty() {
             len += 1;
         }
-        if !self.allowed_channels.is_empty() {
+        if !self.allowed_ibc_routes.is_empty() {
             len += 1;
         }
         if !self.ring_pk.is_empty() {
@@ -3656,6 +3973,9 @@ impl serde::Serialize for MsgRegisterAsset {
         if self.asset_registration_grant.is_some() {
             len += 1;
         }
+        if self.ibc_origin.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.MsgRegisterAsset", len)?;
         if let Some(v) = self.asset_id.as_ref() {
             struct_ser.serialize_field("assetId", v)?;
@@ -3673,8 +3993,8 @@ impl serde::Serialize for MsgRegisterAsset {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("threshold", pbjson::private::base64::encode(&self.threshold).as_str())?;
         }
-        if !self.allowed_channels.is_empty() {
-            struct_ser.serialize_field("allowedChannels", &self.allowed_channels)?;
+        if !self.allowed_ibc_routes.is_empty() {
+            struct_ser.serialize_field("allowedIbcRoutes", &self.allowed_ibc_routes)?;
         }
         if !self.ring_pk.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -3699,6 +4019,9 @@ impl serde::Serialize for MsgRegisterAsset {
         if let Some(v) = self.asset_registration_grant.as_ref() {
             struct_ser.serialize_field("assetRegistrationGrant", v)?;
         }
+        if let Some(v) = self.ibc_origin.as_ref() {
+            struct_ser.serialize_field("ibcOrigin", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -3716,8 +4039,8 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
             "dk_pub",
             "dkPub",
             "threshold",
-            "allowed_channels",
-            "allowedChannels",
+            "allowed_ibc_routes",
+            "allowedIbcRoutes",
             "ring_pk",
             "ringPk",
             "ring_id",
@@ -3730,6 +4053,8 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
             "registrationAuthorityVk",
             "asset_registration_grant",
             "assetRegistrationGrant",
+            "ibc_origin",
+            "ibcOrigin",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -3738,7 +4063,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
             IsRegulated,
             DkPub,
             Threshold,
-            AllowedChannels,
+            AllowedIbcRoutes,
             RingPk,
             RingId,
             PolicyId,
@@ -3746,6 +4071,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
             Resource,
             RegistrationAuthorityVk,
             AssetRegistrationGrant,
+            IbcOrigin,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -3772,7 +4098,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                             "isRegulated" | "is_regulated" => Ok(GeneratedField::IsRegulated),
                             "dkPub" | "dk_pub" => Ok(GeneratedField::DkPub),
                             "threshold" => Ok(GeneratedField::Threshold),
-                            "allowedChannels" | "allowed_channels" => Ok(GeneratedField::AllowedChannels),
+                            "allowedIbcRoutes" | "allowed_ibc_routes" => Ok(GeneratedField::AllowedIbcRoutes),
                             "ringPk" | "ring_pk" => Ok(GeneratedField::RingPk),
                             "ringId" | "ring_id" => Ok(GeneratedField::RingId),
                             "policyId" | "policy_id" => Ok(GeneratedField::PolicyId),
@@ -3780,6 +4106,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                             "resource" => Ok(GeneratedField::Resource),
                             "registrationAuthorityVk" | "registration_authority_vk" => Ok(GeneratedField::RegistrationAuthorityVk),
                             "assetRegistrationGrant" | "asset_registration_grant" => Ok(GeneratedField::AssetRegistrationGrant),
+                            "ibcOrigin" | "ibc_origin" => Ok(GeneratedField::IbcOrigin),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -3803,7 +4130,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                 let mut is_regulated__ = None;
                 let mut dk_pub__ = None;
                 let mut threshold__ = None;
-                let mut allowed_channels__ = None;
+                let mut allowed_ibc_routes__ = None;
                 let mut ring_pk__ = None;
                 let mut ring_id__ = None;
                 let mut policy_id__ = None;
@@ -3811,6 +4138,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                 let mut resource__ = None;
                 let mut registration_authority_vk__ = None;
                 let mut asset_registration_grant__ = None;
+                let mut ibc_origin__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::AssetId => {
@@ -3841,11 +4169,11 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::AllowedChannels => {
-                            if allowed_channels__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("allowedChannels"));
+                        GeneratedField::AllowedIbcRoutes => {
+                            if allowed_ibc_routes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("allowedIbcRoutes"));
                             }
-                            allowed_channels__ = Some(map_.next_value()?);
+                            allowed_ibc_routes__ = Some(map_.next_value()?);
                         }
                         GeneratedField::RingPk => {
                             if ring_pk__.is_some() {
@@ -3891,6 +4219,12 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                             }
                             asset_registration_grant__ = map_.next_value()?;
                         }
+                        GeneratedField::IbcOrigin => {
+                            if ibc_origin__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ibcOrigin"));
+                            }
+                            ibc_origin__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -3901,7 +4235,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                     is_regulated: is_regulated__.unwrap_or_default(),
                     dk_pub: dk_pub__.unwrap_or_default(),
                     threshold: threshold__.unwrap_or_default(),
-                    allowed_channels: allowed_channels__.unwrap_or_default(),
+                    allowed_ibc_routes: allowed_ibc_routes__.unwrap_or_default(),
                     ring_pk: ring_pk__.unwrap_or_default(),
                     ring_id: ring_id__.unwrap_or_default(),
                     policy_id: policy_id__.unwrap_or_default(),
@@ -3909,6 +4243,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                     resource: resource__.unwrap_or_default(),
                     registration_authority_vk: registration_authority_vk__,
                     asset_registration_grant: asset_registration_grant__,
+                    ibc_origin: ibc_origin__,
                 })
             }
         }
@@ -4179,6 +4514,142 @@ impl<'de> serde::Deserialize<'de> for NativeAssetRegistration {
             }
         }
         deserializer.deserialize_struct("penumbra.core.component.compliance.v1.NativeAssetRegistration", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for UpdateAssetIbcPolicy {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.asset_id.is_some() {
+            len += 1;
+        }
+        if !self.expected_route_policy_hash.is_empty() {
+            len += 1;
+        }
+        if !self.allowed_ibc_routes.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.UpdateAssetIbcPolicy", len)?;
+        if let Some(v) = self.asset_id.as_ref() {
+            struct_ser.serialize_field("assetId", v)?;
+        }
+        if !self.expected_route_policy_hash.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("expectedRoutePolicyHash", pbjson::private::base64::encode(&self.expected_route_policy_hash).as_str())?;
+        }
+        if !self.allowed_ibc_routes.is_empty() {
+            struct_ser.serialize_field("allowedIbcRoutes", &self.allowed_ibc_routes)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for UpdateAssetIbcPolicy {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "asset_id",
+            "assetId",
+            "expected_route_policy_hash",
+            "expectedRoutePolicyHash",
+            "allowed_ibc_routes",
+            "allowedIbcRoutes",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            AssetId,
+            ExpectedRoutePolicyHash,
+            AllowedIbcRoutes,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "assetId" | "asset_id" => Ok(GeneratedField::AssetId),
+                            "expectedRoutePolicyHash" | "expected_route_policy_hash" => Ok(GeneratedField::ExpectedRoutePolicyHash),
+                            "allowedIbcRoutes" | "allowed_ibc_routes" => Ok(GeneratedField::AllowedIbcRoutes),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = UpdateAssetIbcPolicy;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.compliance.v1.UpdateAssetIbcPolicy")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<UpdateAssetIbcPolicy, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut asset_id__ = None;
+                let mut expected_route_policy_hash__ = None;
+                let mut allowed_ibc_routes__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::AssetId => {
+                            if asset_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetId"));
+                            }
+                            asset_id__ = map_.next_value()?;
+                        }
+                        GeneratedField::ExpectedRoutePolicyHash => {
+                            if expected_route_policy_hash__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("expectedRoutePolicyHash"));
+                            }
+                            expected_route_policy_hash__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::AllowedIbcRoutes => {
+                            if allowed_ibc_routes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("allowedIbcRoutes"));
+                            }
+                            allowed_ibc_routes__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(UpdateAssetIbcPolicy {
+                    asset_id: asset_id__,
+                    expected_route_policy_hash: expected_route_policy_hash__.unwrap_or_default(),
+                    allowed_ibc_routes: allowed_ibc_routes__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.compliance.v1.UpdateAssetIbcPolicy", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for UserRegistrationGrant {

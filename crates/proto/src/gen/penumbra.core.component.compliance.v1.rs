@@ -53,9 +53,9 @@ pub struct MsgRegisterAsset {
     /// Amount threshold for flagging (16 bytes, little-endian u128).
     #[prost(bytes = "vec", tag = "4")]
     pub threshold: ::prost::alloc::vec::Vec<u8>,
-    /// IBC channels allowed for this regulated asset. Empty = IBC blocked.
-    #[prost(string, repeated, tag = "5")]
-    pub allowed_channels: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Direct IBC routes allowed for this regulated asset. Empty = IBC blocked.
+    #[prost(message, repeated, tag = "5")]
+    pub allowed_ibc_routes: ::prost::alloc::vec::Vec<IbcRoute>,
     /// Orbis ring public key (32 bytes compressed point).
     #[prost(bytes = "vec", tag = "6")]
     pub ring_pk: ::prost::alloc::vec::Vec<u8>,
@@ -79,6 +79,9 @@ pub struct MsgRegisterAsset {
     /// Registrar authorization for this asset registration.
     #[prost(message, optional, tag = "12")]
     pub asset_registration_grant: ::core::option::Option<AssetRegistrationGrant>,
+    /// External IBC origin for a regulated voucher asset, if any.
+    #[prost(message, optional, tag = "13")]
+    pub ibc_origin: ::core::option::Option<IbcAssetOrigin>,
 }
 impl ::prost::Name for MsgRegisterAsset {
     const NAME: &'static str = "MsgRegisterAsset";
@@ -101,8 +104,8 @@ pub struct AssetRegistrationGrantBody {
     pub dk_pub: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "4")]
     pub threshold: ::prost::alloc::vec::Vec<u8>,
-    #[prost(string, repeated, tag = "5")]
-    pub allowed_channels: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "5")]
+    pub allowed_ibc_routes: ::prost::alloc::vec::Vec<IbcRoute>,
     #[prost(bytes = "vec", tag = "6")]
     pub ring_pk: ::prost::alloc::vec::Vec<u8>,
     #[prost(string, tag = "7")]
@@ -119,6 +122,8 @@ pub struct AssetRegistrationGrantBody {
     >,
     #[prost(uint64, tag = "12")]
     pub valid_until_unix: u64,
+    #[prost(message, optional, tag = "13")]
+    pub ibc_origin: ::core::option::Option<IbcAssetOrigin>,
 }
 impl ::prost::Name for AssetRegistrationGrantBody {
     const NAME: &'static str = "AssetRegistrationGrantBody";
@@ -128,6 +133,68 @@ impl ::prost::Name for AssetRegistrationGrantBody {
     }
     fn type_url() -> ::prost::alloc::string::String {
         "/penumbra.core.component.compliance.v1.AssetRegistrationGrantBody".into()
+    }
+}
+/// A direct ICS-20 route bound to local committed IBC identifiers.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IbcRoute {
+    #[prost(string, tag = "1")]
+    pub local_port: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub local_channel: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub connection_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub counterparty_port: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub counterparty_channel: ::prost::alloc::string::String,
+}
+impl ::prost::Name for IbcRoute {
+    const NAME: &'static str = "IbcRoute";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.IbcRoute".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.IbcRoute".into()
+    }
+}
+/// External origin for a regulated ICS-20 voucher asset.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IbcAssetOrigin {
+    #[prost(message, optional, tag = "1")]
+    pub route: ::core::option::Option<IbcRoute>,
+    #[prost(string, tag = "2")]
+    pub base_denom: ::prost::alloc::string::String,
+}
+impl ::prost::Name for IbcAssetOrigin {
+    const NAME: &'static str = "IbcAssetOrigin";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.IbcAssetOrigin".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.IbcAssetOrigin".into()
+    }
+}
+/// Governance-controlled replacement of a regulated asset's IBC route policy.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UpdateAssetIbcPolicy {
+    #[prost(message, optional, tag = "1")]
+    pub asset_id: ::core::option::Option<super::super::super::asset::v1::AssetId>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub expected_route_policy_hash: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, repeated, tag = "3")]
+    pub allowed_ibc_routes: ::prost::alloc::vec::Vec<IbcRoute>,
+}
+impl ::prost::Name for UpdateAssetIbcPolicy {
+    const NAME: &'static str = "UpdateAssetIbcPolicy";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.UpdateAssetIbcPolicy".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.UpdateAssetIbcPolicy".into()
     }
 }
 /// Chain-registrar authorization for an asset registration.
@@ -537,7 +604,7 @@ pub struct IndexedLeafData {
     #[prost(bytes = "vec", tag = "5")]
     pub threshold: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "6")]
-    pub channels_hash: ::prost::alloc::vec::Vec<u8>,
+    pub route_policy_hash: ::prost::alloc::vec::Vec<u8>,
     /// Orbis-decided policy (RingData)
     #[prost(bytes = "vec", tag = "7")]
     pub ring_pk: ::prost::alloc::vec::Vec<u8>,
@@ -568,8 +635,8 @@ pub struct AssetPolicy {
     pub dk_pub: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "2")]
     pub threshold: ::prost::alloc::vec::Vec<u8>,
-    #[prost(string, repeated, tag = "3")]
-    pub allowed_channels: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "3")]
+    pub allowed_ibc_routes: ::prost::alloc::vec::Vec<IbcRoute>,
     /// RingData
     #[prost(string, tag = "4")]
     pub ring_id: ::prost::alloc::string::String,
@@ -585,6 +652,8 @@ pub struct AssetPolicy {
     pub registration_authority_vk: ::core::option::Option<
         super::super::super::super::crypto::decaf377_rdsa::v1::SpendVerificationKey,
     >,
+    #[prost(message, optional, tag = "10")]
+    pub ibc_origin: ::core::option::Option<IbcAssetOrigin>,
 }
 impl ::prost::Name for AssetPolicy {
     const NAME: &'static str = "AssetPolicy";

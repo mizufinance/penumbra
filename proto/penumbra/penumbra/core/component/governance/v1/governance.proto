@@ -2,6 +2,7 @@ syntax = "proto3";
 package penumbra.core.component.governance.v1;
 
 import "penumbra/core/keys/v1/keys.proto";
+import "penumbra/core/component/compliance/v1/compliance.proto";
 import "penumbra/crypto/decaf377_rdsa/v1/decaf377_rdsa.proto";
 
 message ProposalSubmit {
@@ -126,6 +127,7 @@ message Proposal {
     UpgradePlan upgrade_plan = 9;
     FreezeIbcClient freeze_ibc_client = 10;
     UnfreezeIbcClient unfreeze_ibc_client = 11;
+    compliance.v1.UpdateAssetIbcPolicy update_asset_ibc_policy = 12;
   }
 
   // A signaling proposal is meant to register a vote on-chain, but does not have an automatic
@@ -193,6 +195,7 @@ enum ProposalKind {
   PROPOSAL_KIND_UPGRADE_PLAN = 5;
   PROPOSAL_KIND_FREEZE_IBC_CLIENT = 6;
   PROPOSAL_KIND_UNFREEZE_IBC_CLIENT = 7;
+  PROPOSAL_KIND_UPDATE_ASSET_IBC_POLICY = 8;
 }
 
 // Query operations for the governance component.

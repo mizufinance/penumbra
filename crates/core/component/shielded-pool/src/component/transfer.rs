@@ -22,7 +22,8 @@ use ibc_types::{
     transfer::acknowledgement::TokenTransferAcknowledgement,
 };
 use penumbra_sdk_asset::{asset, asset::Metadata, Value};
-use penumbra_sdk_ibc::component::ChannelStateReadExt;
+use penumbra_sdk_compliance::{ComplianceRegistryRead as _, IbcComplianceMetadata, IbcRoute};
+use penumbra_sdk_ibc::component::{ChannelStateReadExt, ConnectionStateReadExt};
 use penumbra_sdk_keys::Address;
 use penumbra_sdk_num::Amount;
 use penumbra_sdk_proto::{
@@ -67,6 +68,134 @@ fn is_source(
     }
 }
 
+async fn resolve_ibc_route<S: StateRead + ?Sized>(
+    state: &S,
+    local_port: &PortId,
+    local_channel: &ChannelId,
+) -> Result<IbcRoute> {
+    let channel = state
+        .get_channel(local_channel, local_port)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("IBC route channel not found"))?;
+    let connection_id = channel
+        .connection_hops
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("IBC route channel has no connection hop"))?;
+    state
+        .get_connection(connection_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("IBC route connection not found"))?;
+    let counterparty_channel = channel
+        .counterparty()
+        .channel_id()
+        .ok_or_else(|| anyhow::anyhow!("IBC route missing counterparty channel"))?;
+    Ok(IbcRoute {
+        local_port: local_port.to_string(),
+        local_channel: local_channel.to_string(),
+        connection_id: connection_id.to_string(),
+        counterparty_port: channel.counterparty().port_id.to_string(),
+        counterparty_channel: counterparty_channel.to_string(),
+    })
+}
+
+fn received_asset_metadata(
+    msg: &MsgRecvPacket,
+    packet_data: &FungibleTokenPacketData,
+    packet_denom: &asset::Metadata,
+) -> Result<(asset::Metadata, bool)> {
+    if is_source(
+        &msg.packet.port_on_a,
+        &msg.packet.chan_on_a,
+        packet_denom,
+        false,
+    ) {
+        let prefix = format!(
+            "{source_port}/{source_chan}/",
+            source_port = msg.packet.port_on_a,
+            source_chan = msg.packet.chan_on_a
+        );
+
+        let denom: asset::Metadata = packet_data
+            .denom
+            .strip_prefix(&prefix)
+            .context(format!(
+                "denom in packet didn't begin with expected prefix {}",
+                prefix
+            ))?
+            .try_into()
+            .context("couldnt decode denom in ICS20 transfer")?;
+        Ok((denom, true))
+    } else {
+        let prefixed_denomination = format!(
+            "{}/{}/{}",
+            msg.packet.port_on_b, msg.packet.chan_on_b, packet_data.denom
+        );
+        let denom: asset::Metadata = prefixed_denomination
+            .as_str()
+            .try_into()
+            .context("unable to parse denom in ics20 transfer as DenomMetadata")?;
+        Ok((denom, false))
+    }
+}
+
+async fn check_regulated_inbound_ics20<S: StateRead>(
+    state: &S,
+    msg: &MsgRecvPacket,
+    packet_data: &FungibleTokenPacketData,
+    received_denom: &asset::Metadata,
+    returned_to_source: bool,
+    compliance_metadata: &Option<IbcComplianceMetadata>,
+) -> Result<()> {
+    let route = resolve_ibc_route(state, &msg.packet.port_on_b, &msg.packet.chan_on_b).await?;
+    let received_asset_id = received_denom.id();
+    let mut policy = state.get_asset_policy(received_asset_id).await?;
+
+    if !returned_to_source {
+        if let Some(origin_asset_id) = state.get_ibc_origin_asset_id(&packet_data.denom).await? {
+            anyhow::ensure!(
+                origin_asset_id == received_asset_id,
+                "regulated IBC origin {} arrived as unexpected asset {}",
+                packet_data.denom,
+                received_asset_id
+            );
+            if policy.is_none() {
+                policy = state.get_asset_policy(origin_asset_id).await?;
+            }
+            anyhow::ensure!(
+                policy.is_some(),
+                "regulated IBC origin {} has no registered asset policy",
+                packet_data.denom
+            );
+        }
+    }
+
+    if let Some(metadata) = compliance_metadata {
+        anyhow::ensure!(
+            metadata.asset_id == received_asset_id,
+            "IBC compliance metadata asset_id does not match received asset"
+        );
+        anyhow::ensure!(
+            policy.is_some(),
+            "IBC compliance metadata present for unregistered asset"
+        );
+    }
+
+    if let Some(policy) = policy {
+        IbcComplianceMetadata::validate_regulated_memo(&packet_data.memo)?;
+        anyhow::ensure!(
+            policy.permits_ibc_route(&route),
+            "regulated asset is not allowed on IBC route {}:{} via {} to {}:{}",
+            route.local_port,
+            route.local_channel,
+            route.connection_id,
+            route.counterparty_port,
+            route.counterparty_channel
+        );
+    }
+
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct Ics20Transfer {}
 
@@ -80,9 +209,20 @@ pub trait Ics20TransferExecutionExt: StateWrite {
         let packet: IBCPacket<Unchecked> = withdrawal.clone().into();
         self.send_packet_check(packet, current_block_time).await?;
 
-        // TODO(compliance-demo): restore regulated asset IBC channel allowlist enforcement.
-        // Temporarily disabled so the bankD local compliance demo can withdraw regulated
-        // assets back over IBC before register-asset exposes allowed channel setup.
+        if let Some(policy) = self.get_asset_policy(withdrawal.denom.id()).await? {
+            IbcComplianceMetadata::validate_regulated_memo(&withdrawal.ics20_memo)?;
+            let route =
+                resolve_ibc_route(self, &PortId::transfer(), &withdrawal.source_channel).await?;
+            anyhow::ensure!(
+                policy.permits_ibc_route(&route),
+                "regulated asset is not allowed on IBC route {}:{} via {} to {}:{}",
+                route.local_port,
+                route.local_channel,
+                route.connection_id,
+                route.counterparty_port,
+                route.counterparty_channel
+            );
+        }
 
         Ok(())
     }
@@ -322,44 +462,37 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
         .context("couldnt decode denom in ICS20 transfer")?;
     let receiver_amount: Amount = packet_data
         .amount
+        .clone()
         .try_into()
         .context("couldnt decode amount in ICS20 transfer")?;
     let receiver_address = Address::from_str(&packet_data.receiver)?;
 
     // Parse compliance metadata from memo (if present).
     let compliance_metadata =
-        penumbra_sdk_compliance::IbcComplianceMetadata::from_memo(&packet_data.memo)
-            .unwrap_or_else(|e| {
-                tracing::debug!(?e, "failed to parse compliance metadata from ICS-20 memo");
-                None
-            });
+        IbcComplianceMetadata::from_memo(&packet_data.memo).unwrap_or_else(|e| {
+            tracing::debug!(?e, "failed to parse compliance metadata from ICS-20 memo");
+            None
+        });
+
+    let (received_denom, returned_to_source) =
+        received_asset_metadata(msg, &packet_data, &packet_denom)?;
+    check_regulated_inbound_ics20(
+        &state,
+        msg,
+        &packet_data,
+        &received_denom,
+        returned_to_source,
+        &compliance_metadata,
+    )
+    .await?;
 
     // NOTE: here we assume we are chain A.
 
     // 2. check if we are the source chain for the denom.
-    if is_source(
-        &msg.packet.port_on_a,
-        &msg.packet.chan_on_a,
-        &packet_denom,
-        false,
-    ) {
+    if returned_to_source {
         // mint tokens to receiver in the amount of packet_data.amount in the denom of denom (with
         // the source removed, since we're the source)
-        let prefix = format!(
-            "{source_port}/{source_chan}/",
-            source_port = msg.packet.port_on_a,
-            source_chan = msg.packet.chan_on_a
-        );
-
-        let denom: asset::Metadata = packet_data
-            .denom
-            .strip_prefix(&prefix)
-            .context(format!(
-                "denom in packet didn't begin with expected prefix {}",
-                prefix
-            ))?
-            .try_into()
-            .context("couldnt decode denom in ICS20 transfer")?;
+        let denom = received_denom;
 
         let value: Value = Value {
             amount: receiver_amount,
@@ -423,15 +556,7 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
         // prefixedDenomination = prefix + data.denom
         //
         // then mint that denom to packet_data.receiver in packet_data.amount
-        let prefixed_denomination = format!(
-            "{}/{}/{}",
-            msg.packet.port_on_b, msg.packet.chan_on_b, packet_data.denom
-        );
-
-        let denom: asset::Metadata = prefixed_denomination
-            .as_str()
-            .try_into()
-            .context("unable to parse denom in ics20 transfer as DenomMetadata")?;
+        let denom = received_denom;
         state.register_denom(&denom).await;
 
         let value = Value {

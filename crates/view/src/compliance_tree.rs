@@ -183,8 +183,8 @@ impl ComplianceAssetTree {
                 .vartime_decompress()
                 .map_err(|_| anyhow::anyhow!("invalid dk_pub encoding at position {}", pos))?;
 
-            let channels_hash = decaf377::Fq::from_bytes_checked(&leaf_data.channels_hash)
-                .map_err(|_| anyhow::anyhow!("invalid channels_hash at position {}", pos))?;
+            let route_policy_hash = decaf377::Fq::from_bytes_checked(&leaf_data.route_policy_hash)
+                .map_err(|_| anyhow::anyhow!("invalid route_policy_hash at position {}", pos))?;
             let ring_pk = decaf377::Encoding(leaf_data.ring_pk)
                 .vartime_decompress()
                 .map_err(|_| anyhow::anyhow!("invalid ring_pk encoding at position {}", pos))?;
@@ -204,7 +204,7 @@ impl ComplianceAssetTree {
                 params: LeafParams {
                     dk_pub,
                     threshold: leaf_data.threshold,
-                    channels_hash,
+                    route_policy_hash,
                 },
                 ring: LeafRing {
                     ring_pk,
@@ -336,7 +336,7 @@ impl ComplianceAssetTree {
                 next_value: leaf.next_value.to_bytes(),
                 dk_pub: leaf.params.dk_pub.vartime_compress().0,
                 threshold: leaf.params.threshold,
-                channels_hash: leaf.params.channels_hash.to_bytes(),
+                route_policy_hash: leaf.params.route_policy_hash.to_bytes(),
                 ring_pk: leaf.ring.ring_pk.vartime_compress().0,
                 ring_id_hash: leaf.ring.ring_id_hash.to_bytes(),
                 policy_id_hash: leaf.ring.policy_id_hash.to_bytes(),
@@ -412,7 +412,7 @@ mod tests {
             params: LeafParams {
                 dk_pub,
                 threshold,
-                channels_hash: penumbra_sdk_compliance::indexed_tree::string_to_fq(""),
+                route_policy_hash: penumbra_sdk_compliance::indexed_tree::string_to_fq(""),
             },
             ring: LeafRing::default(),
         };

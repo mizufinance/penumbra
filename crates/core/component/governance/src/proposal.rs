@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 use crate::change::ParameterChange;
+use penumbra_sdk_compliance::UpdateAssetIbcPolicy;
 use penumbra_sdk_proto::{penumbra::core::component::governance::v1 as pb, DomainType};
 
 /// A governance proposal.
@@ -60,6 +61,9 @@ impl From<Proposal> for pb::Proposal {
                     client_id: client_id.into(),
                 },
             )),
+            ProposalPayload::UpdateAssetIbcPolicy(update) => {
+                Some(Payload::UpdateAssetIbcPolicy(update.into()))
+            }
         };
         proposal.payload = payload;
         proposal
@@ -135,6 +139,9 @@ impl TryFrom<pb::Proposal> for Proposal {
                         client_id: unfreeze_ibc_client.client_id,
                     }
                 }
+                Payload::UpdateAssetIbcPolicy(update) => {
+                    ProposalPayload::UpdateAssetIbcPolicy(update.try_into()?)
+                }
             },
         })
     }
@@ -194,6 +201,8 @@ pub enum ProposalKind {
     FreezeIbcClient,
     /// A proposal to unfreeze an IBC client.
     UnfreezeIbcClient,
+    /// A proposal to replace a regulated asset's direct IBC routes.
+    UpdateAssetIbcPolicy,
 }
 
 impl From<ProposalKind> for pb::ProposalKind {
@@ -205,6 +214,7 @@ impl From<ProposalKind> for pb::ProposalKind {
             ProposalKind::UpgradePlan => pb::ProposalKind::UpgradePlan,
             ProposalKind::FreezeIbcClient => pb::ProposalKind::FreezeIbcClient,
             ProposalKind::UnfreezeIbcClient => pb::ProposalKind::UnfreezeIbcClient,
+            ProposalKind::UpdateAssetIbcPolicy => pb::ProposalKind::UpdateAssetIbcPolicy,
         }
     }
 }
@@ -221,6 +231,7 @@ impl TryFrom<pb::ProposalKind> for ProposalKind {
             pb::ProposalKind::UpgradePlan => ProposalKind::UpgradePlan,
             pb::ProposalKind::FreezeIbcClient => ProposalKind::FreezeIbcClient,
             pb::ProposalKind::UnfreezeIbcClient => ProposalKind::UnfreezeIbcClient,
+            pb::ProposalKind::UpdateAssetIbcPolicy => ProposalKind::UpdateAssetIbcPolicy,
         };
         Ok(kind)
     }
@@ -237,6 +248,7 @@ impl FromStr for ProposalKind {
             "upgrade_plan" => Ok(ProposalKind::UpgradePlan),
             "freeze_ibc_client" => Ok(ProposalKind::FreezeIbcClient),
             "unfreeze_ibc_client" => Ok(ProposalKind::UnfreezeIbcClient),
+            "update_asset_ibc_policy" => Ok(ProposalKind::UpdateAssetIbcPolicy),
             _ => Err(anyhow::anyhow!("invalid proposal kind: {}", s)),
         }
     }
@@ -252,6 +264,7 @@ impl Proposal {
             ProposalPayload::UpgradePlan { .. } => ProposalKind::UpgradePlan,
             ProposalPayload::FreezeIbcClient { .. } => ProposalKind::FreezeIbcClient,
             ProposalPayload::UnfreezeIbcClient { .. } => ProposalKind::UnfreezeIbcClient,
+            ProposalPayload::UpdateAssetIbcPolicy(_) => ProposalKind::UpdateAssetIbcPolicy,
         }
     }
 }
@@ -288,6 +301,8 @@ pub enum ProposalPayload {
         /// The identifier of the client to unfreeze.
         client_id: String,
     },
+    /// Replace direct IBC routes for an existing regulated asset.
+    UpdateAssetIbcPolicy(UpdateAssetIbcPolicy),
 }
 
 /// A TOML-serializable version of `ProposalPayload`, meant for human consumption.
@@ -300,6 +315,7 @@ pub enum ProposalPayloadToml {
     UpgradePlan { height: u64 },
     FreezeIbcClient { client_id: String },
     UnfreezeIbcClient { client_id: String },
+    UpdateAssetIbcPolicy(UpdateAssetIbcPolicy),
 }
 
 impl TryFrom<ProposalPayloadToml> for ProposalPayload {
@@ -321,6 +337,9 @@ impl TryFrom<ProposalPayloadToml> for ProposalPayload {
             ProposalPayloadToml::UnfreezeIbcClient { client_id } => {
                 ProposalPayload::UnfreezeIbcClient { client_id }
             }
+            ProposalPayloadToml::UpdateAssetIbcPolicy(update) => {
+                ProposalPayload::UpdateAssetIbcPolicy(update)
+            }
         })
     }
 }
@@ -341,6 +360,9 @@ impl From<ProposalPayload> for ProposalPayloadToml {
             }
             ProposalPayload::UnfreezeIbcClient { client_id } => {
                 ProposalPayloadToml::UnfreezeIbcClient { client_id }
+            }
+            ProposalPayload::UpdateAssetIbcPolicy(update) => {
+                ProposalPayloadToml::UpdateAssetIbcPolicy(update)
             }
         }
     }

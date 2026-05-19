@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use decaf377_rdsa::{SigningKey, SpendAuth, VerificationKey};
 use penumbra_sdk_asset::asset;
 use penumbra_sdk_compliance::structs::{
-    AssetRegistrationGrant, AssetRegistrationGrantBody, MsgRegisterAsset, MsgRegisterUser,
-    UserRegistrationGrant, UserRegistrationGrantBody,
+    AssetRegistrationGrant, AssetRegistrationGrantBody, IbcAssetOrigin, IbcRoute, MsgRegisterAsset,
+    MsgRegisterUser, UserRegistrationGrant, UserRegistrationGrantBody,
 };
 use penumbra_sdk_compliance::{
     derive_compliance_scalar, issuer_keys::DetectionKey, ComplianceLeaf, IssuerComplianceWorker,
@@ -60,6 +60,15 @@ pub enum ComplianceCmd {
         /// Registration-authority verification key for regulated user grants, hex-encoded.
         #[clap(long)]
         registration_authority_vk_hex: Option<String>,
+        /// Allowed direct IBC route: <local_channel,connection_id,counterparty_channel>.
+        #[clap(long = "allowed-ibc-route")]
+        allowed_ibc_routes: Vec<String>,
+        /// Base denom for a regulated external IBC origin.
+        #[clap(long)]
+        ibc_origin_base_denom: Option<String>,
+        /// Origin route: <local_channel,connection_id,counterparty_channel>.
+        #[clap(long)]
+        ibc_origin_route: Option<String>,
         /// Asset registration grant, hex-encoded protobuf bytes.
         #[clap(long)]
         asset_registration_grant_hex: String,
@@ -128,6 +137,15 @@ pub enum ComplianceCmd {
         /// Registration-authority verification key for regulated user grants, hex-encoded.
         #[clap(long)]
         registration_authority_vk_hex: Option<String>,
+        /// Allowed direct IBC route: <local_channel,connection_id,counterparty_channel>.
+        #[clap(long = "allowed-ibc-route")]
+        allowed_ibc_routes: Vec<String>,
+        /// Base denom for a regulated external IBC origin.
+        #[clap(long)]
+        ibc_origin_base_denom: Option<String>,
+        /// Origin route: <local_channel,connection_id,counterparty_channel>.
+        #[clap(long)]
+        ibc_origin_route: Option<String>,
         /// Registrar signing key authorized in genesis, hex-encoded.
         #[clap(long)]
         registrar_sk_hex: String,
@@ -289,6 +307,9 @@ impl ComplianceCmd {
                 permission,
                 resource,
                 registration_authority_vk_hex,
+                allowed_ibc_routes,
+                ibc_origin_base_denom,
+                ibc_origin_route,
                 registrar_sk_hex,
                 valid_until_unix,
             } => {
@@ -320,13 +341,20 @@ impl ComplianceCmd {
                         "--registration-authority-vk-hex is required for regulated assets"
                     );
                 }
+                let allowed_ibc_routes = Self::parse_ibc_routes(allowed_ibc_routes, is_regulated)?;
+                let ibc_origin = Self::parse_ibc_origin(
+                    ibc_origin_base_denom.as_deref(),
+                    ibc_origin_route.as_deref(),
+                    is_regulated,
+                )?;
                 let registrar_sk = parse_spend_sk(registrar_sk_hex, "registrar_sk_hex")?;
                 let body = AssetRegistrationGrantBody {
                     asset_id,
                     is_regulated,
                     dk_pub,
                     threshold: *threshold,
-                    allowed_channels: vec![],
+                    allowed_ibc_routes,
+                    ibc_origin,
                     ring_pk,
                     ring_id: ring_id.clone(),
                     policy_id: policy_id.clone(),
@@ -402,6 +430,9 @@ impl ComplianceCmd {
                 permission,
                 resource,
                 registration_authority_vk_hex,
+                allowed_ibc_routes,
+                ibc_origin_base_denom,
+                ibc_origin_route,
                 asset_registration_grant_hex,
                 fee_tier,
             } => {
@@ -439,6 +470,13 @@ impl ComplianceCmd {
                         "--registration-authority-vk-hex is required for regulated assets"
                     );
                 }
+                let allowed_ibc_routes =
+                    Self::parse_ibc_routes(allowed_ibc_routes, is_regulated)?;
+                let ibc_origin = Self::parse_ibc_origin(
+                    ibc_origin_base_denom.as_deref(),
+                    ibc_origin_route.as_deref(),
+                    is_regulated,
+                )?;
                 let asset_registration_grant =
                     decode_asset_registration_grant(asset_registration_grant_hex)
                         .context("invalid --asset-registration-grant-hex")?;
@@ -448,7 +486,8 @@ impl ComplianceCmd {
                     is_regulated,
                     dk_pub,
                     threshold: *threshold,
-                    allowed_channels: vec![],
+                    allowed_ibc_routes,
+                    ibc_origin,
                     ring_pk,
                     ring_id: ring_id.clone(),
                     policy_id: policy_id.clone(),
@@ -539,6 +578,115 @@ impl ComplianceCmd {
             return Ok(asset_id);
         }
         Ok(asset::REGISTRY.parse_unit(asset_str).id())
+    }
+
+    fn parse_ibc_routes(route_specs: &[String], is_regulated: bool) -> Result<Vec<IbcRoute>> {
+        if !is_regulated && !route_specs.is_empty() {
+            anyhow::bail!("--allowed-ibc-route is only valid for regulated assets");
+        }
+        route_specs
+            .iter()
+            .map(|spec| Self::parse_ibc_route(spec))
+            .collect()
+    }
+
+    fn parse_ibc_origin(
+        base_denom: Option<&str>,
+        route: Option<&str>,
+        is_regulated: bool,
+    ) -> Result<Option<IbcAssetOrigin>> {
+        match (base_denom, route) {
+            (None, None) => Ok(None),
+            (Some(_), None) | (None, Some(_)) => {
+                anyhow::bail!(
+                    "--ibc-origin-base-denom and --ibc-origin-route must be provided together"
+                )
+            }
+            (Some(base_denom), Some(route)) => {
+                if !is_regulated {
+                    anyhow::bail!("IBC origin is only valid for regulated assets");
+                }
+                Ok(Some(IbcAssetOrigin {
+                    route: Self::parse_ibc_route(route)?,
+                    base_denom: base_denom.to_string(),
+                }))
+            }
+        }
+    }
+
+    fn parse_ibc_route(spec: &str) -> Result<IbcRoute> {
+        let parts = spec.split(',').collect::<Vec<_>>();
+        anyhow::ensure!(
+            parts.len() == 3 && parts.iter().all(|part| !part.is_empty()),
+            "IBC route must be <local_channel,connection_id,counterparty_channel>"
+        );
+        Ok(IbcRoute::transfer(parts[0], parts[1], parts[2]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_multiple_ibc_routes_defaults_transfer_ports() {
+        let specs = vec![
+            "channel-0,connection-0,channel-7".to_string(),
+            "channel-1,connection-1,channel-8".to_string(),
+        ];
+
+        let routes = ComplianceCmd::parse_ibc_routes(&specs, true).unwrap();
+
+        assert_eq!(
+            routes,
+            vec![
+                IbcRoute::transfer("channel-0", "connection-0", "channel-7"),
+                IbcRoute::transfer("channel-1", "connection-1", "channel-8"),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_ibc_origin_requires_base_denom_and_route() {
+        assert!(ComplianceCmd::parse_ibc_origin(Some("ubank"), None, true).is_err());
+        assert!(ComplianceCmd::parse_ibc_origin(
+            None,
+            Some("channel-0,connection-0,channel-7"),
+            true
+        )
+        .is_err());
+
+        let origin = ComplianceCmd::parse_ibc_origin(
+            Some("ubank"),
+            Some("channel-0,connection-0,channel-7"),
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(origin.base_denom, "ubank");
+        assert_eq!(
+            origin.route,
+            IbcRoute::transfer("channel-0", "connection-0", "channel-7")
+        );
+    }
+
+    #[test]
+    fn parse_ibc_route_rejects_chain_id_shape() {
+        assert!(
+            ComplianceCmd::parse_ibc_route("channel-0,connection-0,bankd-1,channel-7").is_err()
+        );
+    }
+
+    #[test]
+    fn parse_ibc_policy_args_reject_unregulated_assets() {
+        let specs = vec!["channel-0,connection-0,channel-7".to_string()];
+        assert!(ComplianceCmd::parse_ibc_routes(&specs, false).is_err());
+        assert!(ComplianceCmd::parse_ibc_origin(
+            Some("ubank"),
+            Some("channel-0,connection-0,channel-7"),
+            false
+        )
+        .is_err());
     }
 }
 

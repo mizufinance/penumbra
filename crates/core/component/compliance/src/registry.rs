@@ -64,6 +64,19 @@ fn decode_commitment(bytes: Vec<u8>) -> Result<StateCommitment> {
     )?))
 }
 
+fn encode_asset_id(asset_id: asset::Id) -> Vec<u8> {
+    asset_id.0.to_bytes().to_vec()
+}
+
+fn decode_asset_id(bytes: Vec<u8>) -> Result<asset::Id> {
+    let bytes: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        anyhow::anyhow!("stored asset id must be 32 bytes, got {}", bytes.len())
+    })?;
+    Ok(asset::Id(Fq::from_bytes_checked(&bytes).map_err(|_| {
+        anyhow::anyhow!("stored asset id is not a field element")
+    })?))
+}
+
 fn parse_node_key(key: &[u8], prefix: &str) -> Result<(u8, u64)> {
     let key = std::str::from_utf8(key)?;
     let suffix = key.strip_prefix(prefix).unwrap_or(key);
@@ -289,6 +302,16 @@ pub trait ComplianceRegistryRead: StateRead {
         let key = state_key::asset_policy(&asset_id);
         match self.get_raw(&key).await? {
             Some(bytes) => Ok(Some(AssetPolicy::from_bytes(&bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_ibc_origin_asset_id(&self, base_denom: &str) -> Result<Option<asset::Id>> {
+        match self
+            .get_raw(&state_key::ibc_origin_asset(base_denom))
+            .await?
+        {
+            Some(bytes) => Ok(Some(decode_asset_id(bytes)?)),
             None => Ok(None),
         }
     }
@@ -679,6 +702,7 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
         // case, allow the issuer to attach the regulated policy later.
         if let Some(position) = tree.get_position(asset_id.0) {
             if is_regulated && self.get_asset_policy(asset_id).await?.is_none() {
+                self.set_ibc_origin_asset(asset_id, &policy).await?;
                 let updated_leaf = tree.update_policy(asset_id.0, &policy)?;
                 self.put_asset_imt_leaf(position, &updated_leaf)?;
                 let touched_nodes = tree.nodes_on_path(position)?;
@@ -701,6 +725,9 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
 
         // Insert into the IMT with policy bound into the leaf
         let result = tree.insert(asset_id.0, &policy)?;
+        if is_regulated {
+            self.set_ibc_origin_asset(asset_id, &policy).await?;
+        }
 
         // Save touched leaves and paths.
         self.put_asset_imt_leaf(result.position, &result.indexed_leaf)?;
@@ -761,7 +788,67 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     fn set_asset_policy(&mut self, asset_id: asset::Id, policy: AssetPolicy) -> Result<()> {
         let key = state_key::asset_policy(&asset_id);
         self.put_raw(key, policy.to_bytes()?);
+        if let Some(mut policies) = self.object_get::<BTreeMap<asset::Id, Option<AssetPolicy>>>(
+            state_key::cache::cached_asset_policies(),
+        ) {
+            policies.insert(asset_id, Some(policy));
+            self.object_put(state_key::cache::cached_asset_policies(), policies);
+        }
         Ok(())
+    }
+
+    async fn set_ibc_origin_asset(
+        &mut self,
+        asset_id: asset::Id,
+        policy: &AssetPolicy,
+    ) -> Result<()> {
+        let Some(origin) = &policy.params.ibc_origin else {
+            return Ok(());
+        };
+        let key = state_key::ibc_origin_asset(&origin.base_denom);
+        if let Some(existing) = self.get_raw(&key).await? {
+            let existing = decode_asset_id(existing)?;
+            anyhow::ensure!(
+                existing == asset_id,
+                "regulated IBC origin base denom {} is already registered for asset {}",
+                origin.base_denom,
+                existing
+            );
+        }
+        self.put_raw(key, encode_asset_id(asset_id));
+        Ok(())
+    }
+
+    async fn replace_asset_ibc_policy(
+        &mut self,
+        asset_id: asset::Id,
+        expected_route_policy_hash: [u8; 32],
+        allowed_ibc_routes: Vec<crate::structs::IbcRoute>,
+    ) -> Result<IndexedLeaf> {
+        let mut policy = self
+            .get_asset_policy(asset_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("asset is not regulated"))?;
+        let current_hash = indexed_tree::route_policy_to_fq(&policy.params).to_bytes();
+        anyhow::ensure!(
+            current_hash == expected_route_policy_hash,
+            "asset IBC route policy hash did not match expected current policy"
+        );
+        policy.replace_allowed_ibc_routes(allowed_ibc_routes);
+
+        let mut tree = self.get_asset_imt_for_write().await?;
+        let position = tree
+            .get_position(asset_id.0)
+            .ok_or_else(|| anyhow::anyhow!("regulated asset missing from asset IMT"))?;
+        let updated_leaf = tree.update_policy(asset_id.0, &policy)?;
+        self.put_asset_imt_leaf(position, &updated_leaf)?;
+        let touched_nodes = tree.nodes_on_path(position)?;
+        self.put_asset_imt_nodes(&touched_nodes);
+        self.put(state_key::asset_imt_root().to_string(), tree.root());
+        self.write_asset_imt_cache(tree);
+        self.mark_compliance_trees_modified();
+        self.set_asset_policy(asset_id, policy)?;
+        Ok(updated_leaf)
     }
 
     /// Store a compliance registrar verification key.
@@ -2185,6 +2272,93 @@ mod tests {
                 .await
                 .unwrap(),
             None
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ibc_origin_lookup_rejects_duplicate_base_denom() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        let route = crate::IbcRoute::transfer("channel-0", "connection-0", "channel-7");
+        let policy = AssetPolicy::new(
+            decaf377::Element::GENERATOR,
+            500,
+            vec![route.clone()],
+            Some(crate::IbcAssetOrigin {
+                route,
+                base_denom: "ubank".to_string(),
+            }),
+            String::new(),
+            decaf377::Element::GENERATOR,
+            String::new(),
+            String::new(),
+            String::new(),
+        );
+
+        let asset_id = asset::Id(Fq::from(700u64));
+        state
+            .register_regulated_asset(asset_id, policy.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            state.get_ibc_origin_asset_id("ubank").await.unwrap(),
+            Some(asset_id)
+        );
+
+        let duplicate = state
+            .register_regulated_asset(asset::Id(Fq::from(701u64)), policy)
+            .await
+            .expect_err("duplicate base denom should fail");
+        assert!(
+            duplicate.to_string().contains("already registered"),
+            "unexpected error: {duplicate:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_asset_ibc_policy_requires_expected_hash() {
+        let storage = TempStorage::new().await.unwrap();
+        let snapshot = storage.latest_snapshot();
+        let mut state = cnidarium::StateDelta::new(snapshot);
+
+        let old_route = crate::IbcRoute::transfer("channel-0", "connection-0", "channel-7");
+        let new_route = crate::IbcRoute::transfer("channel-1", "connection-1", "channel-8");
+        let policy = AssetPolicy::new(
+            decaf377::Element::GENERATOR,
+            500,
+            vec![old_route.clone()],
+            None,
+            String::new(),
+            decaf377::Element::GENERATOR,
+            String::new(),
+            String::new(),
+            String::new(),
+        );
+        let expected_hash = indexed_tree::route_policy_to_fq(&policy.params).to_bytes();
+        let asset_id = asset::Id(Fq::from(702u64));
+
+        state
+            .register_regulated_asset(asset_id, policy)
+            .await
+            .unwrap();
+        state
+            .replace_asset_ibc_policy(asset_id, expected_hash, vec![new_route.clone()])
+            .await
+            .unwrap();
+
+        let updated = state.get_asset_policy(asset_id).await.unwrap().unwrap();
+        assert!(updated.permits_ibc_route(&new_route));
+        assert!(!updated.permits_ibc_route(&old_route));
+
+        let stale = state
+            .replace_asset_ibc_policy(asset_id, expected_hash, vec![])
+            .await
+            .expect_err("stale route policy hash should fail");
+        assert!(
+            stale.to_string().contains("did not match"),
+            "unexpected error: {stale:#}"
         );
     }
 

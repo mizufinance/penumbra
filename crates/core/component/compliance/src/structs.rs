@@ -226,8 +226,155 @@ pub struct AssetParams {
     pub dk_pub: decaf377::Element,
     /// Amount threshold for flagging (u128 to cover full amount range).
     pub threshold: u128,
-    /// IBC channels allowed for this asset. Empty = IBC blocked entirely.
-    pub allowed_channels: Vec<String>,
+    /// Direct IBC routes allowed for this asset. Empty = IBC blocked.
+    pub allowed_ibc_routes: Vec<IbcRoute>,
+    /// External origin for regulated voucher assets.
+    pub ibc_origin: Option<IbcAssetOrigin>,
+}
+
+/// A direct ICS-20 route bound to local committed IBC identifiers.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "pb::IbcRoute", into = "pb::IbcRoute")]
+pub struct IbcRoute {
+    pub local_port: String,
+    pub local_channel: String,
+    pub connection_id: String,
+    pub counterparty_port: String,
+    pub counterparty_channel: String,
+}
+
+impl IbcRoute {
+    pub fn transfer(
+        local_channel: impl Into<String>,
+        connection_id: impl Into<String>,
+        counterparty_channel: impl Into<String>,
+    ) -> Self {
+        Self {
+            local_port: "transfer".to_string(),
+            local_channel: local_channel.into(),
+            connection_id: connection_id.into(),
+            counterparty_port: "transfer".to_string(),
+            counterparty_channel: counterparty_channel.into(),
+        }
+    }
+
+    pub fn canonical_key(&self) -> String {
+        [
+            self.local_port.as_str(),
+            self.local_channel.as_str(),
+            self.connection_id.as_str(),
+            self.counterparty_port.as_str(),
+            self.counterparty_channel.as_str(),
+        ]
+        .join("\0")
+    }
+}
+
+impl DomainType for IbcRoute {
+    type Proto = pb::IbcRoute;
+}
+
+impl TryFrom<pb::IbcRoute> for IbcRoute {
+    type Error = anyhow::Error;
+
+    fn try_from(value: pb::IbcRoute) -> Result<Self, Self::Error> {
+        anyhow::ensure!(!value.local_port.is_empty(), "missing local_port");
+        anyhow::ensure!(!value.local_channel.is_empty(), "missing local_channel");
+        anyhow::ensure!(!value.connection_id.is_empty(), "missing connection_id");
+        anyhow::ensure!(
+            !value.counterparty_port.is_empty(),
+            "missing counterparty_port"
+        );
+        anyhow::ensure!(
+            !value.counterparty_channel.is_empty(),
+            "missing counterparty_channel"
+        );
+        Ok(Self {
+            local_port: value.local_port,
+            local_channel: value.local_channel,
+            connection_id: value.connection_id,
+            counterparty_port: value.counterparty_port,
+            counterparty_channel: value.counterparty_channel,
+        })
+    }
+}
+
+impl From<IbcRoute> for pb::IbcRoute {
+    fn from(value: IbcRoute) -> Self {
+        Self {
+            local_port: value.local_port,
+            local_channel: value.local_channel,
+            connection_id: value.connection_id,
+            counterparty_port: value.counterparty_port,
+            counterparty_channel: value.counterparty_channel,
+        }
+    }
+}
+
+/// External origin for a regulated ICS-20 voucher asset.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "pb::IbcAssetOrigin", into = "pb::IbcAssetOrigin")]
+pub struct IbcAssetOrigin {
+    pub route: IbcRoute,
+    pub base_denom: String,
+}
+
+impl IbcAssetOrigin {
+    pub fn canonical_key(&self) -> String {
+        format!("{}\0{}", self.route.canonical_key(), self.base_denom)
+    }
+}
+
+impl DomainType for IbcAssetOrigin {
+    type Proto = pb::IbcAssetOrigin;
+}
+
+impl TryFrom<pb::IbcAssetOrigin> for IbcAssetOrigin {
+    type Error = anyhow::Error;
+
+    fn try_from(value: pb::IbcAssetOrigin) -> Result<Self, Self::Error> {
+        anyhow::ensure!(!value.base_denom.is_empty(), "missing base_denom");
+        Ok(Self {
+            route: value
+                .route
+                .ok_or_else(|| anyhow::anyhow!("missing origin route"))?
+                .try_into()?,
+            base_denom: value.base_denom,
+        })
+    }
+}
+
+impl From<IbcAssetOrigin> for pb::IbcAssetOrigin {
+    fn from(value: IbcAssetOrigin) -> Self {
+        Self {
+            route: Some(value.route.into()),
+            base_denom: value.base_denom,
+        }
+    }
+}
+
+fn canonical_routes(mut routes: Vec<IbcRoute>) -> Vec<IbcRoute> {
+    routes.sort();
+    routes.dedup();
+    routes
+}
+
+pub fn canonical_route_policy_string(
+    origin: &Option<IbcAssetOrigin>,
+    routes: &[IbcRoute],
+) -> String {
+    let mut sorted = routes.to_vec();
+    sorted.sort();
+    let route_part = sorted
+        .iter()
+        .map(IbcRoute::canonical_key)
+        .collect::<Vec<_>>()
+        .join("\0\0");
+    let origin_part = origin
+        .as_ref()
+        .map(IbcAssetOrigin::canonical_key)
+        .unwrap_or_default();
+    format!("origin:{origin_part}\0routes:{route_part}")
 }
 
 /// Orbis ring binding data.
@@ -247,7 +394,7 @@ pub struct RingData {
 
 /// Asset-specific compliance policy stored on-chain.
 ///
-/// Contains issuer parameters (detection key, threshold, channel whitelist)
+/// Contains issuer parameters (detection key, threshold, IBC route policy)
 /// and Orbis ring binding (ring_pk, policy identifiers).
 /// This is state-only data — NOT included in the IMT Merkle commitment.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -257,12 +404,15 @@ pub struct AssetPolicy {
     pub registration_authority_vk: Option<VerificationKey<SpendAuth>>,
 }
 
+const ASSET_POLICY_STORAGE_MAGIC: &[u8; 4] = b"AP2\0";
+
 impl AssetPolicy {
     /// Create a new asset policy.
     pub fn new(
         dk_pub: decaf377::Element,
         threshold: u128,
-        allowed_channels: Vec<String>,
+        allowed_ibc_routes: Vec<IbcRoute>,
+        ibc_origin: Option<IbcAssetOrigin>,
         ring_id: String,
         ring_pk: decaf377::Element,
         policy_id: String,
@@ -273,7 +423,8 @@ impl AssetPolicy {
             params: AssetParams {
                 dk_pub,
                 threshold,
-                allowed_channels,
+                allowed_ibc_routes: canonical_routes(allowed_ibc_routes),
+                ibc_origin,
             },
             ring: RingData {
                 ring_id,
@@ -291,6 +442,14 @@ impl AssetPolicy {
         self
     }
 
+    pub fn replace_allowed_ibc_routes(&mut self, routes: Vec<IbcRoute>) {
+        self.params.allowed_ibc_routes = canonical_routes(routes);
+    }
+
+    pub fn permits_ibc_route(&self, route: &IbcRoute) -> bool {
+        self.params.allowed_ibc_routes.binary_search(route).is_ok()
+    }
+
     /// Create a simple policy with just dk_pub, threshold, and ring_pk.
     /// Uses empty strings for ring_id, policy_id, permission, resource.
     pub fn simple(dk_pub: decaf377::Element, threshold: u128, ring_pk: decaf377::Element) -> Self {
@@ -298,6 +457,7 @@ impl AssetPolicy {
             dk_pub,
             threshold,
             vec![],
+            None,
             String::new(),
             ring_pk,
             String::new(),
@@ -314,7 +474,8 @@ impl AssetPolicy {
             params: AssetParams {
                 dk_pub: *crate::crypto::UNREGULATED_SINK_DK_PUB,
                 threshold: u128::MAX,
-                allowed_channels: vec![],
+                allowed_ibc_routes: vec![],
+                ibc_origin: None,
             },
             ring: RingData {
                 ring_id: String::new(),
@@ -329,35 +490,19 @@ impl AssetPolicy {
 
     /// Serialize to bytes for storage.
     ///
-    /// Format: [dk_pub: 32] [threshold: 16] [ring_pk: 32]
-    ///         [channel_count: 2] [for each: len: 1, utf8 bytes]
+    /// Format starts with `AP2\0`, so older channel-only rows fail closed.
     ///         [ring_id_len: 2] [ring_id bytes]
     ///         [policy_id_len: 2] [policy_id bytes]
     ///         [permission_len: 2] [permission bytes]
     ///         [resource_len: 2] [resource bytes]
     pub fn to_bytes(&self) -> anyhow::Result<Vec<u8>> {
         let mut bytes = Vec::with_capacity(128);
+        bytes.extend_from_slice(ASSET_POLICY_STORAGE_MAGIC);
         // AssetParams
         bytes.extend_from_slice(&self.params.dk_pub.vartime_compress().0);
         bytes.extend_from_slice(&self.params.threshold.to_le_bytes());
         // RingData - ring_pk
         bytes.extend_from_slice(&self.ring.ring_pk.vartime_compress().0);
-        // Channels
-        let count = u16::try_from(self.params.allowed_channels.len()).map_err(|_| {
-            anyhow::anyhow!(
-                "too many allowed channels: {}",
-                self.params.allowed_channels.len()
-            )
-        })?;
-        bytes.extend_from_slice(&count.to_le_bytes());
-        for channel in &self.params.allowed_channels {
-            let len = u8::try_from(channel.len()).map_err(|_| {
-                anyhow::anyhow!("allowed channel name too long: {} bytes", channel.len())
-            })?;
-            bytes.push(len);
-            bytes.extend_from_slice(channel.as_bytes());
-        }
-        // String fields
         fn write_string(bytes: &mut Vec<u8>, s: &str, field: &str) -> anyhow::Result<()> {
             let len = u16::try_from(s.len())
                 .map_err(|_| anyhow::anyhow!("{field} too long: {} bytes", s.len()))?;
@@ -365,6 +510,32 @@ impl AssetPolicy {
             bytes.extend_from_slice(s.as_bytes());
             Ok(())
         }
+        fn write_route(bytes: &mut Vec<u8>, route: &IbcRoute) -> anyhow::Result<()> {
+            write_string(bytes, &route.local_port, "local_port")?;
+            write_string(bytes, &route.local_channel, "local_channel")?;
+            write_string(bytes, &route.connection_id, "connection_id")?;
+            write_string(bytes, &route.counterparty_port, "counterparty_port")?;
+            write_string(bytes, &route.counterparty_channel, "counterparty_channel")
+        }
+        let count = u16::try_from(self.params.allowed_ibc_routes.len()).map_err(|_| {
+            anyhow::anyhow!(
+                "too many allowed IBC routes: {}",
+                self.params.allowed_ibc_routes.len()
+            )
+        })?;
+        bytes.extend_from_slice(&count.to_le_bytes());
+        for route in &self.params.allowed_ibc_routes {
+            write_route(&mut bytes, route)?;
+        }
+        match &self.params.ibc_origin {
+            Some(origin) => {
+                bytes.push(1);
+                write_route(&mut bytes, &origin.route)?;
+                write_string(&mut bytes, &origin.base_denom, "base_denom")?;
+            }
+            None => bytes.push(0),
+        }
+        // String fields
         write_string(&mut bytes, &self.ring.ring_id, "ring_id")?;
         write_string(&mut bytes, &self.ring.policy_id, "policy_id")?;
         write_string(&mut bytes, &self.ring.permission, "permission")?;
@@ -380,48 +551,30 @@ impl AssetPolicy {
 
     /// Deserialize from bytes.
     pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
-        if bytes.len() < 80 {
-            // 32 (dk_pub) + 16 (threshold) + 32 (ring_pk)
+        if bytes.len() < ASSET_POLICY_STORAGE_MAGIC.len() + 80 {
             anyhow::bail!(
-                "invalid AssetPolicy length: expected >= 80 bytes, got {}",
+                "invalid AssetPolicy length: expected AP2 header and policy body, got {}",
                 bytes.len()
             );
         }
-        let dk_pub_bytes: [u8; 32] = bytes[0..32].try_into()?;
+        anyhow::ensure!(
+            &bytes[..ASSET_POLICY_STORAGE_MAGIC.len()] == ASSET_POLICY_STORAGE_MAGIC,
+            "unsupported AssetPolicy storage encoding"
+        );
+        let mut offset = ASSET_POLICY_STORAGE_MAGIC.len();
+        let dk_pub_bytes: [u8; 32] = bytes[offset..offset + 32].try_into()?;
+        offset += 32;
         let dk_pub = decaf377::Encoding(dk_pub_bytes)
             .vartime_decompress()
             .map_err(|_| anyhow::anyhow!("invalid dk_pub encoding"))?;
-        let threshold = u128::from_le_bytes(bytes[32..48].try_into()?);
-        let ring_pk_bytes: [u8; 32] = bytes[48..80].try_into()?;
+        let threshold = u128::from_le_bytes(bytes[offset..offset + 16].try_into()?);
+        offset += 16;
+        let ring_pk_bytes: [u8; 32] = bytes[offset..offset + 32].try_into()?;
+        offset += 32;
         let ring_pk = decaf377::Encoding(ring_pk_bytes)
             .vartime_decompress()
             .map_err(|_| anyhow::anyhow!("invalid ring_pk encoding"))?;
 
-        let mut offset = 80;
-
-        // Parse channels
-        if offset + 2 > bytes.len() {
-            anyhow::bail!("missing allowed_channels count");
-        }
-        let count = u16::from_le_bytes(bytes[offset..offset + 2].try_into()?) as usize;
-        offset += 2;
-        let mut allowed_channels = Vec::with_capacity(count);
-        for _ in 0..count {
-            if offset >= bytes.len() {
-                anyhow::bail!("truncated allowed_channels data");
-            }
-            let len = bytes[offset] as usize;
-            offset += 1;
-            if offset + len > bytes.len() {
-                anyhow::bail!("truncated channel string");
-            }
-            let channel = std::str::from_utf8(&bytes[offset..offset + len])
-                .map_err(|_| anyhow::anyhow!("invalid UTF-8 in channel name"))?;
-            allowed_channels.push(channel.to_string());
-            offset += len;
-        }
-
-        // Parse string fields
         fn read_string(bytes: &[u8], offset: &mut usize, field: &str) -> anyhow::Result<String> {
             if *offset + 2 > bytes.len() {
                 anyhow::bail!("missing {field}");
@@ -436,6 +589,40 @@ impl AssetPolicy {
             *offset += len;
             Ok(s.to_string())
         }
+        fn read_route(bytes: &[u8], offset: &mut usize) -> anyhow::Result<IbcRoute> {
+            Ok(IbcRoute {
+                local_port: read_string(bytes, offset, "local_port")?,
+                local_channel: read_string(bytes, offset, "local_channel")?,
+                connection_id: read_string(bytes, offset, "connection_id")?,
+                counterparty_port: read_string(bytes, offset, "counterparty_port")?,
+                counterparty_channel: read_string(bytes, offset, "counterparty_channel")?,
+            })
+        }
+
+        if offset + 2 > bytes.len() {
+            anyhow::bail!("missing allowed_ibc_routes count");
+        }
+        let count = u16::from_le_bytes(bytes[offset..offset + 2].try_into()?) as usize;
+        offset += 2;
+        let mut allowed_ibc_routes = Vec::with_capacity(count);
+        for _ in 0..count {
+            allowed_ibc_routes.push(read_route(bytes, &mut offset)?);
+        }
+        allowed_ibc_routes = canonical_routes(allowed_ibc_routes);
+
+        if offset >= bytes.len() {
+            anyhow::bail!("missing ibc_origin flag");
+        }
+        let has_origin = bytes[offset];
+        offset += 1;
+        let ibc_origin = match has_origin {
+            0 => None,
+            1 => Some(IbcAssetOrigin {
+                route: read_route(bytes, &mut offset)?,
+                base_denom: read_string(bytes, &mut offset, "base_denom")?,
+            }),
+            _ => anyhow::bail!("invalid ibc_origin flag: {has_origin}"),
+        };
 
         let ring_id = read_string(bytes, &mut offset, "ring_id")?;
         let policy_id = read_string(bytes, &mut offset, "policy_id")?;
@@ -467,7 +654,8 @@ impl AssetPolicy {
             params: AssetParams {
                 dk_pub,
                 threshold,
-                allowed_channels,
+                allowed_ibc_routes,
+                ibc_origin,
             },
             ring: RingData {
                 ring_id,
@@ -525,12 +713,19 @@ impl TryFrom<pb::AssetPolicy> for AssetPolicy {
             .map(TryInto::try_into)
             .transpose()
             .map_err(|_| anyhow::anyhow!("invalid registration_authority_vk"))?;
+        let allowed_ibc_routes = value
+            .allowed_ibc_routes
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let ibc_origin = value.ibc_origin.map(TryInto::try_into).transpose()?;
 
         Ok(AssetPolicy {
             params: AssetParams {
                 dk_pub,
                 threshold,
-                allowed_channels: value.allowed_channels,
+                allowed_ibc_routes: canonical_routes(allowed_ibc_routes),
+                ibc_origin,
             },
             ring: RingData {
                 ring_id: value.ring_id,
@@ -549,13 +744,19 @@ impl From<AssetPolicy> for pb::AssetPolicy {
         pb::AssetPolicy {
             dk_pub: value.params.dk_pub.vartime_compress().0.to_vec(),
             threshold: value.params.threshold.to_le_bytes().to_vec(),
-            allowed_channels: value.params.allowed_channels,
+            allowed_ibc_routes: value
+                .params
+                .allowed_ibc_routes
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             ring_id: value.ring.ring_id,
             ring_pk: value.ring.ring_pk.vartime_compress().0.to_vec(),
             policy_id: value.ring.policy_id,
             permission: value.ring.permission,
             resource: value.ring.resource,
             registration_authority_vk: value.registration_authority_vk.map(Into::into),
+            ibc_origin: value.params.ibc_origin.map(Into::into),
         }
     }
 }
@@ -570,7 +771,8 @@ pub struct AssetRegistrationGrantBody {
     pub is_regulated: bool,
     pub dk_pub: Option<decaf377::Element>,
     pub threshold: Option<u128>,
-    pub allowed_channels: Vec<String>,
+    pub allowed_ibc_routes: Vec<IbcRoute>,
+    pub ibc_origin: Option<IbcAssetOrigin>,
     pub ring_pk: Option<decaf377::Element>,
     pub ring_id: String,
     pub policy_id: String,
@@ -609,6 +811,12 @@ impl TryFrom<pb::AssetRegistrationGrantBody> for AssetRegistrationGrantBody {
             .map(TryInto::try_into)
             .transpose()
             .map_err(|_| anyhow::anyhow!("invalid registration_authority_vk"))?;
+        let allowed_ibc_routes = value
+            .allowed_ibc_routes
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let ibc_origin = value.ibc_origin.map(TryInto::try_into).transpose()?;
 
         Ok(Self {
             asset_id: value
@@ -618,7 +826,8 @@ impl TryFrom<pb::AssetRegistrationGrantBody> for AssetRegistrationGrantBody {
             is_regulated: value.is_regulated,
             dk_pub,
             threshold,
-            allowed_channels: value.allowed_channels,
+            allowed_ibc_routes: canonical_routes(allowed_ibc_routes),
+            ibc_origin,
             ring_pk,
             ring_id: value.ring_id,
             policy_id: value.policy_id,
@@ -643,7 +852,11 @@ impl From<AssetRegistrationGrantBody> for pb::AssetRegistrationGrantBody {
                 .threshold
                 .map(|t| t.to_le_bytes().to_vec())
                 .unwrap_or_default(),
-            allowed_channels: value.allowed_channels,
+            allowed_ibc_routes: value
+                .allowed_ibc_routes
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             ring_pk: value
                 .ring_pk
                 .map(|e| e.vartime_compress().0.to_vec())
@@ -654,6 +867,7 @@ impl From<AssetRegistrationGrantBody> for pb::AssetRegistrationGrantBody {
             resource: value.resource,
             registration_authority_vk: value.registration_authority_vk.map(Into::into),
             valid_until_unix: value.valid_until_unix,
+            ibc_origin: value.ibc_origin.map(Into::into),
         }
     }
 }
@@ -837,8 +1051,10 @@ pub struct MsgRegisterAsset {
     pub dk_pub: Option<decaf377::Element>,
     /// Amount threshold for flagging (optional).
     pub threshold: Option<u128>,
-    /// IBC channels allowed for this regulated asset. Empty = IBC blocked.
-    pub allowed_channels: Vec<String>,
+    /// Direct IBC routes allowed for this regulated asset. Empty = IBC blocked.
+    pub allowed_ibc_routes: Vec<IbcRoute>,
+    /// External IBC origin for regulated voucher assets.
+    pub ibc_origin: Option<IbcAssetOrigin>,
     /// Orbis ring public key (optional).
     pub ring_pk: Option<decaf377::Element>,
     /// Orbis DKG ring identifier.
@@ -884,6 +1100,12 @@ impl TryFrom<pb::MsgRegisterAsset> for MsgRegisterAsset {
             .asset_registration_grant
             .map(TryInto::try_into)
             .transpose()?;
+        let allowed_ibc_routes = value
+            .allowed_ibc_routes
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let ibc_origin = value.ibc_origin.map(TryInto::try_into).transpose()?;
 
         Ok(MsgRegisterAsset {
             asset_id: value
@@ -893,7 +1115,8 @@ impl TryFrom<pb::MsgRegisterAsset> for MsgRegisterAsset {
             is_regulated: value.is_regulated,
             dk_pub,
             threshold,
-            allowed_channels: value.allowed_channels,
+            allowed_ibc_routes: canonical_routes(allowed_ibc_routes),
+            ibc_origin,
             ring_pk,
             ring_id: value.ring_id,
             policy_id: value.policy_id,
@@ -918,7 +1141,11 @@ impl From<MsgRegisterAsset> for pb::MsgRegisterAsset {
                 .threshold
                 .map(|t| t.to_le_bytes().to_vec())
                 .unwrap_or_default(),
-            allowed_channels: value.allowed_channels,
+            allowed_ibc_routes: value
+                .allowed_ibc_routes
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             ring_pk: value
                 .ring_pk
                 .map(|e| e.vartime_compress().0.to_vec())
@@ -929,6 +1156,7 @@ impl From<MsgRegisterAsset> for pb::MsgRegisterAsset {
             resource: value.resource,
             registration_authority_vk: value.registration_authority_vk.map(Into::into),
             asset_registration_grant: value.asset_registration_grant.map(Into::into),
+            ibc_origin: value.ibc_origin.map(Into::into),
         }
     }
 }
@@ -940,7 +1168,8 @@ impl MsgRegisterAsset {
             is_regulated: self.is_regulated,
             dk_pub: self.dk_pub,
             threshold: self.threshold,
-            allowed_channels: self.allowed_channels.clone(),
+            allowed_ibc_routes: self.allowed_ibc_routes.clone(),
+            ibc_origin: self.ibc_origin.clone(),
             ring_pk: self.ring_pk,
             ring_id: self.ring_id.clone(),
             policy_id: self.policy_id.clone(),
@@ -957,6 +1186,65 @@ impl penumbra_sdk_txhash::EffectingData for MsgRegisterAsset {
         penumbra_sdk_txhash::EffectHash::from_proto_effecting_data::<pb::MsgRegisterAsset>(
             &self.clone().into(),
         )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    try_from = "pb::UpdateAssetIbcPolicy",
+    into = "pb::UpdateAssetIbcPolicy"
+)]
+pub struct UpdateAssetIbcPolicy {
+    pub asset_id: asset::Id,
+    pub expected_route_policy_hash: [u8; 32],
+    pub allowed_ibc_routes: Vec<IbcRoute>,
+}
+
+impl DomainType for UpdateAssetIbcPolicy {
+    type Proto = pb::UpdateAssetIbcPolicy;
+}
+
+impl TryFrom<pb::UpdateAssetIbcPolicy> for UpdateAssetIbcPolicy {
+    type Error = anyhow::Error;
+
+    fn try_from(value: pb::UpdateAssetIbcPolicy) -> Result<Self, Self::Error> {
+        let expected_route_policy_hash =
+            value
+                .expected_route_policy_hash
+                .try_into()
+                .map_err(|v: Vec<u8>| {
+                    anyhow::anyhow!(
+                        "expected_route_policy_hash must be 32 bytes, got {}",
+                        v.len()
+                    )
+                })?;
+        let allowed_ibc_routes = value
+            .allowed_ibc_routes
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(Self {
+            asset_id: value
+                .asset_id
+                .ok_or_else(|| anyhow::anyhow!("missing asset_id"))?
+                .try_into()?,
+            expected_route_policy_hash,
+            allowed_ibc_routes: canonical_routes(allowed_ibc_routes),
+        })
+    }
+}
+
+impl From<UpdateAssetIbcPolicy> for pb::UpdateAssetIbcPolicy {
+    fn from(value: UpdateAssetIbcPolicy) -> Self {
+        Self {
+            asset_id: Some(value.asset_id.into()),
+            expected_route_policy_hash: value.expected_route_policy_hash.to_vec(),
+            allowed_ibc_routes: value
+                .allowed_ibc_routes
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        }
     }
 }
 
@@ -1087,7 +1375,11 @@ mod tests {
         let policy = AssetPolicy::new(
             dk_pub,
             1000,
-            vec!["channel-0".to_string()],
+            vec![IbcRoute::transfer("channel-0", "connection-0", "channel-7")],
+            Some(IbcAssetOrigin {
+                route: IbcRoute::transfer("channel-0", "connection-0", "channel-7"),
+                base_denom: "uusd".to_string(),
+            }),
             "ring-123".to_string(),
             ring_pk,
             "policy-abc".to_string(),
@@ -1101,9 +1393,10 @@ mod tests {
         assert_eq!(policy.params.dk_pub, recovered.params.dk_pub);
         assert_eq!(policy.params.threshold, recovered.params.threshold);
         assert_eq!(
-            policy.params.allowed_channels,
-            recovered.params.allowed_channels
+            policy.params.allowed_ibc_routes,
+            recovered.params.allowed_ibc_routes
         );
+        assert_eq!(policy.params.ibc_origin, recovered.params.ibc_origin);
         assert_eq!(policy.ring.ring_id, recovered.ring.ring_id);
         assert_eq!(policy.ring.ring_pk, recovered.ring.ring_pk);
         assert_eq!(policy.ring.policy_id, recovered.ring.policy_id);
@@ -1119,7 +1412,11 @@ mod tests {
         let policy = AssetPolicy::new(
             dk_pub,
             500,
-            vec!["ch-1".to_string(), "ch-2".to_string()],
+            vec![
+                IbcRoute::transfer("channel-1", "connection-0", "channel-7"),
+                IbcRoute::transfer("channel-2", "connection-1", "channel-8"),
+            ],
+            None,
             "ring-id".to_string(),
             ring_pk,
             "pol-id".to_string(),
@@ -1134,13 +1431,18 @@ mod tests {
     }
 
     #[test]
-    fn test_asset_policy_to_bytes_rejects_overlong_channel() {
+    fn test_asset_policy_to_bytes_rejects_overlong_route_field() {
         let dk_pub = decaf377::Element::GENERATOR * decaf377::Fr::from(42u64);
         let ring_pk = decaf377::Element::GENERATOR * decaf377::Fr::from(999u64);
         let policy = AssetPolicy::new(
             dk_pub,
             500,
-            vec!["x".repeat(usize::from(u8::MAX) + 1)],
+            vec![IbcRoute::transfer(
+                "x".repeat(usize::from(u16::MAX) + 1),
+                "connection-0",
+                "channel-7",
+            )],
+            None,
             "ring-id".to_string(),
             ring_pk,
             "pol-id".to_string(),
@@ -1148,10 +1450,10 @@ mod tests {
             "res".to_string(),
         );
 
-        let err = policy.to_bytes().expect_err("overlong channel should fail");
+        let err = policy.to_bytes().expect_err("overlong route should fail");
 
         assert!(
-            err.to_string().contains("allowed channel name too long"),
+            err.to_string().contains("local_channel too long"),
             "unexpected error: {err:#}"
         );
     }
@@ -1164,6 +1466,7 @@ mod tests {
             dk_pub,
             500,
             vec![],
+            None,
             "r".repeat(usize::from(u16::MAX) + 1),
             ring_pk,
             "pol-id".to_string(),
@@ -1187,6 +1490,7 @@ mod tests {
             dk_pub,
             500,
             vec![],
+            None,
             "ring-id".to_string(),
             ring_pk,
             "pol-id".to_string(),
@@ -1198,7 +1502,8 @@ mod tests {
         let err = AssetPolicy::from_bytes(&bytes[..80]).expect_err("truncated policy should fail");
 
         assert!(
-            err.to_string().contains("missing allowed_channels count"),
+            err.to_string().contains("invalid AssetPolicy length")
+                || err.to_string().contains("missing allowed_ibc_routes count"),
             "unexpected error: {err:#}"
         );
     }
@@ -1211,6 +1516,7 @@ mod tests {
             dk_pub,
             500,
             vec![],
+            None,
             "ring-id".to_string(),
             ring_pk,
             "pol-id".to_string(),
