@@ -8,12 +8,16 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use ark_serialize::CanonicalSerialize;
 use cnidarium::TempStorage;
+use decaf377_rdsa::VerificationKey;
 use penumbra_sdk_app::{
     genesis::{AppState, Content},
     server::consensus::{Consensus, ConsensusService},
     APP_VERSION, SUBSTORE_PREFIXES,
 };
 use penumbra_sdk_asset::{Value, BASE_ASSET_DENOM, BASE_ASSET_ID};
+use penumbra_sdk_compliance::{
+    genesis::NativeAssetRegistration, ComplianceLeaf, ComplianceRegistryWrite,
+};
 use penumbra_sdk_keys::test_keys;
 use penumbra_sdk_mock_client::MockClient;
 use penumbra_sdk_mock_consensus::TestNode;
@@ -31,11 +35,11 @@ use sha2::Digest as _;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-const POOL_SCHEMA_VERSION: u32 = 3;
-const POOL_TX_SHAPE: &str = "synthetic-preconsensus-transfer-v3";
+const POOL_SCHEMA_VERSION: u32 = 4;
+const POOL_TX_SHAPE: &str = "regulated-preconsensus-transfer-v4";
 const POOL_PROOF_FAMILY: &str = "transfer";
 const POOL_ACTION_SHAPE: &str = "one_spend_two_outputs_blank_memo";
-const POOL_REGULATED: bool = false;
+const POOL_REGULATED: bool = true;
 const DEFAULT_SHARD_TX_COUNT: usize = 1_000;
 const SYNTHETIC_BENCHMARK_TIME_RFC3339: &str = "2026-01-01T00:00:00Z";
 
@@ -83,8 +87,18 @@ pub async fn setup_proof_storage(
     .take(n)
     .collect();
 
+    let authority_vk = VerificationKey::from(test_keys::SPEND_KEY.spend_auth_key());
     let content = Content {
         chain_id: TestNode::<()>::CHAIN_ID.to_string(),
+        compliance_content: penumbra_sdk_compliance::genesis::Content {
+            native_assets: vec![NativeAssetRegistration {
+                asset_id: *BASE_ASSET_ID,
+                is_regulated: true,
+                dk_pub: Some(decaf377::Element::GENERATOR.vartime_compress().0),
+                registration_authority_vk: Some(authority_vk),
+            }],
+            ..Default::default()
+        },
         shielded_pool_content: penumbra_sdk_shielded_pool::genesis::Content {
             allocations,
             ..Default::default()
@@ -104,6 +118,23 @@ pub async fn setup_proof_storage(
         .await?;
 
     test_node.block().execute().await?;
+
+    let mut state = cnidarium::StateDelta::new(storage.latest_snapshot());
+    for address in [
+        test_keys::ADDRESS_0.deref().clone(),
+        test_keys::ADDRESS_1.deref().clone(),
+    ] {
+        let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+        let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
+        state
+            .add_compliance_leaf(ComplianceLeaf {
+                address,
+                asset_id: *BASE_ASSET_ID,
+                d,
+            })
+            .await?;
+    }
+    storage.commit(state).await?;
 
     let client = Arc::new(
         MockClient::new(test_keys::SPEND_KEY.clone())

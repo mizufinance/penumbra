@@ -14,6 +14,8 @@ use ibc_types::core::{
     connection::State as ConnectionState,
 };
 
+#[cfg(feature = "benchmark-helpers")]
+use crate::benchmarking::{record_inbound_stage, InboundStage};
 use crate::component::{
     app_handler::{AppHandlerCheck, AppHandlerExecute},
     channel::{StateReadExt as _, StateWriteExt},
@@ -45,8 +47,11 @@ impl MsgHandler for MsgRecvPacket {
             .get_channel(&self.packet.chan_on_b, &self.packet.port_on_b)
             .await?
             .ok_or_else(|| anyhow::anyhow!("channel not found"))?;
+        let channel_elapsed = channel_start.elapsed();
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(InboundStage::ChannelRead, channel_elapsed);
         tracing::debug!(
-            elapsed_us = channel_start.elapsed().as_micros(),
+            elapsed_us = channel_elapsed.as_micros(),
             port = %self.packet.port_on_b,
             channel = %self.packet.chan_on_b,
             "ibc_recv_channel_read"
@@ -74,8 +79,11 @@ impl MsgHandler for MsgRecvPacket {
             .get_connection(&channel.connection_hops[0])
             .await?
             .ok_or_else(|| anyhow::anyhow!("connection not found for channel"))?;
+        let connection_elapsed = connection_start.elapsed();
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(InboundStage::ConnectionRead, connection_elapsed);
         tracing::debug!(
-            elapsed_us = connection_start.elapsed().as_micros(),
+            elapsed_us = connection_elapsed.as_micros(),
             connection_id = %channel.connection_hops[0],
             "ibc_recv_connection_read"
         );
@@ -106,8 +114,11 @@ impl MsgHandler for MsgRecvPacket {
                 );
             }
         }
+        let timeout_elapsed = timeout_start.elapsed();
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(InboundStage::TimeoutCheck, timeout_elapsed);
         tracing::debug!(
-            elapsed_us = timeout_start.elapsed().as_micros(),
+            elapsed_us = timeout_elapsed.as_micros(),
             sequence = %self.packet.sequence,
             "ibc_recv_timeout_check"
         );
@@ -117,8 +128,11 @@ impl MsgHandler for MsgRecvPacket {
             .verify_packet_recv_proof::<HI>(&connection, self)
             .await
             .with_context(|| format!("packet {:?} failed to verify", self.packet))?;
+        let proof_elapsed = proof_start.elapsed();
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(InboundStage::PacketProofVerify, proof_elapsed);
         tracing::debug!(
-            elapsed_us = proof_start.elapsed().as_micros(),
+            elapsed_us = proof_elapsed.as_micros(),
             sequence = %self.packet.sequence,
             "ibc_recv_packet_proof_verify"
         );
@@ -135,8 +149,11 @@ impl MsgHandler for MsgRecvPacket {
         } else if state.seen_packet(&self.packet).await? {
             anyhow::bail!("packet has already been processed");
         }
+        let sequence_elapsed = sequence_start.elapsed();
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(InboundStage::DuplicateSequenceCheck, sequence_elapsed);
         tracing::debug!(
-            elapsed_us = sequence_start.elapsed().as_micros(),
+            elapsed_us = sequence_elapsed.as_micros(),
             sequence = %self.packet.sequence,
             ordering = ?channel.ordering,
             "ibc_recv_duplicate_sequence_check"
@@ -146,8 +163,11 @@ impl MsgHandler for MsgRecvPacket {
         if self.packet.port_on_b == transfer {
             let app_check_start = Instant::now();
             AH::recv_packet_check(&mut state, self).await?;
+            let app_check_elapsed = app_check_start.elapsed();
+            #[cfg(feature = "benchmark-helpers")]
+            record_inbound_stage(InboundStage::AppCheck, app_check_elapsed);
             tracing::debug!(
-                elapsed_us = app_check_start.elapsed().as_micros(),
+                elapsed_us = app_check_elapsed.as_micros(),
                 sequence = %self.packet.sequence,
                 "ibc_recv_app_check"
             );
@@ -173,8 +193,11 @@ impl MsgHandler for MsgRecvPacket {
             // it's just a single store key set to an empty string to indicate that the packet has been received
             state.put_packet_receipt(&self.packet);
         }
+        let receipt_elapsed = receipt_start.elapsed();
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(InboundStage::ReceiptWrite, receipt_elapsed);
         tracing::debug!(
-            elapsed_us = receipt_start.elapsed().as_micros(),
+            elapsed_us = receipt_elapsed.as_micros(),
             sequence = %self.packet.sequence,
             ordering = ?channel.ordering,
             "ibc_recv_sequence_or_receipt_write"
@@ -201,8 +224,11 @@ impl MsgHandler for MsgRecvPacket {
         if self.packet.port_on_b == transfer {
             let app_execute_start = Instant::now();
             AH::recv_packet_execute(state, self).await?;
+            let app_execute_elapsed = app_execute_start.elapsed();
+            #[cfg(feature = "benchmark-helpers")]
+            record_inbound_stage(InboundStage::AppExecuteTotal, app_execute_elapsed);
             tracing::debug!(
-                elapsed_us = app_execute_start.elapsed().as_micros(),
+                elapsed_us = app_execute_elapsed.as_micros(),
                 sequence = %self.packet.sequence,
                 "ibc_recv_app_execute_total"
             );

@@ -88,9 +88,12 @@ use crate::block_tx_indexing::BlockTxIndexingMode;
 use crate::event::EventAppParametersChange;
 use crate::genesis::AppState;
 use crate::params::change::ParameterChangeExt as _;
+
 use crate::params::AppParameters;
 use crate::stateless_cache::{CacheEntry, HistoricalValidationStamp, StatelessCache, TxArtifact};
 use crate::{metrics, PenumbraHost};
+#[cfg(feature = "benchmark-helpers")]
+use penumbra_sdk_ibc::benchmarking::{record_inbound_stage, InboundStage};
 use sha2::Digest as _;
 use std::sync::OnceLock;
 
@@ -815,6 +818,8 @@ impl BlockSctAppendLog {
         state: &S,
         payloads: Vec<StatePayload>,
     ) -> Result<Vec<(penumbra_sdk_tct::Position, StatePayload)>> {
+        #[cfg(feature = "benchmark-helpers")]
+        let reserve_start = Instant::now();
         if payloads.is_empty() {
             return Ok(Vec::new());
         }
@@ -823,9 +828,8 @@ impl BlockSctAppendLog {
             Some(position) => position,
             None => {
                 let position = state
-                    .get_sct()
-                    .await
-                    .position()
+                    .get_sct_position()
+                    .await?
                     .expect("state commitment tree is not full");
                 self.base_position = Some(position);
                 position
@@ -840,6 +844,9 @@ impl BlockSctAppendLog {
             positioned.push((position, payload));
         }
         self.next_offset += positioned.len() as u64;
+
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(InboundStage::DeferredSctReserve, reserve_start.elapsed());
 
         Ok(positioned)
     }
@@ -5842,6 +5849,8 @@ impl App {
             + penumbra_sdk_sct::component::tree::SctManager
             + penumbra_sdk_shielded_pool::component::NoteManager,
     {
+        #[cfg(feature = "benchmark-helpers")]
+        let materialize_start = Instant::now();
         let entries = self.pending_sct_append_log.take_entries();
         if entries.is_empty() {
             return Ok(());
@@ -5850,6 +5859,7 @@ impl App {
         let mut note_payloads = state_tx.pending_note_payloads();
         let mut rolled_up_payloads = state_tx.pending_rolled_up_payloads();
         let mut last_position = None;
+        let mut sct_entries = Vec::with_capacity(entries.len());
 
         for (position, payload) in entries {
             debug_assert!(
@@ -5860,9 +5870,8 @@ impl App {
             );
             last_position = Some(position);
 
-            state_tx
-                .add_sct_commitment_at_position(*payload.commitment(), position)
-                .await?;
+            let commitment = *payload.commitment();
+            sct_entries.push((position, commitment));
 
             match payload {
                 StatePayload::Note { source, note } => {
@@ -5874,6 +5883,12 @@ impl App {
             }
         }
 
+        state_tx
+            .add_sct_commitments_at_positions(sct_entries)
+            .await?;
+
+        #[cfg(feature = "benchmark-helpers")]
+        let pending_payload_start = Instant::now();
         state_tx.object_put(
             penumbra_sdk_shielded_pool::state_key::pending_notes(),
             note_payloads,
@@ -5881,6 +5896,16 @@ impl App {
         state_tx.object_put(
             penumbra_sdk_shielded_pool::state_key::pending_rolled_up_payloads(),
             rolled_up_payloads,
+        );
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(
+            InboundStage::DeferredSctPendingPayload,
+            pending_payload_start.elapsed(),
+        );
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(
+            InboundStage::DeferredSctMaterialize,
+            materialize_start.elapsed(),
         );
 
         Ok(())
@@ -5982,10 +6007,9 @@ impl App {
         profile.index_tx_ms = index_start.elapsed().as_secs_f64() * 1000.0;
 
         let check_and_execute_start = Instant::now();
-        let (execution_profile, execution_effects) =
-            check_and_execute_profiled(Arc::as_ref(&tx), &mut state_tx, false)
-                .await
-                .context("executing transaction")?;
+        let execution_profile = check_and_execute_profiled(Arc::as_ref(&tx), &mut state_tx, false)
+            .await
+            .context("executing transaction")?;
         profile.check_and_execute_ms = check_and_execute_start.elapsed().as_secs_f64() * 1000.0;
         profile.set_source_ms = execution_profile.set_source_ms;
         profile.pay_fee_ms = execution_profile.pay_fee_ms;
@@ -6011,21 +6035,6 @@ impl App {
         profile.output_add_note_payload_ms = execution_profile.output_add_note_payload_ms;
         profile.other_action_execute_ms = execution_profile.other_action_execute_ms;
         profile.record_clues_ms = execution_profile.record_clues_ms;
-
-        let positioned_sct_payloads = self
-            .pending_sct_append_log
-            .reserve_positions(&state_tx, execution_effects.sct_payloads)
-            .await
-            .context("reserving deferred SCT positions")?;
-        for (position, payload) in &positioned_sct_payloads {
-            state_tx.record_proto(penumbra_sdk_sct::event::commitment(
-                *payload.commitment(),
-                *position,
-                payload.source().clone(),
-            ));
-        }
-        self.pending_sct_append_log
-            .append_positioned(positioned_sct_payloads);
 
         // At this point, we've completed execution successfully with no errors,
         // so we can apply the transaction to the State. Otherwise, we'd have

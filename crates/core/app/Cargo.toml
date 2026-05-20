@@ -31,6 +31,10 @@ parallel = [
   "ark-ff/parallel",
   "penumbra-sdk-proof-params/parallel",
 ]
+benchmark-helpers = [
+  "penumbra-sdk-ibc/benchmark-helpers",
+  "penumbra-sdk-shielded-pool/benchmark-helpers",
+]
 default = ["std", "component"]
 std     = ["ark-ff/std", "ibc-types/std"]
 

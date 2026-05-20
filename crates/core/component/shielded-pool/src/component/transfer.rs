@@ -32,6 +32,8 @@ use penumbra_sdk_proto::{
 };
 use penumbra_sdk_sct::CommitmentSource;
 
+#[cfg(feature = "benchmark-helpers")]
+use penumbra_sdk_ibc::benchmarking::{record_inbound_stage, InboundStage};
 use penumbra_sdk_ibc::component::{
     app_handler::{AppHandler, AppHandlerCheck, AppHandlerExecute},
     packet::{
@@ -538,8 +540,11 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
     // https://github.com/cosmos/ibc/tree/main/spec/app/ics-020-fungible-token-transfer (onRecvPacket)
     let decode_start = Instant::now();
     let context = Ics20ReceiveContext::parse(msg)?;
+    let decode_elapsed = decode_start.elapsed();
+    #[cfg(feature = "benchmark-helpers")]
+    record_inbound_stage(InboundStage::PacketDataDecode, decode_elapsed);
     tracing::debug!(
-        elapsed_us = decode_start.elapsed().as_micros(),
+        elapsed_us = decode_elapsed.as_micros(),
         sequence = %msg.packet.sequence,
         returned_to_source = context.returned_to_source,
         asset_id = %context.received_denom.id(),
@@ -548,8 +553,11 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
 
     let route_start = Instant::now();
     let route = resolve_ibc_route(&state, &msg.packet.port_on_b, &msg.packet.chan_on_b).await?;
+    let route_elapsed = route_start.elapsed();
+    #[cfg(feature = "benchmark-helpers")]
+    record_inbound_stage(InboundStage::RouteResolve, route_elapsed);
     tracing::debug!(
-        elapsed_us = route_start.elapsed().as_micros(),
+        elapsed_us = route_elapsed.as_micros(),
         local_port = %route.local_port,
         local_channel = %route.local_channel,
         connection_id = %route.connection_id,
@@ -560,12 +568,14 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
 
     let compliance_start = Instant::now();
     check_regulated_inbound_ics20(&state, &route, &context).await?;
+    let compliance_elapsed = compliance_start.elapsed();
+    #[cfg(feature = "benchmark-helpers")]
+    record_inbound_stage(InboundStage::ComplianceCheck, compliance_elapsed);
     tracing::debug!(
-        elapsed_us = compliance_start.elapsed().as_micros(),
+        elapsed_us = compliance_elapsed.as_micros(),
         asset_id = %context.received_denom.id(),
         "ibc_recv_compliance_check"
     );
-
     // NOTE: here we assume we are chain A.
 
     // 2. check if we are the source chain for the denom.
@@ -582,6 +592,8 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
 
         // assume AppHandlerCheck has already been called, and we have enough balance to mint tokens to receiver
         // check if we have enough balance to unescrow tokens to receiver
+        #[cfg(feature = "benchmark-helpers")]
+        let value_balance_read_start = Instant::now();
         let value_balance: Amount = state
             .get(&state_key::ics20_value_balance::by_asset_id(
                 &msg.packet.chan_on_b,
@@ -589,6 +601,11 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
             ))
             .await?
             .unwrap_or_else(Amount::zero);
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(
+            InboundStage::ValueBalanceRead,
+            value_balance_read_start.elapsed(),
+        );
 
         if value_balance < context.receiver_amount {
             // error text here is from the ics20 spec
@@ -614,10 +631,19 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
         let new_value_balance = value_balance
             .checked_sub(&context.receiver_amount)
             .context("underflow subtracing value balance in ics20 transfer")?;
+        #[cfg(feature = "benchmark-helpers")]
+        let value_balance_write_start = Instant::now();
         state.put(
             state_key::ics20_value_balance::by_asset_id(&msg.packet.chan_on_b, &denom.id()),
             new_value_balance,
         );
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(
+            InboundStage::ValueBalanceWrite,
+            value_balance_write_start.elapsed(),
+        );
+        #[cfg(feature = "benchmark-helpers")]
+        let event_record_start = Instant::now();
         state.record_proto(
             event::EventInboundFungibleTokenTransfer {
                 value,
@@ -630,6 +656,8 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
             }
             .to_proto(),
         );
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(InboundStage::EventRecord, event_record_start.elapsed());
     } else {
         // create new denom:
         //
@@ -638,7 +666,11 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
         //
         // then mint that denom to packet_data.receiver in packet_data.amount
         let denom = context.received_denom.clone();
+        #[cfg(feature = "benchmark-helpers")]
+        let register_denom_start = Instant::now();
         state.register_denom(&denom).await;
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(InboundStage::RegisterDenom, register_denom_start.elapsed());
 
         let value = Value {
             amount: context.receiver_amount,
@@ -660,6 +692,8 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
             .context("failed to mint notes in ibc transfer")?;
 
         // update the value balance
+        #[cfg(feature = "benchmark-helpers")]
+        let value_balance_read_start = Instant::now();
         let value_balance: Amount = state
             .get(&state_key::ics20_value_balance::by_asset_id(
                 &msg.packet.chan_on_b,
@@ -667,12 +701,26 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
             ))
             .await?
             .unwrap_or_else(Amount::zero);
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(
+            InboundStage::ValueBalanceRead,
+            value_balance_read_start.elapsed(),
+        );
 
         let new_value_balance = value_balance.saturating_add(&value.amount);
+        #[cfg(feature = "benchmark-helpers")]
+        let value_balance_write_start = Instant::now();
         state.put(
             state_key::ics20_value_balance::by_asset_id(&msg.packet.chan_on_b, &denom.id()),
             new_value_balance,
         );
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(
+            InboundStage::ValueBalanceWrite,
+            value_balance_write_start.elapsed(),
+        );
+        #[cfg(feature = "benchmark-helpers")]
+        let event_record_start = Instant::now();
         state.record_proto(
             event::EventInboundFungibleTokenTransfer {
                 value,
@@ -685,9 +733,14 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
             }
             .to_proto(),
         );
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(InboundStage::EventRecord, event_record_start.elapsed());
     }
+    let mint_unescrow_elapsed = mint_unescrow_start.elapsed();
+    #[cfg(feature = "benchmark-helpers")]
+    record_inbound_stage(InboundStage::MintUnescrowAccounting, mint_unescrow_elapsed);
     tracing::debug!(
-        elapsed_us = mint_unescrow_start.elapsed().as_micros(),
+        elapsed_us = mint_unescrow_elapsed.as_micros(),
         returned_to_source = context.returned_to_source,
         asset_id = %context.received_denom.id(),
         "ibc_recv_mint_unescrow_accounting"
@@ -855,8 +908,11 @@ impl AppHandlerExecute for Ics20Transfer {
                 TokenTransferAcknowledgement::Error(e.to_string()).into()
             }
         };
+        let app_execute_elapsed = app_execute_start.elapsed();
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(InboundStage::AppExecuteInner, app_execute_elapsed);
         tracing::debug!(
-            elapsed_us = app_execute_start.elapsed().as_micros(),
+            elapsed_us = app_execute_elapsed.as_micros(),
             sequence = %msg.packet.sequence,
             "ibc_recv_app_execute"
         );
@@ -866,8 +922,11 @@ impl AppHandlerExecute for Ics20Transfer {
             .write_acknowledgement(&msg.packet, &ack)
             .await
             .context("able to write acknowledgement")?;
+        let ack_elapsed = ack_start.elapsed();
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(InboundStage::AcknowledgementTotal, ack_elapsed);
         tracing::debug!(
-            elapsed_us = ack_start.elapsed().as_micros(),
+            elapsed_us = ack_elapsed.as_micros(),
             sequence = %msg.packet.sequence,
             "ibc_recv_acknowledgement_write"
         );

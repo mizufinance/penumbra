@@ -12,10 +12,10 @@ use penumbra_sdk_mock_consensus::TestNode;
 use penumbra_sdk_proto::core::component::validator::v1::Validator;
 use penumbra_sdk_validator::{GovernanceKey, IdentityKey};
 #[allow(unused_imports)]
-pub use relayer::MockRelayer;
+pub use relayer::{MockRelayer, SendPacketEvent};
 
 mod node;
-pub use node::TestNodeWithIBC;
+pub use node::{TestNodeWithIBC, TestStorage};
 use serde::Deserialize;
 use tendermint::{consensus::params::AbciParams, public_key::Algorithm, Genesis};
 

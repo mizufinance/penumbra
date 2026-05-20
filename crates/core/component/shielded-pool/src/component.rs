@@ -13,7 +13,7 @@ pub use self::metrics::register_metrics;
 pub use assets::{AssetRegistry, AssetRegistryRead};
 pub use fmd::ClueManager;
 pub use ics20_withdrawal_with_handler::Ics20WithdrawalWithHandler;
-pub use note_manager::NoteManager;
+pub use note_manager::{build_position_derived_mint_payload, NoteManager};
 pub use shielded_pool::{ShieldedPool, StateReadExt, StateWriteExt};
 #[cfg(feature = "benchmark-helpers")]
 pub(crate) use transfer::benchmark_parse_ics20_receive_context;

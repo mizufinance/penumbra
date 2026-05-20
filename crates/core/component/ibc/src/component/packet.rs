@@ -9,6 +9,8 @@ use ibc_types::core::{
 };
 use tendermint::Time;
 
+#[cfg(feature = "benchmark-helpers")]
+use crate::benchmarking::{record_inbound_stage, InboundStage};
 use crate::component::{
     channel::{StateReadExt as _, StateWriteExt as _},
     client::StateReadExt as _,
@@ -327,8 +329,11 @@ pub trait WriteAcknowledgement: StateWrite {
                     packet.port_on_b
                 )
             })?;
+        let ack_read_elapsed = ack_read_start.elapsed();
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(InboundStage::AcknowledgementRead, ack_read_elapsed);
         tracing::debug!(
-            elapsed_us = ack_read_start.elapsed().as_micros(),
+            elapsed_us = ack_read_elapsed.as_micros(),
             port = %packet.port_on_b,
             channel = %packet.chan_on_b,
             sequence = %packet.sequence,
@@ -342,8 +347,11 @@ pub trait WriteAcknowledgement: StateWrite {
             packet.sequence.into(),
             ack_bytes,
         );
+        let ack_write_elapsed = ack_write_start.elapsed();
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(InboundStage::AcknowledgementWrite, ack_write_elapsed);
         tracing::debug!(
-            elapsed_us = ack_write_start.elapsed().as_micros(),
+            elapsed_us = ack_write_elapsed.as_micros(),
             port = %packet.port_on_b,
             channel = %packet.chan_on_b,
             sequence = %packet.sequence,

@@ -46,7 +46,7 @@ struct Args {
         long,
         use_value_delimiter = true,
         value_delimiter = ',',
-        default_value = "inner_transfer,inbound_ics20_recv_preupdated,inbound_ics20_full_smoke,outbound_plain_ics20,outbound_shielded_ics20"
+        default_value = "regulated_inner_transfer"
     )]
     scenarios: Vec<String>,
 }
@@ -74,7 +74,6 @@ struct CorpusReport {
 struct ScenarioReport {
     name: String,
     status: String,
-    reason: Option<String>,
     tx_count: usize,
     runs: Vec<RunReport>,
     summary: Option<ScenarioSummary>,
@@ -130,37 +129,23 @@ async fn main() -> Result<()> {
     let mut scenarios = Vec::new();
     for scenario in &args.scenarios {
         let report = match scenario.as_str() {
-            "inner_transfer" => run_inner_transfer(&args, &transfer_txs)
-                .await
-                .context("running inner_transfer benchmark")?,
-            "inbound_ics20_recv_preupdated" => skipped(
-                scenario,
-                args.tx_count,
-                "requires a reusable valid MsgRecvPacket corpus with packet proofs against a \
-                 pre-updated client; this runner does not yet promote the app-test relayer \
-                 harness into bench-support",
-            ),
-            "inbound_ics20_full_smoke" => skipped(
-                scenario,
-                args.tx_count,
-                "requires a reusable MsgUpdateClient + MsgRecvPacket corpus; this runner keeps \
-                 Tendermint client updates in the existing IBC smoke/criterion path until a \
-                 full validator-side corpus exists",
-            ),
-            "outbound_plain_ics20" => skipped(
-                scenario,
-                args.tx_count,
-                "plain Ics20Withdrawal is a component send path, not a transaction Action in this \
-                 tree, so it cannot be measured as full validator-side tx execution",
-            ),
-            "outbound_shielded_ics20" => skipped(
-                scenario,
-                args.tx_count,
-                "requires a reusable ShieldedIcs20Withdrawal tx corpus plus deterministic open \
-                 IBC client/connection/channel state for each fresh run; the proof-only helper \
-                 is covered by ibc_throughput, but full execution is not wired here yet",
-            ),
-            other => skipped(other, args.tx_count, "unknown scenario name"),
+            "regulated_inner_transfer" | "inner_transfer" => {
+                run_inner_transfer(&args, &transfer_txs)
+                    .await
+                    .context("running inner_transfer benchmark")?
+            }
+            "inbound_ics20_recv_preupdated"
+            | "inbound_ics20_full_smoke"
+            | "outbound_plain_ics20"
+            | "outbound_shielded_ics20" => {
+                anyhow::bail!(
+                    "scenario {scenario} is not supported by this binary because it cannot build \
+                     a real reusable IBC corpus from penumbra-sdk-bench. Run the ignored \
+                     app-test benchmark ibc_vs_transfer_benchmark for real IBC inbound/outbound \
+                     corpora."
+                );
+            }
+            other => anyhow::bail!("unknown scenario name: {other}"),
         };
         scenarios.push(report);
     }
@@ -171,8 +156,8 @@ async fn main() -> Result<()> {
         generated_at_unix: unix_ts(),
         notes: vec![
             "transaction/proof generation is excluded from scenario timing".to_string(),
-            "inner_transfer uses current TransferProof proving and verification keys via the corpus cache key".to_string(),
-            "IBC scenarios that lack validator-side reusable corpora are reported as skipped, not approximated".to_string(),
+            "regulated_inner_transfer uses current TransferProof proving and verification keys via the corpus cache key".to_string(),
+            "unsupported IBC scenarios fail instead of emitting skipped or synthetic rows".to_string(),
         ],
         transfer_corpus: corpus_report,
         scenarios,
@@ -313,9 +298,8 @@ async fn run_inner_transfer(args: &Args, txs: &[Vec<u8>]) -> Result<ScenarioRepo
     }
 
     Ok(ScenarioReport {
-        name: "inner_transfer".to_string(),
+        name: "regulated_inner_transfer".to_string(),
         status: "completed".to_string(),
-        reason: None,
         tx_count: args.tx_count,
         summary: Some(summarize(&runs)),
         runs,
@@ -408,17 +392,6 @@ fn execution_only_envelope(envelope: &CandidateEnvelope) -> CandidateEnvelope {
     execution_only
 }
 
-fn skipped(name: &str, tx_count: usize, reason: &str) -> ScenarioReport {
-    ScenarioReport {
-        name: name.to_string(),
-        status: "skipped".to_string(),
-        reason: Some(reason.to_string()),
-        tx_count,
-        runs: Vec::new(),
-        summary: None,
-    }
-}
-
 fn summarize(runs: &[RunReport]) -> ScenarioSummary {
     let mean_total_wall_ms = mean(runs.iter().map(|run| run.total_wall_ms));
     let mean_ms_per_tx = mean(runs.iter().map(|run| run.ms_per_tx));
@@ -494,13 +467,7 @@ fn print_summary(path: &PathBuf, report: &BenchmarkReport) {
                     summary.projected_5000_tx_ms_from_mean,
                 );
             }
-            None => {
-                println!(
-                    "{}: skipped ({})",
-                    scenario.name,
-                    scenario.reason.as_deref().unwrap_or("no reason recorded")
-                );
-            }
+            None => unreachable!("completed scenario must include a summary"),
         }
     }
 }
