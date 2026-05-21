@@ -126,6 +126,7 @@ impl Component for Compliance {
                             dk_pub,
                             u128::MAX,
                             vec![],
+                            None,
                             String::new(),
                             decaf377::Element::GENERATOR,
                             String::new(),
@@ -315,6 +316,15 @@ impl ActionHandler for MsgRegisterAsset {
                 self.registration_authority_vk.is_some(),
                 "regulated assets require registration_authority_vk"
             );
+        } else {
+            anyhow::ensure!(
+                self.allowed_ibc_routes.is_empty(),
+                "unregulated assets cannot set allowed IBC routes"
+            );
+            anyhow::ensure!(
+                self.ibc_origin.is_none(),
+                "unregulated assets cannot set IBC origin"
+            );
         }
         grant.verify()?;
         Ok(())
@@ -353,7 +363,8 @@ impl ActionHandler for MsgRegisterAsset {
                 crate::structs::AssetPolicy::new(
                     dk_pub,
                     threshold,
-                    self.allowed_channels.clone(),
+                    self.allowed_ibc_routes.clone(),
+                    self.ibc_origin.clone(),
                     self.ring_id.clone(),
                     ring_pk,
                     self.policy_id.clone(),
@@ -446,7 +457,8 @@ mod tests {
             is_regulated: true,
             dk_pub: Some(decaf377::Element::GENERATOR),
             threshold: None,
-            allowed_channels: vec![],
+            allowed_ibc_routes: vec![],
+            ibc_origin: None,
             ring_pk: None,
             ring_id: String::new(),
             policy_id: "test-policy".to_string(),
@@ -897,7 +909,8 @@ mod tests {
                 is_regulated: false,
                 dk_pub: None,
                 threshold: None,
-                allowed_channels: vec![],
+                allowed_ibc_routes: vec![],
+                ibc_origin: None,
                 ring_pk: None,
                 ring_id: String::new(),
                 policy_id: String::new(),
@@ -946,7 +959,8 @@ mod tests {
                 is_regulated: true,
                 dk_pub: None, // Missing!
                 threshold: None,
-                allowed_channels: vec![],
+                allowed_ibc_routes: vec![],
+                ibc_origin: None,
                 ring_pk: None,
                 ring_id: String::new(),
                 policy_id: String::new(),

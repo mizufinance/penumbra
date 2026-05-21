@@ -293,6 +293,21 @@ pub trait SctRead: StateRead {
         self.load_sct_from_nv().await
     }
 
+    /// Fetch the next SCT insert position without loading the full tree when possible.
+    async fn get_sct_position(&self) -> Result<Option<tct::Position>> {
+        if let Some(tree) =
+            self.object_get::<tct::Tree>(state_key::cache::cached_state_commitment_tree())
+        {
+            return Ok(tree.position());
+        }
+
+        Ok(decode_stored_position(
+            self.nonverifiable_get_raw(state_key::tree::incremental_position().as_bytes())
+                .await?,
+        )?
+        .into())
+    }
+
     /// Fetch the state commitment tree from nonverifiable storage, preferring the cached tree if
     /// it exists.
     async fn get_sct(&self) -> tct::Tree {
@@ -441,6 +456,31 @@ pub trait SctManager: StateWrite {
         Ok(position)
     }
 
+    /// Build and append a commitment from the next SCT position using one tree load.
+    async fn add_sct_commitment_from_position<T, F>(
+        &mut self,
+        source: CommitmentSource,
+        build: F,
+    ) -> Result<(tct::Position, T)>
+    where
+        T: Send,
+        F: FnOnce(tct::Position) -> Result<(tct::StateCommitment, T)> + Send,
+    {
+        let mut tree = self.get_sct().await;
+        let expected_position = tree.position().expect("state commitment tree is not full");
+        let (commitment, output) = build(expected_position)?;
+        let position = tree.insert(tct::Witness::Forget, commitment)?;
+        ensure!(
+            position == expected_position,
+            "SCT append position drifted: expected {expected_position:?}, got {position:?}"
+        );
+        self.write_sct_cache(tree);
+
+        self.record_proto(event::commitment(commitment, position, source));
+
+        Ok((position, output))
+    }
+
     /// Add a state commitment into the SCT at a pre-reserved position, without emitting an
     /// `EventCommitment`. Used by the app-level deferred SCT staging path.
     async fn add_sct_commitment_at_position(
@@ -454,6 +494,28 @@ pub trait SctManager: StateWrite {
             position == expected_position,
             "deferred SCT append position drifted: expected {expected_position:?}, got {position:?}"
         );
+        self.write_sct_cache(tree);
+
+        Ok(())
+    }
+
+    /// Add positioned state commitments into the SCT with one tree load.
+    async fn add_sct_commitments_at_positions(
+        &mut self,
+        entries: Vec<(tct::Position, tct::StateCommitment)>,
+    ) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let mut tree = self.get_sct().await;
+        for (expected_position, commitment) in entries {
+            let position = tree.insert(tct::Witness::Forget, commitment)?;
+            ensure!(
+                position == expected_position,
+                "deferred SCT append position drifted: expected {expected_position:?}, got {position:?}"
+            );
+        }
         self.write_sct_cache(tree);
 
         Ok(())

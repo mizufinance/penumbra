@@ -16,7 +16,7 @@ use penumbra_sdk_transaction::Transaction;
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct CheckTxProfile {
     pub checktx_total_wall_ms: f64,
     pub checktx_cache_lookup_ms: f64,
@@ -79,7 +79,7 @@ pub struct CheckTxProfile {
     pub cache_hit_count: usize,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PrepareProposalProfile {
     pub candidate_scan_ms: f64,
     pub nullifier_dedup_ms: f64,
@@ -175,7 +175,7 @@ pub struct PrepareProposalProfile {
     pub aggregate_retry_cache_misses: usize,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProcessProposalProfile {
     pub artifact_lookup_ms: f64,
     pub tx_decode_classify_ms: f64,

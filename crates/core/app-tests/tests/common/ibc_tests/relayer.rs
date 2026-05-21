@@ -1,6 +1,6 @@
 use {
     super::TestNodeWithIBC,
-    anyhow::{anyhow, Result},
+    anyhow::{anyhow, Context as _, Result},
     decaf377::Fr,
     ibc_proto::ibc::core::{
         channel::v1::{IdentifiedChannel, QueryChannelRequest, QueryConnectionChannelsRequest},
@@ -61,9 +61,11 @@ use {
     sha2::Digest,
     std::{
         str::FromStr as _,
+        sync::Arc,
         time::{Duration, SystemTime, UNIX_EPOCH},
     },
     tendermint::{abci::Event, Time},
+    tokio::{sync::Semaphore, task::JoinSet},
 };
 #[allow(unused)]
 pub struct MockRelayer {
@@ -71,8 +73,304 @@ pub struct MockRelayer {
     pub chain_b_ibc: TestNodeWithIBC,
 }
 
+#[derive(Clone, Debug)]
+pub struct SendPacketEvent {
+    pub packet_data_hex: String,
+    pub sequence: String,
+    pub port_on_a: String,
+    pub chan_on_a: String,
+    pub port_on_b: String,
+    pub chan_on_b: String,
+    pub timeout_height_on_b: String,
+    pub timeout_timestamp_on_b: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedRecvPacket {
+    pub packet_data_hex: String,
+    pub sequence: String,
+    pub port_on_a: String,
+    pub chan_on_a: String,
+    pub port_on_b: String,
+    pub chan_on_b: String,
+    pub timeout_height_on_b: String,
+    pub timeout_timestamp_on_b: String,
+    pub proof_commitment_on_a: MerkleProof,
+}
+
+fn proof_tx_build_concurrency() -> usize {
+    std::env::var("BENCH_PROOF_TX_BUILD_CONCURRENCY")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|parallelism| parallelism.get())
+                .unwrap_or(8)
+        })
+}
+
 #[allow(unused)]
 impl MockRelayer {
+    pub fn collect_send_packet_events(events: &[Event]) -> Result<Vec<SendPacketEvent>> {
+        let mut packets = Vec::new();
+        for event in events {
+            if event.kind != "send_packet" {
+                continue;
+            }
+            let mut packet_data_hex = None;
+            let mut sequence = None;
+            let mut port_on_a = None;
+            let mut chan_on_a = None;
+            let mut port_on_b = None;
+            let mut chan_on_b = None;
+            let mut timeout_height_on_b = None;
+            let mut timeout_timestamp_on_b = None;
+            for attr in &event.attributes {
+                match attr.key_str()? {
+                    "packet_data_hex" => packet_data_hex = Some(attr.value_str()?.to_string()),
+                    "packet_sequence" => sequence = Some(attr.value_str()?.to_string()),
+                    "packet_src_port" => port_on_a = Some(attr.value_str()?.to_string()),
+                    "packet_src_channel" => chan_on_a = Some(attr.value_str()?.to_string()),
+                    "packet_dst_port" => port_on_b = Some(attr.value_str()?.to_string()),
+                    "packet_dst_channel" => chan_on_b = Some(attr.value_str()?.to_string()),
+                    "packet_timeout_height" => {
+                        timeout_height_on_b = Some(attr.value_str()?.to_string())
+                    }
+                    "packet_timeout_timestamp" => {
+                        timeout_timestamp_on_b = Some(attr.value_str()?.to_string())
+                    }
+                    _ => (),
+                }
+            }
+            packets.push(SendPacketEvent {
+                port_on_a: port_on_a.expect("send_packet missing packet_src_port"),
+                chan_on_a: chan_on_a.expect("send_packet missing packet_src_channel"),
+                port_on_b: port_on_b.expect("send_packet missing packet_dst_port"),
+                chan_on_b: chan_on_b.expect("send_packet missing packet_dst_channel"),
+                sequence: sequence.expect("send_packet missing packet_sequence"),
+                timeout_height_on_b: timeout_height_on_b
+                    .expect("send_packet missing packet_timeout_height"),
+                timeout_timestamp_on_b: timeout_timestamp_on_b
+                    .expect("send_packet missing packet_timeout_timestamp"),
+                packet_data_hex: packet_data_hex.expect("send_packet missing packet_data_hex"),
+            });
+        }
+        Ok(packets)
+    }
+
+    pub async fn build_shielded_withdrawal_txs_a_to_b(
+        &mut self,
+        count: usize,
+    ) -> Result<Vec<Vec<u8>>> {
+        let chain_a_client = Arc::new(self.chain_a_ibc.client().await?);
+        let chain_b_client = self.chain_b_ibc.client().await?;
+        let mut notes = chain_a_client
+            .notes
+            .values()
+            .filter(|n| n.asset_id() == *penumbra_sdk_asset::BASE_ASSET_ID)
+            .cloned()
+            .take(count)
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            notes.len() == count,
+            "expected {count} base-asset notes on chain A, got {}",
+            notes.len()
+        );
+        notes.sort_by_key(|note| note.commit());
+
+        let asset_cache = Cache::with_known_assets();
+        let denom = asset_cache
+            .get(&penumbra_sdk_asset::BASE_ASSET_ID)
+            .expect("base asset ID should exist in asset cache")
+            .clone();
+        let destination_chain_address = chain_b_client.fvk.payment_address(AddressIndex::new(0)).0;
+        let snapshot = self.chain_a_ibc.storage.latest_snapshot();
+        let permits = Arc::new(Semaphore::new(proof_tx_build_concurrency()));
+        let source_channel = self.chain_a_ibc.channel_id.clone();
+        let chain_id = self.chain_a_ibc.chain_id.clone();
+        let mut tasks = JoinSet::new();
+
+        for (ordinal, note) in notes.into_iter().enumerate() {
+            let client = chain_a_client.clone();
+            let permits = permits.clone();
+            let snapshot = snapshot.clone();
+            let destination_chain_address = destination_chain_address.clone();
+            let denom = denom.clone();
+            let source_channel = source_channel.clone();
+            let chain_id = chain_id.clone();
+            tasks.spawn(async move {
+                let _permit = permits
+                    .acquire_owned()
+                    .await
+                    .expect("proof tx semaphore should not be closed");
+                let mut rng = rand_chacha::ChaChaRng::seed_from_u64(1312 + ordinal as u64);
+                let amount = Amount::from(1u64);
+                let timeout_height = Height {
+                    revision_height: 1_000_000,
+                    revision_number: 0,
+                };
+                let timeout_time = 4_102_444_800_000_000_000u64;
+                let return_address = client.fvk.payment_address(AddressIndex::new(0)).0;
+                let withdrawal = Ics20Withdrawal {
+                    destination_chain_address: destination_chain_address.to_string(),
+                    denom,
+                    amount,
+                    timeout_height,
+                    timeout_time,
+                    return_address,
+                    source_channel,
+                    use_compat_address: false,
+                    use_transparent_address: false,
+                    ics20_memo: "".to_string(),
+                };
+                let spend_plan = ShieldedInputPlan::new(
+                    &mut rng,
+                    note.clone(),
+                    client
+                        .position(note.commit())
+                        .expect("note should be in mock client's tree"),
+                );
+                let change_output = ShieldedOutputPlan::new(
+                    &mut rng,
+                    Value {
+                        amount: note.amount() - amount,
+                        asset_id: note.asset_id(),
+                    },
+                    client.fvk.payment_address(AddressIndex::new(0)).0,
+                );
+                let mut plan = {
+                    let ics20_msg = ShieldedIcs20WithdrawalPlan::new(
+                        ShieldedIcs20WithdrawalFamilyId::Canonical,
+                        vec![spend_plan],
+                        Some(change_output),
+                        withdrawal,
+                        Fr::from(1312u64 + ordinal as u64),
+                    )
+                    .expect("valid shielded ICS-20 withdrawal plan");
+                    TransactionPlan {
+                        actions: vec![ics20_msg.into()],
+                        memo: None,
+                        detection_data: None,
+                        fee_funding: None,
+                        transaction_parameters: TransactionParameters {
+                            chain_id,
+                            ..Default::default()
+                        },
+                    }
+                };
+                let tx = client
+                    .witness_auth_build_with_compliance(&mut plan, snapshot)
+                    .await?;
+                Ok::<(usize, Vec<u8>), anyhow::Error>((ordinal, tx.encode_to_vec()))
+            });
+        }
+
+        let mut txs = vec![Vec::new(); count];
+        while let Some(joined) = tasks.join_next().await {
+            let (ordinal, bytes) = joined.context("waiting for IBC proof tx build task")??;
+            txs[ordinal] = bytes;
+        }
+        Ok(txs)
+    }
+
+    pub async fn build_recv_packet_txs_a_to_b(
+        &mut self,
+        packets: &[SendPacketEvent],
+        proof_height: Height,
+    ) -> Result<Vec<Vec<u8>>> {
+        let prepared = self.prepare_recv_packets_a_to_b(packets).await?;
+        self.build_recv_packet_txs_a_to_b_from_prepared(&prepared, proof_height)
+            .await
+    }
+
+    pub async fn prepare_recv_packets_a_to_b(
+        &mut self,
+        packets: &[SendPacketEvent],
+    ) -> Result<Vec<PreparedRecvPacket>> {
+        let mut prepared = Vec::with_capacity(packets.len());
+        for packet in packets {
+            let chain_a_snapshot = self.chain_a_ibc.storage.latest_snapshot();
+            let (_commitment, proof_commitment_on_a) = chain_a_snapshot
+                .get_with_proof(
+                    format!(
+                        "ibc-data/commitments/ports/{}/channels/{}/sequences/{}",
+                        packet.port_on_a, packet.chan_on_a, packet.sequence
+                    )
+                    .as_bytes()
+                    .to_vec(),
+                )
+                .await?;
+
+            prepared.push(PreparedRecvPacket {
+                packet_data_hex: packet.packet_data_hex.clone(),
+                sequence: packet.sequence.clone(),
+                port_on_a: packet.port_on_a.clone(),
+                chan_on_a: packet.chan_on_a.clone(),
+                port_on_b: packet.port_on_b.clone(),
+                chan_on_b: packet.chan_on_b.clone(),
+                timeout_height_on_b: packet.timeout_height_on_b.clone(),
+                timeout_timestamp_on_b: packet.timeout_timestamp_on_b.clone(),
+                proof_commitment_on_a,
+            });
+        }
+        Ok(prepared)
+    }
+
+    pub async fn build_recv_packet_txs_a_to_b_from_prepared(
+        &mut self,
+        packets: &[PreparedRecvPacket],
+        proof_height: Height,
+    ) -> Result<Vec<Vec<u8>>> {
+        let mut txs = Vec::with_capacity(packets.len());
+        for packet in packets {
+            let msg_recv_packet = MsgRecvPacket {
+                packet: Packet {
+                    sequence: Sequence::from_str(&packet.sequence)?,
+                    port_on_a: PortId::from_str(&packet.port_on_a)?,
+                    chan_on_a: ChannelId::from_str(&packet.chan_on_a)?,
+                    port_on_b: PortId::from_str(&packet.port_on_b)?,
+                    chan_on_b: ChannelId::from_str(&packet.chan_on_b)?,
+                    data: hex::decode(&packet.packet_data_hex)?,
+                    timeout_height_on_b: TimeoutHeight::from_str(&packet.timeout_height_on_b)?,
+                    timeout_timestamp_on_b: Timestamp::from_str(&packet.timeout_timestamp_on_b)?,
+                },
+                proof_commitment_on_a: packet.proof_commitment_on_a.clone(),
+                proof_height_on_a: Height {
+                    revision_height: proof_height.revision_height,
+                    revision_number: 0,
+                },
+                signer: self.chain_a_ibc.signer.clone(),
+            };
+
+            let plan = {
+                let ics20_msg = penumbra_sdk_transaction::ActionPlan::IbcAction(
+                    IbcRelay::RecvPacket(msg_recv_packet),
+                )
+                .into();
+                TransactionPlan {
+                    actions: vec![ics20_msg],
+                    memo: None,
+                    detection_data: None,
+                    fee_funding: None,
+                    transaction_parameters: TransactionParameters {
+                        chain_id: self.chain_b_ibc.chain_id.clone(),
+                        ..Default::default()
+                    },
+                }
+            };
+
+            let tx = self
+                .chain_b_ibc
+                .client()
+                .await?
+                .witness_auth_build(&plan)
+                .await?;
+            txs.push(tx.encode_to_vec());
+        }
+        Ok(txs)
+    }
+
     pub async fn get_connection_states(&mut self) -> Result<(ConnectionState, ConnectionState)> {
         let connection_on_a_response = self
             .chain_a_ibc
@@ -723,6 +1021,13 @@ impl MockRelayer {
         _build_and_send_update_client(chain_a_ibc, chain_b_ibc).await
     }
 
+    pub async fn build_update_client_b_tx(&mut self) -> Result<(Vec<u8>, Height)> {
+        let chain_a_ibc = &mut self.chain_b_ibc;
+        let chain_b_ibc = &mut self.chain_a_ibc;
+
+        _build_update_client_tx(chain_a_ibc, chain_b_ibc).await
+    }
+
     // helper function to build UpdateClient to send to chain A
     pub async fn _build_and_send_update_client_a(&mut self) -> Result<Height> {
         tracing::info!(
@@ -734,6 +1039,13 @@ impl MockRelayer {
         let chain_b_ibc = &mut self.chain_b_ibc;
 
         _build_and_send_update_client(chain_a_ibc, chain_b_ibc).await
+    }
+
+    pub async fn build_update_client_a_tx(&mut self) -> Result<(Vec<u8>, Height)> {
+        let chain_a_ibc = &mut self.chain_a_ibc;
+        let chain_b_ibc = &mut self.chain_b_ibc;
+
+        _build_update_client_tx(chain_a_ibc, chain_b_ibc).await
     }
 
     // Send an ACK message to chain A
@@ -1804,6 +2116,23 @@ async fn _build_and_send_update_client(
     chain_a_ibc: &mut TestNodeWithIBC,
     chain_b_ibc: &mut TestNodeWithIBC,
 ) -> Result<Height> {
+    let (tx, height) = _build_update_client_tx(chain_a_ibc, chain_b_ibc).await?;
+
+    // Execute the transaction, applying it to the chain state.
+    chain_a_ibc
+        .node
+        .block()
+        .with_data(vec![tx])
+        .execute()
+        .await?;
+
+    Ok(height)
+}
+
+async fn _build_update_client_tx(
+    chain_a_ibc: &mut TestNodeWithIBC,
+    chain_b_ibc: &mut TestNodeWithIBC,
+) -> Result<(Vec<u8>, Height)> {
     let chain_b_height = chain_b_ibc.get_latest_height().await?;
     let chain_b_latest_block: penumbra_sdk_proto::util::tendermint_proxy::v1::GetBlockByHeightResponse =
         chain_b_ibc
@@ -1866,16 +2195,11 @@ async fn _build_and_send_update_client(
         .witness_auth_build(&plan)
         .await?;
 
-    // Execute the transaction, applying it to the chain state.
-    chain_a_ibc
-        .node
-        .block()
-        .with_data(vec![tx.encode_to_vec()])
-        .execute()
-        .await?;
-
-    Ok(Height {
-        revision_height: chain_b_new_height as u64,
-        revision_number: 0,
-    })
+    Ok((
+        tx.encode_to_vec(),
+        Height {
+            revision_height: chain_b_new_height as u64,
+            revision_number: 0,
+        },
+    ))
 }

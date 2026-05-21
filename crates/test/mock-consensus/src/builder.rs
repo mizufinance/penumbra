@@ -6,8 +6,8 @@
 mod init_chain;
 
 use {
-    crate::{Keyring, OnBlockFn, TestNode, TsCallbackFn},
-    anyhow::Result,
+    crate::{Keyring, NodeResumeState, OnBlockFn, TestNode, TsCallbackFn},
+    anyhow::{bail, Result},
     bytes::Bytes,
     ed25519_consensus::{SigningKey, VerificationKey},
     std::time::Duration,
@@ -192,5 +192,33 @@ impl Builder {
             hardcoded_genesis: Some(genesis),
             ..self
         }
+    }
+
+    /// Construct a node over an already-initialized app store.
+    pub fn resume_chain<C>(self, consensus: C, state: NodeResumeState) -> Result<TestNode<C>> {
+        let Self {
+            keyring,
+            on_block,
+            ts_callback,
+            ..
+        } = self;
+
+        if keyring.is_empty() {
+            bail!("builder must have validator keys before resuming a chain");
+        }
+
+        Ok(TestNode {
+            consensus,
+            last_app_hash: state.last_app_hash,
+            last_validator_set_hash: state.last_validator_set_hash,
+            last_commit: state.last_commit,
+            consensus_params_hash: state.consensus_params_hash,
+            height: state.height,
+            keyring,
+            on_block,
+            ts_callback: ts_callback.unwrap_or(Box::new(default_ts_callback)),
+            timestamp: state.timestamp,
+            chain_id: state.chain_id,
+        })
     }
 }

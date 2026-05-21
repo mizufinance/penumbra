@@ -14,7 +14,7 @@ use penumbra_sdk_sct::component::clock::EpochRead;
 use penumbra_sdk_sct::component::source::SourceContext;
 use penumbra_sdk_sct::component::tree::VerificationExt as _;
 use penumbra_sdk_sct::Nullifier;
-use penumbra_sdk_shielded_pool::component::{ClueManager, StateReadExt as _};
+use penumbra_sdk_shielded_pool::component::{ClueManager, Ics20Transfer, StateReadExt as _};
 use penumbra_sdk_shielded_pool::fmd;
 use penumbra_sdk_tct::StateCommitment;
 use penumbra_sdk_transaction::{gas::GasCost as _, Action, Transaction};
@@ -24,7 +24,7 @@ use tokio::task::JoinSet;
 use tracing::{instrument, Instrument};
 
 use super::AppActionHandler;
-use crate::app::StateReadExt as _;
+use crate::{app::StateReadExt as _, PenumbraHost};
 
 mod stateful;
 pub(crate) mod stateless;
@@ -64,11 +64,6 @@ pub(crate) struct TransactionExecutionProfile {
     pub output_add_note_payload_ms: f64,
     pub other_action_execute_ms: f64,
     pub record_clues_ms: f64,
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct TxExecutionEffects {
-    pub sct_payloads: Vec<StatePayload>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -568,12 +563,11 @@ pub(crate) async fn check_and_execute_profiled<S>(
     tx: &Transaction,
     mut state: S,
     record_clues: bool,
-) -> Result<(TransactionExecutionProfile, TxExecutionEffects)>
+) -> Result<TransactionExecutionProfile>
 where
     S: StateWrite,
 {
     let mut profile = TransactionExecutionProfile::default();
-    let effects = TxExecutionEffects::default();
     let tx_id = tx.id();
     let action_spans_enabled = tracing::enabled!(tracing::Level::INFO);
 
@@ -591,6 +585,17 @@ where
     for (i, action) in tx.actions().enumerate() {
         let action_start = Instant::now();
         match action {
+            Action::IbcRelay(action) => {
+                let relay = action.clone().with_handler::<Ics20Transfer, PenumbraHost>();
+                let execute = relay.check_and_execute(&mut state);
+                if action_spans_enabled {
+                    let span = Action::IbcRelay(action.clone()).create_span(i);
+                    execute.instrument(span).await?;
+                } else {
+                    execute.await?;
+                }
+                profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
+            }
             _ => {
                 if action_spans_enabled {
                     let span = action.create_span(i);
@@ -626,7 +631,7 @@ where
         profile.record_clues_ms = record_clues_start.elapsed().as_secs_f64() * 1000.0;
     }
 
-    Ok((profile, effects))
+    Ok(profile)
 }
 
 pub(crate) async fn prepare_candidate_read_profiled<S: StateRead + 'static>(

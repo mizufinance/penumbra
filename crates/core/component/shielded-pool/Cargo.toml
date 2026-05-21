@@ -38,7 +38,7 @@ parallel = [
     "tonic",
 ]
 docsrs = []
-benchmark-helpers = []
+benchmark-helpers = ["component", "penumbra-sdk-ibc/benchmark-helpers"]
 
 [dependencies]
 anyhow = {workspace = true}
@@ -98,3 +98,4 @@ tracing = {workspace = true}
 penumbra-sdk-compliance = {workspace = true, default-features = false, features = ["test-helpers"]}
 penumbra-sdk-proof-params = {workspace = true, default-features = false}
 proptest = {workspace = true}
+tokio = {workspace = true, features = ["rt-multi-thread", "macros"]}

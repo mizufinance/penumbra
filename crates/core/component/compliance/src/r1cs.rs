@@ -213,7 +213,7 @@ pub struct IndexedLeafVar {
     // Penumbra-decided policy (bound by IMT proof)
     pub dk_pub: ElementVar,
     pub threshold: FqVar,
-    pub channels_hash: FqVar,
+    pub route_policy_hash: FqVar,
     // Orbis-decided policy (bound by IMT proof)
     pub ring_pk: ElementVar,
     pub ring_id_hash: FqVar,
@@ -233,7 +233,8 @@ impl IndexedLeafVar {
         let next_value = FqVar::new_witness(cs.clone(), || Ok(leaf.next_value))?;
         let dk_pub = ElementVar::new_witness(cs.clone(), || Ok(leaf.params.dk_pub))?;
         let threshold = FqVar::new_witness(cs.clone(), || Ok(Fq::from(leaf.params.threshold)))?;
-        let channels_hash = FqVar::new_witness(cs.clone(), || Ok(leaf.params.channels_hash))?;
+        let route_policy_hash =
+            FqVar::new_witness(cs.clone(), || Ok(leaf.params.route_policy_hash))?;
         let ring_pk = ElementVar::new_witness(cs.clone(), || Ok(leaf.ring.ring_pk))?;
         let ring_id_hash = FqVar::new_witness(cs.clone(), || Ok(leaf.ring.ring_id_hash))?;
         let policy_id_hash = FqVar::new_witness(cs.clone(), || Ok(leaf.ring.policy_id_hash))?;
@@ -245,7 +246,7 @@ impl IndexedLeafVar {
             next_value,
             dk_pub,
             threshold,
-            channels_hash,
+            route_policy_hash,
             ring_pk,
             ring_id_hash,
             policy_id_hash,
@@ -256,7 +257,7 @@ impl IndexedLeafVar {
 
     /// Compute the leaf commitment matching native IndexedLeaf::commit().
     ///
-    /// params_hash = hash_3(PARAMS_DOMAIN, dk_pub_fq, threshold, channels_hash)
+    /// params_hash = hash_3(PARAMS_DOMAIN, dk_pub_fq, threshold, route_policy_hash)
     /// ring_hash   = hash_5(RING_DOMAIN, ring_pk_fq, ring_id_hash, policy_id_hash, permission_hash, resource_hash)
     /// leaf_commit = hash_5(LEAF_DOMAIN, value, next_index, next_value, params_hash, ring_hash)
     pub fn commit(&self, cs: ConstraintSystemRef<Fq>) -> Result<FqVar, SynthesisError> {
@@ -272,7 +273,7 @@ impl IndexedLeafVar {
             (
                 dk_pub_fq,
                 self.threshold.clone(),
-                self.channels_hash.clone(),
+                self.route_policy_hash.clone(),
             ),
         )?;
 

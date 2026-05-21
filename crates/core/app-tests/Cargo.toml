@@ -59,18 +59,18 @@ metrics                          = { workspace = true }
 once_cell                        = { workspace = true }
 parking_lot                      = { workspace = true }
 penumbra-sdk-asset               = { workspace = true, default-features = true }
-penumbra-sdk-app                 = { workspace = true, default-features = true }
+penumbra-sdk-app                 = { workspace = true, features = ["benchmark-helpers"], default-features = true }
 penumbra-sdk-compact-block           = { workspace = true, default-features = false }
 penumbra-sdk-fee                     = { workspace = true, default-features = false }
 penumbra-sdk-governance              = { workspace = true, default-features = false }
-penumbra-sdk-ibc                     = { workspace = true, default-features = false }
+penumbra-sdk-ibc                     = { workspace = true, features = ["benchmark-helpers"], default-features = false }
 penumbra-sdk-keys                    = { workspace = true, default-features = true }
 penumbra-sdk-num                     = { workspace = true, default-features = true }
 penumbra-sdk-compliance              = { workspace = true, default-features = false }
 penumbra-sdk-proof-params            = { workspace = true, default-features = false }
 penumbra-sdk-proto                   = { workspace = true, default-features = true }
 penumbra-sdk-sct                     = { workspace = true, default-features = false }
-penumbra-sdk-shielded-pool           = { workspace = true, features = ["bundled-proving-keys"], default-features = false }
+penumbra-sdk-shielded-pool           = { workspace = true, features = ["benchmark-helpers", "bundled-proving-keys"], default-features = false }
 penumbra-sdk-validator                   = { workspace = true, default-features = false }
 penumbra-sdk-tct                     = { workspace = true, default-features = true }
 penumbra-sdk-test-subscriber         = { workspace = true }
@@ -183,6 +183,10 @@ name = "ics23_transfer"
 path = "tests/ics23_transfer.rs"
 
 [[test]]
+name = "ibc_vs_transfer_benchmark"
+path = "tests/ibc_vs_transfer_benchmark.rs"
+
+[[test]]
 name = "app_can_transfer_notes_and_detect_new_notes"
 path = "tests/app_can_transfer_notes_and_detect_new_notes.rs"
 
@@ -197,4 +201,3 @@ path = "tests/view_server_can_be_served_on_localhost.rs"
 [[test]]
 name = "app_can_sweep_a_collection_of_small_notes"
 path = "tests/app_can_sweep_a_collection_of_small_notes.rs"
-

@@ -14,7 +14,7 @@ pub struct IndexedLeafData {
     pub next_value: [u8; 32],
     pub dk_pub: [u8; 32],
     pub threshold: u128,
-    pub channels_hash: [u8; 32],
+    pub route_policy_hash: [u8; 32],
     pub ring_pk: [u8; 32],
     pub ring_id_hash: [u8; 32],
     pub policy_id_hash: [u8; 32],
@@ -164,7 +164,7 @@ impl ComplianceTreeStore<'_, '_> {
             .0
             .prepare_cached(
                 "SELECT value, next_index, next_value, dk_pub, threshold, \
-                 channels_hash, ring_pk, ring_id_hash, policy_id_hash, permission_hash, resource_hash \
+                 route_policy_hash, ring_pk, ring_id_hash, policy_id_hash, permission_hash, resource_hash \
                  FROM compliance_asset_leaves WHERE position = ?1",
             )
             .context("failed to prepare asset leaf query")?;
@@ -177,7 +177,7 @@ impl ComplianceTreeStore<'_, '_> {
                     row.get::<_, Vec<u8>>("next_value")?,
                     row.get::<_, Vec<u8>>("dk_pub")?,
                     row.get::<_, Vec<u8>>("threshold")?,
-                    row.get::<_, Vec<u8>>("channels_hash")?,
+                    row.get::<_, Vec<u8>>("route_policy_hash")?,
                     row.get::<_, Vec<u8>>("ring_pk")?,
                     row.get::<_, Vec<u8>>("ring_id_hash")?,
                     row.get::<_, Vec<u8>>("policy_id_hash")?,
@@ -195,7 +195,7 @@ impl ComplianceTreeStore<'_, '_> {
                 next_value,
                 dk_pub,
                 threshold,
-                channels_hash,
+                route_policy_hash,
                 ring_pk,
                 ring_id_hash,
                 policy_id_hash,
@@ -215,7 +215,7 @@ impl ComplianceTreeStore<'_, '_> {
                 let value = to_arr(value, "value")?;
                 let next_value = to_arr(next_value, "next_value")?;
                 let dk_pub = to_arr(dk_pub, "dk_pub")?;
-                let channels_hash = to_arr(channels_hash, "channels_hash")?;
+                let route_policy_hash = to_arr(route_policy_hash, "route_policy_hash")?;
                 let ring_pk = to_arr(ring_pk, "ring_pk")?;
                 let ring_id_hash = to_arr(ring_id_hash, "ring_id_hash")?;
                 let policy_id_hash = to_arr(policy_id_hash, "policy_id_hash")?;
@@ -260,7 +260,7 @@ impl ComplianceTreeStore<'_, '_> {
                     next_value,
                     dk_pub,
                     threshold,
-                    channels_hash,
+                    route_policy_hash,
                     ring_pk,
                     ring_id_hash,
                     policy_id_hash,
@@ -292,7 +292,7 @@ impl ComplianceTreeStore<'_, '_> {
             .prepare_cached(
                 "INSERT OR REPLACE INTO compliance_asset_leaves \
                  (position, value, next_index, next_value, dk_pub, threshold, \
-                  channels_hash, ring_pk, ring_id_hash, policy_id_hash, permission_hash, resource_hash) \
+                  route_policy_hash, ring_pk, ring_id_hash, policy_id_hash, permission_hash, resource_hash) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             )
             .context("failed to prepare asset leaf insert")?
@@ -303,7 +303,7 @@ impl ComplianceTreeStore<'_, '_> {
                 &leaf.next_value.to_vec(),
                 &leaf.dk_pub.to_vec(),
                 &threshold_bytes,
-                &leaf.channels_hash.to_vec(),
+                &leaf.route_policy_hash.to_vec(),
                 &leaf.ring_pk.to_vec(),
                 &leaf.ring_id_hash.to_vec(),
                 &leaf.policy_id_hash.to_vec(),
@@ -689,7 +689,7 @@ mod tests {
             next_value: [4u8; 32],
             dk_pub: [7u8; 32],
             threshold: 1000,
-            channels_hash: [10u8; 32],
+            route_policy_hash: [10u8; 32],
             ring_pk: [11u8; 32],
             ring_id_hash: [12u8; 32],
             policy_id_hash: [13u8; 32],
@@ -703,7 +703,7 @@ mod tests {
         assert_eq!(retrieved.next_value, [4u8; 32]);
         assert_eq!(retrieved.dk_pub, [7u8; 32]);
         assert_eq!(retrieved.threshold, 1000);
-        assert_eq!(retrieved.channels_hash, [10u8; 32]);
+        assert_eq!(retrieved.route_policy_hash, [10u8; 32]);
         assert_eq!(retrieved.ring_pk, [11u8; 32]);
         assert_eq!(retrieved.ring_id_hash, [12u8; 32]);
         assert_eq!(retrieved.policy_id_hash, [13u8; 32]);

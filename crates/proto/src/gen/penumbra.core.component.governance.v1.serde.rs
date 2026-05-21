@@ -1142,6 +1142,9 @@ impl serde::Serialize for Proposal {
                 proposal::Payload::UnfreezeIbcClient(v) => {
                     struct_ser.serialize_field("unfreezeIbcClient", v)?;
                 }
+                proposal::Payload::UpdateAssetIbcPolicy(v) => {
+                    struct_ser.serialize_field("updateAssetIbcPolicy", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -1167,6 +1170,8 @@ impl<'de> serde::Deserialize<'de> for Proposal {
             "freezeIbcClient",
             "unfreeze_ibc_client",
             "unfreezeIbcClient",
+            "update_asset_ibc_policy",
+            "updateAssetIbcPolicy",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1180,6 +1185,7 @@ impl<'de> serde::Deserialize<'de> for Proposal {
             UpgradePlan,
             FreezeIbcClient,
             UnfreezeIbcClient,
+            UpdateAssetIbcPolicy,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -1211,6 +1217,7 @@ impl<'de> serde::Deserialize<'de> for Proposal {
                             "upgradePlan" | "upgrade_plan" => Ok(GeneratedField::UpgradePlan),
                             "freezeIbcClient" | "freeze_ibc_client" => Ok(GeneratedField::FreezeIbcClient),
                             "unfreezeIbcClient" | "unfreeze_ibc_client" => Ok(GeneratedField::UnfreezeIbcClient),
+                            "updateAssetIbcPolicy" | "update_asset_ibc_policy" => Ok(GeneratedField::UpdateAssetIbcPolicy),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -1296,6 +1303,13 @@ impl<'de> serde::Deserialize<'de> for Proposal {
                                 return Err(serde::de::Error::duplicate_field("unfreezeIbcClient"));
                             }
                             payload__ = map_.next_value::<::std::option::Option<_>>()?.map(proposal::Payload::UnfreezeIbcClient)
+;
+                        }
+                        GeneratedField::UpdateAssetIbcPolicy => {
+                            if payload__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("updateAssetIbcPolicy"));
+                            }
+                            payload__ = map_.next_value::<::std::option::Option<_>>()?.map(proposal::Payload::UpdateAssetIbcPolicy)
 ;
                         }
                         GeneratedField::__SkipField__ => {
@@ -2422,6 +2436,7 @@ impl serde::Serialize for ProposalKind {
             Self::UpgradePlan => "PROPOSAL_KIND_UPGRADE_PLAN",
             Self::FreezeIbcClient => "PROPOSAL_KIND_FREEZE_IBC_CLIENT",
             Self::UnfreezeIbcClient => "PROPOSAL_KIND_UNFREEZE_IBC_CLIENT",
+            Self::UpdateAssetIbcPolicy => "PROPOSAL_KIND_UPDATE_ASSET_IBC_POLICY",
         };
         serializer.serialize_str(variant)
     }
@@ -2440,6 +2455,7 @@ impl<'de> serde::Deserialize<'de> for ProposalKind {
             "PROPOSAL_KIND_UPGRADE_PLAN",
             "PROPOSAL_KIND_FREEZE_IBC_CLIENT",
             "PROPOSAL_KIND_UNFREEZE_IBC_CLIENT",
+            "PROPOSAL_KIND_UPDATE_ASSET_IBC_POLICY",
         ];
 
         struct GeneratedVisitor;
@@ -2487,6 +2503,7 @@ impl<'de> serde::Deserialize<'de> for ProposalKind {
                     "PROPOSAL_KIND_UPGRADE_PLAN" => Ok(ProposalKind::UpgradePlan),
                     "PROPOSAL_KIND_FREEZE_IBC_CLIENT" => Ok(ProposalKind::FreezeIbcClient),
                     "PROPOSAL_KIND_UNFREEZE_IBC_CLIENT" => Ok(ProposalKind::UnfreezeIbcClient),
+                    "PROPOSAL_KIND_UPDATE_ASSET_IBC_POLICY" => Ok(ProposalKind::UpdateAssetIbcPolicy),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

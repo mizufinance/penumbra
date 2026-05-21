@@ -70,6 +70,7 @@ use penumbra_sdk_validator::component::{
 };
 use prost::bytes::Bytes;
 use prost::Message as _;
+use serde::{Deserialize, Serialize};
 use tendermint::abci::{self, Event};
 use tendermint::v0_37::abci::{request, response};
 use tendermint::validator::Update;
@@ -87,9 +88,12 @@ use crate::block_tx_indexing::BlockTxIndexingMode;
 use crate::event::EventAppParametersChange;
 use crate::genesis::AppState;
 use crate::params::change::ParameterChangeExt as _;
+
 use crate::params::AppParameters;
 use crate::stateless_cache::{CacheEntry, HistoricalValidationStamp, StatelessCache, TxArtifact};
 use crate::{metrics, PenumbraHost};
+#[cfg(feature = "benchmark-helpers")]
+use penumbra_sdk_ibc::benchmarking::{record_inbound_stage, InboundStage};
 use sha2::Digest as _;
 use std::sync::OnceLock;
 
@@ -400,7 +404,7 @@ impl Candidate {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct AggregateBuildProfile {
     pub merge_items_ms: f64,
     pub setup_ms: f64,
@@ -463,7 +467,7 @@ pub struct AggregateBuildProfile {
     pub other_ms: f64,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ExecutionBlockProfile {
     pub block_tx_count: usize,
     pub begin_block_ms: f64,
@@ -745,7 +749,7 @@ pub(crate) struct CachedProposalAggregate {
     tail_tx_count: usize,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct ArtifactBuildBreakdown {
     pub precheck_ms: f64,
     pub action_extract_ms: f64,
@@ -814,6 +818,8 @@ impl BlockSctAppendLog {
         state: &S,
         payloads: Vec<StatePayload>,
     ) -> Result<Vec<(penumbra_sdk_tct::Position, StatePayload)>> {
+        #[cfg(feature = "benchmark-helpers")]
+        let reserve_start = Instant::now();
         if payloads.is_empty() {
             return Ok(Vec::new());
         }
@@ -822,9 +828,8 @@ impl BlockSctAppendLog {
             Some(position) => position,
             None => {
                 let position = state
-                    .get_sct()
-                    .await
-                    .position()
+                    .get_sct_position()
+                    .await?
                     .expect("state commitment tree is not full");
                 self.base_position = Some(position);
                 position
@@ -839,6 +844,9 @@ impl BlockSctAppendLog {
             positioned.push((position, payload));
         }
         self.next_offset += positioned.len() as u64;
+
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(InboundStage::DeferredSctReserve, reserve_start.elapsed());
 
         Ok(positioned)
     }
@@ -3049,6 +3057,74 @@ impl App {
         ))
     }
 
+    pub async fn build_candidate_envelope_for_bench_profiled_public(
+        snapshot: Snapshot,
+        txs: &[Vec<u8>],
+        segment_tx_count: Option<usize>,
+        source_builder_label: impl Into<String>,
+    ) -> Result<(
+        CandidateEnvelope,
+        ArtifactBuildBreakdown,
+        AggregateBuildProfile,
+    )> {
+        anyhow::ensure!(
+            !txs.is_empty(),
+            "candidate envelope requires at least one tx"
+        );
+
+        let decoded = txs
+            .iter()
+            .enumerate()
+            .map(|(index, tx_bytes)| {
+                Transaction::decode(tx_bytes.as_slice())
+                    .map(Arc::new)
+                    .with_context(|| format!("decoding bench tx ordinal {index}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let (artifacts, artifact_profile) =
+            Self::build_tx_artifacts_for_stage("bench_candidate_envelope", &decoded).await?;
+
+        let segment_tx_counts = match segment_tx_count {
+            Some(0) => anyhow::bail!("segment_tx_count must be positive"),
+            Some(segment_tx_count) => decoded
+                .chunks(segment_tx_count)
+                .map(|chunk| chunk.len())
+                .collect::<Vec<_>>(),
+            None => vec![decoded.len()],
+        };
+        let (bundle, segment_tx_counts, aggregate_profile) =
+            Self::build_exact_segmented_aggregate_bundle_for_artifacts_profiled_public(
+                &artifacts,
+                &segment_tx_counts,
+            )
+            .await?;
+        let sidecar =
+            ProposalArtifactSidecar::build(&artifacts, decoded.len(), segment_tx_counts.clone())?;
+        let bundle_tx = Self::build_aggregate_bundle_tx_for_snapshot_public(snapshot, bundle)
+            .await
+            .context("building aggregate bundle tx for bench candidate")?;
+        let tx_hashes = txs
+            .iter()
+            .map(|tx_bytes| sha2::Sha256::digest(tx_bytes).into())
+            .collect::<Vec<[u8; 32]>>();
+
+        Ok((
+            CandidateEnvelope {
+                txs: txs.to_vec(),
+                tx_hashes: tx_hashes.clone(),
+                aggregate_bundle_tx_bytes: Some(bundle_tx.encode_to_vec()),
+                sidecar: sidecar.to_record(),
+                segment_tx_counts,
+                block_tx_count: txs.len(),
+                total_payload_bytes: txs.iter().map(Vec::len).sum(),
+                candidate_digest: candidate_digest_from_hashes(&tx_hashes),
+                source_builder_label: source_builder_label.into(),
+            },
+            artifact_profile,
+            aggregate_profile,
+        ))
+    }
+
     fn ensure_unique_spend_nullifiers_from_artifacts(artifacts: &[Arc<TxArtifact>]) -> Result<()> {
         let mut seen = HashSet::new();
         for artifact in artifacts {
@@ -3341,6 +3417,7 @@ impl App {
             prefix_len: usize,
             bundle_tx_bytes: Option<Bytes>,
             tail_tx_count: usize,
+            sidecar: ProposalArtifactSidecar,
         }
 
         let prefix_select_start = Instant::now();
@@ -3395,6 +3472,17 @@ impl App {
                     && cached.proposal_segment_tx_count == self.proposal_segment_tx_count
                 {
                     profile.aggregate_retry_cache_hits += 1;
+                    let sidecar_build_start = Instant::now();
+                    let sidecar = ProposalArtifactSidecar::build(
+                        &selected_artifacts,
+                        current_prefix_len,
+                        Self::proposal_segment_counts(
+                            current_prefix_len,
+                            self.proposal_segment_tx_count,
+                        ),
+                    )?;
+                    profile.sidecar_build_ms +=
+                        sidecar_build_start.elapsed().as_secs_f64() * 1000.0;
                     tracing::info!(
                         height = proposal_height,
                         included_tx_count = current_prefix_len,
@@ -3405,6 +3493,7 @@ impl App {
                         prefix_len: current_prefix_len,
                         bundle_tx_bytes: cached.bundle_tx_bytes.clone(),
                         tail_tx_count: cached.tail_tx_count,
+                        sidecar,
                     });
                     break;
                 }
@@ -3436,7 +3525,7 @@ impl App {
 
             profile.proposal_assemble_attempts += 1;
             let aggregate_start = Instant::now();
-            let (families, _segment_tx_counts, aggregate_profile) =
+            let (families, segment_tx_counts, aggregate_profile) =
                 if let Some(segment_tx_count) = self.proposal_segment_tx_count {
                     let (segment_families, segment_tx_counts, segment_profile) =
                         Self::build_segmented_family_aggregates_for_artifacts(
@@ -3548,11 +3637,20 @@ impl App {
                         fallback_used = true;
                         current_prefix_len = fallback_prefix_len;
                     } else {
+                        let sidecar_build_start = Instant::now();
+                        let sidecar = ProposalArtifactSidecar::build(
+                            &selected_artifacts,
+                            selected_candidates.len(),
+                            segment_tx_counts,
+                        )?;
+                        profile.sidecar_build_ms +=
+                            sidecar_build_start.elapsed().as_secs_f64() * 1000.0;
                         let cached_bundle_tx_bytes = bundle_tx_bytes.clone();
                         best_result = Some(ProposalAssemblyResult {
                             prefix_len: current_prefix_len,
                             bundle_tx_bytes,
                             tail_tx_count: selected_candidates.len(),
+                            sidecar,
                         });
                         self.aggregate_retry_cache = Some(CachedProposalAggregate {
                             height: proposal_height,
@@ -3589,7 +3687,7 @@ impl App {
             if let Some(bundle_tx_bytes) = best_result.bundle_tx_bytes {
                 included_txs.push(bundle_tx_bytes);
             }
-            return Ok((included_txs, profile, None));
+            return Ok((included_txs, profile, Some(best_result.sidecar)));
         }
 
         Ok((Vec::new(), profile, None))
@@ -3634,6 +3732,18 @@ impl App {
     /// Override the proposer aggregate segment size. Production default is 128.
     pub fn set_proposal_segment_tx_count(&mut self, segment_tx_count: Option<usize>) {
         self.proposal_segment_tx_count = segment_tx_count;
+    }
+
+    fn proposal_segment_counts(tx_count: usize, segment_tx_count: Option<usize>) -> Vec<usize> {
+        match segment_tx_count {
+            Some(0) => Vec::new(),
+            Some(segment_tx_count) => (0..tx_count)
+                .step_by(segment_tx_count)
+                .map(|start| (tx_count - start).min(segment_tx_count))
+                .collect(),
+            None if tx_count > 0 => vec![tx_count],
+            None => Vec::new(),
+        }
     }
 
     pub(crate) fn aggregate_retry_cache(&self) -> Option<CachedProposalAggregate> {
@@ -5739,6 +5849,8 @@ impl App {
             + penumbra_sdk_sct::component::tree::SctManager
             + penumbra_sdk_shielded_pool::component::NoteManager,
     {
+        #[cfg(feature = "benchmark-helpers")]
+        let materialize_start = Instant::now();
         let entries = self.pending_sct_append_log.take_entries();
         if entries.is_empty() {
             return Ok(());
@@ -5747,6 +5859,7 @@ impl App {
         let mut note_payloads = state_tx.pending_note_payloads();
         let mut rolled_up_payloads = state_tx.pending_rolled_up_payloads();
         let mut last_position = None;
+        let mut sct_entries = Vec::with_capacity(entries.len());
 
         for (position, payload) in entries {
             debug_assert!(
@@ -5757,9 +5870,8 @@ impl App {
             );
             last_position = Some(position);
 
-            state_tx
-                .add_sct_commitment_at_position(*payload.commitment(), position)
-                .await?;
+            let commitment = *payload.commitment();
+            sct_entries.push((position, commitment));
 
             match payload {
                 StatePayload::Note { source, note } => {
@@ -5771,6 +5883,12 @@ impl App {
             }
         }
 
+        state_tx
+            .add_sct_commitments_at_positions(sct_entries)
+            .await?;
+
+        #[cfg(feature = "benchmark-helpers")]
+        let pending_payload_start = Instant::now();
         state_tx.object_put(
             penumbra_sdk_shielded_pool::state_key::pending_notes(),
             note_payloads,
@@ -5778,6 +5896,16 @@ impl App {
         state_tx.object_put(
             penumbra_sdk_shielded_pool::state_key::pending_rolled_up_payloads(),
             rolled_up_payloads,
+        );
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(
+            InboundStage::DeferredSctPendingPayload,
+            pending_payload_start.elapsed(),
+        );
+        #[cfg(feature = "benchmark-helpers")]
+        record_inbound_stage(
+            InboundStage::DeferredSctMaterialize,
+            materialize_start.elapsed(),
         );
 
         Ok(())
@@ -5879,10 +6007,9 @@ impl App {
         profile.index_tx_ms = index_start.elapsed().as_secs_f64() * 1000.0;
 
         let check_and_execute_start = Instant::now();
-        let (execution_profile, execution_effects) =
-            check_and_execute_profiled(Arc::as_ref(&tx), &mut state_tx, false)
-                .await
-                .context("executing transaction")?;
+        let execution_profile = check_and_execute_profiled(Arc::as_ref(&tx), &mut state_tx, false)
+            .await
+            .context("executing transaction")?;
         profile.check_and_execute_ms = check_and_execute_start.elapsed().as_secs_f64() * 1000.0;
         profile.set_source_ms = execution_profile.set_source_ms;
         profile.pay_fee_ms = execution_profile.pay_fee_ms;
@@ -5908,21 +6035,6 @@ impl App {
         profile.output_add_note_payload_ms = execution_profile.output_add_note_payload_ms;
         profile.other_action_execute_ms = execution_profile.other_action_execute_ms;
         profile.record_clues_ms = execution_profile.record_clues_ms;
-
-        let positioned_sct_payloads = self
-            .pending_sct_append_log
-            .reserve_positions(&state_tx, execution_effects.sct_payloads)
-            .await
-            .context("reserving deferred SCT positions")?;
-        for (position, payload) in &positioned_sct_payloads {
-            state_tx.record_proto(penumbra_sdk_sct::event::commitment(
-                *payload.commitment(),
-                *position,
-                payload.source().clone(),
-            ));
-        }
-        self.pending_sct_append_log
-            .append_positioned(positioned_sct_payloads);
 
         // At this point, we've completed execution successfully with no errors,
         // so we can apply the transaction to the State. Otherwise, we'd have

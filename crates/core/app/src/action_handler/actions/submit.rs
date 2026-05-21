@@ -72,6 +72,7 @@ impl AppActionHandler for ProposalSubmit {
                 let _ = &ClientId::from_str(client_id)
                     .context("can't decode client id from IBC proposal")?;
             }
+            UpdateAssetIbcPolicy(_) => {}
         }
 
         governance_key
@@ -138,6 +139,13 @@ impl AppActionHandler for ProposalSubmit {
                 let client_id = &ClientId::from_str(client_id)
                     .map_err(|e| tonic::Status::aborted(format!("invalid client id: {e}")))?;
                 let _ = state.get_client_state(client_id).await?;
+            }
+            ProposalPayload::UpdateAssetIbcPolicy(update) => {
+                use penumbra_sdk_compliance::ComplianceRegistryRead as _;
+                state
+                    .get_asset_policy(update.asset_id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("asset is not regulated"))?;
             }
         }
 

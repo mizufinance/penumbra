@@ -83,6 +83,25 @@ impl IbcComplianceMetadata {
             .map(|s| s.to_string())
     }
 
+    /// Validate the only memo shapes allowed for regulated ICS-20 transfers.
+    pub fn validate_regulated_memo(memo: &str) -> Result<()> {
+        if memo.is_empty() {
+            return Ok(());
+        }
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(memo).context("regulated IBC memo must be valid JSON")?;
+        let obj = parsed
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("regulated IBC memo must be a JSON object"))?;
+        anyhow::ensure!(
+            obj.len() == 1 && obj.contains_key(MEMO_KEY),
+            "regulated IBC memo may only contain Penumbra compliance metadata"
+        );
+        Self::from_memo(memo)?.ok_or_else(|| anyhow::anyhow!("missing compliance metadata"))?;
+        Ok(())
+    }
+
     /// Convert to protobuf representation.
     pub fn to_proto_public(&self) -> pb::IbcComplianceMetadata {
         pb::IbcComplianceMetadata {
@@ -149,6 +168,37 @@ mod tests {
         let memo = metadata.encode_to_memo("hello world").unwrap();
         let user_memo = IbcComplianceMetadata::extract_user_memo(&memo);
         assert_eq!(user_memo.as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn regulated_memo_allows_empty_or_exact_compliance_wrapper() {
+        assert!(IbcComplianceMetadata::validate_regulated_memo("").is_ok());
+
+        let metadata = IbcComplianceMetadata {
+            compliance_ciphertext: vec![0u8; TRANSFER_INPUT_WIRE_BYTES],
+            asset_id: asset::Id(Fq::from(1u64)),
+        };
+        let memo = metadata.encode_to_memo("").unwrap();
+        assert!(IbcComplianceMetadata::validate_regulated_memo(&memo).is_ok());
+    }
+
+    #[test]
+    fn regulated_memo_rejects_forwarding_and_user_memo_shapes() {
+        let metadata = IbcComplianceMetadata {
+            compliance_ciphertext: vec![0u8; TRANSFER_INPUT_WIRE_BYTES],
+            asset_id: asset::Id(Fq::from(1u64)),
+        };
+
+        let with_user_memo = metadata.encode_to_memo("hello").unwrap();
+        assert!(IbcComplianceMetadata::validate_regulated_memo(&with_user_memo).is_err());
+        assert!(IbcComplianceMetadata::validate_regulated_memo(
+            r#"{"forward":{"channel":"channel-1"}}"#
+        )
+        .is_err());
+        let mut parsed: serde_json::Value =
+            serde_json::from_str(&metadata.encode_to_memo("").unwrap()).unwrap();
+        parsed["wasm"] = serde_json::json!({});
+        assert!(IbcComplianceMetadata::validate_regulated_memo(&parsed.to_string()).is_err());
     }
 
     #[test]

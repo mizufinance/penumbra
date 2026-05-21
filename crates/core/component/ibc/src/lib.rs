@@ -10,6 +10,8 @@
 pub mod component;
 #[cfg(feature = "component")]
 pub use component::ibc_action_with_handler::IbcRelayWithHandlers;
+#[cfg(feature = "benchmark-helpers")]
+pub mod benchmarking;
 
 pub mod genesis;
 mod ibc_action;

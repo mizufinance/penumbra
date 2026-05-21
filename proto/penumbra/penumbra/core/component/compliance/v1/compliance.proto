@@ -34,8 +34,8 @@ message MsgRegisterAsset {
   bytes dk_pub = 3;
   // Amount threshold for flagging (16 bytes, little-endian u128).
   bytes threshold = 4;
-  // IBC channels allowed for this regulated asset. Empty = IBC blocked.
-  repeated string allowed_channels = 5;
+  // Direct IBC routes allowed for this regulated asset. Empty = IBC blocked.
+  repeated IbcRoute allowed_ibc_routes = 5;
   // Orbis ring public key (32 bytes compressed point).
   bytes ring_pk = 6;
   // Orbis DKG ring identifier.
@@ -50,6 +50,8 @@ message MsgRegisterAsset {
   crypto.decaf377_rdsa.v1.SpendVerificationKey registration_authority_vk = 11;
   // Registrar authorization for this asset registration.
   AssetRegistrationGrant asset_registration_grant = 12;
+  // External IBC origin for a regulated voucher asset, if any.
+  IbcAssetOrigin ibc_origin = 13;
 }
 
 // Body signed by a chain compliance registrar to authorize an asset policy.
@@ -58,7 +60,7 @@ message AssetRegistrationGrantBody {
   bool is_regulated = 2;
   bytes dk_pub = 3;
   bytes threshold = 4;
-  repeated string allowed_channels = 5;
+  repeated IbcRoute allowed_ibc_routes = 5;
   bytes ring_pk = 6;
   string ring_id = 7;
   string policy_id = 8;
@@ -66,6 +68,29 @@ message AssetRegistrationGrantBody {
   string resource = 10;
   crypto.decaf377_rdsa.v1.SpendVerificationKey registration_authority_vk = 11;
   uint64 valid_until_unix = 12;
+  IbcAssetOrigin ibc_origin = 13;
+}
+
+// A direct ICS-20 route bound to local committed IBC identifiers.
+message IbcRoute {
+  string local_port = 1;
+  string local_channel = 2;
+  string connection_id = 3;
+  string counterparty_port = 4;
+  string counterparty_channel = 5;
+}
+
+// External origin for a regulated ICS-20 voucher asset.
+message IbcAssetOrigin {
+  IbcRoute route = 1;
+  string base_denom = 2;
+}
+
+// Governance-controlled replacement of a regulated asset's IBC route policy.
+message UpdateAssetIbcPolicy {
+  asset.v1.AssetId asset_id = 1;
+  bytes expected_route_policy_hash = 2;
+  repeated IbcRoute allowed_ibc_routes = 3;
 }
 
 // Chain-registrar authorization for an asset registration.
@@ -272,7 +297,7 @@ message IndexedLeafData {
   // Penumbra-decided policy (AssetParams)
   bytes dk_pub = 4;
   bytes threshold = 5;
-  bytes channels_hash = 6;
+  bytes route_policy_hash = 6;
   // Orbis-decided policy (RingData)
   bytes ring_pk = 7;
   bytes ring_id_hash = 8;
@@ -286,7 +311,7 @@ message AssetPolicy {
   // AssetParams
   bytes dk_pub = 1;
   bytes threshold = 2;
-  repeated string allowed_channels = 3;
+  repeated IbcRoute allowed_ibc_routes = 3;
   // RingData
   string ring_id = 4;
   bytes ring_pk = 5;
@@ -294,6 +319,7 @@ message AssetPolicy {
   string permission = 7;
   string resource = 8;
   crypto.decaf377_rdsa.v1.SpendVerificationKey registration_authority_vk = 9;
+  IbcAssetOrigin ibc_origin = 10;
 }
 
 // Genesis configuration for the compliance component.

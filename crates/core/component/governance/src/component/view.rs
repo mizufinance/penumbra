@@ -661,6 +661,15 @@ pub trait StateWriteExt: StateWrite + penumbra_sdk_ibc::component::ConnectionSta
                 let unfrozen_client = client_state.unfrozen();
                 self.put_client(client_id, unfrozen_client);
             }
+            ProposalPayload::UpdateAssetIbcPolicy(update) => {
+                use penumbra_sdk_compliance::ComplianceRegistryWrite as _;
+                self.replace_asset_ibc_policy(
+                    update.asset_id,
+                    update.expected_route_policy_hash,
+                    update.allowed_ibc_routes.clone(),
+                )
+                .await?;
+            }
         }
         Ok(Ok(()))
     }

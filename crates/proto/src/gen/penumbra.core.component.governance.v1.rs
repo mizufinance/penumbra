@@ -341,7 +341,7 @@ pub struct Proposal {
     #[prost(string, tag = "2")]
     pub description: ::prost::alloc::string::String,
     /// The proposal's payload.
-    #[prost(oneof = "proposal::Payload", tags = "5, 6, 7, 9, 10, 11")]
+    #[prost(oneof = "proposal::Payload", tags = "5, 6, 7, 9, 10, 11, 12")]
     pub payload: ::core::option::Option<proposal::Payload>,
 }
 /// Nested message and enum types in `Proposal`.
@@ -481,6 +481,8 @@ pub mod proposal {
         FreezeIbcClient(FreezeIbcClient),
         #[prost(message, tag = "11")]
         UnfreezeIbcClient(UnfreezeIbcClient),
+        #[prost(message, tag = "12")]
+        UpdateAssetIbcPolicy(super::super::super::compliance::v1::UpdateAssetIbcPolicy),
     }
 }
 impl ::prost::Name for Proposal {
@@ -918,6 +920,7 @@ pub enum ProposalKind {
     UpgradePlan = 5,
     FreezeIbcClient = 6,
     UnfreezeIbcClient = 7,
+    UpdateAssetIbcPolicy = 8,
 }
 impl ProposalKind {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -933,6 +936,7 @@ impl ProposalKind {
             Self::UpgradePlan => "PROPOSAL_KIND_UPGRADE_PLAN",
             Self::FreezeIbcClient => "PROPOSAL_KIND_FREEZE_IBC_CLIENT",
             Self::UnfreezeIbcClient => "PROPOSAL_KIND_UNFREEZE_IBC_CLIENT",
+            Self::UpdateAssetIbcPolicy => "PROPOSAL_KIND_UPDATE_ASSET_IBC_POLICY",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -945,6 +949,7 @@ impl ProposalKind {
             "PROPOSAL_KIND_UPGRADE_PLAN" => Some(Self::UpgradePlan),
             "PROPOSAL_KIND_FREEZE_IBC_CLIENT" => Some(Self::FreezeIbcClient),
             "PROPOSAL_KIND_UNFREEZE_IBC_CLIENT" => Some(Self::UnfreezeIbcClient),
+            "PROPOSAL_KIND_UPDATE_ASSET_IBC_POLICY" => Some(Self::UpdateAssetIbcPolicy),
             _ => None,
         }
     }

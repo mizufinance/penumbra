@@ -7,7 +7,7 @@ use penumbra_sdk_tct::StateCommitment;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::structs::{AssetParams, AssetPolicy, RingData};
+use crate::structs::{canonical_route_policy_string, AssetParams, AssetPolicy, RingData};
 use crate::tree::DEFAULT_DEPTH;
 
 /// Canonical numeric ordering key for `Fq`.
@@ -42,7 +42,7 @@ pub static IMT_LEAF_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
     Fq::from_le_bytes_mod_order(hash.as_bytes())
 });
 
-/// Domain separator for params sub-hash (Penumbra-decided: dk_pub, threshold, channels).
+/// Domain separator for params sub-hash (Penumbra-decided: dk_pub, threshold, IBC route policy).
 pub static PARAMS_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
     let hash = blake2b_simd::Params::default()
         .personal(b"pen.imt.params__")
@@ -72,11 +72,12 @@ pub fn string_to_fq(s: &str) -> Fq {
     Fq::from_le_bytes_mod_order(hash.as_bytes())
 }
 
-/// Hash a sorted list of IBC channels to a field element.
-pub fn channels_to_fq(channels: &[String]) -> Fq {
-    let mut sorted = channels.to_vec();
-    sorted.sort();
-    string_to_fq(&sorted.join("\0"))
+/// Hash a canonical IBC route policy to a field element.
+pub fn route_policy_to_fq(params: &AssetParams) -> Fq {
+    string_to_fq(&canonical_route_policy_string(
+        &params.ibc_origin,
+        &params.allowed_ibc_routes,
+    ))
 }
 
 // --- Policy sub-structs ---
@@ -86,16 +87,16 @@ pub fn channels_to_fq(channels: &[String]) -> Fq {
 pub struct LeafParams {
     pub dk_pub: decaf377::Element,
     pub threshold: u128,
-    pub channels_hash: Fq,
+    pub route_policy_hash: Fq,
 }
 
 impl LeafParams {
-    /// Construct from an AssetParams (hashes allowed_channels).
+    /// Construct from an AssetParams (hashes the canonical route policy).
     pub fn from_asset_params(p: &AssetParams) -> Self {
         Self {
             dk_pub: p.dk_pub,
             threshold: p.threshold,
-            channels_hash: channels_to_fq(&p.allowed_channels),
+            route_policy_hash: route_policy_to_fq(p),
         }
     }
 }
@@ -105,7 +106,7 @@ impl Default for LeafParams {
         Self {
             dk_pub: decaf377::Element::default(),
             threshold: u128::MAX,
-            channels_hash: string_to_fq(""),
+            route_policy_hash: string_to_fq(""),
         }
     }
 }
@@ -153,7 +154,7 @@ static DEFAULT_PARAMS_HASH: Lazy<Fq> = Lazy::new(|| {
     let threshold_fq = Fq::from(p.threshold);
     poseidon377::hash_3(
         &PARAMS_DOMAIN_SEP,
-        (dk_pub_fq, threshold_fq, p.channels_hash),
+        (dk_pub_fq, threshold_fq, p.route_policy_hash),
     )
 });
 
@@ -203,7 +204,7 @@ pub static IMT_ZERO_HASHES: Lazy<Vec<StateCommitment>> = Lazy::new(|| {
 /// A leaf in the Indexed Merkle Tree forming a sorted linked list.
 ///
 /// All policy fields are bound into the commitment via sub-structured Poseidon:
-///   params_hash = hash_3(PARAMS_DOMAIN, dk_pub_fq, threshold_fq, channels_hash)
+///   params_hash = hash_3(PARAMS_DOMAIN, dk_pub_fq, threshold_fq, route_policy_hash)
 ///   ring_hash   = hash_5(RING_DOMAIN, ring_pk_fq, ring_id_hash, policy_id_hash, permission_hash, resource_hash)
 ///   leaf_commit = hash_5(LEAF_DOMAIN, value, next_index, next_value, params_hash, ring_hash)
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -214,7 +215,7 @@ pub struct IndexedLeaf {
     pub next_index: u64,
     /// The value at next_index (for efficient gap verification).
     pub next_value: Fq,
-    /// Penumbra-decided policy (dk_pub, threshold, channels).
+    /// Penumbra-decided policy (dk_pub, threshold, IBC routes).
     pub params: LeafParams,
     /// Orbis-decided policy (ring_pk, ring_id, policy_id, permission, resource).
     pub ring: LeafRing,
@@ -275,7 +276,7 @@ impl IndexedLeaf {
         let threshold_fq = Fq::from(self.params.threshold);
         let params_hash = poseidon377::hash_3(
             &PARAMS_DOMAIN_SEP,
-            (dk_pub_fq, threshold_fq, self.params.channels_hash),
+            (dk_pub_fq, threshold_fq, self.params.route_policy_hash),
         );
 
         let ring_pk_fq = self.ring.ring_pk.vartime_compress_to_field();
@@ -324,7 +325,7 @@ struct IndexedLeafSerde {
     next_value: [u8; 32],
     dk_pub: [u8; 32],
     threshold: u128,
-    channels_hash: [u8; 32],
+    route_policy_hash: [u8; 32],
     ring_pk: [u8; 32],
     ring_id_hash: [u8; 32],
     policy_id_hash: [u8; 32],
@@ -343,7 +344,7 @@ impl Serialize for IndexedLeaf {
             next_value: self.next_value.to_bytes(),
             dk_pub: self.params.dk_pub.vartime_compress().0,
             threshold: self.params.threshold,
-            channels_hash: self.params.channels_hash.to_bytes(),
+            route_policy_hash: self.params.route_policy_hash.to_bytes(),
             ring_pk: self.ring.ring_pk.vartime_compress().0,
             ring_id_hash: self.ring.ring_id_hash.to_bytes(),
             policy_id_hash: self.ring.policy_id_hash.to_bytes(),
@@ -368,8 +369,8 @@ impl<'de> Deserialize<'de> for IndexedLeaf {
         let dk_pub = decaf377::Encoding(h.dk_pub)
             .vartime_decompress()
             .map_err(|_| serde::de::Error::custom("invalid dk_pub encoding"))?;
-        let channels_hash = Fq::from_bytes_checked(&h.channels_hash)
-            .map_err(|_| serde::de::Error::custom("invalid channels_hash Fq bytes"))?;
+        let route_policy_hash = Fq::from_bytes_checked(&h.route_policy_hash)
+            .map_err(|_| serde::de::Error::custom("invalid route_policy_hash Fq bytes"))?;
         let ring_pk = decaf377::Encoding(h.ring_pk)
             .vartime_decompress()
             .map_err(|_| serde::de::Error::custom("invalid ring_pk encoding"))?;
@@ -389,7 +390,7 @@ impl<'de> Deserialize<'de> for IndexedLeaf {
             params: LeafParams {
                 dk_pub,
                 threshold: h.threshold,
-                channels_hash,
+                route_policy_hash,
             },
             ring: LeafRing {
                 ring_pk,
@@ -416,7 +417,7 @@ impl From<IndexedLeaf> for pb::IndexedLeafData {
             next_value: leaf.next_value.to_bytes().to_vec(),
             dk_pub: leaf.params.dk_pub.vartime_compress().0.to_vec(),
             threshold: leaf.params.threshold.to_le_bytes().to_vec(),
-            channels_hash: leaf.params.channels_hash.to_bytes().to_vec(),
+            route_policy_hash: leaf.params.route_policy_hash.to_bytes().to_vec(),
             ring_pk: leaf.ring.ring_pk.vartime_compress().0.to_vec(),
             ring_id_hash: leaf.ring.ring_id_hash.to_bytes().to_vec(),
             policy_id_hash: leaf.ring.policy_id_hash.to_bytes().to_vec(),
@@ -477,7 +478,7 @@ impl TryFrom<pb::IndexedLeafData> for IndexedLeaf {
             u128::MAX
         };
 
-        let channels_hash = parse_fq_or_default(&proto.channels_hash, "channels_hash")?;
+        let route_policy_hash = parse_fq_or_default(&proto.route_policy_hash, "route_policy_hash")?;
 
         let ring_pk = if proto.ring_pk.len() == 32 {
             let bytes: [u8; 32] = proto
@@ -505,7 +506,7 @@ impl TryFrom<pb::IndexedLeafData> for IndexedLeaf {
             params: LeafParams {
                 dk_pub,
                 threshold,
-                channels_hash,
+                route_policy_hash,
             },
             ring: LeafRing {
                 ring_pk,
@@ -572,7 +573,7 @@ impl Serialize for IndexedMerkleTree {
                         next_value: v.next_value.to_bytes(),
                         dk_pub: v.params.dk_pub.vartime_compress().0,
                         threshold: v.params.threshold,
-                        channels_hash: v.params.channels_hash.to_bytes(),
+                        route_policy_hash: v.params.route_policy_hash.to_bytes(),
                         ring_pk: v.ring.ring_pk.vartime_compress().0,
                         ring_id_hash: v.ring.ring_id_hash.to_bytes(),
                         policy_id_hash: v.ring.policy_id_hash.to_bytes(),
@@ -632,8 +633,8 @@ impl<'de> Deserialize<'de> for IndexedMerkleTree {
                 let dk_pub = decaf377::Encoding(h.dk_pub)
                     .vartime_decompress()
                     .map_err(|_| serde::de::Error::custom("invalid dk_pub encoding"))?;
-                let channels_hash = Fq::from_bytes_checked(&h.channels_hash)
-                    .map_err(|_| serde::de::Error::custom("invalid channels_hash Fq bytes"))?;
+                let route_policy_hash = Fq::from_bytes_checked(&h.route_policy_hash)
+                    .map_err(|_| serde::de::Error::custom("invalid route_policy_hash Fq bytes"))?;
                 let ring_pk = decaf377::Encoding(h.ring_pk)
                     .vartime_decompress()
                     .map_err(|_| serde::de::Error::custom("invalid ring_pk encoding"))?;
@@ -654,7 +655,7 @@ impl<'de> Deserialize<'de> for IndexedMerkleTree {
                         params: LeafParams {
                             dk_pub,
                             threshold: h.threshold,
-                            channels_hash,
+                            route_policy_hash,
                         },
                         ring: LeafRing {
                             ring_pk,
@@ -1685,7 +1686,7 @@ mod tests {
         assert_eq!(back.next_value, leaf.next_value);
         assert_eq!(back.params.dk_pub, leaf.params.dk_pub);
         assert_eq!(back.params.threshold, leaf.params.threshold);
-        assert_eq!(back.params.channels_hash, leaf.params.channels_hash);
+        assert_eq!(back.params.route_policy_hash, leaf.params.route_policy_hash);
         assert_eq!(back.ring.ring_pk, leaf.ring.ring_pk);
         assert_eq!(back.ring.ring_id_hash, leaf.ring.ring_id_hash);
     }
@@ -1734,10 +1735,16 @@ mod tests {
     }
 
     #[test]
-    fn test_channels_to_fq_order_independent() {
-        let a = channels_to_fq(&["channel-0".into(), "channel-1".into()]);
-        let b = channels_to_fq(&["channel-1".into(), "channel-0".into()]);
-        assert_eq!(a, b, "channels_to_fq should sort before hashing");
+    fn test_route_policy_to_fq_order_independent() {
+        use crate::structs::IbcRoute;
+        let mut a = AssetPolicy::default_unregulated().params;
+        a.allowed_ibc_routes = vec![
+            IbcRoute::transfer("channel-0", "connection-0", "channel-7"),
+            IbcRoute::transfer("channel-1", "connection-1", "channel-8"),
+        ];
+        let mut b = a.clone();
+        b.allowed_ibc_routes.reverse();
+        assert_eq!(route_policy_to_fq(&a), route_policy_to_fq(&b));
     }
 
     #[test]
@@ -1752,7 +1759,7 @@ mod tests {
             params: LeafParams {
                 dk_pub: decaf377::Element::default(),
                 threshold: 1000u128,
-                channels_hash: string_to_fq(""),
+                route_policy_hash: string_to_fq(""),
             },
             ring: LeafRing::default(),
         };

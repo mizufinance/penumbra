@@ -1,7 +1,10 @@
 use {
-    crate::common::{BuilderExt as _, TempStorageExt as _},
+    crate::common::BuilderExt as _,
     anyhow::{anyhow, Context as _, Result},
-    cnidarium::TempStorage,
+    cnidarium::Storage,
+    decaf377_rdsa::{
+        SigningKey as RdsaSigningKey, SpendAuth, VerificationKey as RdsaVerificationKey,
+    },
     ed25519_consensus::{SigningKey, VerificationKey},
     ibc_proto::ibc::core::{
         channel::v1::query_client::QueryClient as IbcChannelQueryClient,
@@ -23,13 +26,17 @@ use {
     penumbra_sdk_app::{
         genesis::{self, AppState},
         server::consensus::Consensus,
+        SUBSTORE_PREFIXES,
     },
-    penumbra_sdk_asset::asset,
-    penumbra_sdk_compliance::{ComplianceLeaf, MsgRegisterAsset, MsgRegisterUser},
+    penumbra_sdk_asset::{asset, BASE_ASSET_DENOM},
+    penumbra_sdk_compliance::{
+        structs::{AssetRegistrationGrant, UserRegistrationGrant, UserRegistrationGrantBody},
+        ComplianceLeaf, IbcAssetOrigin, IbcRoute, MsgRegisterAsset, MsgRegisterUser,
+    },
     penumbra_sdk_ibc::{component::ClientStateReadExt as _, IBC_COMMITMENT_PREFIX},
     penumbra_sdk_keys::{test_keys, Address},
     penumbra_sdk_mock_client::MockClient,
-    penumbra_sdk_mock_consensus::TestNode,
+    penumbra_sdk_mock_consensus::{NodeResumeState, TestNode},
     penumbra_sdk_proto::{
         util::tendermint_proxy::v1::{
             tendermint_proxy_service_client::TendermintProxyServiceClient, GetStatusRequest,
@@ -37,7 +44,14 @@ use {
         DomainType as _,
     },
     penumbra_sdk_transaction::{Action, Transaction, TransactionBody, TransactionParameters},
-    std::error::Error,
+    rand::SeedableRng as _,
+    std::{
+        error::Error,
+        fs,
+        ops::Deref,
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicU16, Ordering},
+    },
     tap::{Tap, TapFallible},
     tendermint::{
         v0_37::abci::{ConsensusRequest, ConsensusResponse},
@@ -49,6 +63,84 @@ use {
     tower_actor::Actor,
     tracing::info,
 };
+
+static NEXT_GRPC_PORT: AtomicU16 = AtomicU16::new(9990);
+
+pub struct TestStorage {
+    inner: Storage,
+    root: PathBuf,
+    _temp_dir: Option<tempfile::TempDir>,
+}
+
+impl TestStorage {
+    pub async fn new_with_penumbra_prefixes() -> Result<Self> {
+        let dir = tempfile::tempdir()?;
+        Self::load_from_root(dir.path().to_path_buf(), Some(dir)).await
+    }
+
+    pub async fn new_persistent(root: impl AsRef<Path>) -> Result<Self> {
+        let root = root.as_ref().to_path_buf();
+        fs::create_dir_all(&root)?;
+        Self::load_from_root(root, None).await
+    }
+
+    pub async fn copied_from(source: impl AsRef<Path>) -> Result<Self> {
+        let dir = tempfile::tempdir()?;
+        copy_dir_contents(source.as_ref(), dir.path())?;
+        Self::load_from_root(dir.path().to_path_buf(), Some(dir)).await
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    async fn load_from_root(root: PathBuf, temp_dir: Option<tempfile::TempDir>) -> Result<Self> {
+        let inner = Storage::load(root.join("storage.db"), SUBSTORE_PREFIXES.to_vec()).await?;
+        Ok(Self {
+            inner,
+            root,
+            _temp_dir: temp_dir,
+        })
+    }
+}
+
+impl Deref for TestStorage {
+    type Target = Storage;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl AsRef<Storage> for TestStorage {
+    fn as_ref(&self) -> &Storage {
+        &self.inner
+    }
+}
+
+fn copy_dir_contents(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_contents(&source_path, &destination_path)?;
+        } else {
+            if entry.file_name() == "LOCK" {
+                continue;
+            }
+            fs::copy(&source_path, &destination_path).with_context(|| {
+                format!(
+                    "copying {} to {}",
+                    source_path.display(),
+                    destination_path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
 
 // Contains some data from a single IBC connection + client for test usage.
 // This might be better off as an extension trait or additional impl on the TestNode struct.
@@ -66,11 +158,12 @@ pub struct TestNodeWithIBC {
     pub connection: Option<ConnectionEnd>,
     pub channel: Option<ChannelEnd>,
     pub node: TestNode<Actor<ConsensusRequest, ConsensusResponse, Box<dyn Error + Send + Sync>>>,
-    pub storage: TempStorage,
+    pub storage: TestStorage,
     pub ibc_client_query_client: IbcClientQueryClient<Channel>,
     pub ibc_connection_query_client: IbcConnectionQueryClient<Channel>,
     pub ibc_channel_query_client: IbcChannelQueryClient<Channel>,
     pub tendermint_proxy_service_client: TendermintProxyServiceClient<Channel>,
+    rpc_server: tokio::task::JoinHandle<()>,
 }
 
 #[allow(unused)]
@@ -82,15 +175,84 @@ impl TestNodeWithIBC {
         start_time: Time,
         keys: (SigningKey, VerificationKey),
     ) -> Result<Self, anyhow::Error> {
+        Self::new_with_genesis_content(suffix, start_time, keys, genesis::Content::default()).await
+    }
+
+    pub async fn new_with_allocations_and_registrar(
+        suffix: &str,
+        start_time: Time,
+        keys: (SigningKey, VerificationKey),
+        allocation_count: usize,
+        registrar_vk: RdsaVerificationKey<SpendAuth>,
+    ) -> Result<Self, anyhow::Error> {
+        Self::new_with_allocations_and_registrar_at_root(
+            suffix,
+            start_time,
+            keys,
+            allocation_count,
+            registrar_vk,
+            None,
+        )
+        .await
+    }
+
+    pub async fn new_with_allocations_and_registrar_at_root(
+        suffix: &str,
+        start_time: Time,
+        keys: (SigningKey, VerificationKey),
+        allocation_count: usize,
+        registrar_vk: RdsaVerificationKey<SpendAuth>,
+        storage_root: Option<&Path>,
+    ) -> Result<Self, anyhow::Error> {
+        let allocations = std::iter::repeat(penumbra_sdk_shielded_pool::genesis::Allocation {
+            raw_amount: 1_000_000u128.into(),
+            raw_denom: BASE_ASSET_DENOM.deref().base_denom().denom,
+            address: test_keys::ADDRESS_0.to_owned(),
+        })
+        .take(allocation_count)
+        .collect();
+        let content = genesis::Content {
+            compliance_content: penumbra_sdk_compliance::genesis::Content {
+                compliance_registrar_vk: vec![registrar_vk],
+                ..Default::default()
+            },
+            shielded_pool_content: penumbra_sdk_shielded_pool::genesis::Content {
+                allocations,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        Self::new_with_genesis_content_at_root(suffix, start_time, keys, content, storage_root)
+            .await
+    }
+
+    pub async fn new_with_genesis_content(
+        suffix: &str,
+        start_time: Time,
+        keys: (SigningKey, VerificationKey),
+        content: genesis::Content,
+    ) -> Result<Self, anyhow::Error> {
+        Self::new_with_genesis_content_at_root(suffix, start_time, keys, content, None).await
+    }
+
+    pub async fn new_with_genesis_content_at_root(
+        suffix: &str,
+        start_time: Time,
+        keys: (SigningKey, VerificationKey),
+        content: genesis::Content,
+        storage_root: Option<&Path>,
+    ) -> Result<Self, anyhow::Error> {
         let chain_id = format!("{}-{}", TestNode::<()>::CHAIN_ID, suffix);
         // Use the correct substores
-        let storage = TempStorage::new_with_penumbra_prefixes().await?;
+        let storage = match storage_root {
+            Some(root) => TestStorage::new_persistent(root).await?,
+            None => TestStorage::new_with_penumbra_prefixes().await?,
+        };
         // Instantiate a mock tendermint proxy, which we will connect to the test node.
         let proxy = penumbra_sdk_mock_tendermint_proxy::TestNodeProxy::new::<Consensus>();
 
         let node = {
-            let app_state =
-                AppState::Content(genesis::Content::default().with_chain_id(chain_id.clone()));
+            let app_state = AppState::Content(content.with_chain_id(chain_id.clone()));
             let consensus = Consensus::new(storage.as_ref().clone());
             TestNode::builder()
                 .with_keys(vec![keys])
@@ -103,21 +265,16 @@ impl TestNodeWithIBC {
                 .tap_ok(|e| tracing::info!(hash = %e.last_app_hash_hex(), "finished init chain"))?
         };
 
-        // to select a port number just index on the suffix for now
-        let index = match suffix {
-            "a" => 0,
-            "b" => 1,
-            _ => unreachable!("update this hack"),
-        };
         // We use a non-standard port range, to avoid conflicting with other
         // integration tests that bind to the more typical 8080/8081 ports.
-        let grpc_url = format!("http://127.0.0.1:999{}", index) // see #4517
+        let grpc_port = NEXT_GRPC_PORT.fetch_add(1, Ordering::SeqCst);
+        let grpc_url = format!("http://127.0.0.1:{grpc_port}") // see #4517
             .parse::<url::Url>()?
             .tap(|url| tracing::debug!(%url, "parsed grpc url"));
 
         tracing::info!("spawning gRPC...");
         // Spawn the node's RPC server.
-        let _rpc_server = {
+        let rpc_server = {
             let make_svc = penumbra_sdk_app::rpc::routes(
                 storage.as_ref(),
                 proxy,
@@ -151,6 +308,93 @@ impl TestNodeWithIBC {
         let ibc_client_query_client = IbcClientQueryClient::new(channel.clone());
         let tendermint_proxy_service_client = TendermintProxyServiceClient::new(channel.clone());
 
+        Self::from_parts(
+            chain_id,
+            node,
+            storage,
+            ibc_connection_query_client,
+            ibc_channel_query_client,
+            ibc_client_query_client,
+            tendermint_proxy_service_client,
+            rpc_server,
+        )
+    }
+
+    pub async fn new_from_cached_storage(
+        suffix: &str,
+        keys: (SigningKey, VerificationKey),
+        storage: TestStorage,
+        resume_state: NodeResumeState,
+    ) -> Result<Self, anyhow::Error> {
+        let chain_id = format!("{}-{}", TestNode::<()>::CHAIN_ID, suffix);
+        let proxy = penumbra_sdk_mock_tendermint_proxy::TestNodeProxy::new::<Consensus>();
+        let consensus = Consensus::new(storage.as_ref().clone());
+        let node = TestNode::builder()
+            .with_keys(vec![keys])
+            .single_validator()
+            .on_block(proxy.on_block_callback())
+            .resume_chain(consensus, resume_state)?;
+
+        let grpc_port = NEXT_GRPC_PORT.fetch_add(1, Ordering::SeqCst);
+        let grpc_url = format!("http://127.0.0.1:{grpc_port}")
+            .parse::<url::Url>()?
+            .tap(|url| tracing::debug!(%url, "parsed grpc url"));
+
+        let rpc_server = {
+            let make_svc = penumbra_sdk_app::rpc::routes(
+                storage.as_ref(),
+                proxy,
+                false, /*enable_expensive_rpc*/
+            )?
+            .into_axum_router()
+            .layer(tower_http::cors::CorsLayer::permissive())
+            .into_make_service()
+            .tap(|_| tracing::info!("initialized rpc service"));
+            let [addr] = grpc_url
+                .socket_addrs(|| None)?
+                .try_into()
+                .expect("grpc url can be turned into a socket address");
+
+            let server = axum_server::bind(addr).serve(make_svc);
+            tokio::spawn(async { server.await.expect("grpc server returned an error") })
+                .tap(|_| tracing::info!("grpc server is running"))
+        };
+
+        time::sleep(time::Duration::from_secs(1)).await;
+        let channel = Channel::from_shared(grpc_url.to_string())
+            .with_context(|| "could not parse node URI")?
+            .connect()
+            .await
+            .with_context(|| "could not connect to grpc server")
+            .tap_err(|error| tracing::error!(?error, "could not connect to grpc server"))?;
+
+        let ibc_connection_query_client = IbcConnectionQueryClient::new(channel.clone());
+        let ibc_channel_query_client = IbcChannelQueryClient::new(channel.clone());
+        let ibc_client_query_client = IbcClientQueryClient::new(channel.clone());
+        let tendermint_proxy_service_client = TendermintProxyServiceClient::new(channel.clone());
+
+        Self::from_parts(
+            chain_id,
+            node,
+            storage,
+            ibc_connection_query_client,
+            ibc_channel_query_client,
+            ibc_client_query_client,
+            tendermint_proxy_service_client,
+            rpc_server,
+        )
+    }
+
+    fn from_parts(
+        chain_id: String,
+        node: TestNode<Actor<ConsensusRequest, ConsensusResponse, Box<dyn Error + Send + Sync>>>,
+        storage: TestStorage,
+        ibc_connection_query_client: IbcConnectionQueryClient<Channel>,
+        ibc_channel_query_client: IbcChannelQueryClient<Channel>,
+        ibc_client_query_client: IbcClientQueryClient<Channel>,
+        tendermint_proxy_service_client: TendermintProxyServiceClient<Channel>,
+        rpc_server: tokio::task::JoinHandle<()>,
+    ) -> Result<Self, anyhow::Error> {
         let pk = node
             .keyring()
             .iter()
@@ -162,6 +406,7 @@ impl TestNodeWithIBC {
                 .try_into()
                 .expect(""),
         );
+
         Ok(Self {
             // the test relayer supports only a single connection on each chain as of now
             connection_id: ConnectionId::new(0),
@@ -187,6 +432,7 @@ impl TestNodeWithIBC {
             ibc_channel_query_client,
             ibc_client_query_client,
             tendermint_proxy_service_client,
+            rpc_server,
         })
     }
 
@@ -215,7 +461,8 @@ impl TestNodeWithIBC {
                 is_regulated: false,
                 dk_pub: None,
                 threshold: None,
-                allowed_channels: vec![],
+                allowed_ibc_routes: vec![],
+                ibc_origin: None,
                 ring_pk: None,
                 ring_id: String::new(),
                 policy_id: String::new(),
@@ -259,6 +506,98 @@ impl TestNodeWithIBC {
             transaction_body,
             binding_sig: [0u8; 64].into(), // No binding sig needed (no value balance)
             anchor: penumbra_sdk_tct::Tree::new().root(), // Default empty tree anchor
+        };
+
+        self.node
+            .block()
+            .with_data(vec![tx.encode_to_vec()])
+            .execute()
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn execute_regulated_compliance_setup(
+        &mut self,
+        addresses: &[Address],
+        asset: asset::Id,
+        allowed_ibc_routes: Vec<IbcRoute>,
+        ibc_origin: Option<IbcAssetOrigin>,
+        registrar_sk: &RdsaSigningKey<SpendAuth>,
+        authority_sk: &RdsaSigningKey<SpendAuth>,
+    ) -> Result<()> {
+        const VALID_UNTIL_UNIX: u64 = 4_102_444_800;
+        let authority_vk = RdsaVerificationKey::from(authority_sk);
+        let mut actions: Vec<Action> = Vec::new();
+
+        let mut asset_msg = MsgRegisterAsset {
+            asset_id: asset,
+            is_regulated: true,
+            dk_pub: Some(decaf377::Element::GENERATOR),
+            threshold: None,
+            allowed_ibc_routes,
+            ibc_origin,
+            ring_pk: None,
+            ring_id: String::new(),
+            policy_id: "benchmark-policy".to_string(),
+            permission: String::new(),
+            resource: String::new(),
+            registration_authority_vk: Some(authority_vk),
+            asset_registration_grant: None,
+        };
+        let body = asset_msg.registration_grant_body(VALID_UNTIL_UNIX);
+        asset_msg.asset_registration_grant = Some(AssetRegistrationGrant {
+            registrar_vk: RdsaVerificationKey::from(registrar_sk),
+            signature: registrar_sk.sign(
+                rand_chacha::ChaChaRng::seed_from_u64(1),
+                &body.signing_bytes(),
+            ),
+            body,
+        });
+        actions.push(Action::ComplianceRegisterAsset(asset_msg));
+
+        for address in addresses {
+            let b_d_fq = address.diversified_generator().vartime_compress_to_field();
+            let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
+            let leaf = ComplianceLeaf {
+                address: address.clone(),
+                asset_id: asset,
+                d,
+            };
+            let body = UserRegistrationGrantBody {
+                leaf: leaf.clone(),
+                policy_id: "benchmark-policy".to_string(),
+                valid_until_unix: VALID_UNTIL_UNIX,
+                nonce: address.to_string().into_bytes(),
+            };
+            actions.push(Action::ComplianceRegisterUser(MsgRegisterUser {
+                leaf,
+                grant: Some(UserRegistrationGrant {
+                    signature: authority_sk.sign(
+                        rand_chacha::ChaChaRng::seed_from_u64(2 + actions.len() as u64),
+                        &body.signing_bytes(),
+                    ),
+                    body,
+                }),
+            }));
+        }
+
+        let transaction_body = TransactionBody {
+            actions,
+            transaction_parameters: TransactionParameters {
+                expiry_height: 0,
+                chain_id: self.chain_id.clone(),
+                fee: Default::default(),
+            },
+            fee_funding: None,
+            detection_data: None,
+            memo: None,
+        };
+
+        let tx = Transaction {
+            transaction_body,
+            binding_sig: [0u8; 64].into(),
+            anchor: penumbra_sdk_tct::Tree::new().root(),
         };
 
         self.node
@@ -408,5 +747,11 @@ impl TestNodeWithIBC {
             }),
         };
         Ok(header)
+    }
+}
+
+impl Drop for TestNodeWithIBC {
+    fn drop(&mut self) {
+        self.rpc_server.abort();
     }
 }

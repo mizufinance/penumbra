@@ -100,6 +100,15 @@ pub fn asset_policy(asset_id: &penumbra_sdk_asset::asset::Id) -> String {
     format!("compliance/asset_policy/{}", asset_id)
 }
 
+/// State key for regulated external IBC origin lookup keyed by base denom.
+pub fn ibc_origin_asset(base_denom: &str) -> String {
+    let hash = blake2b_simd::Params::new()
+        .hash_length(32)
+        .personal(b"pen.ibc.origin")
+        .hash(base_denom.as_bytes());
+    format!("compliance/ibc_origin/{}", hex::encode(hash.as_bytes()))
+}
+
 /// State key for reverse lookup: (address, asset_id) -> position in user tree
 /// This enables O(1) lookup of a user's leaf position for merkle path generation
 pub fn user_leaf_position(
