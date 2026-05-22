@@ -33,7 +33,7 @@ const TEST_ASSET: &str = "1020wtest_usd";
 
 // The maximum amount of time any command is allowed to take before we error.
 // Gnark proof generation is slower than Groth16; allow extra headroom on top of sync time.
-const TIMEOUT_COMMAND_SECONDS: u64 = 300;
+const TIMEOUT_COMMAND_SECONDS: u64 = 600;
 
 /// Import the wallet from seed phrase into a temporary directory.
 fn load_wallet_into_tmpdir() -> TempDir {
