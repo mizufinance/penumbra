@@ -293,7 +293,7 @@ impl SqliteScannerStore {
             VALUES (1, 0, NULL);
 
             INSERT OR IGNORE INTO scanner_schema_version (id, version)
-            VALUES (1, 1);
+            VALUES (1, 2);
             "#,
         )?;
         let version = Self::schema_version(conn)?.context("scanner DB schema version missing")?;

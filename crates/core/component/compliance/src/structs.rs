@@ -1831,7 +1831,7 @@ impl From<MerklePathLayer> for pb::MerklePathLayer {
 /// Compliance ciphertext with tiered encryption.
 ///
 /// Supports two formats:
-/// - **Transfer-input** (224 bytes): 1 EPK + c2_core + detection + core
+/// - **Transfer-input** (288 bytes): 1 EPK + c2_core + detection + core
 /// - **Transfer-output** (544 bytes): 3 EPKs + 3 c2s + detection + core + ext + sext
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComplianceCiphertext {
@@ -1872,7 +1872,7 @@ impl ComplianceCiphertext {
         self.epk_1.vartime_compress().0
     }
 
-    /// Create a transfer-input ciphertext (detection + core only, 224 bytes).
+    /// Create a transfer-input ciphertext (detection + core only, 288 bytes).
     pub fn new_transfer_input(
         epk_1: decaf377::Element,
         c2_core: Fq,
@@ -1956,7 +1956,7 @@ impl ComplianceCiphertext {
         bytes
     }
 
-    /// Deserialize from bytes. Accepts transfer-input (224 bytes) or transfer-output (544 bytes) format.
+    /// Deserialize from bytes. Accepts transfer-input (288 bytes) or transfer-output (544 bytes) format.
     pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
         let is_output = match bytes.len() {
             TRANSFER_INPUT_WIRE_BYTES => false,

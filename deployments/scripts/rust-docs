@@ -27,8 +27,40 @@ done < <(
   python3 <<'PY'
 import json
 import subprocess
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    tomllib = None
+
+
+def git_packages_from_lock(lock_text):
+    if tomllib is not None:
+        lock = tomllib.loads(lock_text)
+        for pkg in lock.get("package", []):
+            source = pkg.get("source")
+            if source and source.startswith("git+"):
+                yield f"{pkg['name']}@{pkg['version']}"
+        return
+
+    current = {}
+    for line in [*lock_text.splitlines(), "[[package]]"]:
+        line = line.strip()
+        if line == "[[package]]":
+            source = current.get("source")
+            if source and source.startswith("git+"):
+                yield f"{current['name']}@{current['version']}"
+            current = {}
+            continue
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key in {"name", "version", "source"} and value.startswith('"') and value.endswith('"'):
+            current[key] = value[1:-1]
+
 
 meta = json.loads(
     subprocess.check_output(
@@ -42,12 +74,7 @@ for pkg in meta["packages"]:
     if any(target.get("doc", False) for target in pkg.get("targets", [])):
         workspace.append(pkg["name"])
 
-lock = tomllib.loads(Path("Cargo.lock").read_text())
-git_packages = []
-for pkg in lock.get("package", []):
-    source = pkg.get("source")
-    if source and source.startswith("git+"):
-        git_packages.append(f"{pkg['name']}@{pkg['version']}")
+git_packages = list(git_packages_from_lock(Path("Cargo.lock").read_text()))
 
 for spec in sorted(dict.fromkeys(workspace)):
     print(spec)

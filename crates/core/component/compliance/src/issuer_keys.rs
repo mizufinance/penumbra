@@ -288,9 +288,12 @@ impl DetectionKey {
         let keystream = poseidon377::hash_2(&seed, (Fq::zero(), seed));
         let ct_fq = pt_fq + keystream;
 
-        // Remaining slots are zeroed here; real transfer detection encryption is in transfer.rs.
         let mut detection_bytes = [0u8; DETECTION_TIER_BYTES];
         detection_bytes[..32].copy_from_slice(&ct_fq.to_bytes());
+        for (counter, chunk) in (1u64..=3).zip(detection_bytes[32..].chunks_exact_mut(32)) {
+            let keystream = poseidon377::hash_2(&seed, (Fq::from(counter), seed));
+            chunk.copy_from_slice(&keystream.to_bytes());
+        }
         (detection_bytes, epk)
     }
 }

@@ -1688,6 +1688,9 @@ mod tests {
             dk_pub: vec![0u8; 32],
             threshold: u128::MAX.to_le_bytes().to_vec(),
             route_policy_hash: vec![],
+            slot_count: penumbra_sdk_compliance::DEFAULT_COMPLIANCE_SLOT_COUNT
+                .to_le_bytes()
+                .to_vec(),
             ring_pk: vec![0u8; 32],
             ring_id_hash: vec![],
             policy_id_hash: vec![],
