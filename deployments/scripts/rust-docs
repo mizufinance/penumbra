@@ -20,11 +20,9 @@ export RUSTDOCFLAGS="--enable-index-page -Zunstable-options --cfg docsrs"
 # Doing this in one go is useful because the JSON file with search
 # indexes is overwritten on each cargo doc invocation.
 
-package_specs=()
-while IFS= read -r spec; do
-  package_specs+=("$spec")
-done < <(
-  python3 <<'PY'
+package_specs_file="$(mktemp)"
+trap 'rm -f "$package_specs_file"' EXIT
+python3 > "$package_specs_file" <<'PY'
 import json
 import subprocess
 from pathlib import Path
@@ -82,7 +80,11 @@ for spec in sorted(dict.fromkeys(workspace)):
 for spec in sorted(dict.fromkeys(git_packages)):
     print(spec)
 PY
-)
+
+package_specs=()
+while IFS= read -r spec; do
+  package_specs+=("$spec")
+done < "$package_specs_file"
 
 cargo_args=()
 for spec in "${package_specs[@]}"; do
