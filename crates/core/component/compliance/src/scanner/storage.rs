@@ -15,7 +15,7 @@ use crate::audit_status::{AuditStatus, DetectionStatus, ScreenStatus};
 use crate::{ComplianceEvidenceObject, TransferOrbisUploadBundle};
 
 pub const MAX_INVALID_CIPHERTEXTS_PER_BLOCK: usize = 256;
-const SCANNER_DB_SCHEMA_VERSION: i64 = 1;
+const SCANNER_DB_SCHEMA_VERSION: i64 = 2;
 const READ_POOL_SIZE: usize = 4;
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const WAL_AUTOCHECKPOINT_PAGES: i64 = 1_000;
@@ -136,6 +136,8 @@ impl SqliteScannerStore {
                 asset_id TEXT NOT NULL,
                 is_flagged INTEGER NOT NULL,
                 salt BLOB NOT NULL,
+                sender_slot_id INTEGER NOT NULL,
+                receiver_slot_id INTEGER NOT NULL,
                 ciphertext_bytes BLOB NOT NULL,
                 detection_status TEXT NOT NULL DEFAULT 'detected'
                     CHECK (detection_status IN ('detected')),
@@ -291,7 +293,7 @@ impl SqliteScannerStore {
             VALUES (1, 0, NULL);
 
             INSERT OR IGNORE INTO scanner_schema_version (id, version)
-            VALUES (1, 1);
+            VALUES (1, 2);
             "#,
         )?;
         let version = Self::schema_version(conn)?.context("scanner DB schema version missing")?;
@@ -595,8 +597,9 @@ impl ScannerStore for SqliteScannerStore {
             tx.execute(
                 "INSERT OR IGNORE INTO scanner_detections
                  (height, block_hash, tx_index, tx_hash, action_index, output_index,
-                  asset_id, is_flagged, salt, ciphertext_bytes, detection_status, audit_status)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                  asset_id, is_flagged, salt, sender_slot_id, receiver_slot_id,
+                  ciphertext_bytes, detection_status, audit_status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     tx_ref.block.height as i64,
                     tx_ref.block.block_hash.as_slice(),
@@ -607,6 +610,8 @@ impl ScannerStore for SqliteScannerStore {
                     event.asset_id.to_string(),
                     if event.is_flagged { 1i64 } else { 0i64 },
                     event.salt.to_bytes().as_slice(),
+                    event.sender_slot_id as i64,
+                    event.receiver_slot_id as i64,
                     event.raw_bytes.as_slice(),
                     DetectionStatus::Detected.as_str(),
                     AuditStatus::Pending.as_str(),
@@ -954,6 +959,8 @@ mod tests {
             asset_id: asset::Id(decaf377::Fq::from(123u64)),
             is_flagged: true,
             salt: decaf377::Fq::from(9u64),
+            sender_slot_id: 1,
+            receiver_slot_id: 2,
             ciphertext: crate::transfer::TransferComplianceCiphertext {
                 sender_core_epk: decaf377::Element::GENERATOR,
                 sender_ext_epk: decaf377::Element::GENERATOR,
@@ -1121,8 +1128,9 @@ mod tests {
             .execute(
                 "INSERT INTO scanner_detections
                  (height, block_hash, tx_index, tx_hash, action_index, output_index,
-                  asset_id, is_flagged, salt, ciphertext_bytes, detection_status, audit_status)
-                 VALUES (1, ?1, 0, ?2, 0, 0, 'asset', 0, ?3, x'00', 'detected', 'unknown')",
+                  asset_id, is_flagged, salt, sender_slot_id, receiver_slot_id,
+                  ciphertext_bytes, detection_status, audit_status)
+                 VALUES (1, ?1, 0, ?2, 0, 0, 'asset', 0, ?3, 0, 0, x'00', 'detected', 'unknown')",
                 params![block_hash.as_slice(), tx_hash.as_slice(), salt.as_slice()],
             )
             .expect_err("invalid audit status should fail");

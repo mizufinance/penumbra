@@ -1494,18 +1494,16 @@ impl Storage {
     /// Record compliance leaf data for an address in the sync scope.
     pub async fn record_compliance_leaf_data(
         &self,
-        address: &penumbra_sdk_keys::Address,
-        asset_id: &asset::Id,
+        leaf: &penumbra_sdk_compliance::ComplianceLeaf,
         position: u64,
-        ack: &[u8],
-        ack_orbis: &[u8],
         commitment: StateCommitment,
     ) -> anyhow::Result<()> {
         let pool = self.pool.clone();
-        let address_bytes = address.to_vec();
-        let asset_bytes = asset_id.to_bytes().to_vec();
-        let ack_bytes = ack.to_vec();
-        let ack_orbis_bytes = ack_orbis.to_vec();
+        let address_bytes = leaf.address.to_vec();
+        let asset_bytes = leaf.asset_id.to_bytes().to_vec();
+        let slot_id = leaf.slot_id;
+        let slot_derivation = leaf.slot_derivation.to_bytes().to_vec();
+        let d = leaf.d.to_bytes().to_vec();
 
         spawn_blocking(move || {
             let mut conn = pool.get()?;
@@ -1516,8 +1514,9 @@ impl Storage {
                     &address_bytes,
                     &asset_bytes,
                     position,
-                    &ack_bytes,
-                    &ack_orbis_bytes,
+                    slot_id,
+                    &slot_derivation,
+                    &d,
                     commitment,
                 )?;
             }
@@ -1582,12 +1581,12 @@ impl Storage {
 
     /// Get compliance leaf data for an address and asset from local storage.
     ///
-    /// Returns (position, ack_bytes, ack_orbis_bytes, commitment) if available, None if not in scope.
+    /// Returns full leaf slot data if available, None if not in scope.
     pub async fn get_compliance_leaf_data(
         &self,
         address: &penumbra_sdk_keys::Address,
         asset_id: &asset::Id,
-    ) -> anyhow::Result<Option<(u64, [u8; 32], [u8; 32], StateCommitment)>> {
+    ) -> anyhow::Result<Option<compliance::UserLeafData>> {
         let pool = self.pool.clone();
         let address_bytes = address.to_vec();
         let asset_bytes = asset_id.to_bytes().to_vec();
@@ -1599,22 +1598,7 @@ impl Storage {
                 let mut store = compliance::ComplianceTreeStore(&mut tx);
                 store.get_leaf_data(&address_bytes, &asset_bytes)?
             };
-            // Convert Vec<u8> to [u8; 32] if present
-            let converted = result
-                .map(
-                    |(pos, ack_vec, ack_orbis_vec, commitment)| -> anyhow::Result<_> {
-                        let ack_bytes: [u8; 32] = ack_vec.try_into().map_err(|v: Vec<u8>| {
-                            anyhow::anyhow!("ACK must be 32 bytes, got {}", v.len())
-                        })?;
-                        let ack_orbis_bytes: [u8; 32] =
-                            ack_orbis_vec.try_into().map_err(|v: Vec<u8>| {
-                                anyhow::anyhow!("ACK_orbis must be 32 bytes, got {}", v.len())
-                            })?;
-                        Ok((pos, ack_bytes, ack_orbis_bytes, commitment))
-                    },
-                )
-                .transpose()?;
-            Ok::<Option<(u64, [u8; 32], [u8; 32], StateCommitment)>, anyhow::Error>(converted)
+            Ok::<Option<compliance::UserLeafData>, anyhow::Error>(result)
         })
         .await?
     }

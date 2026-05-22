@@ -19,6 +19,7 @@ type IndexedLeafInputs struct {
 	NextValue      frontend.Variable
 	DKPub          gnarkte.Point
 	Threshold      frontend.Variable
+	SlotCount      frontend.Variable
 	ChannelsHash   frontend.Variable
 	RingPK         gnarkte.Point
 	RingIDHash     frontend.Variable
@@ -40,6 +41,10 @@ func fqFromBase64String(value string) (*big.Int, error) {
 
 func IndexedLeafInputsFromFixture(fixture primitives.SpendFixture) (IndexedLeafInputs, error) {
 	leaf := fixture.Private.AssetIndexedLeaf
+	slotCount := leaf.SlotCount.String()
+	if slotCount == "" {
+		slotCount = "0"
+	}
 
 	return IndexedLeafInputs{
 		Value:     primitives.LittleEndianBytesToBigInt(leaf.Value),
@@ -50,6 +55,7 @@ func IndexedLeafInputsFromFixture(fixture primitives.SpendFixture) (IndexedLeafI
 			Y: primitives.MustBigInt(fixture.Private.AssetIndexedLeafDKPubAffine.Y),
 		},
 		Threshold:    leaf.Threshold.String(),
+		SlotCount:    slotCount,
 		ChannelsHash: primitives.LittleEndianBytesToBigInt(leaf.ChannelsHash),
 		RingPK: gnarkte.Point{
 			X: primitives.MustBigInt(fixture.Private.AssetIndexedLeafRingPKAffine.X),
@@ -97,9 +103,14 @@ func IndexedLeafCommitmentNative(inputs IndexedLeafInputs) (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
-	paramsHash, err := primitives.Poseidon377Hash3Native(
+	paramsHash, err := primitives.Poseidon377Hash4Native(
 		primitives.MustBigInt(vectors.Poseidon377.IMTParamsDomain),
-		[3]*big.Int{dkPubFq, primitives.MustBigInt(inputs.Threshold.(string)), inputs.ChannelsHash.(*big.Int)},
+		[4]*big.Int{
+			dkPubFq,
+			primitives.MustBigInt(inputs.Threshold.(string)),
+			primitives.MustBigInt(inputs.SlotCount.(string)),
+			inputs.ChannelsHash.(*big.Int),
+		},
 	)
 	if err != nil {
 		return nil, err
@@ -145,10 +156,10 @@ func IndexedLeafCommitment(api frontend.API, inputs IndexedLeafInputs) (frontend
 	if err != nil {
 		return nil, err
 	}
-	paramsHash, err := primitives.Poseidon377Hash3(
+	paramsHash, err := primitives.Poseidon377Hash4(
 		api,
 		primitives.MustBigInt(vectors.Poseidon377.IMTParamsDomain),
-		[3]frontend.Variable{dkPubFq, inputs.Threshold, inputs.ChannelsHash},
+		[4]frontend.Variable{dkPubFq, inputs.Threshold, inputs.SlotCount, inputs.ChannelsHash},
 	)
 	if err != nil {
 		return nil, err

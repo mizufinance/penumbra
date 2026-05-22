@@ -59,6 +59,7 @@ pub mod proof_test_helpers {
         let policy = penumbra_sdk_compliance::AssetPolicy::new(
             dk_pub,
             u128::MAX,
+            penumbra_sdk_compliance::DEFAULT_COMPLIANCE_SLOT_COUNT,
             vec![],
             None,
             "test-ring-id".to_string(),
@@ -173,6 +174,7 @@ pub mod proof_test_helpers {
             penumbra_sdk_compliance::AssetPolicy::new(
                 dk_pub,
                 asset_indexed_leaf.params.threshold,
+                penumbra_sdk_compliance::DEFAULT_COMPLIANCE_SLOT_COUNT,
                 vec![],
                 None,
                 "test-ring-id".to_string(),
@@ -200,12 +202,12 @@ pub mod proof_test_helpers {
         let ack_sender = ring_pk * sender_d_fr;
 
         let user_leaf =
-            penumbra_sdk_compliance::ComplianceLeaf::new(address.clone(), value.asset_id, d);
+            penumbra_sdk_compliance::ComplianceLeaf::new(address.clone(), value.asset_id, b_d_fq);
 
         let counterparty_leaf = penumbra_sdk_compliance::ComplianceLeaf::new(
             sender_address.clone(),
             value.asset_id,
-            sender_d,
+            sender_b_d_fq,
         );
 
         let (compliance_anchor, compliance_path, compliance_position) =
@@ -455,11 +457,10 @@ pub mod proof_test_helpers {
         let recipient_b_d_fq = recipient_address
             .diversified_generator()
             .vartime_compress_to_field();
-        let recipient_d = penumbra_sdk_compliance::derive_compliance_scalar(recipient_b_d_fq);
         let recipient_leaf = penumbra_sdk_compliance::ComplianceLeaf::new(
             recipient_address.clone(),
             asset_id,
-            recipient_d,
+            recipient_b_d_fq,
         );
         let (
             shared_compliance_anchor,

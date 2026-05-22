@@ -1,10 +1,8 @@
 //! Proto conversion helpers for compliance data structures.
 
 use anyhow::Result;
-use penumbra_sdk_compliance::ComplianceLeaf;
-use penumbra_sdk_keys::Address;
-
 use decaf377::{Fq, Fr};
+use penumbra_sdk_compliance::ComplianceLeaf;
 use penumbra_sdk_proto::core::component::compliance::v1 as compliance_pb;
 use penumbra_sdk_tct::StateCommitment;
 
@@ -14,6 +12,8 @@ pub fn compliance_leaf_to_proto(leaf: &ComplianceLeaf) -> compliance_pb::Complia
         address: Some(leaf.address.clone().into()),
         asset_id: Some(leaf.asset_id.into()),
         d: leaf.d.to_bytes().to_vec(),
+        slot_id: leaf.slot_id,
+        slot_derivation: leaf.slot_derivation.to_bytes().to_vec(),
     }
 }
 
@@ -22,26 +22,8 @@ pub fn compliance_leaf_from_proto(
     proto: compliance_pb::ComplianceLeaf,
     context: &str,
 ) -> Result<ComplianceLeaf> {
-    let address: Address = proto
-        .address
-        .ok_or_else(|| anyhow::anyhow!("missing address in {}", context))?
-        .try_into()?;
-    let asset_id = proto
-        .asset_id
-        .ok_or_else(|| anyhow::anyhow!("missing asset_id in {}", context))?
-        .try_into()?;
-    let d = if proto.d.is_empty() {
-        Fq::from(0u64)
-    } else {
-        let arr: [u8; 32] = proto
-            .d
-            .as_slice()
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid d length in {}", context))?;
-        Fq::from_bytes_checked(&arr)
-            .map_err(|_| anyhow::anyhow!("invalid d bytes in {}", context))?
-    };
-    Ok(ComplianceLeaf::new(address, asset_id, d))
+    ComplianceLeaf::try_from(proto)
+        .map_err(|e| anyhow::anyhow!("invalid compliance leaf in {}: {}", context, e))
 }
 
 /// Convert an `IndexedLeaf` to its proto representation.

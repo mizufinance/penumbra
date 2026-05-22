@@ -29,6 +29,7 @@ pub use structs::{
     AMOUNT_BYTES,
     ASSET_ID_BYTES,
     C2_BYTES,
+    DEFAULT_COMPLIANCE_SLOT_COUNT,
     DETECTION_TAG_BYTES,
     EPK_BYTES,
     FQ_BYTES,
@@ -250,11 +251,11 @@ mod tests {
         state.put_raw(state_key::user_tree().to_string(), tree_bytes);
         state.put_proto(state_key::user_count().to_string(), 0u64);
 
-        let leaf = ComplianceLeaf {
-            address: Address::dummy(&mut rand::thread_rng()),
-            asset_id: asset::Id(Fq::from(100u64)),
-            d: Fq::from(0u64),
-        };
+        let leaf = ComplianceLeaf::new(
+            Address::dummy(&mut rand::thread_rng()),
+            asset::Id(Fq::from(100u64)),
+            Fq::from(0u64),
+        );
 
         let user1_commit = leaf.commit();
         state.add_compliance_leaf(leaf.clone()).await.unwrap();
@@ -315,11 +316,11 @@ mod tests {
         let mut commitments = Vec::new();
 
         for i in 0..4u64 {
-            let leaf = ComplianceLeaf {
-                address: Address::dummy(&mut rng),
-                asset_id: asset::Id(Fq::from(i)),
-                d: Fq::from(0u64),
-            };
+            let leaf = ComplianceLeaf::new(
+                Address::dummy(&mut rng),
+                asset::Id(Fq::from(i)),
+                Fq::from(0u64),
+            );
             commitments.push(leaf.commit());
             state.add_compliance_leaf(leaf).await.unwrap();
         }
@@ -355,19 +356,19 @@ mod tests {
 
         for &pos in &positions {
             while state.get_user_count().await.unwrap() < pos {
-                let dummy_leaf = ComplianceLeaf {
-                    address: Address::dummy(&mut rng),
-                    asset_id: asset::Id(Fq::from(0u64)),
-                    d: Fq::from(0u64),
-                };
+                let dummy_leaf = ComplianceLeaf::new(
+                    Address::dummy(&mut rng),
+                    asset::Id(Fq::from(0u64)),
+                    Fq::from(0u64),
+                );
                 state.add_compliance_leaf(dummy_leaf).await.unwrap();
             }
 
-            let leaf = ComplianceLeaf {
-                address: Address::dummy(&mut rng),
-                asset_id: asset::Id(Fq::from(pos)),
-                d: Fq::from(0u64),
-            };
+            let leaf = ComplianceLeaf::new(
+                Address::dummy(&mut rng),
+                asset::Id(Fq::from(pos)),
+                Fq::from(0u64),
+            );
             state.add_compliance_leaf(leaf.clone()).await.unwrap();
             leaves.push((pos, leaf.commit()));
         }
@@ -389,7 +390,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_transfer_compliance_path_generation() {
-        use crate::crypto::derive_compliance_scalar;
         use crate::transfer::{encrypt_transfer, TRANSFER_WIRE_BYTES};
         use penumbra_sdk_asset::Value;
         use penumbra_sdk_num::Amount;
@@ -428,24 +428,16 @@ mod tests {
 
         let sender_address = Address::dummy(&mut rng);
         let receiver_address = Address::dummy(&mut rng);
-        let sender_leaf = ComplianceLeaf::new(
-            sender_address.clone(),
-            asset_id,
-            derive_compliance_scalar(
-                sender_address
-                    .diversified_generator()
-                    .vartime_compress_to_field(),
-            ),
-        );
-        let receiver_leaf = ComplianceLeaf::new(
-            receiver_address.clone(),
-            asset_id,
-            derive_compliance_scalar(
-                receiver_address
-                    .diversified_generator()
-                    .vartime_compress_to_field(),
-            ),
-        );
+        let sender_slot_derivation = sender_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let receiver_slot_derivation = receiver_address
+            .diversified_generator()
+            .vartime_compress_to_field();
+        let sender_leaf =
+            ComplianceLeaf::new(sender_address.clone(), asset_id, sender_slot_derivation);
+        let receiver_leaf =
+            ComplianceLeaf::new(receiver_address.clone(), asset_id, receiver_slot_derivation);
 
         state
             .add_compliance_leaf(sender_leaf.clone())
@@ -485,6 +477,8 @@ mod tests {
                 asset_id,
             },
             false,
+            0,
+            0,
             Fq::from(0u64),
         )
         .unwrap()
@@ -563,6 +557,8 @@ mod tests {
             &sender_address,
             Value { amount, asset_id },
             true,
+            0,
+            0,
             Fq::from(7u64),
         )
         .unwrap()

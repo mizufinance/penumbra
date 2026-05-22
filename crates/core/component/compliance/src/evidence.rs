@@ -284,7 +284,7 @@ fn dleq_from_upload_package(package: &crate::OrbisEncryptedSeedUploadPackage) ->
 
 fn write_tier_object(out: &mut Vec<u8>, tier: &PublicTransferTierDecodeObject) {
     let statement = &tier.statement;
-    out.extend_from_slice(&statement.subject_b_d_bytes);
+    out.extend_from_slice(&statement.subject_derivation_bytes);
     out.extend_from_slice(&statement.ring_id_hash_bytes);
     out.extend_from_slice(&statement.policy_id_hash_bytes);
     out.extend_from_slice(&statement.resource_hash_bytes);
@@ -301,7 +301,7 @@ fn write_tier_object(out: &mut Vec<u8>, tier: &PublicTransferTierDecodeObject) {
 
 fn read_tier_object(reader: &mut EvidenceReader<'_>) -> Result<PublicTransferTierDecodeObject> {
     let statement = TransferTierMetadataStatement {
-        subject_b_d_bytes: reader.read_array::<32>()?,
+        subject_derivation_bytes: reader.read_array::<32>()?,
         ring_id_hash_bytes: reader.read_array::<32>()?,
         policy_id_hash_bytes: reader.read_array::<32>()?,
         resource_hash_bytes: reader.read_array::<32>()?,
@@ -432,6 +432,8 @@ pub(crate) mod tests {
                 asset_id,
             },
             false,
+            0,
+            0,
             salt,
         )
         .unwrap();

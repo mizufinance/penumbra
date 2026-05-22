@@ -298,10 +298,8 @@ mod tests {
     static TRANSFER_PROOF_TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn compliance_leaf_for(address: &penumbra_sdk_keys::Address) -> ComplianceLeaf {
-        let d = penumbra_sdk_compliance::derive_compliance_scalar(
-            address.diversified_generator().vartime_compress_to_field(),
-        );
-        ComplianceLeaf::new(address.clone(), *BASE_ASSET_ID, d)
+        let slot_derivation = address.diversified_generator().vartime_compress_to_field();
+        ComplianceLeaf::new(address.clone(), *BASE_ASSET_ID, slot_derivation)
     }
 
     fn sender_recipient_compliance_witnesses() -> (

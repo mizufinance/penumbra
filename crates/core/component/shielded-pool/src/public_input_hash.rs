@@ -21,7 +21,7 @@ pub const CONSOLIDATE_STATEMENT_FIELDS_PER_OUTPUT: usize = 1;
 pub const SPLIT_STATEMENT_BASE_FIELDS: usize = 2;
 pub const SPLIT_STATEMENT_FIELDS_PER_INPUT: usize = 2;
 pub const SPLIT_STATEMENT_FIELDS_PER_OUTPUT: usize = 1;
-pub const TRANSFER_STATEMENT_BASE_FIELDS: usize = 75;
+pub const TRANSFER_STATEMENT_BASE_FIELDS: usize = 77;
 pub const TRANSFER_STATEMENT_FIELDS_PER_INPUT: usize = 2;
 pub const TRANSFER_STATEMENT_FIELDS_PER_OUTPUT: usize = 1;
 pub const SHIELDED_ICS20_WITHDRAWAL_STATEMENT_BASE_FIELDS: usize = 10;
@@ -413,9 +413,9 @@ pub fn transfer_statement_fields(
         ("transfer_output_ext_proof", &compliance.output_ext.proof),
     ] {
         let statement = &proof.statement;
-        let subject_b_d = statement
-            .subject_b_d()
-            .map_err(|e| transfer_field_encoding_error(&format!("{label}_subject_b_d: {e}")))?;
+        let subject_derivation = statement.subject_derivation().map_err(|e| {
+            transfer_field_encoding_error(&format!("{label}_subject_derivation: {e}"))
+        })?;
         let ring_id_hash = statement
             .ring_id_hash()
             .map_err(|e| transfer_field_encoding_error(&format!("{label}_ring_id_hash: {e}")))?;
@@ -431,11 +431,9 @@ pub fn transfer_statement_fields(
         let salt = statement
             .salt()
             .map_err(|e| transfer_field_encoding_error(&format!("{label}_salt: {e}")))?;
-        fields.extend(
-            subject_b_d
-                .to_field_elements()
-                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_subject_b_d")))?,
-        );
+        fields.extend(subject_derivation.to_field_elements().ok_or_else(|| {
+            transfer_field_encoding_error(&format!("{label}_subject_derivation"))
+        })?);
         fields.extend(
             ring_id_hash
                 .to_field_elements()

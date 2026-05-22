@@ -27,6 +27,7 @@ type IndexedLeafBinary struct {
 	NextValue      [32]byte
 	DKPub          [32]byte
 	Threshold      [16]byte
+	SlotCount      [32]byte
 	ChannelsHash   [32]byte
 	RingPK         [32]byte
 	RingIDHash     [32]byte
@@ -177,6 +178,9 @@ func readIndexedLeaf(r io.Reader) (IndexedLeafBinary, error) {
 		return out, err
 	}
 	if _, err := io.ReadFull(r, out.Threshold[:]); err != nil {
+		return out, err
+	}
+	if out.SlotCount, err = read32(r); err != nil {
 		return out, err
 	}
 	if out.ChannelsHash, err = read32(r); err != nil {

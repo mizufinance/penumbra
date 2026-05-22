@@ -137,30 +137,7 @@ pub trait ViewClientComplianceExt: ViewClient {
                 )
             })?;
 
-            // Parse the proto leaf into native ComplianceLeaf
-            let address: Address = proto_leaf.address.ok_or_else(|| {
-                anyhow::anyhow!("compliance leaf proto: missing address field")
-            })?.try_into()?;
-
-            let asset_id: penumbra_sdk_asset::asset::Id = proto_leaf.asset_id.ok_or_else(|| {
-                anyhow::anyhow!("compliance leaf proto: missing asset_id field")
-            })?.try_into()?;
-
-            let d = if proto_leaf.d.is_empty() {
-                let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-                penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq)
-            } else {
-                let bytes: [u8; 32] = proto_leaf.d.try_into()
-                    .map_err(|_| anyhow::anyhow!("compliance leaf proto: d must be 32 bytes"))?;
-                decaf377::Fq::from_bytes_checked(&bytes)
-                    .map_err(|_| anyhow::anyhow!("compliance leaf proto: invalid d field element"))?
-            };
-
-            Ok(ComplianceLeaf {
-                address,
-                asset_id,
-                d,
-            })
+            ComplianceLeaf::try_from(proto_leaf)
         }
         .boxed()
     }
@@ -376,13 +353,7 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
         }
 
         if !proofs.is_regulated {
-            let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-            let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
-            let synthetic_leaf = ComplianceLeaf {
-                address: address.clone(),
-                asset_id,
-                d,
-            };
+            let synthetic_leaf = ComplianceLeaf::synthetic_unregulated(address.clone(), asset_id);
             return Ok(UserProofData {
                 auth_path: MerklePath::default(),
                 position: 0,
@@ -548,13 +519,8 @@ impl<'a, V: ViewClient + Send + ?Sized> ComplianceProofProvider
                         },
                     );
                 } else if !result.is_regulated {
-                    let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-                    let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
-                    let synthetic_leaf = ComplianceLeaf {
-                        address: address.clone(),
-                        asset_id: *asset_id,
-                        d,
-                    };
+                    let synthetic_leaf =
+                        ComplianceLeaf::synthetic_unregulated(address.clone(), *asset_id);
                     user_proofs.insert(
                         key,
                         UserProofData {
@@ -825,6 +791,7 @@ async fn enrich_transfer_family_with_compliance<P: ComplianceProofProvider>(
         spend.compliance_anchor = compliance_anchor;
         spend.compliance_path = sender_proof.auth_path;
         spend.compliance_position = sender_proof.position;
+        spend.compliance_leaf = Some(sender_proof.leaf.clone());
         spend.is_regulated = asset_proof.is_regulated;
         spend.target_timestamp = target_timestamp;
         spend.asset_policy = if asset_proof.is_regulated {
@@ -1004,6 +971,7 @@ async fn enrich_internal_funding_with_compliance<P: ComplianceProofProvider>(
         spend.compliance_anchor = compliance_anchor;
         spend.compliance_path = sender_proof.auth_path;
         spend.compliance_position = sender_proof.position;
+        spend.compliance_leaf = Some(sender_proof.leaf.clone());
         spend.is_regulated = asset_proof.is_regulated;
         spend.target_timestamp = target_timestamp;
         spend.asset_policy = if asset_proof.is_regulated {
@@ -1196,6 +1164,7 @@ async fn enrich_shielded_ics20_withdrawals_with_compliance<P: ComplianceProofPro
         spend.compliance_anchor = compliance_anchor;
         spend.compliance_path = sender_proof.auth_path;
         spend.compliance_position = sender_proof.position;
+        spend.compliance_leaf = Some(sender_proof.leaf.clone());
         spend.is_regulated = asset_proof.is_regulated;
         spend.target_timestamp = target_timestamp;
         spend.set_compliance_details(rng)?;

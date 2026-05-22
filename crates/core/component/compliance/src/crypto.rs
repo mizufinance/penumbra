@@ -29,16 +29,16 @@ use penumbra_sdk_keys::Address;
 /// Domain separator for SHA256 derivation — matches Orbis `DERIVATION_DOMAIN` exactly.
 const DERIVATION_DOMAIN: &[u8; 23] = b"elgamal-derivation-v1\0\0";
 
-/// Derive the compliance scalar `d` from the diversified basepoint field element.
+/// Derive the compliance scalar `d` from canonical slot derivation material.
 ///
-/// `d = Fr::from_le_bytes_mod_order(SHA256(DERIVATION_DOMAIN || b_d_fq.to_bytes()))`
+/// `d = Fr::from_le_bytes_mod_order(SHA256(DERIVATION_DOMAIN || slot_derivation.to_bytes()))`
 ///
 /// This MUST match Orbis's `derive_capability_scalar()` so PRE math cancels correctly.
 /// The result is stored as Fq in the compliance leaf (Fr fits losslessly in Fq for decaf377).
-pub fn derive_compliance_scalar(b_d_fq: Fq) -> Fq {
+pub fn derive_compliance_scalar(slot_derivation: Fq) -> Fq {
     let mut hasher = Sha256::new();
     hasher.update(DERIVATION_DOMAIN);
-    hasher.update(b_d_fq.to_bytes());
+    hasher.update(slot_derivation.to_bytes());
     let hash = hasher.finalize();
     // Reduce mod r first (matching Orbis's Fr::from_le_bytes_mod_order), then embed into Fq.
     // r < q for decaf377, so this conversion is lossless.
@@ -252,7 +252,7 @@ pub fn decrypt_detection_tier(
     epk_1: &Element,
     detection_ciphertext: &[u8; DETECTION_TIER_BYTES],
     expected_asset_id: &asset::Id,
-) -> anyhow::Result<(asset::Id, bool, Fq)> {
+) -> anyhow::Result<(asset::Id, bool, Fq, u32, u32)> {
     let ss = *epk_1 * *dk;
 
     let epk_1_fq = epk_1.vartime_compress_to_field();
@@ -271,10 +271,39 @@ pub fn decrypt_detection_tier(
     let keystream_1 = poseidon377::hash_2(&seed, (Fq::from(1u64), seed));
     let salt = ct_salt - keystream_1;
 
+    let slot_id_from_fq = |value: Fq, field: &str| -> anyhow::Result<u32> {
+        let bytes = value.to_bytes();
+        anyhow::ensure!(
+            bytes[4..].iter().all(|byte| *byte == 0),
+            "{field} is not a canonical u32 slot id"
+        );
+        Ok(u32::from_le_bytes(bytes[..4].try_into()?))
+    };
+
+    let ct_sender_slot = Fq::from_le_bytes_mod_order(&detection_ciphertext[64..96]);
+    let keystream_2 = poseidon377::hash_2(&seed, (Fq::from(2u64), seed));
+    let sender_slot_id = slot_id_from_fq(ct_sender_slot - keystream_2, "sender_slot_id")?;
+
+    let ct_receiver_slot = Fq::from_le_bytes_mod_order(&detection_ciphertext[96..128]);
+    let keystream_3 = poseidon377::hash_2(&seed, (Fq::from(3u64), seed));
+    let receiver_slot_id = slot_id_from_fq(ct_receiver_slot - keystream_3, "receiver_slot_id")?;
+
     if pt_fq == expected_asset_id.0 {
-        Ok((*expected_asset_id, false, salt))
+        Ok((
+            *expected_asset_id,
+            false,
+            salt,
+            sender_slot_id,
+            receiver_slot_id,
+        ))
     } else if pt_fq == expected_asset_id.0 + *crate::issuer_keys::FLAG_SENTINEL {
-        Ok((*expected_asset_id, true, salt))
+        Ok((
+            *expected_asset_id,
+            true,
+            salt,
+            sender_slot_id,
+            receiver_slot_id,
+        ))
     } else {
         anyhow::bail!("detection tier does not match expected asset")
     }

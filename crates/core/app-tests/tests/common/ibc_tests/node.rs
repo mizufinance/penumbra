@@ -461,6 +461,7 @@ impl TestNodeWithIBC {
                 is_regulated: false,
                 dk_pub: None,
                 threshold: None,
+                slot_count: 0,
                 allowed_ibc_routes: vec![],
                 ibc_origin: None,
                 ring_pk: None,
@@ -478,12 +479,7 @@ impl TestNodeWithIBC {
         for address in addresses {
             for &asset_id in asset_ids {
                 let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-                let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
-                let leaf = ComplianceLeaf {
-                    address: address.clone(),
-                    asset_id,
-                    d,
-                };
+                let leaf = ComplianceLeaf::new(address.clone(), asset_id, b_d_fq);
                 let msg = MsgRegisterUser { leaf, grant: None };
                 actions.push(Action::ComplianceRegisterUser(msg));
             }
@@ -535,6 +531,7 @@ impl TestNodeWithIBC {
             is_regulated: true,
             dk_pub: Some(decaf377::Element::GENERATOR),
             threshold: None,
+            slot_count: penumbra_sdk_compliance::DEFAULT_COMPLIANCE_SLOT_COUNT,
             allowed_ibc_routes,
             ibc_origin,
             ring_pk: None,
@@ -558,12 +555,7 @@ impl TestNodeWithIBC {
 
         for address in addresses {
             let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-            let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
-            let leaf = ComplianceLeaf {
-                address: address.clone(),
-                asset_id: asset,
-                d,
-            };
+            let leaf = ComplianceLeaf::new(address.clone(), asset, b_d_fq);
             let body = UserRegistrationGrantBody {
                 leaf: leaf.clone(),
                 policy_id: "benchmark-policy".to_string(),

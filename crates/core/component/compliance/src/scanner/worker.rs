@@ -706,6 +706,8 @@ mod tests {
             asset_id: evidence.asset_id,
             is_flagged: evidence.is_flagged,
             salt: evidence.detection_salt,
+            sender_slot_id: 0,
+            receiver_slot_id: 0,
             ciphertext: evidence.transfer_ciphertext.clone(),
             raw_bytes: evidence.transfer_ciphertext.to_bytes(),
         };

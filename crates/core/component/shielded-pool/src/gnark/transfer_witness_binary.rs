@@ -16,7 +16,7 @@ use crate::{
 };
 
 const TRANSFER_WITNESS_MAGIC: &[u8; 4] = b"PTWG";
-const TRANSFER_WITNESS_VERSION: u32 = 7;
+const TRANSFER_WITNESS_VERSION: u32 = 8;
 
 impl TransferWitnessV1 {
     pub fn encode(&self) -> Result<Vec<u8>> {
@@ -43,6 +43,8 @@ impl TransferWitnessV1 {
         encode_merkle_path(&mut buf, &self.sender_compliance_path)?;
         put_u64(&mut buf, self.sender_compliance_position);
         put_bytes(&mut buf, &self.sender_asset_id);
+        put_bytes(&mut buf, &self.sender_slot_id);
+        put_bytes(&mut buf, &self.sender_slot_derivation);
         put_bytes(&mut buf, &self.sender_d);
         put_bytes(&mut buf, &self.transfer_nonce_root);
         encode_vec_32(&mut buf, &self.detection_ciphertext)?;
@@ -119,6 +121,8 @@ impl TransferWitnessV1 {
         let sender_compliance_path = cursor.read_merkle_path()?;
         let sender_compliance_position = cursor.read_u64()?;
         let sender_asset_id = cursor.read_fixed::<32>()?;
+        let sender_slot_id = cursor.read_fixed::<32>()?;
+        let sender_slot_derivation = cursor.read_fixed::<32>()?;
         let sender_d = cursor.read_fixed::<32>()?;
         let transfer_nonce_root = cursor.read_fixed::<32>()?;
         let detection_ciphertext = cursor.read_vec_32()?;
@@ -157,6 +161,8 @@ impl TransferWitnessV1 {
             sender_compliance_path,
             sender_compliance_position,
             sender_asset_id,
+            sender_slot_id,
+            sender_slot_derivation,
             sender_d,
             transfer_nonce_root,
             detection_ciphertext,
@@ -187,7 +193,7 @@ fn encode_compliance_tier(
 ) -> Result<()> {
     put_bytes(buf, &tier.c2);
     encode_vec_32(buf, &tier.ciphertext)?;
-    put_bytes(buf, &tier.subject_b_d);
+    put_bytes(buf, &tier.subject_derivation);
     put_bytes(buf, &tier.ring_id_hash);
     put_bytes(buf, &tier.policy_id_hash);
     put_bytes(buf, &tier.resource_hash);
@@ -210,7 +216,7 @@ fn decode_compliance_tier(
     Ok(TransferComplianceCiphertextWitnessV1 {
         c2: cursor.read_fixed::<32>()?,
         ciphertext: cursor.read_vec_32()?,
-        subject_b_d: cursor.read_fixed::<32>()?,
+        subject_derivation: cursor.read_fixed::<32>()?,
         ring_id_hash: cursor.read_fixed::<32>()?,
         policy_id_hash: cursor.read_fixed::<32>()?,
         resource_hash: cursor.read_fixed::<32>()?,
@@ -290,6 +296,8 @@ fn encode_output(buf: &mut Vec<u8>, output: &TransferOutputWitnessV1) -> Result<
     encode_merkle_path(buf, &output.recipient_compliance_path)?;
     put_u64(buf, output.recipient_compliance_position);
     put_bytes(buf, &output.recipient_asset_id);
+    put_bytes(buf, &output.recipient_slot_id);
+    put_bytes(buf, &output.recipient_slot_derivation);
     put_bytes(buf, &output.recipient_d);
     put_u8(buf, u8::from(output.is_receiver));
     encode_point_affine(buf, &output.created_diversified_generator_affine);
@@ -310,6 +318,8 @@ fn decode_output(cursor: &mut BinaryCursor<'_>) -> Result<TransferOutputWitnessV
         recipient_compliance_path: cursor.read_merkle_path()?,
         recipient_compliance_position: cursor.read_u64()?,
         recipient_asset_id: cursor.read_fixed::<32>()?,
+        recipient_slot_id: cursor.read_fixed::<32>()?,
+        recipient_slot_derivation: cursor.read_fixed::<32>()?,
         recipient_d: cursor.read_fixed::<32>()?,
         is_receiver: cursor.read_u8()? != 0,
         created_diversified_generator_affine: cursor.read_point_affine()?,

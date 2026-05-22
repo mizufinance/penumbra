@@ -1688,6 +1688,9 @@ mod tests {
             dk_pub: vec![0u8; 32],
             threshold: u128::MAX.to_le_bytes().to_vec(),
             route_policy_hash: vec![],
+            slot_count: penumbra_sdk_compliance::DEFAULT_COMPLIANCE_SLOT_COUNT
+                .to_le_bytes()
+                .to_vec(),
             ring_pk: vec![0u8; 32],
             ring_id_hash: vec![],
             policy_id_hash: vec![],
@@ -2313,10 +2316,9 @@ mod tests {
         let view_addresses = BTreeMap::from([(source, address.clone())]);
         let mut view = MockNoteManagerView::new(vec![], view_addresses);
 
-        let d = penumbra_sdk_compliance::derive_compliance_scalar(
-            address.diversified_generator().vartime_compress_to_field(),
-        );
-        let leaf = penumbra_sdk_compliance::ComplianceLeaf::new(address, *BASE_ASSET_ID, d);
+        let slot_derivation = address.diversified_generator().vartime_compress_to_field();
+        let leaf =
+            penumbra_sdk_compliance::ComplianceLeaf::new(address, *BASE_ASSET_ID, slot_derivation);
         let msg = penumbra_sdk_compliance::structs::MsgRegisterUser { leaf, grant: None };
 
         let mut note_manager = NoteManager::new(OsRng);

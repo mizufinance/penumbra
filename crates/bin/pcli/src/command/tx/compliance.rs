@@ -6,10 +6,11 @@ use penumbra_sdk_asset::asset;
 use penumbra_sdk_compliance::structs::{
     AssetRegistrationGrant, AssetRegistrationGrantBody, IbcAssetOrigin, IbcRoute, MsgRegisterAsset,
     MsgRegisterUser, UserRegistrationGrant, UserRegistrationGrantBody,
+    DEFAULT_COMPLIANCE_SLOT_COUNT,
 };
 use penumbra_sdk_compliance::{
-    derive_compliance_scalar, issuer_keys::DetectionKey, ComplianceLeaf, IssuerComplianceWorker,
-    RpcAuditAdviceProvider, SqliteScannerStore, TendermintProxyBlockIdentityProvider,
+    issuer_keys::DetectionKey, ComplianceLeaf, IssuerComplianceWorker, RpcAuditAdviceProvider,
+    SqliteScannerStore, TendermintProxyBlockIdentityProvider,
 };
 use penumbra_sdk_keys::Address;
 use penumbra_sdk_proto::util::tendermint_proxy::v1::{
@@ -42,6 +43,9 @@ pub enum ComplianceCmd {
         /// Amount threshold for flagging, in base units.
         #[clap(long)]
         threshold: Option<u128>,
+        /// Number of compliance slots authorized for this asset.
+        #[clap(long)]
+        slot_count: Option<u32>,
         /// Orbis ring public key (hex, 64 chars = 32 bytes compressed).
         #[clap(long)]
         ring_pk_hex: Option<String>,
@@ -91,6 +95,12 @@ pub enum ComplianceCmd {
         /// User registration grant, hex-encoded protobuf bytes.
         #[clap(long)]
         user_registration_grant_hex: String,
+        /// ACP-authorized compliance slot id for this address.
+        #[clap(long)]
+        slot_id: u32,
+        /// ACP-authorized slot derivation material, hex-encoded 32-byte Fq.
+        #[clap(long)]
+        slot_derivation_hex: String,
         /// The selected fee tier to multiply the fee amount by.
         #[clap(short, long, default_value_t)]
         fee_tier: FeeTier,
@@ -119,6 +129,9 @@ pub enum ComplianceCmd {
         /// Amount threshold for flagging, in base units.
         #[clap(long)]
         threshold: Option<u128>,
+        /// Number of compliance slots authorized for this asset.
+        #[clap(long)]
+        slot_count: Option<u32>,
         /// Orbis ring public key (hex, 64 chars = 32 bytes compressed).
         #[clap(long)]
         ring_pk_hex: Option<String>,
@@ -161,6 +174,12 @@ pub enum ComplianceCmd {
         /// Penumbra address authorized by this grant.
         #[clap(long)]
         address: Address,
+        /// ACP-authorized compliance slot id for this address.
+        #[clap(long)]
+        slot_id: u32,
+        /// ACP-authorized slot derivation material, hex-encoded 32-byte Fq.
+        #[clap(long)]
+        slot_derivation_hex: String,
         /// SourceHub policy ID bound to this grant.
         #[clap(long, default_value = "")]
         policy_id: String,
@@ -301,6 +320,7 @@ impl ComplianceCmd {
                 unregulated,
                 dk_pub_hex,
                 threshold,
+                slot_count,
                 ring_pk_hex,
                 ring_id,
                 policy_id,
@@ -321,6 +341,7 @@ impl ComplianceCmd {
                     anyhow::bail!("Must specify either --regulated or --unregulated");
                 };
                 let asset_id = Self::parse_asset_id(asset_id)?;
+                let slot_count = Self::resolve_slot_count(*slot_count, is_regulated)?;
                 let dk_pub = if let Some(hex_str) = dk_pub_hex {
                     Some(parse_decaf377_element(hex_str, "dk_pub_hex")?)
                 } else if is_regulated {
@@ -353,6 +374,7 @@ impl ComplianceCmd {
                     is_regulated,
                     dk_pub,
                     threshold: *threshold,
+                    slot_count,
                     allowed_ibc_routes,
                     ibc_origin,
                     ring_pk,
@@ -374,14 +396,16 @@ impl ComplianceCmd {
             ComplianceCmd::SignUserGrant {
                 asset_id,
                 address,
+                slot_id,
+                slot_derivation_hex,
                 policy_id,
                 registration_authority_sk_hex,
                 valid_until_unix,
             } => {
                 let asset_id = Self::parse_asset_id(asset_id)?;
-                let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-                let d = derive_compliance_scalar(b_d_fq);
-                let leaf = ComplianceLeaf::new(address.clone(), asset_id, d);
+                let slot_derivation = parse_fq_hex(slot_derivation_hex, "slot_derivation_hex")?;
+                let leaf =
+                    ComplianceLeaf::with_slot(address.clone(), asset_id, *slot_id, slot_derivation);
                 let mut nonce = vec![0u8; 16];
                 rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut nonce);
                 let authority_sk = parse_spend_sk(
@@ -424,6 +448,7 @@ impl ComplianceCmd {
                 unregulated,
                 dk_pub_hex,
                 threshold,
+                slot_count,
                 ring_pk_hex,
                 ring_id,
                 policy_id,
@@ -445,6 +470,7 @@ impl ComplianceCmd {
                 };
 
                 let asset_id = Self::parse_asset_id(asset_id)?;
+                let slot_count = Self::resolve_slot_count(*slot_count, is_regulated)?;
 
                 let dk_pub = if let Some(hex_str) = dk_pub_hex {
                     Some(parse_decaf377_element(hex_str, "dk_pub_hex")?)
@@ -486,6 +512,7 @@ impl ComplianceCmd {
                     is_regulated,
                     dk_pub,
                     threshold: *threshold,
+                    slot_count,
                     allowed_ibc_routes,
                     ibc_origin,
                     ring_pk,
@@ -516,6 +543,8 @@ impl ComplianceCmd {
                 address,
                 address_index,
                 user_registration_grant_hex,
+                slot_id,
+                slot_derivation_hex,
                 fee_tier,
             } => {
                 let asset_id = Self::parse_asset_id(asset_id)?;
@@ -529,9 +558,8 @@ impl ComplianceCmd {
                     }
                 };
 
-                let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-                let d = derive_compliance_scalar(b_d_fq);
-                let leaf = ComplianceLeaf::new(address, asset_id, d);
+                let slot_derivation = parse_fq_hex(slot_derivation_hex, "slot_derivation_hex")?;
+                let leaf = ComplianceLeaf::with_slot(address, asset_id, *slot_id, slot_derivation);
                 let grant = decode_user_registration_grant(user_registration_grant_hex)
                     .context("invalid --user-registration-grant-hex")?;
                 let msg = MsgRegisterUser {
@@ -578,6 +606,21 @@ impl ComplianceCmd {
             return Ok(asset_id);
         }
         Ok(asset::REGISTRY.parse_unit(asset_str).id())
+    }
+
+    fn resolve_slot_count(slot_count: Option<u32>, is_regulated: bool) -> Result<u32> {
+        if is_regulated {
+            if slot_count == Some(0) {
+                anyhow::bail!("--slot-count must be greater than 0 for regulated assets");
+            }
+            Ok(slot_count.unwrap_or(DEFAULT_COMPLIANCE_SLOT_COUNT))
+        } else {
+            let slot_count = slot_count.unwrap_or(0);
+            if slot_count != 0 {
+                anyhow::bail!("--slot-count must be 0 or omitted for unregulated assets");
+            }
+            Ok(0)
+        }
     }
 
     fn parse_ibc_routes(route_specs: &[String], is_regulated: bool) -> Result<Vec<IbcRoute>> {
@@ -772,6 +815,16 @@ fn parse_decaf377_element(hex_str: &str, label: &str) -> Result<decaf377::Elemen
     decaf377::Encoding(arr)
         .vartime_decompress()
         .map_err(|_| anyhow::anyhow!("invalid {label} encoding"))
+}
+
+fn parse_fq_hex(hex_str: &str, label: &str) -> Result<decaf377::Fq> {
+    let bytes = hex::decode(hex_str).with_context(|| format!("invalid {label}: must be hex"))?;
+    if bytes.len() != 32 {
+        anyhow::bail!("{label} must be exactly 64 hex chars (32 bytes)");
+    }
+    let arr: [u8; 32] = bytes.try_into().unwrap();
+    decaf377::Fq::from_bytes_checked(&arr)
+        .map_err(|_| anyhow::anyhow!("invalid {label} field element"))
 }
 
 fn parse_spend_vk(hex_str: &str, label: &str) -> Result<VerificationKey<SpendAuth>> {

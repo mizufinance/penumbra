@@ -36,21 +36,24 @@ impl ComplianceScreener {
             }
         };
 
-        let (asset_id, is_flagged, salt) = match self.detection_key.try_decrypt_detection(
-            &ciphertext.sender_core_epk,
-            &ciphertext.sender_core_epk,
-            &ciphertext.detection_tag,
-            &self.target_asset_id,
-        ) {
-            Ok(result) => result,
-            Err(_) => return ScreeningResult::Irrelevant,
-        };
+        let (asset_id, is_flagged, salt, sender_slot_id, receiver_slot_id) =
+            match self.detection_key.try_decrypt_detection(
+                &ciphertext.sender_core_epk,
+                &ciphertext.sender_core_epk,
+                &ciphertext.detection_tag,
+                &self.target_asset_id,
+            ) {
+                Ok(result) => result,
+                Err(_) => return ScreeningResult::Irrelevant,
+            };
 
         ScreeningResult::Detected(DetectionEvent {
             output_ref: extracted.output_ref,
             asset_id,
             is_flagged,
             salt,
+            sender_slot_id,
+            receiver_slot_id,
             ciphertext,
             raw_bytes: extracted.raw_bytes,
         })
@@ -126,6 +129,8 @@ mod tests {
             sender_address,
             Value { amount, asset_id },
             is_flagged,
+            0,
+            0,
             salt,
         )
         .unwrap()

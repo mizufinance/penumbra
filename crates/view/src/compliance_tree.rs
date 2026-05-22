@@ -204,6 +204,7 @@ impl ComplianceAssetTree {
                 params: LeafParams {
                     dk_pub,
                     threshold: leaf_data.threshold,
+                    slot_count: leaf_data.slot_count,
                     route_policy_hash,
                 },
                 ring: LeafRing {
@@ -336,6 +337,7 @@ impl ComplianceAssetTree {
                 next_value: leaf.next_value.to_bytes(),
                 dk_pub: leaf.params.dk_pub.vartime_compress().0,
                 threshold: leaf.params.threshold,
+                slot_count: leaf.params.slot_count,
                 route_policy_hash: leaf.params.route_policy_hash.to_bytes(),
                 ring_pk: leaf.ring.ring_pk.vartime_compress().0,
                 ring_id_hash: leaf.ring.ring_id_hash.to_bytes(),
@@ -412,6 +414,7 @@ mod tests {
             params: LeafParams {
                 dk_pub,
                 threshold,
+                slot_count: penumbra_sdk_compliance::DEFAULT_COMPLIANCE_SLOT_COUNT,
                 route_policy_hash: penumbra_sdk_compliance::indexed_tree::string_to_fq(""),
             },
             ring: LeafRing::default(),

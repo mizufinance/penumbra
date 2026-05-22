@@ -49,12 +49,12 @@ func ScalarMulBitsLE(api frontend.API, curve gnarkte.Curve, base gnarkte.Point, 
 	return result
 }
 
-func DeriveACKFromSubjectBD(api frontend.API, ringPK gnarkte.Point, subjectBD frontend.Variable) (gnarkte.Point, error) {
+func DeriveACKFromSubjectDerivation(api frontend.API, ringPK gnarkte.Point, subjectDerivation frontend.Variable) (gnarkte.Point, error) {
 	curve, err := gnarkte.NewEdCurve(api, curves.BLS12_377)
 	if err != nil {
 		return gnarkte.Point{}, err
 	}
-	subjectBytesMSB, err := conversion.NativeToBytes(api, subjectBD)
+	subjectBytesMSB, err := conversion.NativeToBytes(api, subjectDerivation)
 	if err != nil {
 		return gnarkte.Point{}, err
 	}

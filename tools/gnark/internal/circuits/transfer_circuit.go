@@ -152,6 +152,8 @@ type transferStatementData struct {
 	receiverAmount         frontend.Variable
 	receiverDivGenFq       frontend.Variable
 	receiverTransmissionFq frontend.Variable
+	receiverSlotID         frontend.Variable
+	receiverSlotDerivation frontend.Variable
 	receiverAck            gnarkte.Point
 	senderCoreEPKFq        frontend.Variable
 	senderExtEPKFq         frontend.Variable
@@ -214,6 +216,7 @@ func (c *TransferCircuit) verifySharedTransferContext(api frontend.API) (transfe
 			NextValue:      c.Asset.Leaf.NextValue,
 			DKPub:          gnarkte.Point{X: c.Asset.Leaf.DKPub.X, Y: c.Asset.Leaf.DKPub.Y},
 			Threshold:      c.Asset.Leaf.Threshold,
+			SlotCount:      c.Asset.Leaf.SlotCount,
 			ChannelsHash:   c.Asset.Leaf.ChannelsHash,
 			RingPK:         gnarkte.Point{X: c.Asset.Leaf.RingPK.X, Y: c.Asset.Leaf.RingPK.Y},
 			RingIDHash:     c.Asset.Leaf.RingIDHash,
@@ -257,6 +260,8 @@ func (c *TransferCircuit) verifySharedTransferContext(api frontend.API) (transfe
 		shared.senderDivGenFq,
 		shared.senderTransmissionFq,
 		c.Sender.AssetID,
+		c.Sender.SlotID,
+		c.Sender.SlotDerivation,
 		c.Sender.D,
 	)
 	if err != nil {
@@ -285,6 +290,8 @@ func (c *TransferCircuit) newTransferStatementData() transferStatementData {
 		receiverAmount:         0,
 		receiverDivGenFq:       0,
 		receiverTransmissionFq: 0,
+		receiverSlotID:         0,
+		receiverSlotDerivation: 0,
 		receiverAck:            gnarkte.Point{X: 0, Y: 0},
 		senderCoreEPKFq:        0,
 		senderExtEPKFq:         0,
@@ -486,6 +493,8 @@ func (c *TransferCircuit) verifyTransferOutput(
 		createdDivGenFq,
 		createdTransmissionFq,
 		output.Recipient.AssetID,
+		output.Recipient.SlotID,
+		output.Recipient.SlotDerivation,
 		output.Recipient.D,
 	)
 	if err != nil {
@@ -509,6 +518,8 @@ func (c *TransferCircuit) verifyTransferOutput(
 		statementData.receiverAmount = output.Note.Amount
 		statementData.receiverDivGenFq = createdDivGenFq
 		statementData.receiverTransmissionFq = createdTransmissionFq
+		statementData.receiverSlotID = output.Recipient.SlotID
+		statementData.receiverSlotDerivation = output.Recipient.SlotDerivation
 		statementData.receiverAck = recipientAck
 		return nil
 	}
@@ -621,6 +632,8 @@ func (c *TransferCircuit) verifyTransferComplianceCiphertexts(
 		statementData.senderCoreEPKFq,
 		salts[0],
 		shared.sharedAssetID,
+		c.Sender.SlotID,
+		statementData.receiverSlotID,
 		c.Compliance.DetectionCiphertext,
 	); err != nil {
 		return err
@@ -679,11 +692,11 @@ func (c *TransferCircuit) verifyTransferComplianceCiphertexts(
 
 	verifyProofStatement := func(
 		proof TransferComplianceProofFields,
-		expectedSubjectBD frontend.Variable,
+		expectedSubjectDerivation frontend.Variable,
 		expectedTier frontend.Variable,
 		expectedSalt frontend.Variable,
 	) (frontend.Variable, error) {
-		api.AssertIsEqual(proof.Statement.SubjectBD, expectedSubjectBD)
+		api.AssertIsEqual(proof.Statement.SubjectDerivation, expectedSubjectDerivation)
 		api.AssertIsEqual(proof.Statement.RingIDHash, shared.indexedLeaf.RingIDHash)
 		api.AssertIsEqual(proof.Statement.PolicyIDHash, shared.indexedLeaf.PolicyIDHash)
 		api.AssertIsEqual(proof.Statement.ResourceHash, shared.indexedLeaf.ResourceHash)
@@ -704,7 +717,7 @@ func (c *TransferCircuit) verifyTransferComplianceCiphertexts(
 
 	senderCoreMetadataHash, err := verifyProofStatement(
 		c.Compliance.SenderCore.Proof,
-		shared.senderDivGenFq,
+		c.Sender.SlotDerivation,
 		1,
 		salts[1],
 	)
@@ -713,7 +726,7 @@ func (c *TransferCircuit) verifyTransferComplianceCiphertexts(
 	}
 	senderExtMetadataHash, err := verifyProofStatement(
 		c.Compliance.SenderExt.Proof,
-		shared.senderDivGenFq,
+		c.Sender.SlotDerivation,
 		2,
 		salts[2],
 	)
@@ -722,7 +735,7 @@ func (c *TransferCircuit) verifyTransferComplianceCiphertexts(
 	}
 	outputCoreMetadataHash, err := verifyProofStatement(
 		c.Compliance.OutputCore.Proof,
-		statementData.receiverDivGenFq,
+		statementData.receiverSlotDerivation,
 		3,
 		salts[3],
 	)
@@ -731,7 +744,7 @@ func (c *TransferCircuit) verifyTransferComplianceCiphertexts(
 	}
 	outputExtMetadataHash, err := verifyProofStatement(
 		c.Compliance.OutputExt.Proof,
-		statementData.receiverDivGenFq,
+		statementData.receiverSlotDerivation,
 		4,
 		salts[4],
 	)
@@ -864,7 +877,7 @@ func (c *TransferCircuit) buildTransferStatementFields(
 		}
 		fields = append(
 			fields,
-			proof.Statement.SubjectBD,
+			proof.Statement.SubjectDerivation,
 			proof.Statement.RingIDHash,
 			proof.Statement.PolicyIDHash,
 			proof.Statement.ResourceHash,

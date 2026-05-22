@@ -20,8 +20,8 @@ static DETECTION_TIER_DOMAIN: Lazy<Fq> = Lazy::new(|| {
     )
 });
 
-/// Size of the detection tier in bytes (2 Fq elements: asset_id+flag, salt).
-pub const DETECTION_TIER_BYTES: usize = 64;
+/// Size of the detection tier in bytes (asset_id+flag, salt, sender slot, receiver slot).
+pub const DETECTION_TIER_BYTES: usize = 128;
 
 /// Sentinel Fq value for flagged transactions: `Fq::from(2^253)`.
 /// Since the Fq modulus is ~2^252.6, this wraps to `2^253 - r` in the field.
@@ -43,6 +43,15 @@ pub fn detection_plaintext_fq(asset_id: &asset::Id, is_flagged: bool) -> Fq {
     } else {
         asset_id.0
     }
+}
+
+fn slot_id_from_fq(value: Fq, field: &str) -> anyhow::Result<u32> {
+    let bytes = value.to_bytes();
+    anyhow::ensure!(
+        bytes[4..].iter().all(|byte| *byte == 0),
+        "{field} is not a canonical u32 slot id"
+    );
+    Ok(u32::from_le_bytes(bytes[..4].try_into()?))
 }
 
 /// Master Compliance Key (Orbis Secret).
@@ -178,7 +187,8 @@ impl DetectionKey {
     /// asset_id (with and without FLAG_SENTINEL) to determine the flag.
     /// Also decrypts the salt (second Fq element) for DLEQ metadata binding.
     ///
-    /// Returns `Ok((asset_id, is_flagged, salt))` if the decrypted value matches expected_asset_id,
+    /// Returns `Ok((asset_id, is_flagged, salt, sender_slot_id, receiver_slot_id))`
+    /// if the decrypted value matches expected_asset_id,
     /// or `Err(_)` if decryption doesn't match (wrong key or wrong asset).
     pub fn try_decrypt_detection(
         &self,
@@ -186,7 +196,7 @@ impl DetectionKey {
         epk_orbis: &Element,
         detection_ciphertext: &[u8; DETECTION_TIER_BYTES],
         expected_asset_id: &asset::Id,
-    ) -> anyhow::Result<(asset::Id, bool, Fq)> {
+    ) -> anyhow::Result<(asset::Id, bool, Fq, u32, u32)> {
         // 1. Compute shared secret using standard curve EPK: S = dk * epk_orbis
         let shared_secret = *epk_orbis * self.0;
 
@@ -196,7 +206,7 @@ impl DetectionKey {
         let seed = poseidon377::hash_2(&*DETECTION_TIER_DOMAIN, (shared_secret_fq, epk_fq));
 
         // 3. Decrypt via Fq subtraction: pt = ct - keystream
-        // Detection tier layout: [asset_id+flag (32 bytes), salt (32 bytes)]
+        // Detection tier layout: [asset_id+flag, salt, sender_slot_id, receiver_slot_id]
         let ct_fq = Fq::from_le_bytes_mod_order(&detection_ciphertext[..32]);
         let keystream = poseidon377::hash_2(&seed, (Fq::zero(), seed));
         let pt_fq = ct_fq - keystream;
@@ -206,11 +216,35 @@ impl DetectionKey {
         let keystream_salt = poseidon377::hash_2(&seed, (Fq::from(1u64), seed));
         let salt = ct_salt_fq - keystream_salt;
 
+        let ct_sender_slot = Fq::from_le_bytes_mod_order(&detection_ciphertext[64..96]);
+        let keystream_sender_slot = poseidon377::hash_2(&seed, (Fq::from(2u64), seed));
+        let sender_slot_id =
+            slot_id_from_fq(ct_sender_slot - keystream_sender_slot, "sender_slot_id")?;
+
+        let ct_receiver_slot = Fq::from_le_bytes_mod_order(&detection_ciphertext[96..128]);
+        let keystream_receiver_slot = poseidon377::hash_2(&seed, (Fq::from(3u64), seed));
+        let receiver_slot_id = slot_id_from_fq(
+            ct_receiver_slot - keystream_receiver_slot,
+            "receiver_slot_id",
+        )?;
+
         // 4. Compare against expected asset_id to determine flag
         if pt_fq == expected_asset_id.0 {
-            Ok((*expected_asset_id, false, salt))
+            Ok((
+                *expected_asset_id,
+                false,
+                salt,
+                sender_slot_id,
+                receiver_slot_id,
+            ))
         } else if pt_fq == expected_asset_id.0 + *FLAG_SENTINEL {
-            Ok((*expected_asset_id, true, salt))
+            Ok((
+                *expected_asset_id,
+                true,
+                salt,
+                sender_slot_id,
+                receiver_slot_id,
+            ))
         } else {
             anyhow::bail!("detection tier does not match expected asset")
         }
@@ -254,10 +288,12 @@ impl DetectionKey {
         let keystream = poseidon377::hash_2(&seed, (Fq::zero(), seed));
         let ct_fq = pt_fq + keystream;
 
-        // Detection tier: [asset_id+flag (32 bytes), salt (32 bytes)]
-        // Salt slot is zeroed here; real salt encryption is in crypto.rs
         let mut detection_bytes = [0u8; DETECTION_TIER_BYTES];
         detection_bytes[..32].copy_from_slice(&ct_fq.to_bytes());
+        for (counter, chunk) in (1u64..=3).zip(detection_bytes[32..].chunks_exact_mut(32)) {
+            let keystream = poseidon377::hash_2(&seed, (Fq::from(counter), seed));
+            chunk.copy_from_slice(&keystream.to_bytes());
+        }
         (detection_bytes, epk)
     }
 }
@@ -383,7 +419,7 @@ mod tests {
 
         let (ciphertext, epk) = dk.encrypt_to_public(&mut rng, &asset_id, false);
 
-        let (decrypted_asset, decrypted_flag, _salt) = dk
+        let (decrypted_asset, decrypted_flag, _salt, _sender_slot_id, _receiver_slot_id) = dk
             .try_decrypt_detection(&epk, &epk, &ciphertext, &asset_id)
             .expect("decryption should succeed");
 
@@ -399,7 +435,7 @@ mod tests {
 
         let (ciphertext, epk) = dk.encrypt_to_public(&mut rng, &asset_id, true);
 
-        let (decrypted_asset, decrypted_flag, _salt) = dk
+        let (decrypted_asset, decrypted_flag, _salt, _sender_slot_id, _receiver_slot_id) = dk
             .try_decrypt_detection(&epk, &epk, &ciphertext, &asset_id)
             .expect("decryption should succeed");
 
@@ -417,7 +453,7 @@ mod tests {
         let (ciphertext, epk) =
             DetectionKey::encrypt_to_dk_pub(&mut rng, &dk_pub, &asset_id, false);
 
-        let (decrypted_asset, decrypted_flag, _salt) = dk
+        let (decrypted_asset, decrypted_flag, _salt, _sender_slot_id, _receiver_slot_id) = dk
             .try_decrypt_detection(&epk, &epk, &ciphertext, &asset_id)
             .expect("decryption should succeed");
 
@@ -502,7 +538,7 @@ mod tests {
         for asset_id in asset_ids {
             for is_flagged in [false, true] {
                 let (ct, epk) = dk.encrypt_to_public(&mut rng, &asset_id, is_flagged);
-                let (dec_id, dec_flag, _salt) = dk
+                let (dec_id, dec_flag, _salt, _sender_slot_id, _receiver_slot_id) = dk
                     .try_decrypt_detection(&epk, &epk, &ct, &asset_id)
                     .expect("decryption should succeed");
 
@@ -528,7 +564,7 @@ mod tests {
         let asset_id = asset::Id(Fq::from_le_bytes_mod_order(&asset_bytes));
 
         let (ciphertext, epk) = dk.encrypt_to_public(&mut rng, &asset_id, true);
-        let (decrypted_asset, decrypted_flag, _salt) = dk
+        let (decrypted_asset, decrypted_flag, _salt, _sender_slot_id, _receiver_slot_id) = dk
             .try_decrypt_detection(&epk, &epk, &ciphertext, &asset_id)
             .expect("decryption should succeed");
 
@@ -548,7 +584,7 @@ mod tests {
         let asset_id = asset::Id(Fq::from_le_bytes_mod_order(&asset_bytes));
 
         let (ciphertext, epk) = dk.encrypt_to_public(&mut rng, &asset_id, false);
-        let (_, decrypted_flag, _salt) = dk
+        let (_, decrypted_flag, _salt, _sender_slot_id, _receiver_slot_id) = dk
             .try_decrypt_detection(&epk, &epk, &ciphertext, &asset_id)
             .expect("decryption should succeed");
 

@@ -4,7 +4,7 @@ use penumbra_sdk_keys::Address;
 use penumbra_sdk_proto::core::component::compliance::v1::{
     query_service_server::QueryService, ComplianceAnchorsRequest, ComplianceAnchorsResponse,
     ComplianceAssetStatusRequest, ComplianceAssetStatusResponse,
-    ComplianceBatchMerkleProofsRequest, ComplianceBatchMerkleProofsResponse, ComplianceLeaf,
+    ComplianceBatchMerkleProofsRequest, ComplianceBatchMerkleProofsResponse,
     ComplianceMerkleProofsRequest, ComplianceMerkleProofsResponse, ComplianceUserLeafRequest,
     ComplianceUserLeafResponse, IndexedLeafData, MerklePath, MerklePathLayer,
 };
@@ -226,11 +226,7 @@ impl QueryService for Server {
                         .await
                         .map_err(|e| Status::internal(format!("failed to get user leaf: {e}")))?;
 
-                    let leaf_proto = leaf_opt.map(|leaf| ComplianceLeaf {
-                        address: Some(leaf.address.into()),
-                        asset_id: Some(leaf.asset_id.into()),
-                        d: leaf.d.to_bytes().to_vec(),
-                    });
+                    let leaf_proto = leaf_opt.map(Into::into);
 
                     (true, Some(proto_path), pos, leaf_proto)
                 }
@@ -319,11 +315,7 @@ impl QueryService for Server {
                 tracing::debug!(?address, ?asset_id, "found user leaf");
                 ComplianceUserLeafResponse {
                     is_registered: true,
-                    leaf: Some(ComplianceLeaf {
-                        address: Some(leaf.address.into()),
-                        asset_id: Some(leaf.asset_id.into()),
-                        d: leaf.d.to_bytes().to_vec(),
-                    }),
+                    leaf: Some(leaf.into()),
                 }
             }
             None => {
@@ -420,11 +412,7 @@ impl QueryService for Server {
                                 Status::internal(format!("failed to get user leaf: {e}"))
                             })?;
 
-                        let leaf_proto = leaf_opt.map(|leaf| ComplianceLeaf {
-                            address: Some(leaf.address.into()),
-                            asset_id: Some(leaf.asset_id.into()),
-                            d: leaf.d.to_bytes().to_vec(),
-                        });
+                        let leaf_proto = leaf_opt.map(Into::into);
 
                         (true, Some(proto_path), pos, leaf_proto)
                     }

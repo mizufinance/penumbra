@@ -222,7 +222,10 @@ mod tests {
         let result = IbcComplianceMetadata::from_proto_public(proto);
         assert!(result.is_err());
         assert!(
-            result.unwrap_err().to_string().contains("224 bytes"),
+            result
+                .unwrap_err()
+                .to_string()
+                .contains(&format!("{TRANSFER_INPUT_WIRE_BYTES} bytes")),
             "error should mention expected size"
         );
     }

@@ -425,13 +425,7 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
         // Unregulated assets can still build without a registered user leaf.
         let asset_proof = self.get_asset_proof(asset_id).await?;
         if !asset_proof.is_regulated {
-            let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-            let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
-            let synthetic_leaf = ComplianceLeaf {
-                address: address.clone(),
-                asset_id,
-                d,
-            };
+            let synthetic_leaf = ComplianceLeaf::synthetic_unregulated(address.clone(), asset_id);
             return Ok(penumbra_sdk_compliance::UserProofData {
                 auth_path: MerklePath::default(),
                 position: 0,
@@ -579,13 +573,8 @@ impl<S: StateRead + Send + Sync> penumbra_sdk_compliance::ComplianceProofProvide
                 } else if !is_regulated {
                     // Unregulated fallback: synthetic leaf with real d so leaf commitment
                     // matches what generate_compliance_details creates.
-                    let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-                    let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
-                    let synthetic_leaf = ComplianceLeaf {
-                        address: address.clone(),
-                        asset_id: *asset_id,
-                        d,
-                    };
+                    let synthetic_leaf =
+                        ComplianceLeaf::synthetic_unregulated(address.clone(), *asset_id);
                     UserProofData {
                         auth_path: MerklePath::default(),
                         position: 0,

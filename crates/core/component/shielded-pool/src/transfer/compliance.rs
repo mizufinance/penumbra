@@ -105,17 +105,13 @@ pub(crate) fn build_transfer_compliance(
             asset_id: receiver_note.asset_id(),
         },
         is_flagged,
+        sender_leaf.slot_id,
+        receiver_leaf.slot_id,
         detection_salt,
     )?;
 
-    let sender_b_d = sender_leaf
-        .address
-        .diversified_generator()
-        .vartime_compress_to_field();
-    let receiver_b_d = receiver_note
-        .address()
-        .diversified_generator()
-        .vartime_compress_to_field();
+    let sender_slot_derivation = sender_leaf.slot_derivation;
+    let receiver_slot_derivation = receiver_leaf.slot_derivation;
     let policy_id = &asset_policy.ring.policy_id;
     let ring_id = &asset_policy.ring.ring_id;
     let resource = &asset_policy.ring.resource;
@@ -128,7 +124,7 @@ pub(crate) fn build_transfer_compliance(
             encryption.sender.core.seed,
             encryption.sender.core.r,
             TransferTierMetadataStatement::from_identifiers(
-                sender_b_d,
+                sender_slot_derivation,
                 ring_id,
                 policy_id,
                 resource,
@@ -151,7 +147,7 @@ pub(crate) fn build_transfer_compliance(
             encryption.sender.ext.seed,
             encryption.sender.ext.r,
             TransferTierMetadataStatement::from_identifiers(
-                sender_b_d,
+                sender_slot_derivation,
                 ring_id,
                 policy_id,
                 resource,
@@ -174,7 +170,7 @@ pub(crate) fn build_transfer_compliance(
             encryption.output.core.seed,
             encryption.output.core.r,
             TransferTierMetadataStatement::from_identifiers(
-                receiver_b_d,
+                receiver_slot_derivation,
                 ring_id,
                 policy_id,
                 resource,
@@ -197,7 +193,7 @@ pub(crate) fn build_transfer_compliance(
             encryption.output.ext.seed,
             encryption.output.ext.r,
             TransferTierMetadataStatement::from_identifiers(
-                receiver_b_d,
+                receiver_slot_derivation,
                 ring_id,
                 policy_id,
                 resource,
