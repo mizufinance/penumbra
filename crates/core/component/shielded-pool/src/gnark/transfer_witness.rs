@@ -46,6 +46,8 @@ pub struct TransferOutputWitnessV1 {
     pub recipient_compliance_path: MerklePathBinary,
     pub recipient_compliance_position: u64,
     pub recipient_asset_id: [u8; 32],
+    pub recipient_slot_id: [u8; 32],
+    pub recipient_slot_derivation: [u8; 32],
     pub recipient_d: [u8; 32],
     /// Output 0 is the receiver leg. Output 1, when present, is sender-owned change.
     pub is_receiver: bool,
@@ -59,7 +61,7 @@ pub struct TransferOutputWitnessV1 {
 pub struct TransferComplianceCiphertextWitnessV1 {
     pub c2: [u8; 32],
     pub ciphertext: Vec<[u8; 32]>,
-    pub subject_b_d: [u8; 32],
+    pub subject_derivation: [u8; 32],
     pub ring_id_hash: [u8; 32],
     pub policy_id_hash: [u8; 32],
     pub resource_hash: [u8; 32],
@@ -103,6 +105,8 @@ pub struct TransferWitnessV1 {
     pub sender_compliance_path: MerklePathBinary,
     pub sender_compliance_position: u64,
     pub sender_asset_id: [u8; 32],
+    pub sender_slot_id: [u8; 32],
+    pub sender_slot_derivation: [u8; 32],
     pub sender_d: [u8; 32],
     pub transfer_nonce_root: [u8; 32],
     pub detection_ciphertext: Vec<[u8; 32]>,
@@ -122,8 +126,16 @@ pub struct TransferWitnessV1 {
     pub sender_transmission_key_affine: PointAffineBytes,
 }
 
-fn compliance_leaf_parts(leaf: &ComplianceLeafBinary) -> ([u8; 80], [u8; 32], [u8; 32]) {
-    (leaf.address, leaf.asset_id, leaf.d)
+fn compliance_leaf_parts(
+    leaf: &ComplianceLeafBinary,
+) -> ([u8; 80], [u8; 32], [u8; 32], [u8; 32], [u8; 32]) {
+    (
+        leaf.address,
+        leaf.asset_id,
+        leaf.slot_id,
+        leaf.slot_derivation,
+        leaf.d,
+    )
 }
 
 fn verification_key_point(
@@ -146,7 +158,7 @@ fn compliance_tier_witness(
             .iter()
             .map(|value| value.to_bytes())
             .collect(),
-        subject_b_d: statement.subject_b_d_bytes,
+        subject_derivation: statement.subject_derivation_bytes,
         ring_id_hash: statement.ring_id_hash_bytes,
         policy_id_hash: statement.policy_id_hash_bytes,
         resource_hash: statement.resource_hash_bytes,
@@ -177,7 +189,8 @@ impl TransferWitnessV1 {
             .with_context(|| format!("compute {TRANSFER_PROOF_LABEL} statement fields"))?;
 
         let sender_leaf = compliance_leaf_from_typed(&private.sender_leaf)?;
-        let (_, sender_asset_id, sender_d) = compliance_leaf_parts(&sender_leaf);
+        let (_, sender_asset_id, sender_slot_id, sender_slot_derivation, sender_d) =
+            compliance_leaf_parts(&sender_leaf);
 
         let spends = public
             .inputs
@@ -239,7 +252,13 @@ impl TransferWitnessV1 {
             .enumerate()
             .map(|(index, (public_output, private_output))| {
                 let recipient_leaf = compliance_leaf_from_typed(&private_output.recipient_leaf)?;
-                let (_, recipient_asset_id, recipient_d) = compliance_leaf_parts(&recipient_leaf);
+                let (
+                    _,
+                    recipient_asset_id,
+                    recipient_slot_id,
+                    recipient_slot_derivation,
+                    recipient_d,
+                ) = compliance_leaf_parts(&recipient_leaf);
                 Ok(TransferOutputWitnessV1 {
                     note_commitment: public_output.note_commitment.0.to_bytes(),
                     created_note_blinding: private_output.created_note.note_blinding().to_bytes(),
@@ -256,6 +275,8 @@ impl TransferWitnessV1 {
                     )?,
                     recipient_compliance_position: private_output.recipient_compliance_position,
                     recipient_asset_id,
+                    recipient_slot_id,
+                    recipient_slot_derivation,
                     recipient_d,
                     is_receiver: private_output.is_receiver,
                     created_diversified_generator_affine: point_affine_bytes(
@@ -309,6 +330,8 @@ impl TransferWitnessV1 {
             sender_compliance_path: merkle_path_from_typed(&private.sender_compliance_path)?,
             sender_compliance_position: private.sender_compliance_position,
             sender_asset_id,
+            sender_slot_id,
+            sender_slot_derivation,
             sender_d,
             transfer_nonce_root: private.compliance.transfer_nonce_root.to_bytes(),
             detection_ciphertext: public

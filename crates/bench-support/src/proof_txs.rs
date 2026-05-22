@@ -95,6 +95,7 @@ pub async fn setup_proof_storage(
                 asset_id: *BASE_ASSET_ID,
                 is_regulated: true,
                 dk_pub: Some(decaf377::Element::GENERATOR.vartime_compress().0),
+                slot_count: penumbra_sdk_compliance::DEFAULT_COMPLIANCE_SLOT_COUNT,
                 registration_authority_vk: Some(authority_vk),
             }],
             ..Default::default()
@@ -125,13 +126,8 @@ pub async fn setup_proof_storage(
         test_keys::ADDRESS_1.deref().clone(),
     ] {
         let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-        let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
         state
-            .add_compliance_leaf(ComplianceLeaf {
-                address,
-                asset_id: *BASE_ASSET_ID,
-                d,
-            })
+            .add_compliance_leaf(ComplianceLeaf::new(address, *BASE_ASSET_ID, b_d_fq))
             .await?;
     }
     storage.commit(state).await?;

@@ -100,17 +100,16 @@ impl ShieldedInputPlan {
         let amount_u128: u128 = self.note.amount().into();
         let is_flagged = amount_u128 >= threshold;
 
-        let b_d_fq = self
-            .note
-            .address()
-            .diversified_generator()
-            .vartime_compress_to_field();
-        let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
-        let compliance_leaf = penumbra_sdk_compliance::ComplianceLeaf::new(
-            self.note.address().clone(),
-            self.note.asset_id(),
-            d,
-        );
+        let compliance_leaf = if self.is_regulated {
+            self.compliance_leaf.clone().ok_or_else(|| {
+                anyhow::anyhow!("regulated shielded input missing registered compliance leaf")
+            })?
+        } else {
+            penumbra_sdk_compliance::ComplianceLeaf::synthetic_unregulated(
+                self.note.address().clone(),
+                self.note.asset_id(),
+            )
+        };
 
         self.compliance_leaf = Some(compliance_leaf);
         self.ring_pk = ring_pk;
@@ -129,15 +128,9 @@ impl ShieldedInputPlan {
         let ring_pk = *penumbra_sdk_compliance::UNREGULATED_SINK_RING_PK;
         let dk_pub = *penumbra_sdk_compliance::UNREGULATED_SINK_DK_PUB;
 
-        let note_b_d_fq = note
-            .address()
-            .diversified_generator()
-            .vartime_compress_to_field();
-        let note_d = penumbra_sdk_compliance::derive_compliance_scalar(note_b_d_fq);
-        let compliance_leaf = penumbra_sdk_compliance::ComplianceLeaf::new(
+        let compliance_leaf = penumbra_sdk_compliance::ComplianceLeaf::synthetic_unregulated(
             note.address().clone(),
             note.asset_id(),
-            note_d,
         );
 
         let (compliance_anchor, compliance_path, compliance_position) =
@@ -288,7 +281,7 @@ impl ShieldedOutputPlan {
     pub fn set_compliance_details(
         &mut self,
         _rng: &mut (impl rand_core::RngCore + rand_core::CryptoRng),
-        _recipient_leaf: &penumbra_sdk_compliance::ComplianceLeaf,
+        recipient_leaf: &penumbra_sdk_compliance::ComplianceLeaf,
         sender_leaf: penumbra_sdk_compliance::ComplianceLeaf,
         tx_blinding_nonce: Fr,
     ) -> anyhow::Result<()> {
@@ -308,16 +301,14 @@ impl ShieldedOutputPlan {
         let amount_u128: u128 = note.amount().into();
         let is_flagged = amount_u128 >= threshold;
 
-        let recv_b_d_fq = self
-            .dest_address
-            .diversified_generator()
-            .vartime_compress_to_field();
-        let recv_d = penumbra_sdk_compliance::derive_compliance_scalar(recv_b_d_fq);
-        let compliance_leaf = penumbra_sdk_compliance::ComplianceLeaf::new(
-            self.dest_address.clone(),
-            note.asset_id(),
-            recv_d,
-        );
+        let compliance_leaf = if self.is_regulated {
+            recipient_leaf.clone()
+        } else {
+            penumbra_sdk_compliance::ComplianceLeaf::synthetic_unregulated(
+                self.dest_address.clone(),
+                note.asset_id(),
+            )
+        };
 
         self.compliance_leaf = Some(compliance_leaf);
         self.counterparty_address = Some(sender_leaf.address.clone());
@@ -341,12 +332,10 @@ impl ShieldedOutputPlan {
         let ring_pk = *penumbra_sdk_compliance::UNREGULATED_SINK_RING_PK;
         let dk_pub = *penumbra_sdk_compliance::UNREGULATED_SINK_DK_PUB;
 
-        let b_d_fq = dest_address
-            .diversified_generator()
-            .vartime_compress_to_field();
-        let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
-        let compliance_leaf =
-            penumbra_sdk_compliance::ComplianceLeaf::new(dest_address.clone(), value.asset_id, d);
+        let compliance_leaf = penumbra_sdk_compliance::ComplianceLeaf::synthetic_unregulated(
+            dest_address.clone(),
+            value.asset_id,
+        );
 
         let (compliance_anchor, compliance_path, compliance_position) =
             penumbra_sdk_compliance::default_user_proof(&compliance_leaf);

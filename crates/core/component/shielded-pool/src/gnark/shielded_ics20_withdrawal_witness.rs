@@ -77,6 +77,8 @@ pub struct ShieldedIcs20WithdrawalWitnessV1 {
     pub sender_compliance_path: MerklePathBinary,
     pub sender_compliance_position: u64,
     pub sender_asset_id: [u8; 32],
+    pub sender_slot_id: [u8; 32],
+    pub sender_slot_derivation: [u8; 32],
     pub sender_d: [u8; 32],
     pub spends: Vec<ShieldedIcs20WithdrawalSpendWitnessV1>,
     pub change_output: ShieldedIcs20WithdrawalChangeWitnessV1,
@@ -88,8 +90,16 @@ pub struct ShieldedIcs20WithdrawalWitnessV1 {
     pub sender_transmission_key_affine: PointAffineBytes,
 }
 
-fn compliance_leaf_parts(leaf: &ComplianceLeafBinary) -> ([u8; 80], [u8; 32], [u8; 32]) {
-    (leaf.address, leaf.asset_id, leaf.d)
+fn compliance_leaf_parts(
+    leaf: &ComplianceLeafBinary,
+) -> ([u8; 80], [u8; 32], [u8; 32], [u8; 32], [u8; 32]) {
+    (
+        leaf.address,
+        leaf.asset_id,
+        leaf.slot_id,
+        leaf.slot_derivation,
+        leaf.d,
+    )
 }
 
 fn verification_key_point(
@@ -192,7 +202,8 @@ impl ShieldedIcs20WithdrawalWitnessV1 {
             .map_err(|e| anyhow!("compute {} statement fields: {e}", public.family_id.label()))?;
 
         let sender_leaf = compliance_leaf_from_typed(&private.sender_leaf)?;
-        let (_, sender_asset_id, sender_d) = compliance_leaf_parts(&sender_leaf);
+        let (_, sender_asset_id, sender_slot_id, sender_slot_derivation, sender_d) =
+            compliance_leaf_parts(&sender_leaf);
 
         let spends = public
             .inputs
@@ -232,6 +243,8 @@ impl ShieldedIcs20WithdrawalWitnessV1 {
             sender_compliance_path: merkle_path_from_typed(&private.sender_compliance_path)?,
             sender_compliance_position: private.sender_compliance_position,
             sender_asset_id,
+            sender_slot_id,
+            sender_slot_derivation,
             sender_d,
             spends,
             change_output: change_witness(&public.change_output, &private.change_output)?,

@@ -137,6 +137,7 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifySharedContext(
 			NextValue:      c.Asset.Leaf.NextValue,
 			DKPub:          gnarkte.Point{X: c.Asset.Leaf.DKPub.X, Y: c.Asset.Leaf.DKPub.Y},
 			Threshold:      c.Asset.Leaf.Threshold,
+			SlotCount:      c.Asset.Leaf.SlotCount,
 			ChannelsHash:   c.Asset.Leaf.ChannelsHash,
 			RingPK:         gnarkte.Point{X: c.Asset.Leaf.RingPK.X, Y: c.Asset.Leaf.RingPK.Y},
 			RingIDHash:     c.Asset.Leaf.RingIDHash,
@@ -173,6 +174,8 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifySharedContext(
 		senderDivGenFq,
 		senderTransmissionFq,
 		c.Sender.AssetID,
+		c.Sender.SlotID,
+		c.Sender.SlotDerivation,
 		c.Sender.D,
 	)
 	if err != nil {

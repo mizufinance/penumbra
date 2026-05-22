@@ -100,12 +100,23 @@ func ComplianceLeafCommitmentFromFixtureNative(fixture SpendFixture) (*big.Int, 
 		return nil, err
 	}
 
-	return Poseidon377Hash4Native(
+	slotID := big.NewInt(0)
+	if fixture.Private.UserLeaf.SlotID != "" {
+		slotID = MustBigInt(fixture.Private.UserLeaf.SlotID)
+	}
+	slotDerivation := big.NewInt(0)
+	if fixture.Private.UserLeaf.SlotDerivation != "" {
+		slotDerivation = MustBigInt(fixture.Private.UserLeaf.SlotDerivation)
+	}
+
+	return Poseidon377Hash6Native(
 		MustBigInt(vectors.Poseidon377.ComplianceLeafDomain),
-		[4]*big.Int{
+		[6]*big.Int{
 			diversifiedGeneratorFq,
 			transmissionKeyFq,
 			MustBigInt(fixture.Private.NoteAssetID),
+			slotID,
+			slotDerivation,
 			MustBigInt(fixture.Private.UserDDecimal),
 		},
 	)
@@ -116,6 +127,8 @@ func ComplianceLeafCommitment(
 	diversifiedGenerator gnarkte.Point,
 	transmissionKey gnarkte.Point,
 	assetID frontend.Variable,
+	slotID frontend.Variable,
+	slotDerivation frontend.Variable,
 	d frontend.Variable,
 ) (frontend.Variable, error) {
 	diversifiedGeneratorFq, err := decafgnark.CompressToField(api, diversifiedGenerator)
@@ -132,6 +145,8 @@ func ComplianceLeafCommitment(
 		diversifiedGeneratorFq,
 		transmissionKeyFq,
 		assetID,
+		slotID,
+		slotDerivation,
 		d,
 	)
 }
@@ -141,6 +156,8 @@ func ComplianceLeafCommitmentFromCompressed(
 	diversifiedGeneratorFq frontend.Variable,
 	transmissionKeyFq frontend.Variable,
 	assetID frontend.Variable,
+	slotID frontend.Variable,
+	slotDerivation frontend.Variable,
 	d frontend.Variable,
 ) (frontend.Variable, error) {
 	vectors, err := LoadPrototypeVectors()
@@ -148,13 +165,15 @@ func ComplianceLeafCommitmentFromCompressed(
 		return nil, err
 	}
 
-	return Poseidon377Hash4(
+	return Poseidon377Hash6(
 		api,
 		MustBigInt(vectors.Poseidon377.ComplianceLeafDomain),
-		[4]frontend.Variable{
+		[6]frontend.Variable{
 			diversifiedGeneratorFq,
 			transmissionKeyFq,
 			assetID,
+			slotID,
+			slotDerivation,
 			d,
 		},
 	)

@@ -36,6 +36,7 @@ type IndexedLeafFields struct {
 	NextValue      frontend.Variable
 	DKPub          Point2D
 	Threshold      frontend.Variable
+	SlotCount      frontend.Variable
 	ChannelsHash   frontend.Variable
 	RingPK         Point2D
 	RingIDHash     frontend.Variable
@@ -51,12 +52,14 @@ type AssetTreeFields struct {
 }
 
 type UserComplianceFields struct {
-	DivGen       Point2D
-	Transmission Point2D
-	AssetID      frontend.Variable
-	D            frontend.Variable
-	Path         [compliance.ComplianceQuadTreeDepth][3]frontend.Variable
-	Position     frontend.Variable
+	DivGen         Point2D
+	Transmission   Point2D
+	AssetID        frontend.Variable
+	SlotID         frontend.Variable
+	SlotDerivation frontend.Variable
+	D              frontend.Variable
+	Path           [compliance.ComplianceQuadTreeDepth][3]frontend.Variable
+	Position       frontend.Variable
 }
 
 type TransferComplianceProofFields struct {
@@ -69,14 +72,14 @@ type TransferComplianceProofFields struct {
 }
 
 type TransferComplianceStatementFields struct {
-	SubjectBD       frontend.Variable
-	RingIDHash      frontend.Variable
-	PolicyIDHash    frontend.Variable
-	ResourceHash    frontend.Variable
-	PermissionHash  frontend.Variable
-	Tier            frontend.Variable
-	TargetTimestamp frontend.Variable
-	Salt            frontend.Variable
+	SubjectDerivation frontend.Variable
+	RingIDHash        frontend.Variable
+	PolicyIDHash      frontend.Variable
+	ResourceHash      frontend.Variable
+	PermissionHash    frontend.Variable
+	Tier              frontend.Variable
+	TargetTimestamp   frontend.Variable
+	Salt              frontend.Variable
 }
 
 type TransferComplianceCoreFields struct {

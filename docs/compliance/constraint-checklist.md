@@ -30,6 +30,20 @@ or re-checks it, and where regressions should be caught.
 - Tested by: compliance registry tests and transfer gnark metamorphic tests.
 - Violation: transaction planning fails or the transfer proof rejects.
 
+### Compliance Slot Binding
+
+- Enforced in: `ComplianceLeaf::commit`, registration validation, and transfer
+  compliance circuits.
+- Verified at: `MsgRegisterUser` checks `slot_id < slot_count` and
+  `d == derive_compliance_scalar(slot_derivation)`.
+- Privacy note: `slot_id` secrecy is not a constraint when `slot_derivation` is
+  visible; same-slot linkability comes from shared `slot_derivation`, `d`, and
+  ACK.
+- Tested by: compliance leaf/proto tests, registry registration tests, and
+  gnark transfer witness parity tests.
+- Violation: registration fails, transfer planning cannot use a synthetic
+  regulated leaf, or the transfer proof rejects.
+
 ### Threshold Flag
 
 - Enforced in: `verify_threshold_flag_simple` and transfer compliance public
@@ -42,7 +56,8 @@ or re-checks it, and where regressions should be caught.
 ### Detection Tier
 
 - Enforced in: transfer compliance ciphertext construction and circuit public
-  inputs.
+  inputs. The detection plaintext contains asset id plus flag, salt, sender
+  slot id, and receiver slot id.
 - Verified at: `ComplianceScreener::screen` and
   `DetectionKey::try_decrypt_detection`.
 - Tested by: `scanner::screener::*` tests and
@@ -95,7 +110,8 @@ or re-checks it, and where regressions should be caught.
 ### DK Plaintext Match
 
 - Enforced in: `validate_and_save_evidence_object`.
-- Verified at: comparison against `scanner_detections` asset, flag, and salt.
+- Verified at: comparison against `scanner_detections` asset, flag, salt, and
+  slot ids.
 - Tested by: audit validation tamper tests and screener tests.
 - Violation: evidence failure is recorded and the row cannot complete audit.
 

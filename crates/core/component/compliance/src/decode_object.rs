@@ -41,8 +41,8 @@ impl TransferTierKind {
 /// `store_secret`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransferTierMetadataStatement {
-    /// Canonical 32-byte little-endian encoding of the subject's `B_d` field element.
-    pub subject_b_d_bytes: [u8; 32],
+    /// Canonical 32-byte little-endian encoding of the subject's slot derivation.
+    pub subject_derivation_bytes: [u8; 32],
     pub ring_id_hash_bytes: [u8; 32],
     pub policy_id_hash_bytes: [u8; 32],
     pub resource_hash_bytes: [u8; 32],
@@ -54,7 +54,7 @@ pub struct TransferTierMetadataStatement {
 
 impl TransferTierMetadataStatement {
     pub fn new(
-        subject_b_d: Fq,
+        subject_derivation: Fq,
         ring_id_hash: Fq,
         policy_id_hash: Fq,
         resource_hash: Fq,
@@ -64,7 +64,7 @@ impl TransferTierMetadataStatement {
         salt: Fq,
     ) -> Self {
         Self {
-            subject_b_d_bytes: subject_b_d.to_bytes(),
+            subject_derivation_bytes: subject_derivation.to_bytes(),
             ring_id_hash_bytes: ring_id_hash.to_bytes(),
             policy_id_hash_bytes: policy_id_hash.to_bytes(),
             resource_hash_bytes: resource_hash.to_bytes(),
@@ -76,7 +76,7 @@ impl TransferTierMetadataStatement {
     }
 
     pub fn from_identifiers(
-        subject_b_d: Fq,
+        subject_derivation: Fq,
         ring_id: &str,
         policy_id: &str,
         resource: &str,
@@ -86,7 +86,7 @@ impl TransferTierMetadataStatement {
         salt: Fq,
     ) -> Self {
         Self::new(
-            subject_b_d,
+            subject_derivation,
             string_to_fq(ring_id),
             string_to_fq(policy_id),
             string_to_fq(resource),
@@ -98,7 +98,7 @@ impl TransferTierMetadataStatement {
     }
 
     pub fn validate_shape(&self) -> Result<()> {
-        self.subject_b_d()?;
+        self.subject_derivation()?;
         self.ring_id_hash()?;
         self.policy_id_hash()?;
         self.resource_hash()?;
@@ -125,14 +125,14 @@ impl TransferTierMetadataStatement {
     }
 
     pub fn subject_ack(&self, ring_pk: &Element) -> Result<Element> {
-        let d = derive_compliance_scalar(self.subject_b_d()?);
+        let d = derive_compliance_scalar(self.subject_derivation()?);
         let d_fr = Fr::from_bytes_checked(&d.to_bytes())
             .map_err(|_| anyhow!("derived compliance scalar is not a canonical Fr"))?;
         Ok(*ring_pk * d_fr)
     }
 
-    pub fn subject_b_d(&self) -> Result<Fq> {
-        parse_fq(self.subject_b_d_bytes, "subject_b_d_bytes")
+    pub fn subject_derivation(&self) -> Result<Fq> {
+        parse_fq(self.subject_derivation_bytes, "subject_derivation_bytes")
     }
 
     pub fn policy_id_hash(&self) -> Result<Fq> {
@@ -266,9 +266,9 @@ mod tests {
         let sk_ring = Fr::rand(&mut rng);
         let ring_pk = Element::GENERATOR * sk_ring;
 
-        let subject_b_d = Fq::from(42u64);
+        let subject_derivation = Fq::from(42u64);
         let statement = TransferTierMetadataStatement::from_identifiers(
-            subject_b_d,
+            subject_derivation,
             "ring-id",
             "policy-id",
             "document",
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn transfer_tier_decode_object_rejects_wrong_subject_linkage() {
         let (mut object, ring_pk) = valid_decode_object();
-        object.statement.subject_b_d_bytes = Fq::from(999u64).to_bytes();
+        object.statement.subject_derivation_bytes = Fq::from(999u64).to_bytes();
 
         let error = object
             .validate(&ring_pk)

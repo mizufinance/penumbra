@@ -1220,22 +1220,13 @@ mod tests {
             .dest_address
             .diversified_generator()
             .vartime_compress_to_field();
-        let recv_d = penumbra_sdk_compliance::derive_compliance_scalar(recv_b_d_fq);
-        let recipient_leaf = ComplianceLeaf {
-            address: output.dest_address.clone(),
-            asset_id,
-            d: recv_d,
-        };
+        let recipient_leaf =
+            ComplianceLeaf::new(output.dest_address.clone(), asset_id, recv_b_d_fq);
 
         let send_b_d_fq = sender_address
             .diversified_generator()
             .vartime_compress_to_field();
-        let send_d = penumbra_sdk_compliance::derive_compliance_scalar(send_b_d_fq);
-        let sender_leaf = ComplianceLeaf {
-            address: sender_address.clone(),
-            asset_id,
-            d: send_d,
-        };
+        let sender_leaf = ComplianceLeaf::new(sender_address.clone(), asset_id, send_b_d_fq);
 
         output
             .set_compliance_details(

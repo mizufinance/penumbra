@@ -36,12 +36,14 @@ func (c *noteCommitmentProfileCircuit) Define(api frontend.API) error {
 }
 
 type complianceLeafProfileCircuit struct {
-	DivGenX frontend.Variable
-	DivGenY frontend.Variable
-	TransX  frontend.Variable
-	TransY  frontend.Variable
-	AssetID frontend.Variable
-	D       frontend.Variable
+	DivGenX        frontend.Variable
+	DivGenY        frontend.Variable
+	TransX         frontend.Variable
+	TransY         frontend.Variable
+	AssetID        frontend.Variable
+	SlotID         frontend.Variable
+	SlotDerivation frontend.Variable
+	D              frontend.Variable
 }
 
 func (c *complianceLeafProfileCircuit) Define(api frontend.API) error {
@@ -50,6 +52,8 @@ func (c *complianceLeafProfileCircuit) Define(api frontend.API) error {
 		gnarkte.Point{X: c.DivGenX, Y: c.DivGenY},
 		gnarkte.Point{X: c.TransX, Y: c.TransY},
 		c.AssetID,
+		c.SlotID,
+		c.SlotDerivation,
 		c.D,
 	)
 	return err
@@ -176,8 +180,12 @@ type transferDetectionProfileCircuit struct {
 	SenderCoreEPKFq frontend.Variable
 	DetectionSalt   frontend.Variable
 	AssetID         frontend.Variable
+	SenderSlotID    frontend.Variable
+	ReceiverSlotID  frontend.Variable
 	Ciphertext0     frontend.Variable
 	Ciphertext1     frontend.Variable
+	Ciphertext2     frontend.Variable
+	Ciphertext3     frontend.Variable
 }
 
 func (c *transferDetectionProfileCircuit) Define(api frontend.API) error {
@@ -189,7 +197,14 @@ func (c *transferDetectionProfileCircuit) Define(api frontend.API) error {
 		c.SenderCoreEPKFq,
 		c.DetectionSalt,
 		c.AssetID,
-		[compliance.TransferDetectionFQCount]frontend.Variable{c.Ciphertext0, c.Ciphertext1},
+		c.SenderSlotID,
+		c.ReceiverSlotID,
+		[compliance.TransferDetectionFQCount]frontend.Variable{
+			c.Ciphertext0,
+			c.Ciphertext1,
+			c.Ciphertext2,
+			c.Ciphertext3,
+		},
 	)
 }
 

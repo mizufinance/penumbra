@@ -548,7 +548,7 @@ message ShieldedOutputPlan {
   // Indexed leaf data for IMT proof verification (value, next_index, next_value).
   compliance.v1.IndexedLeafData asset_indexed_leaf = 21;
   // Sender-encrypted ciphertext (96 bytes = 3 × 32, 3 Fq elements).
-  // Encrypts (recipient_gd, recipient_pk, amount) to sender's ack_orbis.
+  // Encrypts (recipient_gd, recipient_pk, amount) to sender's compliance ACK.
   bytes sender_ciphertext = 22;
   // DLEQ proof salt (random Fq used in metadata hash).
   bytes salt = 23;

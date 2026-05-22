@@ -10,14 +10,14 @@ transfer compliance ciphertext. Transfer inputs and change outputs must carry
 empty compliance bytes.
 
 ```text
-TransferComplianceCiphertext: 576 bytes
+TransferComplianceCiphertext: 640 bytes
   0..128    4 EPKs: sender_core, sender_ext, output_core, output_ext
   128..256  4 C2 envelopes, one per audit tier
-  256..320  detection tier: asset id + flag, salt
-  320..352  encrypted sender_core amount
-  352..448  encrypted sender_ext receiver address
-  448..480  encrypted output_core amount
-  480..576  encrypted output_ext sender address
+  256..384  detection tier: asset id + flag, salt, sender slot, receiver slot
+  384..416  encrypted sender_core amount
+  416..512  encrypted sender_ext receiver address
+  512..544  encrypted output_core amount
+  544..640  encrypted output_ext sender address
 
 TransferComplianceDleqProofs: 256 bytes
   4 * (challenge, response)
@@ -46,6 +46,15 @@ proofs for regulated assets and non-membership proofs for unregulated assets.
 The nullifier set uses a dedicated JMT-style sparse tree instead because
 nullifier insertion is validator-executed, not proved inside a circuit.
 
+`ComplianceLeaf` commits to the registered address, asset id, slot id,
+`slot_derivation`, and `d`. Chain-side registration checks only mechanical
+facts: `slot_id < AssetPolicy.slot_count`, `d == derive(slot_derivation)`, and
+the grant/signature over the full leaf. ACP decides which addresses may use
+which slot. Multiple addresses may share a slot, but that shares
+`slot_derivation`, `d`, and ACK, so it is address-clustering metadata.
+`slot_id` can be public without adding meaningful leakage, because it is only a
+label for the already-visible `slot_derivation` equivalence class.
+
 ## Scanner References
 
 ```rust
@@ -61,6 +70,9 @@ the transaction crate, keep the transaction-crate parity test mandatory.
 
 The scanner DB schema is not migration-compatible with earlier prototype DBs.
 Delete and rebuild old local scanner DBs.
+
+For operator-facing view database reset notes for compliance slot support, see
+`docs/compliance/release-notes.md`.
 
 ## Scanner DB Tables
 
@@ -102,7 +114,7 @@ detected transfer:
 
 ```text
 output ref
-asset id, flag, detection salt
+asset id, flag, detection salt, sender slot, receiver slot
 transfer ciphertext
 transfer DLEQ bundle
 public tier decode objects
@@ -142,7 +154,8 @@ Both flagged issuer-DK decrypt and unflagged Orbis PRE import require
 ## Transfer DLEQ
 
 Each audit tier has an in-circuit Chaum-Pedersen proof binding the tier to
-Penumbra metadata:
+Penumbra metadata. `ACK = d * ring_pk`, where `d` comes from the registered
+slot derivation, not from the address diversifier:
 
 ```text
 S  = r * ACK

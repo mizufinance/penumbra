@@ -21,25 +21,27 @@ pub const TOTAL_PLAINTEXT_BYTES: usize =
 
 /// Compliance ciphertext wire format constants.
 ///
-/// **Transfer-input format (224 bytes):** EPK_1(32) + c2_core(32) + detection(64) + core(96)
+/// **Transfer-input format (288 bytes):** EPK_1(32) + c2_core(32) + detection(128) + core(96)
 ///
 /// **Transfer-output format (544 bytes):** EPK_1(32) + EPK_2(32) + EPK_3(32)
-///   + c2_core(32) + c2_ext(32) + c2_sext(32) + detection(64) + core(96) + ext(96) + sext(96)
+///   + c2_core(32) + c2_ext(32) + c2_sext(32) + detection(128) + core(96) + ext(96) + sext(96)
 pub const EPK_BYTES: usize = 32;
 pub const C2_BYTES: usize = 32;
-pub const DETECTION_TAG_BYTES: usize = 64; // 2 Fq elements: asset_id+flag, salt
+pub const DETECTION_TAG_BYTES: usize = 128; // 4 Fq elements: asset_id+flag, salt, sender slot, receiver slot
 pub const ENCRYPTED_TIER_BYTES: usize = 96; // 3 Fq elements per tier
 
 /// Transfer-input ciphertext: 1 EPK + 1 c2 + detection + core.
 pub const TRANSFER_INPUT_WIRE_BYTES: usize =
-    EPK_BYTES + C2_BYTES + DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES; // 224 bytes
-pub const TRANSFER_INPUT_CIPHERTEXT_FQS: usize = (DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES) / 32; // 5
+    EPK_BYTES + C2_BYTES + DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES; // 288 bytes
+pub const TRANSFER_INPUT_CIPHERTEXT_FQS: usize = (DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES) / 32; // 7
 
 /// Transfer-output ciphertext: 3 EPKs + 3 c2s + detection + 3 tiers.
 pub const TRANSFER_OUTPUT_WIRE_BYTES: usize =
-    EPK_BYTES * 3 + C2_BYTES * 3 + DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES * 3; // 544 bytes
+    EPK_BYTES * 3 + C2_BYTES * 3 + DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES * 3; // 608 bytes
 pub const TRANSFER_OUTPUT_CIPHERTEXT_FQS: usize =
-    (DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES * 3) / 32; // 11
+    (DETECTION_TAG_BYTES + ENCRYPTED_TIER_BYTES * 3) / 32; // 13
+
+pub const DEFAULT_COMPLIANCE_SLOT_COUNT: u32 = 10;
 
 const ASSET_REGISTRATION_GRANT_DOMAIN: &[u8] = b"penumbra.compliance.asset_registration_grant.v1";
 const USER_REGISTRATION_GRANT_DOMAIN: &[u8] = b"penumbra.compliance.user_registration_grant.v1";
@@ -60,12 +62,12 @@ pub const TRANSFER_OUTPUT_DLEQ_BYTES: usize = FQ_BYTES * 6; // 192 bytes: c1||s1
 // Compile-time consistency checks.
 const _: () = {
     assert!(
-        TRANSFER_INPUT_WIRE_BYTES == 224,
-        "TRANSFER_INPUT_WIRE_BYTES must be 224"
+        TRANSFER_INPUT_WIRE_BYTES == 288,
+        "TRANSFER_INPUT_WIRE_BYTES must be 288"
     );
     assert!(
-        TRANSFER_OUTPUT_WIRE_BYTES == 544,
-        "TRANSFER_OUTPUT_WIRE_BYTES must be 544"
+        TRANSFER_OUTPUT_WIRE_BYTES == 608,
+        "TRANSFER_OUTPUT_WIRE_BYTES must be 608"
     );
     assert!(
         TRANSFER_INPUT_DLEQ_BYTES == 64,
@@ -76,12 +78,12 @@ const _: () = {
         "TRANSFER_OUTPUT_DLEQ_BYTES must be 192"
     );
     assert!(
-        TRANSFER_INPUT_CIPHERTEXT_FQS == 5,
-        "TRANSFER_INPUT_CIPHERTEXT_FQS must be 5"
+        TRANSFER_INPUT_CIPHERTEXT_FQS == 7,
+        "TRANSFER_INPUT_CIPHERTEXT_FQS must be 7"
     );
     assert!(
-        TRANSFER_OUTPUT_CIPHERTEXT_FQS == 11,
-        "TRANSFER_OUTPUT_CIPHERTEXT_FQS must be 11"
+        TRANSFER_OUTPUT_CIPHERTEXT_FQS == 13,
+        "TRANSFER_OUTPUT_CIPHERTEXT_FQS must be 13"
     );
 };
 
@@ -120,8 +122,8 @@ pub(crate) static COMPLIANCE_LEAF_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
 
 /// A compliance leaf in the public on-chain registry for regulated assets.
 ///
-/// Contains address, asset_id, and derivation scalar `d`.
-/// `d = SHA256("elgamal-derivation-v1\0\0" || b_d_fq_bytes)` — matches Orbis derivation.
+/// Contains address, asset_id, slot metadata, and derivation scalar `d`.
+/// `d = SHA256("elgamal-derivation-v1\0\0" || slot_derivation)` — matches Orbis derivation.
 /// ACK = d × ring_pk, computed in-circuit from the leaf's `d` value.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "pb::ComplianceLeaf", into = "pb::ComplianceLeaf")]
@@ -130,21 +132,71 @@ pub struct ComplianceLeaf {
     pub address: Address,
     /// The asset ID this compliance leaf applies to.
     pub asset_id: asset::Id,
-    /// Derivation scalar: d = SHA256_derive(b_d_fq). Verified at registration.
+    /// ACP-authorized slot for this asset.
+    pub slot_id: u32,
+    /// Canonical random slot derivation material.
+    pub slot_derivation: Fq,
+    /// Derivation scalar: d = SHA256_derive(slot_derivation). Verified at registration.
     pub d: Fq,
 }
 
 impl ComplianceLeaf {
-    /// Create a ComplianceLeaf.
-    pub fn new(address: Address, asset_id: asset::Id, d: Fq) -> Self {
+    /// Create a slot-0 ComplianceLeaf from ACP-authorized slot derivation material.
+    pub fn new(address: Address, asset_id: asset::Id, slot_derivation: Fq) -> Self {
+        Self::with_slot(address, asset_id, 0, slot_derivation)
+    }
+
+    /// Create a ComplianceLeaf from ACP-authorized slot derivation material.
+    pub fn with_slot(
+        address: Address,
+        asset_id: asset::Id,
+        slot_id: u32,
+        slot_derivation: Fq,
+    ) -> Self {
+        let d = crate::derive_compliance_scalar(slot_derivation);
         Self {
             address,
             asset_id,
+            slot_id,
+            slot_derivation,
             d,
         }
     }
 
-    /// Create the Poseidon commitment: hash_4(domain_sep, (g_d, pk_d, asset_id, d)).
+    /// Create the explicit synthetic leaf used only for unregulated asset proofs.
+    pub fn synthetic_unregulated(address: Address, asset_id: asset::Id) -> Self {
+        let slot_derivation = address.diversified_generator().vartime_compress_to_field();
+        Self::with_slot(address, asset_id, 0, slot_derivation)
+    }
+
+    /// Create a test-only leaf with explicitly supplied d.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub fn new_unchecked(
+        address: Address,
+        asset_id: asset::Id,
+        slot_id: u32,
+        slot_derivation: Fq,
+        d: Fq,
+    ) -> Self {
+        Self {
+            address,
+            asset_id,
+            slot_id,
+            slot_derivation,
+            d,
+        }
+    }
+
+    pub fn validate_derivation(&self) -> anyhow::Result<()> {
+        let expected = crate::derive_compliance_scalar(self.slot_derivation);
+        anyhow::ensure!(
+            self.d == expected,
+            "compliance leaf d does not match slot_derivation"
+        );
+        Ok(())
+    }
+
+    /// Create the Poseidon commitment.
     pub fn commit(&self) -> StateCommitment {
         let diversified_generator = self
             .address
@@ -154,12 +206,14 @@ impl ComplianceLeaf {
             .expect("transmission key is valid");
         let asset_id_field = self.asset_id.0;
 
-        let commit = poseidon377::hash_4(
+        let commit = poseidon377::hash_6(
             &COMPLIANCE_LEAF_DOMAIN_SEP,
             (
                 diversified_generator,
                 transmission_key_s,
                 asset_id_field,
+                Fq::from(self.slot_id),
+                self.slot_derivation,
                 self.d,
             ),
         );
@@ -195,7 +249,16 @@ impl TryFrom<pb::ComplianceLeaf> for ComplianceLeaf {
             .map_err(|_| anyhow::anyhow!("d must be 32 bytes"))?;
         let d = Fq::from_bytes_checked(&bytes)
             .map_err(|_| anyhow::anyhow!("invalid d field element"))?;
-        Ok(ComplianceLeaf {
+        if value.slot_derivation.is_empty() {
+            anyhow::bail!("missing slot_derivation");
+        }
+        let slot_derivation_bytes: [u8; 32] =
+            value.slot_derivation.try_into().map_err(|v: Vec<u8>| {
+                anyhow::anyhow!("slot_derivation must be 32 bytes, got {}", v.len())
+            })?;
+        let slot_derivation = Fq::from_bytes_checked(&slot_derivation_bytes)
+            .map_err(|_| anyhow::anyhow!("invalid slot_derivation field element"))?;
+        let leaf = ComplianceLeaf {
             address: value
                 .address
                 .ok_or_else(|| anyhow::anyhow!("missing address"))?
@@ -204,8 +267,12 @@ impl TryFrom<pb::ComplianceLeaf> for ComplianceLeaf {
                 .asset_id
                 .ok_or_else(|| anyhow::anyhow!("missing asset_id"))?
                 .try_into()?,
+            slot_id: value.slot_id,
+            slot_derivation,
             d,
-        })
+        };
+        leaf.validate_derivation()?;
+        Ok(leaf)
     }
 }
 
@@ -215,6 +282,8 @@ impl From<ComplianceLeaf> for pb::ComplianceLeaf {
             address: Some(value.address.into()),
             asset_id: Some(value.asset_id.into()),
             d: value.d.to_bytes().to_vec(),
+            slot_id: value.slot_id,
+            slot_derivation: value.slot_derivation.to_bytes().to_vec(),
         }
     }
 }
@@ -226,6 +295,8 @@ pub struct AssetParams {
     pub dk_pub: decaf377::Element,
     /// Amount threshold for flagging (u128 to cover full amount range).
     pub threshold: u128,
+    /// Number of ACP-authorized compliance slots for this asset.
+    pub slot_count: u32,
     /// Direct IBC routes allowed for this asset. Empty = IBC blocked.
     pub allowed_ibc_routes: Vec<IbcRoute>,
     /// External origin for regulated voucher assets.
@@ -411,6 +482,7 @@ impl AssetPolicy {
     pub fn new(
         dk_pub: decaf377::Element,
         threshold: u128,
+        slot_count: u32,
         allowed_ibc_routes: Vec<IbcRoute>,
         ibc_origin: Option<IbcAssetOrigin>,
         ring_id: String,
@@ -423,6 +495,7 @@ impl AssetPolicy {
             params: AssetParams {
                 dk_pub,
                 threshold,
+                slot_count,
                 allowed_ibc_routes: canonical_routes(allowed_ibc_routes),
                 ibc_origin,
             },
@@ -456,6 +529,7 @@ impl AssetPolicy {
         Self::new(
             dk_pub,
             threshold,
+            DEFAULT_COMPLIANCE_SLOT_COUNT,
             vec![],
             None,
             String::new(),
@@ -474,6 +548,7 @@ impl AssetPolicy {
             params: AssetParams {
                 dk_pub: *crate::crypto::UNREGULATED_SINK_DK_PUB,
                 threshold: u128::MAX,
+                slot_count: 0,
                 allowed_ibc_routes: vec![],
                 ibc_origin: None,
             },
@@ -501,6 +576,7 @@ impl AssetPolicy {
         // AssetParams
         bytes.extend_from_slice(&self.params.dk_pub.vartime_compress().0);
         bytes.extend_from_slice(&self.params.threshold.to_le_bytes());
+        bytes.extend_from_slice(&self.params.slot_count.to_le_bytes());
         // RingData - ring_pk
         bytes.extend_from_slice(&self.ring.ring_pk.vartime_compress().0);
         fn write_string(bytes: &mut Vec<u8>, s: &str, field: &str) -> anyhow::Result<()> {
@@ -551,7 +627,7 @@ impl AssetPolicy {
 
     /// Deserialize from bytes.
     pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
-        if bytes.len() < ASSET_POLICY_STORAGE_MAGIC.len() + 80 {
+        if bytes.len() < ASSET_POLICY_STORAGE_MAGIC.len() + 84 {
             anyhow::bail!(
                 "invalid AssetPolicy length: expected AP2 header and policy body, got {}",
                 bytes.len()
@@ -569,6 +645,8 @@ impl AssetPolicy {
             .map_err(|_| anyhow::anyhow!("invalid dk_pub encoding"))?;
         let threshold = u128::from_le_bytes(bytes[offset..offset + 16].try_into()?);
         offset += 16;
+        let slot_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into()?);
+        offset += 4;
         let ring_pk_bytes: [u8; 32] = bytes[offset..offset + 32].try_into()?;
         offset += 32;
         let ring_pk = decaf377::Encoding(ring_pk_bytes)
@@ -654,6 +732,7 @@ impl AssetPolicy {
             params: AssetParams {
                 dk_pub,
                 threshold,
+                slot_count,
                 allowed_ibc_routes,
                 ibc_origin,
             },
@@ -724,6 +803,7 @@ impl TryFrom<pb::AssetPolicy> for AssetPolicy {
             params: AssetParams {
                 dk_pub,
                 threshold,
+                slot_count: value.slot_count,
                 allowed_ibc_routes: canonical_routes(allowed_ibc_routes),
                 ibc_origin,
             },
@@ -744,6 +824,7 @@ impl From<AssetPolicy> for pb::AssetPolicy {
         pb::AssetPolicy {
             dk_pub: value.params.dk_pub.vartime_compress().0.to_vec(),
             threshold: value.params.threshold.to_le_bytes().to_vec(),
+            slot_count: value.params.slot_count,
             allowed_ibc_routes: value
                 .params
                 .allowed_ibc_routes
@@ -771,6 +852,7 @@ pub struct AssetRegistrationGrantBody {
     pub is_regulated: bool,
     pub dk_pub: Option<decaf377::Element>,
     pub threshold: Option<u128>,
+    pub slot_count: u32,
     pub allowed_ibc_routes: Vec<IbcRoute>,
     pub ibc_origin: Option<IbcAssetOrigin>,
     pub ring_pk: Option<decaf377::Element>,
@@ -826,6 +908,7 @@ impl TryFrom<pb::AssetRegistrationGrantBody> for AssetRegistrationGrantBody {
             is_regulated: value.is_regulated,
             dk_pub,
             threshold,
+            slot_count: value.slot_count,
             allowed_ibc_routes: canonical_routes(allowed_ibc_routes),
             ibc_origin,
             ring_pk,
@@ -852,6 +935,7 @@ impl From<AssetRegistrationGrantBody> for pb::AssetRegistrationGrantBody {
                 .threshold
                 .map(|t| t.to_le_bytes().to_vec())
                 .unwrap_or_default(),
+            slot_count: value.slot_count,
             allowed_ibc_routes: value
                 .allowed_ibc_routes
                 .into_iter()
@@ -1051,6 +1135,8 @@ pub struct MsgRegisterAsset {
     pub dk_pub: Option<decaf377::Element>,
     /// Amount threshold for flagging (optional).
     pub threshold: Option<u128>,
+    /// Number of ACP-authorized compliance slots for this asset.
+    pub slot_count: u32,
     /// Direct IBC routes allowed for this regulated asset. Empty = IBC blocked.
     pub allowed_ibc_routes: Vec<IbcRoute>,
     /// External IBC origin for regulated voucher assets.
@@ -1115,6 +1201,7 @@ impl TryFrom<pb::MsgRegisterAsset> for MsgRegisterAsset {
             is_regulated: value.is_regulated,
             dk_pub,
             threshold,
+            slot_count: value.slot_count,
             allowed_ibc_routes: canonical_routes(allowed_ibc_routes),
             ibc_origin,
             ring_pk,
@@ -1141,6 +1228,7 @@ impl From<MsgRegisterAsset> for pb::MsgRegisterAsset {
                 .threshold
                 .map(|t| t.to_le_bytes().to_vec())
                 .unwrap_or_default(),
+            slot_count: value.slot_count,
             allowed_ibc_routes: value
                 .allowed_ibc_routes
                 .into_iter()
@@ -1168,6 +1256,7 @@ impl MsgRegisterAsset {
             is_regulated: self.is_regulated,
             dk_pub: self.dk_pub,
             threshold: self.threshold,
+            slot_count: self.slot_count,
             allowed_ibc_routes: self.allowed_ibc_routes.clone(),
             ibc_origin: self.ibc_origin.clone(),
             ring_pk: self.ring_pk,
@@ -1302,26 +1391,28 @@ mod tests {
         let mut rng = rand::thread_rng();
         let address = Address::dummy(&mut rng);
         let asset_id = asset::Id(decaf377::Fq::from(100u64));
-        let d = decaf377::Fq::from(42u64);
+        let slot_derivation = decaf377::Fq::from(42u64);
 
-        let leaf = ComplianceLeaf::new(address.clone(), asset_id, d);
+        let leaf = ComplianceLeaf::with_slot(address.clone(), asset_id, 3, slot_derivation);
 
         assert_eq!(leaf.address, address);
         assert_eq!(leaf.asset_id, asset_id);
-        assert_eq!(leaf.d, d);
+        assert_eq!(leaf.slot_id, 3);
+        assert_eq!(leaf.slot_derivation, slot_derivation);
+        assert_eq!(leaf.d, crate::derive_compliance_scalar(slot_derivation));
     }
 
     #[test]
     fn test_compliance_leaf_different_addresses_different_commits() {
         let mut rng = rand::thread_rng();
         let asset_id = asset::Id(decaf377::Fq::from(100u64));
-        let d = decaf377::Fq::from(42u64);
+        let slot_derivation = decaf377::Fq::from(42u64);
 
         let address1 = Address::dummy(&mut rng);
         let address2 = Address::dummy(&mut rng);
 
-        let leaf1 = ComplianceLeaf::new(address1, asset_id, d);
-        let leaf2 = ComplianceLeaf::new(address2, asset_id, d);
+        let leaf1 = ComplianceLeaf::with_slot(address1, asset_id, 0, slot_derivation);
+        let leaf2 = ComplianceLeaf::with_slot(address2, asset_id, 0, slot_derivation);
 
         assert_ne!(
             leaf1.commit(),
@@ -1331,19 +1422,57 @@ mod tests {
     }
 
     #[test]
+    fn test_same_slot_reuse_same_d_and_ack() {
+        let mut rng = rand::thread_rng();
+        let asset_id = asset::Id(decaf377::Fq::from(100u64));
+        let slot_derivation = decaf377::Fq::from(42u64);
+        let ring_pk = decaf377::Element::GENERATOR * decaf377::Fr::from(77u64);
+
+        let leaf1 =
+            ComplianceLeaf::with_slot(Address::dummy(&mut rng), asset_id, 2, slot_derivation);
+        let leaf2 =
+            ComplianceLeaf::with_slot(Address::dummy(&mut rng), asset_id, 2, slot_derivation);
+        let ack1 = ring_pk * decaf377::Fr::from_le_bytes_mod_order(&leaf1.d.to_bytes());
+        let ack2 = ring_pk * decaf377::Fr::from_le_bytes_mod_order(&leaf2.d.to_bytes());
+
+        assert_eq!(leaf1.d, leaf2.d);
+        assert_eq!(ack1, ack2);
+    }
+
+    #[test]
+    fn test_same_address_different_slots_different_d_and_ack() {
+        let mut rng = rand::thread_rng();
+        let address = Address::dummy(&mut rng);
+        let asset_id = asset::Id(decaf377::Fq::from(100u64));
+        let ring_pk = decaf377::Element::GENERATOR * decaf377::Fr::from(77u64);
+
+        let leaf1 =
+            ComplianceLeaf::with_slot(address.clone(), asset_id, 0, decaf377::Fq::from(42u64));
+        let leaf2 = ComplianceLeaf::with_slot(address, asset_id, 1, decaf377::Fq::from(43u64));
+        let ack1 = ring_pk * decaf377::Fr::from_le_bytes_mod_order(&leaf1.d.to_bytes());
+        let ack2 = ring_pk * decaf377::Fr::from_le_bytes_mod_order(&leaf2.d.to_bytes());
+
+        assert_ne!(leaf1.d, leaf2.d);
+        assert_ne!(ack1, ack2);
+        assert_ne!(leaf1.commit(), leaf2.commit());
+    }
+
+    #[test]
     fn test_compliance_leaf_proto_roundtrip() {
         let mut rng = rand::thread_rng();
         let wallet = Address::dummy(&mut rng);
         let asset_id = asset::Id(decaf377::Fq::from(999u64));
-        let d = decaf377::Fq::from(123u64);
+        let slot_derivation = decaf377::Fq::from(123u64);
 
-        let original = ComplianceLeaf::new(wallet, asset_id, d);
+        let original = ComplianceLeaf::with_slot(wallet, asset_id, 4, slot_derivation);
 
         let proto: pb::ComplianceLeaf = original.clone().into();
         let recovered: ComplianceLeaf = proto.try_into().expect("should parse");
 
         assert_eq!(original.address, recovered.address);
         assert_eq!(original.asset_id, recovered.asset_id);
+        assert_eq!(original.slot_id, recovered.slot_id);
+        assert_eq!(original.slot_derivation, recovered.slot_derivation);
         assert_eq!(original.d, recovered.d);
         assert_eq!(original.commit().0, recovered.commit().0);
     }
@@ -1355,12 +1484,55 @@ mod tests {
             address: Some(Address::dummy(&mut rng).into()),
             asset_id: Some(asset::Id(decaf377::Fq::from(999u64)).into()),
             d: vec![],
+            slot_id: 0,
+            slot_derivation: decaf377::Fq::from(123u64).to_bytes().to_vec(),
         };
 
         let err = ComplianceLeaf::try_from(proto).expect_err("missing d should fail");
 
         assert!(
             err.to_string().contains("missing d"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn test_compliance_leaf_proto_rejects_missing_slot_derivation() {
+        let mut rng = rand::thread_rng();
+        let slot_derivation = decaf377::Fq::from(123u64);
+        let proto = pb::ComplianceLeaf {
+            address: Some(Address::dummy(&mut rng).into()),
+            asset_id: Some(asset::Id(decaf377::Fq::from(999u64)).into()),
+            d: crate::derive_compliance_scalar(slot_derivation)
+                .to_bytes()
+                .to_vec(),
+            slot_id: 0,
+            slot_derivation: vec![],
+        };
+
+        let err = ComplianceLeaf::try_from(proto).expect_err("missing slot derivation should fail");
+
+        assert!(
+            err.to_string().contains("missing slot_derivation"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn test_compliance_leaf_proto_rejects_mismatched_d() {
+        let mut rng = rand::thread_rng();
+        let proto = pb::ComplianceLeaf {
+            address: Some(Address::dummy(&mut rng).into()),
+            asset_id: Some(asset::Id(decaf377::Fq::from(999u64)).into()),
+            d: decaf377::Fq::from(456u64).to_bytes().to_vec(),
+            slot_id: 0,
+            slot_derivation: decaf377::Fq::from(123u64).to_bytes().to_vec(),
+        };
+
+        let err = ComplianceLeaf::try_from(proto).expect_err("mismatched d should fail");
+
+        assert!(
+            err.to_string().contains("does not match slot_derivation"),
             "unexpected error: {err:#}"
         );
     }
@@ -1375,6 +1547,7 @@ mod tests {
         let policy = AssetPolicy::new(
             dk_pub,
             1000,
+            DEFAULT_COMPLIANCE_SLOT_COUNT,
             vec![IbcRoute::transfer("channel-0", "connection-0", "channel-7")],
             Some(IbcAssetOrigin {
                 route: IbcRoute::transfer("channel-0", "connection-0", "channel-7"),
@@ -1412,6 +1585,7 @@ mod tests {
         let policy = AssetPolicy::new(
             dk_pub,
             500,
+            DEFAULT_COMPLIANCE_SLOT_COUNT,
             vec![
                 IbcRoute::transfer("channel-1", "connection-0", "channel-7"),
                 IbcRoute::transfer("channel-2", "connection-1", "channel-8"),
@@ -1437,6 +1611,7 @@ mod tests {
         let policy = AssetPolicy::new(
             dk_pub,
             500,
+            DEFAULT_COMPLIANCE_SLOT_COUNT,
             vec![IbcRoute::transfer(
                 "x".repeat(usize::from(u16::MAX) + 1),
                 "connection-0",
@@ -1465,6 +1640,7 @@ mod tests {
         let policy = AssetPolicy::new(
             dk_pub,
             500,
+            DEFAULT_COMPLIANCE_SLOT_COUNT,
             vec![],
             None,
             "r".repeat(usize::from(u16::MAX) + 1),
@@ -1489,6 +1665,7 @@ mod tests {
         let policy = AssetPolicy::new(
             dk_pub,
             500,
+            DEFAULT_COMPLIANCE_SLOT_COUNT,
             vec![],
             None,
             "ring-id".to_string(),
@@ -1515,6 +1692,7 @@ mod tests {
         let mut proto: pb::AssetPolicy = AssetPolicy::new(
             dk_pub,
             500,
+            DEFAULT_COMPLIANCE_SLOT_COUNT,
             vec![],
             None,
             "ring-id".to_string(),

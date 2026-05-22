@@ -12,7 +12,7 @@ use crate::{
     structs::{DleqProof, C2_BYTES, DETECTION_TAG_BYTES, EPK_BYTES, FQ_BYTES},
 };
 
-pub const TRANSFER_DETECTION_FQS: usize = 2;
+pub const TRANSFER_DETECTION_FQS: usize = 4;
 pub const TRANSFER_CORE_CIPHERTEXT_FQS: usize = 1;
 pub const TRANSFER_EXT_CIPHERTEXT_FQS: usize = 3;
 pub const TRANSFER_CIPHERTEXT_FQS: usize = TRANSFER_DETECTION_FQS
@@ -268,6 +268,8 @@ pub fn encrypt_transfer(
     sender_address: &Address,
     receiver_value: Value,
     is_flagged: bool,
+    sender_slot_id: u32,
+    receiver_slot_id: u32,
     detection_salt: Fq,
 ) -> Result<TransferEncryptionResult> {
     let sender = PartyTierMaterial {
@@ -332,9 +334,15 @@ pub fn encrypt_transfer(
         + poseidon377::hash_2(&seed_detection, (Fq::from(0u64), seed_detection));
     let detection_1 =
         detection_salt + poseidon377::hash_2(&seed_detection, (Fq::from(1u64), seed_detection));
+    let detection_2 = Fq::from(sender_slot_id)
+        + poseidon377::hash_2(&seed_detection, (Fq::from(2u64), seed_detection));
+    let detection_3 = Fq::from(receiver_slot_id)
+        + poseidon377::hash_2(&seed_detection, (Fq::from(3u64), seed_detection));
     let mut detection_tag = [0u8; DETECTION_TAG_BYTES];
     detection_tag[..32].copy_from_slice(&detection_0.to_bytes());
-    detection_tag[32..].copy_from_slice(&detection_1.to_bytes());
+    detection_tag[32..64].copy_from_slice(&detection_1.to_bytes());
+    detection_tag[64..96].copy_from_slice(&detection_2.to_bytes());
+    detection_tag[96..128].copy_from_slice(&detection_3.to_bytes());
 
     let amount_bytes = receiver_value.amount.to_le_bytes();
     let encrypted_sender_core: [u8; FQ_BYTES * TRANSFER_CORE_CIPHERTEXT_FQS] =

@@ -86,12 +86,7 @@ pub async fn register_test_users_for_compliance<S: StateWrite>(
     for address in addresses {
         for &asset_id in asset_ids {
             let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-            let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
-            let leaf = ComplianceLeaf {
-                address: address.clone(),
-                asset_id,
-                d,
-            };
+            let leaf = ComplianceLeaf::new(address.clone(), asset_id, b_d_fq);
             state.add_compliance_leaf(leaf).await?;
         }
     }
@@ -120,12 +115,7 @@ pub async fn state_with_compliance_for_build(
     for address in addresses {
         for &asset_id in asset_ids {
             let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-            let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
-            let leaf = ComplianceLeaf {
-                address: address.clone(),
-                asset_id,
-                d,
-            };
+            let leaf = ComplianceLeaf::new(address.clone(), asset_id, b_d_fq);
             delta.add_compliance_leaf(leaf).await?;
         }
     }

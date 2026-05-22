@@ -19,6 +19,8 @@ pub struct MerklePathBinary {
 pub struct ComplianceLeafBinary {
     pub address: [u8; 80],
     pub asset_id: [u8; 32],
+    pub slot_id: [u8; 32],
+    pub slot_derivation: [u8; 32],
     pub d: [u8; 32],
 }
 
@@ -29,6 +31,7 @@ pub struct IndexedLeafBinary {
     pub next_value: [u8; 32],
     pub dk_pub: [u8; 32],
     pub threshold: [u8; 16],
+    pub slot_count: [u8; 32],
     pub route_policy_hash: [u8; 32],
     pub ring_pk: [u8; 32],
     pub ring_id_hash: [u8; 32],
@@ -68,6 +71,7 @@ pub(crate) fn encode_indexed_leaf(buf: &mut Vec<u8>, leaf: &IndexedLeafBinary) {
     put_bytes(buf, &leaf.next_value);
     put_bytes(buf, &leaf.dk_pub);
     put_bytes(buf, &leaf.threshold);
+    put_bytes(buf, &leaf.slot_count);
     put_bytes(buf, &leaf.route_policy_hash);
     put_bytes(buf, &leaf.ring_pk);
     put_bytes(buf, &leaf.ring_id_hash);
@@ -83,6 +87,7 @@ pub(crate) fn decode_indexed_leaf(cursor: &mut BinaryCursor<'_>) -> Result<Index
         next_value: cursor.read_fixed::<32>()?,
         dk_pub: cursor.read_fixed::<32>()?,
         threshold: cursor.read_fixed::<16>()?,
+        slot_count: cursor.read_fixed::<32>()?,
         route_policy_hash: cursor.read_fixed::<32>()?,
         ring_pk: cursor.read_fixed::<32>()?,
         ring_id_hash: cursor.read_fixed::<32>()?,
@@ -127,6 +132,7 @@ pub(crate) fn indexed_leaf_from_typed(leaf: &IndexedLeaf) -> IndexedLeafBinary {
         next_value: leaf.next_value.to_bytes(),
         dk_pub: leaf.params.dk_pub.vartime_compress().0,
         threshold: leaf.params.threshold.to_le_bytes(),
+        slot_count: decaf377::Fq::from(leaf.params.slot_count).to_bytes(),
         route_policy_hash: leaf.params.route_policy_hash.to_bytes(),
         ring_pk: leaf.ring.ring_pk.vartime_compress().0,
         ring_id_hash: leaf.ring.ring_id_hash.to_bytes(),
@@ -150,6 +156,8 @@ pub(crate) fn compliance_leaf_from_typed(
     Ok(ComplianceLeafBinary {
         address,
         asset_id: leaf.asset_id.0.to_bytes(),
+        slot_id: decaf377::Fq::from(leaf.slot_id).to_bytes(),
+        slot_derivation: leaf.slot_derivation.to_bytes(),
         d: leaf.d.to_bytes(),
     })
 }

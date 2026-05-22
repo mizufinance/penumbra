@@ -11,9 +11,12 @@ use decaf377::{Element, Fq, Fr};
 
 use crate::crypto::{derive_compliance_scalar, verify_dleq_native};
 
-fn ack_from_diversified_base(ring_pk: &Element, b_d_bytes: &[u8]) -> (Element, Fr) {
-    let b_d_fq = Fq::from_le_bytes_mod_order(b_d_bytes);
-    let d = derive_compliance_scalar(b_d_fq);
+fn ack_from_subject_derivation(
+    ring_pk: &Element,
+    subject_derivation_bytes: &[u8],
+) -> (Element, Fr) {
+    let subject_derivation = Fq::from_le_bytes_mod_order(subject_derivation_bytes);
+    let d = derive_compliance_scalar(subject_derivation);
     let d_fr = Fr::from_le_bytes_mod_order(&d.to_bytes());
     (*ring_pk * d_fr, d_fr)
 }
@@ -28,9 +31,10 @@ pub fn compute_reencrypt_commitment(
     sk_ring: &Fr,
     epk_tier: &Element,
     pk_issuer: &Element,
-    b_d_bytes: &[u8],
+    subject_derivation_bytes: &[u8],
 ) -> Element {
-    let (_, d_fr) = ack_from_diversified_base(&compute_ring_pk(sk_ring), b_d_bytes);
+    let (_, d_fr) =
+        ack_from_subject_derivation(&compute_ring_pk(sk_ring), subject_derivation_bytes);
     (*pk_issuer + *epk_tier) * (d_fr * *sk_ring)
 }
 
@@ -58,13 +62,13 @@ pub fn verify_and_compute_reencrypt_commitment(
     sk_ring: &Fr,
     epk_tier: &Element,
     pk_issuer: &Element,
-    b_d_bytes: &[u8],
+    subject_derivation_bytes: &[u8],
     dleq_c: &Fq,
     dleq_s: &Fr,
     metadata_hash: Fq,
 ) -> Result<Element> {
     let ring_pk = compute_ring_pk(sk_ring);
-    let (ack_tier, d_fr) = ack_from_diversified_base(&ring_pk, b_d_bytes);
+    let (ack_tier, d_fr) = ack_from_subject_derivation(&ring_pk, subject_derivation_bytes);
     let shared_point = *epk_tier * (d_fr * *sk_ring);
 
     verify_reencrypt_proof(
@@ -128,8 +132,8 @@ mod tests {
             .expect("fixture should deserialize")
     }
 
-    fn derive_ack(ring_pk: &Element, b_d_fq: Fq) -> Element {
-        let d = derive_compliance_scalar(b_d_fq);
+    fn derive_ack(ring_pk: &Element, subject_derivation: Fq) -> Element {
+        let d = derive_compliance_scalar(subject_derivation);
         let d_fr = Fr::from_le_bytes_mod_order(&d.to_bytes());
         *ring_pk * d_fr
     }
@@ -144,16 +148,17 @@ mod tests {
         let sk_issuer = Fr::rand(&mut rng);
         let pk_issuer = Element::GENERATOR * sk_issuer;
 
-        let b_d_fq = Fq::from(42u64);
-        let b_d_bytes = b_d_fq.to_bytes();
-        let ack = derive_ack(&ring_pk, b_d_fq);
+        let subject_derivation = Fq::from(42u64);
+        let subject_derivation_bytes = subject_derivation.to_bytes();
+        let ack = derive_ack(&ring_pk, subject_derivation);
 
         let r = Fr::rand(&mut rng);
         let epk = Element::GENERATOR * r;
         let seed = Fq::rand(&mut rng);
         let c2 = seed + (ack * r).vartime_compress_to_field();
 
-        let xnc_cmt = compute_reencrypt_commitment(&sk_ring, &epk, &pk_issuer, &b_d_bytes);
+        let xnc_cmt =
+            compute_reencrypt_commitment(&sk_ring, &epk, &pk_issuer, &subject_derivation_bytes);
         let recovered = recover_seed(&xnc_cmt, &sk_issuer, &ack, &c2);
 
         assert_eq!(seed, recovered, "issuer should recover the original seed");
@@ -169,9 +174,9 @@ mod tests {
         let sk_issuer = Fr::rand(&mut rng);
         let pk_issuer = Element::GENERATOR * sk_issuer;
 
-        let b_d_fq = Fq::from(42u64);
-        let b_d_bytes = b_d_fq.to_bytes();
-        let ack = derive_ack(&ring_pk, b_d_fq);
+        let subject_derivation = Fq::from(42u64);
+        let subject_derivation_bytes = subject_derivation.to_bytes();
+        let ack = derive_ack(&ring_pk, subject_derivation);
 
         let r_1 = Fr::rand(&mut rng);
         let r_2 = Fr::rand(&mut rng);
@@ -181,11 +186,13 @@ mod tests {
         let seed = Fq::rand(&mut rng);
         let c2 = seed + (ack * r_1).vartime_compress_to_field();
 
-        let xnc_1 = compute_reencrypt_commitment(&sk_ring, &epk_1, &pk_issuer, &b_d_bytes);
+        let xnc_1 =
+            compute_reencrypt_commitment(&sk_ring, &epk_1, &pk_issuer, &subject_derivation_bytes);
         let recovered = recover_seed(&xnc_1, &sk_issuer, &ack, &c2);
         assert_eq!(seed, recovered, "matching EPK should recover the seed");
 
-        let xnc_2 = compute_reencrypt_commitment(&sk_ring, &epk_2, &pk_issuer, &b_d_bytes);
+        let xnc_2 =
+            compute_reencrypt_commitment(&sk_ring, &epk_2, &pk_issuer, &subject_derivation_bytes);
         let recovered_wrong = recover_seed(&xnc_2, &sk_issuer, &ack, &c2);
         assert_ne!(
             seed, recovered_wrong,
@@ -203,9 +210,9 @@ mod tests {
         let sk_issuer = Fr::rand(&mut rng);
         let pk_issuer = Element::GENERATOR * sk_issuer;
 
-        let b_d_fq = Fq::from(42u64);
-        let b_d_bytes = b_d_fq.to_bytes();
-        let ack = derive_ack(&ring_pk, b_d_fq);
+        let subject_derivation = Fq::from(42u64);
+        let subject_derivation_bytes = subject_derivation.to_bytes();
+        let ack = derive_ack(&ring_pk, subject_derivation);
 
         let r = Fr::rand(&mut rng);
         let k = Fr::rand(&mut rng);
@@ -227,7 +234,7 @@ mod tests {
             &sk_ring,
             &epk,
             &pk_issuer,
-            &b_d_bytes,
+            &subject_derivation_bytes,
             &proof.c,
             &proof.s,
             metadata_hash,
@@ -245,9 +252,9 @@ mod tests {
         let sk_ring = Fr::rand(&mut rng);
         let ring_pk = compute_ring_pk(&sk_ring);
         let pk_issuer = Element::GENERATOR * Fr::rand(&mut rng);
-        let b_d_fq = Fq::from(42u64);
-        let b_d_bytes = b_d_fq.to_bytes();
-        let ack = derive_ack(&ring_pk, b_d_fq);
+        let subject_derivation = Fq::from(42u64);
+        let subject_derivation_bytes = subject_derivation.to_bytes();
+        let ack = derive_ack(&ring_pk, subject_derivation);
 
         let r = Fr::rand(&mut rng);
         let k = Fr::rand(&mut rng);
@@ -267,7 +274,7 @@ mod tests {
             &sk_ring,
             &epk,
             &pk_issuer,
-            &b_d_bytes,
+            &subject_derivation_bytes,
             &bad_c,
             &proof.s,
             metadata_hash,
@@ -285,9 +292,9 @@ mod tests {
         let sk_ring = Fr::rand(&mut rng);
         let ring_pk = compute_ring_pk(&sk_ring);
         let pk_issuer = Element::GENERATOR * Fr::rand(&mut rng);
-        let b_d_fq = Fq::from(42u64);
-        let b_d_bytes = b_d_fq.to_bytes();
-        let ack = derive_ack(&ring_pk, b_d_fq);
+        let subject_derivation = Fq::from(42u64);
+        let subject_derivation_bytes = subject_derivation.to_bytes();
+        let ack = derive_ack(&ring_pk, subject_derivation);
 
         let r = Fr::rand(&mut rng);
         let k = Fr::rand(&mut rng);
@@ -315,7 +322,7 @@ mod tests {
             &sk_ring,
             &epk,
             &pk_issuer,
-            &b_d_bytes,
+            &subject_derivation_bytes,
             &proof.c,
             &proof.s,
             wrong_metadata,
@@ -324,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    fn test_different_diversifiers_produce_different_results() {
+    fn test_different_subject_derivations_produce_different_results() {
         let mut rng = OsRng;
 
         let sk_ring = Fr::rand(&mut rng);
@@ -333,25 +340,41 @@ mod tests {
         let sk_issuer = Fr::rand(&mut rng);
         let pk_issuer = Element::GENERATOR * sk_issuer;
 
-        let b_d_fq_1 = Fq::from(42u64);
-        let b_d_fq_2 = Fq::from(43u64);
+        let subject_derivation_1 = Fq::from(42u64);
+        let subject_derivation_2 = Fq::from(43u64);
 
-        let ack_1 = derive_ack(&ring_pk, b_d_fq_1);
-        let ack_2 = derive_ack(&ring_pk, b_d_fq_2);
-        assert_ne!(ack_1, ack_2, "different diversifiers should change the ACK");
+        let ack_1 = derive_ack(&ring_pk, subject_derivation_1);
+        let ack_2 = derive_ack(&ring_pk, subject_derivation_2);
+        assert_ne!(
+            ack_1, ack_2,
+            "different subject derivations should change the ACK"
+        );
 
         let r = Fr::rand(&mut rng);
         let epk = Element::GENERATOR * r;
         let seed = Fq::rand(&mut rng);
         let c2 = seed + (ack_1 * r).vartime_compress_to_field();
 
-        let xnc_1 = compute_reencrypt_commitment(&sk_ring, &epk, &pk_issuer, &b_d_fq_1.to_bytes());
+        let xnc_1 = compute_reencrypt_commitment(
+            &sk_ring,
+            &epk,
+            &pk_issuer,
+            &subject_derivation_1.to_bytes(),
+        );
         let recovered_1 = recover_seed(&xnc_1, &sk_issuer, &ack_1, &c2);
         assert_eq!(seed, recovered_1);
 
-        let xnc_2 = compute_reencrypt_commitment(&sk_ring, &epk, &pk_issuer, &b_d_fq_2.to_bytes());
+        let xnc_2 = compute_reencrypt_commitment(
+            &sk_ring,
+            &epk,
+            &pk_issuer,
+            &subject_derivation_2.to_bytes(),
+        );
         let recovered_2 = recover_seed(&xnc_2, &sk_issuer, &ack_2, &c2);
-        assert_ne!(seed, recovered_2, "wrong diversifier should not decrypt");
+        assert_ne!(
+            seed, recovered_2,
+            "wrong subject derivation should not decrypt"
+        );
     }
 
     #[test]

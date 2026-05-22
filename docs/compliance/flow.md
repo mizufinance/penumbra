@@ -31,6 +31,7 @@ AssetPolicy {
   dk_pub,
   ring_pk,
   threshold,
+  slot_count,
   allowed_channels,
   ring_id,
   policy_id,
@@ -47,18 +48,34 @@ in NV storage and is checked at readiness.
 
 3. **User registration**: user completes KYC with Defra, publishes a hidden-doc
    proof through SourceHub/Orbis, then registers a `(address, asset)` compliance
-   leaf on Penumbra. A hidden-doc proof shows that the address diversifier
-   appears in an authorized KYC document without revealing the document id.
+   leaf on Penumbra. ACP assigns or authorizes a slot for the asset and supplies
+   canonical random slot derivation material.
 
 ```text
-d   = SHA256("elgamal-derivation-v1\0\0" || B_d)
+slot_id < AssetPolicy.slot_count
+d   = SHA256("elgamal-derivation-v1\0\0" || slot_derivation)
 ACK = d * ring_pk
 ```
 
-`B_d` is the public diversified address base point. `ACK` means Audit
-Compliance Key: it is the per-address key used for audit-tier encryption.
-`d` is stored in the compliance leaf; `ACK` is derivable from `B_d` and the
-asset's `ring_pk`, but is not stored.
+Normal Penumbra address generation is unchanged. `slot_derivation` is opaque
+canonical slot material, not an address diversifier. `ACK` means Audit
+Compliance Key: it is the per-slot key used for audit-tier encryption. `d` and
+`slot_derivation` are stored in the compliance leaf; `ACK` is derived from `d`
+and the asset's `ring_pk`, but is not stored.
+
+Reusing a slot for multiple registered addresses reuses the same
+`slot_derivation`, `d`, and ACK, so those addresses are clusterable. This is
+allowed for regulated assets, but docs and clients should recommend one
+registered address per slot unless the user intentionally accepts that
+clustering. v1 uses bounded slots per asset; later versions can raise the bound
+or make it effectively unbounded.
+
+`slot_id` is not an additional privacy boundary when the corresponding
+`slot_derivation` is visible: the derivation material already defines the
+linkable class. Making `slot_id` public only names that class and does not add
+meaningful leakage beyond public registration data. Hiding `slot_id` would only
+matter in a future design that also hides `slot_derivation` from the same
+observer set.
 
 ## Transfer
 
@@ -75,7 +92,7 @@ Both sender and receiver must have compliance leaves for the regulated asset.
 planner:
   fetch sender/receiver compliance leaves
   fetch AssetPolicy
-  derive sender/receiver ACKs
+  derive sender/receiver ACKs from leaf d
   set is_flagged = amount >= threshold
   create one receiver-output compliance ciphertext
 ```
@@ -86,18 +103,21 @@ metadata. Inputs and change outputs carry no compliance ciphertext.
 
 | Tier | Content | Unflagged Encryption | Flagged Encryption |
 |------|---------|----------------------|--------------------|
-| Detection | asset id, flag, salt | `dk_pub` | `dk_pub` |
+| Detection | asset id, flag, salt, sender slot id, receiver slot id | `dk_pub` | `dk_pub` |
 | Sender core | amount | sender ACK | `dk_pub` |
 | Sender ext | receiver address | sender ACK | `dk_pub` |
 | Output core | amount | receiver ACK | `dk_pub` |
 | Output ext | sender address | receiver ACK | `dk_pub` |
 
 `dk_pub` is the issuer Detection Key public key from `AssetPolicy`. Detection
-is always issuer-DK decryptable. ACK encryption routes unflagged audit tiers to
-authorized subject/ring access through Orbis PRE; flagged transfers encrypt all
-audit tiers to issuer `dk_pub` directly. Core tiers carry values such as amount;
-extension tiers carry address/counterparty data so authorization can separate
-value access from address metadata access.
+is always issuer-DK decryptable and carries the slot ids needed to select the
+one slot derivation for PRE. The slot ids may also be public without extra
+privacy loss, because the registered `slot_derivation` already reveals same-slot
+clustering. ACK encryption routes unflagged audit tiers to authorized
+subject/ring access through Orbis PRE; flagged transfers encrypt all audit tiers
+to issuer `dk_pub` directly. Core tiers carry values such as amount; extension
+tiers carry address/counterparty data so authorization can separate value access
+from address metadata access.
 
 The transfer circuit owns value/nullifier/note/balance soundness. Compliance
 owns asset-policy binding, threshold flag correctness, ciphertext construction,
@@ -187,9 +207,11 @@ decrypt locally after evidence validates. Orbis is not used.
 
 ### Unflagged
 
-Only the detection tier decrypts locally. Audit tiers require governance/ACP
-authorization and Orbis PRE. Each tier has an independent encrypted-seed upload
-package and independent PRE path.
+Only the detection tier decrypts locally. It includes sender and receiver slot
+ids, so audit can run PRE against the selected slot key instead of trying every
+registered address. Audit tiers require governance/ACP authorization and Orbis
+PRE. Each tier has an independent encrypted-seed upload package and independent
+PRE path.
 
 ```text
 ACP grant

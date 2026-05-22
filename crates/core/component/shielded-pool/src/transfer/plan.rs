@@ -772,31 +772,18 @@ impl TryFrom<pb::TransferPlan> for TransferPlan {
 
 fn sender_leaf(spend: &ShieldedInputPlan) -> ComplianceLeaf {
     spend.compliance_leaf.clone().unwrap_or_else(|| {
-        let b_d_fq = spend
-            .note
-            .address()
-            .diversified_generator()
-            .vartime_compress_to_field();
-        let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
-        penumbra_sdk_compliance::ComplianceLeaf::new(
+        penumbra_sdk_compliance::ComplianceLeaf::synthetic_unregulated(
             spend.note.address().clone(),
             spend.note.asset_id(),
-            d,
         )
     })
 }
 
 fn recipient_leaf(output: &ShieldedOutputPlan, created_note: &crate::Note) -> ComplianceLeaf {
     output.compliance_leaf.clone().unwrap_or_else(|| {
-        let b_d_fq = created_note
-            .address()
-            .diversified_generator()
-            .vartime_compress_to_field();
-        let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
-        penumbra_sdk_compliance::ComplianceLeaf::new(
+        penumbra_sdk_compliance::ComplianceLeaf::synthetic_unregulated(
             created_note.address().clone(),
             created_note.asset_id(),
-            d,
         )
     })
 }

@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	TransferDetectionFQCount      = 2
+	TransferDetectionFQCount      = 4
 	TransferCoreCiphertextFQCount = 1
 	TransferExtCiphertextFQCount  = 3
 )
@@ -54,6 +54,8 @@ func VerifyPoseidonEncryptionTransferDetection(
 	senderCoreEPKFq frontend.Variable,
 	detectionSalt frontend.Variable,
 	assetID frontend.Variable,
+	senderSlotID frontend.Variable,
+	receiverSlotID frontend.Variable,
 	ciphertext [TransferDetectionFQCount]frontend.Variable,
 ) error {
 	api.AssertIsBoolean(isRegulated)
@@ -85,9 +87,19 @@ func VerifyPoseidonEncryptionTransferDetection(
 	if err != nil {
 		return err
 	}
+	keystream2, err := primitives.Poseidon377Hash2(api, seedDetection, [2]frontend.Variable{2, seedDetection})
+	if err != nil {
+		return err
+	}
+	keystream3, err := primitives.Poseidon377Hash2(api, seedDetection, [2]frontend.Variable{3, seedDetection})
+	if err != nil {
+		return err
+	}
 
 	AssertEqualIf(api, api.Add(detectionPlaintext, keystream0), ciphertext[0], isRegulated)
 	AssertEqualIf(api, api.Add(detectionSalt, keystream1), ciphertext[1], isRegulated)
+	AssertEqualIf(api, api.Add(senderSlotID, keystream2), ciphertext[2], isRegulated)
+	AssertEqualIf(api, api.Add(receiverSlotID, keystream3), ciphertext[3], isRegulated)
 	return nil
 }
 

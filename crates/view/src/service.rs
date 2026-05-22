@@ -1754,8 +1754,9 @@ impl ViewService for ViewServer {
         // Returns (user_registered, compliance_position, compliance_path, compliance_leaf)
         let (user_registered, compliance_position, compliance_path, compliance_leaf) =
             match local_leaf_data {
-                Some((position, _ack_bytes, _ack_orbis_bytes, _commitment)) => {
+                Some(leaf_data) => {
                     // Local storage hit - compute path from held user_tree reference
+                    let position = leaf_data.position;
                     let path = user_tree.witness(position).map_err(|e| {
                         tonic::Status::internal(format!("failed to compute path: {e}"))
                     })?;
@@ -1764,7 +1765,9 @@ impl ViewService for ViewServer {
                     let leaf_proto = compliance_pb::ComplianceLeaf {
                         address: Some(address.clone().into()),
                         asset_id: Some(asset_id.into()),
-                        d: vec![],
+                        d: leaf_data.d.to_vec(),
+                        slot_id: leaf_data.slot_id,
+                        slot_derivation: leaf_data.slot_derivation.to_vec(),
                     };
 
                     tracing::debug!(
@@ -1924,16 +1927,16 @@ impl ViewService for ViewServer {
             .await
             .map_err(|e| tonic::Status::internal(format!("storage error: {e}")))?;
 
-        if let Some((_position, _ack_bytes, _ack_orbis_bytes, _commitment)) = local_leaf_data {
-            // Local storage hit - reconstruct the leaf, re-deriving d from address
+        if let Some(leaf_data) = local_leaf_data {
+            // Local storage hit - reconstruct the leaf from stored slot material.
             tracing::debug!(?address, ?asset_id, "using local storage for user leaf");
 
-            let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-            let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
             let leaf = compliance_pb::ComplianceLeaf {
                 address: request_inner.address,
                 asset_id: request_inner.asset_id,
-                d: d.to_bytes().to_vec(),
+                d: leaf_data.d.to_vec(),
+                slot_id: leaf_data.slot_id,
+                slot_derivation: leaf_data.slot_derivation.to_vec(),
             };
 
             return Ok(tonic::Response::new(pb::ComplianceUserLeafResponse {
@@ -1973,6 +1976,8 @@ impl ViewService for ViewServer {
             address: l.address,
             asset_id: l.asset_id,
             d: l.d,
+            slot_id: l.slot_id,
+            slot_derivation: l.slot_derivation,
         });
 
         Ok(tonic::Response::new(pb::ComplianceUserLeafResponse {
@@ -2064,17 +2069,18 @@ impl ViewService for ViewServer {
 
             let (user_registered, compliance_position, compliance_path, compliance_leaf) =
                 match local_leaf_data {
-                    Some((position, _ack_bytes, _ack_orbis_bytes, _commitment)) => {
+                    Some(leaf_data) => {
+                        let position = leaf_data.position;
                         let path = user_tree.witness(position).map_err(|e| {
                             tonic::Status::internal(format!("failed to compute path: {e}"))
                         })?;
 
-                        let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-                        let d = penumbra_sdk_compliance::derive_compliance_scalar(b_d_fq);
                         let leaf_proto = compliance_pb::ComplianceLeaf {
                             address: Some(address.clone().into()),
                             asset_id: Some(asset_id.into()),
-                            d: d.to_bytes().to_vec(),
+                            d: leaf_data.d.to_vec(),
+                            slot_id: leaf_data.slot_id,
+                            slot_derivation: leaf_data.slot_derivation.to_vec(),
                         };
 
                         tracing::debug!(

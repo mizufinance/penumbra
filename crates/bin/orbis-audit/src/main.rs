@@ -14,9 +14,10 @@ use match_rows::{candidate_to_entry, AddressData, TransferMatch};
 use orbis_authn::JwtSigner;
 use orbis_common::blockchain::{ChainConfig, SourceHubClient, TxSigner, TEST_ACCOUNT_HEX_KEY};
 use penumbra_orbis_client::OrbisClient;
+use penumbra_sdk_asset::asset;
 use penumbra_sdk_compliance::{
     decrypt_orbis_reencrypted_seed, decrypt_tier_bytes, AuditDetectedRef, AuditScanExport,
-    OrbisAuditEntry, OrbisEncryptedSeedUploadPackage, TransferComplianceCiphertext,
+    ComplianceLeaf, OrbisAuditEntry, OrbisEncryptedSeedUploadPackage, TransferComplianceCiphertext,
     TransferOrbisUploadBundle,
 };
 use penumbra_sdk_keys::Address;
@@ -153,15 +154,22 @@ struct AuditContext<'a> {
     dk: &'a Fr,
     dk_pub: &'a Element,
     subject_transmission_key_hex: &'a str,
-    subject_b_d_bytes: &'a [u8; 32],
+    subject_derivation_bytes: &'a [u8; 32],
     known_transmission_keys: &'a HashSet<String>,
     tier_mode: &'a str,
 }
 
 #[derive(Clone, Debug)]
-struct SubjectData {
+struct SubjectInput {
+    address: Address,
     transmission_key_hex: String,
-    subject_b_d_bytes: [u8; 32],
+}
+
+#[derive(Clone, Debug)]
+struct SubjectData {
+    asset_id: String,
+    transmission_key_hex: String,
+    subject_derivation_bytes: [u8; 32],
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -205,10 +213,10 @@ async fn main() -> Result<()> {
     let dk = parse_fr(&args.dk_hex, "DK")?;
     let dk_pub = Element::GENERATOR * dk;
 
-    let subjects = parse_subjects(&args)?;
+    let subject_inputs = parse_subjects(&args)?;
 
     let mut known_transmission_keys = HashSet::new();
-    for subject in &subjects {
+    for subject in &subject_inputs {
         known_transmission_keys.insert(subject.transmission_key_hex.clone());
     }
     for address in &args.known_addresses {
@@ -222,15 +230,6 @@ async fn main() -> Result<()> {
     let sourcehub = sourcehub_client().await?;
     let jwt_signer = demo_jwt_signer();
     let reader_did_uri = demo_reader_did_uri();
-    eprintln!(
-        "orbis-audit: targets={}...",
-        subjects
-            .iter()
-            .map(|subject| &subject.transmission_key_hex[..16])
-            .collect::<Vec<_>>()
-            .join(",")
-    );
-
     let file = File::open(&args.input).context("failed to open input file")?;
     let reader = BufReader::new(file);
     let scan: AuditScanExport =
@@ -241,6 +240,16 @@ async fn main() -> Result<()> {
     );
 
     let channel = connect_to_node(&args.node).await?;
+    let subjects =
+        resolve_subject_slot_derivations(channel.clone(), &subject_inputs, &scan).await?;
+    eprintln!(
+        "orbis-audit: targets={}...",
+        subject_inputs
+            .iter()
+            .map(|subject| &subject.transmission_key_hex[..16])
+            .collect::<Vec<_>>()
+            .join(",")
+    );
     let total_started = Instant::now();
     let mut object_cache = load_object_cache(args.object_cache.as_ref())?;
     let mut timings = AuditTimings {
@@ -257,8 +266,17 @@ async fn main() -> Result<()> {
             timings.skipped_flagged += 1;
             continue;
         }
-        attempted += subjects.len() as u64;
-        timings.candidate_refs += subjects.len() as u64;
+        let tx_subjects = subjects
+            .iter()
+            .filter(|subject| subject.asset_id == tx_ref.asset_id)
+            .collect::<Vec<_>>();
+        attempted += tx_subjects.len() as u64;
+        timings.candidate_refs += tx_subjects.len() as u64;
+        if tx_subjects.is_empty() {
+            timings.subject_mismatch += 1;
+            continue;
+        }
+
         let started = Instant::now();
         let transactions = fetch_transactions(channel.clone(), tx_ref.height).await?;
         timings.transaction_fetch_ms += started.elapsed().as_millis();
@@ -288,7 +306,7 @@ async fn main() -> Result<()> {
             };
             timings.ciphertext_extraction_ms += started.elapsed().as_millis();
 
-            for subject in &subjects {
+            for subject in &tx_subjects {
                 let ctx = AuditContext {
                     cli: &cli,
                     sourcehub: Some(&sourcehub),
@@ -297,7 +315,7 @@ async fn main() -> Result<()> {
                     dk: &dk,
                     dk_pub: &dk_pub,
                     subject_transmission_key_hex: &subject.transmission_key_hex,
-                    subject_b_d_bytes: &subject.subject_b_d_bytes,
+                    subject_derivation_bytes: &subject.subject_derivation_bytes,
                     known_transmission_keys: &known_transmission_keys,
                     tier_mode,
                 };
@@ -371,7 +389,7 @@ fn percentile(samples: &[u128], percentile: usize) -> u128 {
     values[index]
 }
 
-fn parse_subjects(args: &Args) -> Result<Vec<SubjectData>> {
+fn parse_subjects(args: &Args) -> Result<Vec<SubjectInput>> {
     let mut subject_addresses = args.subject_addresses.clone();
     if let Some(sender_address) = &args.sender_address {
         subject_addresses.push(sender_address.clone());
@@ -388,16 +406,110 @@ fn parse_subjects(args: &Args) -> Result<Vec<SubjectData>> {
             .with_context(|| format!("failed to parse subject address {subject_address}"))?;
         let transmission_key_hex = hex::encode(address.transmission_key().0);
         if seen.insert(transmission_key_hex.clone()) {
-            let subject_b_d_bytes = address
-                .diversified_generator()
-                .vartime_compress_to_field()
-                .to_bytes();
-            subjects.push(SubjectData {
+            subjects.push(SubjectInput {
+                address,
                 transmission_key_hex,
-                subject_b_d_bytes,
             });
         }
     }
+    Ok(subjects)
+}
+
+async fn resolve_subject_slot_derivations(
+    channel: Channel,
+    subject_inputs: &[SubjectInput],
+    scan: &AuditScanExport,
+) -> Result<Vec<SubjectData>> {
+    use penumbra_sdk_proto::core::component::compliance::v1::{
+        query_service_client::QueryServiceClient as ComplianceQueryServiceClient,
+        ComplianceUserLeafRequest,
+    };
+
+    const LOOKUP_CONCURRENCY: usize = 16;
+
+    let mut asset_ids = scan
+        .detected
+        .iter()
+        .map(|tx_ref| tx_ref.asset_id.clone())
+        .collect::<Vec<_>>();
+    asset_ids.sort();
+    asset_ids.dedup();
+
+    async fn collect_lookup(
+        lookups: &mut tokio::task::JoinSet<Result<Option<SubjectData>>>,
+        subjects: &mut Vec<SubjectData>,
+    ) -> Result<()> {
+        let result = lookups
+            .join_next()
+            .await
+            .ok_or_else(|| anyhow!("subject lookup set unexpectedly empty"))?
+            .context("subject compliance leaf lookup task failed")??;
+        if let Some(subject) = result {
+            subjects.push(subject);
+        }
+        Ok(())
+    }
+
+    let mut lookups = tokio::task::JoinSet::new();
+    let mut subjects = Vec::new();
+    for subject in subject_inputs {
+        for asset_id_text in &asset_ids {
+            let channel = channel.clone();
+            let address = subject.address.clone();
+            let transmission_key_hex = subject.transmission_key_hex.clone();
+            let asset_id_text = asset_id_text.clone();
+            lookups.spawn(async move {
+                let asset_id: asset::Id = asset_id_text.parse().with_context(|| {
+                    format!("failed to parse detected asset_id {asset_id_text}")
+                })?;
+                let mut client = ComplianceQueryServiceClient::new(channel);
+                let response = client
+                    .compliance_user_leaf(tonic::Request::new(ComplianceUserLeafRequest {
+                        address: Some(address.into()),
+                        asset_id: Some(asset_id.into()),
+                    }))
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to fetch compliance leaf for subject {} and asset {}",
+                            transmission_key_hex, asset_id_text
+                        )
+                    })?
+                    .into_inner();
+
+                if !response.is_registered {
+                    return Ok(None);
+                }
+
+                let leaf_proto = response
+                    .leaf
+                    .ok_or_else(|| anyhow!("registered compliance leaf response missing leaf"))?;
+                let leaf = ComplianceLeaf::try_from(leaf_proto).with_context(|| {
+                    format!(
+                        "invalid compliance leaf for subject {} and asset {}",
+                        transmission_key_hex, asset_id_text
+                    )
+                })?;
+                Ok(Some(SubjectData {
+                    asset_id: asset_id_text,
+                    transmission_key_hex,
+                    subject_derivation_bytes: leaf.slot_derivation.to_bytes(),
+                }))
+            });
+
+            if lookups.len() >= LOOKUP_CONCURRENCY {
+                collect_lookup(&mut lookups, &mut subjects).await?;
+            }
+        }
+    }
+    while !lookups.is_empty() {
+        collect_lookup(&mut lookups, &mut subjects).await?;
+    }
+
+    if subjects.is_empty() {
+        anyhow::bail!("no subject has a registered compliance slot for any detected asset");
+    }
+
     Ok(subjects)
 }
 
@@ -441,7 +553,7 @@ async fn prepare_transfer(
         sender_ext,
     } = bundle.clone();
 
-    if output_core.derivation_bytes() == *ctx.subject_b_d_bytes {
+    if output_core.derivation_bytes() == *ctx.subject_derivation_bytes {
         let ring_id = output_core.ring_id.clone();
         ensure_package_object(ctx, &ring_id, output_core, timings, object_cache).await?;
         ensure_package_object(ctx, &ring_id, output_ext, timings, object_cache).await?;
@@ -449,7 +561,7 @@ async fn prepare_transfer(
         timings.subject_mismatch += 1;
     }
 
-    if sender_core.derivation_bytes() == *ctx.subject_b_d_bytes {
+    if sender_core.derivation_bytes() == *ctx.subject_derivation_bytes {
         let ring_id = sender_core.ring_id.clone();
         ensure_package_object(ctx, &ring_id, sender_core, timings, object_cache).await?;
         ensure_package_object(ctx, &ring_id, sender_ext, timings, object_cache).await?;
@@ -473,7 +585,7 @@ async fn try_receiver_match(
         output_ext,
         ..
     } = bundle.clone();
-    if output_core.derivation_bytes() != *ctx.subject_b_d_bytes {
+    if output_core.derivation_bytes() != *ctx.subject_derivation_bytes {
         timings.subject_mismatch += 1;
         return Ok(None);
     }
@@ -520,7 +632,7 @@ async fn try_sender_match(
         sender_ext,
         ..
     } = bundle.clone();
-    if sender_core.derivation_bytes() != *ctx.subject_b_d_bytes {
+    if sender_core.derivation_bytes() != *ctx.subject_derivation_bytes {
         timings.subject_mismatch += 1;
         return Ok(None);
     }
@@ -804,9 +916,8 @@ mod tests {
     use penumbra_sdk_proto::core::transaction::v1::action::Action;
     use std::collections::HashSet;
 
-    fn derive_ack(ring_pk: &Element, address: &penumbra_sdk_keys::Address) -> Element {
-        let b_d_fq = address.diversified_generator().vartime_compress_to_field();
-        let d = derive_compliance_scalar(b_d_fq);
+    fn derive_ack(ring_pk: &Element, slot_derivation: decaf377::Fq) -> Element {
+        let d = derive_compliance_scalar(slot_derivation);
         let d_fr = Fr::from_le_bytes_mod_order(&d.to_bytes());
         *ring_pk * d_fr
     }
@@ -819,10 +930,12 @@ mod tests {
         let receiver = test_keys::FULL_VIEWING_KEY
             .payment_address(AddressIndex::from(1u32))
             .0;
+        let sender_slot_derivation = sender.diversified_generator().vartime_compress_to_field();
+        let receiver_slot_derivation = receiver.diversified_generator().vartime_compress_to_field();
         encrypt_transfer(
             &mut rand_core::OsRng,
-            &derive_ack(&ring_pk, &sender),
-            &derive_ack(&ring_pk, &receiver),
+            &derive_ack(&ring_pk, sender_slot_derivation),
+            &derive_ack(&ring_pk, receiver_slot_derivation),
             &dk_pub,
             &receiver,
             &sender,
@@ -831,6 +944,8 @@ mod tests {
                 asset_id: asset::Id(decaf377::Fq::from(77u64)),
             },
             false,
+            0,
+            0,
             decaf377::Fq::from(9u64),
         )
         .expect("transfer ciphertext should build")
@@ -856,7 +971,7 @@ mod tests {
             dk,
             dk_pub,
             subject_transmission_key_hex: subject,
-            subject_b_d_bytes: &[0u8; 32],
+            subject_derivation_bytes: &[0u8; 32],
             known_transmission_keys,
             tier_mode,
         }
@@ -895,8 +1010,8 @@ mod tests {
         let receiver = test_keys::FULL_VIEWING_KEY
             .payment_address(AddressIndex::from(1u32))
             .0;
-        let sender_b_d = sender.diversified_generator().vartime_compress_to_field();
-        let receiver_b_d = receiver.diversified_generator().vartime_compress_to_field();
+        let sender_slot_derivation = sender.diversified_generator().vartime_compress_to_field();
+        let receiver_slot_derivation = receiver.diversified_generator().vartime_compress_to_field();
         let policy_id = "policy-id";
         let resource = "document";
         let permission = "read";
@@ -913,7 +1028,7 @@ mod tests {
                 &ring_pk,
                 decaf377::Fq::from(21u64),
                 penumbra_sdk_compliance::TransferTierMetadataStatement::from_identifiers(
-                    sender_b_d,
+                    sender_slot_derivation,
                     ring_id,
                     policy_id,
                     resource,
@@ -936,7 +1051,7 @@ mod tests {
                 &ring_pk,
                 decaf377::Fq::from(22u64),
                 penumbra_sdk_compliance::TransferTierMetadataStatement::from_identifiers(
-                    sender_b_d,
+                    sender_slot_derivation,
                     ring_id,
                     policy_id,
                     resource,
@@ -959,7 +1074,7 @@ mod tests {
                 &ring_pk,
                 decaf377::Fq::from(23u64),
                 penumbra_sdk_compliance::TransferTierMetadataStatement::from_identifiers(
-                    receiver_b_d,
+                    receiver_slot_derivation,
                     ring_id,
                     policy_id,
                     resource,
@@ -982,7 +1097,7 @@ mod tests {
                 &ring_pk,
                 decaf377::Fq::from(24u64),
                 penumbra_sdk_compliance::TransferTierMetadataStatement::from_identifiers(
-                    receiver_b_d,
+                    receiver_slot_derivation,
                     ring_id,
                     policy_id,
                     resource,

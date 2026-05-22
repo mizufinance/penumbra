@@ -10,13 +10,13 @@ import (
 
 const (
 	transferWitnessV1Magic   = "PTWG"
-	transferWitnessV1Version = 7
+	transferWitnessV1Version = 8
 )
 
 type TransferComplianceCiphertextWitnessV1Binary struct {
 	C2                 [32]byte
 	Ciphertext         [][32]byte
-	SubjectBD          [32]byte
+	SubjectDerivation  [32]byte
 	RingIDHash         [32]byte
 	PolicyIDHash       [32]byte
 	ResourceHash       [32]byte
@@ -61,6 +61,8 @@ type TransferOutputWitnessV1Binary struct {
 	RecipientCompliancePath     MerklePathBinary
 	RecipientCompliancePosition uint64
 	RecipientAssetID            [32]byte
+	RecipientSlotID             [32]byte
+	RecipientSlotDerivation     [32]byte
 	RecipientD                  [32]byte
 	// Output 0 is the receiver leg. Output 1, when present, is sender-owned change.
 	IsReceiver                    bool
@@ -93,6 +95,8 @@ type TransferWitnessV1Binary struct {
 	SenderCompliancePath     MerklePathBinary
 	SenderCompliancePosition uint64
 	SenderAssetID            [32]byte
+	SenderSlotID             [32]byte
+	SenderSlotDerivation     [32]byte
 	SenderD                  [32]byte
 	TransferNonceRoot        [32]byte
 
@@ -225,6 +229,12 @@ func decodeTransferWitnessV1(
 	if witness.SenderAssetID, err = read32(reader); err != nil {
 		return nil, err
 	}
+	if witness.SenderSlotID, err = read32(reader); err != nil {
+		return nil, err
+	}
+	if witness.SenderSlotDerivation, err = read32(reader); err != nil {
+		return nil, err
+	}
 	if witness.SenderD, err = read32(reader); err != nil {
 		return nil, err
 	}
@@ -340,6 +350,12 @@ func decodeTransferWitnessV1(
 		if witness.Outputs[i].RecipientAssetID, err = read32(reader); err != nil {
 			return nil, err
 		}
+		if witness.Outputs[i].RecipientSlotID, err = read32(reader); err != nil {
+			return nil, err
+		}
+		if witness.Outputs[i].RecipientSlotDerivation, err = read32(reader); err != nil {
+			return nil, err
+		}
 		if witness.Outputs[i].RecipientD, err = read32(reader); err != nil {
 			return nil, err
 		}
@@ -397,7 +413,7 @@ func readTransferComplianceTier(reader *bytes.Reader) (TransferComplianceCiphert
 	if tier.Ciphertext, err = readVec32(reader); err != nil {
 		return tier, err
 	}
-	if tier.SubjectBD, err = read32(reader); err != nil {
+	if tier.SubjectDerivation, err = read32(reader); err != nil {
 		return tier, err
 	}
 	if tier.RingIDHash, err = read32(reader); err != nil {

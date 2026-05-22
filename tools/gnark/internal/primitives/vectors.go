@@ -147,6 +147,7 @@ type IndexedLeafFixture struct {
 	NextValue      []byte      `json:"next_value"`
 	DKPub          []byte      `json:"dk_pub"`
 	Threshold      json.Number `json:"threshold"`
+	SlotCount      json.Number `json:"slot_count"`
 	ChannelsHash   []byte      `json:"channels_hash"`
 	RingPK         []byte      `json:"ring_pk"`
 	RingIDHash     []byte      `json:"ring_id_hash"`
@@ -164,9 +165,11 @@ type AssetIDFixture struct {
 }
 
 type ComplianceLeafFixture struct {
-	Address AddressFixture `json:"address"`
-	AssetID AssetIDFixture `json:"assetId"`
-	D       string         `json:"d"`
+	Address        AddressFixture `json:"address"`
+	AssetID        AssetIDFixture `json:"assetId"`
+	SlotID         string         `json:"slot_id"`
+	SlotDerivation string         `json:"slot_derivation"`
+	D              string         `json:"d"`
 }
 
 type SpendPrivateFixture struct {

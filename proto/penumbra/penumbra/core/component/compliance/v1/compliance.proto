@@ -18,8 +18,12 @@ message ComplianceLeaf {
   keys.v1.Address address = 1;
   // The asset ID this compliance leaf applies to.
   asset.v1.AssetId asset_id = 3;
-  // Derivation scalar: d = SHA256_derive(b_d_fq). Verified at registration.
+  // Derivation scalar: d = SHA256_derive(slot_derivation). Verified at registration.
   bytes d = 4;
+  // Compliance slot authorized by the ACP for this address/asset registration.
+  uint32 slot_id = 5;
+  // Canonical random derivation material for the slot.
+  bytes slot_derivation = 6;
 }
 
 // Registry Actions (State Transitions)
@@ -52,6 +56,8 @@ message MsgRegisterAsset {
   AssetRegistrationGrant asset_registration_grant = 12;
   // External IBC origin for a regulated voucher asset, if any.
   IbcAssetOrigin ibc_origin = 13;
+  // Number of ACP-authorized compliance slots for this asset.
+  uint32 slot_count = 14;
 }
 
 // Body signed by a chain compliance registrar to authorize an asset policy.
@@ -69,6 +75,7 @@ message AssetRegistrationGrantBody {
   crypto.decaf377_rdsa.v1.SpendVerificationKey registration_authority_vk = 11;
   uint64 valid_until_unix = 12;
   IbcAssetOrigin ibc_origin = 13;
+  uint32 slot_count = 14;
 }
 
 // A direct ICS-20 route bound to local committed IBC identifiers.
@@ -298,6 +305,7 @@ message IndexedLeafData {
   bytes dk_pub = 4;
   bytes threshold = 5;
   bytes route_policy_hash = 6;
+  bytes slot_count = 12;
   // Orbis-decided policy (RingData)
   bytes ring_pk = 7;
   bytes ring_id_hash = 8;
@@ -320,6 +328,7 @@ message AssetPolicy {
   string resource = 8;
   crypto.decaf377_rdsa.v1.SpendVerificationKey registration_authority_vk = 9;
   IbcAssetOrigin ibc_origin = 10;
+  uint32 slot_count = 11;
 }
 
 // Genesis configuration for the compliance component.
@@ -334,6 +343,7 @@ message NativeAssetRegistration {
   bool is_regulated = 2;
   bytes dk_pub = 3;
   crypto.decaf377_rdsa.v1.SpendVerificationKey registration_authority_vk = 4;
+  uint32 slot_count = 5;
 }
 
 // Emitted when a user is registered in the compliance tree.

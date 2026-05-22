@@ -166,14 +166,7 @@ impl Worker {
             // If in scope, store leaf data for offline proof generation
             if is_in_scope {
                 self.storage
-                    .record_compliance_leaf_data(
-                        &event.leaf.address,
-                        &event.leaf.asset_id,
-                        position,
-                        &[0u8; 32],
-                        &[0u8; 32],
-                        event.commitment,
-                    )
+                    .record_compliance_leaf_data(&event.leaf, position, event.commitment)
                     .await?;
             }
         }

@@ -1388,7 +1388,7 @@ pub struct ShieldedOutputPlan {
         super::super::compliance::v1::IndexedLeafData,
     >,
     /// Sender-encrypted ciphertext (96 bytes = 3 × 32, 3 Fq elements).
-    /// Encrypts (recipient_gd, recipient_pk, amount) to sender's ack_orbis.
+    /// Encrypts (recipient_gd, recipient_pk, amount) to sender's compliance ACK.
     #[prost(bytes = "vec", tag = "22")]
     pub sender_ciphertext: ::prost::alloc::vec::Vec<u8>,
     /// DLEQ proof salt (random Fq used in metadata hash).

@@ -67,7 +67,7 @@ struct EncryptionProof {
 
 impl OrbisEncryptedSeedUploadPackage {
     pub fn derivation_bytes(&self) -> [u8; 32] {
-        self.statement.subject_b_d_bytes
+        self.statement.subject_derivation_bytes
     }
 
     pub fn metadata_hash_fq(&self) -> Result<Fq> {
@@ -286,7 +286,7 @@ pub fn build_orbis_encrypted_seed_upload_package_with_randomness(
     salt: Fq,
 ) -> Result<OrbisEncryptedSeedUploadPackage> {
     statement.validate_shape()?;
-    let derivation_bytes = statement.subject_b_d_bytes;
+    let derivation_bytes = statement.subject_derivation_bytes;
     anyhow::ensure!(
         string_to_fq(ring_id) == statement.ring_id_hash()?,
         "ring_id does not match statement ring_id_hash"

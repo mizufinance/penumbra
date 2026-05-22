@@ -49,6 +49,8 @@ pub struct DetectionEvent {
     pub asset_id: asset::Id,
     pub is_flagged: bool,
     pub salt: decaf377::Fq,
+    pub sender_slot_id: u32,
+    pub receiver_slot_id: u32,
     pub ciphertext: TransferComplianceCiphertext,
     pub raw_bytes: Vec<u8>,
 }
