@@ -44,8 +44,15 @@ fn build_tendermint_http_client(tendermint_url: &url::Url) -> HttpClient {
     // Smoke/devnet connects to a local CometBFT RPC endpoint. Building the reqwest client
     // with system proxy autodetection can panic on macOS in `system-configuration`, so we
     // opt out here and provide the client explicitly.
+    // CometBFT's RPC server closes idle HTTP/1.1 connections aggressively. Without
+    // a shorter client-side pool idle timeout, reqwest hands out a stale pooled
+    // connection and the next request fails with "connection closed before message
+    // completed" — surfaced upstream as tonic Unavailable. TCP keepalive shortens
+    // detection of half-open connections at the transport layer as a backstop.
     let http_client = reqwest::Client::builder()
         .no_proxy()
+        .pool_idle_timeout(std::time::Duration::from_secs(5))
+        .tcp_keepalive(std::time::Duration::from_secs(15))
         .build()
         .expect("tendermint rpc client should build");
 

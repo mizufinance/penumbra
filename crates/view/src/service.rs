@@ -2231,5 +2231,12 @@ async fn get_pd_endpoint(node: Url) -> anyhow::Result<Endpoint> {
             .tls_config(ClientTlsConfig::new().with_webpki_roots())?,
         other => anyhow::bail!("unknown url scheme {other}"),
     };
+    // HTTP/2 keepalive prevents reuse of stale idle pooled connections, which
+    // otherwise surface as tonic Unavailable ("connection closed before message
+    // completed") on the long-lived view worker channel.
+    let endpoint = endpoint
+        .http2_keep_alive_interval(std::time::Duration::from_secs(10))
+        .keep_alive_timeout(std::time::Duration::from_secs(20))
+        .keep_alive_while_idle(true);
     Ok(endpoint)
 }
