@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::types::{
     BlockRef, ClearFlowEvent, DetectionEvent, ExtractedComplianceCiphertext, InvalidCiphertext,
@@ -15,7 +15,8 @@ use crate::audit_status::{AuditStatus, DetectionStatus, ScreenStatus};
 use crate::{ComplianceEvidenceObject, TransferOrbisUploadBundle};
 
 pub const MAX_INVALID_CIPHERTEXTS_PER_BLOCK: usize = 256;
-const SCANNER_DB_SCHEMA_VERSION: i64 = 2;
+const SCANNER_DB_SCHEMA_VERSION: i64 = 1;
+pub const HEARTBEAT_STALE_SECS: i64 = 30;
 const READ_POOL_SIZE: usize = 4;
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const WAL_AUTOCHECKPOINT_PAGES: i64 = 1_000;
@@ -45,6 +46,46 @@ pub trait ScannerStore: Send + Sync {
     async fn commit_block(&self, block: &BlockRef) -> Result<()>;
     async fn rollback_to_height(&self, height: u64) -> Result<()>;
     async fn detection_count(&self) -> Result<u64>;
+
+    async fn mark_started(&self) -> Result<()> {
+        Ok(())
+    }
+    async fn heartbeat(&self) -> Result<()> {
+        Ok(())
+    }
+    async fn record_error(&self, _error: &str) -> Result<()> {
+        Ok(())
+    }
+    async fn mark_stopped(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ScannerRuntimeState {
+    pub started_at: Option<i64>,
+    pub heartbeat_at: Option<i64>,
+    pub last_error: Option<String>,
+    pub last_error_at: Option<i64>,
+}
+
+impl ScannerRuntimeState {
+    /// Returns true if the scanner has processed a block within the last
+    /// `HEARTBEAT_STALE_SECS` seconds. Reflects recent progress, not process
+    /// liveness — a halted chain looks the same as a dead scanner here.
+    pub fn is_active(&self, now_secs: i64) -> bool {
+        match self.heartbeat_at {
+            Some(hb) => now_secs.saturating_sub(hb) <= HEARTBEAT_STALE_SECS,
+            None => false,
+        }
+    }
+}
+
+fn unix_now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or_default()
 }
 
 #[derive(Default)]
@@ -149,6 +190,9 @@ impl SqliteScannerStore {
 
             CREATE INDEX IF NOT EXISTS idx_scanner_detections_asset_id
                 ON scanner_detections(asset_id);
+
+            CREATE INDEX IF NOT EXISTS idx_scanner_detections_is_flagged
+                ON scanner_detections(is_flagged);
 
             CREATE TABLE IF NOT EXISTS scanner_ciphertexts (
                 height INTEGER NOT NULL,
@@ -289,11 +333,21 @@ impl SqliteScannerStore {
                 last_block_hash BLOB
             );
 
+            CREATE TABLE IF NOT EXISTS scanner_runtime (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                started_at INTEGER,
+                heartbeat_at INTEGER,
+                last_error TEXT,
+                last_error_at INTEGER
+            );
+
             INSERT OR IGNORE INTO scanner_sync (id, last_height, last_block_hash)
             VALUES (1, 0, NULL);
 
+            INSERT OR IGNORE INTO scanner_runtime (id) VALUES (1);
+
             INSERT OR IGNORE INTO scanner_schema_version (id, version)
-            VALUES (1, 2);
+            VALUES (1, 1);
             "#,
         )?;
         let version = Self::schema_version(conn)?.context("scanner DB schema version missing")?;
@@ -372,6 +426,73 @@ impl SqliteScannerStore {
                 )
                 .optional()?;
             Ok(count.unwrap_or_default() as u64)
+        })
+    }
+
+    pub fn detection_count_sync(&self) -> Result<i64> {
+        self.with_read_conn(|conn| {
+            let count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM scanner_detections", [], |row| {
+                    row.get(0)
+                })?;
+            Ok(count)
+        })
+    }
+
+    pub fn mark_scanner_started(&self) -> Result<()> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE scanner_runtime
+             SET started_at = ?1, heartbeat_at = ?1, last_error = NULL, last_error_at = NULL
+             WHERE id = 1",
+            params![unix_now_secs()],
+        )?;
+        Ok(())
+    }
+
+    pub fn record_heartbeat(&self) -> Result<()> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE scanner_runtime SET heartbeat_at = ?1 WHERE id = 1",
+            params![unix_now_secs()],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_scanner_stopped(&self) -> Result<()> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE scanner_runtime SET heartbeat_at = NULL WHERE id = 1",
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub fn record_scanner_error(&self, error: &str) -> Result<()> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE scanner_runtime SET last_error = ?1, last_error_at = ?2 WHERE id = 1",
+            params![error, unix_now_secs()],
+        )?;
+        Ok(())
+    }
+
+    pub fn scanner_runtime_state(&self) -> Result<ScannerRuntimeState> {
+        self.with_read_conn(|conn| {
+            let row = conn.query_row(
+                "SELECT started_at, heartbeat_at, last_error, last_error_at
+                 FROM scanner_runtime WHERE id = 1",
+                [],
+                |row| {
+                    Ok(ScannerRuntimeState {
+                        started_at: row.get(0)?,
+                        heartbeat_at: row.get(1)?,
+                        last_error: row.get(2)?,
+                        last_error_at: row.get(3)?,
+                    })
+                },
+            )?;
+            Ok(row)
         })
     }
 
@@ -825,6 +946,22 @@ impl ScannerStore for SqliteScannerStore {
             Ok(count as u64)
         })
     }
+
+    async fn mark_started(&self) -> Result<()> {
+        self.mark_scanner_started()
+    }
+
+    async fn heartbeat(&self) -> Result<()> {
+        self.record_heartbeat()
+    }
+
+    async fn record_error(&self, error: &str) -> Result<()> {
+        self.record_scanner_error(error)
+    }
+
+    async fn mark_stopped(&self) -> Result<()> {
+        self.mark_scanner_stopped()
+    }
 }
 
 fn ensure_pending_block(pending: &PendingBlock, block: &BlockRef) -> Result<()> {
@@ -909,7 +1046,9 @@ fn to_sql_error(error: anyhow::Error) -> rusqlite::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scanner::{ActionRef, ExtractedComplianceCiphertext, OutputRef, TxRef};
+    use crate::scanner::{
+        ActionRef, ClearFlowEvent, ClearFlowKind, ExtractedComplianceCiphertext, OutputRef, TxRef,
+    };
     use penumbra_sdk_asset::asset;
     use penumbra_sdk_txhash::TransactionId;
     use tempfile::NamedTempFile;
@@ -1274,5 +1413,123 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM audit_rows", [], |row| row.get(0))
             .unwrap();
         assert_eq!(audit_count, 1);
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_commits_empty_block_advances_cursor() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let store = SqliteScannerStore::new(temp_file.path()).unwrap();
+        let empty = block(42);
+        store.begin_block(&empty).await.unwrap();
+        store.commit_block(&empty).await.unwrap();
+
+        assert_eq!(store.last_scanned_block().await.unwrap(), Some(empty));
+        assert_eq!(store.detection_count().await.unwrap(), 0);
+
+        let conn = store.lock_conn().unwrap();
+        let ciphertexts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM scanner_ciphertexts WHERE height = 42",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let clear_flows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM scanner_clear_flows WHERE height = 42",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(ciphertexts, 0);
+        assert_eq!(clear_flows, 0);
+    }
+
+    fn clear_flow(height: u64, kind: ClearFlowKind, output_index: u32) -> ClearFlowEvent {
+        ClearFlowEvent {
+            output_ref: output_ref(height, 1, 2, output_index),
+            kind,
+            asset_id: asset::Id(decaf377::Fq::from(7u64)),
+            amount: penumbra_sdk_num::Amount::from(100u64),
+            self_address: Some("penumbra1self".to_string()),
+            counterparty: Some("penumbra1counter".to_string()),
+            public_address: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_projects_clear_shield_and_withdraw_to_audit_rows() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let store = SqliteScannerStore::new(temp_file.path()).unwrap();
+        let block = block(50);
+        store.begin_block(&block).await.unwrap();
+        store
+            .save_clear_flow(&clear_flow(50, ClearFlowKind::Shield, 1))
+            .await
+            .unwrap();
+        store
+            .save_clear_flow(&clear_flow(50, ClearFlowKind::Withdraw, 2))
+            .await
+            .unwrap();
+        store.commit_block(&block).await.unwrap();
+
+        let conn = store.lock_conn().unwrap();
+        let flow_rows: Vec<(String, String)> = conn
+            .prepare(
+                "SELECT flow_type, asset_id FROM scanner_clear_flows WHERE height = 50 ORDER BY output_index",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(flow_rows.len(), 2);
+        assert_eq!(flow_rows[0].0, "shield");
+        assert_eq!(flow_rows[1].0, "withdraw");
+
+        let audit_rows: Vec<(String, Option<String>)> = conn
+            .prepare(
+                "SELECT flow_type, decrypted_via FROM audit_rows WHERE height = 50 ORDER BY output_index",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(audit_rows.len(), 2);
+        assert_eq!(audit_rows[0].0, "shield");
+        assert_eq!(audit_rows[1].0, "withdraw");
+        assert_eq!(audit_rows[0].1.as_deref(), Some(DECRYPTED_VIA_PUBLIC));
+        assert_eq!(audit_rows[1].1.as_deref(), Some(DECRYPTED_VIA_PUBLIC));
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_records_runtime_started_heartbeat_and_error() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let store = SqliteScannerStore::new(temp_file.path()).unwrap();
+
+        let initial = store.scanner_runtime_state().unwrap();
+        assert!(initial.started_at.is_none());
+        assert!(initial.heartbeat_at.is_none());
+        assert!(!initial.is_active(unix_now_secs()));
+
+        store.mark_scanner_started().unwrap();
+        let after_start = store.scanner_runtime_state().unwrap();
+        assert!(after_start.started_at.is_some());
+        assert!(after_start.heartbeat_at.is_some());
+        assert!(after_start.is_active(unix_now_secs()));
+
+        store.record_scanner_error("boom").unwrap();
+        let after_err = store.scanner_runtime_state().unwrap();
+        assert_eq!(after_err.last_error.as_deref(), Some("boom"));
+        assert!(after_err.last_error_at.is_some());
+
+        let stale_now = unix_now_secs() + HEARTBEAT_STALE_SECS + 5;
+        assert!(!after_err.is_active(stale_now));
+
+        store.mark_scanner_stopped().unwrap();
+        let after_stop = store.scanner_runtime_state().unwrap();
+        assert!(after_stop.heartbeat_at.is_none());
+        assert!(!after_stop.is_active(unix_now_secs()));
     }
 }

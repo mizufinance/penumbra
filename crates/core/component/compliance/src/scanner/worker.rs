@@ -175,6 +175,7 @@ impl IssuerComplianceWorker {
     #[instrument(skip(self))]
     pub async fn run(self) -> Result<()> {
         info!("starting issuer compliance scanner worker");
+        self.storage.mark_started().await?;
         if let Err(error) = self.sync(None).await {
             let last_height = self
                 .storage
@@ -188,17 +189,20 @@ impl IssuerComplianceWorker {
                 "compliance sync failed at height {} (check node connection and storage)",
                 last_height
             );
+            let _ = self.storage.record_error(&context_msg).await;
             if let Ok(mut slot) = self.error_slot.lock() {
                 *slot = Some(error.context(context_msg.clone()));
             }
             return Err(anyhow!("{}", context_msg));
         }
+        let _ = self.storage.mark_stopped().await;
         Ok(())
     }
 
     #[instrument(skip(self))]
     pub async fn catch_up_to_height(self, end_height: u64) -> Result<()> {
         info!(end_height, "starting issuer compliance scanner catch-up");
+        self.storage.mark_started().await?;
         if let Err(error) = self.sync(Some(end_height)).await {
             let last_height = self
                 .storage
@@ -212,11 +216,13 @@ impl IssuerComplianceWorker {
                 "compliance catch-up failed at height {} (target {})",
                 last_height, end_height
             );
+            let _ = self.storage.record_error(&context_msg).await;
             if let Ok(mut slot) = self.error_slot.lock() {
                 *slot = Some(error.context(context_msg.clone()));
             }
             return Err(anyhow!("{}", context_msg));
         }
+        let _ = self.storage.mark_stopped().await;
         Ok(())
     }
 
@@ -264,6 +270,7 @@ impl IssuerComplianceWorker {
                 )
             })?;
             self.process_height(compact_block.height).await?;
+            self.storage.heartbeat().await?;
         }
 
         Ok(())
