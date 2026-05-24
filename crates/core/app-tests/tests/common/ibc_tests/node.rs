@@ -48,9 +48,9 @@ use {
     std::{
         error::Error,
         fs,
+        net::TcpListener,
         ops::Deref,
         path::{Path, PathBuf},
-        sync::atomic::{AtomicU16, Ordering},
     },
     tap::{Tap, TapFallible},
     tendermint::{
@@ -63,8 +63,6 @@ use {
     tower_actor::Actor,
     tracing::info,
 };
-
-static NEXT_GRPC_PORT: AtomicU16 = AtomicU16::new(9990);
 
 pub struct TestStorage {
     inner: Storage,
@@ -140,6 +138,20 @@ fn copy_dir_contents(source: &Path, destination: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn bind_rpc_listener() -> Result<(TcpListener, url::Url)> {
+    let listener = TcpListener::bind("127.0.0.1:0").context("binding test gRPC listener")?;
+    let local_addr = listener
+        .local_addr()
+        .context("reading test gRPC listener address")?;
+    listener
+        .set_nonblocking(true)
+        .context("setting test gRPC listener nonblocking")?;
+    let grpc_url = format!("http://{local_addr}")
+        .parse::<url::Url>()?
+        .tap(|url| tracing::debug!(%url, "parsed grpc url"));
+    Ok((listener, grpc_url))
 }
 
 // Contains some data from a single IBC connection + client for test usage.
@@ -265,12 +277,7 @@ impl TestNodeWithIBC {
                 .tap_ok(|e| tracing::info!(hash = %e.last_app_hash_hex(), "finished init chain"))?
         };
 
-        // We use a non-standard port range, to avoid conflicting with other
-        // integration tests that bind to the more typical 8080/8081 ports.
-        let grpc_port = NEXT_GRPC_PORT.fetch_add(1, Ordering::SeqCst);
-        let grpc_url = format!("http://127.0.0.1:{grpc_port}") // see #4517
-            .parse::<url::Url>()?
-            .tap(|url| tracing::debug!(%url, "parsed grpc url"));
+        let (listener, grpc_url) = bind_rpc_listener()?;
 
         tracing::info!("spawning gRPC...");
         // Spawn the node's RPC server.
@@ -284,12 +291,7 @@ impl TestNodeWithIBC {
             .layer(tower_http::cors::CorsLayer::permissive())
             .into_make_service()
             .tap(|_| tracing::info!("initialized rpc service"));
-            let [addr] = grpc_url
-                .socket_addrs(|| None)?
-                .try_into()
-                .expect("grpc url can be turned into a socket address");
-
-            let server = axum_server::bind(addr).serve(make_svc);
+            let server = axum_server::from_tcp(listener).serve(make_svc);
             tokio::spawn(async { server.await.expect("grpc server returned an error") })
                 .tap(|_| tracing::info!("grpc server is running"))
         };
@@ -335,10 +337,7 @@ impl TestNodeWithIBC {
             .on_block(proxy.on_block_callback())
             .resume_chain(consensus, resume_state)?;
 
-        let grpc_port = NEXT_GRPC_PORT.fetch_add(1, Ordering::SeqCst);
-        let grpc_url = format!("http://127.0.0.1:{grpc_port}")
-            .parse::<url::Url>()?
-            .tap(|url| tracing::debug!(%url, "parsed grpc url"));
+        let (listener, grpc_url) = bind_rpc_listener()?;
 
         let rpc_server = {
             let make_svc = penumbra_sdk_app::rpc::routes(
@@ -350,12 +349,7 @@ impl TestNodeWithIBC {
             .layer(tower_http::cors::CorsLayer::permissive())
             .into_make_service()
             .tap(|_| tracing::info!("initialized rpc service"));
-            let [addr] = grpc_url
-                .socket_addrs(|| None)?
-                .try_into()
-                .expect("grpc url can be turned into a socket address");
-
-            let server = axum_server::bind(addr).serve(make_svc);
+            let server = axum_server::from_tcp(listener).serve(make_svc);
             tokio::spawn(async { server.await.expect("grpc server returned an error") })
                 .tap(|_| tracing::info!("grpc server is running"))
         };
