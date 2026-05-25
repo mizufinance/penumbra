@@ -1,0 +1,401 @@
+syntax = "proto3";
+package penumbra.core.component.compliance.v1;
+
+import "penumbra/core/asset/v1/asset.proto";
+import "penumbra/core/keys/v1/keys.proto";
+import "penumbra/crypto/decaf377_rdsa/v1/decaf377_rdsa.proto";
+
+// Crypto Structures
+
+// A wrapper around bytes representing a compliance viewing key (32 bytes).
+message ComplianceViewingKey {
+  bytes inner = 1;
+}
+
+// Compliance component chain parameters.
+message ComplianceParameters {
+  // Number of recent compliance anchors accepted for proof validation.
+  uint64 anchor_validation_window_blocks = 1;
+}
+
+// A compliance leaf in the public on-chain registry for regulated assets.
+message ComplianceLeaf {
+  // The registered address for compliance.
+  keys.v1.Address address = 1;
+  // The asset ID this compliance leaf applies to.
+  asset.v1.AssetId asset_id = 3;
+  // Derivation scalar: d = SHA256_derive(slot_derivation). Verified at registration.
+  bytes d = 4;
+  // Compliance slot authorized by the ACP for this address/asset registration.
+  uint32 slot_id = 5;
+  // Canonical random derivation material for the slot.
+  bytes slot_derivation = 6;
+}
+
+// Registry Actions (State Transitions)
+
+// Message to register an asset as regulated or non-regulated in the compliance registry.
+message MsgRegisterAsset {
+  // The asset ID to register.
+  asset.v1.AssetId asset_id = 1;
+  // Whether this asset is regulated (requires compliance).
+  bool is_regulated = 2;
+  // Issuer's detection key public (32 bytes, optional).
+  bytes dk_pub = 3;
+  // Amount threshold for flagging (16 bytes, little-endian u128).
+  bytes threshold = 4;
+  // Direct IBC routes allowed for this regulated asset. Empty = IBC blocked.
+  repeated IbcRoute allowed_ibc_routes = 5;
+  // Orbis ring public key (32 bytes compressed point).
+  bytes ring_pk = 6;
+  // Orbis DKG ring identifier.
+  string ring_id = 7;
+  // SourceHub policy ID.
+  string policy_id = 8;
+  // ACP permission name.
+  string permission = 9;
+  // ACP resource type.
+  string resource = 10;
+  // Immutable authority key that signs user registration grants for this asset.
+  crypto.decaf377_rdsa.v1.SpendVerificationKey registration_authority_vk = 11;
+  // Registrar authorization for this asset registration.
+  AssetRegistrationGrant asset_registration_grant = 12;
+  // External IBC origin for a regulated voucher asset, if any.
+  IbcAssetOrigin ibc_origin = 13;
+  // Number of ACP-authorized compliance slots for this asset.
+  uint32 slot_count = 14;
+}
+
+// Body signed by a chain compliance registrar to authorize an asset policy.
+message AssetRegistrationGrantBody {
+  asset.v1.AssetId asset_id = 1;
+  bool is_regulated = 2;
+  bytes dk_pub = 3;
+  bytes threshold = 4;
+  repeated IbcRoute allowed_ibc_routes = 5;
+  bytes ring_pk = 6;
+  string ring_id = 7;
+  string policy_id = 8;
+  string permission = 9;
+  string resource = 10;
+  crypto.decaf377_rdsa.v1.SpendVerificationKey registration_authority_vk = 11;
+  uint64 valid_until_unix = 12;
+  IbcAssetOrigin ibc_origin = 13;
+  uint32 slot_count = 14;
+}
+
+// A direct ICS-20 route bound to local committed IBC identifiers.
+message IbcRoute {
+  string local_port = 1;
+  string local_channel = 2;
+  string connection_id = 3;
+  string counterparty_port = 4;
+  string counterparty_channel = 5;
+}
+
+// External origin for a regulated ICS-20 voucher asset.
+message IbcAssetOrigin {
+  IbcRoute route = 1;
+  string base_denom = 2;
+}
+
+// Governance-controlled replacement of a regulated asset's IBC route policy.
+message UpdateAssetIbcPolicy {
+  asset.v1.AssetId asset_id = 1;
+  bytes expected_route_policy_hash = 2;
+  repeated IbcRoute allowed_ibc_routes = 3;
+}
+
+// Chain-registrar authorization for an asset registration.
+message AssetRegistrationGrant {
+  AssetRegistrationGrantBody body = 1;
+  crypto.decaf377_rdsa.v1.SpendVerificationKey registrar_vk = 2;
+  crypto.decaf377_rdsa.v1.SpendAuthSignature signature = 3;
+}
+
+// Body signed by an asset's registration authority to authorize one user leaf.
+message UserRegistrationGrantBody {
+  ComplianceLeaf leaf = 1;
+  string policy_id = 2;
+  uint64 valid_until_unix = 3;
+  bytes nonce = 4;
+}
+
+// Asset-authority authorization for a user registration.
+message UserRegistrationGrant {
+  UserRegistrationGrantBody body = 1;
+  crypto.decaf377_rdsa.v1.SpendAuthSignature signature = 2;
+}
+
+// Message to register a user's compliance viewing key for a regulated asset.
+message MsgRegisterUser {
+  // The compliance leaf containing the user's registration information.
+  ComplianceLeaf leaf = 1;
+  // Grant authorizing this registration.
+  UserRegistrationGrant grant = 2;
+}
+
+// ZK Data (Quad Tree Path)
+
+// A Merkle path in the Quad Merkle Tree (arity 4).
+message MerklePath {
+  // The layers of the Merkle path, from leaf to root.
+  repeated MerklePathLayer layers = 1;
+}
+
+// A single layer in the Quad Merkle Tree path.
+// Since this is a Quad Tree (arity 4), each layer has exactly 3 siblings.
+message MerklePathLayer {
+  // The sibling hashes at this layer (always 3 siblings for a Quad Tree).
+  repeated bytes siblings = 1;
+}
+
+// Query Service for compliance registry state
+
+service QueryService {
+  // Query the regulation status of a specific asset.
+  rpc ComplianceAssetStatus(ComplianceAssetStatusRequest) returns (ComplianceAssetStatusResponse);
+  // Query the current compliance tree anchors (roots).
+  // These are needed by clients to generate valid compliance proofs.
+  rpc ComplianceAnchors(ComplianceAnchorsRequest) returns (ComplianceAnchorsResponse);
+  // Query the Merkle proofs needed for compliance ZK proofs.
+  // Returns paths and positions for both user and asset trees.
+  rpc ComplianceMerkleProofs(ComplianceMerkleProofsRequest) returns (ComplianceMerkleProofsResponse);
+  // Batch query for multiple (address, asset) pairs.
+  // Returns all proofs in a single call, including anchors.
+  // Use this for multi-spend transactions to avoid multiple round trips.
+  rpc ComplianceBatchMerkleProofs(ComplianceBatchMerkleProofsRequest) returns (ComplianceBatchMerkleProofsResponse);
+  // Query a user's registered compliance leaf.
+  // Returns the full leaf (including ACK) that was registered on-chain.
+  rpc ComplianceUserLeaf(ComplianceUserLeafRequest) returns (ComplianceUserLeafResponse);
+}
+
+// Request for querying an asset's regulation status.
+message ComplianceAssetStatusRequest {
+  // The asset ID to query.
+  asset.v1.AssetId asset_id = 1;
+}
+
+// Response containing an asset's regulation status.
+message ComplianceAssetStatusResponse {
+  // The asset ID that was queried.
+  asset.v1.AssetId asset_id = 1;
+  // Whether the asset is registered in the compliance system.
+  // If false, `is_regulated` should be ignored.
+  bool is_registered = 2;
+  // Whether the asset requires compliance (only meaningful if is_registered is true).
+  bool is_regulated = 3;
+  // Optional: Issuer's detection key public (32 bytes compressed point).
+  // Present if the asset has a threshold policy.
+  bytes dk_pub = 4;
+  // Amount threshold for flagging (16 bytes, little-endian u128).
+  // Transfers at or above this amount are encrypted to issuer's DK instead of user's daily key.
+  // u128::MAX means never flag.
+  bytes threshold = 5;
+  // Full asset policy for regulated assets.
+  AssetPolicy asset_policy = 6;
+}
+
+// Request for querying the current compliance tree anchors.
+message ComplianceAnchorsRequest {
+  // Empty - no parameters needed, returns current state.
+}
+
+// Response containing the current compliance tree anchors.
+message ComplianceAnchorsResponse {
+  // The root of the user compliance tree (Quad Merkle Tree).
+  // This is a StateCommitment (32 bytes).
+  bytes user_tree_root = 1;
+  // The root of the asset regulation tree (Quad Merkle Tree).
+  // This is a StateCommitment (32 bytes).
+  bytes asset_tree_root = 2;
+}
+
+// Request for querying Merkle proofs needed for compliance ZK proofs.
+// The client provides their address and asset ID, and receives
+// the paths and positions needed to generate valid proofs.
+message ComplianceMerkleProofsRequest {
+  // The address (used to look up user's position in compliance tree).
+  keys.v1.Address address = 1;
+  // The asset ID (used to look up asset's position in asset tree).
+  asset.v1.AssetId asset_id = 2;
+}
+
+// Response containing Merkle proofs for compliance ZK proofs.
+// This provides all the data needed to populate shielded input/output compliance fields.
+message ComplianceMerkleProofsResponse {
+  // Whether the user is registered for this asset.
+  // If false, compliance_path and compliance_position will be empty/zero.
+  bool user_registered = 1;
+  // Whether the asset is registered in the compliance system.
+  // If false, asset_path and asset_position will be empty/zero.
+  bool asset_registered = 2;
+  // Whether the asset is regulated (only meaningful if asset_registered is true).
+  bool is_regulated = 3;
+
+  // User's Merkle path in the compliance tree (from leaf to root).
+  MerklePath compliance_path = 4;
+  // User's position in the compliance tree.
+  uint64 compliance_position = 5;
+  // Asset's Merkle path in the asset tree (from leaf to root).
+  MerklePath asset_path = 6;
+  // Asset's position in the asset tree.
+  uint64 asset_position = 7;
+
+  // Current compliance tree root (StateCommitment, 32 bytes).
+  bytes compliance_anchor = 8;
+  // Current asset tree root (StateCommitment, 32 bytes).
+  bytes asset_anchor = 9;
+
+  // The indexed leaf data for asset IMT proof verification.
+  // Contains (value, next_index, next_value) needed for membership/non-membership proofs.
+  IndexedLeafData asset_indexed_leaf = 10;
+
+  // The user's compliance leaf (only present if user_registered is true).
+  // Included to avoid N+1 queries when fetching batch proofs.
+  ComplianceLeaf compliance_leaf = 11;
+}
+
+// Request for querying a user's registered compliance leaf.
+message ComplianceUserLeafRequest {
+  // The address to look up.
+  keys.v1.Address address = 1;
+  // The asset ID to look up.
+  asset.v1.AssetId asset_id = 2;
+}
+
+// Response containing a user's registered compliance leaf.
+message ComplianceUserLeafResponse {
+  // Whether the user is registered for this asset.
+  bool is_registered = 1;
+  // The user's compliance leaf (only present if is_registered is true).
+  ComplianceLeaf leaf = 2;
+}
+
+// A single query in a batch request.
+message ComplianceBatchQuery {
+  // The address to look up.
+  keys.v1.Address address = 1;
+  // The asset ID to look up.
+  asset.v1.AssetId asset_id = 2;
+}
+
+// Request for batch querying multiple (address, asset) pairs.
+// Use this for multi-spend/multi-output transactions to fetch all proofs in one call.
+message ComplianceBatchMerkleProofsRequest {
+  // The queries to execute. Each query is an (address, asset_id) pair.
+  repeated ComplianceBatchQuery queries = 1;
+}
+
+// Response containing batch Merkle proofs and anchors.
+// Anchors are returned once (they're the same for all queries).
+// Results are returned in the same order as the queries.
+message ComplianceBatchMerkleProofsResponse {
+  // Current compliance tree root (StateCommitment, 32 bytes).
+  bytes compliance_anchor = 1;
+  // Current asset tree root (StateCommitment, 32 bytes).
+  bytes asset_anchor = 2;
+  // Results for each query, in the same order as the request.
+  repeated ComplianceMerkleProofsResponse results = 3;
+}
+
+// Events
+
+// Data for an indexed leaf in the asset IMT (for client sync).
+// All policy fields are bound into the leaf commitment hash.
+message IndexedLeafData {
+  bytes value = 1;
+  uint64 next_index = 2;
+  bytes next_value = 3;
+  // Penumbra-decided policy (AssetParams)
+  bytes dk_pub = 4;
+  bytes threshold = 5;
+  bytes route_policy_hash = 6;
+  bytes slot_count = 12;
+  // Orbis-decided policy (RingData)
+  bytes ring_pk = 7;
+  bytes ring_id_hash = 8;
+  bytes policy_id_hash = 9;
+  bytes permission_hash = 10;
+  bytes resource_hash = 11;
+}
+
+// Full asset compliance policy (state-only, not in Merkle commitment).
+message AssetPolicy {
+  // AssetParams
+  bytes dk_pub = 1;
+  bytes threshold = 2;
+  repeated IbcRoute allowed_ibc_routes = 3;
+  // RingData
+  string ring_id = 4;
+  bytes ring_pk = 5;
+  string policy_id = 6;
+  string permission = 7;
+  string resource = 8;
+  crypto.decaf377_rdsa.v1.SpendVerificationKey registration_authority_vk = 9;
+  IbcAssetOrigin ibc_origin = 10;
+  uint32 slot_count = 11;
+}
+
+// Genesis configuration for the compliance component.
+message GenesisContent {
+  repeated NativeAssetRegistration native_assets = 1;
+  repeated crypto.decaf377_rdsa.v1.SpendVerificationKey compliance_registrar_vk = 2;
+  ComplianceParameters compliance_params = 3;
+}
+
+// Native asset registration configured at genesis.
+message NativeAssetRegistration {
+  asset.v1.AssetId asset_id = 1;
+  bool is_regulated = 2;
+  bytes dk_pub = 3;
+  crypto.decaf377_rdsa.v1.SpendVerificationKey registration_authority_vk = 4;
+  uint32 slot_count = 5;
+}
+
+// Emitted when a user is registered in the compliance tree.
+message EventUserRegistered {
+  // The position in the user compliance tree.
+  uint64 position = 1;
+  // The commitment of the compliance leaf.
+  bytes commitment = 2;
+  // Full leaf data for client sync.
+  ComplianceLeaf leaf = 3;
+}
+
+// Emitted when an asset is registered in the compliance system.
+message EventAssetRegistered {
+  // The asset ID that was registered.
+  asset.v1.AssetId asset_id = 1;
+  // Whether the asset is regulated (requires compliance).
+  bool is_regulated = 2;
+  // The position in the asset tree (for regulated assets).
+  uint64 position = 3;
+  // The indexed leaf data (for client sync, includes policy fields).
+  IndexedLeafData indexed_leaf = 4;
+  // The low leaf that was updated during IMT insertion.
+  uint64 low_leaf_position = 5;
+  // The updated low leaf data.
+  IndexedLeafData updated_low_leaf = 6;
+  // Full policy for client storage/reference.
+  AssetPolicy asset_policy = 7;
+}
+
+// Compliance metadata embedded in ICS-20 transfer memo field.
+// Carries the spend ciphertext so the issuer can track regulated assets across IBC.
+message IbcComplianceMetadata {
+  // The compliance ciphertext from the transfer-side input bundle.
+  bytes compliance_ciphertext = 1;
+  // The asset ID being transferred.
+  asset.v1.AssetId asset_id = 7;
+}
+
+// Emitted at end of block with the current compliance tree roots.
+message EventComplianceAnchor {
+  // The block height.
+  uint64 height = 1;
+  // The user tree root (StateCommitment, 32 bytes).
+  bytes user_anchor = 2;
+  // The asset tree root (StateCommitment, 32 bytes).
+  bytes asset_anchor = 3;
+}

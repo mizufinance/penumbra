@@ -115,7 +115,7 @@ impl EventBatch {
 
     /// Check if this batch has no blocks in it.
     ///
-    /// Most commonly, this is the result when [`start_later`] is called with a height
+    /// Most commonly, this is the result when [`Self::start_later`] is called with a height
     /// past that inside the batch.
     pub fn empty(&self) -> bool {
         self.first_height > self.last_height
@@ -164,6 +164,7 @@ impl EventBatchContext {
 ///
 /// Versions can be compared to assess breaking changes:
 /// ```
+/// use cometindex::index::Version;
 /// assert!(Version::with_major(3) > Version::with_major(2));
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, sqlx::Type)]

@@ -465,7 +465,7 @@ impl std::ops::Add for BalanceVar {
 mod test {
     use crate::{
         asset::{self, Metadata},
-        STAKING_TOKEN_ASSET_ID,
+        BASE_ASSET_ID,
     };
     use ark_ff::Zero;
     use decaf377::Fr;
@@ -481,11 +481,11 @@ mod test {
         let mut balance = Balance::zero();
         balance += Value {
             amount: 1u64.into(),
-            asset_id: *STAKING_TOKEN_ASSET_ID,
+            asset_id: *BASE_ASSET_ID,
         };
         balance -= Value {
             amount: 1u64.into(),
-            asset_id: *STAKING_TOKEN_ASSET_ID,
+            asset_id: *BASE_ASSET_ID,
         };
         assert!(balance.is_zero());
     }
@@ -495,11 +495,11 @@ mod test {
         let mut balance = Balance::zero();
         balance -= Value {
             amount: 1u64.into(),
-            asset_id: *STAKING_TOKEN_ASSET_ID,
+            asset_id: *BASE_ASSET_ID,
         };
         balance += Value {
             amount: 1u64.into(),
-            asset_id: *STAKING_TOKEN_ASSET_ID,
+            asset_id: *BASE_ASSET_ID,
         };
         assert!(balance.is_zero());
     }
@@ -509,11 +509,11 @@ mod test {
         let mut balance = -Balance::zero();
         balance += Value {
             amount: 1u64.into(),
-            asset_id: *STAKING_TOKEN_ASSET_ID,
+            asset_id: *BASE_ASSET_ID,
         };
         balance -= Value {
             amount: 1u64.into(),
-            asset_id: *STAKING_TOKEN_ASSET_ID,
+            asset_id: *BASE_ASSET_ID,
         };
         assert!(balance.is_zero());
     }
@@ -523,11 +523,11 @@ mod test {
         let mut balance = -Balance::zero();
         balance -= Value {
             amount: 1u64.into(),
-            asset_id: *STAKING_TOKEN_ASSET_ID,
+            asset_id: *BASE_ASSET_ID,
         };
         balance += Value {
             amount: 1u64.into(),
-            asset_id: *STAKING_TOKEN_ASSET_ID,
+            asset_id: *BASE_ASSET_ID,
         };
         assert!(balance.is_zero());
     }
@@ -644,14 +644,14 @@ mod test {
             values: vec![
                 pb::balance::SignedValue {
                     value: Some(pb::Value {
-                        asset_id: Some((*STAKING_TOKEN_ASSET_ID).into()),
+                        asset_id: Some((*BASE_ASSET_ID).into()),
                         amount: Some(Amount::from(100u128).into()),
                     }),
                     negated: true,
                 },
                 pb::balance::SignedValue {
                     value: Some(pb::Value {
-                        asset_id: Some((*STAKING_TOKEN_ASSET_ID).into()),
+                        asset_id: Some((*BASE_ASSET_ID).into()),
                         amount: Some(Amount::from(50u128).into()),
                     }),
                     negated: false,
@@ -663,14 +663,14 @@ mod test {
             values: vec![
                 pb::balance::SignedValue {
                     value: Some(pb::Value {
-                        asset_id: Some((*STAKING_TOKEN_ASSET_ID).into()),
+                        asset_id: Some((*BASE_ASSET_ID).into()),
                         amount: Some(Amount::from(100u128).into()),
                     }),
                     negated: true,
                 },
                 pb::balance::SignedValue {
                     value: Some(pb::Value {
-                        asset_id: Some((*STAKING_TOKEN_ASSET_ID).into()),
+                        asset_id: Some((*BASE_ASSET_ID).into()),
                         amount: Some(Amount::from(200u128).into()),
                     }),
                     negated: false,
@@ -682,14 +682,14 @@ mod test {
             values: vec![
                 pb::balance::SignedValue {
                     value: Some(pb::Value {
-                        asset_id: Some((*STAKING_TOKEN_ASSET_ID).into()),
+                        asset_id: Some((*BASE_ASSET_ID).into()),
                         amount: Some(Amount::from(100u128).into()),
                     }),
                     negated: true,
                 },
                 pb::balance::SignedValue {
                     value: Some(pb::Value {
-                        asset_id: Some((*STAKING_TOKEN_ASSET_ID).into()),
+                        asset_id: Some((*BASE_ASSET_ID).into()),
                         amount: Some(Amount::from(200u128).into()),
                     }),
                     negated: true,
@@ -701,14 +701,14 @@ mod test {
             values: vec![
                 pb::balance::SignedValue {
                     value: Some(pb::Value {
-                        asset_id: Some((*STAKING_TOKEN_ASSET_ID).into()),
+                        asset_id: Some((*BASE_ASSET_ID).into()),
                         amount: Some(Amount::from(100u128).into()),
                     }),
                     negated: false,
                 },
                 pb::balance::SignedValue {
                     value: Some(pb::Value {
-                        asset_id: Some((*STAKING_TOKEN_ASSET_ID).into()),
+                        asset_id: Some((*BASE_ASSET_ID).into()),
                         amount: Some(Amount::from(50u128).into()),
                     }),
                     negated: true,
@@ -720,14 +720,14 @@ mod test {
             values: vec![
                 pb::balance::SignedValue {
                     value: Some(pb::Value {
-                        asset_id: Some((*STAKING_TOKEN_ASSET_ID).into()),
+                        asset_id: Some((*BASE_ASSET_ID).into()),
                         amount: Some(Amount::from(100u128).into()),
                     }),
                     negated: false,
                 },
                 pb::balance::SignedValue {
                     value: Some(pb::Value {
-                        asset_id: Some((*STAKING_TOKEN_ASSET_ID).into()),
+                        asset_id: Some((*BASE_ASSET_ID).into()),
                         amount: Some(Amount::from(200u128).into()),
                     }),
                     negated: true,
@@ -739,14 +739,14 @@ mod test {
             values: vec![
                 pb::balance::SignedValue {
                     value: Some(pb::Value {
-                        asset_id: Some((*STAKING_TOKEN_ASSET_ID).into()),
+                        asset_id: Some((*BASE_ASSET_ID).into()),
                         amount: Some(Amount::from(100u128).into()),
                     }),
                     negated: false,
                 },
                 pb::balance::SignedValue {
                     value: Some(pb::Value {
-                        asset_id: Some((*STAKING_TOKEN_ASSET_ID).into()),
+                        asset_id: Some((*BASE_ASSET_ID).into()),
                         amount: Some(Amount::from(200u128).into()),
                     }),
                     negated: false,
@@ -762,32 +762,32 @@ mod test {
         let balance_5 = Balance::try_from(proto_balance_5).expect("fallible conversion");
 
         assert!(matches!(
-            balance_0.balance.get(&STAKING_TOKEN_ASSET_ID),
+            balance_0.balance.get(&BASE_ASSET_ID),
             Some(Imbalance::Required(amount)) if amount == &NonZeroU128::new(50).unwrap()
         ));
 
         assert!(matches!(
-            balance_1.balance.get(&STAKING_TOKEN_ASSET_ID),
+            balance_1.balance.get(&BASE_ASSET_ID),
             Some(Imbalance::Provided(amount)) if amount == &NonZeroU128::new(100).unwrap()
         ));
 
         assert!(matches!(
-            balance_2.balance.get(&STAKING_TOKEN_ASSET_ID),
+            balance_2.balance.get(&BASE_ASSET_ID),
             Some(Imbalance::Required(amount)) if amount == &NonZeroU128::new(300).unwrap()
         ));
 
         assert!(matches!(
-            balance_3.balance.get(&STAKING_TOKEN_ASSET_ID),
+            balance_3.balance.get(&BASE_ASSET_ID),
             Some(Imbalance::Provided(amount)) if amount == &NonZeroU128::new(50).unwrap()
         ));
 
         assert!(matches!(
-            balance_4.balance.get(&STAKING_TOKEN_ASSET_ID),
+            balance_4.balance.get(&BASE_ASSET_ID),
             Some(Imbalance::Required(amount)) if amount == &NonZeroU128::new(100).unwrap()
         ));
 
         assert!(matches!(
-            balance_5.balance.get(&STAKING_TOKEN_ASSET_ID),
+            balance_5.balance.get(&BASE_ASSET_ID),
             Some(Imbalance::Provided(amount)) if amount == &NonZeroU128::new(300).unwrap()
         ));
     }
@@ -802,7 +802,7 @@ mod test {
             values: vec![
                 pb::balance::SignedValue {
                     value: Some(pb::Value {
-                        asset_id: Some((*STAKING_TOKEN_ASSET_ID).into()),
+                        asset_id: Some((*BASE_ASSET_ID).into()),
                         amount: Some(Amount::from(100u128).into()),
                     }),
                     negated: true,
@@ -820,7 +820,7 @@ mod test {
         let balance = Balance::try_from(proto_balance).expect("fallible conversion");
 
         assert!(matches!(
-            balance.balance.get(&STAKING_TOKEN_ASSET_ID),
+            balance.balance.get(&BASE_ASSET_ID),
             Some(Imbalance::Required(amount)) if amount == &NonZeroU128::new(100).unwrap()
         ));
 
@@ -852,7 +852,7 @@ mod test {
             negated: false,
             balance: [
                 (
-                    *STAKING_TOKEN_ASSET_ID,
+                    *BASE_ASSET_ID,
                     Imbalance::Provided(NonZeroU128::new(100).unwrap()),
                 ),
                 (
@@ -870,7 +870,7 @@ mod test {
         let first_value = proto_balance
             .values
             .iter()
-            .find(|v| v.value.as_ref().unwrap().asset_id == Some((*STAKING_TOKEN_ASSET_ID).into()))
+            .find(|v| v.value.as_ref().unwrap().asset_id == Some((*BASE_ASSET_ID).into()))
             .expect("asset should exist");
         let second_value = proto_balance
             .values
@@ -882,7 +882,7 @@ mod test {
 
         assert_eq!(
             first_value.value.as_ref().unwrap().asset_id,
-            Some((*STAKING_TOKEN_ASSET_ID).into())
+            Some((*BASE_ASSET_ID).into())
         );
         assert_eq!(
             second_value.value.as_ref().unwrap().asset_id,

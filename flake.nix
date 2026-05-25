@@ -47,9 +47,6 @@
           # Set up for Rust builds, pinned to the Rust toolchain version in the Penumbra repository
           overlays = [ (import rust-overlay) ];
           pkgs = import nixpkgs { inherit system overlays; };
-          rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
-          craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
-
           # Add nightly Rust toolchain, required for building the rustdocs with combined index landing page.
           # https://github.com/oxalica/rust-overlay/blob/master/README.md#cheat-sheet-common-usage-of-rust-bin
           nightlyRustToolchain = pkgs.rust-bin.selectLatestNightlyWith(toolchain: toolchain.default);
@@ -62,6 +59,7 @@
         in with pkgs; with pkgs.lib; let
           # Common development packages for all shells
           commonDevPackages = [
+            openssl
             buf
             cargo-hack
             cargo-nextest
@@ -70,6 +68,7 @@
             cometbft
             dbus
             glibcLocales # for postgres initdb locale support
+            go
             grafana
             grpcui
             grpcurl
@@ -84,55 +83,46 @@
             process-compose
             prometheus
             protobuf
+            llvmPackages.lld
             rocksdb
             rsync
             sqlfluff
             toml-cli
           ];
 
+          # Native and system dependencies needed to build the Rust workspace in dev shells.
+          shellBuildInputs = if stdenv.hostPlatform.isDarwin then
+            with pkgs.darwin.apple_sdk.frameworks; [
+              clang
+              pkg-config
+              sqlite
+              SystemConfiguration
+              CoreServices
+            ]
+          else
+            [
+              clang
+              pkg-config
+              sqlite
+            ];
+
           # Common shell hook content
           commonShellHook = ''
             export LIBCLANG_PATH=${LIBCLANG_PATH}
             export RUST_SRC_PATH=${pkgs.rustPlatform.rustLibSrc} # Required for rust-analyzer
             export ROCKSDB_LIB_DIR=${ROCKSDB_LIB_DIR}
+            export LD_LIBRARY_PATH=${lib.makeLibraryPath [
+              pkgs.bzip2
+              pkgs.dbus
+              pkgs.lz4
+              pkgs.openssl
+              pkgs.rocksdb
+              pkgs.snappy
+              pkgs.stdenv.cc.cc
+              pkgs.zstd
+            ]}:''${LD_LIBRARY_PATH:-}
             export RUST_LOG="info,network_integration=debug,pclientd=debug,pcli=info,pd=info,penumbra=info"
           '';
-
-          # All the Penumbra binaries
-          penumbra = (craneLib.buildPackage {
-            pname = "penumbra";
-            src = cleanSourceWith {
-              src = if penumbraRelease == null then craneLib.path ./. else fetchFromGitHub {
-                owner = "penumbra-zone";
-                repo = "penumbra";
-                rev = "v${penumbraRelease.version}";
-                sha256 = "${penumbraRelease.sha256}";
-              };
-              filter = path: type:
-                # Retain non-rust asset files as build inputs:
-                # * no_lfs, param, bin: proving and verification parameters
-                # * zip: frontend bundled assets
-                # * sql: database schema files for indexing
-                # * csv: default genesis allocations for testnet generation
-                # * json: default validator info for testnet generation
-                (builtins.match ".*\.(no_lfs|param|bin|zip|sql|csv|json)$" path != null) ||
-                # ... as well as all the normal cargo source files:
-                (craneLib.filterCargoSources path type);
-            };
-            nativeBuildInputs = [ pkg-config ];
-            buildInputs = if stdenv.hostPlatform.isDarwin then 
-              with pkgs.darwin.apple_sdk.frameworks; [clang openssl rocksdb SystemConfiguration CoreServices]
-            else
-              [clang openssl rocksdb];
-
-            inherit system PKG_CONFIG_PATH LIBCLANG_PATH ROCKSDB_LIB_DIR;
-            cargoExtraArgs = "-p pd -p pcli -p pclientd -p pindexer -p pmonitor";
-            meta = {
-              description = "A fully private proof-of-stake network and decentralized exchange for the Cosmos ecosystem";
-              homepage = "https://penumbra.zone";
-              license = [ licenses.mit licenses.asl20 ];
-            };
-          }).overrideAttrs (_: { doCheck = false; }); # Disable tests to improve build times
 
           # CometBFT
           cometbft = (buildGoModule rec {
@@ -172,40 +162,82 @@
             };
           }).overrideAttrs (_: { doCheck = false; }); # Disable tests to improve build times
         in rec {
-          packages = { inherit penumbra cometbft; };
+          packages = {
+            penumbra =
+              let
+                rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+                craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+              in
+              (craneLib.buildPackage {
+                pname = "penumbra";
+                src = cleanSourceWith {
+                  src = if penumbraRelease == null then craneLib.path ./. else fetchFromGitHub {
+                    owner = "mizufinance";
+                    repo = "penumbra";
+                    rev = "v${penumbraRelease.version}";
+                    sha256 = "${penumbraRelease.sha256}";
+                  };
+                  filter = path: type:
+                    # Retain non-rust asset files as build inputs:
+                    # * no_lfs, param, bin: proving and verification parameters
+                    # * zip: frontend bundled assets
+                    # * sql: database schema files for indexing
+                    # * csv: default genesis allocations for testnet generation
+                    # * json: default validator info for testnet generation
+                    (builtins.match ".*\.(no_lfs|param|bin|zip|sql|csv|json)$" path != null) ||
+                    # ... as well as all the normal cargo source files:
+                    (craneLib.filterCargoSources path type);
+                };
+                nativeBuildInputs = [ pkg-config ];
+                buildInputs = if stdenv.hostPlatform.isDarwin then
+                  with pkgs.darwin.apple_sdk.frameworks; [ clang openssl rocksdb sqlite SystemConfiguration CoreServices ]
+                else
+                  [ clang dbus openssl rocksdb sqlite ];
+
+                inherit system PKG_CONFIG_PATH LIBCLANG_PATH ROCKSDB_LIB_DIR;
+                cargoExtraArgs = "-p pd -p pcli -p pclientd -p pindexer";
+                meta = {
+                  description = "A fully private proof-of-stake network and decentralized exchange for the Cosmos ecosystem";
+                  homepage = "https://penumbra.zone";
+                  license = [ licenses.mit licenses.asl20 ];
+                };
+              }).overrideAttrs (_: { doCheck = false; });
+            inherit cometbft;
+          };
           apps = {
             pd.type = "app";
-            pd.program = "${penumbra}/bin/pd";
+            pd.program = "${packages.penumbra}/bin/pd";
             pcli.type = "app";
-            pcli.program = "${penumbra}/bin/pcli";
+            pcli.program = "${packages.penumbra}/bin/pcli";
             pclientd.type = "app";
-            pclientd.program = "${penumbra}/bin/pclientd";
+            pclientd.program = "${packages.penumbra}/bin/pclientd";
             pindexer.type = "app";
-            pindexer.program = "${penumbra}/bin/pindexer";
-            pmonitor.type = "app";
-            pmonitor.program = "${penumbra}/bin/pmonitor";
+            pindexer.program = "${packages.penumbra}/bin/pindexer";
             cometbft.type = "app";
             cometbft.program = "${cometbft}/bin/cometbft";
           };
           defaultPackage = symlinkJoin {
             name = "penumbra-and-cometbft";
-            paths = [ penumbra cometbft ];
+            paths = [ packages.penumbra cometbft ];
           };
           devShells = {
-            default = craneLib.devShell {
-              inherit LIBCLANG_PATH ROCKSDB_LIB_DIR;
-              inputsFrom = [ penumbra ];
-              packages = commonDevPackages;
-              shellHook = ''
-                ${commonShellHook}
-                echo "Using stable Rust from rust-toolchain.toml"
-              '';
-            };
+            default =
+              let
+                rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+                craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+              in
+              craneLib.devShell {
+                inherit LIBCLANG_PATH ROCKSDB_LIB_DIR;
+                packages = commonDevPackages ++ shellBuildInputs;
+                shellHook = ''
+                  ${commonShellHook}
+                  echo "Using stable Rust from rust-toolchain.toml"
+                '';
+              };
 
             nightly = nightlyCraneLib.devShell {
               inherit LIBCLANG_PATH ROCKSDB_LIB_DIR;
-              inputsFrom = [ penumbra ];
-              packages = commonDevPackages;
+              packages = commonDevPackages ++ shellBuildInputs;
               shellHook = ''
                 ${commonShellHook}
                 echo "Using nightly Rust toolchain"

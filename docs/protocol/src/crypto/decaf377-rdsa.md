@@ -73,7 +73,7 @@ Randomizing a signing key and then deriving the verification key associated to t
 
 ## Implementation
 
-An implementation of `decaf377-rdsa` can be found [here](https://github.com/penumbra-zone/decaf377-rdsa).
+An implementation of `decaf377-rdsa` can be found [here](https://github.com/mizufinance/decaf377-rdsa).
 
 ## `Binding` signatures
 

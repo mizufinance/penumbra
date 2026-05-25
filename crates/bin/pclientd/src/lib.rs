@@ -1,5 +1,5 @@
 // Requires nightly.
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 use std::io::IsTerminal;
 use std::io::Read;
@@ -37,9 +37,8 @@ use url::Url;
 
 mod proxy;
 pub use proxy::{
-    AppQueryProxy, ChainQueryProxy, CompactBlockQueryProxy, DexQueryProxy, DexSimulationProxy,
-    GovernanceQueryProxy, SctQueryProxy, ShieldedPoolQueryProxy, StakeQueryProxy,
-    TendermintProxyProxy,
+    AppQueryProxy, ChainQueryProxy, CompactBlockQueryProxy, GovernanceQueryProxy, SctQueryProxy,
+    ShieldedPoolQueryProxy, TendermintProxyProxy, ValidatorQueryProxy,
 };
 
 use crate::proxy::FeeQueryProxy;
@@ -156,12 +155,11 @@ impl Opt {
 
     fn check_home_nonempty(&self) -> Result<()> {
         if self.home.exists() {
-            if !self.home.is_dir() {
-                return Err(anyhow::anyhow!(
-                    "The home directory {:?} is not a directory.",
-                    self.home
-                ));
-            }
+            anyhow::ensure!(
+                self.home.is_dir(),
+                "The home directory {:?} is not a directory.",
+                self.home
+            );
             let mut entries = fs::read_dir(&self.home)?.peekable();
             if entries.peek().is_some() {
                 return Err(anyhow::anyhow!(
@@ -330,13 +328,11 @@ impl Opt {
 
                 let app_query_proxy = AppQueryProxy(proxy_channel.clone());
                 let governance_query_proxy = GovernanceQueryProxy(proxy_channel.clone());
-                let dex_query_proxy = DexQueryProxy(proxy_channel.clone());
-                let dex_simulation_proxy = DexSimulationProxy(proxy_channel.clone());
                 let sct_query_proxy = SctQueryProxy(proxy_channel.clone());
                 let fee_query_proxy = FeeQueryProxy(proxy_channel.clone());
                 let shielded_pool_query_proxy = ShieldedPoolQueryProxy(proxy_channel.clone());
                 let chain_query_proxy = ChainQueryProxy(proxy_channel.clone());
-                let stake_query_proxy = StakeQueryProxy(proxy_channel.clone());
+                let validator_query_proxy = ValidatorQueryProxy(proxy_channel.clone());
                 let compact_block_query_proxy = CompactBlockQueryProxy(proxy_channel.clone());
                 let tendermint_proxy_proxy = TendermintProxyProxy(proxy_channel.clone());
 
@@ -352,13 +348,11 @@ impl Opt {
                     .add_optional_service(custody_service.map(tonic_web::enable))
                     .add_service(tonic_web::enable(app_query_proxy))
                     .add_service(tonic_web::enable(governance_query_proxy))
-                    .add_service(tonic_web::enable(dex_query_proxy))
-                    .add_service(tonic_web::enable(dex_simulation_proxy))
                     .add_service(tonic_web::enable(sct_query_proxy))
                     .add_service(tonic_web::enable(fee_query_proxy))
                     .add_service(tonic_web::enable(shielded_pool_query_proxy))
                     .add_service(tonic_web::enable(chain_query_proxy))
-                    .add_service(tonic_web::enable(stake_query_proxy))
+                    .add_service(tonic_web::enable(validator_query_proxy))
                     .add_service(tonic_web::enable(compact_block_query_proxy))
                     .add_service(tonic_web::enable(tendermint_proxy_proxy))
                     // TODO: should we add the IBC services here as well? they will appear
@@ -453,12 +447,11 @@ async fn download_registry_to_temp_file(url: &str) -> Result<NamedTempFile> {
             .await
             .with_context(|| format!("Failed to download registry from: {}", url))?;
 
-        if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "Failed to download registry: HTTP {}",
-                response.status()
-            ));
-        }
+        anyhow::ensure!(
+            response.status().is_success(),
+            "Failed to download registry: HTTP {}",
+            response.status()
+        );
 
         let content = response
             .text()

@@ -247,8 +247,6 @@ impl Opt {
                 let mut nf_count = 0;
                 let mut sp_rolled_up_count = 0;
                 let mut sp_note_count = 0;
-                let mut sp_swap_count = 0;
-
                 use penumbra_sdk_compact_block::StatePayload;
 
                 while let Some(block_rsp) = stream.message().await? {
@@ -266,16 +264,11 @@ impl Opt {
                         .iter()
                         .filter(|sp| matches!(sp, StatePayload::Note { .. }))
                         .count();
-                    sp_swap_count += block
-                        .state_payloads
-                        .iter()
-                        .filter(|sp| matches!(sp, StatePayload::Swap { .. }))
-                        .count();
                     progress_bar.set_position(block.height);
                 }
                 progress_bar.finish();
 
-                let sp_count = sp_note_count + sp_swap_count + sp_rolled_up_count;
+                let sp_count = sp_note_count + sp_rolled_up_count;
                 println!(
                     "Fetched at least {}",
                     bytesize::to_string(bytes as u64, false)
@@ -284,7 +277,6 @@ impl Opt {
                 println!("\t{nf_count} nullifiers");
                 println!("\t{sp_count} state payloads, containing:");
                 println!("\t\t{sp_note_count} note payloads");
-                println!("\t\t{sp_swap_count} swap payloads");
                 println!("\t\t{sp_rolled_up_count} rolled up payloads");
             }
         }

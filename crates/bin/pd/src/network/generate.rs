@@ -3,29 +3,35 @@
 //! for Penumbra.
 use crate::network::config::{get_network_dir, NetworkTendermintConfig, ValidatorKeys};
 use anyhow::{Context, Result};
+use decaf377_rdsa::{SpendAuth, VerificationKey};
 use penumbra_sdk_app::{
     app::{MAX_BLOCK_TXS_PAYLOAD_BYTES, MAX_EVIDENCE_SIZE_BYTES},
     params::AppParameters,
 };
-use penumbra_sdk_asset::{asset, STAKING_TOKEN_ASSET_ID};
+use penumbra_sdk_asset::BASE_ASSET_ID;
+use penumbra_sdk_compliance::genesis::Content as ComplianceContent;
 use penumbra_sdk_fee::genesis::Content as FeeContent;
 use penumbra_sdk_governance::genesis::Content as GovernanceContent;
-use penumbra_sdk_keys::{keys::SpendKey, Address};
+use penumbra_sdk_keys::{
+    keys::{Bip44Path, SeedPhrase, SpendKey},
+    test_keys, Address,
+};
 use penumbra_sdk_sct::genesis::Content as SctContent;
 use penumbra_sdk_sct::params::SctParameters;
 use penumbra_sdk_shielded_pool::{
     genesis::{self as shielded_pool_genesis, Allocation, Content as ShieldedPoolContent},
     params::ShieldedPoolParameters,
 };
-use penumbra_sdk_stake::{
-    genesis::Content as StakeContent, params::StakeParameters, validator::Validator,
-    DelegationToken, FundingStream, FundingStreams, GovernanceKey, IdentityKey,
+use penumbra_sdk_validator::{
+    genesis::Content as ValidatorContent, params::ValidatorParameters, validator::Validator,
+    GovernanceKey, IdentityKey,
 };
 use serde::{de, Deserialize};
 use std::{
     fmt,
     fs::File,
     io::Read,
+    net::SocketAddr,
     path::PathBuf,
     str::FromStr,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -55,6 +61,10 @@ pub struct NetworkConfig {
     /// The Tendermint `consensus.timeout_commit` value, controlling how long Tendermint should
     /// wait after committing a block, before starting on the new height. If unspecified, `5s`.
     pub tendermint_timeout_commit: Option<tendermint::Timeout>,
+    /// Bind address for the CometBFT RPC service.
+    pub tendermint_rpc_bind: SocketAddr,
+    /// Bind address for the CometBFT P2P service.
+    pub tendermint_p2p_bind: SocketAddr,
 }
 
 impl NetworkConfig {
@@ -73,9 +83,11 @@ impl NetworkConfig {
         tendermint_timeout_commit: Option<tendermint::Timeout>,
         active_validator_limit: Option<u64>,
         epoch_duration: Option<u64>,
-        unbonding_delay: Option<u64>,
         proposal_voting_blocks: Option<u64>,
         gas_price_simple: Option<u64>,
+        compliance_registrar_vk: Vec<VerificationKey<SpendAuth>>,
+        tendermint_rpc_bind: SocketAddr,
+        tendermint_p2p_bind: SocketAddr,
     ) -> anyhow::Result<NetworkConfig> {
         let external_addresses = external_addresses.unwrap_or_default();
 
@@ -86,10 +98,6 @@ impl NetworkConfig {
         )?;
 
         let mut allocations = Self::collect_allocations(allocations_input_file)?;
-
-        for v in network_validators.iter() {
-            allocations.push(v.delegation_allocation()?);
-        }
 
         // Add an extra allocation for a dynamic wallet address.
         if let Some(address) = allocation_address {
@@ -108,9 +116,9 @@ impl NetworkConfig {
             validators.to_vec(),
             active_validator_limit,
             epoch_duration,
-            unbonding_delay,
             proposal_voting_blocks,
             gas_price_simple,
+            compliance_registrar_vk,
         )?;
         let genesis = Self::make_genesis(app_state)?;
 
@@ -122,6 +130,8 @@ impl NetworkConfig {
             validators: validators.to_vec(),
             peer_address_template,
             tendermint_timeout_commit,
+            tendermint_rpc_bind,
+            tendermint_p2p_bind,
         })
     }
 
@@ -197,9 +207,9 @@ impl NetworkConfig {
         validators: Vec<Validator>,
         active_validator_limit: Option<u64>,
         epoch_duration: Option<u64>,
-        unbonding_delay: Option<u64>,
         proposal_voting_blocks: Option<u64>,
         gas_price_simple: Option<u64>,
+        compliance_registrar_vk: Vec<VerificationKey<SpendAuth>>,
     ) -> anyhow::Result<penumbra_sdk_app::genesis::Content> {
         let default_gov_params = penumbra_sdk_governance::params::GovernanceParameters::default();
 
@@ -216,13 +226,11 @@ impl NetworkConfig {
 
         let app_state = penumbra_sdk_app::genesis::Content {
             chain_id: chain_id.to_string(),
-            stake_content: StakeContent {
+            validator_content: ValidatorContent {
                 validators: validators.into_iter().map(Into::into).collect(),
-                stake_params: StakeParameters {
+                validator_params: ValidatorParameters {
                     active_validator_limit: active_validator_limit
-                        .unwrap_or(default_app_params.stake_params.active_validator_limit),
-                    unbonding_delay: unbonding_delay
-                        .unwrap_or(default_app_params.stake_params.unbonding_delay),
+                        .unwrap_or(default_app_params.validator_params.active_validator_limit),
                     ..Default::default()
                 },
             },
@@ -233,28 +241,17 @@ impl NetworkConfig {
                         compact_block_space_price: gas_price_simple,
                         verification_price: gas_price_simple,
                         execution_price: gas_price_simple,
-                        asset_id: *STAKING_TOKEN_ASSET_ID,
+                        asset_id: *BASE_ASSET_ID,
                     },
-                    fixed_alt_gas_prices: vec![
-                        penumbra_sdk_fee::GasPrices {
-                            block_space_price: 10 * gas_price_simple,
-                            compact_block_space_price: 10 * gas_price_simple,
-                            verification_price: 10 * gas_price_simple,
-                            execution_price: 10 * gas_price_simple,
-                            asset_id: asset::REGISTRY.parse_unit("gm").id(),
-                        },
-                        penumbra_sdk_fee::GasPrices {
-                            block_space_price: 10 * gas_price_simple,
-                            compact_block_space_price: 10 * gas_price_simple,
-                            verification_price: 10 * gas_price_simple,
-                            execution_price: 10 * gas_price_simple,
-                            asset_id: asset::REGISTRY.parse_unit("gn").id(),
-                        },
-                    ],
+                    fixed_alt_gas_prices: vec![],
                 },
             },
             governance_content: GovernanceContent {
                 governance_params: gov_params,
+            },
+            compliance_content: ComplianceContent {
+                compliance_registrar_vk,
+                ..Default::default()
             },
             shielded_pool_content: ShieldedPoolContent {
                 shielded_pool_params: ShieldedPoolParameters::default(),
@@ -264,6 +261,9 @@ impl NetworkConfig {
                 sct_params: SctParameters {
                     epoch_duration: epoch_duration
                         .unwrap_or(default_app_params.sct_params.epoch_duration),
+                    sct_anchor_retention_blocks: default_app_params
+                        .sct_params
+                        .sct_anchor_retention_blocks,
                 },
             },
             ..Default::default()
@@ -305,8 +305,7 @@ impl NetworkConfig {
                     time_iota_ms: 500,
                 },
                 evidence: tendermint::evidence::Params {
-                    // We should keep this in approximate sync with the recommended default for
-                    // `StakeParameters::unbonding_delay`, this is roughly a week.
+                    // Keep this roughly aligned with the intended evidence retention window.
                     max_age_num_blocks: 130000,
                     // Similarly, we set the max age duration for evidence to be a little over a week.
                     max_age_duration: tendermint::evidence::Duration(Duration::from_secs(650000)),
@@ -369,8 +368,8 @@ impl NetworkConfig {
                 &node_name,
                 ips_minus_mine,
                 external_address,
-                None,
-                None,
+                Some(self.tendermint_rpc_bind),
+                Some(self.tendermint_p2p_bind),
             )?;
             if let Some(timeout_commit) = self.tendermint_timeout_commit {
                 tm_config.0.consensus.timeout_commit = timeout_commit;
@@ -391,7 +390,6 @@ pub fn network_generate(
     active_validator_limit: Option<u64>,
     tendermint_timeout_commit: Option<tendermint::Timeout>,
     epoch_duration: Option<u64>,
-    unbonding_delay: Option<u64>,
     peer_address_template: Option<String>,
     external_addresses: Vec<TendermintAddress>,
     validators_input_file: Option<PathBuf>,
@@ -399,6 +397,9 @@ pub fn network_generate(
     allocation_address: Option<Address>,
     proposal_voting_blocks: Option<u64>,
     gas_price_simple: Option<u64>,
+    compliance_registrar_vk: Vec<VerificationKey<SpendAuth>>,
+    tendermint_rpc_bind: SocketAddr,
+    tendermint_p2p_bind: SocketAddr,
 ) -> anyhow::Result<()> {
     tracing::info!(?chain_id, "Generating network config");
     let t = NetworkConfig::generate(
@@ -412,9 +413,11 @@ pub fn network_generate(
         tendermint_timeout_commit,
         active_validator_limit,
         epoch_duration,
-        unbonding_delay,
         proposal_voting_blocks,
         gas_price_simple,
+        compliance_registrar_vk,
+        tendermint_rpc_bind,
+        tendermint_p2p_bind,
     )?;
     tracing::info!(
         n_validators = t.validators.len(),
@@ -466,7 +469,7 @@ impl NetworkAllocation {
     }
     /// Creates a basic set of genesis [Allocation]s for the provided [Address].
     /// Returns multiple Allocations, so that it's immediately possible to use the DEX,
-    /// for basic interactive testing of swap behavior.
+    /// for basic interactive testing of swap behavior, and compliance system testing.
     /// For more control over precise allocation amounts, use [from_csv].
     pub fn simple(address: Address) -> Vec<Allocation> {
         vec![
@@ -474,23 +477,36 @@ impl NetworkAllocation {
                 address: address.clone(),
                 raw_denom: "upenumbra".into(),
                 // The `upenumbra` base denom is millionths, so `10^6 * n`
-                // results in `n` `penumbra` tokens.
-                raw_amount: (100_000 * 10u128.pow(6)).into(),
+                // results in `n` `penumbra` tokens. Split the base allocation
+                // across two genesis notes so nonzero-fee base-asset sends can
+                // dedicate one note to tx-level fee funding.
+                raw_amount: (99_000 * 10u128.pow(6)).into(),
             },
             Allocation {
                 address: address.clone(),
-                raw_denom: "test_usd".into(),
-                raw_amount: (1_000 as u128).into(),
+                raw_denom: "upenumbra".into(),
+                raw_amount: (1_000 * 10u128.pow(6)).into(),
+            },
+            Allocation {
+                address: address.clone(),
+                raw_denom: "wtest_usd".into(),
+                // 1_000_000 display units (exponent 18)
+                raw_amount: (1_000_000u128 * 10u128.pow(18)).into(),
+            },
+            Allocation {
+                address: address.clone(),
+                raw_denom: "wregulated_usd".into(),
+                // 1_000_000 display units (exponent 18)
+                raw_amount: (1_000_000u128 * 10u128.pow(18)).into(),
+            },
+            Allocation {
+                address: address.clone(),
+                raw_denom: "unknown_token".into(),
+                // 1_000_000 display units (exponent 18)
+                raw_amount: (1_000_000u128 * 10u128.pow(18)).into(),
             },
         ]
     }
-}
-
-/// Represents a funding stream within a testnet configuration file.
-#[derive(Debug, Deserialize, Clone)]
-pub struct TestnetFundingStream {
-    pub rate_bps: u16,
-    pub address: String,
 }
 
 /// Represents testnet validators in configuration files.
@@ -499,7 +515,6 @@ pub struct NetworkValidator {
     pub name: String,
     pub website: String,
     pub description: String,
-    pub funding_streams: Vec<TestnetFundingStream>,
     /// All validator identities
     pub sequence_number: u32,
     /// Optional `external_address` field for Tendermint config.
@@ -520,25 +535,50 @@ impl NetworkValidator {
     }
     /// Import validator configs from a reader object that emits JSON.
     pub fn from_reader(input: impl Read) -> Result<Vec<NetworkValidator>> {
-        Ok(serde_json::from_reader(input)?)
-    }
-    /// Generate initial delegation allocation for inclusion in genesis.
-    pub fn delegation_allocation(&self) -> Result<Allocation> {
-        let spend_key = SpendKey::from(self.keys.validator_spend_key.clone());
-        let fvk = spend_key.full_viewing_key();
-        let ivk = fvk.incoming();
-        let (dest, _dtk_d) = ivk.payment_address(0u32.into());
+        #[derive(Deserialize)]
+        struct RawNetworkValidator {
+            pub name: String,
+            pub website: String,
+            pub description: String,
+            #[serde(default)]
+            pub sequence_number: u32,
+            pub external_address: Option<TendermintAddress>,
+            pub peer_address_template: Option<String>,
+            pub keys: Option<ValidatorKeys>,
+        }
 
-        let identity_key: IdentityKey = IdentityKey(fvk.spend_verification_key().clone().into());
-        let delegation_denom = DelegationToken::from(&identity_key).denom();
-        Ok(Allocation {
-            address: dest,
-            // Add an initial allocation of 25,000 delegation tokens,
-            // starting them with 2.5x the individual allocations to discord users.
-            // 25,000 delegation tokens * 1e6 udelegation factor
-            raw_amount: (25_000 * 10u128.pow(6)).into(),
-            raw_denom: delegation_denom.to_string(),
-        })
+        let raw_validators: Vec<RawNetworkValidator> = serde_json::from_reader(input)?;
+
+        raw_validators
+            .into_iter()
+            .map(|raw| {
+                let keys = match raw.keys {
+                    Some(keys) => keys,
+                    None => {
+                        // Keep local/dev validators stable across runs so the integration-test
+                        // wallet can authenticate governance actions against validator 0.
+                        let seed_phrase: SeedPhrase = test_keys::SEED_PHRASE
+                            .parse()
+                            .expect("hardcoded test seed phrase should be valid");
+                        let spend_key = SpendKey::from_seed_phrase_bip44(
+                            seed_phrase,
+                            &Bip44Path::new(raw.sequence_number),
+                        );
+                        ValidatorKeys::from_seed(spend_key.to_bytes().0)
+                    }
+                };
+
+                Ok(NetworkValidator {
+                    name: raw.name,
+                    website: raw.website,
+                    description: raw.description,
+                    sequence_number: raw.sequence_number,
+                    external_address: raw.external_address,
+                    peer_address_template: raw.peer_address_template,
+                    keys,
+                })
+            })
+            .collect()
     }
     /// Return a URL for Tendermint P2P service for this node.
     ///
@@ -594,7 +634,6 @@ impl Default for NetworkValidator {
             name: "".to_string(),
             website: "".to_string(),
             description: "".to_string(),
-            funding_streams: Vec::<TestnetFundingStream>::new(),
             sequence_number: 0,
             external_address: None,
             peer_address_template: None,
@@ -635,19 +674,6 @@ impl TryFrom<&NetworkValidator> for Validator {
             website: tv.website.clone(),
             description: tv.description.clone(),
             enabled: true,
-            funding_streams: FundingStreams::try_from(
-                tv.funding_streams
-                    .iter()
-                    .map(|fs| {
-                        Ok(FundingStream::ToAddress {
-                            address: Address::from_str(&fs.address)
-                                .context("invalid funding stream address in validators.json")?,
-                            rate_bps: fs.rate_bps,
-                        })
-                    })
-                    .collect::<Result<Vec<FundingStream>, anyhow::Error>>()?,
-            )
-            .context("unable to construct funding streams from validators.json")?,
             sequence_number: tv.sequence_number,
         })
     }
@@ -717,25 +743,21 @@ mod tests {
     fn parse_allocations_from_good_csv() -> anyhow::Result<()> {
         let csv_content = r#"
 "amount","denom","address"
-"100000","udelegation_penumbravalid1jzcc6vsm29am9ggs8z0d7s9jk9uf8tfrqg7hglc9ufs7r23nu5yqtw77ex","penumbra1rqcd3hfvkvc04c4c9vc0ac87lh4y0z8l28k4xp6d0cnd5jc6f6k0neuzp6zdwtpwyfpswtdzv9jzqtpjn5t6wh96pfx3flq2dhqgc42u7c06kj57dl39w2xm6tg0wh4zc8kjjk"
 "100000","upenumbra","penumbra1rqcd3hfvkvc04c4c9vc0ac87lh4y0z8l28k4xp6d0cnd5jc6f6k0neuzp6zdwtpwyfpswtdzv9jzqtpjn5t6wh96pfx3flq2dhqgc42u7c06kj57dl39w2xm6tg0wh4zc8kjjk"
-"100000","udelegation_penumbravalid1p2hfuch2p8rshyc90qa23gqk82s74tqcu3x2x3y5tfwpzth4vvrq2gv283","penumbra1xq2e9x7uhfzezwunvazdamlxepf4jr5htsuqnzlsahuayyqxjjwg9lk0aytwm6wfj3jy29rv2kdpen57903s8wxv3jmqwj6m6v5jgn6y2cypfd03rke652k8wmavxra7e9wkrg"
 "100000","upenumbra","penumbra1xq2e9x7uhfzezwunvazdamlxepf4jr5htsuqnzlsahuayyqxjjwg9lk0aytwm6wfj3jy29rv2kdpen57903s8wxv3jmqwj6m6v5jgn6y2cypfd03rke652k8wmavxra7e9wkrg"
-"100000","udelegation_penumbravalid182k8x46hg5vx3ez8ec58ze5yd6a3q4q3fkx45ddt5jahnzz0xyyqdtz7hc","penumbra100zd92fg6x27wc0mlu48cd6phq420u7ep59kzdalg2cq66mjkyl0xr54z0c64gectnj44mv5k2vyjjsz5gyd5gq33a6wnqzvgu2fz7namz7usazsl6p8wza83gcpwt8q76rc4y"
 "100000","upenumbra","penumbra100zd92fg6x27wc0mlu48cd6phq420u7ep59kzdalg2cq66mjkyl0xr54z0c64gectnj44mv5k2vyjjsz5gyd5gq33a6wnqzvgu2fz7namz7usazsl6p8wza83gcpwt8q76rc4y"
-"100000","udelegation_penumbravalid1t2hr2lj5n2jt3hftzjw3strjllnakc7jtw234d229x3zakhaqsqsg9yarw","penumbra1xap8sgefy9rl2nfvsse0h4y6c25hy2n20ymr5w7hs28m9xemt3tmz88atyulswumc32sv7h937wnfhyct282de66zm75nk6ywq3d4r32p5ju0cnscj2rraesnrxr9lvk6hcazp"
 "100000","upenumbra","penumbra1xap8sgefy9rl2nfvsse0h4y6c25hy2n20ymr5w7hs28m9xemt3tmz88atyulswumc32sv7h937wnfhyct282de66zm75nk6ywq3d4r32p5ju0cnscj2rraesnrxr9lvk6hcazp"
 "#;
         let allos = NetworkAllocation::from_reader(csv_content.as_bytes())?;
 
         let a1 = &allos[0];
-        assert!(a1.raw_denom == "udelegation_penumbravalid1jzcc6vsm29am9ggs8z0d7s9jk9uf8tfrqg7hglc9ufs7r23nu5yqtw77ex");
+        assert!(a1.raw_denom == "upenumbra");
         assert!(a1.address == Address::from_str("penumbra1rqcd3hfvkvc04c4c9vc0ac87lh4y0z8l28k4xp6d0cnd5jc6f6k0neuzp6zdwtpwyfpswtdzv9jzqtpjn5t6wh96pfx3flq2dhqgc42u7c06kj57dl39w2xm6tg0wh4zc8kjjk")?);
         assert!(a1.raw_amount.value() == 100000);
 
         let a2 = &allos[1];
         assert!(a2.raw_denom == "upenumbra");
-        assert!(a2.address == Address::from_str("penumbra1rqcd3hfvkvc04c4c9vc0ac87lh4y0z8l28k4xp6d0cnd5jc6f6k0neuzp6zdwtpwyfpswtdzv9jzqtpjn5t6wh96pfx3flq2dhqgc42u7c06kj57dl39w2xm6tg0wh4zc8kjjk")?);
+        assert!(a2.address == Address::from_str("penumbra1xq2e9x7uhfzezwunvazdamlxepf4jr5htsuqnzlsahuayyqxjjwg9lk0aytwm6wfj3jy29rv2kdpen57903s8wxv3jmqwj6m6v5jgn6y2cypfd03rke652k8wmavxra7e9wkrg")?);
         assert!(a2.raw_amount.value() == 100000);
 
         Ok(())
@@ -744,7 +766,7 @@ mod tests {
     #[test]
     fn parse_allocations_from_bad_csv() -> anyhow::Result<()> {
         let csv_content = r#"
-"amount","denom","address"\n"100000","udelegation_penumbravalid1jzcc6vsm29am9ggs8z0d7s9jk9uf8tfrqg7hglc9ufs7r23nu5yqtw77ex","penumbra1rqcd3hfvkvc04c4c9vc0ac87lh4y0z8l28k4xp6d0cnd5jc6f6k0neuzp6zdwtpwyfpswtdzv9jzqtpjn5t6wh96pfx3flq2dhqgc42u7c06kj57dl39w2xm6tg0wh4zc8kjjk"\n"100000","upenumbra","penumbra1rqcd3hfvkvc04c4c9vc0ac87lh4y0z8l28k4xp6d0cnd5jc6f6k0neuzp6zdwtpwyfpswtdzv9jzqtpjn5t6wh96pfx3flq2dhqgc42u7c06kj57dl39w2xm6tg0wh4zc8kjjk"\n"100000","udelegation_penumbravalid1p2hfuch2p8rshyc90qa23gqk82s74tqcu3x2x3y5tfwpzth4vvrq2gv283","penumbra1xq2e9x7uhfzezwunvazdamlxepf4jr5htsuqnzlsahuayyqxjjwg9lk0aytwm6wfj3jy29rv2kdpen57903s8wxv3jmqwj6m6v5jgn6y2cypfd03rke652k8wmavxra7e9wkrg"\n"100000","upenumbra","penumbra1xq2e9x7uhfzezwunvazdamlxepf4jr5htsuqnzlsahuayyqxjjwg9lk0aytwm6wfj3jy29rv2kdpen57903s8wxv3jmqwj6m6v5jgn6y2cypfd03rke652k8wmavxra7e9wkrg"\n"100000","udelegation_penumbravalid182k8x46hg5vx3ez8ec58ze5yd6a3q4q3fkx45ddt5jahnzz0xyyqdtz7hc","penumbra100zd92fg6x27wc0mlu48cd6phq420u7ep59kzdalg2cq66mjkyl0xr54z0c64gectnj44mv5k2vyjjsz5gyd5gq33a6wnqzvgu2fz7namz7usazsl6p8wza83gcpwt8q76rc4y"\n"100000","upenumbra","penumbra100zd92fg6x27wc0mlu48cd6phq420u7ep59kzdalg2cq66mjkyl0xr54z0c64gectnj44mv5k2vyjjsz5gyd5gq33a6wnqzvgu2fz7namz7usazsl6p8wza83gcpwt8q76rc4y"\n"100000","udelegation_penumbravalid1t2hr2lj5n2jt3hftzjw3strjllnakc7jtw234d229x3zakhaqsqsg9yarw","penumbra1xap8sgefy9rl2nfvsse0h4y6c25hy2n20ymr5w7hs28m9xemt3tmz88atyulswumc32sv7h937wnfhyct282de66zm75nk6ywq3d4r32p5ju0cnscj2rraesnrxr9lvk6hcazp"\n"100000","upenumbra","penumbra1xap8sgefy9rl2nfvsse0h4y6c25hy2n20ymr5w7hs28m9xemt3tmz88atyulswumc32sv7h937wnfhyct282de66zm75nk6ywq3d4r32p5ju0cnscj2rraesnrxr9lvk6hcazp"\n
+"amount","denom","address"\n"100000","upenumbra","penumbra1rqcd3hfvkvc04c4c9vc0ac87lh4y0z8l28k4xp6d0cnd5jc6f6k0neuzp6zdwtpwyfpswtdzv9jzqtpjn5t6wh96pfx3flq2dhqgc42u7c06kj57dl39w2xm6tg0wh4zc8kjjk"\n"100000","upenumbra","penumbra1xq2e9x7uhfzezwunvazdamlxepf4jr5htsuqnzlsahuayyqxjjwg9lk0aytwm6wfj3jy29rv2kdpen57903s8wxv3jmqwj6m6v5jgn6y2cypfd03rke652k8wmavxra7e9wkrg"\n"100000","upenumbra","penumbra100zd92fg6x27wc0mlu48cd6phq420u7ep59kzdalg2cq66mjkyl0xr54z0c64gectnj44mv5k2vyjjsz5gyd5gq33a6wnqzvgu2fz7namz7usazsl6p8wza83gcpwt8q76rc4y"\n"100000","upenumbra","penumbra1xap8sgefy9rl2nfvsse0h4y6c25hy2n20ymr5w7hs28m9xemt3tmz88atyulswumc32sv7h937wnfhyct282de66zm75nk6ywq3d4r32p5ju0cnscj2rraesnrxr9lvk6hcazp"\n
 "#;
         let result = NetworkAllocation::from_reader(csv_content.as_bytes());
         assert!(result.is_err());
@@ -768,17 +790,29 @@ mod tests {
             None,
             None,
             None,
-            None,
+            vec![],
+            SocketAddr::from_str("0.0.0.0:26657")?,
+            SocketAddr::from_str("0.0.0.0:26656")?,
         )?;
         assert_eq!(testnet_config.name, "test-chain-1234");
         assert_eq!(testnet_config.genesis.validators.len(), 0);
-        // No external address template was given, so only 1 validator will be present.
+        // When no validators_input_file is provided, validators are loaded from
+        // PD_LATEST_TESTNET_VALIDATORS (testnets/validators-ci.json) which has 2 validators.
         let penumbra_sdk_app::genesis::AppState::Content(app_state) =
             testnet_config.genesis.app_state
         else {
             unimplemented!("TODO: support checkpointed app state")
         };
-        assert_eq!(app_state.stake_content.validators.len(), 1);
+        assert_eq!(app_state.validator_content.validators.len(), 2);
+        assert_eq!(
+            app_state
+                .shielded_pool_content
+                .allocations
+                .iter()
+                .filter(|allocation| allocation.raw_denom.starts_with("udelegation_"))
+                .count(),
+            0
+        );
         Ok(())
     }
 
@@ -800,7 +834,9 @@ mod tests {
             None,
             None,
             None,
-            None,
+            vec![],
+            SocketAddr::from_str("0.0.0.0:26657")?,
+            SocketAddr::from_str("0.0.0.0:26656")?,
         )?;
         assert_eq!(testnet_config.name, "test-chain-4567");
         assert_eq!(testnet_config.genesis.validators.len(), 0);
@@ -809,7 +845,16 @@ mod tests {
         else {
             unimplemented!("TODO: support checkpointed app state")
         };
-        assert_eq!(app_state.stake_content.validators.len(), 2);
+        assert_eq!(app_state.validator_content.validators.len(), 2);
+        assert_eq!(
+            app_state
+                .shielded_pool_content
+                .allocations
+                .iter()
+                .filter(|allocation| allocation.raw_denom.starts_with("udelegation_"))
+                .count(),
+            0
+        );
         Ok(())
     }
 

@@ -5,9 +5,6 @@ use anyhow::Context;
 use async_stream::try_stream;
 use cnidarium::Storage;
 use futures::{StreamExt, TryStreamExt};
-use penumbra_sdk_num::Amount;
-use penumbra_sdk_proto::core::component::governance::v1::AllTalliedDelegatorVotesForProposalRequest;
-use penumbra_sdk_proto::core::component::governance::v1::AllTalliedDelegatorVotesForProposalResponse;
 use penumbra_sdk_proto::core::component::governance::v1::NextProposalIdRequest;
 use penumbra_sdk_proto::core::component::governance::v1::NextProposalIdResponse;
 use penumbra_sdk_proto::core::component::governance::v1::VotingPowerAtProposalStartRequest;
@@ -16,18 +13,15 @@ use penumbra_sdk_proto::{
     core::component::governance::v1::{
         query_service_server::QueryService, ProposalDataRequest, ProposalDataResponse,
         ProposalInfoRequest, ProposalInfoResponse, ProposalListRequest, ProposalListResponse,
-        ProposalRateDataRequest, ProposalRateDataResponse, ValidatorVotesRequest,
-        ValidatorVotesResponse,
+        ValidatorVotesRequest, ValidatorVotesResponse,
     },
     StateReadProto,
 };
-use penumbra_sdk_stake::rate::RateData;
-use penumbra_sdk_stake::IdentityKey;
+use penumbra_sdk_validator::IdentityKey;
 use tonic::Status;
 use tracing::instrument;
 
 use crate::state_key;
-use crate::Tally;
 use crate::Vote;
 
 use super::StateReadExt;
@@ -131,56 +125,13 @@ impl QueryService for Server {
                 tonic::Status::not_found(format!("proposal {} state not found", proposal_id))
             })?;
 
-        let proposal_deposit_amount: Amount = state
-            .get(&state_key::proposal_deposit_amount(proposal_id))
-            .await
-            .map_err(|e| {
-                tonic::Status::internal(format!("unable to fetch proposal deposit amount: {e}"))
-            })?
-            .ok_or_else(|| {
-                tonic::Status::not_found(format!(
-                    "deposit amount for proposal {} was not found",
-                    proposal_id
-                ))
-            })?;
-
         Ok(tonic::Response::new(ProposalDataResponse {
             start_block_height,
             end_block_height,
             start_position: start_position.into(),
             state: Some(proposal_state.into()),
             proposal: Some(proposal.into()),
-            proposal_deposit_amount: Some(proposal_deposit_amount.into()),
         }))
-    }
-
-    type ProposalRateDataStream = Pin<
-        Box<dyn futures::Stream<Item = Result<ProposalRateDataResponse, tonic::Status>> + Send>,
-    >;
-
-    #[instrument(skip(self, request))]
-    async fn proposal_rate_data(
-        &self,
-        request: tonic::Request<ProposalRateDataRequest>,
-    ) -> Result<tonic::Response<Self::ProposalRateDataStream>, Status> {
-        let state = self.storage.latest_snapshot();
-        let proposal_id = request.into_inner().proposal_id;
-
-        let s = state.prefix(&state_key::all_rate_data_at_proposal_start(proposal_id));
-        Ok(tonic::Response::new(
-            s.map_ok(|i: (String, RateData)| {
-                let (_key, rate_data) = i;
-                ProposalRateDataResponse {
-                    rate_data: Some(rate_data.into()),
-                }
-            })
-            .map_err(|e: anyhow::Error| {
-                tonic::Status::unavailable(format!("error getting prefix value from storage: {e}"))
-            })
-            // TODO: how do we instrument a Stream
-            //.instrument(Span::current())
-            .boxed(),
-        ))
     }
 
     type ProposalListStream =
@@ -368,46 +319,5 @@ impl QueryService for Server {
                 voting_power: total_voting_power,
             }))
         }
-    }
-
-    type AllTalliedDelegatorVotesForProposalStream = Pin<
-        Box<
-            dyn futures::Stream<
-                    Item = Result<AllTalliedDelegatorVotesForProposalResponse, tonic::Status>,
-                > + Send,
-        >,
-    >;
-
-    #[instrument(skip(self, request))]
-    async fn all_tallied_delegator_votes_for_proposal(
-        &self,
-        request: tonic::Request<AllTalliedDelegatorVotesForProposalRequest>,
-    ) -> Result<tonic::Response<Self::AllTalliedDelegatorVotesForProposalStream>, Status> {
-        let state = self.storage.latest_snapshot();
-        let proposal_id = request.into_inner().proposal_id;
-
-        let s = state.prefix::<Tally>(&state_key::all_tallied_delegator_votes_for_proposal(
-            proposal_id,
-        ));
-        Ok(tonic::Response::new(
-            s.and_then(|r| async move {
-                Ok((
-                    IdentityKey::from_str(r.0.rsplit('/').next().context("invalid key")?)?,
-                    r.1,
-                ))
-            })
-            .map_err(|e| {
-                tonic::Status::internal(format!("unable to retrieve tallied delegator votes: {e}"))
-            })
-            .map_ok(
-                |i: (IdentityKey, Tally)| AllTalliedDelegatorVotesForProposalResponse {
-                    tally: Some(i.1.into()),
-                    identity_key: Some(i.0.into()),
-                },
-            )
-            // TODO: how do we instrument a Stream
-            //.instrument(Span::current())
-            .boxed(),
-        ))
     }
 }

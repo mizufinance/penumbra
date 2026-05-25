@@ -6,49 +6,8 @@ on:
   workflow_call:
   workflow_dispatch:
 jobs:
-  # Ensure there are no breaking changes to the protocol specs,
-  # by running the "buf lint" action against the changes in this PR.
-  backwards-compatibility:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: bufbuild/buf-setup-action@v1
-        with:
-          buf_api_token: ${{ secrets.BUF_TOKEN }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: bufbuild/buf-lint-action@v1
-        with:
-          input: "proto"
-          buf_token: ${{ secrets.BUF_TOKEN }}
-
-      - name: Check for module path changes
-        shell: bash
-        run: |
-          cd proto/penumbra
-          buf dep update
-          s="$(git status --porcelain)"
-          if [[ -n "$s" ]]; then
-              echo "ERROR: run 'buf dep update' to synchronize buf.lock"
-              echo "$s"
-              exit 1
-          else
-              echo "OK: no changes required to buf.lock"
-          fi
-
-      - name: Check for breaking changes
-        uses: bufbuild/buf-breaking-action@v1
-        with:
-          input: "proto"
-          # The 'main' branch of the GitHub repository that defines the module.
-          # Don't use `GITHUB_REPOSITORY`, because then it'll fail when run on forks.
-          # against: "https://github.com/${GITHUB_REPOSITORY}.git#branch=main,subdir=proto"
-          against: "https://github.com/penumbra-zone/penumbra.git#branch=main,subdir=proto"
-
-  # Run our bespoke tooling for codegen, consuming the protocol buffer definitions
-  # and emitting generated code. Afterward, there should be no uncommitted changes.
-  build:
-    runs-on: buildjet-16vcpu-ubuntu-2204
+  check:
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout the source code
         uses: actions/checkout@v4
@@ -59,7 +18,43 @@ jobs:
         with:
           buf_api_token: ${{ secrets.BUF_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          # input: 'proto'
+
+      # Ensure the protocol specs lint cleanly and the buf module lockfile is current.
+      - uses: bufbuild/buf-lint-action@v1
+        with:
+          input: "proto"
+          buf_token: ${{ secrets.BUF_TOKEN }}
+
+      - name: Check for module path changes
+        shell: bash
+        run: |
+          cd proto
+          for attempt in 1 2 3; do
+              if buf dep update penumbra; then
+                  break
+              fi
+              if [[ "$attempt" -eq 3 ]]; then
+                  echo "ERROR: 'buf dep update penumbra' failed after ${attempt} attempts"
+                  exit 1
+              fi
+              echo "buf dep update failed on attempt ${attempt}, retrying..."
+              sleep 5
+          done
+          s="$(git status --porcelain)"
+          if [[ -n "$s" ]]; then
+              echo "ERROR: run 'buf dep update' to synchronize buf.lock"
+              echo "$s"
+              exit 1
+          else
+              echo "OK: no changes required to buf.lock"
+          fi
+
+      # Re-enable once we have a stable release on dev to compare against.
+      # - name: Check for breaking changes
+      #   uses: bufbuild/buf-breaking-action@v1
+      #   with:
+      #     input: "proto"
+      #     against: "https://github.com/mizufinance/penumbra.git#branch=dev,subdir=proto"
 
       - name: Install protobuf compiler
         shell: bash
@@ -77,7 +72,7 @@ jobs:
         shell: bash
         run: |
           ./deployments/scripts/protobuf-codegen
-          # https://github.com/penumbra-zone/penumbra/issues/3038#issuecomment-1722534133
+          # https://github.com/mizufinance/penumbra/issues/3038#issuecomment-1722534133
           git checkout crates/proto/src/gen/proto_descriptor.bin.no_lfs
           s="$(git status --porcelain)"
           if [[ -n "$s" ]]; then

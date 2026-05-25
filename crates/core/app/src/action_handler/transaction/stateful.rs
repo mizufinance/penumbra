@@ -1,90 +1,50 @@
 use anyhow::{ensure, Result};
 use cnidarium::StateRead;
-use penumbra_sdk_sct::component::clock::EpochRead;
 use penumbra_sdk_sct::component::tree::VerificationExt;
-use penumbra_sdk_shielded_pool::component::StateReadExt as _;
 use penumbra_sdk_shielded_pool::fmd;
 use penumbra_sdk_transaction::{Transaction, TransactionParameters};
 
-use crate::app::StateReadExt;
+use super::HistoricalCheckContext;
 
-pub async fn tx_parameters_historical_check<S: StateRead>(
-    state: S,
+pub fn tx_parameters_historical_check_with_context(
     transaction: &Transaction,
+    context: &HistoricalCheckContext,
 ) -> Result<()> {
     let TransactionParameters {
         chain_id,
         expiry_height,
-        // This is checked during execution.
         fee: _,
-        // IMPORTANT: Adding a transaction parameter? Then you **must** add a SAFETY
-        // argument here to justify why it is safe to validate against a historical
-        // state.
     } = transaction.transaction_parameters();
 
-    // SAFETY: This is safe to do in a **historical** check because the chain's actual
-    // id cannot change during transaction processing.
-    chain_id_is_correct(&state, chain_id).await?;
-    // SAFETY: This is safe to do in a **historical** check because the chain's current
-    // block height cannot change during transaction processing.
-    expiry_height_is_valid(&state, expiry_height).await?;
-
-    Ok(())
-}
-
-pub async fn chain_id_is_correct<S: StateRead>(state: S, tx_chain_id: String) -> Result<()> {
-    let chain_id = state.get_chain_id().await?;
-
-    // The chain ID in the transaction must exactly match the current chain ID.
     ensure!(
-        tx_chain_id == chain_id,
+        chain_id == context.chain_id,
         "transaction chain ID '{}' must match the current chain ID '{}'",
-        tx_chain_id,
-        chain_id
+        chain_id,
+        context.chain_id
     );
-    Ok(())
-}
 
-pub async fn expiry_height_is_valid<S: StateRead>(state: S, expiry_height: u64) -> Result<()> {
-    let current_height = state.get_block_height().await?;
-
-    // A zero expiry height means that the transaction is valid indefinitely.
-    if expiry_height == 0 {
-        return Ok(());
+    if expiry_height != 0 {
+        ensure!(
+            expiry_height >= context.block_height,
+            "transaction expiry height '{}' must be greater than or equal to the current block height '{}'",
+            expiry_height,
+            context.block_height
+        );
     }
 
-    // Otherwise, the expiry height must be greater than or equal to the current block height.
-    ensure!(
-        expiry_height >= current_height,
-        "transaction expiry height '{}' must be greater than or equal to the current block height '{}'",
-        expiry_height,
-        current_height
-    );
-
     Ok(())
 }
 
-pub async fn fmd_parameters_valid<S: StateRead>(state: S, transaction: &Transaction) -> Result<()> {
-    let meta_params = state
-        .get_shielded_pool_params()
-        .await
-        .expect("chain params request must succeed")
-        .fmd_meta_params;
-    let previous_fmd_parameters = state
-        .get_previous_fmd_parameters()
-        .await
-        .expect("chain params request must succeed");
-    let current_fmd_parameters = state
-        .get_current_fmd_parameters()
-        .await
-        .expect("chain params request must succeed");
-    let height = state.get_block_height().await?;
+pub fn fmd_parameters_valid_with_context(
+    transaction: &Transaction,
+    context: &HistoricalCheckContext,
+) -> Result<()> {
     fmd_precision_within_grace_period(
         transaction,
-        meta_params,
-        previous_fmd_parameters,
-        current_fmd_parameters,
-        height,
+        context.fmd_meta_params,
+        context.previous_fmd_parameters.clone(),
+        context.current_fmd_parameters.clone(),
+        context.block_height,
     )
 }
 

@@ -1,18 +1,16 @@
 use penumbra_sdk_proto::{
-    core::component::stake::v1::ValidatorInfoResponse, penumbra::core::component::stake::v1 as pb,
-    DomainType,
+    core::component::validator::v1::ValidatorInfoResponse,
+    penumbra::core::component::validator::v1 as pb, DomainType,
 };
 use serde::{Deserialize, Serialize};
 
 use super::{Status, Validator};
-use crate::rate::RateData;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(try_from = "pb::ValidatorInfo", into = "pb::ValidatorInfo")]
 pub struct Info {
     pub validator: Validator,
     pub status: Status,
-    pub rate_data: RateData,
 }
 
 impl DomainType for Info {
@@ -24,7 +22,6 @@ impl From<Info> for pb::ValidatorInfo {
         pb::ValidatorInfo {
             validator: Some(v.validator.into()),
             status: Some(v.status.into()),
-            rate_data: Some(v.rate_data.into()),
         }
     }
 }
@@ -48,10 +45,6 @@ impl TryFrom<pb::ValidatorInfo> for Info {
             status: v
                 .status
                 .ok_or_else(|| anyhow::anyhow!("missing status field in proto"))?
-                .try_into()?,
-            rate_data: v
-                .rate_data
-                .ok_or_else(|| anyhow::anyhow!("missing rate_data field in proto"))?
                 .try_into()?,
         })
     }

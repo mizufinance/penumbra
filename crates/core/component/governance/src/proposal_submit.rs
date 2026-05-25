@@ -1,3 +1,3 @@
 pub mod action;
 
-pub use action::ProposalSubmit;
+pub use action::{ProposalSubmit, ProposalSubmitBody};

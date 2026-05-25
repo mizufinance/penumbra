@@ -1,2 +1,0 @@
-# Replicating market makers
-

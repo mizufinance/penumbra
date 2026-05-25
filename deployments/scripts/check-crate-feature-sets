@@ -4,6 +4,8 @@
 # declared explicitly.
 set -euo pipefail
 
+repo_root="$(git rev-parse --show-toplevel)"
+cd "${repo_root}"
 
 if ! hash cargo-hack >/dev/null 2>&1 ; then
     >&2 echo "ERROR: cargo-hack not found. Install it with: cargo install cargo-hack"

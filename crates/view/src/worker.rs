@@ -5,9 +5,7 @@ use std::{
 };
 
 use anyhow::Context;
-use penumbra_sdk_auction::auction::AuctionNft;
 use penumbra_sdk_compact_block::CompactBlock;
-use penumbra_sdk_dex::lp::{position, LpNft};
 use penumbra_sdk_keys::FullViewingKey;
 use penumbra_sdk_proto::core::{
     app::v1::{
@@ -33,12 +31,13 @@ use tonic::transport::Channel;
 use tracing::instrument;
 
 use crate::{
+    compliance_tree::{ComplianceAssetTree, ComplianceUserTree},
     sync::{scan_block, FilteredBlock},
     Storage,
 };
 
-// The maximum size of a compact block, in bytes (12MB).
-const MAX_CB_SIZE_BYTES: usize = 12 * 1024 * 1024;
+// Large local benchmark genesis states can emit compact blocks well above the historic 12MB cap.
+const MAX_CB_SIZE_BYTES: usize = 64 * 1024 * 1024;
 
 pub struct Worker {
     storage: Storage,
@@ -48,6 +47,10 @@ pub struct Worker {
     sync_height_tx: watch::Sender<u64>,
     /// Tonic channel used to create GRPC clients.
     channel: Channel,
+    /// In-memory compliance user tree for local sync.
+    compliance_user_tree: Arc<RwLock<ComplianceUserTree>>,
+    /// In-memory compliance asset tree for local sync.
+    compliance_asset_tree: Arc<RwLock<ComplianceAssetTree>>,
 }
 
 impl Worker {
@@ -56,7 +59,9 @@ impl Worker {
     /// - the worker itself;
     /// - a shared, in-memory SCT instance;
     /// - a shared error slot;
-    /// - a channel for notifying the client of sync progress.
+    /// - a channel for notifying the client of sync progress;
+    /// - a shared compliance user tree;
+    /// - a shared compliance asset tree.
     #[instrument(skip_all)]
     pub async fn new(
         storage: Storage,
@@ -67,6 +72,8 @@ impl Worker {
             Arc<RwLock<penumbra_sdk_tct::Tree>>,
             Arc<Mutex<Option<anyhow::Error>>>,
             watch::Receiver<u64>,
+            Arc<RwLock<ComplianceUserTree>>,
+            Arc<RwLock<ComplianceAssetTree>>,
         ),
         anyhow::Error,
     > {
@@ -87,6 +94,20 @@ impl Worker {
         // Mark the current height as seen, since it's not new.
         sync_height_rx.borrow_and_update();
 
+        // Load compliance trees from storage
+        let compliance_user_tree = Arc::new(RwLock::new(
+            storage
+                .compliance_user_tree()
+                .await
+                .context("failed to load compliance user tree")?,
+        ));
+        let compliance_asset_tree = Arc::new(RwLock::new(
+            storage
+                .compliance_asset_tree()
+                .await
+                .context("failed to load compliance asset tree")?,
+        ));
+
         Ok((
             Self {
                 storage,
@@ -95,11 +116,119 @@ impl Worker {
                 error_slot: error_slot.clone(),
                 sync_height_tx,
                 channel,
+                compliance_user_tree: compliance_user_tree.clone(),
+                compliance_asset_tree: compliance_asset_tree.clone(),
             },
             sct,
             error_slot,
             sync_height_rx,
+            compliance_user_tree,
+            compliance_asset_tree,
         ))
+    }
+
+    /// Process compliance registrations from a CompactBlock.
+    ///
+    /// This syncs:
+    /// 1. All user registrations into the user tree (for auth path computation)
+    /// 2. Full leaf data for addresses in sync scope (own + counterparties)
+    /// 3. All asset registrations into the asset tree
+    /// 4. Compliance anchors for the block
+    async fn process_compliance_block(&self, block: &CompactBlock) -> anyhow::Result<()> {
+        // Early return if no compliance registration events in this block.
+        if block.compliance_user_registrations.is_empty()
+            && block.compliance_asset_registrations.is_empty()
+        {
+            return Ok(());
+        }
+
+        let height = block.height;
+
+        // Lock both compliance trees (asset_tree first to ensure consistent lock ordering)
+        let mut asset_tree = self.compliance_asset_tree.write().await;
+        let mut user_tree = self.compliance_user_tree.write().await;
+
+        // Track starting positions for persistence
+        let user_start_position = user_tree.position();
+        let asset_start_position = asset_tree.leaf_count();
+
+        // Process user registrations
+        for event in &block.compliance_user_registrations {
+            // Insert commitment into user tree (for path computation)
+            let position = user_tree.insert(event.commitment)?;
+
+            // Check if this address is in our sync scope
+            let is_in_scope = self
+                .storage
+                .is_address_in_compliance_scope(&self.fvk, &event.leaf.address)
+                .await?;
+
+            // If in scope, store leaf data for offline proof generation
+            if is_in_scope {
+                self.storage
+                    .record_compliance_leaf_data(&event.leaf, position, event.commitment)
+                    .await?;
+            }
+        }
+
+        // Process asset registrations (sync full leaf data including policy)
+        for event in &block.compliance_asset_registrations {
+            // Debug: log each asset registration event
+            tracing::debug!(
+                asset_id = ?event.asset_id,
+                position = event.position,
+                is_regulated = event.is_regulated,
+                threshold = event.indexed_leaf.params.threshold,
+                dk_pub_first_byte = event.indexed_leaf.params.dk_pub.vartime_compress().0[0],
+                low_leaf_position = event.low_leaf_position,
+                "worker: syncing asset registration"
+            );
+
+            // Use sync_from_event to preserve policy data (dk_pub, threshold)
+            // This is critical for correct leaf commitments in proofs
+            asset_tree.sync_from_event(
+                event.indexed_leaf.clone(),
+                event.position,
+                event.updated_low_leaf.clone(),
+                event.low_leaf_position,
+            )?;
+
+            // Also store the asset policy in SQLite for direct lookups
+            if event.is_regulated {
+                self.storage
+                    .store_asset_policy(&event.asset_id, &event.asset_policy)
+                    .await?;
+            }
+        }
+
+        // Debug: log tree state after sync
+        let asset_root_after = asset_tree.root();
+        tracing::debug!(
+            asset_leaf_count = asset_tree.leaf_count(),
+            asset_root = ?asset_root_after.0.to_bytes(),
+            asset_start_position,
+            "worker: asset tree state after sync"
+        );
+
+        // Persist compliance tree changes
+        self.storage
+            .record_compliance_block(
+                height,
+                &user_tree,
+                &mut asset_tree,
+                user_start_position,
+                asset_start_position,
+            )
+            .await?;
+
+        tracing::debug!(
+            height,
+            user_registrations = block.compliance_user_registrations.len(),
+            asset_registrations = block.compliance_asset_registrations.len(),
+            "processed compliance block"
+        );
+
+        Ok(())
     }
 
     pub async fn fetch_transactions(
@@ -116,12 +245,6 @@ impl Worker {
             .new_notes
             .values()
             .map(|record| &record.source)
-            .chain(
-                filtered_block
-                    .new_swaps
-                    .values()
-                    .map(|record| &record.source),
-            )
             .any(|source| matches!(source, CommitmentSource::Transaction { .. }));
 
         // Only make a block request if we detected transactions in the FilteredBlock.
@@ -157,13 +280,6 @@ impl Worker {
             for commitment in tx.state_commitments() {
                 filtered_block
                     .new_notes
-                    .entry(commitment)
-                    .and_modify(|record| {
-                        relevant = true;
-                        record.source = CommitmentSource::Transaction { id: Some(tx_id) };
-                    });
-                filtered_block
-                    .new_swaps
                     .entry(commitment)
                     .and_modify(|record| {
                         relevant = true;
@@ -247,12 +363,15 @@ impl Worker {
                     .await?;
             }
 
+            // Process compliance registrations regardless of whether block requires SCT scanning
+            self.process_compliance_block(&block).await?;
+
             if !block.requires_scanning() {
                 // Optimization: if the block is empty, seal the in-memory SCT,
                 // and skip touching the database:
                 sct_guard.end_block()?;
-                // We also need to end the epoch, since if there are no funding streams, then an
-                // epoch boundary won't necessarily require scanning:
+                // We also need to end the epoch, since an epoch boundary might not imply any
+                // wallet-visible note changes that require scanning:
                 if block.epoch_root.is_some() {
                     sct_guard
                         .end_epoch()
@@ -274,99 +393,95 @@ impl Worker {
                 for transaction in &transactions {
                     for action in transaction.actions() {
                         match action {
-                            penumbra_sdk_transaction::Action::PositionOpen(position_open) => {
-                                let position_id = position_open.position.id();
-
-                                // Record every possible permutation.
-                                let lp_nft = LpNft::new(position_id, position::State::Opened);
-                                let _id = lp_nft.asset_id();
-                                let denom = lp_nft.denom();
-                                self.storage.record_asset(denom).await?;
-
-                                let lp_nft = LpNft::new(position_id, position::State::Closed);
-                                let _id = lp_nft.asset_id();
-                                let denom = lp_nft.denom();
-                                self.storage.record_asset(denom).await?;
-
-                                let lp_nft = LpNft::new(
-                                    position_id,
-                                    position::State::Withdrawn { sequence: 0 },
-                                );
-                                let _id = lp_nft.asset_id();
-                                let denom = lp_nft.denom();
-                                self.storage.record_asset(denom).await?;
-
-                                // Record the position itself
-                                self.storage
-                                    .record_position(position_open.position.clone())
-                                    .await?;
-                            }
-                            penumbra_sdk_transaction::Action::PositionClose(position_close) => {
-                                let position_id = position_close.position_id;
-
-                                // Update the position record
-                                self.storage
-                                    .update_position(position_id, position::State::Closed)
-                                    .await?;
-                            }
-                            penumbra_sdk_transaction::Action::PositionWithdraw(
-                                position_withdraw,
-                            ) => {
-                                let position_id = position_withdraw.position_id;
-
-                                // Record the LPNFT for the current sequence number.
-                                let state = position::State::Withdrawn {
-                                    sequence: position_withdraw.sequence,
-                                };
-                                let lp_nft = LpNft::new(position_id, state);
-                                let denom = lp_nft.denom();
-                                self.storage.record_asset(denom).await?;
-
-                                // Update the position record
-                                self.storage.update_position(position_id, state).await?;
-                            }
-                            penumbra_sdk_transaction::Action::ActionDutchAuctionSchedule(
-                                schedule_da,
-                            ) => {
-                                let auction_id = schedule_da.description.id();
-                                let auction_nft_opened = AuctionNft::new(auction_id, 0);
-                                let nft_metadata_opened = auction_nft_opened.metadata.clone();
-
-                                self.storage.record_asset(nft_metadata_opened).await?;
-
-                                self.storage
-                                    .record_auction_with_state(
-                                        schedule_da.description.id(),
-                                        0u64, // Opened
-                                    )
-                                    .await?;
-                            }
-                            penumbra_sdk_transaction::Action::ActionDutchAuctionEnd(end_da) => {
-                                let auction_id = end_da.auction_id;
-                                let auction_nft_closed = AuctionNft::new(auction_id, 1);
-                                let nft_metadata_closed = auction_nft_closed.metadata.clone();
-
-                                self.storage.record_asset(nft_metadata_closed).await?;
-
-                                self.storage
-                                    .record_auction_with_state(end_da.auction_id, 1)
-                                    .await?;
-                            }
-                            penumbra_sdk_transaction::Action::ActionDutchAuctionWithdraw(
-                                withdraw_da,
-                            ) => {
-                                let auction_id = withdraw_da.auction_id;
-                                let auction_nft_withdrawn =
-                                    AuctionNft::new(auction_id, withdraw_da.seq);
-                                let nft_metadata_withdrawn = auction_nft_withdrawn.metadata.clone();
-
-                                self.storage.record_asset(nft_metadata_withdrawn).await?;
-                                self.storage
-                                    .record_auction_with_state(auction_id, withdraw_da.seq)
-                                    .await?;
-                            }
                             _ => (),
                         };
+                    }
+
+                    // Extract counterparties from outputs using OVK decryption
+                    // This enables offline compliance lookups for future transactions to these addresses
+                    let ovk = self.fvk.outgoing();
+                    for action in transaction.actions() {
+                        let outputs: Vec<_> = match action {
+                            penumbra_sdk_transaction::Action::Transfer(transfer) => transfer
+                                .body
+                                .outputs
+                                .iter()
+                                .map(|output| {
+                                    (
+                                        &output.note_payload.encrypted_note,
+                                        output.ovk_wrapped_key.clone(),
+                                        output.note_payload.note_commitment,
+                                        transfer.body.balance_commitment,
+                                        &output.note_payload.ephemeral_key,
+                                    )
+                                })
+                                .collect(),
+                            penumbra_sdk_transaction::Action::Consolidate(consolidate) => {
+                                consolidate
+                                    .body
+                                    .outputs
+                                    .iter()
+                                    .map(|output| {
+                                        (
+                                            &output.note_payload.encrypted_note,
+                                            output.ovk_wrapped_key.clone(),
+                                            output.note_payload.note_commitment,
+                                            consolidate.body.balance_commitment,
+                                            &output.note_payload.ephemeral_key,
+                                        )
+                                    })
+                                    .collect()
+                            }
+                            penumbra_sdk_transaction::Action::Split(split) => split
+                                .body
+                                .outputs
+                                .iter()
+                                .map(|output| {
+                                    (
+                                        &output.note_payload.encrypted_note,
+                                        output.ovk_wrapped_key.clone(),
+                                        output.note_payload.note_commitment,
+                                        split.body.balance_commitment,
+                                        &output.note_payload.ephemeral_key,
+                                    )
+                                })
+                                .collect(),
+                            _ => Vec::new(),
+                        };
+
+                        for (encrypted_note, ovk_wrapped_key, note_commitment, cv, epk) in outputs {
+                            if let Ok(decrypted_note) =
+                                penumbra_sdk_shielded_pool::Note::decrypt_outgoing(
+                                    encrypted_note,
+                                    ovk_wrapped_key,
+                                    note_commitment,
+                                    cv,
+                                    ovk,
+                                    epk,
+                                )
+                            {
+                                let dest_address = decrypted_note.address();
+                                if !self.fvk.incoming().views_address(&dest_address) {
+                                    if let Err(e) = self
+                                        .storage
+                                        .record_counterparty(&dest_address, height)
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            ?dest_address,
+                                            ?e,
+                                            "failed to record counterparty during sync"
+                                        );
+                                    } else {
+                                        tracing::debug!(
+                                            ?dest_address,
+                                            height,
+                                            "recorded counterparty from historical TX"
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -374,30 +489,12 @@ impl Worker {
                 for note_record in filtered_block.new_notes.values() {
                     // If the asset is already known, skip it, unless there's useful information
                     // to cross-reference.
-                    if let Some(note_denom) = self
+                    if self
                         .storage
                         .asset_by_id(&note_record.note.asset_id())
                         .await?
+                        .is_some()
                     {
-                        // If the asset metata is for an auction, we record the associated note commitment
-                        // in the auction state table to cross reference with SNRs.
-                        if note_denom.is_auction_nft() {
-                            let note_commitment = note_record.note_commitment;
-                            let auction_nft: AuctionNft = note_denom.try_into()?;
-                            self.storage
-                                .update_auction_with_note_commitment(
-                                    auction_nft.id,
-                                    note_commitment,
-                                )
-                                .await?;
-                        } else if let Ok(lp_nft) = LpNft::try_from(note_denom) {
-                            self.storage
-                                .update_position_with_account(
-                                    lp_nft.position_id(),
-                                    note_record.address_index.account,
-                                )
-                                .await?;
-                        }
                         continue;
                     } else {
                         // If the asset is unknown, we may be able to query for its denom metadata and store that.

@@ -1,0 +1,20 @@
+[package]
+name = "gnark-spend-rust-vectors"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+ark-ec = "0.5"
+ark-ff = "0.5"
+blake2b_simd = "=1.0.2"
+decaf377 = { git = "https://github.com/mizufinance/decaf377", branch = "main" }
+poseidon377 = { git = "https://github.com/mizufinance/poseidon377", branch = "main" }
+poseidon-parameters = { git = "https://github.com/mizufinance/poseidon377", branch = "main" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+
+[patch.crates-io]
+decaf377 = { git = "https://github.com/mizufinance/decaf377", branch = "main" }

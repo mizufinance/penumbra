@@ -21,7 +21,7 @@
 #![allow(clippy::needless_borrow)]
 #![allow(clippy::unwrap_used)]
 #![allow(non_snake_case)]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub use prost::{Message, Name};
 
@@ -72,12 +72,6 @@ pub mod penumbra {
 
         /// Components of the Penumbra application.
         pub mod component {
-            pub mod auction {
-                pub mod v1 {
-                    include!("gen/penumbra.core.component.auction.v1.rs");
-                    include!("gen/penumbra.core.component.auction.v1.serde.rs");
-                }
-            }
             pub mod compact_block {
                 pub mod v1 {
                     include!("gen/penumbra.core.component.compact_block.v1.rs");
@@ -85,24 +79,10 @@ pub mod penumbra {
                 }
             }
 
-            pub mod community_pool {
+            pub mod compliance {
                 pub mod v1 {
-                    include!("gen/penumbra.core.component.community_pool.v1.rs");
-                    include!("gen/penumbra.core.component.community_pool.v1.serde.rs");
-                }
-            }
-
-            pub mod dex {
-                pub mod v1 {
-                    include!("gen/penumbra.core.component.dex.v1.rs");
-                    include!("gen/penumbra.core.component.dex.v1.serde.rs");
-                }
-            }
-
-            pub mod distributions {
-                pub mod v1 {
-                    include!("gen/penumbra.core.component.distributions.v1.rs");
-                    include!("gen/penumbra.core.component.distributions.v1.serde.rs");
+                    include!("gen/penumbra.core.component.compliance.v1.rs");
+                    include!("gen/penumbra.core.component.compliance.v1.serde.rs");
                 }
             }
 
@@ -110,13 +90,6 @@ pub mod penumbra {
                 pub mod v1 {
                     include!("gen/penumbra.core.component.fee.v1.rs");
                     include!("gen/penumbra.core.component.fee.v1.serde.rs");
-                }
-            }
-
-            pub mod funding {
-                pub mod v1 {
-                    include!("gen/penumbra.core.component.funding.v1.rs");
-                    include!("gen/penumbra.core.component.funding.v1.serde.rs");
                 }
             }
 
@@ -134,6 +107,13 @@ pub mod penumbra {
                 }
             }
 
+            pub mod validator {
+                pub mod v1 {
+                    include!("gen/penumbra.core.component.validator.v1.rs");
+                    include!("gen/penumbra.core.component.validator.v1.serde.rs");
+                }
+            }
+
             pub mod sct {
                 pub mod v1 {
                     include!("gen/penumbra.core.component.sct.v1.rs");
@@ -145,13 +125,6 @@ pub mod penumbra {
                 pub mod v1 {
                     include!("gen/penumbra.core.component.shielded_pool.v1.rs");
                     include!("gen/penumbra.core.component.shielded_pool.v1.serde.rs");
-                }
-            }
-
-            pub mod stake {
-                pub mod v1 {
-                    include!("gen/penumbra.core.component.stake.v1.rs");
-                    include!("gen/penumbra.core.component.stake.v1.serde.rs");
                 }
             }
         }
@@ -226,19 +199,17 @@ pub mod penumbra {
     }
 
     pub mod util {
+        pub mod node {
+            pub mod v1 {
+                include!("gen/penumbra.util.node.v1.rs");
+                include!("gen/penumbra.util.node.v1.serde.rs");
+            }
+        }
+
         pub mod tendermint_proxy {
             pub mod v1 {
                 include!("gen/penumbra.util.tendermint_proxy.v1.rs");
                 include!("gen/penumbra.util.tendermint_proxy.v1.serde.rs");
-            }
-        }
-    }
-
-    pub mod tools {
-        pub mod summoning {
-            pub mod v1 {
-                include!("gen/penumbra.tools.summoning.v1.rs");
-                include!("gen/penumbra.tools.summoning.v1.serde.rs");
             }
         }
     }
@@ -342,5 +313,5 @@ pub mod cosmos {
 }
 
 #[cfg(feature = "rpc")]
-// https://github.com/penumbra-zone/penumbra/issues/3038#issuecomment-1722534133
+// https://github.com/mizufinance/penumbra/issues/3038#issuecomment-1722534133
 pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!("gen/proto_descriptor.bin.no_lfs");

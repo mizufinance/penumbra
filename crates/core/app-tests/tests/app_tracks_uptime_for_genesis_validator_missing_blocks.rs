@@ -8,7 +8,7 @@ use {
         server::consensus::Consensus,
     },
     penumbra_sdk_mock_consensus::TestNode,
-    penumbra_sdk_stake::component::validator_handler::validator_store::ValidatorDataRead,
+    penumbra_sdk_validator::component::validator_handler::validator_store::ValidatorDataRead,
     tap::Tap,
     tracing::{error_span, trace, Instrument},
 };

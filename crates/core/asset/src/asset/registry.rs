@@ -255,6 +255,22 @@ pub static REGISTRY: Lazy<Registry> = Lazy::new(|| {
             }) as for<'r> fn(&'r str) -> _,
         )
         .add_asset(
+            "^wregulated_usd$",
+            &["^regulated_usd$"],
+            (|data: &str| {
+                assert!(data.is_empty());
+                denom_metadata::Inner::new(
+                    "wregulated_usd".to_string(),
+                    vec![
+                        denom_metadata::BareDenomUnit {
+                            exponent: 18,
+                            denom: "regulated_usd".to_string(),
+                        },
+                    ],
+                )
+            }) as for<'r> fn(&'r str) -> _,
+        )
+        .add_asset(
             "^wtest_eth$",
             &["^test_eth$"],
             (|data: &str| {
@@ -327,58 +343,6 @@ pub static REGISTRY: Lazy<Registry> = Lazy::new(|| {
             }) as for<'r> fn(&'r str) -> _,
         )
         .add_asset(
-            // Note: this regex must be in sync with DelegationToken::try_from
-            // and VALIDATOR_IDENTITY_BECH32_PREFIX in the penumbra-stake crate
-            // TODO: this doesn't restrict the length of the bech32 encoding
-            "^udelegation_(?P<data>penumbravalid1[a-zA-HJ-NP-Z0-9]+)$",
-            &[
-                "^delegation_(?P<data>penumbravalid1[a-zA-HJ-NP-Z0-9]+)$",
-                "^mdelegation_(?P<data>penumbravalid1[a-zA-HJ-NP-Z0-9]+)$",
-            ],
-            (|data: &str| {
-                assert!(!data.is_empty());
-                denom_metadata::Inner::new(
-                    format!("udelegation_{data}"),
-                    vec![
-                        denom_metadata::BareDenomUnit {
-                            exponent: 6,
-                            denom: format!("delegation_{data}"),
-                        },
-                        denom_metadata::BareDenomUnit {
-                            exponent: 3,
-                            denom: format!("mdelegation_{data}"),
-                        },
-                    ],
-                )
-            }) as for<'r> fn(&'r str) -> _,
-        )
-        .add_asset(
-            // Note: this regex must be in sync with UnbondingToken::try_from
-            // and VALIDATOR_IDENTITY_BECH32_PREFIX in the penumbra-stake crate
-            // TODO: this doesn't restrict the length of the bech32 encoding
-            "^uunbonding_(?P<data>start_at_(?P<start>[0-9]+)_(?P<validator>penumbravalid1[a-zA-HJ-NP-Z0-9]+))$",
-            &[
-                "^unbonding_(?P<data>start_at_(?P<start>[0-9]+)_(?P<validator>penumbravalid1[a-zA-HJ-NP-Z0-9]+))$",
-                "^munbonding_(?P<data>start_at_(?P<start>[0-9]+)_(?P<validator>penumbravalid1[a-zA-HJ-NP-Z0-9]+))$",
-            ],
-            (|data: &str| {
-                assert!(!data.is_empty());
-                denom_metadata::Inner::new(
-                    format!("uunbonding_{data}"),
-                    vec![
-                        denom_metadata::BareDenomUnit {
-                            exponent: 6,
-                            denom: format!("unbonding_{data}"),
-                        },
-                        denom_metadata::BareDenomUnit {
-                            exponent: 3,
-                            denom: format!("munbonding_{data}"),
-                        },
-                    ],
-                )
-            }) as for<'r> fn(&'r str) -> _,
-        )
-        .add_asset(
             // Note: this regex must be in sync with LpNft::try_from
             // and the bech32 prefix for LP IDs defined in the proto crate.
             // TODO: this doesn't restrict the length of the bech32 encoding
@@ -417,14 +381,6 @@ pub static REGISTRY: Lazy<Registry> = Lazy::new(|| {
                     },
                 ])
             }) as for<'r> fn(&'r str) -> _
-        )
-        .add_asset(
-            "^auctionnft_(?P<data>[a-z_0-9]+_pauctid1[a-zA-HJ-NP-Z0-9]+)$",
-            &[ /* no display units - nft, unit 1 */ ],
-            (|data: &str| {
-                assert!(!data.is_empty());
-                denom_metadata::Inner::new(format!("auctionnft_{data}"), vec![])
-            }) as for<'r> fn(&'r str) -> _,
         )
         .build()
 });

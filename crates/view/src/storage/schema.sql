@@ -111,39 +111,97 @@ CREATE INDEX spendable_notes_idx ON spendable_notes (
     height_spent       -- null if unspent, so spent/unspent is first
 );
 
--- This table records the mapping from swap commitments to swap plaintexts.
--- For now we just store the swap plaintexts as a blob.
-CREATE TABLE swaps (
-    swap_commitment         BLOB PRIMARY KEY NOT NULL,
-    swap                    BLOB NOT NULL,
-    position                BIGINT NOT NULL,
-    nullifier               BLOB NOT NULL,
-    output_data             BLOB NOT NULL,
-    height_claimed          BIGINT,
-    source                  BLOB NOT NULL
-);
-
-CREATE INDEX swaps_nullifier_idx ON swaps (nullifier);
-
-CREATE TABLE positions (
-     position_id            BLOB PRIMARY KEY NOT NULL,
-     position_state         TEXT NOT NULL,
-     trading_pair           TEXT NOT NULL,
-     account                BIGINT
-);
-
--- This table records the user's own auction state, using the
--- auction id as a primary key. An extra-column is available
--- to cross-reference note commitments that is associated with
--- the entry.
-CREATE TABLE auctions (
-     auction_id             BLOB PRIMARY KEY NOT NULL,
-     auction_state          BIGINT NOT NULL,
-     note_commitment        BLOB
-);
-
 CREATE TABLE epochs (
     epoch_index BIGINT PRIMARY KEY,
     root BLOB,
     start_height BIGINT
+);
+
+-- ========== Compliance Trees (Local Sync) ==========
+
+-- User compliance tree positions and commitments
+CREATE TABLE compliance_user_positions (
+    position BIGINT PRIMARY KEY,
+    commitment BLOB NOT NULL
+);
+
+-- Internal hashes for user tree auth paths
+CREATE TABLE compliance_user_hashes (
+    position BIGINT NOT NULL,
+    height TINYINT NOT NULL,
+    hash BLOB NOT NULL,
+    PRIMARY KEY (position, height)
+);
+
+-- Asset tree (IMT) indexed leaves (full policy for correct tree reconstruction)
+CREATE TABLE compliance_asset_leaves (
+    position BIGINT PRIMARY KEY,
+    value BLOB NOT NULL,
+    next_index BIGINT NOT NULL,
+    next_value BLOB NOT NULL,
+    dk_pub BLOB NOT NULL,          -- 32 bytes compressed curve point
+    threshold BLOB NOT NULL,       -- 16 bytes little-endian u128
+    slot_count BIGINT NOT NULL,
+    route_policy_hash BLOB NOT NULL,   -- 32 bytes Fq
+    ring_pk BLOB NOT NULL,         -- 32 bytes compressed curve point
+    ring_id_hash BLOB NOT NULL,    -- 32 bytes Fq
+    policy_id_hash BLOB NOT NULL,  -- 32 bytes Fq
+    permission_hash BLOB NOT NULL, -- 32 bytes Fq
+    resource_hash BLOB NOT NULL    -- 32 bytes Fq
+);
+
+-- Internal hashes for asset tree auth paths
+CREATE TABLE compliance_asset_hashes (
+    position BIGINT NOT NULL,
+    height TINYINT NOT NULL,
+    hash BLOB NOT NULL,
+    PRIMARY KEY (position, height)
+);
+
+-- Compliance tree anchors per block
+CREATE TABLE compliance_anchors (
+    height BIGINT PRIMARY KEY,
+    user_root BLOB NOT NULL,
+    asset_root BLOB NOT NULL
+);
+-- Index for efficient "latest anchor" queries (ORDER BY height DESC)
+CREATE INDEX compliance_anchors_height_desc ON compliance_anchors(height DESC);
+
+-- Full compliance leaf data (for addresses in sync scope)
+CREATE TABLE compliance_user_leaf_data (
+    address BLOB NOT NULL,
+    asset_id BLOB NOT NULL,
+    position BIGINT NOT NULL,
+    slot_id BIGINT NOT NULL,
+    slot_derivation BLOB NOT NULL,     -- 32 bytes Fq
+    d BLOB NOT NULL,                   -- 32 bytes Fq
+    commitment BLOB NOT NULL,
+    PRIMARY KEY (address, asset_id)
+);
+CREATE INDEX compliance_user_leaf_data_position ON compliance_user_leaf_data(position);
+
+-- Tracked counterparty addresses (sparse sync scope)
+CREATE TABLE compliance_counterparties (
+    address BLOB PRIMARY KEY,
+    first_seen_height BIGINT NOT NULL,
+    last_tx_height BIGINT
+);
+
+-- Tree position cursors (for reconstruction on load)
+CREATE TABLE compliance_user_tree_position (
+    id INTEGER PRIMARY KEY CHECK (id = 0),
+    position BIGINT NOT NULL
+);
+INSERT INTO compliance_user_tree_position VALUES (0, 0);
+
+CREATE TABLE compliance_asset_tree_position (
+    id INTEGER PRIMARY KEY CHECK (id = 0),
+    leaf_count BIGINT NOT NULL
+);
+INSERT INTO compliance_asset_tree_position VALUES (0, 1); -- Starts with sentinel
+
+-- Full asset policies used by compliance planning and Orbis upload packaging.
+CREATE TABLE compliance_asset_policies (
+    asset_id BLOB PRIMARY KEY,
+    policy BLOB NOT NULL
 );

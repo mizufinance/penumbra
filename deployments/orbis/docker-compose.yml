@@ -1,0 +1,114 @@
+services:
+  sourcehub:
+    image: ${SOURCEHUB_IMAGE:-ghcr.io/sourcenetwork/sourcehub@sha256:4f6b71d12a10eb6d433a4b73c7b8ab25d6d8a6242f673fed12da2e254e734f0e}
+    platform: linux/amd64
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        rm -rf /home/node/.sourcehub/*
+        sourcehubd init local-node --chain-id sourcehub-localnet --home /home/node/.sourcehub
+        sourcehubd keys add validator --keyring-backend test --home /home/node/.sourcehub
+        echo "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" | sourcehubd keys add test --recover --keyring-backend test --home /home/node/.sourcehub
+        sourcehubd genesis add-genesis-account validator 100000000000uopen --keyring-backend test --home /home/node/.sourcehub
+        sourcehubd genesis add-genesis-account test 100000000000uopen --keyring-backend test --home /home/node/.sourcehub
+        sourcehubd genesis gentx validator 10000000000uopen --keyring-backend test --chain-id sourcehub-localnet --home /home/node/.sourcehub
+        sourcehubd genesis collect-gentxs --home /home/node/.sourcehub
+        exec sourcehubd start --home /home/node/.sourcehub --rpc.laddr tcp://0.0.0.0:26657 --api.enable --api.address tcp://0.0.0.0:1317
+    ports:
+      - "${ORBIS_SOURCEHUB_RPC_PORT:-26657}:26657"
+      - "${ORBIS_SOURCEHUB_P2P_PORT:-26656}:26656"
+      - "${ORBIS_SOURCEHUB_REST_PORT:-1317}:1317"
+      - "${ORBIS_SOURCEHUB_GRPC_PORT:-9090}:9090"
+    networks:
+      - orbis-integration-network
+    healthcheck:
+      test: ["CMD", "sourcehubd", "status", "--home", "/home/node/.sourcehub"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  node1:
+    build:
+      context: ${ORBIS_RUNTIME_CONTEXT:?set by scripts/orbis-stack.sh}
+      dockerfile: docker/Dockerfile
+      args:
+        ENABLE_INTEGRATION_TEST: "true"
+        CRYPTO_FEATURE: "${ORBIS_INTEGRATION_CRYPTO:-decaf377}"
+    environment:
+      - ORBIS_PASSWORD=testpassword123
+      - ORBIS_SECRET_KEY=testsecret1testsecret1
+      - RUST_LOG=debug
+    command: ["--addr", "0.0.0.0:50051", "--log-level", "debug", "--authz-grpc", "http://sourcehub:9090", "--bulletin-grpc", "http://sourcehub:9090", "--chain-rpc", "http://sourcehub:26657", "--chain-rest", "http://sourcehub:1317", "--metrics-addr", "0.0.0.0:9090", "--reshare-interval-secs", "5"]
+    ports:
+      - "${ORBIS_NODE1_GRPC_PORT:-50051}:50051"
+      - "${ORBIS_NODE1_METRICS_PORT:-9091}:9090"
+    networks:
+      - orbis-integration-network
+    depends_on:
+      sourcehub:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 50051 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  node2:
+    build:
+      context: ${ORBIS_RUNTIME_CONTEXT:?set by scripts/orbis-stack.sh}
+      dockerfile: docker/Dockerfile
+      args:
+        ENABLE_INTEGRATION_TEST: "true"
+        CRYPTO_FEATURE: "${ORBIS_INTEGRATION_CRYPTO:-decaf377}"
+    environment:
+      - ORBIS_PASSWORD=testpassword123
+      - ORBIS_SECRET_KEY=testsecret2testsecret2
+      - RUST_LOG=debug
+    command: ["--addr", "0.0.0.0:50051", "--log-level", "debug", "--authz-grpc", "http://sourcehub:9090", "--bulletin-grpc", "http://sourcehub:9090", "--chain-rpc", "http://sourcehub:26657", "--chain-rest", "http://sourcehub:1317", "--metrics-addr", "0.0.0.0:9090", "--reshare-interval-secs", "5"]
+    ports:
+      - "${ORBIS_NODE2_GRPC_PORT:-50052}:50051"
+      - "${ORBIS_NODE2_METRICS_PORT:-9092}:9090"
+    networks:
+      - orbis-integration-network
+    depends_on:
+      sourcehub:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 50051 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  node3:
+    build:
+      context: ${ORBIS_RUNTIME_CONTEXT:?set by scripts/orbis-stack.sh}
+      dockerfile: docker/Dockerfile
+      args:
+        ENABLE_INTEGRATION_TEST: "true"
+        CRYPTO_FEATURE: "${ORBIS_INTEGRATION_CRYPTO:-decaf377}"
+    environment:
+      - ORBIS_PASSWORD=testpassword123
+      - ORBIS_SECRET_KEY=testsecret3testsecret3
+      - RUST_LOG=debug
+    command: ["--addr", "0.0.0.0:50051", "--log-level", "debug", "--authz-grpc", "http://sourcehub:9090", "--bulletin-grpc", "http://sourcehub:9090", "--chain-rpc", "http://sourcehub:26657", "--chain-rest", "http://sourcehub:1317", "--metrics-addr", "0.0.0.0:9090", "--reshare-interval-secs", "5"]
+    ports:
+      - "${ORBIS_NODE3_GRPC_PORT:-50053}:50051"
+      - "${ORBIS_NODE3_METRICS_PORT:-9093}:9090"
+    networks:
+      - orbis-integration-network
+    depends_on:
+      sourcehub:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 50051 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+networks:
+  orbis-integration-network:
+    driver: bridge

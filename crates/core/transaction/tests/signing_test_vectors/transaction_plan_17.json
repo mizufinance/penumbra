@@ -1,26 +1,24 @@
 {
   "actions": [
     {
-      "actionDutchAuctionWithdraw": {
-        "auctionId": {
-          "inner": "Ebkw77OmywWGtpcB2gTOVNdaKPoVty4ds+3Wwae9+T8="
-        },
-        "seq": "566502593",
-        "reservesInput": {
-          "amount": {
-            "lo": "153567350831122269"
+      "validatorVote": {
+        "body": {
+          "proposal": "990878190",
+          "vote": {
+            "vote": "VOTE_YES"
           },
-          "assetId": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
+          "identityKey": {
+            "ik": "pOh9ZLcE4a9W7zWfGohgecAGgetl4ihM3YkFps0YjAY="
+          },
+          "governanceKey": {
+            "gk": "Lo+agF9kkdSXzyIKTgrWNxW7fd+QTzJkz8EpmMrcigA="
+          },
+          "reason": {
+            "reason": "PIc0rLIC2VjhtpYkY0A4hb5p"
           }
         },
-        "reservesOutput": {
-          "amount": {
-            "lo": "729359186201394366"
-          },
-          "assetId": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          }
+        "authSig": {
+          "inner": "YliynVDXOqMPbnHRnNtbwIvG4G71GegFJtG9iUvOaQmCa4G8IISH4WMiOC0gkaFBxy+eZEoAxsFdKLmSLw+1AA=="
         }
       }
     },
@@ -28,49 +26,25 @@
       "validatorDefinition": {
         "validator": {
           "identityKey": {
-            "ik": "gmSFpOpq6qAbdJIkfigBbyxxcJtBpFGZF9UogI0aLxE="
+            "ik": "LPbH0eYggeIOp1tSJdJDBE3w5pN5ZC6f//AHFyL3bAU="
           },
-          "consensusKey": "iEaJjSBKrHH8a1/TGFda05/odkKHCnMPwW7fIn0OHEc=",
+          "consensusKey": "DsEf5UbIvQJLkjeKxvBWBzGpiKnVoc0NfA16CWk1ZJY=",
           "name": "test validator",
           "enabled": true,
           "governanceKey": {
-            "gk": "gmSFpOpq6qAbdJIkfigBbyxxcJtBpFGZF9UogI0aLxE="
+            "gk": "LPbH0eYggeIOp1tSJdJDBE3w5pN5ZC6f//AHFyL3bAU="
           }
         },
-        "authSig": "NCD5R43L97s8o/wyqW6IPXiQePB2xdSWku0jTKGkzwg1d/Ooc/Y2BekBPiLexY9p68/TUXiveXicz6LoEyVSAQ=="
-      }
-    },
-    {
-      "actionDutchAuctionWithdraw": {
-        "auctionId": {
-          "inner": "0JUM/Bm6bTFjVmdWO+Z7LRjxpOcZsenc7KzDtlm5h6E="
-        },
-        "seq": "757578885",
-        "reservesInput": {
-          "amount": {
-            "lo": "646532044673010656"
-          },
-          "assetId": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          }
-        },
-        "reservesOutput": {
-          "amount": {
-            "lo": "465630247405672762"
-          },
-          "assetId": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          }
-        }
+        "authSig": "5v62yjFNQQVXOwtIsMQrwkgpVpKkiQuGHRuadqtEagYtPD1DkUENFNWTBS/1pHJwSmbN4KiJ7PYQrVnocA5oAg=="
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "7162048338",
-    "chainId": "flsotzgnlautqbiqldcfdubkdokkgjfa-8149786884447743",
+    "expiryHeight": "5877053594",
+    "chainId": "djjhpeynsssvrwsvkmydc-23333170",
     "fee": {
       "amount": {
-        "lo": "318135002609846213"
+        "lo": "676196517752986032"
       }
     }
   }

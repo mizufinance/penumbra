@@ -90,7 +90,6 @@ pub enum RootCommand {
         #[clap(short, long, display_order = 500)]
         enable_expensive_rpc: bool,
     },
-
     /// Generate, join, or reset a network.
     Network {
         /// Path to directory to store output in. Must not exist. Defaults to
@@ -184,9 +183,6 @@ pub enum NetworkCommand {
         /// Number of blocks per epoch.
         #[clap(long)]
         epoch_duration: Option<u64>,
-        /// Number of blocks that must elapse before unbonding stake is released.
-        #[clap(long)]
-        unbonding_delay: Option<u64>,
         /// Maximum number of validators in the consensus set.
         #[clap(long)]
         active_validator_limit: Option<u64>,
@@ -219,6 +215,9 @@ pub enum NetworkCommand {
         /// so `--gas-price-simple=1000` means all resources will have a cost of 1upenumbra.
         #[clap(long)]
         gas_price_simple: Option<u64>,
+        /// Compliance registrar verification key to authorize asset registration grants.
+        #[clap(long = "compliance-registrar-vk-hex")]
+        compliance_registrar_vk_hex: Vec<String>,
         /// Base hostname for a validator's p2p service. If multiple validators
         /// exist in the genesis, e.g. via `--validators-input-file`, then
         /// numeric suffixes are automatically added, e.g. "-0", "-1", etc.
@@ -239,6 +238,12 @@ pub enum NetworkCommand {
         // TODO we should support DNS names here. However, there are complications:
         // https://github.com/tendermint/tendermint/issues/1521
         external_addresses: Option<String>,
+        /// When generating Tendermint config, use this socket to bind the Tendermint RPC service.
+        #[clap(long, env = "PENUMBRA_PD_TM_RPC_BIND", default_value = "0.0.0.0:26657")]
+        tendermint_rpc_bind: SocketAddr,
+        /// When generating Tendermint config, use this socket to bind the Tendermint P2P service.
+        #[clap(long, env = "PENUMBRA_PD_TM_P2P_BIND", default_value = "0.0.0.0:26656")]
+        tendermint_p2p_bind: SocketAddr,
     },
 
     /// Like `network generate`, but joins the network to which the specified node belongs.

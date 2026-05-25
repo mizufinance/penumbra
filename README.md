@@ -15,11 +15,30 @@ The (evolving) protocol spec is rendered at [protocol.penumbra.zone][protocol].
 
 The (evolving) API documentation is rendered at [rustdoc.penumbra.zone][rustdoc].
 
-The (evolving) protobuf documentation is rendered at [buf.build/penumbra-zone/penumbra][protobuf].
+The (evolving) protobuf documentation is rendered at [buf.build/mizufinance/penumbra][protobuf].
 
 To participate in our test network, use Penumbra command line client [`pcli`][pcli].
 
 To join the test network as a full node, follow setup instructions for Penumbra node implementation [`pd`][pd].
+
+## Workspace layout
+
+The root Cargo workspace is production-oriented.
+
+- shipped crates, including the recursive verification / SnarkPack integration, build from the repo root
+- non-production runtime experiments, stage/TPS labs, and prototype tooling live under [`poc/`](/Users/antoinecyr/Documents/Source/penumbra/poc/README.md) as a separate nested workspace
+
+Build the production workspace from the repo root:
+
+```bash
+cargo build --workspace
+```
+
+Build the POC workspace separately:
+
+```bash
+cargo build --workspace --manifest-path poc/Cargo.toml
+```
 
 ## Current work and roadmap
 
@@ -28,8 +47,8 @@ For a high-level view of current work-in-progress and future items, check out ou
 - [Tracking issues][Tracking]
 - [Backlog][Backlog]
 
-[Tracking]: https://github.com/orgs/penumbra-zone/projects/23/views/4
-[Backlog]: https://github.com/orgs/penumbra-zone/projects/23/views/1
+[Tracking]: https://github.com/orgs/mizufinance/projects/23/views/4
+[Backlog]: https://github.com/orgs/mizufinance/projects/23/views/1
 [Discord]: https://discord.gg/hKvkrqa3zC
 [Penumbra]: https://penumbra.zone
 [protocol]: https://protocol.penumbra.zone
@@ -38,7 +57,7 @@ For a high-level view of current work-in-progress and future items, check out ou
 [pd]: https://guide.penumbra.zone/main/pd.html
 [mdBook]: https://github.com/rust-lang/mdBook
 [rustdoc]: https://rustdoc.penumbra.zone
-[protobuf]: https://buf.build/penumbra-zone/penumbra
+[protobuf]: https://buf.build/mizufinance/penumbra
 [tm-install]: https://github.com/tendermint/tendermint/blob/master/docs/introduction/install.md#from-source
 
 

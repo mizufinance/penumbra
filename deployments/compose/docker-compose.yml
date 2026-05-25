@@ -18,7 +18,7 @@ services:
 
   # Initialize network config
   pd-network-init:
-    image: ghcr.io/penumbra-zone/penumbra:local
+    image: ghcr.io/mizufinance/penumbra:local
     networks:
       - penumbra
     command:
@@ -32,7 +32,7 @@ services:
           /bin/pd network --network-dir /pd/network_data generate \
             --chain-id penumbra-local-devnet \
             --preserve-chain-id \
-            --gas-price-simple 0 \
+            --gas-price-simple 1000 \
             --unbonding-delay 100 \
             --epoch-duration 100 \
             --proposal-voting-blocks 50 \
@@ -62,7 +62,7 @@ services:
 
   # Penumbra daemon
   pd-node0:
-    image: ghcr.io/penumbra-zone/penumbra:local
+    image: ghcr.io/mizufinance/penumbra:local
     networks:
       penumbra:
         aliases:

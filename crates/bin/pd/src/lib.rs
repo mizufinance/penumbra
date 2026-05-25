@@ -3,7 +3,7 @@
 #![deny(clippy::unwrap_used)]
 #![recursion_limit = "512"]
 // Requires nightly.
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod metrics;
 

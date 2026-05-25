@@ -13,7 +13,8 @@ component = [
     "cnidarium",
     "penumbra-sdk-proto/cnidarium",
     "penumbra-sdk-sct/component",
-    "penumbra-sdk-stake/component",
+    "penumbra-sdk-validator/component",
+    "penumbra-sdk-compliance/component",
     "tokio",
     "tonic",
 ]
@@ -54,7 +55,7 @@ metrics = {workspace = true}
 once_cell = {workspace = true}
 pbjson-types = {workspace = true}
 penumbra-sdk-asset = {workspace = true, default-features = false}
-penumbra-sdk-distributions = {workspace = true, default-features = false}
+penumbra-sdk-compliance = {workspace = true, default-features = false}
 penumbra-sdk-ibc = {workspace = true, default-features = false}
 penumbra-sdk-keys = {workspace = true, default-features = false}
 penumbra-sdk-num = {workspace = true, default-features = false}
@@ -62,9 +63,10 @@ penumbra-sdk-proof-params = {workspace = true, default-features = false}
 penumbra-sdk-proto = {workspace = true, default-features = false}
 penumbra-sdk-sct = {workspace = true, default-features = false}
 penumbra-sdk-shielded-pool = {workspace = true, default-features = false}
-penumbra-sdk-stake = {workspace = true, default-features = false}
+penumbra-sdk-validator = {workspace = true, default-features = false}
 penumbra-sdk-tct = {workspace = true, default-features = true}
 penumbra-sdk-txhash = {workspace = true, default-features = false}
+poseidon377 = {workspace = true}
 rand = {workspace = true}
 rand_chacha = {workspace = true}
 rand_core = {workspace = true, features = ["getrandom"]}

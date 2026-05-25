@@ -1,0 +1,1228 @@
+use std::collections::{HashMap, HashSet};
+use std::env;
+use std::fs::{self, File};
+use std::io::{BufReader, Write};
+use std::path::PathBuf;
+use std::time::Instant;
+
+use anyhow::{anyhow, Context, Result};
+use clap::Parser;
+use decaf377::{Element, Fq, Fr};
+use did_key::{generate, Ed25519KeyPair as DidEd25519KeyPair, Fingerprint};
+use extract::{extract_transfer_data, TransferExtraction};
+use match_rows::{candidate_to_entry, AddressData, TransferMatch};
+use orbis_authn::JwtSigner;
+use orbis_common::blockchain::{ChainConfig, SourceHubClient, TxSigner, TEST_ACCOUNT_HEX_KEY};
+use penumbra_orbis_client::OrbisClient;
+use penumbra_sdk_asset::asset;
+use penumbra_sdk_compliance::{
+    decrypt_orbis_reencrypted_seed, decrypt_tier_bytes, AuditDetectedRef, AuditScanExport,
+    ComplianceLeaf, OrbisAuditEntry, OrbisEncryptedSeedUploadPackage, TransferComplianceCiphertext,
+    TransferOrbisUploadBundle,
+};
+use penumbra_sdk_keys::Address;
+use penumbra_sdk_num::Amount;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tonic::transport::Channel;
+use url::Url;
+
+use penumbra_orbis_client::ORBIS_NAMESPACE;
+const ORBIS_READER_RELATION: &str = "reader";
+const ORBIS_DEMO_READER_DID_PK: &str = "test_jwt";
+
+mod extract;
+mod match_rows;
+
+#[derive(Parser, Debug)]
+#[clap(
+    name = "orbis-audit",
+    about = "Compliance audit via Orbis PRE for transfer ciphertexts"
+)]
+struct Args {
+    #[clap(long)]
+    input: PathBuf,
+
+    #[clap(long)]
+    dk_hex: String,
+
+    #[clap(long, env = "PENUMBRA_NODE_PD_URL")]
+    node: Url,
+
+    #[clap(long, default_value = "/tmp/alice-audit.json")]
+    output: PathBuf,
+
+    #[clap(long, default_value = "default")]
+    tier: String,
+
+    #[clap(long)]
+    sender_address: Option<String>,
+
+    #[clap(long = "subject-address")]
+    subject_addresses: Vec<String>,
+
+    #[clap(long)]
+    orbis_endpoint: String,
+
+    #[clap(long = "known-address")]
+    known_addresses: Vec<String>,
+
+    #[clap(long)]
+    timings_json: Option<PathBuf>,
+
+    #[clap(long)]
+    object_cache: Option<PathBuf>,
+
+    #[clap(long)]
+    prepare_only: bool,
+}
+
+fn sourcehub_chain_config() -> ChainConfig {
+    ChainConfig::builder()
+        .chain_id(env::var("ORBIS_SOURCEHUB_CHAIN_ID").ok())
+        .rpc_url(sourcehub_url(
+            "ORBIS_SOURCEHUB_RPC",
+            "ORBIS_SOURCEHUB_RPC_PORT",
+        ))
+        .rest_url(sourcehub_url(
+            "ORBIS_SOURCEHUB_REST",
+            "ORBIS_SOURCEHUB_REST_PORT",
+        ))
+        .grpc_url(sourcehub_url(
+            "ORBIS_SOURCEHUB_GRPC",
+            "ORBIS_SOURCEHUB_GRPC_PORT",
+        ))
+        .denom(env::var("ORBIS_SOURCEHUB_DENOM").ok())
+        .build()
+}
+
+fn sourcehub_url(url_key: &str, port_key: &str) -> Option<String> {
+    env::var(url_key).ok().or_else(|| {
+        env::var(port_key)
+            .ok()
+            .map(|port| format!("http://127.0.0.1:{port}"))
+    })
+}
+
+async fn sourcehub_client() -> Result<SourceHubClient> {
+    let config = sourcehub_chain_config();
+    let signer = TxSigner::from_hex_key(TEST_ACCOUNT_HEX_KEY, config.clone())
+        .map_err(|e| anyhow!("failed to create demo SourceHub signer: {}", e))?;
+    SourceHubClient::with_signer(config, signer)
+        .await
+        .map_err(|e| anyhow!("failed to create signed SourceHub client: {}", e))
+}
+
+fn demo_jwt_signer() -> JwtSigner {
+    let key_pair = generate::<DidEd25519KeyPair>(Some(&demo_did_seed(ORBIS_DEMO_READER_DID_PK)));
+    JwtSigner::from_key_pair(key_pair)
+}
+
+fn demo_reader_did_uri() -> String {
+    let key_pair = generate::<DidEd25519KeyPair>(Some(&demo_did_seed(ORBIS_DEMO_READER_DID_PK)));
+    format!("did:key:{}", key_pair.fingerprint())
+}
+
+fn demo_did_seed(s: &str) -> [u8; 32] {
+    Sha256::digest(s.as_bytes()).into()
+}
+
+#[derive(Clone)]
+struct PackageObjectContext {
+    object_id: String,
+    package: OrbisEncryptedSeedUploadPackage,
+    cache_key: String,
+    from_cache: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct ObjectCache {
+    objects: HashMap<String, CachedObject>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CachedObject {
+    object_id: String,
+}
+
+#[derive(Clone)]
+struct AuditContext<'a> {
+    cli: &'a OrbisClient,
+    sourcehub: Option<&'a SourceHubClient>,
+    jwt_signer: Option<&'a JwtSigner>,
+    reader_did_uri: Option<&'a str>,
+    dk: &'a Fr,
+    dk_pub: &'a Element,
+    subject_transmission_key_hex: &'a str,
+    subject_derivation_bytes: &'a [u8; 32],
+    known_transmission_keys: &'a HashSet<String>,
+    tier_mode: &'a str,
+}
+
+#[derive(Clone, Debug)]
+struct SubjectInput {
+    address: Address,
+    transmission_key_hex: String,
+}
+
+#[derive(Clone, Debug)]
+struct SubjectData {
+    asset_id: String,
+    transmission_key_hex: String,
+    subject_derivation_bytes: [u8; 32],
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct AuditTimings {
+    tier: String,
+    candidate_refs: u64,
+    skipped_flagged: u64,
+    no_ciphertext: u64,
+    transaction_fetch_ms: u128,
+    ciphertext_extraction_ms: u128,
+    package_store_ms: u128,
+    object_registration_ms: u128,
+    relationship_setup_ms: u128,
+    start_pre_ms: u128,
+    seed_decrypt_ms: u128,
+    amount_decrypt_ms: u128,
+    address_decrypt_ms: u128,
+    issuer_db_update_ms: u128,
+    pre_calls: u64,
+    total_pre_ms: u128,
+    avg_pre_ms: u128,
+    p95_pre_ms: u128,
+    total_ms: u128,
+    decrypted: u64,
+    object_cache_hits: u64,
+    object_cache_misses: u64,
+    object_cache_stale: u64,
+    subject_mismatch: u64,
+    #[serde(skip)]
+    pre_call_samples_ms: Vec<u128>,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let args = Args::parse();
+    let tier_mode = match args.tier.as_str() {
+        "default" | "extension" => args.tier.as_str(),
+        other => anyhow::bail!("--tier must be 'default' or 'extension', got '{other}'"),
+    };
+
+    let dk = parse_fr(&args.dk_hex, "DK")?;
+    let dk_pub = Element::GENERATOR * dk;
+
+    let subject_inputs = parse_subjects(&args)?;
+
+    let mut known_transmission_keys = HashSet::new();
+    for subject in &subject_inputs {
+        known_transmission_keys.insert(subject.transmission_key_hex.clone());
+    }
+    for address in &args.known_addresses {
+        let address: Address = address
+            .parse()
+            .with_context(|| format!("failed to parse --known-address {address}"))?;
+        known_transmission_keys.insert(hex::encode(address.transmission_key().0));
+    }
+
+    let cli = OrbisClient::new(args.orbis_endpoint.clone())?;
+    let sourcehub = sourcehub_client().await?;
+    let jwt_signer = demo_jwt_signer();
+    let reader_did_uri = demo_reader_did_uri();
+    let file = File::open(&args.input).context("failed to open input file")?;
+    let reader = BufReader::new(file);
+    let scan: AuditScanExport =
+        serde_json::from_reader(reader).context("failed to parse scan JSON")?;
+    eprintln!(
+        "orbis-audit: Processing {} detected transactions",
+        scan.detected.len()
+    );
+
+    let channel = connect_to_node(&args.node).await?;
+    let subjects =
+        resolve_subject_slot_derivations(channel.clone(), &subject_inputs, &scan).await?;
+    eprintln!(
+        "orbis-audit: targets={}...",
+        subject_inputs
+            .iter()
+            .map(|subject| &subject.transmission_key_hex[..16])
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let total_started = Instant::now();
+    let mut object_cache = load_object_cache(args.object_cache.as_ref())?;
+    let mut timings = AuditTimings {
+        tier: args.tier.clone(),
+        ..Default::default()
+    };
+    let mut results = Vec::new();
+    let mut attempted = 0u64;
+    let mut decrypted = 0u64;
+    let mut no_ciphertext = 0u64;
+
+    for tx_ref in &scan.detected {
+        if tx_ref.is_flagged {
+            timings.skipped_flagged += 1;
+            continue;
+        }
+        let tx_subjects = subjects
+            .iter()
+            .filter(|subject| subject.asset_id == tx_ref.asset_id)
+            .collect::<Vec<_>>();
+        attempted += tx_subjects.len() as u64;
+        timings.candidate_refs += tx_subjects.len() as u64;
+        if tx_subjects.is_empty() {
+            timings.subject_mismatch += 1;
+            continue;
+        }
+
+        let started = Instant::now();
+        let transactions = fetch_transactions(channel.clone(), tx_ref.height).await?;
+        timings.transaction_fetch_ms += started.elapsed().as_millis();
+
+        for tx in &transactions {
+            let Some(body) = tx.body.as_ref() else {
+                continue;
+            };
+            let action_index = tx_ref.action_index as usize;
+            if action_index >= body.actions.len() {
+                continue;
+            }
+
+            let action = &body.actions[action_index];
+            let started = Instant::now();
+            let (ct, bundle) = match extract_transfer_data(action, tx_ref.output_index as usize) {
+                TransferExtraction::Found(extracted) => (extracted.ciphertext, extracted.bundle),
+                TransferExtraction::Skipped(reason) => {
+                    timings.ciphertext_extraction_ms += started.elapsed().as_millis();
+                    no_ciphertext += 1;
+                    timings.no_ciphertext += 1;
+                    if reason.is_malformed() {
+                        eprintln!("orbis-audit: malformed transfer data: {reason:?}");
+                    }
+                    continue;
+                }
+            };
+            timings.ciphertext_extraction_ms += started.elapsed().as_millis();
+
+            for subject in &tx_subjects {
+                let ctx = AuditContext {
+                    cli: &cli,
+                    sourcehub: Some(&sourcehub),
+                    jwt_signer: Some(&jwt_signer),
+                    reader_did_uri: Some(&reader_did_uri),
+                    dk: &dk,
+                    dk_pub: &dk_pub,
+                    subject_transmission_key_hex: &subject.transmission_key_hex,
+                    subject_derivation_bytes: &subject.subject_derivation_bytes,
+                    known_transmission_keys: &known_transmission_keys,
+                    tier_mode,
+                };
+                if args.prepare_only {
+                    prepare_transfer(&bundle, &ctx, &mut timings, &mut object_cache).await?;
+                    continue;
+                }
+                if let Some(entry) =
+                    audit_transfer(tx_ref, &ct, &bundle, &ctx, &mut timings, &mut object_cache)
+                        .await?
+                {
+                    decrypted += 1;
+                    results.push(entry);
+                }
+            }
+        }
+    }
+
+    let json = serde_json::to_string_pretty(&results)?;
+    let mut out_file = File::create(&args.output)?;
+    out_file.write_all(json.as_bytes())?;
+
+    eprintln!(
+        "orbis-audit: Decrypted {}/{} non-flagged transfers (tier={}).",
+        decrypted, attempted, args.tier
+    );
+    if no_ciphertext > 0 {
+        eprintln!(
+            "orbis-audit: {} actions had no compliance ciphertext.",
+            no_ciphertext
+        );
+    }
+    timings.decrypted = decrypted;
+    timings.total_ms = total_started.elapsed().as_millis();
+    timings.pre_calls = timings.pre_call_samples_ms.len() as u64;
+    timings.total_pre_ms = timings.pre_call_samples_ms.iter().sum();
+    timings.avg_pre_ms = if timings.pre_calls == 0 {
+        0
+    } else {
+        timings.total_pre_ms / timings.pre_calls as u128
+    };
+    timings.p95_pre_ms = percentile(&timings.pre_call_samples_ms, 95);
+    if let Some(path) = &args.timings_json {
+        let json = serde_json::to_string_pretty(&timings)?;
+        let mut out_file = File::create(path)?;
+        out_file.write_all(json.as_bytes())?;
+    }
+    save_object_cache(args.object_cache.as_ref(), &object_cache)?;
+    eprintln!(
+        "orbis-audit: PRE calls={} total_pre_ms={} avg_pre_ms={} p95_pre_ms={} object_cache_hits={} object_cache_misses={} object_cache_stale={}",
+        timings.pre_calls,
+        timings.total_pre_ms,
+        timings.avg_pre_ms,
+        timings.p95_pre_ms,
+        timings.object_cache_hits,
+        timings.object_cache_misses,
+        timings.object_cache_stale
+    );
+    println!("Results saved to: {}", args.output.display());
+
+    Ok(())
+}
+
+fn percentile(samples: &[u128], percentile: usize) -> u128 {
+    if samples.is_empty() {
+        return 0;
+    }
+    let mut values = samples.to_vec();
+    values.sort_unstable();
+    let index = ((values.len() - 1) * percentile) / 100;
+    values[index]
+}
+
+fn parse_subjects(args: &Args) -> Result<Vec<SubjectInput>> {
+    let mut subject_addresses = args.subject_addresses.clone();
+    if let Some(sender_address) = &args.sender_address {
+        subject_addresses.push(sender_address.clone());
+    }
+    if subject_addresses.is_empty() {
+        anyhow::bail!("at least one --subject-address or --sender-address is required");
+    }
+
+    let mut seen = HashSet::new();
+    let mut subjects = Vec::new();
+    for subject_address in subject_addresses {
+        let address: Address = subject_address
+            .parse()
+            .with_context(|| format!("failed to parse subject address {subject_address}"))?;
+        let transmission_key_hex = hex::encode(address.transmission_key().0);
+        if seen.insert(transmission_key_hex.clone()) {
+            subjects.push(SubjectInput {
+                address,
+                transmission_key_hex,
+            });
+        }
+    }
+    Ok(subjects)
+}
+
+async fn resolve_subject_slot_derivations(
+    channel: Channel,
+    subject_inputs: &[SubjectInput],
+    scan: &AuditScanExport,
+) -> Result<Vec<SubjectData>> {
+    use penumbra_sdk_proto::core::component::compliance::v1::{
+        query_service_client::QueryServiceClient as ComplianceQueryServiceClient,
+        ComplianceUserLeafRequest,
+    };
+
+    const LOOKUP_CONCURRENCY: usize = 16;
+
+    let mut asset_ids = scan
+        .detected
+        .iter()
+        .map(|tx_ref| tx_ref.asset_id.clone())
+        .collect::<Vec<_>>();
+    asset_ids.sort();
+    asset_ids.dedup();
+
+    async fn collect_lookup(
+        lookups: &mut tokio::task::JoinSet<Result<Option<SubjectData>>>,
+        subjects: &mut Vec<SubjectData>,
+    ) -> Result<()> {
+        let result = lookups
+            .join_next()
+            .await
+            .ok_or_else(|| anyhow!("subject lookup set unexpectedly empty"))?
+            .context("subject compliance leaf lookup task failed")??;
+        if let Some(subject) = result {
+            subjects.push(subject);
+        }
+        Ok(())
+    }
+
+    let mut lookups = tokio::task::JoinSet::new();
+    let mut subjects = Vec::new();
+    for subject in subject_inputs {
+        for asset_id_text in &asset_ids {
+            let channel = channel.clone();
+            let address = subject.address.clone();
+            let transmission_key_hex = subject.transmission_key_hex.clone();
+            let asset_id_text = asset_id_text.clone();
+            lookups.spawn(async move {
+                let asset_id: asset::Id = asset_id_text.parse().with_context(|| {
+                    format!("failed to parse detected asset_id {asset_id_text}")
+                })?;
+                let mut client = ComplianceQueryServiceClient::new(channel);
+                let response = client
+                    .compliance_user_leaf(tonic::Request::new(ComplianceUserLeafRequest {
+                        address: Some(address.into()),
+                        asset_id: Some(asset_id.into()),
+                    }))
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to fetch compliance leaf for subject {} and asset {}",
+                            transmission_key_hex, asset_id_text
+                        )
+                    })?
+                    .into_inner();
+
+                if !response.is_registered {
+                    return Ok(None);
+                }
+
+                let leaf_proto = response
+                    .leaf
+                    .ok_or_else(|| anyhow!("registered compliance leaf response missing leaf"))?;
+                let leaf = ComplianceLeaf::try_from(leaf_proto).with_context(|| {
+                    format!(
+                        "invalid compliance leaf for subject {} and asset {}",
+                        transmission_key_hex, asset_id_text
+                    )
+                })?;
+                Ok(Some(SubjectData {
+                    asset_id: asset_id_text,
+                    transmission_key_hex,
+                    subject_derivation_bytes: leaf.slot_derivation.to_bytes(),
+                }))
+            });
+
+            if lookups.len() >= LOOKUP_CONCURRENCY {
+                collect_lookup(&mut lookups, &mut subjects).await?;
+            }
+        }
+    }
+    while !lookups.is_empty() {
+        collect_lookup(&mut lookups, &mut subjects).await?;
+    }
+
+    if subjects.is_empty() {
+        anyhow::bail!("no subject has a registered compliance slot for any detected asset");
+    }
+
+    Ok(subjects)
+}
+
+async fn audit_transfer(
+    tx_ref: &AuditDetectedRef,
+    ct: &TransferComplianceCiphertext,
+    bundle: &TransferOrbisUploadBundle,
+    ctx: &AuditContext<'_>,
+    timings: &mut AuditTimings,
+    object_cache: &mut ObjectCache,
+) -> Result<Option<OrbisAuditEntry>> {
+    if let Some(candidate) = try_receiver_match(ct, bundle, ctx, timings, object_cache).await? {
+        return Ok(Some(candidate_to_entry(
+            tx_ref,
+            candidate,
+            ctx.tier_mode,
+            ctx.subject_transmission_key_hex,
+        )));
+    }
+    if let Some(candidate) = try_sender_match(ct, bundle, ctx, timings, object_cache).await? {
+        return Ok(Some(candidate_to_entry(
+            tx_ref,
+            candidate,
+            ctx.tier_mode,
+            ctx.subject_transmission_key_hex,
+        )));
+    }
+    Ok(None)
+}
+
+async fn prepare_transfer(
+    bundle: &TransferOrbisUploadBundle,
+    ctx: &AuditContext<'_>,
+    timings: &mut AuditTimings,
+    object_cache: &mut ObjectCache,
+) -> Result<()> {
+    let TransferOrbisUploadBundle {
+        output_core,
+        output_ext,
+        sender_core,
+        sender_ext,
+    } = bundle.clone();
+
+    if output_core.derivation_bytes() == *ctx.subject_derivation_bytes {
+        let ring_id = output_core.ring_id.clone();
+        ensure_package_object(ctx, &ring_id, output_core, timings, object_cache).await?;
+        ensure_package_object(ctx, &ring_id, output_ext, timings, object_cache).await?;
+    } else {
+        timings.subject_mismatch += 1;
+    }
+
+    if sender_core.derivation_bytes() == *ctx.subject_derivation_bytes {
+        let ring_id = sender_core.ring_id.clone();
+        ensure_package_object(ctx, &ring_id, sender_core, timings, object_cache).await?;
+        ensure_package_object(ctx, &ring_id, sender_ext, timings, object_cache).await?;
+    } else {
+        timings.subject_mismatch += 1;
+    }
+
+    Ok(())
+}
+
+async fn try_receiver_match(
+    ct: &TransferComplianceCiphertext,
+    bundle: &TransferOrbisUploadBundle,
+    ctx: &AuditContext<'_>,
+    timings: &mut AuditTimings,
+    object_cache: &mut ObjectCache,
+) -> Result<Option<TransferMatch>> {
+    let ring_id = bundle.output_core.ring_id.clone();
+    let TransferOrbisUploadBundle {
+        output_core,
+        output_ext,
+        ..
+    } = bundle.clone();
+    if output_core.derivation_bytes() != *ctx.subject_derivation_bytes {
+        timings.subject_mismatch += 1;
+        return Ok(None);
+    }
+    let output_core_seed =
+        pre_package_seed(ctx, &ring_id, output_core, timings, object_cache).await?;
+    let started = Instant::now();
+    let amount = decrypt_amount_with_seed(output_core_seed, &ct.encrypted_output_core)?;
+    timings.amount_decrypt_ms += started.elapsed().as_millis();
+
+    let output_ext_seed =
+        pre_package_seed(ctx, &ring_id, output_ext, timings, object_cache).await?;
+    let started = Instant::now();
+    let sender = match decrypt_address_with_seed(output_ext_seed, &ct.encrypted_output_ext) {
+        Ok(sender) => {
+            timings.address_decrypt_ms += started.elapsed().as_millis();
+            sender
+        }
+        Err(_) => {
+            timings.address_decrypt_ms += started.elapsed().as_millis();
+            return Ok(None);
+        }
+    };
+
+    if !ctx
+        .known_transmission_keys
+        .contains(&sender.transmission_key_hex)
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(TransferMatch::Receiver { amount, sender }))
+}
+
+async fn try_sender_match(
+    ct: &TransferComplianceCiphertext,
+    bundle: &TransferOrbisUploadBundle,
+    ctx: &AuditContext<'_>,
+    timings: &mut AuditTimings,
+    object_cache: &mut ObjectCache,
+) -> Result<Option<TransferMatch>> {
+    let ring_id = bundle.sender_core.ring_id.clone();
+    let TransferOrbisUploadBundle {
+        sender_core,
+        sender_ext,
+        ..
+    } = bundle.clone();
+    if sender_core.derivation_bytes() != *ctx.subject_derivation_bytes {
+        timings.subject_mismatch += 1;
+        return Ok(None);
+    }
+    let sender_core_seed =
+        pre_package_seed(ctx, &ring_id, sender_core, timings, object_cache).await?;
+    let started = Instant::now();
+    let amount = decrypt_amount_with_seed(sender_core_seed, &ct.encrypted_sender_core)?;
+    timings.amount_decrypt_ms += started.elapsed().as_millis();
+
+    let sender_ext_seed =
+        pre_package_seed(ctx, &ring_id, sender_ext, timings, object_cache).await?;
+    let started = Instant::now();
+    let receiver = match decrypt_address_with_seed(sender_ext_seed, &ct.encrypted_sender_ext) {
+        Ok(receiver) => {
+            timings.address_decrypt_ms += started.elapsed().as_millis();
+            receiver
+        }
+        Err(_) => {
+            timings.address_decrypt_ms += started.elapsed().as_millis();
+            return Ok(None);
+        }
+    };
+
+    if !ctx
+        .known_transmission_keys
+        .contains(&receiver.transmission_key_hex)
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(TransferMatch::Sender { amount, receiver }))
+}
+
+fn decrypt_amount_with_seed(seed: Fq, encrypted: &[u8]) -> Result<Amount> {
+    let plaintext = decrypt_tier_bytes(encrypted, seed, 16);
+    let amount_bytes: [u8; 16] = plaintext[..16]
+        .try_into()
+        .context("transfer amount plaintext must be 16 bytes")?;
+    Ok(Amount::from_le_bytes(amount_bytes))
+}
+
+fn decrypt_address_with_seed(seed: Fq, encrypted: &[u8]) -> Result<AddressData> {
+    let plaintext = decrypt_tier_bytes(encrypted, seed, 64);
+    let diversified_generator_bytes: [u8; 32] = plaintext[..32]
+        .try_into()
+        .context("transfer address diversified generator must be 32 bytes")?;
+    let transmission_key: [u8; 32] = plaintext[32..64]
+        .try_into()
+        .context("transfer address transmission key must be 32 bytes")?;
+    decaf377::Encoding(diversified_generator_bytes)
+        .vartime_decompress()
+        .map_err(|_| anyhow!("invalid transfer address diversified generator"))?;
+    Ok(AddressData {
+        transmission_key_hex: hex::encode(transmission_key),
+    })
+}
+
+fn load_object_cache(path: Option<&PathBuf>) -> Result<ObjectCache> {
+    let Some(path) = path else {
+        return Ok(ObjectCache::default());
+    };
+    if !path.exists() {
+        return Ok(ObjectCache::default());
+    }
+    let file = File::open(path)
+        .with_context(|| format!("failed to open object cache {}", path.display()))?;
+    serde_json::from_reader(BufReader::new(file))
+        .with_context(|| format!("failed to parse object cache {}", path.display()))
+}
+
+fn save_object_cache(path: Option<&PathBuf>, cache: &ObjectCache) -> Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create object cache dir {}", parent.display()))?;
+    }
+    let json = serde_json::to_string_pretty(cache)?;
+    let mut file = File::create(path)
+        .with_context(|| format!("failed to write object cache {}", path.display()))?;
+    file.write_all(json.as_bytes())?;
+    Ok(())
+}
+
+fn package_cache_key(ring_id: &str, package: &OrbisEncryptedSeedUploadPackage) -> Result<String> {
+    let mut hasher = Sha256::new();
+    hasher.update(ring_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(serde_json::to_vec(package)?);
+    Ok(hex::encode(hasher.finalize()))
+}
+
+async fn ensure_package_object(
+    ctx: &AuditContext<'_>,
+    ring_id: &str,
+    package: OrbisEncryptedSeedUploadPackage,
+    timings: &mut AuditTimings,
+    object_cache: &mut ObjectCache,
+) -> Result<PackageObjectContext> {
+    package.validate()?;
+    let cache_key = package_cache_key(ring_id, &package)?;
+    if let Some(cached) = object_cache.objects.get(&cache_key) {
+        timings.object_cache_hits += 1;
+        return Ok(PackageObjectContext {
+            object_id: cached.object_id.clone(),
+            package,
+            cache_key,
+            from_cache: true,
+        });
+    }
+
+    timings.object_cache_misses += 1;
+    let sourcehub = ctx
+        .sourcehub
+        .ok_or_else(|| anyhow!("missing SourceHub client for Orbis object registration"))?;
+    let jwt_signer = ctx
+        .jwt_signer
+        .ok_or_else(|| anyhow!("missing Orbis JWT signer for package storage"))?;
+    let reader_did_uri = ctx
+        .reader_did_uri
+        .ok_or_else(|| anyhow!("missing reader DID URI for Orbis relationship setup"))?;
+    let started = Instant::now();
+    let stored = ctx
+        .cli
+        .store_encrypted_seed_package(ORBIS_NAMESPACE, ring_id, &package, jwt_signer)
+        .await?;
+    timings.package_store_ms += started.elapsed().as_millis();
+    let started = Instant::now();
+    OrbisClient::register_object(
+        sourcehub,
+        &package.policy_id,
+        &package.resource,
+        &stored.object_id,
+    )
+    .await?;
+    timings.object_registration_ms += started.elapsed().as_millis();
+    let started = Instant::now();
+    OrbisClient::set_relationship(
+        sourcehub,
+        &package.policy_id,
+        &package.resource,
+        &stored.object_id,
+        ORBIS_READER_RELATION,
+        reader_did_uri,
+    )
+    .await?;
+    timings.relationship_setup_ms += started.elapsed().as_millis();
+    object_cache.objects.insert(
+        cache_key.clone(),
+        CachedObject {
+            object_id: stored.object_id.clone(),
+        },
+    );
+    Ok(PackageObjectContext {
+        object_id: stored.object_id.clone(),
+        package,
+        cache_key: cache_key.clone(),
+        from_cache: false,
+    })
+}
+
+async fn pre_package_seed(
+    ctx: &AuditContext<'_>,
+    ring_id: &str,
+    package: OrbisEncryptedSeedUploadPackage,
+    timings: &mut AuditTimings,
+    object_cache: &mut ObjectCache,
+) -> Result<Fq> {
+    let mut object = ensure_package_object(ctx, ring_id, package, timings, object_cache).await?;
+    let jwt_signer = ctx
+        .jwt_signer
+        .ok_or_else(|| anyhow!("missing Orbis JWT signer for PRE"))?;
+    let started = Instant::now();
+    let mut pre_result = ctx
+        .cli
+        .start_pre(
+            ORBIS_NAMESPACE,
+            &hex::encode(ctx.dk_pub.vartime_compress().0),
+            &object.object_id,
+            &hex::encode(object.package.derivation_bytes()),
+            Some(&object.package.salt),
+            Some(object.package.timestamp),
+            jwt_signer,
+        )
+        .await;
+    if pre_result.is_err() && object.from_cache {
+        timings.object_cache_stale += 1;
+        object_cache.objects.remove(&object.cache_key);
+        object = ensure_package_object(ctx, ring_id, object.package.clone(), timings, object_cache)
+            .await?;
+        pre_result = ctx
+            .cli
+            .start_pre(
+                ORBIS_NAMESPACE,
+                &hex::encode(ctx.dk_pub.vartime_compress().0),
+                &object.object_id,
+                &hex::encode(object.package.derivation_bytes()),
+                Some(&object.package.salt),
+                Some(object.package.timestamp),
+                jwt_signer,
+            )
+            .await;
+    }
+    let pre = pre_result?;
+    let pre_ms = started.elapsed().as_millis();
+    timings.start_pre_ms += pre_ms;
+    timings.pre_call_samples_ms.push(pre_ms);
+
+    let started = Instant::now();
+    let xnc_bytes = hex::decode(&pre.xnc_cmt_hex).context("invalid xnc_cmt hex from PRE")?;
+    let xnc_arr: [u8; 32] = xnc_bytes
+        .try_into()
+        .map_err(|_| anyhow!("xnc_cmt should be 32 bytes"))?;
+    let xnc_cmt = decaf377::Encoding(xnc_arr)
+        .vartime_decompress()
+        .map_err(|_| anyhow!("invalid xnc_cmt curve point"))?;
+    let seed = decrypt_orbis_reencrypted_seed(&object.package, ctx.dk, &xnc_cmt, &pre.secret)?;
+    timings.seed_decrypt_ms += started.elapsed().as_millis();
+    Ok(seed)
+}
+
+fn parse_fr(hex_str: &str, label: &str) -> Result<Fr> {
+    let bytes = hex::decode(hex_str).context(format!("invalid hex for {label}"))?;
+    if bytes.len() != 32 {
+        anyhow::bail!(
+            "{label} must be 32 bytes (64 hex chars), got {}",
+            bytes.len()
+        );
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Ok(Fr::from_le_bytes_mod_order(&arr))
+}
+
+async fn connect_to_node(node_url: &Url) -> Result<Channel> {
+    let endpoint = tonic::transport::Endpoint::from_shared(node_url.to_string())
+        .context("invalid node URL")?
+        .timeout(std::time::Duration::from_secs(30));
+
+    endpoint
+        .connect()
+        .await
+        .context(format!("failed to connect to node at {node_url}"))
+}
+
+async fn fetch_transactions(
+    channel: Channel,
+    height: u64,
+) -> Result<Vec<penumbra_sdk_proto::core::transaction::v1::Transaction>> {
+    use penumbra_sdk_proto::core::app::v1::{
+        query_service_client::QueryServiceClient as AppQueryServiceClient,
+        TransactionsByHeightRequest,
+    };
+
+    let mut client = AppQueryServiceClient::new(channel);
+    let request = TransactionsByHeightRequest {
+        block_height: height,
+    };
+    let response = client
+        .transactions_by_height(request)
+        .await
+        .context("failed to fetch transactions")?;
+    Ok(response.into_inner().transactions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::extract::ExtractionSkip;
+    use decaf377::{Element, Fr};
+    use penumbra_sdk_asset::{asset, Value};
+    use penumbra_sdk_compliance::transfer::encrypt_transfer;
+    use penumbra_sdk_compliance::DecryptedVia;
+    use penumbra_sdk_compliance::{derive_compliance_scalar, issuer_keys::DetectionKey};
+    use penumbra_sdk_keys::{keys::AddressIndex, test_keys};
+    use penumbra_sdk_num::Amount;
+    use penumbra_sdk_proto::core::component::shielded_pool::v1::{
+        Consolidate, ConsolidateBody, Split, SplitBody, Transfer, TransferBody, TransferOutputBody,
+    };
+    use penumbra_sdk_proto::core::transaction::v1::action::Action;
+    use std::collections::HashSet;
+
+    fn derive_ack(ring_pk: &Element, slot_derivation: decaf377::Fq) -> Element {
+        let d = derive_compliance_scalar(slot_derivation);
+        let d_fr = Fr::from_le_bytes_mod_order(&d.to_bytes());
+        *ring_pk * d_fr
+    }
+
+    fn make_transfer_ciphertext_bytes() -> Vec<u8> {
+        let dk = DetectionKey::new(Fr::from(5u64));
+        let dk_pub = dk.public_key();
+        let ring_pk = Element::GENERATOR * Fr::from(11u64);
+        let sender = test_keys::ADDRESS_0.clone();
+        let receiver = test_keys::FULL_VIEWING_KEY
+            .payment_address(AddressIndex::from(1u32))
+            .0;
+        let sender_slot_derivation = sender.diversified_generator().vartime_compress_to_field();
+        let receiver_slot_derivation = receiver.diversified_generator().vartime_compress_to_field();
+        encrypt_transfer(
+            &mut rand_core::OsRng,
+            &derive_ack(&ring_pk, sender_slot_derivation),
+            &derive_ack(&ring_pk, receiver_slot_derivation),
+            &dk_pub,
+            &receiver,
+            &sender,
+            Value {
+                amount: Amount::from(17u128),
+                asset_id: asset::Id(decaf377::Fq::from(77u64)),
+            },
+            false,
+            0,
+            0,
+            decaf377::Fq::from(9u64),
+        )
+        .expect("transfer ciphertext should build")
+        .ciphertext
+        .to_bytes()
+    }
+
+    fn dummy_context<'a>(tier_mode: &'a str, subject: &'a str) -> AuditContext<'a> {
+        let cli = Box::leak(Box::new(
+            OrbisClient::new("http://127.0.0.1:8080").expect("dummy endpoint should parse"),
+        ));
+        let dk = Box::leak(Box::new(Fr::from(3u64)));
+        let dk_pub = Box::leak(Box::new(Element::GENERATOR * Fr::from(3u64)));
+        let mut known_transmission_keys = HashSet::new();
+        known_transmission_keys.insert(subject.to_string());
+        let known_transmission_keys = Box::leak(Box::new(known_transmission_keys));
+
+        AuditContext {
+            cli,
+            sourcehub: None,
+            jwt_signer: None,
+            reader_did_uri: None,
+            dk,
+            dk_pub,
+            subject_transmission_key_hex: subject,
+            subject_derivation_bytes: &[0u8; 32],
+            known_transmission_keys,
+            tier_mode,
+        }
+    }
+
+    #[test]
+    fn extract_transfer_data_ignores_non_transfer_actions() {
+        let split_action = penumbra_sdk_proto::core::transaction::v1::Action {
+            action: Some(Action::Split(Split {
+                body: Some(SplitBody::default()),
+                ..Default::default()
+            })),
+        };
+        let consolidate_action = penumbra_sdk_proto::core::transaction::v1::Action {
+            action: Some(Action::Consolidate(Consolidate {
+                body: Some(ConsolidateBody::default()),
+                ..Default::default()
+            })),
+        };
+
+        assert!(matches!(
+            extract_transfer_data(&split_action, 0),
+            TransferExtraction::Skipped(ExtractionSkip::NonTransferAction)
+        ));
+        assert!(matches!(
+            extract_transfer_data(&consolidate_action, 0),
+            TransferExtraction::Skipped(ExtractionSkip::NonTransferAction)
+        ));
+    }
+
+    fn make_upload_bundle_bytes() -> Vec<u8> {
+        let mut rng = rand_core::OsRng;
+        let ring_sk = Fr::rand(&mut rng);
+        let ring_pk = Element::GENERATOR * ring_sk;
+        let sender = test_keys::ADDRESS_0.clone();
+        let receiver = test_keys::FULL_VIEWING_KEY
+            .payment_address(AddressIndex::from(1u32))
+            .0;
+        let sender_slot_derivation = sender.diversified_generator().vartime_compress_to_field();
+        let receiver_slot_derivation = receiver.diversified_generator().vartime_compress_to_field();
+        let policy_id = "policy-id";
+        let resource = "document";
+        let permission = "read";
+        let ring_id = "ring-id";
+        let timestamp = 1_700_000_000;
+        let sender_core_salt = decaf377::Fq::from(11u64);
+        let sender_ext_salt = decaf377::Fq::from(12u64);
+        let output_core_salt = decaf377::Fq::from(13u64);
+        let output_ext_salt = decaf377::Fq::from(14u64);
+
+        let bundle = TransferOrbisUploadBundle {
+            sender_core: penumbra_sdk_compliance::build_orbis_encrypted_seed_upload_package(
+                &mut rng,
+                &ring_pk,
+                decaf377::Fq::from(21u64),
+                penumbra_sdk_compliance::TransferTierMetadataStatement::from_identifiers(
+                    sender_slot_derivation,
+                    ring_id,
+                    policy_id,
+                    resource,
+                    permission,
+                    penumbra_sdk_compliance::TransferTierKind::SenderCore,
+                    timestamp,
+                    sender_core_salt,
+                ),
+                ring_id,
+                policy_id,
+                resource,
+                permission,
+                penumbra_sdk_compliance::TransferTierKind::SenderCore,
+                timestamp,
+                sender_core_salt,
+            )
+            .expect("sender_core package should build"),
+            sender_ext: penumbra_sdk_compliance::build_orbis_encrypted_seed_upload_package(
+                &mut rng,
+                &ring_pk,
+                decaf377::Fq::from(22u64),
+                penumbra_sdk_compliance::TransferTierMetadataStatement::from_identifiers(
+                    sender_slot_derivation,
+                    ring_id,
+                    policy_id,
+                    resource,
+                    permission,
+                    penumbra_sdk_compliance::TransferTierKind::SenderExt,
+                    timestamp,
+                    sender_ext_salt,
+                ),
+                ring_id,
+                policy_id,
+                resource,
+                permission,
+                penumbra_sdk_compliance::TransferTierKind::SenderExt,
+                timestamp,
+                sender_ext_salt,
+            )
+            .expect("sender_ext package should build"),
+            output_core: penumbra_sdk_compliance::build_orbis_encrypted_seed_upload_package(
+                &mut rng,
+                &ring_pk,
+                decaf377::Fq::from(23u64),
+                penumbra_sdk_compliance::TransferTierMetadataStatement::from_identifiers(
+                    receiver_slot_derivation,
+                    ring_id,
+                    policy_id,
+                    resource,
+                    permission,
+                    penumbra_sdk_compliance::TransferTierKind::OutputCore,
+                    timestamp,
+                    output_core_salt,
+                ),
+                ring_id,
+                policy_id,
+                resource,
+                permission,
+                penumbra_sdk_compliance::TransferTierKind::OutputCore,
+                timestamp,
+                output_core_salt,
+            )
+            .expect("output_core package should build"),
+            output_ext: penumbra_sdk_compliance::build_orbis_encrypted_seed_upload_package(
+                &mut rng,
+                &ring_pk,
+                decaf377::Fq::from(24u64),
+                penumbra_sdk_compliance::TransferTierMetadataStatement::from_identifiers(
+                    receiver_slot_derivation,
+                    ring_id,
+                    policy_id,
+                    resource,
+                    permission,
+                    penumbra_sdk_compliance::TransferTierKind::OutputExt,
+                    timestamp,
+                    output_ext_salt,
+                ),
+                ring_id,
+                policy_id,
+                resource,
+                permission,
+                penumbra_sdk_compliance::TransferTierKind::OutputExt,
+                timestamp,
+                output_ext_salt,
+            )
+            .expect("output_ext package should build"),
+        };
+        bundle.to_bytes().expect("bundle should serialize")
+    }
+
+    #[test]
+    fn extract_transfer_data_reads_requested_transfer_output() {
+        let ciphertext_bytes = make_transfer_ciphertext_bytes();
+        let bundle_bytes = make_upload_bundle_bytes();
+        let transfer_action = penumbra_sdk_proto::core::transaction::v1::Action {
+            action: Some(Action::Transfer(Transfer {
+                body: Some(TransferBody {
+                    outputs: vec![
+                        TransferOutputBody::default(),
+                        TransferOutputBody {
+                            compliance_ciphertext: ciphertext_bytes.clone(),
+                            orbis_upload_bundle: bundle_bytes.clone(),
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+        };
+
+        let TransferExtraction::Found(extracted) = extract_transfer_data(&transfer_action, 1)
+        else {
+            panic!("transfer action should expose data");
+        };
+        assert_eq!(extracted.ciphertext.to_bytes(), ciphertext_bytes);
+        assert_eq!(
+            extracted
+                .bundle
+                .to_bytes()
+                .expect("bundle should serialize"),
+            bundle_bytes
+        );
+    }
+
+    #[test]
+    fn extract_transfer_data_classifies_malformed_ciphertext() {
+        let transfer_action = penumbra_sdk_proto::core::transaction::v1::Action {
+            action: Some(Action::Transfer(Transfer {
+                body: Some(TransferBody {
+                    outputs: vec![TransferOutputBody {
+                        compliance_ciphertext: vec![1, 2, 3],
+                        orbis_upload_bundle: Vec::new(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+        };
+
+        assert!(matches!(
+            extract_transfer_data(&transfer_action, 0),
+            TransferExtraction::Skipped(ExtractionSkip::InvalidComplianceCiphertext { len: 3, .. })
+        ));
+    }
+
+    #[test]
+    fn candidate_to_entry_uses_semantic_transfer_rendering() {
+        let tx_ref = AuditDetectedRef {
+            height: 290,
+            tx_hash: "tx".to_string(),
+            action_index: 1,
+            output_index: 2,
+            asset_id: "asset".to_string(),
+            is_flagged: false,
+            flow_type: penumbra_sdk_compliance::FlowType::PrivateTransfer,
+        };
+        let self_tk = "aa".repeat(32);
+        let counterparty_tk = "bb".repeat(32);
+
+        let default_ctx = dummy_context("default", &self_tk);
+        let default_entry = candidate_to_entry(
+            &tx_ref,
+            TransferMatch::Sender {
+                amount: Amount::from(400u128),
+                receiver: AddressData {
+                    transmission_key_hex: counterparty_tk.clone(),
+                },
+            },
+            default_ctx.tier_mode,
+            default_ctx.subject_transmission_key_hex,
+        );
+        assert_eq!(default_entry.amount, "400");
+        assert_eq!(default_entry.output_index, 2);
+        assert_eq!(default_entry.self_address, self_tk);
+        assert_eq!(default_entry.counterparty, "");
+        assert_eq!(default_entry.decrypted_via, DecryptedVia::OrbisPre);
+
+        let extension_ctx = dummy_context("extension", &self_tk);
+        let extension_entry = candidate_to_entry(
+            &tx_ref,
+            TransferMatch::Receiver {
+                amount: Amount::from(600u128),
+                sender: AddressData {
+                    transmission_key_hex: counterparty_tk.clone(),
+                },
+            },
+            extension_ctx.tier_mode,
+            extension_ctx.subject_transmission_key_hex,
+        );
+        assert_eq!(extension_entry.amount, "600");
+        assert_eq!(extension_entry.self_address, self_tk);
+        assert_eq!(extension_entry.counterparty, counterparty_tk);
+        assert_eq!(extension_entry.decrypted_via, DecryptedVia::OrbisPre);
+    }
+}

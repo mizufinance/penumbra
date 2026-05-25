@@ -1,6 +1,5 @@
 pub use debug::DebugCmd;
 pub use init::InitCmd;
-pub use migrate::MigrateCmd;
 pub use query::QueryCmd;
 pub use threshold::ThresholdCmd;
 pub use tx::TxCmd;
@@ -11,11 +10,9 @@ use self::tx::TxCmdWithOptions;
 
 mod debug;
 mod init;
-mod migrate;
 mod query;
 mod threshold;
 mod tx;
-mod utils;
 mod validator;
 mod view;
 
@@ -57,11 +54,8 @@ pub enum Command {
     /// Follow the threshold signing protocol.
     #[clap(subcommand, display_order = 500)]
     Threshold(ThresholdCmd),
-    /// Migrate your balance to another wallet.
-    #[clap(subcommand, display_order = 600)]
-    Migrate(MigrateCmd),
     /// Manage a validator.
-    #[clap(subcommand, display_order = 900)]
+    #[clap(subcommand, display_order = 800)]
     Validator(ValidatorCmd),
     /// Display information related to diagnosing problems running Penumbra
     #[clap(subcommand, display_order = 999)]
@@ -79,7 +73,6 @@ impl Command {
             Command::Query(cmd) => cmd.offline(),
             Command::Debug(cmd) => cmd.offline(),
             Command::Threshold(cmd) => cmd.offline(),
-            Command::Migrate(_) => false,
         }
     }
 }

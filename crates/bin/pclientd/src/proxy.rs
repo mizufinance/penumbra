@@ -74,50 +74,6 @@ impl tower::Service<http::Request<BoxBody>> for GovernanceQueryProxy {
 }
 
 #[derive(Clone)]
-pub struct DexQueryProxy(pub Channel);
-
-impl NamedService for DexQueryProxy {
-    const NAME: &'static str = "penumbra.core.component.dex.v1.QueryService";
-}
-
-impl tower::Service<http::Request<BoxBody>> for DexQueryProxy {
-    type Response = http::Response<BoxBody>;
-    type Error = Infallible;
-    type Future =
-        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
-
-    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, req: http::Request<BoxBody>) -> Self::Future {
-        proxy(self.0.clone(), req)
-    }
-}
-
-#[derive(Clone)]
-pub struct DexSimulationProxy(pub Channel);
-
-impl NamedService for DexSimulationProxy {
-    const NAME: &'static str = "penumbra.core.component.dex.v1.SimulationService";
-}
-
-impl tower::Service<http::Request<BoxBody>> for DexSimulationProxy {
-    type Response = http::Response<BoxBody>;
-    type Error = Infallible;
-    type Future =
-        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
-
-    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, req: http::Request<BoxBody>) -> Self::Future {
-        proxy(self.0.clone(), req)
-    }
-}
-
-#[derive(Clone)]
 pub struct FeeQueryProxy(pub Channel);
 
 impl NamedService for FeeQueryProxy {
@@ -206,13 +162,13 @@ impl tower::Service<http::Request<BoxBody>> for ChainQueryProxy {
 }
 
 #[derive(Clone)]
-pub struct StakeQueryProxy(pub Channel);
+pub struct ValidatorQueryProxy(pub Channel);
 
-impl NamedService for StakeQueryProxy {
-    const NAME: &'static str = "penumbra.core.component.stake.v1.QueryService";
+impl NamedService for ValidatorQueryProxy {
+    const NAME: &'static str = "penumbra.core.component.validator.v1.QueryService";
 }
 
-impl tower::Service<http::Request<BoxBody>> for StakeQueryProxy {
+impl tower::Service<http::Request<BoxBody>> for ValidatorQueryProxy {
     type Response = http::Response<BoxBody>;
     type Error = Infallible;
     type Future =

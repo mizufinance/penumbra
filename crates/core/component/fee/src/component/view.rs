@@ -25,17 +25,15 @@ pub trait StateReadExt: StateRead {
         // read these from the _fee params_ instead, since those are
         // the values that will get updated by governance.
         let params = self.get_fee_params().await?;
+        params.validate_base_asset_only()?;
         Ok(params.fixed_gas_prices)
     }
 
-    /// Gets the current gas prices for alternative fee tokens.
+    /// The reduced chain does not expose alternative fee tokens.
     async fn get_alt_gas_prices(&self) -> Result<Vec<GasPrices>> {
-        // When we implement dynamic gas pricing, we will want
-        // to read the prices we computed. But until then, we need to
-        // read these from the _fee params_ instead, since those are
-        // the values that will get updated by governance.
         let params = self.get_fee_params().await?;
-        Ok(params.fixed_alt_gas_prices)
+        params.validate_base_asset_only()?;
+        Ok(Vec::new())
     }
 
     /// Returns true if the gas prices have been changed in this block.
@@ -102,6 +100,20 @@ pub trait StateWriteExt: StateWrite {
                 None => Some((Amount::zero(), tip_fee.amount())),
             },
             tip_fee.asset_id(),
+        );
+        self.object_put(state_key::fee_accumulator(), new);
+    }
+
+    fn raw_accumulate_base_fee_and_tip(&mut self, base_fee: Fee, tip_fee: Fee) {
+        debug_assert_eq!(base_fee.asset_id(), tip_fee.asset_id());
+
+        let old = self.accumulated_base_fees_and_tips();
+        let new = old.alter(
+            |maybe_amounts| match maybe_amounts {
+                Some((base, tip)) => Some((base + base_fee.amount(), tip + tip_fee.amount())),
+                None => Some((base_fee.amount(), tip_fee.amount())),
+            },
+            base_fee.asset_id(),
         );
         self.object_put(state_key::fee_accumulator(), new);
     }

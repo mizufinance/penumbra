@@ -1,4 +1,4 @@
-use ibc_types::core::{channel::ChannelId, channel::PortId, client::Height as IbcHeight};
+use ibc_types::core::{channel::ChannelId, client::Height as IbcHeight};
 use penumbra_sdk_asset::{
     asset::{self, Metadata},
     Balance, Value,
@@ -12,6 +12,9 @@ use penumbra_sdk_proto::{
 use penumbra_sdk_txhash::{EffectHash, EffectingData};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
+
+#[cfg(feature = "component")]
+use ibc_types::core::channel::PortId;
 
 #[cfg(feature = "component")]
 use penumbra_sdk_ibc::component::packet::{IBCPacket, Unchecked};

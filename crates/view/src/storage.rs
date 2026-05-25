@@ -1,11 +1,10 @@
-use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context};
 use camino::Utf8Path;
 use decaf377::Fq;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
-use penumbra_sdk_auction::auction::AuctionId;
 use r2d2_sqlite::{
     rusqlite::{OpenFlags, OptionalExtension},
     SqliteConnectionManager,
@@ -21,10 +20,6 @@ use url::Url;
 
 use penumbra_sdk_app::params::AppParameters;
 use penumbra_sdk_asset::{asset, asset::Id, asset::Metadata, Value};
-use penumbra_sdk_dex::{
-    lp::position::{self, Position, State},
-    TradingPair,
-};
 use penumbra_sdk_fee::GasPrices;
 use penumbra_sdk_keys::{keys::AddressIndex, Address, FullViewingKey};
 use penumbra_sdk_num::Amount;
@@ -36,14 +31,14 @@ use penumbra_sdk_proto::{
 };
 use penumbra_sdk_sct::{CommitmentSource, Nullifier};
 use penumbra_sdk_shielded_pool::{fmd, note, Note, Rseed};
-use penumbra_sdk_stake::{DelegationToken, IdentityKey};
 use penumbra_sdk_tct::{self as tct, builder::epoch::Root};
 use penumbra_sdk_transaction::Transaction;
 use sct::TreeStore;
 use tct::StateCommitment;
 
-use crate::{sync::FilteredBlock, SpendableNoteRecord, SwapRecord};
+use crate::{sync::FilteredBlock, SpendableNoteRecord};
 
+pub(crate) mod compliance;
 mod sct;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -72,7 +67,6 @@ pub struct Storage {
 
     scanned_notes_tx: tokio::sync::broadcast::Sender<SpendableNoteRecord>,
     scanned_nullifiers_tx: tokio::sync::broadcast::Sender<Nullifier>,
-    scanned_swaps_tx: tokio::sync::broadcast::Sender<SwapRecord>,
 }
 
 impl Storage {
@@ -162,7 +156,6 @@ impl Storage {
             uncommitted_height: Arc::new(Mutex::new(None)),
             scanned_notes_tx: broadcast::channel(128).0,
             scanned_nullifiers_tx: broadcast::channel(512).0,
-            scanned_swaps_tx: broadcast::channel(128).0,
         };
 
         spawn_blocking(move || {
@@ -249,7 +242,6 @@ impl Storage {
                 uncommitted_height: Arc::new(Mutex::new(None)),
                 scanned_notes_tx: broadcast::channel(128).0,
                 scanned_nullifiers_tx: broadcast::channel(512).0,
-                scanned_swaps_tx: broadcast::channel(128).0,
             })
         })
         .await??;
@@ -437,82 +429,6 @@ impl Storage {
                 },
             };
         }
-    }
-
-    /// Query for a swap by its swap commitment, optionally waiting until the note is detected.
-    pub async fn swap_by_commitment(
-        &self,
-        swap_commitment: tct::StateCommitment,
-        await_detection: bool,
-    ) -> anyhow::Result<SwapRecord> {
-        // Start subscribing now, before querying for whether we already
-        // have the record, so that we can't miss it if we race a write.
-        let mut rx = self.scanned_swaps_tx.subscribe();
-
-        let pool = self.pool.clone();
-
-        if let Some(record) = spawn_blocking(move || {
-            // Check if we already have the swap record
-            pool.get()?
-                .prepare(&format!(
-                    "SELECT * FROM swaps WHERE swaps.swap_commitment = x'{}'",
-                    hex::encode(swap_commitment.0.to_bytes())
-                ))?
-                .query_and_then((), |record| record.try_into())?
-                .next()
-                .transpose()
-        })
-        .await??
-        {
-            return Ok(record);
-        }
-
-        if !await_detection {
-            anyhow::bail!("swap commitment {} not found", swap_commitment);
-        }
-
-        // Otherwise, wait for newly detected swaps and check whether they're
-        // the requested one.
-
-        loop {
-            match rx.recv().await {
-                Ok(record) => {
-                    if record.swap_commitment == swap_commitment {
-                        return Ok(record);
-                    }
-                }
-
-                Err(e) => match e {
-                    RecvError::Closed => {
-                        anyhow::bail!(
-                            "Receiver error during swap detection: closed (no more active senders)"
-                        );
-                    }
-                    RecvError::Lagged(count) => {
-                        anyhow::bail!(
-                            "Receiver error during swap detection: lagged (by {:?} messages)",
-                            count
-                        );
-                    }
-                },
-            };
-        }
-    }
-
-    /// Query for all unclaimed swaps.
-    pub async fn unclaimed_swaps(&self) -> anyhow::Result<Vec<SwapRecord>> {
-        let pool = self.pool.clone();
-
-        let records = spawn_blocking(move || {
-            // Check if we already have the swap record
-            pool.get()?
-                .prepare("SELECT * FROM swaps WHERE swaps.height_claimed is NULL")?
-                .query_and_then((), |record| record.try_into())?
-                .collect::<anyhow::Result<Vec<_>>>()
-        })
-        .await??;
-
-        Ok(records)
     }
 
     /// Query for a nullifier's status, optionally waiting until the nullifier is detected.
@@ -988,73 +904,6 @@ impl Storage {
         .await?
     }
 
-    /// Return all notes that are eligible for voting at `votable_at_height`.
-    /// If an `address_index` is provided, only notes from within that subaccount
-    /// will be returned; otherwise, all voting notes across all subaccounts will
-    /// returned. If you want just the main account, then set `Some(0)` in the caller.
-    pub async fn notes_for_voting(
-        &self,
-        address_index: Option<penumbra_sdk_keys::keys::AddressIndex>,
-        votable_at_height: u64,
-    ) -> anyhow::Result<Vec<(SpendableNoteRecord, IdentityKey)>> {
-        let pool = self.pool.clone();
-
-        spawn_blocking(move || {
-            let mut lock = pool.get()?;
-            let dbtx = lock.transaction()?;
-
-            let spendable_note_records: Vec<SpendableNoteRecord> = dbtx
-                .prepare(&format!(
-                    "SELECT notes.note_commitment,
-                        spendable_notes.height_created,
-                        notes.address,
-                        notes.amount,
-                        notes.asset_id,
-                        notes.rseed,
-                        spendable_notes.address_index,
-                        spendable_notes.source,
-                        spendable_notes.height_spent,
-                        spendable_notes.nullifier,
-                        spendable_notes.position
-                    FROM
-                        notes JOIN spendable_notes ON notes.note_commitment = spendable_notes.note_commitment
-                    WHERE
-                        notes.asset_id IN (
-                            SELECT asset_id FROM assets WHERE denom LIKE '_delegation\\_%' ESCAPE '\\'
-                        )
-                        AND ((spendable_notes.height_spent IS NULL) OR (spendable_notes.height_spent > {votable_at_height}))
-                        AND (spendable_notes.height_created < {votable_at_height})
-                    ",
-                ))?
-                .query_and_then((), |row| row.try_into())?
-                .collect::<anyhow::Result<Vec<_>>>()?;
-
-            // TODO: this could be internalized into the SQL query in principle, but it's easier to
-            // do it this way; if it becomes slow, we can do it better
-            let mut results = Vec::new();
-            for record in spendable_note_records {
-                // Skip notes that don't match the account index, if declared.
-                if matches!(address_index, Some(a) if a.account != record.address_index.account) {
-                      continue;
-                }
-                let asset_id = record.note.asset_id().to_bytes().to_vec();
-                let denom: String = dbtx.query_row_and_then(
-                    "SELECT denom FROM assets WHERE asset_id = ?1",
-                    [asset_id],
-                    |row| row.get("denom"),
-                )?;
-
-                let identity_key = DelegationToken::from_str(&denom)
-                    .context("invalid delegation token denom")?
-                    .validator();
-
-                results.push((record, identity_key));
-            }
-
-            Ok(results)
-        }).await?
-    }
-
     #[tracing::instrument(skip(self))]
     pub async fn record_asset(&self, asset: Metadata) -> anyhow::Result<()> {
         tracing::debug!(?asset);
@@ -1070,180 +919,6 @@ impl Storage {
                 .execute(
                     "INSERT OR REPLACE INTO assets (asset_id, denom, metadata) VALUES (?1, ?2, ?3)",
                     (asset_id, denom, metadata_json),
-                )
-                .map_err(anyhow::Error::from)
-        })
-        .await??;
-
-        Ok(())
-    }
-
-    pub async fn record_auction_with_state(
-        &self,
-        auction_id: AuctionId,
-        auction_state: u64,
-    ) -> anyhow::Result<()> {
-        let auction_id = auction_id.0.to_vec();
-
-        let pool = self.pool.clone();
-
-        spawn_blocking(move || {
-            let mut lock = pool.get()?;
-            let tx = lock.transaction()?;
-            tx.execute(
-                "INSERT OR IGNORE INTO auctions (auction_id, auction_state, note_commitment) VALUES (?1, ?2, NULL)",
-                (auction_id.clone(), auction_state),
-            )?;
-            tx.execute(
-                "UPDATE auctions SET auction_state = ?2 WHERE auction_id = ?1",
-                (auction_id, auction_state),
-            )
-                .map_err(anyhow::Error::from)?;
-
-            tx.commit()?;
-            Ok::<(), anyhow::Error>(())
-            })
-            .await??;
-
-        Ok(())
-    }
-
-    pub async fn update_auction_with_note_commitment(
-        &self,
-        auction_id: AuctionId,
-        note_commitment: StateCommitment,
-    ) -> anyhow::Result<()> {
-        let auction_id = auction_id.0.to_vec();
-        let blob_nc = note_commitment.0.to_bytes().to_vec();
-
-        let pool = self.pool.clone();
-
-        spawn_blocking(move || {
-            pool.get()?
-                .execute(
-                    "UPDATE auctions SET (note_commitment) = ?1 WHERE auction_id = ?2",
-                    (blob_nc, auction_id),
-                )
-                .map_err(anyhow::Error::from)
-        })
-        .await??;
-
-        Ok(())
-    }
-
-    pub async fn fetch_auctions_by_account(
-        &self,
-        account_filter: Option<AddressIndex>,
-        include_inactive: bool,
-    ) -> anyhow::Result<Vec<(AuctionId, SpendableNoteRecord, u64 /* local seqnum */)>> {
-        let account_clause = account_filter
-            .map(|idx| {
-                format!(
-                    "AND spendable_notes.address_index = x'{}'",
-                    hex::encode(idx.to_bytes())
-                )
-            })
-            .unwrap_or_else(|| "".to_string());
-
-        let active_clause = if !include_inactive {
-            "AND auctions.auction_state = 0"
-        } else {
-            ""
-        };
-
-        let query = format!(
-            "SELECT auctions.auction_id, spendable_notes.*, notes.*, auctions.auction_state
-                 FROM auctions
-                 JOIN spendable_notes ON auctions.note_commitment = spendable_notes.note_commitment
-                 JOIN notes ON auctions.note_commitment = notes.note_commitment
-                 WHERE 1 = 1
-                 {account_clause}
-                 {active_clause}",
-            account_clause = account_clause,
-            active_clause = active_clause,
-        );
-
-        let pool = self.pool.clone();
-
-        spawn_blocking(move || {
-            let mut conn = pool.get()?;
-            let tx = conn.transaction()?;
-
-            let spendable_note_records: Vec<(AuctionId, SpendableNoteRecord, u64)> = tx
-                .prepare(&query)?
-                .query_and_then((), |row| {
-                    let raw_auction_id: Vec<u8> = row.get("auction_id")?;
-                    let array_auction_id: [u8; 32] = raw_auction_id
-                        .try_into()
-                        .map_err(|_| anyhow!("auction id must be 32 bytes"))?;
-                    let auction_id = AuctionId(array_auction_id);
-                    let spendable_note_record: SpendableNoteRecord = row.try_into()?;
-                    let local_seq: u64 = row.get("auction_state")?;
-                    Ok((auction_id, spendable_note_record, local_seq))
-                })?
-                .collect::<anyhow::Result<Vec<_>>>()?;
-
-            Ok(spendable_note_records)
-        })
-        .await?
-    }
-
-    pub async fn record_position(&self, position: Position) -> anyhow::Result<()> {
-        let position_id = position.id().0.to_vec();
-
-        let position_state = position.state.to_string();
-        let trading_pair = position.phi.pair.to_string();
-
-        let pool = self.pool.clone();
-
-        spawn_blocking(move || {
-            pool.get()?
-                .execute(
-                    "INSERT OR REPLACE INTO positions (position_id, position_state, trading_pair) VALUES (?1, ?2, ?3)",
-                    (position_id, position_state, trading_pair),
-                )
-                .map_err(anyhow::Error::from)
-        })
-            .await??;
-
-        Ok(())
-    }
-
-    pub async fn update_position(
-        &self,
-        position_id: position::Id,
-        position_state: position::State,
-    ) -> anyhow::Result<()> {
-        let position_id = position_id.0.to_vec();
-        let position_state = position_state.to_string();
-
-        let pool = self.pool.clone();
-
-        spawn_blocking(move || {
-            pool.get()?
-                .execute(
-                    "UPDATE positions SET (position_state) = ?1 WHERE position_id = ?2",
-                    (position_state, position_id),
-                )
-                .map_err(anyhow::Error::from)
-        })
-        .await??;
-
-        Ok(())
-    }
-
-    pub async fn update_position_with_account(
-        &self,
-        position_id: position::Id,
-        account: u32,
-    ) -> anyhow::Result<()> {
-        let pool = self.pool.clone();
-
-        spawn_blocking(move || {
-            pool.get()?
-                .execute(
-                    "UPDATE positions SET (account) = ?1 WHERE position_id = ?2",
-                    (i64::from(account), position_id.0),
                 )
                 .map_err(anyhow::Error::from)
         })
@@ -1376,7 +1051,7 @@ impl Storage {
         spawn_blocking(move || {
             pool.get()?
                 .prepare(&format!(
-                    "SELECT nullifier FROM (SELECT nullifier FROM spendable_notes UNION SELECT nullifier FROM swaps UNION SELECT nullifier FROM tx_by_nullifier) WHERE nullifier IN ({})",
+                    "SELECT nullifier FROM (SELECT nullifier FROM spendable_notes UNION SELECT nullifier FROM tx_by_nullifier) WHERE nullifier IN ({})",
                     nullifiers
                         .iter()
                         .map(|x| format!("x'{}'", hex::encode(x.0.to_bytes())))
@@ -1421,7 +1096,6 @@ impl Storage {
         let uncommitted_height = self.uncommitted_height.clone();
         let scanned_notes_tx = self.scanned_notes_tx.clone();
         let scanned_nullifiers_tx = self.scanned_nullifiers_tx.clone();
-        let scanned_swaps_tx = self.scanned_swaps_tx.clone();
 
         let fvk = self.full_viewing_key().await?;
 
@@ -1505,37 +1179,6 @@ impl Storage {
                 )?;
             }
 
-            // Insert new swap records into storage
-            for swap in filtered_block.new_swaps.values() {
-                let swap_commitment = swap.swap_commitment.0.to_bytes().to_vec();
-                let swap_bytes = swap.swap.encode_to_vec();
-                let position = (u64::from(swap.position)) as i64;
-                let nullifier = swap.nullifier.to_bytes().to_vec();
-                let source = swap.source.encode_to_vec();
-                let output_data = swap.output_data.encode_to_vec();
-
-                dbtx.execute(
-                    "INSERT INTO swaps (swap_commitment, swap, position, nullifier, output_data, height_claimed, source)
-                    VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)
-                    ON CONFLICT (swap_commitment)
-                    DO UPDATE SET swap = excluded.swap,
-                    position = excluded.position,
-                    nullifier = excluded.nullifier,
-                    output_data = excluded.output_data,
-                    height_claimed = excluded.height_claimed,
-                    source = excluded.source",
-                    (
-                        &swap_commitment,
-                        &swap_bytes,
-                        &position,
-                        &nullifier,
-                        &output_data,
-                        // height_claimed is NULL because the swap is newly discovered
-                        &source,
-                    ),
-                )?;
-            }
-
             // Update any rows of the table with matching nullifiers to have height_spent
             for nullifier in &filtered_block.spent_nullifiers {
                 let height_spent = filtered_block.height as i64;
@@ -1554,53 +1197,11 @@ impl Storage {
                     .next()
                     .transpose()?;
 
-                let swap_commitment: Option<StateCommitment> = dbtx.prepare_cached(
-                    "UPDATE swaps SET height_claimed = ?1 WHERE nullifier = ?2 RETURNING swap_commitment"
-                )?
-                    .query_and_then(
-                        (height_spent, &nullifier_bytes),
-                        |row| {
-                            let bytes: Vec<u8> = row.get("swap_commitment")?;
-                            StateCommitment::try_from(&bytes[..]).context("invalid commitment bytes")
-                        },
-                    )?
-                    .next()
-                    .transpose()?;
-
-                // Check denom type
-                let spent_denom: String
-                    = dbtx.prepare_cached(
-                    "SELECT denom FROM assets
-                        WHERE asset_id ==
-                            (SELECT asset_id FROM notes
-                             WHERE note_commitment ==
-                                (SELECT note_commitment FROM spendable_notes WHERE nullifier = ?1))"
-                )?
-                    .query_and_then(
-                        [&nullifier_bytes],
-                        |row| row.get("denom"),
-                    )?
-                    .next()
-                    .transpose()?
-                    .unwrap_or("unknown".to_string());
-
                 // Mark spent notes as spent
                 if let Some(spent_commitment) = spent_commitment {
-                    tracing::debug!(?nullifier, ?spent_commitment, ?spent_denom, "detected spent note commitment");
-                    // Forget spent note commitments from the SCT unless they are delegation tokens,
-                    // which must be saved to allow voting on proposals that might or might not be
-                    // open presently
-
-                    if DelegationToken::from_str(&spent_denom).is_err() {
-                        tracing::debug!(?nullifier, ?spent_commitment, ?spent_denom, "forgetting spent note commitment");
-                        new_sct.forget(spent_commitment);
-                    }
-                };
-
-                // Mark spent swaps as spent
-                if let Some(spent_swap_commitment) = swap_commitment {
-                    tracing::debug!(?nullifier, ?spent_swap_commitment, "detected and forgetting spent swap commitment");
-                    new_sct.forget(spent_swap_commitment);
+                    tracing::debug!(?nullifier, ?spent_commitment, "detected spent note commitment");
+                    tracing::debug!(?nullifier, ?spent_commitment, "forgetting spent note commitment");
+                    new_sct.forget(spent_commitment);
                 };
             }
 
@@ -1692,58 +1293,11 @@ impl Storage {
                 let _ = scanned_nullifiers_tx.send(*nullifier);
             }
 
-            for swap_record in filtered_block.new_swaps.values() {
-                // This will fail to be broadcast if there is no active rece∑iver (such as on initial
-                // sync) The error is ignored, as this isn't a problem, because if there is no
-                // active receiver there is nothing to do
-                let _ = scanned_swaps_tx.send(swap_record.clone());
-            }
-
             anyhow::Ok(new_sct)
         })
             .await??;
 
         Ok(())
-    }
-
-    pub async fn owned_position_ids(
-        &self,
-        position_state: Option<State>,
-        trading_pair: Option<TradingPair>,
-        address_index: Option<AddressIndex>,
-    ) -> anyhow::Result<Vec<position::Id>> {
-        let pool = self.pool.clone();
-
-        let state_clause = match position_state {
-            Some(state) => format!("position_state = \"{}\"", state),
-            None => "true".to_string(),
-        };
-
-        let pair_clause = match trading_pair {
-            Some(pair) => format!("trading_pair = \"{}\"", pair),
-            None => "true".to_string(),
-        };
-
-        let account_clause = match address_index {
-            Some(index) => format!("account = {}", index.account),
-            None => "true".to_string(),
-        };
-
-        spawn_blocking(move || {
-            let q = format!(
-                "SELECT position_id FROM positions WHERE {} AND {} AND {}",
-                state_clause, pair_clause, account_clause
-            );
-
-            pool.get()?
-                .prepare_cached(&q)?
-                .query_and_then([], |row| {
-                    let position_id: Vec<u8> = row.get("position_id")?;
-                    Ok(position::Id(position_id.as_slice().try_into()?))
-                })?
-                .collect()
-        })
-        .await?
     }
 
     pub async fn notes_by_sender(
@@ -1861,6 +1415,241 @@ impl Storage {
                     },
                 )
                 .map_err(anyhow::Error::from)
+        })
+        .await?
+    }
+
+    /// Load the compliance user tree from storage.
+    pub async fn compliance_user_tree(
+        &self,
+    ) -> anyhow::Result<crate::compliance_tree::ComplianceUserTree> {
+        let pool = self.pool.clone();
+
+        spawn_blocking(move || {
+            let mut conn = pool.get()?;
+            let mut tx = conn.transaction()?;
+            let mut store = compliance::ComplianceTreeStore(&mut tx);
+            crate::compliance_tree::ComplianceUserTree::from_store(&mut store)
+        })
+        .await?
+    }
+
+    /// Load the compliance asset tree from storage.
+    pub async fn compliance_asset_tree(
+        &self,
+    ) -> anyhow::Result<crate::compliance_tree::ComplianceAssetTree> {
+        let pool = self.pool.clone();
+
+        spawn_blocking(move || {
+            let mut conn = pool.get()?;
+            let mut tx = conn.transaction()?;
+            let mut store = compliance::ComplianceTreeStore(&mut tx);
+            crate::compliance_tree::ComplianceAssetTree::from_store(&mut store)
+        })
+        .await?
+    }
+
+    /// Record compliance tree changes for a block.
+    pub async fn record_compliance_block(
+        &self,
+        height: u64,
+        user_tree: &crate::compliance_tree::ComplianceUserTree,
+        asset_tree: &mut crate::compliance_tree::ComplianceAssetTree,
+        user_start_position: u64,
+        asset_start_position: u64,
+    ) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        let user_root = user_tree.root();
+        let asset_root = asset_tree.root();
+
+        // Clone tree state for persistence
+        let user_tree_for_persist = user_tree.clone();
+        let asset_tree_for_persist = asset_tree.clone();
+
+        spawn_blocking(move || {
+            let mut conn = pool.get()?;
+            let mut tx = conn.transaction()?;
+
+            {
+                let mut store = compliance::ComplianceTreeStore(&mut tx);
+
+                // Persist user tree changes
+                user_tree_for_persist.persist(&mut store, user_start_position)?;
+
+                // Persist asset tree changes
+                asset_tree_for_persist.persist(&mut store, asset_start_position)?;
+
+                // Store anchors for this block
+                store.add_anchor(height, user_root, asset_root)?;
+            }
+
+            tx.commit()?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await??;
+
+        asset_tree.clear_dirty_positions();
+
+        Ok(())
+    }
+
+    /// Record compliance leaf data for an address in the sync scope.
+    pub async fn record_compliance_leaf_data(
+        &self,
+        leaf: &penumbra_sdk_compliance::ComplianceLeaf,
+        position: u64,
+        commitment: StateCommitment,
+    ) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        let address_bytes = leaf.address.to_vec();
+        let asset_bytes = leaf.asset_id.to_bytes().to_vec();
+        let slot_id = leaf.slot_id;
+        let slot_derivation = leaf.slot_derivation.to_bytes().to_vec();
+        let d = leaf.d.to_bytes().to_vec();
+
+        spawn_blocking(move || {
+            let mut conn = pool.get()?;
+            let mut tx = conn.transaction()?;
+            {
+                let mut store = compliance::ComplianceTreeStore(&mut tx);
+                store.add_leaf_data(
+                    &address_bytes,
+                    &asset_bytes,
+                    position,
+                    slot_id,
+                    &slot_derivation,
+                    &d,
+                    commitment,
+                )?;
+            }
+            tx.commit()?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(())
+    }
+
+    /// Record a counterparty address for tracking.
+    pub async fn record_counterparty(
+        &self,
+        address: &penumbra_sdk_keys::Address,
+        height: u64,
+    ) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        let address_bytes = address.to_vec();
+
+        spawn_blocking(move || {
+            let mut conn = pool.get()?;
+            let mut tx = conn.transaction()?;
+            {
+                let mut store = compliance::ComplianceTreeStore(&mut tx);
+                store.add_counterparty(&address_bytes, height)?;
+            }
+            tx.commit()?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(())
+    }
+
+    /// Check if an address is in the compliance sync scope (own or counterparty).
+    pub async fn is_address_in_compliance_scope(
+        &self,
+        fvk: &FullViewingKey,
+        address: &penumbra_sdk_keys::Address,
+    ) -> anyhow::Result<bool> {
+        // First check if it's one of our own addresses
+        if fvk.address_index(address).is_some() {
+            return Ok(true);
+        }
+
+        // Otherwise check if it's a tracked counterparty
+        let pool = self.pool.clone();
+        let address_bytes = address.to_vec();
+
+        spawn_blocking(move || {
+            let mut conn = pool.get()?;
+            let mut tx = conn.transaction()?;
+            let result = {
+                let mut store = compliance::ComplianceTreeStore(&mut tx);
+                store.is_counterparty(&address_bytes)?
+            };
+            Ok::<bool, anyhow::Error>(result)
+        })
+        .await?
+    }
+
+    /// Get compliance leaf data for an address and asset from local storage.
+    ///
+    /// Returns full leaf slot data if available, None if not in scope.
+    pub async fn get_compliance_leaf_data(
+        &self,
+        address: &penumbra_sdk_keys::Address,
+        asset_id: &asset::Id,
+    ) -> anyhow::Result<Option<compliance::UserLeafData>> {
+        let pool = self.pool.clone();
+        let address_bytes = address.to_vec();
+        let asset_bytes = asset_id.to_bytes().to_vec();
+
+        spawn_blocking(move || {
+            let mut conn = pool.get()?;
+            let mut tx = conn.transaction()?;
+            let result = {
+                let mut store = compliance::ComplianceTreeStore(&mut tx);
+                store.get_leaf_data(&address_bytes, &asset_bytes)?
+            };
+            Ok::<Option<compliance::UserLeafData>, anyhow::Error>(result)
+        })
+        .await?
+    }
+
+    /// Store a full asset policy.
+    pub async fn store_asset_policy(
+        &self,
+        asset_id: &asset::Id,
+        policy: &penumbra_sdk_compliance::structs::AssetPolicy,
+    ) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        let asset_bytes = asset_id.to_bytes().to_vec();
+        let policy_bytes = policy.to_bytes()?;
+
+        spawn_blocking(move || {
+            let conn = pool.get()?;
+            conn.execute(
+                "INSERT OR REPLACE INTO compliance_asset_policies (asset_id, policy) VALUES (?1, ?2)",
+                (asset_bytes.as_slice(), policy_bytes.as_slice()),
+            )?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await?
+    }
+
+    /// Get an asset policy (threshold and DK_pub) if one exists.
+    pub async fn get_asset_policy(
+        &self,
+        asset_id: &asset::Id,
+    ) -> anyhow::Result<Option<penumbra_sdk_compliance::structs::AssetPolicy>> {
+        let pool = self.pool.clone();
+        let asset_bytes = asset_id.to_bytes().to_vec();
+
+        spawn_blocking(move || {
+            let conn = pool.get()?;
+            let result: Option<Vec<u8>> = conn
+                .query_row(
+                    "SELECT policy FROM compliance_asset_policies WHERE asset_id = ?1",
+                    [asset_bytes.as_slice()],
+                    |row| row.get(0),
+                )
+                .optional()?;
+
+            match result {
+                Some(policy_bytes) => Ok(Some(
+                    penumbra_sdk_compliance::structs::AssetPolicy::from_bytes(&policy_bytes)?,
+                )),
+                None => Ok(None),
+            }
         })
         .await?
     }

@@ -14,24 +14,13 @@ concurrency:
 
 jobs:
   lint:
-    runs-on: buildjet-16vcpu-ubuntu-2204
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: true
 
-      - name: install nix
-        uses: nixbuild/nix-quick-install-action@v28
-
-      - name: setup nix cache
-        uses: nix-community/cache-nix-action@v5
-        with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-          backend: buildjet
-
-      - name: Load rust cache
-        uses: astriaorg/buildjet-rust-cache@v2.5.1
+      - uses: ./.github/actions/setup-nix-rust
 
       # The `rust-toolchain.toml` file dictates which version of rust to setup.
       - name: check rust version
@@ -39,7 +28,7 @@ jobs:
 
       # Run `cargo check`, with a custom target dir for caching.
       - name: run cargo check
-        run: nix develop --command just check
+        run: nix develop --command just ci-check
 
       # If a dependency was modified, Cargo.lock may flap if not committed.
       - name: Check for diffs
@@ -55,27 +44,28 @@ jobs:
               echo "OK: no uncommitted changes detected"
           fi
 
+  deny:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
   # As of 2025Q1, the "features" job is the slowest in the CI suite.
   # Consider moving to a scheduled job on main, rather than running on PRs.
   features:
-    runs-on: buildjet-16vcpu-ubuntu-2204
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: true
 
-      - name: install nix
-        uses: nixbuild/nix-quick-install-action@v28
-
-      - name: setup nix cache
-        uses: nix-community/cache-nix-action@v5
+      - uses: ./.github/actions/setup-nix-rust
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-          backend: buildjet
-
-      - name: Load rust cache
-        uses: astriaorg/buildjet-rust-cache@v2.5.1
+          free-disk: "true"
 
       # Build each crate separately, to validate that the feature-gating is working.
       # This is a lighter-weight version of `cargo check-all-features --workspace --release`.
@@ -86,26 +76,102 @@ jobs:
         run: nix develop --command ./deployments/scripts/check-wasm-compat.sh
 
   test:
-    runs-on: buildjet-16vcpu-ubuntu-2204
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: true
 
-      - name: install nix
-        uses: nixbuild/nix-quick-install-action@v28
-
-      - name: setup nix cache
-        uses: nix-community/cache-nix-action@v5
+      - uses: ./.github/actions/setup-nix-rust
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-          backend: buildjet
-
-      - name: Load rust cache
-        uses: astriaorg/buildjet-rust-cache@v2.5.1
+          free-disk: "true"
 
       - name: Run tests with nextest
-        run: nix develop --command just test
+        run: nix develop --command just ci-test
         env:
           CARGO_TERM_COLOR: always
+
+  go-gnark:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/gnark/go.mod
+          cache-dependency-path: tools/gnark/go.sum
+
+      - name: Check Go formatting
+        working-directory: tools/gnark
+        shell: bash
+        run: |
+          files="$(gofmt -l .)"
+          if test -n "$files"; then
+            echo "unformatted Go files:"
+            printf "%s\n" "$files"
+            exit 1
+          fi
+
+      - name: Build gnark Go module
+        working-directory: tools/gnark
+        run: go build ./...
+
+      - name: Test gnark Go module
+        working-directory: tools/gnark
+        run: go test ./...
+
+      - name: Vet gnark Go module
+        working-directory: tools/gnark
+        run: go vet ./...
+
+  gnark-rust:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - uses: ./.github/actions/setup-nix-rust
+        with:
+          free-disk: "true"
+
+      - name: Run gnark-backed Rust proof tests
+        run: nix develop --command just ci-gnark-proof-tests
+
+  summary:
+    needs: [lint, deny, features, test, go-gnark, gnark-rust]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check Rust workflow result
+        env:
+          LINT_RESULT: ${{ needs.lint.result }}
+          DENY_RESULT: ${{ needs.deny.result }}
+          FEATURES_RESULT: ${{ needs.features.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          GO_GNARK_RESULT: ${{ needs['go-gnark'].result }}
+          GNARK_RUST_RESULT: ${{ needs['gnark-rust'].result }}
+        run: |
+          failed=0
+          for job in \
+            "lint:$LINT_RESULT" \
+            "deny:$DENY_RESULT" \
+            "features:$FEATURES_RESULT" \
+            "test:$TEST_RESULT" \
+            "go-gnark:$GO_GNARK_RESULT" \
+            "gnark-rust:$GNARK_RUST_RESULT"
+          do
+            name="${job%%:*}"
+            result="${job#*:}"
+            if [ "$result" != "success" ]; then
+              echo "$name did not pass: $result"
+              failed=1
+            else
+              echo "$name passed"
+            fi
+          done
+
+          exit "$failed"

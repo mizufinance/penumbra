@@ -1,7 +1,7 @@
-use std::{collections::BTreeMap, convert::TryFrom};
+use std::convert::TryFrom;
 
 use anyhow::Result;
-use penumbra_sdk_dex::{BatchSwapOutputData, TradingPair};
+use penumbra_sdk_compliance::event::{EventAssetRegistered, EventUserRegistered};
 use penumbra_sdk_fee::GasPrices;
 use penumbra_sdk_proto::{
     core::component::compact_block::v1::CompactBlockRangeResponse,
@@ -9,7 +9,10 @@ use penumbra_sdk_proto::{
 };
 use penumbra_sdk_sct::Nullifier;
 use penumbra_sdk_shielded_pool::fmd;
-use penumbra_sdk_tct::builder::{block, epoch};
+use penumbra_sdk_tct::{
+    builder::{block, epoch},
+    StateCommitment,
+};
 use serde::{Deserialize, Serialize};
 
 use super::StatePayload;
@@ -32,8 +35,6 @@ pub struct CompactBlock {
     pub fmd_parameters: Option<fmd::Parameters>,
     /// If the block indicated a proposal was being started.
     pub proposal_started: bool,
-    /// Output prices for batch swaps occurring in this block.
-    pub swap_outputs: BTreeMap<TradingPair, BatchSwapOutputData>,
     /// Set if the app parameters have been updated. Notifies the client that it should re-sync from the fullnode RPC.
     pub app_parameters_updated: bool,
     /// Updated gas prices for the native token, if they have changed.
@@ -42,6 +43,14 @@ pub struct CompactBlock {
     pub alt_gas_prices: Vec<GasPrices>,
     // The epoch index
     pub epoch_index: u64,
+    /// Compliance user tree anchor (root) for this block.
+    pub compliance_user_anchor: Option<StateCommitment>,
+    /// Compliance asset tree anchor (root) for this block.
+    pub compliance_asset_anchor: Option<StateCommitment>,
+    /// User registrations in this block (for compliance tree sync).
+    pub compliance_user_registrations: Vec<EventUserRegistered>,
+    /// Asset registrations in this block (for compliance tree sync).
+    pub compliance_asset_registrations: Vec<EventAssetRegistered>,
     // **IMPORTANT NOTE FOR FUTURE HUMANS**: if you want to add new fields to the `CompactBlock`,
     // you must update `CompactBlock::requires_scanning` to check for the emptiness of those fields,
     // because the client will skip processing any compact block that is marked as not requiring
@@ -58,11 +67,14 @@ impl Default for CompactBlock {
             epoch_root: None,
             fmd_parameters: None,
             proposal_started: false,
-            swap_outputs: BTreeMap::new(),
             app_parameters_updated: false,
             gas_prices: None,
             alt_gas_prices: Vec::new(),
             epoch_index: 0,
+            compliance_user_anchor: None,
+            compliance_asset_anchor: None,
+            compliance_user_registrations: Vec::new(),
+            compliance_asset_registrations: Vec::new(),
         }
     }
 }
@@ -77,6 +89,8 @@ impl CompactBlock {
             || self.app_parameters_updated // need to save latest app parameters
             || self.gas_prices.is_some() // need to save latest gas prices
             || !self.alt_gas_prices.is_empty() // need to save latest alt gas prices
+            || !self.compliance_user_registrations.is_empty() // need to sync user tree
+            || !self.compliance_asset_registrations.is_empty() // need to sync asset tree
     }
 }
 
@@ -99,11 +113,28 @@ impl From<CompactBlock> for pb::CompactBlock {
             epoch_root: cb.epoch_root.map(Into::into),
             fmd_parameters: cb.fmd_parameters.map(Into::into),
             proposal_started: cb.proposal_started,
-            swap_outputs: cb.swap_outputs.into_values().map(Into::into).collect(),
             app_parameters_updated: cb.app_parameters_updated,
             gas_prices: cb.gas_prices.map(Into::into),
             alt_gas_prices: cb.alt_gas_prices.into_iter().map(Into::into).collect(),
             epoch_index: cb.epoch_index,
+            compliance_user_anchor: cb
+                .compliance_user_anchor
+                .map(|a| <[u8; 32]>::from(a).to_vec())
+                .unwrap_or_default(),
+            compliance_asset_anchor: cb
+                .compliance_asset_anchor
+                .map(|a| <[u8; 32]>::from(a).to_vec())
+                .unwrap_or_default(),
+            compliance_user_registrations: cb
+                .compliance_user_registrations
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            compliance_asset_registrations: cb
+                .compliance_asset_registrations
+                .into_iter()
+                .map(Into::into)
+                .collect(),
         }
     }
 }
@@ -112,6 +143,25 @@ impl TryFrom<pb::CompactBlock> for CompactBlock {
     type Error = anyhow::Error;
 
     fn try_from(value: pb::CompactBlock) -> Result<Self, Self::Error> {
+        let compliance_user_anchor = if value.compliance_user_anchor.is_empty() {
+            None
+        } else {
+            let bytes: [u8; 32] = value
+                .compliance_user_anchor
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("compliance_user_anchor must be 32 bytes"))?;
+            Some(StateCommitment::try_from(bytes)?)
+        };
+        let compliance_asset_anchor = if value.compliance_asset_anchor.is_empty() {
+            None
+        } else {
+            let bytes: [u8; 32] = value
+                .compliance_asset_anchor
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("compliance_asset_anchor must be 32 bytes"))?;
+            Some(StateCommitment::try_from(bytes)?)
+        };
+
         Ok(CompactBlock {
             height: value.height,
             state_payloads: value
@@ -119,12 +169,6 @@ impl TryFrom<pb::CompactBlock> for CompactBlock {
                 .into_iter()
                 .map(StatePayload::try_from)
                 .collect::<Result<Vec<StatePayload>>>()?,
-            swap_outputs: value
-                .swap_outputs
-                .into_iter()
-                .map(BatchSwapOutputData::try_from)
-                .map(|s| s.map(|swap_output| (swap_output.trading_pair, swap_output)))
-                .collect::<Result<BTreeMap<TradingPair, BatchSwapOutputData>>>()?,
             nullifiers: value
                 .nullifiers
                 .into_iter()
@@ -147,6 +191,18 @@ impl TryFrom<pb::CompactBlock> for CompactBlock {
                 .map(GasPrices::try_from)
                 .collect::<Result<Vec<GasPrices>>>()?,
             epoch_index: value.epoch_index,
+            compliance_user_anchor,
+            compliance_asset_anchor,
+            compliance_user_registrations: value
+                .compliance_user_registrations
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<EventUserRegistered>>>()?,
+            compliance_asset_registrations: value
+                .compliance_asset_registrations
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<EventAssetRegistered>>>()?,
         })
     }
 }

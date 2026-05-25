@@ -8,7 +8,7 @@ use {
         server::consensus::Consensus,
     },
     penumbra_sdk_mock_consensus::TestNode,
-    penumbra_sdk_stake::component::validator_handler::ValidatorDataRead as _,
+    penumbra_sdk_validator::component::validator_handler::ValidatorDataRead as _,
     tap::{Tap, TapFallible},
     tracing::info,
 };
@@ -48,7 +48,7 @@ async fn mock_consensus_can_define_a_genesis_validator() -> anyhow::Result<()> {
                 .ok_or_else(|| anyhow!("could not find validator status"))?;
             assert_eq!(
                 status,
-                penumbra_sdk_stake::validator::State::Active,
+                penumbra_sdk_validator::validator::State::Active,
                 "validator should be active"
             );
         }

@@ -10,12 +10,7 @@ use tracing::instrument;
 
 use cnidarium_component::Component;
 
-use crate::{
-    proposal_state::{
-        Outcome as ProposalOutcome, State as ProposalState, Withdrawn as ProposalWithdrawn,
-    },
-    tally,
-};
+use crate::{proposal_state::State as ProposalState, tally};
 
 mod view;
 
@@ -68,8 +63,7 @@ impl Component for Governance {
 
     #[instrument(name = "governance", skip(state))]
     async fn end_epoch<S: StateWrite + 'static>(state: &mut Arc<S>) -> Result<()> {
-        let state = Arc::get_mut(state).expect("state should be unique");
-        state.tally_delegator_votes(None).await?;
+        let _state = Arc::get_mut(state).expect("state should be unique");
         Ok(())
     }
 }
@@ -96,9 +90,6 @@ pub async fn enact_all_passed_proposals<S: StateWrite>(mut state: S) -> Result<(
             continue;
         }
 
-        // Do a final tally of any pending delegator votes for the proposal
-        state.tally_delegator_votes(Some(proposal_id)).await?;
-
         let current_state = state
             .proposal_state(proposal_id)
             .await?
@@ -120,10 +111,6 @@ pub async fn enact_all_passed_proposals<S: StateWrite>(mut state: S) -> Result<(
                 // error, since proposals are allowed to fail to be enacted)
                 match outcome {
                     tally::Outcome::Pass => {
-                        // IMPORTANT: We **ONLY** enact proposals that have concluded, and whose
-                        // tally is `Pass`, and whose state is not `Withdrawn`. This is the sole
-                        // place in the codebase where we prevent withdrawn proposals from being
-                        // passed!
                         let payload = state
                             .proposal_payload(proposal_id)
                             .await?
@@ -174,17 +161,8 @@ pub async fn enact_all_passed_proposals<S: StateWrite>(mut state: S) -> Result<(
 
                 outcome.into()
             }
-            ProposalState::Withdrawn { reason } => {
-                tracing::info!(proposal = %proposal_id, reason = ?reason, "proposal concluded after being withdrawn");
-                ProposalOutcome::Failed {
-                    withdrawn: ProposalWithdrawn::WithReason { reason },
-                }
-            }
             ProposalState::Finished { outcome: _ } => {
                 anyhow::bail!("proposal {proposal_id} is already finished, and should have been removed from the active set");
-            }
-            ProposalState::Claimed { outcome: _ } => {
-                anyhow::bail!("proposal {proposal_id} is already claimed, and should have been removed from the active set");
             }
         };
 

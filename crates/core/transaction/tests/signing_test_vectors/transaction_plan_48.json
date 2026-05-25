@@ -1,61 +1,56 @@
 {
   "actions": [
     {
-      "proposalWithdraw": {
-        "proposal": "843893421"
-      }
-    },
-    {
-      "communityPoolOutput": {
-        "value": {
-          "amount": {
-            "lo": "810187426565504444"
-          },
-          "assetId": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          }
+      "proposalSubmit": {
+        "proposal": {
+          "title": "ijitcisyzlsczsmwfluxyveas-2514115907312775",
+          "description": "epzh-34510829343238924413",
+          "signaling": {}
         },
-        "address": {
-          "inner": "ss+bcEmKMAcFvr3a8nquQgE3bJJ11mJwu4SenHJp6PvooYNrHiq989dK7HXt0G7SABKfgKOosyUHCMfe/dIq7Q3XtJYopBHd3BEZoCKIMng="
+        "proposer": {
+          "ik": "j3eDQIZ7o+e1H5rkz0i5QcliEVMrOnZHH81vuVJ8NBQ="
+        },
+        "governanceKey": {
+          "gk": "WhG54e+ZzwjElabLJIFwKWALfs0hdnsmVK6urpPZ9xA="
+        },
+        "authSig": {
+          "inner": "DIWh/2dPcqcIvXqwhEJ06bJO77ZnnUB57sdg1vYwvRBxHmE/DGXw1E2jTrWT8yzep6EfleI/IIOc7wsInZE1AA=="
         }
       }
     },
     {
-      "proposalWithdraw": {
-        "proposal": "758716570"
+      "ibcRelayAction": {
+        "rawAction": {
+          "typeUrl": "/ibc.core.channel.v1.MsgRecvPacket",
+          "value": "CrMBCI2HrqECEgtkZWZhdWx0UG9ydBoJY2hhbm5lbC0wIgtkZWZhdWx0UG9ydCoJY2hhbm5lbC0wMmQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOgsI8N7PdxDKmPfyAkCo5J+Go6Ky1BgSAgoAGgsI8N7PdxDKmPfyAiKPAXBlbnVtYnJhMXJxa2Z3aHU1OWVzcWF2bm42bnY5N2EyNnR6Zzl6NXN0bGx2OWhndnQ4MjlueTlwNnlmNG5lenM1eGdqaDg3enVzN2o0cTg0anZyZ2NnNGNlcjhsZHg1YWVuM2hrZzhxYWxkdnFrYzgwemthMjQ5cmE0c2pjdGx2dnB5d3dhOGxzNXUwa2Rm"
+        }
       }
     },
     {
-      "positionWithdraw": {
-        "reserves": {
-          "r1": {
-            "lo": "980119925094349979"
-          },
-          "r2": {
-            "lo": "400519731478096542"
-          }
+      "proposalSubmit": {
+        "proposal": {
+          "title": "bma-045995438272510084313957",
+          "description": "nsyfitkqlsmpfschfykvumwfloqgqnf-34578741640765950431527",
+          "signaling": {}
         },
-        "positionId": {
-          "inner": "bsWNutFCNQkURuGkyxmNmwwsP3Jd9XUSCtyabolaYCE="
+        "proposer": {
+          "ik": "+Yk2zNRIs62NrohVnVJx7edCsqTc1K5CN1az9MzKOso="
         },
-        "pair": {
-          "asset1": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          },
-          "asset2": {
-            "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-          }
+        "governanceKey": {
+          "gk": "njhEIcTuStv6+dmglJb6qlKbOadqSfcyNshALTR+HQg="
         },
-        "sequence": "1"
+        "authSig": {
+          "inner": "hKSjeg1M18aw693kgNUQ3Qz+Hw0O8TIJ+IBR5QE0iwZZn+nJW3FY2MK3XCSKB3q+Dq5mNgmlhJNv5BibKq4iBA=="
+        }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "3101462334",
-    "chainId": "vyklgcjeqbjn-17638596568242081315848442011998",
+    "expiryHeight": "4902174078",
+    "chainId": "smyyyphfguxatdzgeovwi-61615470244205397179079090823873",
     "fee": {
       "amount": {
-        "lo": "642867356857420384"
+        "lo": "776423354285686300"
       }
     }
   }

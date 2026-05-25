@@ -4,33 +4,40 @@
 //! synchronize and interact with public chain state using one or more full viewing keys. See the
 //! documentation of [`ViewClient`] and a [`ViewServer`] for more information.
 //!
-//! This crate also provides a [`Planner`]. This is a planner for
-//! [`TransactionPlan`][penumbra_sdk_transaction::TransactionPlan].
+//! This crate also provides a wallet-facing [`NoteManager`] for shielded transfer,
+//! consolidate, split, ICS-20 withdrawal, and transfer-funded action planning.
 //!
 //! Finally, this crate provides a [`Storage`] type for managing persistent sqlite storage.
 
 #![deny(clippy::unwrap_used)]
 #![recursion_limit = "512"]
 // Requires nightly.
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 mod client;
+mod client_compliance;
+mod compliance_tree;
 mod metrics;
+mod note_manager;
 mod note_record;
-mod planner;
 mod service;
 mod status;
 mod storage;
-mod swap_record;
 mod sync;
 mod transaction_info;
 mod worker;
 
 pub use crate::client::ViewClient;
+pub use crate::client_compliance::{
+    enrich_plan_with_compliance, ViewClientComplianceExt, ViewClientComplianceProvider,
+};
+pub use crate::compliance_tree::{ComplianceAssetTree, ComplianceUserTree};
 pub use crate::metrics::register_metrics;
+pub use crate::note_manager::{
+    NoteManager, NoteManagerPlanningResult, NoteManagerResumeToken, TransferPlanningResult,
+    TransferResumeToken,
+};
 pub use crate::note_record::SpendableNoteRecord;
-pub use crate::planner::Planner;
 pub use crate::service::ViewServer;
 pub use crate::status::StatusStreamResponse;
 pub use crate::storage::Storage;
-pub use crate::swap_record::SwapRecord;
 pub use crate::transaction_info::TransactionInfo;

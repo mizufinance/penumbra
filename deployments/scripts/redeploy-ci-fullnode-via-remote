@@ -50,7 +50,7 @@ function install_pd() {
     # and it has the nice benefit of being faster, because we don't have to rebuild
     # the same gitref on a slower remote host.
     echo "Fetching latest version of pd..."
-    container_img="ghcr.io/penumbra-zone/penumbra:${PENUMBRA_VERSION}"
+    container_img="ghcr.io/mizufinance/penumbra:${PENUMBRA_VERSION}"
     podman pull "$container_img"
     container_id="$(podman run --detach "$container_img" sleep infinity)"
     f="$(mktemp)"

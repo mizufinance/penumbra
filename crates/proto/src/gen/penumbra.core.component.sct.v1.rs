@@ -5,6 +5,9 @@ pub struct SctParameters {
     /// The default duration of each epoch, in number of blocks.
     #[prost(uint64, tag = "1")]
     pub epoch_duration: u64,
+    /// Number of recent SCT anchors and historical timestamps retained for witness refresh.
+    #[prost(uint64, tag = "2")]
+    pub sct_anchor_retention_blocks: u64,
 }
 impl ::prost::Name for SctParameters {
     const NAME: &'static str = "SctParameters";
@@ -59,7 +62,7 @@ impl ::prost::Name for Epoch {
 /// decide whether or not to download block data.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommitmentSource {
-    #[prost(oneof = "commitment_source::Source", tags = "1, 2, 20, 30, 40, 50")]
+    #[prost(oneof = "commitment_source::Source", tags = "1, 2, 40")]
     pub source: ::core::option::Option<commitment_source::Source>,
 }
 /// Nested message and enum types in `CommitmentSource`.
@@ -101,36 +104,6 @@ pub mod commitment_source {
             "/penumbra.core.component.sct.v1.CommitmentSource.Transaction".into()
         }
     }
-    /// The commitment was created through a validator's funding stream.
-    #[derive(Clone, Copy, PartialEq, ::prost::Message)]
-    pub struct FundingStreamReward {
-        /// The epoch index the rewards were issued in.
-        #[prost(uint64, tag = "1")]
-        pub epoch_index: u64,
-    }
-    impl ::prost::Name for FundingStreamReward {
-        const NAME: &'static str = "FundingStreamReward";
-        const PACKAGE: &'static str = "penumbra.core.component.sct.v1";
-        fn full_name() -> ::prost::alloc::string::String {
-            "penumbra.core.component.sct.v1.CommitmentSource.FundingStreamReward".into()
-        }
-        fn type_url() -> ::prost::alloc::string::String {
-            "/penumbra.core.component.sct.v1.CommitmentSource.FundingStreamReward".into()
-        }
-    }
-    /// The commitment was created through a `CommunityPoolOutput` in a governance-initated transaction.
-    #[derive(Clone, Copy, PartialEq, ::prost::Message)]
-    pub struct CommunityPoolOutput {}
-    impl ::prost::Name for CommunityPoolOutput {
-        const NAME: &'static str = "CommunityPoolOutput";
-        const PACKAGE: &'static str = "penumbra.core.component.sct.v1";
-        fn full_name() -> ::prost::alloc::string::String {
-            "penumbra.core.component.sct.v1.CommitmentSource.CommunityPoolOutput".into()
-        }
-        fn type_url() -> ::prost::alloc::string::String {
-            "/penumbra.core.component.sct.v1.CommitmentSource.CommunityPoolOutput".into()
-        }
-    }
     /// The commitment was created by an inbound ICS20 transfer.
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Ics20Transfer {
@@ -154,44 +127,14 @@ pub mod commitment_source {
             "/penumbra.core.component.sct.v1.CommitmentSource.Ics20Transfer".into()
         }
     }
-    /// The commitment was created by the LQT mechanism and tracks LQT reward notes.
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct LiquidityTournamentReward {
-        /// The epoch in which the reward occured.
-        #[prost(uint64, tag = "1")]
-        pub epoch: u64,
-        /// Transaction hash of the transaction that did the voting.
-        #[prost(message, optional, tag = "2")]
-        pub tx_hash: ::core::option::Option<
-            super::super::super::super::txhash::v1::TransactionId,
-        >,
-    }
-    impl ::prost::Name for LiquidityTournamentReward {
-        const NAME: &'static str = "LiquidityTournamentReward";
-        const PACKAGE: &'static str = "penumbra.core.component.sct.v1";
-        fn full_name() -> ::prost::alloc::string::String {
-            "penumbra.core.component.sct.v1.CommitmentSource.LiquidityTournamentReward"
-                .into()
-        }
-        fn type_url() -> ::prost::alloc::string::String {
-            "/penumbra.core.component.sct.v1.CommitmentSource.LiquidityTournamentReward"
-                .into()
-        }
-    }
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Source {
         #[prost(message, tag = "1")]
         Transaction(Transaction),
         #[prost(message, tag = "2")]
         Ics20Transfer(Ics20Transfer),
-        #[prost(message, tag = "20")]
-        FundingStreamReward(FundingStreamReward),
-        #[prost(message, tag = "30")]
-        CommunityPoolOutput(CommunityPoolOutput),
         #[prost(message, tag = "40")]
         Genesis(Genesis),
-        #[prost(message, tag = "50")]
-        Lqt(LiquidityTournamentReward),
     }
 }
 impl ::prost::Name for CommitmentSource {
@@ -463,6 +406,49 @@ impl ::prost::Name for SctFrontierResponse {
         "/penumbra.core.component.sct.v1.SctFrontierResponse".into()
     }
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NullifierRequest {
+    #[prost(message, optional, tag = "1")]
+    pub nullifier: ::core::option::Option<Nullifier>,
+    #[prost(bool, tag = "2")]
+    pub with_proof: bool,
+}
+impl ::prost::Name for NullifierRequest {
+    const NAME: &'static str = "NullifierRequest";
+    const PACKAGE: &'static str = "penumbra.core.component.sct.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.sct.v1.NullifierRequest".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.sct.v1.NullifierRequest".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NullifierResponse {
+    #[prost(bool, tag = "1")]
+    pub spent: bool,
+    /// Present only when spent = true.
+    #[prost(message, optional, tag = "2")]
+    pub nullification_info: ::core::option::Option<NullificationInfo>,
+    /// The committed nullifier tree root used for this lookup; always present
+    /// when the server has initialized SCT state.
+    #[prost(bytes = "vec", tag = "3")]
+    pub nullifier_root: ::prost::alloc::vec::Vec<u8>,
+    /// Present only when NullifierRequest.with_proof = true.
+    /// Borsh-encoded JMT SparseMerkleProof<Sha256>.
+    #[prost(bytes = "vec", tag = "4")]
+    pub proof: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for NullifierResponse {
+    const NAME: &'static str = "NullifierResponse";
+    const PACKAGE: &'static str = "penumbra.core.component.sct.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.sct.v1.NullifierResponse".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.sct.v1.NullifierResponse".into()
+    }
+}
 /// Generated client implementations.
 #[cfg(feature = "rpc")]
 pub mod query_service_client {
@@ -672,6 +658,35 @@ pub mod query_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        pub async fn nullifier(
+            &mut self,
+            request: impl tonic::IntoRequest<super::NullifierRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::NullifierResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/penumbra.core.component.sct.v1.QueryService/Nullifier",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "penumbra.core.component.sct.v1.QueryService",
+                        "Nullifier",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -714,6 +729,13 @@ pub mod query_service_server {
             request: tonic::Request<super::SctFrontierRequest>,
         ) -> std::result::Result<
             tonic::Response<super::SctFrontierResponse>,
+            tonic::Status,
+        >;
+        async fn nullifier(
+            &self,
+            request: tonic::Request<super::NullifierRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::NullifierResponse>,
             tonic::Status,
         >;
     }
@@ -960,6 +982,51 @@ pub mod query_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = SctFrontierSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/penumbra.core.component.sct.v1.QueryService/Nullifier" => {
+                    #[allow(non_camel_case_types)]
+                    struct NullifierSvc<T: QueryService>(pub Arc<T>);
+                    impl<
+                        T: QueryService,
+                    > tonic::server::UnaryService<super::NullifierRequest>
+                    for NullifierSvc<T> {
+                        type Response = super::NullifierResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::NullifierRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as QueryService>::nullifier(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = NullifierSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

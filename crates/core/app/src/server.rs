@@ -1,10 +1,13 @@
 //! Facilities related to the Penumbra app's ABCI server.
 
+use std::sync::Arc;
+
 use {
     self::{
         consensus::Consensus, events::EventIndexLayer, info::Info, mempool::Mempool,
         snapshot::Snapshot,
     },
+    crate::stateless_cache::StatelessCache,
     cnidarium::Storage,
     penumbra_sdk_tower_trace::trace::request_span,
     tendermint::v0_37::abci::{
@@ -24,7 +27,6 @@ mod events;
 pub fn new(
     storage: Storage,
 ) -> Server<
-    // These bounds ensure that the server can be bound to a TCP port, or a Unix socket.
     impl tower_service::Service<
             ConsensusRequest,
             Response = ConsensusResponse,
@@ -44,20 +46,41 @@ pub fn new(
     Info,
     Snapshot,
 > {
+    let stateless_cache = Arc::new(StatelessCache::new());
+
     let consensus = tower::ServiceBuilder::new()
         .layer(request_span::layer(|req: &ConsensusRequest| {
             use penumbra_sdk_tower_trace::v037::RequestExt;
             req.create_span()
         }))
         .layer(EventIndexLayer::index_all())
-        .service(Consensus::new(storage.clone()));
+        .service(Consensus::new_with_cache(
+            storage.clone(),
+            stateless_cache.clone(),
+        ));
     let mempool = tower::ServiceBuilder::new()
         .layer(request_span::layer(|req: &MempoolRequest| {
             use penumbra_sdk_tower_trace::v037::RequestExt;
             req.create_span()
         }))
-        .service(tower_actor::Actor::new(10, |queue: _| {
-            Mempool::new(storage.clone(), queue).run()
+        .service(tower_actor::Actor::new(10, {
+            let storage = storage.clone();
+            let stateless_cache = stateless_cache.clone();
+            move |queue: _| {
+                let storage = storage.clone();
+                let stateless_cache = stateless_cache.clone();
+                async move {
+                    tracing::info!("mempool actor future starting");
+                    let result = Mempool::new(storage, stateless_cache, queue).run().await;
+                    match &result {
+                        Ok(()) => tracing::warn!("mempool actor future exited cleanly"),
+                        Err(error) => {
+                            tracing::error!(?error, "mempool actor future exited with error")
+                        }
+                    }
+                    result
+                }
+            }
         }));
     let info = Info::new(storage.clone());
     let snapshot = Snapshot {};

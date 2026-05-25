@@ -17,6 +17,7 @@ default = ["component", "std"]
 std = ["ibc-types/std"]
 docsrs = []
 rpc = ["dep:tonic", "ibc-proto/client", "ibc-proto/server"]
+benchmark-helpers = []
 
 [dependencies]
 anyhow = {workspace = true}

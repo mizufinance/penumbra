@@ -1,17 +1,13 @@
 syntax = "proto3";
 package penumbra.core.app.v1;
 
-import "penumbra/core/component/auction/v1/auction.proto";
-import "penumbra/core/component/community_pool/v1/community_pool.proto";
-import "penumbra/core/component/dex/v1/dex.proto";
-import "penumbra/core/component/distributions/v1/distributions.proto";
 import "penumbra/core/component/fee/v1/fee.proto";
-import "penumbra/core/component/funding/v1/funding.proto";
+import "penumbra/core/component/compliance/v1/compliance.proto";
 import "penumbra/core/component/governance/v1/governance.proto";
 import "penumbra/core/component/ibc/v1/ibc.proto";
 import "penumbra/core/component/sct/v1/sct.proto";
 import "penumbra/core/component/shielded_pool/v1/shielded_pool.proto";
-import "penumbra/core/component/stake/v1/stake.proto";
+import "penumbra/core/component/validator/v1/validator.proto";
 import "penumbra/core/transaction/v1/transaction.proto";
 
 // Query operations for the overall Penumbra application.
@@ -41,26 +37,18 @@ message AppParameters {
   string chain_id = 1;
   // Sct module parameters.
   core.component.sct.v1.SctParameters sct_params = 2;
-  // Community Pool module parameters.
-  core.component.community_pool.v1.CommunityPoolParameters community_pool_params = 3;
   // Governance module parameters.
   core.component.governance.v1.GovernanceParameters governance_params = 4;
   // IBC module parameters.
   core.component.ibc.v1.IbcParameters ibc_params = 5;
-  // Stake module parameters.
-  core.component.stake.v1.StakeParameters stake_params = 6;
+  // Validator component parameters.
+  core.component.validator.v1.ValidatorParameters validator_params = 6;
   // Fee module parameters.
   core.component.fee.v1.FeeParameters fee_params = 7;
-  // Distributions module parameters.
-  core.component.distributions.v1.DistributionsParameters distributions_params = 8;
-  // Funding module parameters.
-  core.component.funding.v1.FundingParameters funding_params = 9;
   // Shielded pool module parameters.
   core.component.shielded_pool.v1.ShieldedPoolParameters shielded_pool_params = 10;
-  // DEX module parameters.
-  core.component.dex.v1.DexParameters dex_params = 11;
-  // Auction module parameters.
-  core.component.auction.v1.AuctionParameters auction_params = 12;
+  // Compliance module parameters.
+  core.component.compliance.v1.ComplianceParameters compliance_params = 11;
 }
 
 // Requests the global configuration data for the app.
@@ -80,8 +68,8 @@ message GenesisAppState {
 message GenesisContent {
   // The initial chain identifier.
   string chain_id = 1;
-  // Stake module genesis state.
-  core.component.stake.v1.GenesisContent stake_content = 2;
+  // Validator component genesis state.
+  core.component.validator.v1.GenesisContent validator_content = 2;
   // Shielded pool module genesis state.
   core.component.shielded_pool.v1.GenesisContent shielded_pool_content = 3;
   // Governance module genesis state.
@@ -90,18 +78,10 @@ message GenesisContent {
   core.component.ibc.v1.GenesisContent ibc_content = 5;
   // Sct module genesis state.
   core.component.sct.v1.GenesisContent sct_content = 6;
-  // Community Pool module genesis state.
-  core.component.community_pool.v1.GenesisContent community_pool_content = 7;
   // Fee module genesis state.
   core.component.fee.v1.GenesisContent fee_content = 8;
-  // Distributions module genesis state.
-  core.component.distributions.v1.GenesisContent distributions_content = 9;
-  // Funding module genesis state.
-  core.component.funding.v1.GenesisContent funding_content = 10;
-  // DEX component genesis state.
-  core.component.dex.v1.GenesisContent dex_content = 11;
-  // Auction component genesis state.
-  core.component.auction.v1.GenesisContent auction_content = 12;
+  // Compliance module genesis state.
+  core.component.compliance.v1.GenesisContent compliance_content = 9;
 }
 
 // An event triggering when the app parameters change.

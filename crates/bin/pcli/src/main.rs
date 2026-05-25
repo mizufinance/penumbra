@@ -2,6 +2,7 @@
 #![allow(clippy::clone_on_copy)]
 
 use std::fs;
+use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -10,7 +11,17 @@ use rustls::crypto::aws_lc_rs;
 use pcli::{command::*, opt::Opt};
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     // Preserved for posterity and memory
     if std::env::var("PCLI_DISPLAY_WARNING").is_ok() {
         pcli::warning::display();
@@ -53,6 +64,23 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    if let Command::Transaction(tx_cmd) = &opt.cmd {
+        if let TxCmd::Compliance(compliance_cmd) = &tx_cmd.cmd {
+            if compliance_cmd.is_scan() {
+                compliance_cmd.exec_scan().await?;
+                return Ok(());
+            }
+            if compliance_cmd.is_generate_dk() {
+                compliance_cmd.exec_generate_dk()?;
+                return Ok(());
+            }
+            if compliance_cmd.is_sign_grant() {
+                compliance_cmd.exec_sign_grant()?;
+                return Ok(());
+            }
+        }
+    }
+
     let (mut app, cmd) = opt.into_app().await?;
 
     if !cmd.offline() {
@@ -71,7 +99,6 @@ async fn main() -> Result<()> {
         Command::Validator(cmd) => cmd.exec(&mut app).await?,
         Command::Query(cmd) => cmd.exec(&mut app).await?,
         Command::Threshold(cmd) => cmd.exec(&mut app).await?,
-        Command::Migrate(cmd) => cmd.exec(&mut app).await?,
     }
 
     Ok(())

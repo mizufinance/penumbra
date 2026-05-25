@@ -1,27 +1,23 @@
 use anyhow::anyhow;
-use penumbra_sdk_proto::{penumbra::core::component::stake::v1 as pb, DomainType};
+use penumbra_sdk_proto::{penumbra::core::component::validator::v1 as pb, DomainType};
 use serde::{Deserialize, Serialize};
 
 /// The state of a validator in the validator state machine.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Serialize, Deserialize)]
 #[serde(try_from = "pb::ValidatorState", into = "pb::ValidatorState")]
 pub enum State {
-    /// The validator definition has been published, but the validator stake is below the minimum
-    /// threshold required to be indexed.
+    /// The validator definition has been published, but the validator is not yet
+    /// participating in the active rotation.
     Defined,
-    /// The validator is not currently a part of the consensus set, but could become so if it
-    /// acquired enough voting power.
+    /// The validator is not currently a part of the active set, but is eligible for rotation.
     Inactive,
     /// The validator is an active part of the consensus set.
     Active,
-    /// The validator has been slashed for downtime, and is prevented from participation
-    /// in consensus until it requests to be reinstated.
+    /// The validator exceeded downtime policy and must be re-enabled by its operator.
     Jailed,
-    /// The validator has been slashed for byzantine misbehavior, and is permanently banned.
+    /// The validator committed byzantine misbehavior and is permanently banned.
     Tombstoned,
     /// The validator operator has disabled this validator's operations.
-    ///
-    /// Delegations to this validator are not allowed.
     Disabled,
 }
 

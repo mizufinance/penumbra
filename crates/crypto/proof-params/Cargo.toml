@@ -18,8 +18,8 @@ reqwest = { version = "0.12.9", optional = true, features = [
     "json",
 ] }
 serde_json = { version = "1", optional = true }
-sha2 = { version = "0.10.6", optional = true }
-hex = { version = "0.4.3", optional = true }
+sha2 = { version = "0.10.6" }
+hex = { version = "0.4.3" }
 anyhow = "1"
 
 [features]
@@ -29,11 +29,10 @@ download-proving-keys = [
     "regex",
     "reqwest",
     "serde_json",
-    "sha2",
-    "hex",
     "bundled-proving-keys",
 ]
 parallel = [
+    "dep:rayon",
     "ark-ff/parallel",
     "decaf377/parallel",
     "ark-groth16/parallel",
@@ -55,11 +54,17 @@ bech32 = {workspace = true}
 decaf377 = {workspace = true, features = ["r1cs"], default-features = true}
 num-bigint = {workspace = true}
 once_cell = {workspace = true}
+poseidon377 = {workspace = true, features = ["r1cs"]}
 rand = {workspace = true}
 rand_core = {workspace = true, features = ["getrandom"]}
+rayon = { version = "1.10", optional = true }
 serde = {workspace = true, features = ["derive"]}
+serde_json = {workspace = true}
 sha2 = {workspace = true}
 tracing = {workspace = true}
+
+[dev-dependencies]
+rand_chacha = {workspace = true}
 
 [package.metadata.docs.rs]
 features = [] # docs.rs

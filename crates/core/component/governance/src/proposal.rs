@@ -1,10 +1,9 @@
-use anyhow::Context;
-use bytes::Bytes;
 use ibc_types::core::client::ClientId;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 use crate::change::ParameterChange;
+use penumbra_sdk_compliance::UpdateAssetIbcPolicy;
 use penumbra_sdk_proto::{penumbra::core::component::governance::v1 as pb, DomainType};
 
 /// A governance proposal.
@@ -23,9 +22,6 @@ pub struct Proposal {
     /// The specific kind and attributes of the proposal.
     pub payload: ProposalPayload,
 }
-
-/// The protobuf type URL for a transaction plan.
-pub const TRANSACTION_PLAN_TYPE_URL: &str = "/penumbra.core.transaction.v1.TransactionPlan";
 
 impl From<Proposal> for pb::Proposal {
     fn from(inner: Proposal) -> pb::Proposal {
@@ -52,14 +48,6 @@ impl From<Proposal> for pb::Proposal {
             ProposalPayload::ParameterChange(change) => {
                 Some(Payload::ParameterChange(change.into()))
             }
-            ProposalPayload::CommunityPoolSpend { transaction_plan } => Some(
-                Payload::CommunityPoolSpend(pb::proposal::CommunityPoolSpend {
-                    transaction_plan: Some(pbjson_types::Any {
-                        type_url: TRANSACTION_PLAN_TYPE_URL.to_owned(),
-                        value: transaction_plan.into(),
-                    }),
-                }),
-            ),
             ProposalPayload::UpgradePlan { height } => {
                 Some(Payload::UpgradePlan(pb::proposal::UpgradePlan { height }))
             }
@@ -73,6 +61,9 @@ impl From<Proposal> for pb::Proposal {
                     client_id: client_id.into(),
                 },
             )),
+            ProposalPayload::UpdateAssetIbcPolicy(update) => {
+                Some(Payload::UpdateAssetIbcPolicy(update.into()))
+            }
         };
         proposal.payload = payload;
         proposal
@@ -121,22 +112,6 @@ impl TryFrom<pb::Proposal> for Proposal {
                 Payload::ParameterChange(change) => {
                     ProposalPayload::ParameterChange(change.try_into()?)
                 }
-                Payload::CommunityPoolSpend(community_pool_spend) => {
-                    ProposalPayload::CommunityPoolSpend {
-                        transaction_plan: {
-                            let transaction_plan = community_pool_spend
-                                .transaction_plan
-                                .ok_or_else(|| anyhow::anyhow!("missing transaction plan"))?;
-                            if transaction_plan.type_url != TRANSACTION_PLAN_TYPE_URL {
-                                anyhow::bail!(
-                                    "unknown transaction plan type url: {}",
-                                    transaction_plan.type_url
-                                );
-                            }
-                            transaction_plan.value.to_vec()
-                        },
-                    }
-                }
                 Payload::UpgradePlan(upgrade_plan) => ProposalPayload::UpgradePlan {
                     height: upgrade_plan.height,
                 },
@@ -163,6 +138,9 @@ impl TryFrom<pb::Proposal> for Proposal {
                     ProposalPayload::UnfreezeIbcClient {
                         client_id: unfreeze_ibc_client.client_id,
                     }
+                }
+                Payload::UpdateAssetIbcPolicy(update) => {
+                    ProposalPayload::UpdateAssetIbcPolicy(update.try_into()?)
                 }
             },
         })
@@ -217,14 +195,14 @@ pub enum ProposalKind {
     Emergency,
     /// A parameter change proposal.
     ParameterChange,
-    /// A Community Pool spend proposal.
-    CommunityPoolSpend,
     /// An upgrade proposal.
     UpgradePlan,
     /// A proposal to freeze an IBC client.
     FreezeIbcClient,
     /// A proposal to unfreeze an IBC client.
     UnfreezeIbcClient,
+    /// A proposal to replace a regulated asset's direct IBC routes.
+    UpdateAssetIbcPolicy,
 }
 
 impl From<ProposalKind> for pb::ProposalKind {
@@ -233,10 +211,10 @@ impl From<ProposalKind> for pb::ProposalKind {
             ProposalKind::Signaling => pb::ProposalKind::Signaling,
             ProposalKind::Emergency => pb::ProposalKind::Emergency,
             ProposalKind::ParameterChange => pb::ProposalKind::ParameterChange,
-            ProposalKind::CommunityPoolSpend => pb::ProposalKind::CommunityPoolSpend,
             ProposalKind::UpgradePlan => pb::ProposalKind::UpgradePlan,
             ProposalKind::FreezeIbcClient => pb::ProposalKind::FreezeIbcClient,
             ProposalKind::UnfreezeIbcClient => pb::ProposalKind::UnfreezeIbcClient,
+            ProposalKind::UpdateAssetIbcPolicy => pb::ProposalKind::UpdateAssetIbcPolicy,
         }
     }
 }
@@ -250,10 +228,10 @@ impl TryFrom<pb::ProposalKind> for ProposalKind {
             pb::ProposalKind::Signaling => ProposalKind::Signaling,
             pb::ProposalKind::Emergency => ProposalKind::Emergency,
             pb::ProposalKind::ParameterChange => ProposalKind::ParameterChange,
-            pb::ProposalKind::CommunityPoolSpend => ProposalKind::CommunityPoolSpend,
             pb::ProposalKind::UpgradePlan => ProposalKind::UpgradePlan,
             pb::ProposalKind::FreezeIbcClient => ProposalKind::FreezeIbcClient,
             pb::ProposalKind::UnfreezeIbcClient => ProposalKind::UnfreezeIbcClient,
+            pb::ProposalKind::UpdateAssetIbcPolicy => ProposalKind::UpdateAssetIbcPolicy,
         };
         Ok(kind)
     }
@@ -267,8 +245,10 @@ impl FromStr for ProposalKind {
             "signaling" => Ok(ProposalKind::Signaling),
             "emergency" => Ok(ProposalKind::Emergency),
             "parameter_change" => Ok(ProposalKind::ParameterChange),
-            "community_pool_spend" => Ok(ProposalKind::CommunityPoolSpend),
             "upgrade_plan" => Ok(ProposalKind::UpgradePlan),
+            "freeze_ibc_client" => Ok(ProposalKind::FreezeIbcClient),
+            "unfreeze_ibc_client" => Ok(ProposalKind::UnfreezeIbcClient),
+            "update_asset_ibc_policy" => Ok(ProposalKind::UpdateAssetIbcPolicy),
             _ => Err(anyhow::anyhow!("invalid proposal kind: {}", s)),
         }
     }
@@ -281,10 +261,10 @@ impl Proposal {
             ProposalPayload::Signaling { .. } => ProposalKind::Signaling,
             ProposalPayload::Emergency { .. } => ProposalKind::Emergency,
             ProposalPayload::ParameterChange { .. } => ProposalKind::ParameterChange,
-            ProposalPayload::CommunityPoolSpend { .. } => ProposalKind::CommunityPoolSpend,
             ProposalPayload::UpgradePlan { .. } => ProposalKind::UpgradePlan,
             ProposalPayload::FreezeIbcClient { .. } => ProposalKind::FreezeIbcClient,
             ProposalPayload::UnfreezeIbcClient { .. } => ProposalKind::UnfreezeIbcClient,
+            ProposalPayload::UpdateAssetIbcPolicy(_) => ProposalKind::UpdateAssetIbcPolicy,
         }
     }
 }
@@ -308,16 +288,6 @@ pub enum ProposalPayload {
     /// A parameter change proposal describes a change to the app parameters, which should
     /// take effect when the proposal is passed.
     ParameterChange(ParameterChange),
-    /// A Community Pool spend proposal describes proposed transaction(s) to be executed or cancelled at
-    /// specific heights, with the spend authority of the Community Pool.
-    CommunityPoolSpend {
-        /// The transaction plan to be executed at the time the proposal is passed.
-        ///
-        /// This must be a transaction plan which can be executed by the Community Pool, which means it can't
-        /// require any witness data or authorization signatures, but it may use the `CommunityPoolSpend`
-        /// action.
-        transaction_plan: Vec<u8>,
-    },
     /// An upgrade plan proposal describes a planned upgrade to the chain. If ratified, the chain
     /// will halt at the specified height, trigger an epoch transition, and halt the chain.
     UpgradePlan { height: u64 },
@@ -331,6 +301,8 @@ pub enum ProposalPayload {
         /// The identifier of the client to unfreeze.
         client_id: String,
     },
+    /// Replace direct IBC routes for an existing regulated asset.
+    UpdateAssetIbcPolicy(UpdateAssetIbcPolicy),
 }
 
 /// A TOML-serializable version of `ProposalPayload`, meant for human consumption.
@@ -340,10 +312,10 @@ pub enum ProposalPayloadToml {
     Signaling { commit: Option<String> },
     Emergency { halt_chain: bool },
     ParameterChange(ParameterChange),
-    CommunityPoolSpend { transaction: String },
     UpgradePlan { height: u64 },
     FreezeIbcClient { client_id: String },
     UnfreezeIbcClient { client_id: String },
+    UpdateAssetIbcPolicy(UpdateAssetIbcPolicy),
 }
 
 impl TryFrom<ProposalPayloadToml> for ProposalPayload {
@@ -358,24 +330,15 @@ impl TryFrom<ProposalPayloadToml> for ProposalPayload {
             ProposalPayloadToml::ParameterChange(change) => {
                 ProposalPayload::ParameterChange(change)
             }
-            ProposalPayloadToml::CommunityPoolSpend { transaction } => {
-                ProposalPayload::CommunityPoolSpend {
-                    transaction_plan: Bytes::from(
-                        base64::Engine::decode(
-                            &base64::engine::general_purpose::STANDARD,
-                            transaction,
-                        )
-                        .context("couldn't decode transaction plan from base64")?,
-                    )
-                    .to_vec(),
-                }
-            }
             ProposalPayloadToml::UpgradePlan { height } => ProposalPayload::UpgradePlan { height },
             ProposalPayloadToml::FreezeIbcClient { client_id } => {
                 ProposalPayload::FreezeIbcClient { client_id }
             }
             ProposalPayloadToml::UnfreezeIbcClient { client_id } => {
                 ProposalPayload::UnfreezeIbcClient { client_id }
+            }
+            ProposalPayloadToml::UpdateAssetIbcPolicy(update) => {
+                ProposalPayload::UpdateAssetIbcPolicy(update)
             }
         })
     }
@@ -391,20 +354,15 @@ impl From<ProposalPayload> for ProposalPayloadToml {
             ProposalPayload::ParameterChange(change) => {
                 ProposalPayloadToml::ParameterChange(change)
             }
-            ProposalPayload::CommunityPoolSpend { transaction_plan } => {
-                ProposalPayloadToml::CommunityPoolSpend {
-                    transaction: base64::Engine::encode(
-                        &base64::engine::general_purpose::STANDARD,
-                        transaction_plan,
-                    ),
-                }
-            }
             ProposalPayload::UpgradePlan { height } => ProposalPayloadToml::UpgradePlan { height },
             ProposalPayload::FreezeIbcClient { client_id } => {
                 ProposalPayloadToml::FreezeIbcClient { client_id }
             }
             ProposalPayload::UnfreezeIbcClient { client_id } => {
                 ProposalPayloadToml::UnfreezeIbcClient { client_id }
+            }
+            ProposalPayload::UpdateAssetIbcPolicy(update) => {
+                ProposalPayloadToml::UpdateAssetIbcPolicy(update)
             }
         }
     }
@@ -427,8 +385,22 @@ impl ProposalPayload {
     pub fn is_parameter_change(&self) -> bool {
         matches!(self, ProposalPayload::ParameterChange { .. })
     }
+}
 
-    pub fn is_community_pool_spend(&self) -> bool {
-        matches!(self, ProposalPayload::CommunityPoolSpend { .. })
+#[cfg(test)]
+mod tests {
+    use super::ProposalKind;
+    use std::str::FromStr;
+
+    #[test]
+    fn proposal_kind_parses_ibc_freeze_variants() {
+        assert_eq!(
+            ProposalKind::from_str("freeze_ibc_client").expect("freeze kind should parse"),
+            ProposalKind::FreezeIbcClient
+        );
+        assert_eq!(
+            ProposalKind::from_str("unfreeze_ibc_client").expect("unfreeze kind should parse"),
+            ProposalKind::UnfreezeIbcClient
+        );
     }
 }

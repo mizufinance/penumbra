@@ -1,54 +1,50 @@
 {
   "actions": [
     {
-      "swap": {
-        "swapPlaintext": {
-          "tradingPair": {
-            "asset1": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            },
-            "asset2": {
-              "inner": "KeqcLzNx9qSH5+lcJHBB9KNW+YPrBk5dKzvPMiypahA="
-            }
-          },
-          "delta1I": {
-            "lo": "72887687410642095"
-          },
-          "delta2I": {
-            "lo": "547635641772447099"
-          },
-          "claimFee": {
-            "amount": {}
-          },
-          "claimAddress": {
-            "inner": "0bniv4eu9150x4dvwnqGvQTwyaAd8h8hBi9jfjPE6vXSklK7Q10uIeaHzf5mMQVIBEPf8hUuDHGBCUdPgcS71KESXOGKpymM4N4tAaW8oYU="
-          },
-          "rseed": "KeOJXP1AP7JzZYpFhct3JdrVkiHPs9qiCU/+FRJ5g1Q="
-        },
-        "feeBlinding": "QosWaO7xqNjGM/8R/D5su71Kzakyyka+0diHIQbVCQQ=",
-        "proofBlindingR": "aL14qFSs2Ann3ONjBFYy5V5y+hsv1tsXLgHoy9U/VxE=",
-        "proofBlindingS": "K/EoLZ6PgiJSlfGIcwM8fszcp+yq+qJT4/eZX7hILAk="
+      "ibcRelayAction": {
+        "rawAction": {
+          "typeUrl": "/ibc.core.channel.v1.MsgRecvPacket",
+          "value": "CrIBCJ6OvOsCEgtkZWZhdWx0UG9ydBoJY2hhbm5lbC0wIgtkZWZhdWx0UG9ydCoJY2hhbm5lbC0wMmQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOgoIme6OBhDo0o5sQPCD/P2iorLUGBICCgAaCgiZ7o4GEOjSjmwijwFwZW51bWJyYTEwMDk3azVxenN5eGVubnJrNndydTlraDR1dXRhdjN2Z2hzcGRnbnFncGEwMmhmcGV5ZGM3a2h5NWR4OWZhcGFkbnA3ZmhobnBjeXc5MGpjc2szODgzbWY2enVxeDRoYTdsZmMyc2NjMnBseTQ1YTY5enU1YzdzZnhydndhZWthcTNsNHJ4Mw=="
+        }
       }
     },
     {
-      "proposalSubmit": {
-        "proposal": {
-          "title": "rxrthzxztjzqytgjtijrhi-6529552803510343709013",
-          "description": "snisohocwfgeviddxdvlwbo-33080487998",
-          "signaling": {}
+      "validatorVote": {
+        "body": {
+          "proposal": "408267076",
+          "vote": {
+            "vote": "VOTE_YES"
+          },
+          "identityKey": {
+            "ik": "+8mCrvNaqcaPzE8WEseKwS0CrrxD3Tin1RyifC3Iwgg="
+          },
+          "governanceKey": {
+            "gk": "0ERuTUb/7rlgU1GcUcWRnAyC13gjww7FVI+LPmj+/AU="
+          },
+          "reason": {
+            "reason": "5Lrc"
+          }
         },
-        "depositAmount": {
-          "lo": "61121106144839310"
+        "authSig": {
+          "inner": "pGk0HCOKjFLG8cPFEtkWbUmXWiyWXTq19++HeEj6ywAYCVfNj5L2Uu8JNTv5FYoR2u6GeXPBKVfJ2ujgg+ZyAw=="
+        }
+      }
+    },
+    {
+      "ibcRelayAction": {
+        "rawAction": {
+          "typeUrl": "/ibc.core.channel.v1.MsgRecvPacket",
+          "value": "CrQBCJ+S1LMDEgtkZWZhdWx0UG9ydBoJY2hhbm5lbC0wIgtkZWZhdWx0UG9ydCoJY2hhbm5lbC0wMmQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOgwIs7nOxAMQy66PsAFA8Lq9/qKistQYEgIKABoMCLO5zsQDEMuuj7ABIo8BcGVudW1icmExOTZyenFoM2o3OHk5OTNjd3JxdngwbXFla25obGMzNGFuemxld3U3Z2RraGp4MHR0cjdrdXZ1N2FocDVxZHlqMDltY3EzZDh2ZGRyMmM4dDVwMzNmN2FoMDA3ZzZ1cThxem1hcW5nMDY4bnF3bnltOTJ1cWhuMnpsOWw5YzY0eXZ2Z2cydWs="
         }
       }
     }
   ],
   "transactionParameters": {
-    "expiryHeight": "7163888795",
-    "chainId": "txeyufhwmxngiob-316114451531670780",
+    "expiryHeight": "1465120163",
+    "chainId": "esqjpesfqrproialuhmasqcmwxyvevt-6499631631",
     "fee": {
       "amount": {
-        "lo": "666412132367616610"
+        "lo": "974005054464729560"
       }
     }
   }

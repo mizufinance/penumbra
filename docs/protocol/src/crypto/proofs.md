@@ -81,11 +81,11 @@ recursion later, without meaningfully restricting the near-term proving choices.
 For this reason, BLS12-377 seems like the best choice of proving curve.
 
 Penumbra's approach is to first create a useful set of fixed functionality, and
-generalize to custom, programmable functionality only later. Compared to
-Sapling, there is *more* functionality (not just `Spend` and `Output` but
-`Delegate`, `Undelegate`, `Vote`, ...), meaning that there are more proof
-statements.  Using Groth16 means that each of these statements needs to have its
-own proving and verification key, generated through a decentralized setup. 
+generalize to custom, programmable functionality only later. The current proof
+surface is intentionally reduced to `Transfer`, `Split`, `Consolidate`, and
+`ShieldedIcs20Withdrawal`, plus supporting non-transaction proofs such as
+nullifier derivation. Using Groth16 means that each supported statement needs
+its own proving and verification key, generated through a decentralized setup.
 
 So the advantage of a universal setup (as in PLONK) over per-statement setup (as
 in Groth16) would be:

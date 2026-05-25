@@ -8,25 +8,23 @@ use async_trait::async_trait;
 use cnidarium::{StateRead, StateWrite};
 use futures::StreamExt;
 use ibc_types::core::client::ClientId;
-use penumbra_sdk_asset::{asset, Value, STAKING_TOKEN_DENOM};
 use penumbra_sdk_ibc::component::ClientStateReadExt as _;
 use penumbra_sdk_ibc::component::ClientStateWriteExt as _;
-use penumbra_sdk_num::Amount;
 use penumbra_sdk_proto::{StateReadProto, StateWriteProto};
 use penumbra_sdk_sct::{
     component::{clock::EpochRead, tree::SctRead},
     Nullifier,
 };
-use penumbra_sdk_shielded_pool::component::AssetRegistryRead;
-use penumbra_sdk_stake::{
-    component::{validator_handler::ValidatorDataRead, ConsensusIndexRead},
-    DelegationToken, GovernanceKey, IdentityKey,
-};
 use penumbra_sdk_tct as tct;
+use penumbra_sdk_validator::{
+    component::{validator_handler::ValidatorDataRead, ConsensusIndexRead},
+    params::EQUAL_VALIDATOR_VOTING_POWER,
+    GovernanceKey, IdentityKey,
+};
 use tokio::task::JoinSet;
 use tracing::instrument;
 
-use penumbra_sdk_stake::{rate::RateData, validator};
+use penumbra_sdk_validator::validator;
 
 use crate::{
     change::ParameterChange,
@@ -40,7 +38,7 @@ use crate::{
 use crate::{state_key, tally::Tally};
 
 #[async_trait]
-pub trait StateReadExt: StateRead + penumbra_sdk_stake::StateReadExt {
+pub trait StateReadExt: StateRead + penumbra_sdk_validator::StateReadExt {
     /// Returns true if the next height is an upgrade height.
     /// We look-ahead to the next height because we want to halt the chain immediately after
     /// committing the block.
@@ -88,10 +86,9 @@ pub trait StateReadExt: StateRead + penumbra_sdk_stake::StateReadExt {
             .map(|p: Proposal| p.payload))
     }
 
-    /// Get the proposal deposit amount for a proposal.
-    async fn proposal_deposit_amount(&self, proposal_id: u64) -> Result<Option<Amount>> {
-        self.get(&state_key::proposal_deposit_amount(proposal_id))
-            .await
+    /// Get the validator identity that submitted the proposal.
+    async fn proposal_submitter(&self, proposal_id: u64) -> Result<Option<IdentityKey>> {
+        self.get(&state_key::proposal_submitter(proposal_id)).await
     }
 
     /// Get the state of a proposal.
@@ -185,19 +182,6 @@ pub trait StateReadExt: StateRead + penumbra_sdk_stake::StateReadExt {
         Ok(())
     }
 
-    /// Get the [`RateData`] for a validator at the start height of a given proposal.
-    async fn rate_data_at_proposal_start(
-        &self,
-        proposal_id: u64,
-        identity_key: IdentityKey,
-    ) -> Result<Option<RateData>> {
-        self.get(&state_key::rate_data_at_proposal_start(
-            proposal_id,
-            identity_key,
-        ))
-        .await
-    }
-
     /// Throw an error if the proposal is not votable.
     async fn check_proposal_votable(&self, proposal_id: u64) -> Result<()> {
         if let Some(proposal_state) = self.proposal_state(proposal_id).await? {
@@ -206,10 +190,7 @@ pub trait StateReadExt: StateRead + penumbra_sdk_stake::StateReadExt {
                 Voting => {
                     // This is when you can vote on a proposal
                 }
-                Withdrawn { .. } => {
-                    anyhow::bail!("proposal {} has already been withdrawn", proposal_id)
-                }
-                Finished { .. } | Claimed { .. } => {
+                Finished { .. } => {
                     anyhow::bail!("voting on proposal {} has already concluded", proposal_id)
                 }
             }
@@ -260,57 +241,6 @@ pub trait StateReadExt: StateRead + penumbra_sdk_stake::StateReadExt {
                     start_height
                 );
             }
-        }
-
-        Ok(())
-    }
-
-    /// Look up the validator for a given asset ID, if it is a delegation token.
-    async fn validator_by_delegation_asset(&self, asset_id: asset::Id) -> Result<IdentityKey> {
-        // Attempt to find the denom for the asset ID of the specified value
-        let Some(denom_metadata) = self.denom_metadata_by_asset(&asset_id).await else {
-            anyhow::bail!("asset ID {} does not correspond to a known denom", asset_id);
-        };
-
-        // Attempt to find the validator identity for the specified denom, failing if it is not a
-        // delegation token
-        let validator_identity = DelegationToken::try_from(denom_metadata)?.validator();
-
-        Ok(validator_identity)
-    }
-
-    /// Throw an error if the exchange between the value and the unbonded amount isn't correct for
-    /// the proposal given.
-    async fn check_unbonded_amount_correct_exchange_for_proposal(
-        &self,
-        proposal_id: u64,
-        value: &Value,
-        unbonded_amount: &Amount,
-    ) -> Result<()> {
-        let validator_identity = self.validator_by_delegation_asset(value.asset_id).await?;
-
-        // Attempt to look up the snapshotted `RateData` for the validator at the start of the proposal
-        let Some(rate_data) = self
-            .rate_data_at_proposal_start(proposal_id, validator_identity)
-            .await?
-        else {
-            anyhow::bail!(
-                "validator {} was not active at the start of proposal {}",
-                validator_identity,
-                proposal_id
-            );
-        };
-
-        // Check that the unbonded amount is correct relative to that exchange rate
-        if rate_data.unbonded_amount(value.amount).value() != unbonded_amount.value() {
-            anyhow::bail!(
-                "unbonded amount {}{} does not correspond to {} staked delegation tokens for validator {} using the exchange rate at the start of proposal {}",
-                unbonded_amount,
-                *STAKING_TOKEN_DENOM,
-                value.amount,
-                validator_identity,
-                proposal_id,
-            );
         }
 
         Ok(())
@@ -369,54 +299,14 @@ pub trait StateReadExt: StateRead + penumbra_sdk_stake::StateReadExt {
         Ok(())
     }
 
-    /// Check that a deposit claim could be made on the proposal.
-    async fn check_proposal_claimable(&self, proposal_id: u64) -> Result<()> {
-        if let Some(proposal_state) = self.proposal_state(proposal_id).await? {
-            match proposal_state {
-                ProposalState::Voting => {
-                    anyhow::bail!("proposal {} is still voting", proposal_id)
-                }
-                ProposalState::Withdrawn { .. } => {
-                    anyhow::bail!(
-                        "proposal {} has been withdrawn but voting has not concluded",
-                        proposal_id
-                    )
-                }
-                ProposalState::Finished { .. } => {
-                    // This is when you can claim a proposal
-                }
-                ProposalState::Claimed { .. } => {
-                    anyhow::bail!(
-                        "the deposit for proposal {} has already been claimed",
-                        proposal_id
-                    )
-                }
-            }
-        } else {
-            anyhow::bail!("proposal {} does not exist", proposal_id);
-        }
+    /// Check that the validator is currently active.
+    async fn check_validator_is_active(&self, identity_key: &IdentityKey) -> Result<()> {
+        let Some(state) = self.get_validator_state(identity_key).await? else {
+            anyhow::bail!("validator {} does not exist", identity_key);
+        };
 
-        Ok(())
-    }
-
-    /// Check that the deposit claim amount matches the proposal's deposit amount.
-    async fn check_proposal_claim_valid_deposit(
-        &self,
-        proposal_id: u64,
-        claim_deposit_amount: Amount,
-    ) -> Result<()> {
-        if let Some(proposal_deposit_amount) = self.proposal_deposit_amount(proposal_id).await? {
-            if claim_deposit_amount != proposal_deposit_amount {
-                anyhow::bail!(
-                    "proposal deposit claim for {}{} does not match proposal deposit of {}{}",
-                    claim_deposit_amount,
-                    *STAKING_TOKEN_DENOM,
-                    proposal_deposit_amount,
-                    *STAKING_TOKEN_DENOM,
-                );
-            }
-        } else {
-            anyhow::bail!("proposal {} does not exist", proposal_id);
+        if state != validator::State::Active {
+            anyhow::bail!("validator {} is not active", identity_key);
         }
 
         Ok(())
@@ -505,29 +395,6 @@ pub trait StateReadExt: StateRead + penumbra_sdk_stake::StateReadExt {
         Ok(votes)
     }
 
-    /// Get all the *tallied* delegator votes for the proposal (excluding those which have been
-    /// cast but not tallied).
-    async fn tallied_delegator_votes(
-        &self,
-        proposal_id: u64,
-    ) -> Result<BTreeMap<IdentityKey, Tally>> {
-        let mut tallies = BTreeMap::new();
-
-        let prefix = state_key::all_tallied_delegator_votes_for_proposal(proposal_id);
-        let mut stream = self.prefix(&prefix);
-
-        while let Some((key, tally)) = stream.next().await.transpose()? {
-            let identity_key = key
-                .rsplit('/')
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("incorrect key format for delegator vote tally"))?
-                .parse()?;
-            tallies.insert(identity_key, tally);
-        }
-
-        Ok(tallies)
-    }
-
     /// Add up all the currently tallied votes (without tallying any cast votes that haven't been
     /// tallied yet).
     async fn current_tally(&self, proposal_id: u64) -> Result<Tally> {
@@ -535,31 +402,19 @@ pub trait StateReadExt: StateRead + penumbra_sdk_stake::StateReadExt {
             .validator_voting_power_at_proposal_start(proposal_id)
             .await?;
         let mut validator_votes = self.validator_votes(proposal_id).await?;
-        let mut delegator_tallies = self.tallied_delegator_votes(proposal_id).await?;
 
-        // For each validator, tally their own vote, overriding it with any tallied delegator votes
+        // For each validator, tally their own vote using the equal voting power snapshotted
+        // when the proposal entered voting.
         let mut tally = Tally::default();
         for (validator, power) in validator_powers.into_iter() {
-            let delegator_tally = delegator_tallies.remove(&validator).unwrap_or_default();
             if let Some(vote) = validator_votes.remove(&validator) {
-                // The effective power of a validator is the voting power of that validator at
-                // proposal start, minus the total voting power used by delegators to that validator
-                // who have voted. Their votes will be added back in below, re-assigning their
-                // voting power to their chosen votes.
-                let effective_power = power.saturating_sub(delegator_tally.total());
-                tally += (vote, effective_power).into();
+                tally += (vote, power).into();
             }
-            // Add the delegator votes in, regardless of if the validator has voted.
-            tally += delegator_tally;
         }
 
         assert!(
             validator_votes.is_empty(),
             "no inactive validator should have voted"
-        );
-        assert!(
-            delegator_tallies.is_empty(),
-            "no delegator should have been able to vote for an inactive validator"
         );
 
         Ok(tally)
@@ -584,7 +439,7 @@ pub trait StateReadExt: StateRead + penumbra_sdk_stake::StateReadExt {
     }
 }
 
-impl<T: StateRead + penumbra_sdk_stake::StateReadExt + ?Sized> StateReadExt for T {}
+impl<T: StateRead + penumbra_sdk_validator::StateReadExt + ?Sized> StateReadExt for T {}
 
 #[async_trait]
 pub trait StateWriteExt: StateWrite + penumbra_sdk_ibc::component::ConnectionStateWriteExt {
@@ -610,31 +465,21 @@ pub trait StateWriteExt: StateWrite + penumbra_sdk_ibc::component::ConnectionSta
             );
         }
 
-        // Snapshot the rate data and voting power for all active validators at this height
+        // Snapshot the equal voting power for all active validators at this height.
         let mut js = JoinSet::new();
         let mut validator_identity_stream = self.consensus_set_stream()?;
         while let Some(identity_key) = validator_identity_stream.next().await {
             let identity_key = identity_key?;
 
             let state = self.get_validator_state(&identity_key);
-            let rate_data = self.get_validator_rate(&identity_key);
-            let power: penumbra_sdk_proto::state::future::DomainFuture<
-                Amount,
-                <Self as StateRead>::GetRawFut,
-            > = self.get_validator_power(&identity_key);
             js.spawn(async move {
                 let state = state
                     .await?
                     .expect("every known validator must have a recorded state");
-                // Compute the rate data, only for active validators, and write it to the state
+                // Snapshot only active validators. Equal voting power is derived from membership,
+                // not stake or exchange-rate data.
                 let per_validator = if state == validator::State::Active {
-                    let rate_data = rate_data
-                        .await?
-                        .expect("every known validator must have a recorded current rate");
-                    let power = power
-                        .await?
-                        .expect("every known validator must have a recorded current power");
-                    Some((identity_key, rate_data, power))
+                    Some(identity_key)
                 } else {
                     None
                 };
@@ -645,14 +490,10 @@ pub trait StateWriteExt: StateWrite + penumbra_sdk_ibc::component::ConnectionSta
         // Iterate over all the futures and insert them into the state (this can be done in
         // arbitrary order, because they are non-overlapping)
         while let Some(per_validator) = js.join_next().await.transpose()? {
-            if let Some((identity_key, rate_data, power)) = per_validator? {
-                self.put(
-                    state_key::rate_data_at_proposal_start(proposal_id, identity_key),
-                    rate_data,
-                );
-                self.put(
+            if let Some(identity_key) = per_validator? {
+                self.put_proto(
                     state_key::voting_power_at_proposal_start(proposal_id, identity_key),
-                    power,
+                    EQUAL_VALIDATOR_VOTING_POWER,
                 )
             }
         }
@@ -685,9 +526,9 @@ pub trait StateWriteExt: StateWrite + penumbra_sdk_ibc::component::ConnectionSta
         self.object_put(state_key::proposal_started(), ());
     }
 
-    /// Store the proposal deposit amount.
-    fn put_deposit_amount(&mut self, proposal_id: u64, amount: Amount) {
-        self.put(state_key::proposal_deposit_amount(proposal_id), amount);
+    /// Store the validator identity that submitted the proposal.
+    fn put_proposal_submitter(&mut self, proposal_id: u64, submitter: IdentityKey) {
+        self.put(state_key::proposal_submitter(proposal_id), submitter);
     }
 
     /// Set the state of a proposal.
@@ -696,13 +537,13 @@ pub trait StateWriteExt: StateWrite + penumbra_sdk_ibc::component::ConnectionSta
         self.put(state_key::proposal_state(proposal_id), state.clone());
 
         match &state {
-            ProposalState::Voting | ProposalState::Withdrawn { .. } => {
+            ProposalState::Voting => {
                 // If we're setting the proposal to a non-finished state, track it in our list of
                 // proposals that are not finished
                 self.put_proto(state_key::unfinished_proposal(proposal_id), ());
             }
-            ProposalState::Finished { .. } | ProposalState::Claimed { .. } => {
-                // If we're setting the proposal to a finished or claimed state, remove it from our list of
+            ProposalState::Finished { .. } => {
+                // If we're setting the proposal to a finished state, remove it from our list of
                 // proposals that are not finished
                 self.delete(state_key::unfinished_proposal(proposal_id));
             }
@@ -758,116 +599,10 @@ pub trait StateWriteExt: StateWrite + penumbra_sdk_ibc::component::ConnectionSta
         );
     }
 
-    /// Record a delegator vote on a proposal.
-    async fn cast_delegator_vote(
-        &mut self,
-        proposal_id: u64,
-        identity_key: IdentityKey,
-        vote: Vote,
-        nullifier: &Nullifier,
-        unbonded_amount: Amount,
-    ) -> Result<()> {
-        // Convert the unbonded amount into voting power
-        let power = unbonded_amount.value() as u64;
-        let tally: Tally = (vote, power).into();
-
-        // Record the vote
-        self.put(
-            state_key::untallied_delegator_vote(proposal_id, identity_key, nullifier),
-            tally,
-        );
-
-        Ok(())
-    }
-
-    /// Tally delegator votes by sweeping them into the aggregate for each validator, for each proposal.
-    #[instrument(skip(self))]
-    async fn tally_delegator_votes(&mut self, just_for_proposal: Option<u64>) -> Result<()> {
-        // Iterate over all the delegator votes, or just the ones for a specific proposal
-        let prefix = if let Some(proposal_id) = just_for_proposal {
-            state_key::all_untallied_delegator_votes_for_proposal(proposal_id)
-        } else {
-            state_key::all_untallied_delegator_votes().to_string()
-        };
-        let mut prefix_stream = self.prefix(&prefix);
-
-        // We need to keep track of modifications and then apply them after iteration, because
-        // `self.prefix(..)` borrows `self` immutably, so we can't mutate `self` during iteration
-        let mut keys_to_delete = vec![];
-        let mut new_tallies: BTreeMap<u64, BTreeMap<IdentityKey, Tally>> = BTreeMap::new();
-
-        while let Some((key, tally)) = prefix_stream.next().await.transpose()? {
-            // Extract the validator identity key from the key string
-            let mut reverse_path_elements = key.rsplit('/');
-            reverse_path_elements.next(); // skip the nullifier element of the key
-            let identity_key = reverse_path_elements
-                .next()
-                .ok_or_else(|| {
-                    anyhow::anyhow!("unexpected key format for untallied delegator vote")
-                })?
-                .parse()?;
-            let proposal_id = reverse_path_elements
-                .next()
-                .ok_or_else(|| {
-                    anyhow::anyhow!("unexpected key format for untallied delegator vote")
-                })?
-                .parse()?;
-
-            // Get the current tally for this validator
-            let mut current_tally = self
-                .get::<Tally>(&state_key::tallied_delegator_votes(
-                    proposal_id,
-                    identity_key,
-                ))
-                .await?
-                .unwrap_or_default();
-
-            // Add the new tally to the current tally
-            current_tally += tally;
-
-            // Remember the new tally
-            new_tallies
-                .entry(proposal_id)
-                .or_default()
-                .insert(identity_key, current_tally);
-
-            // Remember to delete this key
-            keys_to_delete.push(key);
-        }
-
-        // Explicit drop because we need to borrow self mutably again below
-        drop(prefix_stream);
-
-        // Actually record the key deletions in the state
-        for key in keys_to_delete {
-            self.delete(key);
-        }
-
-        // Actually record the new tallies in the state
-        for (proposal_id, new_tallies_for_proposal) in new_tallies {
-            for (identity_key, tally) in new_tallies_for_proposal {
-                tracing::debug!(
-                    proposal_id,
-                    identity_key = %identity_key,
-                    yes = %tally.yes(),
-                    no = %tally.no(),
-                    abstain = %tally.abstain(),
-                    "tallying delegator votes"
-                );
-                self.put(
-                    state_key::tallied_delegator_votes(proposal_id, identity_key),
-                    tally,
-                );
-            }
-        }
-
-        Ok(())
-    }
-
     #[instrument(skip(self))]
     async fn enact_proposal(
         &mut self,
-        proposal_id: u64,
+        _proposal_id: u64,
         payload: &ProposalPayload,
     ) -> Result<Result<()>> // inner error from proposal execution
     {
@@ -902,13 +637,6 @@ pub trait StateWriteExt: StateWrite + penumbra_sdk_ibc::component::ConnectionSta
                     change.clone(),
                 );
             }
-            ProposalPayload::CommunityPoolSpend {
-                transaction_plan: _,
-            } => {
-                // All we need to do here is signal to the `App` that we'd like this transaction to
-                // be slotted in at the end of the block:
-                self.deliver_community_pool_transaction(proposal_id).await?;
-            }
             ProposalPayload::UpgradePlan { height } => {
                 tracing::info!(target_height = height, "upgrade plan proposal passed");
                 self.signal_upgrade(*height).await?;
@@ -933,24 +661,17 @@ pub trait StateWriteExt: StateWrite + penumbra_sdk_ibc::component::ConnectionSta
                 let unfrozen_client = client_state.unfrozen();
                 self.put_client(client_id, unfrozen_client);
             }
+            ProposalPayload::UpdateAssetIbcPolicy(update) => {
+                use penumbra_sdk_compliance::ComplianceRegistryWrite as _;
+                self.replace_asset_ibc_policy(
+                    update.asset_id,
+                    update.expected_route_policy_hash,
+                    update.allowed_ibc_routes.clone(),
+                )
+                .await?;
+            }
         }
         Ok(Ok(()))
-    }
-
-    async fn deliver_community_pool_transaction(&mut self, proposal: u64) -> Result<()> {
-        // Schedule for beginning of next block
-        let delivery_height = self.get_block_height().await? + 1;
-
-        tracing::info!(%proposal, %delivery_height, "scheduling Community Pool transaction for delivery at next block");
-
-        self.put_proto(
-            state_key::deliver_single_community_pool_transaction_at_height(
-                delivery_height,
-                proposal,
-            ),
-            proposal,
-        );
-        Ok(())
     }
 
     /// Records the next upgrade height.

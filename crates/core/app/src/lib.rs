@@ -1,5 +1,5 @@
 #![deny(clippy::unwrap_used)]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 use once_cell::sync::Lazy;
 
@@ -23,18 +23,18 @@ pub mod params;
 cfg_if::cfg_if! {
     if #[cfg(feature="component")] {
         pub mod app;
+        pub mod block_tx_indexing;
         pub mod metrics;
         pub mod rpc;
         pub mod server;
+        pub mod stateless_cache;
 
         mod action_handler;
-        mod community_pool_ext;
         mod penumbra_host_chain;
 
         pub use crate::{
             action_handler::AppActionHandler, app::StateWriteExt,
-            community_pool_ext::CommunityPoolStateReadExt, metrics::register_metrics,
-            penumbra_host_chain::PenumbraHost,
+            metrics::register_metrics, penumbra_host_chain::PenumbraHost,
         };
 
         /// Temporary compat wrapper for duplicate trait impls

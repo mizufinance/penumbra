@@ -59,7 +59,7 @@ impl TryFrom<asset::Metadata> for VotingReceiptToken {
             .captures(base_string.as_ref())
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "base denom {} is not an unbonding token",
+                    "base denom {} is not a voting receipt token",
                     base_denom.to_string()
                 )
             })?;

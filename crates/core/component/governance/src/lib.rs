@@ -1,16 +1,7 @@
 #![deny(clippy::unwrap_used)]
 // Requires nightly.
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![recursion_limit = "512"]
-
-pub mod delegator_vote;
-pub use delegator_vote::{
-    DelegatorVote, DelegatorVoteBody, DelegatorVoteCircuit, DelegatorVotePlan, DelegatorVoteProof,
-    DelegatorVoteProofPrivate, DelegatorVoteProofPublic, DelegatorVoteView,
-};
-
-pub mod proposal_deposit_claim;
-pub use proposal_deposit_claim::ProposalDepositClaim;
 
 pub mod validator_vote;
 pub use validator_vote::{
@@ -18,20 +9,15 @@ pub use validator_vote::{
 };
 
 pub mod proposal_submit;
-pub use proposal_submit::ProposalSubmit;
-
-pub mod proposal_withdraw;
-pub use proposal_withdraw::ProposalWithdraw;
+pub use proposal_submit::{ProposalSubmit, ProposalSubmitBody};
 
 pub mod proposal;
 pub use proposal::{Proposal, ProposalKind, ProposalPayload};
 
-pub mod proposal_nft;
 pub mod proposal_state;
 
 pub mod voting_receipt_token;
 
-pub use proposal_nft::ProposalNft;
 pub use voting_receipt_token::VotingReceiptToken;
 
 pub mod event;

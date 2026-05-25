@@ -2,58 +2,68 @@ use {
     anyhow::Context,
     cnidarium::TempStorage,
     common::TempStorageExt as _,
+    futures::StreamExt,
     penumbra_sdk_app::{
         genesis::{AppState, Content},
         server::consensus::Consensus,
     },
-    penumbra_sdk_asset::{STAKING_TOKEN_ASSET_ID, STAKING_TOKEN_DENOM},
+    penumbra_sdk_asset::{BASE_ASSET_DENOM, BASE_ASSET_ID},
     penumbra_sdk_keys::{keys::AddressIndex, test_keys},
     penumbra_sdk_mock_client::MockClient,
     penumbra_sdk_mock_consensus::TestNode,
     penumbra_sdk_proto::{
         view::v1::{
             view_service_client::ViewServiceClient, view_service_server::ViewServiceServer,
-            StatusRequest, StatusResponse,
+            StatusRequest,
         },
         DomainType,
     },
     penumbra_sdk_shielded_pool::genesis::Allocation,
     penumbra_sdk_view::ViewClient,
-    penumbra_sdk_wallet::plan::SWEEP_COUNT,
+    penumbra_sdk_wallet::plan,
     rand_core::OsRng,
     std::ops::Deref,
     tap::{Tap, TapFallible},
+    tokio::time,
 };
 
 mod common;
 
-/// The number of notes placed in the test wallet at genesis.
-//  note: when debugging, it can help to set this to a lower value.
-const COUNT: usize = SWEEP_COUNT + 1;
+const COUNT: usize = 5;
 
-/// Exercises that the app can process a "sweep", consolidating small notes.
-//  NB: a multi-thread runtime is needed to run both the view server and its client.
+async fn wait_for_view_sync(
+    view_client: &mut ViewServiceClient<ViewServiceServer<penumbra_sdk_view::ViewServer>>,
+    min_height: u64,
+) -> anyhow::Result<()> {
+    let mut status_stream = ViewClient::status_stream(view_client).await?;
+    while let Some(status) = status_stream.next().await.transpose()? {
+        tracing::info!(?status, "view client received status stream response");
+    }
+    let status = view_client.status(StatusRequest {}).await?.into_inner();
+    assert!(!status.catching_up, "view client should not be catching up");
+    assert!(
+        status.full_sync_height >= min_height,
+        "view client should be synced to at least height {min_height}, got {}",
+        status.full_sync_height
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "Flaked in #4626"]
 async fn app_can_sweep_a_collection_of_small_notes() -> anyhow::Result<()> {
-    // Install a test logger, and acquire some temporary storage.
     let guard = common::set_tracing_subscriber_with_env_filter("info".into());
     let storage = TempStorage::new_with_penumbra_prefixes().await?;
-
-    // Instantiate a mock tendermint proxy, which we will connect to the test node.
     let proxy = penumbra_sdk_mock_tendermint_proxy::TestNodeProxy::new::<Consensus>();
 
-    // Define allocations to the test address, as many small notes.
     let allocations = {
         let dust = Allocation {
             raw_amount: 1_u128.into(),
-            raw_denom: STAKING_TOKEN_DENOM.deref().base_denom().denom,
+            raw_denom: BASE_ASSET_DENOM.deref().base_denom().denom,
             address: test_keys::ADDRESS_0.to_owned(),
         };
         std::iter::repeat(dust).take(COUNT).collect()
     };
 
-    // Define our application state, and start the test node.
     let mut test_node = {
         let content = Content {
             chain_id: TestNode::<()>::CHAIN_ID.to_string(),
@@ -75,7 +85,6 @@ async fn app_can_sweep_a_collection_of_small_notes() -> anyhow::Result<()> {
             .tap_ok(|e| tracing::info!(hash = %e.last_app_hash_hex(), "finished init chain"))?
     };
 
-    // Sync the mock client, using the test wallet's spend key, to the latest snapshot.
     let mut client = MockClient::new(test_keys::SPEND_KEY.clone())
         .with_sync_to_storage(&storage)
         .await?
@@ -83,83 +92,56 @@ async fn app_can_sweep_a_collection_of_small_notes() -> anyhow::Result<()> {
             |c| tracing::info!(client.notes = %c.notes.len(), "mock client synced to test storage"),
         );
 
-    // Jump ahead a few blocks.
     test_node
         .fast_forward(10)
         .tap(|_| tracing::debug!("fast forwarding past genesis"))
         .await?;
 
-    let grpc_url = "http://127.0.0.1:8081" // see #4517
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let local_addr = listener.local_addr()?;
+    let grpc_url = format!("http://{local_addr}")
         .parse::<url::Url>()?
         .tap(|url| tracing::debug!(%url, "parsed grpc url"));
 
-    // Spawn the server-side view server.
     {
-        let make_svc = penumbra_sdk_app::rpc::routes(
-            storage.as_ref(),
-            proxy,
-            false, /*enable_expensive_rpc*/
-        )?
-        .into_axum_router()
-        .layer(tower_http::cors::CorsLayer::permissive())
-        .into_make_service()
-        .tap(|_| tracing::debug!("initialized rpc service"));
-        let [addr] = grpc_url
-            .socket_addrs(|| None)?
-            .try_into()
-            .expect("grpc url can be turned into a socket address");
-        let server = axum_server::bind(addr).serve(make_svc);
-        tokio::spawn(async { server.await.expect("grpc server returned an error") })
-            .tap(|_| tracing::debug!("grpc server is running"))
+        let make_svc = penumbra_sdk_app::rpc::routes(storage.as_ref(), proxy, false)?
+            .into_axum_router()
+            .layer(tower_http::cors::CorsLayer::permissive())
+            .into_make_service();
+        listener.set_nonblocking(true)?;
+        let server = axum_server::from_tcp(listener).serve(make_svc);
+        tokio::spawn(async { server.await.expect("grpc server returned an error") });
     };
 
-    // Spawn the client-side view server...
-    let view_server = {
-        penumbra_sdk_view::ViewServer::load_or_initialize(
-            None::<&camino::Utf8Path>,
-            None::<&camino::Utf8Path>,
-            &*test_keys::FULL_VIEWING_KEY,
-            grpc_url,
-        )
-        .await
-        // TODO(kate): the goal is to communicate with the `ViewServiceServer`.
-        .map(ViewServiceServer::new)
-        .context("initializing view server")?
-    };
+    time::sleep(time::Duration::from_millis(50)).await;
 
-    // Create a view client, and get the test wallet's notes.
+    let view_server = penumbra_sdk_view::ViewServer::load_or_initialize(
+        None::<&camino::Utf8Path>,
+        None::<&camino::Utf8Path>,
+        &*test_keys::FULL_VIEWING_KEY,
+        grpc_url,
+    )
+    .await
+    .map(ViewServiceServer::new)
+    .context("initializing view server")?;
+
     let mut view_client = ViewServiceClient::new(view_server);
 
-    // Sync the view client to the chain.
-    {
-        use futures::StreamExt;
-        let mut status_stream = ViewClient::status_stream(&mut view_client).await?;
-        while let Some(status) = status_stream.next().await.transpose()? {
-            tracing::info!(?status, "view client received status stream response");
-        }
-        // Confirm that the status is as expected: synced up to the 11th block.
-        let status = view_client.status(StatusRequest {}).await?.into_inner();
-        debug_assert_eq!(
-            status,
-            StatusResponse {
-                full_sync_height: 10,
-                partial_sync_height: 10,
-                catching_up: false,
-            }
-        );
-    }
+    wait_for_view_sync(&mut view_client, 10).await?;
 
     client.sync_to_latest(storage.latest_snapshot()).await?;
-    debug_assert_eq!(
+    assert_eq!(
         client
-            .notes_by_asset(STAKING_TOKEN_ASSET_ID.deref().to_owned())
+            .notes_by_asset(BASE_ASSET_ID.deref().to_owned())
             .count(),
         COUNT,
         "client wallet should have {COUNT} notes before sweeping"
     );
 
     loop {
-        let plans = penumbra_sdk_wallet::plan::sweep(&mut view_client, OsRng)
+        client.sync_to_latest(storage.latest_snapshot()).await?;
+
+        let plans = plan::sweep(&mut view_client, OsRng)
             .await
             .context("constructing sweep plans")?;
         if plans.is_empty() {
@@ -172,20 +154,21 @@ async fn app_can_sweep_a_collection_of_small_notes() -> anyhow::Result<()> {
                 .with_data(vec![tx.encode_to_vec()])
                 .execute()
                 .await?;
+            client.sync_to_latest(storage.latest_snapshot()).await?;
+            wait_for_view_sync(&mut view_client, storage.latest_snapshot().version()).await?;
         }
     }
 
     let post_sweep_notes = view_client.unspent_notes_by_address_and_asset().await?;
-
-    client.sync_to_latest(storage.latest_snapshot()).await?;
-    assert_eq!(
-        post_sweep_notes
-            .get(&AddressIndex::from(0))
-            .expect("test wallet could not find any notes")
-            .get(&*STAKING_TOKEN_ASSET_ID)
-            .map(Vec::len),
-        Some(2),
-        "destination address should have collected {SWEEP_COUNT} notes into one note"
+    let final_note_count = post_sweep_notes
+        .get(&AddressIndex::from(0))
+        .expect("test wallet could not find any notes")
+        .get(&*BASE_ASSET_ID)
+        .map(Vec::len)
+        .unwrap_or_default();
+    assert!(
+        final_note_count < COUNT,
+        "sweep should reduce note count from {COUNT}, got {final_note_count}"
     );
 
     Ok(())

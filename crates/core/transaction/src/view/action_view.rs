@@ -1,29 +1,14 @@
-use penumbra_sdk_auction::auction::dutch::{
-    actions::view::{ActionDutchAuctionScheduleView, ActionDutchAuctionWithdrawView},
-    ActionDutchAuctionEnd,
-};
-use penumbra_sdk_community_pool::{CommunityPoolDeposit, CommunityPoolOutput, CommunityPoolSpend};
-use penumbra_sdk_dex::{
-    lp::{
-        action::{PositionClose, PositionWithdraw},
-        view::PositionOpenView,
-    },
-    swap::SwapView,
-    swap_claim::SwapClaimView,
-};
-use penumbra_sdk_funding::liquidity_tournament::ActionLiquidityTournamentVoteView;
-use penumbra_sdk_governance::{
-    ProposalDepositClaim, ProposalSubmit, ProposalWithdraw, ValidatorVote,
-};
+use penumbra_sdk_compliance::structs::{MsgRegisterAsset, MsgRegisterUser};
+use penumbra_sdk_governance::{ProposalSubmit, ValidatorVote};
 use penumbra_sdk_ibc::IbcRelay;
+use penumbra_sdk_proof_aggregation::AggregateBundle;
 use penumbra_sdk_proto::{core::transaction::v1 as pbt, DomainType};
-use penumbra_sdk_shielded_pool::Ics20Withdrawal;
-use penumbra_sdk_stake::{Delegate, Undelegate, UndelegateClaim};
+use penumbra_sdk_shielded_pool::ShieldedIcs20WithdrawalView;
 use serde::{Deserialize, Serialize};
 
-pub use penumbra_sdk_governance::DelegatorVoteView;
-pub use penumbra_sdk_shielded_pool::OutputView;
-pub use penumbra_sdk_shielded_pool::SpendView;
+pub use penumbra_sdk_shielded_pool::ConsolidateView;
+pub use penumbra_sdk_shielded_pool::SplitView;
+pub use penumbra_sdk_shielded_pool::TransferView;
 
 use crate::Action;
 
@@ -31,33 +16,17 @@ use crate::Action;
 #[serde(try_from = "pbt::ActionView", into = "pbt::ActionView")]
 #[allow(clippy::large_enum_variant)]
 pub enum ActionView {
-    // Action types with encrypted contents
-    Spend(SpendView),
-    Output(OutputView),
-    Swap(SwapView),
-    SwapClaim(SwapClaimView),
-    DelegatorVote(DelegatorVoteView),
-    // Action types with transparent contents
-    ValidatorDefinition(penumbra_sdk_stake::validator::Definition),
+    Transfer(TransferView),
+    Consolidate(ConsolidateView),
+    Split(SplitView),
+    ValidatorDefinition(penumbra_sdk_validator::validator::Definition),
     IbcRelay(IbcRelay),
     ProposalSubmit(ProposalSubmit),
-    ProposalWithdraw(ProposalWithdraw),
     ValidatorVote(ValidatorVote),
-    ProposalDepositClaim(ProposalDepositClaim),
-    PositionOpen(PositionOpenView),
-    PositionClose(PositionClose),
-    PositionWithdraw(PositionWithdraw),
-    Delegate(Delegate),
-    Undelegate(Undelegate),
-    UndelegateClaim(UndelegateClaim),
-    Ics20Withdrawal(Ics20Withdrawal),
-    CommunityPoolDeposit(CommunityPoolDeposit),
-    CommunityPoolSpend(CommunityPoolSpend),
-    CommunityPoolOutput(CommunityPoolOutput),
-    ActionDutchAuctionSchedule(ActionDutchAuctionScheduleView),
-    ActionDutchAuctionEnd(ActionDutchAuctionEnd),
-    ActionDutchAuctionWithdraw(ActionDutchAuctionWithdrawView),
-    ActionLiquidityTournamentVote(ActionLiquidityTournamentVoteView),
+    ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalView),
+    ComplianceRegisterAsset(MsgRegisterAsset),
+    ComplianceRegisterUser(MsgRegisterUser),
+    AggregateBundle(AggregateBundle),
 }
 
 impl DomainType for ActionView {
@@ -74,45 +43,21 @@ impl TryFrom<pbt::ActionView> for ActionView {
                 .action_view
                 .ok_or_else(|| anyhow::anyhow!("missing action_view"))?
             {
-                AV::Delegate(x) => ActionView::Delegate(x.try_into()?),
-                AV::Spend(x) => ActionView::Spend(x.try_into()?),
-                AV::Output(x) => ActionView::Output(x.try_into()?),
-                AV::Undelegate(x) => ActionView::Undelegate(x.try_into()?),
-                AV::UndelegateClaim(x) => ActionView::UndelegateClaim(x.try_into()?),
-                AV::Swap(x) => ActionView::Swap(x.try_into()?),
-                AV::SwapClaim(x) => ActionView::SwapClaim(x.try_into()?),
+                AV::Transfer(x) => ActionView::Transfer(x.try_into()?),
+                AV::Consolidate(x) => ActionView::Consolidate(x.try_into()?),
+                AV::Split(x) => ActionView::Split(x.try_into()?),
                 AV::ValidatorDefinition(x) => ActionView::ValidatorDefinition(x.try_into()?),
                 AV::IbcRelayAction(x) => ActionView::IbcRelay(x.try_into()?),
                 AV::ProposalSubmit(x) => ActionView::ProposalSubmit(x.try_into()?),
-                AV::ProposalWithdraw(x) => ActionView::ProposalWithdraw(x.try_into()?),
-                AV::ProposalDepositClaim(x) => ActionView::ProposalDepositClaim(x.try_into()?),
                 AV::ValidatorVote(x) => ActionView::ValidatorVote(x.try_into()?),
-                AV::DelegatorVote(x) => ActionView::DelegatorVote(x.try_into()?),
-                AV::PositionOpen(x) => ActionView::PositionOpen(PositionOpenView::Opaque {
-                    action: x.try_into()?,
-                }),
-                AV::PositionClose(x) => ActionView::PositionClose(x.try_into()?),
-                AV::PositionWithdraw(x) => ActionView::PositionWithdraw(x.try_into()?),
-                AV::PositionRewardClaim(_) => {
-                    return Err(anyhow::anyhow!(
-                        "PositionRewardClaim is deprecated and unsupported"
-                    ))
+                AV::ShieldedIcs20Withdrawal(x) => {
+                    ActionView::ShieldedIcs20Withdrawal(x.try_into()?)
                 }
-                AV::Ics20Withdrawal(x) => ActionView::Ics20Withdrawal(x.try_into()?),
-                AV::CommunityPoolDeposit(x) => ActionView::CommunityPoolDeposit(x.try_into()?),
-                AV::CommunityPoolSpend(x) => ActionView::CommunityPoolSpend(x.try_into()?),
-                AV::CommunityPoolOutput(x) => ActionView::CommunityPoolOutput(x.try_into()?),
-                AV::ActionDutchAuctionSchedule(x) => {
-                    ActionView::ActionDutchAuctionSchedule(x.try_into()?)
+                AV::ComplianceRegisterAsset(x) => {
+                    ActionView::ComplianceRegisterAsset(x.try_into()?)
                 }
-                AV::ActionDutchAuctionEnd(x) => ActionView::ActionDutchAuctionEnd(x.try_into()?),
-                AV::ActionDutchAuctionWithdraw(x) => {
-                    ActionView::ActionDutchAuctionWithdraw(x.try_into()?)
-                }
-                AV::ActionLiquidityTournamentVote(x) => {
-                    ActionView::ActionLiquidityTournamentVote(x.try_into()?)
-                }
-                AV::PositionOpenView(x) => ActionView::PositionOpen(x.try_into()?),
+                AV::ComplianceRegisterUser(x) => ActionView::ComplianceRegisterUser(x.try_into()?),
+                AV::AggregateBundle(x) => ActionView::AggregateBundle(x.try_into()?),
             },
         )
     }
@@ -123,37 +68,17 @@ impl From<ActionView> for pbt::ActionView {
         use pbt::action_view::ActionView as AV;
         Self {
             action_view: Some(match v {
-                ActionView::Swap(x) => AV::Swap(x.into()),
-                ActionView::SwapClaim(x) => AV::SwapClaim(x.into()),
-                ActionView::Output(x) => AV::Output(x.into()),
-                ActionView::Spend(x) => AV::Spend(x.into()),
-                ActionView::Delegate(x) => AV::Delegate(x.into()),
-                ActionView::Undelegate(x) => AV::Undelegate(x.into()),
-                ActionView::UndelegateClaim(x) => AV::UndelegateClaim(x.into()),
+                ActionView::Transfer(x) => AV::Transfer(x.into()),
+                ActionView::Consolidate(x) => AV::Consolidate(x.into()),
+                ActionView::Split(x) => AV::Split(x.into()),
                 ActionView::ValidatorDefinition(x) => AV::ValidatorDefinition(x.into()),
                 ActionView::IbcRelay(x) => AV::IbcRelayAction(x.into()),
                 ActionView::ProposalSubmit(x) => AV::ProposalSubmit(x.into()),
-                ActionView::ProposalWithdraw(x) => AV::ProposalWithdraw(x.into()),
                 ActionView::ValidatorVote(x) => AV::ValidatorVote(x.into()),
-                ActionView::DelegatorVote(x) => AV::DelegatorVote(x.into()),
-                ActionView::ProposalDepositClaim(x) => AV::ProposalDepositClaim(x.into()),
-                ActionView::PositionOpen(x) => AV::PositionOpenView(x.into()),
-                ActionView::PositionClose(x) => AV::PositionClose(x.into()),
-                ActionView::PositionWithdraw(x) => AV::PositionWithdraw(x.into()),
-                ActionView::Ics20Withdrawal(x) => AV::Ics20Withdrawal(x.into()),
-                ActionView::CommunityPoolDeposit(x) => AV::CommunityPoolDeposit(x.into()),
-                ActionView::CommunityPoolSpend(x) => AV::CommunityPoolSpend(x.into()),
-                ActionView::CommunityPoolOutput(x) => AV::CommunityPoolOutput(x.into()),
-                ActionView::ActionDutchAuctionSchedule(x) => {
-                    AV::ActionDutchAuctionSchedule(x.into())
-                }
-                ActionView::ActionDutchAuctionEnd(x) => AV::ActionDutchAuctionEnd(x.into()),
-                ActionView::ActionDutchAuctionWithdraw(x) => {
-                    AV::ActionDutchAuctionWithdraw(x.into())
-                }
-                ActionView::ActionLiquidityTournamentVote(x) => {
-                    AV::ActionLiquidityTournamentVote(x.into())
-                }
+                ActionView::ShieldedIcs20Withdrawal(x) => AV::ShieldedIcs20Withdrawal(x.into()),
+                ActionView::ComplianceRegisterAsset(x) => AV::ComplianceRegisterAsset(x.into()),
+                ActionView::ComplianceRegisterUser(x) => AV::ComplianceRegisterUser(x.into()),
+                ActionView::AggregateBundle(x) => AV::AggregateBundle(x.into()),
             }),
         }
     }
@@ -162,37 +87,24 @@ impl From<ActionView> for pbt::ActionView {
 impl From<ActionView> for Action {
     fn from(action_view: ActionView) -> Action {
         match action_view {
-            ActionView::Swap(x) => Action::Swap(x.into()),
-            ActionView::SwapClaim(x) => Action::SwapClaim(x.into()),
-            ActionView::Output(x) => Action::Output(x.into()),
-            ActionView::Spend(x) => Action::Spend(x.into()),
-            ActionView::Delegate(x) => Action::Delegate(x),
-            ActionView::Undelegate(x) => Action::Undelegate(x),
-            ActionView::UndelegateClaim(x) => Action::UndelegateClaim(x),
+            ActionView::Transfer(x) => Action::Transfer(x.into()),
+            ActionView::Consolidate(x) => Action::Consolidate(x.into()),
+            ActionView::Split(x) => Action::Split(x.into()),
             ActionView::ValidatorDefinition(x) => Action::ValidatorDefinition(x),
             ActionView::IbcRelay(x) => Action::IbcRelay(x),
             ActionView::ProposalSubmit(x) => Action::ProposalSubmit(x),
-            ActionView::ProposalWithdraw(x) => Action::ProposalWithdraw(x),
             ActionView::ValidatorVote(x) => Action::ValidatorVote(x),
-            ActionView::DelegatorVote(x) => Action::DelegatorVote(x.into()),
-            ActionView::ProposalDepositClaim(x) => Action::ProposalDepositClaim(x),
-            ActionView::PositionOpen(x) => Action::PositionOpen(x.into()),
-            ActionView::PositionClose(x) => Action::PositionClose(x),
-            ActionView::PositionWithdraw(x) => Action::PositionWithdraw(x),
-            ActionView::Ics20Withdrawal(x) => Action::Ics20Withdrawal(x),
-            ActionView::CommunityPoolDeposit(x) => Action::CommunityPoolDeposit(x),
-            ActionView::CommunityPoolSpend(x) => Action::CommunityPoolSpend(x),
-            ActionView::CommunityPoolOutput(x) => Action::CommunityPoolOutput(x),
-            ActionView::ActionDutchAuctionSchedule(x) => {
-                Action::ActionDutchAuctionSchedule(x.into())
-            }
-            ActionView::ActionDutchAuctionEnd(x) => Action::ActionDutchAuctionEnd(x),
-            ActionView::ActionDutchAuctionWithdraw(x) => {
-                Action::ActionDutchAuctionWithdraw(x.into())
-            }
-            ActionView::ActionLiquidityTournamentVote(x) => {
-                Action::ActionLiquidityTournamentVote(x.into())
-            }
+            ActionView::ShieldedIcs20Withdrawal(x) => match x {
+                ShieldedIcs20WithdrawalView::Visible { withdrawal, .. } => {
+                    Action::ShieldedIcs20Withdrawal(withdrawal)
+                }
+                ShieldedIcs20WithdrawalView::Opaque { withdrawal } => {
+                    Action::ShieldedIcs20Withdrawal(withdrawal)
+                }
+            },
+            ActionView::ComplianceRegisterAsset(x) => Action::ComplianceRegisterAsset(x),
+            ActionView::ComplianceRegisterUser(x) => Action::ComplianceRegisterUser(x),
+            ActionView::AggregateBundle(x) => Action::AggregateBundle(x),
         }
     }
 }

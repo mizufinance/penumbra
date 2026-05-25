@@ -13,6 +13,7 @@ component = [
     "cnidarium-component",
     "penumbra-sdk-proto/cnidarium",
     "penumbra-sdk-proto/rpc",
+    "tokio",
     "tonic",
 ]
 default = ["std", "component"]
@@ -28,13 +29,16 @@ ark-serialize = {workspace = true}
 async-trait = {workspace = true}
 bincode = {workspace = true}
 blake2b_simd = {workspace = true}
+borsh = {workspace = true}
 bytes = {workspace = true}
 cnidarium = {workspace = true, optional = true, default-features = true}
 cnidarium-component = {workspace = true, optional = true, default-features = true}
 decaf377 = {workspace = true, features = ["r1cs"], default-features = true}
 decaf377-rdsa = {workspace = true}
 hex = {workspace = true}
+futures = {workspace = true}
 im = {workspace = true}
+jmt = {workspace = true}
 metrics = {workspace = true}
 once_cell = {workspace = true}
 pbjson-types = {workspace = true}
@@ -46,10 +50,13 @@ poseidon377 = {workspace = true, features = ["r1cs"]}
 rand = {workspace = true}
 rand_core = {workspace = true, features = ["getrandom"]}
 serde = {workspace = true, features = ["derive"]}
+sha2 = {workspace = true}
 tendermint = {workspace = true}
+tokio = {workspace = true, optional = true, features = ["rt"]}
 tonic = {workspace = true, optional = true}
 tracing = {workspace = true}
 chrono = { workspace = true, default-features = false, features = ["serde", "now"] }
 
 [dev-dependencies]
 getrandom = {workspace = true}
+tokio = {workspace = true, features = ["full"]}

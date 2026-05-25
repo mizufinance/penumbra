@@ -11,10 +11,10 @@ processes:
     command: |-
       set -e
       ./deployments/scripts/prep-postgres-env
-      postgres -k /tmp -D ~/.penumbra/network_data/postgresql/
+      postgres -k /tmp -p ${PENUMBRA_POSTGRES_PORT} -D ${PENUMBRA_DEVNET_HOME}/network_data/postgresql/
     readiness_probe:
       exec:
-        command: psql -h localhost -p 5432 -lqt
+        command: psql -h 127.0.0.1 -p ${PENUMBRA_POSTGRES_PORT} -lqt
       initial_delay_seconds: 5
       period_seconds: 5
       failure_threshold: 3
@@ -28,26 +28,26 @@ processes:
   postgresql-init:
     command: |-
       set -e
-      if psql -h localhost -p 5432 -lqt | grep penumbra_cometbft ; then
+      if psql -h 127.0.0.1 -p ${PENUMBRA_POSTGRES_PORT} -lqt | grep penumbra_cometbft ; then
         >&2 echo "Postgres DB already initialized, skipping schema/grants..."
         exit 0
       fi
       >&2 echo "Creating database schema for CometBFT..."
       # Create database for CometBFT writes
-      createdb -h localhost -p 5432 penumbra_cometbft || true
-      createuser -h localhost -p 5432 penumbra
-      psql -h localhost -p 5432 -d penumbra_cometbft -f crates/util/cometindex/vendor/schema.sql
-      psql -h localhost -p 5432 -d penumbra_cometbft -c 'GRANT ALL PRIVILEGES ON DATABASE penumbra_cometbft TO penumbra;'
-      psql -h localhost -p 5432 -d penumbra_cometbft -c 'GRANT pg_read_all_data TO penumbra;'
-      psql -h localhost -p 5432 -d penumbra_cometbft -c 'GRANT pg_write_all_data TO penumbra;'
+      createdb -h 127.0.0.1 -p ${PENUMBRA_POSTGRES_PORT} penumbra_cometbft || true
+      createuser -h 127.0.0.1 -p ${PENUMBRA_POSTGRES_PORT} penumbra
+      psql -h 127.0.0.1 -p ${PENUMBRA_POSTGRES_PORT} -d penumbra_cometbft -f crates/util/cometindex/vendor/schema.sql
+      psql -h 127.0.0.1 -p ${PENUMBRA_POSTGRES_PORT} -d penumbra_cometbft -c 'GRANT ALL PRIVILEGES ON DATABASE penumbra_cometbft TO penumbra;'
+      psql -h 127.0.0.1 -p ${PENUMBRA_POSTGRES_PORT} -d penumbra_cometbft -c 'GRANT pg_read_all_data TO penumbra;'
+      psql -h 127.0.0.1 -p ${PENUMBRA_POSTGRES_PORT} -d penumbra_cometbft -c 'GRANT pg_write_all_data TO penumbra;'
 
       # Create database for pindexer
       >&2 echo "Creating database schema for pindexer..."
-      createuser -h localhost -p 5432 penumbra_ro
-      createdb -h localhost -p 5432 penumbra_pindexer || true
-      psql -h localhost -p 5432 -d penumbra_cometbft -c 'GRANT pg_read_all_data TO penumbra_ro;'
-      psql -h localhost -p 5432 -d penumbra_pindexer -c 'GRANT pg_write_all_data TO penumbra_ro;'
-      psql -h localhost -p 5432 -d penumbra_pindexer -c 'GRANT ALL PRIVILEGES ON DATABASE penumbra_pindexer TO penumbra_ro;'
+      createuser -h 127.0.0.1 -p ${PENUMBRA_POSTGRES_PORT} penumbra_ro
+      createdb -h 127.0.0.1 -p ${PENUMBRA_POSTGRES_PORT} penumbra_pindexer || true
+      psql -h 127.0.0.1 -p ${PENUMBRA_POSTGRES_PORT} -d penumbra_cometbft -c 'GRANT pg_read_all_data TO penumbra_ro;'
+      psql -h 127.0.0.1 -p ${PENUMBRA_POSTGRES_PORT} -d penumbra_pindexer -c 'GRANT pg_write_all_data TO penumbra_ro;'
+      psql -h 127.0.0.1 -p ${PENUMBRA_POSTGRES_PORT} -d penumbra_pindexer -c 'GRANT ALL PRIVILEGES ON DATABASE penumbra_pindexer TO penumbra_ro;'
     depends_on:
       postgresql:
         condition: process_healthy
@@ -64,9 +64,9 @@ processes:
       - "RUST_LOG=debug"
     command: |-
       cargo run --release --bin pindexer -- \
-          --src-database-url "postgresql://localhost:5432/penumbra_cometbft?sslmode=disable" \
-          --dst-database-url "postgresql://localhost:5432/penumbra_pindexer?sslmode=disable" \
-          --genesis-json ~/.penumbra/network_data/node0/cometbft/config/genesis.json
+          --src-database-url "postgresql://127.0.0.1:${PENUMBRA_POSTGRES_PORT}/penumbra_cometbft?sslmode=disable" \
+          --dst-database-url "postgresql://127.0.0.1:${PENUMBRA_POSTGRES_PORT}/penumbra_pindexer?sslmode=disable" \
+          --genesis-json ${PENUMBRA_DEVNET_HOME}/network_data/node0/cometbft/config/genesis.json
     depends_on:
       postgresql-init:
         condition: process_completed_successfully

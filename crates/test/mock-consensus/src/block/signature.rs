@@ -12,7 +12,7 @@ use {
 
 /// Helper functions for generating [commit signatures].
 mod sign {
-    use tendermint::{account::Id, block::CommitSig, time::Time};
+    use tendermint::{account::Id, block::CommitSig};
 
     /// Returns a [commit signature] saying this validator voted for the block.
     ///
@@ -44,18 +44,6 @@ mod sign {
             validator_address,
             timestamp: canonical.timestamp.expect("timestamp should be present"),
             signature: Some(signature.into()),
-        }
-    }
-
-    /// Returns a [commit signature] saying this validator voted nil.
-    ///
-    /// [commit signature]: CommitSig
-    #[allow(dead_code)]
-    pub(super) fn nil(validator_address: Id, timestamp: Time) -> CommitSig {
-        CommitSig::BlockIdFlagNil {
-            validator_address,
-            timestamp,
-            signature: None,
         }
     }
 }

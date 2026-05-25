@@ -1,9 +1,43 @@
 use anyhow::{Context, Result};
-use penumbra_sdk_transaction::Transaction;
+use penumbra_sdk_transaction::{Action, Transaction};
 use penumbra_sdk_txhash::AuthorizingData;
 
+fn note_creating_output_count(tx: &Transaction) -> usize {
+    let action_outputs = tx
+        .actions()
+        .map(|action| match action {
+            Action::Transfer(transfer) => transfer
+                .body
+                .outputs
+                .iter()
+                .filter(|output| !output.is_dummy())
+                .count(),
+            Action::Consolidate(consolidate) => consolidate.body.outputs.len(),
+            Action::Split(split) => split.body.outputs.len(),
+            Action::ShieldedIcs20Withdrawal(_) => 1,
+            _ => 0,
+        })
+        .sum::<usize>();
+
+    let fee_outputs = tx
+        .transaction_body()
+        .fee_funding
+        .map(|fee_funding| {
+            fee_funding
+                .transfer
+                .body
+                .outputs
+                .iter()
+                .filter(|output| !output.is_dummy())
+                .count()
+        })
+        .unwrap_or_default();
+
+    action_outputs + fee_outputs
+}
+
 #[tracing::instrument(skip(tx))]
-pub(super) fn valid_binding_signature(tx: &Transaction) -> Result<()> {
+pub(crate) fn valid_binding_signature(tx: &Transaction) -> Result<()> {
     let auth_hash = tx.auth_hash();
 
     tracing::debug!(bvk = ?tx.binding_verification_key(), ?auth_hash);
@@ -15,13 +49,14 @@ pub(super) fn valid_binding_signature(tx: &Transaction) -> Result<()> {
 }
 
 pub fn num_clues_equal_to_num_outputs(tx: &Transaction) -> anyhow::Result<()> {
+    let num_note_creating_actions = note_creating_output_count(tx);
     if tx
         .transaction_body()
         .detection_data
         .unwrap_or_default()
         .fmd_clues
         .len()
-        != tx.outputs().count()
+        != num_note_creating_actions
     {
         Err(anyhow::anyhow!(
             "consensus rule violated: must have equal number of outputs and FMD clues"
@@ -33,7 +68,7 @@ pub fn num_clues_equal_to_num_outputs(tx: &Transaction) -> anyhow::Result<()> {
 
 #[allow(clippy::if_same_then_else)]
 pub fn check_memo_exists_if_outputs_absent_if_not(tx: &Transaction) -> anyhow::Result<()> {
-    let num_outputs = tx.outputs().count();
+    let num_outputs = note_creating_output_count(tx);
     if num_outputs > 0 && tx.transaction_body().memo.is_none() {
         Err(anyhow::anyhow!(
             "consensus rule violated: must have memo if outputs present"

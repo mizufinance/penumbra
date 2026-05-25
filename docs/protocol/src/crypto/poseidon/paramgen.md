@@ -124,7 +124,7 @@ The parameters that are used for `poseidon377` are located in the [`params.rs`
 module of the source code](https://rustdoc.penumbra.zone/main/poseidon377/params/index.html). The parameters were generated on an Apple M1.
 
 [Merlin]: https://merlin.cool/
-[transcript]: https://github.com/penumbra-zone/poseidon377/blob/main/poseidon-paramgen/src/transcript.rs#L16
+[transcript]: https://github.com/mizufinance/poseidon377/blob/main/poseidon-paramgen/src/transcript.rs#L16
 [Grassi, Rechberger and Schofnegger 2020]: https://eprint.iacr.org/2020/500
 [Keller and Rosemarin 2020]: https://eprint.iacr.org/2020/179.pdf
 [shortest addition chains]: https://wwwhomes.uni-bielefeld.de/achim/addition_chain.html

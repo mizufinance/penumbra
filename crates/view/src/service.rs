@@ -7,11 +7,7 @@ use std::{
 use anyhow::{anyhow, Context};
 use async_stream::try_stream;
 use camino::Utf8Path;
-use decaf377::Fq;
-use futures::stream::{self, StreamExt, TryStreamExt};
-use penumbra_sdk_auction::auction::dutch::actions::view::{
-    ActionDutchAuctionScheduleView, ActionDutchAuctionWithdrawView,
-};
+use futures::stream::{StreamExt, TryStreamExt};
 use rand::Rng;
 use rand_core::OsRng;
 use tap::{Tap, TapFallible};
@@ -24,15 +20,6 @@ use tracing::{instrument, Instrument};
 use url::Url;
 
 use penumbra_sdk_asset::{asset, asset::Metadata, Value};
-use penumbra_sdk_dex::{
-    lp::{
-        position::{self, Position},
-        Reserves,
-    },
-    swap_claim::SwapClaimPlan,
-    TradingPair,
-};
-use penumbra_sdk_fee::Fee;
 use penumbra_sdk_keys::{
     keys::WalletId,
     keys::{AddressIndex, FullViewingKey},
@@ -40,6 +27,7 @@ use penumbra_sdk_keys::{
 };
 use penumbra_sdk_num::Amount;
 use penumbra_sdk_proto::{
+    core::component::compliance::v1 as compliance_pb,
     util::tendermint_proxy::v1::{
         tendermint_proxy_service_client::TendermintProxyServiceClient, BroadcastTxSyncRequest,
         GetStatusRequest, GetStatusResponse, SyncInfo,
@@ -51,18 +39,22 @@ use penumbra_sdk_proto::{
         view_service_server::{ViewService, ViewServiceServer},
         AppParametersResponse, AssetMetadataByIdRequest, AssetMetadataByIdResponse,
         BroadcastTransactionResponse, FmdParametersResponse, GasPricesResponse,
-        NoteByCommitmentResponse, StatusResponse, SwapByCommitmentResponse,
-        TransactionPlannerResponse, WalletIdRequest, WalletIdResponse, WitnessResponse,
+        NoteByCommitmentResponse, StatusResponse, TransactionPlannerResponse, WalletIdRequest,
+        WalletIdResponse, WitnessResponse,
     },
     DomainType,
 };
-use penumbra_sdk_stake::{rate::RateData, IdentityKey};
 use penumbra_sdk_tct::{Proof, StateCommitment};
 use penumbra_sdk_transaction::{
-    AuthorizationData, Transaction, TransactionPerspective, TransactionPlan, WitnessData,
+    plan::ActionPlan, AuthorizationData, Transaction, TransactionPerspective, TransactionPlan,
+    WitnessData,
 };
 
-use crate::{worker::Worker, Planner, SpendableNoteRecord, Storage};
+use crate::{
+    compliance_tree::{ComplianceAssetTree, ComplianceUserTree},
+    worker::Worker,
+    NoteManager, Storage, TransferPlanningResult,
+};
 
 /// A [`futures::Stream`] of broadcast transaction responses.
 ///
@@ -70,6 +62,9 @@ use crate::{worker::Worker, Planner, SpendableNoteRecord, Storage};
 type BroadcastTransactionStream = Pin<
     Box<dyn futures::Stream<Item = Result<pb::BroadcastTransactionResponse, tonic::Status>> + Send>,
 >;
+
+const BROADCAST_NULLIFIER_DETECTION_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(180);
 
 /// A service that synchronizes private chain state and responds to queries
 /// about it.
@@ -91,6 +86,10 @@ pub struct ViewServer {
     node: Url,
     /// Used to watch for changes to the sync height.
     sync_height_rx: watch::Receiver<u64>,
+    /// A copy of the compliance user tree used by the worker task.
+    compliance_user_tree: Arc<RwLock<ComplianceUserTree>>,
+    /// A copy of the compliance asset tree used by the worker task.
+    compliance_asset_tree: Arc<RwLock<ComplianceAssetTree>>,
 }
 
 impl ViewServer {
@@ -127,12 +126,18 @@ impl ViewServer {
         let span = tracing::error_span!(parent: None, "view");
         let channel = Self::get_pd_channel(node.clone()).await?;
 
-        let (worker, state_commitment_tree, error_slot, sync_height_rx) =
-            Worker::new(storage.clone(), channel)
-                .instrument(span.clone())
-                .tap(|_| tracing::trace!("constructing view server worker"))
-                .await?
-                .tap(|_| tracing::debug!("constructed view server worker"));
+        let (
+            worker,
+            state_commitment_tree,
+            error_slot,
+            sync_height_rx,
+            compliance_user_tree,
+            compliance_asset_tree,
+        ) = Worker::new(storage.clone(), channel)
+            .instrument(span.clone())
+            .tap(|_| tracing::trace!("constructing view server worker"))
+            .await?
+            .tap(|_| tracing::debug!("constructed view server worker"));
 
         tokio::spawn(worker.run().instrument(span))
             .tap(|_| tracing::debug!("spawned view server worker"));
@@ -143,6 +148,8 @@ impl ViewServer {
             sync_height_rx,
             state_commitment_tree,
             node,
+            compliance_user_tree,
+            compliance_asset_tree,
         })
     }
 
@@ -192,6 +199,27 @@ impl ViewServer {
         // (if the worker is to crash without setting the error_slot, the service should die as well)
 
         Ok(()).tap(|_| tracing::trace!("view server worker is healthy"))
+    }
+
+    /// Get a reference to the local compliance user tree.
+    ///
+    /// This tree is synced from the chain and can be used for local proof generation.
+    pub fn compliance_user_tree(&self) -> &Arc<RwLock<ComplianceUserTree>> {
+        &self.compliance_user_tree
+    }
+
+    /// Get a reference to the local compliance asset tree.
+    ///
+    /// This tree is synced from the chain and can be used for local proof generation.
+    pub fn compliance_asset_tree(&self) -> &Arc<RwLock<ComplianceAssetTree>> {
+        &self.compliance_asset_tree
+    }
+
+    /// Get a reference to the storage.
+    ///
+    /// This is useful for getting leaf data for local compliance proof generation.
+    pub fn storage(&self) -> &Storage {
+        &self.storage
     }
 
     #[instrument(skip(self, transaction), fields(id = %transaction.id()))]
@@ -244,22 +272,7 @@ impl ViewServer {
 
                 // 2. Optionally wait for the transaction to be detected by the view service.
                 let nullifier = if await_detection {
-                    // This needs to be only *spend* nullifiers because the nullifier detection
-                    // is broken for swaps, https://github.com/penumbra-zone/penumbra/issues/1749
-                    //
-                    // in the meantime, inline the definition from `Transaction`
-                    transaction
-                        .actions()
-                        .filter_map(|action| match action {
-                            penumbra_sdk_transaction::Action::Spend(spend) => Some(spend.body.nullifier),
-                            /*
-                            penumbra_sdk_transaction::Action::SwapClaim(swap_claim) => {
-                                Some(swap_claim.body.nullifier)
-                            }
-                             */
-                            _ => None,
-                        })
-                        .next()
+                    transaction.spent_nullifiers().next()
                 } else {
                     None
                 };
@@ -267,7 +280,7 @@ impl ViewServer {
                 if let Some(nullifier) = nullifier {
                     tracing::info!(?nullifier, "waiting for detection of nullifier");
                     let detection = self2.storage.nullifier_status(nullifier, true);
-                    tokio::time::timeout(std::time::Duration::from_secs(20), detection)
+                    tokio::time::timeout(BROADCAST_NULLIFIER_DETECTION_TIMEOUT, detection)
                         .await
                         .map_err(|_| {
                             tonic::Status::unavailable(
@@ -374,9 +387,6 @@ impl ViewServer {
 impl ViewService for ViewServer {
     type NotesStream =
         Pin<Box<dyn futures::Stream<Item = Result<pb::NotesResponse, tonic::Status>> + Send>>;
-    type NotesForVotingStream = Pin<
-        Box<dyn futures::Stream<Item = Result<pb::NotesForVotingResponse, tonic::Status>> + Send>,
-    >;
     type AssetsStream =
         Pin<Box<dyn futures::Stream<Item = Result<pb::AssetsResponse, tonic::Status>> + Send>>;
     type StatusStreamStream = Pin<
@@ -387,12 +397,6 @@ impl ViewService for ViewServer {
     >;
     type BalancesStream =
         Pin<Box<dyn futures::Stream<Item = Result<pb::BalancesResponse, tonic::Status>> + Send>>;
-    type OwnedPositionIdsStream = Pin<
-        Box<dyn futures::Stream<Item = Result<pb::OwnedPositionIdsResponse, tonic::Status>> + Send>,
-    >;
-    type UnclaimedSwapsStream = Pin<
-        Box<dyn futures::Stream<Item = Result<pb::UnclaimedSwapsResponse, tonic::Status>> + Send>,
-    >;
     type BroadcastTransactionStream = BroadcastTransactionStream;
     type WitnessAndBuildStream = Pin<
         Box<dyn futures::Stream<Item = Result<pb::WitnessAndBuildResponse, tonic::Status>> + Send>,
@@ -402,108 +406,6 @@ impl ViewService for ViewServer {
             dyn futures::Stream<Item = Result<pb::AuthorizeAndBuildResponse, tonic::Status>> + Send,
         >,
     >;
-    type DelegationsByAddressIndexStream = Pin<
-        Box<
-            dyn futures::Stream<Item = Result<pb::DelegationsByAddressIndexResponse, tonic::Status>>
-                + Send,
-        >,
-    >;
-    type UnbondingTokensByAddressIndexStream = Pin<
-        Box<
-            dyn futures::Stream<
-                    Item = Result<pb::UnbondingTokensByAddressIndexResponse, tonic::Status>,
-                > + Send,
-        >,
-    >;
-    type AuctionsStream =
-        Pin<Box<dyn futures::Stream<Item = Result<pb::AuctionsResponse, tonic::Status>> + Send>>;
-    type LatestSwapsStream =
-        Pin<Box<dyn futures::Stream<Item = Result<pb::LatestSwapsResponse, tonic::Status>> + Send>>;
-    type LqtVotingNotesStream = Pin<
-        Box<dyn futures::Stream<Item = Result<pb::LqtVotingNotesResponse, tonic::Status>> + Send>,
-    >;
-    type TournamentVotesStream = Pin<
-        Box<dyn futures::Stream<Item = Result<pb::TournamentVotesResponse, tonic::Status>> + Send>,
-    >;
-    type LpPositionBundleStream = Pin<
-        Box<dyn futures::Stream<Item = Result<pb::LpPositionBundleResponse, tonic::Status>> + Send>,
-    >;
-    type LpStrategyCatalogStream = Pin<
-        Box<
-            dyn futures::Stream<Item = Result<pb::LpStrategyCatalogResponse, tonic::Status>> + Send,
-        >,
-    >;
-
-    #[instrument(skip_all, level = "trace")]
-    async fn auctions(
-        &self,
-        request: tonic::Request<pb::AuctionsRequest>,
-    ) -> Result<tonic::Response<Self::AuctionsStream>, tonic::Status> {
-        use penumbra_sdk_proto::core::component::auction::v1 as pb_auction;
-        use penumbra_sdk_proto::core::component::auction::v1::query_service_client::QueryServiceClient as AuctionQueryServiceClient;
-
-        let parameters = request.into_inner();
-        let query_latest_state = parameters.query_latest_state;
-        let include_inactive = parameters.include_inactive;
-
-        let account_filter = parameters
-            .account_filter
-            .to_owned()
-            .map(AddressIndex::try_from)
-            .map_or(Ok(None), |v| v.map(Some))
-            .map_err(|_| tonic::Status::invalid_argument("invalid account filter"))?;
-
-        let all_auctions = self
-            .storage
-            .fetch_auctions_by_account(account_filter, include_inactive)
-            .await
-            .map_err(|e| tonic::Status::internal(e.to_string()))?;
-
-        let client = if query_latest_state {
-            Some(
-                AuctionQueryServiceClient::connect(self.node.to_string())
-                    .await
-                    .map_err(|e| tonic::Status::internal(e.to_string()))?,
-            )
-        } else {
-            None
-        };
-
-        let responses = futures::future::join_all(all_auctions.into_iter().map(
-            |(auction_id, note_record, local_seq)| {
-                let maybe_client = client.clone();
-                async move {
-                    let (any_state, positions) = if let Some(mut client2) = maybe_client {
-                        let extra_data = client2
-                            .auction_state_by_id(pb_auction::AuctionStateByIdRequest {
-                                id: Some(auction_id.into()),
-                            })
-                            .await
-                            .map_err(|e| tonic::Status::internal(e.to_string()))?
-                            .into_inner();
-                        (extra_data.auction, extra_data.positions)
-                    } else {
-                        (None, vec![])
-                    };
-
-                    Result::<_, tonic::Status>::Ok(pb::AuctionsResponse {
-                        id: Some(auction_id.into()),
-                        note_record: Some(note_record.into()),
-                        auction: any_state,
-                        positions,
-                        local_seq,
-                    })
-                }
-            },
-        ))
-        .await;
-
-        let stream = stream::iter(responses)
-            .map_err(|e| tonic::Status::internal(format!("error getting auction: {e}")))
-            .boxed();
-
-        Ok(Response::new(stream))
-    }
 
     #[instrument(skip_all, level = "trace")]
     async fn broadcast_transaction(
@@ -533,24 +435,34 @@ impl ViewService for ViewServer {
     ) -> Result<tonic::Response<pb::TransactionPlannerResponse>, tonic::Status> {
         let prq = request.into_inner();
 
-        let app_params =
-            self.storage.app_params().await.map_err(|e| {
-                tonic::Status::internal(format!("could not get app params: {:#}", e))
-            })?;
-
         let gas_prices =
             self.storage.gas_prices().await.map_err(|e| {
                 tonic::Status::internal(format!("could not get gas prices: {:#}", e))
             })?;
 
-        // TODO: need to support passing the fee _in_ to this API via the TransactionPlannerRequest
-        // meaning the requester should fetch the gas prices and estimate cost/allow the user to modify
-        // fee paid
-        let mut planner = Planner::new(OsRng);
-        planner.set_gas_prices(gas_prices);
-        planner.expiry_height(prq.expiry_height);
+        let source = prq
+            .source
+            .as_ref()
+            .map(|addr_index| addr_index.account)
+            .unwrap_or(0u32);
 
-        for output in prq.outputs {
+        if !prq.outputs.is_empty() {
+            if !prq.ibc_relay_actions.is_empty() || !prq.ics20_withdrawals.is_empty() {
+                return Err(tonic::Status::invalid_argument(
+                    "wallet-facing shielded transfer intents cannot be mixed with other action types in transaction_planner",
+                ));
+            }
+            if prq.outputs.len() != 1 {
+                return Err(tonic::Status::invalid_argument(
+                    "wallet-facing shielded transfer supports exactly one external recipient",
+                ));
+            }
+
+            let output = prq
+                .outputs
+                .into_iter()
+                .next()
+                .expect("checked exactly one output");
             let address: Address = output
                 .address
                 .ok_or_else(|| tonic::Status::invalid_argument("Missing address"))?
@@ -558,7 +470,6 @@ impl ViewService for ViewServer {
                 .map_err(|e| {
                     tonic::Status::invalid_argument(format!("Could not parse address: {e:#}"))
                 })?;
-
             let value: Value = output
                 .value
                 .ok_or_else(|| tonic::Status::invalid_argument("Missing value"))?
@@ -567,235 +478,167 @@ impl ViewService for ViewServer {
                     tonic::Status::invalid_argument(format!("Could not parse value: {e:#}"))
                 })?;
 
-            planner.output(value, address);
-        }
-
-        for swap in prq.swaps {
-            let value: Value = swap
-                .value
-                .ok_or_else(|| tonic::Status::invalid_argument("Missing value"))?
-                .try_into()
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!("Could not parse value: {e:#}"))
-                })?;
-
-            let target_asset: asset::Id = swap
-                .target_asset
-                .ok_or_else(|| tonic::Status::invalid_argument("Missing target asset"))?
-                .try_into()
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!("Could not parse target asset: {e:#}"))
-                })?;
-
-            let fee: Fee = swap
-                .fee
-                .ok_or_else(|| tonic::Status::invalid_argument("Missing fee"))?
-                .try_into()
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!("Could not parse fee: {e:#}"))
-                })?;
-
-            let claim_address: Address = swap
-                .claim_address
-                .ok_or_else(|| tonic::Status::invalid_argument("Missing claim address"))?
-                .try_into()
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!("Could not parse claim address: {e:#}"))
-                })?;
-
-            planner
-                .swap(value, target_asset, fee, claim_address)
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!("Could not plan swap: {e:#}"))
-                })?;
-        }
-
-        for swap_claim in prq.swap_claims {
-            let swap_commitment: StateCommitment = swap_claim
-                .swap_commitment
-                .ok_or_else(|| tonic::Status::invalid_argument("Missing swap commitment"))?
-                .try_into()
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!(
-                        "Could not parse swap commitment: {e:#}"
-                    ))
-                })?;
-            let swap_record = self
-                .storage
-                // TODO: should there be a timeout on detection here instead?
-                .swap_by_commitment(swap_commitment, false)
-                .await
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!(
-                        "Could not fetch swap by commitment: {e:#}"
-                    ))
-                })?;
-
-            planner.swap_claim(SwapClaimPlan {
-                swap_plaintext: swap_record.swap,
-                position: swap_record.position,
-                output_data: swap_record.output_data,
-                epoch_duration: app_params.sct_params.epoch_duration,
-                proof_blinding_r: Fq::rand(&mut OsRng),
-                proof_blinding_s: Fq::rand(&mut OsRng),
-            });
-        }
-
-        let current_epoch = if prq.undelegations.is_empty() && prq.delegations.is_empty() {
-            None
-        } else {
-            Some(
-                prq.epoch
-                    .ok_or_else(|| {
-                        tonic::Status::invalid_argument(
-                            "Missing current epoch in TransactionPlannerRequest",
-                        )
-                    })?
-                    .try_into()
-                    .map_err(|e| {
+            let mut note_manager = NoteManager::new(OsRng);
+            note_manager
+                .set_gas_prices(gas_prices)
+                .expiry_height(prq.expiry_height);
+            if let Some(memo) = prq.memo {
+                note_manager.memo(memo.text);
+                if let Some(return_address) = memo.return_address {
+                    note_manager.memo_return_address(return_address.try_into().map_err(|e| {
                         tonic::Status::invalid_argument(format!(
-                            "Could not parse current epoch: {e:#}"
+                            "Could not parse memo return address: {e:#}"
                         ))
-                    })?,
-            )
-        };
+                    })?);
+                }
+            }
 
-        for delegation in prq.delegations {
-            let amount: Amount = delegation
-                .amount
-                .ok_or_else(|| tonic::Status::invalid_argument("Missing amount"))?
-                .try_into()
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!("Could not parse amount: {e:#}"))
-                })?;
+            let mut client_of_self = ViewServiceClient::new(ViewServiceServer::new(self.clone()));
+            let planning_result = note_manager
+                .plan_transfer(&mut client_of_self, source.into(), value, address)
+                .await
+                .context("could not plan wallet-facing shielded transfer")
+                .map_err(|e| tonic::Status::invalid_argument(format!("{e:#}")))?;
 
-            let rate_data: RateData = delegation
-                .rate_data
-                .ok_or_else(|| tonic::Status::invalid_argument("Missing rate data"))?
-                .try_into()
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!("Could not parse rate data: {e:#}"))
-                })?;
+            let transaction_plan = match planning_result {
+                TransferPlanningResult::Ready { transaction_plan } => transaction_plan,
+                TransferPlanningResult::NeedsMaintenance { .. } => {
+                    return Err(tonic::Status::invalid_argument(
+                        "wallet-facing shielded transfer requires note maintenance first",
+                    ));
+                }
+                TransferPlanningResult::InsufficientBalance => {
+                    return Err(tonic::Status::invalid_argument(
+                        "insufficient balance for requested transfer",
+                    ));
+                }
+                TransferPlanningResult::UnsupportedIntent { reason } => {
+                    return Err(tonic::Status::invalid_argument(reason));
+                }
+            };
 
-            planner.delegate(
-                current_epoch.expect("checked that current epoch is present"),
-                amount,
-                rate_data,
-            );
+            return Ok(tonic::Response::new(TransactionPlannerResponse {
+                plan: Some(transaction_plan.into()),
+            }));
         }
 
-        for undelegation in prq.undelegations {
-            let value: Value = undelegation
-                .value
-                .ok_or_else(|| tonic::Status::invalid_argument("Missing value"))?
+        if !prq.ics20_withdrawals.is_empty() {
+            if !prq.ibc_relay_actions.is_empty() || !prq.outputs.is_empty() {
+                return Err(tonic::Status::invalid_argument(
+                    "wallet-facing ICS-20 withdrawal intents cannot be mixed with other action types in transaction_planner",
+                ));
+            }
+            if prq.ics20_withdrawals.len() != 1 {
+                return Err(tonic::Status::invalid_argument(
+                    "wallet-facing ICS-20 withdrawal planner supports exactly one outbound withdrawal",
+                ));
+            }
+
+            let withdrawal: penumbra_sdk_shielded_pool::Ics20Withdrawal = prq
+                .ics20_withdrawals
+                .into_iter()
+                .next()
+                .expect("checked exactly one ICS-20 withdrawal")
                 .try_into()
                 .map_err(|e| {
-                    tonic::Status::invalid_argument(format!("Could not parse value: {e:#}"))
+                    tonic::Status::invalid_argument(format!(
+                        "Could not parse ICS-20 withdrawal: {e:#}"
+                    ))
                 })?;
 
-            let rate_data: RateData = undelegation
-                .rate_data
-                .ok_or_else(|| tonic::Status::invalid_argument("Missing rate data"))?
-                .try_into()
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!("Could not parse rate data: {e:#}"))
-                })?;
+            let mut note_manager = NoteManager::new(OsRng);
+            note_manager
+                .set_gas_prices(gas_prices)
+                .expiry_height(prq.expiry_height);
 
-            planner.undelegate(
-                current_epoch.expect("checked that current epoch is present"),
-                value.amount,
-                rate_data,
-            );
+            let mut client_of_self = ViewServiceClient::new(ViewServiceServer::new(self.clone()));
+            let planning_result = note_manager
+                .plan_ics20_withdrawal(&mut client_of_self, source.into(), withdrawal)
+                .await
+                .context("could not plan wallet-facing ICS-20 withdrawal")
+                .map_err(|e| tonic::Status::invalid_argument(format!("{e:#}")))?;
+
+            let transaction_plan = match planning_result {
+                TransferPlanningResult::Ready { transaction_plan } => transaction_plan,
+                TransferPlanningResult::NeedsMaintenance { .. } => {
+                    return Err(tonic::Status::invalid_argument(
+                        "wallet-facing ICS-20 withdrawal requires note maintenance first",
+                    ));
+                }
+                TransferPlanningResult::InsufficientBalance => {
+                    return Err(tonic::Status::invalid_argument(
+                        "insufficient balance for requested ICS-20 withdrawal",
+                    ));
+                }
+                TransferPlanningResult::UnsupportedIntent { reason } => {
+                    return Err(tonic::Status::invalid_argument(reason));
+                }
+            };
+
+            return Ok(tonic::Response::new(TransactionPlannerResponse {
+                plan: Some(transaction_plan.into()),
+            }));
         }
 
-        for position_open in prq.position_opens {
-            let position: Position = position_open
-                .position
-                .ok_or_else(|| tonic::Status::invalid_argument("Missing position"))?
-                .try_into()
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!("Could not parse position: {e:#}"))
-                })?;
+        if !prq.ibc_relay_actions.is_empty() && prq.outputs.is_empty() {
+            let mut note_manager = NoteManager::new(OsRng);
+            note_manager
+                .set_gas_prices(gas_prices)
+                .expiry_height(prq.expiry_height);
+            if let Some(memo) = prq.memo {
+                note_manager.memo(memo.text);
+                if let Some(return_address) = memo.return_address {
+                    note_manager.memo_return_address(return_address.try_into().map_err(|e| {
+                        tonic::Status::invalid_argument(format!(
+                            "Could not parse memo return address: {e:#}"
+                        ))
+                    })?);
+                }
+            }
 
-            planner.position_open(position);
+            let actions = prq
+                .ibc_relay_actions
+                .into_iter()
+                .map(|ibc_action| {
+                    ibc_action
+                        .try_into()
+                        .map(ActionPlan::IbcAction)
+                        .map_err(|e| tonic::Status::invalid_argument(format!("{e:#}")))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let mut client_of_self = ViewServiceClient::new(ViewServiceServer::new(self.clone()));
+            let planning_result = note_manager
+                .plan_actions_with_transfer_funding(&mut client_of_self, source.into(), actions)
+                .await
+                .context("could not plan wallet-facing IBC relay transaction")
+                .map_err(|e| tonic::Status::invalid_argument(format!("{e:#}")))?;
+
+            let transaction_plan = match planning_result {
+                TransferPlanningResult::Ready { transaction_plan } => transaction_plan,
+                TransferPlanningResult::NeedsMaintenance { .. } => {
+                    return Err(tonic::Status::invalid_argument(
+                        "wallet-facing IBC relay transaction requires note maintenance first",
+                    ));
+                }
+                TransferPlanningResult::InsufficientBalance => {
+                    return Err(tonic::Status::invalid_argument(
+                        "insufficient balance for requested IBC relay transaction",
+                    ));
+                }
+                TransferPlanningResult::UnsupportedIntent { reason } => {
+                    return Err(tonic::Status::invalid_argument(reason));
+                }
+            };
+
+            return Ok(tonic::Response::new(TransactionPlannerResponse {
+                plan: Some(transaction_plan.into()),
+            }));
         }
 
-        for position_close in prq.position_closes {
-            let position_id: position::Id = position_close
-                .position_id
-                .ok_or_else(|| tonic::Status::invalid_argument("Missing position_id"))?
-                .try_into()
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!("Could not parse position ID: {e:#}"))
-                })?;
-
-            planner.position_close(position_id);
-        }
-
-        for position_withdraw in prq.position_withdraws {
-            let position_id: position::Id = position_withdraw
-                .position_id
-                .ok_or_else(|| tonic::Status::invalid_argument("Missing position_id"))?
-                .try_into()
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!("Could not parse position ID: {e:#}"))
-                })?;
-
-            let reserves: Reserves = position_withdraw
-                .reserves
-                .ok_or_else(|| tonic::Status::invalid_argument("Missing reserves"))?
-                .try_into()
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!("Could not parse reserves: {e:#}"))
-                })?;
-
-            let trading_pair: TradingPair = position_withdraw
-                .trading_pair
-                .ok_or_else(|| tonic::Status::invalid_argument("Missing pair"))?
-                .try_into()
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!("Could not parse pair: {e:#}"))
-                })?;
-
-            planner.position_withdraw(position_id, reserves, trading_pair, 0);
-        }
-
-        // Insert any ICS20 withdrawals.
-        for ics20_withdrawal in prq.ics20_withdrawals {
-            planner.ics20_withdrawal(
-                ics20_withdrawal
-                    .try_into()
-                    .map_err(|e| tonic::Status::invalid_argument(format!("{e:#}")))?,
-            );
-        }
-
-        // Finally, insert all the requested IBC actions.
-        for ibc_action in prq.ibc_relay_actions {
-            planner.ibc_action(
-                ibc_action
-                    .try_into()
-                    .map_err(|e| tonic::Status::invalid_argument(format!("{e:#}")))?,
-            );
-        }
-
-        let mut client_of_self = ViewServiceClient::new(ViewServiceServer::new(self.clone()));
-
-        let source = prq
-            .source
-            // If the request specified a source of funds, pass it to the planner...
-            .map(|addr_index| addr_index.account)
-            // ... or just use the default account if not.
-            .unwrap_or(0u32);
-
-        let plan = planner
-            .plan(&mut client_of_self, source.into())
-            .await
-            .context("could not plan requested transaction")
-            .map_err(|e| tonic::Status::invalid_argument(format!("{e:#}")))?;
-
-        Ok(tonic::Response::new(TransactionPlannerResponse {
-            plan: Some(plan.into()),
-        }))
+        Err(tonic::Status::invalid_argument(
+            "transaction_planner only supports wallet-facing transfer, ICS-20 withdrawal, and transfer-funded IBC relay intents",
+        ))
     }
 
     #[instrument(skip_all, level = "trace")]
@@ -939,46 +782,53 @@ impl ViewService for ViewServer {
         };
 
         // Next, extend the TxP with the openings of commitments known to our view server
-        // but not included in the transaction body, for instance spent notes or swap claim outputs.
+        // but not included in the transaction body, for instance spent notes.
         for action in tx.actions() {
             use penumbra_sdk_transaction::Action;
             match action {
-                Action::Spend(spend) => {
-                    let nullifier = spend.body.nullifier;
-                    // An error here indicates we don't know the nullifier, so we omit it from the Perspective.
-                    if let Ok(spendable_note_record) =
-                        self.storage.note_by_nullifier(nullifier, false).await
-                    {
-                        txp.spend_nullifiers
-                            .insert(nullifier, spendable_note_record.note);
+                Action::Transfer(transfer) => {
+                    for input in &transfer.body.inputs {
+                        let nullifier = input.nullifier;
+                        if let Ok(spendable_note_record) =
+                            self.storage.note_by_nullifier(nullifier, false).await
+                        {
+                            txp.spend_nullifiers
+                                .insert(nullifier, spendable_note_record.note);
+                        }
                     }
                 }
-                Action::SwapClaim(claim) => {
-                    let output_1_record = self
-                        .storage
-                        .note_by_commitment(claim.body.output_1_commitment, false)
-                        .await
-                        .map_err(|e| {
-                            tonic::Status::internal(format!(
-                                "Error retrieving first SwapClaim output note record: {:#}",
-                                e
-                            ))
-                        })?;
-                    let output_2_record = self
-                        .storage
-                        .note_by_commitment(claim.body.output_2_commitment, false)
-                        .await
-                        .map_err(|e| {
-                            tonic::Status::internal(format!(
-                                "Error retrieving second SwapClaim output note record: {:#}",
-                                e
-                            ))
-                        })?;
-
-                    txp.advice_notes
-                        .insert(claim.body.output_1_commitment, output_1_record.note);
-                    txp.advice_notes
-                        .insert(claim.body.output_2_commitment, output_2_record.note);
+                Action::Consolidate(consolidate) => {
+                    for input in &consolidate.body.inputs {
+                        let nullifier = input.nullifier;
+                        if let Ok(spendable_note_record) =
+                            self.storage.note_by_nullifier(nullifier, false).await
+                        {
+                            txp.spend_nullifiers
+                                .insert(nullifier, spendable_note_record.note);
+                        }
+                    }
+                }
+                Action::Split(split) => {
+                    for input in &split.body.inputs {
+                        let nullifier = input.nullifier;
+                        if let Ok(spendable_note_record) =
+                            self.storage.note_by_nullifier(nullifier, false).await
+                        {
+                            txp.spend_nullifiers
+                                .insert(nullifier, spendable_note_record.note);
+                        }
+                    }
+                }
+                Action::ShieldedIcs20Withdrawal(withdrawal) => {
+                    for input in &withdrawal.body.inputs {
+                        let nullifier = input.nullifier;
+                        if let Ok(spendable_note_record) =
+                            self.storage.note_by_nullifier(nullifier, false).await
+                        {
+                            txp.spend_nullifiers
+                                .insert(nullifier, spendable_note_record.note);
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -991,65 +841,60 @@ impl ViewService for ViewServer {
         let mut address_views = BTreeMap::new();
         let mut asset_ids = BTreeSet::new();
         for action_view in min_view.action_views() {
-            use penumbra_sdk_dex::{swap::SwapView, swap_claim::SwapClaimView};
-            use penumbra_sdk_transaction::view::action_view::{
-                ActionView, DelegatorVoteView, OutputView, SpendView,
-            };
+            use penumbra_sdk_transaction::view::action_view::ActionView;
             match action_view {
-                ActionView::Spend(SpendView::Visible { note, .. }) => {
-                    let address = note.address();
-                    address_views.insert(address.clone(), fvk.view_address(address));
-                    asset_ids.insert(note.asset_id());
-                }
-                ActionView::Output(OutputView::Visible { note, .. }) => {
-                    let address = note.address();
-                    address_views.insert(address.clone(), fvk.view_address(address.clone()));
-                    asset_ids.insert(note.asset_id());
-
-                    // Also add an AddressView for the return address in the memo.
-                    let memo = tx.decrypt_memo(&fvk).map_err(|_| {
-                        tonic::Status::internal("Error decrypting memo for OutputView")
-                    })?;
-                    address_views.insert(memo.return_address(), fvk.view_address(address));
-                }
-                ActionView::Swap(SwapView::Visible { swap_plaintext, .. }) => {
-                    let address = swap_plaintext.claim_address.clone();
-                    address_views.insert(address.clone(), fvk.view_address(address));
-                    asset_ids.insert(swap_plaintext.trading_pair.asset_1());
-                    asset_ids.insert(swap_plaintext.trading_pair.asset_2());
-                }
-                ActionView::SwapClaim(SwapClaimView::Visible {
-                    output_1, output_2, ..
-                }) => {
-                    // Both will be sent to the same address so this only needs to be added once
-                    let address = output_1.address();
-                    address_views.insert(address.clone(), fvk.view_address(address));
-                    asset_ids.insert(output_1.asset_id());
-                    asset_ids.insert(output_2.asset_id());
-                }
-                ActionView::DelegatorVote(DelegatorVoteView::Visible { note, .. }) => {
-                    let address = note.address();
-                    address_views.insert(address.clone(), fvk.view_address(address));
-                    asset_ids.insert(note.asset_id());
-                }
-                ActionView::ActionDutchAuctionWithdraw(ActionDutchAuctionWithdrawView {
-                    action: _,
-                    reserves,
-                }) => {
-                    // previous comment: /* no-op for now - i'm not totally sure we have all the necessary data to attribute specific note openings to this view */
-                    // to this cronokirby replied: well, we can however at least fill in some asset ids!
-                    for value in reserves {
-                        asset_ids.insert(value.asset_id());
+                ActionView::Transfer(
+                    penumbra_sdk_transaction::view::action_view::TransferView::Visible {
+                        spent_notes,
+                        created_notes,
+                        ..
+                    },
+                )
+                | ActionView::Consolidate(
+                    penumbra_sdk_transaction::view::action_view::ConsolidateView::Visible {
+                        spent_notes,
+                        created_notes,
+                        ..
+                    },
+                )
+                | ActionView::Split(
+                    penumbra_sdk_transaction::view::action_view::SplitView::Visible {
+                        spent_notes,
+                        created_notes,
+                        ..
+                    },
+                ) => {
+                    for note in spent_notes.iter().chain(created_notes.iter()) {
+                        let address = note.address();
+                        address_views.insert(address.clone(), fvk.view_address(address));
+                        asset_ids.insert(note.asset_id());
+                    }
+                    if let Ok(memo) = tx.decrypt_memo(&fvk) {
+                        let return_address = memo.return_address();
+                        address_views
+                            .insert(return_address.clone(), fvk.view_address(return_address));
                     }
                 }
-                // We can populate asset ids for the assets involved in the auction
-                ActionView::ActionDutchAuctionSchedule(ActionDutchAuctionScheduleView {
-                    action,
-                    ..
-                }) => {
-                    let description = &action.description;
-                    asset_ids.insert(description.input.asset_id);
-                    asset_ids.insert(description.output_id);
+                ActionView::ShieldedIcs20Withdrawal(
+                    penumbra_sdk_shielded_pool::ShieldedIcs20WithdrawalView::Visible {
+                        spent_notes,
+                        change_note,
+                        ..
+                    },
+                ) => {
+                    for note in spent_notes
+                        .iter()
+                        .chain(std::slice::from_ref(change_note).iter())
+                    {
+                        let address = note.address();
+                        address_views.insert(address.clone(), fvk.view_address(address));
+                        asset_ids.insert(note.asset_id());
+                    }
+                    if let Ok(memo) = tx.decrypt_memo(&fvk) {
+                        let return_address = memo.return_address();
+                        address_views
+                            .insert(return_address.clone(), fvk.view_address(return_address));
+                    }
                 }
                 _ => {}
             }
@@ -1089,37 +934,6 @@ impl ViewService for ViewServer {
         Ok(tonic::Response::new(response))
     }
 
-    #[instrument(skip_all, level = "trace")]
-    async fn swap_by_commitment(
-        &self,
-        request: tonic::Request<pb::SwapByCommitmentRequest>,
-    ) -> Result<tonic::Response<pb::SwapByCommitmentResponse>, tonic::Status> {
-        self.check_worker().await?;
-
-        let request = request.into_inner();
-
-        let swap_commitment = request
-            .swap_commitment
-            .ok_or_else(|| {
-                tonic::Status::failed_precondition("Missing swap commitment in request")
-            })?
-            .try_into()
-            .map_err(|_| {
-                tonic::Status::failed_precondition("Invalid swap commitment in request")
-            })?;
-
-        let swap = pb::SwapRecord::from(
-            self.storage
-                .swap_by_commitment(swap_commitment, request.await_detection)
-                .await
-                .map_err(|e| tonic::Status::internal(format!("error: {e}")))?,
-        );
-
-        Ok(tonic::Response::new(SwapByCommitmentResponse {
-            swap: Some(swap),
-        }))
-    }
-
     #[allow(deprecated)]
     #[instrument(skip(self, request))]
     async fn balances(
@@ -1131,16 +945,14 @@ impl ViewService for ViewServer {
         let account_filter = request.account_filter.and_then(|x| {
             AddressIndex::try_from(x)
                 .map_err(|_| {
-                    tonic::Status::failed_precondition("Invalid swap commitment in request")
+                    tonic::Status::failed_precondition("invalid account filter in request")
                 })
                 .map_or(None, |x| x.into())
         });
 
         let asset_id_filter = request.asset_id_filter.and_then(|x| {
             asset::Id::try_from(x)
-                .map_err(|_| {
-                    tonic::Status::failed_precondition("Invalid swap commitment in request")
-                })
+                .map_err(|_| tonic::Status::failed_precondition("invalid asset filter in request"))
                 .map_or(None, |x| x.into())
         });
 
@@ -1376,47 +1188,6 @@ impl ViewService for ViewServer {
     }
 
     #[instrument(skip_all, level = "trace")]
-    async fn notes_for_voting(
-        &self,
-        request: tonic::Request<pb::NotesForVotingRequest>,
-    ) -> Result<tonic::Response<Self::NotesForVotingStream>, tonic::Status> {
-        self.check_worker().await?;
-
-        let address_index = request
-            .get_ref()
-            .address_index
-            .to_owned()
-            .map(AddressIndex::try_from)
-            .map_or(Ok(None), |v| v.map(Some))
-            .map_err(|_| tonic::Status::invalid_argument("invalid address index"))?;
-
-        let votable_at_height = request.get_ref().votable_at_height;
-
-        let notes = self
-            .storage
-            .notes_for_voting(address_index, votable_at_height)
-            .await
-            .map_err(|e| tonic::Status::unavailable(format!("error fetching notes: {e}")))?;
-
-        let stream = try_stream! {
-            for (note, identity_key) in notes {
-                yield pb::NotesForVotingResponse {
-                    note_record: Some(note.into()),
-                    identity_key: Some(identity_key.into()),
-                }
-            }
-        };
-
-        Ok(tonic::Response::new(
-            stream
-                .map_err(|e: anyhow::Error| {
-                    tonic::Status::unavailable(format!("error getting notes: {e}"))
-                })
-                .boxed(),
-        ))
-    }
-
-    #[instrument(skip_all, level = "trace")]
     async fn assets(
         &self,
         request: tonic::Request<pb::AssetsRequest>,
@@ -1426,9 +1197,6 @@ impl ViewService for ViewServer {
         let pb::AssetsRequest {
             filtered,
             include_specific_denominations,
-            include_delegation_tokens,
-            include_unbonding_tokens,
-            include_lp_nfts,
             include_proposal_nfts,
             include_voting_receipt_tokens,
         } = request.get_ref();
@@ -1447,9 +1215,6 @@ impl ViewService for ViewServer {
                 }
             }
             for (include, pattern) in [
-                (include_delegation_tokens, "_delegation\\_%"),
-                (include_unbonding_tokens, "_unbonding\\_%"),
-                (include_lp_nfts, "lpnft\\_%"),
                 (include_proposal_nfts, "proposal\\_%"),
                 (include_voting_receipt_tokens, "voted\\_on\\_%"),
             ] {
@@ -1558,20 +1323,31 @@ impl ViewService for ViewServer {
                         .expect("TransactionPlan should exist in request")
                 });
 
-        let requested_note_commitments: Vec<StateCommitment> = tx_plan
-            .spend_plans()
-            .filter(|plan| plan.note.amount() != 0u64.into())
+        fn action_spend_notes(
+            action: &penumbra_sdk_transaction::ActionPlan,
+        ) -> &[penumbra_sdk_shielded_pool::ShieldedInputPlan] {
+            use penumbra_sdk_transaction::ActionPlan;
+            match action {
+                ActionPlan::Transfer(p) => &p.spends,
+                ActionPlan::Consolidate(p) => &p.spends,
+                ActionPlan::Split(p) => &p.spends,
+                ActionPlan::ShieldedIcs20Withdrawal(p) => &p.spends,
+                _ => &[],
+            }
+        }
+
+        let zero_amount = 0u64.into();
+        let all_spend_notes = || {
+            tx_plan
+                .actions
+                .iter()
+                .flat_map(action_spend_notes)
+                .chain(tx_plan.fee_funding.iter().flat_map(|f| &f.transfer.spends))
+        };
+
+        let requested_note_commitments: Vec<StateCommitment> = all_spend_notes()
+            .filter(|spend| spend.note.amount() != zero_amount)
             .map(|spend| spend.note.commit().into())
-            .chain(
-                tx_plan
-                    .swap_claim_plans()
-                    .map(|swap_claim| swap_claim.swap_plaintext.swap_commitment().into()),
-            )
-            .chain(
-                tx_plan
-                    .delegator_vote_plans()
-                    .map(|vote_plan| vote_plan.staked_note.commit().into()),
-            )
             .collect();
 
         tracing::debug!(?requested_note_commitments);
@@ -1600,10 +1376,9 @@ impl ViewService for ViewServer {
 
         // Now we need to augment the witness data with dummy proofs such that
         // note commitments corresponding to dummy spends also have proofs.
-        for nc in tx_plan
-            .spend_plans()
-            .filter(|plan| plan.note.amount() == 0u64.into())
-            .map(|plan| plan.note.commit())
+        for nc in all_spend_notes()
+            .filter(|spend| spend.note.amount() == zero_amount)
+            .map(|spend| spend.note.commit())
         {
             witness_data.add_proof(nc, Proof::dummy(&mut OsRng, nc));
         }
@@ -1655,14 +1430,37 @@ impl ViewService for ViewServer {
                 tonic::Status::failed_precondition("Error retrieving full viewing key")
             })?;
 
+        // Extract destination addresses before building (for counterparty tracking)
+        let dest_addresses = transaction_plan.dest_addresses();
+
         let transaction = Some(
             transaction_plan
                 // TODO: calling `.build` should provide some mechanism to get progress
                 // updates
                 .build(&fvk, &witness_data, &authorization_data)
-                .map_err(|_| tonic::Status::failed_precondition("Error building transaction"))?
+                .map_err(|e| {
+                    tonic::Status::failed_precondition(format!("Error building transaction: {}", e))
+                })?
                 .into(),
         );
+
+        // Track counterparties after successful build
+        // This enables offline compliance lookups for future transactions to these addresses
+        for address in dest_addresses {
+            // Skip self-sends (change outputs back to our own addresses)
+            if fvk.incoming().views_address(&address) {
+                continue;
+            }
+            // Record the counterparty (height 0 = pending, will be updated when TX is confirmed)
+            if let Err(e) = self.storage.record_counterparty(&address, 0).await {
+                tracing::warn!(?address, ?e, "failed to record counterparty");
+            } else {
+                tracing::debug!(
+                    ?address,
+                    "recorded counterparty for future offline compliance"
+                );
+            }
+        }
 
         let stream = try_stream! {
             yield pb::WitnessAndBuildResponse {
@@ -1740,94 +1538,58 @@ impl ViewService for ViewServer {
     }
 
     #[instrument(skip_all, level = "trace")]
-    async fn owned_position_ids(
-        &self,
-        request: tonic::Request<pb::OwnedPositionIdsRequest>,
-    ) -> Result<tonic::Response<Self::OwnedPositionIdsStream>, tonic::Status> {
-        self.check_worker().await?;
-
-        let pb::OwnedPositionIdsRequest {
-            position_state,
-            trading_pair,
-            subaccount,
-        } = request.into_inner();
-
-        let position_state: Option<position::State> = position_state
-            .map(|state| state.try_into())
-            .transpose()
-            .map_err(|e: anyhow::Error| e.context("could not decode position state"))
-            .map_err(|e| tonic::Status::invalid_argument(format!("{:#}", e)))?;
-
-        let trading_pair: Option<TradingPair> = trading_pair
-            .map(|pair| pair.try_into())
-            .transpose()
-            .map_err(|e: anyhow::Error| e.context("could not decode trading pair"))
-            .map_err(|e| tonic::Status::invalid_argument(format!("{:#}", e)))?;
-
-        let subaccount: Option<AddressIndex> = subaccount
-            .map(|a| a.try_into())
-            .transpose()
-            .map_err(|e: anyhow::Error| e.context("could not decode subaccount"))
-            .map_err(|e| tonic::Status::invalid_argument(format!("{:#}", e)))?;
-
-        let ids = self
-            .storage
-            .owned_position_ids(position_state, trading_pair, subaccount)
-            .await
-            .map_err(|e| tonic::Status::unavailable(format!("error getting position ids: {e}")))?;
-
-        let stream = try_stream! {
-            for id in ids {
-                yield pb::OwnedPositionIdsResponse{
-                    position_id: Some(id.into()),
-                    // We null out the randomizer, reflecting that we didn't use it.
-                    subaccount: subaccount.map(|s|
-                        AddressIndex { account: s.account, ..Default::default()}.into()
-                    ),
-                }
-            }
-        };
-
-        Ok(tonic::Response::new(
-            stream
-                .map_err(|e: anyhow::Error| {
-                    tonic::Status::unavailable(format!("error getting position ids: {e}"))
-                })
-                .boxed(),
-        ))
-    }
-
-    #[instrument(skip_all, level = "trace")]
     async fn authorize_and_build(
         &self,
-        _request: tonic::Request<pb::AuthorizeAndBuildRequest>,
+        request: tonic::Request<pb::AuthorizeAndBuildRequest>,
     ) -> Result<tonic::Response<Self::AuthorizeAndBuildStream>, tonic::Status> {
-        unimplemented!("authorize_and_build")
-    }
+        let pb::AuthorizeAndBuildRequest { transaction_plan } = request.into_inner();
 
-    #[instrument(skip_all, level = "trace")]
-    async fn unclaimed_swaps(
-        &self,
-        _: tonic::Request<pb::UnclaimedSwapsRequest>,
-    ) -> Result<tonic::Response<Self::UnclaimedSwapsStream>, tonic::Status> {
-        self.check_worker().await?;
+        let transaction_plan: TransactionPlan = transaction_plan
+            .ok_or_else(|| tonic::Status::invalid_argument("missing transaction plan"))?
+            .try_into()
+            .map_err(|e: anyhow::Error| e.context("could not decode transaction plan"))
+            .map_err(|e| tonic::Status::invalid_argument(format!("{:#}", e)))?;
 
-        let swaps = self.storage.unclaimed_swaps().await.map_err(|e| {
-            tonic::Status::unavailable(format!("error fetching unclaimed swaps: {e}"))
+        let witness_request = pb::WitnessRequest {
+            transaction_plan: Some(transaction_plan.clone().into()),
+        };
+
+        let witness_data: WitnessData = self
+            .witness(tonic::Request::new(witness_request))
+            .await?
+            .into_inner()
+            .witness_data
+            .ok_or_else(|| tonic::Status::invalid_argument("missing witness data"))?
+            .try_into()
+            .map_err(|e: anyhow::Error| e.context("could not decode witness data"))
+            .map_err(|e| tonic::Status::invalid_argument(format!("{:#}", e)))?;
+
+        let fvk = self.storage.full_viewing_key().await.map_err(|e| {
+            tonic::Status::failed_precondition(format!("error retrieving full viewing key: {e}"))
         })?;
 
+        let transaction = transaction_plan
+            .build(&fvk, &witness_data, &AuthorizationData::default())
+            .map_err(|e| {
+                tonic::Status::failed_precondition(format!(
+                    "unable to authorize and build transaction from the view service alone: {e}"
+                ))
+            })?;
+
         let stream = try_stream! {
-            for swap in swaps {
-                yield pb::UnclaimedSwapsResponse{
-                    swap: Some(swap.into()),
-                }
+            yield pb::AuthorizeAndBuildResponse {
+                status: Some(pb::authorize_and_build_response::Status::Complete(
+                    pb::authorize_and_build_response::Complete {
+                        transaction: Some(transaction.into()),
+                    },
+                )),
             }
         };
 
         Ok(tonic::Response::new(
             stream
                 .map_err(|e: anyhow::Error| {
-                    tonic::Status::unavailable(format!("error getting unclaimed swaps: {e}"))
+                    tonic::Status::unavailable(format!("error authorizing transaction: {e}"))
                 })
                 .boxed(),
         ))
@@ -1871,87 +1633,591 @@ impl ViewService for ViewServer {
     }
 
     #[instrument(skip_all, level = "trace")]
-    async fn delegations_by_address_index(
+    async fn compliance_asset_status(
         &self,
-        _request: tonic::Request<pb::DelegationsByAddressIndexRequest>,
-    ) -> Result<tonic::Response<Self::DelegationsByAddressIndexStream>, tonic::Status> {
-        unimplemented!("delegations_by_address_index")
+        request: tonic::Request<pb::ComplianceAssetStatusRequest>,
+    ) -> Result<tonic::Response<pb::ComplianceAssetStatusResponse>, tonic::Status> {
+        let asset_id_proto = request
+            .into_inner()
+            .asset_id
+            .ok_or_else(|| tonic::Status::invalid_argument("missing asset_id"))?;
+
+        // Parse asset_id to check against local tree
+        let asset_id: penumbra_sdk_asset::asset::Id = asset_id_proto
+            .clone()
+            .try_into()
+            .map_err(|e| tonic::Status::invalid_argument(format!("invalid asset_id: {e}")))?;
+
+        // Get asset policy if it exists
+        let policy = self
+            .storage
+            .get_asset_policy(&asset_id)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("failed to get asset policy: {e}")))?;
+        let is_regulated = policy.is_some();
+
+        let (dk_pub, threshold, has_policy) = match &policy {
+            Some(p) => (
+                p.params.dk_pub.vartime_compress().0.to_vec(),
+                p.params.threshold.to_le_bytes().to_vec(),
+                true,
+            ),
+            None => (vec![], vec![], false),
+        };
+
+        tracing::debug!(
+            ?asset_id,
+            is_regulated,
+            has_policy,
+            "using local tree for asset status"
+        );
+
+        // With IMT, we can always answer the query (regulated = membership, unregulated = non-membership)
+        Ok(tonic::Response::new(pb::ComplianceAssetStatusResponse {
+            asset_id: Some(asset_id_proto),
+            is_registered: true,
+            is_regulated,
+            dk_pub,
+            threshold,
+            asset_policy: policy.map(Into::into),
+        }))
     }
 
     #[instrument(skip_all, level = "trace")]
-    async fn unbonding_tokens_by_address_index(
+    async fn compliance_anchors(
         &self,
-        _request: tonic::Request<pb::UnbondingTokensByAddressIndexRequest>,
-    ) -> Result<tonic::Response<Self::UnbondingTokensByAddressIndexStream>, tonic::Status> {
-        unimplemented!("unbonding_tokens_by_address_index currently only implemented on web")
+        _request: tonic::Request<pb::ComplianceAnchorsRequest>,
+    ) -> Result<tonic::Response<pb::ComplianceAnchorsResponse>, tonic::Status> {
+        // Use local tree roots
+        let user_root = self.compliance_user_tree.read().await.root();
+        let asset_root = self.compliance_asset_tree.read().await.root();
+
+        tracing::debug!(
+            ?user_root,
+            ?asset_root,
+            "using local tree roots for anchors"
+        );
+
+        Ok(tonic::Response::new(pb::ComplianceAnchorsResponse {
+            user_tree_root: user_root.0.to_bytes().to_vec(),
+            asset_tree_root: asset_root.0.to_bytes().to_vec(),
+        }))
     }
 
     #[instrument(skip_all, level = "trace")]
-    async fn latest_swaps(
+    async fn compliance_merkle_proofs(
         &self,
-        _request: tonic::Request<pb::LatestSwapsRequest>,
-    ) -> Result<tonic::Response<Self::LatestSwapsStream>, tonic::Status> {
-        unimplemented!("latest_swaps currently only implemented on web")
+        request: tonic::Request<pb::ComplianceMerkleProofsRequest>,
+    ) -> Result<tonic::Response<pb::ComplianceMerkleProofsResponse>, tonic::Status> {
+        let request_inner = request.into_inner();
+
+        // Parse address and asset_id
+        let address: penumbra_sdk_keys::Address = request_inner
+            .address
+            .clone()
+            .ok_or_else(|| tonic::Status::invalid_argument("missing address"))?
+            .try_into()
+            .map_err(|e| tonic::Status::invalid_argument(format!("invalid address: {e}")))?;
+
+        let asset_id: penumbra_sdk_asset::asset::Id = request_inner
+            .asset_id
+            .clone()
+            .ok_or_else(|| tonic::Status::invalid_argument("missing asset_id"))?
+            .try_into()
+            .map_err(|e| tonic::Status::invalid_argument(format!("invalid asset_id: {e}")))?;
+
+        // Acquire read locks for entire operation (prevents worker from syncing mid-request)
+        let user_tree = self.compliance_user_tree.read().await;
+        let asset_tree = self.compliance_asset_tree.read().await;
+
+        let user_anchor = user_tree.root();
+        let asset_anchor = asset_tree.root();
+
+        // Get asset proof from local tree (always available)
+        let (asset_position, indexed_leaf, asset_path, _asset_present_as_member) = asset_tree
+            .get_proof_data(asset_id)
+            .map_err(|e| tonic::Status::internal(format!("failed to get asset proof: {e}")))?;
+        let is_regulated = self
+            .storage
+            .get_asset_policy(&asset_id)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("failed to get asset policy: {e}")))?
+            .is_some();
+
+        // Try to get leaf data from local storage
+        let local_leaf_data = self
+            .storage
+            .get_compliance_leaf_data(&address, &asset_id)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("storage error: {e}")))?;
+
+        // Returns (user_registered, compliance_position, compliance_path, compliance_leaf)
+        let (user_registered, compliance_position, compliance_path, compliance_leaf) =
+            match local_leaf_data {
+                Some(leaf_data) => {
+                    // Local storage hit - compute path from held user_tree reference
+                    let position = leaf_data.position;
+                    let path = user_tree.witness(position).map_err(|e| {
+                        tonic::Status::internal(format!("failed to compute path: {e}"))
+                    })?;
+
+                    // Build proto leaf from local storage
+                    let leaf_proto = compliance_pb::ComplianceLeaf {
+                        address: Some(address.clone().into()),
+                        asset_id: Some(asset_id.into()),
+                        d: leaf_data.d.to_vec(),
+                        slot_id: leaf_data.slot_id,
+                        slot_derivation: leaf_data.slot_derivation.to_vec(),
+                    };
+
+                    tracing::debug!(
+                        ?address,
+                        ?asset_id,
+                        position,
+                        "using local storage for user proof"
+                    );
+                    (true, position, path, Some(leaf_proto))
+                }
+                None => {
+                    // Local storage miss - fall back to gRPC for leaf data
+                    tracing::debug!(?address, ?asset_id, "local storage miss, fetching from pd");
+
+                    use penumbra_sdk_proto::core::component::compliance::v1::{
+                        query_service_client::QueryServiceClient as ComplianceQueryServiceClient,
+                        ComplianceUserLeafRequest,
+                    };
+
+                    let endpoint = get_pd_endpoint(self.node.clone()).await.map_err(|e| {
+                        tonic::Status::internal(format!("failed to connect to pd: {e}"))
+                    })?;
+                    let channel = endpoint.connect().await.map_err(|e| {
+                        tonic::Status::internal(format!("failed to connect to pd: {e}"))
+                    })?;
+                    let mut client = ComplianceQueryServiceClient::new(channel);
+
+                    let leaf_request = ComplianceUserLeafRequest {
+                        address: request_inner.address.clone(),
+                        asset_id: request_inner.asset_id.clone(),
+                    };
+                    let leaf_response = client
+                        .compliance_user_leaf(tonic::Request::new(leaf_request))
+                        .await?
+                        .into_inner();
+
+                    if !leaf_response.is_registered {
+                        // User not registered - return empty proof
+                        (
+                            false,
+                            0,
+                            penumbra_sdk_compliance::structs::MerklePath::default(),
+                            None,
+                        )
+                    } else {
+                        // Got leaf from pd, need to get position and compute path locally
+                        // For now, fall back to full gRPC proof since we don't have position
+                        use penumbra_sdk_proto::core::component::compliance::v1::ComplianceMerkleProofsRequest;
+
+                        let proof_request = ComplianceMerkleProofsRequest {
+                            address: request_inner.address.clone(),
+                            asset_id: request_inner.asset_id.clone(),
+                        };
+                        let proof_response = client
+                            .compliance_merkle_proofs(tonic::Request::new(proof_request))
+                            .await?
+                            .into_inner();
+
+                        let path = proof_response
+                            .compliance_path
+                            .map(|p| penumbra_sdk_compliance::structs::MerklePath {
+                                layers: p
+                                    .layers
+                                    .into_iter()
+                                    .map(|layer| {
+                                        penumbra_sdk_compliance::structs::MerklePathLayer {
+                                            siblings: layer.siblings,
+                                        }
+                                    })
+                                    .collect(),
+                            })
+                            .ok_or_else(|| {
+                                tonic::Status::internal("compliance_path missing from pd response")
+                            })?;
+
+                        // Include the leaf from the gRPC response
+                        let leaf = leaf_response.leaf;
+
+                        (
+                            proof_response.user_registered,
+                            proof_response.compliance_position,
+                            path,
+                            leaf,
+                        )
+                    }
+                }
+            };
+
+        // Convert local types to proto types (using compliance_pb for inner types)
+        let compliance_path_proto = compliance_pb::MerklePath {
+            layers: compliance_path
+                .layers
+                .into_iter()
+                .map(|layer| compliance_pb::MerklePathLayer {
+                    siblings: layer.siblings,
+                })
+                .collect(),
+        };
+
+        let asset_path_proto = compliance_pb::MerklePath {
+            layers: asset_path
+                .layers
+                .into_iter()
+                .map(|layer| compliance_pb::MerklePathLayer {
+                    siblings: layer.siblings,
+                })
+                .collect(),
+        };
+
+        let asset_indexed_leaf_proto: compliance_pb::IndexedLeafData = indexed_leaf.clone().into();
+
+        // Release read locks (allows worker to sync)
+        drop(user_tree);
+        drop(asset_tree);
+
+        Ok(tonic::Response::new(pb::ComplianceMerkleProofsResponse {
+            user_registered,
+            asset_registered: true, // Always true with IMT (membership or non-membership)
+            is_regulated,
+            compliance_path: Some(compliance_path_proto),
+            compliance_position,
+            asset_path: Some(asset_path_proto),
+            asset_position,
+            compliance_anchor: user_anchor.0.to_bytes().to_vec(),
+            asset_anchor: asset_anchor.0.to_bytes().to_vec(),
+            asset_indexed_leaf: Some(asset_indexed_leaf_proto),
+            compliance_leaf,
+        }))
     }
 
     #[instrument(skip_all, level = "trace")]
-    async fn tournament_votes(
+    async fn compliance_user_leaf(
         &self,
-        _request: tonic::Request<pb::TournamentVotesRequest>,
-    ) -> Result<tonic::Response<Self::TournamentVotesStream>, tonic::Status> {
-        unimplemented!("tournament_votes currently only implemented on web")
-    }
+        request: tonic::Request<pb::ComplianceUserLeafRequest>,
+    ) -> Result<tonic::Response<pb::ComplianceUserLeafResponse>, tonic::Status> {
+        let request_inner = request.into_inner();
 
-    #[instrument(skip_all, level = "trace")]
-    async fn lqt_voting_notes(
-        &self,
-        request: tonic::Request<pb::LqtVotingNotesRequest>,
-    ) -> Result<tonic::Response<Self::LqtVotingNotesStream>, tonic::Status> {
-        async fn inner(
-            this: &ViewServer,
-            epoch: u64,
-            filter: Option<AddressIndex>,
-        ) -> anyhow::Result<Vec<(SpendableNoteRecord, IdentityKey)>> {
-            let (_, start_height) = this.storage.get_epoch(epoch).await?;
-            let start_height =
-                start_height.ok_or_else(|| anyhow!("missing height for epoch {epoch}"))?;
-            let notes = this.storage.notes_for_voting(filter, start_height).await?;
-            Ok(notes)
+        // Parse address and asset_id
+        let address: penumbra_sdk_keys::Address = request_inner
+            .address
+            .clone()
+            .ok_or_else(|| tonic::Status::invalid_argument("missing address"))?
+            .try_into()
+            .map_err(|e| tonic::Status::invalid_argument(format!("invalid address: {e}")))?;
+
+        let asset_id: penumbra_sdk_asset::asset::Id = request_inner
+            .asset_id
+            .clone()
+            .ok_or_else(|| tonic::Status::invalid_argument("missing asset_id"))?
+            .try_into()
+            .map_err(|e| tonic::Status::invalid_argument(format!("invalid asset_id: {e}")))?;
+
+        // Try to get leaf data from local storage first
+        let local_leaf_data = self
+            .storage
+            .get_compliance_leaf_data(&address, &asset_id)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("storage error: {e}")))?;
+
+        if let Some(leaf_data) = local_leaf_data {
+            // Local storage hit - reconstruct the leaf from stored slot material.
+            tracing::debug!(?address, ?asset_id, "using local storage for user leaf");
+
+            let leaf = compliance_pb::ComplianceLeaf {
+                address: request_inner.address,
+                asset_id: request_inner.asset_id,
+                d: leaf_data.d.to_vec(),
+                slot_id: leaf_data.slot_id,
+                slot_derivation: leaf_data.slot_derivation.to_vec(),
+            };
+
+            return Ok(tonic::Response::new(pb::ComplianceUserLeafResponse {
+                is_registered: true,
+                leaf: Some(leaf),
+            }));
         }
 
-        let request = request.into_inner();
-        let epoch = request.epoch_index;
-        let filter = request
-            .account_filter
-            .map(|x| AddressIndex::try_from(x))
-            .transpose()
-            .map_err(|_| tonic::Status::invalid_argument("invalid account filter"))?;
-        let notes = inner(self, epoch, filter).await.map_err(|e| {
-            tonic::Status::internal(format!("error fetching voting notes: {:#}", e))
-        })?;
-        let stream = tokio_stream::iter(notes.into_iter().map(|(note, _)| {
-            Result::<_, tonic::Status>::Ok(pb::LqtVotingNotesResponse {
-                note_record: Some(note.into()),
-                already_voted: false,
-            })
-        }));
-        Ok(tonic::Response::new(stream.boxed()))
+        // Local storage miss - fall back to gRPC
+        tracing::debug!(?address, ?asset_id, "local storage miss, fetching from pd");
+
+        use penumbra_sdk_proto::core::component::compliance::v1::{
+            query_service_client::QueryServiceClient as ComplianceQueryServiceClient,
+            ComplianceUserLeafRequest as ComplianceRequest,
+        };
+
+        let endpoint = get_pd_endpoint(self.node.clone())
+            .await
+            .map_err(|e| tonic::Status::internal(format!("failed to connect to pd: {e}")))?;
+        let channel = endpoint
+            .connect()
+            .await
+            .map_err(|e| tonic::Status::internal(format!("failed to connect to pd: {e}")))?;
+        let mut client = ComplianceQueryServiceClient::new(channel);
+
+        let compliance_request = ComplianceRequest {
+            address: request_inner.address.clone(),
+            asset_id: request_inner.asset_id.clone(),
+        };
+        let response = client
+            .compliance_user_leaf(tonic::Request::new(compliance_request))
+            .await?
+            .into_inner();
+
+        // Convert compliance proto types to view proto types
+        let leaf = response.leaf.map(|l| compliance_pb::ComplianceLeaf {
+            address: l.address,
+            asset_id: l.asset_id,
+            d: l.d,
+            slot_id: l.slot_id,
+            slot_derivation: l.slot_derivation,
+        });
+
+        Ok(tonic::Response::new(pb::ComplianceUserLeafResponse {
+            is_registered: response.is_registered,
+            leaf,
+        }))
     }
 
     #[instrument(skip_all, level = "trace")]
-    async fn lp_position_bundle(
+    async fn compliance_batch_merkle_proofs(
         &self,
-        _request: tonic::Request<pb::LpPositionBundleRequest>,
-    ) -> Result<tonic::Response<Self::LpPositionBundleStream>, tonic::Status> {
-        unimplemented!("lp_position_bundle currently only implemented on web")
-    }
+        request: tonic::Request<pb::ComplianceBatchMerkleProofsRequest>,
+    ) -> Result<tonic::Response<pb::ComplianceBatchMerkleProofsResponse>, tonic::Status> {
+        let request_inner = request.into_inner();
 
-    #[instrument(skip_all, level = "trace")]
-    async fn lp_strategy_catalog(
-        &self,
-        _request: tonic::Request<pb::LpStrategyCatalogRequest>,
-    ) -> Result<tonic::Response<Self::LpStrategyCatalogStream>, tonic::Status> {
-        unimplemented!("lp_strategy_catalog currently only implemented on web")
+        // Acquire read locks for entire batch (prevents worker from syncing mid-batch)
+        // This follows the SCT witness() pattern at lines 1575-1627
+        let user_tree = self.compliance_user_tree.read().await;
+        let asset_tree = self.compliance_asset_tree.read().await;
+
+        let user_anchor = user_tree.root();
+        let asset_anchor = asset_tree.root();
+
+        // Debug: log anchors at read time
+        tracing::debug!(
+            user_anchor = ?user_anchor.0.to_bytes(),
+            asset_anchor = ?asset_anchor.0.to_bytes(),
+            num_queries = request_inner.queries.len(),
+            "compliance_batch_merkle_proofs: read anchors from local trees"
+        );
+
+        let mut results = Vec::with_capacity(request_inner.queries.len());
+
+        // Lazy gRPC client - only created if we have cache misses
+        use penumbra_sdk_proto::core::component::compliance::v1::{
+            query_service_client::QueryServiceClient as ComplianceQueryServiceClient,
+            ComplianceMerkleProofsRequest, ComplianceUserLeafRequest,
+        };
+        let mut grpc_client: Option<ComplianceQueryServiceClient<tonic::transport::Channel>> = None;
+
+        for query in request_inner.queries {
+            // Parse address and asset_id
+            let address: penumbra_sdk_keys::Address = query
+                .address
+                .clone()
+                .ok_or_else(|| tonic::Status::invalid_argument("missing address in query"))?
+                .try_into()
+                .map_err(|e| tonic::Status::invalid_argument(format!("invalid address: {e}")))?;
+
+            let asset_id: penumbra_sdk_asset::asset::Id = query
+                .asset_id
+                .clone()
+                .ok_or_else(|| tonic::Status::invalid_argument("missing asset_id in query"))?
+                .try_into()
+                .map_err(|e| tonic::Status::invalid_argument(format!("invalid asset_id: {e}")))?;
+
+            // Get asset proof from local tree (using held reference)
+            let (asset_position, indexed_leaf, asset_path, _asset_present_as_member) = asset_tree
+                .get_proof_data(asset_id)
+                .map_err(|e| tonic::Status::internal(format!("failed to get asset proof: {e}")))?;
+            let is_regulated = self
+                .storage
+                .get_asset_policy(&asset_id)
+                .await
+                .map_err(|e| tonic::Status::internal(format!("failed to get asset policy: {e}")))?
+                .is_some();
+
+            // Debug: log proof data
+            let leaf_commitment = indexed_leaf.commit();
+            tracing::debug!(
+                asset_id = ?asset_id.0.to_bytes(),
+                position = asset_position,
+                is_regulated,
+                leaf_value = ?indexed_leaf.value.to_bytes(),
+                leaf_next_index = indexed_leaf.next_index,
+                leaf_threshold = indexed_leaf.params.threshold,
+                leaf_dk_pub_first_byte = indexed_leaf.params.dk_pub.vartime_compress().0[0],
+                leaf_commitment = ?leaf_commitment.0.to_bytes(),
+                "compliance_batch_merkle_proofs: asset proof data"
+            );
+
+            // Returns (user_registered, compliance_position, compliance_path, compliance_leaf).
+            // Prefer real user proofs whenever a leaf exists, even for unregulated assets.
+            let local_leaf_data = self
+                .storage
+                .get_compliance_leaf_data(&address, &asset_id)
+                .await
+                .map_err(|e| tonic::Status::internal(format!("storage error: {e}")))?;
+
+            let (user_registered, compliance_position, compliance_path, compliance_leaf) =
+                match local_leaf_data {
+                    Some(leaf_data) => {
+                        let position = leaf_data.position;
+                        let path = user_tree.witness(position).map_err(|e| {
+                            tonic::Status::internal(format!("failed to compute path: {e}"))
+                        })?;
+
+                        let leaf_proto = compliance_pb::ComplianceLeaf {
+                            address: Some(address.clone().into()),
+                            asset_id: Some(asset_id.into()),
+                            d: leaf_data.d.to_vec(),
+                            slot_id: leaf_data.slot_id,
+                            slot_derivation: leaf_data.slot_derivation.to_vec(),
+                        };
+
+                        tracing::debug!(
+                            ?address,
+                            ?asset_id,
+                            position,
+                            is_regulated,
+                            "using local storage for batch user proof"
+                        );
+                        (true, position, path, Some(leaf_proto))
+                    }
+                    None => {
+                        tracing::debug!(
+                            ?address,
+                            ?asset_id,
+                            is_regulated,
+                            "local storage miss, fetching from pd for batch"
+                        );
+
+                        if grpc_client.is_none() {
+                            let endpoint =
+                                get_pd_endpoint(self.node.clone()).await.map_err(|e| {
+                                    tonic::Status::internal(format!("failed to connect to pd: {e}"))
+                                })?;
+                            let channel = endpoint.connect().await.map_err(|e| {
+                                tonic::Status::internal(format!("failed to connect to pd: {e}"))
+                            })?;
+                            grpc_client = Some(ComplianceQueryServiceClient::new(channel));
+                        }
+                        let client = grpc_client.as_mut().unwrap();
+
+                        let leaf_request = ComplianceUserLeafRequest {
+                            address: query.address.clone(),
+                            asset_id: query.asset_id.clone(),
+                        };
+                        let leaf_response = client
+                            .compliance_user_leaf(tonic::Request::new(leaf_request))
+                            .await?
+                            .into_inner();
+
+                        if !leaf_response.is_registered {
+                            (
+                                false,
+                                0,
+                                penumbra_sdk_compliance::structs::MerklePath::default(),
+                                None,
+                            )
+                        } else {
+                            let proof_request = ComplianceMerkleProofsRequest {
+                                address: query.address.clone(),
+                                asset_id: query.asset_id.clone(),
+                            };
+                            let proof_response = client
+                                .compliance_merkle_proofs(tonic::Request::new(proof_request))
+                                .await?
+                                .into_inner();
+
+                            let path = proof_response
+                                .compliance_path
+                                .map(|p| penumbra_sdk_compliance::structs::MerklePath {
+                                    layers: p
+                                        .layers
+                                        .into_iter()
+                                        .map(|layer| {
+                                            penumbra_sdk_compliance::structs::MerklePathLayer {
+                                                siblings: layer.siblings,
+                                            }
+                                        })
+                                        .collect(),
+                                })
+                                .ok_or_else(|| {
+                                    tonic::Status::internal(
+                                        "compliance_path missing from pd response",
+                                    )
+                                })?;
+
+                            (
+                                proof_response.user_registered,
+                                proof_response.compliance_position,
+                                path,
+                                leaf_response.leaf,
+                            )
+                        }
+                    }
+                };
+
+            // Convert local types to proto types
+            let compliance_path_proto = compliance_pb::MerklePath {
+                layers: compliance_path
+                    .layers
+                    .into_iter()
+                    .map(|layer| compliance_pb::MerklePathLayer {
+                        siblings: layer.siblings,
+                    })
+                    .collect(),
+            };
+
+            let asset_path_proto = compliance_pb::MerklePath {
+                layers: asset_path
+                    .layers
+                    .into_iter()
+                    .map(|layer| compliance_pb::MerklePathLayer {
+                        siblings: layer.siblings,
+                    })
+                    .collect(),
+            };
+
+            let asset_indexed_leaf_proto: compliance_pb::IndexedLeafData =
+                indexed_leaf.clone().into();
+
+            results.push(pb::ComplianceMerkleProofsResponse {
+                user_registered,
+                asset_registered: true, // Always true with IMT (membership or non-membership)
+                is_regulated,
+                compliance_path: Some(compliance_path_proto),
+                compliance_position,
+                asset_path: Some(asset_path_proto),
+                asset_position,
+                compliance_anchor: user_anchor.0.to_bytes().to_vec(),
+                asset_anchor: asset_anchor.0.to_bytes().to_vec(),
+                asset_indexed_leaf: Some(asset_indexed_leaf_proto),
+                compliance_leaf,
+            });
+        }
+
+        // Release read locks (allows worker to sync)
+        drop(user_tree);
+        drop(asset_tree);
+
+        // Return as ViewService response
+        Ok(tonic::Response::new(
+            pb::ComplianceBatchMerkleProofsResponse {
+                compliance_anchor: user_anchor.0.to_bytes().to_vec(),
+                asset_anchor: asset_anchor.0.to_bytes().to_vec(),
+                results,
+            },
+        ))
     }
 }
 
@@ -1965,5 +2231,12 @@ async fn get_pd_endpoint(node: Url) -> anyhow::Result<Endpoint> {
             .tls_config(ClientTlsConfig::new().with_webpki_roots())?,
         other => anyhow::bail!("unknown url scheme {other}"),
     };
+    // HTTP/2 keepalive prevents reuse of stale idle pooled connections, which
+    // otherwise surface as tonic Unavailable ("connection closed before message
+    // completed") on the long-lived view worker channel.
+    let endpoint = endpoint
+        .http2_keep_alive_interval(std::time::Duration::from_secs(10))
+        .keep_alive_timeout(std::time::Duration::from_secs(20))
+        .keep_alive_while_idle(true);
     Ok(endpoint)
 }

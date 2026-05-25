@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+package penumbra.core.component.validator.v1;
+
+import "penumbra/core/keys/v1/keys.proto";
+import "penumbra/core/num/v1/num.proto";
+
+// Describes a validator's configuration data.
+message Validator {
+  // The validator's identity verification key.
+  keys.v1.IdentityKey identity_key = 1;
+  // The validator's consensus pubkey for use in Tendermint (Ed25519).
+  bytes consensus_key = 2;
+  // The validator's (human-readable) name.
+  string name = 3;
+  // The validator's website.
+  string website = 4;
+  // The validator's description.
+  string description = 5;
+  // Whether the validator is enabled or not.
+  bool enabled = 8;
+  // The sequence number determines which validator data takes priority.
+  uint32 sequence_number = 7;
+  // The validator's governance key.
+  keys.v1.GovernanceKey governance_key = 9;
+}
+
+// A transaction action (re)defining a validator.
+message ValidatorDefinition {
+  // The configuration data for the validator.
+  Validator validator = 1;
+  // A signature by the validator's identity key over the validator data.
+  bytes auth_sig = 2;
+}
+
+// Validator management configuration data.
+message ValidatorParameters {
+  // The maximum number of validators in the consensus set.
+  uint64 active_validator_limit = 1;
+  // The number of blocks in the window to check for downtime.
+  uint64 signed_blocks_window_len = 2;
+  // The maximum number of blocks in the window each validator can miss signing
+  // before validator enforcement triggers.
+  uint64 missed_blocks_maximum = 3;
+}
+
+// Describes the state of a validator.
+message ValidatorState {
+  enum ValidatorStateEnum {
+    VALIDATOR_STATE_ENUM_UNSPECIFIED = 0;
+    VALIDATOR_STATE_ENUM_DEFINED = 1;
+    VALIDATOR_STATE_ENUM_INACTIVE = 2;
+    VALIDATOR_STATE_ENUM_ACTIVE = 3;
+    VALIDATOR_STATE_ENUM_JAILED = 4;
+    VALIDATOR_STATE_ENUM_TOMBSTONED = 5;
+    VALIDATOR_STATE_ENUM_DISABLED = 6;
+  }
+
+  ValidatorStateEnum state = 1;
+}
+
+// Describes the current state of a validator on-chain.
+message ValidatorStatus {
+  keys.v1.IdentityKey identity_key = 1;
+  ValidatorState state = 2;
+  num.v1.Amount voting_power = 3;
+}
+
+// Combines all validator info into a single packet.
+message ValidatorInfo {
+  Validator validator = 1;
+  ValidatorStatus status = 2;
+}
+
+// Genesis data for the validator component.
+message GenesisContent {
+  ValidatorParameters validator_params = 1;
+  repeated Validator validators = 2;
+}
+
+// Track's a validator's uptime.
+message Uptime {
+  uint64 as_of_block_height = 1;
+  uint32 window_len = 2;
+  bytes bitvec = 3;
+}
+
+message CurrentConsensusKeys {
+  repeated keys.v1.ConsensusKey consensus_keys = 1;
+}
+
+message EventValidatorStateChange {
+  keys.v1.IdentityKey identity_key = 1;
+  ValidatorState state = 2;
+}
+
+message EventValidatorVotingPowerChange {
+  keys.v1.IdentityKey identity_key = 1;
+  num.v1.Amount voting_power = 2;
+}
+
+message EventValidatorDefinitionUpload {
+  Validator validator = 1;
+}
+
+message EventValidatorMissedBlock {
+  keys.v1.IdentityKey identity_key = 1;
+}
+
+message EventTombstoneValidator {
+  uint64 evidence_height = 1;
+  uint64 current_height = 2;
+  keys.v1.IdentityKey identity_key = 4;
+  bytes address = 5;
+  uint64 voting_power = 6;
+}
+
+service QueryService {
+  rpc GetValidatorInfo(GetValidatorInfoRequest) returns (GetValidatorInfoResponse);
+  rpc ValidatorInfo(ValidatorInfoRequest) returns (stream ValidatorInfoResponse);
+  rpc ValidatorStatus(ValidatorStatusRequest) returns (ValidatorStatusResponse);
+  rpc ValidatorUptime(ValidatorUptimeRequest) returns (ValidatorUptimeResponse);
+}
+
+message GetValidatorInfoRequest {
+  keys.v1.IdentityKey identity_key = 1;
+}
+
+message GetValidatorInfoResponse {
+  ValidatorInfo validator_info = 1;
+}
+
+message ValidatorInfoRequest {
+  bool show_inactive = 1;
+}
+
+message ValidatorInfoResponse {
+  ValidatorInfo validator_info = 1;
+}
+
+message ValidatorStatusRequest {
+  keys.v1.IdentityKey identity_key = 1;
+}
+
+message ValidatorStatusResponse {
+  ValidatorStatus status = 1;
+}
+
+message ValidatorUptimeRequest {
+  keys.v1.IdentityKey identity_key = 1;
+}
+
+message ValidatorUptimeResponse {
+  Uptime uptime = 1;
+}

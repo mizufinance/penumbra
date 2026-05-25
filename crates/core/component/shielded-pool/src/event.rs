@@ -12,69 +12,69 @@ use crate::note::StateCommitment;
 // Narrator: we did in fact need the separate domain types.
 
 #[derive(Clone, Debug)]
-pub struct EventSpend {
+pub struct EventNullifierSpent {
     pub nullifier: Nullifier,
 }
 
-impl TryFrom<pb::EventSpend> for EventSpend {
+impl TryFrom<pb::EventNullifierSpent> for EventNullifierSpent {
     type Error = anyhow::Error;
 
-    fn try_from(value: pb::EventSpend) -> Result<Self, Self::Error> {
-        fn inner(value: pb::EventSpend) -> anyhow::Result<EventSpend> {
-            Ok(EventSpend {
+    fn try_from(value: pb::EventNullifierSpent) -> Result<Self, Self::Error> {
+        fn inner(value: pb::EventNullifierSpent) -> anyhow::Result<EventNullifierSpent> {
+            Ok(EventNullifierSpent {
                 nullifier: value
                     .nullifier
                     .ok_or(anyhow!("missing `nullifier`"))?
                     .try_into()?,
             })
         }
-        inner(value).context(format!("parsing {}", pb::EventSpend::NAME))
+        inner(value).context(format!("parsing {}", pb::EventNullifierSpent::NAME))
     }
 }
 
-impl From<EventSpend> for pb::EventSpend {
-    fn from(value: EventSpend) -> Self {
+impl From<EventNullifierSpent> for pb::EventNullifierSpent {
+    fn from(value: EventNullifierSpent) -> Self {
         Self {
             nullifier: Some(value.nullifier.into()),
         }
     }
 }
 
-impl DomainType for EventSpend {
-    type Proto = pb::EventSpend;
+impl DomainType for EventNullifierSpent {
+    type Proto = pb::EventNullifierSpent;
 }
 
 #[derive(Clone, Debug)]
-pub struct EventOutput {
+pub struct EventNoteCreated {
     pub note_commitment: StateCommitment,
 }
 
-impl TryFrom<pb::EventOutput> for EventOutput {
+impl TryFrom<pb::EventNoteCreated> for EventNoteCreated {
     type Error = anyhow::Error;
 
-    fn try_from(value: pb::EventOutput) -> Result<Self, Self::Error> {
-        fn inner(value: pb::EventOutput) -> anyhow::Result<EventOutput> {
-            Ok(EventOutput {
+    fn try_from(value: pb::EventNoteCreated) -> Result<Self, Self::Error> {
+        fn inner(value: pb::EventNoteCreated) -> anyhow::Result<EventNoteCreated> {
+            Ok(EventNoteCreated {
                 note_commitment: value
                     .note_commitment
                     .ok_or(anyhow!("missing `note_commitment`"))?
                     .try_into()?,
             })
         }
-        inner(value).context(format!("parsing {}", pb::EventOutput::NAME))
+        inner(value).context(format!("parsing {}", pb::EventNoteCreated::NAME))
     }
 }
 
-impl From<EventOutput> for pb::EventOutput {
-    fn from(value: EventOutput) -> Self {
+impl From<EventNoteCreated> for pb::EventNoteCreated {
+    fn from(value: EventNoteCreated) -> Self {
         Self {
             note_commitment: Some(value.note_commitment.into()),
         }
     }
 }
 
-impl DomainType for EventOutput {
-    type Proto = pb::EventOutput;
+impl DomainType for EventNoteCreated {
+    type Proto = pb::EventNoteCreated;
 }
 
 #[derive(Clone, Debug)]

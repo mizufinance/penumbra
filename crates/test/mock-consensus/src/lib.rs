@@ -26,7 +26,7 @@
 //! [cargo-test]: https://doc.rust-lang.org/cargo/commands/cargo-test.html
 //! [cometbft]: https://github.com/cometbft/cometbft
 //! [cometmock]: https://github.com/informalsystems/CometMock
-//! [penumbra]: https://github.com/penumbra-zone/penumbra
+//! [penumbra]: https://github.com/mizufinance/penumbra
 //! [tendermint]: https://github.com/tendermint/tendermint
 
 use {
@@ -113,6 +113,18 @@ pub type TsCallbackFn = Box<dyn Fn(Time) -> Time + Send + Sync + 'static>;
 /// Entries in this keyring consist of a [`VerificationKey`] and a [`SigningKey`].
 type Keyring = BTreeMap<VerificationKey, SigningKey>;
 
+/// Consensus node state required to resume block production over an existing app store.
+#[derive(Clone, Debug)]
+pub struct NodeResumeState {
+    pub last_app_hash: Vec<u8>,
+    pub last_validator_set_hash: Option<tendermint::Hash>,
+    pub last_commit: Option<Commit>,
+    pub consensus_params_hash: Vec<u8>,
+    pub height: Height,
+    pub timestamp: Time,
+    pub chain_id: tendermint::chain::Id,
+}
+
 /// Accessors.
 impl<C> TestNode<C> {
     /// A chain ID for use in tests.
@@ -161,6 +173,18 @@ impl<C> TestNode<C> {
 
     pub fn height(&self) -> &Height {
         &self.height
+    }
+
+    pub fn resume_state(&self) -> NodeResumeState {
+        NodeResumeState {
+            last_app_hash: self.last_app_hash.clone(),
+            last_validator_set_hash: self.last_validator_set_hash,
+            last_commit: self.last_commit.clone(),
+            consensus_params_hash: self.consensus_params_hash.clone(),
+            height: self.height,
+            timestamp: self.timestamp,
+            chain_id: self.chain_id.clone(),
+        }
     }
 }
 

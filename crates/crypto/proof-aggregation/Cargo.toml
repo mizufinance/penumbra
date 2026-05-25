@@ -1,0 +1,34 @@
+[package]
+name = "penumbra-sdk-proof-aggregation"
+authors = { workspace = true }
+repository = { workspace = true }
+description = "Proof aggregation primitives for Penumbra consensus"
+version = { workspace = true }
+license = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+anyhow = { workspace = true }
+ark-groth16 = { workspace = true, default-features = false }
+ark-inner-products = { path = "vendor/ripp/inner_products" }
+ark-serialize = { workspace = true }
+ark-ip-proofs = { path = "vendor/ripp/ip_proofs" }
+bincode = { workspace = true }
+blake2 = "0.9"
+decaf377 = { workspace = true }
+digest = "0.9"
+hex = { workspace = true }
+penumbra-sdk-proof-params = { workspace = true, default-features = false }
+penumbra-sdk-proto = { workspace = true, default-features = true }
+penumbra-sdk-shielded-pool = { workspace = true, default-features = false }
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+rayon = "1"
+serde = { workspace = true, features = ["derive"] }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+ark-ff = { workspace = true }
+ark-r1cs-std = { workspace = true }
+ark-relations = { workspace = true }
+ark-snark = { workspace = true }

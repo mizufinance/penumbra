@@ -212,17 +212,8 @@ impl serde::Serialize for CommitmentSource {
                 commitment_source::Source::Ics20Transfer(v) => {
                     struct_ser.serialize_field("ics20Transfer", v)?;
                 }
-                commitment_source::Source::FundingStreamReward(v) => {
-                    struct_ser.serialize_field("fundingStreamReward", v)?;
-                }
-                commitment_source::Source::CommunityPoolOutput(v) => {
-                    struct_ser.serialize_field("communityPoolOutput", v)?;
-                }
                 commitment_source::Source::Genesis(v) => {
                     struct_ser.serialize_field("genesis", v)?;
-                }
-                commitment_source::Source::Lqt(v) => {
-                    struct_ser.serialize_field("lqt", v)?;
                 }
             }
         }
@@ -239,22 +230,14 @@ impl<'de> serde::Deserialize<'de> for CommitmentSource {
             "transaction",
             "ics_20_transfer",
             "ics20Transfer",
-            "funding_stream_reward",
-            "fundingStreamReward",
-            "community_pool_output",
-            "communityPoolOutput",
             "genesis",
-            "lqt",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Transaction,
             Ics20Transfer,
-            FundingStreamReward,
-            CommunityPoolOutput,
             Genesis,
-            Lqt,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -279,10 +262,7 @@ impl<'de> serde::Deserialize<'de> for CommitmentSource {
                         match value {
                             "transaction" => Ok(GeneratedField::Transaction),
                             "ics20Transfer" | "ics_20_transfer" => Ok(GeneratedField::Ics20Transfer),
-                            "fundingStreamReward" | "funding_stream_reward" => Ok(GeneratedField::FundingStreamReward),
-                            "communityPoolOutput" | "community_pool_output" => Ok(GeneratedField::CommunityPoolOutput),
                             "genesis" => Ok(GeneratedField::Genesis),
-                            "lqt" => Ok(GeneratedField::Lqt),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -319,32 +299,11 @@ impl<'de> serde::Deserialize<'de> for CommitmentSource {
                             source__ = map_.next_value::<::std::option::Option<_>>()?.map(commitment_source::Source::Ics20Transfer)
 ;
                         }
-                        GeneratedField::FundingStreamReward => {
-                            if source__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("fundingStreamReward"));
-                            }
-                            source__ = map_.next_value::<::std::option::Option<_>>()?.map(commitment_source::Source::FundingStreamReward)
-;
-                        }
-                        GeneratedField::CommunityPoolOutput => {
-                            if source__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("communityPoolOutput"));
-                            }
-                            source__ = map_.next_value::<::std::option::Option<_>>()?.map(commitment_source::Source::CommunityPoolOutput)
-;
-                        }
                         GeneratedField::Genesis => {
                             if source__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("genesis"));
                             }
                             source__ = map_.next_value::<::std::option::Option<_>>()?.map(commitment_source::Source::Genesis)
-;
-                        }
-                        GeneratedField::Lqt => {
-                            if source__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("lqt"));
-                            }
-                            source__ = map_.next_value::<::std::option::Option<_>>()?.map(commitment_source::Source::Lqt)
 ;
                         }
                         GeneratedField::__SkipField__ => {
@@ -358,178 +317,6 @@ impl<'de> serde::Deserialize<'de> for CommitmentSource {
             }
         }
         deserializer.deserialize_struct("penumbra.core.component.sct.v1.CommitmentSource", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for commitment_source::CommunityPoolOutput {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let len = 0;
-        let struct_ser = serializer.serialize_struct("penumbra.core.component.sct.v1.CommitmentSource.CommunityPoolOutput", len)?;
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for commitment_source::CommunityPoolOutput {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            __SkipField__,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                            Ok(GeneratedField::__SkipField__)
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = commitment_source::CommunityPoolOutput;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct penumbra.core.component.sct.v1.CommitmentSource.CommunityPoolOutput")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<commitment_source::CommunityPoolOutput, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                while map_.next_key::<GeneratedField>()?.is_some() {
-                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
-                }
-                Ok(commitment_source::CommunityPoolOutput {
-                })
-            }
-        }
-        deserializer.deserialize_struct("penumbra.core.component.sct.v1.CommitmentSource.CommunityPoolOutput", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for commitment_source::FundingStreamReward {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.epoch_index != 0 {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.sct.v1.CommitmentSource.FundingStreamReward", len)?;
-        if self.epoch_index != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("epochIndex", ToString::to_string(&self.epoch_index).as_str())?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for commitment_source::FundingStreamReward {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "epoch_index",
-            "epochIndex",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            EpochIndex,
-            __SkipField__,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "epochIndex" | "epoch_index" => Ok(GeneratedField::EpochIndex),
-                            _ => Ok(GeneratedField::__SkipField__),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = commitment_source::FundingStreamReward;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct penumbra.core.component.sct.v1.CommitmentSource.FundingStreamReward")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<commitment_source::FundingStreamReward, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut epoch_index__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::EpochIndex => {
-                            if epoch_index__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("epochIndex"));
-                            }
-                            epoch_index__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::__SkipField__ => {
-                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
-                        }
-                    }
-                }
-                Ok(commitment_source::FundingStreamReward {
-                    epoch_index: epoch_index__.unwrap_or_default(),
-                })
-            }
-        }
-        deserializer.deserialize_struct("penumbra.core.component.sct.v1.CommitmentSource.FundingStreamReward", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for commitment_source::Genesis {
@@ -737,123 +524,6 @@ impl<'de> serde::Deserialize<'de> for commitment_source::Ics20Transfer {
             }
         }
         deserializer.deserialize_struct("penumbra.core.component.sct.v1.CommitmentSource.Ics20Transfer", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for commitment_source::LiquidityTournamentReward {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.epoch != 0 {
-            len += 1;
-        }
-        if self.tx_hash.is_some() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.sct.v1.CommitmentSource.LiquidityTournamentReward", len)?;
-        if self.epoch != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("epoch", ToString::to_string(&self.epoch).as_str())?;
-        }
-        if let Some(v) = self.tx_hash.as_ref() {
-            struct_ser.serialize_field("txHash", v)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for commitment_source::LiquidityTournamentReward {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "epoch",
-            "tx_hash",
-            "txHash",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            Epoch,
-            TxHash,
-            __SkipField__,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "epoch" => Ok(GeneratedField::Epoch),
-                            "txHash" | "tx_hash" => Ok(GeneratedField::TxHash),
-                            _ => Ok(GeneratedField::__SkipField__),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = commitment_source::LiquidityTournamentReward;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct penumbra.core.component.sct.v1.CommitmentSource.LiquidityTournamentReward")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<commitment_source::LiquidityTournamentReward, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut epoch__ = None;
-                let mut tx_hash__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::Epoch => {
-                            if epoch__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("epoch"));
-                            }
-                            epoch__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::TxHash => {
-                            if tx_hash__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("txHash"));
-                            }
-                            tx_hash__ = map_.next_value()?;
-                        }
-                        GeneratedField::__SkipField__ => {
-                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
-                        }
-                    }
-                }
-                Ok(commitment_source::LiquidityTournamentReward {
-                    epoch: epoch__.unwrap_or_default(),
-                    tx_hash: tx_hash__,
-                })
-            }
-        }
-        deserializer.deserialize_struct("penumbra.core.component.sct.v1.CommitmentSource.LiquidityTournamentReward", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for commitment_source::Transaction {
@@ -2118,6 +1788,275 @@ impl<'de> serde::Deserialize<'de> for Nullifier {
         deserializer.deserialize_struct("penumbra.core.component.sct.v1.Nullifier", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for NullifierRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.nullifier.is_some() {
+            len += 1;
+        }
+        if self.with_proof {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.sct.v1.NullifierRequest", len)?;
+        if let Some(v) = self.nullifier.as_ref() {
+            struct_ser.serialize_field("nullifier", v)?;
+        }
+        if self.with_proof {
+            struct_ser.serialize_field("withProof", &self.with_proof)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for NullifierRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "nullifier",
+            "with_proof",
+            "withProof",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Nullifier,
+            WithProof,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "nullifier" => Ok(GeneratedField::Nullifier),
+                            "withProof" | "with_proof" => Ok(GeneratedField::WithProof),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = NullifierRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.sct.v1.NullifierRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<NullifierRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut nullifier__ = None;
+                let mut with_proof__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Nullifier => {
+                            if nullifier__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullifier"));
+                            }
+                            nullifier__ = map_.next_value()?;
+                        }
+                        GeneratedField::WithProof => {
+                            if with_proof__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("withProof"));
+                            }
+                            with_proof__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(NullifierRequest {
+                    nullifier: nullifier__,
+                    with_proof: with_proof__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.sct.v1.NullifierRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for NullifierResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.spent {
+            len += 1;
+        }
+        if self.nullification_info.is_some() {
+            len += 1;
+        }
+        if !self.nullifier_root.is_empty() {
+            len += 1;
+        }
+        if !self.proof.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.sct.v1.NullifierResponse", len)?;
+        if self.spent {
+            struct_ser.serialize_field("spent", &self.spent)?;
+        }
+        if let Some(v) = self.nullification_info.as_ref() {
+            struct_ser.serialize_field("nullificationInfo", v)?;
+        }
+        if !self.nullifier_root.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("nullifierRoot", pbjson::private::base64::encode(&self.nullifier_root).as_str())?;
+        }
+        if !self.proof.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("proof", pbjson::private::base64::encode(&self.proof).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for NullifierResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "spent",
+            "nullification_info",
+            "nullificationInfo",
+            "nullifier_root",
+            "nullifierRoot",
+            "proof",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Spent,
+            NullificationInfo,
+            NullifierRoot,
+            Proof,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "spent" => Ok(GeneratedField::Spent),
+                            "nullificationInfo" | "nullification_info" => Ok(GeneratedField::NullificationInfo),
+                            "nullifierRoot" | "nullifier_root" => Ok(GeneratedField::NullifierRoot),
+                            "proof" => Ok(GeneratedField::Proof),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = NullifierResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.sct.v1.NullifierResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<NullifierResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut spent__ = None;
+                let mut nullification_info__ = None;
+                let mut nullifier_root__ = None;
+                let mut proof__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Spent => {
+                            if spent__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("spent"));
+                            }
+                            spent__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::NullificationInfo => {
+                            if nullification_info__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullificationInfo"));
+                            }
+                            nullification_info__ = map_.next_value()?;
+                        }
+                        GeneratedField::NullifierRoot => {
+                            if nullifier_root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullifierRoot"));
+                            }
+                            nullifier_root__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Proof => {
+                            if proof__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("proof"));
+                            }
+                            proof__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(NullifierResponse {
+                    spent: spent__.unwrap_or_default(),
+                    nullification_info: nullification_info__,
+                    nullifier_root: nullifier_root__.unwrap_or_default(),
+                    proof: proof__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.sct.v1.NullifierResponse", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for SctFrontierRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -2380,11 +2319,19 @@ impl serde::Serialize for SctParameters {
         if self.epoch_duration != 0 {
             len += 1;
         }
+        if self.sct_anchor_retention_blocks != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.sct.v1.SctParameters", len)?;
         if self.epoch_duration != 0 {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("epochDuration", ToString::to_string(&self.epoch_duration).as_str())?;
+        }
+        if self.sct_anchor_retention_blocks != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("sctAnchorRetentionBlocks", ToString::to_string(&self.sct_anchor_retention_blocks).as_str())?;
         }
         struct_ser.end()
     }
@@ -2398,11 +2345,14 @@ impl<'de> serde::Deserialize<'de> for SctParameters {
         const FIELDS: &[&str] = &[
             "epoch_duration",
             "epochDuration",
+            "sct_anchor_retention_blocks",
+            "sctAnchorRetentionBlocks",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             EpochDuration,
+            SctAnchorRetentionBlocks,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -2426,6 +2376,7 @@ impl<'de> serde::Deserialize<'de> for SctParameters {
                     {
                         match value {
                             "epochDuration" | "epoch_duration" => Ok(GeneratedField::EpochDuration),
+                            "sctAnchorRetentionBlocks" | "sct_anchor_retention_blocks" => Ok(GeneratedField::SctAnchorRetentionBlocks),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -2446,6 +2397,7 @@ impl<'de> serde::Deserialize<'de> for SctParameters {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut epoch_duration__ = None;
+                let mut sct_anchor_retention_blocks__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::EpochDuration => {
@@ -2456,6 +2408,14 @@ impl<'de> serde::Deserialize<'de> for SctParameters {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::SctAnchorRetentionBlocks => {
+                            if sct_anchor_retention_blocks__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sctAnchorRetentionBlocks"));
+                            }
+                            sct_anchor_retention_blocks__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -2463,6 +2423,7 @@ impl<'de> serde::Deserialize<'de> for SctParameters {
                 }
                 Ok(SctParameters {
                     epoch_duration: epoch_duration__.unwrap_or_default(),
+                    sct_anchor_retention_blocks: sct_anchor_retention_blocks__.unwrap_or_default(),
                 })
             }
         }

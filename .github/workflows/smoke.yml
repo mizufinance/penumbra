@@ -1,9 +1,6 @@
 name: integration
 on:
   pull_request:
-    # Don't run Rust tests if only docs changed.
-    paths-ignore:
-      - 'docs/**'
   # Also support ad-hoc calls for workflow.
   workflow_call:
   workflow_dispatch:
@@ -13,54 +10,81 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  paths:
+    runs-on: ubuntu-24.04
+    outputs:
+      smoke: ${{ steps.filter.outputs.smoke }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            smoke:
+              - '.github/actions/setup-nix-rust/**'
+              - '.github/workflows/smoke.yml'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'crates/**'
+              - 'deployments/**'
+              - 'flake.lock'
+              - 'flake.nix'
+              - 'justfile'
+              - 'scripts/**'
+              - 'testnets/**'
+              - 'tools/gnark/**'
+
   smoke:
-    runs-on: buildjet-16vcpu-ubuntu-2204
+    needs: paths
+    if: github.event_name == 'workflow_dispatch' || needs.paths.outputs.smoke == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    env:
+      PENUMBRA_PD_GRPC_PORT: "18080"
+      PENUMBRA_COMETBFT_RPC_PORT: "17657"
+      PENUMBRA_COMETBFT_P2P_PORT: "17656"
+      PENUMBRA_POSTGRES_PORT: "15432"
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: true
 
-      - name: install nix
-        uses: nixbuild/nix-quick-install-action@v28
-
-      - name: setup nix cache
-        uses: nix-community/cache-nix-action@v5
+      - uses: ./.github/actions/setup-nix-rust
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-          backend: buildjet
-
-      - name: Load rust cache
-        uses: astriaorg/buildjet-rust-cache@v2.5.1
-        with:
+          free-disk: "true"
           # bust cache with unique key; increment the integer in `^v(\d+)` to force fresh cache
-          prefix-key: "v0-rust-smoke"
+          rust-cache-prefix: "v0-rust-smoke"
 
       - name: run the smoke-test suite
         run: nix develop --command just smoke
 
-  pmonitor:
-    runs-on: buildjet-16vcpu-ubuntu-2204
+  summary:
+    needs: [paths, smoke]
+    if: always()
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-
-      - name: install nix
-        uses: nixbuild/nix-quick-install-action@v28
-
-      - name: setup nix cache
-        uses: nix-community/cache-nix-action@v5
-        with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-          backend: buildjet
-
-      - name: Load rust cache
-        uses: astriaorg/buildjet-rust-cache@v2.5.1
-
-      - name: run the pmonitor integration tests
-        run: nix develop --command just integration-pmonitor
+      - name: Check integration result
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SHOULD_RUN: ${{ needs.paths.outputs.smoke }}
+          PATHS_RESULT: ${{ needs.paths.result }}
+          SMOKE_RESULT: ${{ needs.smoke.result }}
+        run: |
+          if [ "$PATHS_RESULT" != "success" ]; then
+            echo "path filtering failed: $PATHS_RESULT"
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$SHOULD_RUN" = "true" ]; then
+            if [ "$SMOKE_RESULT" != "success" ]; then
+              echo "smoke did not pass: $SMOKE_RESULT"
+              exit 1
+            fi
+            echo "smoke passed"
+          else
+            echo "smoke skipped for unrelated changes"
+          fi
 
   # Integration tests that run against the public testnet endpoints.
   # Temporarily disabling these in CI, as the testnet endpoints are

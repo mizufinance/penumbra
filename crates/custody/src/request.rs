@@ -1,7 +1,7 @@
-use penumbra_sdk_governance::ValidatorVoteBody;
+use penumbra_sdk_governance::{ProposalSubmitBody, ValidatorVoteBody};
 use penumbra_sdk_proto::{custody::v1 as pb, DomainType};
-use penumbra_sdk_stake::validator::Validator;
 use penumbra_sdk_transaction::TransactionPlan;
+use penumbra_sdk_validator::validator::Validator;
 
 use crate::PreAuthorization;
 
@@ -125,6 +125,49 @@ impl From<AuthorizeValidatorVoteRequest> for pb::AuthorizeValidatorVoteRequest {
     fn from(value: AuthorizeValidatorVoteRequest) -> pb::AuthorizeValidatorVoteRequest {
         Self {
             validator_vote: Some(value.validator_vote.into()),
+            pre_authorizations: value
+                .pre_authorizations
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        }
+    }
+}
+
+/// A proposal submission authorization request submitted to a custody service for approval.
+#[derive(Debug, Clone)]
+pub struct AuthorizeProposalSubmitRequest {
+    /// The proposal submission body to authorize.
+    pub proposal_submit: ProposalSubmitBody,
+    /// Optionally, pre-authorization data, if required by the custodian.
+    pub pre_authorizations: Vec<PreAuthorization>,
+}
+
+impl DomainType for AuthorizeProposalSubmitRequest {
+    type Proto = pb::AuthorizeProposalSubmitRequest;
+}
+
+impl TryFrom<pb::AuthorizeProposalSubmitRequest> for AuthorizeProposalSubmitRequest {
+    type Error = anyhow::Error;
+    fn try_from(value: pb::AuthorizeProposalSubmitRequest) -> Result<Self, Self::Error> {
+        Ok(Self {
+            proposal_submit: value
+                .proposal_submit
+                .ok_or_else(|| anyhow::anyhow!("missing proposal submit"))?
+                .try_into()?,
+            pre_authorizations: value
+                .pre_authorizations
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+impl From<AuthorizeProposalSubmitRequest> for pb::AuthorizeProposalSubmitRequest {
+    fn from(value: AuthorizeProposalSubmitRequest) -> pb::AuthorizeProposalSubmitRequest {
+        Self {
+            proposal_submit: Some(value.proposal_submit.into()),
             pre_authorizations: value
                 .pre_authorizations
                 .into_iter()

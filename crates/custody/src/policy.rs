@@ -6,8 +6,9 @@ use penumbra_sdk_keys::Address;
 use penumbra_sdk_proto::{
     core::{
         component::{
+            governance::v1::ProposalSubmitBody as ProtoProposalSubmitBody,
             governance::v1::ValidatorVoteBody as ProtoValidatorVoteBody,
-            stake::v1::Validator as ProtoValidator,
+            validator::v1::Validator as ProtoValidator,
         },
         transaction::v1::TransactionPlan as ProtoTransactionPlan,
     },
@@ -17,8 +18,8 @@ use penumbra_sdk_transaction::plan::ActionPlan;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AuthorizeRequest, AuthorizeValidatorDefinitionRequest, AuthorizeValidatorVoteRequest,
-    PreAuthorization,
+    AuthorizeProposalSubmitRequest, AuthorizeRequest, AuthorizeValidatorDefinitionRequest,
+    AuthorizeValidatorVoteRequest, PreAuthorization,
 };
 
 /// A trait for checking whether a transaction plan is allowed by a policy.
@@ -34,6 +35,12 @@ pub trait Policy {
 
     /// Checks whether the proposed validator vote is allowed by this policy.
     fn check_validator_vote(&self, _request: &AuthorizeValidatorVoteRequest) -> anyhow::Result<()>;
+
+    /// Checks whether the proposed proposal submission is allowed by this policy.
+    fn check_proposal_submit(
+        &self,
+        _request: &AuthorizeProposalSubmitRequest,
+    ) -> anyhow::Result<()>;
 }
 
 /// A set of basic spend authorization policies.
@@ -53,11 +60,8 @@ pub enum AuthPolicy {
         #[serde(with = "address_as_string")]
         allowed_destination_addresses: Vec<Address>,
     },
-    /// Intended for relayers, only allows `Spend`, `Output`, and `IbcAction`
-    /// actions in transactions.
-    ///
-    /// This policy should be combined with an `AllowList` to prevent sending
-    /// funds outside of the relayer account.
+    /// Intended for relayers, only allows `IbcAction` transactions plus at most
+    /// one self-addressed transfer used to fund fees.
     OnlyIbcRelay,
     /// Require specific pre-authorizations for submitted [`TransactionPlan`](penumbra_sdk_transaction::TransactionPlan)s.
     PreAuthorization(PreAuthorizationPolicy),
@@ -164,7 +168,7 @@ mod address_as_string {
 /// Because Go's encoding/json will encode byte[] as base64-encoded strings,
 /// and Go's Ed25519 keys are byte[] values, this hopefully makes it easier to
 /// copy-paste pre-authorization keys from Go programs into the Rust config.
-// TODO: remove this after <https://github.com/penumbra-zone/ed25519-consensus/issues/7>
+// TODO: remove this after <https://github.com/mizufinance/ed25519-consensus/issues/7>
 mod ed25519_vec_base64 {
     use base64::prelude::*;
 
@@ -207,29 +211,52 @@ impl Policy for AuthPolicy {
             AuthPolicy::DestinationAllowList {
                 allowed_destination_addresses,
             } => {
-                for output in plan.output_plans() {
-                    if !allowed_destination_addresses.contains(&output.dest_address) {
-                        anyhow::bail!("output {:?} has dest_address not in allow list", output);
-                    }
-                }
-                for swap in plan.swap_plans() {
-                    if !allowed_destination_addresses.contains(&swap.swap_plaintext.claim_address) {
-                        anyhow::bail!("swap {:?} has claim_address not in allow list", swap);
+                for address in plan.dest_addresses() {
+                    if !allowed_destination_addresses.contains(&address) {
+                        anyhow::bail!("destination address {:?} not in allow list", address);
                     }
                 }
                 Ok(())
             }
             AuthPolicy::OnlyIbcRelay => {
+                let mut ibc_action_count = 0usize;
+                let mut transfer_count = 0usize;
+
                 for action in &plan.actions {
                     match action {
-                        ActionPlan::Spend { .. }
-                        | ActionPlan::Output { .. }
-                        | ActionPlan::IbcAction { .. } => {}
+                        ActionPlan::IbcAction { .. } => {
+                            ibc_action_count += 1;
+                        }
+                        ActionPlan::Transfer(transfer) => {
+                            transfer_count += 1;
+                            if transfer_count > 1 {
+                                anyhow::bail!(
+                                    "OnlyIbcRelay allows at most one transfer funding action"
+                                );
+                            }
+
+                            let sender = transfer
+                                .inputs()
+                                .first()
+                                .expect("transfer plans always contain at least one real input")
+                                .note
+                                .address();
+                            if transfer.dest_addresses().any(|dest| dest != sender) {
+                                anyhow::bail!(
+                                    "OnlyIbcRelay only allows self-addressed transfer outputs"
+                                );
+                            }
+                        }
                         _ => {
                             anyhow::bail!("action {:?} not allowed by OnlyRelay policy", action);
                         }
                     }
                 }
+
+                if ibc_action_count == 0 {
+                    anyhow::bail!("OnlyIbcRelay requires at least one IBC relay action");
+                }
+
                 Ok(())
             }
             AuthPolicy::PreAuthorization(policy) => policy.check_transaction(request),
@@ -245,6 +272,13 @@ impl Policy for AuthPolicy {
 
     fn check_validator_vote(&self, _request: &AuthorizeValidatorVoteRequest) -> anyhow::Result<()> {
         anyhow::bail!("validator votes are not allowed by this policy")
+    }
+
+    fn check_proposal_submit(
+        &self,
+        _request: &AuthorizeProposalSubmitRequest,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("proposal submissions are not allowed by this policy")
     }
 }
 
@@ -271,5 +305,122 @@ impl Policy for PreAuthorizationPolicy {
             &request.pre_authorizations,
             ProtoValidatorVoteBody::from(request.validator_vote.clone()).encode_to_vec(),
         )
+    }
+
+    fn check_proposal_submit(
+        &self,
+        request: &AuthorizeProposalSubmitRequest,
+    ) -> anyhow::Result<()> {
+        self.check_pre_authorizations(
+            &request.pre_authorizations,
+            ProtoProposalSubmitBody::from(request.proposal_submit.clone()).encode_to_vec(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use decaf377::Fr;
+    use penumbra_sdk_asset::{Value, BASE_ASSET_ID};
+    use penumbra_sdk_ibc::IbcRelay;
+    use penumbra_sdk_keys::{
+        keys::{Bip44Path, SeedPhrase, SpendKey},
+        Address,
+    };
+    use penumbra_sdk_shielded_pool::{
+        Note, Rseed, ShieldedInputPlan, ShieldedOutputPlan, TransferPlan,
+    };
+    use penumbra_sdk_transaction::TransactionPlan;
+    use rand_core::OsRng;
+
+    fn test_address(index: u32) -> Address {
+        let seed = SeedPhrase::from_randomness(&[index as u8; 32]);
+        let spend_key = SpendKey::from_seed_phrase_bip44(seed, &Bip44Path::new(0));
+        spend_key
+            .full_viewing_key()
+            .incoming()
+            .payment_address(index.into())
+            .0
+    }
+
+    fn test_ibc_action() -> IbcRelay {
+        IbcRelay::Unknown(pbjson_types::Any {
+            type_url: "/penumbra.test.ibc".to_owned(),
+            value: vec![1, 2, 3].into(),
+        })
+    }
+
+    fn test_transfer(dest_address: Address) -> TransferPlan {
+        let mut rng = OsRng;
+        let sender = test_address(10);
+        let note = Note::from_parts(
+            sender.clone(),
+            Value {
+                amount: 5u64.into(),
+                asset_id: *BASE_ASSET_ID,
+            },
+            Rseed::generate(&mut rng),
+        )
+        .expect("valid test note");
+        let spend = ShieldedInputPlan::new(&mut rng, note, 0u64.into());
+        let mut output = ShieldedOutputPlan::new(
+            &mut rng,
+            Value {
+                amount: 4u64.into(),
+                asset_id: *BASE_ASSET_ID,
+            },
+            dest_address,
+        );
+        output.asset_anchor = spend.asset_anchor;
+        output.compliance_anchor = spend.compliance_anchor;
+        output.target_timestamp = spend.target_timestamp;
+        output.is_regulated = spend.is_regulated;
+        output.tx_blinding_nonce = spend.tx_blinding_nonce;
+        output.asset_indexed_leaf = spend.asset_indexed_leaf.clone();
+        output.asset_path = spend.asset_path.clone();
+        output.asset_position = spend.asset_position;
+        output.asset_policy = spend.asset_policy.clone();
+
+        TransferPlan::from_spend_output(spend.into(), output.into(), Fr::from(1u64))
+            .expect("valid transfer plan")
+    }
+
+    #[test]
+    fn only_ibc_relay_accepts_self_funded_transfer() {
+        let sender = test_address(10);
+        let request = AuthorizeRequest {
+            plan: TransactionPlan {
+                actions: vec![
+                    ActionPlan::Transfer(test_transfer(sender)),
+                    ActionPlan::IbcAction(test_ibc_action()),
+                ],
+                ..Default::default()
+            },
+            pre_authorizations: vec![],
+        };
+
+        AuthPolicy::OnlyIbcRelay
+            .check_transaction(&request)
+            .expect("self-funded relay transaction should be allowed");
+    }
+
+    #[test]
+    fn only_ibc_relay_rejects_external_transfer_outputs() {
+        let request = AuthorizeRequest {
+            plan: TransactionPlan {
+                actions: vec![
+                    ActionPlan::Transfer(test_transfer(test_address(12))),
+                    ActionPlan::IbcAction(test_ibc_action()),
+                ],
+                ..Default::default()
+            },
+            pre_authorizations: vec![],
+        };
+
+        let err = AuthPolicy::OnlyIbcRelay
+            .check_transaction(&request)
+            .expect_err("external transfer outputs should be rejected");
+        assert!(err.to_string().contains("self-addressed"));
     }
 }

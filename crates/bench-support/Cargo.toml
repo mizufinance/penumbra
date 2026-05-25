@@ -1,0 +1,37 @@
+[package]
+name = "penumbra-sdk-bench-support"
+authors = { workspace = true }
+repository = { workspace = true }
+description = "Shared benchmark support utilities for Penumbra benches"
+version = { workspace = true }
+license = { workspace = true }
+edition = { workspace = true }
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+ark-serialize = { workspace = true }
+cnidarium = { workspace = true, features = ["migration"], default-features = true }
+csv = "1"
+decaf377 = { workspace = true }
+decaf377-rdsa = { workspace = true }
+hex = { workspace = true }
+once_cell = { workspace = true }
+penumbra-sdk-app = { workspace = true, features = ["benchmark-helpers"], default-features = true }
+penumbra-sdk-asset = { workspace = true, default-features = true }
+penumbra-sdk-compliance = { workspace = true, default-features = false }
+penumbra-sdk-keys = { workspace = true, default-features = true }
+penumbra-sdk-mock-client = { workspace = true }
+penumbra-sdk-mock-consensus = { workspace = true }
+penumbra-sdk-num = { workspace = true, default-features = true }
+penumbra-sdk-proto = { workspace = true, default-features = true, features = ["rpc"] }
+penumbra-sdk-proof-params = { workspace = true, default-features = true }
+penumbra-sdk-shielded-pool = { workspace = true, default-features = true, features = ["benchmark-helpers"] }
+penumbra-sdk-transaction = { workspace = true, default-features = true }
+rand_core = { workspace = true, features = ["getrandom"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tendermint = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros", "time"] }
+zstd = "0.13"

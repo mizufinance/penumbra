@@ -20,6 +20,77 @@ export RUSTDOCFLAGS="--enable-index-page -Zunstable-options --cfg docsrs"
 # Doing this in one go is useful because the JSON file with search
 # indexes is overwritten on each cargo doc invocation.
 
+package_specs_file="$(mktemp)"
+trap 'rm -f "$package_specs_file"' EXIT
+python3 > "$package_specs_file" <<'PY'
+import json
+import subprocess
+from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    tomllib = None
+
+
+def git_packages_from_lock(lock_text):
+    if tomllib is not None:
+        lock = tomllib.loads(lock_text)
+        for pkg in lock.get("package", []):
+            source = pkg.get("source")
+            if source and source.startswith("git+"):
+                yield f"{pkg['name']}@{pkg['version']}"
+        return
+
+    current = {}
+    for line in [*lock_text.splitlines(), "[[package]]"]:
+        line = line.strip()
+        if line == "[[package]]":
+            source = current.get("source")
+            if source and source.startswith("git+"):
+                yield f"{current['name']}@{current['version']}"
+            current = {}
+            continue
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key in {"name", "version", "source"} and value.startswith('"') and value.endswith('"'):
+            current[key] = value[1:-1]
+
+
+meta = json.loads(
+    subprocess.check_output(
+        ["cargo", "metadata", "--format-version=1", "--no-deps"],
+        text=True,
+    )
+)
+
+workspace = []
+for pkg in meta["packages"]:
+    if any(target.get("doc", False) for target in pkg.get("targets", [])):
+        workspace.append(pkg["name"])
+
+git_packages = list(git_packages_from_lock(Path("Cargo.lock").read_text()))
+
+for spec in sorted(dict.fromkeys(workspace)):
+    print(spec)
+
+for spec in sorted(dict.fromkeys(git_packages)):
+    print(spec)
+PY
+
+package_specs=()
+while IFS= read -r spec; do
+  package_specs+=("$spec")
+done < "$package_specs_file"
+
+cargo_args=()
+for spec in "${package_specs[@]}"; do
+  cargo_args+=(-p "$spec")
+done
+
 # The nix version of `cargo` does not support the `+nightly` flag.
 # There's a nix devShell specifically for nightly Rust, that's used in CI.
 # We'll still support non-nix Rust nightlies, though.
@@ -27,55 +98,7 @@ nightly_opt=""
 if [[ -z "${IN_NIX_SHELL:-}" ]] ; then
   nightly_opt="+nightly"
 fi
-cargo $nightly_opt doc --no-deps \
-  -p ark-ff \
-  -p ark-serialize \
-  -p cnidarium \
-  -p cnidarium-component \
-  -p cometindex \
-  -p decaf377-fmd \
-  -p decaf377-ka \
-  -p decaf377-rdsa \
-  -p decaf377@0.10.1 \
-  -p ibc-types \
-  -p jmt \
-  -p pcli \
-  -p pclientd \
-  -p pd \
-  -p pmonitor \
-  -p penumbra-sdk-app \
-  -p penumbra-sdk-asset \
-  -p penumbra-sdk-community-pool \
-  -p penumbra-sdk-custody \
-  -p penumbra-sdk-custody-ledger-usb \
-  -p penumbra-sdk-dex \
-  -p penumbra-sdk-distributions \
-  -p penumbra-sdk-fee \
-  -p penumbra-sdk-governance \
-  -p penumbra-sdk-ibc \
-  -p penumbra-sdk-keys \
-  -p penumbra-sdk-measure \
-  -p penumbra-sdk-mock-consensus \
-  -p penumbra-sdk-mock-tendermint-proxy \
-  -p penumbra-sdk-mock-client \
-  -p penumbra-sdk-num \
-  -p penumbra-sdk-proof-params \
-  -p penumbra-sdk-proof-setup \
-  -p penumbra-sdk-proto \
-  -p penumbra-sdk-sct \
-  -p penumbra-sdk-shielded-pool \
-  -p penumbra-sdk-stake \
-  -p penumbra-sdk-tct \
-  -p penumbra-sdk-transaction \
-  -p penumbra-sdk-txhash \
-  -p penumbra-sdk-view \
-  -p penumbra-sdk-wallet \
-  -p pindexer \
-  -p poseidon-permutation \
-  -p poseidon377 \
-  -p tendermint \
-  -p tendermint-config \
-  -p tower-abci \
+cargo $nightly_opt doc --no-deps "${cargo_args[@]}"
 
 >&2 echo "Copying newly built index file to docroot for deployment"
 cp -v target/doc/index.html docs/rustdoc/index.html

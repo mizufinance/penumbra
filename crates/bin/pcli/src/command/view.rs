@@ -2,23 +2,18 @@ use anyhow::Result;
 
 use address::AddressCmd;
 use balance::BalanceCmd;
-use lps::LiquidityPositionsCmd;
 use noble_address::NobleAddressCmd;
-use staked::StakedCmd;
+use notes::NotesCmd;
 use transaction_hashes::TransactionHashesCmd;
 use tx::TxCmd;
 use wallet_id::WalletIdCmd;
 
 use crate::App;
 
-use self::auction::AuctionCmd;
-
 mod address;
-mod auction;
 mod balance;
-mod lps;
 mod noble_address;
-mod staked;
+mod notes;
 mod wallet_id;
 
 pub mod transaction_hashes;
@@ -26,8 +21,6 @@ mod tx;
 
 #[derive(Debug, clap::Subcommand)]
 pub enum ViewCmd {
-    /// View your auction information
-    Auction(AuctionCmd),
     /// View your wallet id
     WalletId(WalletIdCmd),
     /// View one of your addresses, either by numerical index, or a random ephemeral one.
@@ -36,8 +29,8 @@ pub enum ViewCmd {
     NobleAddress(NobleAddressCmd),
     /// View your account balances.
     Balance(BalanceCmd),
-    /// View your staked delegation tokens.
-    Staked(StakedCmd),
+    /// View your unspent notes, optionally filtered for scripting use.
+    Notes(NotesCmd),
     /// Deletes all scanned data and local state, while leaving keys untouched.
     Reset(Reset),
     /// Synchronizes the client, privately scanning the chain state.
@@ -50,25 +43,20 @@ pub enum ViewCmd {
     ListTransactionHashes(TransactionHashesCmd),
     /// Displays a transaction's details by hash.
     Tx(TxCmd),
-    /// View information about the liquidity positions you control.
-    #[clap(visible_alias = "lps")]
-    LiquidityPositions(LiquidityPositionsCmd),
 }
 
 impl ViewCmd {
     pub fn offline(&self) -> bool {
         match self {
-            ViewCmd::Auction(auction_cmd) => auction_cmd.offline(),
             ViewCmd::WalletId(wallet_id_cmd) => wallet_id_cmd.offline(),
             ViewCmd::Address(address_cmd) => address_cmd.offline(),
             ViewCmd::NobleAddress(address_cmd) => address_cmd.offline(),
             ViewCmd::Balance(balance_cmd) => balance_cmd.offline(),
-            ViewCmd::Staked(staked_cmd) => staked_cmd.offline(),
+            ViewCmd::Notes(notes_cmd) => notes_cmd.offline(),
             ViewCmd::Reset(_) => true,
             ViewCmd::Sync => false,
             ViewCmd::ListTransactionHashes(transactions_cmd) => transactions_cmd.offline(),
             ViewCmd::Tx(tx_cmd) => tx_cmd.offline(),
-            ViewCmd::LiquidityPositions(lps_cmd) => lps_cmd.offline(),
         }
     }
 
@@ -77,9 +65,6 @@ impl ViewCmd {
         let full_viewing_key = app.config.full_viewing_key.clone();
 
         match self {
-            ViewCmd::Auction(auction_cmd) => {
-                auction_cmd.exec(app.view(), &full_viewing_key).await?
-            }
             ViewCmd::WalletId(wallet_id_cmd) => {
                 wallet_id_cmd.exec(&full_viewing_key)?;
             }
@@ -109,14 +94,10 @@ impl ViewCmd {
                 let view_client = app.view();
                 balance_cmd.exec(view_client).await?;
             }
-            ViewCmd::Staked(staked_cmd) => {
-                let channel = app.pd_channel().await?;
+            ViewCmd::Notes(notes_cmd) => {
                 let view_client = app.view();
-                staked_cmd
-                    .exec(&full_viewing_key, view_client, channel)
-                    .await?;
+                notes_cmd.exec(view_client).await?;
             }
-            ViewCmd::LiquidityPositions(cmd) => cmd.exec(app).await?,
         }
 
         Ok(())

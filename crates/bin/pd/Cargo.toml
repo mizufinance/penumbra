@@ -14,9 +14,9 @@ rust-version = "1.75"
 dist = true
 
 [features]
-default = ["download-proving-keys"]
+default = []
 std = ["ibc-types/std"]
-download-proving-keys = ["penumbra-sdk-proof-params/download-proving-keys"]
+benchmark-system-allocator = []
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -57,15 +57,15 @@ metrics-process                  = "2.4.0"
 metrics-tracing-context          = { workspace = true }
 metrics-util                     = "0.18.0"
 mime_guess                       = "2"
+mimalloc                         = "0.1"
 once_cell                        = { workspace = true }
 pbjson-types                     = { workspace = true }
-penumbra-sdk-app                     = { workspace = true, default-features = true }
+penumbra-sdk-app                     = { workspace = true, features = ["parallel"], default-features = true }
 penumbra-sdk-asset                   = { workspace = true, default-features = true }
 penumbra-sdk-auto-https              = { version = "2.1.0", path = "../../util/auto-https" }
 penumbra-sdk-compact-block           = { workspace = true, default-features = true }
+penumbra-sdk-compliance              = { workspace = true, default-features = true }
 penumbra-sdk-custody                 = { workspace = true }
-penumbra-sdk-auction                 = { workspace = true, features = ["parallel"], default-features = true }
-penumbra-sdk-dex                     = { workspace = true, features = ["parallel"], default-features = true }
 penumbra-sdk-fee                     = { workspace = true, default-features = true }
 penumbra-sdk-governance              = { workspace = true, features = ["parallel"], default-features = true }
 penumbra-sdk-ibc                     = { workspace = true, features = ["rpc"], default-features = true }
@@ -74,7 +74,7 @@ penumbra-sdk-num                     = { workspace = true, default-features = tr
 penumbra-sdk-proto                   = { workspace = true, default-features = true }
 penumbra-sdk-sct                     = { workspace = true, default-features = true }
 penumbra-sdk-shielded-pool           = { workspace = true, features = ["parallel"], default-features = true }
-penumbra-sdk-stake                   = { workspace = true, features = ["parallel"], default-features = true }
+penumbra-sdk-validator                   = { workspace = true, features = ["parallel"], default-features = true }
 penumbra-sdk-tct                     = { workspace = true, default-features = true }
 penumbra-sdk-tendermint-proxy        = { version = "2.1.0", path = "../../util/tendermint-proxy" }
 penumbra-sdk-tower-trace             = { workspace = true }

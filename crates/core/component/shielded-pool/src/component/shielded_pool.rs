@@ -11,6 +11,7 @@ use cnidarium::{StateRead, StateWrite};
 use cnidarium_component::Component;
 use penumbra_sdk_proto::StateReadProto as _;
 use penumbra_sdk_proto::StateWriteProto as _;
+use penumbra_sdk_sct::component::tree::{SctManager as _, SctRead as _};
 use penumbra_sdk_sct::CommitmentSource;
 use tendermint::v0_37::abci;
 use tracing::instrument;
@@ -18,6 +19,8 @@ use tracing::instrument;
 use super::{AssetRegistry, NoteManager};
 
 pub struct ShieldedPool {}
+
+const GENESIS_SCT_BLOCK_CAPACITY: usize = u16::MAX as usize + 1;
 
 #[async_trait]
 impl Component for ShieldedPool {
@@ -33,6 +36,7 @@ impl Component for ShieldedPool {
                 state.put_shielded_pool_params(genesis.shielded_pool_params.clone());
                 state.put_current_fmd_parameters(fmd::Parameters::default());
                 state.put_previous_fmd_parameters(fmd::Parameters::default());
+                let mut allocations_in_current_sct_block = 0usize;
 
                 // Register a denom for each asset in the genesis state
                 for allocation in &genesis.allocations {
@@ -43,6 +47,17 @@ impl Component for ShieldedPool {
                         "Genesis allocations contain empty note",
                     );
 
+                    // `InitChain` can mint more notes than fit in a single SCT block. Because no
+                    // ABCI `end_block` runs during genesis, we have to roll the frontier forward
+                    // here to keep large synthetic allocation sets buildable.
+                    if allocations_in_current_sct_block == GENESIS_SCT_BLOCK_CAPACITY {
+                        let mut tree = state.get_sct().await;
+                        tree.end_block()
+                            .expect("ending a genesis SCT block should never fail");
+                        state.write_sct_cache(tree);
+                        allocations_in_current_sct_block = 0;
+                    }
+
                     state.register_denom(&allocation.denom()).await;
                     state
                         .mint_note(
@@ -52,6 +67,7 @@ impl Component for ShieldedPool {
                         )
                         .await
                         .expect("able to mint note for genesis allocation");
+                    allocations_in_current_sct_block += 1;
                 }
             }
         }
@@ -92,8 +108,9 @@ impl Component for ShieldedPool {
                 .get_fmd_algorithm_state()
                 .await
                 .expect("should be able to read state");
-            let (new, algorithm_state) =
-                meta_params.updated_fmd_params(&old, algorithm_state, height, clue_count_delta);
+            let (new, algorithm_state) = meta_params
+                .updated_fmd_params(&old, algorithm_state, height, clue_count_delta)
+                .expect("FMD clue count should be monotonic within a block");
             state.put_previous_fmd_parameters(old);
             state.put_current_fmd_parameters(new);
             state.put_fmd_algorithm_state(algorithm_state);

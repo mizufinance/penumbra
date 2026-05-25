@@ -13,11 +13,8 @@ std = ["ark-ff/std", "ibc-types/std"]
 parallel = [
     "tokio",
     "penumbra-sdk-shielded-pool/parallel",
-    "penumbra-sdk-auction/parallel",
-    "penumbra-sdk-dex/parallel",
-    "penumbra-sdk-funding/parallel",
     "penumbra-sdk-governance/parallel",
-    "penumbra-sdk-stake/parallel",
+    "penumbra-sdk-validator/parallel",
 ]
 download-proving-keys = ["penumbra-sdk-proof-params/download-proving-keys"]
 
@@ -42,20 +39,18 @@ num-bigint = {workspace = true}
 once_cell = {workspace = true}
 pbjson-types = {workspace = true}
 penumbra-sdk-asset = {workspace = true, default-features = false}
-penumbra-sdk-community-pool = {workspace = true, default-features = false}
-penumbra-sdk-auction = {workspace = true, default-features = false}
-penumbra-sdk-dex = {workspace = true, default-features = false}
+penumbra-sdk-compliance = {workspace = true, default-features = false}
 penumbra-sdk-fee = {workspace = true, default-features = false}
-penumbra-sdk-funding = {workspace = true, default-features = false}
 penumbra-sdk-governance = {workspace = true, default-features = false}
 penumbra-sdk-ibc = {workspace = true, default-features = false}
 penumbra-sdk-keys = {workspace = true, default-features = false}
 penumbra-sdk-num = {workspace = true, default-features = false}
 penumbra-sdk-proof-params = {workspace = true, default-features = true}
+penumbra-sdk-proof-aggregation = {workspace = true, default-features = true}
 penumbra-sdk-proto = {workspace = true, default-features = true}
 penumbra-sdk-sct = {workspace = true, default-features = false}
 penumbra-sdk-shielded-pool = {workspace = true, default-features = false}
-penumbra-sdk-stake = {workspace = true, default-features = false}
+penumbra-sdk-validator = {workspace = true, default-features = false}
 penumbra-sdk-tct = {workspace = true, default-features = true }
 penumbra-sdk-txhash = {workspace = true, default-features = false}
 poseidon377 = {workspace = true, features = ["r1cs"]}

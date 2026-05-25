@@ -4,7 +4,7 @@
 //! use the conventional `decaf377` basepoint.
 
 // Requires nightly.
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 use anyhow::anyhow;
 use frost_core::frost;

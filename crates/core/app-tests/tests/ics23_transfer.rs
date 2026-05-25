@@ -2,7 +2,7 @@ use {
     anyhow::anyhow,
     common::ibc_tests::{MockRelayer, TestNodeWithIBC, ValidatorKeys},
     once_cell::sync::Lazy,
-    penumbra_sdk_asset::{asset::Cache, Value},
+    penumbra_sdk_asset::{asset::Cache, Value, BASE_ASSET_ID},
     penumbra_sdk_ibc::IbcToken,
     penumbra_sdk_num::Amount,
     std::time::Duration,
@@ -79,14 +79,15 @@ async fn ics20_transfer_no_timeouts() -> anyhow::Result<()> {
     // TODO: some testing of failure cases of the handshake process would be good
     relayer.handshake().await?;
 
-    // Grab the note that will be spent during the transfer.
+    // Grab the base-asset note that will be spent during the transfer.
     let chain_a_client = relayer.chain_a_ibc.client().await?;
     let chain_a_note = chain_a_client
         .notes
         .values()
+        .filter(|n| n.asset_id() == *BASE_ASSET_ID)
         .cloned()
         .next()
-        .ok_or_else(|| anyhow!("mock client had no note"))?;
+        .ok_or_else(|| anyhow!("mock client had no base-asset note"))?;
 
     // Get the balance of that asset on chain A
     let pretransfer_balance_a: Amount = chain_a_client

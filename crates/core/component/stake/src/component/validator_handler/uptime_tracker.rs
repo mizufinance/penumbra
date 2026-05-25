@@ -10,7 +10,7 @@ use {
             StateReadExt as _,
         },
         event,
-        params::StakeParameters,
+        params::ValidatorParameters,
         validator, IdentityKey, Uptime,
     },
     anyhow::Result,
@@ -154,7 +154,7 @@ pub trait ValidatorUptimeTracker: StateWrite {
         &mut self,
         (identity_key, consensus_key, mut uptime): ValidatorInformation,
         did_address_vote: &BTreeMap<Address, bool>,
-        params: &StakeParameters,
+        params: &ValidatorParameters,
         height: u64,
     ) -> anyhow::Result<()> {
         let addr = validator_address(&consensus_key);
@@ -163,7 +163,7 @@ pub trait ValidatorUptimeTracker: StateWrite {
             .cloned()
             // If the height is `1`, then the `LastCommitInfo` refers to the genesis block,
             // which has no signers -- so we'll mark all validators as having signed.
-            // https://github.com/penumbra-zone/penumbra/issues/1050
+            // https://github.com/mizufinance/penumbra/issues/1050
             .unwrap_or(height == 1);
 
         tracing::debug!(

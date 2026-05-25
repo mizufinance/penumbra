@@ -4,7 +4,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use decaf377::Fr;
-use penumbra_sdk_asset::{asset, balance, Balance, Value, STAKING_TOKEN_ASSET_ID};
+use penumbra_sdk_asset::{asset, balance, Balance, Value, BASE_ASSET_ID};
 use penumbra_sdk_num::Amount;
 
 // Each fee tier multiplier has an implicit 100 denominator.
@@ -25,7 +25,7 @@ impl Fee {
     pub fn from_staking_token_amount(amount: Amount) -> Self {
         Self(Value {
             amount,
-            asset_id: *STAKING_TOKEN_ASSET_ID,
+            asset_id: *BASE_ASSET_ID,
         })
     }
 
@@ -55,7 +55,7 @@ impl Fee {
 
     pub fn apply_tier(self, fee_tier: FeeTier) -> Self {
         // TODO: this could be fingerprinted since fees are public; it would be ideal to apply
-        // some sampling distribution, see https://github.com/penumbra-zone/penumbra/issues/3153
+        // some sampling distribution, see https://github.com/mizufinance/penumbra/issues/3153
         match fee_tier {
             FeeTier::Low => {
                 let amount = (self.amount() * FEE_TIER_LOW_MULTIPLIER.into()) / 100u32.into();
@@ -88,7 +88,7 @@ impl DomainType for Fee {
 
 impl From<Fee> for pb::Fee {
     fn from(fee: Fee) -> Self {
-        if fee.0.asset_id == *STAKING_TOKEN_ASSET_ID {
+        if fee.0.asset_id == *BASE_ASSET_ID {
             pb::Fee {
                 amount: Some(fee.0.amount.into()),
                 asset_id: None,
@@ -123,7 +123,7 @@ impl TryFrom<pb::Fee> for Fee {
                     .amount
                     .context("missing protobuf contents for Fee Amount")?
                     .try_into()?,
-                asset_id: *STAKING_TOKEN_ASSET_ID,
+                asset_id: *BASE_ASSET_ID,
             }))
         }
     }

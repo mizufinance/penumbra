@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use cnidarium::{StateRead, StateWrite};
 
 mod actions;
-mod transaction;
+pub(crate) mod transaction;
 
 /// Stub: to be replaced with impls of cnidarium_component::ActionHandler
 ///

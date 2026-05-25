@@ -1,0 +1,9 @@
+{
+  "orbis_runtime_contract": "orbis-rs@d5889bd777bbac7bf97a8e89a2556116f2740ceb",
+  "dkg_pk_hex": "402b00948b1d0e861fbb544e18adc801401ba3ca7f054d53ee7299643b49ef08",
+  "enc_cmt_hex": "3afcc445553164ce90221501f4f6e5d1a49b8cd91e1b43e29888061da716800c",
+  "shared_point_hex": "0ad694d726585495e59c347d23ca5b655a7cb12cff28d87eb2bd0f6b8e6a1a08",
+  "challenge_hex": "05eebf667f45871e457eac02186ec098a07909421b3d29ece9e2864514c7a603",
+  "response_hex": "b537d0e468a237721fb660af7edd2f57d6643ac9c1bda67fc9cbb9f81f2c4803",
+  "metadata_hex": "21ce2bc64b7ca13ad59bceb9fe450591ab7fbf92489e0b34f4333b3a6119be0d"
+}

@@ -1,7 +1,6 @@
 use anyhow::anyhow;
 use pbjson_types::Any;
 use penumbra_sdk_asset::{asset, EstimatedPrice, Value, ValueView};
-use penumbra_sdk_dex::BatchSwapOutputData;
 use penumbra_sdk_keys::{Address, AddressView, PayloadKey, PositionMetadataKey};
 use penumbra_sdk_proto::core::transaction::v1::{
     self as pb, NullifierWithNote, PayloadKeyWithCommitment,
@@ -53,10 +52,6 @@ pub struct TransactionPerspective {
     ///
     /// Allows walking forwards from an output to the transaction that later spent it.
     pub nullification_transaction_ids_by_commitment: BTreeMap<note::StateCommitment, TransactionId>,
-    /// Any relevant batch swap output data.
-    ///
-    /// This can be used to fill in information about swap outputs.
-    pub batch_swap_output_data: Vec<BatchSwapOutputData>,
     /// The key used to decrypt position metadata.
     ///
     /// We leave this as optional for maximal backwards compatibility.
@@ -98,41 +93,26 @@ impl TransactionPerspective {}
 
 impl From<TransactionPerspective> for pb::TransactionPerspective {
     fn from(msg: TransactionPerspective) -> Self {
-        let mut payload_keys = Vec::new();
-        let mut spend_nullifiers = Vec::new();
-        let mut advice_notes = Vec::new();
-        let mut address_views = Vec::new();
-        let mut denoms = Vec::new();
-
-        for (commitment, payload_key) in msg.payload_keys {
-            payload_keys.push(PayloadKeyWithCommitment {
-                payload_key: Some(payload_key.to_owned().into()),
-                commitment: Some(commitment.to_owned().into()),
-            });
-        }
-
-        for (nullifier, note) in msg.spend_nullifiers {
-            spend_nullifiers.push(NullifierWithNote {
-                nullifier: Some(nullifier.into()),
-                note: Some(note.into()),
-            })
-        }
-        for note in msg.advice_notes.into_values() {
-            advice_notes.push(note.into());
-        }
-        for address_view in msg.address_views {
-            address_views.push(address_view.into());
-        }
-        for denom in msg.denoms.values() {
-            denoms.push(denom.clone().into());
-        }
-
         Self {
-            payload_keys,
-            spend_nullifiers,
-            advice_notes,
-            address_views,
-            denoms,
+            payload_keys: msg
+                .payload_keys
+                .into_iter()
+                .map(|(commitment, payload_key)| PayloadKeyWithCommitment {
+                    payload_key: Some(payload_key.into()),
+                    commitment: Some(commitment.into()),
+                })
+                .collect(),
+            spend_nullifiers: msg
+                .spend_nullifiers
+                .into_iter()
+                .map(|(nullifier, note)| NullifierWithNote {
+                    nullifier: Some(nullifier.into()),
+                    note: Some(note.into()),
+                })
+                .collect(),
+            advice_notes: msg.advice_notes.into_values().map(Into::into).collect(),
+            address_views: msg.address_views.into_iter().map(Into::into).collect(),
+            denoms: msg.denoms.values().map(|d| d.clone().into()).collect(),
             transaction_id: Some(msg.transaction_id.into()),
             prices: msg.prices.into_iter().map(Into::into).collect(),
             extended_metadata: msg
@@ -162,11 +142,6 @@ impl From<TransactionPerspective> for pb::TransactionPerspective {
                         transaction_id: Some(v.into()),
                     },
                 )
-                .collect(),
-            batch_swap_output_data: msg
-                .batch_swap_output_data
-                .into_iter()
-                .map(Into::into)
                 .collect(),
             position_metadata_key: msg.position_metadata_key.map(|x| x.into()),
         }
@@ -291,11 +266,6 @@ impl TryFrom<pb::TransactionPerspective> for TransactionPerspective {
                     ))
                 })
                 .collect::<Result<_, anyhow::Error>>()?,
-            batch_swap_output_data: msg
-                .batch_swap_output_data
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
             position_metadata_key: msg
                 .position_metadata_key
                 .map(|x| x.try_into())

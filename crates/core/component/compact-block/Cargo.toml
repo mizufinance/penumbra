@@ -15,8 +15,8 @@ component = [
     "tonic",
     "tokio-stream",
     "tokio",
+    "penumbra-sdk-fee/component",
     "penumbra-sdk-governance/component",
-    "penumbra-sdk-dex/component",
 ]
 # proving-keys = ["penumbra-sdk-proof-params/proving-keys"]
 default = ["std", "component"]
@@ -35,7 +35,7 @@ decaf377-rdsa = {workspace = true}
 futures = {workspace = true}
 im = {workspace = true}
 metrics = {workspace = true}
-penumbra-sdk-dex = {workspace = true, default-features = false}
+penumbra-sdk-compliance = {workspace = true, default-features = false}
 penumbra-sdk-fee = {workspace = true, default-features = false}
 penumbra-sdk-governance = {workspace = true, default-features = false}
 penumbra-sdk-ibc = {workspace = true, default-features = false}
@@ -43,7 +43,6 @@ penumbra-sdk-proof-params = {workspace = true, default-features = false}
 penumbra-sdk-proto = {workspace = true, default-features = false}
 penumbra-sdk-sct = {workspace = true, default-features = false}
 penumbra-sdk-shielded-pool = {workspace = true, default-features = false}
-penumbra-sdk-stake = {workspace = true, default-features = false}
 penumbra-sdk-tct = {workspace = true, default-features = true}
 rand = {workspace = true}
 rand_core = {workspace = true, features = ["getrandom"]}

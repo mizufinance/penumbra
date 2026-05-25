@@ -29,29 +29,19 @@ impl BalanceCmd {
         if self.by_note {
             table.set_header(vec!["Account", "Value", "Source", "Sender"]);
 
-            let rows = notes
-                .iter()
-                .flat_map(|(index, notes_by_asset)| {
-                    // Include each note individually:
-                    notes_by_asset.iter().flat_map(|(asset, notes)| {
-                        notes.iter().map(|record| {
-                            (
-                                *index,
-                                asset.value(record.note.amount()),
-                                record.source.clone(),
-                                record.return_address.clone(),
-                            )
-                        })
+            let rows = notes.iter().flat_map(|(index, notes_by_asset)| {
+                // Include each note individually:
+                notes_by_asset.iter().flat_map(|(asset, notes)| {
+                    notes.iter().map(|record| {
+                        (
+                            *index,
+                            asset.value(record.note.amount()),
+                            record.source.clone(),
+                            record.return_address.clone(),
+                        )
                     })
                 })
-                /* Don't exclude withdrawn LPNFTs in by_note, which is a more precise view.
-                // Exclude withdrawn LPNFTs.
-                .filter(|(_, value, _, _)| match asset_cache.get(&value.asset_id) {
-                    None => true,
-                    Some(denom) => !denom.is_withdrawn_position_nft(),
-                });
-                 */
-                ;
+            });
 
             for (index, value, source, return_address) in rows {
                 table.add_row(vec![
@@ -68,25 +58,16 @@ impl BalanceCmd {
         } else {
             table.set_header(vec!["Account", "Amount"]);
 
-            let rows = notes
-                .iter()
-                .flat_map(|(index, notes_by_asset)| {
-                    // Sum the notes for each asset:
-                    notes_by_asset.iter().map(|(asset, notes)| {
-                        let sum: u128 = notes
-                            .iter()
-                            .map(|record| u128::from(record.note.amount()))
-                            .sum();
-                        (*index, asset.value(sum.into()))
-                    })
+            let rows = notes.iter().flat_map(|(index, notes_by_asset)| {
+                // Sum the notes for each asset:
+                notes_by_asset.iter().map(|(asset, notes)| {
+                    let sum: u128 = notes
+                        .iter()
+                        .map(|record| u128::from(record.note.amount()))
+                        .sum();
+                    (*index, asset.value(sum.into()))
                 })
-                // Exclude withdrawn LPNFTs and withdrawn auction NFTs.
-                .filter(|(_, value)| match asset_cache.get(&value.asset_id) {
-                    None => true,
-                    Some(denom) => {
-                        !denom.is_withdrawn_position_nft() && !denom.is_withdrawn_auction_nft()
-                    }
-                });
+            });
 
             for (index, value) in rows {
                 table.add_row(vec![format!("# {}", index), value.format(&asset_cache)]);
@@ -104,10 +85,6 @@ fn format_source(source: &CommitmentSource) -> String {
         CommitmentSource::Genesis => "Genesis".to_owned(),
         CommitmentSource::Transaction { id: None } => "Tx (Unknown)".to_owned(),
         CommitmentSource::Transaction { id: Some(id) } => format!("Tx {}", hex::encode(&id[..])),
-        CommitmentSource::FundingStreamReward { epoch_index } => {
-            format!("Funding Stream (Epoch {})", epoch_index)
-        }
-        CommitmentSource::CommunityPoolOutput => format!("CommunityPoolOutput"),
         CommitmentSource::Ics20Transfer {
             packet_seq,
             channel_id,
@@ -116,12 +93,6 @@ fn format_source(source: &CommitmentSource) -> String {
             "ICS20 packet {} via {} from {}",
             packet_seq, channel_id, sender
         ),
-        CommitmentSource::LiquidityTournamentReward { epoch, tx_hash } => {
-            format!(
-                "Liquidity tournament reward (Epoch {}, Tx {})",
-                epoch, tx_hash
-            )
-        }
     }
 }
 

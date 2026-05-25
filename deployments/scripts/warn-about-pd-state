@@ -7,8 +7,11 @@ set -euo pipefail
 
 # Fail fast if testnet dir exists, otherwise `cargo run ...` will block
 # for a while, masking the error.
-if [[ -d ~/.penumbra/network_data ]] ; then
-    >&2 echo "ERROR: network data directory exists at ~/.penumbra/network_data"
+penumbra_devnet_home="${PENUMBRA_DEVNET_HOME:-$HOME/.penumbra}"
+network_data_dir="${penumbra_devnet_home}/network_data"
+
+if [[ -d "$network_data_dir" ]] ; then
+    >&2 echo "ERROR: network data directory exists at $network_data_dir"
     >&2 echo "Not removing this directory automatically; to remove, run: pd network unsafe-reset-all"
     exit 1
 fi

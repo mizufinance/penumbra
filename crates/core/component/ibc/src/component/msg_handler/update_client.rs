@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use cnidarium::{StateRead, StateWrite};
@@ -94,11 +96,18 @@ impl MsgHandler for MsgUpdateClient {
         let options = trusted_client_state.as_light_client_options()?;
         let verifier = ProdVerifier::default();
 
+        let verifier_start = Instant::now();
         let verdict = verifier.verify_update_header(
             untrusted_state,
             trusted_state,
             &options,
             HI::get_block_timestamp(&state).await?,
+        );
+        tracing::debug!(
+            elapsed_us = verifier_start.elapsed().as_micros(),
+            client_id = %self.client_id,
+            height = %untrusted_header.height(),
+            "ibc_update_client_prod_verifier"
         );
 
         match verdict {
