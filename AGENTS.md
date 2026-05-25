@@ -1,7 +1,24 @@
 # Penumbra Engineering Instructions
 
-New product, no backwards-compat. Prefer the correct design over legacy shims.
+New prototype product, no stable contracts unless explicitly identified.
+Prefer the correct design over legacy shims.
 Delete obsolete paths; do not keep aliases, flags, or half-finished abstractions.
+
+## Prototype Contract Policy
+
+Assume there are no stable contracts in this repository unless the user names
+one or the boundary is a standards/protocol interface. Existing code, files,
+schemas, JSON shapes, CLI output, demo state, and tests are implementation
+details, not compatibility obligations.
+
+When improving the system, change or delete implementation details freely and
+update all in-repo references to the new design. Do not infer consumers from
+existing internal callers; update the callers. Do not add migrations, aliases,
+compatibility shims, transitional fields, or dual paths unless the user asks for
+them or there is clear evidence of an external protocol/client contract.
+
+Schema versions are guardrails against accidentally opening stale local data.
+They are not migration promises.
 
 ## Workflow
 

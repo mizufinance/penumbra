@@ -1,0 +1,3 @@
+[[profile.default.overrides]]
+filter = 'package(penumbra-sdk-app-tests) and binary(ics23_transfer)'
+threads-required = "num-test-threads"

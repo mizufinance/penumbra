@@ -68,12 +68,6 @@ ExtractedComplianceCiphertext { output_ref, raw_bytes, upload_bundle_bytes }
 `tx_hash` must match Penumbra `TransactionId`. If a helper computes it outside
 the transaction crate, keep the transaction-crate parity test mandatory.
 
-The scanner DB schema is not migration-compatible with earlier prototype DBs.
-Delete and rebuild old local scanner DBs.
-
-For operator-facing view database reset notes for compliance slot support, see
-`docs/compliance/release-notes.md`.
-
 ## Scanner DB Tables
 
 | Table | Purpose |

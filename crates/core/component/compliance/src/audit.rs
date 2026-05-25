@@ -817,19 +817,48 @@ pub fn export_ledger_rows(store: &SqliteScannerStore) -> Result<Vec<AuditLedgerR
     Ok(ledger)
 }
 
+/// Health summary for the compliance scanner.
+///
+/// `active` is heartbeat-derived: `true` only when the worker has processed a
+/// block within `HEARTBEAT_STALE_SECS`. It reflects recent progress, not
+/// process liveness — a halted chain looks the same as a dead scanner. On
+/// clean exit (catch-up completes, or `run()` returns Ok) the heartbeat is
+/// cleared so `active` flips to `false` immediately.
 pub fn scanner_health_json(store: &SqliteScannerStore) -> Result<serde_json::Value> {
-    let conn = store.lock_conn()?;
-    let (last_height, last_hash): (i64, Option<Vec<u8>>) = conn.query_row(
-        "SELECT last_height, last_block_hash FROM scanner_sync WHERE id = 1",
-        [],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
+    let (last_height, last_hash): (i64, Option<Vec<u8>>) = {
+        let conn = store.lock_conn()?;
+        conn.query_row(
+            "SELECT last_height, last_block_hash FROM scanner_sync WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?
+    };
+    let runtime = store.scanner_runtime_state()?;
+    let detection_count = store.detection_count_sync()?;
+    let now = now_unix();
+    let active = runtime.is_active(now);
+    let message = if let Some(err) = runtime.last_error.as_deref() {
+        format!("Scanner failed: {err}")
+    } else if active {
+        "Scanner active".to_string()
+    } else if runtime.started_at.is_some() {
+        "Scanner stopped".to_string()
+    } else {
+        "Scanner not started".to_string()
+    };
     Ok(serde_json::json!({
         "healthy": true,
-        "message": "Scanner running",
+        "message": message,
+        "active": active,
+        "started_at": runtime.started_at,
+        "heartbeat_at": runtime.heartbeat_at,
+        "heartbeat_stale_secs": crate::scanner::HEARTBEAT_STALE_SECS,
+        "last_error": runtime.last_error,
+        "last_error_at": runtime.last_error_at,
         "last_height": last_height,
         "last_block_hash": last_hash.map(hex::encode),
-        "updatedAt": now_unix(),
+        "detection_count": detection_count,
+        "updatedAt": now,
     }))
 }
 
@@ -1110,6 +1139,50 @@ mod tests {
             1
         );
         assert_eq!(audit_status(&store, &evidence), AUDIT_STATUS_AUDIT_COMPLETE);
+    }
+
+    #[tokio::test]
+    async fn duplicate_orbis_import_is_idempotent() {
+        let store = SqliteScannerStore::new(":memory:").unwrap();
+        let (evidence, bundle, ring_pk) = crate::evidence::tests::valid_evidence_fixture();
+        persist_evidence_detection(&store, &evidence, &bundle, false).await;
+        validate_and_save_evidence_object(&store, &evidence, &bundle, &ring_pk).unwrap();
+        let entry = orbis_entry(&evidence);
+
+        assert_eq!(
+            import_orbis_audit_entries(&store, std::slice::from_ref(&entry), Some("alice"))
+                .unwrap(),
+            1
+        );
+        assert_eq!(audit_status(&store, &evidence), AUDIT_STATUS_AUDIT_COMPLETE);
+
+        let receipts_after_first: i64 = store
+            .lock_conn()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM audit_row_audits", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        assert_eq!(
+            import_orbis_audit_entries(&store, std::slice::from_ref(&entry), Some("alice"))
+                .unwrap(),
+            1,
+            "second import returns same row count (idempotent)"
+        );
+        assert_eq!(audit_status(&store, &evidence), AUDIT_STATUS_AUDIT_COMPLETE);
+
+        let receipts_after_second: i64 = store
+            .lock_conn()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM audit_row_audits", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            receipts_after_first, receipts_after_second,
+            "no duplicate audit_row_audits rows"
+        );
     }
 
     #[tokio::test]
