@@ -2254,9 +2254,9 @@ impl<'de> serde::Deserialize<'de> for ComplianceParameters {
                             if anchor_validation_window_blocks__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("anchorValidationWindowBlocks"));
                             }
-                            anchor_validation_window_blocks__ = Some(
-                                map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0,
-                            );
+                            anchor_validation_window_blocks__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
                         }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
