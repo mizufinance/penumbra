@@ -118,10 +118,6 @@ pub mod tree {
         format!("sct/tree/anchor_lookup/{}", anchor)
     }
 
-    pub fn state_commitment_tree() -> &'static str {
-        "sct/tree/state_commitment_tree"
-    }
-
     pub fn note_source(note_commitment: &penumbra_sdk_tct::StateCommitment) -> String {
         format!("sct/tree/note_source/{}", note_commitment)
     }

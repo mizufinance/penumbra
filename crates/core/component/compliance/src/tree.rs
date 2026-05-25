@@ -204,10 +204,16 @@ impl QuadTree {
         })
     }
 
+    /// Return the number of leaves this tree can address.
+    pub fn max_leaves(&self) -> u64 {
+        Self::max_leaves_for_depth(self.depth)
+    }
+
     /// Compute max leaves safely, avoiding overflow in shift operations.
-    /// Requires depth <= 31 (which is guaranteed by with_depth validation).
+    /// Requires depth <= 31.
     #[inline]
-    fn max_leaves_for_depth(depth: u8) -> u64 {
+    pub fn max_leaves_for_depth(depth: u8) -> u64 {
+        assert!(depth <= 31, "depth must be <= 31 to avoid shift overflow");
         debug_assert!(depth <= 31, "depth must be <= 31 to avoid shift overflow");
         1u64 << ((depth as u32) * 2)
     }
@@ -241,7 +247,7 @@ impl QuadTree {
 
     /// Hash four child nodes to produce the parent hash.
     /// Using child0 as domain separator is a common pattern for Merkle trees.
-    fn hash_children(
+    pub fn hash_children(
         child0: StateCommitment,
         child1: StateCommitment,
         child2: StateCommitment,

@@ -215,7 +215,7 @@ impl Worker {
             .record_compliance_block(
                 height,
                 &user_tree,
-                &asset_tree,
+                &mut asset_tree,
                 user_start_position,
                 asset_start_position,
             )

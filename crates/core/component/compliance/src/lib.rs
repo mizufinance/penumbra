@@ -55,6 +55,9 @@ pub use indexed_tree::{
 
 pub mod state_key;
 
+pub mod params;
+pub use params::ComplianceParameters;
+
 // Registry requires cnidarium for state access
 #[cfg(feature = "component")]
 pub mod registry;
@@ -233,11 +236,10 @@ pub mod test_helpers {
 #[cfg(all(test, feature = "component"))]
 mod tests {
     use super::*;
-    use cnidarium::{StateDelta, StateWrite, TempStorage};
+    use cnidarium::{StateDelta, TempStorage};
     use decaf377::Fq;
     use penumbra_sdk_asset::asset;
     use penumbra_sdk_keys::Address;
-    use penumbra_sdk_proto::StateWriteProto;
     use penumbra_sdk_tct::StateCommitment;
 
     #[tokio::test]
@@ -245,11 +247,6 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
-
-        let user_tree = QuadTree::new();
-        let tree_bytes = bincode::serialize(&user_tree).unwrap();
-        state.put_raw(state_key::user_tree().to_string(), tree_bytes);
-        state.put_proto(state_key::user_count().to_string(), 0u64);
 
         let leaf = ComplianceLeaf::new(
             Address::dummy(&mut rand::thread_rng()),
@@ -307,11 +304,6 @@ mod tests {
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
-        let user_tree = QuadTree::new();
-        let tree_bytes = bincode::serialize(&user_tree).unwrap();
-        state.put_raw(state_key::user_tree().to_string(), tree_bytes);
-        state.put_proto(state_key::user_count().to_string(), 0u64);
-
         let mut rng = rand::thread_rng();
         let mut commitments = Vec::new();
 
@@ -344,11 +336,6 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
-
-        let user_tree = QuadTree::new();
-        let tree_bytes = bincode::serialize(&user_tree).unwrap();
-        state.put_raw(state_key::user_tree().to_string(), tree_bytes);
-        state.put_proto(state_key::user_count().to_string(), 0u64);
 
         let mut rng = rand::thread_rng();
         let positions = vec![0, 5, 10];
@@ -398,19 +385,6 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
-
-        let user_tree = QuadTree::new();
-        state.put_raw(
-            state_key::user_tree().to_string(),
-            bincode::serialize(&user_tree).unwrap(),
-        );
-        state.put_proto(state_key::user_count().to_string(), 0u64);
-
-        let asset_imt = indexed_tree::IndexedMerkleTree::new();
-        state.put_raw(
-            state_key::asset_imt().to_string(),
-            bincode::serialize(&asset_imt).unwrap(),
-        );
 
         let mut rng = rand::thread_rng();
         let asset_id = asset::Id(Fq::from(1000u64));

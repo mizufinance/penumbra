@@ -1454,7 +1454,7 @@ impl Storage {
         &self,
         height: u64,
         user_tree: &crate::compliance_tree::ComplianceUserTree,
-        asset_tree: &crate::compliance_tree::ComplianceAssetTree,
+        asset_tree: &mut crate::compliance_tree::ComplianceAssetTree,
         user_start_position: u64,
         asset_start_position: u64,
     ) -> anyhow::Result<()> {
@@ -1463,8 +1463,8 @@ impl Storage {
         let asset_root = asset_tree.root();
 
         // Clone tree state for persistence
-        let user_tree = user_tree.clone();
-        let asset_tree = asset_tree.clone();
+        let user_tree_for_persist = user_tree.clone();
+        let asset_tree_for_persist = asset_tree.clone();
 
         spawn_blocking(move || {
             let mut conn = pool.get()?;
@@ -1474,10 +1474,10 @@ impl Storage {
                 let mut store = compliance::ComplianceTreeStore(&mut tx);
 
                 // Persist user tree changes
-                user_tree.persist(&mut store, user_start_position)?;
+                user_tree_for_persist.persist(&mut store, user_start_position)?;
 
                 // Persist asset tree changes
-                asset_tree.persist(&mut store, asset_start_position)?;
+                asset_tree_for_persist.persist(&mut store, asset_start_position)?;
 
                 // Store anchors for this block
                 store.add_anchor(height, user_root, asset_root)?;
@@ -1487,6 +1487,8 @@ impl Storage {
             Ok::<(), anyhow::Error>(())
         })
         .await??;
+
+        asset_tree.clear_dirty_positions();
 
         Ok(())
     }

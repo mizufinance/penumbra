@@ -846,12 +846,6 @@ mod tests {
             .write_sct(1, reference.clone(), block_root, None)
             .await;
 
-        assert!(state
-            .nonverifiable_get_raw(state_key::tree::state_commitment_tree().as_bytes())
-            .await
-            .unwrap()
-            .is_none());
-
         let loaded = state.get_sct().await;
         assert_eq!(loaded.root(), expected_root);
 

@@ -3,6 +3,7 @@ use std::fmt::Display;
 use anyhow::Context;
 use anyhow::Result;
 use penumbra_sdk_asset::BASE_ASSET_ID;
+use penumbra_sdk_compliance::params::ComplianceParameters;
 use penumbra_sdk_fee::FeeParameters;
 use penumbra_sdk_governance::change::ParameterChange;
 use penumbra_sdk_governance::{params::GovernanceParameters, tally::Ratio};
@@ -51,6 +52,10 @@ impl AppParameters {
         // Tracked by #3593
         let AppParameters {
             chain_id,
+            compliance_params:
+                ComplianceParameters {
+                    anchor_validation_window_blocks: _,
+                },
             fee_params:
                 FeeParameters {
                     fixed_gas_prices: _,
@@ -127,6 +132,10 @@ impl AppParameters {
     pub fn check_valid(&self) -> Result<()> {
         let AppParameters {
             chain_id,
+            compliance_params:
+                ComplianceParameters {
+                    anchor_validation_window_blocks,
+                },
             fee_params:
                 FeeParameters {
                     fixed_gas_prices,
@@ -169,6 +178,10 @@ impl AppParameters {
             (
                 *sct_anchor_retention_blocks >= 1,
                 "SCT anchor retention must be at least one block",
+            ),
+            (
+                *anchor_validation_window_blocks >= 1,
+                "compliance anchor validation window must be at least one block",
             ),
             (
                 *active_validator_limit > 3,
@@ -246,4 +259,40 @@ fn check_invariant<'a, T: Eq + 'a>(
             .into_iter()
             .map(|(old, new, name)| ((*old == *new), format!("{name} can't be changed"))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_params() -> AppParameters {
+        AppParameters {
+            chain_id: "test-chain".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn compliance_anchor_validation_window_may_change() {
+        let old = valid_params();
+        let mut new = old.clone();
+        new.compliance_params.anchor_validation_window_blocks += 1;
+
+        old.check_valid_update(&new).unwrap();
+    }
+
+    #[test]
+    fn compliance_anchor_validation_window_must_be_positive() {
+        let mut params = valid_params();
+        params.compliance_params.anchor_validation_window_blocks = 0;
+
+        let err = params
+            .check_valid()
+            .expect_err("zero compliance anchor window should be invalid");
+        assert!(
+            err.to_string()
+                .contains("compliance anchor validation window"),
+            "unexpected error: {err:#}"
+        );
+    }
 }

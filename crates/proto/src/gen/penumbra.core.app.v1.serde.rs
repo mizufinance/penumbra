@@ -27,6 +27,9 @@ impl serde::Serialize for AppParameters {
         if self.shielded_pool_params.is_some() {
             len += 1;
         }
+        if self.compliance_params.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.app.v1.AppParameters", len)?;
         if !self.chain_id.is_empty() {
             struct_ser.serialize_field("chainId", &self.chain_id)?;
@@ -48,6 +51,9 @@ impl serde::Serialize for AppParameters {
         }
         if let Some(v) = self.shielded_pool_params.as_ref() {
             struct_ser.serialize_field("shieldedPoolParams", v)?;
+        }
+        if let Some(v) = self.compliance_params.as_ref() {
+            struct_ser.serialize_field("complianceParams", v)?;
         }
         struct_ser.end()
     }
@@ -73,6 +79,8 @@ impl<'de> serde::Deserialize<'de> for AppParameters {
             "feeParams",
             "shielded_pool_params",
             "shieldedPoolParams",
+            "compliance_params",
+            "complianceParams",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -84,6 +92,7 @@ impl<'de> serde::Deserialize<'de> for AppParameters {
             ValidatorParams,
             FeeParams,
             ShieldedPoolParams,
+            ComplianceParams,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -113,6 +122,7 @@ impl<'de> serde::Deserialize<'de> for AppParameters {
                             "validatorParams" | "validator_params" => Ok(GeneratedField::ValidatorParams),
                             "feeParams" | "fee_params" => Ok(GeneratedField::FeeParams),
                             "shieldedPoolParams" | "shielded_pool_params" => Ok(GeneratedField::ShieldedPoolParams),
+                            "complianceParams" | "compliance_params" => Ok(GeneratedField::ComplianceParams),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -139,6 +149,7 @@ impl<'de> serde::Deserialize<'de> for AppParameters {
                 let mut validator_params__ = None;
                 let mut fee_params__ = None;
                 let mut shielded_pool_params__ = None;
+                let mut compliance_params__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ChainId => {
@@ -183,6 +194,12 @@ impl<'de> serde::Deserialize<'de> for AppParameters {
                             }
                             shielded_pool_params__ = map_.next_value()?;
                         }
+                        GeneratedField::ComplianceParams => {
+                            if compliance_params__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("complianceParams"));
+                            }
+                            compliance_params__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -196,6 +213,7 @@ impl<'de> serde::Deserialize<'de> for AppParameters {
                     validator_params: validator_params__,
                     fee_params: fee_params__,
                     shielded_pool_params: shielded_pool_params__,
+                    compliance_params: compliance_params__,
                 })
             }
         }

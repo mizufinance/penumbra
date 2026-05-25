@@ -1,11 +1,7 @@
-/// State key for the asset Indexed Merkle Tree (IMT)
-pub fn asset_imt() -> &'static str {
-    "compliance/asset_imt"
-}
-
-/// State key for the user compliance tree
-pub fn user_tree() -> &'static str {
-    "compliance/user_tree"
+pub mod config {
+    pub fn compliance_params() -> &'static str {
+        "compliance/config/params"
+    }
 }
 
 /// State key for the user compliance tree root.
@@ -42,6 +38,18 @@ pub mod tree_storage {
 
     pub fn asset_leaf(position: u64) -> String {
         format!("{}{:020}", asset_leaf_prefix(), position)
+    }
+
+    pub fn asset_value_desc_prefix() -> &'static str {
+        "compliance/tree/asset/value_desc/"
+    }
+
+    pub fn asset_value_desc(descending_value_key: [u8; 32]) -> String {
+        format!(
+            "{}{}",
+            asset_value_desc_prefix(),
+            hex::encode(descending_value_key)
+        )
     }
 }
 
@@ -157,6 +165,11 @@ pub fn ibc_compliance_metadata(channel_id: &str, packet_seq: u64) -> String {
 /// - anchor_lookup: anchor -> height (for validating historical anchors)
 pub mod anchor {
     use penumbra_sdk_tct::StateCommitment;
+
+    /// State key for the greatest anchor height pruned from retention storage.
+    pub fn pruned_through_height() -> &'static str {
+        "compliance/anchor/pruned_through_height"
+    }
 
     /// State key for user tree anchor at a specific block height.
     pub fn user_anchor_by_height(height: u64) -> String {

@@ -12,6 +12,7 @@ use tracing::instrument;
 
 use crate::{
     event, genesis,
+    params::StateWriteExt as _,
     registry::{ComplianceRegistryRead, ComplianceRegistryWrite},
     state_key,
     structs::{MsgRegisterAsset, MsgRegisterUser},
@@ -33,6 +34,11 @@ impl Component for Compliance {
 
     #[instrument(name = "compliance", skip(state, app_state))]
     async fn init_chain<S: StateWrite>(mut state: S, app_state: Option<&Self::AppState>) {
+        let compliance_params = app_state
+            .map(|genesis| genesis.compliance_params.clone())
+            .unwrap_or_default();
+        state.put_compliance_params(compliance_params);
+
         // Initialize empty trees if they don't exist
         // This ensures the trees are properly set up at genesis
 
@@ -452,6 +458,7 @@ mod tests {
         genesis::Content {
             native_assets: vec![],
             compliance_registrar_vk: vec![registrar_vk],
+            ..Default::default()
         }
     }
 
@@ -573,6 +580,7 @@ mod tests {
                 )),
             }],
             compliance_registrar_vk: vec![],
+            ..Default::default()
         };
 
         Compliance::init_chain(&mut state, Some(&genesis)).await;

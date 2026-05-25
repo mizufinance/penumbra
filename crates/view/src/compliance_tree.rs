@@ -15,6 +15,7 @@ use penumbra_sdk_compliance::{
     tree::QuadTree,
 };
 use penumbra_sdk_tct::StateCommitment;
+use std::collections::BTreeSet;
 
 use crate::storage::compliance::{ComplianceTreeStore, IndexedLeafData};
 
@@ -129,6 +130,7 @@ pub struct ComplianceAssetTree {
     inner: IndexedMerkleTree,
     /// Ordered list of asset values that have been inserted (for persistence)
     inserted_values: Vec<decaf377::Fq>,
+    dirty_positions: BTreeSet<u64>,
 }
 
 impl ComplianceAssetTree {
@@ -137,6 +139,7 @@ impl ComplianceAssetTree {
         Self {
             inner: IndexedMerkleTree::new(),
             inserted_values: Vec::new(),
+            dirty_positions: BTreeSet::new(),
         }
     }
 
@@ -247,6 +250,7 @@ impl ComplianceAssetTree {
         Ok(Self {
             inner: tree,
             inserted_values,
+            dirty_positions: BTreeSet::new(),
         })
     }
 
@@ -261,14 +265,29 @@ impl ComplianceAssetTree {
         updated_low_leaf: IndexedLeaf,
         low_leaf_position: u64,
     ) -> Result<()> {
+        let existing_position = self.inner.get_position(new_leaf.value);
         self.inner.sync_from_event(
             new_leaf.clone(),
             new_position,
             updated_low_leaf,
             low_leaf_position,
         )?;
-        self.inserted_values.push(new_leaf.value);
+        if let Some(position) = existing_position {
+            self.dirty_positions.insert(position);
+        } else {
+            self.inserted_values.push(new_leaf.value);
+            self.dirty_positions.insert(new_position);
+            self.dirty_positions.insert(low_leaf_position);
+        }
         Ok(())
+    }
+
+    pub fn dirty_position_count(&self) -> usize {
+        self.dirty_positions.len()
+    }
+
+    pub fn clear_dirty_positions(&mut self) {
+        self.dirty_positions.clear();
     }
 
     /// Check if an asset value is in the tree.
@@ -316,7 +335,7 @@ impl ComplianceAssetTree {
 
     /// Persist tree state to SQLite.
     ///
-    /// This saves all indexed leaves from position 0 to current leaf_count.
+    /// This saves only the asset leaves touched by new registrations.
     /// Uses INSERT OR REPLACE to handle both new and updated leaves.
     pub fn persist(
         &self,
@@ -325,9 +344,7 @@ impl ComplianceAssetTree {
     ) -> Result<()> {
         let leaf_count = self.inner.leaf_count();
 
-        // Save all leaves (INSERT OR REPLACE handles updates)
-        // This ensures both new leaves AND updated low leaves are persisted correctly.
-        for pos in 0..leaf_count {
+        for &pos in &self.dirty_positions {
             let leaf = self.inner.get_leaf(pos).ok_or_else(|| {
                 anyhow::anyhow!("missing asset leaf at position {} during persist", pos)
             })?;
@@ -445,5 +462,89 @@ mod tests {
         assert!(is_regulated);
         assert_eq!(retrieved_leaf.params.dk_pub, dk_pub);
         assert_eq!(retrieved_leaf.params.threshold, threshold);
+    }
+
+    #[test]
+    fn asset_tree_persist_writes_only_dirty_positions_and_reloads_root() {
+        use decaf377::Fq;
+        use penumbra_sdk_compliance::indexed_tree::{LeafParams, LeafRing, FQ_MAX};
+        use r2d2_sqlite::rusqlite::Connection;
+
+        let mut db = Connection::open_in_memory().unwrap();
+        db.execute_batch(include_str!("storage/schema.sql"))
+            .unwrap();
+
+        let mut tree = ComplianceAssetTree::new();
+        let new_leaf = IndexedLeaf {
+            value: Fq::from(100u64),
+            next_index: 0,
+            next_value: *FQ_MAX,
+            params: LeafParams::default(),
+            ring: LeafRing::default(),
+        };
+        let updated_sentinel =
+            IndexedLeaf::with_default_policy(Fq::from(0u64), 1, Fq::from(100u64));
+
+        tree.sync_from_event(new_leaf, 1, updated_sentinel, 0)
+            .unwrap();
+        assert_eq!(tree.dirty_position_count(), 2);
+
+        {
+            let mut tx = db.transaction().unwrap();
+            let mut store = ComplianceTreeStore(&mut tx);
+            tree.persist(&mut store, 1).unwrap();
+            tx.commit().unwrap();
+        }
+        tree.clear_dirty_positions();
+        let first_root = tree.root();
+
+        let row_count: u64 = db
+            .query_row("SELECT COUNT(*) FROM compliance_asset_leaves", [], |row| {
+                row.get::<_, u64>(0)
+            })
+            .unwrap();
+        assert_eq!(row_count, 2);
+
+        {
+            let mut tx = db.transaction().unwrap();
+            let mut store = ComplianceTreeStore(&mut tx);
+            let reloaded = ComplianceAssetTree::from_store(&mut store).unwrap();
+            assert_eq!(reloaded.root(), first_root);
+        }
+
+        let lower_leaf = IndexedLeaf {
+            value: Fq::from(50u64),
+            next_index: 1,
+            next_value: Fq::from(100u64),
+            params: LeafParams::default(),
+            ring: LeafRing::default(),
+        };
+        let updated_sentinel = IndexedLeaf::with_default_policy(Fq::from(0u64), 2, Fq::from(50u64));
+        tree.sync_from_event(lower_leaf, 2, updated_sentinel, 0)
+            .unwrap();
+        assert_eq!(tree.dirty_position_count(), 2);
+
+        {
+            let mut tx = db.transaction().unwrap();
+            let mut store = ComplianceTreeStore(&mut tx);
+            tree.persist(&mut store, 2).unwrap();
+            tx.commit().unwrap();
+        }
+        tree.clear_dirty_positions();
+        let second_root = tree.root();
+
+        let row_count: u64 = db
+            .query_row("SELECT COUNT(*) FROM compliance_asset_leaves", [], |row| {
+                row.get::<_, u64>(0)
+            })
+            .unwrap();
+        assert_eq!(row_count, 3);
+
+        {
+            let mut tx = db.transaction().unwrap();
+            let mut store = ComplianceTreeStore(&mut tx);
+            let reloaded = ComplianceAssetTree::from_store(&mut store).unwrap();
+            assert_eq!(reloaded.root(), second_root);
+        }
     }
 }
