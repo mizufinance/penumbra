@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use cnidarium::{Snapshot, StateRead, StateWrite};
 use cnidarium_component::ActionHandler as _;
 use penumbra_sdk_compact_block::StatePayload;
+use penumbra_sdk_compliance::params::StateReadExt as _;
 use penumbra_sdk_compliance::registry::{check_timestamp_freshness, ComplianceRegistryRead as _};
 use penumbra_sdk_fee::component::FeePay as _;
 use penumbra_sdk_sct::component::clock::EpochRead;
@@ -83,7 +84,7 @@ pub(crate) struct PreparedCandidateRead {
     pub effects: PreparedCandidateEffects,
 }
 
-type AnchorPair = (StateCommitment, StateCommitment);
+type AnchorValidationKey = (StateCommitment, StateCommitment, u64, u64);
 type ClaimedAnchorKey = penumbra_sdk_tct::Root;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -94,7 +95,7 @@ pub(crate) struct HistoricalCheckProfile {
 
 #[derive(Debug, Default)]
 pub(crate) struct AnchorValidationCache {
-    entries: RwLock<HashMap<AnchorPair, Arc<OnceCell<std::result::Result<(), String>>>>>,
+    entries: RwLock<HashMap<AnchorValidationKey, Arc<OnceCell<std::result::Result<(), String>>>>>,
     hits: AtomicUsize,
     misses: AtomicUsize,
 }
@@ -102,14 +103,14 @@ pub(crate) struct AnchorValidationCache {
 impl AnchorValidationCache {
     fn entry(
         &self,
-        pair: AnchorPair,
+        key: AnchorValidationKey,
     ) -> (Arc<OnceCell<std::result::Result<(), String>>>, bool, f64) {
         let read_wait_start = Instant::now();
         let existing = self
             .entries
             .read()
             .expect("anchor cache poisoned")
-            .get(&pair)
+            .get(&key)
             .cloned();
         let mut wait_ms = read_wait_start.elapsed().as_secs_f64() * 1000.0;
         if let Some(cell) = existing {
@@ -120,13 +121,13 @@ impl AnchorValidationCache {
         let write_wait_start = Instant::now();
         let mut entries = self.entries.write().expect("anchor cache poisoned");
         wait_ms += write_wait_start.elapsed().as_secs_f64() * 1000.0;
-        if let Some(cell) = entries.get(&pair).cloned() {
+        if let Some(cell) = entries.get(&key).cloned() {
             self.hits.fetch_add(1, Ordering::Relaxed);
             return (cell, true, wait_ms);
         }
 
         let cell = Arc::new(OnceCell::new());
-        entries.insert(pair, cell.clone());
+        entries.insert(key, cell.clone());
         self.misses.fetch_add(1, Ordering::Relaxed);
         (cell, false, wait_ms)
     }
@@ -259,9 +260,18 @@ async fn validate_compliance_anchors_read_only<S: StateRead>(
     block_height: u64,
     anchor_cache: Arc<AnchorValidationCache>,
 ) -> Result<(f64, f64)> {
-    let anchor_pair = (*user_anchor, *asset_anchor);
+    let anchor_validation_window_blocks = state
+        .get_compliance_params()
+        .await?
+        .anchor_validation_window_blocks;
+    let anchor_key = (
+        *user_anchor,
+        *asset_anchor,
+        block_height,
+        anchor_validation_window_blocks,
+    );
     let validate_start = Instant::now();
-    let (cell, _, cache_wait_ms) = anchor_cache.entry(anchor_pair);
+    let (cell, _, cache_wait_ms) = anchor_cache.entry(anchor_key);
 
     let result = cell
         .get_or_init(|| async move {
@@ -270,13 +280,11 @@ async fn validate_compliance_anchors_read_only<S: StateRead>(
                 .await
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| "invalid user compliance anchor: not found in history".to_string())?;
-            if block_height
-                > user_anchor_height + penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS
-            {
+            if block_height > user_anchor_height + anchor_validation_window_blocks {
                 return Err(format!(
                     "user compliance anchor too old: height {} is more than {} blocks behind current height {}",
                     user_anchor_height,
-                    penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS,
+                    anchor_validation_window_blocks,
                     block_height
                 ));
             }
@@ -286,13 +294,11 @@ async fn validate_compliance_anchors_read_only<S: StateRead>(
                 .await
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| "invalid asset compliance anchor: not found in history".to_string())?;
-            if block_height
-                > asset_anchor_height + penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS
-            {
+            if block_height > asset_anchor_height + anchor_validation_window_blocks {
                 return Err(format!(
                     "asset compliance anchor too old: height {} is more than {} blocks behind current height {}",
                     asset_anchor_height,
-                    penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS,
+                    anchor_validation_window_blocks,
                     block_height
                 ));
             }
@@ -363,9 +369,17 @@ fn validate_compliance_anchors_read_only_sync(
     block_height: u64,
     anchor_cache: Arc<AnchorValidationCache>,
 ) -> Result<(f64, f64)> {
-    let anchor_pair = (*user_anchor, *asset_anchor);
+    let anchor_validation_window_blocks = handle
+        .block_on(snapshot.get_compliance_params())?
+        .anchor_validation_window_blocks;
+    let anchor_key = (
+        *user_anchor,
+        *asset_anchor,
+        block_height,
+        anchor_validation_window_blocks,
+    );
     let validate_start = Instant::now();
-    let (cell, _, cache_wait_ms) = anchor_cache.entry(anchor_pair);
+    let (cell, _, cache_wait_ms) = anchor_cache.entry(anchor_key);
     let snapshot = snapshot.clone();
     let user_anchor = *user_anchor;
     let asset_anchor = *asset_anchor;
@@ -385,13 +399,11 @@ fn validate_compliance_anchors_read_only_sync(
                 })
                 .transpose()?
                 .ok_or_else(|| "invalid user compliance anchor: not found in history".to_string())?;
-            if block_height
-                > user_anchor_height + penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS
-            {
+            if block_height > user_anchor_height + anchor_validation_window_blocks {
                 return Err(format!(
                     "user compliance anchor too old: height {} is more than {} blocks behind current height {}",
                     user_anchor_height,
-                    penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS,
+                    anchor_validation_window_blocks,
                     block_height
                 ));
             }
@@ -408,13 +420,11 @@ fn validate_compliance_anchors_read_only_sync(
                 })
                 .transpose()?
                 .ok_or_else(|| "invalid asset compliance anchor: not found in history".to_string())?;
-            if block_height
-                > asset_anchor_height + penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS
-            {
+            if block_height > asset_anchor_height + anchor_validation_window_blocks {
                 return Err(format!(
                     "asset compliance anchor too old: height {} is more than {} blocks behind current height {}",
                     asset_anchor_height,
-                    penumbra_sdk_compliance::registry::MAX_ANCHOR_AGE_BLOCKS,
+                    anchor_validation_window_blocks,
                     block_height
                 ));
             }
@@ -1085,16 +1095,18 @@ mod tests {
     #[tokio::test]
     async fn anchor_validation_cache_counts_shared_pair_once() -> Result<()> {
         let cache = Arc::new(AnchorValidationCache::default());
-        let pair = (
+        let key = (
             tct::StateCommitment::try_from([0; 32]).expect("valid commitment"),
             tct::StateCommitment::try_from([1; 32]).expect("valid commitment"),
+            100,
+            50,
         );
 
         let mut tasks = tokio::task::JoinSet::new();
         for _ in 0..8 {
             let cache = cache.clone();
             tasks.spawn(async move {
-                let (cell, _hit, _wait_ms) = cache.entry(pair);
+                let (cell, _hit, _wait_ms) = cache.entry(key);
                 let result = cell
                     .get_or_init(|| async { Ok::<(), String>(()) })
                     .await

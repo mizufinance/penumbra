@@ -13,6 +13,8 @@ use penumbra_sdk_asset::asset;
 use penumbra_sdk_proto::{penumbra::core::component::compliance::v1 as pb, DomainType};
 use serde::{Deserialize, Serialize};
 
+use crate::params::ComplianceParameters;
+
 /// Genesis content for the compliance component.
 ///
 /// This allows configuring additional compliance asset entries at genesis.
@@ -20,6 +22,9 @@ use serde::{Deserialize, Serialize};
 /// asset; entries listed here are added on top of that baseline.
 #[derive(Deserialize, Serialize, Debug, Clone, Default)]
 pub struct Content {
+    /// Compliance component parameters at genesis.
+    #[serde(default)]
+    pub compliance_params: ComplianceParameters,
     /// Native assets to register explicitly at genesis.
     pub native_assets: Vec<NativeAssetRegistration>,
     /// Compliance registrar keys authorized to register asset policies.
@@ -35,6 +40,11 @@ impl TryFrom<pb::GenesisContent> for Content {
 
     fn try_from(value: pb::GenesisContent) -> Result<Self, Self::Error> {
         Ok(Self {
+            compliance_params: value
+                .compliance_params
+                .map(TryInto::try_into)
+                .transpose()?
+                .unwrap_or_default(),
             native_assets: value
                 .native_assets
                 .into_iter()
@@ -52,6 +62,7 @@ impl TryFrom<pb::GenesisContent> for Content {
 impl From<Content> for pb::GenesisContent {
     fn from(value: Content) -> Self {
         Self {
+            compliance_params: Some(value.compliance_params.into()),
             native_assets: value.native_assets.into_iter().map(Into::into).collect(),
             compliance_registrar_vk: value
                 .compliance_registrar_vk
@@ -136,6 +147,10 @@ mod tests {
     fn test_default_genesis() {
         let content = Content::default();
         assert!(content.native_assets.is_empty());
+        assert_eq!(
+            content.compliance_params.anchor_validation_window_blocks,
+            crate::params::ComplianceParameters::default().anchor_validation_window_blocks
+        );
     }
 
     #[test]

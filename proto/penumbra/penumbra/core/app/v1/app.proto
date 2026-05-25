@@ -47,6 +47,8 @@ message AppParameters {
   core.component.fee.v1.FeeParameters fee_params = 7;
   // Shielded pool module parameters.
   core.component.shielded_pool.v1.ShieldedPoolParameters shielded_pool_params = 10;
+  // Compliance module parameters.
+  core.component.compliance.v1.ComplianceParameters compliance_params = 11;
 }
 
 // Requests the global configuration data for the app.

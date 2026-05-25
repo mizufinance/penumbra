@@ -1,3 +1,4 @@
+use penumbra_sdk_compliance::params::ComplianceParameters;
 use penumbra_sdk_fee::FeeParameters;
 use penumbra_sdk_governance::params::GovernanceParameters;
 use penumbra_sdk_ibc::params::IBCParameters;
@@ -15,6 +16,7 @@ pub mod change;
 #[serde(try_from = "pb::AppParameters", into = "pb::AppParameters")]
 pub struct AppParameters {
     pub chain_id: String,
+    pub compliance_params: ComplianceParameters,
     pub fee_params: FeeParameters,
     pub governance_params: GovernanceParameters,
     pub ibc_params: IBCParameters,
@@ -33,6 +35,10 @@ impl TryFrom<pb::AppParameters> for AppParameters {
     fn try_from(msg: pb::AppParameters) -> anyhow::Result<Self> {
         Ok(AppParameters {
             chain_id: msg.chain_id,
+            compliance_params: msg
+                .compliance_params
+                .ok_or_else(|| anyhow::anyhow!("proto response missing compliance params"))?
+                .try_into()?,
             fee_params: msg
                 .fee_params
                 .ok_or_else(|| anyhow::anyhow!("proto response missing fee params"))?
@@ -65,6 +71,7 @@ impl From<AppParameters> for pb::AppParameters {
     fn from(params: AppParameters) -> Self {
         pb::AppParameters {
             chain_id: params.chain_id,
+            compliance_params: Some(params.compliance_params.into()),
             fee_params: Some(params.fee_params.into()),
             governance_params: Some(params.governance_params.into()),
             ibc_params: Some(params.ibc_params.into()),

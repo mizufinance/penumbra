@@ -12,6 +12,12 @@ message ComplianceViewingKey {
   bytes inner = 1;
 }
 
+// Compliance component chain parameters.
+message ComplianceParameters {
+  // Number of recent compliance anchors accepted for proof validation.
+  uint64 anchor_validation_window_blocks = 1;
+}
+
 // A compliance leaf in the public on-chain registry for regulated assets.
 message ComplianceLeaf {
   // The registered address for compliance.
@@ -335,6 +341,7 @@ message AssetPolicy {
 message GenesisContent {
   repeated NativeAssetRegistration native_assets = 1;
   repeated crypto.decaf377_rdsa.v1.SpendVerificationKey compliance_registrar_vk = 2;
+  ComplianceParameters compliance_params = 3;
 }
 
 // Native asset registration configured at genesis.

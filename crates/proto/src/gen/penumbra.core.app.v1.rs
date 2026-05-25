@@ -73,6 +73,11 @@ pub struct AppParameters {
     pub shielded_pool_params: ::core::option::Option<
         super::super::component::shielded_pool::v1::ShieldedPoolParameters,
     >,
+    /// Compliance module parameters.
+    #[prost(message, optional, tag = "11")]
+    pub compliance_params: ::core::option::Option<
+        super::super::component::compliance::v1::ComplianceParameters,
+    >,
 }
 impl ::prost::Name for AppParameters {
     const NAME: &'static str = "AppParameters";

@@ -17,6 +17,20 @@ use crate::tree::DEFAULT_DEPTH;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FqOrdKey([u8; 32]);
 
+impl FqOrdKey {
+    pub fn to_bytes(self) -> [u8; 32] {
+        self.0
+    }
+
+    pub fn descending_bytes(value: Fq) -> [u8; 32] {
+        let mut bytes = Self::from(value).0;
+        for byte in &mut bytes {
+            *byte = !*byte;
+        }
+        bytes
+    }
+}
+
 impl From<Fq> for FqOrdKey {
     fn from(value: Fq) -> Self {
         let bytes = value.into_bigint().to_bytes_be();
@@ -878,7 +892,7 @@ impl IndexedMerkleTree {
         }
     }
 
-    fn hash_children(
+    pub fn hash_children(
         child0: StateCommitment,
         child1: StateCommitment,
         child2: StateCommitment,

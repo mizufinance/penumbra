@@ -32,6 +32,7 @@ use decaf377_rdsa as rdsa;
 use ibc_types::core::connection::ChainId;
 use jmt::RootHash;
 use penumbra_sdk_compact_block::{component::CompactBlockManager, StatePayload};
+use penumbra_sdk_compliance::params::{StateReadExt as _, StateWriteExt as _};
 use penumbra_sdk_compliance::registry::ComplianceRegistryRead as _;
 use penumbra_sdk_compliance::Compliance;
 use penumbra_sdk_fee::component::{
@@ -6283,6 +6284,7 @@ pub trait StateReadExt: StateRead {
     /// Returns the set of app parameters
     async fn get_app_params(&self) -> Result<AppParameters> {
         let chain_id = self.get_chain_id().await?;
+        let compliance_params = self.get_compliance_params().await?;
         let ibc_params = self.get_ibc_params().await?;
         let fee_params = self.get_fee_params().await?;
         let governance_params = self.get_governance_params().await?;
@@ -6292,6 +6294,7 @@ pub trait StateReadExt: StateRead {
 
         Ok(AppParameters {
             chain_id,
+            compliance_params,
             fee_params,
             governance_params,
             ibc_params,
@@ -6374,6 +6377,7 @@ pub trait StateWriteExt: StateWrite {
         // To make sure we don't forget to write any parts, destructure the entire params
         let AppParameters {
             chain_id,
+            compliance_params,
             fee_params,
             governance_params,
             ibc_params,
@@ -6389,6 +6393,7 @@ pub trait StateWriteExt: StateWrite {
         std::mem::drop(chain_id);
 
         self.put_fee_params(fee_params);
+        self.put_compliance_params(compliance_params);
         self.put_governance_params(governance_params);
         self.put_ibc_params(ibc_params);
         self.put_sct_params(sct_params);

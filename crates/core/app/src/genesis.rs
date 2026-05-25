@@ -196,6 +196,14 @@ mod test {
             .compliance_content
             .compliance_registrar_vk
             .is_empty());
+        assert_eq!(
+            content
+                .compliance_content
+                .compliance_params
+                .anchor_validation_window_blocks,
+            penumbra_sdk_compliance::params::ComplianceParameters::default()
+                .anchor_validation_window_blocks
+        );
         Ok(())
     }
 }

@@ -467,6 +467,7 @@ impl QueryService for Server {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::params::{ComplianceParameters, StateWriteExt as _};
     use crate::registry::ComplianceRegistryWrite as _;
     use cnidarium::TempStorage;
     use penumbra_sdk_sct::component::clock::EpochManager as _;
@@ -476,6 +477,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.put_compliance_params(ComplianceParameters::default());
 
         state.put_block_height(5);
         state.record_compliance_anchors(5).await.unwrap();

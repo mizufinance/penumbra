@@ -2171,6 +2171,106 @@ impl<'de> serde::Deserialize<'de> for ComplianceMerkleProofsResponse {
         deserializer.deserialize_struct("penumbra.core.component.compliance.v1.ComplianceMerkleProofsResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ComplianceParameters {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.anchor_validation_window_blocks != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.ComplianceParameters", len)?;
+        if self.anchor_validation_window_blocks != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("anchorValidationWindowBlocks", ToString::to_string(&self.anchor_validation_window_blocks).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ComplianceParameters {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "anchor_validation_window_blocks",
+            "anchorValidationWindowBlocks",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            AnchorValidationWindowBlocks,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "anchorValidationWindowBlocks" | "anchor_validation_window_blocks" => Ok(GeneratedField::AnchorValidationWindowBlocks),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ComplianceParameters;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.component.compliance.v1.ComplianceParameters")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ComplianceParameters, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut anchor_validation_window_blocks__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::AnchorValidationWindowBlocks => {
+                            if anchor_validation_window_blocks__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("anchorValidationWindowBlocks"));
+                            }
+                            anchor_validation_window_blocks__ = Some(
+                                map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0,
+                            );
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(ComplianceParameters {
+                    anchor_validation_window_blocks: anchor_validation_window_blocks__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.component.compliance.v1.ComplianceParameters", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ComplianceUserLeafRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -3001,12 +3101,18 @@ impl serde::Serialize for GenesisContent {
         if !self.compliance_registrar_vk.is_empty() {
             len += 1;
         }
+        if self.compliance_params.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.component.compliance.v1.GenesisContent", len)?;
         if !self.native_assets.is_empty() {
             struct_ser.serialize_field("nativeAssets", &self.native_assets)?;
         }
         if !self.compliance_registrar_vk.is_empty() {
             struct_ser.serialize_field("complianceRegistrarVk", &self.compliance_registrar_vk)?;
+        }
+        if let Some(v) = self.compliance_params.as_ref() {
+            struct_ser.serialize_field("complianceParams", v)?;
         }
         struct_ser.end()
     }
@@ -3022,12 +3128,15 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
             "nativeAssets",
             "compliance_registrar_vk",
             "complianceRegistrarVk",
+            "compliance_params",
+            "complianceParams",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             NativeAssets,
             ComplianceRegistrarVk,
+            ComplianceParams,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -3052,6 +3161,7 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
                         match value {
                             "nativeAssets" | "native_assets" => Ok(GeneratedField::NativeAssets),
                             "complianceRegistrarVk" | "compliance_registrar_vk" => Ok(GeneratedField::ComplianceRegistrarVk),
+                            "complianceParams" | "compliance_params" => Ok(GeneratedField::ComplianceParams),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -3073,6 +3183,7 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
             {
                 let mut native_assets__ = None;
                 let mut compliance_registrar_vk__ = None;
+                let mut compliance_params__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::NativeAssets => {
@@ -3087,6 +3198,12 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
                             }
                             compliance_registrar_vk__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::ComplianceParams => {
+                            if compliance_params__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("complianceParams"));
+                            }
+                            compliance_params__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -3095,6 +3212,7 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
                 Ok(GenesisContent {
                     native_assets: native_assets__.unwrap_or_default(),
                     compliance_registrar_vk: compliance_registrar_vk__.unwrap_or_default(),
+                    compliance_params: compliance_params__,
                 })
             }
         }

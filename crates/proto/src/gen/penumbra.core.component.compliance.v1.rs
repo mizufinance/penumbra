@@ -15,6 +15,23 @@ impl ::prost::Name for ComplianceViewingKey {
         "/penumbra.core.component.compliance.v1.ComplianceViewingKey".into()
     }
 }
+/// Compliance component chain parameters.
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct ComplianceParameters {
+    /// Number of recent compliance anchors accepted for proof validation.
+    #[prost(uint64, tag = "1")]
+    pub anchor_validation_window_blocks: u64,
+}
+impl ::prost::Name for ComplianceParameters {
+    const NAME: &'static str = "ComplianceParameters";
+    const PACKAGE: &'static str = "penumbra.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "penumbra.core.component.compliance.v1.ComplianceParameters".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/penumbra.core.component.compliance.v1.ComplianceParameters".into()
+    }
+}
 /// A compliance leaf in the public on-chain registry for regulated assets.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ComplianceLeaf {
@@ -689,6 +706,8 @@ pub struct GenesisContent {
     pub compliance_registrar_vk: ::prost::alloc::vec::Vec<
         super::super::super::super::crypto::decaf377_rdsa::v1::SpendVerificationKey,
     >,
+    #[prost(message, optional, tag = "3")]
+    pub compliance_params: ::core::option::Option<ComplianceParameters>,
 }
 impl ::prost::Name for GenesisContent {
     const NAME: &'static str = "GenesisContent";
