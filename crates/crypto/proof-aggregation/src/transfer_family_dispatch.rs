@@ -4,17 +4,17 @@ use decaf377::{Bls12_377, Fq};
 use penumbra_sdk_proof_params::batch::BatchItem;
 
 use crate::{
-    backend::{AggregateBuildBackendProfile, AggregateVerificationProfile},
+    backend::{AggregateBuildBackendProfile, AggregateVerificationProfile, AggregateVerifyError},
     srs::DevSrs,
     transcript::TransferTranscriptDigest,
 };
 
-pub(crate) fn verify_transfer_aggregate_profiled_unchecked(
+pub(crate) fn verify_transfer_aggregate_profiled_status(
     pvk: &PreparedVerifyingKey<Bls12_377>,
     aggregate_proof_bytes: &[u8],
     padded_public_inputs: &[Vec<Fq>],
     srs: &DevSrs,
-) -> Result<AggregateVerificationProfile> {
+) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
     crate::backend::verify_with_digest_profiled::<TransferTranscriptDigest>(
         pvk,
         aggregate_proof_bytes,
@@ -32,7 +32,7 @@ pub(crate) fn verify_transfer_aggregate(
     aggregate_proof_bytes: &[u8],
     padded_public_inputs: &[Vec<Fq>],
     srs: &DevSrs,
-) -> Result<bool> {
+) -> Result<bool, AggregateVerifyError> {
     crate::backend::verify_with_digest::<TransferTranscriptDigest>(
         pvk,
         aggregate_proof_bytes,
@@ -44,6 +44,11 @@ pub(crate) fn verify_transfer_aggregate(
 pub(crate) fn aggregate_transfer_profiled(
     items: &[BatchItem],
     srs: &DevSrs,
+    challenge_context: [u8; 32],
 ) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
-    crate::backend::aggregate_with_digest_profiled::<TransferTranscriptDigest>(items, srs)
+    crate::backend::aggregate_with_digest_profiled::<TransferTranscriptDigest>(
+        items,
+        srs,
+        challenge_context,
+    )
 }

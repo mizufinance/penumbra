@@ -12,8 +12,7 @@ change.
 
 ## Scope
 
-Status: mixed. The aggregate-bundle pipeline isolation is implemented; the full
-transcript binding target is not.
+Status: implemented for the current prototype hardening pass.
 
 Penumbra aggregates already-valid Groth16 proofs into internal
 `AggregateBundle` transactions. The aggregate bundle is accepted only through
@@ -39,7 +38,8 @@ an accepted aggregate.
 
 ## Threat Model
 
-Status: target, with the implemented app-level invariants cited in `Scope`.
+Status: implemented for the listed cheap-shape and statement-binding checks;
+long-running fuzzing remains open.
 
 Assume a malicious proposer or aggregator can submit arbitrary aggregate bundle
 bytes and arbitrary ordinary transactions. The verifier must reject:
@@ -63,15 +63,14 @@ bound, or perform avoidable expensive work before cheap shape checks.
 
 ## Statement Binding
 
-Status: target. The current backend digest is family-domain-separated only. It
-does not yet bind the complete aggregate statement listed below.
+Status: implemented for version, family, SRS id, verifying-key digest, counts,
+padding rule, and ordered padded public inputs. The aggregate proof wrapper
+stores only a recomputed statement digest; protobuf has no second digest field.
 
-Every aggregate statement has one canonical encoding. The transcript preimage
-for Fiat-Shamir challenges must bind at least:
+Every aggregate statement has one canonical encoding. The Fiat-Shamir
+challenge context binds:
 
 - aggregate protocol version
-- curve identifier
-- backend identifier
 - SRS identifier
 - proof family and family variant
 - verifying key digest
@@ -79,10 +78,22 @@ for Fiat-Shamir challenges must bind at least:
 - padded proof count
 - canonical padding rule
 - ordered padded public inputs
-- all aggregate proof public messages in verifier order
+- all aggregate proof public messages in verifier order, through the vendored
+  challenge helper
 
 Every field is length-prefixed or fixed-width encoded. Distinct aggregate
 statements must not have the same transcript preimage.
+
+Implemented enforcement:
+
+- statement constructor and encoder:
+  `crates/crypto/proof-aggregation/src/statement.rs`
+- aggregate proof wrapper digest check:
+  `crates/crypto/proof-aggregation/src/aggregate_proof_wrapper.rs`
+- backend wrapper decode before SnarkPack verification:
+  `crates/crypto/proof-aggregation/src/backend.rs`
+- vendored Fiat-Shamir helper:
+  `crates/crypto/proof-aggregation/vendor/ripp/ip_proofs/src/challenge.rs`
 
 The legacy prover/verifier phase domain API was deleted as a bug-class
 reduction. It looked like phase domain separation, but the backend digest path
@@ -92,8 +103,8 @@ unused phase labels.
 
 ## Padding
 
-Status: implemented for current padding behavior; transcript binding of the
-padding rule is target work.
+Status: implemented for current padding behavior and statement binding of the
+padding rule.
 
 Aggregation inputs are padded to the next power of two by repeating the final
 real proof and its public inputs. Verification recomputes the padded public
@@ -115,8 +126,7 @@ a new aggregate version.
 
 ## Verification Matrix
 
-Status: target. Some shape tests exist today; the full mutation/property matrix
-is not implemented.
+Status: implemented as focused unit/property coverage for the current pass.
 
 For each generated valid aggregate fixture, tests should mutate one field at a
 time and assert rejection:
@@ -146,7 +156,7 @@ Differential property tests use legacy batch verification as the oracle:
 
 ## Fuzzing Targets
 
-Status: target.
+Status: smoke coverage implemented; long-running fuzz harnesses remain open.
 
 Fuzz these surfaces with panic detection and resource limits:
 
@@ -159,10 +169,17 @@ Fuzz these surfaces with panic detection and resource limits:
 The expected fuzz result is either a valid accepted aggregate built from valid
 artifacts or a bounded error.
 
+Open items:
+
+- add long-running `cargo-fuzz` harnesses for aggregate bundle decoding,
+  wrapped proof decoding, malformed aggregate verification, and statement
+  construction
+- wire those harnesses into nightly CI with corpus retention
+
 ## Benchmarking
 
-Status: target measurement plan. CI failure thresholds should live in
-`docs/snarkpack/bench-thresholds.md` once release-mode baselines are collected.
+Status: provisional local size threshold is recorded in
+`docs/snarkpack/bench-thresholds.md`; release latency gates are still open.
 
 Benchmark both valid and invalid paths in release mode:
 
@@ -178,7 +195,8 @@ asymmetric denial-of-service path.
 
 ## Formal Verification
 
-Status: target. No hax extraction is implemented yet.
+Status: formal handoff artifacts exist in `docs/snarkpack/formal-handoff.md`.
+No hax extraction is implemented yet.
 
 The first formal target is the transcript and statement encoder, not full
 SnarkPack algebraic soundness.
@@ -200,7 +218,8 @@ a cryptographic proof model beyond implementation structure.
 
 ## Completion Criteria
 
-Status: target.
+Status: partially complete. Formal extraction and fixed CI benchmark gates are
+next-phase work.
 
 This phase is complete when:
 

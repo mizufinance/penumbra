@@ -41,6 +41,31 @@ Entries added after this file must follow `Required Divergence Entries`.
   loop, and final exponentiation stages.
 - GIPA rescale thresholds and Rayon use are tuned for local builder benchmarks.
 
+## Post-Policy Divergence Entries
+
+### 2026-05-26: Statement-bound Fiat-Shamir challenge helper
+
+- base: pre-existing vendored `ripp` snapshot in this repository; exact
+  upstream commit unknown
+- changed files:
+  - `ip_proofs/src/challenge.rs`
+  - `ip_proofs/src/lib.rs`
+  - `ip_proofs/src/applications/groth16_aggregation.rs`
+  - `ip_proofs/src/gipa.rs`
+  - `ip_proofs/src/tipa/mod.rs`
+  - `ip_proofs/src/tipa/structured_scalar_message.rs`
+- reason: bind SnarkPack Fiat-Shamir challenges to the recomputed aggregate
+  statement context and centralize all challenge preimage formatting
+- security impact: removes direct ad hoc `D::digest` challenge sites, adds
+  stage labels and statement context to the challenge preimage, and adds
+  challenge-trace parity coverage between prover and verifier
+- benchmark impact: expected to be negligible relative to GIPA/pairing work;
+  release thresholds are tracked in `docs/snarkpack/bench-thresholds.md`
+- tests:
+  - `cargo test -p penumbra-sdk-proof-aggregation challenge_trace --lib`
+  - `cargo test -p penumbra-sdk-proof-aggregation --lib`
+  - `just snarkpack-invariants`
+
 ## Verification Obligations
 
 Changes under this directory require at least:

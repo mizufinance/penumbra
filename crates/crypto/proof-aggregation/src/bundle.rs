@@ -40,7 +40,7 @@ impl From<ProofFamilyId> for pb::ProofFamilyId {
 }
 
 impl ProofFamilyId {
-    fn try_from_proto_fields(
+    pub(crate) fn try_from_proto_fields(
         family_id: i32,
         consolidate_family_id: u32,
         split_family_id: u32,
@@ -86,21 +86,21 @@ impl ProofFamilyId {
         }
     }
 
-    fn consolidate_family_id(self) -> u32 {
+    pub(crate) fn consolidate_family_id(self) -> u32 {
         match self {
             ProofFamilyId::Consolidate(family_id) => family_id.get(),
             _ => 0,
         }
     }
 
-    fn split_family_id(self) -> u32 {
+    pub(crate) fn split_family_id(self) -> u32 {
         match self {
             ProofFamilyId::Split(family_id) => family_id.get(),
             _ => 0,
         }
     }
 
-    fn shielded_ics20_withdrawal_family_id(self) -> u32 {
+    pub(crate) fn shielded_ics20_withdrawal_family_id(self) -> u32 {
         match self {
             ProofFamilyId::ShieldedIcs20Withdrawal(family_id) => family_id.get(),
             _ => 0,
@@ -283,5 +283,28 @@ mod tests {
         let proto = bundle.to_proto();
         let decoded = AggregateBundle::try_from(proto).expect("bundle round-trip");
         assert_eq!(decoded, bundle);
+    }
+
+    #[test]
+    fn aggregate_bundle_decode_rejects_unspecified_family() {
+        let proto = penumbra_sdk_proto::core::transaction::v1::AggregateBundle {
+            version: 1,
+            srs_id: vec![0; 32],
+            families: vec![penumbra_sdk_proto::core::transaction::v1::FamilyAggregate {
+                family_id: penumbra_sdk_proto::core::transaction::v1::ProofFamilyId::Unspecified
+                    as i32,
+                consolidate_family_id: 0,
+                split_family_id: 0,
+                shielded_ics20_withdrawal_family_id: 0,
+                real_count: 1,
+                padded_count: 1,
+                aggregate_proof: vec![1, 2, 3],
+            }],
+        };
+
+        let err = AggregateBundle::try_from(proto)
+            .expect_err("unspecified aggregate family should reject");
+
+        assert!(err.to_string().contains("unspecified proof family id"));
     }
 }

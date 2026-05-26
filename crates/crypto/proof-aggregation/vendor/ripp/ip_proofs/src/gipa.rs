@@ -9,7 +9,7 @@ use std::{
     ops::{Add, MulAssign},
 };
 
-use crate::{mul_helper, Error, InnerProductArgumentError};
+use crate::{challenge::challenge_digest, mul_helper, Error, InnerProductArgumentError};
 use ark_dh_commitments::DoublyHomomorphicCommitment;
 use ark_inner_products::InnerProduct;
 use ark_std::cfg_iter;
@@ -202,6 +202,7 @@ where
         }
         // Calculate base commitment and transcript
         let (base_com, transcript) = Self::_compute_recursive_challenges(
+            b"tipa.generic.gipa.round",
             (com.0.clone(), com.1.clone(), com.2.clone()),
             proof,
         )?;
@@ -228,6 +229,7 @@ where
         let (m_a, m_b) = values;
         let (ck_a, ck_b, ck_t) = ck;
         let (proof, aux, _) = Self::_prove_profiled(
+            b"tipa.generic.gipa.round",
             (m_a.to_vec(), m_b.to_vec()),
             (ck_a.to_vec(), ck_b.to_vec(), ck_t.to_vec()),
         )?;
@@ -245,9 +247,25 @@ where
         ),
         Error,
     > {
+        Self::prove_with_aux_profiled_with_stage(b"tipa.generic.gipa.round", values, ck)
+    }
+
+    pub fn prove_with_aux_profiled_with_stage(
+        stage_label: &'static [u8],
+        values: (&[IP::LeftMessage], &[IP::RightMessage]),
+        ck: (&[LMC::Key], &[RMC::Key], &[IPC::Key]),
+    ) -> Result<
+        (
+            GIPAProof<IP, LMC, RMC, IPC, D>,
+            GIPAAux<IP, LMC, RMC, IPC, D>,
+            GipaBuildProfile,
+        ),
+        Error,
+    > {
         let (m_a, m_b) = values;
         let (ck_a, ck_b, ck_t) = ck;
         Self::_prove_profiled(
+            stage_label,
             (m_a.to_vec(), m_b.to_vec()),
             (ck_a.to_vec(), ck_b.to_vec(), ck_t.to_vec()),
         )
@@ -255,6 +273,7 @@ where
 
     // Returns vector of recursive commitments and transcripts in reverse order
     fn _prove_profiled(
+        stage_label: &'static [u8],
         values: (Vec<IP::LeftMessage>, Vec<IP::RightMessage>),
         ck: (Vec<LMC::Key>, Vec<RMC::Key>, Vec<IPC::Key>),
     ) -> Result<
@@ -321,7 +340,6 @@ where
                 let transcript = r_transcript.last().unwrap_or(&default_transcript);
                 let (c, c_inv) = 'challenge: loop {
                     let mut hash_input = Vec::new();
-                    hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
                     transcript.serialize_uncompressed(&mut hash_input)?;
                     com_1.0.serialize_uncompressed(&mut hash_input)?;
                     com_1.1.serialize_uncompressed(&mut hash_input)?;
@@ -330,7 +348,10 @@ where
                     com_2.1.serialize_uncompressed(&mut hash_input)?;
                     com_2.2.serialize_uncompressed(&mut hash_input)?;
                     let c: LMC::Scalar = u128::from_be_bytes(
-                        D::digest(&hash_input).as_slice()[0..16].try_into().unwrap(),
+                        challenge_digest::<D>(stage_label, counter_nonce, &hash_input).as_slice()
+                            [0..16]
+                            .try_into()
+                            .unwrap(),
                     )
                     .into();
                     if let Some(c_inv) = c.inverse() {
@@ -395,10 +416,27 @@ where
         com: (&LMC::Output, &RMC::Output, &IPC::Output),
         proof: &GIPAProof<IP, LMC, RMC, IPC, D>,
     ) -> Result<((LMC::Output, RMC::Output, IPC::Output), Vec<LMC::Scalar>), Error> {
-        Self::_compute_recursive_challenges((com.0.clone(), com.1.clone(), com.2.clone()), proof)
+        Self::verify_recursive_challenge_transcript_with_stage(
+            b"tipa.generic.gipa.round",
+            com,
+            proof,
+        )
+    }
+
+    pub fn verify_recursive_challenge_transcript_with_stage(
+        stage_label: &'static [u8],
+        com: (&LMC::Output, &RMC::Output, &IPC::Output),
+        proof: &GIPAProof<IP, LMC, RMC, IPC, D>,
+    ) -> Result<((LMC::Output, RMC::Output, IPC::Output), Vec<LMC::Scalar>), Error> {
+        Self::_compute_recursive_challenges(
+            stage_label,
+            (com.0.clone(), com.1.clone(), com.2.clone()),
+            proof,
+        )
     }
 
     fn _compute_recursive_challenges(
+        stage_label: &'static [u8],
         com: (LMC::Output, RMC::Output, IPC::Output),
         proof: &GIPAProof<IP, LMC, RMC, IPC, D>,
     ) -> Result<((LMC::Output, RMC::Output, IPC::Output), Vec<LMC::Scalar>), Error> {
@@ -411,7 +449,6 @@ where
             let transcript = r_transcript.last().unwrap_or(&default_transcript);
             let (c, c_inv) = 'challenge: loop {
                 let mut hash_input = Vec::new();
-                hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
                 transcript.serialize_uncompressed(&mut hash_input)?;
                 com_1.0.serialize_uncompressed(&mut hash_input)?;
                 com_1.1.serialize_uncompressed(&mut hash_input)?;
@@ -420,7 +457,10 @@ where
                 com_2.1.serialize_uncompressed(&mut hash_input)?;
                 com_2.2.serialize_uncompressed(&mut hash_input)?;
                 let c: LMC::Scalar = u128::from_be_bytes(
-                    D::digest(&hash_input).as_slice()[0..16].try_into().unwrap(),
+                    challenge_digest::<D>(stage_label, counter_nonce, &hash_input).as_slice()
+                        [0..16]
+                        .try_into()
+                        .unwrap(),
                 )
                 .into();
                 if let Some(c_inv) = c.inverse() {

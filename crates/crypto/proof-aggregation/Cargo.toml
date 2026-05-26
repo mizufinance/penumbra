@@ -32,3 +32,4 @@ ark-ff = { workspace = true }
 ark-r1cs-std = { workspace = true }
 ark-relations = { workspace = true }
 ark-snark = { workspace = true }
+proptest = { workspace = true }

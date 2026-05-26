@@ -11,6 +11,7 @@ use std::time::Instant;
 use rayon::prelude::*;
 
 use crate::{
+    challenge::challenge_digest,
     tipa::{
         prove_pairing_inner_product_with_prepared_srs_shift,
         prove_pairing_inner_product_with_prepared_srs_shift_profiled,
@@ -181,11 +182,14 @@ where
     let mut counter_nonce: usize = 0;
     let r = loop {
         let mut hash_input = Vec::new();
-        hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
         com_a.serialize_uncompressed(&mut hash_input)?;
         com_b.serialize_uncompressed(&mut hash_input)?;
         com_c.serialize_uncompressed(&mut hash_input)?;
-        if let Some(r) = <P::ScalarField>::from_random_bytes(&D::digest(&hash_input)) {
+        if let Some(r) = <P::ScalarField>::from_random_bytes(&challenge_digest::<D>(
+            b"aggregate.randomizer",
+            counter_nonce,
+            &hash_input,
+        )) {
             break r;
         };
         counter_nonce += 1;
@@ -285,11 +289,14 @@ where
     let mut counter_nonce: usize = 0;
     let r = loop {
         let mut hash_input = Vec::new();
-        hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
         com_a.serialize_uncompressed(&mut hash_input)?;
         com_b.serialize_uncompressed(&mut hash_input)?;
         com_c.serialize_uncompressed(&mut hash_input)?;
-        if let Some(r) = <P::ScalarField>::from_random_bytes(&D::digest(&hash_input)) {
+        if let Some(r) = <P::ScalarField>::from_random_bytes(&challenge_digest::<D>(
+            b"aggregate.randomizer",
+            counter_nonce,
+            &hash_input,
+        )) {
             break r;
         };
         counter_nonce += 1;
@@ -519,11 +526,14 @@ where
     let mut counter_nonce: usize = 0;
     loop {
         let mut hash_input = Vec::new();
-        hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
         proof.com_a.serialize_uncompressed(&mut hash_input)?;
         proof.com_b.serialize_uncompressed(&mut hash_input)?;
         proof.com_c.serialize_uncompressed(&mut hash_input)?;
-        if let Some(r) = <P::ScalarField>::from_random_bytes(&D::digest(&hash_input)) {
+        if let Some(r) = <P::ScalarField>::from_random_bytes(&challenge_digest::<D>(
+            b"aggregate.randomizer",
+            counter_nonce,
+            &hash_input,
+        )) {
             break Ok(r);
         };
         counter_nonce += 1;
@@ -539,7 +549,9 @@ where
     P: Pairing,
     D: Digest,
 {
-    PairingInnerProductAB::<P, D>::verify_with_srs_shift(
+    PairingInnerProductAB::<P, D>::verify_with_srs_shift_and_labels(
+        b"tipa.ab.gipa.round",
+        b"tipa.ab.kzg",
         ip_verifier_srs,
         &HomomorphicPlaceholderValue,
         (

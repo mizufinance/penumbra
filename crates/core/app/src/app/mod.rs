@@ -44,8 +44,9 @@ use penumbra_sdk_ibc::component::{Ibc, StateWriteExt as _};
 use penumbra_sdk_ibc::StateReadExt as _;
 use penumbra_sdk_proof_aggregation::{
     aggregate_family_profiled, pad_items_to_power_of_two, prepare_verify_inputs, srs_id,
-    verify_family_aggregate_profiled_unchecked, AggregateBuildBackendProfile, AggregateBundle,
-    AggregateVerificationProfile, DevSrs, FamilyAggregate, ProofFamilyId,
+    verify_family_aggregate_profiled_status, AggregateBuildBackendProfile, AggregateBundle,
+    AggregateStatement, AggregateVerificationProfile, DevSrs, FamilyAggregate, ProofFamilyId,
+    AGGREGATE_STATEMENT_VERSION,
 };
 use penumbra_sdk_proof_params::batch::{self, BatchItem};
 use penumbra_sdk_proto::core::app::v1::TransactionsByHeightResponse;
@@ -2020,6 +2021,14 @@ impl App {
                 .iter()
                 .map(|item| item.public_inputs.clone())
                 .collect::<Vec<_>>();
+            let statement = AggregateStatement::new(
+                AGGREGATE_STATEMENT_VERSION,
+                family_id,
+                srs_id(&srs),
+                proof_verification_key_for_family(family_id),
+                real_count,
+                &padded_public_inputs,
+            )?;
             let debug_entry = debug_entries
                 .iter()
                 .find(|entry| entry.family_id == family_id)
@@ -2044,7 +2053,7 @@ impl App {
                 move || -> Result<(FamilyAggregate, AggregateBuildProfile, f64)> {
                     let family_start = Instant::now();
                     let (aggregate_proof, backend_profile) = aggregate_family_profiled(
-                        family_id,
+                        &statement,
                         proof_verification_key_for_family(family_id),
                         &padded_items,
                         &srs_for_task,
@@ -2385,14 +2394,21 @@ impl App {
                 let srs_for_task = srs;
                 let debug_segment_index = debug_entry.segment_index;
                 let debug_family_index = debug_entry.family_index;
+                let statement = AggregateStatement::new(
+                    AGGREGATE_STATEMENT_VERSION,
+                    family,
+                    srs_id(&srs_for_task),
+                    proof_verification_key_for_family(family),
+                    aggregate.real_count,
+                    &padded_public_inputs,
+                )?;
 
                 verify_tasks.push(tokio::task::spawn_blocking(
                     move || -> Result<(usize, usize, ProofFamilyId, AggregateVerificationProfile)> {
-                        let backend_profile = verify_family_aggregate_profiled_unchecked(
-                            family,
+                        let backend_profile = verify_family_aggregate_profiled_status(
+                            &statement,
                             proof_verification_key_for_family(family),
                             &aggregate_proof,
-                            &padded_public_inputs,
                             &srs_for_task,
                         )?;
 

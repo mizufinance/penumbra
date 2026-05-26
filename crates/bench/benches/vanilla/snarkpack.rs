@@ -5,7 +5,8 @@ use ark_snark::SNARK;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use decaf377::{Bls12_377, Fq};
 use penumbra_sdk_proof_aggregation::{
-    aggregate_family, pad_items_to_power_of_two, verify_family_aggregate, DevSrs, ProofFamilyId,
+    aggregate_family, pad_items_to_power_of_two, srs_id, verify_family_aggregate,
+    AggregateStatement, DevSrs, ProofFamilyId, AGGREGATE_STATEMENT_VERSION,
 };
 use penumbra_sdk_proof_params::batch::BatchItem;
 use penumbra_sdk_shielded_pool::ShieldedIcs20WithdrawalFamilyId;
@@ -38,7 +39,7 @@ struct Fixture {
     count: usize,
     pvk: PreparedVerifyingKey<Bls12_377>,
     padded_items: Vec<BatchItem>,
-    padded_public_inputs: Vec<Vec<Fq>>,
+    statement: AggregateStatement,
     aggregate_proof: Vec<u8>,
 }
 
@@ -75,19 +76,28 @@ fn build_fixture(family_id: ProofFamilyId, count: usize, srs: &DevSrs) -> Fixtur
     let (pvk, items) = generate_items(count);
     let padded_items =
         pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
-    let aggregate_proof =
-        aggregate_family(family_id, &pvk, &padded_items, srs).expect("aggregation succeeds");
     let padded_public_inputs = padded_items
         .iter()
         .map(|item| item.public_inputs.clone())
-        .collect();
+        .collect::<Vec<_>>();
+    let statement = AggregateStatement::new(
+        AGGREGATE_STATEMENT_VERSION,
+        family_id,
+        srs_id(srs),
+        &pvk,
+        count as u32,
+        &padded_public_inputs,
+    )
+    .expect("statement builds");
+    let aggregate_proof =
+        aggregate_family(&statement, &pvk, &padded_items, srs).expect("aggregation succeeds");
 
     Fixture {
         family_id,
         count,
         pvk,
         padded_items,
-        padded_public_inputs,
+        statement,
         aggregate_proof,
     }
 }
@@ -116,7 +126,7 @@ fn snarkpack_bench(c: &mut Criterion) {
             |b, fixture| {
                 b.iter(|| {
                     let _ = aggregate_family(
-                        fixture.family_id,
+                        &fixture.statement,
                         &fixture.pvk,
                         &fixture.padded_items,
                         &srs,
@@ -136,10 +146,9 @@ fn snarkpack_bench(c: &mut Criterion) {
             |b, fixture| {
                 b.iter(|| {
                     verify_family_aggregate(
-                        fixture.family_id,
+                        &fixture.statement,
                         &fixture.pvk,
                         &fixture.aggregate_proof,
-                        &fixture.padded_public_inputs,
                         &srs,
                     )
                     .expect("verification succeeds");

@@ -5,6 +5,7 @@ use std::{
 };
 
 pub mod applications;
+pub mod challenge;
 pub mod gipa;
 pub mod tipa;
 

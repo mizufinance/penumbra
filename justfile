@@ -80,6 +80,14 @@ gnark-proof-tests-slow:
     cargo test --release -p penumbra-sdk-shielded-pool --features bundled-proving-keys transfer_proof_roundtrip --lib
     cargo test --release -p penumbra-sdk-shielded-pool --lib
 
+# Run ignored slow SnarkPack parity tests.
+snarkpack-slow:
+    cargo test -p penumbra-sdk-proof-aggregation snarkpack_matches_legacy_batch_across_families_and_counts_slow --lib -- --ignored
+
+# Check durable SnarkPack hardening invariants.
+snarkpack-invariants:
+    ./scripts/check-snarkpack-invariants.sh
+
 # Run the default gnark validation suite.
 gnark-proof-tests: gnark-proof-tests-fast
 

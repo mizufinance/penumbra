@@ -13,6 +13,7 @@ use std::{convert::TryInto, marker::PhantomData, ops::MulAssign};
 use rayon::prelude::*;
 
 use crate::{
+    challenge::challenge_digest,
     gipa::{GIPAAux, GIPAProof, GipaBuildProfile, GIPA},
     mul_helper, Error,
 };
@@ -325,13 +326,16 @@ where
     let mut counter_nonce: usize = 0;
     let c = loop {
         let mut hash_input = Vec::new();
-        hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
         if let Some(first) = transcript.first() {
             first.serialize_uncompressed(&mut hash_input)?;
         }
         ck_a_final.serialize_uncompressed(&mut hash_input)?;
         ck_b_final.serialize_uncompressed(&mut hash_input)?;
-        if let Some(c) = P::ScalarField::from_random_bytes(&D::digest(&hash_input)) {
+        if let Some(c) = P::ScalarField::from_random_bytes(&challenge_digest::<D>(
+            b"tipa.ab.kzg",
+            counter_nonce,
+            &hash_input,
+        )) {
             break c;
         };
         counter_nonce += 1;
@@ -485,7 +489,6 @@ where
         let transcript = r_transcript.last().unwrap_or(&default_transcript);
         let (c, c_inv) = loop {
             let mut hash_input = Vec::new();
-            hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
             transcript.serialize_uncompressed(&mut hash_input)?;
             com_1.0.serialize_uncompressed(&mut hash_input)?;
             com_1.1.serialize_uncompressed(&mut hash_input)?;
@@ -493,9 +496,13 @@ where
             com_2.0.serialize_uncompressed(&mut hash_input)?;
             com_2.1.serialize_uncompressed(&mut hash_input)?;
             com_2.2.serialize_uncompressed(&mut hash_input)?;
-            let c: P::ScalarField =
-                u128::from_be_bytes(D::digest(&hash_input).as_slice()[0..16].try_into().unwrap())
-                    .into();
+            let c: P::ScalarField = u128::from_be_bytes(
+                challenge_digest::<D>(b"tipa.ab.gipa.round", counter_nonce, &hash_input).as_slice()
+                    [0..16]
+                    .try_into()
+                    .unwrap(),
+            )
+            .into();
             if let Some(c_inv) = c.inverse() {
                 break (c_inv, c);
             }
@@ -652,13 +659,16 @@ where
         let mut counter_nonce: usize = 0;
         let c = loop {
             let mut hash_input = Vec::new();
-            hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
             if let Some(first) = transcript.first() {
                 first.serialize_uncompressed(&mut hash_input)?;
             }
             ck_a_final.serialize_uncompressed(&mut hash_input)?;
             ck_b_final.serialize_uncompressed(&mut hash_input)?;
-            if let Some(c) = LMC::Scalar::from_random_bytes(&D::digest(&hash_input)) {
+            if let Some(c) = LMC::Scalar::from_random_bytes(&challenge_digest::<D>(
+                b"tipa.generic.kzg",
+                counter_nonce,
+                &hash_input,
+            )) {
                 break c;
             };
             counter_nonce += 1;
@@ -719,8 +729,31 @@ where
         proof: &TIPAProof<IP, LMC, RMC, IPC, P, D>,
         r_shift: &P::ScalarField,
     ) -> Result<bool, Error> {
-        let (base_com, transcript) =
-            GIPA::verify_recursive_challenge_transcript(com, &proof.gipa_proof)?;
+        Self::verify_with_srs_shift_and_labels(
+            b"tipa.generic.gipa.round",
+            b"tipa.generic.kzg",
+            v_srs,
+            ck_t,
+            com,
+            proof,
+            r_shift,
+        )
+    }
+
+    pub fn verify_with_srs_shift_and_labels(
+        gipa_stage_label: &'static [u8],
+        kzg_stage_label: &'static [u8],
+        v_srs: &VerifierSRS<P>,
+        ck_t: &IPC::Key,
+        com: (&LMC::Output, &RMC::Output, &IPC::Output),
+        proof: &TIPAProof<IP, LMC, RMC, IPC, P, D>,
+        r_shift: &P::ScalarField,
+    ) -> Result<bool, Error> {
+        let (base_com, transcript) = GIPA::verify_recursive_challenge_transcript_with_stage(
+            gipa_stage_label,
+            com,
+            &proof.gipa_proof,
+        )?;
         let transcript_inverse = transcript.iter().map(|x| x.inverse().unwrap()).collect();
 
         // Verify commitment keys wellformed
@@ -731,13 +764,16 @@ where
         let mut counter_nonce: usize = 0;
         let c = loop {
             let mut hash_input = Vec::new();
-            hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
             if let Some(first) = transcript.first() {
                 first.serialize_uncompressed(&mut hash_input)?;
             }
             ck_a_final.serialize_uncompressed(&mut hash_input)?;
             ck_b_final.serialize_uncompressed(&mut hash_input)?;
-            if let Some(c) = LMC::Scalar::from_random_bytes(&D::digest(&hash_input)) {
+            if let Some(c) = LMC::Scalar::from_random_bytes(&challenge_digest::<D>(
+                kzg_stage_label,
+                counter_nonce,
+                &hash_input,
+            )) {
                 break c;
             };
             counter_nonce += 1;

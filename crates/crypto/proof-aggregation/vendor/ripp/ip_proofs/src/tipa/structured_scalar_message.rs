@@ -10,6 +10,7 @@ use std::{marker::PhantomData, ops::MulAssign};
 use rayon::prelude::*;
 
 use crate::{
+    challenge::challenge_digest,
     gipa::{GIPAProof, GipaBuildProfile, GIPA},
     tipa::{
         prove_commitment_key_kzg_opening_with_affine_profiled, structured_generators_scalar_power,
@@ -92,7 +93,8 @@ where
     ) -> Result<bool, Error> {
         // Calculate base commitments and recursive transcript
         //TODO: Scalar b not included in generating challenges
-        let (base_com, transcript) = GIPA::verify_recursive_challenge_transcript(
+        let (base_com, transcript) = GIPA::verify_recursive_challenge_transcript_with_stage(
+            b"tipa.generic.ssm.gipa.round",
             (com.0, &LMC::Scalar::zero(), com.1),
             proof,
         )?;
@@ -281,7 +283,8 @@ where
             SSMPlaceholderCommitment<P::ScalarField>,
             IPC,
             D,
-        >>::prove_with_aux_profiled(
+        >>::prove_with_aux_profiled_with_stage(
+            b"tipa.c.gipa.round",
             values,
             (
                 ck.0,
@@ -308,12 +311,15 @@ where
         let mut counter_nonce: usize = 0;
         let c = loop {
             let mut hash_input = Vec::new();
-            hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
             if let Some(first) = transcript.first() {
                 first.serialize_uncompressed(&mut hash_input)?;
             }
             ck_a_final.serialize_uncompressed(&mut hash_input)?;
-            if let Some(c) = LMC::Scalar::from_random_bytes(&D::digest(&hash_input)) {
+            if let Some(c) = LMC::Scalar::from_random_bytes(&challenge_digest::<D>(
+                b"tipa.c.kzg",
+                counter_nonce,
+                &hash_input,
+            )) {
                 break c;
             };
             counter_nonce += 1;
@@ -354,7 +360,8 @@ where
         scalar_b: &P::ScalarField,
         proof: &TIPAWithSSMProof<IP, LMC, IPC, P, D>,
     ) -> Result<bool, Error> {
-        let (base_com, transcript) = GIPA::verify_recursive_challenge_transcript(
+        let (base_com, transcript) = GIPA::verify_recursive_challenge_transcript_with_stage(
+            b"tipa.c.gipa.round",
             (com.0, scalar_b, com.1),
             &proof.gipa_proof,
         )?;
@@ -369,12 +376,15 @@ where
         let mut counter_nonce: usize = 0;
         let c = loop {
             let mut hash_input = Vec::new();
-            hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
             if let Some(first) = transcript.first() {
                 first.serialize_uncompressed(&mut hash_input)?;
             }
             ck_a_final.serialize_uncompressed(&mut hash_input)?;
-            if let Some(c) = LMC::Scalar::from_random_bytes(&D::digest(&hash_input)) {
+            if let Some(c) = LMC::Scalar::from_random_bytes(&challenge_digest::<D>(
+                b"tipa.c.kzg",
+                counter_nonce,
+                &hash_input,
+            )) {
                 break c;
             };
             counter_nonce += 1;
