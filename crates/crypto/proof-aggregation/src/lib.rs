@@ -27,7 +27,6 @@ pub use srs::{
     srs_id, srs_report, DevSrs, DevSrsReport, DEFAULT_MAX_PADDED_PROOF_COUNT, DEV_SRS_BACKEND_ID,
     DEV_SRS_CURVE_ID, DEV_SRS_VERSION,
 };
-pub use transcript::{transcript_domain, TranscriptPhase};
 
 pub fn aggregate_family(
     family_id: ProofFamilyId,
