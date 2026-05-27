@@ -6,7 +6,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use decaf377::{Bls12_377, Fq};
 use penumbra_sdk_proof_aggregation::{
     aggregate_family, pad_items_to_power_of_two, srs_id, verify_family_aggregate,
-    AggregateStatement, DevSrs, ProofFamilyId, AGGREGATE_STATEMENT_VERSION,
+    AggregateStatement, DevSrs, ProofFamilyId, AGGREGATE_PROTOCOL_VERSION,
 };
 use penumbra_sdk_proof_params::batch::BatchItem;
 use penumbra_sdk_shielded_pool::ShieldedIcs20WithdrawalFamilyId;
@@ -81,7 +81,7 @@ fn build_fixture(family_id: ProofFamilyId, count: usize, srs: &DevSrs) -> Fixtur
         .map(|item| item.public_inputs.clone())
         .collect::<Vec<_>>();
     let statement = AggregateStatement::new(
-        AGGREGATE_STATEMENT_VERSION,
+        AGGREGATE_PROTOCOL_VERSION,
         family_id,
         srs_id(srs),
         &pvk,

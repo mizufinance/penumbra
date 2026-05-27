@@ -46,7 +46,7 @@ use penumbra_sdk_proof_aggregation::{
     aggregate_family_profiled, pad_items_to_power_of_two, prepare_verify_inputs, srs_id,
     verify_family_aggregate_profiled_status, AggregateBuildBackendProfile, AggregateBundle,
     AggregateStatement, AggregateVerificationProfile, DevSrs, FamilyAggregate, ProofFamilyId,
-    AGGREGATE_STATEMENT_VERSION,
+    AGGREGATE_PROTOCOL_VERSION,
 };
 use penumbra_sdk_proof_params::batch::{self, BatchItem};
 use penumbra_sdk_proto::core::app::v1::TransactionsByHeightResponse;
@@ -113,7 +113,6 @@ pub const MAX_TRANSACTION_SIZE_BYTES: usize = 96 * 1024;
 /// The maximum size of the evidence portion of a block (30KB).
 pub const MAX_EVIDENCE_SIZE_BYTES: usize = 30 * 1024;
 
-const AGGREGATE_BUNDLE_VERSION: u32 = 1;
 const MAX_PADDED_PROOF_COUNT: usize = 32_768;
 const AGGREGATE_DEBUG_DIR_ENV: &str = "PENUMBRA_AGGREGATE_DEBUG_DIR";
 static AGGREGATE_DEBUG_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -1885,7 +1884,7 @@ impl App {
         family_estimates: &[AggregateBundleFamilyEstimate],
     ) -> usize {
         let bundle = AggregateBundle {
-            version: AGGREGATE_BUNDLE_VERSION,
+            version: AGGREGATE_PROTOCOL_VERSION,
             srs_id: vec![0; 32],
             families: family_estimates
                 .iter()
@@ -2022,7 +2021,7 @@ impl App {
                 .map(|item| item.public_inputs.clone())
                 .collect::<Vec<_>>();
             let statement = AggregateStatement::new(
-                AGGREGATE_STATEMENT_VERSION,
+                AGGREGATE_PROTOCOL_VERSION,
                 family_id,
                 srs_id(&srs),
                 proof_verification_key_for_family(family_id),
@@ -2186,7 +2185,7 @@ impl App {
         let tx_build_start = Instant::now();
         let bundle_tx = self
             .build_aggregate_bundle_tx(AggregateBundle {
-                version: AGGREGATE_BUNDLE_VERSION,
+                version: AGGREGATE_PROTOCOL_VERSION,
                 srs_id: srs_id(&srs).to_vec(),
                 families,
             })
@@ -2301,7 +2300,7 @@ impl App {
         let mut profile = AggregateVerifyProfile::default();
         let result: Result<()> = async {
             anyhow::ensure!(
-                bundle.version == AGGREGATE_BUNDLE_VERSION,
+                bundle.version == AGGREGATE_PROTOCOL_VERSION,
                 "unsupported aggregate bundle version {}",
                 bundle.version
             );
@@ -2395,7 +2394,7 @@ impl App {
                 let debug_segment_index = debug_entry.segment_index;
                 let debug_family_index = debug_entry.family_index;
                 let statement = AggregateStatement::new(
-                    AGGREGATE_STATEMENT_VERSION,
+                    AGGREGATE_PROTOCOL_VERSION,
                     family,
                     srs_id(&srs_for_task),
                     proof_verification_key_for_family(family),
@@ -3027,7 +3026,7 @@ impl App {
                 .await?;
         Ok((
             AggregateBundle {
-                version: AGGREGATE_BUNDLE_VERSION,
+                version: AGGREGATE_PROTOCOL_VERSION,
                 srs_id: srs_id(&DevSrs::default()).to_vec(),
                 families,
             },
@@ -3044,7 +3043,7 @@ impl App {
                 .await?;
         Ok((
             AggregateBundle {
-                version: AGGREGATE_BUNDLE_VERSION,
+                version: AGGREGATE_PROTOCOL_VERSION,
                 srs_id: srs_id(&DevSrs::default()).to_vec(),
                 families,
             },
@@ -3065,7 +3064,7 @@ impl App {
             .await?;
         Ok((
             AggregateBundle {
-                version: AGGREGATE_BUNDLE_VERSION,
+                version: AGGREGATE_PROTOCOL_VERSION,
                 srs_id: srs_id(&DevSrs::default()).to_vec(),
                 families,
             },

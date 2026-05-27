@@ -11,7 +11,7 @@ use std::time::Instant;
 use rayon::prelude::*;
 
 use crate::{
-    challenge::challenge_digest,
+    challenge::{challenge_digest, ChallengeContext, ChallengeTraceSink, NoopChallengeTraceSink},
     tipa::{
         prove_pairing_inner_product_with_prepared_srs_shift,
         prove_pairing_inner_product_with_prepared_srs_shift_profiled,
@@ -151,12 +151,28 @@ where
 }
 
 pub fn aggregate_proofs<P, D>(
+    context: &ChallengeContext,
     ip_srs: &SRS<P>,
     proofs: &[Proof<P>],
 ) -> Result<AggregateProof<P, D>, Error>
 where
     P: Pairing,
     D: Digest,
+{
+    let mut trace = NoopChallengeTraceSink;
+    aggregate_proofs_with_trace(context, &mut trace, ip_srs, proofs)
+}
+
+pub fn aggregate_proofs_with_trace<P, D, S>(
+    context: &ChallengeContext,
+    trace: &mut S,
+    ip_srs: &SRS<P>,
+    proofs: &[Proof<P>],
+) -> Result<AggregateProof<P, D>, Error>
+where
+    P: Pairing,
+    D: Digest,
+    S: ChallengeTraceSink,
 {
     let a = proofs
         .iter()
@@ -179,13 +195,15 @@ where
     let com_c = PairingInnerProduct::<P>::inner_product(&c, ck_1)?;
 
     // Random linear combination of proofs
-    let mut counter_nonce: usize = 0;
+    let mut counter_nonce: u64 = 0;
     let r = loop {
         let mut hash_input = Vec::new();
         com_a.serialize_uncompressed(&mut hash_input)?;
         com_b.serialize_uncompressed(&mut hash_input)?;
         com_c.serialize_uncompressed(&mut hash_input)?;
-        if let Some(r) = <P::ScalarField>::from_random_bytes(&challenge_digest::<D>(
+        if let Some(r) = <P::ScalarField>::from_random_bytes(&challenge_digest::<D, _>(
+            context,
+            trace,
             b"aggregate.randomizer",
             counter_nonce,
             &hash_input,
@@ -213,6 +231,8 @@ where
     );
 
     let tipa_proof_ab = prove_pairing_inner_product_with_prepared_srs_shift::<P, D>(
+        context,
+        trace,
         &prepared_srs,
         (&a_r, &b),
         (&ck_1_r, ck_2, &HomomorphicPlaceholderValue),
@@ -220,7 +240,9 @@ where
     )?;
 
     let tipa_proof_c =
-        MultiExpInnerProductC::<P, D>::prove_with_prepared_structured_scalar_message(
+        MultiExpInnerProductC::<P, D>::prove_with_prepared_structured_scalar_message_with_trace(
+            context,
+            trace,
             &prepared_srs,
             (&c, &r_vec),
             (ck_1, &HomomorphicPlaceholderValue),
@@ -238,12 +260,28 @@ where
 }
 
 pub fn aggregate_proofs_profiled<P, D>(
+    context: &ChallengeContext,
     ip_srs: &SRS<P>,
     proofs: &[Proof<P>],
 ) -> Result<(AggregateProof<P, D>, AggregateProofBuildProfile), Error>
 where
     P: Pairing,
     D: Digest,
+{
+    let mut trace = NoopChallengeTraceSink;
+    aggregate_proofs_profiled_with_trace(context, &mut trace, ip_srs, proofs)
+}
+
+pub fn aggregate_proofs_profiled_with_trace<P, D, S>(
+    context: &ChallengeContext,
+    trace: &mut S,
+    ip_srs: &SRS<P>,
+    proofs: &[Proof<P>],
+) -> Result<(AggregateProof<P, D>, AggregateProofBuildProfile), Error>
+where
+    P: Pairing,
+    D: Digest,
+    S: ChallengeTraceSink,
 {
     let started = Instant::now();
     let mut profile = AggregateProofBuildProfile::default();
@@ -286,13 +324,15 @@ where
     profile.commitment_ms = commitment_started.elapsed().as_secs_f64() * 1000.0;
 
     let randomizer_started = Instant::now();
-    let mut counter_nonce: usize = 0;
+    let mut counter_nonce: u64 = 0;
     let r = loop {
         let mut hash_input = Vec::new();
         com_a.serialize_uncompressed(&mut hash_input)?;
         com_b.serialize_uncompressed(&mut hash_input)?;
         com_c.serialize_uncompressed(&mut hash_input)?;
-        if let Some(r) = <P::ScalarField>::from_random_bytes(&challenge_digest::<D>(
+        if let Some(r) = <P::ScalarField>::from_random_bytes(&challenge_digest::<D, _>(
+            context,
+            trace,
             b"aggregate.randomizer",
             counter_nonce,
             &hash_input,
@@ -340,6 +380,8 @@ where
     let tipa_ab_started = Instant::now();
     let (tipa_proof_ab, tipa_ab_profile) =
         prove_pairing_inner_product_with_prepared_srs_shift_profiled::<P, D>(
+            context,
+            trace,
             &prepared_srs,
             (&a_r, &b),
             (&ck_1_r, ck_2, &HomomorphicPlaceholderValue),
@@ -351,6 +393,8 @@ where
     let tipa_c_started = Instant::now();
     let (tipa_proof_c, tipa_c_profile) =
         MultiExpInnerProductC::<P, D>::prove_with_prepared_structured_scalar_message_profiled(
+            context,
+            trace,
             &prepared_srs,
             (&c, &r_vec),
             (ck_1, &HomomorphicPlaceholderValue),
@@ -375,6 +419,7 @@ where
 }
 
 pub fn verify_aggregate_proof<P, D>(
+    context: &ChallengeContext,
     ip_verifier_srs: &VerifierSRS<P>,
     vk: &VerifyingKey<P>,
     public_inputs: &[Vec<P::ScalarField>], //TODO: Should use ToConstraintField instead
@@ -384,9 +429,34 @@ where
     P: Pairing,
     D: Digest,
 {
-    let r = derive_randomizer::<P, D>(proof)?;
-    let tipa_proof_ab_valid = verify_tipa_ab::<P, D>(ip_verifier_srs, proof, &r)?;
-    let tipa_proof_c_valid = verify_tipa_c::<P, D>(ip_verifier_srs, proof, &r)?;
+    let mut trace = NoopChallengeTraceSink;
+    verify_aggregate_proof_with_trace(
+        context,
+        &mut trace,
+        ip_verifier_srs,
+        vk,
+        public_inputs,
+        proof,
+    )
+}
+
+pub fn verify_aggregate_proof_with_trace<P, D, S>(
+    context: &ChallengeContext,
+    trace: &mut S,
+    ip_verifier_srs: &VerifierSRS<P>,
+    vk: &VerifyingKey<P>,
+    public_inputs: &[Vec<P::ScalarField>],
+    proof: &AggregateProof<P, D>,
+) -> Result<bool, Error>
+where
+    P: Pairing,
+    D: Digest,
+    S: ChallengeTraceSink,
+{
+    let r = derive_randomizer::<P, D, S>(context, trace, proof)?;
+    let tipa_proof_ab_valid =
+        verify_tipa_ab::<P, D, S>(context, trace, ip_verifier_srs, proof, &r)?;
+    let tipa_proof_c_valid = verify_tipa_c::<P, D, S>(context, trace, ip_verifier_srs, proof, &r)?;
     let (r_sum, g_ic) = fold_public_inputs::<P>(vk, public_inputs, &r);
     let ppe_valid = verify_ppe::<P>(vk, proof, &r_sum, g_ic);
 
@@ -394,6 +464,7 @@ where
 }
 
 pub fn verify_aggregate_proof_profiled<P, D>(
+    context: &ChallengeContext,
     ip_verifier_srs: &VerifierSRS<P>,
     vk: &VerifyingKey<P>,
     public_inputs: &[Vec<P::ScalarField>],
@@ -403,18 +474,43 @@ where
     P: Pairing,
     D: Digest,
 {
+    let mut trace = NoopChallengeTraceSink;
+    verify_aggregate_proof_profiled_with_trace(
+        context,
+        &mut trace,
+        ip_verifier_srs,
+        vk,
+        public_inputs,
+        proof,
+    )
+}
+
+pub fn verify_aggregate_proof_profiled_with_trace<P, D, S>(
+    context: &ChallengeContext,
+    trace: &mut S,
+    ip_verifier_srs: &VerifierSRS<P>,
+    vk: &VerifyingKey<P>,
+    public_inputs: &[Vec<P::ScalarField>],
+    proof: &AggregateProof<P, D>,
+) -> Result<AggregateProofVerificationProfile, Error>
+where
+    P: Pairing,
+    D: Digest,
+    S: ChallengeTraceSink,
+{
     let started = Instant::now();
 
     let challenge_started = Instant::now();
-    let r = derive_randomizer::<P, D>(proof)?;
+    let r = derive_randomizer::<P, D, S>(context, trace, proof)?;
     let challenge_ms = challenge_started.elapsed().as_secs_f64() * 1000.0;
 
     let tipa_ab_started = Instant::now();
-    let tipa_proof_ab_valid = verify_tipa_ab::<P, D>(ip_verifier_srs, proof, &r)?;
+    let tipa_proof_ab_valid =
+        verify_tipa_ab::<P, D, S>(context, trace, ip_verifier_srs, proof, &r)?;
     let tipa_ab_ms = tipa_ab_started.elapsed().as_secs_f64() * 1000.0;
 
     let tipa_c_started = Instant::now();
-    let tipa_proof_c_valid = verify_tipa_c::<P, D>(ip_verifier_srs, proof, &r)?;
+    let tipa_proof_c_valid = verify_tipa_c::<P, D, S>(context, trace, ip_verifier_srs, proof, &r)?;
     let tipa_c_ms = tipa_c_started.elapsed().as_secs_f64() * 1000.0;
 
     let public_input_fold_started = Instant::now();
@@ -518,18 +614,25 @@ fn apply_pairing_profile(
     profile.pairing_final_exponentiation_ms = pairing_profile.final_exponentiation_ms;
 }
 
-fn derive_randomizer<P, D>(proof: &AggregateProof<P, D>) -> Result<P::ScalarField, Error>
+fn derive_randomizer<P, D, S>(
+    context: &ChallengeContext,
+    trace: &mut S,
+    proof: &AggregateProof<P, D>,
+) -> Result<P::ScalarField, Error>
 where
     P: Pairing,
     D: Digest,
+    S: ChallengeTraceSink,
 {
-    let mut counter_nonce: usize = 0;
+    let mut counter_nonce: u64 = 0;
     loop {
         let mut hash_input = Vec::new();
         proof.com_a.serialize_uncompressed(&mut hash_input)?;
         proof.com_b.serialize_uncompressed(&mut hash_input)?;
         proof.com_c.serialize_uncompressed(&mut hash_input)?;
-        if let Some(r) = <P::ScalarField>::from_random_bytes(&challenge_digest::<D>(
+        if let Some(r) = <P::ScalarField>::from_random_bytes(&challenge_digest::<D, _>(
+            context,
+            trace,
             b"aggregate.randomizer",
             counter_nonce,
             &hash_input,
@@ -540,7 +643,9 @@ where
     }
 }
 
-fn verify_tipa_ab<P, D>(
+fn verify_tipa_ab<P, D, S>(
+    context: &ChallengeContext,
+    trace: &mut S,
     ip_verifier_srs: &VerifierSRS<P>,
     proof: &AggregateProof<P, D>,
     r: &P::ScalarField,
@@ -548,8 +653,11 @@ fn verify_tipa_ab<P, D>(
 where
     P: Pairing,
     D: Digest,
+    S: ChallengeTraceSink,
 {
-    PairingInnerProductAB::<P, D>::verify_with_srs_shift_and_labels(
+    PairingInnerProductAB::<P, D>::verify_with_srs_shift_and_labels_with_trace(
+        context,
+        trace,
         b"tipa.ab.gipa.round",
         b"tipa.ab.kzg",
         ip_verifier_srs,
@@ -564,7 +672,9 @@ where
     )
 }
 
-fn verify_tipa_c<P, D>(
+fn verify_tipa_c<P, D, S>(
+    context: &ChallengeContext,
+    trace: &mut S,
     ip_verifier_srs: &VerifierSRS<P>,
     proof: &AggregateProof<P, D>,
     r: &P::ScalarField,
@@ -572,8 +682,11 @@ fn verify_tipa_c<P, D>(
 where
     P: Pairing,
     D: Digest,
+    S: ChallengeTraceSink,
 {
-    MultiExpInnerProductC::<P, D>::verify_with_structured_scalar_message(
+    MultiExpInnerProductC::<P, D>::verify_with_structured_scalar_message_with_trace(
+        context,
+        trace,
         ip_verifier_srs,
         &HomomorphicPlaceholderValue,
         (&proof.com_c, &IdentityOutput(vec![proof.agg_c.clone()])),

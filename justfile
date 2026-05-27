@@ -23,6 +23,7 @@ build:
 
 # Runs 'cargo check' on all rust files in the project.
 check:
+    just snarkpack-invariants
     # check, failing on warnings
     RUSTFLAGS="-D warnings" cargo check --release --all-targets --all-features --target-dir=target/check
     # fmt dry-run, failing on any suggestions

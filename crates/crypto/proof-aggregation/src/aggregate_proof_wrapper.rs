@@ -1,6 +1,9 @@
 use std::fmt;
 
 pub const AGGREGATE_PROOF_WRAPPER_DOMAIN: &[u8] = b"penumbra.snarkpack.aggregate_proof.v1\0";
+
+// Consensus-relevant bound: changing this cap changes which aggregate bundle
+// bytes validators accept and requires protocol/security review.
 pub const MAX_AGGREGATE_PROOF_BYTES: usize = 128 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -28,6 +28,7 @@ pub use backend::{
     AggregationBackend,
 };
 pub use bundle::{AggregateBundle, FamilyAggregate, ProofFamilyId};
+pub use padding::PADDING_RULE_DOMAIN;
 pub use padding::{pad_items_to_power_of_two, prepare_verify_inputs, PreparedVerifyInputs};
 pub use srs::{
     srs_id, srs_report, DevSrs, DevSrsReport, DEFAULT_MAX_PADDED_PROOF_COUNT, DEV_SRS_BACKEND_ID,
@@ -36,7 +37,7 @@ pub use srs::{
 pub use statement::{
     aggregate_verification_key_digest, challenge_context, encode_statement, statement_digest,
     validate_counts, validate_row_arity, AggregateStatement, AggregateStatementError,
-    StatementEncodingInput, AGGREGATE_STATEMENT_VERSION,
+    StatementEncodingInput, AGGREGATE_PROTOCOL_VERSION,
 };
 
 pub fn aggregate_family(

@@ -1,19 +1,18 @@
 use std::fmt;
 
 use ark_groth16::PreparedVerifyingKey;
+use ark_ip_proofs::challenge::ChallengeContext;
 use ark_serialize::CanonicalSerialize;
 use decaf377::{Bls12_377, Fq};
 use penumbra_sdk_proto::core::transaction::v1 as pb;
 use sha2::{Digest as _, Sha256};
 
-use crate::ProofFamilyId;
+use crate::{padding::PADDING_RULE_DOMAIN, ProofFamilyId, DEV_SRS_BACKEND_ID, DEV_SRS_CURVE_ID};
 
-pub const AGGREGATE_STATEMENT_VERSION: u32 = 1;
+pub const AGGREGATE_PROTOCOL_VERSION: u32 = 1;
 
 const STATEMENT_DIGEST_DOMAIN: &[u8] = b"penumbra.snarkpack.statement_digest.v1\0";
-const CHALLENGE_CONTEXT_DOMAIN: &[u8] = b"penumbra.snarkpack.challenge_context.v1\0";
 const VK_DIGEST_DOMAIN: &[u8] = b"penumbra.snarkpack.vk_digest.v1\0";
-const PADDING_RULE_DOMAIN: &[u8] = b"penumbra.snarkpack.padding.repeat-final-row.v1\0";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AggregateStatementError {
@@ -35,7 +34,8 @@ pub enum AggregateStatementError {
     },
     OversizeBytes {
         field: &'static str,
-        len: usize,
+        max: usize,
+        got: usize,
     },
     EncodingFailed(String),
 }
@@ -68,10 +68,10 @@ impl fmt::Display for AggregateStatementError {
                 f,
                 "aggregate statement row {index}: expected {expected} public inputs, got {got}"
             ),
-            Self::OversizeBytes { field, len } => {
+            Self::OversizeBytes { field, max, got } => {
                 write!(
                     f,
-                    "aggregate statement field {field} is too large: {len} bytes"
+                    "aggregate statement field {field} is too large: got {got} bytes, max {max}"
                 )
             }
             Self::EncodingFailed(err) => write!(f, "aggregate statement encoding failed: {err}"),
@@ -84,6 +84,8 @@ impl std::error::Error for AggregateStatementError {}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StatementEncodingInput {
     pub version: u32,
+    pub curve_id: Vec<u8>,
+    pub backend_id: Vec<u8>,
     pub proof_family_id: u32,
     pub consolidate_family_id: u32,
     pub split_family_id: u32,
@@ -98,11 +100,13 @@ pub struct StatementEncodingInput {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AggregateStatement {
-    input: StatementEncodingInput,
+    family_id: ProofFamilyId,
+    real_count: u32,
+    padded_count: u32,
     padded_public_inputs: Vec<Vec<Fq>>,
     canonical_bytes: Vec<u8>,
     statement_digest: [u8; 32],
-    challenge_context: [u8; 32],
+    challenge_context: ChallengeContext,
 }
 
 impl AggregateStatement {
@@ -114,14 +118,15 @@ impl AggregateStatement {
         real_count: u32,
         padded_public_inputs: &[Vec<Fq>],
     ) -> Result<Self, AggregateStatementError> {
-        if version != AGGREGATE_STATEMENT_VERSION {
+        if version != AGGREGATE_PROTOCOL_VERSION {
             return Err(AggregateStatementError::BadVersion { version });
         }
 
         let padded_count = u32::try_from(padded_public_inputs.len()).map_err(|_| {
             AggregateStatementError::OversizeBytes {
                 field: "padded_public_inputs.len",
-                len: padded_public_inputs.len(),
+                max: u32::MAX as usize,
+                got: padded_public_inputs.len(),
             }
         })?;
         validate_counts(real_count, padded_count, padded_public_inputs)?;
@@ -138,6 +143,8 @@ impl AggregateStatement {
         let family = family_encoding(family_id);
         let input = StatementEncodingInput {
             version,
+            curve_id: DEV_SRS_CURVE_ID.as_bytes().to_vec(),
+            backend_id: DEV_SRS_BACKEND_ID.as_bytes().to_vec(),
             proof_family_id: family.proof_family_id,
             consolidate_family_id: family.consolidate_family_id,
             split_family_id: family.split_family_id,
@@ -149,17 +156,20 @@ impl AggregateStatement {
             public_input_arity: u32::try_from(expected_arity).map_err(|_| {
                 AggregateStatementError::OversizeBytes {
                     field: "public_input_arity",
-                    len: expected_arity,
+                    max: u32::MAX as usize,
+                    got: expected_arity,
                 }
             })?,
             padded_public_inputs: field_rows_to_bytes(padded_public_inputs)?,
         };
         let canonical_bytes = encode_statement(&input)?;
         let statement_digest = statement_digest_from_canonical(&canonical_bytes);
-        let challenge_context = challenge_context_from_statement_digest(statement_digest);
+        let challenge_context = ChallengeContext::from_statement_digest(statement_digest);
 
         Ok(Self {
-            input,
+            family_id,
+            real_count,
+            padded_count,
             padded_public_inputs: padded_public_inputs.to_vec(),
             canonical_bytes,
             statement_digest,
@@ -168,22 +178,15 @@ impl AggregateStatement {
     }
 
     pub fn family_id(&self) -> ProofFamilyId {
-        let input = &self.input;
-        ProofFamilyId::try_from_proto_fields(
-            input.proof_family_id as i32,
-            input.consolidate_family_id,
-            input.split_family_id,
-            input.shielded_ics20_withdrawal_family_id,
-        )
-        .expect("aggregate statement stores a valid proof family id")
+        self.family_id
     }
 
     pub fn real_count(&self) -> u32 {
-        self.input.real_count
+        self.real_count
     }
 
     pub fn padded_count(&self) -> u32 {
-        self.input.padded_count
+        self.padded_count
     }
 
     pub fn padded_public_inputs(&self) -> &[Vec<Fq>] {
@@ -198,8 +201,8 @@ impl AggregateStatement {
         self.statement_digest
     }
 
-    pub fn challenge_context(&self) -> [u8; 32] {
-        self.challenge_context
+    pub fn challenge_context(&self) -> &ChallengeContext {
+        &self.challenge_context
     }
 }
 
@@ -221,8 +224,11 @@ pub fn encode_statement(
     input: &StatementEncodingInput,
 ) -> Result<Vec<u8>, AggregateStatementError> {
     let mut bytes = Vec::new();
-    append_bytes_field(&mut bytes, PADDING_RULE_DOMAIN)?;
+    // Every byte field is length-prefixed, including fixed-width digests.
     append_u32_field(&mut bytes, input.version);
+    append_bytes_field(&mut bytes, &input.curve_id)?;
+    append_bytes_field(&mut bytes, &input.backend_id)?;
+    append_bytes_field(&mut bytes, PADDING_RULE_DOMAIN)?;
     append_u32_field(&mut bytes, input.proof_family_id);
     append_u32_field(&mut bytes, input.consolidate_family_id);
     append_u32_field(&mut bytes, input.split_family_id);
@@ -250,8 +256,8 @@ pub fn statement_digest(
 
 pub fn challenge_context(
     input: &StatementEncodingInput,
-) -> Result<[u8; 32], AggregateStatementError> {
-    Ok(challenge_context_from_statement_digest(statement_digest(
+) -> Result<ChallengeContext, AggregateStatementError> {
+    Ok(ChallengeContext::from_statement_digest(statement_digest(
         input,
     )?))
 }
@@ -302,13 +308,6 @@ fn statement_digest_from_canonical(canonical_bytes: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-fn challenge_context_from_statement_digest(statement_digest: [u8; 32]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(CHALLENGE_CONTEXT_DOMAIN);
-    hasher.update(statement_digest);
-    hasher.finalize().into()
-}
-
 fn field_rows_to_bytes(rows: &[Vec<Fq>]) -> Result<Vec<Vec<Vec<u8>>>, AggregateStatementError> {
     rows.iter()
         .map(|row| {
@@ -356,7 +355,8 @@ fn append_bytes_field(bytes: &mut Vec<u8>, field: &[u8]) -> Result<(), Aggregate
 fn append_field(hasher: &mut Sha256, field: &[u8]) -> Result<(), AggregateStatementError> {
     let len = u32::try_from(field.len()).map_err(|_| AggregateStatementError::OversizeBytes {
         field: "hash_field",
-        len: field.len(),
+        max: u32::MAX as usize,
+        got: field.len(),
     })?;
     hasher.update(len.to_le_bytes());
     hasher.update(field);
@@ -368,8 +368,11 @@ fn append_len(
     len: usize,
     field: &'static str,
 ) -> Result<(), AggregateStatementError> {
-    let len =
-        u32::try_from(len).map_err(|_| AggregateStatementError::OversizeBytes { field, len })?;
+    let len = u32::try_from(len).map_err(|_| AggregateStatementError::OversizeBytes {
+        field,
+        max: u32::MAX as usize,
+        got: len,
+    })?;
     bytes.extend_from_slice(&len.to_le_bytes());
     Ok(())
 }
@@ -428,7 +431,7 @@ mod tests {
         let rows = vec![vec![Fq::from(1u64)], vec![Fq::from(4u64)]];
 
         let statement = AggregateStatement::new(
-            AGGREGATE_STATEMENT_VERSION,
+            AGGREGATE_PROTOCOL_VERSION,
             ProofFamilyId::Transfer,
             srs_id(&srs),
             &pvk,
@@ -440,7 +443,10 @@ mod tests {
         assert_eq!(statement.real_count(), 2);
         assert_eq!(statement.padded_count(), 2);
         assert_eq!(statement.family_id(), ProofFamilyId::Transfer);
-        assert_ne!(statement.statement_digest(), statement.challenge_context());
+        assert_ne!(
+            &statement.statement_digest(),
+            statement.challenge_context().as_bytes()
+        );
         assert_eq!(statement.padded_public_inputs(), rows.as_slice());
     }
 
@@ -450,7 +456,7 @@ mod tests {
         let rows = vec![vec![Fq::from(1u64)]];
 
         let err = AggregateStatement::new(
-            AGGREGATE_STATEMENT_VERSION,
+            AGGREGATE_PROTOCOL_VERSION,
             ProofFamilyId::Transfer,
             [0u8; 32],
             &pvk,
@@ -472,7 +478,7 @@ mod tests {
         ];
 
         let err = AggregateStatement::new(
-            AGGREGATE_STATEMENT_VERSION,
+            AGGREGATE_PROTOCOL_VERSION,
             ProofFamilyId::Transfer,
             [0u8; 32],
             &pvk,
@@ -490,7 +496,7 @@ mod tests {
         let rows = vec![vec![Fq::from(1u64), Fq::from(2u64)]];
 
         let err = AggregateStatement::new(
-            AGGREGATE_STATEMENT_VERSION,
+            AGGREGATE_PROTOCOL_VERSION,
             ProofFamilyId::Transfer,
             [0u8; 32],
             &pvk,
@@ -517,7 +523,7 @@ mod tests {
         changed_rows[1][0] += Fq::from(1u64);
 
         let original = AggregateStatement::new(
-            AGGREGATE_STATEMENT_VERSION,
+            AGGREGATE_PROTOCOL_VERSION,
             ProofFamilyId::Transfer,
             [1u8; 32],
             &pvk,
@@ -526,7 +532,7 @@ mod tests {
         )
         .expect("statement should build");
         let changed = AggregateStatement::new(
-            AGGREGATE_STATEMENT_VERSION,
+            AGGREGATE_PROTOCOL_VERSION,
             ProofFamilyId::Transfer,
             [1u8; 32],
             &pvk,
@@ -537,6 +543,57 @@ mod tests {
 
         assert_ne!(original.canonical_bytes(), changed.canonical_bytes());
         assert_ne!(original.statement_digest(), changed.statement_digest());
+    }
+
+    #[test]
+    fn statement_canonical_encoding_layout() {
+        let input = StatementEncodingInput {
+            version: AGGREGATE_PROTOCOL_VERSION,
+            curve_id: b"curve-x".to_vec(),
+            backend_id: b"backend-y".to_vec(),
+            proof_family_id: 1,
+            consolidate_family_id: 2,
+            split_family_id: 3,
+            shielded_ics20_withdrawal_family_id: 4,
+            srs_id: [0x11; 32],
+            vk_digest: [0x22; 32],
+            real_count: 1,
+            padded_count: 2,
+            public_input_arity: 1,
+            padded_public_inputs: vec![vec![vec![0xaa, 0xbb]], vec![vec![0xcc]]],
+        };
+
+        let encoded = encode_statement(&input).expect("encoding succeeds");
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&4u32.to_le_bytes());
+        expected.extend_from_slice(&AGGREGATE_PROTOCOL_VERSION.to_le_bytes());
+        expected.extend_from_slice(&7u32.to_le_bytes());
+        expected.extend_from_slice(b"curve-x");
+        expected.extend_from_slice(&9u32.to_le_bytes());
+        expected.extend_from_slice(b"backend-y");
+        expected.extend_from_slice(&(PADDING_RULE_DOMAIN.len() as u32).to_le_bytes());
+        expected.extend_from_slice(PADDING_RULE_DOMAIN);
+        for value in [1u32, 2, 3, 4] {
+            expected.extend_from_slice(&4u32.to_le_bytes());
+            expected.extend_from_slice(&value.to_le_bytes());
+        }
+        expected.extend_from_slice(&32u32.to_le_bytes());
+        expected.extend_from_slice(&[0x11; 32]);
+        expected.extend_from_slice(&32u32.to_le_bytes());
+        expected.extend_from_slice(&[0x22; 32]);
+        for value in [1u32, 2, 1] {
+            expected.extend_from_slice(&4u32.to_le_bytes());
+            expected.extend_from_slice(&value.to_le_bytes());
+        }
+        expected.extend_from_slice(&2u32.to_le_bytes());
+        expected.extend_from_slice(&1u32.to_le_bytes());
+        expected.extend_from_slice(&2u32.to_le_bytes());
+        expected.extend_from_slice(&[0xaa, 0xbb]);
+        expected.extend_from_slice(&1u32.to_le_bytes());
+        expected.extend_from_slice(&1u32.to_le_bytes());
+        expected.extend_from_slice(&[0xcc]);
+
+        assert_eq!(encoded, expected);
     }
 
     proptest! {
@@ -568,7 +625,9 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let input = StatementEncodingInput {
-                version: AGGREGATE_STATEMENT_VERSION,
+                version: AGGREGATE_PROTOCOL_VERSION,
+                curve_id: DEV_SRS_CURVE_ID.as_bytes().to_vec(),
+                backend_id: DEV_SRS_BACKEND_ID.as_bytes().to_vec(),
                 proof_family_id: 1,
                 consolidate_family_id: 0,
                 split_family_id: 0,

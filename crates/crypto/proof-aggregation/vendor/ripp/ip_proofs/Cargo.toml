@@ -21,6 +21,7 @@ ark-serialize = { version = "0.5", features = [ "derive" ] }
 ark-std = "0.5"
 ark-groth16 = "0.5"
 digest = "0.9"
+sha2 = "0.9"
 num-traits = "0.2"
 itertools = "0.12"
 rayon = { version = "1", optional = true }

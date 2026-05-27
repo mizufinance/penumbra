@@ -15,6 +15,7 @@ use ark_std::rand::Rng;
 use digest::Digest;
 
 use crate::{
+    challenge::ChallengeContext,
     tipa::{
         structured_generators_scalar_power,
         structured_scalar_message::{TIPAWithSSM, TIPAWithSSMProof},
@@ -198,6 +199,7 @@ impl<P: Pairing, D: Digest> BivariatePolynomialCommitment<P, D> {
     }
 
     pub fn open(
+        context: &ChallengeContext,
         srs: &(SRS<P>, Vec<P::G1Affine>),
         bivariate_polynomial: &BivariatePolynomial<P::ScalarField>,
         y_polynomial_comms: &Vec<P::G1>,
@@ -241,6 +243,7 @@ impl<P: Pairing, D: Digest> BivariatePolynomialCommitment<P, D> {
         let ipa_time = start_timer!(|| "Computing IPA proof");
         let ip_proof =
             PolynomialEvaluationSecondTierIPA::<P, D>::prove_with_structured_scalar_message(
+                context,
                 &ip_srs,
                 (y_polynomial_comms, &powers_of_x),
                 (&ck_1, &HomomorphicPlaceholderValue),
@@ -262,6 +265,7 @@ impl<P: Pairing, D: Digest> BivariatePolynomialCommitment<P, D> {
     }
 
     pub fn verify(
+        context: &ChallengeContext,
         v_srs: &VerifierSRS<P>,
         com: &PairingOutput<P>,
         point: &(P::ScalarField, P::ScalarField),
@@ -271,6 +275,7 @@ impl<P: Pairing, D: Digest> BivariatePolynomialCommitment<P, D> {
         let (x, y) = point;
         let ip_proof_valid =
             PolynomialEvaluationSecondTierIPA::<P, D>::verify_with_structured_scalar_message(
+                context,
                 v_srs,
                 &HomomorphicPlaceholderValue,
                 (com, &IdentityOutput(vec![proof.y_eval_comm.clone()])),
@@ -345,6 +350,7 @@ impl<P: Pairing, D: Digest> UnivariatePolynomialCommitment<P, D> {
     }
 
     pub fn open(
+        context: &ChallengeContext,
         srs: &(SRS<P>, Vec<P::G1Affine>),
         polynomial: &UnivariatePolynomial<P::ScalarField>,
         y_polynomial_comms: &Vec<P::G1>,
@@ -354,6 +360,7 @@ impl<P: Pairing, D: Digest> UnivariatePolynomialCommitment<P, D> {
         let y = point.clone();
         let x = point.pow(&vec![(y_degree + 1) as u64]);
         BivariatePolynomialCommitment::open(
+            context,
             srs,
             &Self::bivariate_form((x_degree, y_degree), polynomial),
             y_polynomial_comms,
@@ -362,6 +369,7 @@ impl<P: Pairing, D: Digest> UnivariatePolynomialCommitment<P, D> {
     }
 
     pub fn verify(
+        context: &ChallengeContext,
         v_srs: &VerifierSRS<P>,
         max_degree: usize,
         com: &PairingOutput<P>,
@@ -372,7 +380,7 @@ impl<P: Pairing, D: Digest> UnivariatePolynomialCommitment<P, D> {
         let (_, y_degree) = Self::bivariate_degrees(max_degree);
         let y = point.clone();
         let x = y.pow(&vec![(y_degree + 1) as u64]);
-        BivariatePolynomialCommitment::verify(v_srs, com, &(x, y), eval, proof)
+        BivariatePolynomialCommitment::verify(context, v_srs, com, &(x, y), eval, proof)
     }
 }
 

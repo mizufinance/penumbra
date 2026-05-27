@@ -9,7 +9,10 @@ use std::{
     ops::{Add, MulAssign},
 };
 
-use crate::{challenge::challenge_digest, mul_helper, Error, InnerProductArgumentError};
+use crate::{
+    challenge::{challenge_digest, ChallengeContext, ChallengeTraceSink, NoopChallengeTraceSink},
+    mul_helper, Error, InnerProductArgumentError,
+};
 use ark_dh_commitments::DoublyHomomorphicCommitment;
 use ark_inner_products::InnerProduct;
 use ark_std::cfg_iter;
@@ -162,6 +165,7 @@ where
     }
 
     pub fn prove(
+        context: &ChallengeContext,
         values: (&[IP::LeftMessage], &[IP::RightMessage], &IP::Output),
         ck: (&[LMC::Key], &[RMC::Key], &IPC::Key),
         com: (&LMC::Output, &RMC::Output, &IPC::Output),
@@ -183,12 +187,16 @@ where
             return Err(Box::new(InnerProductArgumentError::InnerProductInvalid));
         }
 
-        let (proof, _) =
-            Self::prove_with_aux((values.0, values.1), (ck.0, ck.1, &vec![ck.2.clone()]))?;
+        let (proof, _) = Self::prove_with_aux(
+            context,
+            (values.0, values.1),
+            (ck.0, ck.1, &vec![ck.2.clone()]),
+        )?;
         Ok(proof)
     }
 
     pub fn verify(
+        context: &ChallengeContext,
         ck: (&[LMC::Key], &[RMC::Key], &IPC::Key),
         com: (&LMC::Output, &RMC::Output, &IPC::Output),
         proof: &GIPAProof<IP, LMC, RMC, IPC, D>,
@@ -201,7 +209,10 @@ where
             )));
         }
         // Calculate base commitment and transcript
+        let mut trace = NoopChallengeTraceSink;
         let (base_com, transcript) = Self::_compute_recursive_challenges(
+            context,
+            &mut trace,
             b"tipa.generic.gipa.round",
             (com.0.clone(), com.1.clone(), com.2.clone()),
             proof,
@@ -217,6 +228,7 @@ where
     }
 
     pub fn prove_with_aux(
+        context: &ChallengeContext,
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &[RMC::Key], &[IPC::Key]),
     ) -> Result<
@@ -228,7 +240,10 @@ where
     > {
         let (m_a, m_b) = values;
         let (ck_a, ck_b, ck_t) = ck;
+        let mut trace = NoopChallengeTraceSink;
         let (proof, aux, _) = Self::_prove_profiled(
+            context,
+            &mut trace,
             b"tipa.generic.gipa.round",
             (m_a.to_vec(), m_b.to_vec()),
             (ck_a.to_vec(), ck_b.to_vec(), ck_t.to_vec()),
@@ -237,6 +252,7 @@ where
     }
 
     pub fn prove_with_aux_profiled(
+        context: &ChallengeContext,
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &[RMC::Key], &[IPC::Key]),
     ) -> Result<
@@ -247,10 +263,11 @@ where
         ),
         Error,
     > {
-        Self::prove_with_aux_profiled_with_stage(b"tipa.generic.gipa.round", values, ck)
+        Self::prove_with_aux_profiled_with_stage(context, b"tipa.generic.gipa.round", values, ck)
     }
 
     pub fn prove_with_aux_profiled_with_stage(
+        context: &ChallengeContext,
         stage_label: &'static [u8],
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &[RMC::Key], &[IPC::Key]),
@@ -262,9 +279,38 @@ where
         ),
         Error,
     > {
+        let mut trace = NoopChallengeTraceSink;
+        Self::prove_with_aux_profiled_with_stage_with_trace(
+            context,
+            &mut trace,
+            stage_label,
+            values,
+            ck,
+        )
+    }
+
+    pub fn prove_with_aux_profiled_with_stage_with_trace<S>(
+        context: &ChallengeContext,
+        trace: &mut S,
+        stage_label: &'static [u8],
+        values: (&[IP::LeftMessage], &[IP::RightMessage]),
+        ck: (&[LMC::Key], &[RMC::Key], &[IPC::Key]),
+    ) -> Result<
+        (
+            GIPAProof<IP, LMC, RMC, IPC, D>,
+            GIPAAux<IP, LMC, RMC, IPC, D>,
+            GipaBuildProfile,
+        ),
+        Error,
+    >
+    where
+        S: ChallengeTraceSink,
+    {
         let (m_a, m_b) = values;
         let (ck_a, ck_b, ck_t) = ck;
         Self::_prove_profiled(
+            context,
+            trace,
             stage_label,
             (m_a.to_vec(), m_b.to_vec()),
             (ck_a.to_vec(), ck_b.to_vec(), ck_t.to_vec()),
@@ -273,6 +319,8 @@ where
 
     // Returns vector of recursive commitments and transcripts in reverse order
     fn _prove_profiled(
+        context: &ChallengeContext,
+        trace: &mut impl ChallengeTraceSink,
         stage_label: &'static [u8],
         values: (Vec<IP::LeftMessage>, Vec<IP::RightMessage>),
         ck: (Vec<LMC::Key>, Vec<RMC::Key>, Vec<IPC::Key>),
@@ -335,7 +383,7 @@ where
 
                 // Fiat-Shamir challenge
                 let challenge_started = std::time::Instant::now();
-                let mut counter_nonce: usize = 0;
+                let mut counter_nonce: u64 = 0;
                 let default_transcript = Default::default();
                 let transcript = r_transcript.last().unwrap_or(&default_transcript);
                 let (c, c_inv) = 'challenge: loop {
@@ -348,8 +396,14 @@ where
                     com_2.1.serialize_uncompressed(&mut hash_input)?;
                     com_2.2.serialize_uncompressed(&mut hash_input)?;
                     let c: LMC::Scalar = u128::from_be_bytes(
-                        challenge_digest::<D>(stage_label, counter_nonce, &hash_input).as_slice()
-                            [0..16]
+                        challenge_digest::<D, _>(
+                            context,
+                            trace,
+                            stage_label,
+                            counter_nonce,
+                            &hash_input,
+                        )
+                        .as_slice()[0..16]
                             .try_into()
                             .unwrap(),
                     )
@@ -413,10 +467,12 @@ where
 
     // Helper function used to calculate recursive challenges from proof execution (transcript in reverse)
     pub fn verify_recursive_challenge_transcript(
+        context: &ChallengeContext,
         com: (&LMC::Output, &RMC::Output, &IPC::Output),
         proof: &GIPAProof<IP, LMC, RMC, IPC, D>,
     ) -> Result<((LMC::Output, RMC::Output, IPC::Output), Vec<LMC::Scalar>), Error> {
         Self::verify_recursive_challenge_transcript_with_stage(
+            context,
             b"tipa.generic.gipa.round",
             com,
             proof,
@@ -424,11 +480,34 @@ where
     }
 
     pub fn verify_recursive_challenge_transcript_with_stage(
+        context: &ChallengeContext,
         stage_label: &'static [u8],
         com: (&LMC::Output, &RMC::Output, &IPC::Output),
         proof: &GIPAProof<IP, LMC, RMC, IPC, D>,
     ) -> Result<((LMC::Output, RMC::Output, IPC::Output), Vec<LMC::Scalar>), Error> {
+        let mut trace = NoopChallengeTraceSink;
+        Self::verify_recursive_challenge_transcript_with_stage_with_trace(
+            context,
+            &mut trace,
+            stage_label,
+            com,
+            proof,
+        )
+    }
+
+    pub fn verify_recursive_challenge_transcript_with_stage_with_trace<S>(
+        context: &ChallengeContext,
+        trace: &mut S,
+        stage_label: &'static [u8],
+        com: (&LMC::Output, &RMC::Output, &IPC::Output),
+        proof: &GIPAProof<IP, LMC, RMC, IPC, D>,
+    ) -> Result<((LMC::Output, RMC::Output, IPC::Output), Vec<LMC::Scalar>), Error>
+    where
+        S: ChallengeTraceSink,
+    {
         Self::_compute_recursive_challenges(
+            context,
+            trace,
             stage_label,
             (com.0.clone(), com.1.clone(), com.2.clone()),
             proof,
@@ -436,6 +515,8 @@ where
     }
 
     fn _compute_recursive_challenges(
+        context: &ChallengeContext,
+        trace: &mut impl ChallengeTraceSink,
         stage_label: &'static [u8],
         com: (LMC::Output, RMC::Output, IPC::Output),
         proof: &GIPAProof<IP, LMC, RMC, IPC, D>,
@@ -444,7 +525,7 @@ where
         let mut r_transcript: Vec<LMC::Scalar> = Vec::new();
         for (com_1, com_2) in proof.r_commitment_steps.iter().rev() {
             // Fiat-Shamir challenge
-            let mut counter_nonce: usize = 0;
+            let mut counter_nonce: u64 = 0;
             let default_transcript = Default::default();
             let transcript = r_transcript.last().unwrap_or(&default_transcript);
             let (c, c_inv) = 'challenge: loop {
@@ -457,8 +538,14 @@ where
                 com_2.1.serialize_uncompressed(&mut hash_input)?;
                 com_2.2.serialize_uncompressed(&mut hash_input)?;
                 let c: LMC::Scalar = u128::from_be_bytes(
-                    challenge_digest::<D>(stage_label, counter_nonce, &hash_input).as_slice()
-                        [0..16]
+                    challenge_digest::<D, _>(
+                        context,
+                        trace,
+                        stage_label,
+                        counter_nonce,
+                        &hash_input,
+                    )
+                    .as_slice()[0..16]
                         .try_into()
                         .unwrap(),
                 )

@@ -10,7 +10,7 @@ use std::{marker::PhantomData, ops::MulAssign};
 use rayon::prelude::*;
 
 use crate::{
-    challenge::challenge_digest,
+    challenge::{challenge_digest, ChallengeContext, ChallengeTraceSink, NoopChallengeTraceSink},
     gipa::{GIPAProof, GipaBuildProfile, GIPA},
     tipa::{
         prove_commitment_key_kzg_opening_with_affine_profiled, structured_generators_scalar_power,
@@ -70,11 +70,13 @@ where
     }
 
     pub fn prove_with_structured_scalar_message(
+        context: &ChallengeContext,
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &IPC::Key),
     ) -> Result<GIPAProof<IP, LMC, SSMPlaceholderCommitment<LMC::Scalar>, IPC, D>, Error> {
         let (proof, _) =
             <GIPA<IP, LMC, SSMPlaceholderCommitment<LMC::Scalar>, IPC, D>>::prove_with_aux(
+                context,
                 values,
                 (
                     ck.0,
@@ -86,6 +88,7 @@ where
     }
 
     pub fn verify_with_structured_scalar_message(
+        context: &ChallengeContext,
         ck: (&[LMC::Key], &IPC::Key),
         com: (&LMC::Output, &IPC::Output),
         scalar_b: &LMC::Scalar,
@@ -94,6 +97,7 @@ where
         // Calculate base commitments and recursive transcript
         //TODO: Scalar b not included in generating challenges
         let (base_com, transcript) = GIPA::verify_recursive_challenge_transcript_with_stage(
+            context,
             b"tipa.generic.ssm.gipa.round",
             (com.0, &LMC::Scalar::zero(), com.1),
             proof,
@@ -225,17 +229,19 @@ where
     }
 
     pub fn prove_with_structured_scalar_message(
+        context: &ChallengeContext,
         srs: &SRS<P>,
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &IPC::Key),
     ) -> Result<TIPAWithSSMProof<IP, LMC, IPC, P, D>, Error> {
         let (proof, profile) =
-            Self::prove_with_structured_scalar_message_profiled(srs, values, ck)?;
+            Self::prove_with_structured_scalar_message_profiled(context, srs, values, ck)?;
         debug_assert!(profile.total_ms >= 0.0);
         Ok(proof)
     }
 
     pub fn prove_with_structured_scalar_message_profiled(
+        context: &ChallengeContext,
         srs: &SRS<P>,
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &IPC::Key),
@@ -247,21 +253,53 @@ where
         Error,
     > {
         let prepared_srs = srs.prepare_for_proving();
-        Self::prove_with_prepared_structured_scalar_message_profiled(&prepared_srs, values, ck)
+        let mut trace = NoopChallengeTraceSink;
+        Self::prove_with_prepared_structured_scalar_message_profiled(
+            context,
+            &mut trace,
+            &prepared_srs,
+            values,
+            ck,
+        )
     }
 
     pub fn prove_with_prepared_structured_scalar_message(
+        context: &ChallengeContext,
+        trace: &mut impl ChallengeTraceSink,
         prepared_srs: &PreparedProvingSrs<P>,
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &IPC::Key),
     ) -> Result<TIPAWithSSMProof<IP, LMC, IPC, P, D>, Error> {
-        let (proof, profile) =
-            Self::prove_with_prepared_structured_scalar_message_profiled(prepared_srs, values, ck)?;
+        let (proof, profile) = Self::prove_with_prepared_structured_scalar_message_profiled(
+            context,
+            trace,
+            prepared_srs,
+            values,
+            ck,
+        )?;
         debug_assert!(profile.total_ms >= 0.0);
         Ok(proof)
     }
 
-    pub fn prove_with_prepared_structured_scalar_message_profiled(
+    pub fn prove_with_prepared_structured_scalar_message_with_trace(
+        context: &ChallengeContext,
+        trace: &mut impl ChallengeTraceSink,
+        prepared_srs: &PreparedProvingSrs<P>,
+        values: (&[IP::LeftMessage], &[IP::RightMessage]),
+        ck: (&[LMC::Key], &IPC::Key),
+    ) -> Result<TIPAWithSSMProof<IP, LMC, IPC, P, D>, Error> {
+        Self::prove_with_prepared_structured_scalar_message(
+            context,
+            trace,
+            prepared_srs,
+            values,
+            ck,
+        )
+    }
+
+    pub fn prove_with_prepared_structured_scalar_message_profiled<S>(
+        context: &ChallengeContext,
+        trace: &mut S,
         prepared_srs: &PreparedProvingSrs<P>,
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &IPC::Key),
@@ -271,7 +309,10 @@ where
             TipaWithSsmBuildProfile,
         ),
         Error,
-    > {
+    >
+    where
+        S: ChallengeTraceSink,
+    {
         let total_started = std::time::Instant::now();
         let mut profile = TipaWithSsmBuildProfile::default();
         // Run GIPA
@@ -283,7 +324,9 @@ where
             SSMPlaceholderCommitment<P::ScalarField>,
             IPC,
             D,
-        >>::prove_with_aux_profiled_with_stage(
+        >>::prove_with_aux_profiled_with_stage_with_trace(
+            context,
+            trace,
             b"tipa.c.gipa.round",
             values,
             (
@@ -308,14 +351,16 @@ where
 
         // KZG challenge point
         let kzg_challenge_started = std::time::Instant::now();
-        let mut counter_nonce: usize = 0;
+        let mut counter_nonce: u64 = 0;
         let c = loop {
             let mut hash_input = Vec::new();
             if let Some(first) = transcript.first() {
                 first.serialize_uncompressed(&mut hash_input)?;
             }
             ck_a_final.serialize_uncompressed(&mut hash_input)?;
-            if let Some(c) = LMC::Scalar::from_random_bytes(&challenge_digest::<D>(
+            if let Some(c) = LMC::Scalar::from_random_bytes(&challenge_digest::<D, _>(
+                context,
+                trace,
                 b"tipa.c.kzg",
                 counter_nonce,
                 &hash_input,
@@ -354,17 +399,39 @@ where
     }
 
     pub fn verify_with_structured_scalar_message(
+        context: &ChallengeContext,
         v_srs: &VerifierSRS<P>,
         ck_t: &IPC::Key,
         com: (&LMC::Output, &IPC::Output),
         scalar_b: &P::ScalarField,
         proof: &TIPAWithSSMProof<IP, LMC, IPC, P, D>,
     ) -> Result<bool, Error> {
-        let (base_com, transcript) = GIPA::verify_recursive_challenge_transcript_with_stage(
-            b"tipa.c.gipa.round",
-            (com.0, scalar_b, com.1),
-            &proof.gipa_proof,
-        )?;
+        let mut trace = NoopChallengeTraceSink;
+        Self::verify_with_structured_scalar_message_with_trace(
+            context, &mut trace, v_srs, ck_t, com, scalar_b, proof,
+        )
+    }
+
+    pub fn verify_with_structured_scalar_message_with_trace<S>(
+        context: &ChallengeContext,
+        trace: &mut S,
+        v_srs: &VerifierSRS<P>,
+        ck_t: &IPC::Key,
+        com: (&LMC::Output, &IPC::Output),
+        scalar_b: &P::ScalarField,
+        proof: &TIPAWithSSMProof<IP, LMC, IPC, P, D>,
+    ) -> Result<bool, Error>
+    where
+        S: ChallengeTraceSink,
+    {
+        let (base_com, transcript) =
+            GIPA::verify_recursive_challenge_transcript_with_stage_with_trace(
+                context,
+                trace,
+                b"tipa.c.gipa.round",
+                (com.0, scalar_b, com.1),
+                &proof.gipa_proof,
+            )?;
         let transcript_inverse = cfg_iter!(transcript)
             .map(|x| x.inverse().unwrap())
             .collect();
@@ -373,14 +440,16 @@ where
         let ck_a_proof = &proof.final_ck_proof;
 
         // KZG challenge point
-        let mut counter_nonce: usize = 0;
+        let mut counter_nonce: u64 = 0;
         let c = loop {
             let mut hash_input = Vec::new();
             if let Some(first) = transcript.first() {
                 first.serialize_uncompressed(&mut hash_input)?;
             }
             ck_a_final.serialize_uncompressed(&mut hash_input)?;
-            if let Some(c) = LMC::Scalar::from_random_bytes(&challenge_digest::<D>(
+            if let Some(c) = LMC::Scalar::from_random_bytes(&challenge_digest::<D, _>(
+                context,
+                trace,
                 b"tipa.c.kzg",
                 counter_nonce,
                 &hash_input,

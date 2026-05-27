@@ -359,6 +359,7 @@ dependencies = [
  "num-traits",
  "rayon",
  "serde",
+ "sha2 0.9.9",
 ]
 
 [[package]]

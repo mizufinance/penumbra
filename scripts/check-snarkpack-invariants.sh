@@ -21,6 +21,10 @@ if rg -n "USE_UNCHECKED_AGGREGATE_DESERIALIZATION" crates/crypto/proof-aggregati
   fail "unchecked aggregate deserialization switch must not be retained"
 fi
 
+if rg -n "thread_local!|static CHALLENGE_CONTEXT|static CHALLENGE_TRACE" crates/crypto/proof-aggregation/vendor/ripp/ip_proofs/src; then
+  fail "vendored challenge binding and tracing must not use thread-local fallback state"
+fi
+
 direct_digest_sites="$(
   rg -n "D::digest|Digest::digest" crates/crypto/proof-aggregation/vendor/ripp/ip_proofs/src \
     | grep -v "vendor/ripp/ip_proofs/src/challenge.rs" || true

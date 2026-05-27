@@ -13,7 +13,7 @@ use std::{convert::TryInto, marker::PhantomData, ops::MulAssign};
 use rayon::prelude::*;
 
 use crate::{
-    challenge::challenge_digest,
+    challenge::{challenge_digest, ChallengeContext, ChallengeTraceSink, NoopChallengeTraceSink},
     gipa::{GIPAAux, GIPAProof, GipaBuildProfile, GIPA},
     mul_helper, Error,
 };
@@ -277,6 +277,8 @@ fn pairing_affine_with_prepared_g2<P: Pairing>(
 }
 
 pub(crate) fn prove_pairing_inner_product_with_prepared_srs_shift<P, D>(
+    context: &ChallengeContext,
+    trace: &mut impl ChallengeTraceSink,
     prepared_srs: &PreparedProvingSrs<P>,
     values: (&[P::G1], &[P::G2]),
     ck: (&[P::G2], &[P::G1], &HomomorphicPlaceholderValue),
@@ -287,6 +289,8 @@ where
     D: Digest,
 {
     let (proof, profile) = prove_pairing_inner_product_with_prepared_srs_shift_profiled::<P, D>(
+        context,
+        trace,
         prepared_srs,
         values,
         ck,
@@ -297,6 +301,8 @@ where
 }
 
 pub(crate) fn prove_pairing_inner_product_with_prepared_srs_shift_profiled<P, D>(
+    context: &ChallengeContext,
+    trace: &mut impl ChallengeTraceSink,
     prepared_srs: &PreparedProvingSrs<P>,
     values: (&[P::G1], &[P::G2]),
     ck: (&[P::G2], &[P::G1], &HomomorphicPlaceholderValue),
@@ -311,7 +317,7 @@ where
 
     let gipa_started = std::time::Instant::now();
     let (proof, aux, gipa_profile) =
-        prove_pairing_inner_product_gipa_with_aux_profiled::<P, D>(values, ck)?;
+        prove_pairing_inner_product_gipa_with_aux_profiled::<P, D>(context, trace, values, ck)?;
     profile.gipa_ms = gipa_started.elapsed().as_secs_f64() * 1000.0;
     profile.gipa = gipa_profile;
 
@@ -323,7 +329,7 @@ where
     let r_inverse = r_shift.inverse().unwrap();
 
     let kzg_challenge_started = std::time::Instant::now();
-    let mut counter_nonce: usize = 0;
+    let mut counter_nonce: u64 = 0;
     let c = loop {
         let mut hash_input = Vec::new();
         if let Some(first) = transcript.first() {
@@ -331,7 +337,9 @@ where
         }
         ck_a_final.serialize_uncompressed(&mut hash_input)?;
         ck_b_final.serialize_uncompressed(&mut hash_input)?;
-        if let Some(c) = P::ScalarField::from_random_bytes(&challenge_digest::<D>(
+        if let Some(c) = P::ScalarField::from_random_bytes(&challenge_digest::<D, _>(
+            context,
+            trace,
             b"tipa.ab.kzg",
             counter_nonce,
             &hash_input,
@@ -381,6 +389,8 @@ where
 }
 
 fn prove_pairing_inner_product_gipa_with_aux_profiled<P, D>(
+    context: &ChallengeContext,
+    trace: &mut impl ChallengeTraceSink,
     values: (&[P::G1], &[P::G2]),
     ck: (&[P::G2], &[P::G1], &HomomorphicPlaceholderValue),
 ) -> Result<
@@ -484,7 +494,7 @@ where
         profile.commit_r_ms += commit_r_started.elapsed().as_secs_f64() * 1000.0;
 
         let challenge_started = std::time::Instant::now();
-        let mut counter_nonce: usize = 0;
+        let mut counter_nonce: u64 = 0;
         let default_transcript = Default::default();
         let transcript = r_transcript.last().unwrap_or(&default_transcript);
         let (c, c_inv) = loop {
@@ -497,8 +507,14 @@ where
             com_2.1.serialize_uncompressed(&mut hash_input)?;
             com_2.2.serialize_uncompressed(&mut hash_input)?;
             let c: P::ScalarField = u128::from_be_bytes(
-                challenge_digest::<D>(b"tipa.ab.gipa.round", counter_nonce, &hash_input).as_slice()
-                    [0..16]
+                challenge_digest::<D, _>(
+                    context,
+                    trace,
+                    b"tipa.ab.gipa.round",
+                    counter_nonce,
+                    &hash_input,
+                )
+                .as_slice()[0..16]
                     .try_into()
                     .unwrap(),
             )
@@ -586,63 +602,100 @@ where
     }
 
     pub fn prove(
+        context: &ChallengeContext,
         srs: &SRS<P>,
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &[RMC::Key], &IPC::Key),
     ) -> Result<TIPAProof<IP, LMC, RMC, IPC, P, D>, Error> {
-        Self::prove_with_srs_shift(srs, values, ck, &<P::ScalarField>::one())
+        Self::prove_with_srs_shift(context, srs, values, ck, &<P::ScalarField>::one())
     }
 
     // Shifts KZG proof for left message by scalar r (used for efficient composition with aggregation protocols)
     // LMC commitment key should already be shifted before being passed as input
     pub fn prove_with_srs_shift(
+        context: &ChallengeContext,
         srs: &SRS<P>,
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &[RMC::Key], &IPC::Key),
         r_shift: &P::ScalarField,
     ) -> Result<TIPAProof<IP, LMC, RMC, IPC, P, D>, Error> {
-        let (proof, profile) = Self::prove_with_srs_shift_profiled(srs, values, ck, r_shift)?;
+        let (proof, profile) =
+            Self::prove_with_srs_shift_profiled(context, srs, values, ck, r_shift)?;
         debug_assert!(profile.total_ms >= 0.0);
         Ok(proof)
     }
 
     pub fn prove_with_srs_shift_profiled(
+        context: &ChallengeContext,
         srs: &SRS<P>,
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &[RMC::Key], &IPC::Key),
         r_shift: &P::ScalarField,
     ) -> Result<(TIPAProof<IP, LMC, RMC, IPC, P, D>, TipaBuildProfile), Error> {
         let prepared_srs = srs.prepare_for_proving();
-        Self::prove_with_prepared_srs_shift_profiled(&prepared_srs, values, ck, r_shift)
+        Self::prove_with_prepared_srs_shift_profiled(context, &prepared_srs, values, ck, r_shift)
     }
 
     pub fn prove_with_prepared_srs_shift(
+        context: &ChallengeContext,
         prepared_srs: &PreparedProvingSrs<P>,
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &[RMC::Key], &IPC::Key),
         r_shift: &P::ScalarField,
     ) -> Result<TIPAProof<IP, LMC, RMC, IPC, P, D>, Error> {
-        let (proof, profile) =
-            Self::prove_with_prepared_srs_shift_profiled(prepared_srs, values, ck, r_shift)?;
+        let (proof, profile) = Self::prove_with_prepared_srs_shift_profiled(
+            context,
+            prepared_srs,
+            values,
+            ck,
+            r_shift,
+        )?;
         debug_assert!(profile.total_ms >= 0.0);
         Ok(proof)
     }
 
     pub fn prove_with_prepared_srs_shift_profiled(
+        context: &ChallengeContext,
         prepared_srs: &PreparedProvingSrs<P>,
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &[RMC::Key], &IPC::Key),
         r_shift: &P::ScalarField,
     ) -> Result<(TIPAProof<IP, LMC, RMC, IPC, P, D>, TipaBuildProfile), Error> {
+        let mut trace = NoopChallengeTraceSink;
+        Self::prove_with_prepared_srs_shift_profiled_with_trace(
+            context,
+            &mut trace,
+            prepared_srs,
+            values,
+            ck,
+            r_shift,
+        )
+    }
+
+    pub fn prove_with_prepared_srs_shift_profiled_with_trace<S>(
+        context: &ChallengeContext,
+        trace: &mut S,
+        prepared_srs: &PreparedProvingSrs<P>,
+        values: (&[IP::LeftMessage], &[IP::RightMessage]),
+        ck: (&[LMC::Key], &[RMC::Key], &IPC::Key),
+        r_shift: &P::ScalarField,
+    ) -> Result<(TIPAProof<IP, LMC, RMC, IPC, P, D>, TipaBuildProfile), Error>
+    where
+        S: ChallengeTraceSink,
+    {
         let total_started = std::time::Instant::now();
         let mut profile = TipaBuildProfile::default();
 
         // Run GIPA
         let gipa_started = std::time::Instant::now();
-        let (proof, aux, gipa_profile) = <GIPA<IP, LMC, RMC, IPC, D>>::prove_with_aux_profiled(
-            values,
-            (ck.0, ck.1, &vec![ck.2.clone()]),
-        )?;
+        let (proof, aux, gipa_profile) =
+            <GIPA<IP, LMC, RMC, IPC, D>>::prove_with_aux_profiled_with_stage_with_trace(
+                context,
+                trace,
+                b"tipa.generic.gipa.round",
+                values,
+                (ck.0, ck.1, &vec![ck.2.clone()]),
+            )?;
         profile.gipa_ms = gipa_started.elapsed().as_secs_f64() * 1000.0;
         profile.gipa = gipa_profile;
 
@@ -656,7 +709,7 @@ where
 
         // KZG challenge point
         let kzg_challenge_started = std::time::Instant::now();
-        let mut counter_nonce: usize = 0;
+        let mut counter_nonce: u64 = 0;
         let c = loop {
             let mut hash_input = Vec::new();
             if let Some(first) = transcript.first() {
@@ -664,7 +717,9 @@ where
             }
             ck_a_final.serialize_uncompressed(&mut hash_input)?;
             ck_b_final.serialize_uncompressed(&mut hash_input)?;
-            if let Some(c) = LMC::Scalar::from_random_bytes(&challenge_digest::<D>(
+            if let Some(c) = LMC::Scalar::from_random_bytes(&challenge_digest::<D, _>(
+                context,
+                trace,
                 b"tipa.generic.kzg",
                 counter_nonce,
                 &hash_input,
@@ -714,15 +769,17 @@ where
     }
 
     pub fn verify(
+        context: &ChallengeContext,
         v_srs: &VerifierSRS<P>,
         ck_t: &IPC::Key,
         com: (&LMC::Output, &RMC::Output, &IPC::Output),
         proof: &TIPAProof<IP, LMC, RMC, IPC, P, D>,
     ) -> Result<bool, Error> {
-        Self::verify_with_srs_shift(v_srs, ck_t, com, proof, &<P::ScalarField>::one())
+        Self::verify_with_srs_shift(context, v_srs, ck_t, com, proof, &<P::ScalarField>::one())
     }
 
     pub fn verify_with_srs_shift(
+        context: &ChallengeContext,
         v_srs: &VerifierSRS<P>,
         ck_t: &IPC::Key,
         com: (&LMC::Output, &RMC::Output, &IPC::Output),
@@ -730,6 +787,7 @@ where
         r_shift: &P::ScalarField,
     ) -> Result<bool, Error> {
         Self::verify_with_srs_shift_and_labels(
+            context,
             b"tipa.generic.gipa.round",
             b"tipa.generic.kzg",
             v_srs,
@@ -741,6 +799,7 @@ where
     }
 
     pub fn verify_with_srs_shift_and_labels(
+        context: &ChallengeContext,
         gipa_stage_label: &'static [u8],
         kzg_stage_label: &'static [u8],
         v_srs: &VerifierSRS<P>,
@@ -749,11 +808,42 @@ where
         proof: &TIPAProof<IP, LMC, RMC, IPC, P, D>,
         r_shift: &P::ScalarField,
     ) -> Result<bool, Error> {
-        let (base_com, transcript) = GIPA::verify_recursive_challenge_transcript_with_stage(
+        let mut trace = NoopChallengeTraceSink;
+        Self::verify_with_srs_shift_and_labels_with_trace(
+            context,
+            &mut trace,
             gipa_stage_label,
+            kzg_stage_label,
+            v_srs,
+            ck_t,
             com,
-            &proof.gipa_proof,
-        )?;
+            proof,
+            r_shift,
+        )
+    }
+
+    pub fn verify_with_srs_shift_and_labels_with_trace<S>(
+        context: &ChallengeContext,
+        trace: &mut S,
+        gipa_stage_label: &'static [u8],
+        kzg_stage_label: &'static [u8],
+        v_srs: &VerifierSRS<P>,
+        ck_t: &IPC::Key,
+        com: (&LMC::Output, &RMC::Output, &IPC::Output),
+        proof: &TIPAProof<IP, LMC, RMC, IPC, P, D>,
+        r_shift: &P::ScalarField,
+    ) -> Result<bool, Error>
+    where
+        S: ChallengeTraceSink,
+    {
+        let (base_com, transcript) =
+            GIPA::verify_recursive_challenge_transcript_with_stage_with_trace(
+                context,
+                trace,
+                gipa_stage_label,
+                com,
+                &proof.gipa_proof,
+            )?;
         let transcript_inverse = transcript.iter().map(|x| x.inverse().unwrap()).collect();
 
         // Verify commitment keys wellformed
@@ -761,7 +851,7 @@ where
         let (ck_a_proof, ck_b_proof) = &proof.final_ck_proof;
 
         // KZG challenge point
-        let mut counter_nonce: usize = 0;
+        let mut counter_nonce: u64 = 0;
         let c = loop {
             let mut hash_input = Vec::new();
             if let Some(first) = transcript.first() {
@@ -769,7 +859,9 @@ where
             }
             ck_a_final.serialize_uncompressed(&mut hash_input)?;
             ck_b_final.serialize_uncompressed(&mut hash_input)?;
-            if let Some(c) = LMC::Scalar::from_random_bytes(&challenge_digest::<D>(
+            if let Some(c) = LMC::Scalar::from_random_bytes(&challenge_digest::<D, _>(
+                context,
+                trace,
                 kzg_stage_label,
                 counter_nonce,
                 &hash_input,

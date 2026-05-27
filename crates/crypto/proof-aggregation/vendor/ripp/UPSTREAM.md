@@ -46,25 +46,37 @@ Entries added after this file must follow `Required Divergence Entries`.
 ### 2026-05-26: Statement-bound Fiat-Shamir challenge helper
 
 - base: pre-existing vendored `ripp` snapshot in this repository; exact
-  upstream commit unknown
+  upstream commit unknown; local review performed at Penumbra commit
+  `743f3870c`
 - changed files:
+  - `ip_proofs/Cargo.toml`
   - `ip_proofs/src/challenge.rs`
   - `ip_proofs/src/lib.rs`
   - `ip_proofs/src/applications/groth16_aggregation.rs`
+  - `ip_proofs/src/applications/poly_commit/mod.rs`
+  - `ip_proofs/src/applications/poly_commit/transparent.rs`
   - `ip_proofs/src/gipa.rs`
   - `ip_proofs/src/tipa/mod.rs`
   - `ip_proofs/src/tipa/structured_scalar_message.rs`
-- reason: bind SnarkPack Fiat-Shamir challenges to the recomputed aggregate
-  statement context and centralize all challenge preimage formatting
-- security impact: removes direct ad hoc `D::digest` challenge sites, adds
-  stage labels and statement context to the challenge preimage, and adds
-  challenge-trace parity coverage between prover and verifier
+- reason: bind SnarkPack Fiat-Shamir challenges to an explicit recomputed
+  aggregate statement context and centralize all challenge preimage formatting
+- security impact: removes direct ad hoc `D::digest` challenge sites and the
+  silent thread-local `[0u8; 32]` fallback, adds stage labels and statement
+  context to the challenge preimage, and adds challenge-trace parity coverage
+  between prover and verifier
 - benchmark impact: expected to be negligible relative to GIPA/pairing work;
   release thresholds are tracked in `docs/snarkpack/bench-thresholds.md`
 - tests:
-  - `cargo test -p penumbra-sdk-proof-aggregation challenge_trace --lib`
+  - `cargo test -p penumbra-sdk-proof-aggregation prover_verifier_challenge_streams_match --lib`
   - `cargo test -p penumbra-sdk-proof-aggregation --lib`
   - `just snarkpack-invariants`
+
+Call-graph review at commit `743f3870c`: `rg -n
+"challenge_digest|par_iter|par_chunks|rayon::scope"
+crates/crypto/proof-aggregation/vendor/ripp/ip_proofs/src` found Rayon
+parallelism only in G2 preparation and rescale/scaling helpers. No
+`challenge_digest` call was inside a `par_iter`, `par_chunks`, or
+`rayon::scope` closure.
 
 ## Verification Obligations
 

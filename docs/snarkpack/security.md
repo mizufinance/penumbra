@@ -22,9 +22,9 @@ execute through generic action handling.
 Implemented enforcement:
 
 - aggregate-bundle transaction shape:
-  `crates/core/app/src/app/mod.rs:2194`
+  `crates/core/app/src/app/mod.rs:2202`
 - aggregate bundle must be last and unique in `ProcessProposal`:
-  `crates/core/app/src/app/mod.rs:4209`
+  `crates/core/app/src/app/mod.rs:4224`
 - aggregate bundle rejected from generic action stateless, historical, and
   execution handling: `crates/core/app/src/action_handler/actions.rs:40`,
   `crates/core/app/src/action_handler/actions.rs:64`,
@@ -63,14 +63,17 @@ bound, or perform avoidable expensive work before cheap shape checks.
 
 ## Statement Binding
 
-Status: implemented for version, family, SRS id, verifying-key digest, counts,
-padding rule, and ordered padded public inputs. The aggregate proof wrapper
-stores only a recomputed statement digest; protobuf has no second digest field.
+Status: implemented for version, curve id, backend id, family, SRS id,
+verifying-key digest, counts, padding rule, and ordered padded public inputs.
+The aggregate proof wrapper stores only a recomputed statement digest; protobuf
+has no second digest field.
 
 Every aggregate statement has one canonical encoding. The Fiat-Shamir
 challenge context binds:
 
 - aggregate protocol version
+- curve identifier
+- backend identifier
 - SRS identifier
 - proof family and family variant
 - verifying key digest
@@ -81,8 +84,9 @@ challenge context binds:
 - all aggregate proof public messages in verifier order, through the vendored
   challenge helper
 
-Every field is length-prefixed or fixed-width encoded. Distinct aggregate
-statements must not have the same transcript preimage.
+Every byte field is length-prefixed, including fixed-width digests; integer
+fields are fixed-width little-endian. Distinct aggregate statements must not
+have the same transcript preimage.
 
 Implemented enforcement:
 
@@ -94,6 +98,8 @@ Implemented enforcement:
   `crates/crypto/proof-aggregation/src/backend.rs`
 - vendored Fiat-Shamir helper:
   `crates/crypto/proof-aggregation/vendor/ripp/ip_proofs/src/challenge.rs`
+- explicit prover/verifier challenge trace parity:
+  `prover_verifier_challenge_streams_match`
 
 The legacy prover/verifier phase domain API was deleted as a bug-class
 reduction. It looked like phase domain separation, but the backend digest path
@@ -114,37 +120,39 @@ against those recomputed values before aggregate verification.
 Implemented enforcement:
 
 - proof padding repeats the final proof:
-  `crates/crypto/proof-aggregation/src/padding.rs:12`
+  `crates/crypto/proof-aggregation/src/padding.rs:14`
 - verifier public-input padding repeats the final public input:
-  `crates/crypto/proof-aggregation/src/padding.rs:37`
+  `crates/crypto/proof-aggregation/src/padding.rs:39`
 - aggregate `real_count` and `padded_count` are checked against recomputed
-  inputs: `crates/core/app/src/app/mod.rs:2350`,
-  `crates/core/app/src/app/mod.rs:2358`
+  inputs: `crates/core/app/src/app/mod.rs:2359`,
+  `crates/core/app/src/app/mod.rs:2371`
 
 The padding rule is part of the aggregate statement. Changing the rule requires
 a new aggregate version.
 
 ## Verification Matrix
 
-Status: implemented as focused unit/property coverage for the current pass.
+Status: implemented as focused unit/property coverage for the current pass,
+except the alternate-valid-SRS fixture listed as an open item.
 
-For each generated valid aggregate fixture, tests should mutate one field at a
-time and assert rejection:
-
-- family or family variant
-- SRS identifier
-- valid proof from a different SRS
-- verifying key digest
-- aggregate proof bytes
-- public input value
-- public input order
-- same proof with a different padded public-input vector and consistent count
-- real count
-- padded count
-- padding duplicate
-- family order
-- segment counts
-- aggregate bundle transaction shape
+| Invariant or mutation | Coverage |
+| --- | --- |
+| family or family variant | `snarkpack_backend_rejects_wrong_family_id`; `aggregate_bundle_verification_rejects_bad_version_srs_and_family_count` |
+| SRS identifier | `statement_rejects_mutated_srs_id`; `aggregate_bundle_verification_rejects_bad_version_srs_and_family_count` |
+| valid proof from a different SRS | TODO(snarkpack-srs-v2): add when a second production-style SRS fixture exists |
+| verifying key digest | `statement_mismatch_rejects_vk_digest_mutation_before_backend` |
+| aggregate proof bytes | `snarkpack_backend_rejects_malformed_aggregate_bytes`; `malformed_aggregate_proof_oversize_rejected_before_deserialization`; `wrapper_rejects_malformed_length` |
+| public input value | `snarkpack_backend_rejects_mutated_public_inputs`; `snarkpack_property_matches_legacy_batch_oracle` |
+| public input order | `statement_digest_binds_inputs`; `snarkpack_property_matches_legacy_batch_oracle` |
+| same proof with different padded public-input vector and consistent count | `snarkpack_backend_rejects_mutated_public_inputs` |
+| real count | `statement_rejects_bad_counts`; app aggregate real-count checks |
+| padded count | `statement_rejects_bad_padding`; app aggregate padded-count checks |
+| padding duplicate | `pads_by_repeating_last_item`; `prepare_verify_inputs_matches_full_padding` |
+| family order | app aggregate ordering checks in `verify_aggregate_bundle_for_artifacts_raw_profiled` |
+| segment counts | segmented aggregate bundle tests and segment coverage checks in `verify_aggregate_bundle_for_artifacts_raw_profiled` |
+| aggregate bundle transaction shape | `ensure_aggregate_bundle_tx_shape_rejects_memo_detection_fee_and_extra_action` |
+| prover/verifier challenge stream equality | `prover_verifier_challenge_streams_match` |
+| statement canonical field order | `statement_canonical_encoding_layout` |
 
 Differential property tests use legacy batch verification as the oracle:
 
