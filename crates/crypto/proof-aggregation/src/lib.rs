@@ -1,7 +1,7 @@
 //! Consensus proof-family aggregation transport and backend facade.
 //!
-//! The aggregation backend is implemented locally using vendored arkworks
-//! SnarkPack code adapted from `ripp`.
+//! The aggregation backend is Penumbra-owned SnarkPack implementation code
+//! forked from `arkworks-rs/ripp`.
 
 mod aggregate_proof_wrapper;
 mod backend;

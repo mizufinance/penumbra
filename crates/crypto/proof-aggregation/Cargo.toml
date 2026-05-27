@@ -10,9 +10,9 @@ edition = { workspace = true }
 [dependencies]
 anyhow = { workspace = true }
 ark-groth16 = { workspace = true, default-features = false }
-ark-inner-products = { path = "vendor/ripp/inner_products" }
+ark-inner-products = { path = "src/ipp/inner_products" }
 ark-serialize = { workspace = true }
-ark-ip-proofs = { path = "vendor/ripp/ip_proofs" }
+ark-ip-proofs = { path = "src/ipp/ip_proofs" }
 bincode = { workspace = true }
 blake2 = "0.9"
 decaf377 = { workspace = true }

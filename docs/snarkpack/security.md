@@ -30,8 +30,10 @@ Implemented enforcement:
   `crates/core/app/src/action_handler/actions.rs:64`,
   `crates/core/app/src/action_handler/actions.rs:88`
 
-The current prototype uses a vendored Arkworks/RIPP SnarkPack backend over
-BLS12-377. The security goal for this phase is implementation binding and
+The current prototype uses a Penumbra-owned SnarkPack/RIPP implementation
+forked from Arkworks RIPP over BLS12-377. The original RIPP code is not treated
+as a production-security baseline; audit scope is the full local
+implementation. The security goal for this phase is implementation binding and
 verification discipline: a malicious proposer must not be able to replace,
 reorder, omit, or mismatch any public statement material while still producing
 an accepted aggregate.
@@ -81,8 +83,8 @@ challenge context binds:
 - padded proof count
 - canonical padding rule
 - ordered padded public inputs
-- all aggregate proof public messages in verifier order, through the vendored
-  challenge helper
+- all aggregate proof public messages in verifier order, through the
+  Penumbra-owned challenge helper
 
 Every byte field is length-prefixed, including fixed-width digests; integer
 fields are fixed-width little-endian. Distinct aggregate statements must not
@@ -96,8 +98,8 @@ Implemented enforcement:
   `crates/crypto/proof-aggregation/src/aggregate_proof_wrapper.rs`
 - backend wrapper decode before SnarkPack verification:
   `crates/crypto/proof-aggregation/src/backend.rs`
-- vendored Fiat-Shamir helper:
-  `crates/crypto/proof-aggregation/vendor/ripp/ip_proofs/src/challenge.rs`
+- Penumbra-owned Fiat-Shamir helper:
+  `crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/challenge.rs`
 - explicit prover/verifier challenge trace parity:
   `prover_verifier_challenge_streams_match`
 

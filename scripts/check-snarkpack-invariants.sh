@@ -21,17 +21,17 @@ if rg -n "USE_UNCHECKED_AGGREGATE_DESERIALIZATION" crates/crypto/proof-aggregati
   fail "unchecked aggregate deserialization switch must not be retained"
 fi
 
-if rg -n "thread_local!|static CHALLENGE_CONTEXT|static CHALLENGE_TRACE" crates/crypto/proof-aggregation/vendor/ripp/ip_proofs/src; then
-  fail "vendored challenge binding and tracing must not use thread-local fallback state"
+if rg -n "thread_local!|static CHALLENGE_CONTEXT|static CHALLENGE_TRACE" crates/crypto/proof-aggregation/src/ipp/ip_proofs/src; then
+  fail "challenge binding and tracing must not use thread-local fallback state"
 fi
 
 direct_digest_sites="$(
-  rg -n "D::digest|Digest::digest" crates/crypto/proof-aggregation/vendor/ripp/ip_proofs/src \
-    | grep -v "vendor/ripp/ip_proofs/src/challenge.rs" || true
+  rg -n "D::digest|Digest::digest" crates/crypto/proof-aggregation/src/ipp/ip_proofs/src \
+    | grep -v "src/ipp/ip_proofs/src/challenge.rs" || true
 )"
 if [[ -n "$direct_digest_sites" ]]; then
   echo "$direct_digest_sites" >&2
-  fail "vendored Fiat-Shamir challenges must use challenge::challenge_digest"
+  fail "Fiat-Shamir challenges must use challenge::challenge_digest"
 fi
 
 rg -n "decode_wrapped_aggregate_proof" crates/crypto/proof-aggregation/src/backend.rs >/dev/null \
