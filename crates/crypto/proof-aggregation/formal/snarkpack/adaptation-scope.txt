@@ -1,0 +1,44 @@
+# Filecoin-to-Penumbra SnarkPack adaptation touch points that must be mapped in
+# docs/snarkpack/adaptation-register.md.
+#
+# Format: adaptation.id|relative/file/path:grep-pattern
+# External references use: adaptation.id|external:identifier-or-url
+
+filecoin.bellperson.repo|external:https://github.com/filecoin-project/bellperson
+filecoin.normative-pin|external:62c362fd46ca2139747b8770bae53ce6f1e42bb1
+filecoin.bellperson.v0.21.0|external:62c362fd46ca2139747b8770bae53ce6f1e42bb1
+filecoin.rust-fil-proofs.v11.1.0|external:004d7b4244c469e0d9aeebf15f9a81ef60308ba3
+filecoin.bellperson.release-branch|external:ff5f39e43cc62481cc575adae628cb7d1124bce8
+filecoin.bellperson.v0.18.2|external:c5fa04be1824ceb19a96a36ee1689f9d15b2e864
+curve.bls12-377.backend|crates/crypto/proof-aggregation/src/backend.rs:Bls12_377
+curve.bls12-377.srs|crates/crypto/proof-aggregation/src/srs.rs:Bls12_377
+curve.field.public-input|crates/crypto/proof-aggregation/src/statement.rs:Fq
+hash.statement-digest|crates/crypto/proof-aggregation/src/statement.rs:STATEMENT_DIGEST_DOMAIN
+hash.challenge-context|crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/challenge.rs:CHALLENGE_CONTEXT_DOMAIN
+hash.challenge-preimage|crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/challenge.rs:CHALLENGE_DOMAIN
+hash.family-transcript|crates/crypto/proof-aggregation/src/transcript.rs:transcript_family_domain
+serialization.aggregate-proof|crates/crypto/proof-aggregation/src/backend.rs:deserialize_aggregate_proof
+serialization.vk-digest|crates/crypto/proof-aggregation/src/statement.rs:aggregate_verification_key_digest
+serialization.public-input-fields|crates/crypto/proof-aggregation/src/statement.rs:field_rows_to_bytes
+srs.dev-shape|crates/crypto/proof-aggregation/src/srs.rs:DevSrs
+srs.identity|crates/crypto/proof-aggregation/src/srs.rs:srs_id
+srs.inner-product|crates/crypto/proof-aggregation/src/srs.rs:inner_product_srs_for_count
+statement.canonical-binding|crates/crypto/proof-aggregation/src/statement.rs:AggregateStatement::new
+statement.wrapper|crates/crypto/proof-aggregation/src/aggregate_proof_wrapper.rs:AGGREGATE_PROOF_WRAPPER_DOMAIN
+padding.repeat-final|crates/crypto/proof-aggregation/src/padding.rs:PADDING_RULE_DOMAIN
+family.identifiers|crates/crypto/proof-aggregation/src/bundle.rs:ProofFamilyId
+bundle.proto-shape|crates/crypto/proof-aggregation/src/bundle.rs:AggregateBundle
+app.bundle-routing|crates/core/app/src/app/mod.rs:verify_aggregate_bundle_for_artifacts_raw_profiled
+app.action-rejection|crates/core/app/src/action_handler/actions.rs:Action::AggregateBundle
+backend.preflight|crates/crypto/proof-aggregation/src/preflight.rs:preflight_aggregate_verify
+backend.digest-dispatch|crates/crypto/proof-aggregation/src/backend.rs:verify_preflighted_family_aggregate_profiled_status
+ripp.prepared-srs|crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/tipa/mod.rs:PreparedProvingSrs
+ripp.shifted-srs-ab|crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/tipa/mod.rs:prove_pairing_inner_product_with_prepared_srs_shift_profiled
+ripp.kzg-openings|crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/tipa/mod.rs:verify_commitment_key_g2_kzg_opening
+ripp.public-input-folding|crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/applications/groth16_aggregation.rs:fold_public_inputs
+ripp.randomizer|crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/applications/groth16_aggregation.rs:derive_randomizer
+arkworks.subgroup-rejection-g1|crates/crypto/proof-aggregation/src/backend.rs:deserialize_compressed
+arkworks.subgroup-rejection-g2|crates/crypto/proof-aggregation/src/srs.rs:deserialize_compressed
+arkworks.identity-semantics|crates/crypto/proof-aggregation/src/ipp/dh_commitments/src/identity/mod.rs:IdentityCommitment
+arkworks.torsion-rejection|crates/crypto/proof-aggregation/src/srs.rs:CanonicalDeserialize
+arkworks.msm-boundary|crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/tipa/mod.rs:G::msm

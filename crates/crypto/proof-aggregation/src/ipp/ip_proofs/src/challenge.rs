@@ -1,6 +1,9 @@
 use std::convert::TryFrom;
 
 use digest::{Digest, Output};
+use penumbra_sdk_proof_aggregation_trace_schema::{
+    TraceComparisonLevel, TraceEvent, TraceEventKind,
+};
 use sha2::Sha256;
 
 const CHALLENGE_DOMAIN: &[u8] = b"penumbra.snarkpack.challenge.v1\0";
@@ -13,9 +16,9 @@ pub struct ChallengeContext {
 
 impl ChallengeContext {
     pub fn from_statement_digest(digest: [u8; 32]) -> Self {
+        let preimage = challenge_context_preimage(digest);
         let mut hasher = Sha256::new();
-        hasher.update(CHALLENGE_CONTEXT_DOMAIN);
-        hasher.update(digest);
+        hasher.update(&preimage);
         Self {
             bytes: hasher.finalize().into(),
         }
@@ -26,15 +29,17 @@ impl ChallengeContext {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ChallengeTraceEntry {
-    pub stage_label: Vec<u8>,
-    pub nonce: u64,
-    pub digest_bytes: Vec<u8>,
+pub fn challenge_context_preimage(statement_digest: [u8; 32]) -> Vec<u8> {
+    let mut preimage = Vec::with_capacity(CHALLENGE_CONTEXT_DOMAIN.len() + 32);
+    preimage.extend_from_slice(CHALLENGE_CONTEXT_DOMAIN);
+    preimage.extend_from_slice(&statement_digest);
+    preimage
 }
 
+pub type ChallengeTraceEntry = TraceEvent;
+
 pub trait ChallengeTraceSink {
-    fn record(&mut self, stage_label: &'static [u8], nonce: u64, digest: &[u8]);
+    fn record(&mut self, stage_label: &'static [u8], nonce: u64, preimage: &[u8], digest: &[u8]);
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -42,7 +47,14 @@ pub struct NoopChallengeTraceSink;
 
 impl ChallengeTraceSink for NoopChallengeTraceSink {
     #[inline]
-    fn record(&mut self, _stage_label: &'static [u8], _nonce: u64, _digest: &[u8]) {}
+    fn record(
+        &mut self,
+        _stage_label: &'static [u8],
+        _nonce: u64,
+        _preimage: &[u8],
+        _digest: &[u8],
+    ) {
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -61,11 +73,40 @@ impl VecChallengeTraceSink {
 }
 
 impl ChallengeTraceSink for VecChallengeTraceSink {
-    fn record(&mut self, stage_label: &'static [u8], nonce: u64, digest: &[u8]) {
-        self.entries.push(ChallengeTraceEntry {
-            stage_label: stage_label.to_vec(),
-            nonce,
-            digest_bytes: digest.to_vec(),
+    fn record(&mut self, stage_label: &'static [u8], nonce: u64, preimage: &[u8], digest: &[u8]) {
+        let stage_label_str = trace_stage_label(stage_label);
+        self.entries.push(TraceEvent {
+            spec_row_id: "fs.stage-labels",
+            primary_level: TraceComparisonLevel::PenumbraByte,
+            event_kind: TraceEventKind::ChallengePreimage,
+            stage_label: stage_label_str,
+            nonce: Some(nonce),
+            round_index: None,
+            byte_payload: stage_label.to_vec(),
+            abstract_payload: None,
+            filecoin_bug_class: None,
+        });
+        self.entries.push(TraceEvent {
+            spec_row_id: "fs.challenge-preimage",
+            primary_level: TraceComparisonLevel::PenumbraByte,
+            event_kind: TraceEventKind::ChallengePreimage,
+            stage_label: stage_label_str,
+            nonce: Some(nonce),
+            round_index: None,
+            byte_payload: preimage.to_vec(),
+            abstract_payload: None,
+            filecoin_bug_class: None,
+        });
+        self.entries.push(TraceEvent {
+            spec_row_id: trace_spec_row_id(stage_label),
+            primary_level: TraceComparisonLevel::PenumbraByte,
+            event_kind: TraceEventKind::ChallengeDigest,
+            stage_label: stage_label_str,
+            nonce: Some(nonce),
+            round_index: None,
+            byte_payload: digest.to_vec(),
+            abstract_payload: None,
+            filecoin_bug_class: None,
         });
     }
 }
@@ -83,7 +124,7 @@ where
 {
     let preimage = challenge_preimage(context, stage_label, nonce, messages);
     let digest = D::digest(&preimage);
-    trace.record(stage_label, nonce, digest.as_slice());
+    trace.record(stage_label, nonce, &preimage, digest.as_slice());
     digest
 }
 
@@ -104,4 +145,31 @@ pub fn challenge_preimage(
     preimage.extend_from_slice(&nonce.to_le_bytes());
     preimage.extend_from_slice(messages);
     preimage
+}
+
+fn trace_stage_label(stage_label: &'static [u8]) -> &'static str {
+    match stage_label {
+        b"aggregate.randomizer" => "aggregate.randomizer",
+        b"tipa.ab.gipa.round" => "tipa.ab.gipa.round",
+        b"tipa.ab.kzg" => "tipa.ab.kzg",
+        b"tipa.c.gipa.round" => "tipa.c.gipa.round",
+        b"tipa.c.kzg" => "tipa.c.kzg",
+        b"tipa.generic.gipa.round" => "tipa.generic.gipa.round",
+        b"tipa.generic.kzg" => "tipa.generic.kzg",
+        b"tipa.generic.ssm.gipa.round" => "tipa.generic.ssm.gipa.round",
+        _ => "unknown",
+    }
+}
+
+fn trace_spec_row_id(stage_label: &'static [u8]) -> &'static str {
+    match stage_label {
+        b"aggregate.randomizer" => "groth16.randomizer",
+        b"tipa.ab.kzg" | b"tipa.generic.kzg" => "tipa.ab.kzg-challenge",
+        b"tipa.c.kzg" => "ssm.kzg-challenge",
+        b"tipa.ab.gipa.round"
+        | b"tipa.c.gipa.round"
+        | b"tipa.generic.gipa.round"
+        | b"tipa.generic.ssm.gipa.round" => "gipa.challenge-dependency",
+        _ => "fs.challenge-preimage",
+    }
 }

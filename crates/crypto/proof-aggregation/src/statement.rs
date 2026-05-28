@@ -130,6 +130,10 @@ impl StatementPublicInputRow {
     pub fn iter(&self) -> impl Iterator<Item = &StatementFieldBytes> {
         self.fields.iter()
     }
+
+    pub(crate) fn as_slice(&self) -> &[StatementFieldBytes] {
+        &self.fields
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -148,6 +152,10 @@ impl StatementPaddedRows {
 
     pub fn iter(&self) -> impl Iterator<Item = &StatementPublicInputRow> {
         self.rows.iter()
+    }
+
+    pub(crate) fn as_slice(&self) -> &[StatementPublicInputRow] {
+        &self.rows
     }
 }
 
@@ -320,13 +328,42 @@ pub fn encode_statement(
     append_u32_field(&mut bytes, input.padded_count);
     append_u32_field(&mut bytes, input.public_input_arity);
     append_len(&mut bytes, input.padded_public_inputs.len(), "row_count")?;
-    for row in input.padded_public_inputs.iter() {
-        append_len(&mut bytes, row.len(), "row_arity")?;
-        for field in row.iter() {
-            append_bytes_field(&mut bytes, field.as_bytes())?;
-        }
-    }
+    encode_rows(&mut bytes, input.padded_public_inputs.as_slice())?;
     Ok(bytes)
+}
+
+/// Encode the padded-row sequence by structural recursion so the F* refinement
+/// can induct over the rows. Byte output is identical to the prior nested loop.
+fn encode_rows(
+    bytes: &mut Vec<u8>,
+    rows: &[StatementPublicInputRow],
+) -> Result<(), AggregateStatementError> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let (head, rest) = rows.split_at(1);
+    encode_row(bytes, &head[0])?;
+    encode_rows(bytes, rest)
+}
+
+fn encode_row(
+    bytes: &mut Vec<u8>,
+    row: &StatementPublicInputRow,
+) -> Result<(), AggregateStatementError> {
+    append_len(bytes, row.len(), "row_arity")?;
+    encode_fields(bytes, row.as_slice())
+}
+
+fn encode_fields(
+    bytes: &mut Vec<u8>,
+    fields: &[StatementFieldBytes],
+) -> Result<(), AggregateStatementError> {
+    if fields.is_empty() {
+        return Ok(());
+    }
+    let (head, rest) = fields.split_at(1);
+    append_bytes_field(bytes, head[0].as_bytes())?;
+    encode_fields(bytes, rest)
 }
 
 pub fn statement_digest(
@@ -370,16 +407,29 @@ pub fn validate_row_arity<T>(
     rows: &[Vec<T>],
     expected: usize,
 ) -> Result<(), AggregateStatementError> {
-    for (index, row) in rows.iter().enumerate() {
-        if row.len() != expected {
-            return Err(AggregateStatementError::RowArityMismatch {
-                index,
-                expected,
-                got: row.len(),
-            });
-        }
+    validate_row_arity_from(rows, expected, 0)
+}
+
+/// Structural recursion over rows so the F* refinement can induct. Behaviour is
+/// identical to the prior `enumerate` loop: it rejects at the first row whose
+/// length differs from `expected`, reporting that row's running index.
+fn validate_row_arity_from<T>(
+    rows: &[Vec<T>],
+    expected: usize,
+    index: usize,
+) -> Result<(), AggregateStatementError> {
+    if rows.is_empty() {
+        return Ok(());
     }
-    Ok(())
+    let (head, rest) = rows.split_at(1);
+    if head[0].len() != expected {
+        return Err(AggregateStatementError::RowArityMismatch {
+            index,
+            expected,
+            got: head[0].len(),
+        });
+    }
+    validate_row_arity_from(rest, expected, index + 1)
 }
 
 pub fn validate_repeat_final_padding<T: Eq>(
@@ -404,15 +454,34 @@ pub fn validate_repeat_final_padding<T: Eq>(
         });
     }
     let final_real = &rows[real_count_usize - 1];
-    for row in &rows[real_count_usize..] {
-        if row != final_real {
-            return Err(AggregateStatementError::BadPadding {
-                padded_count,
-                row_count: rows.len(),
-            });
-        }
+    check_repeat_suffix(
+        &rows[real_count_usize..],
+        final_real,
+        padded_count,
+        rows.len(),
+    )
+}
+
+/// Structural recursion over the padding suffix so the F* refinement can induct.
+/// Behaviour is identical to the prior suffix loop: every row at or beyond the
+/// real count must equal the final real row, else `BadPadding`.
+fn check_repeat_suffix<T: Eq>(
+    suffix: &[Vec<T>],
+    final_real: &Vec<T>,
+    padded_count: u32,
+    row_count: usize,
+) -> Result<(), AggregateStatementError> {
+    if suffix.is_empty() {
+        return Ok(());
     }
-    Ok(())
+    let (head, rest) = suffix.split_at(1);
+    if &head[0] != final_real {
+        return Err(AggregateStatementError::BadPadding {
+            padded_count,
+            row_count,
+        });
+    }
+    check_repeat_suffix(rest, final_real, padded_count, row_count)
 }
 
 fn statement_digest_from_canonical(canonical_bytes: &[u8]) -> [u8; 32] {

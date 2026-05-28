@@ -9,16 +9,18 @@ use ark_ip_proofs::applications::groth16_aggregation::{
     verify_aggregate_proof_profiled, AggregateProof, AggregateProofBuildProfile,
     AggregateProofVerificationProfile,
 };
-#[cfg(test)]
 use ark_ip_proofs::applications::groth16_aggregation::{
     aggregate_proofs_with_trace, verify_aggregate_proof_with_trace,
 };
-use ark_ip_proofs::challenge::ChallengeContext;
-#[cfg(test)]
-use ark_ip_proofs::challenge::ChallengeTraceSink;
+use ark_ip_proofs::challenge::{
+    challenge_context_preimage, ChallengeContext, ChallengeTraceSink, VecChallengeTraceSink,
+};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use decaf377::{Bls12_377, Fq};
 use digest::Digest;
+use penumbra_sdk_proof_aggregation_trace_schema::{
+    TraceComparisonLevel, TraceEvent, TraceEventKind,
+};
 use penumbra_sdk_proof_params::batch::BatchItem;
 use penumbra_sdk_shielded_pool::{ConsolidateFamilyId, SplitFamilyId};
 
@@ -32,7 +34,8 @@ use crate::{
     srs::DevSrs,
     statement::{AggregateStatement, AggregateStatementError},
     transcript::{
-        ConsolidateTranscriptDigest, ShieldedIcs20WithdrawalTranscriptDigest, SplitTranscriptDigest,
+        ConsolidateTranscriptDigest, ShieldedIcs20WithdrawalTranscriptDigest,
+        SplitTranscriptDigest, TransferTranscriptDigest,
     },
     transfer_family_dispatch::{
         aggregate_transfer, aggregate_transfer_profiled, verify_transfer_aggregate,
@@ -69,6 +72,12 @@ impl fmt::Display for AggregateVerifyError {
 }
 
 impl std::error::Error for AggregateVerifyError {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AggregateTraceReport {
+    pub accepted: bool,
+    pub trace: Vec<TraceEvent>,
+}
 
 impl From<AggregateStatementError> for AggregateVerifyError {
     fn from(value: AggregateStatementError) -> Self {
@@ -289,6 +298,79 @@ impl SnarkpackBackend {
         aggregate_transfer_profiled(items, srs, challenge_context)
     }
 
+    fn aggregate_transfer_family_with_trace<S>(
+        challenge_context: &ChallengeContext,
+        trace: &mut S,
+        items: &[BatchItem],
+        srs: &DevSrs,
+    ) -> Result<Vec<u8>>
+    where
+        S: ChallengeTraceSink,
+    {
+        aggregate_with_digest_with_trace::<TransferTranscriptDigest, S>(
+            challenge_context,
+            trace,
+            items,
+            srs,
+        )
+    }
+
+    fn aggregate_split_family_with_trace<S>(
+        family_id: SplitFamilyId,
+        challenge_context: &ChallengeContext,
+        trace: &mut S,
+        items: &[BatchItem],
+        srs: &DevSrs,
+    ) -> Result<Vec<u8>>
+    where
+        S: ChallengeTraceSink,
+    {
+        match family_id {
+            SplitFamilyId::OneByFour => aggregate_with_digest_with_trace::<
+                SplitTranscriptDigest<{ SplitFamilyId::OneByFour.get() }>,
+                S,
+            >(challenge_context, trace, items, srs),
+            SplitFamilyId::OneByEight => aggregate_with_digest_with_trace::<
+                SplitTranscriptDigest<{ SplitFamilyId::OneByEight.get() }>,
+                S,
+            >(challenge_context, trace, items, srs),
+            other => Err(anyhow::anyhow!(
+                "unknown split aggregate family {}",
+                other.get()
+            )),
+        }
+    }
+
+    fn aggregate_consolidate_family_with_trace<S>(
+        family_id: ConsolidateFamilyId,
+        challenge_context: &ChallengeContext,
+        trace: &mut S,
+        items: &[BatchItem],
+        srs: &DevSrs,
+    ) -> Result<Vec<u8>>
+    where
+        S: ChallengeTraceSink,
+    {
+        match family_id {
+            ConsolidateFamilyId::TwoByOne => aggregate_with_digest_with_trace::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::TwoByOne.get() }>,
+                S,
+            >(challenge_context, trace, items, srs),
+            ConsolidateFamilyId::FourByOne => aggregate_with_digest_with_trace::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::FourByOne.get() }>,
+                S,
+            >(challenge_context, trace, items, srs),
+            ConsolidateFamilyId::EightByOne => aggregate_with_digest_with_trace::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::EightByOne.get() }>,
+                S,
+            >(challenge_context, trace, items, srs),
+            other => Err(anyhow::anyhow!(
+                "unknown consolidate aggregate family {}",
+                other.get()
+            )),
+        }
+    }
+
     fn aggregate_split_family_profiled(
         family_id: SplitFamilyId,
         items: &[BatchItem],
@@ -366,6 +448,48 @@ impl SnarkpackBackend {
         }
     }
 
+    fn verify_split_family_aggregate_with_trace<S>(
+        challenge_context: &ChallengeContext,
+        trace: &mut S,
+        family_id: SplitFamilyId,
+        pvk: &PreparedVerifyingKey<Bls12_377>,
+        aggregate_proof_bytes: &[u8],
+        padded_public_inputs: &[Vec<Fq>],
+        srs: &DevSrs,
+    ) -> Result<bool, AggregateVerifyError>
+    where
+        S: ChallengeTraceSink,
+    {
+        match family_id {
+            SplitFamilyId::OneByFour => verify_with_digest_with_trace::<
+                SplitTranscriptDigest<{ SplitFamilyId::OneByFour.get() }>,
+                S,
+            >(
+                challenge_context,
+                trace,
+                pvk,
+                aggregate_proof_bytes,
+                padded_public_inputs,
+                srs,
+            ),
+            SplitFamilyId::OneByEight => verify_with_digest_with_trace::<
+                SplitTranscriptDigest<{ SplitFamilyId::OneByEight.get() }>,
+                S,
+            >(
+                challenge_context,
+                trace,
+                pvk,
+                aggregate_proof_bytes,
+                padded_public_inputs,
+                srs,
+            ),
+            other => Err(AggregateVerifyError::BadVersion(format!(
+                "unknown split aggregate family {}",
+                other.get()
+            ))),
+        }
+    }
+
     fn verify_consolidate_family_aggregate_profiled_status(
         challenge_context: &ChallengeContext,
         family_id: ConsolidateFamilyId,
@@ -397,6 +521,59 @@ impl SnarkpackBackend {
                 ConsolidateTranscriptDigest<{ ConsolidateFamilyId::EightByOne.get() }>,
             >(
                 challenge_context,
+                pvk,
+                aggregate_proof_bytes,
+                padded_public_inputs,
+                srs,
+            ),
+            other => Err(AggregateVerifyError::BadVersion(format!(
+                "unknown consolidate aggregate family {}",
+                other.get()
+            ))),
+        }
+    }
+
+    fn verify_consolidate_family_aggregate_with_trace<S>(
+        challenge_context: &ChallengeContext,
+        trace: &mut S,
+        family_id: ConsolidateFamilyId,
+        pvk: &PreparedVerifyingKey<Bls12_377>,
+        aggregate_proof_bytes: &[u8],
+        padded_public_inputs: &[Vec<Fq>],
+        srs: &DevSrs,
+    ) -> Result<bool, AggregateVerifyError>
+    where
+        S: ChallengeTraceSink,
+    {
+        match family_id {
+            ConsolidateFamilyId::TwoByOne => verify_with_digest_with_trace::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::TwoByOne.get() }>,
+                S,
+            >(
+                challenge_context,
+                trace,
+                pvk,
+                aggregate_proof_bytes,
+                padded_public_inputs,
+                srs,
+            ),
+            ConsolidateFamilyId::FourByOne => verify_with_digest_with_trace::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::FourByOne.get() }>,
+                S,
+            >(
+                challenge_context,
+                trace,
+                pvk,
+                aggregate_proof_bytes,
+                padded_public_inputs,
+                srs,
+            ),
+            ConsolidateFamilyId::EightByOne => verify_with_digest_with_trace::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::EightByOne.get() }>,
+                S,
+            >(
+                challenge_context,
+                trace,
                 pvk,
                 aggregate_proof_bytes,
                 padded_public_inputs,
@@ -485,6 +662,131 @@ impl SnarkpackBackend {
             )));
         }
         Ok(profile)
+    }
+
+    pub fn aggregate_family_with_trace(
+        statement: &AggregateStatement,
+        _pvk: &PreparedVerifyingKey<Bls12_377>,
+        items: &[BatchItem],
+        srs: &DevSrs,
+    ) -> Result<(Vec<u8>, Vec<TraceEvent>)> {
+        let family_id = statement.family_id();
+        srs.ensure_supported_count(items.len())?;
+        ensure!(
+            !items.is_empty(),
+            "cannot build an aggregate proof for empty family {:?}",
+            family_id
+        );
+
+        let mut challenge_trace = VecChallengeTraceSink::default();
+        let inner_proof_bytes = match family_id {
+            ProofFamilyId::Transfer => Self::aggregate_transfer_family_with_trace(
+                statement.challenge_context(),
+                &mut challenge_trace,
+                items,
+                srs,
+            ),
+            ProofFamilyId::Consolidate(family_id) => Self::aggregate_consolidate_family_with_trace(
+                family_id,
+                statement.challenge_context(),
+                &mut challenge_trace,
+                items,
+                srs,
+            ),
+            ProofFamilyId::Split(family_id) => Self::aggregate_split_family_with_trace(
+                family_id,
+                statement.challenge_context(),
+                &mut challenge_trace,
+                items,
+                srs,
+            ),
+            ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
+                aggregate_with_digest_with_trace::<ShieldedIcs20WithdrawalTranscriptDigest, _>(
+                    statement.challenge_context(),
+                    &mut challenge_trace,
+                    items,
+                    srs,
+                )
+            }
+        }?;
+
+        let wrapped =
+            encode_wrapped_aggregate_proof(statement.statement_digest(), &inner_proof_bytes)?;
+        ensure!(
+            wrapped.len() <= MAX_AGGREGATE_PROOF_BYTES,
+            "wrapped aggregate proof bytes {} exceed cap {}",
+            wrapped.len(),
+            MAX_AGGREGATE_PROOF_BYTES
+        );
+
+        Ok((
+            wrapped,
+            complete_snarkpack_trace(statement, challenge_trace.into_entries()),
+        ))
+    }
+
+    pub fn verify_family_aggregate_with_trace(
+        statement: &AggregateStatement,
+        pvk: &PreparedVerifyingKey<Bls12_377>,
+        aggregate_proof_bytes: &[u8],
+        srs: &DevSrs,
+    ) -> Result<AggregateTraceReport, AggregateVerifyError> {
+        let call = preflight_aggregate_verify(AggregatePreflightInput {
+            statement,
+            pvk,
+            aggregate_proof_bytes,
+            srs,
+        })?;
+        let family_id = call.family_id();
+        let mut challenge_trace = VecChallengeTraceSink::default();
+
+        let accepted = match family_id {
+            ProofFamilyId::Transfer => {
+                verify_with_digest_with_trace::<TransferTranscriptDigest, _>(
+                    call.challenge_context(),
+                    &mut challenge_trace,
+                    call.pvk(),
+                    call.inner_proof_bytes(),
+                    call.padded_public_inputs(),
+                    call.srs(),
+                )?
+            }
+            ProofFamilyId::Consolidate(family_id) => {
+                Self::verify_consolidate_family_aggregate_with_trace(
+                    call.challenge_context(),
+                    &mut challenge_trace,
+                    family_id,
+                    call.pvk(),
+                    call.inner_proof_bytes(),
+                    call.padded_public_inputs(),
+                    call.srs(),
+                )?
+            }
+            ProofFamilyId::Split(family_id) => Self::verify_split_family_aggregate_with_trace(
+                call.challenge_context(),
+                &mut challenge_trace,
+                family_id,
+                call.pvk(),
+                call.inner_proof_bytes(),
+                call.padded_public_inputs(),
+                call.srs(),
+            )?,
+            ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
+                verify_with_digest_with_trace::<ShieldedIcs20WithdrawalTranscriptDigest, _>(
+                    call.challenge_context(),
+                    &mut challenge_trace,
+                    call.pvk(),
+                    call.inner_proof_bytes(),
+                    call.padded_public_inputs(),
+                    call.srs(),
+                )?
+            }
+        };
+
+        Ok(AggregateTraceReport {
+            accepted,
+            trace: complete_snarkpack_trace(statement, challenge_trace.into_entries()),
+        })
     }
 }
 
@@ -680,7 +982,6 @@ pub(crate) fn aggregate_with_digest<D: Digest>(
     Ok(bytes)
 }
 
-#[cfg(test)]
 pub(crate) fn aggregate_with_digest_with_trace<D, S>(
     challenge_context: &ChallengeContext,
     trace: &mut S,
@@ -831,7 +1132,6 @@ pub(crate) fn verify_with_digest<D: Digest>(
     .map_err(|e| AggregateVerifyError::BackendRejected(e.to_string()))
 }
 
-#[cfg(test)]
 pub(crate) fn verify_with_digest_with_trace<D, S>(
     challenge_context: &ChallengeContext,
     trace: &mut S,
@@ -855,6 +1155,58 @@ where
         &aggregate,
     )
     .map_err(|e| AggregateVerifyError::BackendRejected(e.to_string()))
+}
+
+fn complete_snarkpack_trace(
+    statement: &AggregateStatement,
+    challenge_entries: Vec<TraceEvent>,
+) -> Vec<TraceEvent> {
+    let mut trace = Vec::with_capacity(1 + 10 + challenge_entries.len());
+    trace.push(trace_context_event(statement));
+    push_static_abstract_trace(&mut trace);
+    trace.extend(challenge_entries);
+    trace
+}
+
+fn trace_context_event(statement: &AggregateStatement) -> TraceEvent {
+    TraceEvent {
+        spec_row_id: "fs.context-constructor",
+        primary_level: TraceComparisonLevel::PenumbraByte,
+        event_kind: TraceEventKind::ChallengeContext,
+        stage_label: "statement",
+        nonce: None,
+        round_index: None,
+        byte_payload: challenge_context_preimage(statement.statement_digest()),
+        abstract_payload: None,
+        filecoin_bug_class: None,
+    }
+}
+
+fn push_static_abstract_trace(trace: &mut Vec<TraceEvent>) {
+    push_abstract_trace(trace, "gipa.input-relation");
+    push_abstract_trace(trace, "gipa.round-folding");
+    push_abstract_trace(trace, "gipa.verifier-folding");
+    push_abstract_trace(trace, "tipa.srs");
+    push_abstract_trace(trace, "tipa.ab.gipa");
+    push_abstract_trace(trace, "tipa.ab.kzg-equations");
+    push_abstract_trace(trace, "ssm.power-sequence");
+    push_abstract_trace(trace, "ssm.base-equation");
+    push_abstract_trace(trace, "groth16.folded-inputs");
+    push_abstract_trace(trace, "groth16.ppe");
+}
+
+fn push_abstract_trace(trace: &mut Vec<TraceEvent>, spec_row_id: &'static str) {
+    trace.push(TraceEvent {
+        spec_row_id,
+        primary_level: TraceComparisonLevel::AbstractTrace,
+        event_kind: TraceEventKind::EquationRole,
+        stage_label: spec_row_id,
+        nonce: None,
+        round_index: None,
+        byte_payload: Vec::new(),
+        abstract_payload: Some(spec_row_id),
+        filecoin_bug_class: None,
+    });
 }
 
 pub(crate) fn verify_with_digest_profiled<D: Digest>(

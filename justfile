@@ -89,6 +89,10 @@ snarkpack-slow:
 snarkpack-invariants:
     ./scripts/check-snarkpack-invariants.sh
 
+# Re-derive Filecoin v2 SnarkPack transcript-shape evidence from the pinned Bellperson source.
+snarkpack-filecoin-shape:
+    ./scripts/check-snarkpack-filecoin-shape.sh
+
 # Run pinned SnarkPack formal extraction and F* proof checks.
 snarkpack-formal:
     ./scripts/snarkpack-formal.sh

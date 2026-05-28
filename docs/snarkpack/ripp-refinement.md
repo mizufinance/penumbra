@@ -5,8 +5,11 @@ between Penumbra-owned RIPP/SnarkPack Rust and the algorithm whose algebraic
 soundness is assumed. It is not a mechanized proof.
 
 Review each row against `docs/snarkpack/ripp-spec.md`. That file states the
-local algorithm spec, transcript rules, and minimum evidence required for each
-deviation class.
+Penumbra-local algorithm spec, imports Filecoin v2 transcript bug-class
+discipline, assigns one primary comparison level per spec row, and records the
+minimum evidence required for each deviation class. Intentional
+Filecoin-to-Penumbra differences are tracked separately in
+`docs/snarkpack/adaptation-register.md`.
 
 Rows are keyed by `symbol_id`, and every symbol in
 `crates/crypto/proof-aggregation/formal/snarkpack/ripp-refinement-scope.txt`

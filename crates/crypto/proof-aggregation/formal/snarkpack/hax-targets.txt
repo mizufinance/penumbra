@@ -15,4 +15,5 @@ penumbra_sdk_proof_aggregation::statement::validate_repeat_final_padding
 penumbra_sdk_proof_aggregation::aggregate_proof_wrapper::encode_wrapped_aggregate_proof
 penumbra_sdk_proof_aggregation::aggregate_proof_wrapper::decode_wrapped_aggregate_proof_inner_range
 ark_ip_proofs::challenge::ChallengeContext
+ark_ip_proofs::challenge::challenge_context_preimage
 ark_ip_proofs::challenge::challenge_preimage

@@ -1,0 +1,9 @@
+[package]
+name = "penumbra-sdk-proof-aggregation-trace-schema"
+authors = { workspace = true }
+repository = { workspace = true }
+description = "Shared trace schema for Penumbra SnarkPack proof aggregation"
+version = { workspace = true }
+license = { workspace = true }
+edition = { workspace = true }
+publish = false

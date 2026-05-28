@@ -1,12 +1,79 @@
-# SnarkPack RIPP Implementation Spec
+# SnarkPack RIPP Review Spec
 
-Status: review specification for the Penumbra-owned RIPP/SnarkPack backend.
-This is not a mechanized proof. It is the checklist used to review
-`docs/snarkpack/ripp-refinement.md`.
+Status: Penumbra-local implementation spec, checked against Filecoin v2
+transcript bug classes and used by `docs/snarkpack/ripp-refinement.md`.
+This is not a mechanized proof and not an independently invented SnarkPack
+specification.
 
 In this document, "RIPP" means the local proof stack under
 `crates/crypto/proof-aggregation/src/ipp/ip_proofs/src`: GIPA, TIPA,
 TIPA-with-structured-scalar-message, and the Groth16 aggregation adapter.
+
+Filecoin SnarkPack v2 is the reference for Fiat-Shamir omission/reordering bug
+classes and transcript discipline. The normative SnarkPack-shape source is
+Bellperson `v0.21.0` at peeled commit
+`62c362fd46ca2139747b8770bae53ce6f1e42bb1`; rust-fil-proofs
+`filecoin-proofs-v11.1.0` at commit
+`004d7b4244c469e0d9aeebf15f9a81ef60308ba3` is production-consumer evidence
+for the Filecoin Network v16 Skyr release. The Penumbra-local spec is
+authoritative for BLS12-377, hash/domain choices, statement binding, padding,
+SRS/VK binding, and aggregate-bundle integration. No cross-curve byte-level
+equivalence to Filecoin is claimed.
+
+## Comparison Levels
+
+Every spec row/event has exactly one primary required comparison level.
+Secondary checks can provide evidence, but they do not satisfy the row's gate.
+The shared trace policy table in
+`crates/crypto/proof-aggregation-trace-schema` must match the Spec Row Index
+below.
+
+- `penumbra-byte`: exact bytes hashed or serialized by Penumbra; required
+  between Penumbra reference and optimized paths.
+- `abstract-trace`: typed event order, labels, challenge dependencies, round
+  schedule, object roles, and verifier equation roles.
+- `filecoin-shape`: abstract dependency-shape comparison against Filecoin v2
+  bug classes only.
+- `penumbra-local`: Penumbra-only integration behavior with no Filecoin
+  comparison target.
+
+Default primary-level policy:
+
+- Penumbra challenge preimages, statement bytes, wrapper bytes, SRS/VK digest
+  inputs, and public-input framing use `penumbra-byte`.
+- GIPA/TIPA/Groth16 round structure and verifier equation roles use
+  `abstract-trace` unless exact Penumbra bytes are hashed at that step.
+- Filecoin-specific bug-class checks use `filecoin-shape`.
+- Penumbra-only app integration and aggregate-bundle routing use
+  `penumbra-local` evidence in the refinement/adaptation maps.
+
+Rows whose primary level is `abstract-trace` may consume objects whose byte
+binding is established by upstream `penumbra-byte` rows. In that case, the
+abstract row gates only the equation or event role; the upstream byte rows gate
+canonical framing and byte-to-object binding.
+
+## Spec Row Index
+
+| spec_row_id | source basis | primary_required_comparison_level | required evidence |
+| --- | --- | --- | --- |
+| `fs.context-constructor` | Penumbra adaptation; Filecoin v2 transcript context bug class | `penumbra-byte` | F* challenge-context row; invariant guard against alternate constructors |
+| `fs.challenge-preimage` | Penumbra adaptation; Filecoin v2 ordered transcript-input bug class | `penumbra-byte` | F* challenge-preimage row; golden layout test |
+| `fs.stage-labels` | Penumbra adaptation; Filecoin v2 domain-separation discipline | `penumbra-byte` | prover/verifier trace parity and stage-label review |
+| `fs.filecoin-bug-class` | Bellperson `v0.21.0` Filecoin v2 transcript hardening, with rust-fil-proofs `filecoin-proofs-v11.1.0` as production-consumer evidence | `filecoin-shape` | manual review against pinned Filecoin v2 reference |
+| `gipa.input-relation` | paper algebra and local implementation | `abstract-trace` | equation review and unit/property evidence |
+| `gipa.round-folding` | paper algebra and local implementation | `abstract-trace` | equation review and prover/verifier trace evidence |
+| `gipa.challenge-dependency` | Penumbra challenge helper and Filecoin v2 transcript-input discipline | `penumbra-byte` | trace parity over exact Penumbra challenge bytes |
+| `gipa.verifier-folding` | paper algebra and local implementation | `abstract-trace` | equation review and mutation rejection evidence |
+| `tipa.srs` | paper algebra and Penumbra SRS adaptation | `abstract-trace` | SRS dimension tests and refinement review |
+| `tipa.ab.gipa` | paper algebra and local implementation | `abstract-trace` | GIPA trace/equation evidence |
+| `tipa.ab.kzg-challenge` | Penumbra challenge helper and Filecoin v2 transcript-input discipline | `penumbra-byte` | trace parity over exact Penumbra KZG challenge bytes |
+| `tipa.ab.kzg-equations` | paper algebra and local implementation | `abstract-trace` | KZG equation review and mutation tests |
+| `ssm.power-sequence` | paper algebra and local implementation | `abstract-trace` | structured-power tests and equation review |
+| `ssm.kzg-challenge` | Penumbra challenge helper and Filecoin v2 transcript-input discipline | `penumbra-byte` | trace parity over exact Penumbra C-path challenge bytes |
+| `ssm.base-equation` | paper algebra and local implementation | `abstract-trace` | equation review and mutation tests |
+| `groth16.randomizer` | Penumbra challenge helper and Filecoin v2 final-randomness bug class | `penumbra-byte` | randomizer trace parity and Filecoin bug-class review |
+| `groth16.folded-inputs` | Penumbra public-input adaptation and paper algebra; byte binding is covered by `curve.field.public-input` and `serialization.public-input-fields` adaptation rows | `abstract-trace` | public-input mutation tests and equation review |
+| `groth16.ppe` | paper algebra and local implementation | `abstract-trace` | PPE mutation tests and equation review |
 
 ## What Is Formally Verified Today
 
@@ -16,8 +83,15 @@ algorithm correctness.
 Mechanically proved rows today:
 
 - `validate_counts` rejects zero real count.
+- statement byte-field framing and full `encode_statement` injectivity.
+- statement digest equality reduction to canonical statement equality, modulo
+  the SHA-256 collision-resistance assumption.
+- full count, row-arity, and repeat-final-padding validation iff lemmas.
 - wrapper decode rejects oversized bytes before parsing or exposing the inner
   proof range.
+- wrapper round trip returns the exact inner range, and digest mismatch rejects
+  before successful inner-range exposure.
+- challenge context layout and challenge preimage layout/injectivity.
 
 Composed/type-checked rows today:
 
@@ -26,10 +100,9 @@ Composed/type-checked rows today:
 - aggregate backend verification receives only typed preflighted proof bytes.
 - app-level aggregate bundle flow reaches typed aggregate preflight.
 
-Open F* rows include statement encoding injectivity, digest reduction, full
-validation iff lemmas, padding non-malleability, wrapper round trip/digest
-mismatch, and challenge preimage injectivity. RIPP/GIPA/TIPA algorithm fidelity
-is not formally proved; it is covered by the refinement review map.
+There are no remaining open Stage 4 implementation-boundary F* rows for the
+current extracted Rust target set. RIPP/GIPA/TIPA algorithm fidelity is not
+formally proved; it is covered by the refinement review map.
 
 ## Review Method
 
@@ -45,11 +118,22 @@ For each `symbol_id` in `ripp-refinement-scope.txt`, verify four facts:
 
 Do not mark a row `refined` just because tests pass. Tests are evidence for a
 review conclusion; they are not a replacement for checking the equations.
+Security-binding or semantic rows cannot become `refined` solely from tests.
 
 ## Fiat-Shamir Challenge Spec
 
 Implementation file:
 `crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/challenge.rs`.
+
+Source basis: Penumbra adaptation plus Filecoin v2 transcript omission and
+ordering bug classes.
+
+Primary comparison levels:
+
+- `fs.context-constructor`: `penumbra-byte`
+- `fs.challenge-preimage`: `penumbra-byte`
+- `fs.stage-labels`: `penumbra-byte`
+- `fs.filecoin-bug-class`: `filecoin-shape`
 
 Context:
 
@@ -81,10 +165,28 @@ Required checks:
   - `tipa.c.kzg`
 - prover and verifier traces are byte-identical for accepted proofs
 
+Filecoin v2 bug-class checklist:
+
+- no omitted first-round transcript hash
+- no omitted final randomness dependency
+- no reorderable public messages
+- no hidden/default transcript context
+- prover and verifier consume equivalent challenge inputs
+
 ## GIPA Spec
 
 Implementation file:
 `crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/gipa.rs`.
+
+Source basis: paper algebra plus local implementation. Fiat-Shamir dependency
+rows additionally import Filecoin v2 transcript discipline.
+
+Primary comparison levels:
+
+- `gipa.input-relation`: `abstract-trace`
+- `gipa.round-folding`: `abstract-trace`
+- `gipa.challenge-dependency`: `penumbra-byte`
+- `gipa.verifier-folding`: `abstract-trace`
 
 Input relation:
 
@@ -173,6 +275,15 @@ Required checks:
 Implementation file:
 `crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/tipa/mod.rs`.
 
+Source basis: paper algebra plus Penumbra SRS and transcript adaptations.
+
+Primary comparison levels:
+
+- `tipa.srs`: `abstract-trace`
+- `tipa.ab.gipa`: `abstract-trace`
+- `tipa.ab.kzg-challenge`: `penumbra-byte`
+- `tipa.ab.kzg-equations`: `abstract-trace`
+
 SRS:
 
 ```text
@@ -224,6 +335,14 @@ Required checks:
 Implementation file:
 `crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/tipa/structured_scalar_message.rs`.
 
+Source basis: paper algebra plus local C-path specialization.
+
+Primary comparison levels:
+
+- `ssm.power-sequence`: `abstract-trace`
+- `ssm.kzg-challenge`: `penumbra-byte`
+- `ssm.base-equation`: `abstract-trace`
+
 This is the C-path variant where the right message is public structured powers:
 
 ```text
@@ -266,6 +385,15 @@ Required checks:
 
 Implementation file:
 `crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/applications/groth16_aggregation.rs`.
+
+Source basis: paper algebra plus Penumbra public-input, family, and transcript
+adaptations.
+
+Primary comparison levels:
+
+- `groth16.randomizer`: `penumbra-byte`
+- `groth16.folded-inputs`: `abstract-trace`
+- `groth16.ppe`: `abstract-trace`
 
 Inputs:
 
@@ -322,6 +450,8 @@ Required checks:
 
 - prover and verifier derive `r` from exactly `com_a`, `com_b`, `com_c`
 - `r_vec` order matches public-input folding and `agg_c`
+- byte binding of public inputs to field elements is covered by upstream
+  `penumbra-byte` rows; this section checks the folding equation
 - `ck_1_r` uses inverse powers matching the shifted TIPA AB prover
 - public input arity was checked before this backend is called
 - malformed or mutated TIPA AB, TIPA C, KZG opening, public input, or PPE input

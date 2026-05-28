@@ -127,11 +127,73 @@ FSTAR
   cat >> "$FSTAR_HAX_PROOF_LIBS/core/Core_models.Num.fst" <<'FSTAR'
 
 assume val impl_u32__is_power_of_two: u32 -> bool
+
+assume val impl_u32__to_le_bytes_injective: x: u32 -> y: u32
+  -> Lemma (requires impl_u32__to_le_bytes x == impl_u32__to_le_bytes y) (ensures x == y)
+
+assume val impl_u32__from_to_le_bytes: x: u32
+  -> Lemma (ensures impl_u32__from_le_bytes (impl_u32__to_le_bytes x) == x)
+
+assume val impl_usize_u32_cast_roundtrip: x: usize
+  -> Lemma
+      (requires v x <= 4294967295)
+      (ensures (cast (cast x <: u32) <: usize) == x)
+
+assume val impl_usize__checked_add_ok: x: usize -> y: usize
+  -> Lemma
+      (requires v x + v y <= max_usize)
+      (ensures impl_usize__checked_add x y == Core_models.Option.Option_Some (x +! y))
+
+assume val impl_u64__to_le_bytes_injective: x: u64 -> y: u64
+  -> Lemma (requires impl_u64__to_le_bytes x == impl_u64__to_le_bytes y) (ensures x == y)
 FSTAR
 
   cat >> "$FSTAR_HAX_PROOF_LIBS/core/Core_models.Slice.fst" <<'FSTAR'
 
 assume val impl__starts_with: #v_T:Type0 -> t_Slice v_T -> t_Slice v_T -> bool
+
+assume val impl__starts_with_append: #v_T:Type0 -> prefix:t_Slice v_T -> rest:t_Slice v_T
+  -> Lemma (ensures impl__starts_with (FStar.Seq.append prefix rest) prefix == true)
+
+assume val impl__get_middle_append3:
+  #v_T:Type0 ->
+  prefix:t_Slice v_T ->
+  field:t_Slice v_T ->
+  suffix:t_Slice v_T ->
+  Lemma
+    (requires
+      Rust_primitives.Integers.v (impl__len prefix) +
+      Rust_primitives.Integers.v (impl__len field) +
+      Rust_primitives.Integers.v (impl__len suffix) <=
+      Rust_primitives.Integers.max_usize)
+    (ensures
+      impl__get #v_T
+        #(Core_models.Ops.Range.t_Range Rust_primitives.Integers.usize)
+        (FStar.Seq.append prefix (FStar.Seq.append field suffix))
+        ({
+            Core_models.Ops.Range.f_start = impl__len prefix;
+            Core_models.Ops.Range.f_end = impl__len prefix +! impl__len field
+          }
+          <:
+          Core_models.Ops.Range.t_Range Rust_primitives.Integers.usize)
+      ==
+      Core_models.Option.Option_Some field)
+FSTAR
+
+  cat >> "$FSTAR_HAX_PROOF_LIBS/core/Core_models.Convert.fst" <<'FSTAR'
+
+assume val impl__try_into_array_self_slice:
+  #v_T:Type0 ->
+  #v_N:Rust_primitives.Integers.usize ->
+  bytes:t_Array v_T v_N ->
+  Lemma
+    (ensures
+      f_try_into #(t_Slice v_T)
+        #(t_Array v_T v_N)
+        #FStar.Tactics.Typeclasses.solve
+        (bytes <: t_Slice v_T)
+      ==
+      Core_models.Result.Result_Ok bytes)
 FSTAR
 }
 
@@ -143,7 +205,7 @@ popd >/dev/null
 
 pushd crates/crypto/proof-aggregation/src/ipp/ip_proofs >/dev/null
 cargo hax into \
-  -i '-** +ark_ip_proofs::challenge::ChallengeContext +ark_ip_proofs::challenge::challenge_preimage' \
+  -i '-** +ark_ip_proofs::challenge::ChallengeContext +ark_ip_proofs::challenge::challenge_context_preimage +ark_ip_proofs::challenge::challenge_preimage' \
   fstar
 popd >/dev/null
 
@@ -157,6 +219,7 @@ FSTAR_FLAGS=(
   --include "$FSTAR_HAX_LIB_EXTRACTION"
   --include "crates/crypto/proof-aggregation/proofs/fstar/extraction"
   --include "crates/crypto/proof-aggregation/src/ipp/ip_proofs/proofs/fstar/extraction"
+  --include "$FORMAL_DIR/fstar"
 )
 
 for proof in "$FORMAL_DIR"/fstar/*.fst; do

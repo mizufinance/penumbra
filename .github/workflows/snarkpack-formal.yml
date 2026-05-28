@@ -8,13 +8,19 @@ on:
     paths:
       - '.github/workflows/snarkpack-formal.yml'
       - 'crates/crypto/proof-aggregation/formal/**'
+      - 'crates/crypto/proof-aggregation-reference/**'
+      - 'crates/crypto/proof-aggregation-trace-schema/**'
       - 'crates/crypto/proof-aggregation/src/aggregate_proof_wrapper.rs'
       - 'crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/challenge.rs'
       - 'crates/crypto/proof-aggregation/src/preflight.rs'
       - 'crates/crypto/proof-aggregation/src/statement.rs'
+      - 'docs/snarkpack/adaptation-register.md'
       - 'docs/snarkpack/formal-handoff.md'
       - 'docs/snarkpack/ripp-refinement.md'
+      - 'docs/snarkpack/ripp-spec.md'
+      - 'docs/snarkpack/security.md'
       - 'justfile'
+      - 'scripts/check-snarkpack-filecoin-shape.sh'
       - 'scripts/check-snarkpack-invariants.sh'
       - 'scripts/snarkpack-formal.sh'
 
@@ -72,3 +78,6 @@ jobs:
 
       - name: Check SnarkPack formal invariants
         run: nix develop --command just snarkpack-invariants
+
+      - name: Check SnarkPack Filecoin shape evidence
+        run: nix develop --command just snarkpack-filecoin-shape
