@@ -81,6 +81,18 @@ where
     D: Digest,
     S: ChallengeTraceSink,
 {
+    let preimage = challenge_preimage(context, stage_label, nonce, messages);
+    let digest = D::digest(&preimage);
+    trace.record(stage_label, nonce, digest.as_slice());
+    digest
+}
+
+pub fn challenge_preimage(
+    context: &ChallengeContext,
+    stage_label: &'static [u8],
+    nonce: u64,
+    messages: &[u8],
+) -> Vec<u8> {
     let stage_label_len = u32::try_from(stage_label.len()).expect("challenge stage label fits u32");
     let mut preimage = Vec::with_capacity(
         CHALLENGE_DOMAIN.len() + 4 + stage_label.len() + 32 + 8 + messages.len(),
@@ -91,7 +103,5 @@ where
     preimage.extend_from_slice(context.as_bytes());
     preimage.extend_from_slice(&nonce.to_le_bytes());
     preimage.extend_from_slice(messages);
-    let digest = D::digest(&preimage);
-    trace.record(stage_label, nonce, digest.as_slice());
-    digest
+    preimage
 }

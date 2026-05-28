@@ -95,12 +95,81 @@ pub struct StatementEncodingInput {
     pub real_count: u32,
     pub padded_count: u32,
     pub public_input_arity: u32,
-    pub padded_public_inputs: Vec<Vec<Vec<u8>>>,
+    pub padded_public_inputs: StatementPaddedRows,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StatementFieldBytes {
+    bytes: Vec<u8>,
+}
+
+impl StatementFieldBytes {
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StatementPublicInputRow {
+    fields: Vec<StatementFieldBytes>,
+}
+
+impl StatementPublicInputRow {
+    pub fn new(fields: Vec<StatementFieldBytes>) -> Self {
+        Self { fields }
+    }
+
+    pub fn len(&self) -> usize {
+        self.fields.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &StatementFieldBytes> {
+        self.fields.iter()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StatementPaddedRows {
+    rows: Vec<StatementPublicInputRow>,
+}
+
+impl StatementPaddedRows {
+    pub fn new(rows: Vec<StatementPublicInputRow>) -> Self {
+        Self { rows }
+    }
+
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &StatementPublicInputRow> {
+        self.rows.iter()
+    }
+}
+
+impl From<Vec<Vec<Vec<u8>>>> for StatementPaddedRows {
+    fn from(rows: Vec<Vec<Vec<u8>>>) -> Self {
+        Self::new(
+            rows.into_iter()
+                .map(|row| {
+                    StatementPublicInputRow::new(
+                        row.into_iter().map(StatementFieldBytes::new).collect(),
+                    )
+                })
+                .collect(),
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AggregateStatement {
     family_id: ProofFamilyId,
+    srs_id: [u8; 32],
+    vk_digest: [u8; 32],
     real_count: u32,
     padded_count: u32,
     padded_public_inputs: Vec<Vec<Fq>>,
@@ -130,6 +199,7 @@ impl AggregateStatement {
             }
         })?;
         validate_counts(real_count, padded_count, padded_public_inputs)?;
+        validate_repeat_final_padding(real_count, padded_public_inputs)?;
 
         let expected_arity = pvk.vk.gamma_abc_g1.len().checked_sub(1).ok_or(
             AggregateStatementError::RowArityMismatch {
@@ -141,6 +211,7 @@ impl AggregateStatement {
         validate_row_arity(padded_public_inputs, expected_arity)?;
 
         let family = family_encoding(family_id);
+        let vk_digest = aggregate_verification_key_digest(pvk)?;
         let input = StatementEncodingInput {
             version,
             curve_id: DEV_SRS_CURVE_ID.as_bytes().to_vec(),
@@ -150,7 +221,7 @@ impl AggregateStatement {
             split_family_id: family.split_family_id,
             shielded_ics20_withdrawal_family_id: family.shielded_ics20_withdrawal_family_id,
             srs_id,
-            vk_digest: aggregate_verification_key_digest(pvk)?,
+            vk_digest,
             real_count,
             padded_count,
             public_input_arity: u32::try_from(expected_arity).map_err(|_| {
@@ -168,6 +239,8 @@ impl AggregateStatement {
 
         Ok(Self {
             family_id,
+            srs_id,
+            vk_digest,
             real_count,
             padded_count,
             padded_public_inputs: padded_public_inputs.to_vec(),
@@ -179,6 +252,14 @@ impl AggregateStatement {
 
     pub fn family_id(&self) -> ProofFamilyId {
         self.family_id
+    }
+
+    pub fn srs_id(&self) -> [u8; 32] {
+        self.srs_id
+    }
+
+    pub fn vk_digest(&self) -> [u8; 32] {
+        self.vk_digest
     }
 
     pub fn real_count(&self) -> u32 {
@@ -239,10 +320,10 @@ pub fn encode_statement(
     append_u32_field(&mut bytes, input.padded_count);
     append_u32_field(&mut bytes, input.public_input_arity);
     append_len(&mut bytes, input.padded_public_inputs.len(), "row_count")?;
-    for row in &input.padded_public_inputs {
+    for row in input.padded_public_inputs.iter() {
         append_len(&mut bytes, row.len(), "row_arity")?;
-        for field in row {
-            append_bytes_field(&mut bytes, field)?;
+        for field in row.iter() {
+            append_bytes_field(&mut bytes, field.as_bytes())?;
         }
     }
     Ok(bytes)
@@ -285,8 +366,8 @@ pub fn validate_counts<T>(
     Ok(())
 }
 
-pub fn validate_row_arity(
-    rows: &[Vec<Fq>],
+pub fn validate_row_arity<T>(
+    rows: &[Vec<T>],
     expected: usize,
 ) -> Result<(), AggregateStatementError> {
     for (index, row) in rows.iter().enumerate() {
@@ -301,6 +382,39 @@ pub fn validate_row_arity(
     Ok(())
 }
 
+pub fn validate_repeat_final_padding<T: Eq>(
+    real_count: u32,
+    rows: &[Vec<T>],
+) -> Result<(), AggregateStatementError> {
+    let padded_count =
+        u32::try_from(rows.len()).map_err(|_| AggregateStatementError::OversizeBytes {
+            field: "padded_public_inputs.len",
+            max: u32::MAX as usize,
+            got: rows.len(),
+        })?;
+    let real_count_usize =
+        usize::try_from(real_count).map_err(|_| AggregateStatementError::BadCount {
+            real_count,
+            padded_count,
+        })?;
+    if real_count_usize == 0 || real_count_usize > rows.len() {
+        return Err(AggregateStatementError::BadCount {
+            real_count,
+            padded_count,
+        });
+    }
+    let final_real = &rows[real_count_usize - 1];
+    for row in &rows[real_count_usize..] {
+        if row != final_real {
+            return Err(AggregateStatementError::BadPadding {
+                padded_count,
+                row_count: rows.len(),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn statement_digest_from_canonical(canonical_bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(STATEMENT_DIGEST_DOMAIN);
@@ -308,7 +422,7 @@ fn statement_digest_from_canonical(canonical_bytes: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-fn field_rows_to_bytes(rows: &[Vec<Fq>]) -> Result<Vec<Vec<Vec<u8>>>, AggregateStatementError> {
+fn field_rows_to_bytes(rows: &[Vec<Fq>]) -> Result<StatementPaddedRows, AggregateStatementError> {
     rows.iter()
         .map(|row| {
             row.iter()
@@ -317,11 +431,13 @@ fn field_rows_to_bytes(rows: &[Vec<Fq>]) -> Result<Vec<Vec<Vec<u8>>>, AggregateS
                     field
                         .serialize_compressed(&mut bytes)
                         .map_err(|err| AggregateStatementError::EncodingFailed(err.to_string()))?;
-                    Ok(bytes)
+                    Ok(StatementFieldBytes::new(bytes))
                 })
-                .collect()
+                .collect::<Result<Vec<_>, _>>()
+                .map(StatementPublicInputRow::new)
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()
+        .map(StatementPaddedRows::new)
 }
 
 #[derive(Clone, Copy)]
@@ -380,6 +496,7 @@ fn append_len(
 #[cfg(test)]
 mod tests {
     use ark_groth16::{r1cs_to_qap::LibsnarkReduction, Groth16, PreparedVerifyingKey};
+    use ark_ip_proofs::challenge::challenge_preimage;
     use ark_r1cs_std::{alloc::AllocVar, eq::EqGadget, fields::fp::FpVar};
     use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
     use decaf377::{Bls12_377, Fq};
@@ -469,6 +586,83 @@ mod tests {
     }
 
     #[test]
+    fn statement_validation_helpers_cover_count_cases() {
+        let one_row = vec![vec![Fq::from(1u64)]];
+        let two_rows = vec![vec![Fq::from(1u64)], vec![Fq::from(2u64)]];
+
+        assert!(matches!(
+            validate_counts(0, 1, &one_row),
+            Err(AggregateStatementError::BadCount { .. })
+        ));
+        assert!(matches!(
+            validate_counts(2, 1, &one_row),
+            Err(AggregateStatementError::BadCount { .. })
+        ));
+        assert!(matches!(
+            validate_counts(1, 0, &one_row),
+            Err(AggregateStatementError::BadCount { .. })
+        ));
+        assert!(matches!(
+            validate_counts(1, 3, &one_row),
+            Err(AggregateStatementError::BadPadding { .. })
+        ));
+        assert!(matches!(
+            validate_counts(1, 2, &one_row),
+            Err(AggregateStatementError::BadPadding { .. })
+        ));
+        assert!(validate_counts(1, 2, &two_rows).is_ok());
+        assert!(validate_row_arity(&two_rows, 1).is_ok());
+        assert!(matches!(
+            validate_row_arity(&two_rows, 2),
+            Err(AggregateStatementError::RowArityMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn statement_rejects_noncanonical_repeat_final_padding() {
+        let pvk = sample_pvk();
+        let rows = vec![
+            vec![Fq::from(1u64)],
+            vec![Fq::from(2u64)],
+            vec![Fq::from(3u64)],
+            vec![Fq::from(2u64)],
+        ];
+
+        let err = AggregateStatement::new(
+            AGGREGATE_PROTOCOL_VERSION,
+            ProofFamilyId::Transfer,
+            [0u8; 32],
+            &pvk,
+            2,
+            &rows,
+        )
+        .expect_err("padding suffix must repeat the final real row");
+
+        assert!(matches!(err, AggregateStatementError::BadPadding { .. }));
+    }
+
+    #[test]
+    fn statement_accepts_canonical_repeat_final_padding() {
+        let pvk = sample_pvk();
+        let rows = vec![
+            vec![Fq::from(1u64)],
+            vec![Fq::from(2u64)],
+            vec![Fq::from(2u64)],
+            vec![Fq::from(2u64)],
+        ];
+
+        AggregateStatement::new(
+            AGGREGATE_PROTOCOL_VERSION,
+            ProofFamilyId::Transfer,
+            [0u8; 32],
+            &pvk,
+            2,
+            &rows,
+        )
+        .expect("canonical repeat-final padding should build");
+    }
+
+    #[test]
     fn statement_rejects_bad_padding() {
         let pvk = sample_pvk();
         let rows = vec![
@@ -527,7 +721,7 @@ mod tests {
             ProofFamilyId::Transfer,
             [1u8; 32],
             &pvk,
-            1,
+            2,
             &rows,
         )
         .expect("statement should build");
@@ -536,13 +730,127 @@ mod tests {
             ProofFamilyId::Transfer,
             [1u8; 32],
             &pvk,
-            1,
+            2,
             &changed_rows,
         )
         .expect("changed statement should build");
 
         assert_ne!(original.canonical_bytes(), changed.canonical_bytes());
         assert_ne!(original.statement_digest(), changed.statement_digest());
+    }
+
+    #[test]
+    fn statement_digest_binds_real_count_even_with_repeated_rows() {
+        let pvk = sample_pvk();
+        let rows = vec![
+            vec![Fq::from(7u64)],
+            vec![Fq::from(7u64)],
+            vec![Fq::from(7u64)],
+            vec![Fq::from(7u64)],
+        ];
+        let one_real = AggregateStatement::new(
+            AGGREGATE_PROTOCOL_VERSION,
+            ProofFamilyId::Transfer,
+            [1u8; 32],
+            &pvk,
+            1,
+            &rows,
+        )
+        .expect("statement should build");
+        let three_real = AggregateStatement::new(
+            AGGREGATE_PROTOCOL_VERSION,
+            ProofFamilyId::Transfer,
+            [1u8; 32],
+            &pvk,
+            3,
+            &rows,
+        )
+        .expect("statement should build");
+
+        assert_ne!(one_real.canonical_bytes(), three_real.canonical_bytes());
+        assert_ne!(one_real.statement_digest(), three_real.statement_digest());
+    }
+
+    #[test]
+    fn statement_encoding_binds_all_top_level_fields() {
+        let base = StatementEncodingInput {
+            version: AGGREGATE_PROTOCOL_VERSION,
+            curve_id: b"curve".to_vec(),
+            backend_id: b"backend".to_vec(),
+            proof_family_id: 1,
+            consolidate_family_id: 2,
+            split_family_id: 3,
+            shielded_ics20_withdrawal_family_id: 4,
+            srs_id: [0x11; 32],
+            vk_digest: [0x22; 32],
+            real_count: 1,
+            padded_count: 1,
+            public_input_arity: 1,
+            padded_public_inputs: vec![vec![vec![0xaa]]].into(),
+        };
+        let base_encoded = encode_statement(&base).expect("base encodes");
+
+        let mutations = [
+            StatementEncodingInput {
+                version: 2,
+                ..base.clone()
+            },
+            StatementEncodingInput {
+                curve_id: b"other-curve".to_vec(),
+                ..base.clone()
+            },
+            StatementEncodingInput {
+                backend_id: b"other-backend".to_vec(),
+                ..base.clone()
+            },
+            StatementEncodingInput {
+                proof_family_id: 9,
+                ..base.clone()
+            },
+            StatementEncodingInput {
+                consolidate_family_id: 9,
+                ..base.clone()
+            },
+            StatementEncodingInput {
+                split_family_id: 9,
+                ..base.clone()
+            },
+            StatementEncodingInput {
+                shielded_ics20_withdrawal_family_id: 9,
+                ..base.clone()
+            },
+            StatementEncodingInput {
+                srs_id: [0x33; 32],
+                ..base.clone()
+            },
+            StatementEncodingInput {
+                vk_digest: [0x44; 32],
+                ..base.clone()
+            },
+            StatementEncodingInput {
+                real_count: 2,
+                ..base.clone()
+            },
+            StatementEncodingInput {
+                padded_count: 2,
+                ..base.clone()
+            },
+            StatementEncodingInput {
+                public_input_arity: 2,
+                ..base.clone()
+            },
+            StatementEncodingInput {
+                padded_public_inputs: vec![vec![vec![0xbb]]].into(),
+                ..base.clone()
+            },
+        ];
+
+        for mutated in mutations {
+            assert_ne!(
+                base_encoded,
+                encode_statement(&mutated).expect("mutation encodes")
+            );
+        }
     }
 
     #[test]
@@ -560,7 +868,7 @@ mod tests {
             real_count: 1,
             padded_count: 2,
             public_input_arity: 1,
-            padded_public_inputs: vec![vec![vec![0xaa, 0xbb]], vec![vec![0xcc]]],
+            padded_public_inputs: vec![vec![vec![0xaa, 0xbb]], vec![vec![0xcc]]].into(),
         };
 
         let encoded = encode_statement(&input).expect("encoding succeeds");
@@ -594,6 +902,136 @@ mod tests {
         expected.extend_from_slice(&[0xcc]);
 
         assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn statement_encoding_length_prefixes_top_level_byte_fields() {
+        let left = StatementEncodingInput {
+            version: AGGREGATE_PROTOCOL_VERSION,
+            curve_id: b"a".to_vec(),
+            backend_id: b"bc".to_vec(),
+            proof_family_id: 1,
+            consolidate_family_id: 2,
+            split_family_id: 3,
+            shielded_ics20_withdrawal_family_id: 4,
+            srs_id: [0x11; 32],
+            vk_digest: [0x22; 32],
+            real_count: 1,
+            padded_count: 1,
+            public_input_arity: 1,
+            padded_public_inputs: vec![vec![vec![0xaa]]].into(),
+        };
+        let right = StatementEncodingInput {
+            curve_id: b"ab".to_vec(),
+            backend_id: b"c".to_vec(),
+            ..left.clone()
+        };
+
+        assert_ne!(
+            encode_statement(&left).expect("left encodes"),
+            encode_statement(&right).expect("right encodes")
+        );
+    }
+
+    #[test]
+    fn statement_encoding_length_prefixes_public_input_fields() {
+        let left = StatementEncodingInput {
+            version: AGGREGATE_PROTOCOL_VERSION,
+            curve_id: b"curve".to_vec(),
+            backend_id: b"backend".to_vec(),
+            proof_family_id: 1,
+            consolidate_family_id: 2,
+            split_family_id: 3,
+            shielded_ics20_withdrawal_family_id: 4,
+            srs_id: [0x11; 32],
+            vk_digest: [0x22; 32],
+            real_count: 1,
+            padded_count: 1,
+            public_input_arity: 2,
+            padded_public_inputs: vec![vec![vec![1], vec![2, 3]]].into(),
+        };
+        let right = StatementEncodingInput {
+            padded_public_inputs: vec![vec![vec![1, 2], vec![3]]].into(),
+            ..left.clone()
+        };
+
+        assert_ne!(
+            encode_statement(&left).expect("left encodes"),
+            encode_statement(&right).expect("right encodes")
+        );
+    }
+
+    #[test]
+    fn statement_encoding_length_prefixes_public_input_rows() {
+        let left = StatementEncodingInput {
+            version: AGGREGATE_PROTOCOL_VERSION,
+            curve_id: b"curve".to_vec(),
+            backend_id: b"backend".to_vec(),
+            proof_family_id: 1,
+            consolidate_family_id: 2,
+            split_family_id: 3,
+            shielded_ics20_withdrawal_family_id: 4,
+            srs_id: [0x11; 32],
+            vk_digest: [0x22; 32],
+            real_count: 1,
+            padded_count: 2,
+            public_input_arity: 1,
+            padded_public_inputs: vec![vec![vec![1]], vec![vec![2]]].into(),
+        };
+        let right = StatementEncodingInput {
+            padded_count: 1,
+            public_input_arity: 2,
+            padded_public_inputs: vec![vec![vec![1], vec![2]]].into(),
+            ..left.clone()
+        };
+
+        assert_ne!(
+            encode_statement(&left).expect("left encodes"),
+            encode_statement(&right).expect("right encodes")
+        );
+    }
+
+    #[test]
+    fn challenge_preimage_layout_golden() {
+        let context = ChallengeContext::from_statement_digest([9u8; 32]);
+        let stage = b"stage.alpha";
+        let nonce = 42u64;
+        let messages = [0xaa, 0xbb, 0xcc];
+
+        let preimage = challenge_preimage(&context, stage, nonce, &messages);
+        let mut expected = Vec::new();
+        expected.extend_from_slice(b"penumbra.snarkpack.challenge.v1\0");
+        expected.extend_from_slice(&(stage.len() as u32).to_le_bytes());
+        expected.extend_from_slice(stage);
+        expected.extend_from_slice(context.as_bytes());
+        expected.extend_from_slice(&nonce.to_le_bytes());
+        expected.extend_from_slice(&messages);
+
+        assert_eq!(preimage, expected);
+    }
+
+    #[test]
+    fn challenge_preimage_changes_on_stage_context_nonce_or_messages() {
+        let context = ChallengeContext::from_statement_digest([9u8; 32]);
+        let other_context = ChallengeContext::from_statement_digest([10u8; 32]);
+        let base = challenge_preimage(&context, b"stage.alpha", 42, &[0xaa, 0xbb]);
+
+        assert_ne!(
+            base,
+            challenge_preimage(&context, b"stage.beta", 42, &[0xaa, 0xbb])
+        );
+        assert_ne!(
+            base,
+            challenge_preimage(&other_context, b"stage.alpha", 42, &[0xaa, 0xbb])
+        );
+        assert_ne!(
+            base,
+            challenge_preimage(&context, b"stage.alpha", 43, &[0xaa, 0xbb])
+        );
+        assert_ne!(
+            base,
+            challenge_preimage(&context, b"stage.alpha", 42, &[0xaa, 0xbc])
+        );
     }
 
     proptest! {
@@ -637,7 +1075,7 @@ mod tests {
                 real_count,
                 padded_count,
                 public_input_arity: expected_arity as u32,
-                padded_public_inputs: primitive_rows,
+                padded_public_inputs: primitive_rows.into(),
             };
             let encoded = encode_statement(&input).expect("bounded statement encoding succeeds");
             prop_assert!(!encoded.is_empty());

@@ -96,8 +96,9 @@ Implemented enforcement:
   `crates/crypto/proof-aggregation/src/statement.rs`
 - aggregate proof wrapper digest check:
   `crates/crypto/proof-aggregation/src/aggregate_proof_wrapper.rs`
-- backend wrapper decode before SnarkPack verification:
-  `crates/crypto/proof-aggregation/src/backend.rs`
+- typed aggregate preflight, which recomputes SRS/VK facts and decodes the
+  wrapper before SnarkPack verification:
+  `crates/crypto/proof-aggregation/src/preflight.rs`
 - Penumbra-owned Fiat-Shamir helper:
   `crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/challenge.rs`
 - explicit prover/verifier challenge trace parity:
@@ -205,38 +206,46 @@ asymmetric denial-of-service path.
 
 ## Formal Verification
 
-Status: formal handoff artifacts exist in `docs/snarkpack/formal-handoff.md`.
-No hax extraction is implemented yet.
+Status: hax extraction and F* typechecking are operational, but the concrete
+implementation formal-verification campaign is still open. The authoritative
+evidence index is `docs/snarkpack/formal-handoff.md`.
 
-The first formal target is the transcript and statement encoder, not full
-SnarkPack algebraic soundness.
+Evidence is typed:
 
-Use hax extraction to F* first for implementation velocity and toolchain risk
-reduction. Keep Lean 4 as the preferred Rust-to-Lean target when the extracted
-subset is supported, and use Coq as a fallback if it is the lowest-friction
-backend for a specific lemma.
+- `proved`: mechanically checked in F* against extracted executed Rust
+- `refined`: reviewed against the published algorithm with tests and signoff
+- `composed`: Rust types plus proved/refined pieces, tests, and invariant
+  guards
+- `assumed`: explicit external/tool/cryptographic assumption
+- `open`: completion blocker
 
-The initial hax target is:
+The implementation-boundary target is statement encoding injectivity, wrapper
+framing, count/arity validation, padding canonicality, and explicit
+Fiat-Shamir challenge preimage binding. The local RIPP implementation is not a
+black-box oracle; `docs/snarkpack/ripp-refinement.md` maps proof-relevant RIPP
+symbols to the intended algorithm and must be reviewed before completion.
 
-- transcript encoding injectivity
-- inclusion of all required public statement fields
-- fixed challenge input order
-- padding and count invariants
-
-EasyCrypt is reserved for later game-based soundness work if the project needs
-a cryptographic proof model beyond implementation structure.
+The end-to-end cryptographic proof is tracked separately in
+`docs/snarkpack/formal-research-plan.md`. That research track uses Lean 4 for
+the algebraic protocol model and EasyCrypt for Fiat-Shamir/random-oracle games;
+F* remains the implementation-boundary proof backend.
 
 ## Completion Criteria
 
-Status: partially complete. Formal extraction and fixed CI benchmark gates are
-next-phase work.
+Status: open. Formal extraction is operational; full implementation-boundary
+lemmas, RIPP refinement signoff, clean-image formal CI, arkworks boundary
+tests, and fixed CI benchmark gates remain open.
 
 This phase is complete when:
 
-- the statement-binding spec is implemented by typed transcript code
-- mutation and property tests cover the verification matrix
-- fuzz targets run in CI smoke and nightly modes
-- invalid inputs are bounded and panic-free
-- release benchmarks establish accepted thresholds
-- hax extraction covers the transcript encoder invariants, with Lean 4 used
-  where the backend supports the required Rust subset
+- all pure implementation-boundary rows in `formal-handoff.md` are `proved`
+- RIPP mapping rows are `refined`, `proved-equivalent`, or explicitly
+  `assumed`
+- app/backend composition rows are `composed`
+- every assumption is reviewed and narrowly scoped
+- no `open` rows remain
+- no raw verifier bypass remains
+- statement encoding injectivity is mechanically proved
+- digest reduction is mechanically proved modulo SHA-256 collision resistance
+- padding canonicality and bounded non-malleability are proved
+- benchmark thresholds hold after proof-driven refactors

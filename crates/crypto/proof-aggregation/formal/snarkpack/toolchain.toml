@@ -1,0 +1,19 @@
+[toolchain]
+rust = "1.89"
+hax = "v0.3.7"
+fstar = "v2026.05.24"
+z3 = "4.14.1"
+ocaml = "5.1.1"
+opam_switch = "hax-0.3.7"
+
+[policy]
+primary_backend = "fstar"
+lean4_status = "selected-for-algebraic-research-track"
+coq_status = "fallback"
+easycrypt_status = "selected-for-random-oracle-research-track"
+
+[research]
+algebraic_backend = "lean4"
+random_oracle_backend = "easycrypt"
+implementation_backend = "fstar"
+plan = "docs/snarkpack/formal-research-plan.md"

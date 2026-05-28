@@ -1,4 +1,5 @@
 use std::fmt;
+use std::ops::Range;
 
 pub const AGGREGATE_PROOF_WRAPPER_DOMAIN: &[u8] = b"penumbra.snarkpack.aggregate_proof.v1\0";
 
@@ -53,6 +54,22 @@ pub fn decode_wrapped_aggregate_proof<'a>(
     expected_statement_digest: [u8; 32],
     max_aggregate_proof_bytes: Option<usize>,
 ) -> Result<&'a [u8], AggregateProofBytesError> {
+    let inner_range = decode_wrapped_aggregate_proof_inner_range(
+        wrapped_proof_bytes,
+        expected_statement_digest,
+        max_aggregate_proof_bytes,
+    )?;
+
+    wrapped_proof_bytes
+        .get(inner_range)
+        .ok_or(AggregateProofBytesError::MalformedProofBytes)
+}
+
+pub fn decode_wrapped_aggregate_proof_inner_range(
+    wrapped_proof_bytes: &[u8],
+    expected_statement_digest: [u8; 32],
+    max_aggregate_proof_bytes: Option<usize>,
+) -> Result<Range<usize>, AggregateProofBytesError> {
     if let Some(max) = max_aggregate_proof_bytes {
         if wrapped_proof_bytes.len() > max {
             return Err(AggregateProofBytesError::OversizeBytes {
@@ -96,15 +113,14 @@ pub fn decode_wrapped_aggregate_proof<'a>(
         return Err(AggregateProofBytesError::MalformedProofBytes);
     }
 
-    wrapped_proof_bytes
-        .get(proof_start..proof_end)
-        .ok_or(AggregateProofBytesError::MalformedProofBytes)
+    Ok(proof_start..proof_end)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_wrapped_aggregate_proof, encode_wrapped_aggregate_proof, AggregateProofBytesError,
+        decode_wrapped_aggregate_proof, decode_wrapped_aggregate_proof_inner_range,
+        encode_wrapped_aggregate_proof, AggregateProofBytesError,
     };
 
     #[test]
@@ -117,6 +133,18 @@ mod tests {
             decode_wrapped_aggregate_proof(&wrapped, digest, None).expect("wrapper decode");
 
         assert_eq!(decoded, inner.as_slice());
+    }
+
+    #[test]
+    fn wrapper_decode_core_returns_inner_proof_range() {
+        let digest = [7u8; 32];
+        let inner = vec![1, 2, 3, 4, 5];
+        let wrapped = encode_wrapped_aggregate_proof(digest, &inner).expect("wrapper encode");
+
+        let range = decode_wrapped_aggregate_proof_inner_range(&wrapped, digest, None)
+            .expect("wrapper decode");
+
+        assert_eq!(&wrapped[range], inner.as_slice());
     }
 
     #[test]

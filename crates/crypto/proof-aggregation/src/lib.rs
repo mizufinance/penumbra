@@ -7,6 +7,7 @@ mod aggregate_proof_wrapper;
 mod backend;
 mod bundle;
 mod padding;
+mod preflight;
 mod srs;
 mod statement;
 mod transcript;
@@ -30,14 +31,19 @@ pub use backend::{
 pub use bundle::{AggregateBundle, FamilyAggregate, ProofFamilyId};
 pub use padding::PADDING_RULE_DOMAIN;
 pub use padding::{pad_items_to_power_of_two, prepare_verify_inputs, PreparedVerifyInputs};
+pub use preflight::{
+    preflight_aggregate_verify, AggregatePreflightInput, VerifiedAggregateBackendCall,
+    VerifiedChallengeContext, VerifiedInnerProofBytes,
+};
 pub use srs::{
     srs_id, srs_report, DevSrs, DevSrsReport, DEFAULT_MAX_PADDED_PROOF_COUNT, DEV_SRS_BACKEND_ID,
     DEV_SRS_CURVE_ID, DEV_SRS_VERSION,
 };
 pub use statement::{
     aggregate_verification_key_digest, challenge_context, encode_statement, statement_digest,
-    validate_counts, validate_row_arity, AggregateStatement, AggregateStatementError,
-    StatementEncodingInput, AGGREGATE_PROTOCOL_VERSION,
+    validate_counts, validate_repeat_final_padding, validate_row_arity, AggregateStatement,
+    AggregateStatementError, StatementEncodingInput, StatementFieldBytes, StatementPaddedRows,
+    StatementPublicInputRow, AGGREGATE_PROTOCOL_VERSION,
 };
 
 pub fn aggregate_family(

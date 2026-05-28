@@ -1,0 +1,74 @@
+name: snarkpack-formal
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 9 * * *'
+  pull_request:
+    paths:
+      - '.github/workflows/snarkpack-formal.yml'
+      - 'crates/crypto/proof-aggregation/formal/**'
+      - 'crates/crypto/proof-aggregation/src/aggregate_proof_wrapper.rs'
+      - 'crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/challenge.rs'
+      - 'crates/crypto/proof-aggregation/src/preflight.rs'
+      - 'crates/crypto/proof-aggregation/src/statement.rs'
+      - 'docs/snarkpack/formal-handoff.md'
+      - 'docs/snarkpack/ripp-refinement.md'
+      - 'justfile'
+      - 'scripts/check-snarkpack-invariants.sh'
+      - 'scripts/snarkpack-formal.sh'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  formal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-nix-rust
+        with:
+          rust-cache-prefix: snarkpack-formal
+
+      - name: Install pinned Z3
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/opt"
+          curl -L \
+            -o /tmp/z3-4.14.1.zip \
+            https://github.com/Z3Prover/z3/releases/download/z3-4.14.1/z3-4.14.1-x64-glibc-2.35.zip
+          unzip -q /tmp/z3-4.14.1.zip -d "$HOME/.local/opt"
+          echo "$HOME/.local/opt/z3-4.14.1-x64-glibc-2.35/bin" >> "$GITHUB_PATH"
+
+      - name: Install pinned F*
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/opt"
+          curl -L \
+            -o /tmp/fstar-v2026.05.24.tar.gz \
+            https://github.com/FStarLang/FStar/releases/download/v2026.05.24/fstar-v2026.05.24-Linux-x86_64.tar.gz
+          tar -xzf /tmp/fstar-v2026.05.24.tar.gz -C "$HOME/.local/opt"
+          echo "$HOME/.local/opt/fstar-v2026.05.24-Linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: Install pinned hax
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/opt"
+          git clone --depth 1 --branch v0.3.7 https://github.com/cryspen/hax "$HOME/.local/opt/hax-v0.3.7"
+          nix profile install "$HOME/.local/opt/hax-v0.3.7"
+          echo "HAX_PROOF_LIBS_HOME=$HOME/.local/opt/hax-v0.3.7/hax-lib/proof-libs/fstar" >> "$GITHUB_ENV"
+
+      - name: Run SnarkPack formal gate
+        run: nix develop --command just snarkpack-formal
+
+      - name: Check SnarkPack formal invariants
+        run: nix develop --command just snarkpack-invariants

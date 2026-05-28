@@ -95,6 +95,11 @@ crates/bench/benches/compliance/tps/{runs,microscope,admission,incremental}/
 # Android proof lab build artifacts
 **/android-proof-lab/target/
 
+# hax-generated formal extraction outputs
+crates/crypto/proof-aggregation/proofs/
+crates/crypto/proof-aggregation/src/ipp/ip_proofs/proofs/
+crates/crypto/proof-aggregation/formal/snarkpack/.generated/
+
 # POC tool caches
 poc/tools/gnark-spend-prototype/.gocache/
 poc/tools/gnark-spend-prototype/.tmp/

@@ -89,6 +89,10 @@ snarkpack-slow:
 snarkpack-invariants:
     ./scripts/check-snarkpack-invariants.sh
 
+# Run pinned SnarkPack formal extraction and F* proof checks.
+snarkpack-formal:
+    ./scripts/snarkpack-formal.sh
+
 # Run the default gnark validation suite.
 gnark-proof-tests: gnark-proof-tests-fast
 

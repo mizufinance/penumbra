@@ -24,8 +24,10 @@ use penumbra_sdk_shielded_pool::{ConsolidateFamilyId, SplitFamilyId};
 
 use crate::{
     aggregate_proof_wrapper::{
-        decode_wrapped_aggregate_proof, encode_wrapped_aggregate_proof, AggregateProofBytesError,
-        MAX_AGGREGATE_PROOF_BYTES,
+        encode_wrapped_aggregate_proof, AggregateProofBytesError, MAX_AGGREGATE_PROOF_BYTES,
+    },
+    preflight::{
+        preflight_aggregate_verify, AggregatePreflightInput, VerifiedAggregateBackendCall,
     },
     srs::DevSrs,
     statement::{AggregateStatement, AggregateStatementError},
@@ -413,55 +415,51 @@ impl SnarkpackBackend {
         aggregate_proof_bytes: &[u8],
         srs: &DevSrs,
     ) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
-        let family_id = statement.family_id();
-        let padded_public_inputs = statement.padded_public_inputs();
-        srs.ensure_supported_count(padded_public_inputs.len())
-            .map_err(|err| AggregateVerifyError::BadPadding(err.to_string()))?;
-        if padded_public_inputs.is_empty() {
-            return Err(AggregateVerifyError::BadCount(format!(
-                "cannot verify an empty aggregate for family {family_id:?}"
-            )));
-        }
-
-        let inner_proof_bytes = decode_wrapped_aggregate_proof(
+        let call = preflight_aggregate_verify(AggregatePreflightInput {
+            statement,
+            pvk,
             aggregate_proof_bytes,
-            statement.statement_digest(),
-            Some(MAX_AGGREGATE_PROOF_BYTES),
-        )?;
+            srs,
+        })?;
+        Self::verify_preflighted_family_aggregate_profiled_status(call)
+    }
 
-        match family_id {
+    fn verify_preflighted_family_aggregate_profiled_status(
+        call: VerifiedAggregateBackendCall<'_>,
+    ) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
+        match call.family_id() {
             ProofFamilyId::Transfer => Self::verify_transfer_family_aggregate_profiled_status(
-                statement.challenge_context(),
-                pvk,
-                inner_proof_bytes,
-                padded_public_inputs,
-                srs,
+                call.challenge_context(),
+                call.pvk(),
+                call.inner_proof_bytes(),
+                call.padded_public_inputs(),
+                call.srs(),
             ),
             ProofFamilyId::Consolidate(family_id) => {
                 Self::verify_consolidate_family_aggregate_profiled_status(
-                    statement.challenge_context(),
+                    call.challenge_context(),
                     family_id,
-                    pvk,
-                    inner_proof_bytes,
-                    padded_public_inputs,
-                    srs,
+                    call.pvk(),
+                    call.inner_proof_bytes(),
+                    call.padded_public_inputs(),
+                    call.srs(),
                 )
             }
             ProofFamilyId::Split(family_id) => Self::verify_split_family_aggregate_profiled_status(
-                statement.challenge_context(),
+                call.challenge_context(),
                 family_id,
-                pvk,
-                inner_proof_bytes,
-                padded_public_inputs,
-                srs,
+                call.pvk(),
+                call.inner_proof_bytes(),
+                call.padded_public_inputs(),
+                call.srs(),
             ),
             ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
                 verify_with_digest_profiled::<ShieldedIcs20WithdrawalTranscriptDigest>(
-                    statement.challenge_context(),
-                    pvk,
-                    inner_proof_bytes,
-                    padded_public_inputs,
-                    srs,
+                    call.challenge_context(),
+                    call.pvk(),
+                    call.inner_proof_bytes(),
+                    call.padded_public_inputs(),
+                    call.srs(),
                 )
             }
         }
@@ -551,58 +549,51 @@ impl AggregationBackend for SnarkpackBackend {
         aggregate_proof_bytes: &[u8],
         srs: &Self::Srs,
     ) -> Result<(), AggregateVerifyError> {
-        let family_id = statement.family_id();
-        let padded_public_inputs = statement.padded_public_inputs();
-        srs.ensure_supported_count(padded_public_inputs.len())
-            .map_err(|err| AggregateVerifyError::BadPadding(err.to_string()))?;
-        if padded_public_inputs.is_empty() {
-            return Err(AggregateVerifyError::BadCount(format!(
-                "cannot verify an empty aggregate for family {family_id:?}"
-            )));
-        }
-        let inner_proof_bytes = decode_wrapped_aggregate_proof(
+        let call = preflight_aggregate_verify(AggregatePreflightInput {
+            statement,
+            pvk,
             aggregate_proof_bytes,
-            statement.statement_digest(),
-            Some(MAX_AGGREGATE_PROOF_BYTES),
-        )?;
+            srs,
+        })?;
+        let family_id = call.family_id();
 
         let accepted = match family_id {
             ProofFamilyId::Transfer => Self::verify_transfer_family_aggregate(
-                statement.challenge_context(),
-                pvk,
-                inner_proof_bytes,
-                padded_public_inputs,
-                srs,
+                call.challenge_context(),
+                call.pvk(),
+                call.inner_proof_bytes(),
+                call.padded_public_inputs(),
+                call.srs(),
             )?,
             ProofFamilyId::Consolidate(family_id) => {
                 Self::verify_consolidate_family_aggregate_profiled_status(
-                    statement.challenge_context(),
+                    call.challenge_context(),
                     family_id,
-                    pvk,
-                    inner_proof_bytes,
-                    padded_public_inputs,
-                    srs,
+                    call.pvk(),
+                    call.inner_proof_bytes(),
+                    call.padded_public_inputs(),
+                    call.srs(),
                 )?
                 .accepted
             }
             ProofFamilyId::Split(family_id) => {
                 Self::verify_split_family_aggregate_profiled_status(
-                    statement.challenge_context(),
+                    call.challenge_context(),
                     family_id,
-                    pvk,
-                    inner_proof_bytes,
-                    padded_public_inputs,
-                    srs,
+                    call.pvk(),
+                    call.inner_proof_bytes(),
+                    call.padded_public_inputs(),
+                    call.srs(),
                 )?
                 .accepted
             }
             ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
                 verify_with_digest::<ShieldedIcs20WithdrawalTranscriptDigest>(
-                    statement.challenge_context(),
-                    pvk,
-                    inner_proof_bytes,
-                    padded_public_inputs,
-                    srs,
+                    call.challenge_context(),
+                    call.pvk(),
+                    call.inner_proof_bytes(),
+                    call.padded_public_inputs(),
+                    call.srs(),
                 )?
             }
         };
