@@ -204,6 +204,19 @@ where
         }
     }
 
+    fn rescale_fold_profiled<T>(
+        scaled_half: &[T],
+        unscaled_half: &[T],
+        scalar: &LMC::Scalar,
+    ) -> (Vec<T>, f64)
+    where
+        T: Clone + Add<Output = T> + MulAssign<LMC::Scalar> + Send + Sync,
+    {
+        let started = std::time::Instant::now();
+        let folded = Self::rescale_fold(scaled_half, unscaled_half, scalar);
+        (folded, started.elapsed().as_secs_f64() * 1000.0)
+    }
+
     pub fn setup<R: Rng>(
         rng: &mut R,
         size: usize,
@@ -469,29 +482,51 @@ where
                 profile.challenge_ms += challenge_started.elapsed().as_secs_f64() * 1000.0;
 
                 // Set up values for next step of recursion
-                let rescale_m1 = start_timer!(|| "Rescale M1");
-                let rescale_m1_started = std::time::Instant::now();
-                m_a = Self::rescale_fold(m_a_1, m_a_2, &c);
-                end_timer!(rescale_m1);
-                profile.rescale_m1_ms += rescale_m1_started.elapsed().as_secs_f64() * 1000.0;
+                #[cfg(all(feature = "parallel", not(feature = "bench-baseline")))]
+                let (
+                    (next_m_a, rescale_m1_ms),
+                    (next_m_b, rescale_m2_ms),
+                    (next_ck_a, rescale_ck1_ms),
+                    (next_ck_b, rescale_ck2_ms),
+                ) = {
+                    let ((next_m_a, next_m_b), (next_ck_a, next_ck_b)) = rayon::join(
+                        || {
+                            rayon::join(
+                                || Self::rescale_fold_profiled(m_a_1, m_a_2, &c),
+                                || Self::rescale_fold_profiled(m_b_2, m_b_1, &c_inv),
+                            )
+                        },
+                        || {
+                            rayon::join(
+                                || Self::rescale_fold_profiled(ck_a_2, ck_a_1, &c_inv),
+                                || Self::rescale_fold_profiled(ck_b_1, ck_b_2, &c),
+                            )
+                        },
+                    );
+                    (next_m_a, next_m_b, next_ck_a, next_ck_b)
+                };
 
-                let rescale_m2 = start_timer!(|| "Rescale M2");
-                let rescale_m2_started = std::time::Instant::now();
-                m_b = Self::rescale_fold(m_b_2, m_b_1, &c_inv);
-                end_timer!(rescale_m2);
-                profile.rescale_m2_ms += rescale_m2_started.elapsed().as_secs_f64() * 1000.0;
+                #[cfg(any(not(feature = "parallel"), feature = "bench-baseline"))]
+                let (
+                    (next_m_a, rescale_m1_ms),
+                    (next_m_b, rescale_m2_ms),
+                    (next_ck_a, rescale_ck1_ms),
+                    (next_ck_b, rescale_ck2_ms),
+                ) = (
+                    Self::rescale_fold_profiled(m_a_1, m_a_2, &c),
+                    Self::rescale_fold_profiled(m_b_2, m_b_1, &c_inv),
+                    Self::rescale_fold_profiled(ck_a_2, ck_a_1, &c_inv),
+                    Self::rescale_fold_profiled(ck_b_1, ck_b_2, &c),
+                );
 
-                let rescale_ck1 = start_timer!(|| "Rescale CK1");
-                let rescale_ck1_started = std::time::Instant::now();
-                ck_a = Self::rescale_fold(ck_a_2, ck_a_1, &c_inv);
-                end_timer!(rescale_ck1);
-                profile.rescale_ck1_ms += rescale_ck1_started.elapsed().as_secs_f64() * 1000.0;
-
-                let rescale_ck2 = start_timer!(|| "Rescale CK2");
-                let rescale_ck2_started = std::time::Instant::now();
-                ck_b = Self::rescale_fold(ck_b_1, ck_b_2, &c);
-                end_timer!(rescale_ck2);
-                profile.rescale_ck2_ms += rescale_ck2_started.elapsed().as_secs_f64() * 1000.0;
+                m_a = next_m_a;
+                m_b = next_m_b;
+                ck_a = next_ck_a;
+                ck_b = next_ck_b;
+                profile.rescale_m1_ms += rescale_m1_ms;
+                profile.rescale_m2_ms += rescale_m2_ms;
+                profile.rescale_ck1_ms += rescale_ck1_ms;
+                profile.rescale_ck2_ms += rescale_ck2_ms;
 
                 r_commitment_steps.push((com_1, com_2));
                 r_transcript.push(c);
