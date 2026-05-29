@@ -10,6 +10,10 @@ edition = { workspace = true }
 [features]
 default = []
 fuzzing = []
+# Bench-only A/B seam (compile-time, never on in production). Forwards to the
+# RIPP backend's retained pre-optimization paths. See
+# docs/snarkpack/optimization-playbook.md.
+bench-baseline = ["ark-ip-proofs/bench-baseline"]
 
 [dependencies]
 anyhow = { workspace = true }

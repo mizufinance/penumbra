@@ -43,3 +43,8 @@ blake2 = "0.9"
 default = [ "parallel" ]
 parallel = [ "rayon", "ark-ec/parallel", "ark-ff/parallel", "ark-poly/parallel", "ark-std/parallel", "ark-groth16/parallel" ]
 print-trace = [ "ark-std/print-trace" ]
+# Bench-only A/B seam: routes optimized hot paths to their retained
+# pre-optimization `*_baseline` implementations so the same release bench can be
+# built twice and compared. Never enabled in production. See
+# docs/snarkpack/optimization-playbook.md.
+bench-baseline = []

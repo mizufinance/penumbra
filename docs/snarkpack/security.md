@@ -109,6 +109,13 @@ construction — `msm_keys_equals_sequential_fold` proves the MSM yields the sam
 group element as the prior fold — so it landed with both baselines unchanged and
 `AGGREGATE_PROTOCOL_VERSION` still `1`.
 
+The full search-to-land method — how to find candidates (profiler- and
+pattern-driven), classify the change, measure it honestly with the corpus-backed
+bench and the compile-time `bench-baseline` A/B seam, apply the win-or-clarity
+bar, and run the gate set — is the optimization playbook in
+`docs/snarkpack/optimization-playbook.md`, which also carries the ranked
+candidate backlog.
+
 Fixed performance thresholds and the denial-of-service asymmetry gate are a
 later stage; Stage 10 only requires a repeatable measurement so optimizations
 are evidence-backed.

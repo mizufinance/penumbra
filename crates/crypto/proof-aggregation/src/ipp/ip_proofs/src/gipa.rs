@@ -20,6 +20,31 @@ use ark_std::cfg_iter;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
+/// Pre-optimization sequential multiexponentiation `Σ scalarsᵢ · keysᵢ`,
+/// retained as the `bench-baseline` A/B comparison for the `msm_keys` path in
+/// `_compute_final_commitment_keys`. Byte-identical to `msm_keys`; selected only
+/// under the bench-only `bench-baseline` feature, never in production.
+#[cfg(feature = "bench-baseline")]
+fn fold_keys_baseline<K, S>(keys: &[K], scalars: &[S]) -> K
+where
+    K: Clone + Add<Output = K> + MulAssign<S>,
+    S: Copy,
+{
+    assert!(
+        !keys.is_empty(),
+        "fold_keys_baseline requires non-empty keys"
+    );
+    assert_eq!(keys.len(), scalars.len());
+    let mut acc = keys[0].clone();
+    acc *= scalars[0];
+    for (k, s) in keys[1..].iter().zip(&scalars[1..]) {
+        let mut term = k.clone();
+        term *= *s;
+        acc = acc + term;
+    }
+    acc
+}
+
 pub struct GIPA<IP, LMC, RMC, IPC, D> {
     _inner_product: PhantomData<IP>,
     _left_commitment: PhantomData<LMC>,
@@ -589,8 +614,20 @@ where
         // Recombine the final commitment keys by multiexponentiation. The
         // commitment trait's `msm_keys` is byte-identical to the prior
         // sequential fold; group-backed keys (AFGHO) use a real MSM.
-        let ck_a_base = LMC::msm_keys(ck_a, &ck_a_agg_challenge_exponents);
-        let ck_b_base = RMC::msm_keys(ck_b, &ck_b_agg_challenge_exponents);
+        //
+        // The `bench-baseline` feature swaps in the pre-optimization sequential
+        // fold so the A/B harness can measure the MSM delta on the real verify
+        // path in the same release build. See the optimization playbook.
+        #[cfg(not(feature = "bench-baseline"))]
+        let (ck_a_base, ck_b_base) = (
+            LMC::msm_keys(ck_a, &ck_a_agg_challenge_exponents),
+            RMC::msm_keys(ck_b, &ck_b_agg_challenge_exponents),
+        );
+        #[cfg(feature = "bench-baseline")]
+        let (ck_a_base, ck_b_base) = (
+            fold_keys_baseline::<LMC::Key, LMC::Scalar>(ck_a, &ck_a_agg_challenge_exponents),
+            fold_keys_baseline::<RMC::Key, RMC::Scalar>(ck_b, &ck_b_agg_challenge_exponents),
+        );
         Ok((ck_a_base, ck_b_base))
     }
 
