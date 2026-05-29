@@ -45,6 +45,32 @@ where
     acc
 }
 
+#[cfg(feature = "bench-baseline")]
+fn fold_output_baseline<T, S>(left: &T, current: &T, right: &T, c: &S, c_inv: &S) -> T
+where
+    T: Clone + Add<Output = T> + MulAssign<S>,
+    S: Clone,
+{
+    mul_helper(left, c) + current.clone() + mul_helper(right, c_inv)
+}
+
+fn fold_output<T, S>(left: &T, current: &mut T, right: &T, c: &S, c_inv: &S)
+where
+    T: Clone + Default + Add<Output = T> + MulAssign<S>,
+    S: Clone,
+{
+    #[cfg(feature = "bench-baseline")]
+    {
+        *current = fold_output_baseline(left, current, right, c, c_inv);
+    }
+
+    #[cfg(not(feature = "bench-baseline"))]
+    {
+        let current_value = std::mem::take(current);
+        *current = mul_helper(left, c) + current_value + mul_helper(right, c_inv);
+    }
+}
+
 pub struct GIPA<IP, LMC, RMC, IPC, D> {
     _inner_product: PhantomData<IP>,
     _left_commitment: PhantomData<LMC>,
@@ -583,9 +609,9 @@ where
                 counter_nonce += 1;
             };
 
-            com_a = mul_helper(&com_1.0, &c) + com_a.clone() + mul_helper(&com_2.0, &c_inv);
-            com_b = mul_helper(&com_1.1, &c) + com_b.clone() + mul_helper(&com_2.1, &c_inv);
-            com_t = mul_helper(&com_1.2, &c) + com_t.clone() + mul_helper(&com_2.2, &c_inv);
+            fold_output(&com_1.0, &mut com_a, &com_2.0, &c, &c_inv);
+            fold_output(&com_1.1, &mut com_b, &com_2.1, &c, &c_inv);
+            fold_output(&com_1.2, &mut com_t, &com_2.2, &c, &c_inv);
 
             r_transcript.push(c);
         }
