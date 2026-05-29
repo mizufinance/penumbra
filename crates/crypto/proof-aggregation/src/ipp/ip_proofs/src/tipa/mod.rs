@@ -240,6 +240,19 @@ where
     }
 }
 
+fn rescale_fold_curve_profiled<G>(
+    scaled_half: &[G],
+    unscaled_half: &[G],
+    scalar: &G::ScalarField,
+) -> (Vec<G>, f64)
+where
+    G: CurveGroup + Send + Sync,
+{
+    let started = std::time::Instant::now();
+    let folded = rescale_fold_curve(scaled_half, unscaled_half, scalar);
+    (folded, started.elapsed().as_secs_f64() * 1000.0)
+}
+
 fn prepare_g2_affine_vec<P: Pairing>(points: &[P::G2Affine]) -> Vec<P::G2Prepared> {
     let mut prepared = Vec::with_capacity(points.len());
 
@@ -526,21 +539,51 @@ where
         };
         profile.challenge_ms += challenge_started.elapsed().as_secs_f64() * 1000.0;
 
-        let rescale_m1_started = std::time::Instant::now();
-        m_a = rescale_fold_curve(m_a_1, m_a_2, &c);
-        profile.rescale_m1_ms += rescale_m1_started.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(all(feature = "parallel", not(feature = "bench-baseline")))]
+        let (
+            (next_m_a, rescale_m1_ms),
+            (next_m_b, rescale_m2_ms),
+            (next_ck_a, rescale_ck1_ms),
+            (next_ck_b, rescale_ck2_ms),
+        ) = {
+            let ((next_m_a, next_m_b), (next_ck_a, next_ck_b)) = rayon::join(
+                || {
+                    rayon::join(
+                        || rescale_fold_curve_profiled(m_a_1, m_a_2, &c),
+                        || rescale_fold_curve_profiled(m_b_2, m_b_1, &c_inv),
+                    )
+                },
+                || {
+                    rayon::join(
+                        || rescale_fold_curve_profiled(ck_a_2, ck_a_1, &c_inv),
+                        || rescale_fold_curve_profiled(ck_b_1, ck_b_2, &c),
+                    )
+                },
+            );
+            (next_m_a, next_m_b, next_ck_a, next_ck_b)
+        };
 
-        let rescale_m2_started = std::time::Instant::now();
-        m_b = rescale_fold_curve(m_b_2, m_b_1, &c_inv);
-        profile.rescale_m2_ms += rescale_m2_started.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(any(not(feature = "parallel"), feature = "bench-baseline"))]
+        let (
+            (next_m_a, rescale_m1_ms),
+            (next_m_b, rescale_m2_ms),
+            (next_ck_a, rescale_ck1_ms),
+            (next_ck_b, rescale_ck2_ms),
+        ) = (
+            rescale_fold_curve_profiled(m_a_1, m_a_2, &c),
+            rescale_fold_curve_profiled(m_b_2, m_b_1, &c_inv),
+            rescale_fold_curve_profiled(ck_a_2, ck_a_1, &c_inv),
+            rescale_fold_curve_profiled(ck_b_1, ck_b_2, &c),
+        );
 
-        let rescale_ck1_started = std::time::Instant::now();
-        ck_a = rescale_fold_curve(ck_a_2, ck_a_1, &c_inv);
-        profile.rescale_ck1_ms += rescale_ck1_started.elapsed().as_secs_f64() * 1000.0;
-
-        let rescale_ck2_started = std::time::Instant::now();
-        ck_b = rescale_fold_curve(ck_b_1, ck_b_2, &c);
-        profile.rescale_ck2_ms += rescale_ck2_started.elapsed().as_secs_f64() * 1000.0;
+        m_a = next_m_a;
+        m_b = next_m_b;
+        ck_a = next_ck_a;
+        ck_b = next_ck_b;
+        profile.rescale_m1_ms += rescale_m1_ms;
+        profile.rescale_m2_ms += rescale_m2_ms;
+        profile.rescale_ck1_ms += rescale_ck1_ms;
+        profile.rescale_ck2_ms += rescale_ck2_ms;
 
         r_commitment_steps.push((com_1, com_2));
         r_transcript.push(c);
