@@ -7,6 +7,10 @@ version = { workspace = true }
 license = { workspace = true }
 edition = { workspace = true }
 
+[features]
+default = []
+fuzzing = []
+
 [dependencies]
 anyhow = { workspace = true }
 ark-groth16 = { workspace = true, default-features = false }

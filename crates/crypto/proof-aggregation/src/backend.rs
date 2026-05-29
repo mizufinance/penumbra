@@ -242,7 +242,7 @@ pub fn set_rayon_threads_per_batch_for_bench(n: usize) {
     RAYON_THREADS_PER_BATCH.store(n, Ordering::Relaxed);
 }
 
-fn deserialize_aggregate_proof<D: Digest>(
+pub(crate) fn deserialize_aggregate_proof<D: Digest>(
     aggregate_proof_bytes: &[u8],
 ) -> Result<AggregateProof<Bls12_377, D>, AggregateVerifyError> {
     AggregateProof::<Bls12_377, D>::deserialize_compressed(&aggregate_proof_bytes[..])
@@ -1410,6 +1410,70 @@ mod tests {
         }
     }
 
+    fn groth16_oracle_agreement_for_counts(counts: &[usize]) {
+        let (pvk, items) = sample_items();
+        let base_item = items.first().expect("at least one sample item").clone();
+        let srs = DevSrs::default();
+
+        for family_id in parity_families() {
+            for count in counts {
+                let repeated = vec![base_item.clone(); *count];
+                for item in &repeated {
+                    assert!(
+                        Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(
+                            &pvk,
+                            &item.public_inputs,
+                            &item.proof,
+                        )
+                        .expect("single Groth16 oracle should run"),
+                        "single Groth16 oracle should accept valid item"
+                    );
+                }
+
+                let batch_accepts = batch::batch_verify(&pvk, &repeated).is_ok();
+                let statement = statement_for_items(family_id, &pvk, *count, &repeated, &srs);
+                let aggregate = aggregate_family(&statement, &pvk, &repeated, &srs)
+                    .expect("aggregation should succeed");
+                let snarkpack_accepts =
+                    verify_family_aggregate(&statement, &pvk, &aggregate, &srs).is_ok();
+                assert_eq!(
+                    snarkpack_accepts, batch_accepts,
+                    "SnarkPack and batch oracle disagree for {family_id:?} count={count}"
+                );
+
+                if *count <= 64 {
+                    let mut invalid_items = repeated.clone();
+                    for item in &mut invalid_items {
+                        item.public_inputs[0] += Fq::from(1u64);
+                        assert!(
+                            !Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(
+                                &pvk,
+                                &item.public_inputs,
+                                &item.proof,
+                            )
+                            .expect("single Groth16 oracle should run"),
+                            "single Groth16 oracle should reject mutated public input"
+                        );
+                    }
+                    assert!(
+                        batch::batch_verify(&pvk, &invalid_items).is_err(),
+                        "batch oracle should reject invalid items"
+                    );
+                    let invalid_statement =
+                        statement_for_items(family_id, &pvk, *count, &invalid_items, &srs);
+                    let invalid_aggregate =
+                        aggregate_family(&invalid_statement, &pvk, &invalid_items, &srs)
+                            .expect("aggregation over invalid proof records should serialize");
+                    assert!(
+                        verify_family_aggregate(&invalid_statement, &pvk, &invalid_aggregate, &srs)
+                            .is_err(),
+                        "SnarkPack should reject aggregate built over individually invalid items"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn snarkpack_backend_accepts_valid_aggregate() {
         let (pvk, items) = sample_items();
@@ -1712,6 +1776,71 @@ mod tests {
     }
 
     #[test]
+    fn snarkpack_matches_single_and_batch_groth16_oracles() {
+        groth16_oracle_agreement_for_counts(&[1, 2, 4, 8]);
+    }
+
+    #[test]
+    #[ignore]
+    fn snarkpack_matches_single_and_batch_groth16_oracles_slow() {
+        groth16_oracle_agreement_for_counts(&[64, 256, 1024]);
+    }
+
+    #[test]
+    fn aggregation_is_deterministic_for_fixed_inputs() {
+        let (pvk, items) = sample_items_with_count(31, 8);
+        let srs = DevSrs::default();
+        let padded_items =
+            pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
+        let statement = statement_for_items(
+            ProofFamilyId::Transfer,
+            &pvk,
+            items.len(),
+            &padded_items,
+            &srs,
+        );
+
+        let first = aggregate_family(&statement, &pvk, &padded_items, &srs)
+            .expect("first aggregation should succeed");
+        let second = aggregate_family(&statement, &pvk, &padded_items, &srs)
+            .expect("second aggregation should succeed");
+
+        assert_eq!(
+            first, second,
+            "fixed aggregate inputs must produce stable bytes"
+        );
+    }
+
+    #[test]
+    fn preflight_rejects_oversize_before_inner_deserialization() {
+        let (pvk, items) = sample_items();
+        let srs = DevSrs::default();
+        let padded_items =
+            pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
+        let statement = statement_for_items(
+            ProofFamilyId::Transfer,
+            &pvk,
+            items.len(),
+            &padded_items,
+            &srs,
+        );
+        let oversized = vec![0u8; MAX_AGGREGATE_PROOF_BYTES + 1];
+
+        let result = preflight_aggregate_verify(AggregatePreflightInput {
+            statement: &statement,
+            pvk: &pvk,
+            aggregate_proof_bytes: &oversized,
+            srs: &srs,
+        });
+        let err = match result {
+            Ok(_) => panic!("oversize preflight input must reject"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, AggregateVerifyError::OversizeBytes(_)));
+    }
+
+    #[test]
     #[ignore]
     fn aggregate_proof_size_report() {
         let (pvk, items) = sample_items();
@@ -1801,6 +1930,42 @@ mod tests {
                 snarkpack_result.is_err(),
                 "SnarkPack should reject the same mutated batch"
             );
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(16))]
+
+        #[test]
+        fn preflight_aggregate_verify_do_not_panic(
+            bytes in prop::collection::vec(any::<u8>(), 0usize..=4096),
+            seed in any::<u64>(),
+        ) {
+            let (pvk, items) = sample_items_with_count(seed, 2);
+            let srs = DevSrs::default();
+            let padded_items = pad_items_to_power_of_two(&items, srs.max_padded_count as usize)
+                .expect("padding should succeed");
+            let statement = statement_for_items(
+                ProofFamilyId::Transfer,
+                &pvk,
+                items.len(),
+                &padded_items,
+                &srs,
+            );
+
+            let _ = preflight_aggregate_verify(AggregatePreflightInput {
+                statement: &statement,
+                pvk: &pvk,
+                aggregate_proof_bytes: &bytes,
+                srs: &srs,
+            });
+        }
+
+        #[test]
+        fn deserialize_aggregate_proof_do_not_panic(
+            bytes in prop::collection::vec(any::<u8>(), 0usize..=4096),
+        ) {
+            let _ = deserialize_aggregate_proof::<TransferTranscriptDigest>(&bytes);
         }
     }
 }

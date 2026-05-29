@@ -1577,14 +1577,20 @@ pub enum VerifierMutant {
 
 impl fmt::Display for VerifierMutant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.spec_row_id())
+    }
+}
+
+impl VerifierMutant {
+    pub const fn spec_row_id(self) -> &'static str {
         match self {
-            Self::ContextConstructor => write!(f, "fs.context-constructor"),
-            Self::ChallengePreimage => write!(f, "fs.challenge-preimage"),
-            Self::StageLabels => write!(f, "fs.stage-labels"),
-            Self::GipaChallengeDependency => write!(f, "gipa.challenge-dependency"),
-            Self::TipaAbKzgChallenge => write!(f, "tipa.ab.kzg-challenge"),
-            Self::SsmKzgChallenge => write!(f, "ssm.kzg-challenge"),
-            Self::Groth16Randomizer => write!(f, "groth16.randomizer"),
+            Self::ContextConstructor => "fs.context-constructor",
+            Self::ChallengePreimage => "fs.challenge-preimage",
+            Self::StageLabels => "fs.stage-labels",
+            Self::GipaChallengeDependency => "gipa.challenge-dependency",
+            Self::TipaAbKzgChallenge => "tipa.ab.kzg-challenge",
+            Self::SsmKzgChallenge => "ssm.kzg-challenge",
+            Self::Groth16Randomizer => "groth16.randomizer",
         }
     }
 }
@@ -1624,6 +1630,8 @@ pub fn filecoin_shape_bug_class_events() -> Vec<TraceEvent> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use ark_groth16::{r1cs_to_qap::LibsnarkReduction, Groth16};
     use ark_r1cs_std::{alloc::AllocVar, eq::EqGadget, fields::fp::FpVar};
@@ -1632,8 +1640,11 @@ mod tests {
     use penumbra_sdk_proof_aggregation::{
         aggregate_family, aggregate_family_with_trace, decode_wrapped_aggregate_proof,
         encode_wrapped_aggregate_proof, pad_items_to_power_of_two, verify_family_aggregate,
-        verify_family_aggregate_with_trace, AGGREGATE_PROTOCOL_VERSION,
+        verify_family_aggregate_with_trace, AGGREGATE_PROTOCOL_VERSION, MAX_AGGREGATE_PROOF_BYTES,
     };
+    use penumbra_sdk_proof_params::batch;
+    use penumbra_sdk_shielded_pool::ShieldedIcs20WithdrawalFamilyId;
+    use proptest::prelude::*;
 
     #[derive(Clone)]
     struct SquareCircuit {
@@ -1705,6 +1716,68 @@ mod tests {
         (pvk, padded, statement, srs)
     }
 
+    fn sample_items_with_count(
+        seed: u64,
+        count: usize,
+    ) -> (PreparedVerifyingKey<P>, Vec<BatchItem>) {
+        let mut rng = ChaCha20Rng::seed_from_u64(seed);
+        let pk = Groth16::<P, LibsnarkReduction>::generate_random_parameters_with_reduction(
+            SquareCircuit {
+                x: Some(Fq::from(1u64)),
+            },
+            &mut rng,
+        )
+        .expect("setup should succeed");
+        let pvk = PreparedVerifyingKey::from(pk.vk.clone());
+        let items = (0..count)
+            .map(|_| {
+                let x = Fq::rand(&mut rng);
+                let proof = Groth16::<P, LibsnarkReduction>::prove(
+                    &pk,
+                    SquareCircuit { x: Some(x) },
+                    &mut rng,
+                )
+                .expect("proof should build");
+                BatchItem {
+                    proof,
+                    public_inputs: vec![x * x],
+                }
+            })
+            .collect();
+        (pvk, items)
+    }
+
+    fn parity_families() -> [ProofFamilyId; 4] {
+        [
+            ProofFamilyId::Transfer,
+            ProofFamilyId::Consolidate(penumbra_sdk_shielded_pool::CONSOLIDATE_FAMILY_SPECS[0].id),
+            ProofFamilyId::Split(penumbra_sdk_shielded_pool::SPLIT_FAMILY_SPECS[0].id),
+            ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical),
+        ]
+    }
+
+    fn statement_for_items(
+        family_id: ProofFamilyId,
+        pvk: &PreparedVerifyingKey<P>,
+        real_count: usize,
+        padded_items: &[BatchItem],
+        srs: &DevSrs,
+    ) -> AggregateStatement {
+        let rows = padded_items
+            .iter()
+            .map(|item| item.public_inputs.clone())
+            .collect::<Vec<_>>();
+        AggregateStatement::new(
+            AGGREGATE_PROTOCOL_VERSION,
+            family_id,
+            srs_id(srs),
+            pvk,
+            real_count as u32,
+            &rows,
+        )
+        .expect("statement should build")
+    }
+
     fn wrong_pvk() -> PreparedVerifyingKey<P> {
         let mut rng = ChaCha20Rng::seed_from_u64(99);
         let pk = Groth16::<P, LibsnarkReduction>::generate_random_parameters_with_reduction(
@@ -1771,6 +1844,225 @@ mod tests {
         .expect("wrong-SRS statement should build")
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum ExpectedInputRejection {
+        InvalidInput,
+        MalformedProof,
+        Rejected,
+    }
+
+    struct InputMutationCase {
+        statement: AggregateStatement,
+        pvk: PreparedVerifyingKey<P>,
+        proof: Vec<u8>,
+        srs: DevSrs,
+    }
+
+    struct InputFixture {
+        pvk: PreparedVerifyingKey<P>,
+        items: Vec<BatchItem>,
+        statement: AggregateStatement,
+        srs: DevSrs,
+        proof: Vec<u8>,
+    }
+
+    impl InputFixture {
+        fn new() -> Self {
+            let (pvk, items, statement, srs) = fixture();
+            let proof = aggregate_family(&statement, &pvk, &items, &srs).expect("aggregate");
+            Self {
+                pvk,
+                items,
+                statement,
+                srs,
+                proof,
+            }
+        }
+
+        fn valid_case(&self) -> InputMutationCase {
+            InputMutationCase {
+                statement: self.statement.clone(),
+                pvk: self.pvk.clone(),
+                proof: self.proof.clone(),
+                srs: self.srs,
+            }
+        }
+    }
+
+    struct InputMutant {
+        name: &'static str,
+        spec_row_id: &'static str,
+        expected: ExpectedInputRejection,
+        apply: fn(&InputFixture) -> Result<InputMutationCase, ReferencePathError>,
+    }
+
+    fn mutate_public_input(
+        fixture: &InputFixture,
+    ) -> Result<InputMutationCase, ReferencePathError> {
+        let mut case = fixture.valid_case();
+        case.statement =
+            mutated_public_input_statement(&fixture.statement, &fixture.pvk, &fixture.srs);
+        Ok(case)
+    }
+
+    fn mutate_real_count(fixture: &InputFixture) -> Result<InputMutationCase, ReferencePathError> {
+        AggregateStatement::new(
+            AGGREGATE_PROTOCOL_VERSION,
+            fixture.statement.family_id(),
+            srs_id(&fixture.srs),
+            &fixture.pvk,
+            1,
+            fixture.statement.padded_public_inputs(),
+        )
+        .map(|statement| InputMutationCase {
+            statement,
+            ..fixture.valid_case()
+        })
+        .map_err(|err| ReferencePathError::InvalidInput(err.to_string()))
+    }
+
+    fn mutate_family_id(fixture: &InputFixture) -> Result<InputMutationCase, ReferencePathError> {
+        let mut case = fixture.valid_case();
+        case.statement = wrong_family_statement(&fixture.statement, &fixture.pvk, &fixture.srs);
+        Ok(case)
+    }
+
+    fn mutate_srs_id(fixture: &InputFixture) -> Result<InputMutationCase, ReferencePathError> {
+        let mut case = fixture.valid_case();
+        case.statement = wrong_srs_statement(&fixture.statement, &fixture.pvk, &fixture.srs);
+        Ok(case)
+    }
+
+    fn mutate_vk_digest(fixture: &InputFixture) -> Result<InputMutationCase, ReferencePathError> {
+        let mut case = fixture.valid_case();
+        case.pvk = wrong_pvk();
+        Ok(case)
+    }
+
+    fn mutate_padding(fixture: &InputFixture) -> Result<InputMutationCase, ReferencePathError> {
+        let mut rows = fixture
+            .items
+            .iter()
+            .map(|item| item.public_inputs.clone())
+            .collect::<Vec<_>>();
+        rows[1][0] += Fq::from(1u64);
+        AggregateStatement::new(
+            AGGREGATE_PROTOCOL_VERSION,
+            fixture.statement.family_id(),
+            srs_id(&fixture.srs),
+            &fixture.pvk,
+            1,
+            &rows,
+        )
+        .map(|statement| InputMutationCase {
+            statement,
+            ..fixture.valid_case()
+        })
+        .map_err(|err| ReferencePathError::InvalidInput(err.to_string()))
+    }
+
+    fn mutate_wrapper_digest(
+        fixture: &InputFixture,
+    ) -> Result<InputMutationCase, ReferencePathError> {
+        let mut case = fixture.valid_case();
+        case.proof[40] ^= 0x01;
+        Ok(case)
+    }
+
+    fn mutate_inner_proof_byte(
+        fixture: &InputFixture,
+    ) -> Result<InputMutationCase, ReferencePathError> {
+        let inner = decode_wrapped_aggregate_proof(
+            &fixture.proof,
+            fixture.statement.statement_digest(),
+            None,
+        )
+        .map_err(|err| ReferencePathError::Rejected(err.to_string()))?;
+        let mut mutated_inner = Vec::new();
+        mutated_inner.extend_from_slice(inner);
+        mutated_inner[0] ^= 0x01;
+        let mut case = fixture.valid_case();
+        case.proof =
+            encode_wrapped_aggregate_proof(fixture.statement.statement_digest(), &mutated_inner)
+                .map_err(|err| ReferencePathError::InvalidInput(err.to_string()))?;
+        Ok(case)
+    }
+
+    fn mutate_truncation(fixture: &InputFixture) -> Result<InputMutationCase, ReferencePathError> {
+        let mut case = fixture.valid_case();
+        case.proof.truncate(case.proof.len() / 2);
+        Ok(case)
+    }
+
+    fn mutate_oversize(fixture: &InputFixture) -> Result<InputMutationCase, ReferencePathError> {
+        let mut case = fixture.valid_case();
+        case.proof = vec![0u8; MAX_AGGREGATE_PROOF_BYTES + 1];
+        Ok(case)
+    }
+
+    const INPUT_MUTANTS: &[InputMutant] = &[
+        InputMutant {
+            name: "public-input",
+            spec_row_id: "fs.context-constructor",
+            expected: ExpectedInputRejection::Rejected,
+            apply: mutate_public_input,
+        },
+        InputMutant {
+            name: "real-count",
+            spec_row_id: "fs.context-constructor",
+            expected: ExpectedInputRejection::InvalidInput,
+            apply: mutate_real_count,
+        },
+        InputMutant {
+            name: "family-id",
+            spec_row_id: "fs.context-constructor",
+            expected: ExpectedInputRejection::Rejected,
+            apply: mutate_family_id,
+        },
+        InputMutant {
+            name: "srs-id",
+            spec_row_id: "fs.context-constructor",
+            expected: ExpectedInputRejection::Rejected,
+            apply: mutate_srs_id,
+        },
+        InputMutant {
+            name: "vk-digest",
+            spec_row_id: "fs.context-constructor",
+            expected: ExpectedInputRejection::Rejected,
+            apply: mutate_vk_digest,
+        },
+        InputMutant {
+            name: "padding-noncanonical",
+            spec_row_id: "fs.context-constructor",
+            expected: ExpectedInputRejection::InvalidInput,
+            apply: mutate_padding,
+        },
+        InputMutant {
+            name: "wrapper-digest",
+            spec_row_id: "fs.context-constructor",
+            expected: ExpectedInputRejection::Rejected,
+            apply: mutate_wrapper_digest,
+        },
+        InputMutant {
+            name: "inner-proof-byte",
+            spec_row_id: "groth16.randomizer",
+            expected: ExpectedInputRejection::MalformedProof,
+            apply: mutate_inner_proof_byte,
+        },
+        InputMutant {
+            name: "truncation",
+            spec_row_id: "fs.context-constructor",
+            expected: ExpectedInputRejection::Rejected,
+            apply: mutate_truncation,
+        },
+        InputMutant {
+            name: "oversize",
+            spec_row_id: "fs.context-constructor",
+            expected: ExpectedInputRejection::Rejected,
+            apply: mutate_oversize,
+        },
+    ];
+
     fn assert_reference_rejects(
         statement: &AggregateStatement,
         pvk: &PreparedVerifyingKey<P>,
@@ -1789,6 +2081,105 @@ mod tests {
         for event in trace {
             event.validate().expect("trace event should satisfy policy");
         }
+    }
+
+    fn penumbra_byte_trace_rows() -> BTreeSet<&'static str> {
+        TRACE_POLICIES
+            .iter()
+            .filter(|policy| policy.primary_level == TraceComparisonLevel::PenumbraByte)
+            .map(|policy| policy.spec_row_id)
+            .collect()
+    }
+
+    fn assert_expected_rejection(
+        mutant: &InputMutant,
+        result: Result<InputMutationCase, ReferencePathError>,
+    ) {
+        match (mutant.expected, result) {
+            (ExpectedInputRejection::InvalidInput, Err(ReferencePathError::InvalidInput(_))) => {}
+            (ExpectedInputRejection::MalformedProof, Ok(case)) => {
+                let err = reference_verify_family_aggregate(
+                    &case.statement,
+                    &case.pvk,
+                    &case.proof,
+                    &case.srs,
+                )
+                .expect_err("input mutant should reject as malformed proof");
+                assert!(
+                    matches!(err, ReferencePathError::MalformedProof(_)),
+                    "input mutant {} rejected with wrong error: {err}",
+                    mutant.name
+                );
+            }
+            (ExpectedInputRejection::Rejected, Ok(case)) => {
+                assert_reference_rejects(
+                    &case.statement,
+                    &case.pvk,
+                    &case.proof,
+                    &case.srs,
+                    mutant.name,
+                );
+            }
+            (expected, _) => panic!("input mutant {} expected {expected:?}", mutant.name),
+        }
+    }
+
+    fn reference_parity_case(
+        count: usize,
+        seed: u64,
+        family_index: usize,
+        mutation: u8,
+    ) -> Result<(), TestCaseError> {
+        let (pvk, items) = sample_items_with_count(seed, count);
+        let srs = DevSrs::default();
+        let padded_items = pad_items_to_power_of_two(&items, srs.max_padded_count as usize)
+            .expect("padding should succeed");
+        let family_id = parity_families()[family_index];
+        let statement = statement_for_items(family_id, &pvk, count, &padded_items, &srs);
+        let aggregate = aggregate_family(&statement, &pvk, &padded_items, &srs).expect("aggregate");
+
+        let batch_accepts = batch::batch_verify(&pvk, &padded_items).is_ok();
+        let production_accepts =
+            verify_family_aggregate(&statement, &pvk, &aggregate, &srs).is_ok();
+        let reference_accepts =
+            reference_verify_family_aggregate(&statement, &pvk, &aggregate, &srs)
+                .map(|report| report.accepted)
+                .unwrap_or(false);
+        prop_assert_eq!(production_accepts, batch_accepts);
+        prop_assert_eq!(reference_accepts, batch_accepts);
+
+        let mut mutated_items = padded_items.clone();
+        let mut mutated_statement = statement.clone();
+        let mut mutated_aggregate = aggregate.clone();
+        match mutation % 2 {
+            0 => {
+                for item in &mut mutated_items {
+                    item.proof.c = Default::default();
+                }
+                mutated_aggregate = aggregate_family(&statement, &pvk, &mutated_items, &srs)
+                    .expect("mutated proof aggregation should serialize");
+            }
+            1 => {
+                for item in &mut mutated_items {
+                    item.public_inputs[0] += Fq::from(1u64);
+                }
+                mutated_statement =
+                    statement_for_items(family_id, &pvk, count, &mutated_items, &srs);
+            }
+            _ => {}
+        }
+
+        let batch_accepts = batch::batch_verify(&pvk, &mutated_items).is_ok();
+        let production_accepts =
+            verify_family_aggregate(&mutated_statement, &pvk, &mutated_aggregate, &srs).is_ok();
+        let reference_accepts =
+            reference_verify_family_aggregate(&mutated_statement, &pvk, &mutated_aggregate, &srs)
+                .map(|report| report.accepted)
+                .unwrap_or(false);
+        prop_assert!(!batch_accepts, "mutated batch oracle must reject");
+        prop_assert_eq!(production_accepts, batch_accepts);
+        prop_assert_eq!(reference_accepts, batch_accepts);
+        Ok(())
     }
 
     #[test]
@@ -1884,74 +2275,32 @@ mod tests {
 
     #[test]
     fn reference_verifier_rejects_required_input_mutations() {
-        let (pvk, items, statement, srs) = fixture();
-        let production = aggregate_family(&statement, &pvk, &items, &srs).expect("aggregate");
+        let fixture = InputFixture::new();
+        for mutant in INPUT_MUTANTS {
+            assert_expected_rejection(mutant, (mutant.apply)(&fixture));
+        }
+    }
 
-        let mut truncated_wrapper = production.clone();
-        truncated_wrapper.truncate(truncated_wrapper.len() / 2);
-        assert_reference_rejects(
-            &statement,
-            &pvk,
-            &truncated_wrapper,
-            &srs,
-            "malformed wrapper",
-        );
-
-        let mut wrapper_digest = production.clone();
-        wrapper_digest[40] ^= 0x01;
-        assert_reference_rejects(&statement, &pvk, &wrapper_digest, &srs, "wrapper digest");
-
-        let public_input_statement = mutated_public_input_statement(&statement, &pvk, &srs);
-        assert_reference_rejects(
-            &public_input_statement,
-            &pvk,
-            &production,
-            &srs,
-            "public input",
-        );
-
-        let family_statement = wrong_family_statement(&statement, &pvk, &srs);
-        assert_reference_rejects(&family_statement, &pvk, &production, &srs, "family");
-
-        let srs_statement = wrong_srs_statement(&statement, &pvk, &srs);
-        assert_reference_rejects(&srs_statement, &pvk, &production, &srs, "SRS id");
-
-        let wrong_pvk = wrong_pvk();
-        assert_reference_rejects(&statement, &wrong_pvk, &production, &srs, "VK");
-
-        let inner = decode_wrapped_aggregate_proof(&production, statement.statement_digest(), None)
-            .expect("wrapper decode");
-        let mut proof = ReferenceAggregateProof::deserialize_compressed(inner)
-            .expect("inner proof should decode");
-        proof.agg_c += G1::generator();
-        let mut mutated_inner = Vec::new();
-        proof
-            .serialize_compressed(&mut mutated_inner)
-            .expect("proof serialize");
-        let mutated_proof =
-            encode_wrapped_aggregate_proof(statement.statement_digest(), &mutated_inner)
-                .expect("wrapper encode");
-        assert_reference_rejects(&statement, &pvk, &mutated_proof, &srs, "proof bytes");
-
-        let mut malformed_inner = inner.to_vec();
-        malformed_inner[0] ^= 0x01;
-        let malformed_proof =
-            encode_wrapped_aggregate_proof(statement.statement_digest(), &malformed_inner)
-                .expect("wrapper encode");
-        assert_reference_rejects(&statement, &pvk, &malformed_proof, &srs, "malformed proof");
-
-        let noncanonical_rows = statement.padded_public_inputs().to_vec();
-        assert!(
-            AggregateStatement::new(
-                AGGREGATE_PROTOCOL_VERSION,
-                statement.family_id(),
-                srs_id(&srs),
-                &pvk,
-                1,
-                &noncanonical_rows,
-            )
-            .is_err(),
-            "non-canonical padding should not construct a reference input"
+    #[test]
+    fn input_mutant_matrix_is_declared_per_byte_binding_row() {
+        let names = INPUT_MUTANTS
+            .iter()
+            .map(|mutant| mutant.name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "public-input",
+                "real-count",
+                "family-id",
+                "srs-id",
+                "vk-digest",
+                "padding-noncanonical",
+                "wrapper-digest",
+                "inner-proof-byte",
+                "truncation",
+                "oversize",
+            ]
         );
     }
 
@@ -1960,6 +2309,10 @@ mod tests {
         let (pvk, items, statement, srs) = fixture();
         let production = aggregate_family(&statement, &pvk, &items, &srs).expect("aggregate");
         for mutant in VERIFIER_MUTANTS {
+            assert!(
+                penumbra_byte_trace_rows().contains(mutant.spec_row_id()),
+                "verifier mutant {mutant} must name a PenumbraByte trace row"
+            );
             let report = reference_verify_family_aggregate_with_verifier_mutant(
                 &statement,
                 &pvk,
@@ -1993,6 +2346,49 @@ mod tests {
                 "groth16.randomizer",
             ]
         );
+    }
+
+    #[test]
+    fn mutation_matrices_cover_penumbra_byte_trace_rows() {
+        let expected = penumbra_byte_trace_rows();
+        let covered = INPUT_MUTANTS
+            .iter()
+            .map(|mutant| mutant.spec_row_id)
+            .chain(VERIFIER_MUTANTS.iter().map(|mutant| mutant.spec_row_id()))
+            .collect::<BTreeSet<_>>();
+        assert!(
+            expected.is_subset(&covered),
+            "input/verifier mutation matrices must cover every PenumbraByte row: expected={expected:?}, covered={covered:?}"
+        );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1))]
+
+        #[test]
+        fn reference_property_matches_production_and_batch_oracles(
+            count in 1usize..=8,
+            seed in any::<u64>(),
+            family_index in 0usize..4,
+            mutation in 0u8..2,
+        ) {
+            reference_parity_case(count, seed, family_index, mutation)?;
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4))]
+
+        #[test]
+        #[ignore]
+        fn reference_property_matches_production_and_batch_oracles_slow(
+            count in 1usize..=8,
+            seed in any::<u64>(),
+            family_index in 0usize..4,
+            mutation in 0u8..2,
+        ) {
+            reference_parity_case(count, seed, family_index, mutation)?;
+        }
     }
 
     #[test]

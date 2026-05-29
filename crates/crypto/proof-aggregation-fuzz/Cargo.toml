@@ -1,0 +1,78 @@
+[package]
+name = "penumbra-sdk-proof-aggregation-fuzz"
+authors = { workspace = true }
+repository = { workspace = true }
+description = "Coverage-guided fuzz targets for Penumbra proof aggregation"
+version = { workspace = true }
+license = { workspace = true }
+edition = { workspace = true }
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+ark-ff = { workspace = true }
+ark-groth16 = { workspace = true, default-features = false }
+ark-r1cs-std = { workspace = true }
+ark-relations = { workspace = true }
+ark-snark = { workspace = true }
+bincode = { workspace = true }
+decaf377 = { workspace = true }
+decaf377-rdsa = { workspace = true }
+libfuzzer-sys = "0.4"
+penumbra-sdk-app = { workspace = true, features = ["component", "fuzzing"] }
+penumbra-sdk-fee = { workspace = true, default-features = true }
+penumbra-sdk-proof-aggregation = { workspace = true, features = ["fuzzing"] }
+penumbra-sdk-proof-aggregation-reference = { path = "../proof-aggregation-reference" }
+penumbra-sdk-proof-aggregation-trace-schema = { workspace = true }
+penumbra-sdk-proof-params = { workspace = true, default-features = false }
+penumbra-sdk-proto = { workspace = true, default-features = true }
+penumbra-sdk-sct = { workspace = true, default-features = false }
+penumbra-sdk-tct = { workspace = true, default-features = true }
+penumbra-sdk-transaction = { workspace = true, default-features = true }
+penumbra-sdk-txhash = { workspace = true, default-features = true }
+rand_chacha = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
+
+[[bin]]
+name = "wrapper_inner_range"
+path = "fuzz_targets/wrapper_inner_range.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "preflight_aggregate_verify"
+path = "fuzz_targets/preflight_aggregate_verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "deserialize_aggregate_proof"
+path = "fuzz_targets/deserialize_aggregate_proof.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sidecar_decoding"
+path = "fuzz_targets/sidecar_decoding.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "aggregate_bundle_shape"
+path = "fuzz_targets/aggregate_bundle_shape.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proposal_validation"
+path = "fuzz_targets/proposal_validation.rs"
+test = false
+doc = false
+bench = false

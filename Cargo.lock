@@ -119,6 +119,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
+
+[[package]]
 name = "arc-swap"
 version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -988,7 +994,7 @@ dependencies = [
  "bitflags 2.6.0",
  "cexpr",
  "clang-sys",
- "itertools 0.11.0",
+ "itertools 0.12.1",
  "lazy_static",
  "lazycell",
  "log",
@@ -4654,13 +4660,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "libfuzzer-sys"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f12a681b7dd8ce12bff52488013ba614b869148d54dd79836ab85aafdd53f08d"
+dependencies = [
+ "arbitrary",
+ "cc",
+]
+
+[[package]]
 name = "libloading"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e310b3a6b5907f99202fcdb4960ff45b93735d7c7d96b760fcff8db2dc0e103d"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -5960,6 +5976,7 @@ dependencies = [
  "penumbra-sdk-transaction",
  "penumbra-sdk-txhash",
  "penumbra-sdk-validator",
+ "proptest",
  "prost 0.13.4",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
@@ -6714,6 +6731,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "penumbra-sdk-proof-aggregation-fuzz"
+version = "2.1.0"
+dependencies = [
+ "ark-ff",
+ "ark-groth16",
+ "ark-r1cs-std",
+ "ark-relations",
+ "ark-snark",
+ "bincode",
+ "decaf377",
+ "decaf377-rdsa",
+ "libfuzzer-sys",
+ "penumbra-sdk-app",
+ "penumbra-sdk-fee",
+ "penumbra-sdk-proof-aggregation",
+ "penumbra-sdk-proof-aggregation-reference",
+ "penumbra-sdk-proof-aggregation-trace-schema",
+ "penumbra-sdk-proof-params",
+ "penumbra-sdk-proto",
+ "penumbra-sdk-sct",
+ "penumbra-sdk-tct",
+ "penumbra-sdk-transaction",
+ "penumbra-sdk-txhash",
+ "rand_chacha 0.3.1",
+ "tokio",
+]
+
+[[package]]
 name = "penumbra-sdk-proof-aggregation-reference"
 version = "2.1.0"
 dependencies = [
@@ -6733,6 +6778,7 @@ dependencies = [
  "penumbra-sdk-proof-aggregation-trace-schema",
  "penumbra-sdk-proof-params",
  "penumbra-sdk-shielded-pool",
+ "proptest",
  "rand_chacha 0.3.1",
  "sha2 0.10.8",
  "thiserror 1.0.69",
@@ -7838,7 +7884,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81bddcdb20abf9501610992b6759a4c888aef7d1a7247ef75e2404275ac24af1"
 dependencies = [
  "anyhow",
- "itertools 0.11.0",
+ "itertools 0.12.1",
  "proc-macro2 1.0.93",
  "quote",
  "syn 2.0.96",

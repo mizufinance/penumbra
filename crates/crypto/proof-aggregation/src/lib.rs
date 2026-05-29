@@ -19,8 +19,9 @@ use decaf377::Bls12_377;
 use penumbra_sdk_proof_params::batch::BatchItem;
 
 pub use aggregate_proof_wrapper::{
-    decode_wrapped_aggregate_proof, encode_wrapped_aggregate_proof, AggregateProofBytesError,
-    AGGREGATE_PROOF_WRAPPER_DOMAIN, MAX_AGGREGATE_PROOF_BYTES,
+    decode_wrapped_aggregate_proof, decode_wrapped_aggregate_proof_inner_range,
+    encode_wrapped_aggregate_proof, AggregateProofBytesError, AGGREGATE_PROOF_WRAPPER_DOMAIN,
+    MAX_AGGREGATE_PROOF_BYTES,
 };
 pub use backend::AggregateBuildBackendProfile;
 use backend::SnarkpackBackend;
@@ -113,4 +114,14 @@ pub fn verify_family_aggregate_profiled_status(
         aggregate_proof_bytes,
         srs,
     )
+}
+
+#[cfg(any(test, feature = "fuzzing"))]
+pub fn deserialize_aggregate_proof_for_fuzz(
+    aggregate_proof_bytes: &[u8],
+) -> std::result::Result<(), AggregateVerifyError> {
+    backend::deserialize_aggregate_proof::<transcript::TransferTranscriptDigest>(
+        aggregate_proof_bytes,
+    )
+    .map(|_| ())
 }

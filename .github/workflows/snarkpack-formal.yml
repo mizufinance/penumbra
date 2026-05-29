@@ -8,6 +8,7 @@ on:
     paths:
       - '.github/workflows/snarkpack-formal.yml'
       - 'crates/crypto/proof-aggregation/formal/**'
+      - 'crates/crypto/proof-aggregation-fuzz/**'
       - 'crates/crypto/proof-aggregation-reference/**'
       - 'crates/crypto/proof-aggregation-trace-schema/**'
       - 'crates/crypto/proof-aggregation/src/aggregate_proof_wrapper.rs'
@@ -78,6 +79,19 @@ jobs:
 
       - name: Check SnarkPack formal invariants
         run: nix develop --command just snarkpack-invariants
+
+      - name: Install cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo install cargo-fuzz --locked
+
+      - name: Run SnarkPack fuzz smoke
+        if: github.event_name == 'pull_request'
+        run: nix develop --command just snarkpack-fuzz-smoke
+
+      - name: Run scheduled SnarkPack fuzz smoke
+        if: github.event_name != 'pull_request'
+        run: nix develop --command env SNARKPACK_FUZZ_RUNS=256 just snarkpack-fuzz-smoke
 
       - name: Check SnarkPack Filecoin shape evidence
         run: nix develop --command just snarkpack-filecoin-shape

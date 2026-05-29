@@ -22,15 +22,14 @@ This is the authoritative order for the SnarkPack security campaign:
 4. Implementation-boundary hax/F* glue, running in parallel after Stage 1
 5. Penumbra slow reference path
 6. Trace instrumentation
-7. Deterministic conformance tests
-8. Property and differential testing
-9. Coverage fuzzing
-10. Optional advanced research track: Lean/EasyCrypt/spec-guided bug finding,
+7. Deterministic and property conformance tests
+8. Coverage fuzzing
+9. Optional advanced research track: Lean/EasyCrypt/spec-guided bug finding,
     non-blocking
-11. Optimization
-12. Performance and DoS gates
-13. Assumption register finalization
-14. Final manual review
+10. Optimization
+11. Performance and DoS gates
+12. Assumption register finalization
+13. Final manual review
 
 Stages 1 through 3 are planning artifacts with invariant-backed coverage. They
 define the target for later proof, reference-path, testing, fuzzing,
@@ -60,6 +59,20 @@ Spec Row Index in `docs/snarkpack/ripp-spec.md`; instrumentation must not
 re-decide trace levels from production call shape. The Filecoin-shape harness
 re-derives evidence from Bellperson `v0.21.0`; no cross-curve byte equivalence
 is claimed.
+
+Stage 7 is implemented as deterministic and seeded property coverage. The
+production backend checks Groth16 single-proof, batch, and aggregate agreement
+across parity families and count tables. The reference crate checks
+production/reference/batch agreement for clean and mutated inputs, declares
+the input mutation matrix, and asserts the input plus verifier matrices cover
+every Penumbra byte trace row.
+
+Stage 8 is implemented as bounded fuzz smoke coverage plus a cargo-fuzz
+scaffold. Stable proptests cover wrapper decoding, preflight, aggregate proof
+deserialization, sidecar decoding, and aggregate bundle transaction shape. The
+non-published fuzz crate provides libFuzzer targets for the same byte
+boundaries and proposal-validation path, with invariant-gated dependency
+boundaries.
 
 ## Scope Lock
 
@@ -280,8 +293,8 @@ except the alternate-valid-SRS fixture listed as an open item.
 | valid proof from a different SRS | TODO(snarkpack-srs-v2): add when a second production-style SRS fixture exists |
 | verifying key digest | `statement_mismatch_rejects_vk_digest_mutation_before_backend` |
 | aggregate proof bytes | `snarkpack_backend_rejects_malformed_aggregate_bytes`; `malformed_aggregate_proof_oversize_rejected_before_deserialization`; `wrapper_rejects_malformed_length` |
-| public input value | `snarkpack_backend_rejects_mutated_public_inputs`; `snarkpack_property_matches_legacy_batch_oracle` |
-| public input order | `statement_digest_binds_inputs`; `snarkpack_property_matches_legacy_batch_oracle` |
+| public input value | `snarkpack_backend_rejects_mutated_public_inputs`; `snarkpack_property_matches_legacy_batch_oracle`; `reference_property_matches_production_and_batch_oracles` |
+| public input order | `statement_digest_binds_inputs`; `snarkpack_property_matches_legacy_batch_oracle`; `reference_property_matches_production_and_batch_oracles` |
 | same proof with different padded public-input vector and consistent count | `snarkpack_backend_rejects_mutated_public_inputs` |
 | real count | `statement_rejects_bad_counts`; app aggregate real-count checks |
 | padded count | `statement_rejects_bad_padding`; app aggregate padded-count checks |
@@ -294,8 +307,11 @@ except the alternate-valid-SRS fixture listed as an open item.
 | independent reference accepts production aggregate | `reference_verifier_accepts_production_prover` |
 | production verifier accepts independent reference aggregate | `reference_prover_cross_verifies_with_production` |
 | production/reference trace parity | `production_and_reference_traces_match_declared_levels` |
-| reference input mutation matrix | `reference_verifier_rejects_required_input_mutations` |
-| verifier-mutant challenge omission/reordering sensitivity | `verifier_mutants_reject_valid_proofs` |
+| reference input mutation matrix | `reference_verifier_rejects_required_input_mutations`; `input_mutant_matrix_is_declared_per_byte_binding_row`; `mutation_matrices_cover_penumbra_byte_trace_rows` |
+| verifier-mutant challenge omission/reordering sensitivity | `verifier_mutants_reject_valid_proofs`; `verifier_mutant_matrix_is_declared_per_byte_binding_row`; `mutation_matrices_cover_penumbra_byte_trace_rows` |
+| aggregate determinism | `aggregation_is_deterministic_for_fixed_inputs` |
+| Groth16 oracle agreement | `snarkpack_matches_single_and_batch_groth16_oracles` |
+| untrusted byte entrypoints | `wrapper_decode_inner_range_do_not_panic`; `preflight_aggregate_verify_do_not_panic`; `deserialize_aggregate_proof_do_not_panic`; `decode_batch_item_do_not_panic`; `decode_artifact_do_not_panic`; `ensure_aggregate_bundle_tx_shape_do_not_panic`; `just snarkpack-fuzz-smoke` |
 
 Differential property tests use legacy batch verification as the oracle:
 
@@ -307,7 +323,8 @@ Differential property tests use legacy batch verification as the oracle:
 
 ## Fuzzing Targets
 
-Status: smoke coverage implemented; long-running fuzz harnesses remain open.
+Status: bounded smoke coverage implemented; long-running corpus expansion and
+crash triage remain open operational work.
 
 Fuzz these surfaces with panic detection and resource limits:
 
@@ -320,12 +337,18 @@ Fuzz these surfaces with panic detection and resource limits:
 The expected fuzz result is either a valid accepted aggregate built from valid
 artifacts or a bounded error.
 
-Open items:
+Implemented harnesses:
 
-- add long-running `cargo-fuzz` harnesses for aggregate bundle decoding,
-  wrapped proof decoding, malformed aggregate verification, and statement
-  construction
-- wire those harnesses into nightly CI with corpus retention
+- `decode_wrapped_aggregate_proof_inner_range`
+- `preflight_aggregate_verify`
+- aggregate proof deserialization through the fuzz-only helper
+- sidecar `decode_batch_item` and `decode_artifact`
+- aggregate bundle transaction shape
+- proposal aggregate bundle validation with bounded artifacts
+
+Open item:
+
+- retain and minimize long-running fuzz corpora outside the smoke gate
 
 ## Benchmarking
 

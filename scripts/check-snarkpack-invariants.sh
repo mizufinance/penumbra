@@ -94,11 +94,42 @@ check_reference_crate_boundary() {
   production_reference_imports="$(
     rg -n 'penumbra-sdk-proof-aggregation-reference|proof_aggregation_reference|proof-aggregation-reference' \
       Cargo.toml crates \
-      | rg -v '^Cargo.toml:|^crates/crypto/proof-aggregation-reference/' || true
+      | rg -v '^Cargo.toml:|^crates/crypto/proof-aggregation-reference/|^crates/crypto/proof-aggregation-fuzz/' || true
   )"
   if [[ -n "$production_reference_imports" ]]; then
     echo "$production_reference_imports" >&2
     fail "production crates must not depend on the dev-only reference oracle"
+  fi
+}
+
+check_fuzz_crate_boundary() {
+  local manifest="crates/crypto/proof-aggregation-fuzz/Cargo.toml"
+  local crate_dir="crates/crypto/proof-aggregation-fuzz"
+
+  [[ -f "$manifest" ]] || return
+
+  rg -F '"crates/crypto/proof-aggregation-fuzz"' Cargo.toml >/dev/null \
+    || fail "fuzz crate must be listed as a workspace member"
+  rg -n '^publish = false$' "$manifest" >/dev/null \
+    || fail "fuzz crate must be marked publish = false"
+  rg -n '^cargo-fuzz = true$' "$manifest" >/dev/null \
+    || fail "fuzz crate must be marked as a cargo-fuzz package"
+  rg -n '^libfuzzer-sys = ' "$manifest" >/dev/null \
+    || fail "fuzz crate must depend on libfuzzer-sys"
+  rg -n '^penumbra-sdk-proof-aggregation = ' "$manifest" >/dev/null \
+    || fail "fuzz crate must use the public proof-aggregation crate boundary"
+  rg -n '^penumbra-sdk-proof-aggregation-reference = ' "$manifest" >/dev/null \
+    || fail "fuzz crate must use the reference oracle crate as a dev-only boundary"
+  rg -n '^penumbra-sdk-proof-aggregation-trace-schema = ' "$manifest" >/dev/null \
+    || fail "fuzz crate must use the shared trace schema boundary"
+
+  local forbidden_deps
+  forbidden_deps="$(
+    rg -n 'ark-ip-proofs|ark-inner-products|src/ipp|proof-aggregation/src' "$manifest" "$crate_dir" || true
+  )"
+  if [[ -n "$forbidden_deps" ]]; then
+    echo "$forbidden_deps" >&2
+    fail "fuzz crate must not depend on or import production internals"
   fi
 }
 
@@ -406,6 +437,7 @@ if [[ -f "$adaptation_scope" ]]; then
 fi
 
 check_reference_crate_boundary
+check_fuzz_crate_boundary
 check_trace_schema
 
 expected_stamp="$(formal_proof_stamp)"

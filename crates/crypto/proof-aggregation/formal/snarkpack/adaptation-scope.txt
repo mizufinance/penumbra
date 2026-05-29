@@ -18,6 +18,7 @@ hash.challenge-context|crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/cha
 hash.challenge-preimage|crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/challenge.rs:CHALLENGE_DOMAIN
 hash.family-transcript|crates/crypto/proof-aggregation/src/transcript.rs:transcript_family_domain
 serialization.aggregate-proof|crates/crypto/proof-aggregation/src/backend.rs:deserialize_aggregate_proof
+test-surface.deserialize-fuzz-helper|crates/crypto/proof-aggregation/src/lib.rs:deserialize_aggregate_proof_for_fuzz
 serialization.vk-digest|crates/crypto/proof-aggregation/src/statement.rs:aggregate_verification_key_digest
 serialization.public-input-fields|crates/crypto/proof-aggregation/src/statement.rs:field_rows_to_bytes
 srs.dev-shape|crates/crypto/proof-aggregation/src/srs.rs:DevSrs

@@ -35,6 +35,7 @@ members = [
   "crates/crypto/decaf377-ka",
   "crates/crypto/eddy",
   "crates/crypto/proof-aggregation",
+  "crates/crypto/proof-aggregation-fuzz",
   "crates/crypto/proof-aggregation-reference",
   "crates/crypto/proof-aggregation-trace-schema",
   "crates/crypto/proof-params",

@@ -122,6 +122,7 @@ mod tests {
         decode_wrapped_aggregate_proof, decode_wrapped_aggregate_proof_inner_range,
         encode_wrapped_aggregate_proof, AggregateProofBytesError,
     };
+    use proptest::prelude::*;
 
     #[test]
     fn wrapper_round_trips_inner_proof() {
@@ -185,5 +186,34 @@ mod tests {
                 got: wrapped.len()
             }
         );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn wrapper_decode_inner_range_do_not_panic(
+            bytes in prop::collection::vec(any::<u8>(), 0usize..=4096),
+            digest in any::<[u8; 32]>(),
+            max in prop::option::of(0usize..=4096),
+        ) {
+            let result = decode_wrapped_aggregate_proof_inner_range(&bytes, digest, max);
+            if let Some(max) = max {
+                if bytes.len() > max {
+                    prop_assert_eq!(
+                        result,
+                        Err(AggregateProofBytesError::OversizeBytes {
+                            max,
+                            got: bytes.len(),
+                        })
+                    );
+                    return Ok(());
+                }
+            }
+            if let Ok(range) = result {
+                prop_assert!(range.start <= range.end);
+                prop_assert!(range.end <= bytes.len());
+            }
+        }
     }
 }

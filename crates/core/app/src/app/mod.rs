@@ -1,6 +1,8 @@
 mod preconsensus;
 mod validation_support;
 
+#[cfg(any(test, feature = "fuzzing"))]
+pub use self::preconsensus::decode_batch_item_for_fuzz;
 pub use self::preconsensus::{
     CheckTxProfile, PrepareProposalProfile, ProcessProposalProfile, ProposalArtifactSidecar,
     ProposalArtifactSidecarRecord, ProposalArtifactSidecarRecordEntry,
@@ -2221,6 +2223,11 @@ impl App {
         valid_binding_signature(tx)?;
         tx.aggregate_bundle_action()
             .context("aggregate bundle tx missing bundle action")
+    }
+
+    #[cfg(feature = "fuzzing")]
+    pub fn ensure_aggregate_bundle_tx_shape_for_fuzz(tx: &Transaction) -> Result<()> {
+        Self::ensure_aggregate_bundle_tx_shape(tx).map(|_| ())
     }
 
     fn expected_aggregate_segments(
@@ -6425,8 +6432,10 @@ mod tests {
     use std::sync::Arc;
 
     use anyhow::{anyhow, Context, Result};
+    use ark_ff::Zero;
     use cnidarium::{StateDelta, StateRead, StateWrite, TempStorage};
     use decaf377::{Fq, Fr};
+    use decaf377_rdsa as rdsa;
     use futures::StreamExt as _;
     use penumbra_sdk_asset::{asset, Value, BASE_ASSET_DENOM, BASE_ASSET_ID};
     use penumbra_sdk_compact_block::StatePayload;
@@ -6455,6 +6464,8 @@ mod tests {
         plan::MemoPlan,
         Action, DetectionData, Transaction, TransactionParameters, TransactionPlan,
     };
+    use penumbra_sdk_txhash::AuthorizingData;
+    use proptest::prelude::*;
     use rand_core::OsRng;
     use sha2::Digest as _;
     use tendermint::v0_37::abci::{request, response};
@@ -6910,6 +6921,106 @@ mod tests {
             .contains("aggregate bundle tx must contain exactly one aggregate bundle action"));
 
         Ok(())
+    }
+
+    fn aggregate_bundle_shape_test_tx(bundle: AggregateBundle, mode: u8) -> Transaction {
+        let mut tx = Transaction {
+            transaction_body: penumbra_sdk_transaction::TransactionBody {
+                actions: vec![Action::AggregateBundle(bundle.clone())],
+                transaction_parameters: TransactionParameters {
+                    expiry_height: 0,
+                    chain_id: "penumbra-test-chain".to_owned(),
+                    fee: Fee::default(),
+                },
+                fee_funding: None,
+                detection_data: None,
+                memo: None,
+            },
+            binding_sig: [0; 64].into(),
+            anchor: penumbra_sdk_tct::Root(penumbra_sdk_tct::structure::Hash::zero()),
+        };
+
+        match mode % 6 {
+            0 => tx.transaction_body.actions.clear(),
+            1 => {
+                tx.transaction_body.memo = Some(MemoCiphertext([0; MEMO_CIPHERTEXT_LEN_BYTES]));
+            }
+            2 => {
+                tx.transaction_body.detection_data = Some(DetectionData { fmd_clues: vec![] });
+            }
+            3 => {
+                tx.transaction_body.transaction_parameters.fee =
+                    Fee::from_staking_token_amount(1u64.into());
+            }
+            4 => tx
+                .transaction_body
+                .actions
+                .push(Action::AggregateBundle(bundle)),
+            _ => {
+                let binding_signing_key = rdsa::SigningKey::from(Fr::zero());
+                let auth_hash = tx.transaction_body.auth_hash();
+                tx.binding_sig = binding_signing_key.sign_deterministic(auth_hash.as_bytes());
+            }
+        }
+
+        tx
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn ensure_aggregate_bundle_tx_shape_do_not_panic(
+            mode in 0u8..6,
+            version in any::<u32>(),
+            srs_id in prop::collection::vec(any::<u8>(), 0usize..=64),
+            aggregate_proof in prop::collection::vec(any::<u8>(), 0usize..=1024),
+            real_count in any::<u32>(),
+            padded_count in any::<u32>(),
+        ) {
+            let bundle = AggregateBundle {
+                version,
+                srs_id,
+                families: vec![penumbra_sdk_proof_aggregation::FamilyAggregate {
+                    family_id: ProofFamilyId::Transfer,
+                    real_count,
+                    padded_count,
+                    aggregate_proof,
+                }],
+            };
+            let tx = aggregate_bundle_shape_test_tx(bundle, mode);
+            let result = App::ensure_aggregate_bundle_tx_shape(&tx);
+
+            match mode % 6 {
+                0 | 4 => prop_assert!(
+                    result
+                        .expect_err("aggregate action shape mutation must reject")
+                        .to_string()
+                        .contains("exactly one aggregate bundle action")
+                ),
+                1 => prop_assert!(
+                    result
+                        .expect_err("memo mutation must reject")
+                        .to_string()
+                        .contains("must not contain a memo")
+                ),
+                2 => prop_assert!(
+                    result
+                        .expect_err("detection mutation must reject")
+                        .to_string()
+                        .contains("must not contain detection data")
+                ),
+                3 => prop_assert!(
+                    result
+                        .expect_err("fee mutation must reject")
+                        .to_string()
+                        .contains("must have zero fee")
+                ),
+                _ => {
+                    let _ = result;
+                }
+            }
+        }
     }
 
     #[tokio::test]

@@ -84,6 +84,12 @@ gnark-proof-tests-slow:
 # Run ignored slow SnarkPack parity tests.
 snarkpack-slow:
     cargo test -p penumbra-sdk-proof-aggregation snarkpack_matches_legacy_batch_across_families_and_counts_slow --lib -- --ignored
+    cargo test -p penumbra-sdk-proof-aggregation snarkpack_matches_single_and_batch_groth16_oracles_slow --lib -- --ignored
+    cargo test -p penumbra-sdk-proof-aggregation-reference reference_property_matches_production_and_batch_oracles_slow --lib -- --ignored
+
+# Run bounded SnarkPack fuzz harness smoke tests.
+snarkpack-fuzz-smoke:
+    bash -lc 'set -euo pipefail; runs="${SNARKPACK_FUZZ_RUNS:-16}"; fuzz_dir="crates/crypto/proof-aggregation-fuzz"; tmp="$(mktemp -d)"; trap "rm -rf \"$tmp\"" EXIT; cargo +nightly fuzz build --fuzz-dir "$fuzz_dir"; for target in wrapper_inner_range preflight_aggregate_verify deserialize_aggregate_proof sidecar_decoding aggregate_bundle_shape proposal_validation; do mkdir -p "$tmp/$target"; cp "$fuzz_dir"/corpus/"$target"/* "$tmp/$target"/; cargo +nightly fuzz run --fuzz-dir "$fuzz_dir" "$target" "$tmp/$target" -- -runs="$runs"; done'
 
 # Check durable SnarkPack hardening invariants.
 snarkpack-invariants:
