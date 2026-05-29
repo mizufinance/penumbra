@@ -466,45 +466,84 @@ where
         let m_b_1_prepared = prepare_g2_affine_vec::<P>(&m_b_1_affine);
         let m_b_2_prepared = prepare_g2_affine_vec::<P>(&m_b_2_affine);
 
-        let commit_l_started = std::time::Instant::now();
-        let ip_l_started = std::time::Instant::now();
-        let ip_l = pairing_affine_with_prepared_g2::<P>(&m_a_1_affine, &m_b_1_prepared)?;
-        profile.commit_ab_ms += ip_l_started.elapsed().as_secs_f64() * 1000.0;
-        let com_a_l_started = std::time::Instant::now();
-        let com_a_l = pairing_affine::<P>(&m_a_1_affine, ck_a_1_affine)?;
-        profile.commit_com_a_ms += com_a_l_started.elapsed().as_secs_f64() * 1000.0;
-        let com_b_l_started = std::time::Instant::now();
-        let com_b_l = pairing_affine_with_prepared_g2::<P>(&ck_b_1_affine, &m_b_1_prepared)?;
-        profile.commit_com_b_ms += com_b_l_started.elapsed().as_secs_f64() * 1000.0;
-        let com_1 = (
-            com_a_l,
-            com_b_l,
-            IdentityCommitment::<ark_ec::pairing::PairingOutput<P>, P::ScalarField>::commit(
-                &vec![ck_t.clone()],
-                &vec![ip_l],
-            )?,
-        );
-        profile.commit_l_ms += commit_l_started.elapsed().as_secs_f64() * 1000.0;
+        let commit_l = || {
+            let commit_started = std::time::Instant::now();
+            let ip_started = std::time::Instant::now();
+            let ip = pairing_affine_with_prepared_g2::<P>(&m_a_1_affine, &m_b_1_prepared)
+                .map_err(|err| err.to_string())?;
+            let ip_ms = ip_started.elapsed().as_secs_f64() * 1000.0;
+            let com_a_started = std::time::Instant::now();
+            let com_a =
+                pairing_affine::<P>(&m_a_1_affine, ck_a_1_affine).map_err(|err| err.to_string())?;
+            let com_a_ms = com_a_started.elapsed().as_secs_f64() * 1000.0;
+            let com_b_started = std::time::Instant::now();
+            let com_b = pairing_affine_with_prepared_g2::<P>(&ck_b_1_affine, &m_b_1_prepared)
+                .map_err(|err| err.to_string())?;
+            let com_b_ms = com_b_started.elapsed().as_secs_f64() * 1000.0;
+            let com = (
+                com_a,
+                com_b,
+                IdentityCommitment::<ark_ec::pairing::PairingOutput<P>, P::ScalarField>::commit(
+                    &vec![ck_t.clone()],
+                    &vec![ip],
+                )
+                .map_err(|err| err.to_string())?,
+            );
+            Ok::<_, String>((
+                com,
+                commit_started.elapsed().as_secs_f64() * 1000.0,
+                ip_ms,
+                com_a_ms,
+                com_b_ms,
+            ))
+        };
+        let commit_r = || {
+            let commit_started = std::time::Instant::now();
+            let ip_started = std::time::Instant::now();
+            let ip = pairing_affine_with_prepared_g2::<P>(&m_a_2_affine, &m_b_2_prepared)
+                .map_err(|err| err.to_string())?;
+            let ip_ms = ip_started.elapsed().as_secs_f64() * 1000.0;
+            let com_a_started = std::time::Instant::now();
+            let com_a =
+                pairing_affine::<P>(&m_a_2_affine, ck_a_2_affine).map_err(|err| err.to_string())?;
+            let com_a_ms = com_a_started.elapsed().as_secs_f64() * 1000.0;
+            let com_b_started = std::time::Instant::now();
+            let com_b = pairing_affine_with_prepared_g2::<P>(&ck_b_2_affine, &m_b_2_prepared)
+                .map_err(|err| err.to_string())?;
+            let com_b_ms = com_b_started.elapsed().as_secs_f64() * 1000.0;
+            let com = (
+                com_a,
+                com_b,
+                IdentityCommitment::<ark_ec::pairing::PairingOutput<P>, P::ScalarField>::commit(
+                    &vec![ck_t.clone()],
+                    &vec![ip],
+                )
+                .map_err(|err| err.to_string())?,
+            );
+            Ok::<_, String>((
+                com,
+                commit_started.elapsed().as_secs_f64() * 1000.0,
+                ip_ms,
+                com_a_ms,
+                com_b_ms,
+            ))
+        };
 
-        let commit_r_started = std::time::Instant::now();
-        let ip_r_started = std::time::Instant::now();
-        let ip_r = pairing_affine_with_prepared_g2::<P>(&m_a_2_affine, &m_b_2_prepared)?;
-        profile.commit_ab_ms += ip_r_started.elapsed().as_secs_f64() * 1000.0;
-        let com_a_r_started = std::time::Instant::now();
-        let com_a_r = pairing_affine::<P>(&m_a_2_affine, ck_a_2_affine)?;
-        profile.commit_com_a_ms += com_a_r_started.elapsed().as_secs_f64() * 1000.0;
-        let com_b_r_started = std::time::Instant::now();
-        let com_b_r = pairing_affine_with_prepared_g2::<P>(&ck_b_2_affine, &m_b_2_prepared)?;
-        profile.commit_com_b_ms += com_b_r_started.elapsed().as_secs_f64() * 1000.0;
-        let com_2 = (
-            com_a_r,
-            com_b_r,
-            IdentityCommitment::<ark_ec::pairing::PairingOutput<P>, P::ScalarField>::commit(
-                &vec![ck_t.clone()],
-                &vec![ip_r],
-            )?,
-        );
-        profile.commit_r_ms += commit_r_started.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(all(feature = "parallel", not(feature = "bench-baseline")))]
+        let (commit_l_result, commit_r_result) = rayon::join(commit_l, commit_r);
+
+        #[cfg(any(not(feature = "parallel"), feature = "bench-baseline"))]
+        let (commit_l_result, commit_r_result) = (commit_l(), commit_r());
+
+        let (com_1, commit_l_ms, ip_l_ms, com_a_l_ms, com_b_l_ms) =
+            commit_l_result.map_err(|err: String| std::io::Error::other(err))?;
+        let (com_2, commit_r_ms, ip_r_ms, com_a_r_ms, com_b_r_ms) =
+            commit_r_result.map_err(|err: String| std::io::Error::other(err))?;
+        profile.commit_l_ms += commit_l_ms;
+        profile.commit_r_ms += commit_r_ms;
+        profile.commit_ab_ms += ip_l_ms + ip_r_ms;
+        profile.commit_com_a_ms += com_a_l_ms + com_a_r_ms;
+        profile.commit_com_b_ms += com_b_l_ms + com_b_r_ms;
 
         let challenge_started = std::time::Instant::now();
         let mut counter_nonce: u64 = 0;
