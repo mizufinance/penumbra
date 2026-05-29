@@ -13,12 +13,11 @@ use rayon::prelude::*;
 use crate::{
     challenge::{challenge_digest, ChallengeContext, ChallengeTraceSink, NoopChallengeTraceSink},
     tipa::{
-        prove_pairing_inner_product_with_prepared_srs_shift,
         prove_pairing_inner_product_with_prepared_srs_shift_profiled,
         structured_scalar_message::{
             structured_scalar_power, TIPAWithSSM, TIPAWithSSMProof, TipaWithSsmBuildProfile,
         },
-        TIPAProof, TipaBuildProfile, VerifierSRS, SRS, TIPA,
+        PreparedProvingSrs, TIPAProof, TipaBuildProfile, VerifierSRS, SRS, TIPA,
     },
     Error,
 };
@@ -64,6 +63,42 @@ type MultiExpInnerProductCProof<P, D> = TIPAWithSSMProof<
     P,
     D,
 >;
+
+#[derive(Default)]
+struct BufferedChallengeTraceSink {
+    records: Vec<ChallengeTraceRecord>,
+}
+
+struct ChallengeTraceRecord {
+    stage_label: &'static [u8],
+    nonce: u64,
+    preimage: Vec<u8>,
+    digest: Vec<u8>,
+}
+
+impl BufferedChallengeTraceSink {
+    fn replay_into<S: ChallengeTraceSink>(self, trace: &mut S) {
+        for record in self.records {
+            trace.record(
+                record.stage_label,
+                record.nonce,
+                &record.preimage,
+                &record.digest,
+            );
+        }
+    }
+}
+
+impl ChallengeTraceSink for BufferedChallengeTraceSink {
+    fn record(&mut self, stage_label: &'static [u8], nonce: u64, preimage: &[u8], digest: &[u8]) {
+        self.records.push(ChallengeTraceRecord {
+            stage_label,
+            nonce,
+            preimage: preimage.to_vec(),
+            digest: digest.to_vec(),
+        });
+    }
+}
 
 fn timed_pairing_inner_product<P: Pairing>(
     left: &[P::G1],
@@ -111,6 +146,145 @@ fn initial_commitments_profiled<P: Pairing>(
     let (com_c, com_c_ms) = com_c_result.map_err(|err: String| std::io::Error::other(err))?;
 
     Ok(((com_a, com_b, com_c), (com_a_ms, com_b_ms, com_c_ms)))
+}
+
+fn prove_tipa_ab_buffered_profiled<P, D>(
+    context: &ChallengeContext,
+    prepared_srs: &PreparedProvingSrs<P>,
+    a_r: &[P::G1],
+    b: &[P::G2],
+    ck_1_r: &[P::G2],
+    ck_2: &[P::G1],
+    r: &P::ScalarField,
+) -> Result<
+    (
+        PairingInnerProductABProof<P, D>,
+        TipaBuildProfile,
+        BufferedChallengeTraceSink,
+        f64,
+    ),
+    String,
+>
+where
+    P: Pairing,
+    D: Digest,
+{
+    let mut trace = BufferedChallengeTraceSink::default();
+    let started = Instant::now();
+    let (proof, profile) = prove_pairing_inner_product_with_prepared_srs_shift_profiled::<P, D>(
+        context,
+        &mut trace,
+        prepared_srs,
+        (a_r, b),
+        (ck_1_r, ck_2, &HomomorphicPlaceholderValue),
+        r,
+    )
+    .map_err(|err| err.to_string())?;
+    Ok((
+        proof,
+        profile,
+        trace,
+        started.elapsed().as_secs_f64() * 1000.0,
+    ))
+}
+
+fn prove_tipa_c_buffered_profiled<P, D>(
+    context: &ChallengeContext,
+    prepared_srs: &PreparedProvingSrs<P>,
+    c: &[P::G1],
+    r_vec: &[P::ScalarField],
+    ck_1: &[P::G2],
+) -> Result<
+    (
+        MultiExpInnerProductCProof<P, D>,
+        TipaWithSsmBuildProfile,
+        BufferedChallengeTraceSink,
+        f64,
+    ),
+    String,
+>
+where
+    P: Pairing,
+    D: Digest,
+{
+    let mut trace = BufferedChallengeTraceSink::default();
+    let started = Instant::now();
+    let (proof, profile) =
+        MultiExpInnerProductC::<P, D>::prove_with_prepared_structured_scalar_message_profiled(
+            context,
+            &mut trace,
+            prepared_srs,
+            (c, r_vec),
+            (ck_1, &HomomorphicPlaceholderValue),
+        )
+        .map_err(|err| err.to_string())?;
+    Ok((
+        proof,
+        profile,
+        trace,
+        started.elapsed().as_secs_f64() * 1000.0,
+    ))
+}
+
+fn prove_tipa_proofs_buffered_profiled<P, D, S>(
+    context: &ChallengeContext,
+    trace: &mut S,
+    prepared_srs: &PreparedProvingSrs<P>,
+    a_r: &[P::G1],
+    b: &[P::G2],
+    c: &[P::G1],
+    r_vec: &[P::ScalarField],
+    ck_1_r: &[P::G2],
+    ck_2: &[P::G1],
+    ck_1: &[P::G2],
+    r: &P::ScalarField,
+) -> Result<
+    (
+        (
+            PairingInnerProductABProof<P, D>,
+            MultiExpInnerProductCProof<P, D>,
+        ),
+        (TipaBuildProfile, TipaWithSsmBuildProfile),
+        (f64, f64),
+    ),
+    Error,
+>
+where
+    P: Pairing,
+    D: Digest,
+    S: ChallengeTraceSink,
+{
+    #[cfg(all(feature = "parallel", not(feature = "bench-baseline")))]
+    let (tipa_ab_result, tipa_c_result) = rayon::join(
+        || prove_tipa_ab_buffered_profiled::<P, D>(context, prepared_srs, a_r, b, ck_1_r, ck_2, r),
+        || prove_tipa_c_buffered_profiled::<P, D>(context, prepared_srs, c, r_vec, ck_1),
+    );
+
+    #[cfg(any(not(feature = "parallel"), feature = "bench-baseline"))]
+    let (tipa_ab_result, tipa_c_result) = {
+        let tipa_ab_result =
+            prove_tipa_ab_buffered_profiled::<P, D>(context, prepared_srs, a_r, b, ck_1_r, ck_2, r);
+        let tipa_c_result = if tipa_ab_result.is_ok() {
+            prove_tipa_c_buffered_profiled::<P, D>(context, prepared_srs, c, r_vec, ck_1)
+        } else {
+            Err("skipped tipa_c after tipa_ab failure".to_string())
+        };
+        (tipa_ab_result, tipa_c_result)
+    };
+
+    let (tipa_proof_ab, tipa_ab_profile, tipa_ab_trace, tipa_ab_ms) =
+        tipa_ab_result.map_err(|err: String| std::io::Error::other(err))?;
+    let (tipa_proof_c, tipa_c_profile, tipa_c_trace, tipa_c_ms) =
+        tipa_c_result.map_err(|err: String| std::io::Error::other(err))?;
+
+    tipa_ab_trace.replay_into(trace);
+    tipa_c_trace.replay_into(trace);
+
+    Ok((
+        (tipa_proof_ab, tipa_proof_c),
+        (tipa_ab_profile, tipa_c_profile),
+        (tipa_ab_ms, tipa_c_ms),
+    ))
 }
 
 #[derive(Clone, CanonicalSerialize, CanonicalDeserialize)]
@@ -276,23 +450,19 @@ where
         PairingInnerProduct::<P>::inner_product(&a_r, &ck_1_r)?
     );
 
-    let tipa_proof_ab = prove_pairing_inner_product_with_prepared_srs_shift::<P, D>(
+    let ((tipa_proof_ab, tipa_proof_c), _, _) = prove_tipa_proofs_buffered_profiled::<P, D, S>(
         context,
         trace,
         &prepared_srs,
-        (&a_r, &b),
-        (&ck_1_r, ck_2, &HomomorphicPlaceholderValue),
+        &a_r,
+        &b,
+        &c,
+        &r_vec,
+        &ck_1_r,
+        ck_2,
+        ck_1,
         &r,
     )?;
-
-    let tipa_proof_c =
-        MultiExpInnerProductC::<P, D>::prove_with_prepared_structured_scalar_message_with_trace(
-            context,
-            trace,
-            &prepared_srs,
-            (&c, &r_vec),
-            (ck_1, &HomomorphicPlaceholderValue),
-        )?;
 
     Ok(AggregateProof {
         com_a,
@@ -419,29 +589,23 @@ where
         profile.consistency_check_ms = consistency_started.elapsed().as_secs_f64() * 1000.0;
     }
 
-    let tipa_ab_started = Instant::now();
-    let (tipa_proof_ab, tipa_ab_profile) =
-        prove_pairing_inner_product_with_prepared_srs_shift_profiled::<P, D>(
+    let ((tipa_proof_ab, tipa_proof_c), (tipa_ab_profile, tipa_c_profile), (tipa_ab_ms, tipa_c_ms)) =
+        prove_tipa_proofs_buffered_profiled::<P, D, S>(
             context,
             trace,
             &prepared_srs,
-            (&a_r, &b),
-            (&ck_1_r, ck_2, &HomomorphicPlaceholderValue),
+            &a_r,
+            &b,
+            &c,
+            &r_vec,
+            &ck_1_r,
+            ck_2,
+            ck_1,
             &r,
         )?;
-    profile.tipa_ab_ms = tipa_ab_started.elapsed().as_secs_f64() * 1000.0;
+    profile.tipa_ab_ms = tipa_ab_ms;
     apply_tipa_ab_profile(&mut profile, &tipa_ab_profile);
-
-    let tipa_c_started = Instant::now();
-    let (tipa_proof_c, tipa_c_profile) =
-        MultiExpInnerProductC::<P, D>::prove_with_prepared_structured_scalar_message_profiled(
-            context,
-            trace,
-            &prepared_srs,
-            (&c, &r_vec),
-            (ck_1, &HomomorphicPlaceholderValue),
-        )?;
-    profile.tipa_c_ms = tipa_c_started.elapsed().as_secs_f64() * 1000.0;
+    profile.tipa_c_ms = tipa_c_ms;
     apply_tipa_c_profile(&mut profile, &tipa_c_profile);
     apply_pairing_profile(&mut profile, &pairing_profile_snapshot());
     profile.total_ms = started.elapsed().as_secs_f64() * 1000.0;

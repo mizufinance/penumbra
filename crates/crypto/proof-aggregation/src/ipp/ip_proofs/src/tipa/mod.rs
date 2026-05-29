@@ -289,30 +289,6 @@ fn pairing_affine_with_prepared_g2<P: Pairing>(
         .ok_or_else(|| Box::new(std::io::Error::other("pairing length mismatch")) as Error)
 }
 
-pub(crate) fn prove_pairing_inner_product_with_prepared_srs_shift<P, D>(
-    context: &ChallengeContext,
-    trace: &mut impl ChallengeTraceSink,
-    prepared_srs: &PreparedProvingSrs<P>,
-    values: (&[P::G1], &[P::G2]),
-    ck: (&[P::G2], &[P::G1], &HomomorphicPlaceholderValue),
-    r_shift: &P::ScalarField,
-) -> Result<PairingTipaProof<P, D>, Error>
-where
-    P: Pairing,
-    D: Digest,
-{
-    let (proof, profile) = prove_pairing_inner_product_with_prepared_srs_shift_profiled::<P, D>(
-        context,
-        trace,
-        prepared_srs,
-        values,
-        ck,
-        r_shift,
-    )?;
-    debug_assert!(profile.total_ms >= 0.0);
-    Ok(proof)
-}
-
 pub(crate) fn prove_pairing_inner_product_with_prepared_srs_shift_profiled<P, D>(
     context: &ChallengeContext,
     trace: &mut impl ChallengeTraceSink,
