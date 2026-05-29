@@ -287,6 +287,126 @@ where
     ))
 }
 
+fn verify_tipa_ab_buffered_profiled<P, D>(
+    context: &ChallengeContext,
+    ip_verifier_srs: &VerifierSRS<P>,
+    proof: &AggregateProof<P, D>,
+    r: &P::ScalarField,
+) -> Result<(bool, BufferedChallengeTraceSink, f64), String>
+where
+    P: Pairing,
+    D: Digest,
+{
+    let mut trace = BufferedChallengeTraceSink::default();
+    let started = Instant::now();
+    let valid = verify_tipa_ab::<P, D, BufferedChallengeTraceSink>(
+        context,
+        &mut trace,
+        ip_verifier_srs,
+        proof,
+        r,
+    )
+    .map_err(|err| err.to_string())?;
+    Ok((valid, trace, started.elapsed().as_secs_f64() * 1000.0))
+}
+
+fn verify_tipa_c_buffered_profiled<P, D>(
+    context: &ChallengeContext,
+    ip_verifier_srs: &VerifierSRS<P>,
+    proof: &AggregateProof<P, D>,
+    r: &P::ScalarField,
+) -> Result<(bool, BufferedChallengeTraceSink, f64), String>
+where
+    P: Pairing,
+    D: Digest,
+{
+    let mut trace = BufferedChallengeTraceSink::default();
+    let started = Instant::now();
+    let valid = verify_tipa_c::<P, D, BufferedChallengeTraceSink>(
+        context,
+        &mut trace,
+        ip_verifier_srs,
+        proof,
+        r,
+    )
+    .map_err(|err| err.to_string())?;
+    Ok((valid, trace, started.elapsed().as_secs_f64() * 1000.0))
+}
+
+fn verify_public_inputs_ppe_profiled<P, D>(
+    vk: &VerifyingKey<P>,
+    public_inputs: &[Vec<P::ScalarField>],
+    proof: &AggregateProof<P, D>,
+    r: &P::ScalarField,
+) -> (bool, f64, f64)
+where
+    P: Pairing,
+    D: Digest,
+{
+    let public_input_fold_started = Instant::now();
+    let (r_sum, g_ic) = fold_public_inputs::<P>(vk, public_inputs, r);
+    let public_input_fold_ms = public_input_fold_started.elapsed().as_secs_f64() * 1000.0;
+
+    let ppe_started = Instant::now();
+    let ppe_valid = verify_ppe::<P>(vk, proof, &r_sum, g_ic);
+    let ppe_ms = ppe_started.elapsed().as_secs_f64() * 1000.0;
+
+    (ppe_valid, public_input_fold_ms, ppe_ms)
+}
+
+fn verify_independent_checks_profiled<P, D, S>(
+    context: &ChallengeContext,
+    trace: &mut S,
+    ip_verifier_srs: &VerifierSRS<P>,
+    vk: &VerifyingKey<P>,
+    public_inputs: &[Vec<P::ScalarField>],
+    proof: &AggregateProof<P, D>,
+    r: &P::ScalarField,
+) -> Result<((bool, bool, bool), (f64, f64, f64, f64)), Error>
+where
+    P: Pairing,
+    D: Digest,
+    S: ChallengeTraceSink,
+{
+    #[cfg(all(feature = "parallel", not(feature = "bench-baseline")))]
+    let (tipa_ab_result, (tipa_c_result, ppe_result)) = rayon::join(
+        || verify_tipa_ab_buffered_profiled::<P, D>(context, ip_verifier_srs, proof, r),
+        || {
+            rayon::join(
+                || verify_tipa_c_buffered_profiled::<P, D>(context, ip_verifier_srs, proof, r),
+                || verify_public_inputs_ppe_profiled::<P, D>(vk, public_inputs, proof, r),
+            )
+        },
+    );
+
+    #[cfg(any(not(feature = "parallel"), feature = "bench-baseline"))]
+    let (tipa_ab_result, tipa_c_result, ppe_result) = {
+        let tipa_ab_result =
+            verify_tipa_ab_buffered_profiled::<P, D>(context, ip_verifier_srs, proof, r);
+        let tipa_c_result = if tipa_ab_result.is_ok() {
+            verify_tipa_c_buffered_profiled::<P, D>(context, ip_verifier_srs, proof, r)
+        } else {
+            Err("skipped tipa_c after tipa_ab failure".to_string())
+        };
+        let ppe_result = verify_public_inputs_ppe_profiled::<P, D>(vk, public_inputs, proof, r);
+        (tipa_ab_result, tipa_c_result, ppe_result)
+    };
+
+    let (tipa_proof_ab_valid, tipa_ab_trace, tipa_ab_ms) =
+        tipa_ab_result.map_err(|err: String| std::io::Error::other(err))?;
+    let (tipa_proof_c_valid, tipa_c_trace, tipa_c_ms) =
+        tipa_c_result.map_err(|err: String| std::io::Error::other(err))?;
+    let (ppe_valid, public_input_fold_ms, ppe_ms) = ppe_result;
+
+    tipa_ab_trace.replay_into(trace);
+    tipa_c_trace.replay_into(trace);
+
+    Ok((
+        (tipa_proof_ab_valid, tipa_proof_c_valid, ppe_valid),
+        (tipa_ab_ms, tipa_c_ms, public_input_fold_ms, ppe_ms),
+    ))
+}
+
 #[derive(Clone, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AggregateProof<P: Pairing, D: Digest> {
     com_a: PairingOutput<P>,
@@ -660,11 +780,16 @@ where
     S: ChallengeTraceSink,
 {
     let r = derive_randomizer::<P, D, S>(context, trace, proof)?;
-    let tipa_proof_ab_valid =
-        verify_tipa_ab::<P, D, S>(context, trace, ip_verifier_srs, proof, &r)?;
-    let tipa_proof_c_valid = verify_tipa_c::<P, D, S>(context, trace, ip_verifier_srs, proof, &r)?;
-    let (r_sum, g_ic) = fold_public_inputs::<P>(vk, public_inputs, &r);
-    let ppe_valid = verify_ppe::<P>(vk, proof, &r_sum, g_ic);
+    let ((tipa_proof_ab_valid, tipa_proof_c_valid, ppe_valid), _) =
+        verify_independent_checks_profiled::<P, D, S>(
+            context,
+            trace,
+            ip_verifier_srs,
+            vk,
+            public_inputs,
+            proof,
+            &r,
+        )?;
 
     Ok(tipa_proof_ab_valid && tipa_proof_c_valid && ppe_valid)
 }
@@ -710,22 +835,18 @@ where
     let r = derive_randomizer::<P, D, S>(context, trace, proof)?;
     let challenge_ms = challenge_started.elapsed().as_secs_f64() * 1000.0;
 
-    let tipa_ab_started = Instant::now();
-    let tipa_proof_ab_valid =
-        verify_tipa_ab::<P, D, S>(context, trace, ip_verifier_srs, proof, &r)?;
-    let tipa_ab_ms = tipa_ab_started.elapsed().as_secs_f64() * 1000.0;
-
-    let tipa_c_started = Instant::now();
-    let tipa_proof_c_valid = verify_tipa_c::<P, D, S>(context, trace, ip_verifier_srs, proof, &r)?;
-    let tipa_c_ms = tipa_c_started.elapsed().as_secs_f64() * 1000.0;
-
-    let public_input_fold_started = Instant::now();
-    let (r_sum, g_ic) = fold_public_inputs::<P>(vk, public_inputs, &r);
-    let public_input_fold_ms = public_input_fold_started.elapsed().as_secs_f64() * 1000.0;
-
-    let ppe_started = Instant::now();
-    let ppe_valid = verify_ppe::<P>(vk, proof, &r_sum, g_ic);
-    let ppe_ms = ppe_started.elapsed().as_secs_f64() * 1000.0;
+    let (
+        (tipa_proof_ab_valid, tipa_proof_c_valid, ppe_valid),
+        (tipa_ab_ms, tipa_c_ms, public_input_fold_ms, ppe_ms),
+    ) = verify_independent_checks_profiled::<P, D, S>(
+        context,
+        trace,
+        ip_verifier_srs,
+        vk,
+        public_inputs,
+        proof,
+        &r,
+    )?;
 
     Ok(AggregateProofVerificationProfile {
         challenge_ms,
