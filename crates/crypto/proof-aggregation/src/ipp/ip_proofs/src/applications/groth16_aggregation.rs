@@ -65,6 +65,54 @@ type MultiExpInnerProductCProof<P, D> = TIPAWithSSMProof<
     D,
 >;
 
+fn timed_pairing_inner_product<P: Pairing>(
+    left: &[P::G1],
+    right: &[P::G2],
+) -> Result<(PairingOutput<P>, f64), String> {
+    let started = Instant::now();
+    let output =
+        PairingInnerProduct::<P>::inner_product(left, right).map_err(|err| err.to_string())?;
+    Ok((output, started.elapsed().as_secs_f64() * 1000.0))
+}
+
+fn initial_commitments_profiled<P: Pairing>(
+    a: &[P::G1],
+    b: &[P::G2],
+    c: &[P::G1],
+    ck_1: &[P::G2],
+    ck_2: &[P::G1],
+) -> Result<
+    (
+        (PairingOutput<P>, PairingOutput<P>, PairingOutput<P>),
+        (f64, f64, f64),
+    ),
+    Error,
+> {
+    #[cfg(all(feature = "parallel", not(feature = "bench-baseline")))]
+    let ((com_a_result, com_b_result), com_c_result) = rayon::join(
+        || {
+            rayon::join(
+                || timed_pairing_inner_product::<P>(a, ck_1),
+                || timed_pairing_inner_product::<P>(ck_2, b),
+            )
+        },
+        || timed_pairing_inner_product::<P>(c, ck_1),
+    );
+
+    #[cfg(any(not(feature = "parallel"), feature = "bench-baseline"))]
+    let (com_a_result, com_b_result, com_c_result) = (
+        timed_pairing_inner_product::<P>(a, ck_1),
+        timed_pairing_inner_product::<P>(ck_2, b),
+        timed_pairing_inner_product::<P>(c, ck_1),
+    );
+
+    let (com_a, com_a_ms) = com_a_result.map_err(|err: String| std::io::Error::other(err))?;
+    let (com_b, com_b_ms) = com_b_result.map_err(|err: String| std::io::Error::other(err))?;
+    let (com_c, com_c_ms) = com_c_result.map_err(|err: String| std::io::Error::other(err))?;
+
+    Ok(((com_a, com_b, com_c), (com_a_ms, com_b_ms, com_c_ms)))
+}
+
 #[derive(Clone, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AggregateProof<P: Pairing, D: Digest> {
     com_a: PairingOutput<P>,
@@ -190,9 +238,7 @@ where
     let prepared_srs = ip_srs.prepare_for_proving();
     let (ck_1, ck_2) = prepared_srs.commitment_keys();
 
-    let com_a = PairingInnerProduct::<P>::inner_product(&a, ck_1)?;
-    let com_b = PairingInnerProduct::<P>::inner_product(ck_2, &b)?;
-    let com_c = PairingInnerProduct::<P>::inner_product(&c, ck_1)?;
+    let ((com_a, com_b, com_c), _) = initial_commitments_profiled::<P>(&a, &b, &c, ck_1, ck_2)?;
 
     // Random linear combination of proofs
     let mut counter_nonce: u64 = 0;
@@ -312,15 +358,11 @@ where
 
     reset_pairing_profile_accumulator();
     let commitment_started = Instant::now();
-    let com_a_started = Instant::now();
-    let com_a = PairingInnerProduct::<P>::inner_product(&a, ck_1)?;
-    profile.com_a_ms = com_a_started.elapsed().as_secs_f64() * 1000.0;
-    let com_b_started = Instant::now();
-    let com_b = PairingInnerProduct::<P>::inner_product(ck_2, &b)?;
-    profile.com_b_ms = com_b_started.elapsed().as_secs_f64() * 1000.0;
-    let com_c_started = Instant::now();
-    let com_c = PairingInnerProduct::<P>::inner_product(&c, ck_1)?;
-    profile.com_c_ms = com_c_started.elapsed().as_secs_f64() * 1000.0;
+    let ((com_a, com_b, com_c), (com_a_ms, com_b_ms, com_c_ms)) =
+        initial_commitments_profiled::<P>(&a, &b, &c, ck_1, ck_2)?;
+    profile.com_a_ms = com_a_ms;
+    profile.com_b_ms = com_b_ms;
+    profile.com_c_ms = com_c_ms;
     profile.commitment_ms = commitment_started.elapsed().as_secs_f64() * 1000.0;
 
     let randomizer_started = Instant::now();
