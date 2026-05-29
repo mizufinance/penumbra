@@ -53,7 +53,11 @@ pub trait DoublyHomomorphicCommitment: Clone {
     /// term initializes the accumulator, the rest fold in). Group-backed
     /// commitments override this with a real MSM; the result is the same group
     /// element either way, so callers stay byte-for-byte identical.
+    ///
+    /// Precondition: `keys` is non-empty and `keys.len() == scalars.len()`.
+    /// Both are asserted (the default seeds the accumulator from `keys[0]`).
     fn msm_keys(keys: &[Self::Key], scalars: &[Self::Scalar]) -> Self::Key {
+        assert!(!keys.is_empty(), "msm_keys requires a non-empty key vector");
         assert_eq!(
             keys.len(),
             scalars.len(),

@@ -60,6 +60,7 @@ impl<P: Pairing> DoublyHomomorphicCommitment for AFGHOCommitmentG2<P> {
 /// sequential fold, computed faster. Used by the GIPA final commitment-key
 /// recombination on the verifier path.
 fn msm_group<G: CurveGroup>(keys: &[G], scalars: &[G::ScalarField]) -> G {
+    assert!(!keys.is_empty(), "msm_keys requires a non-empty key vector");
     assert_eq!(
         keys.len(),
         scalars.len(),
@@ -115,17 +116,28 @@ mod tests {
     fn msm_keys_equals_sequential_fold() {
         let mut rng = StdRng::seed_from_u64(7u64);
         for size in [1usize, 2, 4, 8, 64, 256] {
-            let keys: Vec<_> = (0..size)
+            // C1's key side is G2; C2's key side is G1. Both verifier
+            // commitment-key recombinations go through `msm_keys`, so cover
+            // both override impls.
+            let g2_keys: Vec<_> = (0..size)
                 .map(|_| <Bls12_381 as Pairing>::G2::rand(&mut rng))
+                .collect();
+            let g1_keys: Vec<_> = (0..size)
+                .map(|_| <Bls12_381 as Pairing>::G1::rand(&mut rng))
                 .collect();
             let scalars: Vec<_> = (0..size)
                 .map(|_| <Bls12_381 as ark_ec::pairing::Pairing>::ScalarField::rand(&mut rng))
                 .collect();
-            let via_msm = C1::msm_keys(&keys, &scalars);
-            let via_fold = sequential_fold(&keys, &scalars);
+
             assert_eq!(
-                via_msm, via_fold,
-                "msm_keys must match the sequential fold byte-for-byte at size {size}"
+                C1::msm_keys(&g2_keys, &scalars),
+                sequential_fold(&g2_keys, &scalars),
+                "G1 commitment (G2 key side) msm_keys must match the fold at size {size}"
+            );
+            assert_eq!(
+                C2::msm_keys(&g1_keys, &scalars),
+                sequential_fold(&g1_keys, &scalars),
+                "G2 commitment (G1 key side) msm_keys must match the fold at size {size}"
             );
         }
     }
