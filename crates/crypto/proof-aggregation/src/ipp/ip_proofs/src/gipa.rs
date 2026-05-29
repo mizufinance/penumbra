@@ -217,6 +217,26 @@ where
         (folded, started.elapsed().as_secs_f64() * 1000.0)
     }
 
+    fn commit_round_profiled(
+        ck_a: &[LMC::Key],
+        m_a: &[IP::LeftMessage],
+        ck_b: &[RMC::Key],
+        m_b: &[IP::RightMessage],
+        ck_t: &[IPC::Key],
+    ) -> Result<((LMC::Output, RMC::Output, IPC::Output), f64), String> {
+        let started = std::time::Instant::now();
+        let com_a = LMC::commit(ck_a, m_a).map_err(|err| err.to_string())?;
+        let com_b = RMC::commit(ck_b, m_b).map_err(|err| err.to_string())?;
+        let inner_product = IP::inner_product(m_a, m_b).map_err(|err| err.to_string())?;
+        let inner_products = vec![inner_product];
+        let commitment = (
+            com_a,
+            com_b,
+            IPC::commit(ck_t, &inner_products).map_err(|err| err.to_string())?,
+        );
+        Ok((commitment, started.elapsed().as_secs_f64() * 1000.0))
+    }
+
     pub fn setup<R: Rng>(
         rng: &mut R,
         size: usize,
@@ -233,7 +253,12 @@ where
         values: (&[IP::LeftMessage], &[IP::RightMessage], &IP::Output),
         ck: (&[LMC::Key], &[RMC::Key], &IPC::Key),
         com: (&LMC::Output, &RMC::Output, &IPC::Output),
-    ) -> Result<GIPAProof<IP, LMC, RMC, IPC, D>, Error> {
+    ) -> Result<GIPAProof<IP, LMC, RMC, IPC, D>, Error>
+    where
+        LMC::Output: Send,
+        RMC::Output: Send,
+        IPC::Output: Send,
+    {
         if IP::inner_product(values.0, values.1)? != values.2.clone() {
             return Err(Box::new(InnerProductArgumentError::InnerProductInvalid));
         }
@@ -301,7 +326,12 @@ where
             GIPAAux<IP, LMC, RMC, IPC, D>,
         ),
         Error,
-    > {
+    >
+    where
+        LMC::Output: Send,
+        RMC::Output: Send,
+        IPC::Output: Send,
+    {
         let (m_a, m_b) = values;
         let (ck_a, ck_b, ck_t) = ck;
         let mut trace = NoopChallengeTraceSink;
@@ -326,7 +356,12 @@ where
             GipaBuildProfile,
         ),
         Error,
-    > {
+    >
+    where
+        LMC::Output: Send,
+        RMC::Output: Send,
+        IPC::Output: Send,
+    {
         Self::prove_with_aux_profiled_with_stage(context, b"tipa.generic.gipa.round", values, ck)
     }
 
@@ -342,7 +377,12 @@ where
             GipaBuildProfile,
         ),
         Error,
-    > {
+    >
+    where
+        LMC::Output: Send,
+        RMC::Output: Send,
+        IPC::Output: Send,
+    {
         let mut trace = NoopChallengeTraceSink;
         Self::prove_with_aux_profiled_with_stage_with_trace(
             context,
@@ -369,6 +409,9 @@ where
     >
     where
         S: ChallengeTraceSink,
+        LMC::Output: Send,
+        RMC::Output: Send,
+        IPC::Output: Send,
     {
         let (m_a, m_b) = values;
         let (ck_a, ck_b, ck_t) = ck;
@@ -395,7 +438,12 @@ where
             GipaBuildProfile,
         ),
         Error,
-    > {
+    >
+    where
+        LMC::Output: Send,
+        RMC::Output: Send,
+        IPC::Output: Send,
+    {
         let total_started = std::time::Instant::now();
         let (mut m_a, mut m_b) = values;
         let (mut ck_a, mut ck_b, ck_t) = ck;
@@ -426,24 +474,24 @@ where
                 let ck_b_1 = &ck_b[split..];
                 let ck_b_2 = &ck_b[..split];
 
-                let cl = start_timer!(|| "Commit L");
-                let commit_l_started = std::time::Instant::now();
-                let com_1 = (
-                    LMC::commit(ck_a_1, m_a_1)?,
-                    RMC::commit(ck_b_1, m_b_1)?,
-                    IPC::commit(&ck_t, &vec![IP::inner_product(m_a_1, m_b_1)?])?,
+                #[cfg(all(feature = "parallel", not(feature = "bench-baseline")))]
+                let (com_1_result, com_2_result) = rayon::join(
+                    || Self::commit_round_profiled(ck_a_1, m_a_1, ck_b_1, m_b_1, &ck_t),
+                    || Self::commit_round_profiled(ck_a_2, m_a_2, ck_b_2, m_b_2, &ck_t),
                 );
-                end_timer!(cl);
-                profile.commit_l_ms += commit_l_started.elapsed().as_secs_f64() * 1000.0;
-                let cr = start_timer!(|| "Commit R");
-                let commit_r_started = std::time::Instant::now();
-                let com_2 = (
-                    LMC::commit(ck_a_2, m_a_2)?,
-                    RMC::commit(ck_b_2, m_b_2)?,
-                    IPC::commit(&ck_t, &vec![IP::inner_product(m_a_2, m_b_2)?])?,
+
+                #[cfg(any(not(feature = "parallel"), feature = "bench-baseline"))]
+                let (com_1_result, com_2_result) = (
+                    Self::commit_round_profiled(ck_a_1, m_a_1, ck_b_1, m_b_1, &ck_t),
+                    Self::commit_round_profiled(ck_a_2, m_a_2, ck_b_2, m_b_2, &ck_t),
                 );
-                end_timer!(cr);
-                profile.commit_r_ms += commit_r_started.elapsed().as_secs_f64() * 1000.0;
+
+                let (com_1, commit_l_ms) =
+                    com_1_result.map_err(|err: String| std::io::Error::other(err))?;
+                let (com_2, commit_r_ms) =
+                    com_2_result.map_err(|err: String| std::io::Error::other(err))?;
+                profile.commit_l_ms += commit_l_ms;
+                profile.commit_r_ms += commit_r_ms;
 
                 // Fiat-Shamir challenge
                 let challenge_started = std::time::Instant::now();

@@ -666,6 +666,9 @@ where
     LMC::Output: MulAssign<P::ScalarField>,
     RMC::Output: MulAssign<P::ScalarField>,
     IPC::Output: MulAssign<P::ScalarField>,
+    LMC::Output: Send,
+    RMC::Output: Send,
+    IPC::Output: Send,
 {
     pub fn setup<R: Rng>(rng: &mut R, size: usize) -> Result<(SRS<P>, IPC::Key), Error> {
         let alpha = <P::ScalarField>::rand(rng);

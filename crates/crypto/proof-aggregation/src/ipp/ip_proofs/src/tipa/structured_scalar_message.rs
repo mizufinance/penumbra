@@ -64,6 +64,8 @@ where
     IPC::Message: MulAssign<LMC::Scalar>,
     IPC::Key: MulAssign<LMC::Scalar>,
     IPC::Output: MulAssign<LMC::Scalar>,
+    LMC::Output: Send,
+    IPC::Output: Send,
 {
     pub fn setup<R: Rng>(rng: &mut R, size: usize) -> Result<(Vec<LMC::Key>, IPC::Key), Error> {
         Ok((LMC::setup(rng, size)?, IPC::setup(rng, 1)?.pop().unwrap()))
@@ -210,6 +212,8 @@ where
     IPC::Output: MulAssign<P::ScalarField>,
     LMC::Message: MulAssign<P::ScalarField>,
     LMC::Output: MulAssign<P::ScalarField>,
+    LMC::Output: Send,
+    IPC::Output: Send,
 {
     //TODO: Don't need full TIPA SRS since only using one set of powers
     pub fn setup<R: Rng>(rng: &mut R, size: usize) -> Result<(SRS<P>, IPC::Key), Error> {
