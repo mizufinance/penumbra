@@ -932,22 +932,57 @@ where
             counter_nonce += 1;
         };
 
-        let ck_a_valid = verify_commitment_key_g2_kzg_opening(
-            v_srs,
-            &ck_a_final,
-            &ck_a_proof,
-            &transcript_inverse,
-            &r_shift.inverse().unwrap(),
-            &c,
-        )?;
-        let ck_b_valid = verify_commitment_key_g1_kzg_opening(
-            v_srs,
-            &ck_b_final,
-            &ck_b_proof,
-            &transcript,
-            &<P::ScalarField>::one(),
-            &c,
-        )?;
+        let r_shift_inverse = r_shift.inverse().unwrap();
+        #[cfg(all(feature = "parallel", not(feature = "bench-baseline")))]
+        let (ck_a_result, ck_b_result) = rayon::join(
+            || {
+                verify_commitment_key_g2_kzg_opening(
+                    v_srs,
+                    ck_a_final,
+                    ck_a_proof,
+                    &transcript_inverse,
+                    &r_shift_inverse,
+                    &c,
+                )
+                .map_err(|err| err.to_string())
+            },
+            || {
+                verify_commitment_key_g1_kzg_opening(
+                    v_srs,
+                    ck_b_final,
+                    ck_b_proof,
+                    &transcript,
+                    &<P::ScalarField>::one(),
+                    &c,
+                )
+                .map_err(|err| err.to_string())
+            },
+        );
+
+        #[cfg(any(not(feature = "parallel"), feature = "bench-baseline"))]
+        let (ck_a_result, ck_b_result) = (
+            verify_commitment_key_g2_kzg_opening(
+                v_srs,
+                ck_a_final,
+                ck_a_proof,
+                &transcript_inverse,
+                &r_shift_inverse,
+                &c,
+            )
+            .map_err(|err| err.to_string()),
+            verify_commitment_key_g1_kzg_opening(
+                v_srs,
+                ck_b_final,
+                ck_b_proof,
+                &transcript,
+                &<P::ScalarField>::one(),
+                &c,
+            )
+            .map_err(|err| err.to_string()),
+        );
+
+        let ck_a_valid = ck_a_result.map_err(|err: String| std::io::Error::other(err))?;
+        let ck_b_valid = ck_b_result.map_err(|err: String| std::io::Error::other(err))?;
 
         // Verify base inner product commitment
         let (com_a, com_b, com_t) = base_com;
