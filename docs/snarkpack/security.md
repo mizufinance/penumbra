@@ -74,6 +74,45 @@ non-published fuzz crate provides libFuzzer targets for the same byte
 boundaries and proposal-validation path, with invariant-gated dependency
 boundaries.
 
+Stage 10 (optimization) is implemented as a byte-trace-locked iterative loop.
+The governing rule is that every optimization must preserve the Penumbra byte
+trace or explicitly version the protocol. Two committed, version-tagged golden
+baselines enforce this: an aggregate-proof byte baseline
+(`aggregate_bytes_match_committed_baseline`) and a PenumbraByte transcript-trace
+baseline (`penumbra_byte_trace_matches_committed_baseline`). Both regenerate
+deterministically from fixed `(family, count, seed)` vectors and fail on any
+drift. The version tag on each baseline must equal `AGGREGATE_PROTOCOL_VERSION`,
+making the choice between "preserve bytes" and "version the protocol" a
+mechanical gate rather than a judgment call.
+
+The per-optimization workflow is:
+
+1. Confirm the targeted stage is measured (the `snarkpack verify` / `snarkpack
+   aggregate` Criterion groups in `crates/bench/benches/vanilla/snarkpack.rs`).
+2. Implement the optimization.
+3. Run the byte and trace baselines, the production/reference trace-equivalence
+   test, the Groth16 oracle-agreement table, and the mutation matrices. If the
+   baselines hold, the change is byte-preserving and lands as a refactor. If a
+   baseline fails, either revert to a byte-preserving form, or take the
+   version path: bump `AGGREGATE_PROTOCOL_VERSION`, regenerate both baselines via
+   their `--ignored` helper tests, and add an `adaptation-register.md` row (with
+   a matching `adaptation-scope.txt` entry) documenting the byte change. No
+   silent byte changes are permitted.
+4. Record the before/after performance delta on the targeted stage.
+
+The first optimization landed under this loop replaces the GIPA verifier's
+sequential final commitment-key recombination
+(`_compute_final_commitment_keys`) with a variable-base multiexponentiation,
+exposed as the overridable `DoublyHomomorphicCommitment::msm_keys` method
+(default fold; AFGHO group-backed override). It is byte-preserving by
+construction — `msm_keys_equals_sequential_fold` proves the MSM yields the same
+group element as the prior fold — so it landed with both baselines unchanged and
+`AGGREGATE_PROTOCOL_VERSION` still `1`.
+
+Fixed performance thresholds and the denial-of-service asymmetry gate are a
+later stage; Stage 10 only requires a repeatable measurement so optimizations
+are evidence-backed.
+
 ## Scope Lock
 
 Status: pending internal signoff; this does not require a security-firm

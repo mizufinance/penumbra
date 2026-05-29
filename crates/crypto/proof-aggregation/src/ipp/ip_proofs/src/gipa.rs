@@ -586,21 +586,11 @@ where
             }
         }
         assert_eq!(ck_a_agg_challenge_exponents.len(), ck_a.len());
-        //TODO: Optimization: Use VariableMSM multiexponentiation
-        let ck_a_base_init = mul_helper(&ck_a[0], &ck_a_agg_challenge_exponents[0]);
-        let ck_a_base = ck_a[1..]
-            .iter()
-            .zip(&ck_a_agg_challenge_exponents[1..])
-            .map(|(g, x)| mul_helper(g, &x))
-            .fold(ck_a_base_init, |sum, x| sum + x);
-        //.reduce(|| ck_a_base_init.clone(), |sum, x| sum + x);
-        let ck_b_base_init = mul_helper(&ck_b[0], &ck_b_agg_challenge_exponents[0]);
-        let ck_b_base = ck_b[1..]
-            .iter()
-            .zip(&ck_b_agg_challenge_exponents[1..])
-            .map(|(g, x)| mul_helper(g, &x))
-            .fold(ck_b_base_init, |sum, x| sum + x);
-        //.reduce(|| ck_b_base_init.clone(), |sum, x| sum + x);
+        // Recombine the final commitment keys by multiexponentiation. The
+        // commitment trait's `msm_keys` is byte-identical to the prior
+        // sequential fold; group-backed keys (AFGHO) use a real MSM.
+        let ck_a_base = LMC::msm_keys(ck_a, &ck_a_agg_challenge_exponents);
+        let ck_b_base = RMC::msm_keys(ck_b, &ck_b_agg_challenge_exponents);
         Ok((ck_a_base, ck_b_base))
     }
 

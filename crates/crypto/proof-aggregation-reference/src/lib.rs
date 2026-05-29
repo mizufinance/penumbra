@@ -2248,6 +2248,122 @@ mod tests {
         assert_eq!(reference.prover_trace, production_report.trace);
     }
 
+    // Stage 9 byte-trace lock: the ordered PenumbraByte trace payloads for a
+    // fixed vector set must not change unless `AGGREGATE_PROTOCOL_VERSION` is
+    // bumped. This complements the production-crate aggregate-byte baseline and
+    // catches transcript-shape drift, not just final-byte drift.
+
+    const TRACE_BASELINE_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/penumbra_byte_trace_baseline.txt"
+    );
+
+    fn trace_baseline_vectors() -> Vec<(ProofFamilyId, usize, u64)> {
+        let mut vectors = Vec::new();
+        for (family_index, family_id) in parity_families().into_iter().enumerate() {
+            for count in [1usize, 2, 4, 8] {
+                let seed = 9_000 + (family_index as u64) * 100 + count as u64;
+                vectors.push((family_id, count, seed));
+            }
+        }
+        vectors
+    }
+
+    fn family_token(family_id: ProofFamilyId) -> String {
+        format!("{family_id:?}")
+            .chars()
+            .map(|c| if c.is_whitespace() { '_' } else { c })
+            .collect()
+    }
+
+    fn penumbra_byte_trace_for_vector(
+        family_id: ProofFamilyId,
+        count: usize,
+        seed: u64,
+    ) -> Vec<TraceEvent> {
+        let (pvk, items) = sample_items_with_count(seed, count);
+        let srs = DevSrs::default();
+        let padded = pad_items_to_power_of_two(&items, srs.max_padded_count as usize)
+            .expect("padding should succeed");
+        let rows = padded
+            .iter()
+            .map(|item| item.public_inputs.clone())
+            .collect::<Vec<_>>();
+        let statement = AggregateStatement::new(
+            AGGREGATE_PROTOCOL_VERSION,
+            family_id,
+            srs_id(&srs),
+            &pvk,
+            items.len() as u32,
+            &rows,
+        )
+        .expect("statement should build");
+        let (_bytes, events) = aggregate_family_with_trace(&statement, &pvk, &padded, &srs)
+            .expect("aggregate with trace should succeed");
+        events
+            .into_iter()
+            .filter(|e| e.primary_level == TraceComparisonLevel::PenumbraByte)
+            .collect()
+    }
+
+    fn render_trace_baseline() -> String {
+        let mut out = String::new();
+        out.push_str(
+            "# SnarkPack PenumbraByte transcript-trace baseline (Stage 9 byte-trace lock).\n",
+        );
+        out.push_str("# Regenerate: cargo test -p penumbra-sdk-proof-aggregation-reference regenerate_penumbra_byte_trace_baseline -- --ignored\n");
+        out.push_str("# Row: <index> <family> count=<n> seed=<n> ev=<i> <spec_row_id> <event_kind> <hex_payload>\n");
+        out.push_str(&format!("version {AGGREGATE_PROTOCOL_VERSION}\n"));
+        for (index, (family_id, count, seed)) in trace_baseline_vectors().into_iter().enumerate() {
+            for (event_index, event) in penumbra_byte_trace_for_vector(family_id, count, seed)
+                .into_iter()
+                .enumerate()
+            {
+                out.push_str(&format!(
+                    "{index} {} count={count} seed={seed} ev={event_index} {} {:?} {}\n",
+                    family_token(family_id),
+                    event.spec_row_id,
+                    event.event_kind,
+                    hex::encode(&event.byte_payload),
+                ));
+            }
+        }
+        out
+    }
+
+    fn committed_trace_version(contents: &str) -> Option<u32> {
+        contents
+            .lines()
+            .find_map(|line| line.strip_prefix("version "))
+            .and_then(|v| v.trim().parse().ok())
+    }
+
+    #[test]
+    fn penumbra_byte_trace_matches_committed_baseline() {
+        let committed = std::fs::read_to_string(TRACE_BASELINE_PATH).unwrap_or_else(|e| {
+            panic!("missing PenumbraByte trace baseline at {TRACE_BASELINE_PATH}: {e}; regenerate with `cargo test -p penumbra-sdk-proof-aggregation-reference regenerate_penumbra_byte_trace_baseline -- --ignored`")
+        });
+
+        assert_eq!(
+            committed_trace_version(&committed),
+            Some(AGGREGATE_PROTOCOL_VERSION),
+            "trace baseline version tag does not match AGGREGATE_PROTOCOL_VERSION ({AGGREGATE_PROTOCOL_VERSION}); if the transcript change is intentional, bump the version and regenerate via `cargo test -p penumbra-sdk-proof-aggregation-reference regenerate_penumbra_byte_trace_baseline -- --ignored`"
+        );
+
+        let current = render_trace_baseline();
+        assert_eq!(
+            committed, current,
+            "PenumbraByte transcript trace drifted from the committed baseline. An optimization must preserve the transcript or take the protocol-version path: bump AGGREGATE_PROTOCOL_VERSION, regenerate via `cargo test -p penumbra-sdk-proof-aggregation-reference regenerate_penumbra_byte_trace_baseline -- --ignored`, and add an adaptation-register row."
+        );
+    }
+
+    #[test]
+    #[ignore = "writes the committed trace baseline; run intentionally after a sanctioned transcript change"]
+    fn regenerate_penumbra_byte_trace_baseline() {
+        let rendered = render_trace_baseline();
+        std::fs::write(TRACE_BASELINE_PATH, rendered).expect("write trace baseline");
+    }
+
     #[test]
     fn reference_verifier_rejects_mutated_wrapper_digest() {
         let (pvk, items, statement, srs) = fixture();

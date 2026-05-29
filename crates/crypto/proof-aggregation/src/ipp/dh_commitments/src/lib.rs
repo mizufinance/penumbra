@@ -47,6 +47,28 @@ pub trait DoublyHomomorphicCommitment: Clone {
 
     fn setup<R: Rng>(r: &mut R, size: usize) -> Result<Vec<Self::Key>, Error>;
 
+    /// Multiexponentiation `Σ scalarsᵢ · keysᵢ`.
+    ///
+    /// The default mirrors the original sequential accumulation exactly (first
+    /// term initializes the accumulator, the rest fold in). Group-backed
+    /// commitments override this with a real MSM; the result is the same group
+    /// element either way, so callers stay byte-for-byte identical.
+    fn msm_keys(keys: &[Self::Key], scalars: &[Self::Scalar]) -> Self::Key {
+        assert_eq!(
+            keys.len(),
+            scalars.len(),
+            "msm_keys requires matching key/scalar lengths"
+        );
+        let mut acc = keys[0].clone();
+        acc.mul_assign(scalars[0]);
+        for (key, scalar) in keys[1..].iter().zip(&scalars[1..]) {
+            let mut term = key.clone();
+            term.mul_assign(*scalar);
+            acc = acc + term;
+        }
+        acc
+    }
+
     fn commit(k: &[Self::Key], m: &[Self::Message]) -> Result<Self::Output, Error>;
 
     fn verify(k: &[Self::Key], m: &[Self::Message], com: &Self::Output) -> Result<bool, Error> {

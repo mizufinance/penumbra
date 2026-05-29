@@ -1811,6 +1811,96 @@ mod tests {
         );
     }
 
+    // Stage 9 byte-trace lock: the committed aggregate-proof bytes for a fixed
+    // vector set must not change unless `AGGREGATE_PROTOCOL_VERSION` is bumped.
+    // An optimization that alters these bytes is a protocol change, not a
+    // refactor, and must take the version-bump path (see docs/snarkpack/security.md).
+
+    const BYTE_BASELINE_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/aggregate_bytes_baseline.txt"
+    );
+
+    fn baseline_vectors() -> Vec<(ProofFamilyId, usize, u64)> {
+        let mut vectors = Vec::new();
+        for (family_index, family_id) in parity_families().into_iter().enumerate() {
+            for count in [1usize, 2, 4, 8] {
+                let seed = 9_000 + (family_index as u64) * 100 + count as u64;
+                vectors.push((family_id, count, seed));
+            }
+        }
+        vectors
+    }
+
+    fn family_token(family_id: ProofFamilyId) -> String {
+        format!("{family_id:?}")
+            .chars()
+            .map(|c| if c.is_whitespace() { '_' } else { c })
+            .collect()
+    }
+
+    fn aggregate_bytes_for_vector(family_id: ProofFamilyId, count: usize, seed: u64) -> Vec<u8> {
+        let (pvk, items) = sample_items_with_count(seed, count);
+        let srs = DevSrs::default();
+        let padded_items =
+            pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
+        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
+        aggregate_family(&statement, &pvk, &padded_items, &srs).expect("aggregation should succeed")
+    }
+
+    fn render_byte_baseline() -> String {
+        let mut out = String::new();
+        out.push_str("# SnarkPack aggregate-proof byte baseline (Stage 9 byte-trace lock).\n");
+        out.push_str("# Regenerate: cargo test -p penumbra-sdk-proof-aggregation regenerate_aggregate_byte_baseline -- --ignored\n");
+        out.push_str("# Row: <index> <family> count=<n> seed=<n> <hex_aggregate_bytes>\n");
+        out.push_str(&format!("version {AGGREGATE_PROTOCOL_VERSION}\n"));
+        for (index, (family_id, count, seed)) in baseline_vectors().into_iter().enumerate() {
+            let bytes = aggregate_bytes_for_vector(family_id, count, seed);
+            out.push_str(&format!(
+                "{index} {} count={count} seed={seed} {}\n",
+                family_token(family_id),
+                hex::encode(&bytes),
+            ));
+        }
+        out
+    }
+
+    fn committed_baseline_version(contents: &str) -> Option<u32> {
+        contents
+            .lines()
+            .find_map(|line| line.strip_prefix("version "))
+            .and_then(|v| v.trim().parse().ok())
+    }
+
+    #[test]
+    fn aggregate_bytes_match_committed_baseline() {
+        let committed = std::fs::read_to_string(BYTE_BASELINE_PATH).unwrap_or_else(|e| {
+            panic!("missing aggregate byte baseline at {BYTE_BASELINE_PATH}: {e}; regenerate with `cargo test -p penumbra-sdk-proof-aggregation regenerate_aggregate_byte_baseline -- --ignored`")
+        });
+
+        // Version-drift guard: a committed baseline from a different protocol
+        // version is the mechanical fork between "preserve bytes" and "version".
+        let committed_version = committed_baseline_version(&committed);
+        assert_eq!(
+            committed_version,
+            Some(AGGREGATE_PROTOCOL_VERSION),
+            "byte baseline version tag does not match AGGREGATE_PROTOCOL_VERSION ({AGGREGATE_PROTOCOL_VERSION}); if the byte change is intentional, bump the version and regenerate via `cargo test -p penumbra-sdk-proof-aggregation regenerate_aggregate_byte_baseline -- --ignored`"
+        );
+
+        let current = render_byte_baseline();
+        assert_eq!(
+            committed, current,
+            "aggregate-proof bytes drifted from the committed baseline. An optimization must preserve bytes or take the protocol-version path: bump AGGREGATE_PROTOCOL_VERSION, regenerate via `cargo test -p penumbra-sdk-proof-aggregation regenerate_aggregate_byte_baseline -- --ignored`, and add an adaptation-register row."
+        );
+    }
+
+    #[test]
+    #[ignore = "writes the committed byte baseline; run intentionally after a sanctioned byte change"]
+    fn regenerate_aggregate_byte_baseline() {
+        let rendered = render_byte_baseline();
+        std::fs::write(BYTE_BASELINE_PATH, rendered).expect("write byte baseline");
+    }
+
     #[test]
     fn preflight_rejects_oversize_before_inner_deserialization() {
         let (pvk, items) = sample_items();

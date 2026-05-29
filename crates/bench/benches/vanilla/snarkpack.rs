@@ -1,9 +1,11 @@
-use ark_groth16::{r1cs_to_qap::LibsnarkReduction, Groth16, PreparedVerifyingKey};
+use ark_groth16::{r1cs_to_qap::LibsnarkReduction, Groth16, PreparedVerifyingKey, Proof};
 use ark_r1cs_std::{alloc::AllocVar, eq::EqGadget, fields::fp::FpVar};
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use decaf377::{Bls12_377, Fq};
+use std::path::PathBuf;
 use penumbra_sdk_proof_aggregation::{
     aggregate_family, pad_items_to_power_of_two, srs_id, verify_family_aggregate,
     AggregateStatement, DevSrs, ProofFamilyId, AGGREGATE_PROTOCOL_VERSION,
@@ -43,6 +45,52 @@ struct Fixture {
     aggregate_proof: Vec<u8>,
 }
 
+/// Committed Groth16 proof corpus directory. The expensive setup (proving-key
+/// generation + per-proof proving) runs once, is serialized here, and every
+/// subsequent benchmark run loads from disk instead of re-proving. Keyed by
+/// `count` only — the `SquareCircuit` proving key and proofs do not depend on
+/// the aggregation family (the family only selects the transcript domain).
+fn corpus_path(count: usize) -> PathBuf {
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/corpus/snarkpack"))
+        .join(format!("items_{count}.bin"))
+}
+
+/// Load the proof corpus for `count` from disk, generating and persisting it on
+/// first use. Uses unchecked decode: this is a trusted, locally generated corpus.
+fn load_or_generate_items(count: usize) -> (PreparedVerifyingKey<Bls12_377>, Vec<BatchItem>) {
+    let path = corpus_path(count);
+    if let Ok(bytes) = std::fs::read(&path) {
+        let mut cur = &bytes[..];
+        let pvk = PreparedVerifyingKey::<Bls12_377>::deserialize_uncompressed_unchecked(&mut cur)
+            .expect("corpus pvk decodes");
+        let raw = Vec::<(Proof<Bls12_377>, Vec<Fq>)>::deserialize_uncompressed_unchecked(&mut cur)
+            .expect("corpus items decode");
+        let items = raw
+            .into_iter()
+            .map(|(proof, public_inputs)| BatchItem {
+                proof,
+                public_inputs,
+            })
+            .collect();
+        return (pvk, items);
+    }
+
+    let (pvk, items) = generate_items(count);
+    let mut buf = Vec::new();
+    pvk.serialize_uncompressed(&mut buf)
+        .expect("pvk serializes");
+    let raw: Vec<(Proof<Bls12_377>, Vec<Fq>)> = items
+        .iter()
+        .map(|item| (item.proof.clone(), item.public_inputs.clone()))
+        .collect();
+    raw.serialize_uncompressed(&mut buf)
+        .expect("items serialize");
+    std::fs::create_dir_all(path.parent().expect("corpus dir has parent"))
+        .expect("create corpus dir");
+    std::fs::write(&path, buf).expect("persist corpus");
+    (pvk, items)
+}
+
 fn generate_items(count: usize) -> (PreparedVerifyingKey<Bls12_377>, Vec<BatchItem>) {
     let mut rng = ChaCha20Rng::seed_from_u64((count as u64) + 9);
     let setup_circuit = SquareCircuit {
@@ -73,7 +121,7 @@ fn generate_items(count: usize) -> (PreparedVerifyingKey<Bls12_377>, Vec<BatchIt
 }
 
 fn build_fixture(family_id: ProofFamilyId, count: usize, srs: &DevSrs) -> Fixture {
-    let (pvk, items) = generate_items(count);
+    let (pvk, items) = load_or_generate_items(count);
     let padded_items =
         pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
     let padded_public_inputs = padded_items

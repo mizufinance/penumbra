@@ -30,4 +30,5 @@ thiserror = { workspace = true }
 ark-r1cs-std = { workspace = true }
 ark-relations = { workspace = true }
 ark-snark = { workspace = true }
+hex = { workspace = true }
 proptest = { workspace = true }
