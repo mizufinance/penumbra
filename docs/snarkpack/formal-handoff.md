@@ -22,7 +22,7 @@ requires rerunning `just snarkpack-formal`, reviewing generated extraction
 diffs and support shims, updating the verification marker, and refreshing the
 proof artifact stamp.
 
-Proof artifact stamp: sha256:eace5d0369d45ae632562b9f3d127ab2f7f9970660b26599af6f888bfac43523
+Proof artifact stamp: sha256:d5c28b00a2653a82b0ca504f9adc7ca93fe5ce105e0374cf6c277f2b86582132
 
 The stamp is the SHA-256 of the committed SnarkPack F* proof files and
 `scripts/snarkpack-formal.sh` plus
@@ -96,11 +96,11 @@ classification defaults to the higher-risk class until resolved.
 
 | Assumption | Owner | Rationale | Why not proved here | Supporting evidence | Removal path | Required signoff | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| SHA-256 collision resistance | cryptography lead | Statement digest binding reduces to this after encoding injectivity is proved. | External cryptographic primitive assumption. | standard SHA-256 analysis; fixed domain prefixes | replace primitive or mechanize external proof only in research track | security/crypto | assumed |
-| SHA-256 preimage resistance | cryptography lead | Challenge context and wrapper digests use SHA-256-derived commitments. | External cryptographic primitive assumption. | standard SHA-256 analysis; fixed domain prefixes | replace primitive or mechanize external proof only in research track | security/crypto | assumed |
+| SHA-256 collision resistance | cryptography lead | Statement digest binding reduces to this after encoding injectivity is proved. | External cryptographic primitive assumption. | standard SHA-256 analysis; fixed domain prefixes | replace primitive or external audit (no end-to-end FV) | security/crypto | assumed |
+| SHA-256 preimage resistance | cryptography lead | Challenge context and wrapper digests use SHA-256-derived commitments. | External cryptographic primitive assumption. | standard SHA-256 analysis; fixed domain prefixes | replace primitive or external audit (no end-to-end FV) | security/crypto | assumed |
 | Domain separation by fixed distinct prefixes | proof-aggregation maintainers | Separate statement digest, challenge context, challenge preimage, VK digest, and wrapper domains. | Reduces to fixed-prefix review plus hash assumptions. | golden-layout tests and invariant review | prove prefix disjointness mechanically if needed | security/crypto | assumed |
-| abstract Groth16 soundness | cryptography lead | Aggregate verification ultimately depends on Groth16 proof soundness. | Out of implementation-boundary FV scope. | published Groth16 proofs and existing Penumbra circuit audits | research-grade cryptographic proof project | security/crypto | assumed |
-| abstract RIPP/GIPA/TIPA/SnarkPack algebraic soundness | cryptography lead | Local implementation is reviewed against the algorithm, but algebraic soundness is external. | Requires protocol proof over algebraic model. | published SnarkPack/RIPP proof material; `ripp-refinement.md` | Lean/EasyCrypt research track | security/crypto | assumed |
+| abstract Groth16 soundness | cryptography lead | Aggregate verification ultimately depends on Groth16 proof soundness. | Out of implementation-boundary FV scope. | published Groth16 proofs and existing Penumbra circuit audits | standing assumption; external audit only (no end-to-end FV) | security/crypto | assumed |
+| abstract RIPP/GIPA/TIPA/SnarkPack algebraic soundness | cryptography lead | Local implementation is reviewed against the algorithm, but algebraic soundness is external. | End-to-end FV out of scope; paper + Filecoin impl assumed sound. | published SnarkPack/RIPP proof material; `ripp-refinement.md`; Stage 9 Lean differential conformance | standing assumption; Lean differential conformance is supporting evidence, external audit otherwise | security/crypto | assumed |
 | arkworks field/group/pairing mathematical operation implementations | proof-aggregation maintainers | The implementation calls arkworks arithmetic primitives. | Full library verification is outside this campaign. | upstream tests plus planned boundary property tests | verified arithmetic backend or external audit artifact | security/crypto | assumed |
 | arkworks MSM implementation computes intended linear combination | proof-aggregation maintainers | MSM is an implementation-heavy dependency, not a pure algebra axiom. | Full arkworks MSM verification is outside this campaign. | required zero-scalar, identity, and random-vector parity tests | verified MSM or external audit artifact | security/crypto | assumed |
 | arkworks serialization and subgroup behavior | proof-aggregation maintainers | SRS, VK, proof bytes, and digests depend on arkworks encoding checks. | Full serialization/subgroup proof is outside this campaign. | required G1/G2 subgroup, torsion, malformed-byte, and round-trip tests | verified serialization backend or external audit artifact | security/crypto | assumed |
@@ -139,20 +139,18 @@ Unrecorded `assume val`, `admit`, `--admit_smt_queries`, duplicate
 formal-only encoders, tuple/default `ChallengeContext` constructors, and
 unmapped RIPP refinement symbols are rejected by `just snarkpack-invariants`.
 
-## Research Track
+## Soundness Assumption And Differential Conformance
 
-The end-to-end cryptographic proof is a separate research-grade project, not a
-larger hax extraction target:
+End-to-end formal verification is **out of scope**. SnarkPack/RIPP/Groth16
+algebraic soundness is a standing assumption, inherited from the published paper
+and the Filecoin (Bellperson v0.21.0) implementation, both assumed sound. There
+is no Lean algebraic proof and no EasyCrypt Fiat-Shamir proof.
 
-- Lean 4 for the algebraic protocol model: Groth16 aggregation, RIPP, GIPA,
-  TIPA, commitments, pairings, and reduction invariants.
-- EasyCrypt for Fiat-Shamir/random-oracle games and transcript-binding
-  reductions.
-- F* via hax for executed Rust implementation-boundary proofs.
-- Coq as fallback only if Lean 4 cannot support the algebraic model cleanly.
-
-Open the research track only after the implementation-boundary campaign is
-complete or if an external audit/soundness issue requires it earlier.
+Instead, algebraic/transcript conformance is **probabilistically cross-checked**
+by Stage 9 (security.md): an independent, hand-built Lean model of the transcript
+and folding discipline, differentially tested against the Rust. This is evidence,
+not proof, and is non-blocking. F* via hax remains the executed-Rust
+implementation-boundary proof backend and stays a completion blocker.
 
 ## Gates
 

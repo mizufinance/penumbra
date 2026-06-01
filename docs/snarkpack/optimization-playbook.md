@@ -288,8 +288,8 @@ the §4a 10% estimate.
    paying 1 exponentiation instead of N. Byte-stable (category 1 in bytes —
    validation is orthogonal to the wire/transcript).
 
-   **Measured (2026-06-01, throwaway bench `subgroup_vs_deserialize_bench`, work
-   floor `RAYON_NUM_THREADS=1`):** `deserialize_ms` is the dominant verify stage —
+   **Measured (2026-06-01, one-off bench since removed, work floor
+   `RAYON_NUM_THREADS=1`):** `deserialize_ms` is the dominant verify stage —
    58% of `core_total` at n=1 rising to **129% at n=64** (i.e. larger than all the
    rest of verify combined). A batched randomized subgroup check with **128-bit**
    verifier-local randomizers runs **~2.2–2.4×** faster than per-element checks

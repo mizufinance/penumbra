@@ -12,29 +12,132 @@ change.
 
 ## Security Campaign Order
 
-Status: scope lock pending internal signoff.
+Status: build-out largely complete; campaign now in its evidence-closure phase.
+Scope **locked** 2026-06-01 (decisions recorded under Scope Lock). Optimization is
+**frozen** (see below). End-to-end formal verification is **out of scope** — the
+SnarkPack paper and the Filecoin implementation are assumed sound (see Scope Lock).
 
-This is the authoritative order for the SnarkPack security campaign:
+This is the authoritative order for the SnarkPack security campaign. Each stage
+carries its current status; the **Remaining Work** subsection below is the active
+plan.
 
-1. Scope Lock
-2. Spec Reframe
-3. Adaptation Register
-4. Implementation-boundary hax/F* glue, running in parallel after Stage 1
-5. Penumbra slow reference path
-6. Trace instrumentation
-7. Deterministic and property conformance tests
-8. Coverage fuzzing
-9. Optional advanced research track: Lean/EasyCrypt/spec-guided bug finding,
-    non-blocking
-10. Optimization
-11. Performance and DoS gates
-12. Assumption register finalization
-13. Final manual review
+| # | Stage | Status |
+|---|---|---|
+| 1 | Scope Lock | **locked 2026-06-01** (decisions recorded) |
+| 2 | Spec Reframe (`ripp-spec.md`) | drafted; needs review signoff |
+| 3 | Adaptation Register (`adaptation-register.md` + scope file) | implemented |
+| 4 | Implementation-boundary hax/F* glue | complete for current extracted target set |
+| 5 | Penumbra slow reference path (reference crate) | implemented |
+| 6 | Trace instrumentation (trace-schema crate) | implemented |
+| 7 | Deterministic + property conformance tests | implemented |
+| 8 | Coverage fuzzing | bounded smoke landed; **corpus expansion ongoing** |
+| 9 | Lean differential conformance: implementation vs paper / Filecoin discipline | **not started** (wanted; primary independent-oracle evidence) |
+| 10 | Optimization | **frozen** — byte-trace-locked loop, current state accepted as-is |
+| 11 | Performance and DoS gates | **open** (thresholds provisional) |
+| 12 | Assumption register finalization | **open** (16 `assumed` rows to narrow) |
+| 13 | Final manual review | **open** |
 
 Stages 1 through 3 are planning artifacts with invariant-backed coverage. They
-define the target for later proof, reference-path, testing, fuzzing,
-optimization, and review work. They do not claim SnarkPack/RIPP/Groth16
-algebraic soundness.
+define the target for later proof, reference-path, testing, fuzzing, and review
+work. They do not claim SnarkPack/RIPP/Groth16 algebraic soundness.
+
+### Optimization is frozen
+
+The Stage 10 byte-trace-locked optimization loop and its landed results are
+accepted as-is. No further optimization work is planned. Any future optimization
+must still obey the byte-trace lock in `docs/snarkpack/optimization-playbook.md`
+(preserve the Penumbra byte trace or explicitly version the protocol), but it is
+out of the active campaign critical path.
+
+### Remaining Work (active plan)
+
+Everything left to reach campaign completion, in dependency order. The critical
+path is open formal rows → DoS gate → assumption finalization → review. Stage 8
+(continued) and Stage 9 (Lean differential conformance) run alongside. Algebraic
+soundness is a **standing assumption** (paper + Filecoin implementation assumed
+sound); end-to-end formal verification is not pursued, so there is no
+algebraic-soundness proof stage.
+
+**P0 — Scope Lock — DONE (2026-06-01).** Scope decisions are locked: algebraic
+soundness is a standing assumption; boundary + implementation F* proofs remain
+completion blockers; end-to-end FV is dropped; Lean differential conformance
+(Stage 9) is wanted as the primary independent-oracle evidence. Recorded in the
+Scope Lock section.
+
+**P1 — Close the 7 `open` formal rows (`formal-handoff.md`).** Load-bearing ones:
+- *Statement-encoding injectivity, mechanically proved* — unblocks the
+  digest-reduction row, which is currently blocked-by-injectivity.
+- *RIPP mapping row* (`ripp-refinement.md`, status `open`, "not yet reviewed") —
+  review the proof-relevant RIPP/GIPA/TIPA symbol map to the intended algorithm;
+  move each scoped row to `refined`, `proved-equivalent`, or explicitly `assumed`.
+- *Padding canonicality and bounded non-malleability* — proved per completion
+  criteria.
+- Clean-image formal CI and arkworks boundary tests.
+
+**P1 — Performance and DoS gates (Stage 11).** Replace the provisional
+`bench-thresholds.md` numbers with fixed CI thresholds, and add the
+**valid-vs-invalid-path (DoS asymmetry) benchmark**: prove a malformed or
+adversarial aggregate is rejected cheaply with bounded verifier work (no
+blow-up). Independent of all optimization work.
+
+**P1 — Assumption register finalization (Stage 12).** Review and narrowly scope
+the 16 `assumed` rows; each needs a recorded semantic postcondition and a removal
+path. No `assumed` row may silently widen scope.
+
+**P2 — Fuzzing corpus expansion (Stage 8 continued).** Move the malformed-aggregate,
+proposal-validation, and byte-boundary targets from bounded smoke to sustained
+coverage; record bounded-failure behavior.
+
+**P2 — Stage 9: Lean differential conformance (wanted).** See the dedicated
+section below. The independent-oracle evidence that our implementation
+probabilistically conforms to the paper / Filecoin transcript discipline — the
+realistic substitute for the executable Filecoin→Rust differential test that the
+cross-curve boundary makes impossible. Evidence, not proof; non-blocking for
+completion but the primary thing standing in for the dropped end-to-end FV.
+
+**P0-final — Final manual review (Stage 13).** Timeboxed review of spec,
+adaptation register, reference path, F* proof index, test/fuzz evidence, and
+assumptions, once P0-P1 are green.
+
+### Stage 9: Lean differential conformance
+
+Goal — show our implementation is **probabilistically conformant** to the paper /
+Filecoin transcript discipline by differentially testing the Rust against an
+independent Lean model. This is the wanted substitute for the algebraic-soundness
+proof that was dropped with end-to-end FV: it does not prove soundness, it
+samples for divergence from the independently-derived discipline.
+
+Motivation — the independent-oracle gap. Every behavioral test today compares
+production-Rust against reference-Rust; both descend from the same arkworks
+lineage and implement the same algebraic equations, so a bug in the equations
+themselves passes both. The Filecoin-shape harness
+(`scripts/check-snarkpack-filecoin-shape.sh`) is a **static source grep** of
+pinned Bellperson `v0.21.0`, not an executable oracle, and cross-curve byte
+equivalence is impossible (BLS12-381 vs BLS12-377). So the transcript/folding
+discipline has no independent *executable* check — only static shape + human
+review (`ripp-refinement.md`, `open`).
+
+Deliverable:
+- An **independent, hand-built Lean model** of the transcript + folding structure
+  (Fiat-Shamir label sequence, challenge derivation, GIPA/TIPA fold order,
+  padding) — derived from `ripp-spec.md` and the paper, **not** transliterated
+  from the Rust (or it is circular). Pairing/field arithmetic stays abstract and
+  `assumed`, matching the existing scope (algebraic soundness out; FS discipline
+  in).
+- A **differential conformance harness**: sample inputs, run the executable Lean
+  model and the Rust reference, compare the structural transcript/fold outputs.
+  Start as a seeded proptest; graduate to coverage-guided spec-conformance
+  fuzzing (Stage 8 fuzzer with the conformance property instead of no-panic).
+
+Scope discipline:
+- This is **evidence, not proof** — it can falsify Lean↔Rust divergence from the
+  paper/Filecoin discipline but does not prove equivalence. It upgrades the `open`
+  RIPP-mapping row toward tested. There is no follow-on end-to-end proof; this
+  track stands alone.
+- "Programmatic extraction" here means **compiling the Lean model to an executable
+  oracle**. There is no automatic extraction of the Rust RIPP algebra into Lean;
+  hax extracts Rust→F* only at the implementation boundary. The Lean model is
+  written by hand from `ripp-spec.md` and the paper.
 
 Stage 4 keeps the hax/F* glue focused on implementation-boundary rows over
 executed Rust. It does not introduce duplicate formal-only encoders. The
@@ -74,9 +177,10 @@ non-published fuzz crate provides libFuzzer targets for the same byte
 boundaries and proposal-validation path, with invariant-gated dependency
 boundaries.
 
-Stage 10 (optimization) is implemented as a byte-trace-locked iterative loop.
-The governing rule is that every optimization must preserve the Penumbra byte
-trace or explicitly version the protocol. Two committed, version-tagged golden
+Stage 10 (optimization) is implemented as a byte-trace-locked iterative loop and
+is now **frozen**: the landed results are accepted as-is and no further
+optimization is planned. The governing rule remains that any future optimization
+must preserve the Penumbra byte trace or explicitly version the protocol. Two committed, version-tagged golden
 baselines enforce this: an aggregate-proof byte baseline
 (`aggregate_bytes_match_committed_baseline`) and a PenumbraByte transcript-trace
 baseline (`penumbra_byte_trace_matches_committed_baseline`). Both regenerate
@@ -122,8 +226,21 @@ are evidence-backed.
 
 ## Scope Lock
 
-Status: pending internal signoff; this does not require a security-firm
-engagement.
+Status: locked 2026-06-01. Decisions recorded below; this does not require a
+security-firm engagement.
+
+Locked decisions (2026-06-01):
+- Algebraic soundness of SnarkPack/RIPP/Groth16 is a **standing assumption** — the
+  published paper and the Filecoin (Bellperson v0.21.0) implementation are assumed
+  sound. It is not a campaign deliverable and not an `open` blocker.
+- **Boundary and implementation F\* proofs stay completion blockers** (statement
+  injectivity, digest reduction, padding canonicality) — these are boundary FV
+  over executed Rust, not end-to-end.
+- **End-to-end formal verification is dropped** — no Lean algebraic proof, no
+  EasyCrypt Fiat-Shamir proof, no composed end-to-end theorem.
+- **Lean differential conformance (Stage 9) is wanted** as the primary independent
+  oracle: probabilistically check the Rust against the paper / Filecoin transcript
+  discipline. Evidence, not proof; non-blocking.
 
 Campaign claim:
 
@@ -132,8 +249,10 @@ Penumbra implements a Penumbra-local SnarkPack/RIPP backend whose Fiat-Shamir
 transcript discipline is checked against Filecoin SnarkPack v2 bug classes.
 Penumbra-specific statement, wrapper, padding, challenge, and preflight binding
 obligations are proved, refined, composed, assumed, or open per the evidence
-taxonomy in formal-handoff.md. This campaign does not prove
-SnarkPack/RIPP/Groth16 algebraic soundness.
+taxonomy in formal-handoff.md. SnarkPack/RIPP/Groth16 algebraic soundness is not
+proved; it is assumed from the published paper and the Filecoin implementation,
+and probabilistically cross-checked by Lean differential conformance (Stage 9).
+End-to-end formal verification is out of scope.
 ```
 
 Evidence statuses are exactly those in `docs/snarkpack/formal-handoff.md`:
@@ -440,10 +559,10 @@ Intentional Filecoin-to-Penumbra differences are tracked in
 `crates/crypto/proof-aggregation/formal/snarkpack/adaptation-scope.txt` keeps
 that register coverage-checkable.
 
-The end-to-end cryptographic proof is tracked separately in
-`docs/snarkpack/formal-research-plan.md`. That research track uses Lean 4 for
-the algebraic protocol model and EasyCrypt for Fiat-Shamir/random-oracle games;
-F* remains the implementation-boundary proof backend.
+End-to-end cryptographic proof is **out of scope**: SnarkPack/RIPP/Groth16
+algebraic soundness is assumed from the published paper and the Filecoin
+implementation (Scope Lock). F* covers the implementation boundary; Lean is used
+only for the Stage 9 differential conformance oracle, not for an algebraic proof.
 
 ## Independent Reference And Trace Evidence
 

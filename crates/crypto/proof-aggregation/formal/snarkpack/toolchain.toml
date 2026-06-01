@@ -8,12 +8,6 @@ opam_switch = "hax-0.3.7"
 
 [policy]
 primary_backend = "fstar"
-lean4_status = "selected-for-algebraic-research-track"
-coq_status = "fallback"
-easycrypt_status = "selected-for-random-oracle-research-track"
-
-[research]
-algebraic_backend = "lean4"
-random_oracle_backend = "easycrypt"
-implementation_backend = "fstar"
-plan = "docs/snarkpack/formal-research-plan.md"
+lean4_status = "differential-conformance-testing-only"
+coq_status = "unused"
+easycrypt_status = "dropped-no-end-to-end-fv"

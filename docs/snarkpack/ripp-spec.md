@@ -483,6 +483,8 @@ This spec does not prove:
 - arkworks field/group/pairing/MSM/serialization correctness
 - hax semantic preservation
 
-Those are tracked as assumptions or research-track obligations in
-`docs/snarkpack/formal-handoff.md` and
-`docs/snarkpack/formal-research-plan.md`.
+Those are tracked as standing assumptions in
+`docs/snarkpack/formal-handoff.md`. End-to-end formal verification is out of
+scope; algebraic soundness is assumed from the paper and the Filecoin
+implementation and probabilistically cross-checked by Lean differential
+conformance (security.md Stage 9).

@@ -6705,7 +6705,6 @@ name = "penumbra-sdk-proof-aggregation"
 version = "2.1.0"
 dependencies = [
  "anyhow",
- "ark-ec",
  "ark-ff",
  "ark-groth16",
  "ark-inner-products",
