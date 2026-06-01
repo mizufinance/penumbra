@@ -1,0 +1,4 @@
+# Large regenerable proof corpora (fixed-seed ChaCha20Rng in load_or_generate_items).
+# Small fixtures (<=64) stay tracked for fast CI; large ones regenerate on demand.
+items_1024.bin
+items_2048.bin

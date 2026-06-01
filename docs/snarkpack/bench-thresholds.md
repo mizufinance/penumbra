@@ -51,16 +51,3 @@ with bounded work and must remain materially cheaper than a valid aggregate
 verification. A regression that performs pairing work or full inner aggregate
 deserialization before these shape checks makes the gate fail.
 
-## Historical Local Baseline
-
-The 2026-05-26 local release Criterion run is retained only as a calibration
-note:
-
-- aggregate transfer 64 proofs: `[253.62 ms, 317.93 ms]`
-- aggregate consolidate 64 proofs: `[547.48 ms, 649.62 ms]`
-- aggregate split 64 proofs: `[547.96 ms, 647.36 ms]`
-- aggregate shielded ICS-20 withdrawal 64 proofs: `[267.38 ms, 343.47 ms]`
-- verify transfer 64 proofs: `[69.876 ms, 107.85 ms]`
-- verify consolidate 64 proofs: `[66.333 ms, 87.854 ms]`
-- verify split 64 proofs: `[71.209 ms, 98.065 ms]`
-- verify shielded ICS-20 withdrawal 64 proofs: `[70.095 ms, 100.72 ms]`

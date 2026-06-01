@@ -10,103 +10,63 @@ SRS requirement in this phase is that the SRS identity is bound into every
 aggregate statement so a future production SRS swap is a normal versioned
 change.
 
-## Security Campaign Order
+## Hardening layers and status
 
-Status: build-out largely complete; campaign now in its evidence-closure phase.
-Scope **locked** 2026-06-01 (decisions recorded under Scope Lock). Optimization is
-**frozen** (see below). End-to-end formal verification is **out of scope** — the
-SnarkPack paper and the Filecoin implementation are assumed sound (see Scope Lock).
+Scope is **locked** (decisions recorded under Scope Lock). End-to-end formal
+verification is **out of scope** — the SnarkPack paper and the Filecoin
+implementation are assumed sound. Optimization is byte-trace-locked (see
+`docs/snarkpack/optimization-playbook.md`): a change must preserve the Penumbra
+byte trace or explicitly version the protocol.
 
-This is the authoritative order for the SnarkPack security campaign. Each stage
-carries its current status; the **Remaining Work** subsection below is the active
-plan.
+The hardening layers and the state of each:
 
-| # | Stage | Status |
+| # | Layer | State |
 |---|---|---|
-| 1 | Scope Lock | **locked 2026-06-01** (decisions recorded) |
+| 1 | Scope Lock | locked (decisions recorded) |
 | 2 | Spec Reframe (`ripp-spec.md`) | drafted; needs review signoff |
-| 3 | Adaptation Register (`adaptation-register.md` + scope file) | implemented |
-| 4 | Implementation-boundary hax/F* glue | complete for current extracted target set |
-| 5 | Penumbra slow reference path (reference crate) | implemented |
-| 6 | Trace instrumentation (trace-schema crate) | implemented |
-| 7 | Deterministic + property conformance tests | implemented |
-| 8 | Coverage fuzzing | minimized corpora landed; smoke seeds from corpus; baseline recorded |
-| 9 | Lean differential conformance: implementation vs paper / Filecoin discipline | implemented as non-blocking evidence |
-| 10 | Optimization | **frozen** — byte-trace-locked loop, current state accepted as-is |
-| 11 | Performance and DoS gates | implemented and CI-gated |
-| 12 | Assumption register finalization | narrowed (13 `assumed` rows, each with postcondition + removal path) |
-| 13 | Final manual review | **open** |
+| 3 | Adaptation Register (`adaptation-register.md` + scope file) | enforced (invariant bijection) |
+| 4 | Implementation-boundary hax/F* glue | covers the current extracted target set |
+| 5 | Penumbra slow reference path (reference crate) | in place |
+| 6 | Trace instrumentation (trace-schema crate) | in place |
+| 7 | Deterministic + property conformance tests | in place |
+| 8 | Coverage fuzzing | minimized corpora committed; smoke seeds from corpus |
+| 9 | Lean differential conformance (implementation vs paper / Filecoin discipline) | in place, non-blocking evidence |
+| 10 | Optimization | byte-trace-locked loop (see playbook) |
+| 11 | Performance and DoS gates | CI-gated (`just snarkpack-dos-gate`) |
+| 12 | Assumption register | 13 `assumed` rows, each with postcondition + removal path |
+| 13 | Final manual review | remaining |
 
-Stages 1 through 3 are planning artifacts with invariant-backed coverage. They
-define the target for later proof, reference-path, testing, fuzzing, and review
-work. They do not claim SnarkPack/RIPP/Groth16 algebraic soundness.
+Layers 1 through 3 are planning artifacts with invariant-backed coverage. They
+define the target for the proof, reference-path, testing, fuzzing, and review
+layers. They do not claim SnarkPack/RIPP/Groth16 algebraic soundness.
 
-### Optimization is frozen
+### What the layers enforce today
 
-The Stage 10 byte-trace-locked optimization loop and its landed results are
-accepted as-is. No further optimization work is planned. Any future optimization
-must still obey the byte-trace lock in `docs/snarkpack/optimization-playbook.md`
-(preserve the Penumbra byte trace or explicitly version the protocol), but it is
-out of the active campaign critical path.
+- **Formal ledger** (`formal-handoff.md`): statement-encoding injectivity, digest
+  reduction, padding canonicality, and challenge-preimage injectivity are
+  `proved`; the RIPP mapping is `refined`, with every scoped RIPP/GIPA/TIPA symbol
+  classified against a `ripp-spec.md` row and file:line evidence. No `open` rows.
+- **Performance / DoS gate** (`bench-thresholds.md`, `just snarkpack-dos-gate`):
+  enforces the valid-vs-adversarial asymmetry benchmark across malformed wrapper,
+  wrong-family, wrong-public-input, oversized, valid, and mixed-proposal paths.
+- **Assumption register** (`formal-handoff.md`): the 13 `assumed` rows each carry a
+  postcondition and removal path; arkworks/decaf377 rows cite boundary tests.
+- **Fuzzing** (`fuzz-corpus-baseline.md`): each target has a committed minimized
+  corpus; the smoke gate seeds from it through a temporary copy.
+- **Lean differential conformance** (`just snarkpack-lean-conformance`): an
+  executable Lean oracle plus Rust-vs-Lean trace-shape tests that **exhaustively
+  enumerate** the finite shape domain (one shape per power of two up to the SRS
+  max). Evidence, not proof; the algebraic-soundness row stays `assumed`.
 
-### Remaining Work (active plan)
+Algebraic soundness is a **standing assumption** (paper + Filecoin assumed sound);
+there is no algebraic-soundness proof layer because end-to-end FV is out of scope.
+The full layer-by-layer landscape — what each catches and why — is consolidated in
+`docs/snarkpack/verification-plan.md`.
 
-Everything left to reach campaign completion, in dependency order. P1 evidence
-closure is implemented: the formal handoff ledger has no `open` rows, the
-DoS/performance gate is CI-wired, and the assumption register is narrowed. Stage
-8 corpus expansion and Stage 9 Lean differential conformance are implemented as
-non-blocking evidence. Final manual review remains the campaign-level
-governance checkpoint. Algebraic
-soundness is a **standing assumption** (paper + Filecoin implementation assumed
-sound); end-to-end formal verification is not pursued, so there is no
-algebraic-soundness proof stage.
+### Remaining
 
-The full verification landscape — every testing/verification layer (boundary FV,
-independent reference path, differential oracle tests, trace equivalence,
-byte-equivalence baselines, mutation matrices, Filecoin-shape check, fuzzing,
-Lean differential conformance, DoS gates, assumption register), what each catches,
-and the prioritized remaining work — is consolidated in
-`docs/snarkpack/verification-plan.md`. This section is the campaign-order view of
-the same plan.
-
-**P0 — Scope Lock — DONE (2026-06-01).** Scope decisions are locked: algebraic
-soundness is a standing assumption; boundary + implementation F* proofs remain
-completion blockers; end-to-end FV is dropped; Lean differential conformance
-(Stage 9) is the primary independent-oracle evidence. Recorded in the Scope Lock
-section.
-
-**P1 — Formal ledger closure (`formal-handoff.md`) — DONE.**
-Statement-encoding injectivity, digest reduction, padding canonicality, and
-challenge-preimage injectivity are `proved`. The RIPP mapping row is `refined`;
-every scoped RIPP/GIPA/TIPA symbol is classified with file:line evidence and a
-`ripp-spec.md` row reference.
-
-**P1 — Performance and DoS gates (Stage 11) — DONE.** `bench-thresholds.md`
-records fixed CI thresholds, and `just snarkpack-dos-gate` enforces the
-valid-vs-adversarial asymmetry benchmark for malformed wrapper, wrong-family,
-wrong-public-input, oversized, valid, and mixed-proposal paths.
-
-**P1 — Assumption register finalization (Stage 12) — DONE.** The 13 `assumed`
-rows each record a postcondition and removal path; arkworks/decaf377 rows cite
-implemented boundary tests.
-
-**P2 — Fuzzing corpus expansion (Stage 8 continued) — DONE as local corpus
-baseline.** Each fuzz target has a committed minimized corpus, and the smoke gate
-seeds from it through a temporary copy. `docs/snarkpack/fuzz-corpus-baseline.md`
-records coverage-guided baseline runs, minimized coverage, and the
-proposal-validation SRS-id cheap-rejection finding/fix.
-
-**P2 — Stage 9: Lean differential conformance — DONE as non-blocking evidence.**
-See the dedicated section below. The independent-oracle evidence that our
-implementation conforms to the paper / Filecoin transcript discipline is live:
-`just snarkpack-lean-conformance` runs the executable Lean oracle and Rust-vs-Lean
-trace-shape tests that **exhaustively enumerate** the finite shape domain (one
-shape per power of two up to the SRS max). Evidence, not proof (bounded and
-structural); the algebraic-soundness row remains `assumed`.
-
-**P0-final — Final manual review (Stage 13).** Timeboxed review of spec,
-adaptation register, reference path, F* proof index, test/fuzz evidence, and
-assumptions, once P0-P1 are green.
+**Final manual review** (layer 13): a timeboxed review of spec, adaptation
+register, reference path, F* proof index, test/fuzz evidence, and assumptions.
 
 ### Stage 9: Lean differential conformance
 
@@ -196,10 +156,9 @@ boundaries and proposal-validation path, with invariant-gated dependency
 boundaries. The 2026-06-01 corpus baseline and clean-run coverage are recorded in
 `docs/snarkpack/fuzz-corpus-baseline.md`.
 
-Stage 10 (optimization) is implemented as a byte-trace-locked iterative loop and
-is now **frozen**: the landed results are accepted as-is and no further
-optimization is planned. The governing rule remains that any future optimization
-must preserve the Penumbra byte trace or explicitly version the protocol. Two committed, version-tagged golden
+Stage 10 (optimization) is a byte-trace-locked iterative loop. The governing rule
+is that any optimization must preserve the Penumbra byte trace or explicitly
+version the protocol. Two committed, version-tagged golden
 baselines enforce this: an aggregate-proof byte baseline
 (`aggregate_bytes_match_committed_baseline`) and a PenumbraByte transcript-trace
 baseline (`penumbra_byte_trace_matches_committed_baseline`). Both regenerate
@@ -223,14 +182,10 @@ The per-optimization workflow is:
    silent byte changes are permitted.
 4. Record the before/after performance delta on the targeted stage.
 
-The first optimization landed under this loop replaces the GIPA verifier's
-sequential final commitment-key recombination
-(`_compute_final_commitment_keys`) with a variable-base multiexponentiation,
-exposed as the overridable `DoublyHomomorphicCommitment::msm_keys` method
-(default fold; AFGHO group-backed override). It is byte-preserving by
-construction — `msm_keys_equals_sequential_fold` proves the MSM yields the same
-group element as the prior fold — so it landed with both baselines unchanged and
-`AGGREGATE_PROTOCOL_VERSION` still `1`.
+The optimizations currently in place and the candidate backlog are described in
+`docs/snarkpack/optimization-playbook.md` (§9, §8); each is byte-preserving by
+construction, with an equivalence test and both golden baselines unchanged at
+`AGGREGATE_PROTOCOL_VERSION` `1`.
 
 The full search-to-land method — how to find candidates (profiler- and
 pattern-driven), classify the change, measure it honestly with the corpus-backed
@@ -239,9 +194,9 @@ bar, and run the gate set — is the optimization playbook in
 `docs/snarkpack/optimization-playbook.md`, which also carries the ranked
 candidate backlog.
 
-Fixed performance thresholds and the denial-of-service asymmetry gate are a
-later stage; Stage 10 only requires a repeatable measurement so optimizations
-are evidence-backed.
+Fixed performance thresholds and the denial-of-service asymmetry gate are layer
+11 (`bench-thresholds.md`, `just snarkpack-dos-gate`); layer 10 itself only
+requires a repeatable measurement so optimizations are evidence-backed.
 
 ## Scope Lock
 
@@ -251,7 +206,7 @@ security-firm engagement.
 Locked decisions (2026-06-01):
 - Algebraic soundness of SnarkPack/RIPP/Groth16 is a **standing assumption** — the
   published paper and the Filecoin (Bellperson v0.21.0) implementation are assumed
-  sound. It is not a campaign deliverable and not an `open` blocker.
+  sound. It is not a deliverable and not an `open` blocker.
 - **Boundary and implementation F\* proofs stay completion blockers** (statement
   injectivity, digest reduction, padding canonicality) — these are boundary FV
   over executed Rust, not end-to-end.
@@ -262,7 +217,7 @@ Locked decisions (2026-06-01):
   and check the Rust against the paper / Filecoin discipline on every shape.
   Evidence, not proof (bounded + structural); non-blocking.
 
-Campaign claim:
+Claim:
 
 ```text
 Penumbra implements a Penumbra-local SnarkPack/RIPP backend whose Fiat-Shamir
@@ -558,11 +513,10 @@ asymmetric denial-of-service path.
 
 ## Formal Verification
 
-Status: Stage 4 implementation-boundary F* rows are complete for the current
-extracted Rust target set. The RIPP refinement row is reviewed, assumptions are
-narrowed, and no formal handoff rows remain `open`. The broader campaign remains
-open only for final manual review and non-blocking evidence strengthening. The
-authoritative evidence index is `docs/snarkpack/formal-handoff.md`.
+Implementation-boundary F* rows cover the current extracted Rust target set. The
+RIPP refinement row is reviewed, assumptions are narrowed, and no formal handoff
+rows remain `open`; final manual review and non-blocking evidence strengthening
+remain. The authoritative evidence index is `docs/snarkpack/formal-handoff.md`.
 
 Evidence is typed:
 
@@ -577,7 +531,7 @@ The implementation-boundary target is statement encoding injectivity, wrapper
 framing, count/arity validation, padding canonicality, and explicit
 Fiat-Shamir challenge preimage binding. The local RIPP implementation is not a
 black-box oracle; `docs/snarkpack/ripp-refinement.md` maps proof-relevant RIPP
-symbols to the intended algorithm and is reviewed for P1 completion.
+symbols to the intended algorithm and is reviewed.
 Intentional Filecoin-to-Penumbra differences are tracked in
 `docs/snarkpack/adaptation-register.md`; the scope file under
 `crates/crypto/proof-aggregation/formal/snarkpack/adaptation-scope.txt` keeps
@@ -590,9 +544,8 @@ only for the Stage 9 differential conformance oracle, not for an algebraic proof
 
 ## Independent Reference And Trace Evidence
 
-Status: implemented as code and tests. These are part of the closed P1 evidence
-set; the P2 Lean conformance oracle is now live supporting evidence, and final
-manual review remains outside the implementation gate.
+In place as code and tests, with the Lean conformance oracle as supporting
+evidence.
 
 The independent reference crate re-derives the dev SRS from the public seed and
 checks the resulting SRS id against production. It owns its aggregate proof,
@@ -609,10 +562,9 @@ Penumbra bytes only between Penumbra paths; Filecoin-shape rows are checked by
 
 ## Completion Criteria
 
-Status: P1 implementation gate closed. Stage 4 implementation-boundary F* rows
-are complete for the current extracted Rust target set; RIPP refinement,
-clean-image formal CI, arkworks/decaf377 boundary tests, and fixed CI benchmark
-gates are in place. Final manual review remains the campaign-level checkpoint.
+Implementation-boundary F* rows cover the current extracted Rust target set; RIPP
+refinement, clean-image formal CI, arkworks/decaf377 boundary tests, and fixed CI
+benchmark gates are in place. Final manual review remains.
 
 This phase is complete when:
 

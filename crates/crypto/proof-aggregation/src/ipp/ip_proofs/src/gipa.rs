@@ -86,6 +86,10 @@ const GIPA_RESCALE_PARALLEL_THRESHOLD: usize = 64;
 #[derive(Clone, Debug, Default)]
 pub struct GipaBuildProfile {
     pub total_ms: f64,
+    /// Per-task self-time for the left/right round commitments. Under the
+    /// parallel seam these two run concurrently via `rayon::join`, so their
+    /// wall-clock windows overlap — they are not additive and their sum can
+    /// exceed `total_ms`. Read each as its own work, not as a serial subtotal.
     pub commit_l_ms: f64,
     pub commit_r_ms: f64,
     pub commit_ab_ms: f64,
@@ -490,6 +494,8 @@ where
                     com_1_result.map_err(|err: String| std::io::Error::other(err))?;
                 let (com_2, commit_r_ms) =
                     com_2_result.map_err(|err: String| std::io::Error::other(err))?;
+                // Per-task self-times: under the parallel seam these overlap in
+                // wall-clock, so the two fields are not additive (see field docs).
                 profile.commit_l_ms += commit_l_ms;
                 profile.commit_r_ms += commit_r_ms;
 

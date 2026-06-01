@@ -127,16 +127,18 @@ wire-only (2) vs transcript (3) and act accordingly.
 
 ## 3. MEASURE — prove the win is real
 
-Never quote an isolated microbench as an end-to-end result. (The first
-optimization showed a 45–90× *microbench* speedup that was ~1–2% — inside the
-noise band — end-to-end at realistic batch sizes.)
+Never quote an isolated microbench as an end-to-end result: a large microbench
+speedup routinely collapses into the noise band once measured on the full
+aggregate/verify path at realistic batch sizes.
 
 ### 3a. Corpus-backed bench
 `crates/bench/benches/vanilla/snarkpack.rs` benchmarks `aggregate_family` and
-`verify_family_aggregate` by `(family, count)`. The Groth16 proof corpus is
-generated once and committed under `crates/bench/corpus/snarkpack/`; the bench
-loads it via `load_or_generate_items` — proofs are **never** regenerated per
-run, and the measured closure times only the aggregate/verify call.
+`verify_family_aggregate` by `(family, count)`. The Groth16 proof corpus lives
+under `crates/bench/corpus/snarkpack/`; the bench loads it via
+`load_or_generate_items`, regenerating from a fixed `ChaCha20Rng` seed only when a
+file is absent, so the measured closure times only the aggregate/verify call. The
+small fixtures (≤64) are committed for fast CI; the large ones (1024, 2048) are
+git-ignored and regenerate on first use (deterministic, so A/B-stable).
 
 ### 3b. The compile-time A/B seam
 To compare an optimization against its pre-optimization form on the *real*
@@ -286,20 +288,11 @@ the §4a 10% estimate.
    decode-`Validate::No` + **one randomized batch subgroup check** over all GT
    elements (random rᵢ, test `Π eᵢ^{rᵢ}` is in 𝔾_T; in-subgroup-iff-all w.h.p.),
    paying 1 exponentiation instead of N. Byte-stable (category 1 in bytes —
-   validation is orthogonal to the wire/transcript).
-
-   **Measured (2026-06-01, one-off bench since removed, work floor
-   `RAYON_NUM_THREADS=1`):** `deserialize_ms` is the dominant verify stage —
-   58% of `core_total` at n=1 rising to **129% at n=64** (i.e. larger than all the
-   rest of verify combined). A batched randomized subgroup check with **128-bit**
-   verifier-local randomizers runs **~2.2–2.4×** faster than per-element checks
-   (~0.9 ms per GT subgroup check). But only ~half of `deserialize_ms` is subgroup
-   checking — the rest is un-batchable Fp12 decompression/parsing — and 128-bit
-   randomizers cap the batchable part at ~2×. Net projected end-to-end:
-   **~13–16% verify** (clears the 10% bar, low end). Note: a smaller randomizer
-   (64-bit → ~4×) buys more speed but weakens soundness; that trade is part of the
-   security review. *Confirm the exact GT-element count and decompression share
-   before committing.*
+   validation is orthogonal to the wire/transcript). Only the subgroup-check part
+   of `deserialize_ms` batches; the Fp12 decompression/parsing remainder does not,
+   and 128-bit verifier-local randomizers cap the batchable speedup at ~2×, so the
+   estimate clears the 10% bar at the low end rather than dramatically. Confirm the
+   exact GT-element count and the decompression share before committing.
 
    **Why it is gated, not just landed.** This weakens a *soundness check*
    (per-element → aggregate-probabilistic), so byte-stability is **necessary but
@@ -328,53 +321,50 @@ the §4a 10% estimate.
      "deserialized elements are subgroup-valid" premise is still discharged, now by
      the batch.
 
-**Evaluated and rejected as sub-bar (do not re-attempt without new evidence):**
+**Deferred to the §10 benchmark matrix (not pursued as optimizations here):**
 
-- **Batch all verify pairing checks into one randomized multi-pairing** (fold the
-  two KZG openings, TIPA-AB/C base cases, and the 3-pair PPE with verifier-local
-  γᵢ to remove ~4 of 5 final exponentiations). Implemented and **reverted** —
-  regressed or tied across n={1,2,4,8,64}. Pairings are not the bottleneck
-  (deserialize is, candidate 1), and this matches the literature: compressed/
-  randomized pairing checks are SnarkPack's headline FE-saving trick and still did
-  not pay on our shapes.
-- Narrow 2-KZG-opening merge (saves 1 FE, ~5–8%) — subset of the above.
-- Batch-invert the transcript (`ark_ff::batch_inversion`) — transcript is
-  log₂n (≤13) elements; field inversions are negligible vs pairings, <1%.
-- MSM-ify `fold_public_inputs` `g_ic` and the shifted-`ck_1` build — one-time,
-  sized by public inputs not by n; measured below bar.
-- Category-2 uncompressed encoding (slower); reusing prepared `ck_a` in TIPA-AB
-  (regressed build ~5–9%).
-
-**Parallelization — deferred to the §10 matrix, not optimizations:** the landed
-`rayon` stack (rescale folds, round commits, TIPA proofs, verification checks,
-KZG checks) is the default pending the benchmark matrix; do not re-tune it here.
-
-**Landed — prepared verifier-G2 reuse in the PPE (§11):** `verify_ppe` now reuses
-`PreparedVerifyingKey`'s `alpha_g1_beta_g2` (GT-exp, −1 Miller loop) and the
-prepared `-γ`/`-δ` tables instead of re-pairing the raw `vk` G2 points. Provable
-work reduction, equivalence-tested (`ppe_optimized_matches_baseline_gt_value`),
-byte/trace-stable category 1. Measured −3% at n=1, noise at larger n; landed under
-§4's never-slower clause, not the 10% bar. Subsumes the line-table-only idea below.
-
-**Memory-budget SRS precompute — remaining:**
 - *Large fixed-base MSM tables for the SRS generators* (windowed comb/Pippenger,
-  tens–hundreds of MB): **deferred to the §10 matrix.** Its payoff is
-  memory-bandwidth- and regime-bound and does **not** transfer from a single
-  developer machine to the production fleet — see §10a.
+  tens–hundreds of MB). Payoff is memory-bandwidth- and regime-bound and does not
+  transfer from a developer machine to the production fleet — see §10a.
+
+**Already evaluated — do not re-attempt without new evidence:**
+
+- Batch all verify pairing checks into one randomized multi-pairing (fold the KZG
+  openings, TIPA-AB/C base cases, and the 3-pair PPE) — pairings are not the
+  bottleneck (deserialize is, candidate 1); regressed or tied on our shapes, in
+  line with the SnarkPack literature. The narrow 2-KZG-opening merge is a subset.
+- Batch-invert the transcript — log₂n (≤13) elements; negligible vs pairings.
+- MSM-ify `fold_public_inputs` `g_ic` / the shifted-`ck_1` build — one-time, sized
+  by public inputs not by n; below bar.
+- Category-2 uncompressed encoding (slower); reusing prepared `ck_a` in TIPA-AB
+  (regressed the build path).
 
 Architectural TODOs (`tipa/mod.rs`, `structured_scalar_message.rs`) are
 out-of-loop refactors, not optimization candidates.
 
-## 9. Worked example (the first optimization)
+## 9. Optimizations currently in place
 
-`_compute_final_commitment_keys` recombines the final GIPA commitment keys
-(`Σ xᵢ·ck[i]`). The original code was a sequential fold; it now calls the
-commitment trait's `msm_keys` (variable-base MSM for AFGHO keys). Equivalence is
-proven by `msm_keys_equals_sequential_fold` (both key sides), the byte and trace
-baselines pass unchanged (category 1, version 1), and the `bench-baseline` seam
-(`fold_keys_baseline`) lets the verify path be A/B-measured. Honest result:
-~1–2% end-to-end at n ≤ 64 (near noise) — it earns its place on
-correctness/clarity/scaling, not on a dramatic speedup.
+Two work-reduction optimizations are live on the default build, both category 1
+(identical elements, byte/trace baselines unchanged, version 1):
+
+- **Final commitment-key recombination via MSM.** `_compute_final_commitment_keys`
+  recombines the final GIPA keys (`Σ xᵢ·ck[i]`) with the commitment trait's
+  `msm_keys` (variable-base MSM) instead of a sequential fold. Equivalence:
+  `msm_keys_equals_sequential_fold` (both key sides); A/B seam `fold_keys_baseline`.
+- **Prepared verifier-G2 reuse in the PPE (§11).** `verify_ppe` reuses the
+  precomputes carried in `ark_groth16::PreparedVerifyingKey` (`alpha_g1_beta_g2` as
+  a GT exponentiation, the prepared `-γ`/`-δ` tables) instead of re-pairing the raw
+  `vk` G2 points, removing one Miller loop and three `G2Prepared::from` builds.
+  Equivalence: `ppe_optimized_matches_baseline_gt_value`.
+
+Both clear §4's never-slower clause (provable work reduction, equivalence-tested)
+rather than the §4a 10% bar; each retains a `*_baseline` twin under `bench-baseline`
+as the A/B and equivalence oracle.
+
+A `rayon` parallel stack (GIPA rescale folds, round commits, TIPA proofs,
+verification checks, KZG checks) is also in place as the default. It is **not**
+tuned here — its value is regime-conditional and settled later against the §10
+matrix (§0.7).
 
 ## 10. Parallelization benchmark matrix (to run later)
 
@@ -430,57 +420,34 @@ emit a recommended budget per candidate architecture. Until then this stays
 unbenched and uncommitted by design. (Record the chosen budget and table sizing in
 the §0.6 register once known.)
 
-## 11. Prepared verifier-G2 reuse in the PPE — LANDED (provable work reduction)
+## 11. How `verify_ppe` works today
 
 The fixed verifier G2 points the PPE pairs against never change across
-verifications, yet the original `verify_ppe` re-prepared and re-paired them every
-call. The realized optimization reuses the precomputes **already carried in
-`ark_groth16::PreparedVerifyingKey`** instead of caching new line tables — so it
-goes further than line-table reuse and removes a whole pairing:
+verifications, so `verify_ppe` reuses the precomputes **already carried in
+`ark_groth16::PreparedVerifyingKey`** rather than re-preparing and re-pairing the
+raw `vk` G2 points each call:
 
 - `e(α·r_sum, β) = e(α, β)^{r_sum}` — `pvk.alpha_g1_beta_g2` raised to `r_sum`, a
-  GT exponentiation that **removes one Miller loop** entirely.
+  GT exponentiation in place of one Miller loop.
 - `e(g_ic, γ) = e(-g_ic, -γ)` and `e(agg_c, δ) = e(-agg_c, -δ)` — paired against
   `pvk.{gamma,delta}_g2_neg_pc`, the already-prepared `-γ`/`-δ` line tables, so
-  neither γ nor δ is re-prepared (and β is no longer prepared at all).
+  neither γ nor δ is re-prepared and β is not prepared at all.
 
 Net per verify: −1 Miller loop, −3 `G2Prepared::from` builds, +1 GT exponentiation
-(cheaper than a Miller loop) + 2 already-prepared tables reused. Strictly less
-work for the identical GT element ⇒ **provably never slower** (§4 second clause).
+(cheaper than a Miller loop). Strictly less work for the identical GT element, so
+it is never slower than the three-pairing form. The PPE is a fixed-cost stage
+(independent of n), so the saving is near-constant in absolute terms.
 
-**Category 1, byte- and trace-stable.** The change is verifier-side arithmetic
-only: same accept/reject decision, no wire or Fiat-Shamir byte touched, version
-unchanged. The reference oracle has its own `verify_ppe` (it does not call
-production), and the PPE emits no challenge-trace events, so the PenumbraByte trace
-baseline is unaffected.
+**Category 1, byte- and trace-stable.** Verifier-side arithmetic only: same
+accept/reject decision, no wire or Fiat-Shamir byte touched, version unchanged. The
+reference oracle has its own `verify_ppe` and the PPE emits no challenge-trace
+events, so the PenumbraByte trace baseline is unaffected. Equivalence is asserted by
+`ppe_optimized_matches_baseline_gt_value` (the optimized expression equals the
+three-pairing GT value over random inputs); end-to-end correctness is additionally
+gated by `snarkpack_matches_single_and_batch_groth16_oracles` and the byte/trace
+baselines. The three-pairing form is retained as `verify_ppe_baseline` (compiled
+only under `bench-baseline`) for the §3b A/B seam.
 
-**Equivalence:** `ppe_optimized_matches_baseline_gt_value`
-(`backend.rs` tests) asserts the optimized expression equals the three-pairing
-form's GT value over random inputs; end-to-end correctness is additionally gated by
-`snarkpack_matches_single_and_batch_groth16_oracles` and the byte/trace baselines.
-The pre-optimization three-pairing form is retained as `verify_ppe_baseline`
-(compiled only under `bench-baseline`) for the §3b A/B seam.
-
-**A/B (2026-06-01, M4 Pro, work floor `RAYON_NUM_THREADS=1`, `snarkpack verify`):**
-
-| n | optimized | origin baseline | Δ |
-|---:|---:|---:|---:|
-| 1  | 14.74 ms | 15.21 ms | −3.1% |
-| 2  | 33.61 | 33.34 | +0.8% (noise) |
-| 4  | 46.66 | 45.96 | +1.5% (noise) |
-| 8  | 59.14 | 58.31 | +1.4% (noise) |
-| 64 | 96.91 | 100.46 | −3.5% |
-
-The PPE is a fixed-cost stage, so the saving (~0.4–0.5 ms) is near-constant —
-visible (~3%) at n=1 and lost in measurement noise where verify is larger and
-deserialize-dominated (§8 candidate 1). It does **not** clear §4a's 10% bar and was
-not *pursued* under it; it was landed under §4's provable-work-reduction clause
-because the work was already done and the change is equivalence-tested and never
-slower. The larger lever remains §8 candidate 1.
-
-**Ceiling analysis (superseded).** The earlier line-table-only framing — caching
-just the 4 fixed-G2 `G2Prepared::from` builds — had a ceiling of ≤4.1% (n=1) → ~1%
-(n=64); see `crates/bench/benches/vanilla/snarkpack_prepared_g2.rs`, which measures
-per-`G2Prepared::from` cost vs full verify. The landed PPE reuse subsumes it by
-also removing the β Miller loop, not merely the prepares.
+`crates/bench/benches/vanilla/snarkpack_prepared_g2.rs` measures per-`G2Prepared::from`
+cost against full verify, bounding the prepare-reuse portion of the saving.
 

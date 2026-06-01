@@ -520,6 +520,9 @@ where
             commit_l_result.map_err(|err: String| std::io::Error::other(err))?;
         let (com_2, commit_r_ms, ip_r_ms, com_a_r_ms, com_b_r_ms) =
             commit_r_result.map_err(|err: String| std::io::Error::other(err))?;
+        // Per-task self-times: under the parallel seam `commit_l`/`commit_r` run
+        // concurrently, so the `_l`/`_r` fields overlap in wall-clock and are not
+        // additive (their sum can exceed the round's elapsed time).
         profile.commit_l_ms += commit_l_ms;
         profile.commit_r_ms += commit_r_ms;
         profile.commit_ab_ms += ip_l_ms + ip_r_ms;

@@ -1,10 +1,10 @@
 # SnarkPack Verification & Testing Plan
 
 The verification layers and the remaining work to complete the hardening phase.
-This is the consolidated companion to `security.md` (campaign order and status)
-and `formal-handoff.md` (the typed evidence ledger).
+This is the consolidated companion to `security.md` (layer order and status) and
+`formal-handoff.md` (the typed evidence ledger).
 
-The campaign is layered defense: no single layer proves the system; each catches
+The design is layered defense: no single layer proves the system; each catches
 a different bug class. The layers below run from "closest to the cryptographic
 math" down to "closest to the raw bytes and ops." Each says what it checks, why
 it matters (the bug class), its state, and how it is or should be implemented.
@@ -78,7 +78,7 @@ by Layer 9.
   Both regenerate deterministically from fixed `(family, count, seed)` vectors and
   fail on any drift; each version tag must equal `AGGREGATE_PROTOCOL_VERSION`.
 - Why: makes silently changing the wire/transcript bytes impossible — "preserve
-  bytes vs version the protocol" becomes a mechanical gate. This locks the (frozen)
+  bytes vs version the protocol" becomes a mechanical gate. This locks the
   optimization loop and any refactor.
 - State: implemented.
 - Scope: byte equivalence is Penumbra-reference vs Penumbra-optimized only. There
@@ -179,9 +179,9 @@ by Layer 9.
 - Why: not a test — it makes "what is proven vs assumed" auditable and honest and
   prevents an assumption from silently widening.
 - State: 13 proved / 1 refined / 6 composed / 13 assumed / 0 open, matching
-  `formal-handoff.md` as of 2026-06-01.
-- Left: no P1 ledger rows remain open; future work is evidence strengthening
-  outside the P1 completion gate.
+  `formal-handoff.md`.
+- Left: no ledger rows remain open; further work is evidence strengthening
+  outside the completion gate.
 
 ## Part B — What we deliberately do not verify (standing assumptions)
 
@@ -193,47 +193,36 @@ scope. Layer 9 is the only one that cross-checks the algebraic/transcript
 assumption (exhaustively over its bounded shape domain); the rest are
 external-audit-or-replace.
 
-## Part C — Remaining-work plan
+## Part C — Current state and remaining work
 
-P0 — Scope Lock — done (2026-06-01).
+Scope is locked. What each layer enforces today:
 
-P1 — critical path to completion, closed by the current ledger:
-
-| Item | Closes layer | Detail |
+| Item | Layer | Detail |
 |---|---|---|
-| Stale prose reconciled with the ledger | 1, 11 | Statement injectivity, digest reduction, padding canonicality, and challenge-preimage injectivity are `proved`; the ledger has no `open` rows. |
+| Prose reconciled with the ledger | 1, 11 | Statement injectivity, digest reduction, padding canonicality, and challenge-preimage injectivity are `proved`; the ledger has no `open` rows. |
 | Clean-image formal CI + arkworks boundary property tests | 1, 11 | The `snarkpack-formal` workflow uses pinned hax/F*/Z3 versions and the arkworks/decaf377 boundary tests are named in the assumption register. |
 | RIPP-mapping review (`ripp-refinement.md`) | 1, 11 | Every scoped symbol is `refined` with code line and spec-row evidence. |
 | DoS-asymmetry + perf gate | 10 | `just snarkpack-dos-gate` enforces fixed size, latency, and cheap-rejection thresholds in CI. |
-| Assumption-register finalization | 11 | The 13 `assumed` rows each have a postcondition and removal path; rows naming backend tests cite implemented tests. |
+| Assumption register | 11 | The 13 `assumed` rows each have a postcondition and removal path; rows naming backend tests cite implemented tests. |
+| Fuzz corpus | 8 | Minimized corpora committed for each target; smoke seeds from the corpus; baseline and finding triage recorded in `fuzz-corpus-baseline.md`. Non-blocking evidence. |
+| Lean differential conformance | 9 | Independent executable oracle: a hand-derived Lean transcript/folding model differentially tested against the Rust by exhaustive enumeration of the finite shape domain (powers of two to the SRS max), not fuzzing. Non-blocking evidence. |
 
-P2 — parallel, evidence-strengthening, non-blocking:
-
-| Item | Closes layer | Detail |
-|---|---|---|
-| Fuzz corpus expansion | 8 | Minimized corpora committed for each target; smoke seeds from the corpus; baseline and finding triage recorded in `fuzz-corpus-baseline.md`. |
-| Lean differential conformance | 9 | Independent executable oracle implemented. Hand-derived Lean transcript/folding model, differentially tested against the Rust by exhaustive enumeration of the finite shape domain (powers of two to the SRS max), not fuzzing. |
-
-P0-final — Final manual review: timeboxed review of spec, adaptation register,
-reference path, F* proof index, test/fuzz evidence, and assumptions, once P1 is
-green. Touches all layers.
+**Remaining — final manual review:** a timeboxed review of spec, adaptation
+register, reference path, F* proof index, test/fuzz evidence, and assumptions.
+Touches all layers.
 
 ## Sequencing
 
-P1 no longer starts with an injectivity proof: that proof is already present in
-`StatementEncodingProofs.fst` and the dependent digest/padding/challenge rows are
-closed in `formal-handoff.md`. The live completion path is evidence maintenance:
-keep the RIPP refinement map exact, keep the DoS gate in CI, keep assumption rows
-narrow, and keep the formal workflow reproducible from pinned tools.
+The completion path is evidence maintenance, not new proof: statement-encoding
+injectivity is already present in `StatementEncodingProofs.fst` and the dependent
+digest/padding/challenge rows are closed in `formal-handoff.md`. Keep the RIPP
+refinement map exact, keep the DoS gate in CI, keep assumption rows narrow, and
+keep the formal workflow reproducible from pinned tools.
 
-Fuzz expansion and Lean differential are P2 evidence-strengthening work. They are
-implemented as non-blocking evidence: the standing algebraic-soundness assumption
-remains, but it is now backed by a live paper-derived Lean conformance oracle that
-exhaustively enumerates the finite transcript-shape domain, plus coverage-guided
-byte-boundary fuzzing.
-
-Critical path to phase-complete: no P1 formal rows remain open; final manual
-review is the remaining campaign-level governance checkpoint.
+The standing algebraic-soundness assumption remains, backed (non-blocking) by the
+paper-derived Lean conformance oracle that exhaustively enumerates the finite
+transcript-shape domain, plus coverage-guided byte-boundary fuzzing. No formal
+rows remain open; final manual review is the one remaining governance checkpoint.
 
 ## Completion definition
 
@@ -247,4 +236,4 @@ review is the remaining campaign-level governance checkpoint.
 - Every assumption reviewed and narrowly scoped.
 
 Layer 9 (Lean differential) is not in the completion gate — it strengthens the
-standing algebraic-soundness assumption but the campaign completes without it.
+standing algebraic-soundness assumption but the phase completes without it.
