@@ -1,4 +1,5 @@
 use ark_ec::pairing::{Pairing, PairingOutput};
+#[cfg(not(feature = "bench-baseline"))]
 use ark_ec::CurveGroup;
 use ark_ff::{Field, One, Zero};
 use ark_groth16::{PreparedVerifyingKey, Proof, VerifyingKey};
@@ -28,10 +29,11 @@ use ark_dh_commitments::{
 };
 #[cfg(feature = "bench-baseline")]
 use ark_inner_products::cfg_multi_pairing;
+#[cfg(not(feature = "bench-baseline"))]
+use ark_inner_products::cfg_multi_pairing_g1_affine_g2_prepared;
 use ark_inner_products::{
-    cfg_multi_pairing_g1_affine_g2_prepared, pairing_profile_snapshot,
-    reset_pairing_profile_accumulator, InnerProduct, MultiexponentiationInnerProduct,
-    PairingComputationProfile, PairingInnerProduct,
+    pairing_profile_snapshot, reset_pairing_profile_accumulator, InnerProduct,
+    MultiexponentiationInnerProduct, PairingComputationProfile, PairingInnerProduct,
 };
 
 type PairingInnerProductAB<P, D> = TIPA<
@@ -1073,6 +1075,7 @@ fn fold_public_inputs<P: Pairing>(
 ///     tables, so neither γ nor δ is re-prepared per verify.
 /// Same GT value as the 3-pairing form (verified by `ppe_optimized_matches_baseline`
 /// and the Groth16 oracle agreement test); byte- and trace-stable category 1.
+#[cfg(not(feature = "bench-baseline"))]
 fn verify_ppe<P: Pairing>(
     pvk: &PreparedVerifyingKey<P>,
     proof: &AggregateProof<P, impl Digest>,
