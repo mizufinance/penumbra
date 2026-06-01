@@ -21,6 +21,13 @@ aggregate bytes and the PenumbraByte transcript are unchanged — the golden
 baselines pass without anyone thinking about it, and `AGGREGATE_PROTOCOL_VERSION`
 stays put.
 
+**Byte-stability is necessary, not always sufficient.** A passing byte/trace
+baseline proves you did not change the *output*, but it cannot vouch for a change
+that weakens a *validation or soundness check* (e.g. batched vs per-element
+subgroup checks — §8 candidate 1). Such a change can be byte-stable and still
+accept invalid proofs; the gates won't catch it. Any change to how elements are
+*validated* needs an explicit security review on top of byte stability.
+
 Category 3 changes what gets hashed for challenges. That voids the Filecoin-shape
 inheritance (`scripts/check-snarkpack-filecoin-shape.sh`) — the argument *"our
 transcript is byte-shaped like the audited Filecoin/Bellperson SnarkPack,
@@ -34,6 +41,46 @@ Transcript surface to never touch as an "optimization":
 - `encode_statement` — `crates/crypto/proof-aggregation/src/statement.rs`
 - `ChallengeContext` / `challenge_preimage` — `crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/challenge.rs`
 - family transcript digests — `crates/crypto/proof-aggregation/src/transcript.rs`
+
+## 0.5 Dynamic-core scaling (hard rule)
+
+Parallelism is encouraged and should *maximize* the cores it is given, but it
+must **scale dynamically** with the runtime core count. Never assume or hardcode
+a static number of cores, a fixed split, or a machine-specific constant.
+
+Production will run a large, not-yet-fixed core count across many machines, and
+the natural parallelism unit is also *across aggregations*. So an intra-op
+parallel construct must degrade gracefully — never slower than serial — when
+cores are scarce or already busy with other aggregations. `rayon` work-stealing
+satisfies this by construction; bespoke fixed-thread schemes do not.
+
+## 0.6 Tunable Parameters Register
+
+Any constant that will need calibration once the production machine architecture
+is settled — a parallel-vs-serial `n` threshold, chunk size, `rayon::join`
+nesting depth, pool size — must be a **named tunable** recorded here, never a
+silent magic number on a parallel path.
+
+| Name | Site | Current value | Rationale | Tune when |
+|---|---|---|---|---|
+| _(none yet — populate as parallel knobs are introduced or surfaced)_ | | | | hardware known |
+
+## 0.7 Parallelization is deferred, not optimized
+
+The current default parallelization stays as-is. **Do not tune it now.** The
+allocation strategy — how a fixed core pool is spent — is settled *later*,
+against the benchmark matrix (§10), once the production architecture is known.
+The matrix must cover three regimes:
+
+- **Throughput** — many aggregations in parallel, each lean (≈1 thread); cores
+  saturated by the workload, so intra-op `rayon` yields ~nothing.
+- **Latency** — one aggregation across many cores (intra-op `rayon`); the regime
+  the current landed parallel stack was benched in.
+- **Hybrid** — bounded intra-op parallelism plus across-aggregation scheduling.
+
+Until then, the value of every intra-op `rayon` change is *regime-conditional and
+unsettled*: it is **not** counted toward the optimization bar (§4). That bar is
+about work reduction, measured at the work floor (§3).
 
 ## 1. FIND — where to look
 
@@ -65,7 +112,6 @@ Grep the RIPP backend (`backend.rs`, `src/ipp/ip_proofs/src/`,
 | `.map(\|x\| x.inverse().unwrap())` over a vector | `ark_ff::batch_inversion` |
 | N independent `cfg_multi_pairing` checks | one combined multi-pairing (random linear combination) — removes a final-exponentiation |
 | `.clone()` on `PairingOutput` / `G1` / `G2` inside a per-round loop | in-place `add_assign` / `mul_assign` |
-| independent serial sub-computations | `rayon::join` / `par_iter` |
 | challenge powers / inverses recomputed across passes | hoist + reuse |
 | leftover `//TODO: Optimization` / `VariableMSM` markers | the marked optimization |
 
@@ -122,6 +168,20 @@ end-to-end path in the *same release build*, use the `bench-baseline` feature
 The retained `*_baseline` fn doubles as the equivalence-test oracle (§4), so the
 seam and the correctness proof share one artifact.
 
+### 3c. The work floor is the per-change metric
+Run the A/B at `RAYON_NUM_THREADS=1` as well. This is the **work floor** — it
+strips scheduling out and shows whether the change removed real work. A
+work-reduction optimization must move the work-floor number; a change whose only
+gain appears at >1 thread is *parallelization*, which is deferred to the §10
+matrix and is **not** quoted as an optimization win (§0.7).
+
+### 3d. Report the cumulative number, not just the per-change delta
+The §3b seam compares against the *immediately preceding* state, which is itself
+already optimized — a moving reference. Per-change deltas measured this way do
+**not** sum to the real total (§4.5). For any landed change, also record the
+**cumulative A/B**: full optimized build vs the pristine *origin* baseline. The
+cumulative-vs-origin figure is the headline number.
+
 ## 4. DECIDE — the win-or-clarity bar
 
 Land iff **either**:
@@ -135,6 +195,28 @@ near-noise gain with no clarity or scaling case. "Technically faster in a
 microbench" is not sufficient. Honest reporting includes "this was noise,
 reverting."
 
+### 4a. The 10% rule — estimate before attempting
+Do **not** *attempt* an optimization you estimate below **10%** end-to-end at
+realistic counts. Estimate first — FE/Miller-loop accounting or op-count
+arithmetic is usually enough — and record the estimate before coding. Pursue only
+≥10% candidates. A smaller *measured* result is fine to keep if it lands; a
+smaller *estimate* is the reason not to start. Pure correctness/clarity/scaling
+refactors are still allowed but are labeled as such, not as performance.
+
+## 4.5 Interactions — optimizations against one another
+
+Two optimizations can work against each other:
+
+- **Site conflict.** Two rewrites of the same loop (e.g. parallelize vs MSM-ify)
+  are mutually exclusive — implementing one removes the other's premise, and the
+  §3b seam can only gate one at a time. A/B them independently, then pick one.
+- **Non-additive stacking.** Stacked parallelism shares one thread pool, so
+  per-change deltas measured against a moving reference do **not** sum: the
+  cumulative win is not the sum of the per-commit figures, and can be far less
+  under a core-saturated workload. For any stack of ≥2 related changes, record a
+  final cumulative A/B (§3d). A parallel stack must never claim the sum of its
+  per-commit numbers as its real win.
+
 ## 5. IMPLEMENT — per-category workflow
 
 ### Category 1
@@ -145,6 +227,13 @@ reverting."
 3. Wire the §3b A/B seam.
 4. Implement; confirm the byte + trace baselines pass **unchanged** and the
    version stays 1.
+5. **Baseline lifecycle.** Once landed and validated, the optimized code *is* the
+   live baseline going forward — the retained `*_baseline` is only a frozen A/B +
+   equivalence artifact, compiled solely under `bench-baseline`. Remove the
+   `*_baseline` twin unless it remains a useful equivalence oracle; do not hoard
+   dead feature-gated paths. Distinguish the *origin baseline* (pristine,
+   pre-optimization) from the *prior-stack reference* (the per-change A/B point):
+   the headline number is always vs origin (§3d).
 
 ### Category 2 (wire encoding only)
 1. Bump `AGGREGATE_PROTOCOL_VERSION` (`statement.rs`).
@@ -181,29 +270,87 @@ reverting."
 
 ## 8. Candidate backlog (ranked, grounded in real sites)
 
-Each is a *candidate*, not a commitment — each goes through §3–§4 first.
+Each is a *candidate*, not a commitment — each goes through §3–§4 first, including
+the §4a 10% estimate.
 
-1. **Merge the two KZG-opening multi-pairings** — the verifier runs two separate
-   2-pair `cfg_multi_pairing` checks (`tipa/mod.rs` ~`998`, ~`1021`); a combined
-   4-pair check via random linear combination removes one final-exponentiation,
-   the single most expensive verify step. *Highest expected end-to-end win.*
-2. **Batch-invert the transcript** — serial `.inverse()` maps at `tipa/mod.rs`
-   ~`706`/`847` and `structured_scalar_message.rs` ~`435`; use
-   `ark_ff::batch_inversion`. Fold in the redundant `c.inverse()` exponent loop
-   in `gipa.rs` `_compute_final_commitment_keys` and `r_shift.inverse()`.
-3. **MSM-ify `fold_public_inputs` `g_ic`** — hand-rolled multiexponentiation in
-   `groth16_aggregation.rs` (~`714`); use `G1::msm`. (`public_input_fold_ms`.)
-4. **MSM-ify the shifted-`ck_1` build** — per-element G2 scalar-mul in
-   `groth16_aggregation.rs` (~`535`); variable-base MSM on G2. (`backend_ck_1_r_ms`.)
-5. **Clone elimination in the GIPA verifier fold** — `.clone()` on `Fp12` each
-   round (`gipa.rs` ~`561`); in-place ops. Likely a *clarity* land, not a
-   measured win.
-6. **`rayon::join` the four independent rescale-folds** per GIPA round
-   (`gipa.rs` ~`423`); judge against rayon overhead at small log(n).
+**Open, clears the 10% bar — deferred pending a security review (not started):**
 
-Architectural TODOs (`tipa/mod.rs` ~`32`/`161`/`979`,
-`structured_scalar_message.rs` ~`25`) are out-of-loop refactors, not
-optimization candidates.
+1. **Batched GT subgroup validation on deserialization.** The measured #1 verify
+   hotspot is `deserialize_ms`, **not** pairings. `AggregateProof`
+   (`groth16_aggregation.rs`) carries many GT elements — the four top-level
+   (`com_a/b/c`, `ip_ab`) plus the `r_commitment_steps` commitments in both
+   `tipa_proof_ab` and `tipa_proof_c`, ~2 per round × log₂n rounds (≈16 at n=8,
+   ≈28 at n=64). `deserialize_aggregate_proof` (`backend.rs`) calls
+   `deserialize_compressed` (Arkworks `Validate::Yes`), which runs a **full
+   GT-subgroup exponentiation per element** — the dominant cost. Replace it with
+   decode-`Validate::No` + **one randomized batch subgroup check** over all GT
+   elements (random rᵢ, test `Π eᵢ^{rᵢ}` is in 𝔾_T; in-subgroup-iff-all w.h.p.),
+   paying 1 exponentiation instead of N. Byte-stable (category 1 in bytes —
+   validation is orthogonal to the wire/transcript).
+
+   **Measured (2026-06-01, throwaway bench `subgroup_vs_deserialize_bench`, work
+   floor `RAYON_NUM_THREADS=1`):** `deserialize_ms` is the dominant verify stage —
+   58% of `core_total` at n=1 rising to **129% at n=64** (i.e. larger than all the
+   rest of verify combined). A batched randomized subgroup check with **128-bit**
+   verifier-local randomizers runs **~2.2–2.4×** faster than per-element checks
+   (~0.9 ms per GT subgroup check). But only ~half of `deserialize_ms` is subgroup
+   checking — the rest is un-batchable Fp12 decompression/parsing — and 128-bit
+   randomizers cap the batchable part at ~2×. Net projected end-to-end:
+   **~13–16% verify** (clears the 10% bar, low end). Note: a smaller randomizer
+   (64-bit → ~4×) buys more speed but weakens soundness; that trade is part of the
+   security review. *Confirm the exact GT-element count and decompression share
+   before committing.*
+
+   **Why it is gated, not just landed.** This weakens a *soundness check*
+   (per-element → aggregate-probabilistic), so byte-stability is **necessary but
+   not sufficient** — it needs an explicit security review. The review must
+   establish, before any code lands:
+   - **The error bound from the real BLS12-377 𝔽_{q^12}^× order factorization**
+     — the smallest cofactor prime ℓ_min sets the per-round soundness error 1/ℓ_min.
+     If ℓ_min is small, one batch round is insufficient (need larger randomizers /
+     multiple rounds / per-prime handling). *Compute this number first; it gates
+     the whole design.* Analyze the **smallest** N (n=1/2), not the typical n=64.
+   - **Randomizer sizing & domain** — error ≤ 2⁻¹²⁸ derived per cofactor prime,
+     not assumed from "a random 𝔽_r scalar"; CSPRNG, fresh per verification.
+   - **Independence** — rᵢ sampled after the proof bytes are fixed, never derived
+     from the proof/transcript (else the prover can grind; also would be a
+     forbidden category-3 touch). Assert rᵢ never enter `encode_statement`/
+     `challenge_preimage`.
+   - **Completeness** — every GT element the per-element path validated is in the
+     batch; derive the list from the serialization traversal so a future field
+     can't silently escape it. Non-GT fields (`agg_c` in G1, any G2) keep their
+     own subgroup checks.
+   - **Negative tests are the real proof** — plant a small-cofactor-torsion
+     component in *each* element position (top-level and a round commitment in each
+     sub-proof) and assert the batch **rejects** every one. If you can't construct
+     that test, the cofactor structure isn't understood well enough to ship.
+   - **Filecoin-shape interaction** — confirm the audited construction's
+     "deserialized elements are subgroup-valid" premise is still discharged, now by
+     the batch.
+
+**Evaluated and rejected as sub-bar (do not re-attempt without new evidence):**
+
+- **Batch all verify pairing checks into one randomized multi-pairing** (fold the
+  two KZG openings, TIPA-AB/C base cases, and the 3-pair PPE with verifier-local
+  γᵢ to remove ~4 of 5 final exponentiations). Implemented and **reverted** —
+  regressed or tied across n={1,2,4,8,64}. Pairings are not the bottleneck
+  (deserialize is, candidate 1), and this matches the literature: compressed/
+  randomized pairing checks are SnarkPack's headline FE-saving trick and still did
+  not pay on our shapes.
+- Narrow 2-KZG-opening merge (saves 1 FE, ~5–8%) — subset of the above.
+- Batch-invert the transcript (`ark_ff::batch_inversion`) — transcript is
+  log₂n (≤13) elements; field inversions are negligible vs pairings, <1%.
+- MSM-ify `fold_public_inputs` `g_ic` and the shifted-`ck_1` build — one-time,
+  sized by public inputs not by n; measured below bar.
+- Category-2 uncompressed encoding (slower); reusing prepared `ck_a` in TIPA-AB
+  (regressed build ~5–9%).
+
+**Parallelization — deferred to the §10 matrix, not optimizations:** the landed
+`rayon` stack (rescale folds, round commits, TIPA proofs, verification checks,
+KZG checks) is the default pending the benchmark matrix; do not re-tune it here.
+
+Architectural TODOs (`tipa/mod.rs`, `structured_scalar_message.rs`) are
+out-of-loop refactors, not optimization candidates.
 
 ## 9. Worked example (the first optimization)
 
@@ -215,3 +362,24 @@ baselines pass unchanged (category 1, version 1), and the `bench-baseline` seam
 (`fold_keys_baseline`) lets the verify path be A/B-measured. Honest result:
 ~1–2% end-to-end at n ≤ 64 (near noise) — it earns its place on
 correctness/clarity/scaling, not on a dramatic speedup.
+
+## 10. Parallelization benchmark matrix (to run later)
+
+Parallelization is *not* tuned through the optimization loop (§0.7). Instead,
+once the production machine architecture is settled, run this matrix to choose
+the default allocation strategy. Do not change parallelization code before then;
+only populate the §0.6 register with the knobs the matrix will sweep.
+
+Axes:
+
+- **Regime:** throughput (N aggregations × 1 thread) vs latency (1 aggregation ×
+  M threads) vs hybrid (bounded intra-op + across-aggregation scheduling).
+- **Core pool:** sweep available-core counts (e.g. 1, 4, 16, 64, 256) — never a
+  static assumption.
+- **`n` (proofs per aggregation):** {1, 2, 4, 8, 64}.
+- **Intra-op knob:** rayon pool size / max-intra-op-threads, off → full.
+
+Metric: aggregate **throughput** (aggs/sec) *and* per-aggregation **latency**
+under a *saturated* workload — not idle-bench wall-clock, which flatters intra-op
+parallelism by assuming free spare cores. Output: a recommended default (regime +
+knob values) per candidate architecture, with the §0.6 register filled in.
