@@ -25,6 +25,7 @@ allow = [
     "Unlicense",
     "CC0-1.0",
     "Zlib",
+    "NCSA",      # permissive University of Illinois/NCSA license; libfuzzer-sys
     "BSL-1.0",   # Boost Software License (permissive) — used by ryu via serde_json
     "MPL-2.0",   # file-level copyleft only; we don't modify these files.
                  # affects: option-ext (via dirs)

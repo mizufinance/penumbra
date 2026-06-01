@@ -57,6 +57,48 @@ hash_stdin() {
   fi
 }
 
+if ! command -v rg >/dev/null 2>&1; then
+  rg() {
+    local fixed=0
+    local line_numbers=0
+    local invert=0
+    local opts=()
+
+    while (($#)); do
+      case "$1" in
+        -F) fixed=1 ;;
+        -n) line_numbers=1 ;;
+        -v) invert=1 ;;
+        --)
+          shift
+          break
+          ;;
+        -*) fail "fallback rg does not support option $1" ;;
+        *) break ;;
+      esac
+      shift
+    done
+
+    (($# > 0)) || fail "fallback rg requires a pattern"
+    local pattern="$1"
+    shift
+
+    if ((fixed)); then
+      opts+=("-F")
+    else
+      opts+=("-E")
+    fi
+    ((line_numbers)) && opts+=("-n")
+    ((invert)) && opts+=("-v")
+
+    if (($# > 0)); then
+      grep -R "${opts[@]}" -- "$pattern" "$@"
+    else
+      grep "${opts[@]}" -- "$pattern"
+    fi
+  }
+fi
+
 formal_proof_stamp() {
   {
     hash_file scripts/snarkpack-formal.sh | awk '{print $1 "  scripts/snarkpack-formal.sh"}'

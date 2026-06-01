@@ -7048,7 +7048,7 @@ mod tests {
             .contains("unsupported aggregate bundle version"));
 
         let mut bad_srs = bundle.clone();
-        bad_srs.srs_id.push(0);
+        bad_srs.srs_id[0] ^= 0x01;
         let srs_error =
             App::verify_aggregate_bundle_for_artifacts_raw_public(&artifacts, &bad_srs, None)
                 .await
