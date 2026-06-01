@@ -53,7 +53,8 @@ fi
 
 require_command hax-engine
 
-fstar_home="$HOME/.local/opt/fstar-${fstar_pin}-Linux-x86_64/bin"
+fstar_home="$HOME/.local/opt/fstar/bin"
+fstar_release_home="$HOME/.local/opt/fstar-${fstar_pin}-Linux-x86_64/bin"
 if [ -n "${FSTAR_BIN:-}" ]; then
   [ -x "$FSTAR_BIN" ] || fail "FSTAR_BIN is set but not executable: $FSTAR_BIN"
   FSTAR="$FSTAR_BIN"
@@ -65,6 +66,10 @@ elif [ -x "$fstar_home/fstar.exe" ]; then
   FSTAR="$fstar_home/fstar.exe"
 elif [ -x "$fstar_home/fstar" ]; then
   FSTAR="$fstar_home/fstar"
+elif [ -x "$fstar_release_home/fstar.exe" ]; then
+  FSTAR="$fstar_release_home/fstar.exe"
+elif [ -x "$fstar_release_home/fstar" ]; then
+  FSTAR="$fstar_release_home/fstar"
 else
   fail "F* is not installed; expected F* $fstar_pin"
 fi
