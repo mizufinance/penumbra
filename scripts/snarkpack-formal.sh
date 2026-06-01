@@ -35,9 +35,9 @@ load_opam_switch() {
   if command -v hax-engine >/dev/null 2>&1 || [ -z "$switch" ]; then
     return
   fi
-  command -v opam >/dev/null 2>&1 || return
-  opam switch list --short 2>/dev/null | grep -Fx "$switch" >/dev/null || return
-  eval "$(opam env --switch="$switch")"
+  command -v opam >/dev/null 2>&1 || return 0
+  opam switch list --short 2>/dev/null | grep -Fx "$switch" >/dev/null || return 0
+  eval "$(opam env --switch="$switch")" || fail "failed to load opam switch $switch"
 }
 
 load_opam_switch
@@ -56,17 +56,29 @@ else
   fail "F* is not installed; expected F* $(read_pin fstar)"
 fi
 
-z3 --version | grep -F "$(read_pin z3)" >/dev/null \
-  || fail "z3 version mismatch; expected $(read_pin z3)"
+echo "snarkpack formal: checking pinned tool versions"
+
+z3_pin="$(read_pin z3)"
+z3_version="$(z3 --version 2>&1)" || fail "z3 --version failed: $z3_version"
+case "$z3_version" in
+  *"$z3_pin"*) ;;
+  *) fail "z3 version mismatch; expected $z3_pin, got: $z3_version" ;;
+esac
 
 hax_version="$(without_v_prefix "$(read_pin hax)")"
 fstar_version="$(without_v_prefix "$(read_pin fstar)")"
 
-cargo hax --version | grep -F "version=${hax_version}" >/dev/null \
-  || fail "hax version mismatch; expected $(read_pin hax)"
+cargo_hax_version="$(cargo hax --version 2>&1)" || fail "cargo hax --version failed: $cargo_hax_version"
+case "$cargo_hax_version" in
+  *"version=${hax_version}"*) ;;
+  *) fail "hax version mismatch; expected $(read_pin hax), got: $cargo_hax_version" ;;
+esac
 
-"$FSTAR" --version | grep -F "$fstar_version" >/dev/null \
-  || fail "F* version mismatch; expected $(read_pin fstar)"
+fstar_cli_version="$("$FSTAR" --version 2>&1)" || fail "F* --version failed: $fstar_cli_version"
+case "$fstar_cli_version" in
+  *"$fstar_version"*) ;;
+  *) fail "F* version mismatch; expected $(read_pin fstar), got: $fstar_cli_version" ;;
+esac
 
 find_hax_proof_libs() {
   if [ -n "${HAX_PROOF_LIBS_HOME:-}" ] && [ -d "$HAX_PROOF_LIBS_HOME/core" ]; then
