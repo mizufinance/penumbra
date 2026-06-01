@@ -81,7 +81,9 @@ jobs:
           set -euo pipefail
           mkdir -p "$HOME/.local/opt"
           git clone --depth 1 --branch hax-lib-v0.3.7 https://github.com/cryspen/hax "$HOME/.local/opt/hax-v0.3.7"
-          nix profile install "$HOME/.local/opt/hax-v0.3.7"
+          nix profile install \
+            "$HOME/.local/opt/hax-v0.3.7#hax" \
+            "$HOME/.local/opt/hax-v0.3.7#hax-engine"
           echo "HAX_PROOF_LIBS_HOME=$HOME/.local/opt/hax-v0.3.7/hax-lib/proof-libs/fstar" >> "$GITHUB_ENV"
 
       - name: Install pinned Lean
