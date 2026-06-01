@@ -1,5 +1,5 @@
 module StatementEncodingProofs
-#set-options "--fuel 1 --ifuel 1 --z3rlimit 100"
+#set-options "--fuel 2 --ifuel 1 --z3rlimit 400"
 
 module S = Penumbra_sdk_proof_aggregation.Statement
 module V = Alloc.Vec
@@ -113,9 +113,14 @@ let rec lemma_encode_fields_content
   else begin
     let head = Seq.index fields 0 in
     let rest = Seq.slice fields 1 (Seq.length fields) in
+    assert (wf_field head);
+    assert (wf_fields rest);
     lemma_append_bytes_field_ok bytes (field_bytes head);
     let b1 = fst (S.append_bytes_field bytes (field_bytes head)) in
+    assert (S.encode_fields bytes fields == S.encode_fields b1 rest);
     lemma_encode_fields_content b1 rest;
+    assert (Core_models.Result.Result_Ok? (snd (S.encode_fields b1 rest)));
+    assert (bo (fst (S.encode_fields b1 rest)) == Seq.append (bo b1) (spec_fields rest));
     Seq.append_assoc (bo bytes)
       (Seq.append
         (Num.impl_u32__to_le_bytes (cast (Core_models.Slice.impl__len #u8 (field_bytes head)) <: u32))
@@ -233,9 +238,14 @@ let rec lemma_encode_rows_content
   else begin
     let head = Seq.index rows 0 in
     let rest = Seq.slice rows 1 (Seq.length rows) in
+    assert (wf_row head);
+    assert (wf_rows rest);
     lemma_encode_row_content bytes head;
     let b1 = fst (S.encode_row bytes head) in
+    assert (S.encode_rows bytes rows == S.encode_rows b1 rest);
     lemma_encode_rows_content b1 rest;
+    assert (Core_models.Result.Result_Ok? (snd (S.encode_rows b1 rest)));
+    assert (bo (fst (S.encode_rows b1 rest)) == Seq.append (bo b1) (spec_rows rest));
     Seq.append_assoc (bo bytes) (spec_row head) (spec_rows rest)
   end
 

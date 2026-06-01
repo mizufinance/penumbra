@@ -23,7 +23,7 @@ requires rerunning `just snarkpack-formal`, reviewing generated extraction
 diffs and support shims, updating the verification marker, and refreshing the
 proof artifact stamp.
 
-Proof artifact stamp: sha256:ddb9147693d1b2ef02ecb7c1168feddbbf4cc96426a434dee28326d73613d283
+Proof artifact stamp: sha256:44cbb140ff4d5a2bf12461a4bc58ef84ca109419434e686e682614b9d81de9b5
 
 The stamp is the SHA-256 of the committed SnarkPack F* proof files and
 `scripts/snarkpack-formal.sh` plus
