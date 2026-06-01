@@ -11,15 +11,19 @@ on:
       - 'crates/crypto/proof-aggregation-fuzz/**'
       - 'crates/crypto/proof-aggregation-reference/**'
       - 'crates/crypto/proof-aggregation-trace-schema/**'
+      - 'crates/crypto/proof-aggregation/Cargo.toml'
       - 'crates/crypto/proof-aggregation/src/aggregate_proof_wrapper.rs'
+      - 'crates/crypto/proof-aggregation/src/backend.rs'
       - 'crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/challenge.rs'
       - 'crates/crypto/proof-aggregation/src/preflight.rs'
       - 'crates/crypto/proof-aggregation/src/statement.rs'
       - 'docs/snarkpack/adaptation-register.md'
+      - 'docs/snarkpack/bench-thresholds.md'
       - 'docs/snarkpack/formal-handoff.md'
       - 'docs/snarkpack/ripp-refinement.md'
       - 'docs/snarkpack/ripp-spec.md'
       - 'docs/snarkpack/security.md'
+      - 'docs/snarkpack/verification-plan.md'
       - 'justfile'
       - 'scripts/check-snarkpack-filecoin-shape.sh'
       - 'scripts/check-snarkpack-invariants.sh'
@@ -95,3 +99,6 @@ jobs:
 
       - name: Check SnarkPack Filecoin shape evidence
         run: nix develop --command just snarkpack-filecoin-shape
+
+      - name: Run SnarkPack DoS gate
+        run: nix develop --command just snarkpack-dos-gate

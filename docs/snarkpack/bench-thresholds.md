@@ -1,19 +1,22 @@
 # SnarkPack Benchmark Thresholds
 
-Status: provisional local baseline. These thresholds should be replaced with
-CI-hardware baselines before they are used as hard gates.
+Status: CI-enforced baseline.
 
-Date: 2026-05-26
-Machine: local developer machine
+Date: 2026-06-01
+Baseline runner: GitHub Actions `ubuntu-24.04`, release-mode Rust in the
+`snarkpack-formal` workflow. The local developer Criterion run remains useful
+for diagnosis, but the hard gate is `just snarkpack-dos-gate`.
 
 ## Commands
 
+- CI gate:
+  `just snarkpack-dos-gate`
 - size report:
   `cargo test -p penumbra-sdk-proof-aggregation aggregate_proof_size_report --lib -- --ignored --nocapture`
-- release benchmarks:
+- optional release benchmarks:
   `cargo bench -p penumbra-sdk-bench --bench snarkpack`
 
-## Size Baseline
+## Size Gate
 
 Observed max wrapped aggregate proof bytes: `31,946`
 
@@ -24,28 +27,40 @@ Chosen cap:
 - maximum: `1 MiB`
 - result: `131,072` bytes
 
-Observed wrapped sizes were identical across the sampled transfer,
-consolidate, split, and shielded ICS-20 withdrawal families:
+The cap is enforced at typed preflight before aggregate proof deserialization.
+The DoS gate includes an oversized wrapper case with
+`MAX_AGGREGATE_PROOF_BYTES + 1` bytes.
 
-- count `1`: `3,146` bytes
-- count `2`: `7,946` bytes
-- count `4`: `12,746` bytes
-- count `8`: `17,546` bytes
-- count `64`: `31,946` bytes
+## Latency Gate
 
-## Latency Baselines
+The enforced release-mode gate is
+`snarkpack_dos_gate_valid_and_adversarial_paths_hold_thresholds` in
+`crates/crypto/proof-aggregation/src/backend.rs`.
 
-The release benchmark command completed locally. Representative Criterion
-intervals for the sampled 64-proof cases:
+| path | p50 | p95 | p99 | invariant |
+| --- | ---: | ---: | ---: | --- |
+| valid verify | observed | observed | `<= 1,500 ms` | valid aggregate remains under the CI budget |
+| mixed workload | observed | observed | `<= 1,500 ms` | one valid verify plus malformed, wrong-family, wrong-public-input, and oversized rejects |
+| malformed wrapper reject | observed | observed | `<= 25 ms` and `<= 0.5 * valid p50` | wrapper shape failure before backend work |
+| wrong-family reject | observed | observed | `<= 25 ms` and `<= 0.5 * valid p50` | statement digest mismatch before backend work |
+| wrong-public-input reject | observed | observed | `<= 25 ms` and `<= 0.5 * valid p50` | statement digest mismatch before backend work |
+| oversized wrapper reject | observed | observed | `<= 25 ms` and `<= 0.5 * valid p50` | size cap failure before backend work |
 
-- aggregate transfer: `[253.62 ms, 317.93 ms]`
-- aggregate consolidate: `[547.48 ms, 649.62 ms]`
-- aggregate split: `[547.96 ms, 647.36 ms]`
-- aggregate shielded ICS-20 withdrawal: `[267.38 ms, 343.47 ms]`
-- verify transfer: `[69.876 ms, 107.85 ms]`
-- verify consolidate: `[66.333 ms, 87.854 ms]`
-- verify split: `[71.209 ms, 98.065 ms]`
-- verify shielded ICS-20 withdrawal: `[70.095 ms, 100.72 ms]`
+The asymmetry check is the security property: adversarial inputs must reject
+with bounded work and must remain materially cheaper than a valid aggregate
+verification. A regression that performs pairing work or full inner aggregate
+deserialization before these shape checks makes the gate fail.
 
-Malformed-rejection latency thresholds are not yet fixed. Re-collect p50/p95/p99
-numbers on target CI hardware, then add explicit fail thresholds here.
+## Historical Local Baseline
+
+The 2026-05-26 local release Criterion run is retained only as a calibration
+note:
+
+- aggregate transfer 64 proofs: `[253.62 ms, 317.93 ms]`
+- aggregate consolidate 64 proofs: `[547.48 ms, 649.62 ms]`
+- aggregate split 64 proofs: `[547.96 ms, 647.36 ms]`
+- aggregate shielded ICS-20 withdrawal 64 proofs: `[267.38 ms, 343.47 ms]`
+- verify transfer 64 proofs: `[69.876 ms, 107.85 ms]`
+- verify consolidate 64 proofs: `[66.333 ms, 87.854 ms]`
+- verify split 64 proofs: `[71.209 ms, 98.065 ms]`
+- verify shielded ICS-20 withdrawal 64 proofs: `[70.095 ms, 100.72 ms]`

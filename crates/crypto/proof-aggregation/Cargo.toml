@@ -37,6 +37,7 @@ serde = { workspace = true, features = ["derive"] }
 sha2 = { workspace = true }
 
 [dev-dependencies]
+ark-ec = { workspace = true }
 ark-ff = { workspace = true }
 ark-r1cs-std = { workspace = true }
 ark-relations = { workspace = true }

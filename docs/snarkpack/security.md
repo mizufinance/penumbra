@@ -33,8 +33,8 @@ plan.
 | 8 | Coverage fuzzing | bounded smoke landed; **corpus expansion ongoing** |
 | 9 | Lean differential conformance: implementation vs paper / Filecoin discipline | **not started** (wanted; primary independent-oracle evidence) |
 | 10 | Optimization | **frozen** — byte-trace-locked loop, current state accepted as-is |
-| 11 | Performance and DoS gates | **open** (thresholds provisional) |
-| 12 | Assumption register finalization | **open** (16 `assumed` rows to narrow) |
+| 11 | Performance and DoS gates | implemented and CI-gated |
+| 12 | Assumption register finalization | narrowed (13 `assumed` rows, each with postcondition + removal path) |
 | 13 | Final manual review | **open** |
 
 Stages 1 through 3 are planning artifacts with invariant-backed coverage. They
@@ -51,12 +51,22 @@ out of the active campaign critical path.
 
 ### Remaining Work (active plan)
 
-Everything left to reach campaign completion, in dependency order. The critical
-path is open formal rows → DoS gate → assumption finalization → review. Stage 8
-(continued) and Stage 9 (Lean differential conformance) run alongside. Algebraic
+Everything left to reach campaign completion, in dependency order. P1 evidence
+closure is implemented: the formal handoff ledger has no `open` rows, the
+DoS/performance gate is CI-wired, and the assumption register is narrowed. Stage
+8 (continued) and Stage 9 (Lean differential conformance) run alongside. Final
+manual review remains the campaign-level governance checkpoint. Algebraic
 soundness is a **standing assumption** (paper + Filecoin implementation assumed
 sound); end-to-end formal verification is not pursued, so there is no
 algebraic-soundness proof stage.
+
+The full verification landscape — every testing/verification layer (boundary FV,
+independent reference path, differential oracle tests, trace equivalence,
+byte-equivalence baselines, mutation matrices, Filecoin-shape check, fuzzing,
+Lean differential conformance, DoS gates, assumption register), what each catches,
+and the prioritized remaining work — is consolidated in
+`docs/snarkpack/verification-plan.md`. This section is the campaign-order view of
+the same plan.
 
 **P0 — Scope Lock — DONE (2026-06-01).** Scope decisions are locked: algebraic
 soundness is a standing assumption; boundary + implementation F* proofs remain
@@ -64,25 +74,20 @@ completion blockers; end-to-end FV is dropped; Lean differential conformance
 (Stage 9) is wanted as the primary independent-oracle evidence. Recorded in the
 Scope Lock section.
 
-**P1 — Close the 7 `open` formal rows (`formal-handoff.md`).** Load-bearing ones:
-- *Statement-encoding injectivity, mechanically proved* — unblocks the
-  digest-reduction row, which is currently blocked-by-injectivity.
-- *RIPP mapping row* (`ripp-refinement.md`, status `open`, "not yet reviewed") —
-  review the proof-relevant RIPP/GIPA/TIPA symbol map to the intended algorithm;
-  move each scoped row to `refined`, `proved-equivalent`, or explicitly `assumed`.
-- *Padding canonicality and bounded non-malleability* — proved per completion
-  criteria.
-- Clean-image formal CI and arkworks boundary tests.
+**P1 — Formal ledger closure (`formal-handoff.md`) — DONE.**
+Statement-encoding injectivity, digest reduction, padding canonicality, and
+challenge-preimage injectivity are `proved`. The RIPP mapping row is `refined`;
+every scoped RIPP/GIPA/TIPA symbol is classified with file:line evidence and a
+`ripp-spec.md` row reference.
 
-**P1 — Performance and DoS gates (Stage 11).** Replace the provisional
-`bench-thresholds.md` numbers with fixed CI thresholds, and add the
-**valid-vs-invalid-path (DoS asymmetry) benchmark**: prove a malformed or
-adversarial aggregate is rejected cheaply with bounded verifier work (no
-blow-up). Independent of all optimization work.
+**P1 — Performance and DoS gates (Stage 11) — DONE.** `bench-thresholds.md`
+records fixed CI thresholds, and `just snarkpack-dos-gate` enforces the
+valid-vs-adversarial asymmetry benchmark for malformed wrapper, wrong-family,
+wrong-public-input, oversized, valid, and mixed-proposal paths.
 
-**P1 — Assumption register finalization (Stage 12).** Review and narrowly scope
-the 16 `assumed` rows; each needs a recorded semantic postcondition and a removal
-path. No `assumed` row may silently widen scope.
+**P1 — Assumption register finalization (Stage 12) — DONE.** The 13 `assumed`
+rows each record a postcondition and removal path; arkworks/decaf377 rows cite
+implemented boundary tests.
 
 **P2 — Fuzzing corpus expansion (Stage 8 continued).** Move the malformed-aggregate,
 proposal-validation, and byte-boundary targets from bounded smoke to sustained
@@ -248,8 +253,8 @@ Campaign claim:
 Penumbra implements a Penumbra-local SnarkPack/RIPP backend whose Fiat-Shamir
 transcript discipline is checked against Filecoin SnarkPack v2 bug classes.
 Penumbra-specific statement, wrapper, padding, challenge, and preflight binding
-obligations are proved, refined, composed, assumed, or open per the evidence
-taxonomy in formal-handoff.md. SnarkPack/RIPP/Groth16 algebraic soundness is not
+obligations are proved, refined, composed, or assumed per the evidence taxonomy
+in formal-handoff.md. SnarkPack/RIPP/Groth16 algebraic soundness is not
 proved; it is assumed from the published paper and the Filecoin implementation,
 and probabilistically cross-checked by Lean differential conformance (Stage 9).
 End-to-end formal verification is out of scope.
@@ -517,8 +522,9 @@ Open item:
 
 ## Benchmarking
 
-Status: provisional local size threshold is recorded in
-`docs/snarkpack/bench-thresholds.md`; release latency gates are still open.
+Status: CI-gated. Fixed release-mode thresholds are recorded in
+`docs/snarkpack/bench-thresholds.md` and enforced by `just snarkpack-dos-gate`
+in `.github/workflows/snarkpack-formal.yml`.
 
 Benchmark both valid and invalid paths in release mode:
 
@@ -535,9 +541,9 @@ asymmetric denial-of-service path.
 ## Formal Verification
 
 Status: Stage 4 implementation-boundary F* rows are complete for the current
-extracted Rust target set. The broader verification campaign remains open for
-RIPP refinement, Filecoin-to-Penumbra adaptation, assumption review, reference
-and trace evidence, boundary tests, performance gates, and final review. The
+extracted Rust target set. The RIPP refinement row is reviewed, assumptions are
+narrowed, and no formal handoff rows remain `open`. The broader campaign remains
+open only for final manual review and non-blocking evidence strengthening. The
 authoritative evidence index is `docs/snarkpack/formal-handoff.md`.
 
 Evidence is typed:
@@ -553,7 +559,7 @@ The implementation-boundary target is statement encoding injectivity, wrapper
 framing, count/arity validation, padding canonicality, and explicit
 Fiat-Shamir challenge preimage binding. The local RIPP implementation is not a
 black-box oracle; `docs/snarkpack/ripp-refinement.md` maps proof-relevant RIPP
-symbols to the intended algorithm and must be reviewed before completion.
+symbols to the intended algorithm and is reviewed for P1 completion.
 Intentional Filecoin-to-Penumbra differences are tracked in
 `docs/snarkpack/adaptation-register.md`; the scope file under
 `crates/crypto/proof-aggregation/formal/snarkpack/adaptation-scope.txt` keeps
@@ -566,9 +572,9 @@ only for the Stage 9 differential conformance oracle, not for an algebraic proof
 
 ## Independent Reference And Trace Evidence
 
-Status: implemented as code and tests, but not sufficient to complete the full
-campaign without the remaining refinement, adaptation, assumption, trace,
-boundary-test, performance, and review gates.
+Status: implemented as code and tests. These are part of the closed P1 evidence
+set, but final manual review and P2 evidence strengthening remain outside the
+implementation gate.
 
 The independent reference crate re-derives the dev SRS from the public seed and
 checks the resulting SRS id against production. It owns its aggregate proof,
@@ -585,9 +591,10 @@ Penumbra bytes only between Penumbra paths; Filecoin-shape rows are checked by
 
 ## Completion Criteria
 
-Status: open. Stage 4 implementation-boundary F* rows are complete for the
-current extracted Rust target set; RIPP refinement signoff, clean-image formal
-CI, arkworks boundary tests, and fixed CI benchmark gates remain open.
+Status: P1 implementation gate closed. Stage 4 implementation-boundary F* rows
+are complete for the current extracted Rust target set; RIPP refinement,
+clean-image formal CI, arkworks/decaf377 boundary tests, and fixed CI benchmark
+gates are in place. Final manual review remains the campaign-level checkpoint.
 
 This phase is complete when:
 

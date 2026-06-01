@@ -315,8 +315,28 @@ if [[ -f "$ripp_scope" ]]; then
     [[ -f "$file" ]] || fail "RIPP refinement scoped file $file does not exist"
     rg -n "\\b${leaf}\\b" "$file" >/dev/null \
       || fail "RIPP refinement scoped symbol $symbol_id does not exist"
-    rg -F "| \`$symbol_id\` |" "$ripp_map" >/dev/null \
-      || fail "RIPP refinement scoped symbol $symbol_id is missing from $ripp_map"
+    row_count="$(
+      grep -F "| \`$symbol_id\` |" "$ripp_map" | wc -l | tr -d ' '
+    )"
+    [[ "$row_count" == "1" ]] \
+      || fail "RIPP refinement scoped symbol $symbol_id must appear exactly once in $ripp_map"
+    row="$(grep -F "| \`$symbol_id\` |" "$ripp_map")"
+    deviation_class="$(markdown_field "$row" 5)"
+    evidence="$(markdown_field "$row" 6)"
+    status="$(markdown_field "$row" 7)"
+    reviewer="$(markdown_field "$row" 8)"
+    is_deviation_class "$deviation_class" \
+      || fail "RIPP refinement row $symbol_id has invalid deviation class $deviation_class"
+    [[ -n "$evidence" && "$evidence" != "pending" ]] \
+      || fail "RIPP refinement row $symbol_id lacks evidence"
+    is_evidence_status "$status" \
+      || fail "RIPP refinement row $symbol_id has invalid status $status"
+    [[ "$status" != '`open`' ]] \
+      || fail "RIPP refinement row $symbol_id must not remain open"
+    if [[ "$deviation_class" == '`security-binding`' || "$deviation_class" == '`semantic`' ]]; then
+      [[ -n "$reviewer" && "$reviewer" != "pending" ]] \
+        || fail "RIPP refinement row $symbol_id needs reviewer/date"
+    fi
   done < "$ripp_scope"
 
   while IFS= read -r mapped_symbol; do
@@ -435,6 +455,40 @@ if [[ -f "$adaptation_scope" ]]; then
     fi
   done < <(sed -n '/^| `[^`]*` |/p' "$adaptation_map")
 fi
+
+formal_handoff=docs/snarkpack/formal-handoff.md
+open_handoff_rows="$(rg -n '\|[[:space:]]*`?open`?[[:space:]]*\|' "$formal_handoff" || true)"
+if [[ -n "$open_handoff_rows" ]]; then
+  echo "$open_handoff_rows" >&2
+  fail "formal-handoff.md must not contain open evidence rows"
+fi
+
+while IFS= read -r row; do
+  assumption="$(markdown_field "$row" 2)"
+  owner="$(markdown_field "$row" 3)"
+  rationale="$(markdown_field "$row" 4)"
+  evidence="$(markdown_field "$row" 6)"
+  removal_path="$(markdown_field "$row" 7)"
+  signoff="$(markdown_field "$row" 8)"
+  status="$(markdown_field "$row" 9)"
+  [[ "$status" == 'assumed' || "$status" == '`assumed`' ]] || continue
+
+  [[ -n "$owner" && "$owner" != "pending" ]] \
+    || fail "assumption row $assumption lacks owner"
+  [[ -n "$rationale" && "$rationale" != "pending" ]] \
+    || fail "assumption row $assumption lacks rationale"
+  [[ -n "$evidence" && "$evidence" != "pending" ]] \
+    || fail "assumption row $assumption lacks supporting evidence"
+  [[ "$evidence" == *"Postcondition:"* ]] \
+    || fail "assumption row $assumption lacks an explicit postcondition"
+  [[ -n "$removal_path" && "$removal_path" != "pending" ]] \
+    || fail "assumption row $assumption lacks removal path"
+  [[ -n "$signoff" && "$signoff" != "pending" ]] \
+    || fail "assumption row $assumption lacks required signoff"
+  if [[ "$evidence" == *"planned"* || "$evidence" == *"required tests"* || "$evidence" == *"Required tests"* ]]; then
+    fail "assumption row $assumption still names planned or required tests instead of passing tests"
+  fi
+done < <(awk '/^## Assumptions$/ { in_table = 1; next } /^## / && in_table { in_table = 0 } in_table && /^\|/ && $0 !~ /^\| ---/ && $0 !~ /^\| Assumption / { print }' "$formal_handoff")
 
 check_reference_crate_boundary
 check_fuzz_crate_boundary

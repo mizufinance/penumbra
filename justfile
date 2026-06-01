@@ -103,6 +103,10 @@ snarkpack-filecoin-shape:
 snarkpack-formal:
     ./scripts/snarkpack-formal.sh
 
+# Enforce SnarkPack valid-vs-adversarial DoS latency and size thresholds.
+snarkpack-dos-gate:
+    cargo test --release -p penumbra-sdk-proof-aggregation snarkpack_dos_gate_valid_and_adversarial_paths_hold_thresholds --lib -- --ignored --nocapture
+
 # Run the default gnark validation suite.
 gnark-proof-tests: gnark-proof-tests-fast
 

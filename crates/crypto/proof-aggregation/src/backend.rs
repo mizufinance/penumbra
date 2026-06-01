@@ -1259,6 +1259,11 @@ fn profile_with_deserialize(
 
 #[cfg(test)]
 mod tests {
+    use ark_ec::{
+        pairing::{Pairing, PairingOutput},
+        AffineRepr, CurveGroup, PrimeGroup,
+    };
+    use ark_ff::{UniformRand, Zero};
     use ark_groth16::{r1cs_to_qap::LibsnarkReduction, Groth16, PreparedVerifyingKey};
     use ark_ip_proofs::challenge::VecChallengeTraceSink;
     use ark_r1cs_std::{alloc::AllocVar, eq::EqGadget, fields::fp::FpVar};
@@ -1273,8 +1278,9 @@ mod tests {
     use crate::transcript::TransferTranscriptDigest;
     use crate::{
         aggregate_family, aggregate_family_profiled, pad_items_to_power_of_two, srs_id,
-        verify_family_aggregate, verify_family_aggregate_profiled, AggregateStatement,
-        AggregateVerifyError, AGGREGATE_PROTOCOL_VERSION,
+        statement::aggregate_verification_key_digest, verify_family_aggregate,
+        verify_family_aggregate_profiled, AggregateStatement, AggregateVerifyError,
+        AGGREGATE_PROTOCOL_VERSION,
     };
 
     use super::*;
@@ -1389,6 +1395,141 @@ mod tests {
         .expect("statement should build")
     }
 
+    type BackendG1 = <Bls12_377 as Pairing>::G1;
+    type BackendG2 = <Bls12_377 as Pairing>::G2;
+    type BackendG1Affine = <Bls12_377 as Pairing>::G1Affine;
+    type BackendG2Affine = <Bls12_377 as Pairing>::G2Affine;
+    type BackendScalar = <Bls12_377 as Pairing>::ScalarField;
+
+    fn compressed_bytes<T: CanonicalSerialize>(value: &T) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        value
+            .serialize_compressed(&mut bytes)
+            .expect("compressed serialization should succeed");
+        bytes
+    }
+
+    fn assert_compressed_round_trip<T>(value: &T)
+    where
+        T: CanonicalDeserialize + CanonicalSerialize + Eq + std::fmt::Debug,
+    {
+        let bytes = compressed_bytes(value);
+        let decoded =
+            T::deserialize_compressed(&bytes[..]).expect("compressed round trip should decode");
+        assert_eq!(&decoded, value);
+    }
+
+    fn sequential_msm<G>(bases: &[G], scalars: &[G::ScalarField]) -> G
+    where
+        G: CurveGroup,
+    {
+        bases
+            .iter()
+            .zip(scalars)
+            .fold(G::zero(), |mut acc, (base, scalar)| {
+                let mut term = *base;
+                term *= *scalar;
+                acc += term;
+                acc
+            })
+    }
+
+    fn arkworks_msm<G>(bases: &[G], scalars: &[G::ScalarField]) -> G
+    where
+        G: CurveGroup,
+    {
+        let affine_bases = G::normalize_batch(bases);
+        G::msm(&affine_bases, scalars).expect("MSM inputs have matching lengths")
+    }
+
+    fn non_subgroup_g1(rng: &mut ChaCha20Rng) -> BackendG1Affine {
+        for _ in 0..10_000 {
+            let x = <BackendG1Affine as AffineRepr>::BaseField::rand(rng);
+            for greatest in [false, true] {
+                if let Some(point) = BackendG1Affine::get_point_from_x_unchecked(x, greatest) {
+                    if point.is_on_curve() && !point.is_in_correct_subgroup_assuming_on_curve() {
+                        return point;
+                    }
+                }
+            }
+        }
+        panic!("could not sample a G1 non-subgroup point");
+    }
+
+    fn non_subgroup_g2(rng: &mut ChaCha20Rng) -> BackendG2Affine {
+        for _ in 0..10_000 {
+            let x = <BackendG2Affine as AffineRepr>::BaseField::rand(rng);
+            for greatest in [false, true] {
+                if let Some(point) = BackendG2Affine::get_point_from_x_unchecked(x, greatest) {
+                    if point.is_on_curve() && !point.is_in_correct_subgroup_assuming_on_curve() {
+                        return point;
+                    }
+                }
+            }
+        }
+        panic!("could not sample a G2 non-subgroup point");
+    }
+
+    #[derive(Clone, Copy)]
+    enum ExpectedRejection {
+        MalformedProofBytes,
+        OversizeBytes,
+        StatementDigestMismatch,
+    }
+
+    struct RejectionCase {
+        name: &'static str,
+        statement: AggregateStatement,
+        aggregate_bytes: Vec<u8>,
+        expected: ExpectedRejection,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct TimingStats {
+        p50_ms: f64,
+        p95_ms: f64,
+        p99_ms: f64,
+    }
+
+    fn assert_expected_rejection(err: &AggregateVerifyError, expected: ExpectedRejection) {
+        match expected {
+            ExpectedRejection::MalformedProofBytes => {
+                assert!(
+                    matches!(err, AggregateVerifyError::MalformedProofBytes(_)),
+                    "{err}"
+                )
+            }
+            ExpectedRejection::OversizeBytes => {
+                assert!(
+                    matches!(err, AggregateVerifyError::OversizeBytes(_)),
+                    "{err}"
+                )
+            }
+            ExpectedRejection::StatementDigestMismatch => {
+                assert_eq!(err, &AggregateVerifyError::StatementDigestMismatch)
+            }
+        }
+    }
+
+    fn percentile(values: &[f64], pct: f64) -> f64 {
+        let mut sorted = values.to_vec();
+        sorted.sort_by(|left, right| {
+            left.partial_cmp(right)
+                .expect("timing measurements are finite")
+        });
+        let rank = ((sorted.len() as f64 - 1.0) * pct).ceil() as usize;
+        sorted[rank.min(sorted.len() - 1)]
+    }
+
+    fn timing_stats(values: &[f64]) -> TimingStats {
+        assert!(!values.is_empty());
+        TimingStats {
+            p50_ms: percentile(values, 0.50),
+            p95_ms: percentile(values, 0.95),
+            p99_ms: percentile(values, 0.99),
+        }
+    }
+
     fn snarkpack_matches_legacy_batch_for_counts(counts: &[usize]) {
         let (pvk, items) = sample_items();
         let base_item = items.first().expect("at least one sample item").clone();
@@ -1472,6 +1613,114 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn arkworks_pairing_identity_and_generator_consistency() {
+        let generator_pairing = Bls12_377::pairing(BackendG1::generator(), BackendG2::generator());
+        assert_ne!(generator_pairing, PairingOutput::<Bls12_377>::zero());
+        assert_eq!(
+            Bls12_377::pairing(BackendG1::zero(), BackendG2::generator()),
+            PairingOutput::<Bls12_377>::zero()
+        );
+        assert_eq!(
+            Bls12_377::pairing(BackendG1::generator(), BackendG2::zero()),
+            PairingOutput::<Bls12_377>::zero()
+        );
+    }
+
+    #[test]
+    fn arkworks_msm_boundary_zero_scalar_identity_and_random_parity() {
+        let mut rng = ChaCha20Rng::seed_from_u64(0x5eed);
+        let scalars: Vec<BackendScalar> = (0..16).map(|_| BackendScalar::rand(&mut rng)).collect();
+        let zero_scalars = vec![BackendScalar::zero(); scalars.len()];
+
+        let g1_bases: Vec<BackendG1> = (0..scalars.len())
+            .map(|_| BackendG1::rand(&mut rng))
+            .collect();
+        let g1_identities = vec![BackendG1::zero(); scalars.len()];
+        assert_eq!(arkworks_msm(&g1_bases, &zero_scalars), BackendG1::zero());
+        assert_eq!(arkworks_msm(&g1_identities, &scalars), BackendG1::zero());
+        assert_eq!(
+            arkworks_msm(&g1_bases, &scalars),
+            sequential_msm(&g1_bases, &scalars)
+        );
+
+        let g2_bases: Vec<BackendG2> = (0..scalars.len())
+            .map(|_| BackendG2::rand(&mut rng))
+            .collect();
+        let g2_identities = vec![BackendG2::zero(); scalars.len()];
+        assert_eq!(arkworks_msm(&g2_bases, &zero_scalars), BackendG2::zero());
+        assert_eq!(arkworks_msm(&g2_identities, &scalars), BackendG2::zero());
+        assert_eq!(
+            arkworks_msm(&g2_bases, &scalars),
+            sequential_msm(&g2_bases, &scalars)
+        );
+    }
+
+    #[test]
+    fn arkworks_g1_g2_compressed_round_trip_and_identity() {
+        let mut rng = ChaCha20Rng::seed_from_u64(0xdecaf);
+
+        for point in [
+            BackendG1::zero().into_affine(),
+            BackendG1::generator().into_affine(),
+            BackendG1::rand(&mut rng).into_affine(),
+        ] {
+            assert_compressed_round_trip(&point);
+        }
+
+        for point in [
+            BackendG2::zero().into_affine(),
+            BackendG2::generator().into_affine(),
+            BackendG2::rand(&mut rng).into_affine(),
+        ] {
+            assert_compressed_round_trip(&point);
+        }
+    }
+
+    #[test]
+    fn arkworks_g1_g2_malformed_compressed_bytes_reject() {
+        let g1_bytes = compressed_bytes(&BackendG1::generator().into_affine());
+        let g2_bytes = compressed_bytes(&BackendG2::generator().into_affine());
+
+        assert!(BackendG1Affine::deserialize_compressed(&g1_bytes[..g1_bytes.len() - 1]).is_err());
+        assert!(BackendG2Affine::deserialize_compressed(&g2_bytes[..g2_bytes.len() - 1]).is_err());
+        assert!(BackendG1Affine::deserialize_compressed(&vec![0xff; g1_bytes.len()][..]).is_err());
+        assert!(BackendG2Affine::deserialize_compressed(&vec![0xff; g2_bytes.len()][..]).is_err());
+    }
+
+    #[test]
+    fn arkworks_g1_g2_subgroup_and_torsion_rejection() {
+        let mut rng = ChaCha20Rng::seed_from_u64(0x51a7e);
+
+        let g1_torsion = non_subgroup_g1(&mut rng);
+        let g1_bytes = compressed_bytes(&g1_torsion);
+        assert!(
+            BackendG1Affine::deserialize_compressed(&g1_bytes[..]).is_err(),
+            "checked G1 deserialization must reject non-subgroup points"
+        );
+
+        let g2_torsion = non_subgroup_g2(&mut rng);
+        let g2_bytes = compressed_bytes(&g2_torsion);
+        assert!(
+            BackendG2Affine::deserialize_compressed(&g2_bytes[..]).is_err(),
+            "checked G2 deserialization must reject non-subgroup points"
+        );
+    }
+
+    #[test]
+    fn decaf377_vk_digest_round_trips_after_serialization() {
+        let (pvk, _) = sample_items();
+        let original_digest =
+            aggregate_verification_key_digest(&pvk).expect("VK digest should build");
+        let bytes = compressed_bytes(&pvk);
+        let decoded = PreparedVerifyingKey::<Bls12_377>::deserialize_compressed(&bytes[..])
+            .expect("prepared verifying key should round-trip");
+
+        let decoded_digest =
+            aggregate_verification_key_digest(&decoded).expect("decoded VK digest should build");
+        assert_eq!(decoded_digest, original_digest);
     }
 
     #[test]
@@ -1631,6 +1880,155 @@ mod tests {
             .expect_err("VK digest mutation should reject before backend verification");
 
         assert_eq!(err, AggregateVerifyError::StatementDigestMismatch);
+    }
+
+    #[test]
+    #[ignore = "release-mode CI gate; run with `just snarkpack-dos-gate`"]
+    fn snarkpack_dos_gate_valid_and_adversarial_paths_hold_thresholds() {
+        const SAMPLES: usize = 5;
+        const VALID_P99_MAX_MS: f64 = 1_500.0;
+        const MIXED_P99_MAX_MS: f64 = 1_500.0;
+        const CHEAP_REJECT_P99_MAX_MS: f64 = 25.0;
+        const CHEAP_REJECT_VALID_RATIO: f64 = 0.50;
+
+        let (pvk, items) = sample_items();
+        let srs = DevSrs::default();
+        let padded_items =
+            pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
+        let family_id = ProofFamilyId::Transfer;
+        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
+        let aggregate = aggregate_family(&statement, &pvk, &padded_items, &srs)
+            .expect("aggregation should succeed");
+
+        for _ in 0..2 {
+            verify_family_aggregate(&statement, &pvk, &aggregate, &srs)
+                .expect("warmup valid aggregate verification should succeed");
+        }
+
+        let mut mutated_inputs = padded_public_inputs(&padded_items);
+        mutated_inputs[0][0] += Fq::from(1u64);
+        let wrong_public_input_statement =
+            statement_for_public_inputs(family_id, &pvk, items.len(), &mutated_inputs, &srs);
+        let wrong_family_statement = statement_for_items(
+            ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical),
+            &pvk,
+            items.len(),
+            &padded_items,
+            &srs,
+        );
+        let malformed_len = aggregate.len().min(8);
+        let rejection_cases = vec![
+            RejectionCase {
+                name: "malformed-wrapper",
+                statement: statement.clone(),
+                aggregate_bytes: aggregate[..malformed_len].to_vec(),
+                expected: ExpectedRejection::MalformedProofBytes,
+            },
+            RejectionCase {
+                name: "wrong-family",
+                statement: wrong_family_statement,
+                aggregate_bytes: aggregate.clone(),
+                expected: ExpectedRejection::StatementDigestMismatch,
+            },
+            RejectionCase {
+                name: "wrong-public-input",
+                statement: wrong_public_input_statement,
+                aggregate_bytes: aggregate.clone(),
+                expected: ExpectedRejection::StatementDigestMismatch,
+            },
+            RejectionCase {
+                name: "oversized-wrapper",
+                statement: statement.clone(),
+                aggregate_bytes: vec![0u8; MAX_AGGREGATE_PROOF_BYTES + 1],
+                expected: ExpectedRejection::OversizeBytes,
+            },
+        ];
+
+        for case in &rejection_cases {
+            let err = match preflight_aggregate_verify(AggregatePreflightInput {
+                statement: &case.statement,
+                pvk: &pvk,
+                aggregate_proof_bytes: &case.aggregate_bytes,
+                srs: &srs,
+            }) {
+                Ok(_) => panic!("adversarial input must fail before backend verification"),
+                Err(err) => err,
+            };
+            assert_expected_rejection(&err, case.expected);
+        }
+
+        let mut valid_samples = Vec::with_capacity(SAMPLES);
+        let mut mixed_samples = Vec::with_capacity(SAMPLES * (rejection_cases.len() + 1));
+        for _ in 0..SAMPLES {
+            let started = Instant::now();
+            verify_family_aggregate(&statement, &pvk, &aggregate, &srs)
+                .expect("valid aggregate verification should succeed");
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+            valid_samples.push(elapsed_ms);
+            mixed_samples.push(elapsed_ms);
+        }
+
+        let valid_stats = timing_stats(&valid_samples);
+        assert!(
+            valid_stats.p99_ms <= VALID_P99_MAX_MS,
+            "valid p99 {:.3}ms exceeds {:.3}ms",
+            valid_stats.p99_ms,
+            VALID_P99_MAX_MS
+        );
+
+        for case in &rejection_cases {
+            let mut samples = Vec::with_capacity(SAMPLES);
+            for _ in 0..SAMPLES {
+                let started = Instant::now();
+                let err =
+                    verify_family_aggregate(&case.statement, &pvk, &case.aggregate_bytes, &srs)
+                        .expect_err("adversarial aggregate should reject");
+                let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+                assert_expected_rejection(&err, case.expected);
+                samples.push(elapsed_ms);
+                mixed_samples.push(elapsed_ms);
+            }
+
+            let reject_stats = timing_stats(&samples);
+            assert!(
+                reject_stats.p99_ms <= CHEAP_REJECT_P99_MAX_MS,
+                "{name} reject p99 {p99:.3}ms exceeds {limit:.3}ms",
+                name = case.name,
+                p99 = reject_stats.p99_ms,
+                limit = CHEAP_REJECT_P99_MAX_MS
+            );
+            assert!(
+                reject_stats.p99_ms <= valid_stats.p50_ms * CHEAP_REJECT_VALID_RATIO,
+                "{name} reject p99 {reject:.3}ms is not cheaply below valid p50 {valid:.3}ms",
+                name = case.name,
+                reject = reject_stats.p99_ms,
+                valid = valid_stats.p50_ms
+            );
+            println!(
+                "snarkpack-dos-gate {name}: p50={p50:.3}ms p95={p95:.3}ms p99={p99:.3}ms",
+                name = case.name,
+                p50 = reject_stats.p50_ms,
+                p95 = reject_stats.p95_ms,
+                p99 = reject_stats.p99_ms
+            );
+        }
+
+        let mixed_stats = timing_stats(&mixed_samples);
+        assert!(
+            mixed_stats.p99_ms <= MIXED_P99_MAX_MS,
+            "mixed workload p99 {:.3}ms exceeds {:.3}ms",
+            mixed_stats.p99_ms,
+            MIXED_P99_MAX_MS
+        );
+
+        println!(
+            "snarkpack-dos-gate valid: p50={:.3}ms p95={:.3}ms p99={:.3}ms",
+            valid_stats.p50_ms, valid_stats.p95_ms, valid_stats.p99_ms
+        );
+        println!(
+            "snarkpack-dos-gate mixed: p50={:.3}ms p95={:.3}ms p99={:.3}ms",
+            mixed_stats.p50_ms, mixed_stats.p95_ms, mixed_stats.p99_ms
+        );
     }
 
     #[test]
