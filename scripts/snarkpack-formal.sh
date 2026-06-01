@@ -29,6 +29,11 @@ require_command() {
 require_command cargo
 require_command z3
 
+hax_pin="$(read_pin hax)"
+fstar_pin="$(read_pin fstar)"
+hax_version="$(without_v_prefix "$hax_pin")"
+fstar_version="$(without_v_prefix "$fstar_pin")"
+
 load_opam_switch() {
   local switch
   switch="$(read_pin opam_switch)"
@@ -43,17 +48,25 @@ load_opam_switch() {
 load_opam_switch
 
 if ! command -v cargo-hax >/dev/null 2>&1 && ! cargo hax --version >/dev/null 2>&1; then
-  fail "cargo-hax is not installed; expected hax $(read_pin hax)"
+  fail "cargo-hax is not installed; expected hax $hax_pin"
 fi
 
 require_command hax-engine
 
-if command -v fstar.exe >/dev/null 2>&1; then
+fstar_home="$HOME/.local/opt/fstar-${fstar_pin}-Linux-x86_64/bin"
+if [ -n "${FSTAR_BIN:-}" ]; then
+  [ -x "$FSTAR_BIN" ] || fail "FSTAR_BIN is set but not executable: $FSTAR_BIN"
+  FSTAR="$FSTAR_BIN"
+elif command -v fstar.exe >/dev/null 2>&1; then
   FSTAR=fstar.exe
 elif command -v fstar >/dev/null 2>&1; then
   FSTAR=fstar
+elif [ -x "$fstar_home/fstar.exe" ]; then
+  FSTAR="$fstar_home/fstar.exe"
+elif [ -x "$fstar_home/fstar" ]; then
+  FSTAR="$fstar_home/fstar"
 else
-  fail "F* is not installed; expected F* $(read_pin fstar)"
+  fail "F* is not installed; expected F* $fstar_pin"
 fi
 
 echo "snarkpack formal: checking pinned tool versions"
@@ -65,19 +78,16 @@ case "$z3_version" in
   *) fail "z3 version mismatch; expected $z3_pin, got: $z3_version" ;;
 esac
 
-hax_version="$(without_v_prefix "$(read_pin hax)")"
-fstar_version="$(without_v_prefix "$(read_pin fstar)")"
-
 cargo_hax_version="$(cargo hax --version 2>&1)" || fail "cargo hax --version failed: $cargo_hax_version"
 case "$cargo_hax_version" in
   *"version=${hax_version}"*) ;;
-  *) fail "hax version mismatch; expected $(read_pin hax), got: $cargo_hax_version" ;;
+  *) fail "hax version mismatch; expected $hax_pin, got: $cargo_hax_version" ;;
 esac
 
 fstar_cli_version="$("$FSTAR" --version 2>&1)" || fail "F* --version failed: $fstar_cli_version"
 case "$fstar_cli_version" in
   *"$fstar_version"*) ;;
-  *) fail "F* version mismatch; expected $(read_pin fstar), got: $fstar_cli_version" ;;
+  *) fail "F* version mismatch; expected $fstar_pin, got: $fstar_cli_version" ;;
 esac
 
 find_hax_proof_libs() {
