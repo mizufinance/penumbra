@@ -403,6 +403,7 @@ mod tests {
     #[test]
     fn bivariate_poly_commit_test() {
         let mut rng = StdRng::seed_from_u64(0u64);
+        let challenge_context = ChallengeContext::from_statement_digest([0u8; 32]);
         let srs =
             TestBivariatePolyCommitment::setup(&mut rng, BIVARIATE_X_DEGREE, BIVARIATE_Y_DEGREE)
                 .unwrap();
@@ -427,6 +428,7 @@ mod tests {
         // Evaluate at challenge point
         let point = (UniformRand::rand(&mut rng), UniformRand::rand(&mut rng));
         let eval_proof = TestBivariatePolyCommitment::open(
+            &challenge_context,
             &srs,
             &bivariate_polynomial,
             &y_polynomial_comms,
@@ -436,9 +438,15 @@ mod tests {
         let eval = bivariate_polynomial.evaluate(&point);
 
         // Verify proof
-        assert!(
-            TestBivariatePolyCommitment::verify(&v_srs, &com, &point, &eval, &eval_proof).unwrap()
-        );
+        assert!(TestBivariatePolyCommitment::verify(
+            &challenge_context,
+            &v_srs,
+            &com,
+            &point,
+            &eval,
+            &eval_proof
+        )
+        .unwrap());
     }
 
     // `cargo test univariate_poly_commit_test --release --features print-trace -- --ignored --nocapture`
@@ -446,6 +454,7 @@ mod tests {
     #[test]
     fn univariate_poly_commit_test() {
         let mut rng = StdRng::seed_from_u64(0u64);
+        let challenge_context = ChallengeContext::from_statement_digest([0u8; 32]);
         let srs = TestUnivariatePolyCommitment::setup(&mut rng, UNIVARIATE_DEGREE).unwrap();
         let v_srs = srs.0.get_verifier_key();
 
@@ -461,13 +470,19 @@ mod tests {
 
         // Evaluate at challenge point
         let point = UniformRand::rand(&mut rng);
-        let eval_proof =
-            TestUnivariatePolyCommitment::open(&srs, &polynomial, &y_polynomial_comms, &point)
-                .unwrap();
+        let eval_proof = TestUnivariatePolyCommitment::open(
+            &challenge_context,
+            &srs,
+            &polynomial,
+            &y_polynomial_comms,
+            &point,
+        )
+        .unwrap();
         let eval = polynomial.evaluate(&point);
 
         // Verify proof
         assert!(TestUnivariatePolyCommitment::verify(
+            &challenge_context,
             &v_srs,
             UNIVARIATE_DEGREE,
             &com,

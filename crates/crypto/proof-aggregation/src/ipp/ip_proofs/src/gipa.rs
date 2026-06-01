@@ -817,6 +817,7 @@ mod tests {
         type PairingGIPA = GIPA<IP, GC1, GC2, IPC, Blake2b>;
 
         let mut rng = StdRng::seed_from_u64(0u64);
+        let challenge_context = ChallengeContext::from_statement_digest([0u8; 32]);
         let (ck_a, ck_b, ck_t) = PairingGIPA::setup(&mut rng, TEST_SIZE).unwrap();
         let m_a = random_generators(&mut rng, TEST_SIZE);
         let m_b = random_generators(&mut rng, TEST_SIZE);
@@ -826,15 +827,20 @@ mod tests {
         let com_t = IPC::commit(&vec![ck_t.clone()], &t).unwrap();
 
         let proof = PairingGIPA::prove(
+            &challenge_context,
             (&m_a, &m_b, &t[0]),
             (&ck_a, &ck_b, &ck_t),
             (&com_a, &com_b, &com_t),
         )
         .unwrap();
 
-        assert!(
-            PairingGIPA::verify((&ck_a, &ck_b, &ck_t), (&com_a, &com_b, &com_t), &proof,).unwrap()
-        );
+        assert!(PairingGIPA::verify(
+            &challenge_context,
+            (&ck_a, &ck_b, &ck_t),
+            (&com_a, &com_b, &com_t),
+            &proof,
+        )
+        .unwrap());
     }
 
     #[test]
@@ -845,6 +851,7 @@ mod tests {
         type MultiExpGIPA = GIPA<IP, GC1, SC1, IPC, Blake2b>;
 
         let mut rng = StdRng::seed_from_u64(0u64);
+        let challenge_context = ChallengeContext::from_statement_digest([0u8; 32]);
         let (ck_a, ck_b, ck_t) = MultiExpGIPA::setup(&mut rng, TEST_SIZE).unwrap();
         let m_a = random_generators(&mut rng, TEST_SIZE);
         let mut m_b = Vec::new();
@@ -857,15 +864,20 @@ mod tests {
         let com_t = IPC::commit(&vec![ck_t.clone()], &t).unwrap();
 
         let proof = MultiExpGIPA::prove(
+            &challenge_context,
             (&m_a, &m_b, &t[0]),
             (&ck_a, &ck_b, &ck_t),
             (&com_a, &com_b, &com_t),
         )
         .unwrap();
 
-        assert!(
-            MultiExpGIPA::verify((&ck_a, &ck_b, &ck_t), (&com_a, &com_b, &com_t), &proof,).unwrap()
-        );
+        assert!(MultiExpGIPA::verify(
+            &challenge_context,
+            (&ck_a, &ck_b, &ck_t),
+            (&com_a, &com_b, &com_t),
+            &proof,
+        )
+        .unwrap());
     }
 
     #[test]
@@ -878,6 +890,7 @@ mod tests {
         type ScalarGIPA = GIPA<IP, SC2, SC2, IPC, Blake2b>;
 
         let mut rng = StdRng::seed_from_u64(0u64);
+        let challenge_context = ChallengeContext::from_statement_digest([0u8; 32]);
         let (ck_a, ck_b, ck_t) = ScalarGIPA::setup(&mut rng, TEST_SIZE).unwrap();
         let mut m_a = Vec::new();
         let mut m_b = Vec::new();
@@ -891,14 +904,19 @@ mod tests {
         let com_t = IPC::commit(&vec![ck_t.clone()], &t).unwrap();
 
         let proof = ScalarGIPA::prove(
+            &challenge_context,
             (&m_a, &m_b, &t[0]),
             (&ck_a, &ck_b, &ck_t),
             (&com_a, &com_b, &com_t),
         )
         .unwrap();
 
-        assert!(
-            ScalarGIPA::verify((&ck_a, &ck_b, &ck_t), (&com_a, &com_b, &com_t), &proof,).unwrap()
-        );
+        assert!(ScalarGIPA::verify(
+            &challenge_context,
+            (&ck_a, &ck_b, &ck_t),
+            (&com_a, &com_b, &com_t),
+            &proof,
+        )
+        .unwrap());
     }
 }

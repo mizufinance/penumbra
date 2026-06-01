@@ -888,7 +888,8 @@ fn build_shifted_ck_1<P: Pairing>(ck_1: &[P::G2], r: &P::ScalarField) -> Vec<P::
 
 fn inverse_powers<P: Pairing>(len: usize, r: &P::ScalarField) -> Vec<P::ScalarField> {
     let mut powers = Vec::with_capacity(len);
-    let r_inv = r.inverse().unwrap();
+    assert!(!r.is_zero(), "inverse_powers requires nonzero r");
+    let r_inv = r.inverse().expect("inverse_powers requires nonzero r");
     let mut current = P::ScalarField::one();
     for _ in 0..len {
         powers.push(current);
@@ -1034,8 +1035,12 @@ fn fold_public_inputs<P: Pairing>(
     public_inputs: &[Vec<P::ScalarField>],
     r: &P::ScalarField,
 ) -> (P::ScalarField, P::G1) {
-    let r_sum = (r.pow(&[public_inputs.len() as u64]) - &<P::ScalarField>::one())
-        / &(r.clone() - &<P::ScalarField>::one());
+    let r_sum = if *r == <P::ScalarField>::one() {
+        P::ScalarField::from(public_inputs.len() as u64)
+    } else {
+        (r.pow(&[public_inputs.len() as u64]) - &<P::ScalarField>::one())
+            / &(r.clone() - &<P::ScalarField>::one())
+    };
     assert_eq!(vk.gamma_abc_g1.len(), public_inputs[0].len() + 1);
     let r_vec = structured_scalar_power(public_inputs.len(), r);
     let mut folded_public_inputs = vec![P::ScalarField::zero(); public_inputs[0].len()];

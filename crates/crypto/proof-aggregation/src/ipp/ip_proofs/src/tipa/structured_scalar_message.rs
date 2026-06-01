@@ -76,9 +76,10 @@ where
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &IPC::Key),
     ) -> Result<GIPAProof<IP, LMC, SSMPlaceholderCommitment<LMC::Scalar>, IPC, D>, Error> {
-        let (proof, _) =
-            <GIPA<IP, LMC, SSMPlaceholderCommitment<LMC::Scalar>, IPC, D>>::prove_with_aux(
+        let (proof, _, _) =
+            <GIPA<IP, LMC, SSMPlaceholderCommitment<LMC::Scalar>, IPC, D>>::prove_with_aux_profiled_with_stage(
                 context,
+                b"tipa.generic.ssm.gipa.round",
                 values,
                 (
                     ck.0,
@@ -527,6 +528,7 @@ mod tests {
         type MultiExpTIPA = TIPAWithSSM<IP, GC1, IPC, Bls12_381, Blake2b>;
 
         let mut rng = StdRng::seed_from_u64(0u64);
+        let challenge_context = ChallengeContext::from_statement_digest([0u8; 32]);
         let (srs, ck_t) = MultiExpTIPA::setup(&mut rng, TEST_SIZE).unwrap();
         let (ck_a, _) = srs.get_commitment_keys();
         let v_srs = srs.get_verifier_key();
@@ -537,11 +539,16 @@ mod tests {
         let t = vec![IP::inner_product(&m_a, &m_b).unwrap()];
         let com_t = IPC::commit(&vec![ck_t.clone()], &t).unwrap();
 
-        let proof =
-            MultiExpTIPA::prove_with_structured_scalar_message(&srs, (&m_a, &m_b), (&ck_a, &ck_t))
-                .unwrap();
+        let proof = MultiExpTIPA::prove_with_structured_scalar_message(
+            &challenge_context,
+            &srs,
+            (&m_a, &m_b),
+            (&ck_a, &ck_t),
+        )
+        .unwrap();
 
         assert!(MultiExpTIPA::verify_with_structured_scalar_message(
+            &challenge_context,
             &v_srs,
             &ck_t,
             (&com_a, &com_t),
@@ -561,6 +568,7 @@ mod tests {
         type ScalarGIPA = GIPAWithSSM<IP, SC1, IPC, Blake2b>;
 
         let mut rng = StdRng::seed_from_u64(0u64);
+        let challenge_context = ChallengeContext::from_statement_digest([0u8; 32]);
         let (ck_a, ck_t) = ScalarGIPA::setup(&mut rng, TEST_SIZE).unwrap();
         let mut m_a = Vec::new();
         for _ in 0..TEST_SIZE {
@@ -572,10 +580,15 @@ mod tests {
         let t = vec![IP::inner_product(&m_a, &m_b).unwrap()];
         let com_t = IPC::commit(&vec![ck_t.clone()], &t).unwrap();
 
-        let proof =
-            ScalarGIPA::prove_with_structured_scalar_message((&m_a, &m_b), (&ck_a, &ck_t)).unwrap();
+        let proof = ScalarGIPA::prove_with_structured_scalar_message(
+            &challenge_context,
+            (&m_a, &m_b),
+            (&ck_a, &ck_t),
+        )
+        .unwrap();
 
         assert!(ScalarGIPA::verify_with_structured_scalar_message(
+            &challenge_context,
             (&ck_a, &ck_t),
             (&com_a, &com_t),
             &b,

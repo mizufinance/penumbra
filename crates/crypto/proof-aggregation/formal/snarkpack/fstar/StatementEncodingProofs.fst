@@ -12,7 +12,7 @@ open Core_models
 (*
   Proof target, extracted from Rust with hax: encode_statement is injective
   over typed StatementEncodingInput values, so the statement digest binds the
-  typed statement (modulo SHA-256 collision resistance, an assumed row).
+  typed statement (modulo SHA-256 collision resistance, an assumed axiom).
 
   Strategy: each append helper writes a determined byte suffix (content
   lemmas). encode_statement is therefore a concatenation of self-delimiting

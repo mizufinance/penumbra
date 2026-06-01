@@ -56,15 +56,15 @@ fn corpus_path(count: usize) -> PathBuf {
 }
 
 /// Load the proof corpus for `count` from disk, generating and persisting it on
-/// first use. Uses unchecked decode: this is a trusted, locally generated corpus.
+/// first use.
 fn load_or_generate_items(count: usize) -> (PreparedVerifyingKey<Bls12_377>, Vec<BatchItem>) {
     let path = corpus_path(count);
     if let Ok(bytes) = std::fs::read(&path) {
         let mut cur = &bytes[..];
-        let pvk = PreparedVerifyingKey::<Bls12_377>::deserialize_uncompressed_unchecked(&mut cur)
-            .expect("corpus pvk decodes");
-        let raw = Vec::<(Proof<Bls12_377>, Vec<Fq>)>::deserialize_uncompressed_unchecked(&mut cur)
-            .expect("corpus items decode");
+        let pvk = PreparedVerifyingKey::<Bls12_377>::deserialize_uncompressed(&mut cur)
+            .expect("corpus pvk checked decode");
+        let raw = Vec::<(Proof<Bls12_377>, Vec<Fq>)>::deserialize_uncompressed(&mut cur)
+            .expect("corpus items checked decode");
         let items = raw
             .into_iter()
             .map(|(proof, public_inputs)| BatchItem {

@@ -61,7 +61,9 @@ fn record_pairing_profile_delta(delta: &PairingComputationProfile) {
 
 #[derive(Debug)]
 pub enum InnerProductError {
+    EmptyInput,
     MessageLengthInvalid(usize, usize),
+    PairingUnavailable,
 }
 
 impl ErrorTrait for InnerProductError {
@@ -73,8 +75,12 @@ impl ErrorTrait for InnerProductError {
 impl Display for InnerProductError {
     fn fmt(self: &Self, f: &mut Formatter<'_>) -> FmtResult {
         let msg = match self {
+            InnerProductError::EmptyInput => "inner product requires non-empty inputs".to_string(),
             InnerProductError::MessageLengthInvalid(left, right) => {
                 format!("left length, right length: {}, {}", left, right)
+            }
+            InnerProductError::PairingUnavailable => {
+                "cfg_multi_pairing returned no pairing result".to_string()
             }
         };
         write!(f, "{}", msg)
@@ -116,8 +122,12 @@ impl<P: Pairing> InnerProduct for PairingInnerProduct<P> {
                 right.len(),
             )));
         };
+        if left.is_empty() {
+            return Err(Box::new(InnerProductError::EmptyInput));
+        }
 
-        Ok(cfg_multi_pairing(left, right).unwrap())
+        cfg_multi_pairing(left, right)
+            .ok_or_else(|| Box::new(InnerProductError::PairingUnavailable) as Error)
     }
 }
 

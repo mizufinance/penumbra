@@ -41,6 +41,13 @@ where
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
+        assert_eq!(
+            self.0.len(),
+            rhs.0.len(),
+            "IdentityOutput length mismatch: left={}, right={}",
+            self.0.len(),
+            rhs.0.len()
+        );
         IdentityOutput(
             self.0
                 .iter()

@@ -315,7 +315,12 @@ where
     let transcript_inverse_started = std::time::Instant::now();
     let transcript_inverse = transcript.iter().map(|x| x.inverse().unwrap()).collect();
     profile.transcript_inverse_ms = transcript_inverse_started.elapsed().as_secs_f64() * 1000.0;
-    let r_inverse = r_shift.inverse().unwrap();
+    let r_inverse = r_shift.inverse().ok_or_else(|| {
+        Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "r_shift must be non-zero before inversion",
+        )) as Error
+    })?;
 
     let kzg_challenge_started = std::time::Instant::now();
     let mut counter_nonce: u64 = 0;
@@ -744,6 +749,31 @@ where
     where
         S: ChallengeTraceSink,
     {
+        Self::prove_with_prepared_srs_shift_profiled_with_labels_with_trace(
+            context,
+            trace,
+            b"tipa.generic.gipa.round",
+            b"tipa.generic.kzg",
+            prepared_srs,
+            values,
+            ck,
+            r_shift,
+        )
+    }
+
+    fn prove_with_prepared_srs_shift_profiled_with_labels_with_trace<S>(
+        context: &ChallengeContext,
+        trace: &mut S,
+        gipa_stage_label: &'static [u8],
+        kzg_stage_label: &'static [u8],
+        prepared_srs: &PreparedProvingSrs<P>,
+        values: (&[IP::LeftMessage], &[IP::RightMessage]),
+        ck: (&[LMC::Key], &[RMC::Key], &IPC::Key),
+        r_shift: &P::ScalarField,
+    ) -> Result<(TIPAProof<IP, LMC, RMC, IPC, P, D>, TipaBuildProfile), Error>
+    where
+        S: ChallengeTraceSink,
+    {
         let total_started = std::time::Instant::now();
         let mut profile = TipaBuildProfile::default();
 
@@ -753,7 +783,7 @@ where
             <GIPA<IP, LMC, RMC, IPC, D>>::prove_with_aux_profiled_with_stage_with_trace(
                 context,
                 trace,
-                b"tipa.generic.gipa.round",
+                gipa_stage_label,
                 values,
                 (ck.0, ck.1, &vec![ck.2.clone()]),
             )?;
@@ -766,7 +796,12 @@ where
         let transcript_inverse_started = std::time::Instant::now();
         let transcript_inverse = transcript.iter().map(|x| x.inverse().unwrap()).collect();
         profile.transcript_inverse_ms = transcript_inverse_started.elapsed().as_secs_f64() * 1000.0;
-        let r_inverse = r_shift.inverse().unwrap();
+        let r_inverse = r_shift.inverse().ok_or_else(|| {
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "r_shift must be non-zero before inversion",
+            )) as Error
+        })?;
 
         // KZG challenge point
         let kzg_challenge_started = std::time::Instant::now();
@@ -781,7 +816,7 @@ where
             if let Some(c) = LMC::Scalar::from_random_bytes(&challenge_digest::<D, _>(
                 context,
                 trace,
-                b"tipa.generic.kzg",
+                kzg_stage_label,
                 counter_nonce,
                 &hash_input,
             )) {
@@ -932,7 +967,12 @@ where
             counter_nonce += 1;
         };
 
-        let r_shift_inverse = r_shift.inverse().unwrap();
+        let r_shift_inverse = r_shift.inverse().ok_or_else(|| {
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "r_shift must be non-zero before inversion",
+            )) as Error
+        })?;
         #[cfg(all(feature = "parallel", not(feature = "bench-baseline")))]
         let (ck_a_result, ck_b_result) = rayon::join(
             || {
@@ -1204,6 +1244,7 @@ mod tests {
         type PairingTIPA = TIPA<IP, GC1, GC2, IPC, Bls12_381, Blake2b>;
 
         let mut rng = StdRng::seed_from_u64(0u64);
+        let challenge_context = ChallengeContext::from_statement_digest([0u8; 32]);
         let (srs, ck_t) = PairingTIPA::setup(&mut rng, TEST_SIZE).unwrap();
         let (ck_a, ck_b) = srs.get_commitment_keys();
         let v_srs = srs.get_verifier_key();
@@ -1214,9 +1255,22 @@ mod tests {
         let t = vec![IP::inner_product(&m_a, &m_b).unwrap()];
         let com_t = IPC::commit(&vec![ck_t.clone()], &t).unwrap();
 
-        let proof = PairingTIPA::prove(&srs, (&m_a, &m_b), (&ck_a, &ck_b, &ck_t)).unwrap();
+        let proof = PairingTIPA::prove(
+            &challenge_context,
+            &srs,
+            (&m_a, &m_b),
+            (&ck_a, &ck_b, &ck_t),
+        )
+        .unwrap();
 
-        assert!(PairingTIPA::verify(&v_srs, &ck_t, (&com_a, &com_b, &com_t), &proof).unwrap());
+        assert!(PairingTIPA::verify(
+            &challenge_context,
+            &v_srs,
+            &ck_t,
+            (&com_a, &com_b, &com_t),
+            &proof
+        )
+        .unwrap());
     }
 
     #[test]
@@ -1227,6 +1281,7 @@ mod tests {
         type MultiExpTIPA = TIPA<IP, GC1, SC1, IPC, Bls12_381, Blake2b>;
 
         let mut rng = StdRng::seed_from_u64(0u64);
+        let challenge_context = ChallengeContext::from_statement_digest([0u8; 32]);
         let (srs, ck_t) = MultiExpTIPA::setup(&mut rng, TEST_SIZE).unwrap();
         let (ck_a, ck_b) = srs.get_commitment_keys();
         let v_srs = srs.get_verifier_key();
@@ -1240,9 +1295,22 @@ mod tests {
         let t = vec![IP::inner_product(&m_a, &m_b).unwrap()];
         let com_t = IPC::commit(&vec![ck_t.clone()], &t).unwrap();
 
-        let proof = MultiExpTIPA::prove(&srs, (&m_a, &m_b), (&ck_a, &ck_b, &ck_t)).unwrap();
+        let proof = MultiExpTIPA::prove(
+            &challenge_context,
+            &srs,
+            (&m_a, &m_b),
+            (&ck_a, &ck_b, &ck_t),
+        )
+        .unwrap();
 
-        assert!(MultiExpTIPA::verify(&v_srs, &ck_t, (&com_a, &com_b, &com_t), &proof).unwrap());
+        assert!(MultiExpTIPA::verify(
+            &challenge_context,
+            &v_srs,
+            &ck_t,
+            (&com_a, &com_b, &com_t),
+            &proof
+        )
+        .unwrap());
     }
 
     #[test]
@@ -1255,6 +1323,7 @@ mod tests {
         type ScalarTIPA = TIPA<IP, SC2, SC1, IPC, Bls12_381, Blake2b>;
 
         let mut rng = StdRng::seed_from_u64(0u64);
+        let challenge_context = ChallengeContext::from_statement_digest([0u8; 32]);
         let (srs, ck_t) = ScalarTIPA::setup(&mut rng, TEST_SIZE).unwrap();
         let (ck_a, ck_b) = srs.get_commitment_keys();
         let v_srs = srs.get_verifier_key();
@@ -1269,9 +1338,22 @@ mod tests {
         let t = vec![IP::inner_product(&m_a, &m_b).unwrap()];
         let com_t = IPC::commit(&vec![ck_t.clone()], &t).unwrap();
 
-        let proof = ScalarTIPA::prove(&srs, (&m_a, &m_b), (&ck_a, &ck_b, &ck_t)).unwrap();
+        let proof = ScalarTIPA::prove(
+            &challenge_context,
+            &srs,
+            (&m_a, &m_b),
+            (&ck_a, &ck_b, &ck_t),
+        )
+        .unwrap();
 
-        assert!(ScalarTIPA::verify(&v_srs, &ck_t, (&com_a, &com_b, &com_t), &proof).unwrap());
+        assert!(ScalarTIPA::verify(
+            &challenge_context,
+            &v_srs,
+            &ck_t,
+            (&com_a, &com_b, &com_t),
+            &proof
+        )
+        .unwrap());
     }
 
     #[test]
@@ -1282,6 +1364,7 @@ mod tests {
         type PairingTIPA = TIPA<IP, GC1, GC2, IPC, Bls12_381, Blake2b>;
 
         let mut rng = StdRng::seed_from_u64(0u64);
+        let challenge_context = ChallengeContext::from_statement_digest([0u8; 32]);
         let (srs, ck_t) = PairingTIPA::setup(&mut rng, TEST_SIZE).unwrap();
         let (ck_a, ck_b) = srs.get_commitment_keys();
         let v_srs = srs.get_verifier_key();
@@ -1310,6 +1393,7 @@ mod tests {
         assert_eq!(com_a, IP::inner_product(&m_a_r, &ck_a_r).unwrap());
 
         let proof = PairingTIPA::prove_with_srs_shift(
+            &challenge_context,
             &srs,
             (&m_a_r, &m_b),
             (&ck_a_r, &ck_b, &ck_t),
@@ -1318,6 +1402,7 @@ mod tests {
         .unwrap();
 
         assert!(PairingTIPA::verify_with_srs_shift(
+            &challenge_context,
             &v_srs,
             &ck_t,
             (&com_a, &com_b, &com_t),
@@ -1335,6 +1420,7 @@ mod tests {
         type PairingTIPA = TIPA<IP, GC1, GC2, IPC, Bls12_381, Blake2b>;
 
         let mut rng = StdRng::seed_from_u64(31u64);
+        let challenge_context = ChallengeContext::from_statement_digest([0u8; 32]);
         let (srs, ck_t) = PairingTIPA::setup(&mut rng, TEST_SIZE).unwrap();
         let prepared = srs.prepare_for_proving();
         let (ck_a, ck_b) = srs.get_commitment_keys();
@@ -1358,15 +1444,24 @@ mod tests {
         let t = vec![IP::inner_product(&m_a_r, &m_b).unwrap()];
         let com_t = IPC::commit(&vec![ck_t.clone()], &t).unwrap();
 
-        let generic = PairingTIPA::prove_with_prepared_srs_shift(
-            &prepared,
-            (&m_a_r, &m_b),
-            (&ck_a_r, &ck_b, &ck_t),
-            &r_scalar,
-        )
-        .unwrap();
+        let mut generic_trace = NoopChallengeTraceSink;
+        let (generic, _) =
+            PairingTIPA::prove_with_prepared_srs_shift_profiled_with_labels_with_trace(
+                &challenge_context,
+                &mut generic_trace,
+                b"tipa.ab.gipa.round",
+                b"tipa.ab.kzg",
+                &prepared,
+                (&m_a_r, &m_b),
+                (&ck_a_r, &ck_b, &ck_t),
+                &r_scalar,
+            )
+            .unwrap();
+        let mut trace = NoopChallengeTraceSink;
         let (specialized, profile) =
             prove_pairing_inner_product_with_prepared_srs_shift_profiled::<Bls12_381, Blake2b>(
+                &challenge_context,
+                &mut trace,
                 &prepared,
                 (&m_a_r, &m_b),
                 (&ck_a_r, &ck_b, &ck_t),
@@ -1385,7 +1480,10 @@ mod tests {
         assert!(profile.gipa.commit_ab_ms >= 0.0);
         assert!(profile.gipa.commit_com_a_ms >= 0.0);
         assert!(profile.gipa.commit_com_b_ms >= 0.0);
-        assert!(PairingTIPA::verify_with_srs_shift(
+        assert!(PairingTIPA::verify_with_srs_shift_and_labels(
+            &challenge_context,
+            b"tipa.ab.gipa.round",
+            b"tipa.ab.kzg",
             &v_srs,
             &ck_t,
             (&com_a, &com_b, &com_t),
