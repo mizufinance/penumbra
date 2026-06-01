@@ -336,8 +336,10 @@ fn encode_rows(
     bytes: &mut Vec<u8>,
     rows: &[StatementPublicInputRow],
 ) -> Result<(), AggregateStatementError> {
-    for row in rows {
-        encode_row(bytes, row)?;
+    let mut index = 0usize;
+    while index < rows.len() {
+        encode_row(bytes, &rows[index])?;
+        index += 1;
     }
     Ok(())
 }
@@ -354,8 +356,10 @@ fn encode_fields(
     bytes: &mut Vec<u8>,
     fields: &[StatementFieldBytes],
 ) -> Result<(), AggregateStatementError> {
-    for field in fields {
-        append_bytes_field(bytes, field.as_bytes())?;
+    let mut index = 0usize;
+    while index < fields.len() {
+        append_bytes_field(bytes, fields[index].as_bytes())?;
+        index += 1;
     }
     Ok(())
 }
@@ -401,7 +405,9 @@ pub fn validate_row_arity<T>(
     rows: &[Vec<T>],
     expected: usize,
 ) -> Result<(), AggregateStatementError> {
-    for (index, row) in rows.iter().enumerate() {
+    let mut index = 0usize;
+    while index < rows.len() {
+        let row = &rows[index];
         if row.len() != expected {
             return Err(AggregateStatementError::RowArityMismatch {
                 index,
@@ -409,6 +415,7 @@ pub fn validate_row_arity<T>(
                 got: row.len(),
             });
         }
+        index += 1;
     }
     Ok(())
 }
@@ -449,13 +456,16 @@ fn check_repeat_suffix<T: Eq>(
     padded_count: u32,
     row_count: usize,
 ) -> Result<(), AggregateStatementError> {
-    for row in suffix {
+    let mut index = 0usize;
+    while index < suffix.len() {
+        let row = &suffix[index];
         if row != final_real {
             return Err(AggregateStatementError::BadPadding {
                 padded_count,
                 row_count,
             });
         }
+        index += 1;
     }
     Ok(())
 }

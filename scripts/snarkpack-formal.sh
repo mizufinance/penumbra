@@ -198,15 +198,19 @@ FSTAR
 }
 
 pushd crates/crypto/proof-aggregation >/dev/null
+echo "snarkpack formal: extracting proof-aggregation statement boundary"
 cargo hax into \
   -i '-** +penumbra_sdk_proof_aggregation::statement::StatementFieldBytes +penumbra_sdk_proof_aggregation::statement::StatementPublicInputRow +penumbra_sdk_proof_aggregation::statement::StatementPaddedRows +penumbra_sdk_proof_aggregation::statement::StatementEncodingInput +penumbra_sdk_proof_aggregation::statement::encode_statement +penumbra_sdk_proof_aggregation::statement::validate_counts +penumbra_sdk_proof_aggregation::statement::validate_row_arity +penumbra_sdk_proof_aggregation::statement::validate_repeat_final_padding +penumbra_sdk_proof_aggregation::aggregate_proof_wrapper::encode_wrapped_aggregate_proof +penumbra_sdk_proof_aggregation::aggregate_proof_wrapper::decode_wrapped_aggregate_proof_inner_range' \
-  fstar
+  fstar \
+  || fail "hax extraction failed for proof-aggregation statement boundary"
 popd >/dev/null
 
 pushd crates/crypto/proof-aggregation/src/ipp/ip_proofs >/dev/null
+echo "snarkpack formal: extracting ip_proofs challenge boundary"
 cargo hax into \
   -i '-** +ark_ip_proofs::challenge::ChallengeContext +ark_ip_proofs::challenge::challenge_context_preimage +ark_ip_proofs::challenge::challenge_preimage' \
-  fstar
+  fstar \
+  || fail "hax extraction failed for ip_proofs challenge boundary"
 popd >/dev/null
 
 prepare_fstar_inputs "$(find_hax_proof_libs)"

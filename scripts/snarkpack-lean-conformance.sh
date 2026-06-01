@@ -45,7 +45,7 @@ LEAN_BIN="$LEAN" cargo run -p penumbra-sdk-proof-aggregation-lean-conformance \
 # padding representatives, for all families. The transcript-shape domain is finite
 # and small, so it is enumerated, not fuzzed. The full sweep to 2^15 is the
 # release-gated #[ignore]d test `lean_oracle_matches_all_shapes_to_max`.
-LEAN_BIN="$LEAN" SNARKPACK_LEAN_ORACLE_SHAPES="$oracle_json" \
+LEAN_BIN="$LEAN" SNARKPACK_REQUIRE_LEAN=1 SNARKPACK_LEAN_ORACLE_SHAPES="$oracle_json" \
   cargo test -p penumbra-sdk-proof-aggregation-lean-conformance --lib
 
 echo "snarkpack lean conformance ok"
