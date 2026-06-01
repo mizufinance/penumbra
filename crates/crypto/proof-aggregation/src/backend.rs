@@ -1125,7 +1125,7 @@ pub(crate) fn verify_with_digest<D: Digest>(
         challenge_context,
         srs.verifier_srs()
             .map_err(|err| AggregateVerifyError::BadPadding(err.to_string()))?,
-        &pvk.vk,
+        pvk,
         padded_public_inputs,
         &aggregate,
     )
@@ -1150,7 +1150,7 @@ where
         trace,
         srs.verifier_srs()
             .map_err(|err| AggregateVerifyError::BadPadding(err.to_string()))?,
-        &pvk.vk,
+        pvk,
         padded_public_inputs,
         &aggregate,
     )
@@ -1226,7 +1226,7 @@ pub(crate) fn verify_with_digest_profiled<D: Digest>(
         challenge_context,
         srs.verifier_srs()
             .map_err(|err| AggregateVerifyError::BadPadding(err.to_string()))?,
-        &pvk.vk,
+        pvk,
         padded_public_inputs,
         &aggregate,
     )
@@ -1284,6 +1284,52 @@ mod tests {
     };
 
     use super::*;
+
+    /// The optimized PPE expression in `verify_ppe` — `e(α,β)^{r_sum}` reused as a
+    /// GT exponentiation plus two pairings against the prepared `-γ`/`-δ` line
+    /// tables (from `PreparedVerifyingKey`) — computes the identical target-group
+    /// element as the original three-pairing form, for random inputs. This is the
+    /// algebraic equivalence guarding that category-1 optimization (the raw `vk`
+    /// three-pairing form is `verify_ppe_baseline`, compiled under `bench-baseline`).
+    #[test]
+    fn ppe_optimized_matches_baseline_gt_value() {
+        use ark_inner_products::{cfg_multi_pairing, cfg_multi_pairing_g1_affine_g2_prepared};
+        type P = Bls12_377;
+        type G1 = <P as Pairing>::G1;
+        type G2 = <P as Pairing>::G2;
+        type G2Prepared = <P as Pairing>::G2Prepared;
+
+        let mut rng = ChaCha20Rng::seed_from_u64(2024);
+        for _ in 0..32 {
+            let alpha = G1::rand(&mut rng);
+            let beta = G2::rand(&mut rng);
+            let gamma = G2::rand(&mut rng);
+            let delta = G2::rand(&mut rng);
+            let g_ic = G1::rand(&mut rng);
+            let agg_c = G1::rand(&mut rng);
+            let r_sum = <P as Pairing>::ScalarField::rand(&mut rng);
+
+            // Baseline: three pairings over the raw vk points.
+            let baseline =
+                cfg_multi_pairing::<P>(&[alpha * r_sum, g_ic, agg_c], &[beta, gamma, delta])
+                    .unwrap();
+
+            // Optimized: e(α,β)^{r_sum} as a GT exponentiation, plus two pairings
+            // against the prepared -γ / -δ tables (stands in for pvk's precomputes).
+            let alpha_g1_beta_g2 = <P as Pairing>::pairing(alpha, beta).0;
+            let alpha_beta_rsum = PairingOutput::<P>(alpha_g1_beta_g2) * r_sum;
+            let neg_gamma_pc = G2Prepared::from((-gamma).into_affine());
+            let neg_delta_pc = G2Prepared::from((-delta).into_affine());
+            let g1_affine = G1::normalize_batch(&[-g_ic, -agg_c]);
+            let folded = cfg_multi_pairing_g1_affine_g2_prepared::<P>(
+                &g1_affine,
+                &[neg_gamma_pc, neg_delta_pc],
+            )
+            .unwrap();
+
+            assert_eq!(baseline, alpha_beta_rsum + folded);
+        }
+    }
 
     #[derive(Clone)]
     struct SquareCircuit {

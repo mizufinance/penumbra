@@ -1,6 +1,7 @@
 use ark_ec::pairing::{Pairing, PairingOutput};
+use ark_ec::CurveGroup;
 use ark_ff::{Field, One, Zero};
-use ark_groth16::{Proof, VerifyingKey};
+use ark_groth16::{PreparedVerifyingKey, Proof, VerifyingKey};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 use ark_std::rand::Rng;
@@ -25,9 +26,12 @@ use ark_dh_commitments::{
     afgho16::{AFGHOCommitmentG1, AFGHOCommitmentG2},
     identity::{HomomorphicPlaceholderValue, IdentityCommitment, IdentityOutput},
 };
+#[cfg(feature = "bench-baseline")]
+use ark_inner_products::cfg_multi_pairing;
 use ark_inner_products::{
-    cfg_multi_pairing, pairing_profile_snapshot, reset_pairing_profile_accumulator, InnerProduct,
-    MultiexponentiationInnerProduct, PairingComputationProfile, PairingInnerProduct,
+    cfg_multi_pairing_g1_affine_g2_prepared, pairing_profile_snapshot,
+    reset_pairing_profile_accumulator, InnerProduct, MultiexponentiationInnerProduct,
+    PairingComputationProfile, PairingInnerProduct,
 };
 
 type PairingInnerProductAB<P, D> = TIPA<
@@ -334,7 +338,7 @@ where
 }
 
 fn verify_public_inputs_ppe_profiled<P, D>(
-    vk: &VerifyingKey<P>,
+    pvk: &PreparedVerifyingKey<P>,
     public_inputs: &[Vec<P::ScalarField>],
     proof: &AggregateProof<P, D>,
     r: &P::ScalarField,
@@ -344,11 +348,14 @@ where
     D: Digest,
 {
     let public_input_fold_started = Instant::now();
-    let (r_sum, g_ic) = fold_public_inputs::<P>(vk, public_inputs, r);
+    let (r_sum, g_ic) = fold_public_inputs::<P>(&pvk.vk, public_inputs, r);
     let public_input_fold_ms = public_input_fold_started.elapsed().as_secs_f64() * 1000.0;
 
     let ppe_started = Instant::now();
-    let ppe_valid = verify_ppe::<P>(vk, proof, &r_sum, g_ic);
+    #[cfg(not(feature = "bench-baseline"))]
+    let ppe_valid = verify_ppe::<P>(pvk, proof, &r_sum, g_ic);
+    #[cfg(feature = "bench-baseline")]
+    let ppe_valid = verify_ppe_baseline::<P>(&pvk.vk, proof, &r_sum, g_ic);
     let ppe_ms = ppe_started.elapsed().as_secs_f64() * 1000.0;
 
     (ppe_valid, public_input_fold_ms, ppe_ms)
@@ -358,7 +365,7 @@ fn verify_independent_checks_profiled<P, D, S>(
     context: &ChallengeContext,
     trace: &mut S,
     ip_verifier_srs: &VerifierSRS<P>,
-    vk: &VerifyingKey<P>,
+    pvk: &PreparedVerifyingKey<P>,
     public_inputs: &[Vec<P::ScalarField>],
     proof: &AggregateProof<P, D>,
     r: &P::ScalarField,
@@ -374,7 +381,7 @@ where
         || {
             rayon::join(
                 || verify_tipa_c_buffered_profiled::<P, D>(context, ip_verifier_srs, proof, r),
-                || verify_public_inputs_ppe_profiled::<P, D>(vk, public_inputs, proof, r),
+                || verify_public_inputs_ppe_profiled::<P, D>(pvk, public_inputs, proof, r),
             )
         },
     );
@@ -388,7 +395,7 @@ where
         } else {
             Err("skipped tipa_c after tipa_ab failure".to_string())
         };
-        let ppe_result = verify_public_inputs_ppe_profiled::<P, D>(vk, public_inputs, proof, r);
+        let ppe_result = verify_public_inputs_ppe_profiled::<P, D>(pvk, public_inputs, proof, r);
         (tipa_ab_result, tipa_c_result, ppe_result)
     };
 
@@ -747,7 +754,7 @@ where
 pub fn verify_aggregate_proof<P, D>(
     context: &ChallengeContext,
     ip_verifier_srs: &VerifierSRS<P>,
-    vk: &VerifyingKey<P>,
+    pvk: &PreparedVerifyingKey<P>,
     public_inputs: &[Vec<P::ScalarField>], //TODO: Should use ToConstraintField instead
     proof: &AggregateProof<P, D>,
 ) -> Result<bool, Error>
@@ -760,7 +767,7 @@ where
         context,
         &mut trace,
         ip_verifier_srs,
-        vk,
+        pvk,
         public_inputs,
         proof,
     )
@@ -770,7 +777,7 @@ pub fn verify_aggregate_proof_with_trace<P, D, S>(
     context: &ChallengeContext,
     trace: &mut S,
     ip_verifier_srs: &VerifierSRS<P>,
-    vk: &VerifyingKey<P>,
+    pvk: &PreparedVerifyingKey<P>,
     public_inputs: &[Vec<P::ScalarField>],
     proof: &AggregateProof<P, D>,
 ) -> Result<bool, Error>
@@ -785,7 +792,7 @@ where
             context,
             trace,
             ip_verifier_srs,
-            vk,
+            pvk,
             public_inputs,
             proof,
             &r,
@@ -797,7 +804,7 @@ where
 pub fn verify_aggregate_proof_profiled<P, D>(
     context: &ChallengeContext,
     ip_verifier_srs: &VerifierSRS<P>,
-    vk: &VerifyingKey<P>,
+    pvk: &PreparedVerifyingKey<P>,
     public_inputs: &[Vec<P::ScalarField>],
     proof: &AggregateProof<P, D>,
 ) -> Result<AggregateProofVerificationProfile, Error>
@@ -810,7 +817,7 @@ where
         context,
         &mut trace,
         ip_verifier_srs,
-        vk,
+        pvk,
         public_inputs,
         proof,
     )
@@ -820,7 +827,7 @@ pub fn verify_aggregate_proof_profiled_with_trace<P, D, S>(
     context: &ChallengeContext,
     trace: &mut S,
     ip_verifier_srs: &VerifierSRS<P>,
-    vk: &VerifyingKey<P>,
+    pvk: &PreparedVerifyingKey<P>,
     public_inputs: &[Vec<P::ScalarField>],
     proof: &AggregateProof<P, D>,
 ) -> Result<AggregateProofVerificationProfile, Error>
@@ -842,7 +849,7 @@ where
         context,
         trace,
         ip_verifier_srs,
-        vk,
+        pvk,
         public_inputs,
         proof,
         &r,
@@ -1051,7 +1058,38 @@ fn fold_public_inputs<P: Pairing>(
     (r_sum, g_ic)
 }
 
+/// PPE check `e(α·r_sum, β)·e(g_ic, γ)·e(agg_c, δ) == ip_ab`, computed by reusing
+/// the precomputes already carried in `PreparedVerifyingKey` rather than pairing
+/// the raw `vk` G2 points afresh:
+///   - `e(α·r_sum, β) = e(α, β)^{r_sum}` — `pvk.alpha_g1_beta_g2` raised to
+///     `r_sum`, a GT exponentiation that removes a whole Miller loop.
+///   - `e(g_ic, γ) = e(-g_ic, -γ)` and `e(agg_c, δ) = e(-agg_c, -δ)` — paired
+///     against `pvk.{gamma,delta}_g2_neg_pc`, the already-prepared `-γ`/`-δ` line
+///     tables, so neither γ nor δ is re-prepared per verify.
+/// Same GT value as the 3-pairing form (verified by `ppe_optimized_matches_baseline`
+/// and the Groth16 oracle agreement test); byte- and trace-stable category 1.
 fn verify_ppe<P: Pairing>(
+    pvk: &PreparedVerifyingKey<P>,
+    proof: &AggregateProof<P, impl Digest>,
+    r_sum: &P::ScalarField,
+    g_ic: P::G1,
+) -> bool {
+    let alpha_beta_rsum = PairingOutput::<P>(pvk.alpha_g1_beta_g2) * *r_sum;
+    let g1_affine = P::G1::normalize_batch(&[-g_ic, -proof.agg_c]);
+    cfg_multi_pairing_g1_affine_g2_prepared::<P>(
+        &g1_affine,
+        &[pvk.gamma_g2_neg_pc.clone(), pvk.delta_g2_neg_pc.clone()],
+    )
+    .map(|folded| alpha_beta_rsum + folded == proof.ip_ab)
+    .unwrap_or(false)
+}
+
+/// Pre-optimization PPE form: three pairings over the raw `vk` G2 points. Retained
+/// only as the `bench-baseline` A/B reference. The optimized form's GT-value
+/// equivalence is gated by `ppe_optimized_matches_baseline_gt_value` (wrapper
+/// crate) and the Groth16 oracle agreement test.
+#[cfg(feature = "bench-baseline")]
+fn verify_ppe_baseline<P: Pairing>(
     vk: &VerifyingKey<P>,
     proof: &AggregateProof<P, impl Digest>,
     r_sum: &P::ScalarField,

@@ -349,6 +349,19 @@ the §4a 10% estimate.
 `rayon` stack (rescale folds, round commits, TIPA proofs, verification checks,
 KZG checks) is the default pending the benchmark matrix; do not re-tune it here.
 
+**Landed — prepared verifier-G2 reuse in the PPE (§11):** `verify_ppe` now reuses
+`PreparedVerifyingKey`'s `alpha_g1_beta_g2` (GT-exp, −1 Miller loop) and the
+prepared `-γ`/`-δ` tables instead of re-pairing the raw `vk` G2 points. Provable
+work reduction, equivalence-tested (`ppe_optimized_matches_baseline_gt_value`),
+byte/trace-stable category 1. Measured −3% at n=1, noise at larger n; landed under
+§4's never-slower clause, not the 10% bar. Subsumes the line-table-only idea below.
+
+**Memory-budget SRS precompute — remaining:**
+- *Large fixed-base MSM tables for the SRS generators* (windowed comb/Pippenger,
+  tens–hundreds of MB): **deferred to the §10 matrix.** Its payoff is
+  memory-bandwidth- and regime-bound and does **not** transfer from a single
+  developer machine to the production fleet — see §10a.
+
 Architectural TODOs (`tipa/mod.rs`, `structured_scalar_message.rs`) are
 out-of-loop refactors, not optimization candidates.
 
@@ -383,3 +396,91 @@ Metric: aggregate **throughput** (aggs/sec) *and* per-aggregation **latency**
 under a *saturated* workload — not idle-bench wall-clock, which flatters intra-op
 parallelism by assuming free spare cores. Output: a recommended default (regime +
 knob values) per candidate architecture, with the §0.6 register filled in.
+
+### 10a. Big memory budget — MUST be tested once the architecture is known
+
+A *memory budget* is a fixed, declared RAM cap a precomputation cache is allowed
+to consume in exchange for cutting repeated compute: you set the ceiling up front
+and size the lookup tables to fit under it. For the SRS this means windowed
+fixed-base tables (comb/Pippenger) over the fixed SRS generators, so each
+scalar-mul becomes table lookups instead of doublings. Bigger budget → bigger
+tables → faster fixed-base MSMs → more RAM per worker.
+
+**This is an open task, not a closed decision.** The large-table version is *not*
+benchmarked yet and must not be sized or committed on developer-machine numbers,
+because its payoff does not transfer:
+
+- **Memory-bandwidth bound.** Tables trade arithmetic for memory lookups; whether
+  that wins depends on the machine's memory bandwidth and cache hierarchy relative
+  to its multiplier throughput. The *sign* of the result can flip between a laptop
+  (fat caches, high unified-memory bandwidth) and a many-core server (many threads
+  contending for shared DRAM) — not just the magnitude.
+- **Regime-entangled (ties into §0.7/§10).** Tables cost RAM *per concurrent
+  worker*. In the **throughput** regime you either replicate them per worker (RAM
+  blows up — the budget genuinely binds) or share and serialize access (the
+  speedup evaporates). The budget cannot be chosen before the regime is, and the
+  regime is settled here, in the §10 matrix.
+- **Saturated, not idle.** The marginal MSM speedup must be measured under a
+  saturated workload; an idle laptop bench overstates it.
+
+**Action when production hardware is settled:** add the large fixed-base table to
+the §10 matrix as an extra axis — **memory budget** {0 (off), small, large}, swept
+against the regime × core-pool × `n` axes, measured under saturated load — and
+emit a recommended budget per candidate architecture. Until then this stays
+unbenched and uncommitted by design. (Record the chosen budget and table sizing in
+the §0.6 register once known.)
+
+## 11. Prepared verifier-G2 reuse in the PPE — LANDED (provable work reduction)
+
+The fixed verifier G2 points the PPE pairs against never change across
+verifications, yet the original `verify_ppe` re-prepared and re-paired them every
+call. The realized optimization reuses the precomputes **already carried in
+`ark_groth16::PreparedVerifyingKey`** instead of caching new line tables — so it
+goes further than line-table reuse and removes a whole pairing:
+
+- `e(α·r_sum, β) = e(α, β)^{r_sum}` — `pvk.alpha_g1_beta_g2` raised to `r_sum`, a
+  GT exponentiation that **removes one Miller loop** entirely.
+- `e(g_ic, γ) = e(-g_ic, -γ)` and `e(agg_c, δ) = e(-agg_c, -δ)` — paired against
+  `pvk.{gamma,delta}_g2_neg_pc`, the already-prepared `-γ`/`-δ` line tables, so
+  neither γ nor δ is re-prepared (and β is no longer prepared at all).
+
+Net per verify: −1 Miller loop, −3 `G2Prepared::from` builds, +1 GT exponentiation
+(cheaper than a Miller loop) + 2 already-prepared tables reused. Strictly less
+work for the identical GT element ⇒ **provably never slower** (§4 second clause).
+
+**Category 1, byte- and trace-stable.** The change is verifier-side arithmetic
+only: same accept/reject decision, no wire or Fiat-Shamir byte touched, version
+unchanged. The reference oracle has its own `verify_ppe` (it does not call
+production), and the PPE emits no challenge-trace events, so the PenumbraByte trace
+baseline is unaffected.
+
+**Equivalence:** `ppe_optimized_matches_baseline_gt_value`
+(`backend.rs` tests) asserts the optimized expression equals the three-pairing
+form's GT value over random inputs; end-to-end correctness is additionally gated by
+`snarkpack_matches_single_and_batch_groth16_oracles` and the byte/trace baselines.
+The pre-optimization three-pairing form is retained as `verify_ppe_baseline`
+(compiled only under `bench-baseline`) for the §3b A/B seam.
+
+**A/B (2026-06-01, M4 Pro, work floor `RAYON_NUM_THREADS=1`, `snarkpack verify`):**
+
+| n | optimized | origin baseline | Δ |
+|---:|---:|---:|---:|
+| 1  | 14.74 ms | 15.21 ms | −3.1% |
+| 2  | 33.61 | 33.34 | +0.8% (noise) |
+| 4  | 46.66 | 45.96 | +1.5% (noise) |
+| 8  | 59.14 | 58.31 | +1.4% (noise) |
+| 64 | 96.91 | 100.46 | −3.5% |
+
+The PPE is a fixed-cost stage, so the saving (~0.4–0.5 ms) is near-constant —
+visible (~3%) at n=1 and lost in measurement noise where verify is larger and
+deserialize-dominated (§8 candidate 1). It does **not** clear §4a's 10% bar and was
+not *pursued* under it; it was landed under §4's provable-work-reduction clause
+because the work was already done and the change is equivalence-tested and never
+slower. The larger lever remains §8 candidate 1.
+
+**Ceiling analysis (superseded).** The earlier line-table-only framing — caching
+just the 4 fixed-G2 `G2Prepared::from` builds — had a ceiling of ≤4.1% (n=1) → ~1%
+(n=64); see `crates/bench/benches/vanilla/snarkpack_prepared_g2.rs`, which measures
+per-`G2Prepared::from` cost vs full verify. The landed PPE reuse subsumes it by
+also removing the β Miller loop, not merely the prepares.
+
