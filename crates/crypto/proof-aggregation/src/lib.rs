@@ -38,8 +38,8 @@ pub use preflight::{
     VerifiedChallengeContext, VerifiedInnerProofBytes,
 };
 pub use srs::{
-    srs_id, srs_report, DevSrs, DevSrsReport, DEFAULT_MAX_PADDED_PROOF_COUNT, DEV_SRS_BACKEND_ID,
-    DEV_SRS_CURVE_ID, DEV_SRS_VERSION,
+    srs_id, srs_report, DevSrs, DevSrsReport, DEFAULT_DEV_SRS_ID, DEFAULT_MAX_PADDED_PROOF_COUNT,
+    DEV_SRS_BACKEND_ID, DEV_SRS_CURVE_ID, DEV_SRS_VERSION,
 };
 pub use statement::{
     aggregate_verification_key_digest, challenge_context, encode_statement, statement_digest,

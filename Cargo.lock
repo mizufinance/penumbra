@@ -6760,6 +6760,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "penumbra-sdk-proof-aggregation-lean-conformance"
+version = "2.1.0"
+dependencies = [
+ "ark-ff",
+ "ark-groth16",
+ "ark-r1cs-std",
+ "ark-relations",
+ "ark-snark",
+ "decaf377",
+ "penumbra-sdk-proof-aggregation",
+ "penumbra-sdk-proof-params",
+ "penumbra-sdk-shielded-pool",
+ "rand_chacha 0.3.1",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "penumbra-sdk-proof-aggregation-reference"
 version = "2.1.0"
 dependencies = [

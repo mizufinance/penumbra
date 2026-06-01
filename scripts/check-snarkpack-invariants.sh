@@ -131,6 +131,72 @@ check_fuzz_crate_boundary() {
     echo "$forbidden_deps" >&2
     fail "fuzz crate must not depend on or import production internals"
   fi
+
+  for target in \
+    wrapper_inner_range \
+    preflight_aggregate_verify \
+    deserialize_aggregate_proof \
+    sidecar_decoding \
+    aggregate_bundle_shape \
+    proposal_validation; do
+    local corpus_dir="$crate_dir/corpus/$target"
+    [[ -d "$corpus_dir" ]] || fail "fuzz corpus missing for $target"
+    [[ -n "$(find "$corpus_dir" -type f -print -quit)" ]] \
+      || fail "fuzz corpus must contain seed files for $target"
+  done
+  rg -n 'fuzz-corpus-baseline.md' docs/snarkpack/security.md docs/snarkpack/verification-plan.md >/dev/null \
+    || fail "fuzz corpus baseline must be referenced by SnarkPack docs"
+}
+
+check_lean_conformance_boundary() {
+  local manifest="crates/crypto/proof-aggregation-lean-conformance/Cargo.toml"
+  local crate_dir="crates/crypto/proof-aggregation-lean-conformance"
+  local lean_source="$crate_dir/lean/SnarkpackOracle.lean"
+
+  [[ -f "$manifest" ]] || fail "Lean conformance crate is missing"
+  [[ -f "$lean_source" ]] || fail "Lean conformance oracle source is missing"
+
+  rg -F '"crates/crypto/proof-aggregation-lean-conformance"' Cargo.toml >/dev/null \
+    || fail "Lean conformance crate must be listed as a workspace member"
+  rg -n '^publish = false$' "$manifest" >/dev/null \
+    || fail "Lean conformance crate must be marked publish = false"
+  rg -n '^penumbra-sdk-proof-aggregation = ' "$manifest" >/dev/null \
+    || fail "Lean conformance crate must use the public proof-aggregation API"
+
+  local forbidden_deps
+  forbidden_deps="$(
+    rg -n 'ark-ip-proofs|ark-inner-products|src/ipp|proof-aggregation/src' "$manifest" "$crate_dir/src" || true
+  )"
+  if [[ -n "$forbidden_deps" ]]; then
+    echo "$forbidden_deps" >&2
+    fail "Lean conformance crate must not depend on or import production internals"
+  fi
+
+  for row in \
+    fs.context-constructor \
+    fs.challenge-preimage \
+    fs.stage-labels \
+    gipa.challenge-dependency \
+    tipa.ab.kzg-challenge \
+    ssm.kzg-challenge \
+    groth16.randomizer; do
+    rg -F "\"$row\"" "$lean_source" >/dev/null \
+      || fail "Lean conformance oracle must name spec row $row"
+  done
+
+  rg -n '^snarkpack-lean-conformance:' justfile >/dev/null \
+    || fail "justfile must expose snarkpack-lean-conformance"
+
+  # The transcript-shape domain is finite (one shape per power of two up to the
+  # SRS max), so conformance is exhaustively enumerated, not fuzzed. Require the
+  # always-on smoke enumeration and the release-gated full sweep over every shape.
+  local conformance_src="$crate_dir/src/lib.rs"
+  rg -n 'fn all_shape_conformance_cases' "$conformance_src" >/dev/null \
+    || fail "Lean conformance must expose the exhaustive all-shape enumeration"
+  rg -n 'fn lean_oracle_matches_seeded_trace_shapes' "$conformance_src" >/dev/null \
+    || fail "Lean conformance must keep the always-on smoke enumeration test"
+  rg -n 'fn lean_oracle_matches_all_shapes_to_max' "$conformance_src" >/dev/null \
+    || fail "Lean conformance must keep the release-gated full shape sweep test"
 }
 
 check_trace_schema() {
@@ -492,6 +558,7 @@ done < <(awk '/^## Assumptions$/ { in_table = 1; next } /^## / && in_table { in_
 
 check_reference_crate_boundary
 check_fuzz_crate_boundary
+check_lean_conformance_boundary
 check_trace_schema
 
 expected_stamp="$(formal_proof_stamp)"

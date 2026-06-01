@@ -9,17 +9,22 @@ on:
       - '.github/workflows/snarkpack-formal.yml'
       - 'crates/crypto/proof-aggregation/formal/**'
       - 'crates/crypto/proof-aggregation-fuzz/**'
+      - 'crates/crypto/proof-aggregation-lean-conformance/**'
       - 'crates/crypto/proof-aggregation-reference/**'
       - 'crates/crypto/proof-aggregation-trace-schema/**'
+      - 'crates/core/app/src/app/mod.rs'
       - 'crates/crypto/proof-aggregation/Cargo.toml'
+      - 'crates/crypto/proof-aggregation/src/lib.rs'
       - 'crates/crypto/proof-aggregation/src/aggregate_proof_wrapper.rs'
       - 'crates/crypto/proof-aggregation/src/backend.rs'
       - 'crates/crypto/proof-aggregation/src/ipp/ip_proofs/src/challenge.rs'
       - 'crates/crypto/proof-aggregation/src/preflight.rs'
+      - 'crates/crypto/proof-aggregation/src/srs.rs'
       - 'crates/crypto/proof-aggregation/src/statement.rs'
       - 'docs/snarkpack/adaptation-register.md'
       - 'docs/snarkpack/bench-thresholds.md'
       - 'docs/snarkpack/formal-handoff.md'
+      - 'docs/snarkpack/fuzz-corpus-baseline.md'
       - 'docs/snarkpack/ripp-refinement.md'
       - 'docs/snarkpack/ripp-spec.md'
       - 'docs/snarkpack/security.md'
@@ -27,6 +32,7 @@ on:
       - 'justfile'
       - 'scripts/check-snarkpack-filecoin-shape.sh'
       - 'scripts/check-snarkpack-invariants.sh'
+      - 'scripts/snarkpack-lean-conformance.sh'
       - 'scripts/snarkpack-formal.sh'
 
 concurrency:
@@ -78,6 +84,14 @@ jobs:
           nix profile install "$HOME/.local/opt/hax-v0.3.7"
           echo "HAX_PROOF_LIBS_HOME=$HOME/.local/opt/hax-v0.3.7/hax-lib/proof-libs/fstar" >> "$GITHUB_ENV"
 
+      - name: Install pinned Lean
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
+          sh /tmp/elan-init.sh -y --default-toolchain leanprover/lean4:v4.11.0
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
       - name: Run SnarkPack formal gate
         run: nix develop --command just snarkpack-formal
 
@@ -102,3 +116,6 @@ jobs:
 
       - name: Run SnarkPack DoS gate
         run: nix develop --command just snarkpack-dos-gate
+
+      - name: Run SnarkPack Lean conformance
+        run: nix develop --command just snarkpack-lean-conformance

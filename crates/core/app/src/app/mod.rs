@@ -48,7 +48,7 @@ use penumbra_sdk_proof_aggregation::{
     aggregate_family_profiled, pad_items_to_power_of_two, prepare_verify_inputs, srs_id,
     verify_family_aggregate_profiled_status, AggregateBuildBackendProfile, AggregateBundle,
     AggregateStatement, AggregateVerificationProfile, DevSrs, FamilyAggregate, ProofFamilyId,
-    AGGREGATE_PROTOCOL_VERSION,
+    AGGREGATE_PROTOCOL_VERSION, DEFAULT_DEV_SRS_ID,
 };
 use penumbra_sdk_proof_params::batch::{self, BatchItem};
 use penumbra_sdk_proto::core::app::v1::TransactionsByHeightResponse;
@@ -2318,9 +2318,13 @@ impl App {
                 "aggregate bundle requires at least one proof"
             );
 
-            let srs = DevSrs::default();
             anyhow::ensure!(
-                bundle.srs_id == srs_id(&srs).to_vec(),
+                bundle.srs_id.len() == 32,
+                "aggregate bundle SRS id must be 32 bytes, got {}",
+                bundle.srs_id.len()
+            );
+            anyhow::ensure!(
+                bundle.srs_id == DEFAULT_DEV_SRS_ID,
                 "aggregate bundle SRS id mismatch"
             );
 
@@ -2346,6 +2350,7 @@ impl App {
                 bundle.families.len()
             );
 
+            let srs = DevSrs::default();
             let mut verify_tasks = Vec::new();
             for (segment_order_index, (family, expected_items)) in
                 expected_segments.into_iter().enumerate()
@@ -6428,6 +6433,7 @@ impl<T: StateWrite + ?Sized> StateWriteExt for T {}
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::ops::Deref;
     use std::sync::Arc;
 
@@ -6446,7 +6452,10 @@ mod tests {
     use penumbra_sdk_mock_client::MockClient;
     use penumbra_sdk_mock_consensus::TestNode;
     use penumbra_sdk_num::Amount;
-    use penumbra_sdk_proof_aggregation::{AggregateBundle, ProofFamilyId};
+    use penumbra_sdk_proof_aggregation::{
+        AggregateBundle, FamilyAggregate, ProofFamilyId, AGGREGATE_PROTOCOL_VERSION,
+        DEFAULT_DEV_SRS_ID,
+    };
     use penumbra_sdk_proto::DomainType;
     use penumbra_sdk_sct::component::clock::{EpochManager as _, EpochRead as _};
     use penumbra_sdk_sct::component::tree::{SctManager as _, SctRead as _};
@@ -7071,6 +7080,52 @@ mod tests {
             .to_string()
             .contains("aggregate bundle family count mismatch"));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aggregate_bundle_verification_rejects_bad_srs_id_before_srs_setup() -> Result<()> {
+        let mut wrong_full_length_srs_id = DEFAULT_DEV_SRS_ID.to_vec();
+        wrong_full_length_srs_id[0] ^= 0x01;
+
+        for (srs_id, expected_error) in [
+            (vec![0; 3], "aggregate bundle SRS id must be 32 bytes"),
+            (wrong_full_length_srs_id, "aggregate bundle SRS id mismatch"),
+        ] {
+            let bundle = AggregateBundle {
+                version: AGGREGATE_PROTOCOL_VERSION,
+                srs_id,
+                families: vec![FamilyAggregate {
+                    family_id: ProofFamilyId::Transfer,
+                    real_count: 1,
+                    padded_count: 1,
+                    aggregate_proof: vec![0xaa, 0xbb],
+                }],
+            };
+            let tx = aggregate_bundle_shape_test_tx(bundle.clone(), 5);
+            let artifact = Arc::new(TxArtifact {
+                tx: Arc::new(tx),
+                proof_items: BTreeMap::new(),
+                spend_nullifiers: Vec::new(),
+                anchor_pairs: Vec::new(),
+                total_proof_count: 1,
+                historical_validation: None,
+            });
+
+            let started = std::time::Instant::now();
+            let (profile, result) =
+                App::verify_aggregate_bundle_for_artifacts_raw_profiled(&[artifact], &bundle, None)
+                    .await;
+            let elapsed = started.elapsed();
+            let error = result.expect_err("bad SRS id must fail before SRS setup");
+
+            assert!(error.to_string().contains(expected_error));
+            assert_eq!(profile.expected_segments_ms, 0.0);
+            assert!(
+                elapsed < std::time::Duration::from_millis(500),
+                "bad SRS id rejection took {elapsed:?}"
+            );
+        }
         Ok(())
     }
 

@@ -107,6 +107,10 @@ snarkpack-formal:
 snarkpack-dos-gate:
     cargo test --release -p penumbra-sdk-proof-aggregation snarkpack_dos_gate_valid_and_adversarial_paths_hold_thresholds --lib -- --ignored --nocapture
 
+# Run the Lean-derived SnarkPack transcript/folding conformance oracle.
+snarkpack-lean-conformance:
+    ./scripts/snarkpack-lean-conformance.sh
+
 # Run the default gnark validation suite.
 gnark-proof-tests: gnark-proof-tests-fast
 

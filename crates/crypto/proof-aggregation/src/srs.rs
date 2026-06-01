@@ -17,6 +17,10 @@ pub const DEFAULT_MAX_PADDED_PROOF_COUNT: u32 = 32_768;
 pub const DEV_SRS_VERSION: u32 = 1;
 pub const DEV_SRS_CURVE_ID: &str = "bls12-377";
 pub const DEV_SRS_BACKEND_ID: &str = "ripp-snarkpack";
+pub const DEFAULT_DEV_SRS_ID: [u8; 32] = [
+    0x59, 0x95, 0xc6, 0x3d, 0xcc, 0x9f, 0xa5, 0xff, 0x52, 0x73, 0xff, 0x4a, 0x43, 0x10, 0x44, 0x0c,
+    0xbf, 0x24, 0xf2, 0x68, 0x2a, 0x05, 0x93, 0x94, 0x36, 0x1f, 0x1b, 0x9f, 0xc4, 0x4c, 0x61, 0xb1,
+];
 const DEV_SRS_SEED: [u8; 32] = [0x50; 32];
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -106,7 +110,6 @@ struct GeneratedDevSrs {
 }
 
 static DEFAULT_DEV_SRS: OnceLock<GeneratedDevSrs> = OnceLock::new();
-static DEFAULT_DEV_SRS_ID: OnceLock<[u8; 32]> = OnceLock::new();
 
 fn generate_default_dev_srs() -> GeneratedDevSrs {
     let started = Instant::now();
@@ -127,7 +130,7 @@ fn generate_default_dev_srs() -> GeneratedDevSrs {
 
 pub fn srs_id(srs: &DevSrs) -> [u8; 32] {
     if srs.max_padded_count == DEFAULT_MAX_PADDED_PROOF_COUNT {
-        return *DEFAULT_DEV_SRS_ID.get_or_init(|| compute_srs_id(srs));
+        return DEFAULT_DEV_SRS_ID;
     }
 
     compute_srs_id(srs)
@@ -193,7 +196,7 @@ impl DevSrs {
 
 #[cfg(test)]
 mod tests {
-    use super::{srs_id, DevSrs};
+    use super::{compute_srs_id, srs_id, DevSrs, DEFAULT_DEV_SRS_ID};
 
     #[test]
     fn srs_id_is_stable() {
@@ -211,5 +214,11 @@ mod tests {
             max_padded_count: 16_384,
         });
         assert_ne!(a, b);
+    }
+
+    #[test]
+    #[ignore = "serializes the full default SRS; run only when SRS generation changes"]
+    fn checked_in_default_srs_id_matches_generated_srs() {
+        assert_eq!(DEFAULT_DEV_SRS_ID, compute_srs_id(&DevSrs::default()));
     }
 }

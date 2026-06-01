@@ -94,7 +94,7 @@ classification defaults to the higher-risk class until resolved.
 | SHA-256 preimage resistance | cryptography lead | Challenge context and wrapper digests use SHA-256-derived commitments. | External cryptographic primitive assumption. | Postcondition: attacker cannot choose proof/wrapper/challenge bytes that invert the recorded SHA-256 commitments at campaign security margins; evidence is standard SHA-256 analysis plus fixed domain prefixes. | replace primitive or obtain external audit evidence; no end-to-end FV is planned for this primitive | security/crypto | assumed |
 | Domain separation by fixed distinct prefixes | proof-aggregation maintainers | Separate statement digest, challenge context, challenge preimage, VK digest, and wrapper domains. | Reduces to fixed-prefix review plus hash assumptions. | Postcondition: statement digest, challenge context, challenge preimage, VK digest, and wrapper domains have disjoint fixed prefixes; evidence is golden-layout tests plus invariant review. | prove prefix disjointness mechanically if this becomes proof-critical | security/crypto | assumed |
 | abstract Groth16 soundness | cryptography lead | Aggregate verification ultimately depends on Groth16 proof soundness. | Out of implementation-boundary FV scope. | Postcondition: accepted Groth16 proofs satisfy the verified circuits under the published Groth16 assumptions; evidence is published Groth16 proof material and existing Penumbra circuit audits. | standing assumption; replace only with external audit or separate Groth16 proof campaign | security/crypto | assumed |
-| abstract RIPP/GIPA/TIPA/SnarkPack algebraic soundness | cryptography lead | Local implementation is reviewed against the algorithm, but algebraic soundness is external. | End-to-end FV out of scope; paper + Filecoin impl assumed sound. | Postcondition: the reviewed local RIPP/GIPA/TIPA equations are sound under the published SnarkPack/RIPP algebraic assumptions; evidence is published proof material, `ripp-refinement.md`, and Stage 9 differential-conformance design. | standing assumption; Lean differential conformance can add evidence, but removal requires a separate algebraic proof or audit | security/crypto | assumed |
+| abstract RIPP/GIPA/TIPA/SnarkPack algebraic soundness | cryptography lead | Local implementation is reviewed against the algorithm, but algebraic soundness is external. | End-to-end FV out of scope; paper + Filecoin impl assumed sound. | Postcondition: the reviewed local RIPP/GIPA/TIPA equations are sound under the published SnarkPack/RIPP algebraic assumptions; evidence is published proof material, `ripp-refinement.md`, and the implemented Stage 9 Lean differential conformance gate (`just snarkpack-lean-conformance`). | standing assumption; removal requires a separate algebraic proof or external audit; Lean conformance remains supporting evidence, not a proof | security/crypto | assumed |
 | arkworks field/group/pairing mathematical operation implementations | proof-aggregation maintainers | The implementation calls arkworks arithmetic primitives. | Full library verification is outside this campaign. | Postcondition: arkworks field, group, and pairing operations implement the algebra used by SnarkPack; evidence is upstream tests plus `arkworks_pairing_identity_and_generator_consistency`, `arkworks_g1_g2_compressed_round_trip_and_identity`, and `arkworks_g1_g2_subgroup_and_torsion_rejection`. | verified arithmetic backend or external audit artifact | security/crypto | assumed |
 | arkworks MSM implementation computes intended linear combination | proof-aggregation maintainers | MSM is an implementation-heavy dependency, not a pure algebra axiom. | Full arkworks MSM verification is outside this campaign. | Postcondition: arkworks MSM returns the same linear combination as the naive fold for the boundary cases used by aggregation; evidence is `arkworks_msm_boundary_zero_scalar_identity_and_random_parity`. | verified MSM or external audit artifact | security/crypto | assumed |
 | arkworks serialization and subgroup behavior | proof-aggregation maintainers | SRS, VK, proof bytes, and digests depend on arkworks encoding checks. | Full serialization/subgroup proof is outside this campaign. | Postcondition: checked compressed G1/G2 decoding rejects malformed and non-subgroup encodings and round-trips valid/identity encodings; evidence is `arkworks_g1_g2_compressed_round_trip_and_identity`, `arkworks_g1_g2_malformed_compressed_bytes_reject`, and `arkworks_g1_g2_subgroup_and_torsion_rejection`. | verified serialization backend or external audit artifact | security/crypto | assumed |
@@ -149,10 +149,12 @@ algebraic soundness is a standing assumption, inherited from the published paper
 and the Filecoin (Bellperson v0.21.0) implementation, both assumed sound. There
 is no Lean algebraic proof and no EasyCrypt Fiat-Shamir proof.
 
-Instead, algebraic/transcript conformance is **probabilistically cross-checked**
-by Stage 9 (security.md): an independent, hand-built Lean model of the transcript
-and folding discipline, differentially tested against the Rust. This is evidence,
-not proof, and is non-blocking. F* via hax remains the executed-Rust
+Instead, algebraic/transcript conformance is **exhaustively cross-checked over a
+bounded domain** by Stage 9 (security.md): an independent, hand-built Lean model of
+the transcript and folding discipline, differentially tested against the Rust by
+enumerating every distinct transcript shape (one per power of two up to the SRS
+max) rather than sampling. This is evidence, not proof (bounded by the SRS max,
+algebra abstract), and is non-blocking. F* via hax remains the executed-Rust
 implementation-boundary proof backend and stays a completion blocker.
 
 ## Gates
@@ -165,6 +167,7 @@ proved rows above. The SnarkPack proof files are checked without
 The clean-image `.github/workflows/snarkpack-formal.yml` job installs the pinned
 Z3, F*, and hax versions from `toolchain.toml`, runs `just snarkpack-formal`,
 then runs `just snarkpack-invariants`, `just snarkpack-fuzz-smoke`,
-`just snarkpack-filecoin-shape`, and `just snarkpack-dos-gate`. Keep the full
+`just snarkpack-filecoin-shape`, `just snarkpack-dos-gate`, and
+`just snarkpack-lean-conformance`. Keep the full
 formal gate out of default `just check` unless it satisfies the default CI
 runtime policy; it remains a required SnarkPack workflow gate.

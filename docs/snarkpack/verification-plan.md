@@ -12,7 +12,8 @@ it matters (the bug class), its state, and how it is or should be implemented.
 End-to-end formal verification is out of scope (Scope Lock, 2026-06-01).
 Algebraic soundness is a standing assumption — the SnarkPack paper and the
 Filecoin (Bellperson v0.21.0) implementation are assumed sound — and is
-probabilistically cross-checked, not proved, by Layer 9.
+exhaustively cross-checked over its bounded transcript-shape domain, not proved,
+by Layer 9.
 
 ## Part A — The verification layers
 
@@ -117,11 +118,16 @@ probabilistically cross-checked, not proved, by Layer 9.
   never unbounded allocation, never expensive work before cheap shape checks.
 - Why: catches malformed-input handling bugs, panics, and DoS-via-malformed-bytes.
   The proposer is adversarial and submits arbitrary bytes.
-- State: bounded smoke implemented + scaffold.
-- Left: sustained long-running corpora, retained and minimized outside the smoke
-  gate.
+- State: minimized corpora are committed for all six original byte-boundary
+  targets plus the Layer 9 conformance target. The smoke gate seeds from the
+  corpus through a temporary copy, and the 2026-06-01 coverage-guided baseline is
+  recorded in `docs/snarkpack/fuzz-corpus-baseline.md`.
+- Finding closed: proposal validation previously generated full default SRS-id
+  material before rejecting malformed SRS ids; the regression
+  `aggregate_bundle_verification_rejects_bad_srs_id_before_srs_setup` and
+  checked-in `DEFAULT_DEV_SRS_ID` keep those rejects cheap.
 
-### 9. Lean differential conformance — planned (the one real gap)
+### 9. Lean differential conformance
 
 - What: an independent, hand-built Lean model of the transcript + folding
   discipline (FS label sequence, challenge derivation, GIPA/TIPA fold order,
@@ -131,14 +137,25 @@ probabilistically cross-checked, not proved, by Layer 9.
 - Why: the only independent algebraic/transcript oracle. Every other behavioral
   layer (3-6) shares the arkworks lineage, so a bug in the equations themselves
   passes all of them; Lean is derived from the paper/Filecoin discipline, so it can
-  falsify that shared-bug class. The wanted substitute for the algebraic-soundness
-  proof dropped with end-to-end FV — evidence, not proof; non-blocking.
-- State: not started.
-- Implementation: build the executable Lean model → seeded differential proptest →
-  graduate to coverage-guided spec-conformance fuzzing (Layer 8's fuzzer with the
-  conformance property instead of no-panic). "Programmatic extraction" means
-  compiling the Lean model to an oracle; there is no auto-extraction of the Rust
-  algebra into Lean.
+  falsify that shared-bug class. This strengthens, but does not remove, the
+  standing algebraic-soundness assumption.
+- State: implemented as evidence, not proof. The dev-only
+  `proof-aggregation-lean-conformance` crate compiles the hand-written Lean model
+  to an executable oracle, runs Rust-vs-Lean structural trace tests, and exposes
+  `just snarkpack-lean-conformance`.
+- Implementation: `SnarkpackOracle.lean` emits spec-row keyed event shapes; Rust
+  fixtures compare public trace-schema event shapes against them. The transcript
+  shape is fully determined by `padded_count = next power of two of the real
+  count` (the only count-dependent part is the GIPA round count = log₂), so the
+  domain of distinct shapes is **finite and small** — one per power of two up to
+  the SRS max (2¹⁵ = 16 shapes) × 4 families. It is therefore **exhaustively
+  enumerated, not fuzzed**: the always-on smoke test covers round depths 0..=5
+  plus padding representatives, and `lean_oracle_matches_all_shapes_to_max`
+  (release-gated, `#[ignore]`) covers every shape up to the SRS max. This is
+  certainty over the bounded shape domain — superseding the earlier
+  coverage-guided `lean_conformance` fuzz target, which sampled a domain small
+  enough to enumerate outright. It remains bounded (≤ 2¹⁵) and structural
+  (algebra abstract), so it is still evidence, not a soundness proof.
 
 ### 10. Performance / DoS-asymmetry gates
 
@@ -172,8 +189,9 @@ Locked 2026-06-01: SnarkPack/RIPP/Groth16 algebraic soundness (assumed from the
 paper + Filecoin implementation), arkworks field/group/pairing/MSM correctness,
 SHA-256 collision/preimage resistance, the random-oracle model for Fiat-Shamir,
 BLS12-377 group laws, and hax semantic preservation. End-to-end FV is out of
-scope. Layer 9 is the only one that probabilistically cross-checks the
-algebraic/transcript assumption; the rest are external-audit-or-replace.
+scope. Layer 9 is the only one that cross-checks the algebraic/transcript
+assumption (exhaustively over its bounded shape domain); the rest are
+external-audit-or-replace.
 
 ## Part C — Remaining-work plan
 
@@ -193,8 +211,8 @@ P2 — parallel, evidence-strengthening, non-blocking:
 
 | Item | Closes layer | Detail |
 |---|---|---|
-| Fuzz corpus expansion | 8 | Smoke → sustained corpora; retain + minimize outside the smoke gate. |
-| Lean differential conformance | 9 | The independent executable oracle. Hand-derived Lean transcript/folding model → differential proptest → conformance fuzz. |
+| Fuzz corpus expansion | 8 | Minimized corpora committed for each target; smoke seeds from the corpus; baseline and finding triage recorded in `fuzz-corpus-baseline.md`. |
+| Lean differential conformance | 9 | Independent executable oracle implemented. Hand-derived Lean transcript/folding model, differentially tested against the Rust by exhaustive enumeration of the finite shape domain (powers of two to the SRS max), not fuzzing. |
 
 P0-final — Final manual review: timeboxed review of spec, adaptation register,
 reference path, F* proof index, test/fuzz evidence, and assumptions, once P1 is
@@ -208,9 +226,11 @@ closed in `formal-handoff.md`. The live completion path is evidence maintenance:
 keep the RIPP refinement map exact, keep the DoS gate in CI, keep assumption rows
 narrow, and keep the formal workflow reproducible from pinned tools.
 
-Fuzz expansion and Lean differential are P2 — they strengthen evidence but do not
-block completion; Lean is the larger investment and closes the genuine
-independent-oracle gap.
+Fuzz expansion and Lean differential are P2 evidence-strengthening work. They are
+implemented as non-blocking evidence: the standing algebraic-soundness assumption
+remains, but it is now backed by a live paper-derived Lean conformance oracle that
+exhaustively enumerates the finite transcript-shape domain, plus coverage-guided
+byte-boundary fuzzing.
 
 Critical path to phase-complete: no P1 formal rows remain open; final manual
 review is the remaining campaign-level governance checkpoint.

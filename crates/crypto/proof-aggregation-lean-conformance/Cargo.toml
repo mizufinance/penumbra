@@ -1,0 +1,24 @@
+[package]
+name = "penumbra-sdk-proof-aggregation-lean-conformance"
+authors = { workspace = true }
+repository = { workspace = true }
+description = "Dev-only Lean differential conformance oracle for Penumbra SnarkPack traces"
+version = { workspace = true }
+license = { workspace = true }
+edition = { workspace = true }
+publish = false
+
+[dependencies]
+ark-ff = { workspace = true }
+ark-groth16 = { workspace = true, default-features = false }
+ark-r1cs-std = { workspace = true }
+ark-relations = { workspace = true }
+ark-snark = { workspace = true }
+decaf377 = { workspace = true }
+penumbra-sdk-proof-aggregation = { workspace = true }
+penumbra-sdk-proof-params = { workspace = true, default-features = false }
+penumbra-sdk-shielded-pool = { workspace = true, default-features = false }
+rand_chacha = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
