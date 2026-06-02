@@ -1,15 +1,18 @@
-use ark_groth16::{r1cs_to_qap::LibsnarkReduction, Groth16, PreparedVerifyingKey};
+use ark_groth16::{r1cs_to_qap::LibsnarkReduction, Groth16, PreparedVerifyingKey, Proof};
 use ark_r1cs_std::{alloc::AllocVar, eq::EqGadget, fields::fp::FpVar};
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use decaf377::{Bls12_377, Fq};
 use penumbra_sdk_proof_aggregation::{
-    aggregate_family, pad_items_to_power_of_two, verify_family_aggregate, DevSrs, ProofFamilyId,
+    aggregate_family, pad_items_to_power_of_two, srs_id, verify_family_aggregate,
+    AggregateStatement, DevSrs, ProofFamilyId, AGGREGATE_PROTOCOL_VERSION,
 };
 use penumbra_sdk_proof_params::batch::BatchItem;
 use penumbra_sdk_shielded_pool::ShieldedIcs20WithdrawalFamilyId;
 use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
+use std::path::PathBuf;
 
 #[derive(Clone)]
 struct SquareCircuit {
@@ -38,8 +41,54 @@ struct Fixture {
     count: usize,
     pvk: PreparedVerifyingKey<Bls12_377>,
     padded_items: Vec<BatchItem>,
-    padded_public_inputs: Vec<Vec<Fq>>,
+    statement: AggregateStatement,
     aggregate_proof: Vec<u8>,
+}
+
+/// Committed Groth16 proof corpus directory. The expensive setup (proving-key
+/// generation + per-proof proving) runs once, is serialized here, and every
+/// subsequent benchmark run loads from disk instead of re-proving. Keyed by
+/// `count` only — the `SquareCircuit` proving key and proofs do not depend on
+/// the aggregation family (the family only selects the transcript domain).
+fn corpus_path(count: usize) -> PathBuf {
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/corpus/snarkpack"))
+        .join(format!("items_{count}.bin"))
+}
+
+/// Load the proof corpus for `count` from disk, generating and persisting it on
+/// first use.
+fn load_or_generate_items(count: usize) -> (PreparedVerifyingKey<Bls12_377>, Vec<BatchItem>) {
+    let path = corpus_path(count);
+    if let Ok(bytes) = std::fs::read(&path) {
+        let mut cur = &bytes[..];
+        let pvk = PreparedVerifyingKey::<Bls12_377>::deserialize_uncompressed(&mut cur)
+            .expect("corpus pvk checked decode");
+        let raw = Vec::<(Proof<Bls12_377>, Vec<Fq>)>::deserialize_uncompressed(&mut cur)
+            .expect("corpus items checked decode");
+        let items = raw
+            .into_iter()
+            .map(|(proof, public_inputs)| BatchItem {
+                proof,
+                public_inputs,
+            })
+            .collect();
+        return (pvk, items);
+    }
+
+    let (pvk, items) = generate_items(count);
+    let mut buf = Vec::new();
+    pvk.serialize_uncompressed(&mut buf)
+        .expect("pvk serializes");
+    let raw: Vec<(Proof<Bls12_377>, Vec<Fq>)> = items
+        .iter()
+        .map(|item| (item.proof.clone(), item.public_inputs.clone()))
+        .collect();
+    raw.serialize_uncompressed(&mut buf)
+        .expect("items serialize");
+    std::fs::create_dir_all(path.parent().expect("corpus dir has parent"))
+        .expect("create corpus dir");
+    std::fs::write(&path, buf).expect("persist corpus");
+    (pvk, items)
 }
 
 fn generate_items(count: usize) -> (PreparedVerifyingKey<Bls12_377>, Vec<BatchItem>) {
@@ -72,22 +121,31 @@ fn generate_items(count: usize) -> (PreparedVerifyingKey<Bls12_377>, Vec<BatchIt
 }
 
 fn build_fixture(family_id: ProofFamilyId, count: usize, srs: &DevSrs) -> Fixture {
-    let (pvk, items) = generate_items(count);
+    let (pvk, items) = load_or_generate_items(count);
     let padded_items =
         pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
-    let aggregate_proof =
-        aggregate_family(family_id, &pvk, &padded_items, srs).expect("aggregation succeeds");
     let padded_public_inputs = padded_items
         .iter()
         .map(|item| item.public_inputs.clone())
-        .collect();
+        .collect::<Vec<_>>();
+    let statement = AggregateStatement::new(
+        AGGREGATE_PROTOCOL_VERSION,
+        family_id,
+        srs_id(srs),
+        &pvk,
+        count as u32,
+        &padded_public_inputs,
+    )
+    .expect("statement builds");
+    let aggregate_proof =
+        aggregate_family(&statement, &pvk, &padded_items, srs).expect("aggregation succeeds");
 
     Fixture {
         family_id,
         count,
         pvk,
         padded_items,
-        padded_public_inputs,
+        statement,
         aggregate_proof,
     }
 }
@@ -116,7 +174,7 @@ fn snarkpack_bench(c: &mut Criterion) {
             |b, fixture| {
                 b.iter(|| {
                     let _ = aggregate_family(
-                        fixture.family_id,
+                        &fixture.statement,
                         &fixture.pvk,
                         &fixture.padded_items,
                         &srs,
@@ -136,10 +194,9 @@ fn snarkpack_bench(c: &mut Criterion) {
             |b, fixture| {
                 b.iter(|| {
                     verify_family_aggregate(
-                        fixture.family_id,
+                        &fixture.statement,
                         &fixture.pvk,
                         &fixture.aggregate_proof,
-                        &fixture.padded_public_inputs,
                         &srs,
                     )
                     .expect("verification succeeds");

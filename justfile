@@ -23,6 +23,7 @@ build:
 
 # Runs 'cargo check' on all rust files in the project.
 check:
+    just snarkpack-invariants
     # check, failing on warnings
     RUSTFLAGS="-D warnings" cargo check --release --all-targets --all-features --target-dir=target/check
     # fmt dry-run, failing on any suggestions
@@ -79,6 +80,36 @@ gnark-proof-tests-fast:
 gnark-proof-tests-slow:
     cargo test --release -p penumbra-sdk-shielded-pool --features bundled-proving-keys transfer_proof_roundtrip --lib
     cargo test --release -p penumbra-sdk-shielded-pool --lib
+
+# Run ignored slow SnarkPack parity tests.
+snarkpack-slow:
+    cargo test -p penumbra-sdk-proof-aggregation snarkpack_matches_legacy_batch_across_families_and_counts_slow --lib -- --ignored
+    cargo test -p penumbra-sdk-proof-aggregation snarkpack_matches_single_and_batch_groth16_oracles_slow --lib -- --ignored
+    cargo test -p penumbra-sdk-proof-aggregation-reference reference_property_matches_production_and_batch_oracles_slow --lib -- --ignored
+
+# Run bounded SnarkPack fuzz harness smoke tests.
+snarkpack-fuzz-smoke:
+    bash -lc 'set -euo pipefail; unset ROCKSDB_LIB_DIR ROCKSDB_INCLUDE_DIR; toolchain="${SNARKPACK_FUZZ_TOOLCHAIN:-nightly-2025-09-30}"; export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" RUSTUP_TOOLCHAIN="$toolchain"; runs="${SNARKPACK_FUZZ_RUNS:-16}"; fuzz_dir="crates/crypto/proof-aggregation-fuzz"; tmp="$(mktemp -d)"; trap "rm -rf \"$tmp\"" EXIT; cargo fuzz build --fuzz-dir "$fuzz_dir"; for target in wrapper_inner_range preflight_aggregate_verify deserialize_aggregate_proof sidecar_decoding aggregate_bundle_shape proposal_validation; do mkdir -p "$tmp/$target"; cp "$fuzz_dir"/corpus/"$target"/* "$tmp/$target"/; cargo fuzz run --fuzz-dir "$fuzz_dir" "$target" "$tmp/$target" -- -runs="$runs"; done'
+
+# Check durable SnarkPack hardening invariants.
+snarkpack-invariants:
+    ./scripts/check-snarkpack-invariants.sh
+
+# Re-derive Filecoin v2 SnarkPack transcript-shape evidence from the pinned Bellperson source.
+snarkpack-filecoin-shape:
+    ./scripts/check-snarkpack-filecoin-shape.sh
+
+# Run pinned SnarkPack formal extraction and F* proof checks.
+snarkpack-formal:
+    ./scripts/snarkpack-formal.sh
+
+# Enforce SnarkPack valid-vs-adversarial DoS latency and size thresholds.
+snarkpack-dos-gate:
+    cargo test --release -p penumbra-sdk-proof-aggregation snarkpack_dos_gate_valid_and_adversarial_paths_hold_thresholds --lib -- --ignored --nocapture
+
+# Run the Lean-derived SnarkPack transcript/folding conformance oracle.
+snarkpack-lean-conformance:
+    ./scripts/snarkpack-lean-conformance.sh
 
 # Run the default gnark validation suite.
 gnark-proof-tests: gnark-proof-tests-fast

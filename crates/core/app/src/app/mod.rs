@@ -1,6 +1,8 @@
 mod preconsensus;
 mod validation_support;
 
+#[cfg(any(test, feature = "fuzzing"))]
+pub use self::preconsensus::decode_batch_item_for_fuzz;
 pub use self::preconsensus::{
     CheckTxProfile, PrepareProposalProfile, ProcessProposalProfile, ProposalArtifactSidecar,
     ProposalArtifactSidecarRecord, ProposalArtifactSidecarRecordEntry,
@@ -44,8 +46,9 @@ use penumbra_sdk_ibc::component::{Ibc, StateWriteExt as _};
 use penumbra_sdk_ibc::StateReadExt as _;
 use penumbra_sdk_proof_aggregation::{
     aggregate_family_profiled, pad_items_to_power_of_two, prepare_verify_inputs, srs_id,
-    verify_family_aggregate_profiled_unchecked, AggregateBuildBackendProfile, AggregateBundle,
-    AggregateVerificationProfile, DevSrs, FamilyAggregate, ProofFamilyId,
+    verify_family_aggregate_profiled_status, AggregateBuildBackendProfile, AggregateBundle,
+    AggregateStatement, AggregateVerificationProfile, DevSrs, FamilyAggregate, ProofFamilyId,
+    AGGREGATE_PROTOCOL_VERSION, DEFAULT_DEV_SRS_ID,
 };
 use penumbra_sdk_proof_params::batch::{self, BatchItem};
 use penumbra_sdk_proto::core::app::v1::TransactionsByHeightResponse;
@@ -112,7 +115,6 @@ pub const MAX_TRANSACTION_SIZE_BYTES: usize = 96 * 1024;
 /// The maximum size of the evidence portion of a block (30KB).
 pub const MAX_EVIDENCE_SIZE_BYTES: usize = 30 * 1024;
 
-const AGGREGATE_BUNDLE_VERSION: u32 = 1;
 const MAX_PADDED_PROOF_COUNT: usize = 32_768;
 const AGGREGATE_DEBUG_DIR_ENV: &str = "PENUMBRA_AGGREGATE_DEBUG_DIR";
 static AGGREGATE_DEBUG_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -1884,7 +1886,7 @@ impl App {
         family_estimates: &[AggregateBundleFamilyEstimate],
     ) -> usize {
         let bundle = AggregateBundle {
-            version: AGGREGATE_BUNDLE_VERSION,
+            version: AGGREGATE_PROTOCOL_VERSION,
             srs_id: vec![0; 32],
             families: family_estimates
                 .iter()
@@ -2020,6 +2022,14 @@ impl App {
                 .iter()
                 .map(|item| item.public_inputs.clone())
                 .collect::<Vec<_>>();
+            let statement = AggregateStatement::new(
+                AGGREGATE_PROTOCOL_VERSION,
+                family_id,
+                srs_id(&srs),
+                proof_verification_key_for_family(family_id),
+                real_count,
+                &padded_public_inputs,
+            )?;
             let debug_entry = debug_entries
                 .iter()
                 .find(|entry| entry.family_id == family_id)
@@ -2044,7 +2054,7 @@ impl App {
                 move || -> Result<(FamilyAggregate, AggregateBuildProfile, f64)> {
                     let family_start = Instant::now();
                     let (aggregate_proof, backend_profile) = aggregate_family_profiled(
-                        family_id,
+                        &statement,
                         proof_verification_key_for_family(family_id),
                         &padded_items,
                         &srs_for_task,
@@ -2177,7 +2187,7 @@ impl App {
         let tx_build_start = Instant::now();
         let bundle_tx = self
             .build_aggregate_bundle_tx(AggregateBundle {
-                version: AGGREGATE_BUNDLE_VERSION,
+                version: AGGREGATE_PROTOCOL_VERSION,
                 srs_id: srs_id(&srs).to_vec(),
                 families,
             })
@@ -2213,6 +2223,11 @@ impl App {
         valid_binding_signature(tx)?;
         tx.aggregate_bundle_action()
             .context("aggregate bundle tx missing bundle action")
+    }
+
+    #[cfg(feature = "fuzzing")]
+    pub fn ensure_aggregate_bundle_tx_shape_for_fuzz(tx: &Transaction) -> Result<()> {
+        Self::ensure_aggregate_bundle_tx_shape(tx).map(|_| ())
     }
 
     fn expected_aggregate_segments(
@@ -2292,7 +2307,7 @@ impl App {
         let mut profile = AggregateVerifyProfile::default();
         let result: Result<()> = async {
             anyhow::ensure!(
-                bundle.version == AGGREGATE_BUNDLE_VERSION,
+                bundle.version == AGGREGATE_PROTOCOL_VERSION,
                 "unsupported aggregate bundle version {}",
                 bundle.version
             );
@@ -2303,9 +2318,13 @@ impl App {
                 "aggregate bundle requires at least one proof"
             );
 
-            let srs = DevSrs::default();
             anyhow::ensure!(
-                bundle.srs_id == srs_id(&srs).to_vec(),
+                bundle.srs_id.len() == 32,
+                "aggregate bundle SRS id must be 32 bytes, got {}",
+                bundle.srs_id.len()
+            );
+            anyhow::ensure!(
+                bundle.srs_id == DEFAULT_DEV_SRS_ID,
                 "aggregate bundle SRS id mismatch"
             );
 
@@ -2331,6 +2350,7 @@ impl App {
                 bundle.families.len()
             );
 
+            let srs = DevSrs::default();
             let mut verify_tasks = Vec::new();
             for (segment_order_index, (family, expected_items)) in
                 expected_segments.into_iter().enumerate()
@@ -2385,14 +2405,21 @@ impl App {
                 let srs_for_task = srs;
                 let debug_segment_index = debug_entry.segment_index;
                 let debug_family_index = debug_entry.family_index;
+                let statement = AggregateStatement::new(
+                    AGGREGATE_PROTOCOL_VERSION,
+                    family,
+                    srs_id(&srs_for_task),
+                    proof_verification_key_for_family(family),
+                    aggregate.real_count,
+                    &padded_public_inputs,
+                )?;
 
                 verify_tasks.push(tokio::task::spawn_blocking(
                     move || -> Result<(usize, usize, ProofFamilyId, AggregateVerificationProfile)> {
-                        let backend_profile = verify_family_aggregate_profiled_unchecked(
-                            family,
+                        let backend_profile = verify_family_aggregate_profiled_status(
+                            &statement,
                             proof_verification_key_for_family(family),
                             &aggregate_proof,
-                            &padded_public_inputs,
                             &srs_for_task,
                         )?;
 
@@ -3011,7 +3038,7 @@ impl App {
                 .await?;
         Ok((
             AggregateBundle {
-                version: AGGREGATE_BUNDLE_VERSION,
+                version: AGGREGATE_PROTOCOL_VERSION,
                 srs_id: srs_id(&DevSrs::default()).to_vec(),
                 families,
             },
@@ -3028,7 +3055,7 @@ impl App {
                 .await?;
         Ok((
             AggregateBundle {
-                version: AGGREGATE_BUNDLE_VERSION,
+                version: AGGREGATE_PROTOCOL_VERSION,
                 srs_id: srs_id(&DevSrs::default()).to_vec(),
                 families,
             },
@@ -3049,7 +3076,7 @@ impl App {
             .await?;
         Ok((
             AggregateBundle {
-                version: AGGREGATE_BUNDLE_VERSION,
+                version: AGGREGATE_PROTOCOL_VERSION,
                 srs_id: srs_id(&DevSrs::default()).to_vec(),
                 families,
             },
@@ -6406,12 +6433,15 @@ impl<T: StateWrite + ?Sized> StateWriteExt for T {}
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::ops::Deref;
     use std::sync::Arc;
 
     use anyhow::{anyhow, Context, Result};
+    use ark_ff::Zero;
     use cnidarium::{StateDelta, StateRead, StateWrite, TempStorage};
     use decaf377::{Fq, Fr};
+    use decaf377_rdsa as rdsa;
     use futures::StreamExt as _;
     use penumbra_sdk_asset::{asset, Value, BASE_ASSET_DENOM, BASE_ASSET_ID};
     use penumbra_sdk_compact_block::StatePayload;
@@ -6422,7 +6452,10 @@ mod tests {
     use penumbra_sdk_mock_client::MockClient;
     use penumbra_sdk_mock_consensus::TestNode;
     use penumbra_sdk_num::Amount;
-    use penumbra_sdk_proof_aggregation::{AggregateBundle, ProofFamilyId};
+    use penumbra_sdk_proof_aggregation::{
+        AggregateBundle, FamilyAggregate, ProofFamilyId, AGGREGATE_PROTOCOL_VERSION,
+        DEFAULT_DEV_SRS_ID,
+    };
     use penumbra_sdk_proto::DomainType;
     use penumbra_sdk_sct::component::clock::{EpochManager as _, EpochRead as _};
     use penumbra_sdk_sct::component::tree::{SctManager as _, SctRead as _};
@@ -6440,6 +6473,8 @@ mod tests {
         plan::MemoPlan,
         Action, DetectionData, Transaction, TransactionParameters, TransactionPlan,
     };
+    use penumbra_sdk_txhash::AuthorizingData;
+    use proptest::prelude::*;
     use rand_core::OsRng;
     use sha2::Digest as _;
     use tendermint::v0_37::abci::{request, response};
@@ -6897,6 +6932,106 @@ mod tests {
         Ok(())
     }
 
+    fn aggregate_bundle_shape_test_tx(bundle: AggregateBundle, mode: u8) -> Transaction {
+        let mut tx = Transaction {
+            transaction_body: penumbra_sdk_transaction::TransactionBody {
+                actions: vec![Action::AggregateBundle(bundle.clone())],
+                transaction_parameters: TransactionParameters {
+                    expiry_height: 0,
+                    chain_id: "penumbra-test-chain".to_owned(),
+                    fee: Fee::default(),
+                },
+                fee_funding: None,
+                detection_data: None,
+                memo: None,
+            },
+            binding_sig: [0; 64].into(),
+            anchor: penumbra_sdk_tct::Root(penumbra_sdk_tct::structure::Hash::zero()),
+        };
+
+        match mode % 6 {
+            0 => tx.transaction_body.actions.clear(),
+            1 => {
+                tx.transaction_body.memo = Some(MemoCiphertext([0; MEMO_CIPHERTEXT_LEN_BYTES]));
+            }
+            2 => {
+                tx.transaction_body.detection_data = Some(DetectionData { fmd_clues: vec![] });
+            }
+            3 => {
+                tx.transaction_body.transaction_parameters.fee =
+                    Fee::from_staking_token_amount(1u64.into());
+            }
+            4 => tx
+                .transaction_body
+                .actions
+                .push(Action::AggregateBundle(bundle)),
+            _ => {
+                let binding_signing_key = rdsa::SigningKey::from(Fr::zero());
+                let auth_hash = tx.transaction_body.auth_hash();
+                tx.binding_sig = binding_signing_key.sign_deterministic(auth_hash.as_bytes());
+            }
+        }
+
+        tx
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn ensure_aggregate_bundle_tx_shape_do_not_panic(
+            mode in 0u8..6,
+            version in any::<u32>(),
+            srs_id in prop::collection::vec(any::<u8>(), 0usize..=64),
+            aggregate_proof in prop::collection::vec(any::<u8>(), 0usize..=1024),
+            real_count in any::<u32>(),
+            padded_count in any::<u32>(),
+        ) {
+            let bundle = AggregateBundle {
+                version,
+                srs_id,
+                families: vec![penumbra_sdk_proof_aggregation::FamilyAggregate {
+                    family_id: ProofFamilyId::Transfer,
+                    real_count,
+                    padded_count,
+                    aggregate_proof,
+                }],
+            };
+            let tx = aggregate_bundle_shape_test_tx(bundle, mode);
+            let result = App::ensure_aggregate_bundle_tx_shape(&tx);
+
+            match mode % 6 {
+                0 | 4 => prop_assert!(
+                    result
+                        .expect_err("aggregate action shape mutation must reject")
+                        .to_string()
+                        .contains("exactly one aggregate bundle action")
+                ),
+                1 => prop_assert!(
+                    result
+                        .expect_err("memo mutation must reject")
+                        .to_string()
+                        .contains("must not contain a memo")
+                ),
+                2 => prop_assert!(
+                    result
+                        .expect_err("detection mutation must reject")
+                        .to_string()
+                        .contains("must not contain detection data")
+                ),
+                3 => prop_assert!(
+                    result
+                        .expect_err("fee mutation must reject")
+                        .to_string()
+                        .contains("must have zero fee")
+                ),
+                _ => {
+                    let _ = result;
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn aggregate_bundle_verification_rejects_bad_version_srs_and_family_count() -> Result<()>
     {
@@ -6913,7 +7048,7 @@ mod tests {
             .contains("unsupported aggregate bundle version"));
 
         let mut bad_srs = bundle.clone();
-        bad_srs.srs_id.push(0);
+        bad_srs.srs_id[0] ^= 0x01;
         let srs_error =
             App::verify_aggregate_bundle_for_artifacts_raw_public(&artifacts, &bad_srs, None)
                 .await
@@ -6945,6 +7080,52 @@ mod tests {
             .to_string()
             .contains("aggregate bundle family count mismatch"));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aggregate_bundle_verification_rejects_bad_srs_id_before_srs_setup() -> Result<()> {
+        let mut wrong_full_length_srs_id = DEFAULT_DEV_SRS_ID.to_vec();
+        wrong_full_length_srs_id[0] ^= 0x01;
+
+        for (srs_id, expected_error) in [
+            (vec![0; 3], "aggregate bundle SRS id must be 32 bytes"),
+            (wrong_full_length_srs_id, "aggregate bundle SRS id mismatch"),
+        ] {
+            let bundle = AggregateBundle {
+                version: AGGREGATE_PROTOCOL_VERSION,
+                srs_id,
+                families: vec![FamilyAggregate {
+                    family_id: ProofFamilyId::Transfer,
+                    real_count: 1,
+                    padded_count: 1,
+                    aggregate_proof: vec![0xaa, 0xbb],
+                }],
+            };
+            let tx = aggregate_bundle_shape_test_tx(bundle.clone(), 5);
+            let artifact = Arc::new(TxArtifact {
+                tx: Arc::new(tx),
+                proof_items: BTreeMap::new(),
+                spend_nullifiers: Vec::new(),
+                anchor_pairs: Vec::new(),
+                total_proof_count: 1,
+                historical_validation: None,
+            });
+
+            let started = std::time::Instant::now();
+            let (profile, result) =
+                App::verify_aggregate_bundle_for_artifacts_raw_profiled(&[artifact], &bundle, None)
+                    .await;
+            let elapsed = started.elapsed();
+            let error = result.expect_err("bad SRS id must fail before SRS setup");
+
+            assert!(error.to_string().contains(expected_error));
+            assert_eq!(profile.expected_segments_ms, 0.0);
+            assert!(
+                elapsed < std::time::Duration::from_millis(500),
+                "bad SRS id rejection took {elapsed:?}"
+            );
+        }
         Ok(())
     }
 

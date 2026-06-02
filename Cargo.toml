@@ -35,6 +35,10 @@ members = [
   "crates/crypto/decaf377-ka",
   "crates/crypto/eddy",
   "crates/crypto/proof-aggregation",
+  "crates/crypto/proof-aggregation-fuzz",
+  "crates/crypto/proof-aggregation-lean-conformance",
+  "crates/crypto/proof-aggregation-reference",
+  "crates/crypto/proof-aggregation-trace-schema",
   "crates/crypto/proof-params",
   "crates/crypto/tct",
   "crates/custody",
@@ -184,6 +188,7 @@ penumbra-sdk-mock-tendermint-proxy   = { version = "2.1.0", path = "crates/test/
 penumbra-sdk-num                     = { default-features = false, version = "2.1.0", path = "crates/core/num" }
 penumbra-sdk-proof-params            = { default-features = false, version = "2.1.0", path = "crates/crypto/proof-params" }
 penumbra-sdk-proof-aggregation       = { default-features = false, version = "2.1.0", path = "crates/crypto/proof-aggregation" }
+penumbra-sdk-proof-aggregation-trace-schema = { version = "2.1.0", path = "crates/crypto/proof-aggregation-trace-schema" }
 penumbra-sdk-proto                   = { default-features = false, version = "2.1.0", path = "crates/proto" }
 penumbra-sdk-sct                     = { default-features = false, version = "2.1.0", path = "crates/core/component/sct" }
 penumbra-sdk-compliance              = { default-features = false, version = "2.1.0", path = "crates/core/component/compliance" }

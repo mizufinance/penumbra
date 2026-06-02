@@ -7,17 +7,29 @@ version = { workspace = true }
 license = { workspace = true }
 edition = { workspace = true }
 
+[features]
+default = []
+fuzzing = []
+# Bench-only A/B seam (compile-time, never on in production). Forwards to the
+# RIPP backend's retained pre-optimization paths. See
+# docs/snarkpack/optimization-playbook.md.
+bench-baseline = ["ark-ip-proofs/bench-baseline"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(hax)'] }
+
 [dependencies]
 anyhow = { workspace = true }
 ark-groth16 = { workspace = true, default-features = false }
-ark-inner-products = { path = "vendor/ripp/inner_products" }
+ark-inner-products = { path = "src/ipp/inner_products" }
 ark-serialize = { workspace = true }
-ark-ip-proofs = { path = "vendor/ripp/ip_proofs" }
+ark-ip-proofs = { path = "src/ipp/ip_proofs" }
 bincode = { workspace = true }
 blake2 = "0.9"
 decaf377 = { workspace = true }
 digest = "0.9"
 hex = { workspace = true }
+penumbra-sdk-proof-aggregation-trace-schema = { workspace = true }
 penumbra-sdk-proof-params = { workspace = true, default-features = false }
 penumbra-sdk-proto = { workspace = true, default-features = true }
 penumbra-sdk-shielded-pool = { workspace = true, default-features = false }
@@ -28,7 +40,9 @@ serde = { workspace = true, features = ["derive"] }
 sha2 = { workspace = true }
 
 [dev-dependencies]
+ark-ec = { workspace = true }
 ark-ff = { workspace = true }
 ark-r1cs-std = { workspace = true }
 ark-relations = { workspace = true }
 ark-snark = { workspace = true }
+proptest = { workspace = true }

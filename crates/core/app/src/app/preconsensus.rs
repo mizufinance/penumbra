@@ -467,3 +467,60 @@ fn decode_batch_item(encoded: EncodedBatchItem) -> Result<BatchItem> {
         public_inputs,
     })
 }
+
+#[cfg(any(test, feature = "fuzzing"))]
+pub fn decode_batch_item_for_fuzz(proof: Vec<u8>, public_inputs: Vec<Vec<u8>>) -> Result<()> {
+    decode_batch_item(EncodedBatchItem {
+        proof,
+        public_inputs,
+    })
+    .map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn decode_batch_item_do_not_panic(
+            proof in prop::collection::vec(any::<u8>(), 0usize..=4096),
+            public_inputs in prop::collection::vec(
+                prop::collection::vec(any::<u8>(), 0usize..=128),
+                0usize..=4,
+            ),
+        ) {
+            let _ = decode_batch_item_for_fuzz(proof, public_inputs);
+        }
+
+        #[test]
+        fn decode_artifact_do_not_panic(
+            tx_hash in any::<[u8; 32]>(),
+            entry_bytes in prop::collection::vec(any::<u8>(), 0usize..=4096),
+        ) {
+            let sidecar = ProposalArtifactSidecar {
+                chunk_tx_count: 0,
+                segment_tx_counts: Vec::new(),
+                encoded_bytes: 0,
+                commitment: [0; 32],
+                entries: BTreeMap::new(),
+            };
+            let tx = Arc::new(Transaction::default());
+            let _ = sidecar.decode_artifact(tx_hash, tx.clone(), &entry_bytes);
+
+            let structured = EncodedArtifactSidecarEntry {
+                tx_hash,
+                proof_items: BTreeMap::new(),
+                spend_nullifiers: Vec::new(),
+                anchor_pairs: Vec::new(),
+                total_proof_count: 0,
+            };
+            if let Ok(encoded) = bincode::serialize(&structured) {
+                let _ = sidecar.decode_artifact(tx_hash, tx, &encoded);
+            }
+        }
+    }
+}

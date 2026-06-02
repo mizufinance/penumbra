@@ -11,12 +11,6 @@ use penumbra_sdk_shielded_pool::{
 
 use crate::ProofFamilyId;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TranscriptPhase {
-    Prover,
-    Verifier,
-}
-
 pub fn transcript_family_domain(family_id: ProofFamilyId) -> Cow<'static, [u8]> {
     match family_id {
         ProofFamilyId::Transfer => Cow::Borrowed(b"penumbra.snarkpack.transfer.v1"),
@@ -28,35 +22,6 @@ pub fn transcript_family_domain(family_id: ProofFamilyId) -> Cow<'static, [u8]> 
         }
         ProofFamilyId::ShieldedIcs20Withdrawal(family_id) => {
             Cow::Owned(format!("penumbra.snarkpack.{}.v1", family_id.label()).into_bytes())
-        }
-    }
-}
-
-pub fn transcript_domain(family_id: ProofFamilyId, phase: TranscriptPhase) -> Cow<'static, [u8]> {
-    match (family_id, phase) {
-        (ProofFamilyId::Transfer, TranscriptPhase::Prover) => {
-            Cow::Borrowed(b"penumbra.snarkpack.transfer.prover.v1")
-        }
-        (ProofFamilyId::Transfer, TranscriptPhase::Verifier) => {
-            Cow::Borrowed(b"penumbra.snarkpack.transfer.verifier.v1")
-        }
-        (ProofFamilyId::Consolidate(family_id), TranscriptPhase::Prover) => {
-            Cow::Owned(format!("penumbra.snarkpack.{}.prover.v1", family_id.label()).into_bytes())
-        }
-        (ProofFamilyId::Consolidate(family_id), TranscriptPhase::Verifier) => {
-            Cow::Owned(format!("penumbra.snarkpack.{}.verifier.v1", family_id.label()).into_bytes())
-        }
-        (ProofFamilyId::Split(family_id), TranscriptPhase::Prover) => {
-            Cow::Owned(format!("penumbra.snarkpack.{}.prover.v1", family_id.label()).into_bytes())
-        }
-        (ProofFamilyId::Split(family_id), TranscriptPhase::Verifier) => {
-            Cow::Owned(format!("penumbra.snarkpack.{}.verifier.v1", family_id.label()).into_bytes())
-        }
-        (ProofFamilyId::ShieldedIcs20Withdrawal(family_id), TranscriptPhase::Prover) => {
-            Cow::Owned(format!("penumbra.snarkpack.{}.prover.v1", family_id.label()).into_bytes())
-        }
-        (ProofFamilyId::ShieldedIcs20Withdrawal(family_id), TranscriptPhase::Verifier) => {
-            Cow::Owned(format!("penumbra.snarkpack.{}.verifier.v1", family_id.label()).into_bytes())
         }
     }
 }
@@ -230,24 +195,7 @@ mod tests {
     use crate::ProofFamilyId;
     use penumbra_sdk_shielded_pool::{ConsolidateFamilyId, SplitFamilyId};
 
-    use super::{transcript_domain, transcript_family_domain, TranscriptPhase};
-
-    #[test]
-    fn transcript_domains_are_unique() {
-        let mut domains = BTreeSet::new();
-        let mut families = vec![ProofFamilyId::Transfer];
-        families.extend(
-            ConsolidateFamilyId::ALL
-                .into_iter()
-                .map(ProofFamilyId::Consolidate),
-        );
-        families.extend(SplitFamilyId::ALL.into_iter().map(ProofFamilyId::Split));
-        for family in families {
-            for phase in [TranscriptPhase::Prover, TranscriptPhase::Verifier] {
-                assert!(domains.insert(transcript_domain(family, phase)));
-            }
-        }
-    }
+    use super::transcript_family_domain;
 
     #[test]
     fn transcript_family_domains_are_unique() {

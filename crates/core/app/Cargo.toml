@@ -36,6 +36,7 @@ benchmark-helpers = [
   "penumbra-sdk-shielded-pool/benchmark-helpers",
 ]
 default = ["std", "component"]
+fuzzing = []
 std     = ["ark-ff/std", "ibc-types/std"]
 
 [dependencies]
@@ -115,6 +116,7 @@ ed25519-consensus                = { workspace = true }
 penumbra-sdk-mock-client         = { workspace = true }
 penumbra-sdk-mock-consensus      = { workspace = true }
 penumbra-sdk-proto               = { workspace = true, features = ["box-grpc"] }
+proptest                         = { workspace = true }
 rand                             = { workspace = true }
 rand_chacha                      = { workspace = true }
 rand_core                        = { workspace = true }

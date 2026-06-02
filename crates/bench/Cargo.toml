@@ -29,6 +29,7 @@ parallel = [
     "ark-r1cs-std/parallel",
 ]
 bench-mimalloc = ["dep:mimalloc"]
+bench-baseline = ["penumbra-sdk-proof-aggregation/bench-baseline"]
 
 # --- Vanilla benchmarks ---
 
@@ -50,6 +51,11 @@ harness = false
 [[bench]]
 name = "snarkpack"
 path = "benches/vanilla/snarkpack.rs"
+harness = false
+
+[[bench]]
+name = "snarkpack_prepared_g2"
+path = "benches/vanilla/snarkpack_prepared_g2.rs"
 harness = false
 
 [[bench]]

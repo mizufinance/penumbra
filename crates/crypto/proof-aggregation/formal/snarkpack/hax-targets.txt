@@ -1,0 +1,19 @@
+# Partial extraction targets for SnarkPack formal verification.
+#
+# hax extraction should keep the executed Rust functions as the source of truth.
+# Any duplicate formal-only traversal branch must be recorded in
+# hax-extraction-boundary.md and parity-tested under cfg(hax).
+
+penumbra_sdk_proof_aggregation::statement::StatementFieldBytes
+penumbra_sdk_proof_aggregation::statement::StatementPublicInputRow
+penumbra_sdk_proof_aggregation::statement::StatementPaddedRows
+penumbra_sdk_proof_aggregation::statement::StatementEncodingInput
+penumbra_sdk_proof_aggregation::statement::encode_statement
+penumbra_sdk_proof_aggregation::statement::validate_counts
+penumbra_sdk_proof_aggregation::statement::validate_row_arity
+penumbra_sdk_proof_aggregation::statement::validate_repeat_final_padding
+penumbra_sdk_proof_aggregation::aggregate_proof_wrapper::encode_wrapped_aggregate_proof
+penumbra_sdk_proof_aggregation::aggregate_proof_wrapper::decode_wrapped_aggregate_proof_inner_range
+ark_ip_proofs::challenge::ChallengeContext
+ark_ip_proofs::challenge::challenge_context_preimage
+ark_ip_proofs::challenge::challenge_preimage

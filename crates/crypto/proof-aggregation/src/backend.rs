@@ -1,4 +1,5 @@
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use anyhow::{ensure, Result};
@@ -8,23 +9,107 @@ use ark_ip_proofs::applications::groth16_aggregation::{
     verify_aggregate_proof_profiled, AggregateProof, AggregateProofBuildProfile,
     AggregateProofVerificationProfile,
 };
+use ark_ip_proofs::applications::groth16_aggregation::{
+    aggregate_proofs_with_trace, verify_aggregate_proof_with_trace,
+};
+use ark_ip_proofs::challenge::{
+    challenge_context_preimage, ChallengeContext, ChallengeTraceSink, VecChallengeTraceSink,
+};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use decaf377::{Bls12_377, Fq};
 use digest::Digest;
+use penumbra_sdk_proof_aggregation_trace_schema::{
+    TraceComparisonLevel, TraceEvent, TraceEventKind,
+};
 use penumbra_sdk_proof_params::batch::BatchItem;
 use penumbra_sdk_shielded_pool::{ConsolidateFamilyId, SplitFamilyId};
 
 use crate::{
+    aggregate_proof_wrapper::{
+        encode_wrapped_aggregate_proof, AggregateProofBytesError, MAX_AGGREGATE_PROOF_BYTES,
+    },
+    preflight::{
+        preflight_aggregate_verify, AggregatePreflightInput, VerifiedAggregateBackendCall,
+    },
     srs::DevSrs,
+    statement::{AggregateStatement, AggregateStatementError},
     transcript::{
-        ConsolidateTranscriptDigest, ShieldedIcs20WithdrawalTranscriptDigest, SplitTranscriptDigest,
+        ConsolidateTranscriptDigest, ShieldedIcs20WithdrawalTranscriptDigest,
+        SplitTranscriptDigest, TransferTranscriptDigest,
     },
     transfer_family_dispatch::{
         aggregate_transfer, aggregate_transfer_profiled, verify_transfer_aggregate,
-        verify_transfer_aggregate_profiled_unchecked,
+        verify_transfer_aggregate_profiled_status,
     },
     ProofFamilyId,
 };
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AggregateVerifyError {
+    BadVersion(String),
+    BadCount(String),
+    BadPadding(String),
+    RowArityMismatch(String),
+    StatementDigestMismatch,
+    OversizeBytes(String),
+    MalformedProofBytes(String),
+    BackendRejected(String),
+}
+
+impl fmt::Display for AggregateVerifyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BadVersion(err) => write!(f, "bad aggregate version: {err}"),
+            Self::BadCount(err) => write!(f, "bad aggregate count: {err}"),
+            Self::BadPadding(err) => write!(f, "bad aggregate padding: {err}"),
+            Self::RowArityMismatch(err) => write!(f, "aggregate row arity mismatch: {err}"),
+            Self::StatementDigestMismatch => write!(f, "aggregate statement digest mismatch"),
+            Self::OversizeBytes(err) => write!(f, "oversized aggregate proof bytes: {err}"),
+            Self::MalformedProofBytes(err) => write!(f, "malformed aggregate proof bytes: {err}"),
+            Self::BackendRejected(err) => write!(f, "SnarkPack backend rejected aggregate: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for AggregateVerifyError {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AggregateTraceReport {
+    pub accepted: bool,
+    pub trace: Vec<TraceEvent>,
+}
+
+impl From<AggregateStatementError> for AggregateVerifyError {
+    fn from(value: AggregateStatementError) -> Self {
+        match value {
+            AggregateStatementError::BadVersion { .. } => Self::BadVersion(value.to_string()),
+            AggregateStatementError::BadCount { .. } => Self::BadCount(value.to_string()),
+            AggregateStatementError::BadPadding { .. } => Self::BadPadding(value.to_string()),
+            AggregateStatementError::RowArityMismatch { .. } => {
+                Self::RowArityMismatch(value.to_string())
+            }
+            AggregateStatementError::OversizeBytes { .. } => Self::OversizeBytes(value.to_string()),
+            AggregateStatementError::EncodingFailed(_) => {
+                Self::MalformedProofBytes(value.to_string())
+            }
+        }
+    }
+}
+
+impl From<AggregateProofBytesError> for AggregateVerifyError {
+    fn from(value: AggregateProofBytesError) -> Self {
+        match value {
+            AggregateProofBytesError::BadVersion => Self::BadVersion(value.to_string()),
+            AggregateProofBytesError::StatementDigestMismatch => Self::StatementDigestMismatch,
+            AggregateProofBytesError::OversizeBytes { .. } => {
+                Self::OversizeBytes(value.to_string())
+            }
+            AggregateProofBytesError::MalformedProofBytes => {
+                Self::MalformedProofBytes(value.to_string())
+            }
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct AggregateVerificationProfile {
@@ -130,28 +215,21 @@ pub trait AggregationBackend {
     type Srs;
 
     fn aggregate_family(
-        family_id: ProofFamilyId,
+        statement: &AggregateStatement,
         pvk: &PreparedVerifyingKey<Bls12_377>,
         items: &[BatchItem],
         srs: &Self::Srs,
     ) -> Result<Vec<u8>>;
 
     fn verify_family_aggregate(
-        family_id: ProofFamilyId,
+        statement: &AggregateStatement,
         pvk: &PreparedVerifyingKey<Bls12_377>,
         aggregate_proof_bytes: &[u8],
-        padded_public_inputs: &[Vec<Fq>],
         srs: &Self::Srs,
-    ) -> Result<()>;
+    ) -> Result<(), AggregateVerifyError>;
 }
 
 pub struct SnarkpackBackend;
-
-static USE_UNCHECKED_AGGREGATE_DESERIALIZATION: AtomicBool = AtomicBool::new(false);
-
-pub fn set_unchecked_aggregate_deserialization_for_bench(enabled: bool) {
-    USE_UNCHECKED_AGGREGATE_DESERIALIZATION.store(enabled, Ordering::Relaxed);
-}
 
 /// Per-invocation rayon thread count. 1 = one dedicated thread per GIPA task (default).
 /// 0 = use the global pool (all available threads shared across concurrent tasks).
@@ -164,26 +242,23 @@ pub fn set_rayon_threads_per_batch_for_bench(n: usize) {
     RAYON_THREADS_PER_BATCH.store(n, Ordering::Relaxed);
 }
 
-fn deserialize_aggregate_proof<D: Digest>(
+pub(crate) fn deserialize_aggregate_proof<D: Digest>(
     aggregate_proof_bytes: &[u8],
-) -> Result<AggregateProof<Bls12_377, D>> {
-    if USE_UNCHECKED_AGGREGATE_DESERIALIZATION.load(Ordering::Relaxed) {
-        AggregateProof::<Bls12_377, D>::deserialize_compressed_unchecked(&aggregate_proof_bytes[..])
-            .map_err(Into::into)
-    } else {
-        AggregateProof::<Bls12_377, D>::deserialize_compressed(&aggregate_proof_bytes[..])
-            .map_err(Into::into)
-    }
+) -> Result<AggregateProof<Bls12_377, D>, AggregateVerifyError> {
+    AggregateProof::<Bls12_377, D>::deserialize_compressed(&aggregate_proof_bytes[..])
+        .map_err(|err| AggregateVerifyError::MalformedProofBytes(err.to_string()))
 }
 
 impl SnarkpackBackend {
-    fn verify_transfer_family_aggregate_profiled_unchecked(
+    fn verify_transfer_family_aggregate_profiled_status(
+        challenge_context: &ChallengeContext,
         pvk: &PreparedVerifyingKey<Bls12_377>,
         aggregate_proof_bytes: &[u8],
         padded_public_inputs: &[Vec<Fq>],
         srs: &DevSrs,
-    ) -> Result<AggregateVerificationProfile> {
-        verify_transfer_aggregate_profiled_unchecked(
+    ) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
+        verify_transfer_aggregate_profiled_status(
+            challenge_context,
             pvk,
             aggregate_proof_bytes,
             padded_public_inputs,
@@ -191,38 +266,124 @@ impl SnarkpackBackend {
         )
     }
 
-    fn aggregate_transfer_family(items: &[BatchItem], srs: &DevSrs) -> Result<Vec<u8>> {
-        aggregate_transfer(items, srs)
+    fn aggregate_transfer_family(
+        challenge_context: &ChallengeContext,
+        items: &[BatchItem],
+        srs: &DevSrs,
+    ) -> Result<Vec<u8>> {
+        aggregate_transfer(challenge_context, items, srs)
     }
 
     fn verify_transfer_family_aggregate(
+        challenge_context: &ChallengeContext,
         pvk: &PreparedVerifyingKey<Bls12_377>,
         aggregate_proof_bytes: &[u8],
         padded_public_inputs: &[Vec<Fq>],
         srs: &DevSrs,
-    ) -> Result<bool> {
-        verify_transfer_aggregate(pvk, aggregate_proof_bytes, padded_public_inputs, srs)
+    ) -> Result<bool, AggregateVerifyError> {
+        verify_transfer_aggregate(
+            challenge_context,
+            pvk,
+            aggregate_proof_bytes,
+            padded_public_inputs,
+            srs,
+        )
     }
 
     fn aggregate_transfer_family_profiled(
         items: &[BatchItem],
         srs: &DevSrs,
+        challenge_context: &ChallengeContext,
     ) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
-        aggregate_transfer_profiled(items, srs)
+        aggregate_transfer_profiled(items, srs, challenge_context)
+    }
+
+    fn aggregate_transfer_family_with_trace<S>(
+        challenge_context: &ChallengeContext,
+        trace: &mut S,
+        items: &[BatchItem],
+        srs: &DevSrs,
+    ) -> Result<Vec<u8>>
+    where
+        S: ChallengeTraceSink,
+    {
+        aggregate_with_digest_with_trace::<TransferTranscriptDigest, S>(
+            challenge_context,
+            trace,
+            items,
+            srs,
+        )
+    }
+
+    fn aggregate_split_family_with_trace<S>(
+        family_id: SplitFamilyId,
+        challenge_context: &ChallengeContext,
+        trace: &mut S,
+        items: &[BatchItem],
+        srs: &DevSrs,
+    ) -> Result<Vec<u8>>
+    where
+        S: ChallengeTraceSink,
+    {
+        match family_id {
+            SplitFamilyId::OneByFour => aggregate_with_digest_with_trace::<
+                SplitTranscriptDigest<{ SplitFamilyId::OneByFour.get() }>,
+                S,
+            >(challenge_context, trace, items, srs),
+            SplitFamilyId::OneByEight => aggregate_with_digest_with_trace::<
+                SplitTranscriptDigest<{ SplitFamilyId::OneByEight.get() }>,
+                S,
+            >(challenge_context, trace, items, srs),
+            other => Err(anyhow::anyhow!(
+                "unknown split aggregate family {}",
+                other.get()
+            )),
+        }
+    }
+
+    fn aggregate_consolidate_family_with_trace<S>(
+        family_id: ConsolidateFamilyId,
+        challenge_context: &ChallengeContext,
+        trace: &mut S,
+        items: &[BatchItem],
+        srs: &DevSrs,
+    ) -> Result<Vec<u8>>
+    where
+        S: ChallengeTraceSink,
+    {
+        match family_id {
+            ConsolidateFamilyId::TwoByOne => aggregate_with_digest_with_trace::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::TwoByOne.get() }>,
+                S,
+            >(challenge_context, trace, items, srs),
+            ConsolidateFamilyId::FourByOne => aggregate_with_digest_with_trace::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::FourByOne.get() }>,
+                S,
+            >(challenge_context, trace, items, srs),
+            ConsolidateFamilyId::EightByOne => aggregate_with_digest_with_trace::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::EightByOne.get() }>,
+                S,
+            >(challenge_context, trace, items, srs),
+            other => Err(anyhow::anyhow!(
+                "unknown consolidate aggregate family {}",
+                other.get()
+            )),
+        }
     }
 
     fn aggregate_split_family_profiled(
         family_id: SplitFamilyId,
         items: &[BatchItem],
         srs: &DevSrs,
+        challenge_context: &ChallengeContext,
     ) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
         match family_id {
             SplitFamilyId::OneByFour => aggregate_with_digest_profiled::<
                 SplitTranscriptDigest<{ SplitFamilyId::OneByFour.get() }>,
-            >(items, srs),
+            >(items, srs, challenge_context),
             SplitFamilyId::OneByEight => aggregate_with_digest_profiled::<
                 SplitTranscriptDigest<{ SplitFamilyId::OneByEight.get() }>,
-            >(items, srs),
+            >(items, srs, challenge_context),
             other => Err(anyhow::anyhow!(
                 "unknown split aggregate family {}",
                 other.get()
@@ -234,17 +395,18 @@ impl SnarkpackBackend {
         family_id: ConsolidateFamilyId,
         items: &[BatchItem],
         srs: &DevSrs,
+        challenge_context: &ChallengeContext,
     ) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
         match family_id {
             ConsolidateFamilyId::TwoByOne => aggregate_with_digest_profiled::<
                 ConsolidateTranscriptDigest<{ ConsolidateFamilyId::TwoByOne.get() }>,
-            >(items, srs),
+            >(items, srs, challenge_context),
             ConsolidateFamilyId::FourByOne => aggregate_with_digest_profiled::<
                 ConsolidateTranscriptDigest<{ ConsolidateFamilyId::FourByOne.get() }>,
-            >(items, srs),
+            >(items, srs, challenge_context),
             ConsolidateFamilyId::EightByOne => aggregate_with_digest_profiled::<
                 ConsolidateTranscriptDigest<{ ConsolidateFamilyId::EightByOne.get() }>,
-            >(items, srs),
+            >(items, srs, challenge_context),
             other => Err(anyhow::anyhow!(
                 "unknown consolidate aggregate family {}",
                 other.get()
@@ -252,144 +414,263 @@ impl SnarkpackBackend {
         }
     }
 
-    fn verify_split_family_aggregate_profiled_unchecked(
+    fn verify_split_family_aggregate_profiled_status(
+        challenge_context: &ChallengeContext,
         family_id: SplitFamilyId,
         pvk: &PreparedVerifyingKey<Bls12_377>,
         aggregate_proof_bytes: &[u8],
         padded_public_inputs: &[Vec<Fq>],
         srs: &DevSrs,
-    ) -> Result<AggregateVerificationProfile> {
+    ) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
         match family_id {
-            SplitFamilyId::OneByFour => {
-                verify_with_digest_profiled::<
-                    SplitTranscriptDigest<{ SplitFamilyId::OneByFour.get() }>,
-                >(pvk, aggregate_proof_bytes, padded_public_inputs, srs)
-            }
-            SplitFamilyId::OneByEight => {
-                verify_with_digest_profiled::<
-                    SplitTranscriptDigest<{ SplitFamilyId::OneByEight.get() }>,
-                >(pvk, aggregate_proof_bytes, padded_public_inputs, srs)
-            }
-            other => Err(anyhow::anyhow!(
-                "unknown split aggregate family {}",
-                other.get()
-            )),
-        }
-    }
-
-    fn verify_consolidate_family_aggregate_profiled_unchecked(
-        family_id: ConsolidateFamilyId,
-        pvk: &PreparedVerifyingKey<Bls12_377>,
-        aggregate_proof_bytes: &[u8],
-        padded_public_inputs: &[Vec<Fq>],
-        srs: &DevSrs,
-    ) -> Result<AggregateVerificationProfile> {
-        match family_id {
-            ConsolidateFamilyId::TwoByOne => {
-                verify_with_digest_profiled::<
-                    ConsolidateTranscriptDigest<{ ConsolidateFamilyId::TwoByOne.get() }>,
-                >(pvk, aggregate_proof_bytes, padded_public_inputs, srs)
-            }
-            ConsolidateFamilyId::FourByOne => {
-                verify_with_digest_profiled::<
-                    ConsolidateTranscriptDigest<{ ConsolidateFamilyId::FourByOne.get() }>,
-                >(pvk, aggregate_proof_bytes, padded_public_inputs, srs)
-            }
-            ConsolidateFamilyId::EightByOne => {
-                verify_with_digest_profiled::<
-                    ConsolidateTranscriptDigest<{ ConsolidateFamilyId::EightByOne.get() }>,
-                >(pvk, aggregate_proof_bytes, padded_public_inputs, srs)
-            }
-            other => Err(anyhow::anyhow!(
-                "unknown consolidate aggregate family {}",
-                other.get()
-            )),
-        }
-    }
-
-    pub fn verify_family_aggregate_profiled_unchecked(
-        family_id: ProofFamilyId,
-        pvk: &PreparedVerifyingKey<Bls12_377>,
-        aggregate_proof_bytes: &[u8],
-        padded_public_inputs: &[Vec<Fq>],
-        srs: &DevSrs,
-    ) -> Result<AggregateVerificationProfile> {
-        srs.ensure_supported_count(padded_public_inputs.len())?;
-        ensure!(
-            !padded_public_inputs.is_empty(),
-            "cannot verify an empty aggregate for family {:?}",
-            family_id
-        );
-
-        match family_id {
-            ProofFamilyId::Transfer => Self::verify_transfer_family_aggregate_profiled_unchecked(
+            SplitFamilyId::OneByFour => verify_with_digest_profiled::<
+                SplitTranscriptDigest<{ SplitFamilyId::OneByFour.get() }>,
+            >(
+                challenge_context,
                 pvk,
                 aggregate_proof_bytes,
                 padded_public_inputs,
                 srs,
             ),
+            SplitFamilyId::OneByEight => verify_with_digest_profiled::<
+                SplitTranscriptDigest<{ SplitFamilyId::OneByEight.get() }>,
+            >(
+                challenge_context,
+                pvk,
+                aggregate_proof_bytes,
+                padded_public_inputs,
+                srs,
+            ),
+            other => Err(AggregateVerifyError::BadVersion(format!(
+                "unknown split aggregate family {}",
+                other.get()
+            ))),
+        }
+    }
+
+    fn verify_split_family_aggregate_with_trace<S>(
+        challenge_context: &ChallengeContext,
+        trace: &mut S,
+        family_id: SplitFamilyId,
+        pvk: &PreparedVerifyingKey<Bls12_377>,
+        aggregate_proof_bytes: &[u8],
+        padded_public_inputs: &[Vec<Fq>],
+        srs: &DevSrs,
+    ) -> Result<bool, AggregateVerifyError>
+    where
+        S: ChallengeTraceSink,
+    {
+        match family_id {
+            SplitFamilyId::OneByFour => verify_with_digest_with_trace::<
+                SplitTranscriptDigest<{ SplitFamilyId::OneByFour.get() }>,
+                S,
+            >(
+                challenge_context,
+                trace,
+                pvk,
+                aggregate_proof_bytes,
+                padded_public_inputs,
+                srs,
+            ),
+            SplitFamilyId::OneByEight => verify_with_digest_with_trace::<
+                SplitTranscriptDigest<{ SplitFamilyId::OneByEight.get() }>,
+                S,
+            >(
+                challenge_context,
+                trace,
+                pvk,
+                aggregate_proof_bytes,
+                padded_public_inputs,
+                srs,
+            ),
+            other => Err(AggregateVerifyError::BadVersion(format!(
+                "unknown split aggregate family {}",
+                other.get()
+            ))),
+        }
+    }
+
+    fn verify_consolidate_family_aggregate_profiled_status(
+        challenge_context: &ChallengeContext,
+        family_id: ConsolidateFamilyId,
+        pvk: &PreparedVerifyingKey<Bls12_377>,
+        aggregate_proof_bytes: &[u8],
+        padded_public_inputs: &[Vec<Fq>],
+        srs: &DevSrs,
+    ) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
+        match family_id {
+            ConsolidateFamilyId::TwoByOne => verify_with_digest_profiled::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::TwoByOne.get() }>,
+            >(
+                challenge_context,
+                pvk,
+                aggregate_proof_bytes,
+                padded_public_inputs,
+                srs,
+            ),
+            ConsolidateFamilyId::FourByOne => verify_with_digest_profiled::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::FourByOne.get() }>,
+            >(
+                challenge_context,
+                pvk,
+                aggregate_proof_bytes,
+                padded_public_inputs,
+                srs,
+            ),
+            ConsolidateFamilyId::EightByOne => verify_with_digest_profiled::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::EightByOne.get() }>,
+            >(
+                challenge_context,
+                pvk,
+                aggregate_proof_bytes,
+                padded_public_inputs,
+                srs,
+            ),
+            other => Err(AggregateVerifyError::BadVersion(format!(
+                "unknown consolidate aggregate family {}",
+                other.get()
+            ))),
+        }
+    }
+
+    fn verify_consolidate_family_aggregate_with_trace<S>(
+        challenge_context: &ChallengeContext,
+        trace: &mut S,
+        family_id: ConsolidateFamilyId,
+        pvk: &PreparedVerifyingKey<Bls12_377>,
+        aggregate_proof_bytes: &[u8],
+        padded_public_inputs: &[Vec<Fq>],
+        srs: &DevSrs,
+    ) -> Result<bool, AggregateVerifyError>
+    where
+        S: ChallengeTraceSink,
+    {
+        match family_id {
+            ConsolidateFamilyId::TwoByOne => verify_with_digest_with_trace::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::TwoByOne.get() }>,
+                S,
+            >(
+                challenge_context,
+                trace,
+                pvk,
+                aggregate_proof_bytes,
+                padded_public_inputs,
+                srs,
+            ),
+            ConsolidateFamilyId::FourByOne => verify_with_digest_with_trace::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::FourByOne.get() }>,
+                S,
+            >(
+                challenge_context,
+                trace,
+                pvk,
+                aggregate_proof_bytes,
+                padded_public_inputs,
+                srs,
+            ),
+            ConsolidateFamilyId::EightByOne => verify_with_digest_with_trace::<
+                ConsolidateTranscriptDigest<{ ConsolidateFamilyId::EightByOne.get() }>,
+                S,
+            >(
+                challenge_context,
+                trace,
+                pvk,
+                aggregate_proof_bytes,
+                padded_public_inputs,
+                srs,
+            ),
+            other => Err(AggregateVerifyError::BadVersion(format!(
+                "unknown consolidate aggregate family {}",
+                other.get()
+            ))),
+        }
+    }
+
+    pub fn verify_family_aggregate_profiled_status(
+        statement: &AggregateStatement,
+        pvk: &PreparedVerifyingKey<Bls12_377>,
+        aggregate_proof_bytes: &[u8],
+        srs: &DevSrs,
+    ) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
+        let call = preflight_aggregate_verify(AggregatePreflightInput {
+            statement,
+            pvk,
+            aggregate_proof_bytes,
+            srs,
+        })?;
+        Self::verify_preflighted_family_aggregate_profiled_status(call)
+    }
+
+    fn verify_preflighted_family_aggregate_profiled_status(
+        call: VerifiedAggregateBackendCall<'_>,
+    ) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
+        match call.family_id() {
+            ProofFamilyId::Transfer => Self::verify_transfer_family_aggregate_profiled_status(
+                call.challenge_context(),
+                call.pvk(),
+                call.inner_proof_bytes(),
+                call.padded_public_inputs(),
+                call.srs(),
+            ),
             ProofFamilyId::Consolidate(family_id) => {
-                Self::verify_consolidate_family_aggregate_profiled_unchecked(
+                Self::verify_consolidate_family_aggregate_profiled_status(
+                    call.challenge_context(),
                     family_id,
-                    pvk,
-                    aggregate_proof_bytes,
-                    padded_public_inputs,
-                    srs,
+                    call.pvk(),
+                    call.inner_proof_bytes(),
+                    call.padded_public_inputs(),
+                    call.srs(),
                 )
             }
-            ProofFamilyId::Split(family_id) => {
-                Self::verify_split_family_aggregate_profiled_unchecked(
-                    family_id,
-                    pvk,
-                    aggregate_proof_bytes,
-                    padded_public_inputs,
-                    srs,
-                )
-            }
+            ProofFamilyId::Split(family_id) => Self::verify_split_family_aggregate_profiled_status(
+                call.challenge_context(),
+                family_id,
+                call.pvk(),
+                call.inner_proof_bytes(),
+                call.padded_public_inputs(),
+                call.srs(),
+            ),
             ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
                 verify_with_digest_profiled::<ShieldedIcs20WithdrawalTranscriptDigest>(
-                    pvk,
-                    aggregate_proof_bytes,
-                    padded_public_inputs,
-                    srs,
+                    call.challenge_context(),
+                    call.pvk(),
+                    call.inner_proof_bytes(),
+                    call.padded_public_inputs(),
+                    call.srs(),
                 )
             }
         }
     }
 
     pub fn verify_family_aggregate_profiled(
-        family_id: ProofFamilyId,
+        statement: &AggregateStatement,
         pvk: &PreparedVerifyingKey<Bls12_377>,
         aggregate_proof_bytes: &[u8],
-        padded_public_inputs: &[Vec<Fq>],
         srs: &DevSrs,
-    ) -> Result<AggregateVerificationProfile> {
-        let profile = Self::verify_family_aggregate_profiled_unchecked(
-            family_id,
+    ) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
+        let profile = Self::verify_family_aggregate_profiled_status(
+            statement,
             pvk,
             aggregate_proof_bytes,
-            padded_public_inputs,
             srs,
         )?;
 
-        ensure!(
-            profile.accepted,
-            "SnarkPack verification rejected {:?}",
-            family_id
-        );
+        if !profile.accepted {
+            return Err(AggregateVerifyError::BackendRejected(format!(
+                "{:?}",
+                statement.family_id()
+            )));
+        }
         Ok(profile)
     }
-}
 
-impl AggregationBackend for SnarkpackBackend {
-    type Srs = DevSrs;
-
-    fn aggregate_family(
-        family_id: ProofFamilyId,
+    pub fn aggregate_family_with_trace(
+        statement: &AggregateStatement,
         _pvk: &PreparedVerifyingKey<Bls12_377>,
         items: &[BatchItem],
-        srs: &Self::Srs,
-    ) -> Result<Vec<u8>> {
+        srs: &DevSrs,
+    ) -> Result<(Vec<u8>, Vec<TraceEvent>)> {
+        let family_id = statement.family_id();
         srs.ensure_supported_count(items.len())?;
         ensure!(
             !items.is_empty(),
@@ -397,73 +678,233 @@ impl AggregationBackend for SnarkpackBackend {
             family_id
         );
 
-        match family_id {
-            ProofFamilyId::Transfer => Self::aggregate_transfer_family(items, srs),
-            ProofFamilyId::Consolidate(family_id) => {
-                Self::aggregate_consolidate_family_profiled(family_id, items, srs)
-                    .map(|(bytes, _)| bytes)
-            }
-            ProofFamilyId::Split(family_id) => {
-                Self::aggregate_split_family_profiled(family_id, items, srs).map(|(bytes, _)| bytes)
-            }
+        let mut challenge_trace = VecChallengeTraceSink::default();
+        let inner_proof_bytes = match family_id {
+            ProofFamilyId::Transfer => Self::aggregate_transfer_family_with_trace(
+                statement.challenge_context(),
+                &mut challenge_trace,
+                items,
+                srs,
+            ),
+            ProofFamilyId::Consolidate(family_id) => Self::aggregate_consolidate_family_with_trace(
+                family_id,
+                statement.challenge_context(),
+                &mut challenge_trace,
+                items,
+                srs,
+            ),
+            ProofFamilyId::Split(family_id) => Self::aggregate_split_family_with_trace(
+                family_id,
+                statement.challenge_context(),
+                &mut challenge_trace,
+                items,
+                srs,
+            ),
             ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
-                aggregate_with_digest::<ShieldedIcs20WithdrawalTranscriptDigest>(items, srs)
+                aggregate_with_digest_with_trace::<ShieldedIcs20WithdrawalTranscriptDigest, _>(
+                    statement.challenge_context(),
+                    &mut challenge_trace,
+                    items,
+                    srs,
+                )
             }
-        }
+        }?;
+
+        let wrapped =
+            encode_wrapped_aggregate_proof(statement.statement_digest(), &inner_proof_bytes)?;
+        ensure!(
+            wrapped.len() <= MAX_AGGREGATE_PROOF_BYTES,
+            "wrapped aggregate proof bytes {} exceed cap {}",
+            wrapped.len(),
+            MAX_AGGREGATE_PROOF_BYTES
+        );
+
+        Ok((
+            wrapped,
+            complete_snarkpack_trace(statement, challenge_trace.into_entries()),
+        ))
     }
 
-    fn verify_family_aggregate(
-        family_id: ProofFamilyId,
+    pub fn verify_family_aggregate_with_trace(
+        statement: &AggregateStatement,
         pvk: &PreparedVerifyingKey<Bls12_377>,
         aggregate_proof_bytes: &[u8],
-        padded_public_inputs: &[Vec<Fq>],
+        srs: &DevSrs,
+    ) -> Result<AggregateTraceReport, AggregateVerifyError> {
+        let call = preflight_aggregate_verify(AggregatePreflightInput {
+            statement,
+            pvk,
+            aggregate_proof_bytes,
+            srs,
+        })?;
+        let family_id = call.family_id();
+        let mut challenge_trace = VecChallengeTraceSink::default();
+
+        let accepted = match family_id {
+            ProofFamilyId::Transfer => {
+                verify_with_digest_with_trace::<TransferTranscriptDigest, _>(
+                    call.challenge_context(),
+                    &mut challenge_trace,
+                    call.pvk(),
+                    call.inner_proof_bytes(),
+                    call.padded_public_inputs(),
+                    call.srs(),
+                )?
+            }
+            ProofFamilyId::Consolidate(family_id) => {
+                Self::verify_consolidate_family_aggregate_with_trace(
+                    call.challenge_context(),
+                    &mut challenge_trace,
+                    family_id,
+                    call.pvk(),
+                    call.inner_proof_bytes(),
+                    call.padded_public_inputs(),
+                    call.srs(),
+                )?
+            }
+            ProofFamilyId::Split(family_id) => Self::verify_split_family_aggregate_with_trace(
+                call.challenge_context(),
+                &mut challenge_trace,
+                family_id,
+                call.pvk(),
+                call.inner_proof_bytes(),
+                call.padded_public_inputs(),
+                call.srs(),
+            )?,
+            ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
+                verify_with_digest_with_trace::<ShieldedIcs20WithdrawalTranscriptDigest, _>(
+                    call.challenge_context(),
+                    &mut challenge_trace,
+                    call.pvk(),
+                    call.inner_proof_bytes(),
+                    call.padded_public_inputs(),
+                    call.srs(),
+                )?
+            }
+        };
+
+        Ok(AggregateTraceReport {
+            accepted,
+            trace: complete_snarkpack_trace(statement, challenge_trace.into_entries()),
+        })
+    }
+}
+
+impl AggregationBackend for SnarkpackBackend {
+    type Srs = DevSrs;
+
+    fn aggregate_family(
+        statement: &AggregateStatement,
+        _pvk: &PreparedVerifyingKey<Bls12_377>,
+        items: &[BatchItem],
         srs: &Self::Srs,
-    ) -> Result<()> {
-        srs.ensure_supported_count(padded_public_inputs.len())?;
+    ) -> Result<Vec<u8>> {
+        let family_id = statement.family_id();
+        srs.ensure_supported_count(items.len())?;
         ensure!(
-            !padded_public_inputs.is_empty(),
-            "cannot verify an empty aggregate for family {:?}",
+            !items.is_empty(),
+            "cannot build an aggregate proof for empty family {:?}",
             family_id
         );
 
+        let inner_proof_bytes = match family_id {
+            ProofFamilyId::Transfer => {
+                Self::aggregate_transfer_family(statement.challenge_context(), items, srs)
+            }
+            ProofFamilyId::Consolidate(family_id) => Self::aggregate_consolidate_family_profiled(
+                family_id,
+                items,
+                srs,
+                statement.challenge_context(),
+            )
+            .map(|(bytes, _)| bytes),
+            ProofFamilyId::Split(family_id) => Self::aggregate_split_family_profiled(
+                family_id,
+                items,
+                srs,
+                statement.challenge_context(),
+            )
+            .map(|(bytes, _)| bytes),
+            ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
+                aggregate_with_digest::<ShieldedIcs20WithdrawalTranscriptDigest>(
+                    statement.challenge_context(),
+                    items,
+                    srs,
+                )
+            }
+        }?;
+
+        let wrapped =
+            encode_wrapped_aggregate_proof(statement.statement_digest(), &inner_proof_bytes)?;
+        ensure!(
+            wrapped.len() <= MAX_AGGREGATE_PROOF_BYTES,
+            "wrapped aggregate proof bytes {} exceed cap {}",
+            wrapped.len(),
+            MAX_AGGREGATE_PROOF_BYTES
+        );
+        Ok(wrapped)
+    }
+
+    fn verify_family_aggregate(
+        statement: &AggregateStatement,
+        pvk: &PreparedVerifyingKey<Bls12_377>,
+        aggregate_proof_bytes: &[u8],
+        srs: &Self::Srs,
+    ) -> Result<(), AggregateVerifyError> {
+        let call = preflight_aggregate_verify(AggregatePreflightInput {
+            statement,
+            pvk,
+            aggregate_proof_bytes,
+            srs,
+        })?;
+        let family_id = call.family_id();
+
         let accepted = match family_id {
             ProofFamilyId::Transfer => Self::verify_transfer_family_aggregate(
-                pvk,
-                aggregate_proof_bytes,
-                padded_public_inputs,
-                srs,
+                call.challenge_context(),
+                call.pvk(),
+                call.inner_proof_bytes(),
+                call.padded_public_inputs(),
+                call.srs(),
             )?,
             ProofFamilyId::Consolidate(family_id) => {
-                Self::verify_consolidate_family_aggregate_profiled_unchecked(
+                Self::verify_consolidate_family_aggregate_profiled_status(
+                    call.challenge_context(),
                     family_id,
-                    pvk,
-                    aggregate_proof_bytes,
-                    padded_public_inputs,
-                    srs,
+                    call.pvk(),
+                    call.inner_proof_bytes(),
+                    call.padded_public_inputs(),
+                    call.srs(),
                 )?
                 .accepted
             }
             ProofFamilyId::Split(family_id) => {
-                Self::verify_split_family_aggregate_profiled_unchecked(
+                Self::verify_split_family_aggregate_profiled_status(
+                    call.challenge_context(),
                     family_id,
-                    pvk,
-                    aggregate_proof_bytes,
-                    padded_public_inputs,
-                    srs,
+                    call.pvk(),
+                    call.inner_proof_bytes(),
+                    call.padded_public_inputs(),
+                    call.srs(),
                 )?
                 .accepted
             }
             ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
                 verify_with_digest::<ShieldedIcs20WithdrawalTranscriptDigest>(
-                    pvk,
-                    aggregate_proof_bytes,
-                    padded_public_inputs,
-                    srs,
+                    call.challenge_context(),
+                    call.pvk(),
+                    call.inner_proof_bytes(),
+                    call.padded_public_inputs(),
+                    call.srs(),
                 )?
             }
         };
 
-        ensure!(accepted, "SnarkPack verification rejected {:?}", family_id);
+        if !accepted {
+            return Err(AggregateVerifyError::BackendRejected(format!(
+                "{family_id:?}"
+            )));
+        }
         Ok(())
     }
 }
@@ -474,11 +915,12 @@ fn collect_proofs(items: &[BatchItem]) -> Vec<ark_groth16::Proof<Bls12_377>> {
 
 impl SnarkpackBackend {
     pub fn aggregate_family_profiled(
-        family_id: ProofFamilyId,
+        statement: &AggregateStatement,
         _pvk: &PreparedVerifyingKey<Bls12_377>,
         items: &[BatchItem],
         srs: &DevSrs,
     ) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
+        let family_id = statement.family_id();
         srs.ensure_supported_count(items.len())?;
         ensure!(
             !items.is_empty(),
@@ -487,29 +929,77 @@ impl SnarkpackBackend {
         );
 
         let (bytes, profile) = match family_id {
-            ProofFamilyId::Transfer => Self::aggregate_transfer_family_profiled(items, srs),
-            ProofFamilyId::Consolidate(family_id) => {
-                Self::aggregate_consolidate_family_profiled(family_id, items, srs)
+            ProofFamilyId::Transfer => {
+                Self::aggregate_transfer_family_profiled(items, srs, statement.challenge_context())
             }
-            ProofFamilyId::Split(family_id) => {
-                Self::aggregate_split_family_profiled(family_id, items, srs)
+            ProofFamilyId::Consolidate(family_id) => Self::aggregate_consolidate_family_profiled(
+                family_id,
+                items,
+                srs,
+                statement.challenge_context(),
+            ),
+            ProofFamilyId::Split(family_id) => Self::aggregate_split_family_profiled(
+                family_id,
+                items,
+                srs,
+                statement.challenge_context(),
+            ),
+            ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
+                aggregate_with_digest_profiled::<ShieldedIcs20WithdrawalTranscriptDigest>(
+                    items,
+                    srs,
+                    statement.challenge_context(),
+                )
             }
-            ProofFamilyId::ShieldedIcs20Withdrawal(_) => aggregate_with_digest_profiled::<
-                ShieldedIcs20WithdrawalTranscriptDigest,
-            >(items, srs),
         }?;
 
-        Ok((bytes, profile))
+        let wrapped = encode_wrapped_aggregate_proof(statement.statement_digest(), &bytes)?;
+        ensure!(
+            wrapped.len() <= MAX_AGGREGATE_PROOF_BYTES,
+            "wrapped aggregate proof bytes {} exceed cap {}",
+            wrapped.len(),
+            MAX_AGGREGATE_PROOF_BYTES
+        );
+
+        Ok((wrapped, profile))
     }
 }
 
 pub(crate) fn aggregate_with_digest<D: Digest>(
+    challenge_context: &ChallengeContext,
     items: &[BatchItem],
     srs: &DevSrs,
 ) -> Result<Vec<u8>> {
     let inner_product_srs = srs.inner_product_srs_for_count(items.len())?;
-    let aggregate = aggregate_proofs::<Bls12_377, D>(&inner_product_srs, &collect_proofs(items))
-        .map_err(|e| anyhow::anyhow!("SnarkPack aggregation failed: {e}"))?;
+    let aggregate = aggregate_proofs::<Bls12_377, D>(
+        challenge_context,
+        &inner_product_srs,
+        &collect_proofs(items),
+    )
+    .map_err(|e| anyhow::anyhow!("SnarkPack aggregation failed: {e}"))?;
+    let mut bytes = Vec::new();
+    aggregate.serialize_compressed(&mut bytes)?;
+    Ok(bytes)
+}
+
+pub(crate) fn aggregate_with_digest_with_trace<D, S>(
+    challenge_context: &ChallengeContext,
+    trace: &mut S,
+    items: &[BatchItem],
+    srs: &DevSrs,
+) -> Result<Vec<u8>>
+where
+    D: Digest,
+    S: ChallengeTraceSink,
+{
+    let inner_product_srs = srs.inner_product_srs_for_count(items.len())?;
+    let aggregate = aggregate_proofs_with_trace::<Bls12_377, D, S>(
+        challenge_context,
+        trace,
+        &inner_product_srs,
+        &collect_proofs(items),
+    )
+    .map_err(|e| anyhow::anyhow!("SnarkPack aggregation failed: {e}"))?;
     let mut bytes = Vec::new();
     aggregate.serialize_compressed(&mut bytes)?;
     Ok(bytes)
@@ -518,6 +1008,7 @@ pub(crate) fn aggregate_with_digest<D: Digest>(
 pub(crate) fn aggregate_with_digest_profiled<D: Digest>(
     items: &[BatchItem],
     srs: &DevSrs,
+    challenge_context: &ChallengeContext,
 ) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
     let rayon_threads = RAYON_THREADS_PER_BATCH.load(Ordering::Relaxed);
     if rayon_threads > 0 {
@@ -525,15 +1016,20 @@ pub(crate) fn aggregate_with_digest_profiled<D: Digest>(
             .num_threads(rayon_threads)
             .build_scoped(
                 |thread| thread.run(),
-                |pool| pool.install(|| aggregate_with_digest_profiled_core::<D>(items, srs)),
+                |pool| {
+                    pool.install(|| {
+                        aggregate_with_digest_profiled_core::<D>(challenge_context, items, srs)
+                    })
+                },
             )
             .map_err(|e| anyhow::anyhow!("rayon pool build error: {e}"))?
     } else {
-        aggregate_with_digest_profiled_core::<D>(items, srs)
+        aggregate_with_digest_profiled_core::<D>(challenge_context, items, srs)
     }
 }
 
 fn aggregate_with_digest_profiled_core<D: Digest>(
+    challenge_context: &ChallengeContext,
     items: &[BatchItem],
     srs: &DevSrs,
 ) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
@@ -547,7 +1043,7 @@ fn aggregate_with_digest_profiled_core<D: Digest>(
     let inner_product_srs = srs.inner_product_srs_for_count(items.len())?;
     let backend_start = Instant::now();
     let (aggregate, core_profile) =
-        aggregate_proofs_profiled::<Bls12_377, D>(&inner_product_srs, &proofs)
+        aggregate_proofs_profiled::<Bls12_377, D>(challenge_context, &inner_product_srs, &proofs)
             .map_err(|e| anyhow::anyhow!("SnarkPack aggregation failed: {e}"))?;
     profile.backend_aggregate_ms = backend_start.elapsed().as_secs_f64() * 1000.0;
     apply_core_build_profile(&mut profile, &core_profile);
@@ -618,27 +1114,108 @@ fn apply_core_build_profile(
 }
 
 pub(crate) fn verify_with_digest<D: Digest>(
+    challenge_context: &ChallengeContext,
     pvk: &PreparedVerifyingKey<Bls12_377>,
     aggregate_proof_bytes: &[u8],
     padded_public_inputs: &[Vec<Fq>],
     srs: &DevSrs,
-) -> Result<bool> {
+) -> Result<bool, AggregateVerifyError> {
     let aggregate = deserialize_aggregate_proof::<D>(aggregate_proof_bytes)?;
     verify_aggregate_proof::<Bls12_377, D>(
-        srs.verifier_srs()?,
-        &pvk.vk,
+        challenge_context,
+        srs.verifier_srs()
+            .map_err(|err| AggregateVerifyError::BadPadding(err.to_string()))?,
+        pvk,
         padded_public_inputs,
         &aggregate,
     )
-    .map_err(|e| anyhow::anyhow!("SnarkPack verification failed: {e}"))
+    .map_err(|e| AggregateVerifyError::BackendRejected(e.to_string()))
 }
 
-pub(crate) fn verify_with_digest_profiled<D: Digest>(
+pub(crate) fn verify_with_digest_with_trace<D, S>(
+    challenge_context: &ChallengeContext,
+    trace: &mut S,
     pvk: &PreparedVerifyingKey<Bls12_377>,
     aggregate_proof_bytes: &[u8],
     padded_public_inputs: &[Vec<Fq>],
     srs: &DevSrs,
-) -> Result<AggregateVerificationProfile> {
+) -> Result<bool, AggregateVerifyError>
+where
+    D: Digest,
+    S: ChallengeTraceSink,
+{
+    let aggregate = deserialize_aggregate_proof::<D>(aggregate_proof_bytes)?;
+    verify_aggregate_proof_with_trace::<Bls12_377, D, S>(
+        challenge_context,
+        trace,
+        srs.verifier_srs()
+            .map_err(|err| AggregateVerifyError::BadPadding(err.to_string()))?,
+        pvk,
+        padded_public_inputs,
+        &aggregate,
+    )
+    .map_err(|e| AggregateVerifyError::BackendRejected(e.to_string()))
+}
+
+fn complete_snarkpack_trace(
+    statement: &AggregateStatement,
+    challenge_entries: Vec<TraceEvent>,
+) -> Vec<TraceEvent> {
+    let mut trace = Vec::with_capacity(1 + 10 + challenge_entries.len());
+    trace.push(trace_context_event(statement));
+    push_static_abstract_trace(&mut trace);
+    trace.extend(challenge_entries);
+    trace
+}
+
+fn trace_context_event(statement: &AggregateStatement) -> TraceEvent {
+    TraceEvent {
+        spec_row_id: "fs.context-constructor",
+        primary_level: TraceComparisonLevel::PenumbraByte,
+        event_kind: TraceEventKind::ChallengeContext,
+        stage_label: "statement",
+        nonce: None,
+        round_index: None,
+        byte_payload: challenge_context_preimage(statement.statement_digest()),
+        abstract_payload: None,
+        filecoin_bug_class: None,
+    }
+}
+
+fn push_static_abstract_trace(trace: &mut Vec<TraceEvent>) {
+    push_abstract_trace(trace, "gipa.input-relation");
+    push_abstract_trace(trace, "gipa.round-folding");
+    push_abstract_trace(trace, "gipa.verifier-folding");
+    push_abstract_trace(trace, "tipa.srs");
+    push_abstract_trace(trace, "tipa.ab.gipa");
+    push_abstract_trace(trace, "tipa.ab.kzg-equations");
+    push_abstract_trace(trace, "ssm.power-sequence");
+    push_abstract_trace(trace, "ssm.base-equation");
+    push_abstract_trace(trace, "groth16.folded-inputs");
+    push_abstract_trace(trace, "groth16.ppe");
+}
+
+fn push_abstract_trace(trace: &mut Vec<TraceEvent>, spec_row_id: &'static str) {
+    trace.push(TraceEvent {
+        spec_row_id,
+        primary_level: TraceComparisonLevel::AbstractTrace,
+        event_kind: TraceEventKind::EquationRole,
+        stage_label: spec_row_id,
+        nonce: None,
+        round_index: None,
+        byte_payload: Vec::new(),
+        abstract_payload: Some(spec_row_id),
+        filecoin_bug_class: None,
+    });
+}
+
+pub(crate) fn verify_with_digest_profiled<D: Digest>(
+    challenge_context: &ChallengeContext,
+    pvk: &PreparedVerifyingKey<Bls12_377>,
+    aggregate_proof_bytes: &[u8],
+    padded_public_inputs: &[Vec<Fq>],
+    srs: &DevSrs,
+) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
     let started = Instant::now();
 
     let deserialize_started = Instant::now();
@@ -646,12 +1223,14 @@ pub(crate) fn verify_with_digest_profiled<D: Digest>(
     let deserialize_ms = deserialize_started.elapsed().as_secs_f64() * 1000.0;
 
     let core_profile = verify_aggregate_proof_profiled::<Bls12_377, D>(
-        srs.verifier_srs()?,
-        &pvk.vk,
+        challenge_context,
+        srs.verifier_srs()
+            .map_err(|err| AggregateVerifyError::BadPadding(err.to_string()))?,
+        pvk,
         padded_public_inputs,
         &aggregate,
     )
-    .map_err(|e| anyhow::anyhow!("SnarkPack verification failed: {e}"))?;
+    .map_err(|e| AggregateVerifyError::BackendRejected(e.to_string()))?;
 
     Ok(profile_with_deserialize(
         core_profile,
@@ -680,21 +1259,77 @@ fn profile_with_deserialize(
 
 #[cfg(test)]
 mod tests {
+    use ark_ec::{
+        pairing::{Pairing, PairingOutput},
+        AffineRepr, CurveGroup, PrimeGroup,
+    };
+    use ark_ff::{UniformRand, Zero};
     use ark_groth16::{r1cs_to_qap::LibsnarkReduction, Groth16, PreparedVerifyingKey};
+    use ark_ip_proofs::challenge::VecChallengeTraceSink;
     use ark_r1cs_std::{alloc::AllocVar, eq::EqGadget, fields::fp::FpVar};
     use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
     use ark_snark::SNARK;
     use decaf377::Fq;
     use penumbra_sdk_proof_params::batch;
     use penumbra_sdk_shielded_pool::ShieldedIcs20WithdrawalFamilyId;
+    use proptest::prelude::*;
     use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
 
+    use crate::transcript::TransferTranscriptDigest;
     use crate::{
-        aggregate_family, aggregate_family_profiled, pad_items_to_power_of_two,
-        verify_family_aggregate, verify_family_aggregate_profiled,
+        aggregate_family, aggregate_family_profiled, pad_items_to_power_of_two, srs_id,
+        statement::aggregate_verification_key_digest, verify_family_aggregate,
+        verify_family_aggregate_profiled, AggregateStatement, AggregateVerifyError,
+        AGGREGATE_PROTOCOL_VERSION,
     };
 
     use super::*;
+
+    /// The optimized PPE expression in `verify_ppe` — `e(α,β)^{r_sum}` reused as a
+    /// GT exponentiation plus two pairings against the prepared `-γ`/`-δ` line
+    /// tables (from `PreparedVerifyingKey`) — computes the identical target-group
+    /// element as the original three-pairing form, for random inputs. This is the
+    /// algebraic equivalence guarding that category-1 optimization (the raw `vk`
+    /// three-pairing form is `verify_ppe_baseline`, compiled under `bench-baseline`).
+    #[test]
+    fn ppe_optimized_matches_baseline_gt_value() {
+        use ark_inner_products::{cfg_multi_pairing, cfg_multi_pairing_g1_affine_g2_prepared};
+        type P = Bls12_377;
+        type G1 = <P as Pairing>::G1;
+        type G2 = <P as Pairing>::G2;
+        type G2Prepared = <P as Pairing>::G2Prepared;
+
+        let mut rng = ChaCha20Rng::seed_from_u64(2024);
+        for _ in 0..32 {
+            let alpha = G1::rand(&mut rng);
+            let beta = G2::rand(&mut rng);
+            let gamma = G2::rand(&mut rng);
+            let delta = G2::rand(&mut rng);
+            let g_ic = G1::rand(&mut rng);
+            let agg_c = G1::rand(&mut rng);
+            let r_sum = <P as Pairing>::ScalarField::rand(&mut rng);
+
+            // Baseline: three pairings over the raw vk points.
+            let baseline =
+                cfg_multi_pairing::<P>(&[alpha * r_sum, g_ic, agg_c], &[beta, gamma, delta])
+                    .unwrap();
+
+            // Optimized: e(α,β)^{r_sum} as a GT exponentiation, plus two pairings
+            // against the prepared -γ / -δ tables (stands in for pvk's precomputes).
+            let alpha_g1_beta_g2 = <P as Pairing>::pairing(alpha, beta).0;
+            let alpha_beta_rsum = PairingOutput::<P>(alpha_g1_beta_g2) * r_sum;
+            let neg_gamma_pc = G2Prepared::from((-gamma).into_affine());
+            let neg_delta_pc = G2Prepared::from((-delta).into_affine());
+            let g1_affine = G1::normalize_batch(&[-g_ic, -agg_c]);
+            let folded = cfg_multi_pairing_g1_affine_g2_prepared::<P>(
+                &g1_affine,
+                &[neg_gamma_pc, neg_delta_pc],
+            )
+            .unwrap();
+
+            assert_eq!(baseline, alpha_beta_rsum + folded);
+        }
+    }
 
     #[derive(Clone)]
     struct SquareCircuit {
@@ -718,7 +1353,14 @@ mod tests {
     }
 
     fn sample_items() -> (PreparedVerifyingKey<Bls12_377>, Vec<BatchItem>) {
-        let mut rng = ChaCha20Rng::seed_from_u64(7);
+        sample_items_with_count(7, 3)
+    }
+
+    fn sample_items_with_count(
+        seed: u64,
+        count: usize,
+    ) -> (PreparedVerifyingKey<Bls12_377>, Vec<BatchItem>) {
+        let mut rng = ChaCha20Rng::seed_from_u64(seed);
         let setup_circuit = SquareCircuit {
             x: Some(Fq::from(1u64)),
         };
@@ -730,7 +1372,7 @@ mod tests {
             .expect("setup should succeed");
         let pvk: PreparedVerifyingKey<Bls12_377> = pk.vk.clone().into();
 
-        let items = (0..3)
+        let items = (0..count)
             .map(|_| {
                 let x = Fq::rand(&mut rng);
                 let circuit = SquareCircuit { x: Some(x) };
@@ -747,6 +1389,386 @@ mod tests {
         (pvk, items)
     }
 
+    fn parity_families() -> [ProofFamilyId; 4] {
+        [
+            ProofFamilyId::Transfer,
+            ProofFamilyId::Consolidate(penumbra_sdk_shielded_pool::CONSOLIDATE_FAMILY_SPECS[0].id),
+            ProofFamilyId::Split(penumbra_sdk_shielded_pool::SPLIT_FAMILY_SPECS[0].id),
+            ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical),
+        ]
+    }
+
+    fn padded_public_inputs(items: &[BatchItem]) -> Vec<Vec<Fq>> {
+        items
+            .iter()
+            .map(|item| item.public_inputs.clone())
+            .collect()
+    }
+
+    fn statement_for_items(
+        family_id: ProofFamilyId,
+        pvk: &PreparedVerifyingKey<Bls12_377>,
+        real_count: usize,
+        padded_items: &[BatchItem],
+        srs: &DevSrs,
+    ) -> AggregateStatement {
+        AggregateStatement::new(
+            AGGREGATE_PROTOCOL_VERSION,
+            family_id,
+            srs_id(srs),
+            pvk,
+            real_count as u32,
+            &padded_public_inputs(padded_items),
+        )
+        .expect("statement should build")
+    }
+
+    fn statement_for_public_inputs(
+        family_id: ProofFamilyId,
+        pvk: &PreparedVerifyingKey<Bls12_377>,
+        real_count: usize,
+        padded_public_inputs: &[Vec<Fq>],
+        srs: &DevSrs,
+    ) -> AggregateStatement {
+        AggregateStatement::new(
+            AGGREGATE_PROTOCOL_VERSION,
+            family_id,
+            srs_id(srs),
+            pvk,
+            real_count as u32,
+            padded_public_inputs,
+        )
+        .expect("statement should build")
+    }
+
+    type BackendG1 = <Bls12_377 as Pairing>::G1;
+    type BackendG2 = <Bls12_377 as Pairing>::G2;
+    type BackendG1Affine = <Bls12_377 as Pairing>::G1Affine;
+    type BackendG2Affine = <Bls12_377 as Pairing>::G2Affine;
+    type BackendScalar = <Bls12_377 as Pairing>::ScalarField;
+
+    fn compressed_bytes<T: CanonicalSerialize>(value: &T) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        value
+            .serialize_compressed(&mut bytes)
+            .expect("compressed serialization should succeed");
+        bytes
+    }
+
+    fn assert_compressed_round_trip<T>(value: &T)
+    where
+        T: CanonicalDeserialize + CanonicalSerialize + Eq + std::fmt::Debug,
+    {
+        let bytes = compressed_bytes(value);
+        let decoded =
+            T::deserialize_compressed(&bytes[..]).expect("compressed round trip should decode");
+        assert_eq!(&decoded, value);
+    }
+
+    fn sequential_msm<G>(bases: &[G], scalars: &[G::ScalarField]) -> G
+    where
+        G: CurveGroup,
+    {
+        bases
+            .iter()
+            .zip(scalars)
+            .fold(G::zero(), |mut acc, (base, scalar)| {
+                let mut term = *base;
+                term *= *scalar;
+                acc += term;
+                acc
+            })
+    }
+
+    fn arkworks_msm<G>(bases: &[G], scalars: &[G::ScalarField]) -> G
+    where
+        G: CurveGroup,
+    {
+        let affine_bases = G::normalize_batch(bases);
+        G::msm(&affine_bases, scalars).expect("MSM inputs have matching lengths")
+    }
+
+    fn non_subgroup_g1(rng: &mut ChaCha20Rng) -> BackendG1Affine {
+        for _ in 0..10_000 {
+            let x = <BackendG1Affine as AffineRepr>::BaseField::rand(rng);
+            for greatest in [false, true] {
+                if let Some(point) = BackendG1Affine::get_point_from_x_unchecked(x, greatest) {
+                    if point.is_on_curve() && !point.is_in_correct_subgroup_assuming_on_curve() {
+                        return point;
+                    }
+                }
+            }
+        }
+        panic!("could not sample a G1 non-subgroup point");
+    }
+
+    fn non_subgroup_g2(rng: &mut ChaCha20Rng) -> BackendG2Affine {
+        for _ in 0..10_000 {
+            let x = <BackendG2Affine as AffineRepr>::BaseField::rand(rng);
+            for greatest in [false, true] {
+                if let Some(point) = BackendG2Affine::get_point_from_x_unchecked(x, greatest) {
+                    if point.is_on_curve() && !point.is_in_correct_subgroup_assuming_on_curve() {
+                        return point;
+                    }
+                }
+            }
+        }
+        panic!("could not sample a G2 non-subgroup point");
+    }
+
+    #[derive(Clone, Copy)]
+    enum ExpectedRejection {
+        MalformedProofBytes,
+        OversizeBytes,
+        StatementDigestMismatch,
+    }
+
+    struct RejectionCase {
+        name: &'static str,
+        statement: AggregateStatement,
+        aggregate_bytes: Vec<u8>,
+        expected: ExpectedRejection,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct TimingStats {
+        p50_ms: f64,
+        p95_ms: f64,
+        p99_ms: f64,
+    }
+
+    fn assert_expected_rejection(err: &AggregateVerifyError, expected: ExpectedRejection) {
+        match expected {
+            ExpectedRejection::MalformedProofBytes => {
+                assert!(
+                    matches!(err, AggregateVerifyError::MalformedProofBytes(_)),
+                    "{err}"
+                )
+            }
+            ExpectedRejection::OversizeBytes => {
+                assert!(
+                    matches!(err, AggregateVerifyError::OversizeBytes(_)),
+                    "{err}"
+                )
+            }
+            ExpectedRejection::StatementDigestMismatch => {
+                assert_eq!(err, &AggregateVerifyError::StatementDigestMismatch)
+            }
+        }
+    }
+
+    fn percentile(values: &[f64], pct: f64) -> f64 {
+        let mut sorted = values.to_vec();
+        sorted.sort_by(|left, right| {
+            left.partial_cmp(right)
+                .expect("timing measurements are finite")
+        });
+        let rank = ((sorted.len() as f64 - 1.0) * pct).ceil() as usize;
+        sorted[rank.min(sorted.len() - 1)]
+    }
+
+    fn timing_stats(values: &[f64]) -> TimingStats {
+        assert!(!values.is_empty());
+        TimingStats {
+            p50_ms: percentile(values, 0.50),
+            p95_ms: percentile(values, 0.95),
+            p99_ms: percentile(values, 0.99),
+        }
+    }
+
+    fn snarkpack_matches_legacy_batch_for_counts(counts: &[usize]) {
+        let (pvk, items) = sample_items();
+        let base_item = items.first().expect("at least one sample item").clone();
+        let srs = DevSrs::default();
+
+        for family_id in parity_families() {
+            for count in counts {
+                let repeated = vec![base_item.clone(); *count];
+                batch::batch_verify(&pvk, &repeated)
+                    .expect("legacy batch verify should accept repeated valid proofs");
+
+                let statement = statement_for_items(family_id, &pvk, *count, &repeated, &srs);
+                let aggregate = aggregate_family(&statement, &pvk, &repeated, &srs)
+                    .expect("aggregation should succeed");
+
+                verify_family_aggregate(&statement, &pvk, &aggregate, &srs)
+                    .expect("SnarkPack verify should match legacy batch verify");
+            }
+        }
+    }
+
+    fn groth16_oracle_agreement_for_counts(counts: &[usize]) {
+        let (pvk, items) = sample_items();
+        let base_item = items.first().expect("at least one sample item").clone();
+        let srs = DevSrs::default();
+
+        for family_id in parity_families() {
+            for count in counts {
+                let repeated = vec![base_item.clone(); *count];
+                for item in &repeated {
+                    assert!(
+                        Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(
+                            &pvk,
+                            &item.public_inputs,
+                            &item.proof,
+                        )
+                        .expect("single Groth16 oracle should run"),
+                        "single Groth16 oracle should accept valid item"
+                    );
+                }
+
+                let batch_accepts = batch::batch_verify(&pvk, &repeated).is_ok();
+                let statement = statement_for_items(family_id, &pvk, *count, &repeated, &srs);
+                let aggregate = aggregate_family(&statement, &pvk, &repeated, &srs)
+                    .expect("aggregation should succeed");
+                let snarkpack_accepts =
+                    verify_family_aggregate(&statement, &pvk, &aggregate, &srs).is_ok();
+                assert_eq!(
+                    snarkpack_accepts, batch_accepts,
+                    "SnarkPack and batch oracle disagree for {family_id:?} count={count}"
+                );
+
+                if *count <= 64 {
+                    let mut invalid_items = repeated.clone();
+                    for item in &mut invalid_items {
+                        item.public_inputs[0] += Fq::from(1u64);
+                        assert!(
+                            !Groth16::<Bls12_377, LibsnarkReduction>::verify_with_processed_vk(
+                                &pvk,
+                                &item.public_inputs,
+                                &item.proof,
+                            )
+                            .expect("single Groth16 oracle should run"),
+                            "single Groth16 oracle should reject mutated public input"
+                        );
+                    }
+                    assert!(
+                        batch::batch_verify(&pvk, &invalid_items).is_err(),
+                        "batch oracle should reject invalid items"
+                    );
+                    let invalid_statement =
+                        statement_for_items(family_id, &pvk, *count, &invalid_items, &srs);
+                    let invalid_aggregate =
+                        aggregate_family(&invalid_statement, &pvk, &invalid_items, &srs)
+                            .expect("aggregation over invalid proof records should serialize");
+                    assert!(
+                        verify_family_aggregate(&invalid_statement, &pvk, &invalid_aggregate, &srs)
+                            .is_err(),
+                        "SnarkPack should reject aggregate built over individually invalid items"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn arkworks_pairing_identity_and_generator_consistency() {
+        let generator_pairing = Bls12_377::pairing(BackendG1::generator(), BackendG2::generator());
+        assert_ne!(generator_pairing, PairingOutput::<Bls12_377>::zero());
+        assert_eq!(
+            Bls12_377::pairing(BackendG1::zero(), BackendG2::generator()),
+            PairingOutput::<Bls12_377>::zero()
+        );
+        assert_eq!(
+            Bls12_377::pairing(BackendG1::generator(), BackendG2::zero()),
+            PairingOutput::<Bls12_377>::zero()
+        );
+    }
+
+    #[test]
+    fn arkworks_msm_boundary_zero_scalar_identity_and_random_parity() {
+        let mut rng = ChaCha20Rng::seed_from_u64(0x5eed);
+        let scalars: Vec<BackendScalar> = (0..16).map(|_| BackendScalar::rand(&mut rng)).collect();
+        let zero_scalars = vec![BackendScalar::zero(); scalars.len()];
+
+        let g1_bases: Vec<BackendG1> = (0..scalars.len())
+            .map(|_| BackendG1::rand(&mut rng))
+            .collect();
+        let g1_identities = vec![BackendG1::zero(); scalars.len()];
+        assert_eq!(arkworks_msm(&g1_bases, &zero_scalars), BackendG1::zero());
+        assert_eq!(arkworks_msm(&g1_identities, &scalars), BackendG1::zero());
+        assert_eq!(
+            arkworks_msm(&g1_bases, &scalars),
+            sequential_msm(&g1_bases, &scalars)
+        );
+
+        let g2_bases: Vec<BackendG2> = (0..scalars.len())
+            .map(|_| BackendG2::rand(&mut rng))
+            .collect();
+        let g2_identities = vec![BackendG2::zero(); scalars.len()];
+        assert_eq!(arkworks_msm(&g2_bases, &zero_scalars), BackendG2::zero());
+        assert_eq!(arkworks_msm(&g2_identities, &scalars), BackendG2::zero());
+        assert_eq!(
+            arkworks_msm(&g2_bases, &scalars),
+            sequential_msm(&g2_bases, &scalars)
+        );
+    }
+
+    #[test]
+    fn arkworks_g1_g2_compressed_round_trip_and_identity() {
+        let mut rng = ChaCha20Rng::seed_from_u64(0xdecaf);
+
+        for point in [
+            BackendG1::zero().into_affine(),
+            BackendG1::generator().into_affine(),
+            BackendG1::rand(&mut rng).into_affine(),
+        ] {
+            assert_compressed_round_trip(&point);
+        }
+
+        for point in [
+            BackendG2::zero().into_affine(),
+            BackendG2::generator().into_affine(),
+            BackendG2::rand(&mut rng).into_affine(),
+        ] {
+            assert_compressed_round_trip(&point);
+        }
+    }
+
+    #[test]
+    fn arkworks_g1_g2_malformed_compressed_bytes_reject() {
+        let g1_bytes = compressed_bytes(&BackendG1::generator().into_affine());
+        let g2_bytes = compressed_bytes(&BackendG2::generator().into_affine());
+
+        assert!(BackendG1Affine::deserialize_compressed(&g1_bytes[..g1_bytes.len() - 1]).is_err());
+        assert!(BackendG2Affine::deserialize_compressed(&g2_bytes[..g2_bytes.len() - 1]).is_err());
+        assert!(BackendG1Affine::deserialize_compressed(&vec![0xff; g1_bytes.len()][..]).is_err());
+        assert!(BackendG2Affine::deserialize_compressed(&vec![0xff; g2_bytes.len()][..]).is_err());
+    }
+
+    #[test]
+    fn arkworks_g1_g2_subgroup_and_torsion_rejection() {
+        let mut rng = ChaCha20Rng::seed_from_u64(0x51a7e);
+
+        let g1_torsion = non_subgroup_g1(&mut rng);
+        let g1_bytes = compressed_bytes(&g1_torsion);
+        assert!(
+            BackendG1Affine::deserialize_compressed(&g1_bytes[..]).is_err(),
+            "checked G1 deserialization must reject non-subgroup points"
+        );
+
+        let g2_torsion = non_subgroup_g2(&mut rng);
+        let g2_bytes = compressed_bytes(&g2_torsion);
+        assert!(
+            BackendG2Affine::deserialize_compressed(&g2_bytes[..]).is_err(),
+            "checked G2 deserialization must reject non-subgroup points"
+        );
+    }
+
+    #[test]
+    fn decaf377_vk_digest_round_trips_after_serialization() {
+        let (pvk, _) = sample_items();
+        let original_digest =
+            aggregate_verification_key_digest(&pvk).expect("VK digest should build");
+        let bytes = compressed_bytes(&pvk);
+        let decoded = PreparedVerifyingKey::<Bls12_377>::deserialize_compressed(&bytes[..])
+            .expect("prepared verifying key should round-trip");
+
+        let decoded_digest =
+            aggregate_verification_key_digest(&decoded).expect("decoded VK digest should build");
+        assert_eq!(decoded_digest, original_digest);
+    }
+
     #[test]
     fn snarkpack_backend_accepts_valid_aggregate() {
         let (pvk, items) = sample_items();
@@ -754,14 +1776,11 @@ mod tests {
         let padded_items =
             pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
         let family_id = ProofFamilyId::Transfer;
-        let aggregate = aggregate_family(family_id, &pvk, &padded_items, &srs)
+        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
+        let aggregate = aggregate_family(&statement, &pvk, &padded_items, &srs)
             .expect("aggregation should succeed");
-        let padded_public_inputs = padded_items
-            .into_iter()
-            .map(|item| item.public_inputs)
-            .collect::<Vec<_>>();
 
-        verify_family_aggregate(family_id, &pvk, &aggregate, &padded_public_inputs, &srs)
+        verify_family_aggregate(&statement, &pvk, &aggregate, &srs)
             .expect("aggregate verification should succeed");
     }
 
@@ -773,14 +1792,11 @@ mod tests {
             pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
         let family_id =
             ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical);
-        let aggregate = aggregate_family(family_id, &pvk, &padded_items, &srs)
+        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
+        let aggregate = aggregate_family(&statement, &pvk, &padded_items, &srs)
             .expect("aggregation should succeed");
-        let padded_public_inputs = padded_items
-            .into_iter()
-            .map(|item| item.public_inputs)
-            .collect::<Vec<_>>();
 
-        verify_family_aggregate(family_id, &pvk, &aggregate, &padded_public_inputs, &srs)
+        verify_family_aggregate(&statement, &pvk, &aggregate, &srs)
             .expect("shielded ICS-20 withdrawal aggregate verification should succeed");
     }
 
@@ -791,25 +1807,31 @@ mod tests {
         let padded_items =
             pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
         let family_id = ProofFamilyId::Transfer;
-        let mut aggregate = aggregate_family(family_id, &pvk, &padded_items, &srs)
+        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
+        let mut aggregate = aggregate_family(&statement, &pvk, &padded_items, &srs)
             .expect("aggregation should succeed");
         aggregate.truncate(aggregate.len() / 2);
-        let padded_public_inputs = padded_items
-            .into_iter()
-            .map(|item| item.public_inputs)
-            .collect::<Vec<_>>();
 
-        let err = verify_family_aggregate(family_id, &pvk, &aggregate, &padded_public_inputs, &srs)
+        let err = verify_family_aggregate(&statement, &pvk, &aggregate, &srs)
             .expect_err("malformed aggregate bytes should be rejected");
 
-        assert!(
-            err.to_string().contains("InvalidData")
-                || err.to_string().contains("serialization")
-                || err.to_string().contains("Not enough data")
-                || err.to_string().contains("UnexpectedEof")
-                || err.to_string().contains("failed to fill whole buffer"),
-            "unexpected error: {err}"
-        );
+        assert!(matches!(err, AggregateVerifyError::MalformedProofBytes(_)));
+    }
+
+    #[test]
+    fn malformed_aggregate_proof_oversize_rejected_before_deserialization() {
+        let (pvk, items) = sample_items();
+        let srs = DevSrs::default();
+        let padded_items =
+            pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
+        let family_id = ProofFamilyId::Transfer;
+        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
+        let oversized = vec![0u8; MAX_AGGREGATE_PROOF_BYTES + 1024];
+
+        let err = verify_family_aggregate(&statement, &pvk, &oversized, &srs)
+            .expect_err("oversized aggregate proof should reject before deserialization");
+
+        assert!(matches!(err, AggregateVerifyError::OversizeBytes(_)));
     }
 
     #[test]
@@ -819,21 +1841,18 @@ mod tests {
         let padded_items =
             pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
         let family_id = ProofFamilyId::Transfer;
-        let aggregate = aggregate_family(family_id, &pvk, &padded_items, &srs)
+        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
+        let aggregate = aggregate_family(&statement, &pvk, &padded_items, &srs)
             .expect("aggregation should succeed");
-        let mut padded_public_inputs = padded_items
-            .into_iter()
-            .map(|item| item.public_inputs)
-            .collect::<Vec<_>>();
+        let mut padded_public_inputs = padded_public_inputs(&padded_items);
         padded_public_inputs[0][0] += Fq::from(1u64);
+        let mutated_statement =
+            statement_for_public_inputs(family_id, &pvk, items.len(), &padded_public_inputs, &srs);
 
-        let err = verify_family_aggregate(family_id, &pvk, &aggregate, &padded_public_inputs, &srs)
+        let err = verify_family_aggregate(&mutated_statement, &pvk, &aggregate, &srs)
             .expect_err("mutated public inputs should be rejected");
 
-        assert!(
-            err.to_string().contains("rejected") || err.to_string().contains("failed"),
-            "unexpected error: {err}"
-        );
+        assert_eq!(err, AggregateVerifyError::StatementDigestMismatch);
     }
 
     #[test]
@@ -843,25 +1862,218 @@ mod tests {
         let padded_items =
             pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
         let family_id = ProofFamilyId::Transfer;
-        let aggregate = aggregate_family(family_id, &pvk, &padded_items, &srs)
+        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
+        let aggregate = aggregate_family(&statement, &pvk, &padded_items, &srs)
             .expect("aggregation should succeed");
-        let padded_public_inputs = padded_items
-            .into_iter()
-            .map(|item| item.public_inputs)
-            .collect::<Vec<_>>();
-
-        let err = verify_family_aggregate(
+        let wrong_statement = statement_for_items(
             ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical),
             &pvk,
-            &aggregate,
-            &padded_public_inputs,
+            items.len(),
+            &padded_items,
             &srs,
-        )
-        .expect_err("family transcript mismatch should be rejected");
+        );
 
+        let err = verify_family_aggregate(&wrong_statement, &pvk, &aggregate, &srs)
+            .expect_err("family transcript mismatch should be rejected");
+
+        assert_eq!(err, AggregateVerifyError::StatementDigestMismatch);
+    }
+
+    #[test]
+    fn statement_rejects_mutated_srs_id() {
+        let (pvk, items) = sample_items();
+        let srs = DevSrs::default();
+        let padded_items =
+            pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
+        let family_id = ProofFamilyId::Transfer;
+        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
+        let aggregate = aggregate_family(&statement, &pvk, &padded_items, &srs)
+            .expect("aggregation should succeed");
+        let padded_inputs = padded_public_inputs(&padded_items);
+        let mut wrong_srs_id = srs_id(&srs);
+        wrong_srs_id[0] ^= 0x01;
+        let wrong_statement = AggregateStatement::new(
+            AGGREGATE_PROTOCOL_VERSION,
+            family_id,
+            wrong_srs_id,
+            &pvk,
+            items.len() as u32,
+            &padded_inputs,
+        )
+        .expect("wrong-SRS statement should still be structurally valid");
+
+        let err = verify_family_aggregate(&wrong_statement, &pvk, &aggregate, &srs)
+            .expect_err("SRS id mutation should reject before backend verification");
+
+        assert_eq!(err, AggregateVerifyError::StatementDigestMismatch);
+    }
+
+    #[test]
+    fn statement_mismatch_rejects_vk_digest_mutation_before_backend() {
+        let (pvk, items) = sample_items();
+        let (wrong_pvk, _) = sample_items_with_count(99, 1);
+        let srs = DevSrs::default();
+        let padded_items =
+            pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
+        let family_id = ProofFamilyId::Transfer;
+        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
+        let aggregate = aggregate_family(&statement, &pvk, &padded_items, &srs)
+            .expect("aggregation should succeed");
+        let wrong_statement =
+            statement_for_items(family_id, &wrong_pvk, items.len(), &padded_items, &srs);
+
+        let err = verify_family_aggregate(&wrong_statement, &pvk, &aggregate, &srs)
+            .expect_err("VK digest mutation should reject before backend verification");
+
+        assert_eq!(err, AggregateVerifyError::StatementDigestMismatch);
+    }
+
+    #[test]
+    #[ignore = "release-mode CI gate; run with `just snarkpack-dos-gate`"]
+    fn snarkpack_dos_gate_valid_and_adversarial_paths_hold_thresholds() {
+        const SAMPLES: usize = 5;
+        const VALID_P99_MAX_MS: f64 = 1_500.0;
+        const MIXED_P99_MAX_MS: f64 = 1_500.0;
+        const CHEAP_REJECT_P99_MAX_MS: f64 = 25.0;
+        const CHEAP_REJECT_VALID_RATIO: f64 = 0.50;
+
+        let (pvk, items) = sample_items();
+        let srs = DevSrs::default();
+        let padded_items =
+            pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
+        let family_id = ProofFamilyId::Transfer;
+        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
+        let aggregate = aggregate_family(&statement, &pvk, &padded_items, &srs)
+            .expect("aggregation should succeed");
+
+        for _ in 0..2 {
+            verify_family_aggregate(&statement, &pvk, &aggregate, &srs)
+                .expect("warmup valid aggregate verification should succeed");
+        }
+
+        let mut mutated_inputs = padded_public_inputs(&padded_items);
+        mutated_inputs[0][0] += Fq::from(1u64);
+        let wrong_public_input_statement =
+            statement_for_public_inputs(family_id, &pvk, items.len(), &mutated_inputs, &srs);
+        let wrong_family_statement = statement_for_items(
+            ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical),
+            &pvk,
+            items.len(),
+            &padded_items,
+            &srs,
+        );
+        let malformed_len = aggregate.len().min(8);
+        let rejection_cases = vec![
+            RejectionCase {
+                name: "malformed-wrapper",
+                statement: statement.clone(),
+                aggregate_bytes: aggregate[..malformed_len].to_vec(),
+                expected: ExpectedRejection::MalformedProofBytes,
+            },
+            RejectionCase {
+                name: "wrong-family",
+                statement: wrong_family_statement,
+                aggregate_bytes: aggregate.clone(),
+                expected: ExpectedRejection::StatementDigestMismatch,
+            },
+            RejectionCase {
+                name: "wrong-public-input",
+                statement: wrong_public_input_statement,
+                aggregate_bytes: aggregate.clone(),
+                expected: ExpectedRejection::StatementDigestMismatch,
+            },
+            RejectionCase {
+                name: "oversized-wrapper",
+                statement: statement.clone(),
+                aggregate_bytes: vec![0u8; MAX_AGGREGATE_PROOF_BYTES + 1],
+                expected: ExpectedRejection::OversizeBytes,
+            },
+        ];
+
+        for case in &rejection_cases {
+            let err = match preflight_aggregate_verify(AggregatePreflightInput {
+                statement: &case.statement,
+                pvk: &pvk,
+                aggregate_proof_bytes: &case.aggregate_bytes,
+                srs: &srs,
+            }) {
+                Ok(_) => panic!("adversarial input must fail before backend verification"),
+                Err(err) => err,
+            };
+            assert_expected_rejection(&err, case.expected);
+        }
+
+        let mut valid_samples = Vec::with_capacity(SAMPLES);
+        let mut mixed_samples = Vec::with_capacity(SAMPLES * (rejection_cases.len() + 1));
+        for _ in 0..SAMPLES {
+            let started = Instant::now();
+            verify_family_aggregate(&statement, &pvk, &aggregate, &srs)
+                .expect("valid aggregate verification should succeed");
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+            valid_samples.push(elapsed_ms);
+            mixed_samples.push(elapsed_ms);
+        }
+
+        let valid_stats = timing_stats(&valid_samples);
         assert!(
-            err.to_string().contains("rejected") || err.to_string().contains("failed"),
-            "unexpected error: {err}"
+            valid_stats.p99_ms <= VALID_P99_MAX_MS,
+            "valid p99 {:.3}ms exceeds {:.3}ms",
+            valid_stats.p99_ms,
+            VALID_P99_MAX_MS
+        );
+
+        for case in &rejection_cases {
+            let mut samples = Vec::with_capacity(SAMPLES);
+            for _ in 0..SAMPLES {
+                let started = Instant::now();
+                let err =
+                    verify_family_aggregate(&case.statement, &pvk, &case.aggregate_bytes, &srs)
+                        .expect_err("adversarial aggregate should reject");
+                let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+                assert_expected_rejection(&err, case.expected);
+                samples.push(elapsed_ms);
+                mixed_samples.push(elapsed_ms);
+            }
+
+            let reject_stats = timing_stats(&samples);
+            assert!(
+                reject_stats.p99_ms <= CHEAP_REJECT_P99_MAX_MS,
+                "{name} reject p99 {p99:.3}ms exceeds {limit:.3}ms",
+                name = case.name,
+                p99 = reject_stats.p99_ms,
+                limit = CHEAP_REJECT_P99_MAX_MS
+            );
+            assert!(
+                reject_stats.p99_ms <= valid_stats.p50_ms * CHEAP_REJECT_VALID_RATIO,
+                "{name} reject p99 {reject:.3}ms is not cheaply below valid p50 {valid:.3}ms",
+                name = case.name,
+                reject = reject_stats.p99_ms,
+                valid = valid_stats.p50_ms
+            );
+            println!(
+                "snarkpack-dos-gate {name}: p50={p50:.3}ms p95={p95:.3}ms p99={p99:.3}ms",
+                name = case.name,
+                p50 = reject_stats.p50_ms,
+                p95 = reject_stats.p95_ms,
+                p99 = reject_stats.p99_ms
+            );
+        }
+
+        let mixed_stats = timing_stats(&mixed_samples);
+        assert!(
+            mixed_stats.p99_ms <= MIXED_P99_MAX_MS,
+            "mixed workload p99 {:.3}ms exceeds {:.3}ms",
+            mixed_stats.p99_ms,
+            MIXED_P99_MAX_MS
+        );
+
+        println!(
+            "snarkpack-dos-gate valid: p50={:.3}ms p95={:.3}ms p99={:.3}ms",
+            valid_stats.p50_ms, valid_stats.p95_ms, valid_stats.p99_ms
+        );
+        println!(
+            "snarkpack-dos-gate mixed: p50={:.3}ms p95={:.3}ms p99={:.3}ms",
+            mixed_stats.p50_ms, mixed_stats.p95_ms, mixed_stats.p99_ms
         );
     }
 
@@ -872,21 +2084,12 @@ mod tests {
         let padded_items =
             pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
         let family_id = ProofFamilyId::Transfer;
-        let aggregate = aggregate_family(family_id, &pvk, &padded_items, &srs)
+        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
+        let aggregate = aggregate_family(&statement, &pvk, &padded_items, &srs)
             .expect("aggregation should succeed");
-        let padded_public_inputs = padded_items
-            .into_iter()
-            .map(|item| item.public_inputs)
-            .collect::<Vec<_>>();
 
-        let profile = verify_family_aggregate_profiled(
-            family_id,
-            &pvk,
-            &aggregate,
-            &padded_public_inputs,
-            &srs,
-        )
-        .expect("aggregate verification should succeed");
+        let profile = verify_family_aggregate_profiled(&statement, &pvk, &aggregate, &srs)
+            .expect("aggregate verification should succeed");
 
         assert!(profile.accepted, "profiled verification should accept");
         assert!(profile.total_ms >= profile.deserialize_ms);
@@ -898,6 +2101,45 @@ mod tests {
     }
 
     #[test]
+    fn prover_verifier_challenge_streams_match() {
+        let (pvk, items) = sample_items();
+        let srs = DevSrs::default();
+        let padded_items =
+            pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
+        let family_id = ProofFamilyId::Transfer;
+        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
+
+        let mut prover_trace = VecChallengeTraceSink::default();
+        let inner_aggregate = aggregate_with_digest_with_trace::<TransferTranscriptDigest, _>(
+            statement.challenge_context(),
+            &mut prover_trace,
+            &padded_items,
+            &srs,
+        )
+        .expect("aggregation should succeed");
+        let mut verifier_trace = VecChallengeTraceSink::default();
+        let accepted = verify_with_digest_with_trace::<TransferTranscriptDigest, _>(
+            statement.challenge_context(),
+            &mut verifier_trace,
+            &pvk,
+            &inner_aggregate,
+            statement.padded_public_inputs(),
+            &srs,
+        )
+        .expect("verification should run");
+
+        assert!(
+            accepted,
+            "aggregate verification should accept the traced aggregate"
+        );
+        assert!(
+            !prover_trace.entries().is_empty(),
+            "challenge trace should not be empty"
+        );
+        assert_eq!(prover_trace.entries(), verifier_trace.entries());
+    }
+
+    #[test]
     fn snarkpack_build_profile_exposes_tipa_subbuckets() {
         let (pvk, items) = sample_items();
         let srs = DevSrs::default();
@@ -905,8 +2147,10 @@ mod tests {
             pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
 
         let family_id = ProofFamilyId::Transfer;
-        let (_aggregate, profile) = aggregate_family_profiled(family_id, &pvk, &padded_items, &srs)
-            .expect("profiled aggregation should succeed");
+        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
+        let (_aggregate, profile) =
+            aggregate_family_profiled(&statement, &pvk, &padded_items, &srs)
+                .expect("profiled aggregation should succeed");
 
         assert!(profile.backend_tipa_ab_ms >= profile.backend_tipa_ab_gipa_ms);
         assert!(profile.backend_tipa_c_ms >= profile.backend_tipa_c_gipa_ms);
@@ -966,31 +2210,296 @@ mod tests {
 
     #[test]
     fn snarkpack_matches_legacy_batch_across_families_and_counts() {
+        snarkpack_matches_legacy_batch_for_counts(&[1, 2, 4, 8]);
+    }
+
+    #[test]
+    #[ignore]
+    fn snarkpack_matches_legacy_batch_across_families_and_counts_slow() {
+        snarkpack_matches_legacy_batch_for_counts(&[64, 256, 1024]);
+    }
+
+    #[test]
+    fn snarkpack_matches_single_and_batch_groth16_oracles() {
+        groth16_oracle_agreement_for_counts(&[1, 2, 4, 8]);
+    }
+
+    #[test]
+    #[ignore]
+    fn snarkpack_matches_single_and_batch_groth16_oracles_slow() {
+        groth16_oracle_agreement_for_counts(&[64, 256, 1024]);
+    }
+
+    #[test]
+    fn aggregation_is_deterministic_for_fixed_inputs() {
+        let (pvk, items) = sample_items_with_count(31, 8);
+        let srs = DevSrs::default();
+        let padded_items =
+            pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
+        let statement = statement_for_items(
+            ProofFamilyId::Transfer,
+            &pvk,
+            items.len(),
+            &padded_items,
+            &srs,
+        );
+
+        let first = aggregate_family(&statement, &pvk, &padded_items, &srs)
+            .expect("first aggregation should succeed");
+        let second = aggregate_family(&statement, &pvk, &padded_items, &srs)
+            .expect("second aggregation should succeed");
+
+        assert_eq!(
+            first, second,
+            "fixed aggregate inputs must produce stable bytes"
+        );
+    }
+
+    // Stage 9 byte-trace lock: the committed aggregate-proof bytes for a fixed
+    // vector set must not change unless `AGGREGATE_PROTOCOL_VERSION` is bumped.
+    // An optimization that alters these bytes is a protocol change, not a
+    // refactor, and must take the version-bump path (see docs/snarkpack/security.md).
+
+    const BYTE_BASELINE_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/aggregate_bytes_baseline.txt"
+    );
+
+    fn baseline_vectors() -> Vec<(ProofFamilyId, usize, u64)> {
+        let mut vectors = Vec::new();
+        for (family_index, family_id) in parity_families().into_iter().enumerate() {
+            for count in [1usize, 2, 4, 8] {
+                let seed = 9_000 + (family_index as u64) * 100 + count as u64;
+                vectors.push((family_id, count, seed));
+            }
+        }
+        vectors
+    }
+
+    fn family_token(family_id: ProofFamilyId) -> String {
+        format!("{family_id:?}")
+            .chars()
+            .map(|c| if c.is_whitespace() { '_' } else { c })
+            .collect()
+    }
+
+    fn aggregate_bytes_for_vector(family_id: ProofFamilyId, count: usize, seed: u64) -> Vec<u8> {
+        let (pvk, items) = sample_items_with_count(seed, count);
+        let srs = DevSrs::default();
+        let padded_items =
+            pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
+        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
+        aggregate_family(&statement, &pvk, &padded_items, &srs).expect("aggregation should succeed")
+    }
+
+    fn render_byte_baseline() -> String {
+        let mut out = String::new();
+        out.push_str("# SnarkPack aggregate-proof byte baseline (Stage 9 byte-trace lock).\n");
+        out.push_str("# Regenerate: cargo test -p penumbra-sdk-proof-aggregation regenerate_aggregate_byte_baseline -- --ignored\n");
+        out.push_str("# Row: <index> <family> count=<n> seed=<n> <hex_aggregate_bytes>\n");
+        out.push_str(&format!("version {AGGREGATE_PROTOCOL_VERSION}\n"));
+        for (index, (family_id, count, seed)) in baseline_vectors().into_iter().enumerate() {
+            let bytes = aggregate_bytes_for_vector(family_id, count, seed);
+            out.push_str(&format!(
+                "{index} {} count={count} seed={seed} {}\n",
+                family_token(family_id),
+                hex::encode(&bytes),
+            ));
+        }
+        out
+    }
+
+    fn committed_baseline_version(contents: &str) -> Option<u32> {
+        contents
+            .lines()
+            .find_map(|line| line.strip_prefix("version "))
+            .and_then(|v| v.trim().parse().ok())
+    }
+
+    #[test]
+    fn aggregate_bytes_match_committed_baseline() {
+        let committed = std::fs::read_to_string(BYTE_BASELINE_PATH).unwrap_or_else(|e| {
+            panic!("missing aggregate byte baseline at {BYTE_BASELINE_PATH}: {e}; regenerate with `cargo test -p penumbra-sdk-proof-aggregation regenerate_aggregate_byte_baseline -- --ignored`")
+        });
+
+        // Version-drift guard: a committed baseline from a different protocol
+        // version is the mechanical fork between "preserve bytes" and "version".
+        let committed_version = committed_baseline_version(&committed);
+        assert_eq!(
+            committed_version,
+            Some(AGGREGATE_PROTOCOL_VERSION),
+            "byte baseline version tag does not match AGGREGATE_PROTOCOL_VERSION ({AGGREGATE_PROTOCOL_VERSION}); if the byte change is intentional, bump the version and regenerate via `cargo test -p penumbra-sdk-proof-aggregation regenerate_aggregate_byte_baseline -- --ignored`"
+        );
+
+        let current = render_byte_baseline();
+        assert_eq!(
+            committed, current,
+            "aggregate-proof bytes drifted from the committed baseline. An optimization must preserve bytes or take the protocol-version path: bump AGGREGATE_PROTOCOL_VERSION, regenerate via `cargo test -p penumbra-sdk-proof-aggregation regenerate_aggregate_byte_baseline -- --ignored`, and add an adaptation-register row."
+        );
+    }
+
+    #[test]
+    #[ignore = "writes the committed byte baseline; run intentionally after a sanctioned byte change"]
+    fn regenerate_aggregate_byte_baseline() {
+        let rendered = render_byte_baseline();
+        std::fs::write(BYTE_BASELINE_PATH, rendered).expect("write byte baseline");
+    }
+
+    #[test]
+    fn preflight_rejects_oversize_before_inner_deserialization() {
+        let (pvk, items) = sample_items();
+        let srs = DevSrs::default();
+        let padded_items =
+            pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
+        let statement = statement_for_items(
+            ProofFamilyId::Transfer,
+            &pvk,
+            items.len(),
+            &padded_items,
+            &srs,
+        );
+        let oversized = vec![0u8; MAX_AGGREGATE_PROOF_BYTES + 1];
+
+        let result = preflight_aggregate_verify(AggregatePreflightInput {
+            statement: &statement,
+            pvk: &pvk,
+            aggregate_proof_bytes: &oversized,
+            srs: &srs,
+        });
+        let err = match result {
+            Ok(_) => panic!("oversize preflight input must reject"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, AggregateVerifyError::OversizeBytes(_)));
+    }
+
+    #[test]
+    #[ignore]
+    fn aggregate_proof_size_report() {
         let (pvk, items) = sample_items();
         let base_item = items.first().expect("at least one sample item").clone();
         let srs = DevSrs::default();
+        let mut observed_max = 0usize;
 
-        for family_id in [
-            ProofFamilyId::Transfer,
-            ProofFamilyId::Consolidate(penumbra_sdk_shielded_pool::CONSOLIDATE_FAMILY_SPECS[0].id),
-            ProofFamilyId::Split(penumbra_sdk_shielded_pool::SPLIT_FAMILY_SPECS[0].id),
-            ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical),
-        ] {
-            for count in [1usize, 2, 4, 8, 64, 256, 1024] {
+        for family_id in parity_families() {
+            for count in [1usize, 2, 4, 8, 64] {
                 let repeated = vec![base_item.clone(); count];
-                batch::batch_verify(&pvk, &repeated)
-                    .expect("legacy batch verify should accept repeated valid proofs");
-
-                let aggregate = aggregate_family(family_id, &pvk, &repeated, &srs)
+                let statement = statement_for_items(family_id, &pvk, count, &repeated, &srs);
+                let aggregate = aggregate_family(&statement, &pvk, &repeated, &srs)
                     .expect("aggregation should succeed");
-                let padded_public_inputs = repeated
-                    .iter()
-                    .map(|item| item.public_inputs.clone())
-                    .collect::<Vec<_>>();
-
-                verify_family_aggregate(family_id, &pvk, &aggregate, &padded_public_inputs, &srs)
-                    .expect("SnarkPack verify should match legacy batch verify");
+                observed_max = observed_max.max(aggregate.len());
+                println!(
+                    "snarkpack_size family={family_id:?} count={count} wrapped_bytes={}",
+                    aggregate.len()
+                );
             }
+        }
+
+        println!("snarkpack_size observed_max_wrapped_bytes={observed_max}");
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(8))]
+
+        #[test]
+        fn snarkpack_property_matches_legacy_batch_oracle(
+            count in 1usize..=8,
+            seed in any::<u64>(),
+            family_index in 0usize..4,
+            mutate_proof in any::<bool>(),
+        ) {
+            let (pvk, items) = sample_items_with_count(seed, count);
+            let srs = DevSrs::default();
+            let padded_items = pad_items_to_power_of_two(&items, srs.max_padded_count as usize)
+                .expect("padding should succeed");
+            let family_id = parity_families()[family_index];
+
+            prop_assert!(
+                batch::batch_verify(&pvk, &padded_items).is_ok(),
+                "legacy batch verify should accept padded valid proofs"
+            );
+
+            let statement = statement_for_items(family_id, &pvk, count, &padded_items, &srs);
+            let aggregate = aggregate_family(&statement, &pvk, &padded_items, &srs)
+                .expect("aggregation should succeed");
+            let padded_public_inputs = padded_public_inputs(&padded_items);
+
+            prop_assert!(
+                verify_family_aggregate(&statement, &pvk, &aggregate, &srs)
+                .is_ok(),
+                "SnarkPack should accept the same valid padded batch"
+            );
+
+            let mut mutated_items = padded_items.clone();
+            let mut mutated_public_inputs = padded_public_inputs;
+            if mutate_proof {
+                mutated_items[0].proof.c = Default::default();
+            } else {
+                mutated_items[0].public_inputs[0] += Fq::from(1u64);
+                mutated_public_inputs[0][0] += Fq::from(1u64);
+            }
+
+            prop_assert!(
+                batch::batch_verify(&pvk, &mutated_items).is_err(),
+                "legacy batch verify should reject the mutated batch"
+            );
+
+            let snarkpack_result = if mutate_proof {
+                let mutated_aggregate = aggregate_family(&statement, &pvk, &mutated_items, &srs)
+                    .expect("mutated proof aggregation should still serialize");
+                verify_family_aggregate(&statement, &pvk, &mutated_aggregate, &srs)
+            } else {
+                let mutated_statement = statement_for_public_inputs(
+                    family_id,
+                    &pvk,
+                    count,
+                    &mutated_public_inputs,
+                    &srs,
+                );
+                verify_family_aggregate(&mutated_statement, &pvk, &aggregate, &srs)
+            };
+
+            prop_assert!(
+                snarkpack_result.is_err(),
+                "SnarkPack should reject the same mutated batch"
+            );
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(16))]
+
+        #[test]
+        fn preflight_aggregate_verify_do_not_panic(
+            bytes in prop::collection::vec(any::<u8>(), 0usize..=4096),
+            seed in any::<u64>(),
+        ) {
+            let (pvk, items) = sample_items_with_count(seed, 2);
+            let srs = DevSrs::default();
+            let padded_items = pad_items_to_power_of_two(&items, srs.max_padded_count as usize)
+                .expect("padding should succeed");
+            let statement = statement_for_items(
+                ProofFamilyId::Transfer,
+                &pvk,
+                items.len(),
+                &padded_items,
+                &srs,
+            );
+
+            let _ = preflight_aggregate_verify(AggregatePreflightInput {
+                statement: &statement,
+                pvk: &pvk,
+                aggregate_proof_bytes: &bytes,
+                srs: &srs,
+            });
+        }
+
+        #[test]
+        fn deserialize_aggregate_proof_do_not_panic(
+            bytes in prop::collection::vec(any::<u8>(), 0usize..=4096),
+        ) {
+            let _ = deserialize_aggregate_proof::<TransferTranscriptDigest>(&bytes);
         }
     }
 }
