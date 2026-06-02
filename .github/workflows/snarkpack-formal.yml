@@ -46,6 +46,8 @@ jobs:
   formal:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      SNARKPACK_FUZZ_TOOLCHAIN: nightly-2025-09-30
     steps:
       - uses: actions/checkout@v4
 
@@ -102,7 +104,7 @@ jobs:
 
       - name: Install cargo-fuzz
         run: |
-          rustup toolchain install nightly --profile minimal
+          rustup toolchain install "$SNARKPACK_FUZZ_TOOLCHAIN" --profile minimal
           cargo install cargo-fuzz --locked
 
       - name: Run SnarkPack fuzz smoke
