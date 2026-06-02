@@ -35,7 +35,7 @@ require_pattern() {
   local label="$1"
   local pattern="$2"
   local file="$3"
-  rg -n "$pattern" "$file" >/dev/null \
+  grep -E -n -- "$pattern" "$file" >/dev/null \
     || fail "missing $label in $file"
 }
 
