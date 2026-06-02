@@ -141,6 +141,8 @@ and support shims are recorded in
 Unrecorded `assume val`, `admit`, `--admit_smt_queries`, duplicate
 formal-only encoders, tuple/default `ChallengeContext` constructors, and
 unmapped RIPP refinement symbols are rejected by `just snarkpack-invariants`.
+Any recorded extraction-only traversal branch must have a boundary row and
+normal plus `cfg(hax)` parity coverage.
 
 ## Soundness Assumption And Differential Conformance
 

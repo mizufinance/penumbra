@@ -118,8 +118,9 @@ Scope discipline:
   written by hand from `ripp-spec.md` and the paper.
 
 Stage 4 keeps the hax/F* glue focused on implementation-boundary rows over
-executed Rust. It does not introduce duplicate formal-only encoders. The
-formal artifact stamp includes proof files, `scripts/snarkpack-formal.sh`, and
+executed Rust. Extraction-only traversal branches must be recorded and
+parity-tested. The formal artifact stamp includes proof files,
+`scripts/snarkpack-formal.sh`, and
 `crates/crypto/proof-aggregation/formal/snarkpack/toolchain.toml`. Status:
 complete for the current extracted Rust target set; the formal gate was run and
 the proof artifact stamp was refreshed.
@@ -275,7 +276,8 @@ Preserved hax/F* discipline:
 - every `assume val` has a recorded semantic postcondition and removal path
 - no unrecorded admits, `--admit_smt_queries`, or debug-only invariants in
   extracted-code claims
-- hax extraction remains over executed Rust, not duplicate formal-only encoders
+- hax extraction remains over executed Rust; any extraction-only traversal
+  branch must be recorded and parity-tested
 
 Preserved formal tool pins:
 

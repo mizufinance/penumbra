@@ -332,14 +332,28 @@ pub fn encode_statement(
     Ok(bytes)
 }
 
+// hax 0.3.7 leaves loop folds opaque in F*. This cfg-only branch is
+// byte-equivalent to the runtime loop and gives the proof a structural measure.
+#[cfg(hax)]
 fn encode_rows(
     bytes: &mut Vec<u8>,
     rows: &[StatementPublicInputRow],
 ) -> Result<(), AggregateStatementError> {
-    let mut index = 0usize;
-    while index < rows.len() {
-        encode_row(bytes, &rows[index])?;
-        index += 1;
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let (head, rest) = rows.split_at(1);
+    encode_row(bytes, &head[0])?;
+    encode_rows(bytes, rest)
+}
+
+#[cfg(not(hax))]
+fn encode_rows(
+    bytes: &mut Vec<u8>,
+    rows: &[StatementPublicInputRow],
+) -> Result<(), AggregateStatementError> {
+    for row in rows {
+        encode_row(bytes, row)?;
     }
     Ok(())
 }
@@ -352,14 +366,26 @@ fn encode_row(
     encode_fields(bytes, row.as_slice())
 }
 
+#[cfg(hax)]
 fn encode_fields(
     bytes: &mut Vec<u8>,
     fields: &[StatementFieldBytes],
 ) -> Result<(), AggregateStatementError> {
-    let mut index = 0usize;
-    while index < fields.len() {
-        append_bytes_field(bytes, fields[index].as_bytes())?;
-        index += 1;
+    if fields.is_empty() {
+        return Ok(());
+    }
+    let (head, rest) = fields.split_at(1);
+    append_bytes_field(bytes, head[0].as_bytes())?;
+    encode_fields(bytes, rest)
+}
+
+#[cfg(not(hax))]
+fn encode_fields(
+    bytes: &mut Vec<u8>,
+    fields: &[StatementFieldBytes],
+) -> Result<(), AggregateStatementError> {
+    for field in fields {
+        append_bytes_field(bytes, field.as_bytes())?;
     }
     Ok(())
 }
@@ -401,6 +427,36 @@ pub fn validate_counts<T>(
     Ok(())
 }
 
+#[cfg(hax)]
+pub fn validate_row_arity<T>(
+    rows: &[Vec<T>],
+    expected: usize,
+) -> Result<(), AggregateStatementError> {
+    validate_row_arity_from(rows, expected, 0)
+}
+
+#[cfg(hax)]
+fn validate_row_arity_from<T>(
+    rows: &[Vec<T>],
+    expected: usize,
+    index: usize,
+) -> Result<(), AggregateStatementError> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let (head, rest) = rows.split_at(1);
+    let row = &head[0];
+    if row.len() != expected {
+        return Err(AggregateStatementError::RowArityMismatch {
+            index,
+            expected,
+            got: row.len(),
+        });
+    }
+    validate_row_arity_from(rest, expected, index + 1)
+}
+
+#[cfg(not(hax))]
 pub fn validate_row_arity<T>(
     rows: &[Vec<T>],
     expected: usize,
@@ -450,6 +506,28 @@ pub fn validate_repeat_final_padding<T: Eq>(
     )
 }
 
+#[cfg(hax)]
+fn check_repeat_suffix<T: Eq>(
+    suffix: &[Vec<T>],
+    final_real: &Vec<T>,
+    padded_count: u32,
+    row_count: usize,
+) -> Result<(), AggregateStatementError> {
+    if suffix.is_empty() {
+        return Ok(());
+    }
+    let (head, rest) = suffix.split_at(1);
+    let row = &head[0];
+    if row != final_real {
+        return Err(AggregateStatementError::BadPadding {
+            padded_count,
+            row_count,
+        });
+    }
+    check_repeat_suffix(rest, final_real, padded_count, row_count)
+}
+
+#[cfg(not(hax))]
 fn check_repeat_suffix<T: Eq>(
     suffix: &[Vec<T>],
     final_real: &Vec<T>,

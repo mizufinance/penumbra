@@ -15,6 +15,9 @@ fuzzing = []
 # docs/snarkpack/optimization-playbook.md.
 bench-baseline = ["ark-ip-proofs/bench-baseline"]
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(hax)'] }
+
 [dependencies]
 anyhow = { workspace = true }
 ark-groth16 = { workspace = true, default-features = false }

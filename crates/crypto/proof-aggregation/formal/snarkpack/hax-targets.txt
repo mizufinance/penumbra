@@ -1,8 +1,8 @@
 # Partial extraction targets for SnarkPack formal verification.
 #
 # hax extraction should keep the executed Rust functions as the source of truth.
-# Do not create a duplicate formal encoder unless extraction fails after two
-# targeted extraction-friendly refactors.
+# Any duplicate formal-only traversal branch must be recorded in
+# hax-extraction-boundary.md and parity-tested under cfg(hax).
 
 penumbra_sdk_proof_aggregation::statement::StatementFieldBytes
 penumbra_sdk_proof_aggregation::statement::StatementPublicInputRow
