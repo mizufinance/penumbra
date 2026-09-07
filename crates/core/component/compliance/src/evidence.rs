@@ -125,13 +125,11 @@ impl ComplianceEvidenceObject {
         ciphertext: WithdrawalComplianceCiphertext,
         public: WithdrawalEvidencePublicData,
     ) -> Result<Self> {
-        let object_type = match record_ref {
-            ComplianceRecordRef::HostWithdrawal(_) => EvidenceObjectType::HostWithdrawal,
-            ComplianceRecordRef::Ics20Withdrawal(_) => EvidenceObjectType::Ics20Withdrawal,
-            ComplianceRecordRef::TransferOutput(_) => {
-                bail!("withdrawal evidence requires a withdrawal record reference")
-            }
-        };
+        let object_type = EvidenceObjectType::for_record(&record_ref);
+        ensure!(
+            object_type != EvidenceObjectType::Transfer,
+            "withdrawal evidence requires a withdrawal record reference"
+        );
         let mut evidence = Self {
             object_type,
             record_ref,
@@ -165,7 +163,7 @@ impl ComplianceEvidenceObject {
 
     pub fn validate_payload_hash(&self) -> Result<()> {
         ensure!(
-            self.object_type.matches_ref(&self.record_ref),
+            self.object_type == EvidenceObjectType::for_record(&self.record_ref),
             "evidence object type/reference mismatch"
         );
         ensure!(
@@ -330,18 +328,6 @@ impl ComplianceEvidenceObject {
 }
 
 impl EvidenceObjectType {
-    fn matches_ref(self, record_ref: &ComplianceRecordRef) -> bool {
-        matches!(
-            (self, record_ref),
-            (Self::Transfer, ComplianceRecordRef::TransferOutput(_))
-                | (Self::HostWithdrawal, ComplianceRecordRef::HostWithdrawal(_))
-                | (
-                    Self::Ics20Withdrawal,
-                    ComplianceRecordRef::Ics20Withdrawal(_)
-                )
-        )
-    }
-
     fn record_ref(self, output_ref: OutputRef) -> ComplianceRecordRef {
         match self {
             Self::Transfer => ComplianceRecordRef::TransferOutput(output_ref),

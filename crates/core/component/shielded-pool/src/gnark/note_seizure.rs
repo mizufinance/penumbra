@@ -93,7 +93,7 @@ mod native {
 }
 #[cfg(any(unix, windows))]
 pub use native::GnarkNoteSeizureClient;
-#[cfg(any(unix, windows))]
+#[cfg(all(any(unix, windows), any(test, feature = "benchmark-helpers")))]
 pub(crate) use native::NOTE_SEIZURE_FAMILY_CONFIG;
 
 #[cfg(all(test, any(unix, windows)))]
