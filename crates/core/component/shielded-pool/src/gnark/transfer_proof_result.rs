@@ -9,8 +9,6 @@ type ProofG2 = <Bls12_377 as Pairing>::G2Affine;
 type ProofG1Base = <ProofG1 as AffineRepr>::BaseField;
 type ProofG2Base = <ProofG2 as AffineRepr>::BaseField;
 
-const PROOF_RESULT_VERSION: u32 = 1;
-
 fn parse_g1_base_be(bytes: &[u8], label: &str) -> Result<ProofG1Base> {
     let modulus = ProofG1Base::MODULUS.to_bytes_be();
     if bytes.len() != modulus.len() || bytes >= modulus.as_slice() {
@@ -34,7 +32,7 @@ pub(crate) fn parse_binary_proof_result(
 ) -> Result<(Fq, Proof<Bls12_377>)> {
     const G1_BYTES: usize = 48;
     const CLAIMED_HASH_BYTES: usize = 32;
-    const HEADER_LEN: usize = 4 + 4 + 4 + 4 + 8;
+    const HEADER_LEN: usize = 4 + 4 + 4 + 8;
     const EXPECTED_LEN: usize = HEADER_LEN + CLAIMED_HASH_BYTES + (2 + 4 + 2) * G1_BYTES;
 
     if payload.len() != EXPECTED_LEN {
@@ -47,18 +45,14 @@ pub(crate) fn parse_binary_proof_result(
     if &payload[0..4] != magic {
         bail!("invalid gnark {label} proof result magic");
     }
-    let version = u32::from_le_bytes(payload[4..8].try_into().unwrap());
-    if version != PROOF_RESULT_VERSION {
-        bail!("unsupported gnark {label} proof result version {version}");
-    }
-    let total_len = u32::from_le_bytes(payload[8..12].try_into().unwrap()) as usize;
+    let total_len = u32::from_le_bytes(payload[4..8].try_into().unwrap()) as usize;
     if total_len != payload.len() {
         bail!(
             "gnark {label} proof result length mismatch: header={total_len}, actual={}",
             payload.len()
         );
     }
-    let status = u32::from_le_bytes(payload[12..16].try_into().unwrap());
+    let status = u32::from_le_bytes(payload[8..12].try_into().unwrap());
     if status != 0 {
         bail!("gnark {label} proof result returned nonzero status {status}");
     }

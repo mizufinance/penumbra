@@ -3,26 +3,28 @@ use super::*;
 use anyhow::{ensure, Context as _};
 use shieldd_sdk_asset::{asset, Value};
 use shieldd_sdk_compliance::{
-    ComplianceRegistryRead as _, ComplianceRegistryWrite as _, UserAssetStatus,
-    UserAssetStatusAction,
+    AuditEffect, AuditEffectRecord, AuditLogWrite as _, AuditSource, ComplianceRegistryRead as _,
+    ComplianceRegistryWrite as _, UserAssetStatus, UserAssetStatusAction,
 };
 use shieldd_sdk_ibc::StateWriteExt as _;
 use shieldd_sdk_keys::Address;
 use shieldd_sdk_num::Amount;
 use shieldd_sdk_proto::execution_client::v1::{
     apply_compliance_action_request, ApplyComplianceActionRequest, ApplyComplianceActionResponse,
-    DepositRequest, DepositResponse, HostSource as ProtoHostSource,
+    DepositRequest, DepositResponse, HostSource as ProtoHostSource, SeizeNoteRequest,
 };
+use shieldd_sdk_sct::component::tree::VerificationExt as _;
 use shieldd_sdk_shielded_pool::component::{
     AssetRegistry as _, AssetRegistryRead as _, NoteManager as _,
 };
-use shieldd_sdk_shielded_pool::HostWithdrawalDestination;
+use shieldd_sdk_shielded_pool::{CapsuleReleaseRequest, HostWithdrawalDestination, NoteSeizure};
 use std::str::FromStr as _;
 use std::time::Instant;
 
 const HOST_ACTION_SOURCE_PREFIX: &str = "application/host_action/source";
-const HOST_DEPOSIT_DOMAIN: &[u8] = b"shieldd.host_deposit.v1";
-const HOST_COMPLIANCE_ACTION_DOMAIN: &[u8] = b"shieldd.host_compliance_action.v1";
+const HOST_DEPOSIT_DOMAIN: &[u8] = b"shieldd.host_deposit";
+const HOST_COMPLIANCE_ACTION_DOMAIN: &[u8] = b"shieldd.host_compliance_action";
+const HOST_NOTE_SEIZURE_DOMAIN: &[u8] = b"shieldd.host_note_seizure";
 const HOST_PROPOSER_ADDRESS: [u8; 20] = [0u8; 20];
 
 #[derive(Clone, Debug)]
@@ -78,7 +80,7 @@ impl HostTxResponse {
 }
 
 /// Host-chain work emitted by an accepted shielded withdrawal.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct HostWithdrawal {
     pub denom: String,
     pub amount: Amount,
@@ -118,6 +120,16 @@ pub struct HostComplianceActionResult {
     pub events: Vec<abci::Event>,
 }
 
+#[derive(Debug)]
+pub struct HostNoteSeizureResult {
+    pub source: ProtoHostSource,
+    pub replayed: bool,
+    pub withdrawal: HostWithdrawal,
+    pub current_status: UserAssetStatus,
+    pub freeze_generation: u64,
+    pub events: Vec<abci::Event>,
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 struct HostActionReceipt {
     request_digest: [u8; 32],
@@ -132,6 +144,12 @@ enum HostActionReceiptResult {
     Compliance {
         previous_status: UserAssetStatus,
         current_status: UserAssetStatus,
+        freeze_generation: u64,
+    },
+    NoteSeizure {
+        withdrawal: HostWithdrawal,
+        current_status: UserAssetStatus,
+        freeze_generation: u64,
     },
 }
 
@@ -168,6 +186,17 @@ impl HostSource {
         hasher.update(self.tx_index.to_be_bytes());
         hash_bytes(hasher, &self.tx_hash);
         hasher.update(self.msg_index.to_be_bytes());
+    }
+
+    fn audit_source(&self, chain_id: String, effect_index: u32) -> AuditSource {
+        AuditSource::Host {
+            chain_id,
+            height: self.height,
+            tx_hash: self.tx_hash,
+            tx_index: self.tx_index,
+            message_index: self.msg_index,
+            effect_index,
+        }
     }
 }
 
@@ -365,6 +394,15 @@ impl HostExecution {
             self.phase
         );
         self.app.apply_compliance_action(request).await
+    }
+
+    pub async fn seize_note(&mut self, request: SeizeNoteRequest) -> Result<HostNoteSeizureResult> {
+        ensure!(
+            self.phase == HostExecutionPhase::InBlock,
+            "note seizure called while host execution phase is {:?}",
+            self.phase
+        );
+        self.app.seize_note(request).await
     }
 
     pub async fn check_tx(&self, tx_bytes: &[u8]) -> Result<HostTxResponse> {
@@ -734,6 +772,16 @@ impl App {
             )
             .await
             .context("minting host deposit note")?;
+        state_tx
+            .append_audit_effect(AuditEffectRecord {
+                source: parsed.source.audit_source(parsed.chain_id.clone(), 0),
+                effect: AuditEffect::PublicDeposit {
+                    asset_id: parsed.value().asset_id,
+                    amount: parsed.amount.value(),
+                    recipient: parsed.recipient.clone(),
+                },
+            })
+            .await?;
 
         let events = self.apply(state_tx);
         Ok(HostDepositResult {
@@ -763,6 +811,7 @@ impl App {
             let HostActionReceiptResult::Compliance {
                 previous_status,
                 current_status,
+                freeze_generation,
             } = receipt.result
             else {
                 anyhow::bail!("host source was already used by a different action kind");
@@ -772,6 +821,7 @@ impl App {
                     &parsed.source,
                     previous_status,
                     current_status,
+                    freeze_generation,
                     true,
                 ),
                 events: Vec::new(),
@@ -779,9 +829,27 @@ impl App {
         }
 
         let event = state_tx
-            .apply_user_status_action(&parsed.address, parsed.asset_id, parsed.action)
+            .apply_user_status_action(
+                &parsed.address,
+                parsed.asset_id,
+                parsed.action,
+                parsed.source.height,
+            )
             .await?;
         let current_status = event.leaf.status;
+        let freeze_generation = event.leaf.freeze_generation;
+        state_tx
+            .append_audit_effect(AuditEffectRecord {
+                source: parsed.source.audit_source(parsed.chain_id.clone(), 0),
+                effect: AuditEffect::UserStatusChanged {
+                    asset_id: parsed.asset_id,
+                    address: parsed.address.clone(),
+                    status: event.leaf.status,
+                    freeze_generation: event.leaf.freeze_generation,
+                    frozen_since_height: event.leaf.frozen_since_height,
+                },
+            })
+            .await?;
         store_host_action_receipt(
             &mut state_tx,
             source_key,
@@ -790,6 +858,7 @@ impl App {
                 result: HostActionReceiptResult::Compliance {
                     previous_status: event.previous_status,
                     current_status,
+                    freeze_generation,
                 },
             },
         )?;
@@ -798,10 +867,198 @@ impl App {
             &parsed.source,
             event.previous_status,
             current_status,
+            freeze_generation,
             false,
         );
         let events = self.apply(state_tx);
         Ok(HostComplianceActionResult { response, events })
+    }
+
+    pub async fn seize_note(&mut self, request: SeizeNoteRequest) -> Result<HostNoteSeizureResult> {
+        let mut state_tx = StateDelta::new(self.state.clone());
+        let chain_id = state_tx.get_chain_id().await?;
+        let parsed = ParsedNoteSeizure::parse(chain_id, request)?;
+        let current_height = state_tx.get_block_height().await?;
+        parsed.source.validate_height(current_height)?;
+        let source_key = parsed.source_key();
+
+        if let Some(receipt) = load_host_action_receipt(&state_tx, &source_key).await? {
+            ensure!(
+                receipt.request_digest == parsed.request_digest,
+                "host source was already used by a different request"
+            );
+            let HostActionReceiptResult::NoteSeizure {
+                withdrawal,
+                current_status,
+                freeze_generation,
+            } = receipt.result
+            else {
+                anyhow::bail!("host source was already used by a different action kind");
+            };
+            return Ok(HostNoteSeizureResult {
+                source: parsed.source.into(),
+                replayed: true,
+                withdrawal,
+                current_status,
+                freeze_generation,
+                events: Vec::new(),
+            });
+        }
+
+        let seizure = &parsed.seizure;
+        let authorization = &seizure.authorization;
+        ensure!(
+            authorization.chain_id == parsed.chain_id,
+            "note seizure authorization is for a different chain"
+        );
+        ensure!(
+            current_height <= authorization.expiry_height,
+            "note seizure authorization has expired"
+        );
+
+        let policy = state_tx
+            .get_asset_policy(authorization.asset_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("note seizure asset is not regulated"))?;
+        let seizure_authority = policy
+            .seizure_authority_vk
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("regulated asset has no seizure authority"))?;
+        authorization.verify_signature(seizure_authority, &seizure.authority_signature)?;
+
+        let leaf = state_tx
+            .get_user_leaf(&authorization.address, authorization.asset_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("note seizure address is not registered for asset"))?;
+        ensure!(
+            matches!(
+                leaf.status,
+                UserAssetStatus::Frozen | UserAssetStatus::Seized
+            ),
+            "note seizure target is not frozen or seized"
+        );
+        ensure!(
+            leaf.freeze_generation == authorization.freeze_generation
+                && leaf.frozen_since_height == authorization.frozen_since_height,
+            "note seizure authorization does not match the current freeze generation"
+        );
+        ensure!(
+            leaf.rnk_commitment == seizure.rnk_commitment,
+            "note seizure RNK commitment differs from the current compliance leaf"
+        );
+
+        let current_window = shieldd_sdk_sct::nullifier_tree::generation_state(&state_tx)
+            .await?
+            .window();
+        ensure!(
+            seizure.nullifier_window == current_window,
+            "note seizure nullifier window is stale"
+        );
+        state_tx.check_claimed_anchor(seizure.anchor).await?;
+        if let Some(history) = seizure.historical_nullifier_proof.as_ref() {
+            verify_historical_nullifier_proof(authorization.nullifier, current_window, history)?;
+        }
+
+        let authorization_commitment = authorization.commitment()?;
+        let release = CapsuleReleaseRequest {
+            chain_id: authorization.chain_id.clone(),
+            ring_id: policy.ring.ring_id.clone(),
+            policy_id: policy.ring.policy_id.clone(),
+            permission: policy.ring.permission.clone(),
+            resource: policy.ring.resource.clone(),
+            ring_pk: policy.ring.ring_pk,
+            asset_id: authorization.asset_id,
+            address: authorization.address.clone(),
+            capk: leaf.capk,
+            note_commitment: authorization.note_commitment,
+            recovery_commitment: seizure.recovery_capsule.commitment(),
+            capsule_epk: seizure.recovery_capsule.epk,
+            authority_instruction_commitment: authorization_commitment,
+            expiry_height: authorization.expiry_height,
+        };
+        let recovered_shared = seizure.capsule_release.verify(&release)?;
+        let recovery_seed =
+            seizure.recovery_capsule.c2 - recovered_shared.vartime_compress_to_field();
+
+        seizure.proof.verify(&seizure.proof_public(recovery_seed))?;
+        state_tx
+            .check_nullifier_unspent(authorization.nullifier)
+            .await?;
+
+        let metadata = state_tx
+            .denom_metadata_by_asset(&authorization.asset_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("note seizure asset has no host denomination"))?;
+        let withdrawal = HostWithdrawal {
+            denom: metadata.base_denom().denom,
+            amount: authorization.amount,
+            destination: authorization.withdrawal.destination.clone(),
+        };
+        let lifecycle = state_tx
+            .admit_note_seizure(
+                &authorization.address,
+                authorization.asset_id,
+                authorization.freeze_generation,
+                authorization.frozen_since_height,
+            )
+            .await?;
+        state_tx
+            .nullify(
+                authorization.nullifier,
+                CommitmentSource::Transaction {
+                    id: Some(parsed.request_digest),
+                },
+            )
+            .await?;
+        state_tx
+            .append_audit_effect(AuditEffectRecord {
+                source: parsed.source.audit_source(parsed.chain_id.clone(), 0),
+                effect: AuditEffect::NoteSeized {
+                    asset_id: authorization.asset_id,
+                    address: authorization.address.clone(),
+                    nullifier: authorization.nullifier.into(),
+                    amount: authorization.amount.value(),
+                    freeze_generation: authorization.freeze_generation,
+                    authorization_commitment,
+                },
+            })
+            .await?;
+        if lifecycle.status_change.is_some() {
+            state_tx
+                .append_audit_effect(AuditEffectRecord {
+                    source: parsed.source.audit_source(parsed.chain_id.clone(), 1),
+                    effect: AuditEffect::UserStatusChanged {
+                        asset_id: lifecycle.leaf.asset_id,
+                        address: lifecycle.leaf.address.clone(),
+                        status: lifecycle.leaf.status,
+                        freeze_generation: lifecycle.leaf.freeze_generation,
+                        frozen_since_height: lifecycle.leaf.frozen_since_height,
+                    },
+                })
+                .await?;
+        }
+        store_host_action_receipt(
+            &mut state_tx,
+            source_key,
+            &HostActionReceipt {
+                request_digest: parsed.request_digest,
+                result: HostActionReceiptResult::NoteSeizure {
+                    withdrawal: withdrawal.clone(),
+                    current_status: lifecycle.leaf.status,
+                    freeze_generation: lifecycle.leaf.freeze_generation,
+                },
+            },
+        )?;
+
+        let result = HostNoteSeizureResult {
+            source: parsed.source.into(),
+            replayed: false,
+            withdrawal,
+            current_status: lifecycle.leaf.status,
+            freeze_generation: lifecycle.leaf.freeze_generation,
+            events: self.apply(state_tx),
+        };
+        Ok(result)
     }
 }
 
@@ -924,6 +1181,41 @@ impl ParsedHostComplianceAction {
     }
 }
 
+struct ParsedNoteSeizure {
+    chain_id: String,
+    source: HostSource,
+    seizure: NoteSeizure,
+    request_digest: [u8; 32],
+}
+
+impl ParsedNoteSeizure {
+    fn parse(chain_id: String, request: SeizeNoteRequest) -> Result<Self> {
+        let source = request
+            .source
+            .context("host note seizure source is required")?
+            .try_into()
+            .context("invalid host note seizure source")?;
+        let seizure_proto = request
+            .seizure
+            .context("host note seizure evidence is required")?;
+        let request_digest =
+            derive_note_seizure_digest(&chain_id, &source, &seizure_proto.encode_to_vec());
+        let seizure = seizure_proto
+            .try_into()
+            .context("invalid host note seizure evidence")?;
+        Ok(Self {
+            chain_id,
+            source,
+            seizure,
+            request_digest,
+        })
+    }
+
+    fn source_key(&self) -> String {
+        self.source.source_key(&self.chain_id)
+    }
+}
+
 async fn load_host_action_receipt<S: StateRead + ?Sized>(
     state: &S,
     key: &str,
@@ -931,7 +1223,7 @@ async fn load_host_action_receipt<S: StateRead + ?Sized>(
     state
         .get_raw(key)
         .await?
-        .map(|bytes| bincode::deserialize(&bytes).context("decoding host action receipt"))
+        .map(|bytes| serde_json::from_slice(&bytes).context("decoding host action receipt"))
         .transpose()
 }
 
@@ -942,7 +1234,7 @@ fn store_host_action_receipt<S: StateWrite + ?Sized>(
 ) -> Result<()> {
     state.put_raw(
         key,
-        bincode::serialize(receipt).context("encoding host action receipt")?,
+        serde_json::to_vec(receipt).context("encoding host action receipt")?,
     );
     Ok(())
 }
@@ -951,6 +1243,7 @@ fn compliance_action_response(
     source: &HostSource,
     previous_status: UserAssetStatus,
     current_status: UserAssetStatus,
+    freeze_generation: u64,
     replayed: bool,
 ) -> ApplyComplianceActionResponse {
     ApplyComplianceActionResponse {
@@ -962,6 +1255,7 @@ fn compliance_action_response(
             current_status,
         ) as i32,
         replayed,
+        freeze_generation,
     }
 }
 
@@ -1002,6 +1296,15 @@ fn derive_compliance_action_digest(
     hasher.finalize().into()
 }
 
+fn derive_note_seizure_digest(chain_id: &str, source: &HostSource, seizure: &[u8]) -> [u8; 32] {
+    let mut hasher = sha2::Sha256::new();
+    hash_bytes(&mut hasher, HOST_NOTE_SEIZURE_DOMAIN);
+    hash_bytes(&mut hasher, chain_id.as_bytes());
+    source.hash_into(&mut hasher);
+    hash_bytes(&mut hasher, seizure);
+    hasher.finalize().into()
+}
+
 fn hash_bytes(hasher: &mut sha2::Sha256, bytes: &[u8]) {
     hasher.update((bytes.len() as u64).to_be_bytes());
     hasher.update(bytes);
@@ -1014,18 +1317,29 @@ mod tests {
     use crate::SUBSTORE_PREFIXES;
     use cnidarium::TempStorage;
     use cnidarium_component::ActionHandler as _;
+    use decaf377::{Element, Fr};
+    use decaf377_rdsa::{SigningKey, SpendAuth};
     use shieldd_sdk_asset::BASE_ASSET_DENOM;
-    use shieldd_sdk_compliance::{AssetPolicy, ComplianceLeaf};
+    use shieldd_sdk_compliance::{
+        compliance_nullifier_key_commitment, encrypt_withdrawal_with_material, AssetPolicy,
+        AuditLogRead as _, ComplianceLeaf, UNREGULATED_SINK_RING_PK,
+    };
+    use shieldd_sdk_keys::keys::NullifierKey;
     use shieldd_sdk_keys::symmetric::{OvkWrappedKey, WrappedMemoKey};
     use shieldd_sdk_keys::test_keys;
     use shieldd_sdk_proto::execution_client::v1::{FreezeUserAsset, UnfreezeUserAsset};
+    use shieldd_sdk_sct::component::tree::{SctManager as _, SctRead as _};
     use shieldd_sdk_shielded_pool::component::StateReadExt as _;
+    use shieldd_sdk_shielded_pool::gnark::GnarkNoteSeizureClient;
     use shieldd_sdk_shielded_pool::{
-        EvmCall, HostExecution as DomainHostExecution, HostTransfer,
-        HostWithdrawal as DomainHostWithdrawal, NotePayload, ShieldedHostWithdrawal,
+        CapsuleReleaseEvidence, CapsuleReleaseRequest, EvmCall,
+        HostExecution as DomainHostExecution, HostTransfer, HostWithdrawal as DomainHostWithdrawal,
+        NotePayload, NoteSeizure, NoteSeizureAuthorizationBody, NoteSeizureProofPrivate,
+        NoteSeizureProofPublic, RecoveryCapsule, Rseed, ShieldedHostWithdrawal,
         ShieldedHostWithdrawalBody, ShieldedIcs20WithdrawalChangeBody,
         ShieldedIcs20WithdrawalFamilyId, ShieldedIcs20WithdrawalProof,
     };
+    use shieldd_sdk_tct as tct;
     use std::ops::Deref as _;
 
     async fn temp_storage() -> TempStorage {
@@ -1112,7 +1426,7 @@ mod tests {
         state_tx
             .test_only_register_asset(
                 asset_id,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -1121,7 +1435,7 @@ mod tests {
             )
             .await?;
         state_tx
-            .test_only_add_compliance_leaf(ComplianceLeaf::new(
+            .test_only_add_compliance_leaf(ComplianceLeaf::registered_for_test(
                 test_keys::ADDRESS_0.deref().clone(),
                 asset_id,
             ))
@@ -1156,6 +1470,16 @@ mod tests {
                 asset_anchor: shieldd_sdk_tct::StateCommitment(decaf377::Fq::from(0u64)),
                 routing_tag: Default::default(),
                 routing_parameter_set_id: decaf377::Fq::from(0u64),
+                withdrawal_compliance_ciphertext: encrypt_withdrawal_with_material(
+                    *UNREGULATED_SINK_RING_PK,
+                    test_keys::ADDRESS_0.deref(),
+                    decaf377::Fq::from(1u64),
+                    decaf377::Fr::from(1u64),
+                )
+                .expect("valid test withdrawal compliance ciphertext")
+                .ciphertext,
+                volume_accumulator:
+                    shieldd_sdk_shielded_pool::VolumeAccumulatorPayload::canonical_fee_funding(),
             },
             auth_sigs: Vec::new(),
             proof: ShieldedIcs20WithdrawalProof::default(),
@@ -1170,20 +1494,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn note_seizure_receipt_survives_storage_roundtrip() -> Result<()> {
+        let storage = temp_storage().await;
+        let mut state = StateDelta::new(storage.latest_snapshot());
+        let receipt = HostActionReceipt {
+            request_digest: [7u8; 32],
+            result: HostActionReceiptResult::NoteSeizure {
+                withdrawal: HostWithdrawal {
+                    denom: regulated_test_denom().to_string(),
+                    amount: Amount::from(42u64),
+                    destination: HostWithdrawalDestination::Transfer(HostTransfer {
+                        recipient: "bank1seizureauthority".to_owned(),
+                    }),
+                },
+                current_status: UserAssetStatus::Seized,
+                freeze_generation: 1,
+            },
+        };
+        store_host_action_receipt(&mut state, "test/receipt".to_owned(), &receipt)?;
+        storage.commit(state).await?;
+        let loaded = load_host_action_receipt(&storage.latest_snapshot(), "test/receipt")
+            .await?
+            .context("stored receipt")?;
+        assert_eq!(loaded.request_digest, receipt.request_digest);
+        let HostActionReceiptResult::NoteSeizure {
+            withdrawal,
+            current_status,
+            freeze_generation,
+        } = loaded.result
+        else {
+            anyhow::bail!("wrong receipt kind");
+        };
+        assert_eq!(withdrawal.amount, Amount::from(42u64));
+        assert_eq!(current_status, UserAssetStatus::Seized);
+        assert_eq!(freeze_generation, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn deposit_mints_note_and_exact_replay_returns_same_result() -> Result<()> {
         let storage = temp_storage().await;
-        let mut app = App::new(storage.latest_snapshot());
-        app.init_chain(&host_genesis()).await;
-        assert!(!app.state.host_withdrawals_enabled().await?);
+        let mut host = HostExecution::new(storage.deref().clone());
+        host.init_genesis(host_genesis()).await?;
+        host.commit().await?;
+        host.begin_block(host_block(1)).await?;
 
-        let height = app.state.get_block_height().await?;
         let mut request = deposit_request(0);
-        request.source = Some(host_source_at(height, 0));
-        let first = app.deposit(request.clone()).await?;
+        request.source = Some(host_source_at(1, 0));
+        let first = host.deposit(request.clone()).await?;
         assert_eq!(first.response.deposit_id.len(), 32);
         assert!(!first.events.is_empty());
 
-        let replay = app.deposit(request).await?;
+        let replay = host.deposit(request).await?;
         assert_eq!(replay.response.deposit_id, first.response.deposit_id);
         assert!(replay.events.is_empty());
 
@@ -1253,6 +1615,195 @@ mod tests {
             .await?;
         assert_eq!(unfreeze.response.previous_status, 2);
         assert_eq!(unfreeze.response.current_status, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "expensive: real release-mode Gnark proof generation"]
+    async fn note_seizure_verifies_capsule_release_and_commits_once() -> Result<()> {
+        shieldd_sdk_shielded_pool::gnark::require_proof_test_runtime(
+            shieldd_sdk_shielded_pool::gnark::ProofTestFamily::NoteSeizure,
+        )?;
+
+        let storage = temp_storage().await;
+        let mut host = HostExecution::new(storage.deref().clone());
+        host.init_genesis(host_genesis()).await?;
+        host.commit().await?;
+        host.begin_block(host_block(1)).await?;
+
+        let address = test_keys::ADDRESS_0.deref().clone();
+        let denom = regulated_test_denom();
+        let asset_id = denom.id();
+        let amount = Amount::from(42u64);
+        let capability_secret = Fr::from_le_bytes_mod_order(
+            &shieldd_sdk_compliance::derive_compliance_scalar(&address).to_bytes(),
+        );
+        let capk = Element::GENERATOR * capability_secret;
+        let rnk = decaf377::Fq::from(1u64);
+        let authority_sk = SigningKey::<SpendAuth>::from(Fr::from(1u64));
+        let policy = AssetPolicy::for_test(Element::GENERATOR, u128::MAX, Element::GENERATOR);
+        let leaf = ComplianceLeaf::registered_for_test(address.clone(), asset_id);
+        assert_eq!(leaf.capk, capk);
+
+        let rseed = Rseed([17u8; 32]);
+        let note_blinding = rseed.derive_note_blinding();
+        let (recovery_capsule, opening) =
+            RecoveryCapsule::encrypt(amount, note_blinding, capk, rseed)?;
+        let note_commitment = shieldd_sdk_shielded_pool::note::commitment_from_address(
+            address.clone(),
+            Value { amount, asset_id },
+            note_blinding,
+            recovery_capsule.commitment(),
+        )?;
+
+        let mut state_tx = StateDelta::new(host.app.state.clone());
+        state_tx.register_denom(&denom).await;
+        state_tx
+            .test_only_register_asset(asset_id, policy.clone(), true)
+            .await?;
+        state_tx.test_only_add_compliance_leaf(leaf).await?;
+        let leaf = state_tx
+            .apply_user_status_action(&address, asset_id, UserAssetStatusAction::Freeze, 1)
+            .await?
+            .leaf;
+        let mut witness_tree = state_tx.get_sct().await;
+        witness_tree.insert(tct::Witness::Keep, note_commitment)?;
+        let block_root = witness_tree.end_block()?;
+        let state_commitment_proof = witness_tree
+            .witness(note_commitment)
+            .context("witnessing the seized note")?;
+        state_tx.write_sct(1, witness_tree, block_root, None).await;
+        let nullifier_window = shieldd_sdk_sct::nullifier_tree::generation_state(&state_tx)
+            .await?
+            .window();
+        host.app.apply(state_tx);
+
+        let nullifier = Nullifier::derive(
+            &NullifierKey(rnk),
+            state_commitment_proof.position(),
+            &note_commitment,
+        );
+        let authorization = NoteSeizureAuthorizationBody {
+            chain_id: "bankd-local".to_owned(),
+            note_commitment,
+            nullifier,
+            address: address.clone(),
+            asset_id,
+            amount,
+            freeze_generation: leaf.freeze_generation,
+            frozen_since_height: leaf.frozen_since_height,
+            withdrawal: DomainHostWithdrawal {
+                value: Value { amount, asset_id },
+                destination: HostWithdrawalDestination::Transfer(HostTransfer {
+                    recipient: "bank1seizureauthority".to_owned(),
+                }),
+            },
+            expiry_height: 20,
+        };
+        let authority_instruction_commitment = authorization.commitment()?;
+        let release_request = CapsuleReleaseRequest {
+            chain_id: authorization.chain_id.clone(),
+            ring_id: policy.ring.ring_id.clone(),
+            policy_id: policy.ring.policy_id.clone(),
+            permission: policy.ring.permission.clone(),
+            resource: policy.ring.resource.clone(),
+            ring_pk: policy.ring.ring_pk,
+            asset_id,
+            address: address.clone(),
+            capk,
+            note_commitment,
+            recovery_commitment: recovery_capsule.commitment(),
+            capsule_epk: recovery_capsule.epk,
+            authority_instruction_commitment,
+            expiry_height: authorization.expiry_height,
+        };
+        let capsule_release = CapsuleReleaseEvidence::from_capability_secret_for_test(
+            &release_request,
+            capability_secret,
+        );
+        let proof_public = NoteSeizureProofPublic {
+            authorization: authorization.clone(),
+            anchor: state_commitment_proof.root(),
+            history_required: false,
+            recent_position_floor: nullifier_window.recent_position_floor,
+            recovery_capsule: recovery_capsule.clone(),
+            recovery_seed: opening.seed,
+            rnk_commitment: compliance_nullifier_key_commitment(rnk),
+        };
+        let proof_private = NoteSeizureProofPrivate {
+            note_blinding,
+            state_commitment_proof,
+            rnk,
+        };
+        let proof = GnarkNoteSeizureClient::from_env()?.prove(&proof_public, &proof_private)?;
+        let seizure = NoteSeizure {
+            authorization: authorization.clone(),
+            authority_signature: authority_sk.sign_deterministic(&authorization.signing_bytes()?),
+            anchor: proof_public.anchor,
+            history_required: false,
+            recent_position_floor: nullifier_window.recent_position_floor,
+            recovery_capsule,
+            rnk_commitment: proof_public.rnk_commitment,
+            capsule_release,
+            proof,
+            nullifier_window,
+            historical_nullifier_proof: None,
+        };
+        let before_audit = host.app.state.get_audit_log_state().await?;
+        let mut invalid_seizure = seizure.clone();
+        invalid_seizure.capsule_release.recovered_point += Element::GENERATOR;
+        let invalid = SeizeNoteRequest {
+            source: Some(host_source(0)),
+            seizure: Some(invalid_seizure.into()),
+        };
+        let error = host
+            .seize_note(invalid)
+            .await
+            .expect_err("an invalid capsule release must not consume the note");
+        assert!(error.to_string().contains("DLEQ"));
+        host.app.state.check_nullifier_unspent(nullifier).await?;
+        assert_eq!(host.app.state.get_audit_log_state().await?, before_audit);
+        assert_eq!(
+            host.app
+                .state
+                .get_user_leaf(&address, asset_id)
+                .await?
+                .context("registered seizure target")?
+                .status,
+            UserAssetStatus::Frozen
+        );
+
+        let request = SeizeNoteRequest {
+            source: Some(host_source(0)),
+            seizure: Some(seizure.into()),
+        };
+
+        let first = host.seize_note(request.clone()).await?;
+        assert!(!first.replayed);
+        assert_eq!(first.withdrawal.amount, amount);
+        assert_eq!(first.current_status, UserAssetStatus::Seized);
+        assert_eq!(
+            host.app.state.verify_audit_log().await?.length,
+            before_audit.length + 2
+        );
+
+        let mut duplicate = request.clone();
+        duplicate.source = Some(host_source(1));
+        assert!(host
+            .seize_note(duplicate)
+            .await
+            .expect_err("a new source cannot spend the same note again")
+            .to_string()
+            .contains("already spent"));
+
+        let replay = host.seize_note(request).await?;
+        assert!(replay.replayed);
+        assert!(replay.events.is_empty());
+        assert_eq!(
+            host.app.state.verify_audit_log().await?.length,
+            before_audit.length + 2
+        );
+
         Ok(())
     }
 

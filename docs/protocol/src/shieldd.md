@@ -15,9 +15,11 @@ withdrawal. Regulated actions bind the current asset-policy and user-status
 roots. A status change therefore invalidates proofs created against the prior
 user root.
 
-Current compliance transitions are per `(address, asset_id)` freeze and
-unfreeze. The current schema has no seizure state; a terminal transition is
-planned only with a future Bankd-authorized balance-certificate workflow.
+Compliance transitions are per `(address, asset_id)`. Bankd can freeze and
+unfreeze a pair. Its privileged `SeizeNote` call consumes one real frozen note,
+emits the same canonical nullifier an owner spend would use, and advances the
+pair to terminal `Seized`. The capsule discovery, ACP/Orbis release, and Bankd
+settlement workflow is not implemented here yet.
 
 This book describes cryptographic and state-machine internals. The Bankd host
 boundary defines the target deployment architecture.

@@ -6,7 +6,7 @@ use shieldd_sdk_keys::keys::FullViewingKey;
 use shieldd_sdk_num::Amount;
 use shieldd_sdk_proto::{shieldd::core::component::shielded_pool::v1 as pb, DomainType};
 
-use crate::{note, Note, NoteCiphertext};
+use crate::{note, Note, NoteCiphertext, RecoveryCapsule};
 use decaf377_ka as ka;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -15,6 +15,7 @@ pub struct NotePayload {
     pub note_commitment: note::StateCommitment,
     pub ephemeral_key: ka::Public,
     pub encrypted_note: NoteCiphertext,
+    pub recovery_capsule: Option<RecoveryCapsule>,
 }
 
 impl NotePayload {
@@ -23,6 +24,7 @@ impl NotePayload {
             note_commitment: note::StateCommitment(Fq::from(0u64)),
             ephemeral_key: ka::Public([0u8; 32]),
             encrypted_note: NoteCiphertext([0u8; crate::note::NOTE_CIPHERTEXT_BYTES]),
+            recovery_capsule: None,
         }
     }
 
@@ -61,6 +63,15 @@ impl NotePayload {
             tracing::warn!("decrypted note does not match provided note commitment");
             return None;
         }
+        if self
+            .recovery_capsule
+            .as_ref()
+            .map(RecoveryCapsule::commitment)
+            != Some(note.recovery_commitment())
+        {
+            tracing::warn!("decrypted note does not match provided recovery capsule");
+            return None;
+        }
         // NOTE: We intentionally return `Option` here instead of `Result`
         // such that we gracefully drop malformed notes instead of returning an error
         // that may propagate up the call stack and cause a panic.
@@ -95,6 +106,7 @@ impl From<NotePayload> for pb::NotePayload {
                 note_commitment: Some(msg.note_commitment.into()),
                 ephemeral_key: Vec::new(),
                 encrypted_note: None,
+                recovery_capsule: None,
             };
         }
 
@@ -102,6 +114,7 @@ impl From<NotePayload> for pb::NotePayload {
             note_commitment: Some(msg.note_commitment.into()),
             ephemeral_key: msg.ephemeral_key.0.to_vec(),
             encrypted_note: Some(msg.encrypted_note.into()),
+            recovery_capsule: msg.recovery_capsule.map(Into::into),
         }
     }
 }
@@ -123,6 +136,10 @@ impl TryFrom<pb::NotePayload> for NotePayload {
                 proto.encrypted_note.is_none(),
                 "dummy note payload encrypted note must be absent"
             );
+            anyhow::ensure!(
+                proto.recovery_capsule.is_none(),
+                "dummy note payload recovery capsule must be absent"
+            );
             return Ok(NotePayload::dummy());
         }
 
@@ -134,6 +151,12 @@ impl TryFrom<pb::NotePayload> for NotePayload {
                 .encrypted_note
                 .ok_or_else(|| anyhow::anyhow!("missing encrypted note"))?
                 .try_into()?,
+            recovery_capsule: Some(
+                proto
+                    .recovery_capsule
+                    .ok_or_else(|| anyhow::anyhow!("missing recovery capsule"))?
+                    .try_into()?,
+            ),
         })
     }
 }

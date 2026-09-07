@@ -7,15 +7,46 @@ pub use crate::audit_status::{
     FLOW_TYPE_WITHDRAW, SCREEN_STATUS_DETECTED, SCREEN_STATUS_INVALID, SCREEN_STATUS_IRRELEVANT,
     SCREEN_STATUS_PENDING,
 };
-use crate::transfer::TransferComplianceCiphertext;
-pub use crate::{ActionRef, BlockRef, OutputRef, TxRef};
+pub use crate::{ActionRef, BlockRef, ComplianceRecordRef, OutputRef, TxRef};
+use crate::{TransferComplianceCiphertext, WithdrawalComplianceCiphertext};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComplianceCiphertextKind {
+    Transfer,
+    Withdrawal,
+}
+
+#[derive(Clone, Debug)]
+pub enum ComplianceCiphertext {
+    Transfer(TransferComplianceCiphertext),
+    Withdrawal(WithdrawalComplianceCiphertext),
+}
+
+impl ComplianceCiphertext {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        match self {
+            Self::Transfer(ciphertext) => ciphertext.to_bytes(),
+            Self::Withdrawal(ciphertext) => ciphertext.to_bytes().to_vec(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PublicWithdrawalData {
+    pub asset_id: asset::Id,
+    pub amount: shieldd_sdk_num::Amount,
+    pub self_address: Option<String>,
+    pub destination: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExtractedComplianceCiphertext {
-    pub output_ref: OutputRef,
+    pub record_ref: ComplianceRecordRef,
+    pub kind: ComplianceCiphertextKind,
     pub routing_tags: [u32; 2],
     pub raw_bytes: Vec<u8>,
     pub metadata_bytes: Option<Vec<u8>>,
+    pub public_withdrawal: Option<PublicWithdrawalData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,18 +77,19 @@ pub struct ClearFlowEvent {
 
 #[derive(Clone, Debug)]
 pub struct DetectionEvent {
-    pub output_ref: OutputRef,
+    pub record_ref: ComplianceRecordRef,
     pub asset_id: asset::Id,
     pub is_flagged: bool,
     pub salt: decaf377::Fq,
     pub routing_tags: [u32; 2],
-    pub ciphertext: TransferComplianceCiphertext,
+    pub ciphertext: ComplianceCiphertext,
     pub raw_bytes: Vec<u8>,
+    pub public_withdrawal: Option<PublicWithdrawalData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InvalidCiphertext {
-    pub output_ref: OutputRef,
+    pub record_ref: ComplianceRecordRef,
     pub reason: String,
     pub raw_bytes: Vec<u8>,
 }
@@ -139,18 +171,40 @@ pub enum CandidateEvidence {
 impl CandidateEvidence {
     pub fn from_detection(event: &DetectionEvent, metadata: Option<&[u8]>) -> Self {
         let build = || -> anyhow::Result<crate::ComplianceEvidenceObject> {
-            let bytes = metadata.ok_or_else(|| {
-                anyhow::anyhow!("detected output is missing transfer compliance metadata")
-            })?;
-            let metadata = crate::TransferComplianceMetadata::from_bytes(bytes)?;
-            crate::ComplianceEvidenceObject::new_transfer(
-                event.output_ref.clone(),
-                event.asset_id,
-                event.is_flagged,
-                event.salt,
-                event.ciphertext.clone(),
-                metadata,
-            )
+            match &event.ciphertext {
+                ComplianceCiphertext::Transfer(ciphertext) => {
+                    let bytes = metadata.ok_or_else(|| {
+                        anyhow::anyhow!("detected output is missing transfer compliance metadata")
+                    })?;
+                    let metadata = crate::TransferComplianceMetadata::from_bytes(bytes)?;
+                    crate::ComplianceEvidenceObject::new_transfer(
+                        event.record_ref.output_ref(),
+                        event.asset_id,
+                        event.is_flagged,
+                        event.salt,
+                        ciphertext.clone(),
+                        metadata,
+                    )
+                }
+                ComplianceCiphertext::Withdrawal(ciphertext) => {
+                    let public = event.public_withdrawal.as_ref().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "withdrawal compliance record is missing public withdrawal data"
+                        )
+                    })?;
+                    crate::ComplianceEvidenceObject::new_withdrawal(
+                        event.record_ref.clone(),
+                        event.asset_id,
+                        event.is_flagged,
+                        ciphertext.clone(),
+                        crate::WithdrawalEvidencePublicData {
+                            amount: public.amount,
+                            self_address: public.self_address.clone(),
+                            destination: public.destination.clone(),
+                        },
+                    )
+                }
+            }
         };
         match build() {
             Ok(evidence) => Self::Ready(evidence),

@@ -56,7 +56,7 @@ pub static IMT_LEAF_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
     Fq::from_le_bytes_mod_order(hash.as_bytes())
 });
 
-/// Domain separator for params sub-hash (Shieldd-decided: dk_pub, threshold, IBC route policy).
+/// Domain separator for params sub-hash (Shieldd-decided: dk_pub, daily_volume_limit, IBC route policy).
 pub static PARAMS_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
     let hash = blake2b_simd::Params::default()
         .personal(b"pen.imt.params2_")
@@ -100,7 +100,7 @@ pub fn route_policy_to_fq(params: &AssetParams) -> Fq {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeafParams {
     pub dk_pub: decaf377::Element,
-    pub threshold: u128,
+    pub daily_volume_limit: u128,
     pub route_policy_hash: Fq,
 }
 
@@ -109,7 +109,7 @@ impl LeafParams {
     pub fn from_asset_params(p: &AssetParams) -> Self {
         Self {
             dk_pub: p.dk_pub,
-            threshold: p.threshold,
+            daily_volume_limit: p.daily_volume_limit,
             route_policy_hash: route_policy_to_fq(p),
         }
     }
@@ -119,7 +119,7 @@ impl Default for LeafParams {
     fn default() -> Self {
         Self {
             dk_pub: *crate::crypto::UNREGULATED_SINK_DK_PUB,
-            threshold: u128::MAX,
+            daily_volume_limit: u128::MAX,
             route_policy_hash: string_to_fq(""),
         }
     }
@@ -165,10 +165,10 @@ impl Default for LeafRing {
 static DEFAULT_PARAMS_HASH: Lazy<Fq> = Lazy::new(|| {
     let p = LeafParams::default();
     let dk_pub_fq = p.dk_pub.vartime_compress_to_field();
-    let threshold_fq = Fq::from(p.threshold);
+    let daily_volume_limit_fq = Fq::from(p.daily_volume_limit);
     poseidon377::hash_3(
         &PARAMS_DOMAIN_SEP,
-        (dk_pub_fq, threshold_fq, p.route_policy_hash),
+        (dk_pub_fq, daily_volume_limit_fq, p.route_policy_hash),
     )
 });
 
@@ -218,7 +218,7 @@ pub static IMT_ZERO_HASHES: Lazy<Vec<StateCommitment>> = Lazy::new(|| {
 /// A leaf in the Indexed Merkle Tree forming a sorted linked list.
 ///
 /// All policy fields are bound into the commitment via sub-structured Poseidon:
-///   params_hash = hash_3(PARAMS_DOMAIN, dk_pub_fq, threshold_fq, route_policy_hash)
+///   params_hash = hash_3(PARAMS_DOMAIN, dk_pub_fq, daily_volume_limit_fq, route_policy_hash)
 ///   ring_hash   = hash_5(RING_DOMAIN, ring_pk_fq, ring_id_hash, policy_id_hash, permission_hash, resource_hash)
 ///   leaf_commit = hash_5(LEAF_DOMAIN, value, next_index, next_value, params_hash, ring_hash)
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -229,7 +229,7 @@ pub struct IndexedLeaf {
     pub next_index: u64,
     /// The value at next_index (for efficient gap verification).
     pub next_value: Fq,
-    /// Shieldd-decided policy (dk_pub, threshold, IBC routes).
+    /// Shieldd-decided policy (dk_pub, daily_volume_limit, IBC routes).
     pub params: LeafParams,
     /// Orbis-decided policy (ring_pk, ring_id, policy_id, permission, resource).
     pub ring: LeafRing,
@@ -294,10 +294,14 @@ impl IndexedLeaf {
     /// Compute the canonical policy sub-commitments for this leaf.
     pub fn commitment_parts(&self) -> IndexedLeafCommitments {
         let dk_pub_fq = self.params.dk_pub.vartime_compress_to_field();
-        let threshold_fq = Fq::from(self.params.threshold);
+        let daily_volume_limit_fq = Fq::from(self.params.daily_volume_limit);
         let params_hash = poseidon377::hash_3(
             &PARAMS_DOMAIN_SEP,
-            (dk_pub_fq, threshold_fq, self.params.route_policy_hash),
+            (
+                dk_pub_fq,
+                daily_volume_limit_fq,
+                self.params.route_policy_hash,
+            ),
         );
 
         let ring_pk_fq = self.ring.ring_pk.vartime_compress_to_field();
@@ -338,8 +342,8 @@ impl IndexedLeaf {
     pub fn dk_pub(&self) -> &decaf377::Element {
         &self.params.dk_pub
     }
-    pub fn threshold(&self) -> u128 {
-        self.params.threshold
+    pub fn daily_volume_limit(&self) -> u128 {
+        self.params.daily_volume_limit
     }
     pub fn ring_pk(&self) -> &decaf377::Element {
         &self.ring.ring_pk
@@ -354,7 +358,7 @@ struct IndexedLeafSerde {
     next_index: u64,
     next_value: [u8; 32],
     dk_pub: [u8; 32],
-    threshold: u128,
+    daily_volume_limit: u128,
     route_policy_hash: [u8; 32],
     ring_pk: [u8; 32],
     ring_id_hash: [u8; 32],
@@ -373,7 +377,7 @@ impl Serialize for IndexedLeaf {
             next_index: self.next_index,
             next_value: self.next_value.to_bytes(),
             dk_pub: self.params.dk_pub.vartime_compress().0,
-            threshold: self.params.threshold,
+            daily_volume_limit: self.params.daily_volume_limit,
             route_policy_hash: self.params.route_policy_hash.to_bytes(),
             ring_pk: self.ring.ring_pk.vartime_compress().0,
             ring_id_hash: self.ring.ring_id_hash.to_bytes(),
@@ -419,7 +423,7 @@ impl<'de> Deserialize<'de> for IndexedLeaf {
             next_value,
             params: LeafParams {
                 dk_pub,
-                threshold: h.threshold,
+                daily_volume_limit: h.daily_volume_limit,
                 route_policy_hash,
             },
             ring: LeafRing {
@@ -446,7 +450,7 @@ impl From<IndexedLeaf> for pb::IndexedLeafData {
             next_index: leaf.next_index,
             next_value: leaf.next_value.to_bytes().to_vec(),
             dk_pub: leaf.params.dk_pub.vartime_compress().0.to_vec(),
-            threshold: leaf.params.threshold.to_le_bytes().to_vec(),
+            daily_volume_limit: leaf.params.daily_volume_limit.to_le_bytes().to_vec(),
             route_policy_hash: leaf.params.route_policy_hash.to_bytes().to_vec(),
             ring_pk: leaf.ring.ring_pk.vartime_compress().0.to_vec(),
             ring_id_hash: leaf.ring.ring_id_hash.to_bytes().to_vec(),
@@ -488,11 +492,17 @@ impl TryFrom<pb::IndexedLeafData> for IndexedLeaf {
         })?;
 
         let dk_pub = parse_element(&proto.dk_pub, "dk_pub")?;
-        let threshold_bytes: [u8; 16] =
-            proto.threshold.as_slice().try_into().map_err(|_| {
-                anyhow!("threshold must be 16 bytes, got {}", proto.threshold.len())
+        let daily_volume_limit_bytes: [u8; 16] = proto
+            .daily_volume_limit
+            .as_slice()
+            .try_into()
+            .map_err(|_| {
+                anyhow!(
+                    "daily_volume_limit must be 16 bytes, got {}",
+                    proto.daily_volume_limit.len()
+                )
             })?;
-        let threshold = u128::from_le_bytes(threshold_bytes);
+        let daily_volume_limit = u128::from_le_bytes(daily_volume_limit_bytes);
         let route_policy_hash = parse_fq(&proto.route_policy_hash, "route_policy_hash")?;
         let ring_pk = parse_element(&proto.ring_pk, "ring_pk")?;
         let ring_id_hash = parse_fq(&proto.ring_id_hash, "ring_id_hash")?;
@@ -508,7 +518,7 @@ impl TryFrom<pb::IndexedLeafData> for IndexedLeaf {
                 .map_err(|e| anyhow!("invalid next_value: {}", e))?,
             params: LeafParams {
                 dk_pub,
-                threshold,
+                daily_volume_limit,
                 route_policy_hash,
             },
             ring: LeafRing {
@@ -575,7 +585,7 @@ impl Serialize for IndexedMerkleTree {
                         next_index: v.next_index,
                         next_value: v.next_value.to_bytes(),
                         dk_pub: v.params.dk_pub.vartime_compress().0,
-                        threshold: v.params.threshold,
+                        daily_volume_limit: v.params.daily_volume_limit,
                         route_policy_hash: v.params.route_policy_hash.to_bytes(),
                         ring_pk: v.ring.ring_pk.vartime_compress().0,
                         ring_id_hash: v.ring.ring_id_hash.to_bytes(),
@@ -657,7 +667,7 @@ impl<'de> Deserialize<'de> for IndexedMerkleTree {
                         next_value,
                         params: LeafParams {
                             dk_pub,
-                            threshold: h.threshold,
+                            daily_volume_limit: h.daily_volume_limit,
                             route_policy_hash,
                         },
                         ring: LeafRing {
@@ -1571,7 +1581,12 @@ mod tests {
             .contains("duplicate"));
 
         let mut sentinel = populated_tree();
-        sentinel.leaves.get_mut(&0).unwrap().params.threshold = 7;
+        sentinel
+            .leaves
+            .get_mut(&0)
+            .unwrap()
+            .params
+            .daily_volume_limit = 7;
         assert!(sentinel
             .validate_well_formed()
             .unwrap_err()
@@ -1984,12 +1999,12 @@ mod tests {
         }
 
         let mut changed_policy = test_policy();
-        changed_policy.params.threshold = 42;
+        changed_policy.params.daily_volume_limit = 42;
         tree.update_policy(Fq::from(400u64), &changed_policy)
             .unwrap();
         let (_, leaf) = tree.find_low_leaf(Fq::from(450u64)).unwrap();
         assert_eq!(leaf.value, Fq::from(400u64));
-        assert_eq!(leaf.threshold(), 42);
+        assert_eq!(leaf.daily_volume_limit(), 42);
     }
 
     #[test]
@@ -2056,7 +2071,10 @@ mod tests {
         assert_eq!(back.next_index, leaf.next_index);
         assert_eq!(back.next_value, leaf.next_value);
         assert_eq!(back.params.dk_pub, leaf.params.dk_pub);
-        assert_eq!(back.params.threshold, leaf.params.threshold);
+        assert_eq!(
+            back.params.daily_volume_limit,
+            leaf.params.daily_volume_limit
+        );
         assert_eq!(back.params.route_policy_hash, leaf.params.route_policy_hash);
         assert_eq!(back.ring.ring_pk, leaf.ring.ring_pk);
         assert_eq!(back.ring.ring_id_hash, leaf.ring.ring_id_hash);
@@ -2068,7 +2086,7 @@ mod tests {
         let proto: pb::IndexedLeafData = leaf.into();
         let mutations: [(&str, fn(&mut pb::IndexedLeafData)); 10] = [
             ("dk_pub", |p| p.dk_pub.clear()),
-            ("threshold", |p| p.threshold.clear()),
+            ("daily_volume_limit", |p| p.daily_volume_limit.clear()),
             ("route_policy_hash", |p| p.route_policy_hash.clear()),
             ("ring_pk", |p| p.ring_pk.clear()),
             ("ring_id_hash", |p| p.ring_id_hash.clear()),
@@ -2156,7 +2174,7 @@ mod tests {
             next_value: *FQ_MAX,
             params: LeafParams {
                 dk_pub: decaf377::Element::default(),
-                threshold: 1000u128,
+                daily_volume_limit: 1000u128,
                 route_policy_hash: string_to_fq(""),
             },
             ring: LeafRing::default(),
@@ -2176,7 +2194,7 @@ mod tests {
 
         assert_eq!(leaf.value, Fq::from(42u64));
         assert_eq!(leaf.params.dk_pub, *crate::crypto::UNREGULATED_SINK_DK_PUB);
-        assert_eq!(leaf.params.threshold, u128::MAX);
+        assert_eq!(leaf.params.daily_volume_limit, u128::MAX);
         assert_eq!(leaf.ring.ring_pk, *crate::crypto::UNREGULATED_SINK_RING_PK);
     }
 }

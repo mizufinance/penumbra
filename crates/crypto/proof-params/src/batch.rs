@@ -371,7 +371,7 @@ fn derive_nonzero_fr(vk_digest: &[u8; 32], item_digest: &[u8; 32], index: usize)
     let mut counter = 0u32;
     loop {
         let mut hasher = Sha256::new();
-        hasher.update(b"shieldd.batch.verify.v1");
+        hasher.update(b"shieldd.batch.verify");
         hasher.update(vk_digest);
         hasher.update(item_digest);
         hasher.update((index as u64).to_le_bytes());

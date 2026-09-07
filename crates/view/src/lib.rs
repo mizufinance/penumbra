@@ -29,7 +29,9 @@ mod transaction_info;
 mod worker;
 
 pub use crate::client::ViewClient;
-pub use crate::client_compliance::complete_plan_with_compliance;
+pub use crate::client_compliance::{
+    complete_plan_with_compliance, CompletionData, VolumeRecoveryRecord,
+};
 pub use crate::compliance_tree::{ComplianceAssetTree, ComplianceUserTree};
 pub use crate::historical_proof_cache::{
     advance_historical_proof_cache, HistoricalProofCache, HistoricalProofCacheState,

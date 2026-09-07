@@ -14,7 +14,7 @@ use {
     shieldd_sdk_proto::{
         view::v1::{
             view_service_client::ViewServiceClient, view_service_server::ViewServiceServer,
-            StatusRequest, StatusResponse,
+            StatusRequest,
         },
         DomainType,
     },
@@ -105,13 +105,9 @@ async fn run_view_server_case(build_proof: bool) -> anyhow::Result<()> {
             tracing::info!(?status, "view client received status stream response");
         }
         let status = view_client.status(StatusRequest {}).await?.into_inner();
-        assert_eq!(
-            status,
-            StatusResponse {
-                sync_height: 10,
-                catching_up: false,
-            }
-        );
+        assert_eq!(status.sync_height, 10);
+        assert!(!status.catching_up);
+        assert!(status.latest_block_timestamp > 0);
     }
 
     let notes = view_client.unspent_notes_by_address_and_asset().await?;
@@ -249,13 +245,9 @@ async fn run_view_server_case(build_proof: bool) -> anyhow::Result<()> {
             tracing::info!(?status, "view client received status stream response");
         }
         let status = view_client.status(StatusRequest {}).await?.into_inner();
-        assert_eq!(
-            status,
-            StatusResponse {
-                sync_height: 11,
-                catching_up: false,
-            }
-        );
+        assert_eq!(status.sync_height, 11);
+        assert!(!status.catching_up);
+        assert!(status.latest_block_timestamp > 0);
     }
 
     let post_tx_notes = view_client.unspent_notes_by_address_and_asset().await?;

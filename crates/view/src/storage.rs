@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroU64,
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{anyhow, Context};
 use camino::Utf8Path;
@@ -23,7 +28,10 @@ use shieldd_sdk_app::params::AppParameters;
 use shieldd_sdk_asset::{asset, asset::Id, asset::Metadata, Value};
 use shieldd_sdk_compliance::{AssetPolicy, ComplianceLeaf};
 use shieldd_sdk_fee::GasPrices;
-use shieldd_sdk_keys::{keys::AddressIndex, Address, FullViewingKey};
+use shieldd_sdk_keys::{
+    keys::{AddressIndex, NullifierKey},
+    Address, FullViewingKey,
+};
 use shieldd_sdk_num::Amount;
 use shieldd_sdk_proto::{
     core::app::v1::{
@@ -33,7 +41,9 @@ use shieldd_sdk_proto::{
     DomainType, Message,
 };
 use shieldd_sdk_sct::{nullifier_generation::NullifierWindow, CommitmentSource, Nullifier};
-use shieldd_sdk_shielded_pool::{discovery, note, Note, Rseed};
+use shieldd_sdk_shielded_pool::{
+    discovery, note, Note, Rseed, VolumeAccumulatorPayload, VolumeAccumulatorState,
+};
 use shieldd_sdk_tct::{self as tct, builder::epoch::Root};
 use shieldd_sdk_transaction::Transaction;
 use tct::StateCommitment;
@@ -53,6 +63,27 @@ pub struct BalanceEntry {
     pub id: Id,
     pub amount: u128,
     pub address_index: AddressIndex,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfirmedVolumeAccumulator {
+    pub state: VolumeAccumulatorState,
+    pub commitment: StateCommitment,
+    pub position: tct::Position,
+}
+
+#[derive(Debug, Clone)]
+pub enum VolumeAccumulatorRecovery {
+    Absent,
+    Complete(ConfirmedVolumeAccumulator),
+    Incomplete,
+}
+
+#[derive(Debug, Clone)]
+pub struct VolumeAccumulatorReservation {
+    pub state: VolumeAccumulatorState,
+    pub payload: VolumeAccumulatorPayload,
+    pub expires_at: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -79,10 +110,71 @@ pub(crate) struct ComplianceBlockPlan {
     pub asset_policy_updates: Vec<ComplianceAssetPolicyUpdate>,
 }
 
+impl ComplianceBlockPlan {
+    pub(crate) fn user_leaf(
+        &self,
+        address: &Address,
+        asset_id: asset::Id,
+    ) -> Option<&ComplianceLeaf> {
+        self.leaf_updates
+            .iter()
+            .rev()
+            .find(|update| &update.leaf.address == address && update.leaf.asset_id == asset_id)
+            .map(|update| &update.leaf)
+    }
+
+    pub(crate) fn asset_policy(&self, asset_id: asset::Id) -> Option<&AssetPolicy> {
+        self.asset_policy_updates
+            .iter()
+            .rev()
+            .find(|update| update.asset_id == asset_id)
+            .map(|update| &update.policy)
+    }
+}
+
 #[cfg(test)]
 mod compliance_projection_tests {
     use super::*;
     use shieldd_sdk_keys::test_keys;
+
+    #[tokio::test]
+    async fn compliance_block_plan_exposes_same_block_policy_and_user_leaf() {
+        let storage = Storage::initialize(
+            None::<&Utf8Path>,
+            (*test_keys::FULL_VIEWING_KEY).clone(),
+            AppParameters::default(),
+        )
+        .await
+        .unwrap();
+        let user_tree = storage.compliance_user_tree().await.unwrap();
+        let asset_tree = storage.compliance_asset_tree().await.unwrap();
+        let asset_id = asset::Id(Fq::from(13u64));
+        let leaf = ComplianceLeaf::synthetic_unregulated(test_keys::ADDRESS_0.clone(), asset_id);
+        let policy = AssetPolicy::for_test(
+            decaf377::Element::GENERATOR,
+            u128::MAX,
+            decaf377::Element::GENERATOR,
+        );
+        let plan = ComplianceBlockPlan {
+            height: 1,
+            user_tree: user_tree.persistence_plan().unwrap(),
+            asset_tree: asset_tree.persistence_plan().unwrap(),
+            user_root: user_tree.root(),
+            asset_root: asset_tree.root(),
+            leaf_updates: vec![ComplianceLeafUpdate {
+                commitment: leaf.commit(),
+                position: 0,
+                leaf: leaf.clone(),
+            }],
+            asset_policy_updates: vec![ComplianceAssetPolicyUpdate {
+                asset_id,
+                policy: policy.clone(),
+            }],
+        };
+
+        assert_eq!(plan.user_leaf(&test_keys::ADDRESS_0, asset_id), Some(&leaf));
+        assert_eq!(plan.asset_policy(asset_id), Some(&policy));
+    }
 
     #[tokio::test]
     async fn compliance_block_failure_rolls_back_leaf_tree_and_anchor_writes() {
@@ -95,7 +187,10 @@ mod compliance_projection_tests {
         .unwrap();
         let mut user_tree = storage.compliance_user_tree().await.unwrap();
         let asset_tree = storage.compliance_asset_tree().await.unwrap();
-        let leaf = ComplianceLeaf::new(test_keys::ADDRESS_0.clone(), asset::Id(Fq::from(17u64)));
+        let leaf = ComplianceLeaf::synthetic_unregulated(
+            test_keys::ADDRESS_0.clone(),
+            asset::Id(Fq::from(17u64)),
+        );
         let commitment = leaf.commit();
         let position = user_tree.insert(commitment).unwrap();
         let user_root = user_tree.root();
@@ -140,7 +235,10 @@ mod compliance_projection_tests {
         .unwrap();
         let mut user_tree = storage.compliance_user_tree().await.unwrap();
         let asset_tree = storage.compliance_asset_tree().await.unwrap();
-        let leaf = ComplianceLeaf::new(test_keys::ADDRESS_0.clone(), asset::Id(Fq::from(19u64)));
+        let leaf = ComplianceLeaf::synthetic_unregulated(
+            test_keys::ADDRESS_0.clone(),
+            asset::Id(Fq::from(19u64)),
+        );
         let commitment = leaf.commit();
         let position = user_tree.insert(commitment).unwrap();
         let user_root = user_tree.root();
@@ -174,6 +272,7 @@ mod compliance_projection_tests {
             app_parameters_updated: false,
             gas_prices: None,
             nullifier_window: None,
+            volume_accumulators: Vec::new(),
         };
         let mut sct = tct::Tree::new();
         let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:1").connect_lazy();
@@ -189,6 +288,45 @@ mod compliance_projection_tests {
             .await
             .unwrap()
             .is_none());
+    }
+}
+
+#[cfg(test)]
+mod note_storage_tests {
+    use super::*;
+    use decaf377::Element;
+    use shieldd_sdk_asset::BASE_ASSET_ID;
+    use shieldd_sdk_keys::test_keys;
+
+    #[tokio::test]
+    async fn note_advice_round_trip_preserves_recovery_commitment() {
+        let storage = Storage::initialize(
+            None::<&Utf8Path>,
+            (*test_keys::FULL_VIEWING_KEY).clone(),
+            AppParameters::default(),
+        )
+        .await
+        .unwrap();
+        let (note, _) = Note::from_parts_with_recovery(
+            test_keys::ADDRESS_0.clone(),
+            Value {
+                amount: Amount::from(41u64),
+                asset_id: *BASE_ASSET_ID,
+            },
+            Rseed([42u8; 32]),
+            Element::GENERATOR,
+        )
+        .unwrap();
+        let commitment = note.commit();
+
+        storage.give_advice(note.clone()).await.unwrap();
+        let advice = storage.scan_advice(vec![commitment]).await.unwrap();
+        let restored = advice
+            .get(&commitment)
+            .expect("stored note must be returned");
+
+        assert_eq!(restored, &note);
+        assert_eq!(restored.recovery_commitment(), note.recovery_commitment());
     }
 }
 
@@ -260,7 +398,7 @@ mod issued_address_tests {
     }
 
     #[tokio::test]
-    async fn issued_address_birth_height_is_write_once_and_purpose_cannot_change() {
+    async fn issued_address_birth_height_is_write_once_and_address_can_cover_many_assets() {
         let fvk = (*test_keys::FULL_VIEWING_KEY).clone();
         let storage = Storage::initialize(None::<&Utf8Path>, fvk.clone(), AppParameters::default())
             .await
@@ -289,7 +427,40 @@ mod issued_address_tests {
         conflicting.purpose = AddressPurpose::Regulated {
             asset_id: asset::Id(decaf377::Fq::from(9u64)),
         };
-        assert!(storage.record_issued_address(conflicting).await.is_err());
+        let assigned = storage
+            .record_issued_address(conflicting.clone())
+            .await
+            .unwrap();
+        assert_eq!(assigned, conflicting.address);
+
+        let mut second_asset = conflicting.clone();
+        second_asset.purpose = AddressPurpose::Regulated {
+            asset_id: asset::Id(decaf377::Fq::from(10u64)),
+        };
+        assert_eq!(
+            storage.record_issued_address(second_asset).await.unwrap(),
+            conflicting.address
+        );
+
+        let other_index = AddressIndex::new(4);
+        let other = IssuedAddress {
+            address_index: other_index,
+            address: fvk.payment_address(other_index),
+            purpose: conflicting.purpose,
+            birth_height: 9,
+            retired_height: None,
+        };
+        assert_eq!(
+            storage.record_issued_address(other).await.unwrap(),
+            conflicting.address,
+            "an existing regulated-asset assignment is immutable"
+        );
+        assert!(storage
+            .retire_issued_address(index, 100)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("permanently assigned"));
     }
 
     #[tokio::test]
@@ -323,6 +494,186 @@ mod issued_address_tests {
     }
 }
 
+#[cfg(test)]
+mod volume_accumulator_tests {
+    use super::*;
+    use camino::Utf8Path;
+    use shieldd_sdk_app::params::AppParameters;
+    use shieldd_sdk_keys::test_keys;
+
+    fn state() -> VolumeAccumulatorState {
+        VolumeAccumulatorState {
+            subject: VolumeAccumulatorState::subject(
+                &test_keys::ADDRESS_0,
+                asset::Id(Fq::from(91u64)),
+            ),
+            day_start: 86_400,
+            undisclosed_volume: 50,
+            blinding: Fq::from(7u64),
+        }
+    }
+
+    fn payload(state: &VolumeAccumulatorState) -> VolumeAccumulatorPayload {
+        let commitment = state.commitment();
+        VolumeAccumulatorPayload::encrypt(
+            state,
+            true,
+            state.origin_nullifier(test_keys::FULL_VIEWING_KEY.nullifier_key()),
+            commitment,
+            test_keys::FULL_VIEWING_KEY.outgoing(),
+        )
+    }
+
+    #[tokio::test]
+    async fn reservation_is_exclusive_until_release_or_strict_expiry() {
+        let storage = Storage::initialize(
+            None::<&Utf8Path>,
+            (*test_keys::FULL_VIEWING_KEY).clone(),
+            AppParameters::default(),
+        )
+        .await
+        .unwrap();
+        let state = state();
+        let payload = payload(&state);
+        let reservation = |expires_at| VolumeAccumulatorReservation {
+            state: state.clone(),
+            payload: payload.clone(),
+            expires_at,
+        };
+        let nk = *test_keys::FULL_VIEWING_KEY.nullifier_key();
+
+        storage
+            .reserve_volume_accumulators(vec![reservation(120)], [1; 32], 100, nk)
+            .await
+            .unwrap();
+        assert!(storage
+            .reserve_volume_accumulators(vec![reservation(140)], [2; 32], 120, nk)
+            .await
+            .is_err());
+        storage
+            .reserve_volume_accumulators(vec![reservation(140)], [2; 32], 121, nk)
+            .await
+            .unwrap();
+        storage
+            .release_volume_reservation(payload.scoped_nullifier())
+            .await
+            .unwrap();
+        assert!(matches!(
+            storage
+                .volume_accumulator_recovery(state.subject, state.day_start)
+                .await
+                .unwrap(),
+            VolumeAccumulatorRecovery::Absent
+        ));
+        storage
+            .reserve_volume_accumulators(vec![reservation(160)], [3; 32], 140, nk)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn incomplete_recovery_heads_are_explicit() {
+        let storage = Storage::initialize(
+            None::<&Utf8Path>,
+            (*test_keys::FULL_VIEWING_KEY).clone(),
+            AppParameters::default(),
+        )
+        .await
+        .unwrap();
+        let state = state();
+        storage
+            .pool
+            .get()
+            .unwrap()
+            .execute(
+                "INSERT INTO volume_accumulators
+                 (subject, day_start, volume, blinding, commitment, position, recovery_status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)",
+                (
+                    state.subject.to_bytes().to_vec(),
+                    state.day_start as i64,
+                    state.undisclosed_volume.to_le_bytes().to_vec(),
+                    state.blinding.to_bytes().to_vec(),
+                    state.commitment().0.to_bytes().to_vec(),
+                    7i64,
+                ),
+            )
+            .unwrap();
+
+        assert!(matches!(
+            storage
+                .volume_accumulator_recovery(state.subject, state.day_start)
+                .await
+                .unwrap(),
+            VolumeAccumulatorRecovery::Incomplete
+        ));
+    }
+
+    #[tokio::test]
+    async fn multi_reservation_failure_is_atomic_and_stale_origins_reject() {
+        let storage = Storage::initialize(
+            None::<&Utf8Path>,
+            (*test_keys::FULL_VIEWING_KEY).clone(),
+            AppParameters::default(),
+        )
+        .await
+        .unwrap();
+        let state = state();
+        let payload = payload(&state);
+        let reservation = VolumeAccumulatorReservation {
+            state: state.clone(),
+            payload: payload.clone(),
+            expires_at: 200,
+        };
+        let nk = *test_keys::FULL_VIEWING_KEY.nullifier_key();
+        assert!(storage
+            .reserve_volume_accumulators(
+                vec![reservation.clone(), reservation.clone()],
+                [1; 32],
+                100,
+                nk,
+            )
+            .await
+            .is_err());
+        let reservation_count: i64 = storage
+            .pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM volume_accumulator_reservations",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(reservation_count, 0);
+
+        storage
+            .pool
+            .get()
+            .unwrap()
+            .execute(
+                "INSERT INTO volume_accumulators
+                 (subject, day_start, volume, blinding, commitment, position, recovery_status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+                (
+                    state.subject.to_bytes().to_vec(),
+                    state.day_start as i64,
+                    state.undisclosed_volume.to_le_bytes().to_vec(),
+                    state.blinding.to_bytes().to_vec(),
+                    state.commitment().0.to_bytes().to_vec(),
+                    7i64,
+                ),
+            )
+            .unwrap();
+        assert!(storage
+            .reserve_volume_accumulators(vec![reservation], [2; 32], 100, nk)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("head changed"));
+    }
+}
+
 /// The hash of the schema for the database.
 static SCHEMA_HASH: Lazy<String> =
     Lazy::new(|| hex::encode(Sha256::digest(include_str!("storage/schema.sql"))));
@@ -345,6 +696,178 @@ pub struct Storage {
 }
 
 impl Storage {
+    pub async fn volume_accumulator_recovery(
+        &self,
+        subject: Fq,
+        day_start: u64,
+    ) -> anyhow::Result<VolumeAccumulatorRecovery> {
+        let pool = self.pool.clone();
+        spawn_blocking(move || {
+            let connection = pool.get()?;
+            let row = connection
+                .query_row(
+                    "SELECT volume, blinding, commitment, position, recovery_status
+                     FROM volume_accumulators
+                     WHERE subject = ?1 AND day_start = ?2",
+                    (subject.to_bytes().to_vec(), day_start as i64),
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<Vec<u8>>>(0)?,
+                            row.get::<_, Option<Vec<u8>>>(1)?,
+                            row.get::<_, Option<Vec<u8>>>(2)?,
+                            row.get::<_, Option<i64>>(3)?,
+                            row.get::<_, i64>(4)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((volume, blinding, commitment, position, recovery_status)) = row else {
+                return Ok(VolumeAccumulatorRecovery::Absent);
+            };
+            if recovery_status != 0 {
+                return Ok(VolumeAccumulatorRecovery::Incomplete);
+            }
+            let volume: [u8; 16] = volume
+                .ok_or_else(|| anyhow!("complete volume accumulator is missing its amount"))?
+                .try_into()
+                .map_err(|_| anyhow!("stored volume accumulator amount is malformed"))?;
+            let blinding = Fq::from_bytes_checked(
+                &blinding
+                    .ok_or_else(|| anyhow!("complete volume accumulator is missing its blinding"))?
+                    .try_into()
+                    .map_err(|_| anyhow!("stored volume accumulator blinding is malformed"))?,
+            )
+            .map_err(|_| anyhow!("stored volume accumulator blinding is noncanonical"))?;
+            let commitment = commitment
+                .ok_or_else(|| anyhow!("complete volume accumulator is missing its commitment"))?;
+            let commitment = StateCommitment::try_from(commitment.as_slice())?;
+            let position: u64 = position
+                .ok_or_else(|| anyhow!("complete volume accumulator is missing its position"))?
+                .try_into()
+                .map_err(|_| anyhow!("stored volume accumulator position is negative"))?;
+            Ok(VolumeAccumulatorRecovery::Complete(
+                ConfirmedVolumeAccumulator {
+                    state: VolumeAccumulatorState {
+                        subject,
+                        day_start,
+                        undisclosed_volume: u128::from_le_bytes(volume),
+                        blinding,
+                    },
+                    commitment,
+                    position: tct::Position::from(position),
+                },
+            ))
+        })
+        .await?
+    }
+
+    pub async fn reserve_volume_accumulators(
+        &self,
+        reservations: Vec<VolumeAccumulatorReservation>,
+        tx_id: [u8; 32],
+        chain_time: u64,
+        nk: NullifierKey,
+    ) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        spawn_blocking(move || {
+            let mut connection = pool.get()?;
+            let transaction = connection.transaction()?;
+            transaction.execute(
+                "DELETE FROM volume_accumulator_reservations WHERE expires_at < ?1",
+                [chain_time as i64],
+            )?;
+
+            let mut subjects = BTreeSet::new();
+            for reservation in &reservations {
+                let state = &reservation.state;
+                let payload = &reservation.payload;
+                anyhow::ensure!(
+                    subjects.insert((state.subject.to_bytes(), state.day_start)),
+                    "transaction contains more than one real accumulator transition for the same subject and day"
+                );
+                anyhow::ensure!(
+                    payload.day_start == state.day_start && payload.commitment == state.commitment(),
+                    "volume accumulator reservation does not match its decrypted successor"
+                );
+
+                let prior: Option<(Vec<u8>, i64, i64)> = transaction
+                    .query_row(
+                        "SELECT commitment, position, recovery_status
+                         FROM volume_accumulators WHERE subject = ?1 AND day_start = ?2",
+                        (state.subject.to_bytes().to_vec(), state.day_start as i64),
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .optional()?;
+                let expected = match prior {
+                    Some((commitment, position, recovery_status)) => {
+                        anyhow::ensure!(
+                            recovery_status == 0,
+                            "daily volume accumulator head is incomplete; rebuild with issuer disclosure"
+                        );
+                        let commitment = StateCommitment::try_from(commitment.as_slice())?;
+                        let position: u64 = position
+                            .try_into()
+                            .context("stored volume accumulator position is negative")?;
+                        Nullifier::derive(&nk, tct::Position::from(position), &commitment)
+                    }
+                    None => state.origin_nullifier(&nk),
+                };
+                anyhow::ensure!(
+                    payload.nullifier == expected,
+                    "daily volume accumulator head changed after planning; rebuild the transaction"
+                );
+
+                let busy: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM volume_accumulator_reservations
+                     WHERE subject = ?1 AND day_start = ?2)",
+                    (state.subject.to_bytes().to_vec(), state.day_start as i64),
+                    |row| row.get(0),
+                )?;
+                anyhow::ensure!(
+                    !busy,
+                    "daily volume accumulator head is reserved by an in-flight transaction; request issuer disclosure or wait"
+                );
+            }
+
+            for reservation in reservations {
+                transaction.execute(
+                    "INSERT INTO volume_accumulator_reservations
+                     (subject, day_start, nullifier, tx_id, expires_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    (
+                        reservation.state.subject.to_bytes().to_vec(),
+                        reservation.state.day_start as i64,
+                        reservation.payload.nullifier.to_bytes().to_vec(),
+                        tx_id.to_vec(),
+                        reservation.expires_at as i64,
+                    ),
+                )?;
+            }
+            transaction.commit()?;
+            anyhow::Ok(())
+        })
+        .await?
+    }
+
+    pub async fn release_volume_reservation(
+        &self,
+        scoped: shieldd_sdk_shielded_pool::VolumeNullifier,
+    ) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        spawn_blocking(move || {
+            pool.get()?.execute(
+                "DELETE FROM volume_accumulator_reservations
+                 WHERE day_start = ?1 AND nullifier = ?2",
+                (
+                    scoped.day_start as i64,
+                    scoped.nullifier.to_bytes().to_vec(),
+                ),
+            )?;
+            anyhow::Ok(())
+        })
+        .await?
+    }
+
     fn put_historical_proof_cache_inner(
         connection: &rusqlite::Connection,
         cache: &HistoricalProofCache,
@@ -805,6 +1328,7 @@ impl Storage {
                         notes.amount,
                         notes.asset_id,
                         notes.rseed,
+                        notes.recovery_commitment,
                         spendable_notes.address_index,
                         spendable_notes.source,
                         spendable_notes.height_spent,
@@ -932,7 +1456,7 @@ impl Storage {
     }
 
     /// Persist an issued address before it is returned to a caller.
-    pub async fn record_issued_address(&self, issued: IssuedAddress) -> anyhow::Result<()> {
+    pub async fn record_issued_address(&self, issued: IssuedAddress) -> anyhow::Result<Address> {
         let pool = self.pool.clone();
         spawn_blocking(move || {
             let address_index = issued.address_index.to_bytes();
@@ -944,45 +1468,49 @@ impl Storage {
                 .map(i64::try_from)
                 .transpose()
                 .context("issued-address retirement height exceeds SQLite i64")?;
-            let (purpose_kind, regulated_asset_id): (i64, Option<Vec<u8>>) = match issued.purpose {
-                AddressPurpose::General => (0, None),
-                AddressPurpose::Regulated { asset_id } => (1, Some(asset_id.to_bytes().to_vec())),
-            };
+            let mut conn = pool.get()?;
+            let tx = conn.transaction()?;
+            if let AddressPurpose::Regulated { asset_id } = issued.purpose {
+                let assigned: Option<Vec<u8>> = tx
+                    .query_row(
+                        "SELECT address FROM regulated_address_assignments WHERE asset_id = ?1",
+                        [asset_id.to_bytes().to_vec()],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if let Some(assigned) = assigned {
+                    let assigned = Address::try_from(assigned.as_slice())?;
+                    tx.commit()?;
+                    return Ok(assigned);
+                }
+            }
 
-            let conn = pool.get()?;
-            conn.execute(
+            tx.execute(
                 "INSERT INTO issued_addresses
-                 (address_index, address, purpose_kind, regulated_asset_id, birth_height, retired_height)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 (address_index, address, birth_height, retired_height)
+                 VALUES (?1, ?2, ?3, ?4)
                  ON CONFLICT(address) DO NOTHING",
-                rusqlite::params![
-                    &address_index[..],
-                    address,
-                    purpose_kind,
-                    regulated_asset_id,
-                    birth_height,
-                    retired_height,
-                ],
+                rusqlite::params![&address_index[..], &address, birth_height, retired_height,],
             )?;
 
-            let existing: (Vec<u8>, Vec<u8>, i64, Option<Vec<u8>>, Option<i64>) = conn.query_row(
-                "SELECT address_index, address, purpose_kind, regulated_asset_id, retired_height
+            let existing: (Vec<u8>, Vec<u8>, Option<i64>) = tx.query_row(
+                "SELECT address_index, address, retired_height
                  FROM issued_addresses WHERE address = ?1",
                 [&address[..]],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
             anyhow::ensure!(
-                existing
-                    == (
-                        address_index.to_vec(),
-                        address,
-                        purpose_kind,
-                        regulated_asset_id,
-                        retired_height,
-                    ),
-                "address was already issued with different identity, purpose, or retirement metadata"
+                existing == (address_index.to_vec(), address.clone(), retired_height),
+                "address was already issued with different identity or retirement metadata"
             );
-            Ok(())
+            if let AddressPurpose::Regulated { asset_id } = issued.purpose {
+                tx.execute(
+                    "INSERT INTO regulated_address_assignments (asset_id, address) VALUES (?1, ?2)",
+                    (asset_id.to_bytes().to_vec(), &address),
+                )?;
+            }
+            tx.commit()?;
+            Ok(issued.address)
         })
         .await?
     }
@@ -993,31 +1521,30 @@ impl Storage {
         spawn_blocking(move || {
             let conn = pool.get()?;
             let mut statement = conn.prepare_cached(
-                "SELECT address_index, address, purpose_kind, regulated_asset_id,
-                        birth_height, retired_height
-                 FROM issued_addresses ORDER BY birth_height, address_index",
+                "SELECT i.address_index, i.address, r.asset_id, i.birth_height, i.retired_height
+                 FROM issued_addresses i
+                 LEFT JOIN regulated_address_assignments r ON r.address = i.address
+                 ORDER BY i.birth_height, i.address_index, r.asset_id",
             )?;
             let rows = statement
                 .query_map([], |row| {
                     Ok((
                         row.get::<_, Vec<u8>>(0)?,
                         row.get::<_, Vec<u8>>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, Option<Vec<u8>>>(3)?,
-                        row.get::<_, i64>(4)?,
-                        row.get::<_, Option<i64>>(5)?,
+                        row.get::<_, Option<Vec<u8>>>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, Option<i64>>(4)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
 
             rows.into_iter()
-                .map(|(index, address, kind, asset_id, birth, retired)| {
-                    let purpose = match (kind, asset_id) {
-                        (0, None) => AddressPurpose::General,
-                        (1, Some(asset_id)) => AddressPurpose::Regulated {
+                .map(|(index, address, asset_id, birth, retired)| {
+                    let purpose = match asset_id {
+                        None => AddressPurpose::General,
+                        Some(asset_id) => AddressPurpose::Regulated {
                             asset_id: asset::Id::try_from(asset_id.as_slice())?,
                         },
-                        _ => anyhow::bail!("invalid issued-address purpose encoding"),
                     };
                     Ok(IssuedAddress {
                         address_index: AddressIndex::try_from(index.as_slice())?,
@@ -1045,14 +1572,21 @@ impl Storage {
         spawn_blocking(move || {
             let changed = pool.get()?.execute(
                 "UPDATE issued_addresses SET retired_height = ?2
-                 WHERE address_index = ?1 AND retired_height IS NULL",
+                 WHERE address_index = ?1 AND retired_height IS NULL
+                   AND NOT EXISTS (
+                     SELECT 1 FROM regulated_address_assignments r
+                     WHERE r.address = issued_addresses.address
+                   )",
                 rusqlite::params![
                     &address_index.to_bytes()[..],
                     i64::try_from(retired_height)
                         .context("retirement height exceeds SQLite i64")?,
                 ],
             )?;
-            anyhow::ensure!(changed == 1, "issued address is unknown or already retired");
+            anyhow::ensure!(
+                changed == 1,
+                "issued address is unknown, already retired, or permanently assigned to a regulated asset"
+            );
             Ok(())
         })
         .await?
@@ -1260,6 +1794,7 @@ impl Storage {
                         notes.amount,
                         notes.asset_id,
                         notes.rseed,
+                        notes.recovery_commitment,
                         spendable_notes.address_index,
                         spendable_notes.source,
                         spendable_notes.height_spent,
@@ -1425,6 +1960,7 @@ impl Storage {
                         notes.amount,
                         notes.asset_id,
                         notes.rseed,
+                        notes.recovery_commitment,
                         spendable_notes.address_index,
                         spendable_notes.source,
                         spendable_notes.height_spent,
@@ -1531,17 +2067,26 @@ impl Storage {
         let amount = u128::from(note.amount()).to_be_bytes().to_vec();
         let asset_id = note.asset_id().to_bytes().to_vec();
         let rseed = note.rseed().to_bytes().to_vec();
+        let recovery_commitment: [u8; 32] = note.recovery_commitment().into();
 
         dbtx.execute(
-            "INSERT INTO notes (note_commitment, address, amount, asset_id, rseed)
-                VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO notes (note_commitment, address, amount, asset_id, rseed, recovery_commitment)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                 ON CONFLICT (note_commitment)
                 DO UPDATE SET
                 address = excluded.address,
                 amount = excluded.amount,
                 asset_id = excluded.asset_id,
-                rseed = excluded.rseed",
-            (note_commitment, address, amount, asset_id, rseed),
+                rseed = excluded.rseed,
+                recovery_commitment = excluded.recovery_commitment",
+            (
+                note_commitment,
+                address,
+                amount,
+                asset_id,
+                rseed,
+                recovery_commitment,
+            ),
         )?;
 
         Ok(())
@@ -1584,7 +2129,8 @@ impl Storage {
                         notes.address,
                         notes.amount,
                         notes.asset_id,
-                        notes.rseed
+                        notes.rseed,
+                        notes.recovery_commitment
                     FROM notes
                     LEFT OUTER JOIN spendable_notes ON notes.note_commitment = spendable_notes.note_commitment
                     WHERE (spendable_notes.note_commitment IS NULL) AND (notes.note_commitment IN ({}))",
@@ -1600,6 +2146,9 @@ impl Storage {
                     let amount_u128: u128 = u128::from_be_bytes(amount);
                     let asset_id = asset::Id(Fq::from_bytes_checked(&row.get::<_, [u8; 32]>("asset_id")?).expect("asset id malformed"));
                     let rseed = Rseed(row.get::<_, [u8; 32]>("rseed")?);
+                    let recovery_commitment = row
+                        .get::<_, [u8; 32]>("recovery_commitment")?
+                        .try_into()?;
                     let note = Note::from_parts(
                         address,
                         Value {
@@ -1607,6 +2156,7 @@ impl Storage {
                             asset_id,
                         },
                         rseed,
+                        recovery_commitment,
                     )?;
                     anyhow::Ok((note.commit(), note))
                 })?
@@ -1792,6 +2342,79 @@ impl Storage {
                 };
             }
 
+            for recovered in &filtered_block.volume_accumulators {
+                let subject = recovered.state.subject.to_bytes().to_vec();
+                let day_start = recovered.state.day_start as i64;
+                let volume = recovered.state.undisclosed_volume.to_le_bytes().to_vec();
+                let blinding = recovered.state.blinding.to_bytes().to_vec();
+                let commitment = recovered.payload.commitment.0.to_bytes().to_vec();
+                let position = u64::from(recovered.position) as i64;
+                let prior: Option<(Vec<u8>, i64, i64)> = dbtx
+                    .query_row(
+                        "SELECT commitment, position, recovery_status
+                         FROM volume_accumulators
+                         WHERE subject = ?1 AND day_start = ?2",
+                        (&subject, day_start),
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .optional()?;
+                let (expected_nullifier, prior_is_complete) = match &prior {
+                    Some((commitment, position, recovery_status)) => {
+                        let commitment = StateCommitment::try_from(commitment.as_slice())?;
+                        let position: u64 = (*position)
+                            .try_into()
+                            .context("stored volume accumulator position is negative")?;
+                        (
+                            Nullifier::derive(
+                                fvk.nullifier_key(),
+                                tct::Position::from(position),
+                                &commitment,
+                            ),
+                            *recovery_status == 0,
+                        )
+                    }
+                    None => (
+                        recovered.state.origin_nullifier(fvk.nullifier_key()),
+                        true,
+                    ),
+                };
+                let recovery_status = i64::from(
+                    !prior_is_complete || expected_nullifier != recovered.payload.nullifier,
+                );
+                if let Some((prior_commitment, _, _)) = &prior {
+                    let prior_commitment = StateCommitment::try_from(prior_commitment.as_slice())?;
+                    anyhow::ensure!(
+                        new_sct.forget(prior_commitment),
+                        "stored volume accumulator commitment is not retained in the wallet SCT"
+                    );
+                }
+                dbtx.execute(
+                    "INSERT INTO volume_accumulators
+                     (subject, day_start, volume, blinding, commitment, position, recovery_status)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                     ON CONFLICT(subject, day_start) DO UPDATE SET
+                       volume = excluded.volume,
+                       blinding = excluded.blinding,
+                       commitment = excluded.commitment,
+                       position = excluded.position,
+                       recovery_status = excluded.recovery_status",
+                    (
+                        &subject,
+                        day_start,
+                        &volume,
+                        &blinding,
+                        &commitment,
+                        position,
+                        recovery_status,
+                    ),
+                )?;
+                dbtx.execute(
+                    "DELETE FROM volume_accumulator_reservations
+                     WHERE subject = ?1 AND day_start = ?2 AND nullifier = ?3",
+                    (&subject, day_start, recovered.payload.nullifier.to_bytes().to_vec()),
+                )?;
+            }
+
             // Update SCT table with current SCT state
             new_sct.to_writer(&mut TreeStore(&mut dbtx))?;
 
@@ -1916,6 +2539,7 @@ impl Storage {
             notes.amount,
             notes.asset_id,
             notes.rseed,
+            notes.recovery_commitment,
             spendable_notes.address_index,
             spendable_notes.source,
             spendable_notes.height_spent,
@@ -2071,8 +2695,12 @@ impl Storage {
                 &update.leaf.address.to_vec(),
                 &update.leaf.asset_id.to_bytes(),
                 update.position,
-                &update.leaf.d.to_bytes(),
+                &update.leaf.capk.vartime_compress().0,
+                &update.leaf.rnk_dh_pk.vartime_compress().0,
+                &update.leaf.rnk_commitment.to_bytes(),
                 update.leaf.status,
+                update.leaf.freeze_generation,
+                update.leaf.frozen_since_height,
                 update.commitment,
             )?;
         }
@@ -2157,7 +2785,7 @@ impl Storage {
         .await?
     }
 
-    /// Get an asset policy (threshold and DK_pub) if one exists.
+    /// Get an asset policy (daily_volume_limit and DK_pub) if one exists.
     pub async fn get_asset_policy(
         &self,
         asset_id: &asset::Id,

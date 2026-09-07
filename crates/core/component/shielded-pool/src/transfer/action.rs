@@ -12,7 +12,7 @@ use shieldd_sdk_txhash::{EffectHash, EffectingData};
 use super::generated::{transfer_auth_sig_count, transfer_input_count, transfer_output_count};
 use crate::{
     backref::ENCRYPTED_BACKREF_LEN, discovery::TransferRouting, transfer::TransferProof,
-    EncryptedBackref, NotePayload,
+    EncryptedBackref, NotePayload, TransferProofContext, VolumeAccumulatorPayload,
 };
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -47,6 +47,8 @@ pub struct TransferBody {
     pub asset_anchor: shieldd_sdk_tct::StateCommitment,
     pub routing: TransferRouting,
     pub routing_parameter_set_id: Fq,
+    pub volume_accumulator: VolumeAccumulatorPayload,
+    pub proof_context: TransferProofContext,
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +72,7 @@ impl TransferBody {
             transfer_output_count(),
             self.outputs.len()
         );
+        self.volume_accumulator.validate(self.proof_context)?;
         Ok(())
     }
 }
@@ -245,6 +248,8 @@ impl From<TransferBody> for pb::TransferBody {
             asset_anchor: Some(msg.asset_anchor.into()),
             routing: Some(msg.routing.into()),
             routing_parameter_set_id: msg.routing_parameter_set_id.to_bytes().to_vec(),
+            volume_accumulator: Some(msg.volume_accumulator.into()),
+            proof_context: msg.proof_context.into(),
         }
     }
 }
@@ -297,6 +302,12 @@ impl TryFrom<pb::TransferBody> for TransferBody {
                     .map_err(|_| anyhow::anyhow!("routing parameter set id must be 32 bytes"))?,
             )
             .map_err(|_| anyhow::anyhow!("routing parameter set id must be canonical"))?,
+            volume_accumulator: proto
+                .volume_accumulator
+                .ok_or_else(|| anyhow::anyhow!("missing volume accumulator payload"))?
+                .try_into()
+                .context("malformed volume accumulator payload")?,
+            proof_context: proto.proof_context.try_into()?,
         };
         body.validate_shape()?;
         Ok(body)

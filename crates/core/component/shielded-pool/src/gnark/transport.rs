@@ -146,7 +146,15 @@ impl GnarkFamilyConfig {
         let artifact_dir =
             artifact_dir.ok_or_else(|| anyhow!("{} is not set", self.env_artifact_dir))?;
         let executable = match (library, daemon) {
-            (Some(path), None) => TransportExecutable::Library(path),
+            (Some(path), None) => {
+                anyhow::ensure!(
+                    !self.init_symbol.is_empty(),
+                    "gnark {} supports only daemon transport; set {}",
+                    self.family,
+                    self.env_daemon
+                );
+                TransportExecutable::Library(path)
+            }
             (None, Some(path)) => TransportExecutable::Daemon(path),
             (Some(_), Some(_)) => bail!(
                 "{} and {} are mutually exclusive",

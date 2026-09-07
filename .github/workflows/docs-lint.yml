@@ -21,6 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Check compliance documentation links and terminology
+        run: python3 scripts/check_compliance_docs.py
+
       - uses: ./.github/actions/setup-nix-rust
 
       - name: Test rustdoc package selection

@@ -161,25 +161,86 @@ func diversifiedTransmissionKeyAfterIvkNonzero(
 	ivkReduced frontend.Variable,
 	quotientA frontend.Variable,
 ) (gnarkte.Point, error) {
+	point, _, err := diversifiedTransmissionKeyAndBitsAfterIvkNonzero(
+		api, nk, ak, diversifiedGenerator, ivkReduced, quotientA,
+	)
+	return point, err
+}
+
+func diversifiedTransmissionKeyAndBitsAfterIvkNonzero(
+	api frontend.API,
+	nk frontend.Variable,
+	ak gnarkte.Point,
+	diversifiedGenerator gnarkte.Point,
+	ivkReduced frontend.Variable,
+	quotientA frontend.Variable,
+) (gnarkte.Point, []frontend.Variable, error) {
 	vectors, err := LoadPrototypeVectors()
 	if err != nil {
-		return gnarkte.Point{}, err
+		return gnarkte.Point{}, nil, err
 	}
 	curve, err := gnarkte.NewEdCurve(api, curves.BLS12_377)
 	if err != nil {
-		return gnarkte.Point{}, err
+		return gnarkte.Point{}, nil, err
 	}
 	_, ivkBits, err := incomingViewingKeyWithBits(api, nk, ak, ivkReduced, quotientA)
 	if err != nil {
-		return gnarkte.Point{}, err
+		return gnarkte.Point{}, nil, err
 	}
 	order := MustBigInt(vectors.Decaf377CompanionCurve.Order)
-	return ScalarMulWindow2LEBits(
+	point := ScalarMulWindow2LEBits(
 		api,
 		curve,
 		diversifiedGenerator,
 		ivkBits[:order.BitLen()],
-	), nil
+	)
+	return point, ivkBits[:order.BitLen()], nil
+}
+
+// RegulatedNullifierKey derives the address-scoped key shared by the wallet
+// IVK and Orbis's diversified ring public key.
+func RegulatedNullifierKey(
+	api frontend.API,
+	ivkBits []frontend.Variable,
+	rnkDhPk gnarkte.Point,
+	diversifiedGeneratorFq frontend.Variable,
+	transmissionKeyFq frontend.Variable,
+	assetID frontend.Variable,
+	ringPk gnarkte.Point,
+) (frontend.Variable, error) {
+	vectors, err := LoadPrototypeVectors()
+	if err != nil {
+		return nil, err
+	}
+	curve, err := gnarkte.NewEdCurve(api, curves.BLS12_377)
+	if err != nil {
+		return nil, err
+	}
+	curve.AssertIsOnCurve(rnkDhPk)
+	curve.AssertIsOnCurve(ringPk)
+	AssertDecafNonIdentity(api, rnkDhPk)
+	AssertDecafNonIdentity(api, ringPk)
+	shared := ScalarMulWindow2LEBits(api, curve, rnkDhPk, ivkBits)
+	AssertDecafNonIdentity(api, shared)
+	sharedFq, err := decafgnark.CompressToField(api, shared)
+	if err != nil {
+		return nil, err
+	}
+	ringPkFq, err := decafgnark.CompressToField(api, ringPk)
+	if err != nil {
+		return nil, err
+	}
+	return Poseidon377Hash5(
+		api,
+		MustBigInt(vectors.Poseidon377.ComplianceNullifierDerivationDomain),
+		[5]frontend.Variable{
+			sharedFq,
+			diversifiedGeneratorFq,
+			transmissionKeyFq,
+			assetID,
+			ringPkFq,
+		},
+	)
 }
 
 func RandomizedVerificationKey(

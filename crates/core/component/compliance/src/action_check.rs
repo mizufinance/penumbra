@@ -64,7 +64,7 @@ mod tests {
         state
             .test_only_register_asset(
                 asset_id,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -94,7 +94,7 @@ mod tests {
         state
             .test_only_register_asset(
                 regulated,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,

@@ -59,17 +59,17 @@ func indexedLeafInputsFromIndexedLeafBinary(
 	ringPK PointAffineBinary,
 ) compliance.IndexedLeafInputs {
 	return compliance.IndexedLeafInputs{
-		Value:           primitives.LittleEndianBytesToBigInt(leaf.Value[:]).String(),
-		NextIndex:       leaf.NextIndex,
-		NextValue:       primitives.LittleEndianBytesToBigInt(leaf.NextValue[:]).String(),
-		DKPub:           circuits.PointAffineToNative(pointAffineBinaryToStrings(dkPub)),
-		Threshold:       primitives.LittleEndianBytesToBigInt(leaf.Threshold[:]).String(),
-		RoutePolicyHash: primitives.LittleEndianBytesToBigInt(leaf.RoutePolicyHash[:]).String(),
-		RingPK:          circuits.PointAffineToNative(pointAffineBinaryToStrings(ringPK)),
-		RingIDHash:      primitives.LittleEndianBytesToBigInt(leaf.RingIDHash[:]).String(),
-		PolicyIDHash:    primitives.LittleEndianBytesToBigInt(leaf.PolicyIDHash[:]).String(),
-		PermissionHash:  primitives.LittleEndianBytesToBigInt(leaf.PermissionHash[:]).String(),
-		ResourceHash:    primitives.LittleEndianBytesToBigInt(leaf.ResourceHash[:]).String(),
+		Value:            primitives.LittleEndianBytesToBigInt(leaf.Value[:]).String(),
+		NextIndex:        leaf.NextIndex,
+		NextValue:        primitives.LittleEndianBytesToBigInt(leaf.NextValue[:]).String(),
+		DKPub:            circuits.PointAffineToNative(pointAffineBinaryToStrings(dkPub)),
+		DailyVolumeLimit: primitives.LittleEndianBytesToBigInt(leaf.DailyVolumeLimit[:]).String(),
+		RoutePolicyHash:  primitives.LittleEndianBytesToBigInt(leaf.RoutePolicyHash[:]).String(),
+		RingPK:           circuits.PointAffineToNative(pointAffineBinaryToStrings(ringPK)),
+		RingIDHash:       primitives.LittleEndianBytesToBigInt(leaf.RingIDHash[:]).String(),
+		PolicyIDHash:     primitives.LittleEndianBytesToBigInt(leaf.PolicyIDHash[:]).String(),
+		PermissionHash:   primitives.LittleEndianBytesToBigInt(leaf.PermissionHash[:]).String(),
+		ResourceHash:     primitives.LittleEndianBytesToBigInt(leaf.ResourceHash[:]).String(),
 	}
 }
 
@@ -86,8 +86,8 @@ func indexedLeafFieldsFromIndexedLeafBinary(
 			X: primitives.LittleEndianBytesToBigInt(dkPub.X[:]).String(),
 			Y: primitives.LittleEndianBytesToBigInt(dkPub.Y[:]).String(),
 		},
-		Threshold:       primitives.LittleEndianBytesToBigInt(leaf.Threshold[:]).String(),
-		RoutePolicyHash: primitives.LittleEndianBytesToBigInt(leaf.RoutePolicyHash[:]).String(),
+		DailyVolumeLimit: primitives.LittleEndianBytesToBigInt(leaf.DailyVolumeLimit[:]).String(),
+		RoutePolicyHash:  primitives.LittleEndianBytesToBigInt(leaf.RoutePolicyHash[:]).String(),
 		RingPK: circuits.Point2D{
 			X: primitives.LittleEndianBytesToBigInt(ringPK.X[:]).String(),
 			Y: primitives.LittleEndianBytesToBigInt(ringPK.Y[:]).String(),
@@ -155,23 +155,23 @@ func noteFields(
 }
 
 func indexedLeafFields(
-	value, nextValue, threshold, routePolicyHash frontend.Variable,
+	value, nextValue, daily_volume_limit, routePolicyHash frontend.Variable,
 	nextIndex frontend.Variable,
 	dkPubX, dkPubY frontend.Variable,
 	ringPKX, ringPKY frontend.Variable,
 	ringIDHash, policyIDHash, permissionHash, resourceHash frontend.Variable,
 ) circuits.IndexedLeafFields {
 	return circuits.IndexedLeafFields{
-		Value:           value,
-		NextIndex:       nextIndex,
-		NextValue:       nextValue,
-		DKPub:           circuits.Point2D{X: dkPubX, Y: dkPubY},
-		Threshold:       threshold,
-		RoutePolicyHash: routePolicyHash,
-		RingPK:          circuits.Point2D{X: ringPKX, Y: ringPKY},
-		RingIDHash:      ringIDHash,
-		PolicyIDHash:    policyIDHash,
-		PermissionHash:  permissionHash,
-		ResourceHash:    resourceHash,
+		Value:            value,
+		NextIndex:        nextIndex,
+		NextValue:        nextValue,
+		DKPub:            circuits.Point2D{X: dkPubX, Y: dkPubY},
+		DailyVolumeLimit: daily_volume_limit,
+		RoutePolicyHash:  routePolicyHash,
+		RingPK:           circuits.Point2D{X: ringPKX, Y: ringPKY},
+		RingIDHash:       ringIDHash,
+		PolicyIDHash:     policyIDHash,
+		PermissionHash:   permissionHash,
+		ResourceHash:     resourceHash,
 	}
 }

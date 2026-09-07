@@ -257,7 +257,7 @@ mod tests {
         Address,
     };
     use shieldd_sdk_shielded_pool::{
-        Note, Rseed, ShieldedInputPlan, ShieldedOutputPlan, TransferPlan,
+        Note, RecoveryCommitment, Rseed, ShieldedInputPlan, ShieldedOutputPlan, TransferPlan,
     };
     use shieldd_sdk_transaction::TransactionPlan;
 
@@ -288,6 +288,7 @@ mod tests {
                 asset_id: *BASE_ASSET_ID,
             },
             Rseed::generate(&mut rng),
+            RecoveryCommitment::unavailable(),
         )
         .expect("valid test note");
         let spend = ShieldedInputPlan::new(&mut rng, note, 0u64.into());

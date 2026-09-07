@@ -698,6 +698,9 @@ impl Transaction {
                     .outputs
                     .iter()
                     .map(|output| Some(output.note_payload.note_commitment))
+                    .chain(std::iter::once(Some(
+                        transfer.body.volume_accumulator.commitment,
+                    )))
                     .collect::<Vec<_>>(),
                 Action::NoteReshape(note_reshape) => note_reshape
                     .body
@@ -864,13 +867,36 @@ fn payload_key_from_view(action_view: &ActionView) -> Option<&PayloadKey> {
 mod tests {
     use decaf377_rdsa::{SigningKey, SpendAuth, VerificationKey};
     use shieldd_sdk_asset::{asset, Balance, Value, BASE_ASSET_DENOM};
+    use shieldd_sdk_compliance::WithdrawalComplianceCiphertext;
     use shieldd_sdk_keys::symmetric::{OvkWrappedKey, WrappedMemoKey};
     use shieldd_sdk_keys::Address;
     use shieldd_sdk_proto::DomainType as _;
     use shieldd_sdk_sct::Nullifier;
-    use shieldd_sdk_shielded_pool::backref::ENCRYPTED_BACKREF_LEN;
+    use shieldd_sdk_shielded_pool::{
+        backref::ENCRYPTED_BACKREF_LEN, note::NOTE_CIPHERTEXT_BYTES, RecoveryCapsule,
+    };
 
     use super::{Action, Transaction, TransactionBody};
+
+    fn recovery_capsule(seed: u64) -> RecoveryCapsule {
+        RecoveryCapsule {
+            epk: decaf377::Element::GENERATOR * decaf377::Fr::from(seed),
+            c2: decaf377::Fq::from(seed + 1),
+            salt: decaf377::Fq::from(seed + 2),
+            key_confirmation: decaf377::Fq::from(seed + 3),
+            encrypted_amount: decaf377::Fq::from(seed + 4),
+            encrypted_note_blinding: decaf377::Fq::from(seed + 5),
+        }
+    }
+
+    fn withdrawal_compliance_ciphertext(seed: u64) -> WithdrawalComplianceCiphertext {
+        WithdrawalComplianceCiphertext {
+            epk: decaf377::Element::GENERATOR * decaf377::Fr::from(seed),
+            c2: decaf377::Fq::from(seed + 1),
+            key_confirmation: decaf377::Fq::from(seed + 2),
+            encrypted_sender_address: [0u8; 96],
+        }
+    }
 
     #[test]
     fn canonical_decode_accepts_exact_encoding_and_rejects_unknown_fields() {
@@ -940,7 +966,10 @@ mod tests {
                                 5u64,
                             )),
                             ephemeral_key: decaf377_ka::Public([6u8; 32]),
-                            encrypted_note: shieldd_sdk_shielded_pool::NoteCiphertext([7u8; 144]),
+                            encrypted_note: shieldd_sdk_shielded_pool::NoteCiphertext(
+                                [7u8; NOTE_CIPHERTEXT_BYTES],
+                            ),
+                            recovery_capsule: Some(recovery_capsule(7)),
                         },
                         wrapped_memo_key: WrappedMemoKey([8u8; 48]),
                         ovk_wrapped_key: OvkWrappedKey([9u8; 48]),
@@ -953,7 +982,10 @@ mod tests {
                                 50u64,
                             )),
                             ephemeral_key: decaf377_ka::Public([60u8; 32]),
-                            encrypted_note: shieldd_sdk_shielded_pool::NoteCiphertext([70u8; 144]),
+                            encrypted_note: shieldd_sdk_shielded_pool::NoteCiphertext(
+                                [70u8; NOTE_CIPHERTEXT_BYTES],
+                            ),
+                            recovery_capsule: Some(recovery_capsule(70)),
                         },
                         wrapped_memo_key: WrappedMemoKey([80u8; 48]),
                         ovk_wrapped_key: OvkWrappedKey([90u8; 48]),
@@ -966,6 +998,9 @@ mod tests {
                 asset_anchor: shieldd_sdk_tct::StateCommitment(decaf377::Fq::from(12u64)),
                 routing: Default::default(),
                 routing_parameter_set_id: decaf377::Fq::from(0u64),
+                volume_accumulator:
+                    shieldd_sdk_shielded_pool::VolumeAccumulatorPayload::canonical_fee_funding(),
+                proof_context: shieldd_sdk_shielded_pool::TransferProofContext::Ordinary,
             },
             auth_sigs: vec![[17u8; 64].into(), [0u8; 64].into()],
             proof: shieldd_sdk_shielded_pool::TransferProof::default(),
@@ -987,7 +1022,7 @@ mod tests {
             tx.spent_nullifiers().count(),
             "zero-allocation count must match the canonical iterator"
         );
-        assert_eq!(tx.state_commitments().collect::<Vec<_>>().len(), 2);
+        assert_eq!(tx.state_commitments().collect::<Vec<_>>().len(), 3);
 
         assert!(
             tx.transaction_body.validate_nullifier_history().is_err(),
@@ -1037,7 +1072,7 @@ mod tests {
         );
         assert_eq!(
             fee_funded_tx.state_commitments().collect::<Vec<_>>().len(),
-            4
+            5
         );
     }
 
@@ -1072,7 +1107,10 @@ mod tests {
                             300u64,
                         )),
                         ephemeral_key: decaf377_ka::Public([3u8; 32]),
-                        encrypted_note: shieldd_sdk_shielded_pool::NoteCiphertext([4u8; 144]),
+                        encrypted_note: shieldd_sdk_shielded_pool::NoteCiphertext(
+                            [4u8; NOTE_CIPHERTEXT_BYTES],
+                        ),
+                        recovery_capsule: Some(recovery_capsule(4)),
                     },
                     wrapped_memo_key: WrappedMemoKey([5u8; 48]),
                     ovk_wrapped_key: OvkWrappedKey([6u8; 48]),
@@ -1144,7 +1182,10 @@ mod tests {
                                     ),
                                     ephemeral_key: decaf377_ka::Public([7u8; 32]),
                                     encrypted_note:
-                                        shieldd_sdk_shielded_pool::NoteCiphertext([8u8; 144]),
+                                        shieldd_sdk_shielded_pool::NoteCiphertext(
+                                            [8u8; NOTE_CIPHERTEXT_BYTES],
+                                        ),
+                                    recovery_capsule: Some(recovery_capsule(8)),
                                 },
                                 wrapped_memo_key: WrappedMemoKey([9u8; 48]),
                                 ovk_wrapped_key: OvkWrappedKey([10u8; 48]),
@@ -1181,8 +1222,9 @@ mod tests {
                                         ),
                                         ephemeral_key: decaf377_ka::Public([17u8; 32]),
                                         encrypted_note: shieldd_sdk_shielded_pool::NoteCiphertext(
-                                            [18u8; 144],
+                                            [18u8; NOTE_CIPHERTEXT_BYTES],
                                         ),
+                                        recovery_capsule: Some(recovery_capsule(18)),
                                     },
                                     wrapped_memo_key: WrappedMemoKey([19u8; 48]),
                                     ovk_wrapped_key: OvkWrappedKey([20u8; 48]),
@@ -1255,8 +1297,9 @@ mod tests {
                                             ephemeral_key: decaf377_ka::Public([28u8; 32]),
                                             encrypted_note:
                                                 shieldd_sdk_shielded_pool::NoteCiphertext(
-                                                    [29u8; 144],
+                                                    [29u8; NOTE_CIPHERTEXT_BYTES],
                                                 ),
+                                            recovery_capsule: Some(recovery_capsule(29)),
                                         },
                                         wrapped_memo_key: WrappedMemoKey([30u8; 48]),
                                         ovk_wrapped_key: OvkWrappedKey([31u8; 48]),
@@ -1268,6 +1311,10 @@ mod tests {
                                 asset_anchor: shieldd_sdk_tct::StateCommitment(decaf377::Fq::from(33u64)),
                                 routing_tag: Default::default(),
                                 routing_parameter_set_id: decaf377::Fq::from(0u64),
+                                withdrawal_compliance_ciphertext:
+                                    withdrawal_compliance_ciphertext(36),
+                                volume_accumulator:
+                                    shieldd_sdk_shielded_pool::VolumeAccumulatorPayload::canonical_fee_funding(),
                             },
                             auth_sigs: vec![[34u8; 64].into(), [35u8; 64].into()],
                             proof: shieldd_sdk_shielded_pool::ShieldedIcs20WithdrawalProof::default(),

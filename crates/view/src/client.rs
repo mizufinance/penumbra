@@ -44,6 +44,16 @@ pub(crate) type BroadcastStatusStream = Pin<
 ///   enforce that it is a tower `Service`.
 #[allow(clippy::type_complexity)]
 pub trait ViewClient {
+    fn volume_accumulator_recovery(
+        &mut self,
+        subject: decaf377::Fq,
+        day_start: u64,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<crate::storage::VolumeAccumulatorRecovery>> + Send + 'static,
+        >,
+    >;
+
     /// Get the current status of chain sync.
     fn status(
         &mut self,
@@ -298,7 +308,7 @@ pub trait ViewClient {
         asset_id: asset::Id,
     ) -> Pin<Box<dyn Future<Output = Result<Option<bool>>> + Send + 'static>>;
 
-    /// Query the compliance registry for an asset's policy (threshold and DK_pub).
+    /// Query the compliance registry for an asset's policy (daily_volume_limit and DK_pub).
     ///
     /// Returns the full ComplianceAssetStatusResponse which includes policy data if present.
     fn compliance_asset_policy(
@@ -381,6 +391,29 @@ where
     T::Future: Send + 'static,
     <T::ResponseBody as tonic::codegen::Body>::Error: Into<tonic::codegen::StdError> + Send,
 {
+    fn volume_accumulator_recovery(
+        &mut self,
+        subject: decaf377::Fq,
+        day_start: u64,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<crate::storage::VolumeAccumulatorRecovery>> + Send + 'static,
+        >,
+    > {
+        let mut client = self.clone();
+        async move {
+            let response = client
+                .volume_accumulator_recovery(pb::VolumeAccumulatorRecoveryRequest {
+                    subject: subject.to_bytes().to_vec(),
+                    day_start,
+                })
+                .await?
+                .into_inner();
+            crate::planning_io::decode_volume_recovery(response, subject, day_start)
+        }
+        .boxed()
+    }
+
     fn status(
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<pb::StatusResponse>> + Send + 'static>> {

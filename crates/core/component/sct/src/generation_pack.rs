@@ -22,14 +22,13 @@ use crate::{
     Nullifier,
 };
 
-const MAGIC: &[u8; 8] = b"SHNFPK01";
-const HEADER_BYTES: usize = 80;
+const MAGIC: &[u8; 8] = b"SHNFPACK";
+const HEADER_BYTES: usize = 76;
 const CHECKSUM_BYTES: usize = 32;
 const MIN_PACK_BYTES: usize = HEADER_BYTES + CHECKSUM_BYTES;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GenerationPackMetadata {
-    pub format_version: u32,
     pub protocol_version: u32,
     pub generation_index: u64,
     pub generation_root: [u8; 32],
@@ -40,11 +39,8 @@ pub struct GenerationPackMetadata {
 }
 
 impl GenerationPackMetadata {
-    pub const FORMAT_VERSION: u32 = 1;
-
     pub fn from_archived(archived: NullifierGenerationArchived, leaf_count: u64) -> Self {
         Self {
-            format_version: Self::FORMAT_VERSION,
             protocol_version: PROTOCOL_VERSION,
             generation_index: archived.generation_index,
             generation_root: archived.generation_root,
@@ -55,10 +51,6 @@ impl GenerationPackMetadata {
     }
 
     pub fn validate(&self) -> Result<()> {
-        ensure!(
-            self.format_version == Self::FORMAT_VERSION,
-            "unsupported nullifier generation pack format"
-        );
         ensure!(
             self.protocol_version == PROTOCOL_VERSION,
             "unsupported nullifier generation pack protocol"
@@ -86,13 +78,12 @@ impl GenerationPackMetadata {
 
     fn decode(bytes: &[u8]) -> Result<Self> {
         let metadata = Self {
-            format_version: read_u32(bytes, 8)?,
-            protocol_version: read_u32(bytes, 12)?,
-            generation_index: read_u64(bytes, 16)?,
-            generation_root: read_array::<32>(bytes, 24)?,
-            generation_start_position: read_u64(bytes, 56)?,
-            generation_end_position: read_u64(bytes, 64)?,
-            leaf_count: read_u64(bytes, 72)?,
+            protocol_version: read_u32(bytes, 8)?,
+            generation_index: read_u64(bytes, 12)?,
+            generation_root: read_array::<32>(bytes, 20)?,
+            generation_start_position: read_u64(bytes, 52)?,
+            generation_end_position: read_u64(bytes, 60)?,
+            leaf_count: read_u64(bytes, 68)?,
         };
         metadata.validate()?;
         Ok(metadata)
@@ -167,7 +158,6 @@ impl NullifierGenerationPack {
                 .context("generation pack byte length overflow")?,
         );
         bytes.extend_from_slice(MAGIC);
-        bytes.extend_from_slice(&self.metadata.format_version.to_be_bytes());
         bytes.extend_from_slice(&self.metadata.protocol_version.to_be_bytes());
         bytes.extend_from_slice(&self.metadata.generation_index.to_be_bytes());
         bytes.extend_from_slice(&self.metadata.generation_root);
@@ -207,7 +197,6 @@ impl NullifierGenerationPack {
     pub fn receipt(&self, bytes: &[u8]) -> Result<NullifierGenerationPackReceipt> {
         ensure!(self.encode()? == bytes, "pack bytes are not canonical");
         let receipt = NullifierGenerationPackReceipt {
-            format_version: self.metadata.format_version,
             protocol_version: self.metadata.protocol_version,
             generation_index: self.metadata.generation_index,
             generation_root: self.metadata.generation_root,
@@ -517,7 +506,6 @@ impl GenerationPackRepository {
             "generation pack metadata does not match retired generation"
         );
         let receipt = NullifierGenerationPackReceipt {
-            format_version: inspection.metadata.format_version,
             protocol_version: inspection.metadata.protocol_version,
             generation_index: inspection.metadata.generation_index,
             generation_root: inspection.metadata.generation_root,

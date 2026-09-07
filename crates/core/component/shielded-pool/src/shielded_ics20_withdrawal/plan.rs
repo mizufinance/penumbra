@@ -4,6 +4,10 @@ use decaf377::Fr;
 use decaf377_rdsa::{Signature, SpendAuth};
 use serde::{Deserialize, Serialize};
 use shieldd_sdk_asset::{asset, Balance};
+use shieldd_sdk_compliance::{
+    derive_withdrawal_encryption_material, encrypt_withdrawal_with_material,
+    withdrawal_encryption_key, WithdrawalEncryptionResult,
+};
 use shieldd_sdk_keys::symmetric::PayloadKey;
 use shieldd_sdk_keys::FullViewingKey;
 use shieldd_sdk_keys::{symmetric::WrappedMemoKey, Address};
@@ -24,7 +28,7 @@ use crate::{
     ShieldedIcs20WithdrawalChangePublic, ShieldedIcs20WithdrawalInputPublic,
     ShieldedIcs20WithdrawalOptionalInputPrivate, ShieldedIcs20WithdrawalProof,
     ShieldedIcs20WithdrawalProofPrivate, ShieldedIcs20WithdrawalProofPublic,
-    ShieldedIcs20WithdrawalRequiredInputPrivate,
+    ShieldedIcs20WithdrawalRequiredInputPrivate, VolumeAccumulatorPlan,
 };
 
 use super::{ShieldedIcs20WithdrawalBody, ShieldedIcs20WithdrawalFamilyId};
@@ -43,6 +47,7 @@ pub struct ShieldedIcs20WithdrawalPlan {
     pub withdrawal: Ics20Withdrawal,
     pub routing_parameters: Parameters,
     pub compliance: crate::WithdrawalContext,
+    pub volume_accumulator: VolumeAccumulatorPlan,
 }
 
 impl ShieldedIcs20WithdrawalPlan {
@@ -52,6 +57,7 @@ impl ShieldedIcs20WithdrawalPlan {
         withdrawal: Ics20Withdrawal,
         value_blinding: Fr,
         compliance: crate::WithdrawalContext,
+        volume_accumulator: VolumeAccumulatorPlan,
         routing_parameters: Parameters,
     ) -> anyhow::Result<Self> {
         let plan = Self {
@@ -61,6 +67,7 @@ impl ShieldedIcs20WithdrawalPlan {
             withdrawal,
             routing_parameters,
             compliance,
+            volume_accumulator,
         };
         plan.validate()?;
         Ok(plan)
@@ -68,6 +75,26 @@ impl ShieldedIcs20WithdrawalPlan {
 
     pub fn family_id(&self) -> ShieldedIcs20WithdrawalFamilyId {
         ShieldedIcs20WithdrawalFamilyId::Canonical
+    }
+
+    pub fn accumulator_prior_commitment(&self) -> Option<tct::StateCommitment> {
+        matches!(
+            self.volume_accumulator,
+            VolumeAccumulatorPlan::Continuation { .. }
+        )
+        .then(|| self.volume_accumulator.prior_commitment())
+    }
+
+    pub fn volume_accumulator_payload(
+        &self,
+        fvk: &FullViewingKey,
+    ) -> crate::VolumeAccumulatorPayload {
+        self.volume_accumulator.clone().selected_payload(
+            fvk.nullifier_key(),
+            fvk.outgoing(),
+            Fq::from_le_bytes_mod_order(&self.compliance.nonce.to_bytes()),
+            crate::TransferProofContext::Ordinary,
+        )
     }
 
     pub fn balance(&self) -> Balance {
@@ -118,6 +145,7 @@ impl ShieldedIcs20WithdrawalPlan {
             first_spend_randomizer: self.first_spend().randomizer,
             sender_address: self.sender_address(),
             asset_id: self.withdrawal_asset_id(),
+            capk: self.compliance.witness.sender.leaf.capk,
             nullifier_domain_sep_label:
                 b"shieldd.shielded_ics20_withdrawal.synthetic_dummy.nullifier",
             nullifier_seed_label:
@@ -183,12 +211,29 @@ impl ShieldedIcs20WithdrawalPlan {
             .witness
             .validate(first_spend.note.asset_id(), &first_spend.note.address())?;
         ensure!(self.compliance.timestamp > 0, "missing action timestamp");
+        ensure!(
+            self.volume_accumulator.day_start()
+                == crate::select_accumulator_day(self.compliance.timestamp),
+            "volume accumulator day does not match action timestamp"
+        );
         Ok(())
     }
 
     fn withdrawal_effect_hash_limbs(&self) -> [Fq; 4] {
         let effect_hash = self.withdrawal.effect_hash();
         super::withdrawal_effect_hash_limbs(effect_hash.as_bytes())
+    }
+
+    fn withdrawal_compliance_encryption(&self) -> anyhow::Result<WithdrawalEncryptionResult> {
+        let sender_leaf = &self.compliance.witness.sender.leaf;
+        let (encryption_key, _) = withdrawal_encryption_key(
+            self.compliance.witness.asset.is_regulated,
+            self.compliance.witness.asset.is_regulated && !self.volume_accumulator.is_real(),
+            &sender_leaf,
+            &self.compliance.witness.asset.leaf,
+        )?;
+        let (seed, randomizer) = derive_withdrawal_encryption_material(self.compliance.nonce);
+        encrypt_withdrawal_with_material(encryption_key, &self.sender_address(), seed, randomizer)
     }
 
     pub fn shielded_ics20_withdrawal_public_private(
@@ -206,20 +251,30 @@ impl ShieldedIcs20WithdrawalPlan {
     > {
         self.validate()
             .map_err(|e| crate::ProofError::InvalidPublicInput(e.to_string()))?;
-        if state_commitment_proofs.len() != self.spends.len() {
+        let needs_accumulator_proof = matches!(
+            self.volume_accumulator,
+            VolumeAccumulatorPlan::Continuation { .. }
+        );
+        let expected_proofs = self.spends.len() + usize::from(needs_accumulator_proof);
+        if state_commitment_proofs.len() != expected_proofs {
             return Err(crate::ProofError::InvalidPublicInput(format!(
                 "shielded ICS-20 withdrawal expected {} state commitment proofs, got {}",
-                self.spends.len(),
+                expected_proofs,
                 state_commitment_proofs.len()
             )));
         }
+        let nullifier_key = self
+            .compliance
+            .witness
+            .nullifier_key(fvk)
+            .map_err(|error| crate::ProofError::InvalidPrivateInput(error.to_string()))?;
 
         let mut input_publics = self
             .spends
             .iter()
             .map(|spend| {
                 Ok(ShieldedIcs20WithdrawalInputPublic {
-                    nullifier: spend.nullifier(fvk),
+                    nullifier: spend.nullifier(&nullifier_key),
                     rk: spend.rk(fvk),
                     history_required: shieldd_sdk_sct::nullifier_generation::is_old(
                         u64::from(spend.position),
@@ -279,7 +334,7 @@ impl ShieldedIcs20WithdrawalPlan {
         let change_note = self
             .change_output
             .as_ref()
-            .map(|output| output.output_note())
+            .map(|output| output.output_note(self.compliance.witness.sender.leaf.capk))
             .unwrap_or_else(|| self.padder().synthetic_dummy_output_note(1));
         let withdrawal_effect_hash_limbs = self.withdrawal_effect_hash_limbs();
         let routing_nonce = Fq::from_le_bytes_mod_order(&self.compliance.nonce.to_bytes());
@@ -289,6 +344,16 @@ impl ShieldedIcs20WithdrawalPlan {
             &self.routing_parameters,
             routing_nonce,
         );
+        let withdrawal_compliance = self
+            .withdrawal_compliance_encryption()
+            .map_err(|error| crate::ProofError::InvalidPrivateInput(error.to_string()))?;
+        let volume_plan = self.volume_accumulator.clone();
+        let volume_payload = self.volume_accumulator_payload(fvk);
+        let volume_prior_proof = if needs_accumulator_proof {
+            state_commitment_proofs[self.spends.len()].clone()
+        } else {
+            dummy_state_commitment_proof(volume_plan.prior_commitment())
+        };
 
         Ok((
             ShieldedIcs20WithdrawalProofPublic {
@@ -301,13 +366,20 @@ impl ShieldedIcs20WithdrawalPlan {
                 inputs: input_publics,
                 change_output: ShieldedIcs20WithdrawalChangePublic {
                     note_commitment: change_note.commit(),
+                    recovery_commitment: change_note.recovery_commitment(),
                 },
                 outbound_asset_id: self.withdrawal.denom.id().0,
                 outbound_amount: Fq::from(self.withdrawal.amount),
                 withdrawal_effect_hash_limbs,
                 routing_tag,
                 routing_parameter_set_id: self.routing_parameters.id(),
+                withdrawal_compliance_ciphertext: withdrawal_compliance.ciphertext.clone(),
                 recent_position_floor,
+                volume_accumulator: crate::VolumeAccumulatorPublic {
+                    nullifier: volume_payload.nullifier,
+                    commitment: volume_payload.commitment,
+                    day_start: volume_payload.day_start,
+                },
             },
             ShieldedIcs20WithdrawalProofPrivate {
                 family_id: ShieldedIcs20WithdrawalFamilyId::Canonical,
@@ -323,10 +395,19 @@ impl ShieldedIcs20WithdrawalPlan {
                 sender_compliance_path: self.compliance.witness.sender.path.clone(),
                 sender_compliance_position: self.compliance.witness.sender.position,
                 sender_leaf: self.compliance.witness.sender.leaf.clone(),
+                withdrawal_seed: withdrawal_compliance.seed,
+                withdrawal_randomizer: withdrawal_compliance.r,
                 required_input,
                 optional_input,
                 change_output: ShieldedIcs20WithdrawalChangePrivate {
                     created_note: change_note,
+                },
+                volume_accumulator_seed: Fq::from_le_bytes_mod_order(
+                    &self.compliance.nonce.to_bytes(),
+                ),
+                volume_accumulator: crate::VolumeAccumulatorPrivate {
+                    plan: volume_plan,
+                    prior_proof: volume_prior_proof,
                 },
             },
         ))
@@ -341,10 +422,11 @@ impl ShieldedIcs20WithdrawalPlan {
     ) -> anyhow::Result<ShieldedIcs20WithdrawalBody> {
         self.validate()?;
 
+        let nullifier_key = self.compliance.witness.nullifier_key(fvk)?;
         let mut inputs = self
             .spends
             .iter()
-            .map(|spend| spend.action_input_body(fvk, recent_position_floor))
+            .map(|spend| spend.action_input_body(fvk, &nullifier_key, recent_position_floor))
             .collect::<anyhow::Result<Vec<_>>>()?;
         let padder = self.padder();
         pad_to_len(&mut inputs, PADDED_ICS20_WITHDRAWAL_INPUTS, |slot| {
@@ -360,11 +442,11 @@ impl ShieldedIcs20WithdrawalPlan {
             }
         });
 
-        let change_note = self
+        let (change_note, recovery_capsule) = self
             .change_output
             .as_ref()
-            .map(ShieldedOutputPlan::output_note)
-            .unwrap_or_else(|| padder.synthetic_dummy_output_note(1));
+            .map(|output| output.output_note_and_capsule(self.compliance.witness.sender.leaf.capk))
+            .unwrap_or_else(|| padder.synthetic_dummy_output_note_and_capsule(1));
         let esk = change_note.ephemeral_secret_key();
         let ovk_wrapped_key = change_note.encrypt_key(
             fvk.outgoing(),
@@ -377,7 +459,7 @@ impl ShieldedIcs20WithdrawalPlan {
             &change_note.diversified_generator(),
         );
         let change_output = ShieldedIcs20WithdrawalChangeBody {
-            note_payload: change_note.payload(),
+            note_payload: change_note.payload(recovery_capsule),
             wrapped_memo_key,
             ovk_wrapped_key,
         };
@@ -389,6 +471,7 @@ impl ShieldedIcs20WithdrawalPlan {
             &self.routing_parameters,
             routing_nonce,
         );
+        let withdrawal_compliance = self.withdrawal_compliance_encryption()?;
 
         Ok(ShieldedIcs20WithdrawalBody {
             family_id: ShieldedIcs20WithdrawalFamilyId::Canonical,
@@ -402,6 +485,8 @@ impl ShieldedIcs20WithdrawalPlan {
             asset_anchor: self.compliance.witness.asset.root,
             routing_tag,
             routing_parameter_set_id: self.routing_parameters.id(),
+            withdrawal_compliance_ciphertext: withdrawal_compliance.ciphertext,
+            volume_accumulator: self.volume_accumulator_payload(fvk),
         })
     }
 
@@ -457,7 +542,7 @@ impl ShieldedIcs20WithdrawalPlan {
             anchor,
             recent_position_floor,
         )?;
-        crate::gnark::encode_shielded_ics20_withdrawal_witness_v12(&public, &private)
+        crate::gnark::encode_shielded_ics20_withdrawal_witness(&public, &private)
             .map_err(|e| crate::ProofError::InvalidPublicInput(e.to_string()))
     }
 
@@ -514,6 +599,7 @@ impl From<ShieldedIcs20WithdrawalPlan> for pb::ShieldedIcs20WithdrawalPlan {
             withdrawal: Some(value.withdrawal.into()),
             compliance: Some(value.compliance.into()),
             routing_parameters: Some(value.routing_parameters.into()),
+            volume_accumulator: Some(value.volume_accumulator.into()),
         }
     }
 }
@@ -548,6 +634,10 @@ impl TryFrom<pb::ShieldedIcs20WithdrawalPlan> for ShieldedIcs20WithdrawalPlan {
             routing_parameters: value
                 .routing_parameters
                 .ok_or_else(|| anyhow!("missing routing parameters"))?
+                .try_into()?,
+            volume_accumulator: value
+                .volume_accumulator
+                .ok_or_else(|| anyhow!("missing volume accumulator plan"))?
                 .try_into()?,
         };
         plan.validate()?;

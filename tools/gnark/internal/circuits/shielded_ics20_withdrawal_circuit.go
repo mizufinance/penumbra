@@ -2,6 +2,7 @@ package circuits
 
 import (
 	"fmt"
+	"golang.org/x/crypto/blake2b"
 	"math/big"
 
 	"github.com/consensys/gnark/frontend"
@@ -9,7 +10,6 @@ import (
 	decafgnark "github.com/mizufinance/decaf377-go/gnark"
 	. "github.com/mizufinance/shieldd/tools/gnark/internal/compliance"
 	. "github.com/mizufinance/shieldd/tools/gnark/internal/primitives"
-	"golang.org/x/crypto/blake2b"
 )
 
 type ShieldedIcs20WithdrawalRequiredSpendCircuitFields struct {
@@ -22,8 +22,9 @@ type ShieldedIcs20WithdrawalRequiredSpendCircuitFields struct {
 }
 
 type ShieldedIcs20WithdrawalNoteCircuitFields struct {
-	Blinding frontend.Variable
-	Amount   frontend.Variable
+	Blinding           frontend.Variable
+	Amount             frontend.Variable
+	RecoveryCommitment frontend.Variable
 }
 
 type ShieldedIcs20WithdrawalStatePathCircuitFields struct {
@@ -40,31 +41,26 @@ type ShieldedIcs20WithdrawalOptionalSpendCircuitFields struct {
 type ShieldedIcs20WithdrawalChangeCircuitFields struct {
 	NoteCommitment frontend.Variable
 	Note           ShieldedIcs20WithdrawalNoteCircuitFields
+	Recovery       RecoveryCapsuleFields
 }
 
 type ShieldedIcs20WithdrawalSenderCircuitFields struct {
-	DivGen   Point2D
-	D        frontend.Variable
-	Status   frontend.Variable
-	Path     [ComplianceQuadTreeDepth][3]frontend.Variable
-	Position frontend.Variable
+	DivGen        Point2D
+	Capk          Point2D
+	RnkDhPk       Point2D
+	RnkCommitment frontend.Variable
+	Status        frontend.Variable
+	Path          [ComplianceQuadTreeDepth][3]frontend.Variable
+	Position      frontend.Variable
 }
 
-// ShieldedIcs20WithdrawalAssetLeafCircuitFields carries only the committed
-// IMT leaf view needed by the withdrawal relation. Policy openings are checked
-// against native state at execution time.
-type ShieldedIcs20WithdrawalAssetLeafCircuitFields struct {
-	Value      frontend.Variable
-	NextIndex  frontend.Variable
-	NextValue  frontend.Variable
-	ParamsHash frontend.Variable
-	RingHash   frontend.Variable
-}
-
-type ShieldedIcs20WithdrawalAssetCircuitFields struct {
-	Leaf     ShieldedIcs20WithdrawalAssetLeafCircuitFields
-	Path     [ComplianceQuadTreeDepth][3]frontend.Variable
-	Position frontend.Variable
+type ShieldedIcs20WithdrawalComplianceCircuitFields struct {
+	EPK                    Point2D
+	C2                     frontend.Variable
+	KeyConfirmation        frontend.Variable
+	EncryptedSenderAddress [WithdrawalAddressCiphertextFQCount]frontend.Variable
+	Seed                   frontend.Variable
+	Randomizer             frontend.Variable
 }
 
 type ShieldedIcs20WithdrawalCircuit struct {
@@ -90,9 +86,12 @@ type ShieldedIcs20WithdrawalCircuit struct {
 	RoutingAsOfHeight         frontend.Variable
 	RoutingNonce              frontend.Variable
 
-	Auth   TransferAuthSharedFields
-	Asset  ShieldedIcs20WithdrawalAssetCircuitFields
-	Sender ShieldedIcs20WithdrawalSenderCircuitFields
+	Auth                  TransferAuthSharedFields
+	Asset                 AssetTreeFields
+	Sender                ShieldedIcs20WithdrawalSenderCircuitFields
+	Compliance            ShieldedIcs20WithdrawalComplianceCircuitFields
+	VolumeAccumulator     TransferVolumeAccumulatorCircuitFields
+	VolumeAccumulatorSeed frontend.Variable
 
 	RequiredSpend ShieldedIcs20WithdrawalRequiredSpendCircuitFields
 	OptionalSpend ShieldedIcs20WithdrawalOptionalSpendCircuitFields
@@ -111,8 +110,26 @@ func (c *ShieldedIcs20WithdrawalCircuit) Define(api frontend.API) error {
 	c.bindShieldedIcs20WithdrawalWitnessSemantics()
 	c.traceWiring("assert.boolean", "var=is_regulated")
 	api.AssertIsBoolean(c.IsRegulated)
+	api.AssertIsEqual(c.VolumeAccumulator.ProofContext, 1)
 
 	shared, err := c.verifySharedContext(api)
+	if err != nil {
+		return err
+	}
+	isFlagged, err := verifyVolumeAccumulatorTransition(
+		api,
+		&c.VolumeAccumulator,
+		c.TargetTimestamp,
+		c.IsRegulated,
+		shared.senderDivGenFq,
+		shared.senderTransmissionFq,
+		shared.sharedAssetID,
+		c.OutboundAmount,
+		shared.indexedLeaf.DailyVolumeLimit,
+		c.Anchor,
+		c.Auth.NK,
+		c.VolumeAccumulatorSeed,
+	)
 	if err != nil {
 		return err
 	}
@@ -128,6 +145,10 @@ func (c *ShieldedIcs20WithdrawalCircuit) Define(api frontend.API) error {
 		c.RoutingNonce,
 		shared.senderTransmissionFq,
 	); err != nil {
+		return err
+	}
+	withdrawalEPKFq, err := c.verifyWithdrawalComplianceCiphertext(api, &shared, isFlagged)
+	if err != nil {
 		return err
 	}
 
@@ -199,7 +220,13 @@ func (c *ShieldedIcs20WithdrawalCircuit) Define(api frontend.API) error {
 		"fields=shielded_ics20_withdrawal_statement_fields",
 	)
 	fields := make([]frontend.Variable, 0, ShieldedIcs20WithdrawalStatementFieldCount(c.nIn))
-	fields = append(fields, c.Anchor, changeCommitment, balanceCommitmentFq)
+	fields = append(
+		fields,
+		c.Anchor,
+		changeCommitment,
+		c.ChangeOutput.Note.RecoveryCommitment,
+		balanceCommitmentFq,
+	)
 	fields = append(fields, c.RecentPositionFloor)
 	fields = append(fields, nullifiersAndRKs...)
 	fields = append(
@@ -212,12 +239,24 @@ func (c *ShieldedIcs20WithdrawalCircuit) Define(api frontend.API) error {
 	)
 	fields = append(fields, c.WithdrawalEffectHashLimbs[:]...)
 	fields = append(fields, c.RoutingTag, c.RoutingParameterSetID)
+	fields = append(fields,
+		c.VolumeAccumulator.Nullifier,
+		c.VolumeAccumulator.Commitment,
+		c.VolumeAccumulator.DayStart,
+	)
+	fields = append(
+		fields,
+		withdrawalEPKFq,
+		c.Compliance.C2,
+		c.Compliance.KeyConfirmation,
+	)
+	fields = append(fields, c.Compliance.EncryptedSenderAddress[:]...)
 
 	for index, field := range fields {
 		c.bindSemantic(fmt.Sprintf("statement.field.%03d", index), field)
 	}
 	c.bindSemantic("statement.fields", fields...)
-	statementHash, err := c.hashShieldedIcs20WithdrawalStatement(api, fields)
+	statementHash, err := ShieldedIcs20WithdrawalStatementHashForShape(api, c.nIn, fields)
 	if err != nil {
 		return err
 	}
@@ -245,6 +284,12 @@ func (c *ShieldedIcs20WithdrawalCircuit) bindShieldedIcs20WithdrawalWitnessSeman
 	c.bindSemantic("routing.as_of_height", c.RoutingAsOfHeight)
 	c.bindSemantic("routing.nonce", c.RoutingNonce)
 	c.bindSemantic("recent_position_floor", c.RecentPositionFloor)
+	c.bindSemantic("compliance.epk", c.Compliance.EPK.X, c.Compliance.EPK.Y)
+	c.bindSemantic("compliance.c2", c.Compliance.C2)
+	c.bindSemantic("compliance.key_confirmation", c.Compliance.KeyConfirmation)
+	c.bindSemantic("compliance.encrypted_sender_address", c.Compliance.EncryptedSenderAddress[:]...)
+	c.bindSemantic("compliance.seed", c.Compliance.Seed)
+	c.bindSemantic("compliance.randomizer", c.Compliance.Randomizer)
 
 	c.bindSemantic("auth.ak", c.Auth.AK.X, c.Auth.AK.Y)
 	c.bindSemantic("auth.nk", c.Auth.NK)
@@ -254,13 +299,20 @@ func (c *ShieldedIcs20WithdrawalCircuit) bindShieldedIcs20WithdrawalWitnessSeman
 	c.bindSemantic("asset.leaf.value", c.Asset.Leaf.Value)
 	c.bindSemantic("asset.leaf.next_index", c.Asset.Leaf.NextIndex)
 	c.bindSemantic("asset.leaf.next_value", c.Asset.Leaf.NextValue)
-	c.bindSemantic("asset.leaf.params_hash", c.Asset.Leaf.ParamsHash)
-	c.bindSemantic("asset.leaf.ring_hash", c.Asset.Leaf.RingHash)
+	c.bindSemantic("asset.leaf.dk_pub", c.Asset.Leaf.DKPub.X, c.Asset.Leaf.DKPub.Y)
+	c.bindSemantic("asset.leaf.daily_volume_limit", c.Asset.Leaf.DailyVolumeLimit)
+	c.bindSemantic("asset.leaf.route_policy_hash", c.Asset.Leaf.RoutePolicyHash)
+	c.bindSemantic("asset.leaf.ring_pk", c.Asset.Leaf.RingPK.X, c.Asset.Leaf.RingPK.Y)
+	c.bindSemantic("asset.leaf.ring_id_hash", c.Asset.Leaf.RingIDHash)
+	c.bindSemantic("asset.leaf.policy_id_hash", c.Asset.Leaf.PolicyIDHash)
+	c.bindSemantic("asset.leaf.permission_hash", c.Asset.Leaf.PermissionHash)
+	c.bindSemantic("asset.leaf.resource_hash", c.Asset.Leaf.ResourceHash)
 	c.bindSemantic("asset.path", quadPathVariables(c.Asset.Path)...)
 	c.bindSemantic("asset.position", c.Asset.Position)
 
 	c.bindSemantic("sender.div_gen", c.Sender.DivGen.X, c.Sender.DivGen.Y)
-	c.bindSemantic("sender.d", c.Sender.D)
+	c.bindSemantic("sender.capk", c.Sender.Capk.X, c.Sender.Capk.Y)
+	c.bindSemantic("sender.rnk_commitment", c.Sender.RnkCommitment)
 	c.bindSemantic("sender.status", c.Sender.Status)
 	c.bindSemantic("sender.path", quadPathVariables(c.Sender.Path)...)
 	c.bindSemantic("sender.position", c.Sender.Position)
@@ -298,76 +350,18 @@ func (c *ShieldedIcs20WithdrawalCircuit) bindShieldedIcs20WithdrawalSpendWitness
 	c.bindSemantic(name+".history_required", spend.HistoryRequired)
 }
 
-func shieldedIcs20WithdrawalStatementHashConstant(suffix string) *big.Int {
-	sum := blake2b.Sum512(
-		[]byte(
-			"shieldd.shielded_pool.shielded_ics20_withdrawal.public_input_hash." +
-				suffix,
-		),
-	)
-	return LittleEndianBytesToBigInt(sum[:])
-}
-
-func (c *ShieldedIcs20WithdrawalCircuit) hashShieldedIcs20WithdrawalStatement(
-	api frontend.API,
-	fields []frontend.Variable,
-) (frontend.Variable, error) {
-	if len(fields) != ShieldedIcs20WithdrawalStatementFieldCount(c.nIn) {
-		return nil, fmt.Errorf(
-			"invalid shielded ICS-20 withdrawal statement field count: got %d",
-			len(fields),
-		)
-	}
-	domain := shieldedIcs20WithdrawalStatementHashConstant("v4")
-	pad0 := shieldedIcs20WithdrawalStatementHashConstant("pad0")
-	pad1 := shieldedIcs20WithdrawalStatementHashConstant("pad1")
-
-	c.traceWiring("statement.hash", "block=0", "inputs=statement.field.000..006", "out=statement.hash.block0")
-	block0, err := Poseidon377Hash7(api, domain, [7]frontend.Variable{
-		fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6],
-	})
-	if err != nil {
-		return nil, err
-	}
-	c.bindSemantic("statement.hash.block0", block0)
-
-	c.traceWiring("statement.hash", "block=1", "inputs=statement.hash.block0,statement.field.007..012", "out=statement.hash.block1")
-	block1, err := Poseidon377Hash7(api, domain, [7]frontend.Variable{
-		block0, fields[7], fields[8], fields[9], fields[10], fields[11], fields[12],
-	})
-	if err != nil {
-		return nil, err
-	}
-	c.bindSemantic("statement.hash.block1", block1)
-
-	c.traceWiring("statement.hash", "block=2", "inputs=statement.hash.block1,statement.field.013..018", "out=statement.hash.block2")
-	block2, err := Poseidon377Hash7(api, domain, [7]frontend.Variable{
-		block1, fields[13], fields[14], fields[15], fields[16], fields[17], fields[18],
-	})
-	if err != nil {
-		return nil, err
-	}
-	c.bindSemantic("statement.hash.block2", block2)
-
-	c.traceWiring("statement.hash", "block=3", "inputs=statement.hash.block2,statement.field.019..020,pad0,pad1,pad0,pad1", "out=statement.hash.block3")
-	block3, err := Poseidon377Hash7(api, domain, [7]frontend.Variable{
-		block2, fields[19], fields[20], pad0, pad1, pad0, pad1,
-	})
-	if err != nil {
-		return nil, err
-	}
-	c.bindSemantic("statement.hash.block3", block3)
-	return block3, nil
-}
-
 type shieldedIcs20WithdrawalSharedContext struct {
 	ak                   gnarkte.Point
-	assetLeaf            ShieldedIcs20WithdrawalAssetLeafCircuitFields
+	indexedLeaf          IndexedLeafInputs
+	effectiveDKPub       gnarkte.Point
+	effectiveRingPK      gnarkte.Point
 	senderDivGen         gnarkte.Point
 	senderDivGenFq       frontend.Variable
 	senderTransmission   gnarkte.Point
 	senderTransmissionFq frontend.Variable
+	senderACK            gnarkte.Point
 	sharedAssetID        frontend.Variable
+	effectiveNK          frontend.Variable
 }
 
 func (c *ShieldedIcs20WithdrawalCircuit) verifySharedContext(
@@ -381,17 +375,55 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifySharedContext(
 	)
 	shared := shieldedIcs20WithdrawalSharedContext{
 		ak: gnarkte.Point{X: c.Auth.AK.X, Y: c.Auth.AK.Y},
-		assetLeaf: ShieldedIcs20WithdrawalAssetLeafCircuitFields{
-			Value:      c.Asset.Leaf.Value,
-			NextIndex:  c.Asset.Leaf.NextIndex,
-			NextValue:  c.Asset.Leaf.NextValue,
-			ParamsHash: c.Asset.Leaf.ParamsHash,
-			RingHash:   c.Asset.Leaf.RingHash,
+		indexedLeaf: IndexedLeafInputs{
+			Value:            c.Asset.Leaf.Value,
+			NextIndex:        c.Asset.Leaf.NextIndex,
+			NextValue:        c.Asset.Leaf.NextValue,
+			DKPub:            gnarkte.Point{X: c.Asset.Leaf.DKPub.X, Y: c.Asset.Leaf.DKPub.Y},
+			DailyVolumeLimit: c.Asset.Leaf.DailyVolumeLimit,
+			RoutePolicyHash:  c.Asset.Leaf.RoutePolicyHash,
+			RingPK:           gnarkte.Point{X: c.Asset.Leaf.RingPK.X, Y: c.Asset.Leaf.RingPK.Y},
+			RingIDHash:       c.Asset.Leaf.RingIDHash,
+			PolicyIDHash:     c.Asset.Leaf.PolicyIDHash,
+			PermissionHash:   c.Asset.Leaf.PermissionHash,
+			ResourceHash:     c.Asset.Leaf.ResourceHash,
 		},
 		senderDivGen:  gnarkte.Point{X: c.Sender.DivGen.X, Y: c.Sender.DivGen.Y},
 		sharedAssetID: c.OutboundAssetID,
 	}
 	c.bindSemantic("shared.asset_id", shared.sharedAssetID)
+	unregulatedRingPK, unregulatedDKPub, err := UnregulatedComplianceKeys()
+	if err != nil {
+		return shieldedIcs20WithdrawalSharedContext{}, err
+	}
+	c.traceWiring(
+		"select.point",
+		"cond=is_regulated",
+		"if_true=asset.leaf.ring_pk",
+		"if_false=unregulated.ring_pk",
+		"out=effective.ring_pk",
+	)
+	shared.effectiveRingPK = SelectPoint(
+		api,
+		c.IsRegulated,
+		shared.indexedLeaf.RingPK,
+		unregulatedRingPK,
+	)
+	c.traceWiring(
+		"select.point",
+		"cond=is_regulated",
+		"if_true=asset.leaf.dk_pub",
+		"if_false=unregulated.dk_pub",
+		"out=effective.dk_pub",
+	)
+	shared.effectiveDKPub = SelectPoint(
+		api,
+		c.IsRegulated,
+		shared.indexedLeaf.DKPub,
+		unregulatedDKPub,
+	)
+	c.bindSemantic("effective.ring_pk", shared.effectiveRingPK.X, shared.effectiveRingPK.Y)
+	c.bindSemantic("effective.dk_pub", shared.effectiveDKPub.X, shared.effectiveDKPub.Y)
 
 	c.traceWiring(
 		"assert.decaf_non_identity",
@@ -406,7 +438,6 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifySharedContext(
 	)
 	AssertDecafNonIdentity(api, shared.senderDivGen)
 
-	var err error
 	c.traceWiring(
 		"decaf.compress_to_field",
 		"in=sender.div_gen",
@@ -428,7 +459,8 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifySharedContext(
 		"ivk_quotient_a=auth.ivk_quotient_a",
 		"out=sender.transmission.computed",
 	)
-	shared.senderTransmission, err = diversifiedTransmissionKeyAfterIvkNonzero(
+	var ivkBits []frontend.Variable
+	shared.senderTransmission, ivkBits, err = diversifiedTransmissionKeyAndBitsAfterIvkNonzero(
 		api,
 		c.Auth.NK,
 		shared.ak,
@@ -470,7 +502,9 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifySharedContext(
 		"div_gen_fq=sender.div_gen_fq",
 		"transmission_fq=sender.transmission_fq",
 		"asset_id=shared.asset_id",
-		"d=sender.d",
+		"capk=sender.capk",
+		"rnk_dh_pk=sender.rnk_dh_pk",
+		"rnk_commitment=sender.rnk_commitment",
 		"status=sender.status",
 		"out=sender.leaf_commitment",
 	)
@@ -479,13 +513,33 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifySharedContext(
 		shared.senderDivGenFq,
 		shared.senderTransmissionFq,
 		shared.sharedAssetID,
-		c.Sender.D,
+		gnarkte.Point{X: c.Sender.Capk.X, Y: c.Sender.Capk.Y},
+		gnarkte.Point{X: c.Sender.RnkDhPk.X, Y: c.Sender.RnkDhPk.Y},
+		c.Sender.RnkCommitment,
 		c.Sender.Status,
 	)
 	if err != nil {
 		return shieldedIcs20WithdrawalSharedContext{}, err
 	}
 	c.bindSemantic("sender.leaf_commitment", senderLeafCommitment)
+	derivedRNK, err := RegulatedNullifierKey(
+		api,
+		ivkBits,
+		gnarkte.Point{X: c.Sender.RnkDhPk.X, Y: c.Sender.RnkDhPk.Y},
+		shared.senderDivGenFq,
+		shared.senderTransmissionFq,
+		shared.sharedAssetID,
+		shared.effectiveRingPK,
+	)
+	if err != nil {
+		return shieldedIcs20WithdrawalSharedContext{}, err
+	}
+	shared.effectiveNK = api.Select(c.IsRegulated, derivedRNK, c.Auth.NK)
+	rnkCommitment, err := ComplianceNullifierKeyCommitment(api, derivedRNK)
+	if err != nil {
+		return shieldedIcs20WithdrawalSharedContext{}, err
+	}
+	AssertEqualIf(api, rnkCommitment, c.Sender.RnkCommitment, c.IsRegulated)
 	c.traceWiring(
 		"gadget.compliance_path",
 		"leaf=sender.leaf_commitment",
@@ -505,8 +559,12 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifySharedContext(
 		"cond=is_regulated",
 	)
 	AssertEqualIf(api, senderComplianceRoot, c.ComplianceAnchor, c.IsRegulated)
-	c.traceWiring("assert.eq_if", "lhs=sender.status", "rhs=1", "cond=is_regulated")
-	AssertEqualIf(api, c.Sender.Status, 1, c.IsRegulated)
+	c.traceWiring("gadget.active_lifecycle", "lifecycle=sender.status", "cond=is_regulated")
+	AssertActiveComplianceLifecycle(api, c.Sender.Status, c.IsRegulated)
+
+	c.traceWiring("bind.capk", "capk=sender.capk", "out=sender.ack")
+	shared.senderACK = gnarkte.Point{X: c.Sender.Capk.X, Y: c.Sender.Capk.Y}
+	c.bindSemantic("sender.ack", shared.senderACK.X, shared.senderACK.Y)
 
 	return shared, nil
 }
@@ -515,81 +573,129 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifyShieldedIcs20WithdrawalAssetRegis
 	api frontend.API,
 	shared *shieldedIcs20WithdrawalSharedContext,
 ) error {
-	vectors, err := LoadPrototypeVectors()
-	if err != nil {
-		return err
-	}
-
-	c.traceWiring(
-		"gadget.asset_registry_leaf_hash",
-		"value=asset.leaf.value",
-		"next_index=asset.leaf.next_index",
-		"next_value=asset.leaf.next_value",
-		"params_hash=asset.leaf.params_hash",
-		"ring_hash=asset.leaf.ring_hash",
-		"out=asset.leaf.commitment",
-	)
-	assetLeafCommitment, err := Poseidon377Hash5(
-		api,
-		MustBigInt(vectors.Poseidon377.IMTLeafDomain),
-		[5]frontend.Variable{
-			shared.assetLeaf.Value,
-			shared.assetLeaf.NextIndex,
-			shared.assetLeaf.NextValue,
-			shared.assetLeaf.ParamsHash,
-			shared.assetLeaf.RingHash,
-		},
-	)
-	if err != nil {
-		return err
-	}
-	c.bindSemantic("asset.leaf.commitment", assetLeafCommitment)
-
-	c.traceWiring(
-		"gadget.asset_registry_path",
-		"leaf=asset.leaf.commitment",
-		"path=asset.path",
-		"position=asset.position",
-		"out=asset.root.computed",
-	)
-	assetRoot, err := VerifyQuadPath(
-		api,
-		assetLeafCommitment,
-		c.Asset.Path,
-		c.Asset.Position,
-	)
-	if err != nil {
-		return err
-	}
-	c.bindSemantic("asset.root.computed", assetRoot)
-	c.traceWiring("assert.eq", "lhs=asset.root.computed", "rhs=asset_anchor")
-	api.AssertIsEqual(assetRoot, c.AssetAnchor)
-
-	// The low leaf at value zero is the reserved IMT sentinel, never an asset
-	// policy. Rejecting zero here prevents regulated equality from treating a
-	// custom sentinel proof as policy authorization.
-	c.traceWiring("assert.ne", "lhs=shared.asset_id", "rhs=0")
 	api.AssertIsDifferent(shared.sharedAssetID, 0)
-
-	c.traceWiring(
-		"gadget.asset_registry_gap",
-		"asset_id=shared.asset_id",
-		"is_regulated=is_regulated",
-		"value=asset.leaf.value",
-		"next_value=asset.leaf.next_value",
-		"out=asset.gap_valid",
-	)
-	validProof := AssetRegistryGap(
+	c.traceWiring("assert.ne", "lhs=shared.asset_id", "rhs=0")
+	return verifyRoutingAssetRegistry(
 		api,
+		c.traceWiring,
+		c.bindSemantic,
+		c.Asset,
+		c.AssetAnchor,
 		shared.sharedAssetID,
 		c.IsRegulated,
-		shared.assetLeaf.Value,
-		shared.assetLeaf.NextValue,
 	)
-	c.bindSemantic("asset.gap_valid", validProof)
-	c.traceWiring("assert.eq", "lhs=asset.gap_valid", "rhs=1")
-	api.AssertIsEqual(validProof, 1)
-	return nil
+}
+
+func (c *ShieldedIcs20WithdrawalCircuit) verifyWithdrawalComplianceCiphertext(
+	api frontend.API,
+	shared *shieldedIcs20WithdrawalSharedContext,
+	isFlagged frontend.Variable,
+) (frontend.Variable, error) {
+	c.bindSemantic("is_flagged", isFlagged)
+	epk := gnarkte.Point{X: c.Compliance.EPK.X, Y: c.Compliance.EPK.Y}
+	c.traceWiring(
+		"assert.decaf_non_identity",
+		"point=compliance.epk",
+		"coordinate=x",
+	)
+	AssertDecafNonIdentity(api, epk)
+	c.traceWiring(
+		"decaf.compress_to_field",
+		"in=compliance.epk",
+		"out=compliance.epk_fq",
+	)
+	epkFq, err := decafgnark.CompressToField(api, epk)
+	if err != nil {
+		return nil, err
+	}
+	c.bindSemantic("compliance.epk_fq", epkFq)
+	c.traceWiring(
+		"decaf.shared_secret",
+		"tier=withdrawal_sender",
+		"esk=compliance.randomizer",
+		"ack=sender.ack",
+		"dk_pub=effective.dk_pub",
+		"flag=is_flagged",
+		"epk=compliance.epk",
+		"issuer=compliance.shared.issuer",
+		"user=compliance.shared.user",
+		"selected=compliance.shared.selected",
+	)
+	issuerShared, userShared, sharedSecret, err := DeriveSharedSecretsSpend(
+		api,
+		c.Compliance.Randomizer,
+		shared.senderACK,
+		shared.effectiveDKPub,
+		isFlagged,
+		epk,
+	)
+	if err != nil {
+		return nil, err
+	}
+	c.bindSemantic("compliance.shared.issuer", issuerShared.X, issuerShared.Y)
+	c.bindSemantic("compliance.shared.user", userShared.X, userShared.Y)
+	c.bindSemantic("compliance.shared.selected", sharedSecret.X, sharedSecret.Y)
+
+	c.traceWiring(
+		"decaf.compress_to_field",
+		"in=compliance.shared.selected",
+		"out=compliance.shared.selected_fq",
+	)
+	sharedSecretFq, err := decafgnark.CompressToField(api, sharedSecret)
+	if err != nil {
+		return nil, err
+	}
+	c.bindSemantic("compliance.shared.selected_fq", sharedSecretFq)
+	computedSeed := api.Sub(c.Compliance.C2, sharedSecretFq)
+	c.bindSemantic("compliance.seed.computed", computedSeed)
+	c.traceWiring(
+		"assert.eq",
+		"lhs=compliance.seed",
+		"rhs=compliance.seed.computed",
+	)
+	api.AssertIsEqual(c.Compliance.Seed, computedSeed)
+	c.traceWiring(
+		"gadget.poseidon_hash2",
+		"domain=withdrawal_key_confirmation",
+		"in0=compliance.seed",
+		"in1=compliance.epk_fq",
+		"out=compliance.key_confirmation.computed",
+	)
+	confirmation, err := Poseidon377Hash2(
+		api,
+		WithdrawalKeyConfirmationDomain,
+		[2]frontend.Variable{c.Compliance.Seed, epkFq},
+	)
+	if err != nil {
+		return nil, err
+	}
+	c.bindSemantic("compliance.key_confirmation.computed", confirmation)
+	c.traceWiring(
+		"assert.eq",
+		"lhs=compliance.key_confirmation",
+		"rhs=compliance.key_confirmation.computed",
+	)
+	api.AssertIsEqual(c.Compliance.KeyConfirmation, confirmation)
+	c.traceWiring(
+		"gadget.poseidon_encryption.address",
+		"tier=withdrawal_sender",
+		"ss=compliance.shared.selected",
+		"c2=compliance.c2",
+		"div_gen_fq=sender.div_gen_fq",
+		"transmission_fq=sender.transmission_fq",
+		"out=compliance.encrypted_sender_address",
+	)
+	if err := VerifyPoseidonEncryptionTransferAddress(
+		api,
+		sharedSecret,
+		c.Compliance.C2,
+		shared.senderDivGenFq,
+		shared.senderTransmissionFq,
+		c.Compliance.EncryptedSenderAddress,
+	); err != nil {
+		return nil, err
+	}
+	return epkFq, nil
 }
 
 func shieldedIcs20WithdrawalSyntheticDummyNullifierDomain() *big.Int {
@@ -632,6 +738,7 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifySpendFacts(
 		shared.sharedAssetID,
 		shared.senderDivGenFq,
 		shared.senderTransmissionFq,
+		spend.Note.RecoveryCommitment,
 	)
 	c.traceWiring(
 		"gadget.note_commitment",
@@ -649,6 +756,7 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifySpendFacts(
 		shared.sharedAssetID,
 		shared.senderDivGenFq,
 		shared.senderTransmissionFq,
+		spend.Note.RecoveryCommitment,
 	)
 	if err != nil {
 		return shieldedIcs20WithdrawalVerifiedSpend{}, err
@@ -662,7 +770,7 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifySpendFacts(
 		"position="+name+".state_proof.position",
 		"out="+name+".nullifier.real",
 	)
-	realNullifier, err := Nullifier(api, c.Auth.NK, spentCommitment, spend.StateProof.Position)
+	realNullifier, err := Nullifier(api, shared.effectiveNK, spentCommitment, spend.StateProof.Position)
 	if err != nil {
 		return shieldedIcs20WithdrawalVerifiedSpend{}, err
 	}
@@ -875,6 +983,7 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifyChangeOutput(
 		shared.sharedAssetID,
 		shared.senderDivGenFq,
 		shared.senderTransmissionFq,
+		output.Note.RecoveryCommitment,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -886,6 +995,16 @@ func (c *ShieldedIcs20WithdrawalCircuit) verifyChangeOutput(
 		"rhs=output0.note_commitment.claimed",
 	)
 	api.AssertIsEqual(createdCommitment, output.NoteCommitment)
+	if err := VerifyRecoveryCapsule(
+		api,
+		shared.senderACK,
+		output.Note.Amount,
+		output.Note.Blinding,
+		output.Recovery,
+	); err != nil {
+		return nil, nil, err
+	}
+	api.AssertIsEqual(output.Recovery.Commitment, output.Note.RecoveryCommitment)
 
 	return output.Note.Amount, output.NoteCommitment, nil
 }

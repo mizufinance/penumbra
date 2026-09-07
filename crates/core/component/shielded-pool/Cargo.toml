@@ -19,7 +19,6 @@ component = [
     "ibc-proto/server",
     "ibc-proto/transport",
 ]
-# proving-keys = ["shieldd-sdk-proof-params/proving-keys"]
 default = ["std", "component"]
 std = ["ark-ff/std"]
 bundled-proving-keys = ["shieldd-sdk-proof-params/bundled-proving-keys"]
@@ -34,7 +33,7 @@ parallel = [
 ]
 docsrs = []
 benchmark-helpers = ["component", "shieldd-sdk-ibc/benchmark-helpers"]
-poc-orbis-v0 = ["shieldd-sdk-compliance/poc-orbis-v0"]
+poc-orbis = ["shieldd-sdk-compliance/poc-orbis"]
 
 [dependencies]
 anyhow = {workspace = true}

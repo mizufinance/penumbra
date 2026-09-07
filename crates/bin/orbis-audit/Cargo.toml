@@ -20,7 +20,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 shieldd-orbis-client = { workspace = true }
-shieldd-sdk-compliance = { workspace = true, default-features = false, features = ["poc-orbis-v0"] }
+shieldd-sdk-compliance = { workspace = true, default-features = false, features = ["poc-orbis"] }
 shieldd-sdk-keys = { workspace = true, default-features = true }
 shieldd-sdk-shielded-pool = { workspace = true, default-features = true }
 tokio = { workspace = true, features = ["full"] }

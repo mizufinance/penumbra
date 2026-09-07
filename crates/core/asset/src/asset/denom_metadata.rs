@@ -446,24 +446,22 @@ impl Unit {
 
     pub fn format_value(&self, value: Amount) -> String {
         let power_of_ten = Amount::from(10u128.pow(self.exponent().into()));
-        let v1 = value / power_of_ten;
-        let v2 = value % power_of_ten;
+        let integer = value / power_of_ten;
+        let fraction = value % power_of_ten;
 
-        // Pad `v2` to exponent digits.
-        let v2_str = format!(
+        // Pad the fractional component to exponent digits.
+        let fraction_string = format!(
             "{:0width$}",
-            u128::from(v2),
+            u128::from(fraction),
             width = self.exponent() as usize
         );
 
-        // For `v2`, there may be trailing zeros that should be stripped
-        // since they are after the decimal point.
-        let v2_stripped = v2_str.trim_end_matches('0');
+        let fraction_trimmed = fraction_string.trim_end_matches('0');
 
-        if v2 != Amount::zero() {
-            format!("{v1}.{v2_stripped}")
+        if fraction != Amount::zero() {
+            format!("{integer}.{fraction_trimmed}")
         } else {
-            format!("{v1}")
+            format!("{integer}")
         }
     }
 
@@ -478,27 +476,27 @@ impl Unit {
             // such that the rest of the logic is the same.
             let right = if split.len() > 1 { split[1] } else { "0" };
 
-            let v1 = left.parse::<u128>().map_err(|e| anyhow::anyhow!(e))?;
-            let mut v2 = right.parse::<u128>().map_err(|e| anyhow::anyhow!(e))?;
-            let v1_power_of_ten = 10u128.pow(self.exponent().into());
+            let integer = left.parse::<u128>().map_err(|e| anyhow::anyhow!(e))?;
+            let mut fraction = right.parse::<u128>().map_err(|e| anyhow::anyhow!(e))?;
+            let unit_scale = 10u128.pow(self.exponent().into());
 
-            if right.len() == (self.exponent() + 1) as usize && v2 == 0 {
-                // This stanza means that the value is the base unit. Simply return v1.
-                return Ok(v1.into());
+            if right.len() == (self.exponent() + 1) as usize && fraction == 0 {
+                // This stanza means that the value is the base unit.
+                return Ok(integer.into());
             } else if right.len() > self.exponent().into() {
                 anyhow::bail!("cannot represent this value");
             }
 
-            let v2_power_of_ten = 10u128.pow((self.exponent() - right.len() as u8).into());
-            v2 = v2
-                .checked_mul(v2_power_of_ten)
+            let fraction_scale = 10u128.pow((self.exponent() - right.len() as u8).into());
+            fraction = fraction
+                .checked_mul(fraction_scale)
                 .context("multiplication overflowed when applying right hand side exponent")?;
 
-            let v = v1
-                .checked_mul(v1_power_of_ten)
-                .and_then(|x| x.checked_add(v2));
+            let scaled = integer
+                .checked_mul(unit_scale)
+                .and_then(|value| value.checked_add(fraction));
 
-            if let Some(value) = v {
+            if let Some(value) = scaled {
                 Ok(value.into())
             } else {
                 anyhow::bail!("overflow!")

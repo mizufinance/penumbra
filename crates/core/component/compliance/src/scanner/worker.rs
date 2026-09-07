@@ -605,15 +605,19 @@ mod tests {
     async fn worker_validates_detected_metadata_only_evidence() {
         let store = Arc::new(SqliteScannerStore::new(":memory:").unwrap());
         let (evidence, metadata) = crate::evidence::tests::valid_evidence_fixture();
-        let block = evidence.output_ref.action.tx.block.clone();
+        let block = evidence.output_ref().action.tx.block.clone();
+        let crate::ComplianceEvidenceCiphertext::Transfer(ciphertext) = &evidence.ciphertext else {
+            panic!("transfer fixture expected")
+        };
         let event = crate::scanner::DetectionEvent {
-            output_ref: evidence.output_ref.clone(),
+            record_ref: evidence.record_ref.clone(),
             asset_id: evidence.asset_id,
             is_flagged: evidence.is_flagged,
             salt: evidence.detection_salt,
             routing_tags: [11, 22],
-            ciphertext: evidence.transfer_ciphertext.clone(),
-            raw_bytes: evidence.transfer_ciphertext.to_bytes(),
+            ciphertext: super::super::types::ComplianceCiphertext::Transfer(ciphertext.clone()),
+            raw_bytes: ciphertext.to_bytes(),
+            public_withdrawal: None,
         };
 
         let metadata_bytes = metadata.to_bytes().unwrap();
@@ -623,9 +627,11 @@ mod tests {
                 block,
                 outputs: vec![ScannedOutput {
                     ciphertext: ExtractedComplianceCiphertext {
-                        output_ref: evidence.output_ref.clone(),
+                        record_ref: evidence.record_ref.clone(),
+                        kind: super::super::types::ComplianceCiphertextKind::Transfer,
+                        public_withdrawal: None,
                         routing_tags: [11, 22],
-                        raw_bytes: evidence.transfer_ciphertext.to_bytes(),
+                        raw_bytes: evidence.ciphertext_bytes(),
                         metadata_bytes: Some(metadata_bytes),
                     },
                     outcome: OutputOutcome::Detected {

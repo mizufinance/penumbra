@@ -67,8 +67,8 @@ pub mod nullifier_generations {
         format!("sct/nullifier_generations/tree/{}", tree.storage_segment())
     }
 
-    pub fn schema_version(tree: NullifierTreeId) -> String {
-        format!("{}/schema_version", tree_base(tree))
+    pub fn schema(tree: NullifierTreeId) -> String {
+        format!("{}/schema", tree_base(tree))
     }
 
     pub fn root(tree: NullifierTreeId) -> String {

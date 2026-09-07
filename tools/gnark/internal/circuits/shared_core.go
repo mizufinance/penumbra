@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	decafgnark "github.com/mizufinance/decaf377-go/gnark"
+	"golang.org/x/crypto/blake2b"
 	"math/big"
 
 	curves "github.com/consensys/gnark-crypto/ecc/twistededwards"
@@ -12,6 +13,18 @@ import (
 	. "github.com/mizufinance/shieldd/tools/gnark/internal/compliance"
 	. "github.com/mizufinance/shieldd/tools/gnark/internal/primitives"
 )
+
+func ComplianceNullifierKeyCommitment(
+	api frontend.API,
+	rnk frontend.Variable,
+) (frontend.Variable, error) {
+	domain := blake2b.Sum512([]byte("shieldd.compliance.nullifier_key"))
+	return Poseidon377Hash1(
+		api,
+		LittleEndianBytesToBigInt(domain[:]),
+		rnk,
+	)
+}
 
 func CompressedLEHexToBigInt(value string) (*big.Int, error) {
 	bytes, err := hex.DecodeString(value)
@@ -35,6 +48,7 @@ func NoteCommitment(
 	noteAssetID frontend.Variable,
 	diversifiedGenerator gnarkte.Point,
 	transmissionKeyS frontend.Variable,
+	recoveryCommitment frontend.Variable,
 ) (frontend.Variable, error) {
 	diversifiedGeneratorFq, err := decafgnark.CompressToField(api, diversifiedGenerator)
 	if err != nil {
@@ -48,6 +62,7 @@ func NoteCommitment(
 		noteAssetID,
 		diversifiedGeneratorFq,
 		transmissionKeyS,
+		recoveryCommitment,
 	)
 }
 
@@ -58,57 +73,23 @@ func NoteCommitmentWithCompressedDivGen(
 	noteAssetID frontend.Variable,
 	diversifiedGeneratorFq frontend.Variable,
 	transmissionKeyS frontend.Variable,
+	recoveryCommitment frontend.Variable,
 ) (frontend.Variable, error) {
 	vectors, err := LoadPrototypeVectors()
 	if err != nil {
 		return nil, err
 	}
 
-	return Poseidon377Hash5(
+	return Poseidon377Hash6(
 		api,
 		MustBigInt(vectors.Poseidon377.NoteCommitDomain),
-		[5]frontend.Variable{
+		[6]frontend.Variable{
 			noteBlinding,
 			noteAmount,
 			noteAssetID,
 			diversifiedGeneratorFq,
 			transmissionKeyS,
-		},
-	)
-}
-
-func ComplianceLeafCommitmentFromFixtureNative(fixture SpendFixture) (*big.Int, error) {
-	vectors, err := LoadPrototypeVectors()
-	if err != nil {
-		return nil, err
-	}
-
-	diversifiedGeneratorFq, err := decafgnark.CompressToFieldNative(
-		PointAffineToNative(fixture.Private.UserDiversifiedGeneratorAffine),
-	)
-	if err != nil {
-		return nil, err
-	}
-	transmissionKeyFq, err := decafgnark.CompressToFieldNative(
-		PointAffineToNative(fixture.Private.UserTransmissionKeyAffine),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	status := big.NewInt(1)
-	if fixture.Private.UserLeaf.Status != "" {
-		status = MustBigInt(fixture.Private.UserLeaf.Status)
-	}
-
-	return Poseidon377Hash5Native(
-		MustBigInt(vectors.Poseidon377.ComplianceLeafDomain),
-		[5]*big.Int{
-			diversifiedGeneratorFq,
-			transmissionKeyFq,
-			MustBigInt(fixture.Private.NoteAssetID),
-			MustBigInt(fixture.Private.UserDDecimal),
-			status,
+			recoveryCommitment,
 		},
 	)
 }
@@ -118,7 +99,9 @@ func ComplianceLeafCommitment(
 	diversifiedGenerator gnarkte.Point,
 	transmissionKey gnarkte.Point,
 	assetID frontend.Variable,
-	d frontend.Variable,
+	capk gnarkte.Point,
+	rnkDhPk gnarkte.Point,
+	rnkCommitment frontend.Variable,
 	status frontend.Variable,
 ) (frontend.Variable, error) {
 	diversifiedGeneratorFq, err := decafgnark.CompressToField(api, diversifiedGenerator)
@@ -135,7 +118,9 @@ func ComplianceLeafCommitment(
 		diversifiedGeneratorFq,
 		transmissionKeyFq,
 		assetID,
-		d,
+		capk,
+		rnkDhPk,
+		rnkCommitment,
 		status,
 	)
 }
@@ -145,46 +130,62 @@ func ComplianceLeafCommitmentFromCompressed(
 	diversifiedGeneratorFq frontend.Variable,
 	transmissionKeyFq frontend.Variable,
 	assetID frontend.Variable,
-	d frontend.Variable,
+	capk gnarkte.Point,
+	rnkDhPk gnarkte.Point,
+	rnkCommitment frontend.Variable,
 	status frontend.Variable,
 ) (frontend.Variable, error) {
 	vectors, err := LoadPrototypeVectors()
 	if err != nil {
 		return nil, err
 	}
+	curve, err := gnarkte.NewEdCurve(api, curves.BLS12_377)
+	if err != nil {
+		return nil, err
+	}
+	curve.AssertIsOnCurve(capk)
+	AssertDecafNonIdentity(api, capk)
+	curve.AssertIsOnCurve(rnkDhPk)
+	AssertDecafNonIdentity(api, rnkDhPk)
+	capkFq, err := decafgnark.CompressToField(api, capk)
+	if err != nil {
+		return nil, err
+	}
 
-	return Poseidon377Hash5(
+	rnkDhPkFq, err := decafgnark.CompressToField(api, rnkDhPk)
+	if err != nil {
+		return nil, err
+	}
+
+	return Poseidon377Hash7(
 		api,
 		MustBigInt(vectors.Poseidon377.ComplianceLeafDomain),
-		[5]frontend.Variable{
+		[7]frontend.Variable{
 			diversifiedGeneratorFq,
 			transmissionKeyFq,
 			assetID,
-			d,
+			capkFq,
+			rnkDhPkFq,
+			rnkCommitment,
 			status,
 		},
 	)
 }
 
-func BlindSenderLeafFromFixtureNative(fixture SpendFixture) (*big.Int, error) {
-	vectors, err := LoadPrototypeVectors()
-	if err != nil {
-		return nil, err
-	}
-
-	leafCommitment, err := ComplianceLeafCommitmentFromFixtureNative(fixture)
-	if err != nil {
-		return nil, err
-	}
-
-	return Poseidon377Hash3Native(
-		MustBigInt(vectors.Poseidon377.SenderLeafDomain),
-		[3]*big.Int{
-			leafCommitment,
-			MustBigInt(fixture.Private.TxBlindingNonce),
-			big.NewInt(0),
-		},
-	)
+// AssertActiveComplianceLifecycle constrains the packed lifecycle value.
+// Layout is status[3] || freeze_generation[64] || frozen_since_height[64],
+// little-endian. An active leaf keeps its authenticated freeze generation but
+// must have no current frozen-since height.
+func AssertActiveComplianceLifecycle(
+	api frontend.API,
+	lifecycle frontend.Variable,
+	enabled frontend.Variable,
+) {
+	bits := api.ToBinary(lifecycle, 131)
+	status := api.FromBinary(bits[:3]...)
+	frozenSinceHeight := api.FromBinary(bits[67:131]...)
+	AssertEqualIf(api, status, 1, enabled)
+	AssertEqualIf(api, frozenSinceHeight, 0, enabled)
 }
 
 func BlindSenderLeaf(

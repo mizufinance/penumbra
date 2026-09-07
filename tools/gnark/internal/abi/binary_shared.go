@@ -23,15 +23,15 @@ type MerklePathBinary struct {
 }
 
 type IndexedLeafBinary struct {
-	Value           [32]byte
-	NextIndex       uint64
-	NextValue       [32]byte
-	Threshold       [16]byte
-	RoutePolicyHash [32]byte
-	RingIDHash      [32]byte
-	PolicyIDHash    [32]byte
-	PermissionHash  [32]byte
-	ResourceHash    [32]byte
+	Value            [32]byte
+	NextIndex        uint64
+	NextValue        [32]byte
+	DailyVolumeLimit [16]byte
+	RoutePolicyHash  [32]byte
+	RingIDHash       [32]byte
+	PolicyIDHash     [32]byte
+	PermissionHash   [32]byte
+	ResourceHash     [32]byte
 }
 
 type PointAffineBinary struct {
@@ -225,7 +225,7 @@ func readIndexedLeaf(r io.Reader) (IndexedLeafBinary, error) {
 	if out.NextValue, err = read32(r); err != nil {
 		return out, err
 	}
-	if _, err := io.ReadFull(r, out.Threshold[:]); err != nil {
+	if _, err := io.ReadFull(r, out.DailyVolumeLimit[:]); err != nil {
 		return out, err
 	}
 	if out.RoutePolicyHash, err = read32(r); err != nil {

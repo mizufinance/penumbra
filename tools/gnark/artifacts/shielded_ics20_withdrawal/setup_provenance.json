@@ -1,23 +1,31 @@
 {
-  "schema": "shieldd.gnark.setup_provenance.v2",
+  "schema": "shieldd.gnark.setup_provenance",
   "curve": "bls12-377",
   "circuit": "shielded_ics20_withdrawal",
   "mode": "fresh_setup",
-  "sr1cs_sha256_hex": "493abc8d370004015b028b881b5728b2d3bdb55cec932849c50e907191812725",
-  "proving_key_sha256_hex": "b80fa91410a116c52fd127ca0e9c541b71c5487dfef55726f09670b8cb8131ba",
-  "verifying_key_binary_sha256_hex": "e43d0025eb4761f37bdbf6bd2a65481a26ced0914c1ba1e4869f50b7915619f2",
-  "verifying_key_json_sha256_hex": "f3324150824b54331dca5656656e9c7ca4589955432423be1f01af742ed344f4",
+  "sr1cs_sha256_hex": "127159e540f330dfc4931e048c144bdd912d5e6210420fa660368e3bef7e664d",
+  "proving_key_sha256_hex": "691f8d865e5d04532d308115f9cd15e871009db00b2faece080dabb1e90188b7",
+  "verifying_key_binary_sha256_hex": "fdb5ff5018bb696afb2f0c1676879ad7cc32fda01c5246097dcbcc2761e92772",
+  "verifying_key_json_sha256_hex": "5ed9c5b16007f3117b9eeeb510e475774058c082611927930be25d8aa05b960c",
   "generation_self_tests": [
     {
-      "proof_case": "regulated_optional_real",
-      "witness_format_version": 12,
-      "witness_sha256_hex": "cd897ba47a2148c4a9f1bd9678b09619fcd716ec3b7a1cc5fb3b33223c517dfb",
+      "proof_case": "regulated_disclosed",
+      "witness_sha256_hex": "ad3765869fcd7a09f235b56270074202fe88c862caf1a9767fb990fb1e4f98a5",
       "proved_and_verified_in_process": true
     },
     {
-      "proof_case": "unregulated_optional_dummy",
-      "witness_format_version": 12,
-      "witness_sha256_hex": "7e73a47914e576ae12dbb4b80a4fd37134f1a68c6f8163e5073757c0227c0965",
+      "proof_case": "unregulated_hidden",
+      "witness_sha256_hex": "61427f36a6f621e404cc5ec3fb4820e7655c4fc65ded651f59a87abddfa4a9ae",
+      "proved_and_verified_in_process": true
+    },
+    {
+      "proof_case": "accumulator_origin",
+      "witness_sha256_hex": "3625277e2a3909659c35453f11f96278a9abef681829b041a5b7b2ec04bba3f1",
+      "proved_and_verified_in_process": true
+    },
+    {
+      "proof_case": "accumulator_continuation",
+      "witness_sha256_hex": "aa5e311093753a87269a85bcbe3db6f7a23c8f9a05d7d6f4c239fbc3b310f7bd",
       "proved_and_verified_in_process": true
     }
   ],

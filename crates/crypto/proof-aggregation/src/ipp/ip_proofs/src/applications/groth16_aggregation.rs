@@ -2095,7 +2095,7 @@ pub struct AggregateProofData<
 
 /// Aggregate-proof wire tree with a caller-selected target-group encoding.
 ///
-/// This is the v1 tree shape; selecting another `GT` changes only the target
+/// This is the aggregate tree shape; selecting another `GT` changes only the target
 /// values stored at its leaves. Protocol-specific codecs must still validate
 /// the reconstructed target-group values before verification.
 #[doc(hidden)]
@@ -2498,7 +2498,7 @@ where
 {
     let randomizer_message = validated_aggregate_randomizer_message(proof)?;
     // Construct the complete adapter input through the shared root used
-    // by the shipping-to-v1 refinement.
+    // by the shipping refinement.
     let input = shipping_aggregate_adapter_core_input_validated::<P, D>(
         pvk,
         public_inputs,
@@ -4023,14 +4023,15 @@ mod tests {
             normal_trace
                 .entries()
                 .iter()
-                .map(|entry| entry.stage_label)
+                .map(|entry| (entry.stage_label, entry.nonce))
                 .collect::<Vec<_>>(),
             vec![
-                b"aggregate.randomizer".as_slice(),
-                b"tipp-mipp.x0".as_slice(),
-                b"tipp-mipp.gipa.round".as_slice(),
-                b"tipp-mipp.final-bridge".as_slice(),
-                b"tipp-mipp.kzg".as_slice(),
+                (b"aggregate.randomizer".as_slice(), 0),
+                (b"tipp-mipp.x0".as_slice(), 0),
+                (b"tipp-mipp.gipa.round".as_slice(), 0),
+                (b"tipp-mipp.final-bridge".as_slice(), 0),
+                (b"tipp-mipp.kzg".as_slice(), 0),
+                (b"tipp-mipp.kzg".as_slice(), 1),
             ]
         );
         assert!(normal_trace.entries().iter().all(|entry| entry.nonce == 0));

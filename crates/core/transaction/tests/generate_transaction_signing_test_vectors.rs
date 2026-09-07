@@ -325,6 +325,16 @@ fn transaction_plan_strategy(fvk: &FullViewingKey) -> impl Strategy<Value = Tran
             memo: None,
             nullifier_window: None,
         };
+        for action in &mut plan.actions {
+            let nonce = match action {
+                ActionPlan::Transfer(plan) => &mut plan.compliance.nonce,
+                ActionPlan::NoteReshape(plan) => &mut plan.compliance.nonce,
+                ActionPlan::ShieldedIcs20Withdrawal(plan) => &mut plan.compliance.nonce,
+                ActionPlan::ShieldedHostWithdrawal(plan) => &mut plan.compliance.nonce,
+                _ => continue,
+            };
+            *nonce = Fr::rand(&mut OsRng);
+        }
         if plan.num_spends() > 0 {
             plan.nullifier_window = Some(NullifierWindow {
                 protocol_version: PROTOCOL_VERSION,

@@ -54,6 +54,7 @@ pub struct NoteReshapeInputPublic {
 #[derive(Clone, Debug)]
 pub struct NoteReshapeOutputPublic {
     pub note_commitment: tct::StateCommitment,
+    pub recovery_commitment: crate::RecoveryCommitment,
 }
 
 #[derive(Clone, Debug)]

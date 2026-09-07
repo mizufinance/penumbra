@@ -117,6 +117,7 @@ url = { workspace = true }
 zip = "0.6"
 
 [dev-dependencies]
+shieldd-sdk-compliance = { workspace = true, features = ["test-helpers"], default-features = true }
 shieldd-sdk-proof-params = { workspace = true, features = [
     "bundled-proving-keys",
 ], default-features = true }

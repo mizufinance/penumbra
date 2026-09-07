@@ -5,14 +5,17 @@ use cnidarium_component::ActionHandler;
 use shieldd_sdk_compliance::registry::ComplianceRegistryRead;
 use shieldd_sdk_proof_params::batch::{self, BatchItem, VerifiedBatchItem};
 use shieldd_sdk_sct::component::clock::EpochRead;
+use shieldd_sdk_sct::component::source::SourceContext as _;
 use shieldd_sdk_txhash::TransactionContext;
 
 use crate::transfer::compliance::{
     parse_transfer_output_compliance, transfer_compliance_public_from_parts,
 };
 use crate::{
-    component::action_handler::note_reshape, Transfer, TransferOutputPublic, TransferProofPublic,
-    TransferSpendPublic,
+    component::action_handler::note_reshape,
+    component::{NoteManager as _, StateReadExt as _, StateWriteExt as _},
+    Transfer, TransferOutputPublic, TransferProofContext, TransferProofPublic, TransferSpendPublic,
+    VolumeAccumulatorPublic,
 };
 
 fn transfer_verify_auth_sigs(transfer: &Transfer, context: &TransactionContext) -> Result<()> {
@@ -61,6 +64,12 @@ pub(crate) fn transfer_extract_public(
         .map(|output| {
             Ok(TransferOutputPublic {
                 note_commitment: output.note_payload.note_commitment,
+                recovery_commitment: output
+                    .note_payload
+                    .recovery_capsule
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("missing transfer recovery capsule"))?
+                    .commitment(),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -77,6 +86,12 @@ pub(crate) fn transfer_extract_public(
         routing: transfer.body.routing,
         routing_parameter_set_id: transfer.body.routing_parameter_set_id,
         recent_position_floor: context.recent_position_floor,
+        volume_accumulator: VolumeAccumulatorPublic {
+            nullifier: transfer.body.volume_accumulator.nullifier,
+            commitment: transfer.body.volume_accumulator.commitment,
+            day_start: transfer.body.volume_accumulator.day_start,
+        },
+        proof_context: transfer.body.proof_context,
     };
     public
         .validate_shape()
@@ -91,12 +106,17 @@ fn transfer_to_batch_item(transfer: &Transfer, public: TransferProofPublic) -> R
 pub fn transfer_check_stateless_and_extract(
     transfer: &Transfer,
     context: &TransactionContext,
+    expected_context: TransferProofContext,
 ) -> Result<BatchItem> {
     note_reshape::validate_action_anchor("transfer", transfer.body.anchor, context)?;
     transfer
         .body
         .validate_shape()
         .context("transfer body shape mismatch")?;
+    anyhow::ensure!(
+        transfer.body.proof_context == expected_context,
+        "transfer proof context does not match its transaction location"
+    );
     transfer_verify_auth_sigs(transfer, context)?;
     transfer_check_lengths(transfer)?;
     let public = transfer_extract_public(transfer, context)?;
@@ -106,6 +126,7 @@ pub fn transfer_check_stateless_and_extract(
 /// Evidence that an exact verified Transfer passed its state preconditions.
 pub struct ValidatedTransferExecution {
     item: BatchItem,
+    proof_context: TransferProofContext,
 }
 
 /// Validate an exact verified Transfer against the current state.
@@ -113,9 +134,10 @@ pub async fn transfer_validate_verified<S: StateWrite>(
     transfer: &Transfer,
     context: &TransactionContext,
     verified_proof: &VerifiedBatchItem,
+    expected_context: TransferProofContext,
     state: S,
 ) -> Result<ValidatedTransferExecution> {
-    let item = transfer_check_stateless_and_extract(transfer, context)?;
+    let item = transfer_check_stateless_and_extract(transfer, context, expected_context)?;
     verified_proof
         .ensure_binds(shieldd_sdk_proof_params::DeployedProofKey::Transfer, &item)
         .context("transfer verified proof capability mismatch")?;
@@ -133,8 +155,19 @@ pub async fn transfer_validate_verified<S: StateWrite>(
         transfer.body.target_timestamp,
         block_time.unix_timestamp(),
     )?;
+    if expected_context == TransferProofContext::Ordinary {
+        state
+            .check_volume_nullifier_unspent(
+                transfer.body.volume_accumulator.day_start,
+                transfer.body.volume_accumulator.nullifier,
+            )
+            .await?;
+    }
 
-    Ok(ValidatedTransferExecution { item })
+    Ok(ValidatedTransferExecution {
+        item,
+        proof_context: expected_context,
+    })
 }
 
 /// Apply proof-bound effects after exact Transfer preconditions were validated.
@@ -144,7 +177,7 @@ pub async fn transfer_execute_validated<S: StateWrite>(
     validated: ValidatedTransferExecution,
     mut state: S,
 ) -> Result<()> {
-    let item = transfer_check_stateless_and_extract(transfer, context)?;
+    let item = transfer_check_stateless_and_extract(transfer, context, validated.proof_context)?;
     anyhow::ensure!(
         validated.item == item,
         "validated transfer capability does not bind this exact action"
@@ -157,7 +190,23 @@ pub async fn transfer_execute_validated<S: StateWrite>(
         |input| input.nullifier,
         |output| &output.note_payload,
     )
-    .await
+    .await?;
+
+    if validated.proof_context == TransferProofContext::Ordinary {
+        let source = state
+            .get_current_source()
+            .ok_or_else(|| anyhow::anyhow!("source should be set during execution"))?;
+        state
+            .record_volume_nullifier(
+                transfer.body.volume_accumulator.day_start,
+                transfer.body.volume_accumulator.nullifier,
+            )
+            .await?;
+        state
+            .add_volume_accumulator_payload(transfer.body.volume_accumulator.clone(), source.into())
+            .await;
+    }
+    Ok(())
 }
 
 /// Execute a Transfer whose exact proof item has already verified.
@@ -165,10 +214,17 @@ pub async fn transfer_execute_verified<S: StateWrite>(
     transfer: &Transfer,
     context: &TransactionContext,
     verified_proof: &VerifiedBatchItem,
+    expected_context: TransferProofContext,
     mut state: S,
 ) -> Result<()> {
-    let validated =
-        transfer_validate_verified(transfer, context, verified_proof, &mut state).await?;
+    let validated = transfer_validate_verified(
+        transfer,
+        context,
+        verified_proof,
+        expected_context,
+        &mut state,
+    )
+    .await?;
     transfer_execute_validated(transfer, context, validated, &mut state).await
 }
 
@@ -177,7 +233,8 @@ impl ActionHandler for Transfer {
     type CheckStatelessContext = TransactionContext;
 
     async fn check_stateless(&self, context: TransactionContext) -> Result<()> {
-        let item = transfer_check_stateless_and_extract(self, &context)?;
+        let item =
+            transfer_check_stateless_and_extract(self, &context, TransferProofContext::Ordinary)?;
         batch::verify_each(
             shieldd_sdk_proof_params::transfer_proof_verification_key(),
             std::slice::from_ref(&item),
@@ -199,10 +256,7 @@ mod tests {
     use shieldd_sdk_sct::component::tree::SctRead as _;
 
     use super::*;
-    use crate::{
-        component::NoteManager as _,
-        test_proof_helpers::proof_test_helpers::build_transfer_action_and_public_without_proof,
-    };
+    use crate::test_proof_helpers::proof_test_helpers::build_transfer_action_and_public_without_proof;
 
     #[test]
     fn auth_verification_rejects_invalid_fixed_slot_signature() {

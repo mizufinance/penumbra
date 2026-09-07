@@ -55,10 +55,19 @@ fn note_reshape_extract_public(
             .collect(),
         outputs: outputs
             .into_iter()
-            .map(|output| NoteReshapeOutputPublic {
-                note_commitment: output.note_commitment,
+            .zip(note_reshape.body.outputs.iter())
+            .map(|(output, body_output)| {
+                Ok(NoteReshapeOutputPublic {
+                    note_commitment: output.note_commitment,
+                    recovery_commitment: body_output
+                        .note_payload
+                        .recovery_capsule
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("missing note reshape recovery capsule"))?
+                        .commitment(),
+                })
             })
-            .collect(),
+            .collect::<Result<Vec<_>>>()?,
     };
     public
         .validate_shape()

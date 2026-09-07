@@ -294,11 +294,14 @@ mod tests {
 
     fn leaf(status: UserAssetStatus) -> ComplianceLeaf {
         let mut rng = rand::thread_rng();
-        let mut leaf = ComplianceLeaf::new(
+        let mut leaf = ComplianceLeaf::registered_for_test(
             shieldd_sdk_keys::Address::dummy(&mut rng),
             asset::Id(decaf377::Fq::from(7u64)),
         );
-        leaf.status = status;
+        if status == UserAssetStatus::Frozen {
+            leaf.apply_status_action(crate::UserAssetStatusAction::Freeze, 1)
+                .expect("test freeze transition");
+        }
         leaf
     }
 

@@ -16,10 +16,10 @@ pub const DEFAULT_REGULATED_PRECISION_BITS: u8 = 12;
 pub const DEFAULT_UNREGULATED_PRECISION_BITS: u8 = 18;
 pub const DEFAULT_GRACE_PERIOD_BLOCKS: u64 = 16;
 
-static ROUTE_DOMAIN: Lazy<Fq> = Lazy::new(|| domain(b"shieldd.discovery.route.v2"));
-static TAG_RANDOM_DOMAIN: Lazy<Fq> = Lazy::new(|| domain(b"shieldd.discovery.tag_random.v2"));
-static TAG_PERMUTATION_DOMAIN: Lazy<Fq> = Lazy::new(|| domain(b"shieldd.discovery.permutation.v2"));
-static PARAMETERS_DOMAIN: Lazy<Fq> = Lazy::new(|| domain(b"shieldd.discovery.parameters.v2"));
+static ROUTE_DOMAIN: Lazy<Fq> = Lazy::new(|| domain(b"shieldd.discovery.route"));
+static TAG_RANDOM_DOMAIN: Lazy<Fq> = Lazy::new(|| domain(b"shieldd.discovery.tag_random"));
+static TAG_PERMUTATION_DOMAIN: Lazy<Fq> = Lazy::new(|| domain(b"shieldd.discovery.permutation"));
+static PARAMETERS_DOMAIN: Lazy<Fq> = Lazy::new(|| domain(b"shieldd.discovery.parameters"));
 
 fn domain(label: &[u8]) -> Fq {
     Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(label).as_bytes())

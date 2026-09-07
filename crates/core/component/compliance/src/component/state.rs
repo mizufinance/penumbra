@@ -10,11 +10,11 @@ use tendermint::v0_37::abci;
 use tracing::instrument;
 
 use crate::{
-    event, genesis,
+    genesis,
     params::StateWriteExt as _,
     registry::{
         AssetGrantAdmission, ComplianceRegistryComponentWrite, ComplianceRegistryRead,
-        ComplianceRegistryWrite, GenesisAssetAdmission, UserGrantAdmission,
+        ComplianceRegistryWrite, GenesisAssetAdmission, GenesisUserAdmission, UserGrantAdmission,
     },
     state_key,
     structs::{MsgRegisterAsset, MsgRegisterUser},
@@ -95,36 +95,10 @@ impl Component for Compliance {
             }
 
             for registration in &genesis.native_assets {
-                let (policy, is_regulated) = if registration.is_regulated {
-                    // Regulated assets MUST have a detection key.
-                    let dk_pub_bytes = registration
-                        .dk_pub
-                        .expect("regulated asset in genesis must have dk_pub");
-                    let registration_authority_vk = registration
-                        .registration_authority_vk
-                        .expect("regulated asset in genesis must have registration_authority_vk");
-                    let dk_pub = decaf377::Encoding(dk_pub_bytes)
-                        .vartime_decompress()
-                        .expect("invalid dk_pub encoding in genesis");
-
-                    (
-                        crate::structs::AssetPolicy::new(
-                            dk_pub,
-                            u128::MAX,
-                            vec![],
-                            None,
-                            String::new(),
-                            decaf377::Element::GENERATOR,
-                            String::new(),
-                            String::new(),
-                            String::new(),
-                        )
-                        .with_registration_authority(registration_authority_vk),
-                        true,
-                    )
-                } else {
-                    (crate::structs::AssetPolicy::default_unregulated(), false)
-                };
+                let policy = registration
+                    .asset_policy()
+                    .expect("native genesis asset policy must be valid");
+                let is_regulated = registration.is_regulated;
 
                 let event_policy = policy.clone();
                 if let Some(result) = state
@@ -156,6 +130,60 @@ impl Component for Compliance {
                         "registered native asset at genesis"
                     );
                 }
+            }
+
+            let chain_id = if genesis.user_registrations.is_empty() {
+                None
+            } else {
+                Some(
+                    state
+                        .get_raw("application/data/chain_id")
+                        .await
+                        .expect("genesis chain id must be readable")
+                        .map(|bytes| {
+                            String::from_utf8(bytes).expect("genesis chain id must be UTF-8")
+                        })
+                        .expect("genesis chain id must be set before compliance initialization"),
+                )
+            };
+            for registration in &genesis.user_registrations {
+                let leaf = &registration.leaf;
+                assert!(
+                    state
+                        .is_asset_regulated(leaf.asset_id)
+                        .await
+                        .expect("genesis user asset status must be readable"),
+                    "genesis compliance users require a regulated asset"
+                );
+                let policy = state
+                    .get_asset_policy(leaf.asset_id)
+                    .await
+                    .expect("genesis user asset policy must be readable")
+                    .expect("genesis user asset must be registered");
+                let position = state
+                    .register_genesis_user(
+                        GenesisUserAdmission::validate(
+                            registration,
+                            &policy,
+                            chain_id
+                                .as_deref()
+                                .expect("genesis user chain id is loaded"),
+                        )
+                        .expect("genesis user registration must be valid"),
+                    )
+                    .await
+                    .expect("must be able to register user at genesis");
+                state.publish_user_registration(crate::event::EventUserRegistered {
+                    position,
+                    commitment: leaf.commit(),
+                    leaf: leaf.clone(),
+                });
+                tracing::info!(
+                    address = ?leaf.address,
+                    ?leaf.asset_id,
+                    position,
+                    "registered compliance user at genesis"
+                );
             }
         }
 
@@ -209,10 +237,14 @@ impl ActionHandler for MsgRegisterUser {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("missing user registration grant"))?;
         anyhow::ensure!(
+            self.capability_certificate.is_some(),
+            "missing Orbis capability certificate"
+        );
+        anyhow::ensure!(
             grant.body.leaf == self.leaf,
             "user registration grant leaf does not match action leaf"
         );
-        self.leaf.validate_derivation()?;
+        self.leaf.validate()?;
         Ok(())
     }
 
@@ -231,7 +263,13 @@ impl ActionHandler for MsgRegisterUser {
             current_unix >= 0,
             "current block timestamp is before Unix epoch"
         );
-        let admission = UserGrantAdmission::verify(self, &policy, current_unix as u64)?;
+        let chain_id = state
+            .get_raw("application/data/chain_id")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("chain id is not initialized"))?;
+        let chain_id = String::from_utf8(chain_id)
+            .map_err(|_| anyhow::anyhow!("stored chain id is not UTF-8"))?;
+        let admission = UserGrantAdmission::verify(self, &policy, current_unix as u64, &chain_id)?;
 
         // Check if user is already registered for this asset (idempotent)
         if let Some(existing_position) = state
@@ -272,15 +310,7 @@ impl ActionHandler for MsgRegisterUser {
             leaf: self.leaf.clone(),
         };
 
-        // Buffer the event for CompactBlock inclusion
-        state.queue_user_registration_event(event.clone());
-
-        // Also emit as ABCI event (for existing event listeners)
-        state.record_proto(event::user_registered(
-            position,
-            commitment,
-            self.leaf.clone(),
-        ));
+        state.publish_user_registration(event);
 
         Ok(())
     }
@@ -308,6 +338,10 @@ impl ActionHandler for MsgRegisterAsset {
             anyhow::ensure!(
                 self.registration_authority_vk.is_some(),
                 "regulated assets require registration_authority_vk"
+            );
+            anyhow::ensure!(
+                self.seizure_authority_vk.is_some(),
+                "regulated assets require seizure_authority_vk"
             );
         } else {
             anyhow::ensure!(
@@ -367,19 +401,48 @@ mod tests {
     use shieldd_sdk_keys::Address;
     use shieldd_sdk_sct::component::clock::EpochManager;
 
-    use crate::genesis::NativeAssetRegistration;
+    use crate::genesis::{GenesisUserRegistration, NativeAssetRegistration};
     use crate::structs::{
-        AssetRegistrationGrant, ComplianceLeaf, MsgRegisterAsset, UserRegistrationGrant,
-        UserRegistrationGrantBody,
+        AssetPolicy, AssetRegistrationGrant, ComplianceLeaf, MsgRegisterAsset,
+        OrbisCapabilityCertificate, UserRegistrationGrant, UserRegistrationGrantBody,
     };
 
     const TEST_BLOCK_UNIX: i64 = 1_700_000_000;
     const TEST_VALID_UNTIL_UNIX: u64 = TEST_BLOCK_UNIX as u64 + 300;
+    const TEST_CHAIN_ID: &str = "shieldd-test";
 
     fn set_test_block_time<S: cnidarium::StateWrite>(state: &mut S, unix: i64) {
         let timestamp =
             tendermint::Time::from_unix_timestamp(unix, 0).expect("test timestamp is valid");
         state.put_block_timestamp(1, timestamp);
+        state.put_raw(
+            "application/data/chain_id".to_string(),
+            TEST_CHAIN_ID.as_bytes().to_vec(),
+        );
+    }
+
+    fn capability_certificate(
+        leaf: &ComplianceLeaf,
+        policy_id: &str,
+    ) -> OrbisCapabilityCertificate {
+        let policy = AssetPolicy::new(
+            decaf377::Element::GENERATOR,
+            u128::MAX,
+            vec![],
+            None,
+            "test-ring".to_owned(),
+            decaf377::Element::GENERATOR,
+            policy_id.to_string(),
+            "read".to_owned(),
+            "document".to_owned(),
+        );
+        OrbisCapabilityCertificate::sign_for_test(
+            TEST_CHAIN_ID,
+            leaf,
+            &policy,
+            decaf377::Fr::from(1u64),
+        )
+        .expect("test Orbis certificate is valid")
     }
 
     fn registrar_genesis(registrar_vk: VerificationKey<SpendAuth>) -> genesis::Content {
@@ -412,15 +475,16 @@ mod tests {
             asset_id,
             is_regulated: true,
             dk_pub: Some(decaf377::Element::GENERATOR),
-            threshold: None,
+            daily_volume_limit: None,
             allowed_ibc_routes: vec![],
             ibc_origin: None,
-            ring_pk: None,
-            ring_id: String::new(),
+            ring_pk: Some(decaf377::Element::GENERATOR),
+            ring_id: "test-ring".to_owned(),
             policy_id: "test-policy".to_string(),
-            permission: String::new(),
-            resource: String::new(),
+            permission: "read".to_owned(),
+            resource: "document".to_owned(),
             registration_authority_vk: Some(authority_vk),
+            seizure_authority_vk: Some(authority_vk),
             asset_registration_grant: None,
         }
     }
@@ -448,6 +512,10 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.put_raw(
+            "application/data/chain_id".to_string(),
+            TEST_CHAIN_ID.as_bytes().to_vec(),
+        );
 
         // Initialize the component with default genesis
         let genesis = genesis::Content::default();
@@ -492,8 +560,21 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.put_raw(
+            "application/data/chain_id".to_string(),
+            TEST_CHAIN_ID.as_bytes().to_vec(),
+        );
 
         let custom_asset = asset::Id(Fq::from(999u64));
+        let address = Address::dummy(&mut rand::thread_rng());
+        let leaf = ComplianceLeaf::registered_from_rnk(
+            address.clone(),
+            custom_asset,
+            decaf377::Element::GENERATOR,
+            address.diversified_generator().clone(),
+            Fq::from(1u64),
+        )
+        .expect("fixed genesis compliance keys are valid");
 
         // Custom genesis with a regulated asset (requires dk_pub)
         let dk_pub_bytes = decaf377::Element::GENERATOR.vartime_compress().0;
@@ -505,8 +586,20 @@ mod tests {
                 registration_authority_vk: Some(VerificationKey::from(
                     &SigningKey::<SpendAuth>::new(OsRng),
                 )),
+                seizure_authority_vk: Some(VerificationKey::from(&SigningKey::<SpendAuth>::new(
+                    OsRng,
+                ))),
+                ring_pk: Some(decaf377::Element::GENERATOR.vartime_compress().0),
+                ring_id: "test-ring".to_owned(),
+                policy_id: "test-policy".to_owned(),
+                permission: "read".to_owned(),
+                resource: "document".to_owned(),
             }],
             compliance_registrar_vk: vec![],
+            user_registrations: vec![GenesisUserRegistration {
+                capability_certificate: capability_certificate(&leaf, "test-policy"),
+                leaf: leaf.clone(),
+            }],
             ..Default::default()
         };
 
@@ -515,6 +608,10 @@ mod tests {
         // Custom asset should be in IMT (regulated)
         let proof_data = state.get_asset_proof_data(custom_asset).await.unwrap();
         assert!(proof_data.is_regulated, "custom asset should be regulated");
+        assert_eq!(
+            state.get_user_leaf(&address, custom_asset).await.unwrap(),
+            Some(leaf)
+        );
     }
 
     #[tokio::test]
@@ -540,9 +637,11 @@ mod tests {
         .await
         .unwrap();
 
-        let leaf = ComplianceLeaf::new(Address::dummy(&mut rand::thread_rng()), asset_id);
+        let leaf =
+            ComplianceLeaf::registered_for_test(Address::dummy(&mut rand::thread_rng()), asset_id);
         let msg = MsgRegisterUser {
             leaf: leaf.clone(),
+            capability_certificate: Some(capability_certificate(&leaf, "test-policy")),
             grant: Some(user_registration_grant(
                 leaf,
                 "test-policy".to_string(),
@@ -562,12 +661,14 @@ mod tests {
                 &msg.leaf.address,
                 asset_id,
                 crate::structs::UserAssetStatusAction::Freeze,
+                1,
             )
             .await
             .unwrap();
         let conflicting_leaf = msg.leaf.clone();
         let conflicting_msg = MsgRegisterUser {
             leaf: conflicting_leaf.clone(),
+            capability_certificate: Some(capability_certificate(&conflicting_leaf, "test-policy")),
             grant: Some(user_registration_grant(
                 conflicting_leaf,
                 "test-policy".to_string(),
@@ -590,7 +691,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn user_registration_derives_distinct_audit_keys_from_distinct_addresses() {
+    async fn user_registration_derives_distinct_capabilities_from_distinct_addresses() {
         let storage = TempStorage::new().await.unwrap();
         let mut state = cnidarium::StateDelta::new(storage.latest_snapshot());
         let registrar_sk = SigningKey::<SpendAuth>::new(OsRng);
@@ -615,9 +716,10 @@ mod tests {
             Address::dummy(&mut rand::thread_rng()),
             Address::dummy(&mut rand::thread_rng()),
         ] {
-            let leaf = ComplianceLeaf::new(address, asset_id);
+            let leaf = ComplianceLeaf::registered_for_test(address, asset_id);
             let msg = MsgRegisterUser {
                 leaf: leaf.clone(),
+                capability_certificate: Some(capability_certificate(&leaf, "test-policy")),
                 grant: Some(user_registration_grant(
                     leaf,
                     "test-policy".to_string(),
@@ -631,7 +733,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn user_registration_rejects_another_addresses_audit_key() {
+    async fn user_registration_rejects_another_addresses_capability() {
         let storage = TempStorage::new().await.unwrap();
         let mut state = cnidarium::StateDelta::new(storage.latest_snapshot());
         let registrar_sk = SigningKey::<SpendAuth>::new(OsRng);
@@ -654,10 +756,12 @@ mod tests {
 
         let first_address = Address::dummy(&mut rand::thread_rng());
         let second_address = Address::dummy(&mut rand::thread_rng());
-        let first_leaf = ComplianceLeaf::new(first_address, asset_id);
-        let reused_key_leaf = ComplianceLeaf::new_unchecked(second_address, asset_id, first_leaf.d);
+        let first_leaf = ComplianceLeaf::registered_for_test(first_address, asset_id);
+        let mut reused_key_leaf = ComplianceLeaf::registered_for_test(second_address, asset_id);
+        reused_key_leaf.capk = first_leaf.capk;
         let msg = MsgRegisterUser {
             leaf: reused_key_leaf.clone(),
+            capability_certificate: Some(capability_certificate(&reused_key_leaf, "test-policy")),
             grant: Some(user_registration_grant(
                 reused_key_leaf,
                 "test-policy".to_string(),
@@ -666,20 +770,20 @@ mod tests {
             )),
         };
         let error = msg
-            .check_stateless(())
+            .check_and_execute(&mut state)
             .await
-            .expect_err("an address cannot reuse another address's audit key");
+            .expect_err("an address cannot reuse another address's capability");
         assert!(
             error
                 .to_string()
-                .contains("does not match the canonical address derivation"),
+                .contains("capk does not match the address and asset ring"),
             "unexpected error: {error:#}"
         );
         assert_eq!(state.get_user_count().await.unwrap(), 0);
     }
 
     #[tokio::test]
-    async fn test_msg_register_user_rejects_zero_derivation() {
+    async fn test_msg_register_user_rejects_identity_capability() {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
@@ -701,13 +805,12 @@ mod tests {
         .await
         .unwrap();
 
-        let leaf = ComplianceLeaf::new_unchecked(
-            Address::dummy(&mut rand::thread_rng()),
-            asset_id,
-            Fq::from(0u64),
-        );
+        let mut leaf =
+            ComplianceLeaf::registered_for_test(Address::dummy(&mut rand::thread_rng()), asset_id);
+        leaf.capk = decaf377::Element::IDENTITY;
         let msg = MsgRegisterUser {
             leaf: leaf.clone(),
+            capability_certificate: Some(capability_certificate(&leaf, "test-policy")),
             grant: Some(user_registration_grant(
                 leaf,
                 "test-policy".to_string(),
@@ -719,10 +822,9 @@ mod tests {
         let err = msg
             .check_stateless(())
             .await
-            .expect_err("zero derivation must be rejected");
+            .expect_err("identity capability must be rejected");
         assert!(
-            err.to_string()
-                .contains("does not match the canonical address derivation"),
+            err.to_string().contains("capk must be nonidentity"),
             "unexpected error: {err}"
         );
         assert_eq!(state.get_user_count().await.unwrap(), 0);
@@ -737,8 +839,12 @@ mod tests {
         Compliance::init_chain(&mut state, Some(&genesis::Content::default())).await;
 
         let msg = MsgRegisterUser {
-            leaf: ComplianceLeaf::new(Address::dummy(&mut rand::thread_rng()), *BASE_ASSET_ID),
+            leaf: ComplianceLeaf::registered_for_test(
+                Address::dummy(&mut rand::thread_rng()),
+                *BASE_ASSET_ID,
+            ),
             grant: None,
+            capability_certificate: None,
         };
 
         let error = msg.check_and_execute(&mut state).await.expect_err(
@@ -768,11 +874,12 @@ mod tests {
         Compliance::init_chain(&mut state, Some(&genesis::Content::default())).await;
 
         let msg = MsgRegisterUser {
-            leaf: ComplianceLeaf::new(
+            leaf: ComplianceLeaf::registered_for_test(
                 Address::dummy(&mut rand::thread_rng()),
                 asset::Id(Fq::from(999_999u64)),
             ),
             grant: None,
+            capability_certificate: None,
         };
 
         let error = msg
@@ -827,6 +934,34 @@ mod tests {
             proof_after.is_regulated,
             "asset should be regulated after registration"
         );
+    }
+
+    #[tokio::test]
+    async fn regulated_asset_registration_requires_explicit_orbis_ring_key() {
+        let storage = TempStorage::new().await.unwrap();
+        let mut state = cnidarium::StateDelta::new(storage.latest_snapshot());
+        let registrar_sk = SigningKey::<SpendAuth>::new(OsRng);
+        let authority_sk = SigningKey::<SpendAuth>::new(OsRng);
+        Compliance::init_chain(
+            &mut state,
+            Some(&registrar_genesis(VerificationKey::from(&registrar_sk))),
+        )
+        .await;
+        set_test_block_time(&mut state, TEST_BLOCK_UNIX);
+
+        let mut registration = regulated_asset_msg(
+            asset::Id(Fq::from(124u64)),
+            VerificationKey::from(&authority_sk),
+        );
+        registration.ring_pk = None;
+        let registration =
+            sign_asset_registration(registration, &registrar_sk, TEST_VALID_UNTIL_UNIX);
+
+        let error = registration
+            .check_and_execute(&mut state)
+            .await
+            .expect_err("regulated registration without a ring key must fail");
+        assert!(error.to_string().contains("require ring_pk"));
     }
 
     #[tokio::test]
@@ -952,16 +1087,19 @@ mod tests {
         .await
         .unwrap();
 
-        let leaf = ComplianceLeaf::new(Address::dummy(&mut rand::thread_rng()), asset_id);
+        let leaf =
+            ComplianceLeaf::registered_for_test(Address::dummy(&mut rand::thread_rng()), asset_id);
 
         let missing_grant = MsgRegisterUser {
             leaf: leaf.clone(),
             grant: None,
+            capability_certificate: Some(capability_certificate(&leaf, "test-policy")),
         };
         assert!(missing_grant.check_stateless(()).await.is_err());
 
         let wrong_grant = MsgRegisterUser {
             leaf: leaf.clone(),
+            capability_certificate: Some(capability_certificate(&leaf, "test-policy")),
             grant: Some(user_registration_grant(
                 leaf.clone(),
                 "test-policy".to_string(),
@@ -980,6 +1118,7 @@ mod tests {
 
         let expired_grant = MsgRegisterUser {
             leaf: leaf.clone(),
+            capability_certificate: Some(capability_certificate(&leaf, "test-policy")),
             grant: Some(user_registration_grant(
                 leaf,
                 "test-policy".to_string(),
@@ -996,13 +1135,12 @@ mod tests {
             "unexpected error: {error}"
         );
 
-        let mismatched_leaf = ComplianceLeaf::new_unchecked(
-            Address::dummy(&mut rand::thread_rng()),
-            asset_id,
-            Fq::from(222u64),
-        );
+        let mut mismatched_leaf =
+            ComplianceLeaf::registered_for_test(Address::dummy(&mut rand::thread_rng()), asset_id);
+        mismatched_leaf.capk = decaf377::Element::GENERATOR * decaf377::Fr::from(222u64);
         let mismatched_msg = MsgRegisterUser {
             leaf: mismatched_leaf.clone(),
+            capability_certificate: Some(capability_certificate(&mismatched_leaf, "test-policy")),
             grant: Some(user_registration_grant(
                 mismatched_leaf,
                 "test-policy".to_string(),
@@ -1011,13 +1149,13 @@ mod tests {
             )),
         };
         let error = mismatched_msg
-            .check_stateless(())
+            .check_and_execute(&mut state)
             .await
-            .expect_err("mismatched d must be rejected before execution");
+            .expect_err("mismatched capk must be rejected before execution");
         assert!(
             error
                 .to_string()
-                .contains("does not match the canonical address derivation"),
+                .contains("capk does not match the address and asset ring"),
             "unexpected error: {error}"
         );
     }
@@ -1044,7 +1182,7 @@ mod tests {
                 asset_id,
                 is_regulated: false,
                 dk_pub: None,
-                threshold: None,
+                daily_volume_limit: None,
                 allowed_ibc_routes: vec![],
                 ibc_origin: None,
                 ring_pk: None,
@@ -1053,6 +1191,7 @@ mod tests {
                 permission: String::new(),
                 resource: String::new(),
                 registration_authority_vk: None,
+                seizure_authority_vk: None,
                 asset_registration_grant: None,
             },
             &registrar_sk,
@@ -1094,7 +1233,7 @@ mod tests {
                 asset_id,
                 is_regulated: true,
                 dk_pub: None, // Missing!
-                threshold: None,
+                daily_volume_limit: None,
                 allowed_ibc_routes: vec![],
                 ibc_origin: None,
                 ring_pk: None,
@@ -1103,6 +1242,7 @@ mod tests {
                 permission: String::new(),
                 resource: String::new(),
                 registration_authority_vk: Some(authority_vk),
+                seizure_authority_vk: Some(authority_vk),
                 asset_registration_grant: None,
             },
             &registrar_sk,

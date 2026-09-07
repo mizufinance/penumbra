@@ -8,10 +8,10 @@ import (
 	"github.com/mizufinance/shieldd/tools/gnark/internal/primitives"
 )
 
-func NewNoteReshapeCircuitAssignmentFromWitnessV6(payload []byte) (*circuits.NoteReshapeCircuit, generated.NoteReshapeFamilySpec, error) {
-	witness, family, err := DecodeNoteReshapeWitnessV6(payload)
+func NewNoteReshapeCircuitAssignmentFromWitness(payload []byte) (*circuits.NoteReshapeCircuit, generated.NoteReshapeFamilySpec, error) {
+	witness, family, err := DecodeNoteReshapeWitness(payload)
 	if err != nil {
-		return nil, generated.NoteReshapeFamilySpec{}, fmt.Errorf("decode NoteReshapeWitnessV6: %w", err)
+		return nil, generated.NoteReshapeFamilySpec{}, fmt.Errorf("decode NoteReshapeWitness: %w", err)
 	}
 	if len(witness.Spends) != family.NIn || len(witness.Outputs) != family.NOut {
 		return nil, generated.NoteReshapeFamilySpec{}, fmt.Errorf("note reshape witness counts mismatch: spends=%d outputs=%d expected=%dx%d", len(witness.Spends), len(witness.Outputs), family.NIn, family.NOut)
@@ -58,10 +58,12 @@ func NewNoteReshapeCircuitAssignmentFromWitnessV6(payload []byte) (*circuits.Not
 		return nil, generated.NoteReshapeFamilySpec{}, fmt.Errorf("decode note reshape sender compliance path: %w", err)
 	}
 	assignment.Sender = circuits.NoteReshapeSenderCircuitFields{
-		D:        fqString(witness.SenderD),
-		Status:   fqString(witness.SenderStatus),
-		Path:     senderPath,
-		Position: witness.SenderCompliancePosition,
+		Capk:          point2DString(witness.SenderCapkAffine),
+		RnkDhPk:       point2DString(witness.SenderRnkDhPkAffine),
+		RnkCommitment: fqString(witness.SenderRnkCommitment),
+		Status:        fqString(witness.SenderStatus),
+		Path:          senderPath,
+		Position:      witness.SenderCompliancePosition,
 	}
 	for i := range witness.Spends {
 		spend, err := newNoteReshapeSpendCircuitFields(&witness.Spends[i])
@@ -101,7 +103,7 @@ func newNoteReshapeAuthSharedFields(nk [32]byte, akAffine PointAffineBinary) (ci
 	}, nil
 }
 
-func newNoteReshapeSpendCircuitFields(witness *NoteReshapeSpendWitnessV6Binary) (circuits.NoteReshapeSpendCircuitFields, error) {
+func newNoteReshapeSpendCircuitFields(witness *NoteReshapeSpendWitnessBinary) (circuits.NoteReshapeSpendCircuitFields, error) {
 	statePath, err := statePathFromBinary(witness.StateCommitmentAuthPath)
 	if err != nil {
 		return circuits.NoteReshapeSpendCircuitFields{}, fmt.Errorf("decode note reshape spend state commitment auth path: %w", err)
@@ -110,8 +112,9 @@ func newNoteReshapeSpendCircuitFields(witness *NoteReshapeSpendWitnessV6Binary) 
 		Nullifier: fqString(witness.Nullifier),
 		RK:        point2DString(witness.RKAffine),
 		Note: circuits.NoteReshapeNoteCircuitFields{
-			Blinding: fqString(witness.SpentNoteBlinding),
-			Amount:   fqString(witness.SpentNoteAmount),
+			Blinding:           fqString(witness.SpentNoteBlinding),
+			Amount:             fqString(witness.SpentNoteAmount),
+			RecoveryCommitment: fqString(witness.SpentNoteRecoveryCommitment),
 		},
 		StateProof:      circuits.StateCommitmentFields{Commitment: fqString(witness.StateCommitmentCommitment), Position: witness.StateCommitmentPosition, Path: statePath},
 		AuthRandomizer:  fqString(witness.SpendAuthRandomizer),
@@ -119,13 +122,15 @@ func newNoteReshapeSpendCircuitFields(witness *NoteReshapeSpendWitnessV6Binary) 
 	}, nil
 }
 
-func newNoteReshapeOutputCircuitFields(witness *NoteReshapeOutputWitnessV6Binary) circuits.NoteReshapeOutputCircuitFields {
+func newNoteReshapeOutputCircuitFields(witness *NoteReshapeOutputWitnessBinary) circuits.NoteReshapeOutputCircuitFields {
 	return circuits.NoteReshapeOutputCircuitFields{
 		NoteCommitment: fqString(witness.NoteCommitment),
 		Note: circuits.NoteReshapeNoteCircuitFields{
-			Blinding: fqString(witness.CreatedNoteBlinding),
-			Amount:   fqString(witness.CreatedNoteAmount),
+			Blinding:           fqString(witness.CreatedNoteBlinding),
+			Amount:             fqString(witness.CreatedNoteAmount),
+			RecoveryCommitment: fqString(witness.RecoveryCommitment),
 		},
+		Recovery: recoveryCapsuleFields(witness.RecoveryCommitment, witness.RecoveryCapsule),
 	}
 }
 

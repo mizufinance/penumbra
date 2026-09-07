@@ -71,6 +71,7 @@ impl TransactionPerspective {
             address: self.view_address(note.address()),
             value: self.view_value(note.value()),
             rseed: note.rseed(),
+            recovery_commitment: note.recovery_commitment(),
         }
     }
 

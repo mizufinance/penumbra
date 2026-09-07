@@ -78,7 +78,7 @@ type CircuitMetadataJSON struct {
 	VerifyingKeyJSONSHA256Hex   string `json:"verifying_key_json_sha256_hex"`
 }
 
-const CircuitMetadataSchema = "shieldd.gnark.circuit_metadata.v2"
+const CircuitMetadataSchema = "shieldd.gnark.circuit_metadata"
 
 func EncodeProofJSON(proof *groth16bls.Proof) ProofJSON {
 	return ProofJSON{

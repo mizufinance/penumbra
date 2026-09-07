@@ -159,7 +159,13 @@ mod tests {
             };
             let rseed = Rseed(rseed_randomness);
 
-            let note = Note::from_parts(sender, value_to_send, rseed).expect("valid note");
+            let note = Note::from_parts(
+                sender,
+                value_to_send,
+                rseed,
+                crate::RecoveryCommitment::unavailable(),
+            )
+            .expect("valid note");
             let note_commitment: shieldd_sdk_tct::StateCommitment = note.commit();
             let nk = *sk.nullifier_key();
             let mut sct = tct::Tree::new();
@@ -199,7 +205,13 @@ mod tests {
             };
             let rseed = Rseed(rseed_randomness);
 
-            let note = Note::from_parts(sender, value_to_send, rseed).expect("valid note");
+            let note = Note::from_parts(
+                sender,
+                value_to_send,
+                rseed,
+                crate::RecoveryCommitment::unavailable(),
+            )
+            .expect("valid note");
             let note_commitment: shieldd_sdk_tct::StateCommitment = note.commit();
             let nk = *sk.nullifier_key();
             let mut sct = tct::Tree::new();

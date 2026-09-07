@@ -1,5 +1,5 @@
 {
-  "schema": "shieldd.note-reshape-witness-roles.v1",
+  "schema": "shieldd.note-reshape-witness-roles",
   "circuit_witness": "NoteReshapeCircuit",
   "roles": [
     {"path": "ClaimedStatementHash", "role": "public", "supports": ["NR-STATEMENT"]},

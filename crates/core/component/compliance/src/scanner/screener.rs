@@ -1,7 +1,13 @@
 use shieldd_sdk_asset::asset;
 
-use super::types::{DetectionEvent, ExtractedComplianceCiphertext, InvalidCiphertext};
-use crate::{issuer_keys::DetectionKey, transfer::TransferComplianceCiphertext};
+use super::types::{
+    ComplianceCiphertext, ComplianceCiphertextKind, DetectionEvent, ExtractedComplianceCiphertext,
+    InvalidCiphertext,
+};
+use crate::{
+    issuer_keys::DetectionKey, transfer::TransferComplianceCiphertext,
+    withdrawal::WithdrawalComplianceCiphertext,
+};
 
 #[derive(Clone)]
 pub struct ComplianceScreener {
@@ -25,34 +31,74 @@ impl ComplianceScreener {
     }
 
     pub fn screen(&self, extracted: ExtractedComplianceCiphertext) -> ScreeningResult {
-        let ciphertext = match TransferComplianceCiphertext::from_bytes(&extracted.raw_bytes) {
+        let ciphertext = match extracted.kind {
+            ComplianceCiphertextKind::Transfer => {
+                TransferComplianceCiphertext::from_bytes(&extracted.raw_bytes)
+                    .map(ComplianceCiphertext::Transfer)
+            }
+            ComplianceCiphertextKind::Withdrawal => {
+                WithdrawalComplianceCiphertext::from_bytes(&extracted.raw_bytes)
+                    .map(ComplianceCiphertext::Withdrawal)
+            }
+        };
+        let ciphertext = match ciphertext {
             Ok(ciphertext) => ciphertext,
             Err(error) => {
                 return ScreeningResult::InvalidCiphertext(InvalidCiphertext {
-                    output_ref: extracted.output_ref,
+                    record_ref: extracted.record_ref,
                     reason: error.to_string(),
                     raw_bytes: extracted.raw_bytes,
                 })
             }
         };
 
-        let (asset_id, is_flagged, salt) = match self.detection_key.try_decrypt_detection(
-            &ciphertext.sender_core_epk,
-            &ciphertext.detection_tag,
-            &self.target_asset_id,
-        ) {
-            Ok(result) => result,
-            Err(_) => return ScreeningResult::Irrelevant,
+        let (asset_id, is_flagged, salt) = match &ciphertext {
+            ComplianceCiphertext::Transfer(ciphertext) => {
+                match self.detection_key.try_decrypt_detection(
+                    &ciphertext.sender_core_epk,
+                    &ciphertext.detection_tag,
+                    &self.target_asset_id,
+                ) {
+                    Ok(result) => result,
+                    Err(_) => return ScreeningResult::Irrelevant,
+                }
+            }
+            ComplianceCiphertext::Withdrawal(ciphertext) => {
+                let Some(public) = &extracted.public_withdrawal else {
+                    return ScreeningResult::InvalidCiphertext(InvalidCiphertext {
+                        record_ref: extracted.record_ref,
+                        reason: "withdrawal is missing its public asset".to_owned(),
+                        raw_bytes: extracted.raw_bytes,
+                    });
+                };
+                if public.asset_id != self.target_asset_id {
+                    return ScreeningResult::Irrelevant;
+                }
+                let is_flagged = match ciphertext
+                    .decrypt_sender_if_key_matches(ciphertext.epk * *self.detection_key.inner())
+                {
+                    Ok(sender) => sender.is_some(),
+                    Err(error) => {
+                        return ScreeningResult::InvalidCiphertext(InvalidCiphertext {
+                            record_ref: extracted.record_ref,
+                            reason: error.to_string(),
+                            raw_bytes: extracted.raw_bytes,
+                        })
+                    }
+                };
+                (public.asset_id, is_flagged, decaf377::Fq::from(0u64))
+            }
         };
 
         ScreeningResult::Detected(DetectionEvent {
-            output_ref: extracted.output_ref,
+            record_ref: extracted.record_ref,
             asset_id,
             is_flagged,
             salt,
             routing_tags: extracted.routing_tags,
             ciphertext,
             raw_bytes: extracted.raw_bytes,
+            public_withdrawal: extracted.public_withdrawal,
         })
     }
 }
@@ -100,10 +146,12 @@ mod tests {
         };
         let _ = asset_id;
         ExtractedComplianceCiphertext {
-            output_ref,
+            record_ref: crate::ComplianceRecordRef::TransferOutput(output_ref),
+            kind: ComplianceCiphertextKind::Transfer,
             routing_tags: [11, 22],
             raw_bytes,
             metadata_bytes: None,
+            public_withdrawal: None,
         }
     }
 
@@ -127,6 +175,8 @@ mod tests {
             Value { amount, asset_id },
             is_flagged,
             salt,
+            salt + decaf377::Fq::from(1u64),
+            salt + decaf377::Fq::from(2u64),
         )
         .unwrap()
         .ciphertext

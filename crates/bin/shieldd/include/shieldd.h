@@ -92,6 +92,12 @@ enum shieldd_method {
    * protobuf-varint-delimited CompactBlockRangeResponse messages.
    */
   SHIELDD_METHOD_QUERY_COMPACT_BLOCK_RANGE = 1000006,
+
+  /*
+   * shieldd.core.component.sct.v1.
+   * NullifierWindowRequest/Response
+   */
+  SHIELDD_METHOD_QUERY_NULLIFIER_WINDOW = 1000007,
 };
 
 uint32_t shieldd_abi_version(void);

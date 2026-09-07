@@ -479,6 +479,7 @@ mod test {
                 asset_id: *shieldd_sdk_asset::BASE_ASSET_ID,
             },
             shieldd_sdk_shielded_pool::Rseed::generate(&mut OsRng),
+            shieldd_sdk_shielded_pool::RecoveryCommitment::unavailable(),
         )?;
         let spend =
             shieldd_sdk_shielded_pool::ShieldedInputPlan::new(&mut OsRng, note, 0u64.into());

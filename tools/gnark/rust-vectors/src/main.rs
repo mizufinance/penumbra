@@ -3,6 +3,7 @@ use ark_ff::PrimeField;
 use decaf377::{Element, Encoding, Fq, Fr, ZETA};
 use poseidon_parameters::v1::{Alpha, MatrixOperations};
 use serde::Serialize;
+use sha2::{Digest, Sha512};
 
 #[derive(Serialize)]
 struct CurveVectors {
@@ -45,6 +46,7 @@ struct PoseidonVectors {
     tct_domain: String,
     sender_leaf_domain: String,
     compliance_leaf_domain: String,
+    compliance_nullifier_derivation_domain: String,
     issuer_detection_domain: String,
     imt_leaf_domain: String,
     imt_params_domain: String,
@@ -86,6 +88,12 @@ struct DecafEncodeVector {
     encoding_hex: String,
 }
 
+#[derive(Serialize)]
+struct OrbisDerivationVector {
+    derivation_hex: String,
+    scalar: String,
+}
+
 /// NoteReshape statement-hash seam fixture (H3 / Phase C).
 ///
 /// Seeded retained-family public statements in the exact production role order,
@@ -106,6 +114,7 @@ struct Vectors {
     poseidon377: PoseidonVectors,
     decaf377_compress_vectors: Vec<DecafCompressVector>,
     decaf377_encode_vectors: Vec<DecafEncodeVector>,
+    orbis_derivation: OrbisDerivationVector,
     note_reshape_statements: Vec<NoteReshapeStatementFixture>,
 }
 
@@ -123,7 +132,7 @@ fn note_reshape_statement_fixture(
     n_in: usize,
     n_out: usize,
 ) -> NoteReshapeStatementFixture {
-    let domain_label = format!("shieldd.shielded_pool.{label}.public_input_hash.v4");
+    let domain_label = format!("shieldd.shielded_pool.{label}.public_input_hash.statement");
     let pad_0_label = format!("shieldd.shielded_pool.{label}.public_input_hash.pad0");
     let pad_1_label = format!("shieldd.shielded_pool.{label}.public_input_hash.pad1");
     let domain = blake2b_fq(domain_label.as_bytes());
@@ -131,7 +140,10 @@ fn note_reshape_statement_fixture(
     let pad_1 = blake2b_fq(pad_1_label.as_bytes());
 
     let mut field_roles = vec!["anchor".to_string()];
-    field_roles.extend((0..n_out).map(|index| format!("output_note_commitment_{index}")));
+    for index in 0..n_out {
+        field_roles.push(format!("output_note_commitment_{index}"));
+        field_roles.push(format!("output_recovery_commitment_{index}"));
+    }
     field_roles.push("balance_commitment_fq".to_string());
     field_roles.push("asset_anchor".to_string());
     field_roles.push("compliance_anchor".to_string());
@@ -153,7 +165,9 @@ fn note_reshape_statement_fixture(
     }
     let mut hash = poseidon377::hash_7(
         &domain,
-        (first[0], first[1], first[2], first[3], first[4], first[5], first[6]),
+        (
+            first[0], first[1], first[2], first[3], first[4], first[5], first[6],
+        ),
     );
     let mut index = usize::min(7, fields.len());
     while index + 6 <= fields.len() {
@@ -234,10 +248,10 @@ fn poseidon_rate_vectors<
 }
 
 fn main() {
-    let spend_domain = blake2b_fq(b"shieldd.shielded_pool.spend.public_input_hash.v1");
+    let spend_domain = blake2b_fq(b"shieldd.shielded_pool.spend.public_input_hash.statement");
     let spend_pad_0 = blake2b_fq(b"shieldd.shielded_pool.spend.public_input_hash.pad0");
     let spend_pad_1 = blake2b_fq(b"shieldd.shielded_pool.spend.public_input_hash.pad1");
-    let hash7_domain = blake2b_fq(b"shieldd.gnark.prototype.poseidon377.hash7.v1");
+    let hash7_domain = blake2b_fq(b"shieldd.gnark.prototype.poseidon377.hash7");
     let hash7_inputs = [1u64, 2, 3, 4, 5, 6, 7].map(Fq::from);
     let hash7_output = poseidon377::hash_7(
         &hash7_domain,
@@ -256,13 +270,16 @@ fn main() {
     let nullifier_inputs = [11u64, 22, 3].map(Fq::from);
     let nullifier_output = poseidon377::hash_3(
         &nullifier_domain,
-        (nullifier_inputs[0], nullifier_inputs[1], nullifier_inputs[2]),
+        (
+            nullifier_inputs[0],
+            nullifier_inputs[1],
+            nullifier_inputs[2],
+        ),
     );
-    // Note commitment = Poseidon hash_5(note_commit_domain,
-    //   [blinding, amount, assetId, divGenFq, transmissionKeyS]).
-    let note_commit_domain = blake2b_fq(b"shieldd.notecommit.v2");
-    let note_commit_inputs = [101u64, 202, 303, 404, 505].map(Fq::from);
-    let note_commit_output = poseidon377::hash_5(
+    // Note commitment binds the recovery capsule commitment alongside the note facts.
+    let note_commit_domain = blake2b_fq(b"shieldd.notecommit");
+    let note_commit_inputs = [101u64, 202, 303, 404, 505, 606].map(Fq::from);
+    let note_commit_output = poseidon377::hash_6(
         &note_commit_domain,
         (
             note_commit_inputs[0],
@@ -270,15 +287,13 @@ fn main() {
             note_commit_inputs[2],
             note_commit_inputs[3],
             note_commit_inputs[4],
+            note_commit_inputs[5],
         ),
     );
-    let note_reshape_statements = [
-        ("note_reshape8x1", 8, 1),
-        ("note_reshape1x8", 1, 8),
-    ]
-    .into_iter()
-    .map(|(label, n_in, n_out)| note_reshape_statement_fixture(label, n_in, n_out))
-    .collect();
+    let note_reshape_statements = [("note_reshape8x1", 8, 1), ("note_reshape1x8", 1, 8)]
+        .into_iter()
+        .map(|(label, n_in, n_out)| note_reshape_statement_fixture(label, n_in, n_out))
+        .collect();
     let generator_encoding = Encoding::from(Element::GENERATOR);
     let generator_encoding_bytes: [u8; 32] = generator_encoding.into();
     let generator_affine = Element::GENERATOR.into_affine();
@@ -333,6 +348,11 @@ fn main() {
     let value_blinding_generator_encoding = Encoding::from(value_blinding_generator);
     let value_blinding_generator_encoding_bytes: [u8; 32] =
         value_blinding_generator_encoding.into();
+    let derivation: Vec<u8> = (0u8..48).collect();
+    let mut derivation_hasher = Sha512::new();
+    derivation_hasher.update(b"elgamal-derivation-v1\0\0");
+    derivation_hasher.update(&derivation);
+    let derivation_scalar = Fr::from_le_bytes_mod_order(&derivation_hasher.finalize());
 
     let vectors = Vectors {
         decaf377_companion_curve: CurveVectors {
@@ -359,7 +379,7 @@ fn main() {
             spend_domain: spend_domain.to_string(),
             spend_pad_0: spend_pad_0.to_string(),
             spend_pad_1: spend_pad_1.to_string(),
-            note_commit_domain: blake2b_fq(b"shieldd.notecommit.v2").to_string(),
+            note_commit_domain: note_commit_domain.to_string(),
             nullifier_domain: blake2b_fq(b"shieldd.nullifier").to_string(),
             value_generator_domain: blake2b_fq(b"shieldd.value.generator").to_string(),
             ivk_domain: Fq::from_le_bytes_mod_order(b"shieldd.derive.ivk").to_string(),
@@ -368,9 +388,12 @@ fn main() {
                 blake2b_simd::blake2b(b"shieldd.leaf_binding.sender").as_bytes(),
             )
             .to_string(),
-            compliance_leaf_domain: blake2b_fq(b"shieldd.compliance.leaf.v5").to_string(),
-            issuer_detection_domain: blake2b_fq(b"shieldd.compliance.issuer_detection")
-                .to_string(),
+            compliance_leaf_domain: blake2b_fq(b"shieldd.compliance.leaf").to_string(),
+            compliance_nullifier_derivation_domain: blake2b_fq(
+                b"shieldd.compliance.nullifier_derivation",
+            )
+            .to_string(),
+            issuer_detection_domain: blake2b_fq(b"shieldd.compliance.issuer_detection").to_string(),
             imt_leaf_domain: personalized_blake2b_fq(b"pen.imt.leaf____").to_string(),
             imt_params_domain: personalized_blake2b_fq(b"pen.imt.params2_").to_string(),
             imt_ring_domain: personalized_blake2b_fq(b"pen.imt.ring____").to_string(),
@@ -391,6 +414,10 @@ fn main() {
         },
         decaf377_compress_vectors,
         decaf377_encode_vectors,
+        orbis_derivation: OrbisDerivationVector {
+            derivation_hex: hex::encode(derivation),
+            scalar: derivation_scalar.to_string(),
+        },
         note_reshape_statements,
     };
 

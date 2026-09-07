@@ -238,9 +238,8 @@ func Failure(err error, proveMS float64) BytesResult {
 }
 
 func PackProofResult(magic string, claimedStatementHash [32]byte, proof *groth16bls.Proof, proveMS float64) ([]byte, error) {
-	buf := bytes.NewBuffer(make([]byte, 0, 4+4+4+4+8+32+384))
+	buf := bytes.NewBuffer(make([]byte, 0, 4+4+4+8+32+384))
 	buf.WriteString(magic)
-	_ = binary.Write(buf, binary.LittleEndian, uint32(1))
 	_ = binary.Write(buf, binary.LittleEndian, uint32(0))
 	_ = binary.Write(buf, binary.LittleEndian, uint32(0))
 	_ = binary.Write(buf, binary.LittleEndian, uint64(proveMS*1000))
@@ -264,7 +263,7 @@ func PackProofResult(magic string, claimedStatementHash [32]byte, proof *groth16
 	buf.Write(cy[:])
 
 	out := buf.Bytes()
-	binary.LittleEndian.PutUint32(out[8:12], uint32(len(out)))
+	binary.LittleEndian.PutUint32(out[4:8], uint32(len(out)))
 	return out, nil
 }
 

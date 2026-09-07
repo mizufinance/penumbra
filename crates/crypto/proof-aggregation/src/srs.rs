@@ -24,17 +24,16 @@ use sha2::{Digest as _, Sha256};
 use crate::strict_deserialize::deserialize_compressed_strict;
 
 pub const DEFAULT_MAX_PADDED_PROOF_COUNT: u32 = 32_768;
-pub const DEV_SRS_VERSION: u32 = 1;
 pub const DEV_SRS_CURVE_ID: &str = "bls12-377";
 pub const DEV_SRS_BACKEND_ID: &str = "ripp-snarkpack";
 const DEFAULT_DEV_SRS_ID_PREFIX: &[u8] =
-    b"shieldd.proof_aggregation.srs.v1:backend=ripp-snarkpack:curve=bls12-377:max_padded_count=32768";
+    b"shieldd.proof_aggregation.srs:backend=ripp-snarkpack:curve=bls12-377:max_padded_count=32768";
 pub const PRODUCTION_SRS_ARTIFACT_DIR_ENV: &str = "SHIELDD_SNARKPACK_SRS_ARTIFACT_DIR";
-const PRODUCTION_SRS_ID_DOMAIN: &[u8] = b"shieldd.proof_aggregation.registered_srs.v1";
+const PRODUCTION_SRS_ID_DOMAIN: &[u8] = b"shieldd.proof_aggregation.registered_srs";
 const MAX_PRODUCTION_SRS_ARTIFACT_BYTES: u64 = 16 * 1024 * 1024;
 pub const DEFAULT_DEV_SRS_ID: [u8; 32] = [
-    0x74, 0x43, 0x1a, 0xbf, 0x24, 0xf3, 0x5e, 0xd3, 0xbc, 0x9e, 0xb4, 0x6e, 0x99, 0xe0, 0xa3, 0xd2,
-    0xbd, 0xa7, 0x2e, 0x98, 0x16, 0x21, 0x98, 0x8f, 0xa5, 0x48, 0xae, 0x80, 0x80, 0x2a, 0x4d, 0xe0,
+    0x44, 0x41, 0x81, 0x48, 0x72, 0x67, 0x60, 0xbd, 0x81, 0x39, 0xbb, 0xf7, 0xb4, 0x94, 0x7a, 0x8d,
+    0x45, 0xb2, 0x82, 0x54, 0x56, 0xfe, 0x1d, 0x58, 0x0d, 0x97, 0xbf, 0x7b, 0xe9, 0xb3, 0xb4, 0xc4,
 ];
 // Public deterministic fixture seed. The resulting alpha/beta values are
 // reproducible, so this setup cannot support a KZG soundness claim.
@@ -529,7 +528,7 @@ fn compute_srs_id(srs: &DevSrs) -> [u8; 32] {
     } else {
         hasher.update(
             format!(
-                "shieldd.proof_aggregation.srs.v{DEV_SRS_VERSION}:backend={DEV_SRS_BACKEND_ID}:curve={DEV_SRS_CURVE_ID}:max_padded_count={}",
+                "shieldd.proof_aggregation.srs:backend={DEV_SRS_BACKEND_ID}:curve={DEV_SRS_CURVE_ID}:max_padded_count={}",
                 srs.max_padded_count
             )
             .as_bytes(),
@@ -597,7 +596,7 @@ mod tests {
     };
     use super::{
         DEFAULT_DEV_SRS_ID_PREFIX, DEFAULT_MAX_PADDED_PROOF_COUNT, DEV_SRS_BACKEND_ID,
-        DEV_SRS_CURVE_ID, DEV_SRS_VERSION,
+        DEV_SRS_CURVE_ID,
     };
 
     #[test]
@@ -695,7 +694,7 @@ mod tests {
     #[test]
     fn default_srs_id_prefix_matches_declared_fields() {
         let expected = format!(
-            "shieldd.proof_aggregation.srs.v{DEV_SRS_VERSION}:backend={DEV_SRS_BACKEND_ID}:curve={DEV_SRS_CURVE_ID}:max_padded_count={DEFAULT_MAX_PADDED_PROOF_COUNT}"
+            "shieldd.proof_aggregation.srs:backend={DEV_SRS_BACKEND_ID}:curve={DEV_SRS_CURVE_ID}:max_padded_count={DEFAULT_MAX_PADDED_PROOF_COUNT}"
         );
 
         assert_eq!(DEFAULT_DEV_SRS_ID_PREFIX, expected.as_bytes());

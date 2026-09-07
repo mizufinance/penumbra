@@ -123,7 +123,13 @@ async fn app_can_transfer_notes_and_detect_new_notes() -> anyhow::Result<()> {
 
     client.sync_to_latest(post_tx_snapshot).await?;
 
-    for output_nc in tx.state_commitments() {
+    for output_nc in tx.transfers().flat_map(|transfer| {
+        transfer
+            .body
+            .outputs
+            .iter()
+            .map(|output| output.note_payload.note_commitment)
+    }) {
         assert!(client.notes.contains_key(&output_nc));
     }
 

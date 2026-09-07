@@ -18,72 +18,104 @@ type witnessFamily struct {
 func testWitnessFamilies() []witnessFamily {
 	return []witnessFamily{
 		{
-			name:    "transfer",
-			payload: func(t *testing.T) []byte { return testfixtures.LoadTransferWitnessV20("transfer") },
+			name:    "note_seizure",
+			payload: func(t *testing.T) []byte { return testfixtures.LoadNoteSeizureWitness() },
 			decode: func(payload []byte) error {
-				_, _, err := DecodeTransferWitnessV20(payload)
+				_, err := DecodeNoteSeizureWitness(payload)
+				return err
+			},
+		},
+		{
+			name:    "transfer",
+			payload: func(t *testing.T) []byte { return testfixtures.LoadTransferWitness("transfer") },
+			decode: func(payload []byte) error {
+				_, _, err := DecodeTransferWitness(payload)
 				return err
 			},
 		},
 		{
 			name: "transfer_flagged",
 			payload: func(t *testing.T) []byte {
-				return testfixtures.LoadTransferWitnessV20("transfer_flagged")
+				return testfixtures.LoadTransferWitness("transfer_flagged")
 			},
 			decode: func(payload []byte) error {
-				_, _, err := DecodeTransferWitnessV20(payload)
+				_, _, err := DecodeTransferWitness(payload)
 				return err
 			},
 		},
 		{
 			name: "transfer_unregulated",
 			payload: func(t *testing.T) []byte {
-				return testfixtures.LoadTransferWitnessV20("transfer_unregulated")
+				return testfixtures.LoadTransferWitness("transfer_unregulated")
 			},
 			decode: func(payload []byte) error {
-				_, _, err := DecodeTransferWitnessV20(payload)
+				_, _, err := DecodeTransferWitness(payload)
 				return err
 			},
 		},
 		{
 			name: "shielded_ics20_withdrawal",
 			payload: func(t *testing.T) []byte {
-				return testfixtures.LoadShieldedIcs20WithdrawalWitnessV12("shielded_ics20_withdrawal")
+				return testfixtures.LoadShieldedIcs20WithdrawalWitness("shielded_ics20_withdrawal")
 			},
 			decode: func(payload []byte) error {
-				_, _, err := DecodeShieldedIcs20WithdrawalWitnessV12(payload)
+				_, _, err := DecodeShieldedIcs20WithdrawalWitness(payload)
 				return err
 			},
 		},
 		{
 			name: "shielded_ics20_withdrawal_unregulated",
 			payload: func(t *testing.T) []byte {
-				return testfixtures.LoadShieldedIcs20WithdrawalWitnessV12(
+				return testfixtures.LoadShieldedIcs20WithdrawalWitness(
 					"shielded_ics20_withdrawal_unregulated",
 				)
 			},
 			decode: func(payload []byte) error {
-				_, _, err := DecodeShieldedIcs20WithdrawalWitnessV12(payload)
+				_, _, err := DecodeShieldedIcs20WithdrawalWitness(payload)
+				return err
+			},
+		},
+		{
+			name: "shielded_ics20_withdrawal_accumulator_origin",
+			payload: func(t *testing.T) []byte {
+				return testfixtures.LoadShieldedIcs20WithdrawalWitness(
+					"shielded_ics20_withdrawal_accumulator_origin",
+				)
+			},
+			decode: func(payload []byte) error {
+				_, _, err := DecodeShieldedIcs20WithdrawalWitness(payload)
+				return err
+			},
+		},
+		{
+			name: "shielded_ics20_withdrawal_accumulator_continuation",
+			payload: func(t *testing.T) []byte {
+				return testfixtures.LoadShieldedIcs20WithdrawalWitness(
+					"shielded_ics20_withdrawal_accumulator_continuation",
+				)
+			},
+			decode: func(payload []byte) error {
+				_, _, err := DecodeShieldedIcs20WithdrawalWitness(payload)
 				return err
 			},
 		},
 		{
 			name: "note_reshape8x1",
 			payload: func(t *testing.T) []byte {
-				return testfixtures.LoadNoteReshapeWitnessV6("note_reshape8x1")
+				return testfixtures.LoadNoteReshapeWitness("note_reshape8x1")
 			},
 			decode: func(payload []byte) error {
-				_, _, err := DecodeNoteReshapeWitnessV6(payload)
+				_, _, err := DecodeNoteReshapeWitness(payload)
 				return err
 			},
 		},
 		{
 			name: "note_reshape1x8",
 			payload: func(t *testing.T) []byte {
-				return testfixtures.LoadNoteReshapeWitnessV6("note_reshape1x8")
+				return testfixtures.LoadNoteReshapeWitness("note_reshape1x8")
 			},
 			decode: func(payload []byte) error {
-				_, _, err := DecodeNoteReshapeWitnessV6(payload)
+				_, _, err := DecodeNoteReshapeWitness(payload)
 				return err
 			},
 		},
@@ -100,7 +132,7 @@ func TestWitnessFamiliesDecode(t *testing.T) {
 	}
 }
 
-func TestShieldedIcs20WithdrawalV12FixtureBranchMatrix(t *testing.T) {
+func TestShieldedIcs20WithdrawalFixtureBranchMatrix(t *testing.T) {
 	for _, tc := range []struct {
 		label       string
 		isRegulated bool
@@ -116,10 +148,20 @@ func TestShieldedIcs20WithdrawalV12FixtureBranchMatrix(t *testing.T) {
 			isRegulated: false,
 			isDummy:     true,
 		},
+		{
+			label:       "shielded_ics20_withdrawal_accumulator_origin",
+			isRegulated: true,
+			isDummy:     false,
+		},
+		{
+			label:       "shielded_ics20_withdrawal_accumulator_continuation",
+			isRegulated: true,
+			isDummy:     false,
+		},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
-			witness, _, err := DecodeShieldedIcs20WithdrawalWitnessV12(
-				testfixtures.LoadShieldedIcs20WithdrawalWitnessV12(tc.label),
+			witness, _, err := DecodeShieldedIcs20WithdrawalWitness(
+				testfixtures.LoadShieldedIcs20WithdrawalWitness(tc.label),
 			)
 			if err != nil {
 				t.Fatalf("decode branch fixture: %v", err)
@@ -158,100 +200,77 @@ func TestWitnessFamiliesRejectTruncatedPayload(t *testing.T) {
 	}
 }
 
-func TestNoteReshapeV6RejectsUnsupportedVersion(t *testing.T) {
-	payload := testfixtures.LoadNoteReshapeWitnessV6("note_reshape8x1")
-	binary.LittleEndian.PutUint32(payload[4:8], 3)
-	if _, _, err := DecodeNoteReshapeWitnessV6(payload); err == nil {
-		t.Fatal("decoder accepted an unsupported version")
-	}
-}
-
-func TestTransferV20RejectsUnsupportedVersion(t *testing.T) {
-	payload := testfixtures.LoadTransferWitnessV20("transfer")
-	binary.LittleEndian.PutUint32(payload[4:8], 16)
-	if _, _, err := DecodeTransferWitnessV20(payload); err == nil {
-		t.Fatal("decoder accepted an unsupported version")
-	}
-}
-
-func TestTransferV20AssignmentRejectsClaimedHashMismatch(t *testing.T) {
-	payload := testfixtures.LoadTransferWitnessV20("transfer")
-	const claimedStatementHashOffset = 12 + 4*32
+func TestTransferAssignmentRejectsClaimedHashMismatch(t *testing.T) {
+	payload := testfixtures.LoadTransferWitness("transfer")
+	const claimedStatementHashOffset = 8 + 4*32
 	payload[claimedStatementHashOffset] ^= 1
-	if _, _, err := NewTransferCircuitAssignmentFromWitnessV20(payload); err == nil {
-		t.Fatal("V20 assignment must reject a claimed hash that disagrees with reconstructed fields")
+	if _, _, err := NewTransferCircuitAssignmentFromWitness(payload); err == nil {
+		t.Fatal(" assignment must reject a claimed hash that disagrees with reconstructed fields")
 	}
 }
 
-func TestTransferV20AssignmentRejectsSerializedSemanticMutation(t *testing.T) {
-	payload := testfixtures.LoadTransferWitnessV20("transfer")
-	const anchorOffset = 12
+func TestTransferAssignmentRejectsSerializedSemanticMutation(t *testing.T) {
+	payload := testfixtures.LoadTransferWitness("transfer")
+	const anchorOffset = 8
 	payload[anchorOffset] ^= 1
-	if _, _, err := NewTransferCircuitAssignmentFromWitnessV20(payload); err == nil {
-		t.Fatal("V20 assignment must reject a serialized anchor mutation against the claimed hash")
+	if _, _, err := NewTransferCircuitAssignmentFromWitness(payload); err == nil {
+		t.Fatal(" assignment must reject a serialized anchor mutation against the claimed hash")
 	}
 }
 
-func TestShieldedIcs20WithdrawalV12RejectsUnsupportedVersion(t *testing.T) {
-	payload := testfixtures.LoadShieldedIcs20WithdrawalWitnessV12("shielded_ics20_withdrawal")
-	binary.LittleEndian.PutUint32(payload[4:8], 8)
-	if _, _, err := DecodeShieldedIcs20WithdrawalWitnessV12(payload); err == nil {
-		t.Fatal("decoder accepted an unsupported version")
-	}
-}
-
-func TestShieldedIcs20WithdrawalV12AssignmentRejectsClaimedHashMismatch(t *testing.T) {
-	payload := testfixtures.LoadShieldedIcs20WithdrawalWitnessV12("shielded_ics20_withdrawal")
-	const claimedStatementHashOffset = 20 + 6*32 + 4*32
+func TestShieldedIcs20WithdrawalAssignmentRejectsClaimedHashMismatch(t *testing.T) {
+	payload := testfixtures.LoadShieldedIcs20WithdrawalWitness("shielded_ics20_withdrawal")
+	const claimedStatementHashOffset = 16 + 6*32 + 4*32
 	payload[claimedStatementHashOffset] ^= 1
-	if _, _, err := NewShieldedIcs20WithdrawalCircuitAssignmentFromWitnessV12(payload); err == nil {
-		t.Fatal("V9 assignment must reject a claimed hash that disagrees with reconstructed fields")
+	if _, _, err := NewShieldedIcs20WithdrawalCircuitAssignmentFromWitness(payload); err == nil {
+		t.Fatal("assignment must reject a claimed hash that disagrees with reconstructed fields")
 	}
 }
 
-func TestShieldedIcs20WithdrawalV12RejectsOversizedEffectHashLimb(t *testing.T) {
-	payload := testfixtures.LoadShieldedIcs20WithdrawalWitnessV12("shielded_ics20_withdrawal")
-	const effectHashLimbsOffset = 20 + 6*32
+func TestShieldedIcs20WithdrawalRejectsOversizedEffectHashLimb(t *testing.T) {
+	payload := testfixtures.LoadShieldedIcs20WithdrawalWitness("shielded_ics20_withdrawal")
+	const effectHashLimbsOffset = 16 + 6*32
 	payload[effectHashLimbsOffset+16] = 1
-	if _, _, err := DecodeShieldedIcs20WithdrawalWitnessV12(payload); err == nil {
-		t.Fatal("V9 decoder must reject effect-hash limbs wider than 128 bits")
+	if _, _, err := DecodeShieldedIcs20WithdrawalWitness(payload); err == nil {
+		t.Fatal("decoder must reject effect-hash limbs wider than 128 bits")
 	}
 }
 
-func TestShieldedIcs20WithdrawalV12RejectsNonCanonicalBalanceBlinding(t *testing.T) {
-	payload := testfixtures.LoadShieldedIcs20WithdrawalWitnessV12("shielded_ics20_withdrawal")
-	const actionBalanceBlindingOffset = 20 + 6*32 + 4*32 + 32 + 3*32
+func TestShieldedIcs20WithdrawalRejectsNonCanonicalBalanceBlinding(t *testing.T) {
+	payload := testfixtures.LoadShieldedIcs20WithdrawalWitness("shielded_ics20_withdrawal")
+	const volumeAccumulatorBytes = 4*32 + 2 + 4*32 + 8 + (4 + 24*3*32) + 2*32
+	const actionBalanceBlindingOffset = 16 + 22*32 + volumeAccumulatorBytes
 	modulus, err := bigIntToLE32(decaf377.ScalarOrder())
 	if err != nil {
 		t.Fatalf("encode Decaf377 scalar modulus: %v", err)
 	}
 	copy(payload[actionBalanceBlindingOffset:], modulus[:])
-	if _, _, err := DecodeShieldedIcs20WithdrawalWitnessV12(payload); err == nil {
-		t.Fatal("V9 decoder must reject a non-canonical action balance blinding")
+	if _, _, err := DecodeShieldedIcs20WithdrawalWitness(payload); err == nil {
+		t.Fatal("decoder must reject a non-canonical action balance blinding")
 	}
 }
 
-func TestShieldedIcs20WithdrawalV12RejectsNonCanonicalBooleanFlags(t *testing.T) {
+func TestShieldedIcs20WithdrawalRejectsNonCanonicalBooleanFlags(t *testing.T) {
 	const (
-		headerBytes            = 20
-		topFieldsThroughNK     = 6*32 + 4*32 + 32 + 3*32 + 2*32
+		headerBytes            = 16
+		topFieldsThroughNK     = 24*32 + 4*32 + 2 + 4*32 + 8 + (4 + 24*3*32) + 2*32
 		merklePathBytes        = 4 + 16*(4+3*32)
-		committedLeafBytes     = 32 + 8 + 3*32
+		committedLeafBytes     = 32 + 8 + 32 + 16 + 5*32
 		isRegulatedOffset      = headerBytes + topFieldsThroughNK + merklePathBytes + 8 + committedLeafBytes
-		slimRequiredSpendBytes = 3*32 + 8 + 4 + 24*3*32 + 32 + 64 + 1
+		slimRequiredSpendBytes = 4*32 + 8 + 4 + 24*3*32 + 32 + 64 + 1
 		routingPrivateBytes    = 2 + 8 + 32
-		optionalIsDummyOffset  = isRegulatedOffset + 1 + routingPrivateBytes + merklePathBytes + 8 + 2*32 + 2*slimRequiredSpendBytes
+		optionalIsDummyOffset  = isRegulatedOffset + 1 + routingPrivateBytes + merklePathBytes + 8 + 8*32 + 2*slimRequiredSpendBytes
 	)
 	for name, offset := range map[string]int{
 		"is_regulated":      isRegulatedOffset,
 		"optional.is_dummy": optionalIsDummyOffset,
 	} {
 		t.Run(name, func(t *testing.T) {
-			payload := testfixtures.LoadShieldedIcs20WithdrawalWitnessV12(
+			payload := testfixtures.LoadShieldedIcs20WithdrawalWitness(
 				"shielded_ics20_withdrawal",
 			)
 			payload[offset] = 2
-			if _, _, err := DecodeShieldedIcs20WithdrawalWitnessV12(payload); err == nil {
+			if _, _, err := DecodeShieldedIcs20WithdrawalWitness(payload); err == nil {
 				t.Fatal("withdrawal decoder must reject non-canonical boolean flags")
 			}
 		})
@@ -259,8 +278,8 @@ func TestShieldedIcs20WithdrawalV12RejectsNonCanonicalBooleanFlags(t *testing.T)
 }
 
 func TestNoteReshapeWitnessPaddingABI(t *testing.T) {
-	fixedPayload := testfixtures.LoadNoteReshapeWitnessV6("note_reshape1x8")
-	fixed, fixedFamily, err := DecodeNoteReshapeWitnessV6(fixedPayload)
+	fixedPayload := testfixtures.LoadNoteReshapeWitness("note_reshape1x8")
+	fixed, fixedFamily, err := DecodeNoteReshapeWitness(fixedPayload)
 	if err != nil {
 		t.Fatalf("decode fixed-family witness: %v", err)
 	}
@@ -273,8 +292,8 @@ func TestNoteReshapeWitnessPaddingABI(t *testing.T) {
 		}
 	}
 
-	syntheticPayload := testfixtures.LoadNoteReshapeWitnessV6("note_reshape8x1")
-	synthetic, syntheticFamily, err := DecodeNoteReshapeWitnessV6(syntheticPayload)
+	syntheticPayload := testfixtures.LoadNoteReshapeWitness("note_reshape8x1")
+	synthetic, syntheticFamily, err := DecodeNoteReshapeWitness(syntheticPayload)
 	if err != nil {
 		t.Fatalf("decode synthetic-family witness: %v", err)
 	}
@@ -286,33 +305,33 @@ func TestNoteReshapeWitnessPaddingABI(t *testing.T) {
 	}
 
 	const (
-		headerBytes           = 24
+		headerBytes           = 20
 		topFieldsThroughNK    = 9 * 32
 		merklePathBytes       = 4 + 16*(4+3*32)
 		indexedLeafBytes      = 32 + 8 + 32 + 16 + 5*32
 		assetLeafPointBytes   = 2 * 64
 		routingPrivateBytes   = 1 + 2 + 8 + 32
 		sharedContextBytes    = 32 + 64
-		senderComplianceBytes = merklePathBytes + 8 + 2*32
+		senderComplianceBytes = merklePathBytes + 8 + 6*32
 		flagOffset            = headerBytes + topFieldsThroughNK + merklePathBytes + 8 + indexedLeafBytes + assetLeafPointBytes + routingPrivateBytes + senderComplianceBytes + sharedContextBytes
 	)
 	malformed := append([]byte(nil), syntheticPayload...)
 	malformed[flagOffset] = 2
-	if _, _, err := DecodeNoteReshapeWitnessV6(malformed); err == nil {
+	if _, _, err := DecodeNoteReshapeWitness(malformed); err == nil {
 		t.Fatal("synthetic-family witness must reject a non-boolean private padding flag")
 	}
 }
 
-func TestNoteReshapeV6RejectsSplitAddressRepresentationPayload(t *testing.T) {
+func TestNoteReshapeRejectsSplitAddressRepresentationPayload(t *testing.T) {
 	payload := append(
 		[]byte(nil),
-		testfixtures.LoadNoteReshapeWitnessV6("note_reshape8x1")...,
+		testfixtures.LoadNoteReshapeWitness("note_reshape8x1")...,
 	)
 
 	payload = append(payload, make([]byte, 32+64+64+32+32)...)
-	binary.LittleEndian.PutUint32(payload[8:12], uint32(len(payload)))
+	binary.LittleEndian.PutUint32(payload[4:8], uint32(len(payload)))
 
-	if _, _, err := DecodeNoteReshapeWitnessV6(payload); err == nil {
-		t.Fatal("V4 must reject an appended split address representation")
+	if _, _, err := DecodeNoteReshapeWitness(payload); err == nil {
+		t.Fatal("decoder must reject an appended split address representation")
 	}
 }

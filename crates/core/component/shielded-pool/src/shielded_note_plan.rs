@@ -3,13 +3,14 @@ use decaf377_rdsa::{SpendAuth, VerificationKey};
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use shieldd_sdk_asset::{Balance, Value};
+use shieldd_sdk_keys::keys::NullifierKey;
 use shieldd_sdk_keys::{keys::IncomingViewingKey, Address, FullViewingKey};
 use shieldd_sdk_proto::core::component::shielded_pool::v1 as pb;
 use shieldd_sdk_sct::Nullifier;
 use shieldd_sdk_tct as tct;
 use std::convert::{TryFrom, TryInto};
 
-use crate::{Backref, Note, Rseed, TransferInputBody};
+use crate::{Backref, Note, RecoveryCapsule, Rseed, TransferInputBody};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(try_from = "pb::ShieldedInputPlan", into = "pb::ShieldedInputPlan")]
@@ -37,13 +38,14 @@ impl ShieldedInputPlan {
     pub fn action_input_body(
         &self,
         fvk: &FullViewingKey,
+        nullifier_key: &NullifierKey,
         recent_position_floor: u64,
     ) -> anyhow::Result<TransferInputBody> {
         let backref = Backref::new(self.note.commit());
-        let encrypted_backref = backref.encrypt(&fvk.backref_key(), &self.nullifier(fvk));
+        let encrypted_backref = backref.encrypt(&fvk.backref_key(), &self.nullifier(nullifier_key));
 
         Ok(TransferInputBody {
-            nullifier: self.nullifier(fvk),
+            nullifier: self.nullifier(nullifier_key),
             rk: self.rk(fvk),
             encrypted_backref,
             compliance_ciphertext: Vec::new(),
@@ -58,9 +60,8 @@ impl ShieldedInputPlan {
         fvk.spend_verification_key().randomize(&self.randomizer)
     }
 
-    pub fn nullifier(&self, fvk: &FullViewingKey) -> Nullifier {
-        let nk = fvk.nullifier_key();
-        Nullifier::derive(nk, self.position, &self.note.commit())
+    pub fn nullifier(&self, key: &NullifierKey) -> Nullifier {
+        Nullifier::derive(key, self.position, &self.note.commit())
     }
 
     pub fn balance(&self) -> Balance {
@@ -97,9 +98,13 @@ impl ShieldedOutputPlan {
         }
     }
 
-    pub fn output_note(&self) -> Note {
-        Note::from_parts(self.dest_address.clone(), self.value, self.rseed)
-            .expect("transmission key in address is always valid")
+    pub fn output_note_and_capsule(&self, capk: decaf377::Element) -> (Note, RecoveryCapsule) {
+        Note::from_parts_with_recovery(self.dest_address.clone(), self.value, self.rseed, capk)
+            .expect("validated output note and compliance capability")
+    }
+
+    pub fn output_note(&self, capk: decaf377::Element) -> Note {
+        self.output_note_and_capsule(capk).0
     }
 
     pub fn is_viewed_by(&self, ivk: &IncomingViewingKey) -> bool {

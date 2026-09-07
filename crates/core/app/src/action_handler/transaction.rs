@@ -7,7 +7,10 @@ use cnidarium::{Snapshot, StateRead, StateWrite};
 use shieldd_sdk_compact_block::{
     component::RoutingManager as _, PendingRoutingAction, StatePayload,
 };
-use shieldd_sdk_compliance::registry::{check_timestamp_freshness, ComplianceRegistryRead as _};
+use shieldd_sdk_compliance::{
+    registry::{check_timestamp_freshness, ComplianceRegistryRead as _},
+    AuditEffect, AuditEffectRecord, AuditLogWrite as _, AuditSource, WithdrawalKind,
+};
 use shieldd_sdk_fee::component::FeePay as _;
 use shieldd_sdk_sct::component::clock::EpochRead;
 use shieldd_sdk_sct::component::source::SourceContext;
@@ -17,12 +20,15 @@ use shieldd_sdk_sct::Nullifier;
 use shieldd_sdk_shielded_pool::component::{
     note_reshape_execute_verified, shielded_host_withdrawal_execute_verified,
     shielded_ics20_withdrawal_execute_verified, transfer_execute_validated,
-    transfer_execute_verified, transfer_validate_verified, Ics20Transfer, StateReadExt as _,
+    transfer_execute_verified, transfer_validate_verified, AssetRegistryRead as _, Ics20Transfer,
+    StateReadExt as _,
 };
 use shieldd_sdk_shielded_pool::discovery;
+use shieldd_sdk_shielded_pool::TransferProofContext;
+use shieldd_sdk_shielded_pool::VolumeNullifier;
 use shieldd_sdk_tct::StateCommitment;
 use shieldd_sdk_transaction::{gas::GasCost as _, Action, Transaction};
-use shieldd_sdk_txhash::{AuthorizingData, TransactionId};
+use shieldd_sdk_txhash::{AuthorizingData, EffectingData as _, TransactionId};
 use tokio::sync::OnceCell;
 use tokio::task::JoinSet;
 use tracing::{instrument, Instrument};
@@ -50,8 +56,10 @@ use stateless::{
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PreparedCandidateRead {
     pub spend_nullifiers: Vec<Nullifier>,
+    pub volume_nullifiers: Vec<VolumeNullifier>,
     pub sct_payloads: Vec<StatePayload>,
     pub routing_actions: Vec<PendingRoutingAction>,
+    pub audit_effects: Vec<AuditEffectRecord>,
 }
 
 type AnchorValidationKey = (StateCommitment, StateCommitment, u64);
@@ -162,6 +170,187 @@ fn transaction_routing_actions(tx: &Transaction) -> Result<Vec<PendingRoutingAct
     Ok(routing_actions)
 }
 
+fn push_transaction_audit_effect(
+    records: &mut Vec<AuditEffectRecord>,
+    height: u64,
+    transaction_id: [u8; 32],
+    action_index: u32,
+    effect_index: u32,
+    effect: AuditEffect,
+) {
+    records.push(AuditEffectRecord {
+        source: AuditSource::ShielddTransaction {
+            height,
+            transaction_id,
+            action_index,
+            effect_index,
+        },
+        effect,
+    });
+}
+
+fn push_transfer_audit_effects(
+    records: &mut Vec<AuditEffectRecord>,
+    height: u64,
+    transaction_id: [u8; 32],
+    action_index: u32,
+    transfer: &shieldd_sdk_shielded_pool::Transfer,
+) -> Result<()> {
+    let mut effect_index = 0u32;
+    for output in &transfer.body.outputs {
+        if !output.compliance_ciphertext.is_empty() {
+            push_transaction_audit_effect(
+                records,
+                height,
+                transaction_id,
+                action_index,
+                effect_index,
+                AuditEffect::TransferOutput {
+                    asset_anchor: transfer.body.asset_anchor,
+                    compliance_ciphertext: output.compliance_ciphertext.clone(),
+                    compliance_metadata: output.compliance_metadata.clone(),
+                },
+            );
+            effect_index = effect_index
+                .checked_add(1)
+                .context("transfer audit effect index overflow")?;
+        }
+    }
+    Ok(())
+}
+
+fn transaction_audit_effects(tx: &Transaction, height: u64) -> Result<Vec<AuditEffectRecord>> {
+    let transaction_id = tx.id().0;
+    let mut records = Vec::new();
+
+    for (action_index, action) in tx.actions().enumerate() {
+        let action_index = u32::try_from(action_index).context("action index exceeds u32")?;
+        match action {
+            Action::Transfer(transfer) => push_transfer_audit_effects(
+                &mut records,
+                height,
+                transaction_id,
+                action_index,
+                transfer,
+            )?,
+            Action::NoteReshape(note_reshape) => push_transaction_audit_effect(
+                &mut records,
+                height,
+                transaction_id,
+                action_index,
+                0,
+                AuditEffect::NoteReshape {
+                    action_effect_hash: note_reshape.effect_hash().0,
+                },
+            ),
+            Action::ShieldedIcs20Withdrawal(withdrawal) => {
+                let value = withdrawal.body.withdrawal.value();
+                push_transaction_audit_effect(
+                    &mut records,
+                    height,
+                    transaction_id,
+                    action_index,
+                    0,
+                    AuditEffect::Withdrawal {
+                        kind: WithdrawalKind::Ics20,
+                        asset_id: value.asset_id,
+                        amount: value.amount.value(),
+                        asset_anchor: withdrawal.body.asset_anchor,
+                        compliance_ciphertext: withdrawal
+                            .body
+                            .withdrawal_compliance_ciphertext
+                            .to_bytes()
+                            .to_vec(),
+                    },
+                );
+            }
+            Action::ShieldedHostWithdrawal(withdrawal) => {
+                let value = withdrawal.body.withdrawal.value;
+                push_transaction_audit_effect(
+                    &mut records,
+                    height,
+                    transaction_id,
+                    action_index,
+                    0,
+                    AuditEffect::Withdrawal {
+                        kind: WithdrawalKind::Host,
+                        asset_id: value.asset_id,
+                        amount: value.amount.value(),
+                        asset_anchor: withdrawal.body.asset_anchor,
+                        compliance_ciphertext: withdrawal
+                            .body
+                            .withdrawal_compliance_ciphertext
+                            .to_bytes()
+                            .to_vec(),
+                    },
+                );
+            }
+            Action::IbcRelay(relay) => push_transaction_audit_effect(
+                &mut records,
+                height,
+                transaction_id,
+                action_index,
+                0,
+                AuditEffect::IbcRelay {
+                    action_effect_hash: relay.effect_hash().0,
+                },
+            ),
+            Action::ComplianceRegisterAsset(registration) => push_transaction_audit_effect(
+                &mut records,
+                height,
+                transaction_id,
+                action_index,
+                0,
+                AuditEffect::AssetRegistered {
+                    asset_id: registration.asset_id,
+                    is_regulated: registration.is_regulated,
+                },
+            ),
+            Action::ComplianceRegisterUser(registration) => push_transaction_audit_effect(
+                &mut records,
+                height,
+                transaction_id,
+                action_index,
+                0,
+                AuditEffect::UserRegistered {
+                    asset_id: registration.leaf.asset_id,
+                    address: registration.leaf.address.clone(),
+                },
+            ),
+            Action::AggregateBundle(_) => {
+                anyhow::bail!("aggregate bundles must be expanded before audit logging")
+            }
+        }
+    }
+
+    if let Some(fee_funding) = &tx.transaction_body.fee_funding {
+        let action_index =
+            u32::try_from(tx.transaction_body.actions.len()).context("action index exceeds u32")?;
+        push_transfer_audit_effects(
+            &mut records,
+            height,
+            transaction_id,
+            action_index,
+            &fee_funding.transfer,
+        )?;
+    }
+
+    for record in &records {
+        record.validate()?;
+    }
+    Ok(records)
+}
+
+pub(crate) async fn append_transaction_audit_effects<S: StateWrite + ?Sized>(
+    state: &mut S,
+    records: impl IntoIterator<Item = AuditEffectRecord>,
+) -> Result<()> {
+    for record in records {
+        state.append_audit_effect(record).await?;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct HistoricalCheckContext {
     pub chain_id: String,
@@ -225,7 +414,11 @@ pub(crate) fn transaction_nullifier_count_allowed(nullifier_count: usize) -> boo
 }
 
 pub(crate) fn transaction_nullifier_count(tx: &Transaction) -> usize {
-    tx.spent_nullifier_count()
+    let volume_nullifiers = tx
+        .actions()
+        .filter(|action| matches!(action, Action::Transfer(_)))
+        .count();
+    tx.spent_nullifier_count().saturating_add(volume_nullifiers)
 }
 
 pub(crate) fn ensure_transaction_resource_bounds(tx: &Transaction) -> Result<()> {
@@ -240,7 +433,7 @@ pub(crate) fn ensure_transaction_resource_bounds(tx: &Transaction) -> Result<()>
     let nullifier_count = transaction_nullifier_count(tx);
     anyhow::ensure!(
         transaction_nullifier_count_allowed(nullifier_count),
-        "transaction spend nullifier count {} exceeds maximum {}",
+        "transaction proof-bound nullifier count {} exceeds maximum {}",
         nullifier_count,
         MAX_TRANSACTION_NULLIFIER_COUNT
     );
@@ -270,58 +463,63 @@ pub(crate) fn verify_historical_proofs(tx: &Transaction) -> Result<Vec<VerifiedH
         .into_iter()
         .zip(&tx.transaction_body.historical_nullifier_proofs)
         .map(|(nullifier, bundle)| {
-            let nullifier_bytes: [u8; 32] = nullifier.into();
-            let mut expected_head = empty_history_head();
-            for chunk in &bundle.completed_chunks {
-                shieldd_sdk_proof_params::historical::verify_chunk(
-                    shieldd_sdk_proof_params::historical::chunk_verification_key(),
-                    shieldd_sdk_proof_params::historical::ChunkClaim {
-                        protocol_version: PROTOCOL_VERSION,
-                        nullifier: nullifier_bytes,
-                        chunk_index: chunk.chunk_index,
-                        start_history_head: expected_head,
-                        end_history_head: chunk.end_history_head,
-                    },
-                    &chunk.groth16_proof,
-                )?;
-                expected_head = chunk.end_history_head;
-            }
-            for generation in &bundle.tail {
-                shieldd_sdk_proof_params::historical::verify_generation(
-                    shieldd_sdk_proof_params::historical::generation_verification_key(),
-                    shieldd_sdk_proof_params::historical::GenerationClaim {
-                        protocol_version: PROTOCOL_VERSION,
-                        nullifier: nullifier_bytes,
-                        generation_index: generation.generation_index,
-                        generation_root: generation.generation_root,
-                        generation_start_position: generation.generation_start_position,
-                        generation_end_position: generation.generation_end_position,
-                        start_history_head: expected_head,
-                        end_history_head: shieldd_sdk_sct::nullifier_generation::append_history(
-                            expected_head,
-                            generation.generation_index,
-                            generation.generation_root,
-                            generation.generation_start_position,
-                            generation.generation_end_position,
-                        )?,
-                    },
-                    &generation.groth16_proof,
-                )?;
-                expected_head = shieldd_sdk_sct::nullifier_generation::append_history(
-                    expected_head,
-                    generation.generation_index,
-                    generation.generation_root,
-                    generation.generation_start_position,
-                    generation.generation_end_position,
-                )?;
-            }
-            anyhow::ensure!(
-                expected_head == window.archived_history_head,
-                "verified historical proof has the wrong terminal history head"
-            );
+            verify_historical_nullifier_proof(nullifier, window, bundle)?;
             Ok(VerifiedHistoricalInput::new(nullifier, window, auth_hash))
         })
         .collect()
+}
+
+pub(crate) fn verify_historical_nullifier_proof(
+    nullifier: Nullifier,
+    window: shieldd_sdk_sct::nullifier_generation::NullifierWindow,
+    bundle: &shieldd_sdk_sct::nullifier_generation::HistoricalNullifierProof,
+) -> Result<()> {
+    bundle.validate_structure(window)?;
+    let nullifier_bytes: [u8; 32] = nullifier.into();
+    let mut expected_head = empty_history_head();
+    for chunk in &bundle.completed_chunks {
+        shieldd_sdk_proof_params::historical::verify_chunk(
+            shieldd_sdk_proof_params::historical::chunk_verification_key(),
+            shieldd_sdk_proof_params::historical::ChunkClaim {
+                protocol_version: PROTOCOL_VERSION,
+                nullifier: nullifier_bytes,
+                chunk_index: chunk.chunk_index,
+                start_history_head: expected_head,
+                end_history_head: chunk.end_history_head,
+            },
+            &chunk.groth16_proof,
+        )?;
+        expected_head = chunk.end_history_head;
+    }
+    for generation in &bundle.tail {
+        let end_history_head = shieldd_sdk_sct::nullifier_generation::append_history(
+            expected_head,
+            generation.generation_index,
+            generation.generation_root,
+            generation.generation_start_position,
+            generation.generation_end_position,
+        )?;
+        shieldd_sdk_proof_params::historical::verify_generation(
+            shieldd_sdk_proof_params::historical::generation_verification_key(),
+            shieldd_sdk_proof_params::historical::GenerationClaim {
+                protocol_version: PROTOCOL_VERSION,
+                nullifier: nullifier_bytes,
+                generation_index: generation.generation_index,
+                generation_root: generation.generation_root,
+                generation_start_position: generation.generation_start_position,
+                generation_end_position: generation.generation_end_position,
+                start_history_head: expected_head,
+                end_history_head,
+            },
+            &generation.groth16_proof,
+        )?;
+        expected_head = end_history_head;
+    }
+    anyhow::ensure!(
+        expected_head == window.archived_history_head,
+        "verified historical proof has the wrong terminal history head"
+    );
+    Ok(())
 }
 
 async fn check_nullifier_read_only<S>(
@@ -333,6 +531,16 @@ where
     S: StateRead,
 {
     state.check_nullifier_unspent(nullifier).await?;
+    Ok(())
+}
+
+async fn check_volume_nullifier_read_only<S>(state: &S, scoped: VolumeNullifier) -> Result<()>
+where
+    S: StateRead,
+{
+    state
+        .check_volume_nullifier_unspent(scoped.day_start, scoped.nullifier)
+        .await?;
     Ok(())
 }
 
@@ -423,6 +631,15 @@ fn check_nullifier_read_only_sync(
     nullifier: shieldd_sdk_sct::Nullifier,
 ) -> Result<()> {
     handle.block_on(snapshot.check_nullifier_unspent(nullifier))?;
+    Ok(())
+}
+
+fn check_volume_nullifier_read_only_sync(
+    handle: &tokio::runtime::Handle,
+    snapshot: &Snapshot,
+    scoped: VolumeNullifier,
+) -> Result<()> {
+    handle.block_on(snapshot.check_volume_nullifier_unspent(scoped.day_start, scoped.nullifier))?;
     Ok(())
 }
 
@@ -602,6 +819,8 @@ where
     let fee = tx.transaction_body.transaction_parameters.fee;
     state.pay_fee(gas_used, fee).await?;
 
+    let height = state.get_block_height().await?;
+    append_transaction_audit_effects(&mut state, transaction_audit_effects(tx, height)?).await?;
     // Fee funding is hashed before body actions and validates against the
     // pre-transaction roots used to build its proof. Its effects remain in
     // their original post-body position to preserve commitment ordering.
@@ -610,6 +829,7 @@ where
             &fee_funding.transfer,
             &tx_context,
             artifact.proof_for_slot(ProofSlot::FeeFunding)?,
+            TransferProofContext::FeeFunding,
             &mut state,
         )
         .await?;
@@ -625,6 +845,7 @@ where
                     action,
                     &tx_context,
                     artifact.proof_for_slot(ProofSlot::BodyAction(i))?,
+                    TransferProofContext::Ordinary,
                     &mut state,
                 )
                 .await?;
@@ -666,7 +887,27 @@ where
                     execute.await?;
                 }
             }
-            action @ (Action::ComplianceRegisterAsset(_) | Action::ComplianceRegisterUser(_)) => {
+            action @ Action::ComplianceRegisterAsset(registration) => {
+                if registration.is_regulated {
+                    anyhow::ensure!(
+                        state
+                            .denom_metadata_by_asset(&registration.asset_id)
+                            .await
+                            .is_none(),
+                        "regulated asset must be registered before its first issuance"
+                    );
+                }
+                if action_spans_enabled {
+                    let span = action.create_span(i);
+                    action
+                        .check_and_execute(&mut state)
+                        .instrument(span)
+                        .await?;
+                } else {
+                    action.check_and_execute(&mut state).await?;
+                }
+            }
+            action @ Action::ComplianceRegisterUser(_) => {
                 if action_spans_enabled {
                     let span = action.create_span(i);
                     action
@@ -710,13 +951,19 @@ pub(crate) async fn prepare_candidate_read<S: StateRead + 'static>(
         source: tx.id(),
     };
     let mut anchor_pairs = BTreeSet::new();
-    let mut output_payloads = Vec::new();
+    let mut sct_payloads = Vec::new();
     let mut spend_nullifiers = Vec::new();
     let mut tx_nullifiers = HashSet::new();
+    let mut volume_nullifiers = Vec::new();
+    let mut tx_volume_nullifiers = HashSet::new();
 
     for (i, action) in tx.actions().enumerate() {
         match action {
             Action::Transfer(transfer) => {
+                anyhow::ensure!(
+                    transfer.body.proof_context == TransferProofContext::Ordinary,
+                    "body transfer must use ordinary proof context"
+                );
                 check_action_timestamp_freshness(
                     transfer.body.target_timestamp,
                     execution_context.block_timestamp,
@@ -730,13 +977,64 @@ pub(crate) async fn prepare_candidate_read<S: StateRead + 'static>(
                     spend_nullifiers.push(input.nullifier);
                 }
                 anchor_pairs.insert((transfer.body.compliance_anchor, transfer.body.asset_anchor));
-                output_payloads.extend(
+                sct_payloads.extend(
                     transfer
                         .body
                         .outputs
                         .iter()
-                        .map(|output| output.note_payload.clone()),
+                        .map(|output| {
+                            (
+                                output.note_payload.clone(),
+                                execution_context.source.clone().into(),
+                            )
+                                .into()
+                        }),
                 );
+                let scoped = transfer.body.volume_accumulator.scoped_nullifier();
+                anyhow::ensure!(
+                    tx_volume_nullifiers.insert(scoped),
+                    "transaction contains duplicate daily volume nullifier {} for day {}",
+                    scoped.nullifier,
+                    scoped.day_start
+                );
+                volume_nullifiers.push(scoped);
+                sct_payloads.push(StatePayload::VolumeAccumulator {
+                    source: execution_context.source.clone().into(),
+                    payload: Box::new(transfer.body.volume_accumulator.clone()),
+                });
+            }
+            Action::ShieldedHostWithdrawal(withdrawal) => {
+                check_action_timestamp_freshness(
+                    withdrawal.body.target_timestamp,
+                    execution_context.block_timestamp,
+                )?;
+                for input in &withdrawal.body.inputs {
+                    anyhow::ensure!(
+                        tx_nullifiers.insert(input.nullifier),
+                        "transaction contains duplicate spend nullifier {}",
+                        input.nullifier
+                    );
+                    spend_nullifiers.push(input.nullifier);
+                }
+                anchor_pairs.insert((withdrawal.body.compliance_anchor, withdrawal.body.asset_anchor));
+                sct_payloads.push((withdrawal.body.change_output.note_payload.clone(), execution_context.source.clone().into()).into());
+                let scoped = withdrawal.body.volume_accumulator.scoped_nullifier();
+                anyhow::ensure!(tx_volume_nullifiers.insert(scoped), "transaction contains duplicate daily volume nullifier {} for day {}", scoped.nullifier, scoped.day_start);
+                volume_nullifiers.push(scoped);
+                sct_payloads.push(StatePayload::VolumeAccumulator { source: execution_context.source.clone().into(), payload: Box::new(withdrawal.body.volume_accumulator.clone()) });
+            }
+            Action::ShieldedIcs20Withdrawal(withdrawal) => {
+                check_action_timestamp_freshness(withdrawal.body.target_timestamp, execution_context.block_timestamp)?;
+                for input in &withdrawal.body.inputs {
+                    anyhow::ensure!(tx_nullifiers.insert(input.nullifier), "transaction contains duplicate spend nullifier {}", input.nullifier);
+                    spend_nullifiers.push(input.nullifier);
+                }
+                anchor_pairs.insert((withdrawal.body.compliance_anchor, withdrawal.body.asset_anchor));
+                sct_payloads.push((withdrawal.body.change_output.note_payload.clone(), execution_context.source.clone().into()).into());
+                let scoped = withdrawal.body.volume_accumulator.scoped_nullifier();
+                anyhow::ensure!(tx_volume_nullifiers.insert(scoped), "transaction contains duplicate daily volume nullifier {} for day {}", scoped.nullifier, scoped.day_start);
+                volume_nullifiers.push(scoped);
+                sct_payloads.push(StatePayload::VolumeAccumulator { source: execution_context.source.clone().into(), payload: Box::new(withdrawal.body.volume_accumulator.clone()) });
             }
             Action::NoteReshape(note_reshape) => {
                 anchor_pairs.insert((
@@ -751,12 +1049,18 @@ pub(crate) async fn prepare_candidate_read<S: StateRead + 'static>(
                     );
                     spend_nullifiers.push(input.nullifier);
                 }
-                output_payloads.extend(
+                sct_payloads.extend(
                     note_reshape
                         .body
                         .outputs
                         .iter()
-                        .map(|output| output.note_payload.clone()),
+                        .map(|output| {
+                            (
+                                output.note_payload.clone(),
+                                execution_context.source.clone().into(),
+                            )
+                                .into()
+                        }),
                 );
             }
             _ => anyhow::bail!(
@@ -767,6 +1071,10 @@ pub(crate) async fn prepare_candidate_read<S: StateRead + 'static>(
         }
     }
     if let Some(fee_funding) = &tx.transaction_body.fee_funding {
+        anyhow::ensure!(
+            fee_funding.transfer.body.proof_context == TransferProofContext::FeeFunding,
+            "fee funding transfer must use fee-funding proof context"
+        );
         check_action_timestamp_freshness(
             fee_funding.transfer.body.target_timestamp,
             execution_context.block_timestamp,
@@ -783,16 +1091,16 @@ pub(crate) async fn prepare_candidate_read<S: StateRead + 'static>(
             fee_funding.transfer.body.compliance_anchor,
             fee_funding.transfer.body.asset_anchor,
         ));
-        output_payloads.extend(
-            fee_funding
-                .transfer
-                .body
-                .outputs
-                .iter()
-                .map(|output| output.note_payload.clone()),
-        );
+        sct_payloads.extend(fee_funding.transfer.body.outputs.iter().map(|output| {
+            (
+                output.note_payload.clone(),
+                execution_context.source.clone().into(),
+            )
+                .into()
+        }));
     }
     let read_nullifiers = spend_nullifiers.clone();
+    let read_volume_nullifiers = volume_nullifiers.clone();
 
     let historical_future = async {
         if !skip_historical {
@@ -823,6 +1131,12 @@ pub(crate) async fn prepare_candidate_read<S: StateRead + 'static>(
             check_nullifier_read_only(state.as_ref(), &context, nullifier).await
         });
     }
+    for scoped in read_volume_nullifiers {
+        let state = state.clone();
+        read_tasks.spawn(async move {
+            check_volume_nullifier_read_only(Arc::as_ref(&state), scoped).await
+        });
+    }
     let read_task_future = async {
         while let Some(result) = read_tasks.join_next().await {
             result??;
@@ -832,12 +1146,10 @@ pub(crate) async fn prepare_candidate_read<S: StateRead + 'static>(
     tokio::try_join!(historical_future, read_task_future)?;
 
     prepared.spend_nullifiers = spend_nullifiers;
-    prepared.sct_payloads = output_payloads
-        .into_iter()
-        .map(|note_payload| (note_payload, execution_context.source.clone().into()).into())
-        .collect();
+    prepared.volume_nullifiers = volume_nullifiers;
+    prepared.sct_payloads = sct_payloads;
     prepared.routing_actions = transaction_routing_actions(tx.as_ref())?;
-
+    prepared.audit_effects = transaction_audit_effects(tx.as_ref(), context.block_height)?;
     Ok(prepared)
 }
 
@@ -856,13 +1168,19 @@ pub(crate) fn prepare_candidate_read_blocking(
         source: tx.id(),
     };
     let mut anchor_pairs = BTreeSet::new();
-    let mut output_payloads = Vec::new();
+    let mut sct_payloads = Vec::new();
     let mut spend_nullifiers = Vec::new();
     let mut tx_nullifiers = HashSet::new();
+    let mut volume_nullifiers = Vec::new();
+    let mut tx_volume_nullifiers = HashSet::new();
 
     for (i, action) in tx.actions().enumerate() {
         match action {
             Action::Transfer(transfer) => {
+                anyhow::ensure!(
+                    transfer.body.proof_context == TransferProofContext::Ordinary,
+                    "body transfer must use ordinary proof context"
+                );
                 check_action_timestamp_freshness(
                     transfer.body.target_timestamp,
                     execution_context.block_timestamp,
@@ -876,13 +1194,57 @@ pub(crate) fn prepare_candidate_read_blocking(
                     spend_nullifiers.push(input.nullifier);
                 }
                 anchor_pairs.insert((transfer.body.compliance_anchor, transfer.body.asset_anchor));
-                output_payloads.extend(
+                sct_payloads.extend(
                     transfer
                         .body
                         .outputs
                         .iter()
-                        .map(|output| output.note_payload.clone()),
+                        .map(|output| {
+                            (
+                                output.note_payload.clone(),
+                                execution_context.source.clone().into(),
+                            )
+                                .into()
+                        }),
                 );
+                let scoped = transfer.body.volume_accumulator.scoped_nullifier();
+                anyhow::ensure!(
+                    tx_volume_nullifiers.insert(scoped),
+                    "transaction contains duplicate daily volume nullifier {} for day {}",
+                    scoped.nullifier,
+                    scoped.day_start
+                );
+                volume_nullifiers.push(scoped);
+                sct_payloads.push(StatePayload::VolumeAccumulator {
+                    source: execution_context.source.clone().into(),
+                    payload: Box::new(transfer.body.volume_accumulator.clone()),
+                });
+            }
+            Action::ShieldedHostWithdrawal(withdrawal) => {
+                check_action_timestamp_freshness(withdrawal.body.target_timestamp, execution_context.block_timestamp)?;
+                for input in &withdrawal.body.inputs {
+                    anyhow::ensure!(tx_nullifiers.insert(input.nullifier), "transaction contains duplicate spend nullifier {}", input.nullifier);
+                    spend_nullifiers.push(input.nullifier);
+                }
+                anchor_pairs.insert((withdrawal.body.compliance_anchor, withdrawal.body.asset_anchor));
+                sct_payloads.push((withdrawal.body.change_output.note_payload.clone(), execution_context.source.clone().into()).into());
+                let scoped = withdrawal.body.volume_accumulator.scoped_nullifier();
+                anyhow::ensure!(tx_volume_nullifiers.insert(scoped), "transaction contains duplicate daily volume nullifier {} for day {}", scoped.nullifier, scoped.day_start);
+                volume_nullifiers.push(scoped);
+                sct_payloads.push(StatePayload::VolumeAccumulator { source: execution_context.source.clone().into(), payload: Box::new(withdrawal.body.volume_accumulator.clone()) });
+            }
+            Action::ShieldedIcs20Withdrawal(withdrawal) => {
+                check_action_timestamp_freshness(withdrawal.body.target_timestamp, execution_context.block_timestamp)?;
+                for input in &withdrawal.body.inputs {
+                    anyhow::ensure!(tx_nullifiers.insert(input.nullifier), "transaction contains duplicate spend nullifier {}", input.nullifier);
+                    spend_nullifiers.push(input.nullifier);
+                }
+                anchor_pairs.insert((withdrawal.body.compliance_anchor, withdrawal.body.asset_anchor));
+                sct_payloads.push((withdrawal.body.change_output.note_payload.clone(), execution_context.source.clone().into()).into());
+                let scoped = withdrawal.body.volume_accumulator.scoped_nullifier();
+                anyhow::ensure!(tx_volume_nullifiers.insert(scoped), "transaction contains duplicate daily volume nullifier {} for day {}", scoped.nullifier, scoped.day_start);
+                volume_nullifiers.push(scoped);
+                sct_payloads.push(StatePayload::VolumeAccumulator { source: execution_context.source.clone().into(), payload: Box::new(withdrawal.body.volume_accumulator.clone()) });
             }
             Action::NoteReshape(note_reshape) => {
                 anchor_pairs.insert((
@@ -897,12 +1259,18 @@ pub(crate) fn prepare_candidate_read_blocking(
                     );
                     spend_nullifiers.push(input.nullifier);
                 }
-                output_payloads.extend(
+                sct_payloads.extend(
                     note_reshape
                         .body
                         .outputs
                         .iter()
-                        .map(|output| output.note_payload.clone()),
+                        .map(|output| {
+                            (
+                                output.note_payload.clone(),
+                                execution_context.source.clone().into(),
+                            )
+                                .into()
+                        }),
                 );
             }
             _ => anyhow::bail!(
@@ -913,6 +1281,10 @@ pub(crate) fn prepare_candidate_read_blocking(
         }
     }
     if let Some(fee_funding) = &tx.transaction_body.fee_funding {
+        anyhow::ensure!(
+            fee_funding.transfer.body.proof_context == TransferProofContext::FeeFunding,
+            "fee funding transfer must use fee-funding proof context"
+        );
         check_action_timestamp_freshness(
             fee_funding.transfer.body.target_timestamp,
             execution_context.block_timestamp,
@@ -929,16 +1301,16 @@ pub(crate) fn prepare_candidate_read_blocking(
             fee_funding.transfer.body.compliance_anchor,
             fee_funding.transfer.body.asset_anchor,
         ));
-        output_payloads.extend(
-            fee_funding
-                .transfer
-                .body
-                .outputs
-                .iter()
-                .map(|output| output.note_payload.clone()),
-        );
+        sct_payloads.extend(fee_funding.transfer.body.outputs.iter().map(|output| {
+            (
+                output.note_payload.clone(),
+                execution_context.source.clone().into(),
+            )
+                .into()
+        }));
     }
     let read_nullifiers = spend_nullifiers.clone();
+    let read_volume_nullifiers = volume_nullifiers.clone();
 
     if skip_historical {
     } else {
@@ -958,14 +1330,14 @@ pub(crate) fn prepare_candidate_read_blocking(
     for nullifier in &read_nullifiers {
         check_nullifier_read_only_sync(&handle, &snapshot, &context, *nullifier)?;
     }
-
+    for scoped in read_volume_nullifiers {
+        check_volume_nullifier_read_only_sync(&handle, &snapshot, scoped)?;
+    }
     prepared.spend_nullifiers = spend_nullifiers;
-    prepared.sct_payloads = output_payloads
-        .into_iter()
-        .map(|note_payload| (note_payload, execution_context.source.clone().into()).into())
-        .collect();
+    prepared.volume_nullifiers = volume_nullifiers;
+    prepared.sct_payloads = sct_payloads;
     prepared.routing_actions = transaction_routing_actions(tx.as_ref())?;
-
+    prepared.audit_effects = transaction_audit_effects(tx.as_ref(), context.block_height)?;
     Ok(prepared)
 }
 

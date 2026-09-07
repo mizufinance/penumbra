@@ -16,13 +16,11 @@ const MAX_SCT_POSITION: u64 = (1u64 << 48) - 1;
 
 static EMPTY_HISTORY_DOMAIN: Lazy<Fq> = Lazy::new(|| {
     Fq::from_le_bytes_mod_order(
-        blake2b_simd::blake2b(b"shieldd.nullifier.history.empty.v2").as_bytes(),
+        blake2b_simd::blake2b(b"shieldd.nullifier.history.empty").as_bytes(),
     )
 });
 static HISTORY_NODE_DOMAIN: Lazy<Fq> = Lazy::new(|| {
-    Fq::from_le_bytes_mod_order(
-        blake2b_simd::blake2b(b"shieldd.nullifier.history.node.v2").as_bytes(),
-    )
+    Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(b"shieldd.nullifier.history.node").as_bytes())
 });
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -750,7 +748,6 @@ impl NullifierGenerationArchived {
 /// Node-local evidence that a generation pack was verified before expanded-tree pruning.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NullifierGenerationPackReceipt {
-    pub format_version: u32,
     pub protocol_version: u32,
     pub generation_index: u64,
     pub generation_root: [u8; 32],
@@ -764,10 +761,6 @@ pub struct NullifierGenerationPackReceipt {
 
 impl NullifierGenerationPackReceipt {
     pub fn validate(&self) -> anyhow::Result<()> {
-        ensure!(
-            self.format_version == 1,
-            "unsupported nullifier generation pack format"
-        );
         ensure!(
             self.protocol_version == PROTOCOL_VERSION,
             "unsupported nullifier generation pack protocol"
@@ -783,7 +776,7 @@ impl NullifierGenerationPackReceipt {
         );
         ensure!(
             self.byte_length
-                == 112u64
+                == 108u64
                     .checked_add(
                         self.leaf_count
                             .checked_sub(1)

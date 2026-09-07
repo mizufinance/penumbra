@@ -14,36 +14,36 @@ import (
 )
 
 type indexedLeafCommitmentCircuit struct {
-	Value           frontend.Variable
-	NextIndex       frontend.Variable
-	NextValue       frontend.Variable
-	DKPubX          frontend.Variable
-	DKPubY          frontend.Variable
-	Threshold       frontend.Variable
-	RoutePolicyHash frontend.Variable
-	RingPKX         frontend.Variable
-	RingPKY         frontend.Variable
-	RingIDHash      frontend.Variable
-	PolicyIDHash    frontend.Variable
-	PermissionHash  frontend.Variable
-	ResourceHash    frontend.Variable
+	Value            frontend.Variable
+	NextIndex        frontend.Variable
+	NextValue        frontend.Variable
+	DKPubX           frontend.Variable
+	DKPubY           frontend.Variable
+	DailyVolumeLimit frontend.Variable
+	RoutePolicyHash  frontend.Variable
+	RingPKX          frontend.Variable
+	RingPKY          frontend.Variable
+	RingIDHash       frontend.Variable
+	PolicyIDHash     frontend.Variable
+	PermissionHash   frontend.Variable
+	ResourceHash     frontend.Variable
 
 	Expected frontend.Variable `gnark:",public"`
 }
 
 func (c *indexedLeafCommitmentCircuit) Define(api frontend.API) error {
 	commitment, err := IndexedLeafCommitment(api, IndexedLeafInputs{
-		Value:           c.Value,
-		NextIndex:       c.NextIndex,
-		NextValue:       c.NextValue,
-		DKPub:           gnarkte.Point{X: c.DKPubX, Y: c.DKPubY},
-		Threshold:       c.Threshold,
-		RoutePolicyHash: c.RoutePolicyHash,
-		RingPK:          gnarkte.Point{X: c.RingPKX, Y: c.RingPKY},
-		RingIDHash:      c.RingIDHash,
-		PolicyIDHash:    c.PolicyIDHash,
-		PermissionHash:  c.PermissionHash,
-		ResourceHash:    c.ResourceHash,
+		Value:            c.Value,
+		NextIndex:        c.NextIndex,
+		NextValue:        c.NextValue,
+		DKPub:            gnarkte.Point{X: c.DKPubX, Y: c.DKPubY},
+		DailyVolumeLimit: c.DailyVolumeLimit,
+		RoutePolicyHash:  c.RoutePolicyHash,
+		RingPK:           gnarkte.Point{X: c.RingPKX, Y: c.RingPKY},
+		RingIDHash:       c.RingIDHash,
+		PolicyIDHash:     c.PolicyIDHash,
+		PermissionHash:   c.PermissionHash,
+		ResourceHash:     c.ResourceHash,
 	})
 	if err != nil {
 		return err
@@ -85,8 +85,8 @@ func syntheticIndexedLeafInputs(t *testing.T) IndexedLeafInputs {
 			X: primitives.MustBigInt(vectors.Decaf377CompanionCurve.GeneratorX),
 			Y: primitives.MustBigInt(vectors.Decaf377CompanionCurve.GeneratorY),
 		},
-		Threshold:       "5",
-		RoutePolicyHash: big.NewInt(33),
+		DailyVolumeLimit: "5",
+		RoutePolicyHash:  big.NewInt(33),
 		RingPK: gnarkte.Point{
 			X: primitives.MustBigInt(vectors.Decaf377CompanionCurve.ValueBlindingGeneratorX),
 			Y: primitives.MustBigInt(vectors.Decaf377CompanionCurve.ValueBlindingGeneratorY),
@@ -157,20 +157,20 @@ func TestIndexedLeafCircuitMatchesNativeCommitment(t *testing.T) {
 	}
 
 	assignment := &indexedLeafCommitmentCircuit{
-		Value:           inputs.Value,
-		NextIndex:       inputs.NextIndex,
-		NextValue:       inputs.NextValue,
-		DKPubX:          inputs.DKPub.X,
-		DKPubY:          inputs.DKPub.Y,
-		Threshold:       inputs.Threshold,
-		RoutePolicyHash: inputs.RoutePolicyHash,
-		RingPKX:         inputs.RingPK.X,
-		RingPKY:         inputs.RingPK.Y,
-		RingIDHash:      inputs.RingIDHash,
-		PolicyIDHash:    inputs.PolicyIDHash,
-		PermissionHash:  inputs.PermissionHash,
-		ResourceHash:    inputs.ResourceHash,
-		Expected:        commitment.String(),
+		Value:            inputs.Value,
+		NextIndex:        inputs.NextIndex,
+		NextValue:        inputs.NextValue,
+		DKPubX:           inputs.DKPub.X,
+		DKPubY:           inputs.DKPub.Y,
+		DailyVolumeLimit: inputs.DailyVolumeLimit,
+		RoutePolicyHash:  inputs.RoutePolicyHash,
+		RingPKX:          inputs.RingPK.X,
+		RingPKY:          inputs.RingPK.Y,
+		RingIDHash:       inputs.RingIDHash,
+		PolicyIDHash:     inputs.PolicyIDHash,
+		PermissionHash:   inputs.PermissionHash,
+		ResourceHash:     inputs.ResourceHash,
+		Expected:         commitment.String(),
 	}
 
 	assert := test.NewAssert(t)

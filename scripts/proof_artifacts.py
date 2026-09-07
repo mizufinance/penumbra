@@ -18,17 +18,18 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT_ROOT = REPO_ROOT / "tools" / "gnark" / "artifacts"
 FAMILIES = (
+    "note_seizure",
     "note_reshape1x8",
     "note_reshape8x1",
     "shielded_ics20_withdrawal",
     "transfer",
 )
 POINTER_VERSION = "https://git-lfs.github.com/spec/v1"
-CACHE_IDENTITY_SCHEMA = "shieldd.proof-artifact-cache.v2"
+CACHE_IDENTITY_SCHEMA = "shieldd.proof-artifact-cache"
 BUNDLE_BYTE_BUDGETS = {
-    "runtime": 110_000_000,
-    "constraints": 560_000_000,
-    "full": 670_000_000,
+    "runtime": 145_000_000,
+    "constraints": 825_000_000,
+    "full": 970_000_000,
 }
 
 
@@ -108,7 +109,7 @@ def artifact_files(bundle: str | Bundle = Bundle.FULL) -> list[ArtifactFile]:
     for family in FAMILIES:
         directory = ARTIFACT_ROOT / family
         metadata = json.loads((directory / "circuit_metadata.json").read_text())
-        if metadata.get("schema") != "shieldd.gnark.circuit_metadata.v2":
+        if metadata.get("schema") != "shieldd.gnark.circuit_metadata":
             raise ArtifactError(f"unsupported circuit metadata for {family}")
         if metadata.get("circuit") != family:
             raise ArtifactError(f"circuit metadata identity mismatch for {family}")

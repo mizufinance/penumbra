@@ -3,6 +3,7 @@ use std::convert::TryInto;
 use anyhow::{Context, Error};
 use decaf377_rdsa::{Signature, SpendAuth};
 use shieldd_sdk_asset::balance;
+use shieldd_sdk_compliance::WithdrawalComplianceCiphertext;
 use shieldd_sdk_keys::symmetric::{OvkWrappedKey, WrappedMemoKey};
 use shieldd_sdk_proto::{core::component::shielded_pool::v1 as pb, DomainType};
 use shieldd_sdk_tct as tct;
@@ -10,7 +11,7 @@ use shieldd_sdk_txhash::{EffectHash, EffectingData};
 
 use crate::{
     discovery::RoutingTag, shielded_ics20_withdrawal::ShieldedIcs20WithdrawalProof,
-    Ics20Withdrawal, TransferInputBody,
+    Ics20Withdrawal, TransferInputBody, TransferProofContext, VolumeAccumulatorPayload,
 };
 
 use super::generated::ShieldedIcs20WithdrawalFamilyId;
@@ -43,6 +44,8 @@ pub struct ShieldedIcs20WithdrawalBody {
     pub asset_anchor: tct::StateCommitment,
     pub routing_tag: RoutingTag,
     pub routing_parameter_set_id: decaf377::Fq,
+    pub withdrawal_compliance_ciphertext: WithdrawalComplianceCiphertext,
+    pub volume_accumulator: VolumeAccumulatorPayload,
 }
 
 #[derive(Clone, Debug)]
@@ -65,6 +68,11 @@ impl ShieldedIcs20WithdrawalBody {
             self.family_id.input_count(),
             self.inputs.len()
         );
+        WithdrawalComplianceCiphertext::from_bytes(
+            &self.withdrawal_compliance_ciphertext.to_bytes(),
+        )?;
+        self.volume_accumulator
+            .validate(TransferProofContext::Ordinary)?;
         Ok(())
     }
 }
@@ -188,6 +196,11 @@ impl From<ShieldedIcs20WithdrawalBody> for pb::ShieldedIcs20WithdrawalBody {
             asset_anchor: Some(value.asset_anchor.into()),
             routing_tag: Some(value.routing_tag.into()),
             routing_parameter_set_id: value.routing_parameter_set_id.to_bytes().to_vec(),
+            withdrawal_compliance_ciphertext: value
+                .withdrawal_compliance_ciphertext
+                .to_bytes()
+                .to_vec(),
+            volume_accumulator: Some(value.volume_accumulator.into()),
         }
     }
 }
@@ -249,6 +262,15 @@ impl TryFrom<pb::ShieldedIcs20WithdrawalBody> for ShieldedIcs20WithdrawalBody {
                     .map_err(|_| anyhow::anyhow!("routing parameter set id must be 32 bytes"))?,
             )
             .map_err(|_| anyhow::anyhow!("routing parameter set id must be canonical"))?,
+            withdrawal_compliance_ciphertext: WithdrawalComplianceCiphertext::from_bytes(
+                &value.withdrawal_compliance_ciphertext,
+            )
+            .context("malformed withdrawal compliance ciphertext")?,
+            volume_accumulator: value
+                .volume_accumulator
+                .ok_or_else(|| anyhow::anyhow!("missing volume accumulator payload"))?
+                .try_into()
+                .context("malformed volume accumulator payload")?,
         };
         body.validate_shape()?;
         Ok(body)

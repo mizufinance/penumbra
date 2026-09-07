@@ -234,6 +234,9 @@ pub struct TransactionPlannerRequest {
     /// The epoch of the transaction being planned.
     #[prost(message, optional, tag = "201")]
     pub epoch: ::core::option::Option<super::super::core::component::sct::v1::Epoch>,
+    /// Voluntarily disclose outbound transfers instead of consuming the daily accumulator.
+    #[prost(bool, tag = "202")]
+    pub disclose_to_issuer: bool,
     /// Specifies either that the planner should compute fees automatically or that it should use a fixed fee amount.
     #[prost(oneof = "transaction_planner_request::FeeMode", tags = "100, 101")]
     pub fee_mode: ::core::option::Option<transaction_planner_request::FeeMode>,
@@ -522,6 +525,9 @@ pub struct StatusResponse {
     /// Whether the view service is catching up with the chain state
     #[prost(bool, tag = "3")]
     pub catching_up: bool,
+    /// Consensus timestamp of the latest block known to the view service.
+    #[prost(uint64, tag = "4")]
+    pub latest_block_timestamp: u64,
 }
 impl ::prost::Name for StatusResponse {
     const NAME: &'static str = "StatusResponse";
@@ -1193,9 +1199,9 @@ pub struct ComplianceAssetStatusResponse {
     /// Issuer's detection key public (32 bytes compressed point).
     #[prost(bytes = "vec", tag = "4")]
     pub dk_pub: ::prost::alloc::vec::Vec<u8>,
-    /// Amount threshold for flagging (16 bytes, little-endian u128).
+    /// Daily undisclosed-volume limit (16-byte little-endian u128).
     #[prost(bytes = "vec", tag = "5")]
-    pub threshold: ::prost::alloc::vec::Vec<u8>,
+    pub daily_volume_limit: ::prost::alloc::vec::Vec<u8>,
     /// Full compliance asset policy for regulated assets.
     #[prost(message, optional, tag = "6")]
     pub asset_policy: ::core::option::Option<
@@ -1423,6 +1429,101 @@ impl ::prost::Name for ComplianceBatchMerkleProofsResponse {
         "/shieldd.view.v1.ComplianceBatchMerkleProofsResponse".into()
     }
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct VolumeAccumulatorRecoveryRequest {
+    #[prost(bytes = "vec", tag = "1")]
+    pub subject: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint64, tag = "2")]
+    pub day_start: u64,
+}
+impl ::prost::Name for VolumeAccumulatorRecoveryRequest {
+    const NAME: &'static str = "VolumeAccumulatorRecoveryRequest";
+    const PACKAGE: &'static str = "shieldd.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "shieldd.view.v1.VolumeAccumulatorRecoveryRequest".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/shieldd.view.v1.VolumeAccumulatorRecoveryRequest".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct VolumeAccumulatorRecoveryResponse {
+    #[prost(oneof = "volume_accumulator_recovery_response::Outcome", tags = "1, 2, 3")]
+    pub outcome: ::core::option::Option<volume_accumulator_recovery_response::Outcome>,
+}
+/// Nested message and enum types in `VolumeAccumulatorRecoveryResponse`.
+pub mod volume_accumulator_recovery_response {
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Complete {
+        #[prost(bytes = "vec", tag = "1")]
+        pub subject: ::prost::alloc::vec::Vec<u8>,
+        #[prost(uint64, tag = "2")]
+        pub day_start: u64,
+        #[prost(bytes = "vec", tag = "3")]
+        pub undisclosed_volume: ::prost::alloc::vec::Vec<u8>,
+        #[prost(bytes = "vec", tag = "4")]
+        pub blinding: ::prost::alloc::vec::Vec<u8>,
+        #[prost(message, optional, tag = "5")]
+        pub commitment: ::core::option::Option<
+            super::super::super::crypto::tct::v1::StateCommitment,
+        >,
+        #[prost(uint64, tag = "6")]
+        pub position: u64,
+    }
+    impl ::prost::Name for Complete {
+        const NAME: &'static str = "Complete";
+        const PACKAGE: &'static str = "shieldd.view.v1";
+        fn full_name() -> ::prost::alloc::string::String {
+            "shieldd.view.v1.VolumeAccumulatorRecoveryResponse.Complete".into()
+        }
+        fn type_url() -> ::prost::alloc::string::String {
+            "/shieldd.view.v1.VolumeAccumulatorRecoveryResponse.Complete".into()
+        }
+    }
+    #[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    pub struct Absent {}
+    impl ::prost::Name for Absent {
+        const NAME: &'static str = "Absent";
+        const PACKAGE: &'static str = "shieldd.view.v1";
+        fn full_name() -> ::prost::alloc::string::String {
+            "shieldd.view.v1.VolumeAccumulatorRecoveryResponse.Absent".into()
+        }
+        fn type_url() -> ::prost::alloc::string::String {
+            "/shieldd.view.v1.VolumeAccumulatorRecoveryResponse.Absent".into()
+        }
+    }
+    #[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    pub struct Incomplete {}
+    impl ::prost::Name for Incomplete {
+        const NAME: &'static str = "Incomplete";
+        const PACKAGE: &'static str = "shieldd.view.v1";
+        fn full_name() -> ::prost::alloc::string::String {
+            "shieldd.view.v1.VolumeAccumulatorRecoveryResponse.Incomplete".into()
+        }
+        fn type_url() -> ::prost::alloc::string::String {
+            "/shieldd.view.v1.VolumeAccumulatorRecoveryResponse.Incomplete".into()
+        }
+    }
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag = "1")]
+        Absent(Absent),
+        #[prost(message, tag = "2")]
+        Complete(Complete),
+        #[prost(message, tag = "3")]
+        Incomplete(Incomplete),
+    }
+}
+impl ::prost::Name for VolumeAccumulatorRecoveryResponse {
+    const NAME: &'static str = "VolumeAccumulatorRecoveryResponse";
+    const PACKAGE: &'static str = "shieldd.view.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "shieldd.view.v1.VolumeAccumulatorRecoveryResponse".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/shieldd.view.v1.VolumeAccumulatorRecoveryResponse".into()
+    }
+}
 /// Generated client implementations.
 #[cfg(feature = "rpc")]
 pub mod view_service_client {
@@ -1518,6 +1619,35 @@ pub mod view_service_client {
         pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
             self.inner = self.inner.max_encoding_message_size(limit);
             self
+        }
+        pub async fn volume_accumulator_recovery(
+            &mut self,
+            request: impl tonic::IntoRequest<super::VolumeAccumulatorRecoveryRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::VolumeAccumulatorRecoveryResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/shieldd.view.v1.ViewService/VolumeAccumulatorRecovery",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "shieldd.view.v1.ViewService",
+                        "VolumeAccumulatorRecovery",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
         }
         /// Get current status of chain sync
         pub async fn status(
@@ -2351,6 +2481,13 @@ pub mod view_service_server {
     /// Generated trait containing gRPC methods that should be implemented for use with ViewServiceServer.
     #[async_trait]
     pub trait ViewService: std::marker::Send + std::marker::Sync + 'static {
+        async fn volume_accumulator_recovery(
+            &self,
+            request: tonic::Request<super::VolumeAccumulatorRecoveryRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::VolumeAccumulatorRecoveryResponse>,
+            tonic::Status,
+        >;
         /// Get current status of chain sync
         async fn status(
             &self,
@@ -2740,6 +2877,58 @@ pub mod view_service_server {
         }
         fn call(&mut self, req: http::Request<B>) -> Self::Future {
             match req.uri().path() {
+                "/shieldd.view.v1.ViewService/VolumeAccumulatorRecovery" => {
+                    #[allow(non_camel_case_types)]
+                    struct VolumeAccumulatorRecoverySvc<T: ViewService>(pub Arc<T>);
+                    impl<
+                        T: ViewService,
+                    > tonic::server::UnaryService<
+                        super::VolumeAccumulatorRecoveryRequest,
+                    > for VolumeAccumulatorRecoverySvc<T> {
+                        type Response = super::VolumeAccumulatorRecoveryResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::VolumeAccumulatorRecoveryRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ViewService>::volume_accumulator_recovery(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = VolumeAccumulatorRecoverySvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
                 "/shieldd.view.v1.ViewService/Status" => {
                     #[allow(non_camel_case_types)]
                     struct StatusSvc<T: ViewService>(pub Arc<T>);

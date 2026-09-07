@@ -43,3 +43,34 @@ pub struct OutputRef {
     pub action: ActionRef,
     pub output_index: u32,
 }
+
+/// Canonical reference to the action record carrying compliance ciphertext.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ComplianceRecordRef {
+    TransferOutput(OutputRef),
+    HostWithdrawal(ActionRef),
+    Ics20Withdrawal(ActionRef),
+}
+
+impl ComplianceRecordRef {
+    pub fn action(&self) -> &ActionRef {
+        match self {
+            Self::TransferOutput(output) => &output.action,
+            Self::HostWithdrawal(action) | Self::Ics20Withdrawal(action) => action,
+        }
+    }
+
+    pub fn output_index(&self) -> u32 {
+        match self {
+            Self::TransferOutput(output) => output.output_index,
+            Self::HostWithdrawal(_) | Self::Ics20Withdrawal(_) => 0,
+        }
+    }
+
+    pub fn output_ref(&self) -> OutputRef {
+        OutputRef {
+            action: self.action().clone(),
+            output_index: self.output_index(),
+        }
+    }
+}

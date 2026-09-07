@@ -30,17 +30,17 @@ type SpendAuthFields struct {
 }
 
 type IndexedLeafFields struct {
-	Value           frontend.Variable
-	NextIndex       frontend.Variable
-	NextValue       frontend.Variable
-	DKPub           Point2D
-	Threshold       frontend.Variable
-	RoutePolicyHash frontend.Variable
-	RingPK          Point2D
-	RingIDHash      frontend.Variable
-	PolicyIDHash    frontend.Variable
-	PermissionHash  frontend.Variable
-	ResourceHash    frontend.Variable
+	Value            frontend.Variable
+	NextIndex        frontend.Variable
+	NextValue        frontend.Variable
+	DKPub            Point2D
+	DailyVolumeLimit frontend.Variable
+	RoutePolicyHash  frontend.Variable
+	RingPK           Point2D
+	RingIDHash       frontend.Variable
+	PolicyIDHash     frontend.Variable
+	PermissionHash   frontend.Variable
+	ResourceHash     frontend.Variable
 }
 
 type AssetTreeFields struct {
@@ -62,9 +62,10 @@ type TransferComplianceMetadataFields struct {
 }
 
 type TransferComplianceCoreFields struct {
-	Epk        Point2D
-	C2         frontend.Variable
-	Ciphertext [compliance.TransferCoreCiphertextFQCount]frontend.Variable
+	Epk             Point2D
+	C2              frontend.Variable
+	KeyConfirmation frontend.Variable
+	Ciphertext      [compliance.TransferCoreCiphertextFQCount]frontend.Variable
 }
 
 type TransferComplianceExtFields struct {

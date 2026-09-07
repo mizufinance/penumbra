@@ -21,7 +21,7 @@ use crate::{
     state_key, Nullifier,
 };
 
-const STORAGE_SCHEMA_VERSION: &[u8] = &[3];
+const STORAGE_SCHEMA_ID: &[u8] = b"shieldd.nullifier.imt.storage";
 const STALE_STORAGE_PREFIX: &str = "sct/nullifier_set/";
 const MAX_CONCURRENT_MARKER_READS: usize = 256;
 const MAX_CONCURRENT_TREE_READS: usize = 256;
@@ -324,7 +324,7 @@ async fn initialize_tree<S: StateWrite + ?Sized>(
     }
     ensure!(
         state
-            .get_raw(&state_key::nullifier_generations::schema_version(tree))
+            .get_raw(&state_key::nullifier_generations::schema(tree))
             .await?
             .is_none(),
         "nullifier storage schema exists without a root"
@@ -337,8 +337,8 @@ async fn initialize_tree<S: StateWrite + ?Sized>(
         root.to_bytes().to_vec(),
     );
     state.put_raw(
-        state_key::nullifier_generations::schema_version(tree),
-        STORAGE_SCHEMA_VERSION.to_vec(),
+        state_key::nullifier_generations::schema(tree),
+        STORAGE_SCHEMA_ID.to_vec(),
     );
     state.put_proto(state_key::nullifier_generations::leaf_count(tree), 1u64);
     Ok(root.to_bytes())
@@ -350,10 +350,10 @@ async fn verify_storage_schema<S: StateRead + ?Sized>(
 ) -> Result<()> {
     ensure!(
         state
-            .get_raw(&state_key::nullifier_generations::schema_version(tree))
+            .get_raw(&state_key::nullifier_generations::schema(tree))
             .await?
             .as_deref()
-            == Some(STORAGE_SCHEMA_VERSION),
+            == Some(STORAGE_SCHEMA_ID),
         "unsupported nullifier IMT schema; replay state"
     );
     Ok(())
@@ -389,12 +389,8 @@ pub async fn initialize<S: StateWrite + ?Sized>(state: &mut S) -> Result<()> {
         return Ok(());
     }
     ensure!(
-        state.get_raw("sct/nullifier_set/root").await?.is_none()
-            && state
-                .get_raw("sct/nullifier_set/schema_version")
-                .await?
-                .is_none(),
-        "stale nullifier state cannot be imported; initialize protocol v2 from genesis or replay"
+        state.get_raw("sct/nullifier_set/root").await?.is_none(),
+        "stale nullifier state cannot be imported; initialize from genesis or replay"
     );
     let current = NullifierTreeId::Generation(0);
     let current_root = initialize_tree(state, current).await?;
@@ -988,7 +984,7 @@ pub async fn rollover<S: StateWrite + ?Sized>(
             archived,
         );
         state.delete(state_key::nullifier_generations::root(retired));
-        state.delete(state_key::nullifier_generations::schema_version(retired));
+        state.delete(state_key::nullifier_generations::schema(retired));
         state.delete(state_key::nullifier_generations::leaf_count(retired));
     }
     state.put(

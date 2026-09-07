@@ -61,6 +61,7 @@ func defineTransferIdentityOwnershipAlias(
 		probe.AssetID,
 		divGenFq,
 		transmission0Fq,
+		0,
 	)
 	if err != nil {
 		return err
@@ -72,6 +73,7 @@ func defineTransferIdentityOwnershipAlias(
 		probe.AssetID,
 		divGenFq,
 		transmission1Fq,
+		0,
 	)
 	if err != nil {
 		return err
@@ -199,6 +201,30 @@ func TestTransferCircuitRejectsIdentityAuthorizationAndDiversifiedGenerators(
 			name: "receiver_transmission_key",
 			mutate: func(c *circuits.TransferCircuit) {
 				c.ReceiverOutput.Recipient.Transmission = circuits.Point2D{X: 0, Y: 1}
+			},
+		},
+		{
+			name: "sender_core_ephemeral_key",
+			mutate: func(c *circuits.TransferCircuit) {
+				c.Compliance.SenderCore.Epk = circuits.Point2D{X: 0, Y: 1}
+			},
+		},
+		{
+			name: "sender_extension_ephemeral_key",
+			mutate: func(c *circuits.TransferCircuit) {
+				c.Compliance.SenderExt.Epk = circuits.Point2D{X: 0, Y: 1}
+			},
+		},
+		{
+			name: "output_core_ephemeral_key",
+			mutate: func(c *circuits.TransferCircuit) {
+				c.Compliance.OutputCore.Epk = circuits.Point2D{X: 0, Y: 1}
+			},
+		},
+		{
+			name: "output_extension_ephemeral_key",
+			mutate: func(c *circuits.TransferCircuit) {
+				c.Compliance.OutputExt.Epk = circuits.Point2D{X: 0, Y: 1}
 			},
 		},
 	}

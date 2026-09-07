@@ -55,12 +55,16 @@ message StatePayload {
   message Note {
     shielded_pool.v1.NotePayload note = 2;
   }
+  message VolumeAccumulator {
+    shielded_pool.v1.VolumeAccumulatorPayload payload = 1;
+  }
   // The source of the payload, if known.
   sct.v1.CommitmentSource source = 1;
   // The state payload itself.
   oneof state_payload {
     RolledUp rolled_up = 2;
     Note note = 3;
+    VolumeAccumulator volume_accumulator = 4;
   }
 }
 

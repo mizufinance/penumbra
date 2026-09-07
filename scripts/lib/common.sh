@@ -433,8 +433,7 @@ ensure_orbis_images() {
         return 1
     fi
     if ! jq -e '
-        .schema_version == 1
-        and (.orbis.source_revision | strings | test("^[0-9a-f]{40}$"))
+        (.orbis.source_revision | strings | test("^[0-9a-f]{40}$"))
         and (.orbis.crypto | strings | length > 0)
         and (.orbis.image | strings | test("^ghcr\\.io/sourcenetwork/orbis-rs@sha256:[0-9a-f]{64}$"))
         and (.vera.source_revision | strings | test("^[0-9a-f]{40}$"))

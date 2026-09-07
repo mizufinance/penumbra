@@ -11,12 +11,12 @@ use crate::ProofFamilyId;
 
 pub fn transcript_family_domain(family_id: ProofFamilyId) -> Cow<'static, [u8]> {
     match family_id {
-        ProofFamilyId::Transfer => Cow::Borrowed(b"shieldd.snarkpack.transfer.v1"),
+        ProofFamilyId::Transfer => Cow::Borrowed(b"shieldd.snarkpack.transfer"),
         ProofFamilyId::NoteReshape(family_id) => {
-            Cow::Owned(format!("shieldd.snarkpack.{}.v1", family_id.label()).into_bytes())
+            Cow::Owned(format!("shieldd.snarkpack.{}", family_id.label()).into_bytes())
         }
         ProofFamilyId::ShieldedIcs20Withdrawal(family_id) => {
-            Cow::Owned(format!("shieldd.snarkpack.{}.v1", family_id.label()).into_bytes())
+            Cow::Owned(format!("shieldd.snarkpack.{}", family_id.label()).into_bytes())
         }
     }
 }
@@ -182,19 +182,19 @@ mod tests {
         let expected = [
             (
                 ProofFamilyId::Transfer,
-                "shieldd.snarkpack.transfer.v1".as_bytes(),
+                "shieldd.snarkpack.transfer".as_bytes(),
             ),
             (
                 ProofFamilyId::NoteReshape(NoteReshapeFamilyId::OneByEight),
-                "shieldd.snarkpack.note_reshape1x8.v1".as_bytes(),
+                "shieldd.snarkpack.note_reshape1x8".as_bytes(),
             ),
             (
                 ProofFamilyId::NoteReshape(NoteReshapeFamilyId::EightByOne),
-                "shieldd.snarkpack.note_reshape8x1.v1".as_bytes(),
+                "shieldd.snarkpack.note_reshape8x1".as_bytes(),
             ),
             (
                 ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical),
-                "shieldd.snarkpack.shielded_ics20_withdrawal.v1".as_bytes(),
+                "shieldd.snarkpack.shielded_ics20_withdrawal".as_bytes(),
             ),
         ];
         let mut domains = BTreeSet::new();

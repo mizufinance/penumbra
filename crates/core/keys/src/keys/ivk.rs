@@ -59,6 +59,16 @@ impl IncomingViewingKey {
         self.ivk.key_agreement_with(pk)
     }
 
+    /// Perform key agreement with a compressed Decaf377 point.
+    pub fn key_agreement_with_element(
+        &self,
+        point: decaf377::Element,
+    ) -> Result<[u8; 32], ka::Error> {
+        self.ivk
+            .key_agreement_with(&ka::Public(point.vartime_compress().0))
+            .map(|shared| shared.0)
+    }
+
     /// Derive a transmission key from the given diversified base.
     pub fn diversified_public(&self, diversified_generator: &decaf377::Element) -> ka::Public {
         self.ivk.diversified_public(diversified_generator)

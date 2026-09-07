@@ -567,7 +567,7 @@ fn format_compliance_identity(plaintext: &[u8]) -> Result<String> {
 
 fn request_scalar(request_id: &str) -> Fr {
     let mut hasher = Sha512::new();
-    hasher.update(b"bankd-orbis-audit-reader-v2");
+    hasher.update(b"bankd-orbis-audit-reader");
     hasher.update(request_id.as_bytes());
     let mut scalar = Fr::from_le_bytes_mod_order(&hasher.finalize());
     if scalar == Fr::from(0u64) {

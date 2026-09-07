@@ -35,7 +35,38 @@ pub struct TransactionPlan {
     pub nullifier_window: Option<NullifierWindow>,
 }
 
+pub struct PlannedSpend<'a> {
+    pub spend: &'a shieldd_sdk_shielded_pool::ShieldedInputPlan,
+    pub witness: &'a shieldd_sdk_shielded_pool::ActionWitness,
+}
+
 impl TransactionPlan {
+    pub fn spends(&self) -> impl Iterator<Item = PlannedSpend<'_>> {
+        self.actions
+            .iter()
+            .filter_map(|action| match action {
+                ActionPlan::Transfer(plan) => Some((&plan.spends, &plan.compliance.witness)),
+                ActionPlan::NoteReshape(plan) => Some((&plan.spends, &plan.compliance.witness)),
+                ActionPlan::ShieldedIcs20Withdrawal(plan) => {
+                    Some((&plan.spends, &plan.compliance.witness))
+                }
+                ActionPlan::ShieldedHostWithdrawal(plan) => {
+                    Some((&plan.spends, &plan.compliance.witness))
+                }
+                _ => None,
+            })
+            .chain(
+                self.fee_funding
+                    .iter()
+                    .map(|fee| (&fee.transfer.spends, &fee.transfer.compliance.witness)),
+            )
+            .flat_map(|(spends, witness)| {
+                spends
+                    .iter()
+                    .map(move |spend| PlannedSpend { spend, witness })
+            })
+    }
+
     pub fn sort_actions(&mut self) {
         self.actions.sort_by_key(ActionPlan::variant_index);
     }
@@ -303,7 +334,8 @@ mod tests {
     use shieldd_sdk_shielded_pool::{
         discovery::{Parameters, Precision},
         HostTransfer, HostWithdrawalDestination, Ics20Withdrawal, Note, NoteReshape,
-        NoteReshapeFamilyId, NoteReshapeProof, Rseed, ShieldedInputPlan, ShieldedOutputPlan,
+        NoteReshapeFamilyId, NoteReshapeProof, RecoveryCommitment, Rseed, ShieldedInputPlan,
+        ShieldedOutputPlan,
     };
     use shieldd_sdk_txhash::EffectHash;
     use std::{ops::Deref, str::FromStr};
@@ -367,27 +399,27 @@ mod tests {
         let sender_sk =
             SpendKey::from_seed_phrase_bip44(SeedPhrase::generate(&mut rng), &Bip44Path::new(0))
                 .expect("test spend key should satisfy key refinements");
-        let recipient_sk =
-            SpendKey::from_seed_phrase_bip44(SeedPhrase::generate(&mut rng), &Bip44Path::new(0))
-                .expect("test spend key should satisfy key refinements");
         let sender = sender_sk
             .full_viewing_key()
             .incoming()
             .payment_address(AddressIndex::from(0u32));
-        let recipient = recipient_sk
-            .full_viewing_key()
-            .incoming()
-            .payment_address(AddressIndex::from(0u32));
+        let recipient = sender.clone();
         let value = Value {
             amount: 100u64.into(),
             asset_id: *BASE_ASSET_ID,
         };
-        let note = Note::from_parts(sender, value, Rseed::generate(&mut rng)).expect("valid note");
+        let note = Note::from_parts(
+            sender,
+            value,
+            Rseed::generate(&mut rng),
+            RecoveryCommitment::unavailable(),
+        )
+        .expect("valid note");
         let spend = ShieldedInputPlan::new(&mut rng, note, 0u64.into());
         let output = ShieldedOutputPlan::new(&mut rng, value, recipient);
 
         FeeFundingPlan {
-            transfer: shieldd_sdk_shielded_pool::test_plan_helpers::transfer(
+            transfer: shieldd_sdk_shielded_pool::test_plan_helpers::fee_funding(
                 vec![spend],
                 vec![output],
                 Fr::from(19u64),
@@ -420,7 +452,13 @@ mod tests {
             amount: 100u64.into(),
             asset_id: *BASE_ASSET_ID,
         };
-        let note = Note::from_parts(sender, value, Rseed::generate(&mut rng)).expect("valid note");
+        let note = Note::from_parts(
+            sender,
+            value,
+            Rseed::generate(&mut rng),
+            RecoveryCommitment::unavailable(),
+        )
+        .expect("valid note");
         let spend = ShieldedInputPlan::new(&mut rng, note, 0u64.into());
         let output = ShieldedOutputPlan::new(&mut rng, value, recipient);
 
@@ -433,7 +471,9 @@ mod tests {
                 vec![spend],
                 vec![output],
                 Fr::rand(&mut rng),
-                context,
+                context.clone(),
+                shieldd_sdk_shielded_pool::VolumeAccumulatorPlan::padding(context.timestamp),
+                shieldd_sdk_shielded_pool::TransferProofContext::Ordinary,
                 parameters.clone(),
             )
         }
@@ -497,7 +537,8 @@ mod tests {
                 Some(change),
                 withdrawal,
                 Fr::from(7u64),
-                context,
+                context.clone(),
+                shieldd_sdk_shielded_pool::VolumeAccumulatorPlan::padding(context.timestamp),
                 parameters.clone(),
             )
         }
@@ -553,7 +594,8 @@ mod tests {
                 None,
                 withdrawal,
                 Fr::from(7u64),
-                context,
+                context.clone(),
+                shieldd_sdk_shielded_pool::VolumeAccumulatorPlan::padding(context.timestamp),
                 parameters.clone(),
             )
         }
@@ -603,7 +645,8 @@ mod tests {
                 None,
                 withdrawal,
                 Fr::from(7u64),
-                context,
+                context.clone(),
+                shieldd_sdk_shielded_pool::VolumeAccumulatorPlan::padding(context.timestamp),
                 parameters.clone(),
             )
         }

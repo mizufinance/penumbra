@@ -251,7 +251,8 @@ mod tests {
         let output = NotePayload {
             note_commitment: shieldd_sdk_tct::StateCommitment(Fq::from(45u64)),
             ephemeral_key: decaf377_ka::Public([0u8; 32]),
-            encrypted_note: crate::NoteCiphertext([0u8; 144]),
+            encrypted_note: crate::NoteCiphertext([0u8; crate::note::NOTE_CIPHERTEXT_BYTES]),
+            recovery_capsule: None,
         };
 
         run_execute(

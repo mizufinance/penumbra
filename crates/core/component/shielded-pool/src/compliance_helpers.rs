@@ -11,8 +11,12 @@ pub fn compliance_leaf_to_proto(leaf: &ComplianceLeaf) -> compliance_pb::Complia
     compliance_pb::ComplianceLeaf {
         address: Some(leaf.address.clone().into()),
         asset_id: Some(leaf.asset_id.into()),
-        d: leaf.d.to_bytes().to_vec(),
+        capk: leaf.capk.vartime_compress().0.to_vec(),
+        rnk_dh_pk: leaf.rnk_dh_pk.vartime_compress().0.to_vec(),
+        rnk_commitment: leaf.rnk_commitment.to_bytes().to_vec(),
         status: compliance_pb::UserAssetStatus::from(leaf.status) as i32,
+        freeze_generation: leaf.freeze_generation,
+        frozen_since_height: leaf.frozen_since_height,
     }
 }
 

@@ -2319,7 +2319,7 @@ impl serde::Serialize for ComplianceAssetStatusResponse {
         if !self.dk_pub.is_empty() {
             len += 1;
         }
-        if !self.threshold.is_empty() {
+        if !self.daily_volume_limit.is_empty() {
             len += 1;
         }
         if self.asset_policy.is_some() {
@@ -2340,10 +2340,10 @@ impl serde::Serialize for ComplianceAssetStatusResponse {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("dkPub", pbjson::private::base64::encode(&self.dk_pub).as_str())?;
         }
-        if !self.threshold.is_empty() {
+        if !self.daily_volume_limit.is_empty() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("threshold", pbjson::private::base64::encode(&self.threshold).as_str())?;
+            struct_ser.serialize_field("dailyVolumeLimit", pbjson::private::base64::encode(&self.daily_volume_limit).as_str())?;
         }
         if let Some(v) = self.asset_policy.as_ref() {
             struct_ser.serialize_field("assetPolicy", v)?;
@@ -2366,7 +2366,8 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
             "isRegulated",
             "dk_pub",
             "dkPub",
-            "threshold",
+            "daily_volume_limit",
+            "dailyVolumeLimit",
             "asset_policy",
             "assetPolicy",
         ];
@@ -2377,7 +2378,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
             IsRegistered,
             IsRegulated,
             DkPub,
-            Threshold,
+            DailyVolumeLimit,
             AssetPolicy,
             __SkipField__,
         }
@@ -2405,7 +2406,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
                             "isRegistered" | "is_registered" => Ok(GeneratedField::IsRegistered),
                             "isRegulated" | "is_regulated" => Ok(GeneratedField::IsRegulated),
                             "dkPub" | "dk_pub" => Ok(GeneratedField::DkPub),
-                            "threshold" => Ok(GeneratedField::Threshold),
+                            "dailyVolumeLimit" | "daily_volume_limit" => Ok(GeneratedField::DailyVolumeLimit),
                             "assetPolicy" | "asset_policy" => Ok(GeneratedField::AssetPolicy),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
@@ -2430,7 +2431,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
                 let mut is_registered__ = None;
                 let mut is_regulated__ = None;
                 let mut dk_pub__ = None;
-                let mut threshold__ = None;
+                let mut daily_volume_limit__ = None;
                 let mut asset_policy__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -2460,11 +2461,11 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::Threshold => {
-                            if threshold__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("threshold"));
+                        GeneratedField::DailyVolumeLimit => {
+                            if daily_volume_limit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dailyVolumeLimit"));
                             }
-                            threshold__ =
+                            daily_volume_limit__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -2484,7 +2485,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
                     is_registered: is_registered__.unwrap_or_default(),
                     is_regulated: is_regulated__.unwrap_or_default(),
                     dk_pub: dk_pub__.unwrap_or_default(),
-                    threshold: threshold__.unwrap_or_default(),
+                    daily_volume_limit: daily_volume_limit__.unwrap_or_default(),
                     asset_policy: asset_policy__,
                 })
             }
@@ -5387,6 +5388,9 @@ impl serde::Serialize for StatusResponse {
         if self.catching_up {
             len += 1;
         }
+        if self.latest_block_timestamp != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.view.v1.StatusResponse", len)?;
         if self.sync_height != 0 {
             #[allow(clippy::needless_borrow)]
@@ -5395,6 +5399,11 @@ impl serde::Serialize for StatusResponse {
         }
         if self.catching_up {
             struct_ser.serialize_field("catchingUp", &self.catching_up)?;
+        }
+        if self.latest_block_timestamp != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("latestBlockTimestamp", ToString::to_string(&self.latest_block_timestamp).as_str())?;
         }
         struct_ser.end()
     }
@@ -5410,12 +5419,15 @@ impl<'de> serde::Deserialize<'de> for StatusResponse {
             "syncHeight",
             "catching_up",
             "catchingUp",
+            "latest_block_timestamp",
+            "latestBlockTimestamp",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             SyncHeight,
             CatchingUp,
+            LatestBlockTimestamp,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -5440,6 +5452,7 @@ impl<'de> serde::Deserialize<'de> for StatusResponse {
                         match value {
                             "syncHeight" | "sync_height" => Ok(GeneratedField::SyncHeight),
                             "catchingUp" | "catching_up" => Ok(GeneratedField::CatchingUp),
+                            "latestBlockTimestamp" | "latest_block_timestamp" => Ok(GeneratedField::LatestBlockTimestamp),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -5461,6 +5474,7 @@ impl<'de> serde::Deserialize<'de> for StatusResponse {
             {
                 let mut sync_height__ = None;
                 let mut catching_up__ = None;
+                let mut latest_block_timestamp__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::SyncHeight => {
@@ -5477,6 +5491,14 @@ impl<'de> serde::Deserialize<'de> for StatusResponse {
                             }
                             catching_up__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::LatestBlockTimestamp => {
+                            if latest_block_timestamp__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("latestBlockTimestamp"));
+                            }
+                            latest_block_timestamp__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -5485,6 +5507,7 @@ impl<'de> serde::Deserialize<'de> for StatusResponse {
                 Ok(StatusResponse {
                     sync_height: sync_height__.unwrap_or_default(),
                     catching_up: catching_up__.unwrap_or_default(),
+                    latest_block_timestamp: latest_block_timestamp__.unwrap_or_default(),
                 })
             }
         }
@@ -6313,6 +6336,9 @@ impl serde::Serialize for TransactionPlannerRequest {
         if self.epoch.is_some() {
             len += 1;
         }
+        if self.disclose_to_issuer {
+            len += 1;
+        }
         if self.fee_mode.is_some() {
             len += 1;
         }
@@ -6348,6 +6374,9 @@ impl serde::Serialize for TransactionPlannerRequest {
         if let Some(v) = self.epoch.as_ref() {
             struct_ser.serialize_field("epoch", v)?;
         }
+        if self.disclose_to_issuer {
+            struct_ser.serialize_field("discloseToIssuer", &self.disclose_to_issuer)?;
+        }
         if let Some(v) = self.fee_mode.as_ref() {
             match v {
                 transaction_planner_request::FeeMode::AutoFee(v) => {
@@ -6382,6 +6411,8 @@ impl<'de> serde::Deserialize<'de> for TransactionPlannerRequest {
             "epoch_index",
             "epochIndex",
             "epoch",
+            "disclose_to_issuer",
+            "discloseToIssuer",
             "auto_fee",
             "autoFee",
             "manual_fee",
@@ -6399,6 +6430,7 @@ impl<'de> serde::Deserialize<'de> for TransactionPlannerRequest {
             HostWithdrawals,
             EpochIndex,
             Epoch,
+            DiscloseToIssuer,
             AutoFee,
             ManualFee,
             __SkipField__,
@@ -6432,6 +6464,7 @@ impl<'de> serde::Deserialize<'de> for TransactionPlannerRequest {
                             "hostWithdrawals" | "host_withdrawals" => Ok(GeneratedField::HostWithdrawals),
                             "epochIndex" | "epoch_index" => Ok(GeneratedField::EpochIndex),
                             "epoch" => Ok(GeneratedField::Epoch),
+                            "discloseToIssuer" | "disclose_to_issuer" => Ok(GeneratedField::DiscloseToIssuer),
                             "autoFee" | "auto_fee" => Ok(GeneratedField::AutoFee),
                             "manualFee" | "manual_fee" => Ok(GeneratedField::ManualFee),
                             _ => Ok(GeneratedField::__SkipField__),
@@ -6462,6 +6495,7 @@ impl<'de> serde::Deserialize<'de> for TransactionPlannerRequest {
                 let mut host_withdrawals__ = None;
                 let mut epoch_index__ = None;
                 let mut epoch__ = None;
+                let mut disclose_to_issuer__ = None;
                 let mut fee_mode__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -6523,6 +6557,12 @@ impl<'de> serde::Deserialize<'de> for TransactionPlannerRequest {
                             }
                             epoch__ = map_.next_value()?;
                         }
+                        GeneratedField::DiscloseToIssuer => {
+                            if disclose_to_issuer__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("discloseToIssuer"));
+                            }
+                            disclose_to_issuer__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::AutoFee => {
                             if fee_mode__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("autoFee"));
@@ -6552,6 +6592,7 @@ impl<'de> serde::Deserialize<'de> for TransactionPlannerRequest {
                     host_withdrawals: host_withdrawals__.unwrap_or_default(),
                     epoch_index: epoch_index__.unwrap_or_default(),
                     epoch: epoch__,
+                    disclose_to_issuer: disclose_to_issuer__.unwrap_or_default(),
                     fee_mode: fee_mode__,
                 })
             }
@@ -6948,6 +6989,599 @@ impl<'de> serde::Deserialize<'de> for TransparentAddressResponse {
             }
         }
         deserializer.deserialize_struct("shieldd.view.v1.TransparentAddressResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for VolumeAccumulatorRecoveryRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.subject.is_empty() {
+            len += 1;
+        }
+        if self.day_start != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("shieldd.view.v1.VolumeAccumulatorRecoveryRequest", len)?;
+        if !self.subject.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("subject", pbjson::private::base64::encode(&self.subject).as_str())?;
+        }
+        if self.day_start != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("dayStart", ToString::to_string(&self.day_start).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for VolumeAccumulatorRecoveryRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "subject",
+            "day_start",
+            "dayStart",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Subject,
+            DayStart,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "subject" => Ok(GeneratedField::Subject),
+                            "dayStart" | "day_start" => Ok(GeneratedField::DayStart),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = VolumeAccumulatorRecoveryRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct shieldd.view.v1.VolumeAccumulatorRecoveryRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<VolumeAccumulatorRecoveryRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut subject__ = None;
+                let mut day_start__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Subject => {
+                            if subject__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("subject"));
+                            }
+                            subject__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::DayStart => {
+                            if day_start__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dayStart"));
+                            }
+                            day_start__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(VolumeAccumulatorRecoveryRequest {
+                    subject: subject__.unwrap_or_default(),
+                    day_start: day_start__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("shieldd.view.v1.VolumeAccumulatorRecoveryRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for VolumeAccumulatorRecoveryResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.outcome.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("shieldd.view.v1.VolumeAccumulatorRecoveryResponse", len)?;
+        if let Some(v) = self.outcome.as_ref() {
+            match v {
+                volume_accumulator_recovery_response::Outcome::Absent(v) => {
+                    struct_ser.serialize_field("absent", v)?;
+                }
+                volume_accumulator_recovery_response::Outcome::Complete(v) => {
+                    struct_ser.serialize_field("complete", v)?;
+                }
+                volume_accumulator_recovery_response::Outcome::Incomplete(v) => {
+                    struct_ser.serialize_field("incomplete", v)?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for VolumeAccumulatorRecoveryResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "absent",
+            "complete",
+            "incomplete",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Absent,
+            Complete,
+            Incomplete,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "absent" => Ok(GeneratedField::Absent),
+                            "complete" => Ok(GeneratedField::Complete),
+                            "incomplete" => Ok(GeneratedField::Incomplete),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = VolumeAccumulatorRecoveryResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct shieldd.view.v1.VolumeAccumulatorRecoveryResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<VolumeAccumulatorRecoveryResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut outcome__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Absent => {
+                            if outcome__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("absent"));
+                            }
+                            outcome__ = map_.next_value::<::std::option::Option<_>>()?.map(volume_accumulator_recovery_response::Outcome::Absent)
+;
+                        }
+                        GeneratedField::Complete => {
+                            if outcome__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("complete"));
+                            }
+                            outcome__ = map_.next_value::<::std::option::Option<_>>()?.map(volume_accumulator_recovery_response::Outcome::Complete)
+;
+                        }
+                        GeneratedField::Incomplete => {
+                            if outcome__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("incomplete"));
+                            }
+                            outcome__ = map_.next_value::<::std::option::Option<_>>()?.map(volume_accumulator_recovery_response::Outcome::Incomplete)
+;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(VolumeAccumulatorRecoveryResponse {
+                    outcome: outcome__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("shieldd.view.v1.VolumeAccumulatorRecoveryResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for volume_accumulator_recovery_response::Absent {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let len = 0;
+        let struct_ser = serializer.serialize_struct("shieldd.view.v1.VolumeAccumulatorRecoveryResponse.Absent", len)?;
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for volume_accumulator_recovery_response::Absent {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                            Ok(GeneratedField::__SkipField__)
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = volume_accumulator_recovery_response::Absent;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct shieldd.view.v1.VolumeAccumulatorRecoveryResponse.Absent")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<volume_accumulator_recovery_response::Absent, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                while map_.next_key::<GeneratedField>()?.is_some() {
+                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                }
+                Ok(volume_accumulator_recovery_response::Absent {
+                })
+            }
+        }
+        deserializer.deserialize_struct("shieldd.view.v1.VolumeAccumulatorRecoveryResponse.Absent", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for volume_accumulator_recovery_response::Complete {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.subject.is_empty() {
+            len += 1;
+        }
+        if self.day_start != 0 {
+            len += 1;
+        }
+        if !self.undisclosed_volume.is_empty() {
+            len += 1;
+        }
+        if !self.blinding.is_empty() {
+            len += 1;
+        }
+        if self.commitment.is_some() {
+            len += 1;
+        }
+        if self.position != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("shieldd.view.v1.VolumeAccumulatorRecoveryResponse.Complete", len)?;
+        if !self.subject.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("subject", pbjson::private::base64::encode(&self.subject).as_str())?;
+        }
+        if self.day_start != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("dayStart", ToString::to_string(&self.day_start).as_str())?;
+        }
+        if !self.undisclosed_volume.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("undisclosedVolume", pbjson::private::base64::encode(&self.undisclosed_volume).as_str())?;
+        }
+        if !self.blinding.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("blinding", pbjson::private::base64::encode(&self.blinding).as_str())?;
+        }
+        if let Some(v) = self.commitment.as_ref() {
+            struct_ser.serialize_field("commitment", v)?;
+        }
+        if self.position != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("position", ToString::to_string(&self.position).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for volume_accumulator_recovery_response::Complete {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "subject",
+            "day_start",
+            "dayStart",
+            "undisclosed_volume",
+            "undisclosedVolume",
+            "blinding",
+            "commitment",
+            "position",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Subject,
+            DayStart,
+            UndisclosedVolume,
+            Blinding,
+            Commitment,
+            Position,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "subject" => Ok(GeneratedField::Subject),
+                            "dayStart" | "day_start" => Ok(GeneratedField::DayStart),
+                            "undisclosedVolume" | "undisclosed_volume" => Ok(GeneratedField::UndisclosedVolume),
+                            "blinding" => Ok(GeneratedField::Blinding),
+                            "commitment" => Ok(GeneratedField::Commitment),
+                            "position" => Ok(GeneratedField::Position),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = volume_accumulator_recovery_response::Complete;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct shieldd.view.v1.VolumeAccumulatorRecoveryResponse.Complete")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<volume_accumulator_recovery_response::Complete, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut subject__ = None;
+                let mut day_start__ = None;
+                let mut undisclosed_volume__ = None;
+                let mut blinding__ = None;
+                let mut commitment__ = None;
+                let mut position__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Subject => {
+                            if subject__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("subject"));
+                            }
+                            subject__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::DayStart => {
+                            if day_start__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dayStart"));
+                            }
+                            day_start__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::UndisclosedVolume => {
+                            if undisclosed_volume__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("undisclosedVolume"));
+                            }
+                            undisclosed_volume__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Blinding => {
+                            if blinding__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("blinding"));
+                            }
+                            blinding__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Commitment => {
+                            if commitment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("commitment"));
+                            }
+                            commitment__ = map_.next_value()?;
+                        }
+                        GeneratedField::Position => {
+                            if position__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("position"));
+                            }
+                            position__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(volume_accumulator_recovery_response::Complete {
+                    subject: subject__.unwrap_or_default(),
+                    day_start: day_start__.unwrap_or_default(),
+                    undisclosed_volume: undisclosed_volume__.unwrap_or_default(),
+                    blinding: blinding__.unwrap_or_default(),
+                    commitment: commitment__,
+                    position: position__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("shieldd.view.v1.VolumeAccumulatorRecoveryResponse.Complete", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for volume_accumulator_recovery_response::Incomplete {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let len = 0;
+        let struct_ser = serializer.serialize_struct("shieldd.view.v1.VolumeAccumulatorRecoveryResponse.Incomplete", len)?;
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for volume_accumulator_recovery_response::Incomplete {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                            Ok(GeneratedField::__SkipField__)
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = volume_accumulator_recovery_response::Incomplete;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct shieldd.view.v1.VolumeAccumulatorRecoveryResponse.Incomplete")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<volume_accumulator_recovery_response::Incomplete, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                while map_.next_key::<GeneratedField>()?.is_some() {
+                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                }
+                Ok(volume_accumulator_recovery_response::Incomplete {
+                })
+            }
+        }
+        deserializer.deserialize_struct("shieldd.view.v1.VolumeAccumulatorRecoveryResponse.Incomplete", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for WalletIdRequest {

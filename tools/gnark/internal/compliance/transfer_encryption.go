@@ -17,12 +17,13 @@ const (
 )
 
 var (
-	TransferSaltDomain          = transferSaltConstant("shieldd.transfer.compliance.salt")
-	TransferDetectionSaltLabel  = transferSaltConstant("detection")
-	TransferSenderCoreSaltLabel = transferSaltConstant("sender_core")
-	TransferSenderExtSaltLabel  = transferSaltConstant("sender_ext")
-	TransferOutputCoreSaltLabel = transferSaltConstant("output_core")
-	TransferOutputExtSaltLabel  = transferSaltConstant("output_ext")
+	TransferSaltDomain            = transferSaltConstant("shieldd.transfer.compliance.salt")
+	TransferDetectionSaltLabel    = transferSaltConstant("detection")
+	TransferSenderCoreSaltLabel   = transferSaltConstant("sender_core")
+	TransferSenderExtSaltLabel    = transferSaltConstant("sender_ext")
+	TransferOutputCoreSaltLabel   = transferSaltConstant("output_core")
+	TransferOutputExtSaltLabel    = transferSaltConstant("output_ext")
+	TransferKeyConfirmationDomain = transferSaltConstant("shieldd.transfer.compliance.key_confirmation.v1")
 )
 
 func transferSaltConstant(label string) *big.Int {
@@ -53,16 +54,6 @@ func DeriveTransferSalt(
 		TransferSaltDomain,
 		[2]frontend.Variable{transferNonceRoot, label},
 	)
-}
-
-func ThresholdFlag(
-	api frontend.API,
-	isRegulated frontend.Variable,
-	amount frontend.Variable,
-	threshold frontend.Variable,
-) frontend.Variable {
-	thresholdReached := api.Sub(1, fieldLessThan(api, amount, threshold))
-	return api.Mul(isRegulated, thresholdReached)
 }
 
 func VerifyPoseidonEncryptionTransferDetection(
@@ -121,6 +112,9 @@ func VerifyPoseidonEncryptionTransferAmount(
 	api frontend.API,
 	sharedSecret gnarkte.Point,
 	c2 frontend.Variable,
+	epkFq frontend.Variable,
+	tierSalt frontend.Variable,
+	keyConfirmation frontend.Variable,
 	amount frontend.Variable,
 	ciphertext [TransferCoreCiphertextFQCount]frontend.Variable,
 ) error {
@@ -129,6 +123,15 @@ func VerifyPoseidonEncryptionTransferAmount(
 		return err
 	}
 	seed := api.Sub(c2, sharedSecretFq)
+	confirmation, err := primitives.Poseidon377Hash3(
+		api,
+		TransferKeyConfirmationDomain,
+		[3]frontend.Variable{seed, epkFq, tierSalt},
+	)
+	if err != nil {
+		return err
+	}
+	api.AssertIsEqual(confirmation, keyConfirmation)
 	keystream, err := complianceStreamBlock(api, seed, 0)
 	if err != nil {
 		return err

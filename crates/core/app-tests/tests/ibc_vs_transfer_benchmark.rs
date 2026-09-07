@@ -45,9 +45,6 @@ use {
 
 mod common;
 
-const SCHEMA_VERSION: u32 = 1;
-const SETUP_CACHE_SCHEMA_VERSION: u32 = 1;
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "real benchmark; run explicitly with SHIELDD_IBC_VS_TRANSFER_TX_COUNT=1000"]
 async fn ibc_vs_transfer_benchmark() -> Result<()> {
@@ -119,7 +116,6 @@ async fn ibc_vs_transfer_benchmark() -> Result<()> {
     );
 
     let report = BenchmarkReport {
-        schema_version: SCHEMA_VERSION,
         generated_at_unix: unix_ts(),
         tx_count: config.tx_count,
         state_setup_tx_count: corpus.state_setup_tx_count(),
@@ -205,7 +201,6 @@ fn workspace_target_bench_dir() -> PathBuf {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct BenchmarkCorpus {
-    schema_version: u32,
     tx_count: usize,
     #[serde(default)]
     state_setup_tx_count: Option<usize>,
@@ -238,7 +233,6 @@ impl BenchmarkCorpus {
             "superset corpus vectors are shorter than requested {tx_count} txs"
         );
         Ok(Self {
-            schema_version: self.schema_version,
             tx_count,
             state_setup_tx_count: Some(self.state_setup_tx_count()),
             created_at_unix: self.created_at_unix,
@@ -278,7 +272,6 @@ struct BenchmarkSetupCache {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct SetupCacheMetadata {
-    schema_version: u32,
     fingerprint: String,
     allocation_count: usize,
     corpus_fingerprint: String,
@@ -314,7 +307,6 @@ struct CachedNodeState {
 
 #[derive(Serialize)]
 struct BenchmarkReport {
-    schema_version: u32,
     generated_at_unix: u64,
     tx_count: usize,
     state_setup_tx_count: usize,
@@ -458,10 +450,7 @@ async fn load_or_build_corpus(config: &Config) -> Result<(BenchmarkCorpus, PathB
     );
     if !config.rebuild_corpus && path.exists() {
         let corpus: BenchmarkCorpus = serde_json::from_slice(&fs::read(&path)?)?;
-        if corpus.schema_version == SCHEMA_VERSION
-            && corpus.tx_count == config.tx_count
-            && corpus.fingerprint == expected_fingerprint
-        {
+        if corpus.tx_count == config.tx_count && corpus.fingerprint == expected_fingerprint {
             return Ok((corpus, path, "loaded".to_string()));
         }
     }
@@ -549,7 +538,6 @@ async fn load_or_build_corpus(config: &Config) -> Result<(BenchmarkCorpus, PathB
     );
 
     let corpus = BenchmarkCorpus {
-        schema_version: SCHEMA_VERSION,
         tx_count: config.tx_count,
         state_setup_tx_count: Some(config.tx_count),
         created_at_unix: unix_ts(),
@@ -587,7 +575,7 @@ fn find_reusable_superset_corpus(config: &Config) -> Result<Option<(BenchmarkCor
             Some(corpus) => corpus,
             None => continue,
         };
-        if corpus.schema_version != SCHEMA_VERSION || corpus.tx_count < config.tx_count {
+        if corpus.tx_count < config.tx_count {
             continue;
         }
         if corpus.fingerprint != corpus_fingerprint(corpus.tx_count)? {
@@ -805,8 +793,7 @@ fn read_valid_setup_cache_metadata(
         return Ok(None);
     }
     let metadata: SetupCacheMetadata = serde_json::from_slice(&fs::read(metadata_path)?)?;
-    if metadata.schema_version != SETUP_CACHE_SCHEMA_VERSION
-        || metadata.fingerprint != expected_fingerprint
+    if metadata.fingerprint != expected_fingerprint
         || metadata.allocation_count != corpus.state_setup_tx_count()
         || metadata.corpus_fingerprint != setup_corpus_fingerprint(corpus)?
         || metadata.compliance_policy_hash != benchmark_compliance_policy_hash()
@@ -835,7 +822,6 @@ fn setup_cache_metadata(
     relayer: &MockRelayer,
 ) -> Result<SetupCacheMetadata> {
     Ok(SetupCacheMetadata {
-        schema_version: SETUP_CACHE_SCHEMA_VERSION,
         fingerprint: fingerprint.to_string(),
         allocation_count: corpus.state_setup_tx_count(),
         corpus_fingerprint: setup_corpus_fingerprint(corpus)?,
@@ -943,7 +929,6 @@ fn ensure_restored_chain_matches_metadata(
 
 fn setup_cache_fingerprint(corpus: &BenchmarkCorpus) -> Result<String> {
     let mut hasher = sha2::Sha256::new();
-    hasher.update(SETUP_CACHE_SCHEMA_VERSION.to_le_bytes());
     hasher.update(setup_corpus_fingerprint(corpus)?.as_bytes());
     hasher.update((corpus.state_setup_tx_count() as u64).to_le_bytes());
     hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
@@ -953,7 +938,7 @@ fn setup_cache_fingerprint(corpus: &BenchmarkCorpus) -> Result<String> {
     }
     hasher.update(b"chain-a-seed-0");
     hasher.update(b"chain-b-seed-1");
-    hasher.update(b"regulated-compliance-v1");
+    hasher.update(b"regulated-compliance");
     hasher.update(benchmark_compliance_policy_hash().as_bytes());
     Ok(hex::encode(hasher.finalize()))
 }
@@ -1791,7 +1776,6 @@ fn decode_txs(txs: &[String]) -> Vec<Vec<u8>> {
 
 fn corpus_fingerprint(tx_count: usize) -> Result<String> {
     let mut hasher = sha2::Sha256::new();
-    hasher.update(SCHEMA_VERSION.to_le_bytes());
     hasher.update((tx_count as u64).to_le_bytes());
     hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
     hasher.update(transfer_verifying_key_digest()?.as_bytes());

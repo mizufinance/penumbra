@@ -1,9 +1,9 @@
 use std::fmt;
 use std::ops::Range;
 
+/// Production full-target proof transport.
 pub const AGGREGATE_PROOF_WRAPPER_DOMAIN: &[u8] = b"shieldd.snarkpack.aggregate_proof.v1\0";
-pub const AGGREGATE_PROOF_TORUS_V2_WRAPPER_DOMAIN: &[u8] =
-    b"shieldd.snarkpack.aggregate_proof.v2\0";
+pub const AGGREGATE_PROOF_TORUS_WRAPPER_DOMAIN: &[u8] = b"shieldd.snarkpack.aggregate_proof.v2\0";
 
 // Consensus-relevant bound: changing this cap changes which aggregate bundle
 // bytes validators accept and requires protocol/security review.
@@ -43,12 +43,12 @@ pub fn encode_wrapped_aggregate_proof(
     )
 }
 
-pub fn encode_wrapped_torus_v2_aggregate_proof(
+pub fn encode_wrapped_torus_aggregate_proof(
     statement_digest: [u8; 32],
     inner_proof_bytes: &[u8],
 ) -> Result<Vec<u8>, AggregateProofBytesError> {
     encode_wrapped_aggregate_proof_with_domain(
-        AGGREGATE_PROOF_TORUS_V2_WRAPPER_DOMAIN,
+        AGGREGATE_PROOF_TORUS_WRAPPER_DOMAIN,
         statement_digest,
         inner_proof_bytes,
     )
@@ -89,13 +89,13 @@ pub fn decode_wrapped_aggregate_proof<'a>(
         .ok_or(AggregateProofBytesError::MalformedProofBytes)
 }
 
-pub fn decode_wrapped_torus_v2_aggregate_proof<'a>(
+pub fn decode_wrapped_torus_aggregate_proof<'a>(
     wrapped_proof_bytes: &'a [u8],
     expected_statement_digest: [u8; 32],
     max_aggregate_proof_bytes: Option<usize>,
 ) -> Result<&'a [u8], AggregateProofBytesError> {
     let inner_range = decode_wrapped_aggregate_proof_inner_range_with_domain(
-        AGGREGATE_PROOF_TORUS_V2_WRAPPER_DOMAIN,
+        AGGREGATE_PROOF_TORUS_WRAPPER_DOMAIN,
         wrapped_proof_bytes,
         expected_statement_digest,
         max_aggregate_proof_bytes,

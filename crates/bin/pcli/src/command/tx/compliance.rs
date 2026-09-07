@@ -5,7 +5,7 @@ use decaf377_rdsa::{SigningKey, SpendAuth, VerificationKey};
 use shieldd_sdk_asset::asset;
 use shieldd_sdk_compliance::structs::{
     AssetRegistrationGrant, AssetRegistrationGrantBody, IbcAssetOrigin, IbcRoute, MsgRegisterAsset,
-    MsgRegisterUser, UserRegistrationGrant, UserRegistrationGrantBody,
+    MsgRegisterUser, OrbisCapabilityCertificate, UserRegistrationGrant, UserRegistrationGrantBody,
 };
 use shieldd_sdk_compliance::{
     issuer_keys::DetectionKey, ComplianceLeaf, IssuerComplianceWorker, SqliteScannerStore,
@@ -17,7 +17,7 @@ use shieldd_sdk_proto::util::tendermint_proxy::v1::{
 };
 use shieldd_sdk_proto::DomainType;
 use shieldd_sdk_transaction::{ActionPlan, TransactionPlan};
-use shieldd_sdk_view::{NoteManager, NoteManagerPlanningResult};
+use shieldd_sdk_view::{NoteManager, NoteManagerPlanningResult, ViewClient};
 use tonic::transport::Channel;
 use url::Url;
 
@@ -39,9 +39,9 @@ pub enum ComplianceCmd {
         /// Issuer's detection key public (hex, 64 chars = 32 bytes).
         #[clap(long)]
         dk_pub_hex: Option<String>,
-        /// Amount threshold for flagging, in base units.
+        /// Daily undisclosed-volume limit, in base units.
         #[clap(long)]
-        threshold: Option<u128>,
+        daily_volume_limit: Option<u128>,
         /// Orbis ring public key (hex, 64 chars = 32 bytes compressed).
         #[clap(long)]
         ring_pk_hex: Option<String>,
@@ -60,6 +60,9 @@ pub enum ComplianceCmd {
         /// Registration-authority verification key for regulated user grants, hex-encoded.
         #[clap(long)]
         registration_authority_vk_hex: Option<String>,
+        /// Seizure-authority verification key for regulated note seizures, hex-encoded.
+        #[clap(long)]
+        seizure_authority_vk_hex: Option<String>,
         /// Allowed direct IBC route: <local_channel,connection_id,counterparty_channel>.
         #[clap(long = "allowed-ibc-route")]
         allowed_ibc_routes: Vec<String>,
@@ -91,9 +94,27 @@ pub enum ComplianceCmd {
         /// User registration grant, hex-encoded protobuf bytes.
         #[clap(long)]
         user_registration_grant_hex: String,
+        /// Orbis capability certificate, hex-encoded protobuf bytes.
+        #[clap(long)]
+        capability_certificate_hex: String,
         /// The selected fee tier to multiply the fee amount by.
         #[clap(short, long, default_value_t)]
         fee_tier: FeeTier,
+    },
+
+    /// Verify an Orbis capability and build the wallet's public registration bundle.
+    PrepareUserRegistration {
+        /// The regulated asset to register for.
+        asset_id: String,
+        /// Address index whose IVK derives the regulated nullifier key.
+        #[clap(long, default_value = "0")]
+        address_index: u32,
+        /// Orbis ring key evaluated on the address diversified generator.
+        #[clap(long)]
+        rnk_dh_pk_hex: String,
+        /// Orbis capability certificate, hex-encoded protobuf bytes.
+        #[clap(long)]
+        capability_certificate_hex: String,
     },
 
     /// Run or catch up the issuer compliance scanner.
@@ -116,9 +137,9 @@ pub enum ComplianceCmd {
         /// Issuer's detection key public (hex, 64 chars = 32 bytes).
         #[clap(long)]
         dk_pub_hex: Option<String>,
-        /// Amount threshold for flagging, in base units.
+        /// Daily undisclosed-volume limit, in base units.
         #[clap(long)]
-        threshold: Option<u128>,
+        daily_volume_limit: Option<u128>,
         /// Orbis ring public key (hex, 64 chars = 32 bytes compressed).
         #[clap(long)]
         ring_pk_hex: Option<String>,
@@ -137,6 +158,9 @@ pub enum ComplianceCmd {
         /// Registration-authority verification key for regulated user grants, hex-encoded.
         #[clap(long)]
         registration_authority_vk_hex: Option<String>,
+        /// Seizure-authority verification key for regulated note seizures, hex-encoded.
+        #[clap(long)]
+        seizure_authority_vk_hex: Option<String>,
         /// Allowed direct IBC route: <local_channel,connection_id,counterparty_channel>.
         #[clap(long = "allowed-ibc-route")]
         allowed_ibc_routes: Vec<String>,
@@ -162,8 +186,17 @@ pub enum ComplianceCmd {
         #[clap(long)]
         address: Address,
         /// Vera policy ID bound to this grant.
-        #[clap(long, default_value = "")]
+        #[clap(long)]
         policy_id: String,
+        /// Orbis ring public key for the registered asset.
+        #[clap(long)]
+        ring_pk_hex: String,
+        /// Orbis ring public key evaluated on the address diversified generator.
+        #[clap(long)]
+        rnk_dh_pk_hex: String,
+        /// Poseidon commitment to the wallet-Orbis regulated nullifier key.
+        #[clap(long)]
+        rnk_commitment_hex: String,
         /// Registration-authority signing key for this asset, hex-encoded.
         #[clap(long)]
         registration_authority_sk_hex: String,
@@ -186,6 +219,7 @@ impl ComplianceCmd {
         match self {
             ComplianceCmd::RegisterAsset { .. } => false,
             ComplianceCmd::RegisterUser { .. } => false,
+            ComplianceCmd::PrepareUserRegistration { .. } => false,
             ComplianceCmd::Scan(_) => true,
             ComplianceCmd::GenerateDk => true,
             ComplianceCmd::SignAssetGrant { .. } => true,
@@ -211,6 +245,63 @@ impl ComplianceCmd {
                 | ComplianceCmd::SignUserGrant { .. }
                 | ComplianceCmd::DeriveSpendVk { .. }
         )
+    }
+
+    pub fn is_prepare_user_registration(&self) -> bool {
+        matches!(self, ComplianceCmd::PrepareUserRegistration { .. })
+    }
+
+    pub async fn exec_prepare_user_registration(&self, app: &mut crate::App) -> Result<()> {
+        let ComplianceCmd::PrepareUserRegistration {
+            asset_id,
+            address_index,
+            rnk_dh_pk_hex,
+            capability_certificate_hex,
+        } = self
+        else {
+            anyhow::bail!("called registration preparation on another command");
+        };
+        let asset_id = Self::parse_asset_id(asset_id)?;
+        let address_index = shieldd_sdk_keys::keys::AddressIndex::new(*address_index);
+        let fvk = app.config.full_viewing_key.clone();
+        let address = fvk.payment_address(address_index);
+        let rnk_dh_pk = parse_decaf377_element(rnk_dh_pk_hex, "rnk_dh_pk_hex")?;
+        let certificate = decode_orbis_capability_certificate(capability_certificate_hex)
+            .context("invalid --capability-certificate-hex")?;
+        let policy: shieldd_sdk_compliance::AssetPolicy = app
+            .view()
+            .compliance_asset_policy(asset_id)
+            .await?
+            .asset_policy
+            .ok_or_else(|| anyhow::anyhow!("regulated asset policy is not synced"))?
+            .try_into()?;
+        let chain_id = app.view().app_params().await?.chain_id;
+        let rnk = shieldd_sdk_compliance::derive_regulated_nullifier_key(
+            fvk.incoming(),
+            &address,
+            asset_id,
+            policy.ring.ring_pk,
+            rnk_dh_pk,
+        )?;
+        let leaf = ComplianceLeaf::registered_from_rnk(
+            address.clone(),
+            asset_id,
+            policy.ring.ring_pk,
+            rnk_dh_pk,
+            rnk,
+        )?;
+        certificate.verify(&leaf, &policy, &chain_id)?;
+        println!(
+            "{}",
+            serde_json::json!({
+                "address": address.to_string(),
+                "assetId": asset_id.to_string(),
+                "rnkDhPkHex": hex::encode(rnk_dh_pk.vartime_compress().0),
+                "rnkCommitmentHex": hex::encode(leaf.rnk_commitment.to_bytes()),
+                "capabilityCertificateHex": capability_certificate_hex,
+            })
+        );
+        Ok(())
     }
 
     /// Execute the persistent issuer scanner.
@@ -279,9 +370,9 @@ impl ComplianceCmd {
                 println!("Public key (use when registering asset):");
                 println!("  DK_pub (hex): {}", dk_pub_hex);
                 println!();
-                println!("To register an asset with threshold flagging:");
+                println!("To register an asset with a daily undisclosed-volume limit:");
                 println!(
-                    "  pcli tx compliance register-asset <ASSET> --regulated --dk-pub-hex {} --threshold <AMOUNT>",
+                    "  pcli tx compliance register-asset <ASSET> --regulated --dk-pub-hex {} --daily-volume-limit <AMOUNT>",
                     dk_pub_hex
                 );
 
@@ -299,13 +390,14 @@ impl ComplianceCmd {
                 regulated,
                 unregulated,
                 dk_pub_hex,
-                threshold,
+                daily_volume_limit,
                 ring_pk_hex,
                 ring_id,
                 policy_id,
                 permission,
                 resource,
                 registration_authority_vk_hex,
+                seizure_authority_vk_hex,
                 allowed_ibc_routes,
                 ibc_origin_base_denom,
                 ibc_origin_route,
@@ -331,6 +423,14 @@ impl ComplianceCmd {
                     .as_ref()
                     .map(|hex_str| parse_decaf377_element(hex_str, "ring_pk_hex"))
                     .transpose()?;
+                require_regulated_orbis_config(
+                    is_regulated,
+                    ring_pk.as_ref(),
+                    ring_id,
+                    policy_id,
+                    permission,
+                    resource,
+                )?;
                 let registration_authority_vk = registration_authority_vk_hex
                     .as_ref()
                     .map(|hex_str| parse_spend_vk(hex_str, "registration_authority_vk_hex"))
@@ -339,6 +439,13 @@ impl ComplianceCmd {
                     anyhow::bail!(
                         "--registration-authority-vk-hex is required for regulated assets"
                     );
+                }
+                let seizure_authority_vk = seizure_authority_vk_hex
+                    .as_ref()
+                    .map(|hex_str| parse_spend_vk(hex_str, "seizure_authority_vk_hex"))
+                    .transpose()?;
+                if is_regulated && seizure_authority_vk.is_none() {
+                    anyhow::bail!("--seizure-authority-vk-hex is required for regulated assets");
                 }
                 let allowed_ibc_routes = Self::parse_ibc_routes(allowed_ibc_routes, is_regulated)?;
                 let ibc_origin = Self::parse_ibc_origin(
@@ -351,7 +458,7 @@ impl ComplianceCmd {
                     asset_id,
                     is_regulated,
                     dk_pub,
-                    threshold: *threshold,
+                    daily_volume_limit: *daily_volume_limit,
                     allowed_ibc_routes,
                     ibc_origin,
                     ring_pk,
@@ -360,6 +467,7 @@ impl ComplianceCmd {
                     permission: permission.clone(),
                     resource: resource.clone(),
                     registration_authority_vk,
+                    seizure_authority_vk,
                     valid_until_unix: *valid_until_unix,
                 };
                 let grant = AssetRegistrationGrant {
@@ -374,11 +482,23 @@ impl ComplianceCmd {
                 asset_id,
                 address,
                 policy_id,
+                ring_pk_hex,
+                rnk_dh_pk_hex,
+                rnk_commitment_hex,
                 registration_authority_sk_hex,
                 valid_until_unix,
             } => {
                 let asset_id = Self::parse_asset_id(asset_id)?;
-                let leaf = ComplianceLeaf::new(address.clone(), asset_id);
+                let ring_pk = parse_decaf377_element(ring_pk_hex, "ring_pk_hex")?;
+                let rnk_dh_pk = parse_decaf377_element(rnk_dh_pk_hex, "rnk_dh_pk_hex")?;
+                let rnk_commitment = parse_fq(rnk_commitment_hex, "rnk_commitment_hex")?;
+                let leaf = ComplianceLeaf::registered(
+                    address.clone(),
+                    asset_id,
+                    ring_pk,
+                    rnk_dh_pk,
+                    rnk_commitment,
+                )?;
                 let mut nonce = vec![0u8; 16];
                 rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut nonce);
                 let authority_sk = parse_spend_sk(
@@ -420,13 +540,14 @@ impl ComplianceCmd {
                 regulated,
                 unregulated,
                 dk_pub_hex,
-                threshold,
+                daily_volume_limit,
                 ring_pk_hex,
                 ring_id,
                 policy_id,
                 permission,
                 resource,
                 registration_authority_vk_hex,
+                seizure_authority_vk_hex,
                 allowed_ibc_routes,
                 ibc_origin_base_denom,
                 ibc_origin_route,
@@ -457,6 +578,14 @@ impl ComplianceCmd {
                     .as_ref()
                     .map(|hex_str| parse_decaf377_element(hex_str, "ring_pk_hex"))
                     .transpose()?;
+                require_regulated_orbis_config(
+                    is_regulated,
+                    ring_pk.as_ref(),
+                    ring_id,
+                    policy_id,
+                    permission,
+                    resource,
+                )?;
                 let registration_authority_vk = registration_authority_vk_hex
                     .as_ref()
                     .map(|hex_str| parse_spend_vk(hex_str, "registration_authority_vk_hex"))
@@ -466,8 +595,14 @@ impl ComplianceCmd {
                         "--registration-authority-vk-hex is required for regulated assets"
                     );
                 }
-                let allowed_ibc_routes =
-                    Self::parse_ibc_routes(allowed_ibc_routes, is_regulated)?;
+                let seizure_authority_vk = seizure_authority_vk_hex
+                    .as_ref()
+                    .map(|hex_str| parse_spend_vk(hex_str, "seizure_authority_vk_hex"))
+                    .transpose()?;
+                if is_regulated && seizure_authority_vk.is_none() {
+                    anyhow::bail!("--seizure-authority-vk-hex is required for regulated assets");
+                }
+                let allowed_ibc_routes = Self::parse_ibc_routes(allowed_ibc_routes, is_regulated)?;
                 let ibc_origin = Self::parse_ibc_origin(
                     ibc_origin_base_denom.as_deref(),
                     ibc_origin_route.as_deref(),
@@ -481,7 +616,7 @@ impl ComplianceCmd {
                     asset_id,
                     is_regulated,
                     dk_pub,
-                    threshold: *threshold,
+                    daily_volume_limit: *daily_volume_limit,
                     allowed_ibc_routes,
                     ibc_origin,
                     ring_pk,
@@ -490,6 +625,7 @@ impl ComplianceCmd {
                     permission: permission.clone(),
                     resource: resource.clone(),
                     registration_authority_vk,
+                    seizure_authority_vk,
                     asset_registration_grant: Some(asset_registration_grant),
                 };
 
@@ -512,6 +648,7 @@ impl ComplianceCmd {
                 address,
                 address_index,
                 user_registration_grant_hex,
+                capability_certificate_hex,
                 fee_tier,
             } => {
                 let asset_id = Self::parse_asset_id(asset_id)?;
@@ -525,12 +662,44 @@ impl ComplianceCmd {
                     }
                 };
 
-                let leaf = ComplianceLeaf::new(address, asset_id);
                 let grant = decode_user_registration_grant(user_registration_grant_hex)
                     .context("invalid --user-registration-grant-hex")?;
+                anyhow::ensure!(
+                    grant.body.leaf.address == address,
+                    "user registration grant address does not match the selected wallet address"
+                );
+                anyhow::ensure!(
+                    grant.body.leaf.asset_id == asset_id,
+                    "user registration grant asset does not match the requested asset"
+                );
+                let capability_certificate =
+                    decode_orbis_capability_certificate(capability_certificate_hex)
+                        .context("invalid --capability-certificate-hex")?;
+                let policy = app
+                    .view()
+                    .compliance_asset_policy(asset_id)
+                    .await?
+                    .asset_policy
+                    .ok_or_else(|| anyhow::anyhow!("regulated asset policy is not synced"))?
+                    .try_into()?;
+                let chain_id = app.view().app_params().await?.chain_id;
+                capability_certificate.verify(&grant.body.leaf, &policy, &chain_id)?;
+                let rnk = shieldd_sdk_compliance::derive_regulated_nullifier_key(
+                    fvk.incoming(),
+                    &address,
+                    asset_id,
+                    policy.ring.ring_pk,
+                    grant.body.leaf.rnk_dh_pk,
+                )?;
+                anyhow::ensure!(
+                    shieldd_sdk_compliance::compliance_nullifier_key_commitment(rnk)
+                        == grant.body.leaf.rnk_commitment,
+                    "registration leaf does not commit to this wallet's canonical RNK"
+                );
                 let msg = MsgRegisterUser {
-                    leaf,
+                    leaf: grant.body.leaf.clone(),
                     grant: Some(grant),
+                    capability_certificate: Some(capability_certificate),
                 };
 
                 let mut note_manager = NoteManager::new(rand_core::OsRng);
@@ -547,6 +716,10 @@ impl ComplianceCmd {
                 .await
             }
 
+            ComplianceCmd::PrepareUserRegistration { .. } => anyhow::bail!(
+                "prepare-user-registration creates a public bundle, not a transaction"
+            ),
+
             ComplianceCmd::Scan(_) => {
                 anyhow::bail!("Scan command doesn't create a transaction - use exec_scan instead")
             }
@@ -559,9 +732,9 @@ impl ComplianceCmd {
 
             ComplianceCmd::SignAssetGrant { .. }
             | ComplianceCmd::SignUserGrant { .. }
-            | ComplianceCmd::DeriveSpendVk { .. } => anyhow::bail!(
-                "offline compliance helper commands don't create transactions - use exec_sign_grant instead"
-            ),
+            | ComplianceCmd::DeriveSpendVk { .. } => {
+                anyhow::bail!("offline compliance helper commands don't create transactions")
+            }
         }
     }
 
@@ -783,6 +956,44 @@ fn parse_decaf377_element(hex_str: &str, label: &str) -> Result<decaf377::Elemen
         .map_err(|_| anyhow::anyhow!("invalid {label} encoding"))
 }
 
+fn parse_fq(hex_str: &str, label: &str) -> Result<decaf377::Fq> {
+    let bytes = hex::decode(hex_str).with_context(|| format!("invalid {label}: must be hex"))?;
+    if bytes.len() != 32 {
+        anyhow::bail!("{label} must be exactly 64 hex chars (32 bytes)");
+    }
+    let bytes: [u8; 32] = bytes.try_into().unwrap();
+    let value = decaf377::Fq::from_bytes_checked(&bytes)
+        .map_err(|_| anyhow::anyhow!("invalid {label} field encoding"))?;
+    anyhow::ensure!(value != decaf377::Fq::from(0u64), "{label} must be nonzero");
+    Ok(value)
+}
+
+fn require_regulated_orbis_config(
+    is_regulated: bool,
+    ring_pk: Option<&decaf377::Element>,
+    ring_id: &str,
+    policy_id: &str,
+    permission: &str,
+    resource: &str,
+) -> Result<()> {
+    if !is_regulated {
+        return Ok(());
+    }
+    anyhow::ensure!(
+        ring_pk.is_some(),
+        "--ring-pk-hex is required for regulated assets"
+    );
+    for (flag, value) in [
+        ("--ring-id", ring_id),
+        ("--policy-id", policy_id),
+        ("--permission", permission),
+        ("--resource", resource),
+    ] {
+        anyhow::ensure!(!value.is_empty(), "{flag} is required for regulated assets");
+    }
+    Ok(())
+}
+
 fn parse_spend_vk(hex_str: &str, label: &str) -> Result<VerificationKey<SpendAuth>> {
     let bytes = hex::decode(hex_str).with_context(|| format!("invalid {label}: must be hex"))?;
     if bytes.len() != 32 {
@@ -813,6 +1024,11 @@ fn decode_asset_registration_grant(hex_str: &str) -> Result<AssetRegistrationGra
 fn decode_user_registration_grant(hex_str: &str) -> Result<UserRegistrationGrant> {
     let bytes = hex::decode(hex_str).context("value must be hex-encoded protobuf bytes")?;
     UserRegistrationGrant::decode(bytes.as_slice())
+}
+
+fn decode_orbis_capability_certificate(hex_str: &str) -> Result<OrbisCapabilityCertificate> {
+    let bytes = hex::decode(hex_str).context("value must be hex-encoded protobuf bytes")?;
+    OrbisCapabilityCertificate::decode(bytes.as_slice())
 }
 
 /// Parse issuer Detection Key (DK) from hex string (32 bytes).

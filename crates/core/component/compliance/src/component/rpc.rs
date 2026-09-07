@@ -76,10 +76,10 @@ impl QueryService for Server {
             .get_asset_policy(asset_id)
             .await
             .map_err(|e| Status::internal(format!("failed to query asset policy: {e}")))?;
-        let (dk_pub, threshold) = match &policy {
+        let (dk_pub, daily_volume_limit) = match &policy {
             Some(policy) => (
                 policy.params.dk_pub.vartime_compress().0.to_vec(),
-                policy.params.threshold.to_le_bytes().to_vec(),
+                policy.params.daily_volume_limit.to_le_bytes().to_vec(),
             ),
             None => (vec![], vec![]),
         };
@@ -90,7 +90,7 @@ impl QueryService for Server {
             is_registered: true, // With IMT, we can always answer the query
             is_regulated: proof_data.is_regulated,
             dk_pub,
-            threshold,
+            daily_volume_limit,
             asset_policy: policy.map(Into::into),
         };
 
@@ -434,7 +434,7 @@ mod tests {
         state
             .test_only_register_asset(
                 asset::Id(Fq::from(55u64)),
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -446,7 +446,7 @@ mod tests {
         let current_asset_root = state.get_asset_imt_root().await.unwrap();
         assert_ne!(stale_asset_root, current_asset_root);
         state
-            .test_only_add_compliance_leaf(ComplianceLeaf::new(
+            .test_only_add_compliance_leaf(ComplianceLeaf::registered_for_test(
                 Address::dummy(&mut rand::thread_rng()),
                 asset::Id(Fq::from(55u64)),
             ))

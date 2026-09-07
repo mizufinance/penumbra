@@ -31,7 +31,7 @@ class ProofArtifactsTest(unittest.TestCase):
         self.sr1cs = b"synthetic sr1cs"
         self.proving_key = b"synthetic proving key"
         metadata = {
-            "schema": "shieldd.gnark.circuit_metadata.v2",
+            "schema": "shieldd.gnark.circuit_metadata",
             "circuit": "transfer",
             "sr1cs_sha256_hex": hashlib.sha256(self.sr1cs).hexdigest(),
             "proving_key_sha256_hex": hashlib.sha256(self.proving_key).hexdigest(),

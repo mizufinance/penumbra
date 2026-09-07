@@ -2,7 +2,7 @@ use std::convert::TryFrom;
 
 use anyhow::{Context, Result};
 use shieldd_sdk_proto::shieldd::core::component::compact_block::v1::{self as pb};
-use shieldd_sdk_shielded_pool::{note, NotePayload};
+use shieldd_sdk_shielded_pool::{note, NotePayload, VolumeAccumulatorPayload};
 
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +20,10 @@ pub enum StatePayload {
         source: CommitmentSource,
         note: Box<NotePayload>,
     },
+    VolumeAccumulator {
+        source: CommitmentSource,
+        payload: Box<VolumeAccumulatorPayload>,
+    },
 }
 
 pub struct StatePayloadDebugKind<'a>(pub &'a StatePayload);
@@ -29,6 +33,9 @@ impl<'a> std::fmt::Debug for StatePayloadDebugKind<'a> {
         match self.0 {
             StatePayload::RolledUp { .. } => f.debug_struct("RolledUp").finish_non_exhaustive(),
             StatePayload::Note { .. } => f.debug_struct("Note").finish_non_exhaustive(),
+            StatePayload::VolumeAccumulator { .. } => {
+                f.debug_struct("VolumeAccumulator").finish_non_exhaustive()
+            }
         }
     }
 }
@@ -38,6 +45,7 @@ impl StatePayload {
         match self {
             Self::RolledUp { commitment, .. } => commitment,
             Self::Note { note, .. } => &note.note_commitment,
+            Self::VolumeAccumulator { payload, .. } => &payload.commitment,
         }
     }
 
@@ -45,6 +53,7 @@ impl StatePayload {
         match self {
             Self::RolledUp { source, .. } => source,
             Self::Note { source, .. } => source,
+            Self::VolumeAccumulator { source, .. } => source,
         }
     }
 }
@@ -86,6 +95,14 @@ impl From<StatePayload> for pb::StatePayload {
                     },
                 )),
             },
+            StatePayload::VolumeAccumulator { source, payload } => pb::StatePayload {
+                source: Some(source.into()),
+                state_payload: Some(pb::state_payload::StatePayload::VolumeAccumulator(
+                    pb::state_payload::VolumeAccumulator {
+                        payload: Some((*payload).into()),
+                    },
+                )),
+            },
         }
     }
 }
@@ -116,6 +133,16 @@ impl TryFrom<pb::StatePayload> for StatePayload {
                     source,
                 })
             }
+            Some(pb::state_payload::StatePayload::VolumeAccumulator(
+                pb::state_payload::VolumeAccumulator { payload },
+            )) => Ok(StatePayload::VolumeAccumulator {
+                payload: Box::new(
+                    payload
+                        .ok_or_else(|| anyhow::anyhow!("missing volume accumulator payload"))?
+                        .try_into()?,
+                ),
+                source,
+            }),
             None => Err(anyhow::anyhow!("missing state payload")),
         }
     }

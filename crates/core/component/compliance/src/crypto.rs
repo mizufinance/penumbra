@@ -20,7 +20,7 @@ use sha2::{Digest, Sha512};
 
 use crate::issuer_keys::{detection_flag_from_fq, DETECTION_TIER_BYTES};
 /// Domain separator for SHA-512 derivation — matches Orbis `DERIVATION_DOMAIN` exactly.
-const DERIVATION_DOMAIN: &[u8; 23] = b"elgamal-derivation-v1\0\0";
+const DERIVATION_DOMAIN: &[u8] = b"elgamal-derivation-v1\0\0";
 
 /// Canonical ordinary-Orbis derivation path for one full Shieldd address.
 pub fn compliance_derivation(address: &Address) -> Vec<u8> {
@@ -35,14 +35,16 @@ pub fn compliance_derivation(address: &Address) -> Vec<u8> {
 /// Orbis uses a 64-byte SHA-512 digest reduced mod `Fr` (wide reduction, negligible
 /// bias). The result is stored as Fq in the compliance leaf (Fr fits losslessly in Fq).
 pub fn derive_compliance_scalar(address: &Address) -> Fq {
+    let fr = capability_scalar(&compliance_derivation(address));
+    Fq::from_le_bytes_mod_order(&fr.to_bytes())
+}
+
+fn capability_scalar(derivation: &[u8]) -> Fr {
     let mut hasher = Sha512::new();
     hasher.update(DERIVATION_DOMAIN);
-    hasher.update(compliance_derivation(address));
+    hasher.update(derivation);
     let hash = hasher.finalize();
-    // Reduce mod r first (matching Orbis's Fr::from_le_bytes_mod_order), then embed into Fq.
-    // r < q for decaf377, so this conversion is lossless.
-    let fr = Fr::from_le_bytes_mod_order(&hash);
-    Fq::from_le_bytes_mod_order(&fr.to_bytes())
+    Fr::from_le_bytes_mod_order(&hash)
 }
 
 /// Domain separator for Poseidon stream cipher seed derivation.
@@ -51,6 +53,17 @@ pub static COMPLIANCE_STREAM_CIPHER_DOMAIN: Lazy<Fq> = Lazy::new(|| {
         blake2b_simd::blake2b(b"shieldd.compliance.poseidon_stream").as_bytes(),
     )
 });
+
+/// Domain separator for non-indexing transfer core key confirmation.
+pub static TRANSFER_KEY_CONFIRMATION_DOMAIN: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"shieldd.transfer.compliance.key_confirmation.v1").as_bytes(),
+    )
+});
+
+pub fn transfer_key_confirmation(seed: Fq, epk_fq: Fq, tier_salt: Fq) -> Fq {
+    poseidon377::hash_3(&TRANSFER_KEY_CONFIRMATION_DOMAIN, (seed, epk_fq, tier_salt))
+}
 
 pub fn compliance_stream_block(seed: Fq, counter: u64) -> Fq {
     poseidon377::hash_2(&COMPLIANCE_STREAM_CIPHER_DOMAIN, (seed, Fq::from(counter)))
@@ -66,14 +79,14 @@ fn derive_unregulated_sink_point(domain_sep: &[u8]) -> Element {
 /// This preserves a uniform transfer ciphertext shape without requiring a
 /// real issuer detection key for unregulated assets.
 pub static UNREGULATED_SINK_DK_PUB: Lazy<Element> =
-    Lazy::new(|| derive_unregulated_sink_point(b"shieldd.compliance.unregulated.dk-pub.v1"));
+    Lazy::new(|| derive_unregulated_sink_point(b"shieldd.compliance.unregulated.dk-pub"));
 
 /// Trapdoorless ring/ACK sink for unregulated assets.
 ///
 /// This preserves uniform ACK-derived encryption routing without reusing the
 /// detection sink point or requiring any Orbis-managed ring for unregulated assets.
 pub static UNREGULATED_SINK_RING_PK: Lazy<Element> =
-    Lazy::new(|| derive_unregulated_sink_point(b"shieldd.compliance.unregulated.ring-pk.v1"));
+    Lazy::new(|| derive_unregulated_sink_point(b"shieldd.compliance.unregulated.ring-pk"));
 
 /// Domain separator for issuer detection tier encryption.
 pub static ISSUER_DETECTION_DOMAIN: Lazy<Fq> = Lazy::new(|| {
@@ -205,6 +218,17 @@ mod tests {
             derive_compliance_scalar(address2),
             "different inputs must produce different scalars"
         );
+        assert_eq!(compliance_derivation(address1), address1.to_vec());
+        assert_eq!(compliance_derivation(address1).len(), 48);
+    }
+
+    #[test]
+    fn orbis_capability_derivation_matches_cross_language_vector() {
+        let derivation: Vec<u8> = (0u8..48).collect();
+        assert_eq!(
+            capability_scalar(&derivation).to_string(),
+            "1193025715605820042638296979565000936182988212520272662409467010519644752199"
+        );
     }
 
     #[test]
@@ -237,8 +261,8 @@ mod tests {
 
     #[test]
     fn test_unregulated_sink_keys_are_hash_to_curve_points() {
-        let dk_hash = blake2b_simd::blake2b(b"shieldd.compliance.unregulated.dk-pub.v1");
-        let ring_hash = blake2b_simd::blake2b(b"shieldd.compliance.unregulated.ring-pk.v1");
+        let dk_hash = blake2b_simd::blake2b(b"shieldd.compliance.unregulated.dk-pub");
+        let ring_hash = blake2b_simd::blake2b(b"shieldd.compliance.unregulated.ring-pk");
         let dk_scalar = Fr::from_le_bytes_mod_order(dk_hash.as_bytes());
         let ring_scalar = Fr::from_le_bytes_mod_order(ring_hash.as_bytes());
 

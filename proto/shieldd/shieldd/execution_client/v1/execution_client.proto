@@ -26,6 +26,9 @@ service ExecutionClientService {
   rpc Deposit(DepositRequest) returns (DepositResponse) {}
   // ApplyComplianceAction applies a Bankd-authorized user/asset status transition.
   rpc ApplyComplianceAction(ApplyComplianceActionRequest) returns (ApplyComplianceActionResponse) {}
+  // SeizeNote consumes one frozen regulated note and returns the exact host
+  // settlement that Bankd must apply atomically with this call.
+  rpc SeizeNote(SeizeNoteRequest) returns (SeizeNoteResponse) {}
   // CheckTx validates a Shieldd transaction supplied by the host chain without
   // applying state changes.
   rpc CheckTx(CheckTxRequest) returns (CheckTxResponse) {}
@@ -44,6 +47,8 @@ service ExecutionClientService {
   // ArchivedNullifierProof returns a retired-generation witness for an old note.
   rpc ArchivedNullifierProof(ArchivedNullifierProofRequest)
       returns (ArchivedNullifierProofResponse) {}
+  // NullifierWindow returns the committed nullifier-generation planning window.
+  rpc NullifierWindow(NullifierWindowRequest) returns (NullifierWindowResponse) {}
   // AppParameters returns the committed Shieldd application parameters.
   rpc AppParameters(AppParametersRequest) returns (AppParametersResponse) {}
   // AssetMetadataById returns metadata for one Shieldd asset identifier.
@@ -71,6 +76,14 @@ message ArchivedNullifierProofRequest {
 // ArchivedNullifierProofResponse carries the component result across the host-chain boundary.
 message ArchivedNullifierProofResponse {
   shieldd.core.component.sct.v1.ArchivedNullifierProofResponse response = 1;
+}
+
+message NullifierWindowRequest {
+  shieldd.core.component.sct.v1.NullifierWindowRequest request = 1;
+}
+
+message NullifierWindowResponse {
+  shieldd.core.component.sct.v1.NullifierWindowResponse response = 1;
 }
 
 message AppParametersRequest {
@@ -208,6 +221,21 @@ message ApplyComplianceActionResponse {
   shieldd.core.component.compliance.v1.UserAssetStatus previous_status = 2;
   shieldd.core.component.compliance.v1.UserAssetStatus current_status = 3;
   bool replayed = 4;
+  // Monotonic generation of the latest freeze for this address and asset.
+  uint64 freeze_generation = 5;
+}
+
+message SeizeNoteRequest {
+  HostSource source = 1;
+  shieldd.core.component.shielded_pool.v1.NoteSeizure seizure = 2;
+}
+
+message SeizeNoteResponse {
+  HostSource source = 1;
+  bool replayed = 2;
+  HostWithdrawal withdrawal = 3;
+  shieldd.core.component.compliance.v1.UserAssetStatus current_status = 4;
+  uint64 freeze_generation = 5;
 }
 
 // CheckTxRequest carries a Shieldd transaction to validate without applying

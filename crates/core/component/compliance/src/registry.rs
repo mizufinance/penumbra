@@ -59,8 +59,8 @@ fn root_from_auth_path(
 /// Maximum number of blocks the RPC will search backwards for a recorded anchor.
 pub const MAX_ANCHOR_SEARCH_DEPTH_BLOCKS: u64 = 10;
 
-/// Maximum allowed drift between target_timestamp and block timestamp (±1 hour).
-pub const MAX_TIMESTAMP_DRIFT_SECS: u64 = 3600;
+/// Maximum allowed drift between target_timestamp and block timestamp (±30 minutes).
+pub const MAX_TIMESTAMP_DRIFT_SECS: u64 = 1_800;
 
 /// Verify a target timestamp against a signed consensus block timestamp.
 pub fn check_timestamp_freshness(
@@ -113,8 +113,9 @@ impl UserGrantAdmission {
         action: &crate::structs::MsgRegisterUser,
         policy: &AssetPolicy,
         current_unix: u64,
+        chain_id: &str,
     ) -> Result<Self> {
-        policy.validate_crypto_keys()?;
+        policy.validate_regulated()?;
         let grant = action
             .grant
             .as_ref()
@@ -123,7 +124,12 @@ impl UserGrantAdmission {
             grant.body.leaf == action.leaf,
             "user registration grant leaf does not match action leaf"
         );
-        action.leaf.validate_derivation()?;
+        action.leaf.validate_registration(policy.ring.ring_pk)?;
+        action
+            .capability_certificate
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing Orbis capability certificate"))?
+            .verify(&action.leaf, policy, chain_id)?;
         anyhow::ensure!(
             action.leaf.status == UserAssetStatus::Active,
             "user registrations must start active"
@@ -142,6 +148,31 @@ impl UserGrantAdmission {
         grant.verify(authority_vk)?;
         Ok(Self {
             leaf: action.leaf.clone(),
+        })
+    }
+}
+
+/// A user-registry mutation admitted from validated genesis content.
+pub struct GenesisUserAdmission {
+    leaf: ComplianceLeaf,
+}
+
+impl GenesisUserAdmission {
+    pub(crate) fn validate(
+        registration: &crate::genesis::GenesisUserRegistration,
+        policy: &AssetPolicy,
+        chain_id: &str,
+    ) -> Result<Self> {
+        policy.validate_regulated()?;
+        registration
+            .capability_certificate
+            .verify(&registration.leaf, policy, chain_id)?;
+        anyhow::ensure!(
+            registration.leaf.status == UserAssetStatus::Active,
+            "genesis compliance users must start active"
+        );
+        Ok(Self {
+            leaf: registration.leaf.clone(),
         })
     }
 }
@@ -187,11 +218,16 @@ impl AssetGrantAdmission {
             let registration_authority_vk = action.registration_authority_vk.ok_or_else(|| {
                 anyhow::anyhow!("regulated assets require registration_authority_vk")
             })?;
-            let threshold = action.threshold.unwrap_or(u128::MAX);
-            let ring_pk = action.ring_pk.unwrap_or(decaf377::Element::GENERATOR);
+            let seizure_authority_vk = action
+                .seizure_authority_vk
+                .ok_or_else(|| anyhow::anyhow!("regulated assets require seizure_authority_vk"))?;
+            let daily_volume_limit = action.daily_volume_limit.unwrap_or(u128::MAX);
+            let ring_pk = action
+                .ring_pk
+                .ok_or_else(|| anyhow::anyhow!("regulated assets require ring_pk"))?;
             AssetPolicy::new(
                 dk_pub,
-                threshold,
+                daily_volume_limit,
                 action.allowed_ibc_routes.clone(),
                 action.ibc_origin.clone(),
                 action.ring_id.clone(),
@@ -201,7 +237,16 @@ impl AssetGrantAdmission {
                 action.resource.clone(),
             )
             .with_registration_authority(registration_authority_vk)
+            .with_seizure_authority(seizure_authority_vk)
         } else {
+            anyhow::ensure!(
+                action.dk_pub.is_none(),
+                "unregulated assets cannot set dk_pub"
+            );
+            anyhow::ensure!(
+                action.daily_volume_limit.is_none(),
+                "unregulated assets cannot set a compliance daily_volume_limit"
+            );
             anyhow::ensure!(
                 action.allowed_ibc_routes.is_empty(),
                 "unregulated assets cannot set allowed IBC routes"
@@ -210,9 +255,25 @@ impl AssetGrantAdmission {
                 action.ibc_origin.is_none(),
                 "unregulated assets cannot set IBC origin"
             );
+            anyhow::ensure!(
+                action.ring_pk.is_none()
+                    && action.ring_id.is_empty()
+                    && action.policy_id.is_empty()
+                    && action.permission.is_empty()
+                    && action.resource.is_empty(),
+                "unregulated assets cannot set Orbis configuration"
+            );
+            anyhow::ensure!(
+                action.registration_authority_vk.is_none() && action.seizure_authority_vk.is_none(),
+                "unregulated assets cannot set compliance authorities"
+            );
             AssetPolicy::default_unregulated()
         };
-        policy.validate_crypto_keys()?;
+        if action.is_regulated {
+            policy.validate_regulated()?;
+        } else {
+            policy.validate_crypto_keys()?;
+        }
         Ok(Self {
             asset_id: action.asset_id,
             policy,
@@ -248,7 +309,11 @@ impl GenesisAssetAdmission {
                 policy.registration_authority_vk.is_some(),
                 "regulated genesis asset requires a registration authority"
             );
-            policy.validate_crypto_keys()?;
+            anyhow::ensure!(
+                policy.seizure_authority_vk.is_some(),
+                "regulated genesis asset requires a seizure authority"
+            );
+            policy.validate_regulated()?;
         } else {
             anyhow::ensure!(
                 policy == AssetPolicy::default_unregulated(),
@@ -752,7 +817,7 @@ pub trait ComplianceRegistryRead: StateRead {
 
     /// Get the compliance policy for an asset.
     ///
-    /// Returns the issuer's detection key and threshold for flagged transfers.
+    /// Returns the issuer's detection key and daily_volume_limit for flagged transfers.
     /// Returns `None` if no policy is set (asset uses default behavior).
     async fn get_asset_policy(&self, asset_id: asset::Id) -> Result<Option<AssetPolicy>> {
         let key = state_key::asset_policy(&asset_id);
@@ -862,29 +927,6 @@ pub trait ComplianceRegistryRead: StateRead {
             "stored compliance user record does not match the committed user tree"
         );
         Ok(Some(record))
-    }
-
-    async fn get_user_audit_key_owner(&self, d: Fq) -> Result<Option<shieldd_sdk_keys::Address>> {
-        self.get_raw(&state_key::user_audit_key_owner(&d))
-            .await?
-            .map(|bytes| {
-                shieldd_sdk_keys::Address::try_from(bytes.as_slice())
-                    .context("invalid stored compliance audit-key owner")
-            })
-            .transpose()
-    }
-
-    async fn get_user_audit_key(&self, address: &shieldd_sdk_keys::Address) -> Result<Option<Fq>> {
-        self.get_raw(&state_key::user_audit_key(address))
-            .await?
-            .map(|bytes| {
-                let encoded: [u8; 32] = bytes
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("invalid stored compliance audit key length"))?;
-                Fq::from_bytes_checked(&encoded)
-                    .map_err(|_| anyhow::anyhow!("invalid stored compliance audit key"))
-            })
-            .transpose()
     }
 
     async fn get_user_asset_position(
@@ -1222,7 +1264,7 @@ trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
     async fn add_compliance_leaf(&mut self, leaf: ComplianceLeaf) -> Result<u64> {
         // This is the durable-state boundary, so intrinsic leaf validity must not
         // depend on every caller having passed through MsgRegisterUser.
-        leaf.validate_derivation()?;
+        leaf.validate()?;
         anyhow::ensure!(
             leaf.status == UserAssetStatus::Active,
             "new compliance leaves must start active"
@@ -1238,19 +1280,6 @@ trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
                 .is_none(),
             "compliance leaf is already registered for address and asset"
         );
-        if let Some(registered_d) = self.get_user_audit_key(&leaf.address).await? {
-            anyhow::ensure!(
-                registered_d == leaf.d,
-                "compliance address is already registered with a different audit key"
-            );
-        }
-        if let Some(owner) = self.get_user_audit_key_owner(leaf.d).await? {
-            anyhow::ensure!(
-                owner == leaf.address,
-                "compliance audit key is already registered to {owner}"
-            );
-        }
-
         let record = UserLeafRecord {
             position: self.get_user_count().await?,
             leaf: leaf.clone(),
@@ -1291,12 +1320,6 @@ trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
         // it against the user-tree root on every read.
         let leaf_record_key = state_key::user_leaf_record(&leaf.address, &leaf.asset_id);
         self.put_raw(leaf_record_key, encoded_record);
-        let owner = leaf.address.to_vec();
-        self.put_raw(state_key::user_audit_key_owner(&leaf.d), owner);
-        self.put_raw(
-            state_key::user_audit_key(&leaf.address),
-            leaf.d.to_bytes().to_vec(),
-        );
         self.put_proto(
             state_key::user_asset_position(&leaf.address, &leaf.asset_id),
             position,
@@ -1310,6 +1333,7 @@ trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
         address: &shieldd_sdk_keys::Address,
         asset_id: asset::Id,
         action: UserAssetStatusAction,
+        source_height: u64,
     ) -> Result<event::EventUserAssetStatusChanged> {
         anyhow::ensure!(
             self.is_asset_regulated(asset_id).await?,
@@ -1322,13 +1346,48 @@ trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
         let previous_status = record.leaf.status;
         let previous_commitment = record.leaf.commit();
         let mut leaf = record.leaf;
-        leaf.status = action.apply(previous_status)?;
+        leaf.apply_status_action(action, source_height)?;
+        self.write_user_asset_status(record.position, previous_status, previous_commitment, leaf)
+            .await
+    }
+
+    async fn seize_frozen_user_asset(
+        &mut self,
+        address: &shieldd_sdk_keys::Address,
+        asset_id: asset::Id,
+    ) -> Result<event::EventUserAssetStatusChanged> {
+        anyhow::ensure!(
+            self.is_asset_regulated(asset_id).await?,
+            "cannot seize user status for unregulated asset {asset_id}"
+        );
+        let record = self
+            .get_user_leaf_record(address, asset_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("user is not registered for asset {asset_id}"))?;
+        let previous_status = record.leaf.status;
+        let previous_commitment = record.leaf.commit();
+        let mut leaf = record.leaf;
+        leaf.status = leaf.status.seize()?;
+        leaf.validate_lifecycle()?;
+        self.write_user_asset_status(record.position, previous_status, previous_commitment, leaf)
+            .await
+    }
+
+    async fn write_user_asset_status(
+        &mut self,
+        position: u64,
+        previous_status: UserAssetStatus,
+        previous_commitment: StateCommitment,
+        leaf: ComplianceLeaf,
+    ) -> Result<event::EventUserAssetStatusChanged> {
+        previous_status.validate_transition(leaf.status)?;
+        leaf.validate_lifecycle()?;
         let commitment = leaf.commit();
-        self.authenticate_user_leaf(record.position, previous_commitment)
+        self.authenticate_user_leaf(position, previous_commitment)
             .await?;
 
         let touched_nodes = self
-            .compute_user_path_updates(&[(record.position, commitment)])
+            .compute_user_path_updates(&[(position, commitment)])
             .await?;
         let root = touched_nodes
             .last()
@@ -1342,13 +1401,13 @@ trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
         self.put_raw(
             key,
             encode_user_leaf_record(&UserLeafRecord {
-                position: record.position,
+                position,
                 leaf: leaf.clone(),
             })?,
         );
 
         Ok(event::EventUserAssetStatusChanged {
-            position: record.position,
+            position,
             commitment,
             leaf,
             previous_status,
@@ -1371,7 +1430,7 @@ trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
             return Ok(None);
         }
         ensure_regulated_asset_id(asset_id, true)?;
-        policy.validate_crypto_keys()?;
+        policy.validate_regulated()?;
 
         self.ensure_asset_tree_initialized().await?;
         let value = asset_id.0;
@@ -1379,44 +1438,12 @@ trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
             anyhow::bail!("IMT insert failed: zero value is reserved for sentinel leaf");
         }
 
-        // Check if already exists. If a stale unregulated leaf from an older
-        // state exists without a policy, attach the regulated policy in place.
+        // A present IMT leaf must have the regulated policy written alongside it.
         if let Some(position) = self.read_asset_position_by_value(value).await? {
-            if is_regulated && self.get_asset_policy(asset_id).await?.is_none() {
-                self.set_ibc_origin_asset(asset_id, &policy).await?;
-                let current_leaf = self.read_asset_leaf(position).await?;
-                anyhow::ensure!(
-                    current_leaf.value == value,
-                    "asset value index inconsistent during policy update"
-                );
-                let updated_leaf = IndexedLeaf::from_policy(
-                    value,
-                    current_leaf.next_index,
-                    current_leaf.next_value,
-                    &policy,
-                );
-                self.authenticate_asset_leaf(position, current_leaf.commit())
-                    .await?;
-                self.put_asset_imt_leaf(position, &updated_leaf)?;
-                let touched_nodes = self
-                    .compute_asset_path_updates(&[(position, updated_leaf.commit())])
-                    .await?;
-                let root = touched_nodes
-                    .last()
-                    .map(|(_, _, root)| *root)
-                    .ok_or_else(|| anyhow::anyhow!("asset IMT policy update produced no root"))?;
-                self.put_asset_imt_nodes(&touched_nodes);
-                self.put(state_key::asset_imt_root().to_string(), root);
-                self.object_delete(state_key::cache::cached_asset_imt());
-                self.set_asset_policy(asset_id, policy)?;
-                tracing::debug!(?asset_id, position, "upgraded existing asset to regulated");
-                return Ok(Some(InsertResult {
-                    position,
-                    indexed_leaf: updated_leaf.clone(),
-                    low_leaf_position: position,
-                    updated_low_leaf: updated_leaf,
-                }));
-            }
+            anyhow::ensure!(
+                self.get_asset_policy(asset_id).await?.is_some(),
+                "regulated asset IMT leaf exists without its policy"
+            );
             tracing::debug!(?asset_id, position, "asset already in IMT, skipping");
             return Ok(None);
         }
@@ -1515,7 +1542,7 @@ trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
 
     /// Set the compliance policy for an asset.
     ///
-    /// Stores the issuer's detection key and threshold for flagged transfers.
+    /// Stores the issuer's detection key and daily_volume_limit for flagged transfers.
     fn set_asset_policy(&mut self, asset_id: asset::Id, policy: AssetPolicy) -> Result<()> {
         let key = state_key::asset_policy(&asset_id);
         self.put_raw(key, policy.to_bytes()?);
@@ -1788,6 +1815,13 @@ trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
 
 impl<T: StateWrite + ?Sized> ComplianceRegistryRawWrite for T {}
 
+#[derive(Clone, Debug)]
+pub struct NoteSeizureLifecycle {
+    pub leaf: ComplianceLeaf,
+    pub previous_status: UserAssetStatus,
+    pub status_change: Option<event::EventUserAssetStatusChanged>,
+}
+
 /// Component lifecycle operations that do not admit registry facts.
 #[async_trait]
 pub(crate) trait ComplianceRegistryComponentWrite:
@@ -1811,8 +1845,13 @@ pub(crate) trait ComplianceRegistryComponentWrite:
         <Self as ComplianceRegistryRawWrite>::record_compliance_anchors(self, height).await
     }
 
-    fn queue_user_registration_event(&mut self, event: event::EventUserRegistered) {
-        <Self as ComplianceRegistryRawWrite>::record_pending_user_registration(self, event);
+    fn publish_user_registration(&mut self, event: event::EventUserRegistered) {
+        <Self as ComplianceRegistryRawWrite>::record_pending_user_registration(self, event.clone());
+        self.record_proto(event::user_registered(
+            event.position,
+            event.commitment,
+            event.leaf,
+        ));
     }
 
     fn publish_asset_registration(&mut self, event: event::EventAssetRegistered) {
@@ -1834,18 +1873,76 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
         <Self as ComplianceRegistryRawWrite>::add_compliance_leaf(self, admission.leaf).await
     }
 
+    /// Persist a user registration admitted during genesis validation.
+    async fn register_genesis_user(&mut self, admission: GenesisUserAdmission) -> Result<u64> {
+        <Self as ComplianceRegistryRawWrite>::add_compliance_leaf(self, admission.leaf).await
+    }
+
     async fn apply_user_status_action(
         &mut self,
         address: &shieldd_sdk_keys::Address,
         asset_id: asset::Id,
         action: UserAssetStatusAction,
+        source_height: u64,
     ) -> Result<event::EventUserAssetStatusChanged> {
         let event = <Self as ComplianceRegistryRawWrite>::change_user_asset_status(
-            self, address, asset_id, action,
+            self,
+            address,
+            asset_id,
+            action,
+            source_height,
         )
         .await?;
         <Self as ComplianceRegistryRawWrite>::emit_user_status_change(self, event.clone());
         Ok(event)
+    }
+
+    /// Admit one note seizure against the exact current freeze generation.
+    ///
+    /// The first admitted note makes the leaf terminally seized. Further notes
+    /// from that same generation remain admissible without another tree write.
+    async fn admit_note_seizure(
+        &mut self,
+        address: &shieldd_sdk_keys::Address,
+        asset_id: asset::Id,
+        freeze_generation: u64,
+        frozen_since_height: u64,
+    ) -> Result<NoteSeizureLifecycle> {
+        anyhow::ensure!(
+            self.is_asset_regulated(asset_id).await?,
+            "cannot seize a note for unregulated asset {asset_id}"
+        );
+        let current = self
+            .get_user_leaf(address, asset_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("user is not registered for asset {asset_id}"))?;
+        anyhow::ensure!(
+            current.freeze_generation == freeze_generation
+                && current.frozen_since_height == frozen_since_height,
+            "note seizure does not match the current freeze generation"
+        );
+        match current.status {
+            UserAssetStatus::Active => {
+                anyhow::bail!("active user asset cannot admit a note seizure")
+            }
+            UserAssetStatus::Frozen => {
+                let event = <Self as ComplianceRegistryRawWrite>::seize_frozen_user_asset(
+                    self, address, asset_id,
+                )
+                .await?;
+                <Self as ComplianceRegistryRawWrite>::emit_user_status_change(self, event.clone());
+                Ok(NoteSeizureLifecycle {
+                    leaf: event.leaf.clone(),
+                    previous_status: event.previous_status,
+                    status_change: Some(event),
+                })
+            }
+            UserAssetStatus::Seized => Ok(NoteSeizureLifecycle {
+                leaf: current,
+                previous_status: UserAssetStatus::Seized,
+                status_change: None,
+            }),
+        }
     }
 
     /// Persist an asset registration admitted by a verified registrar grant.
@@ -2033,7 +2130,7 @@ mod tests {
         let mut state = cnidarium::StateDelta::new(snapshot);
 
         // Create a dummy compliance leaf
-        let leaf = ComplianceLeaf::new(
+        let leaf = ComplianceLeaf::registered_for_test(
             Address::dummy(&mut rand::thread_rng()),
             asset::Id(Fq::from(1u64)),
         );
@@ -2059,7 +2156,7 @@ mod tests {
         state
             .test_only_register_asset(
                 asset_id,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -2069,18 +2166,23 @@ mod tests {
             .await
             .unwrap();
         let position = state
-            .test_only_add_compliance_leaf(ComplianceLeaf::new(address.clone(), asset_id))
+            .test_only_add_compliance_leaf(ComplianceLeaf::registered_for_test(
+                address.clone(),
+                asset_id,
+            ))
             .await
             .unwrap();
         let active_root = state.get_user_tree_root().await.unwrap();
 
         let frozen = state
-            .apply_user_status_action(&address, asset_id, UserAssetStatusAction::Freeze)
+            .apply_user_status_action(&address, asset_id, UserAssetStatusAction::Freeze, 40)
             .await
             .unwrap();
         assert_eq!(frozen.position, position);
         assert_eq!(frozen.previous_status, UserAssetStatus::Active);
         assert_eq!(frozen.leaf.status, UserAssetStatus::Frozen);
+        assert_eq!(frozen.leaf.freeze_generation, 1);
+        assert_eq!(frozen.leaf.frozen_since_height, 40);
         assert_ne!(state.get_user_tree_root().await.unwrap(), active_root);
         assert_eq!(
             state
@@ -2093,37 +2195,107 @@ mod tests {
         );
 
         state
-            .apply_user_status_action(&address, asset_id, UserAssetStatusAction::Freeze)
+            .apply_user_status_action(&address, asset_id, UserAssetStatusAction::Freeze, 41)
             .await
             .expect_err("freeze cannot be applied twice");
         let active = state
-            .apply_user_status_action(&address, asset_id, UserAssetStatusAction::Unfreeze)
+            .apply_user_status_action(&address, asset_id, UserAssetStatusAction::Unfreeze, 42)
             .await
             .unwrap();
         assert_eq!(active.position, position);
         assert_eq!(active.previous_status, UserAssetStatus::Frozen);
         assert_eq!(active.leaf.status, UserAssetStatus::Active);
-        assert_eq!(state.get_user_tree_root().await.unwrap(), active_root);
+        assert_ne!(state.get_user_tree_root().await.unwrap(), active_root);
+
+        let refrozen = state
+            .apply_user_status_action(&address, asset_id, UserAssetStatusAction::Freeze, 50)
+            .await
+            .unwrap();
+        assert_eq!(refrozen.leaf.freeze_generation, 2);
+        assert_eq!(refrozen.leaf.frozen_since_height, 50);
+        assert_ne!(refrozen.commitment, frozen.commitment);
     }
 
     #[tokio::test]
-    async fn add_compliance_leaf_rejects_invalid_derivation_before_mutation() {
+    async fn note_seizure_is_terminal_but_allows_more_notes_from_the_same_freeze() {
+        let storage = TempStorage::new().await.unwrap();
+        let mut state = cnidarium::StateDelta::new(storage.latest_snapshot());
+        let address = Address::dummy(&mut rand::thread_rng());
+        let asset_id = asset::Id(Fq::from(92u64));
+        state
+            .test_only_register_asset(
+                asset_id,
+                AssetPolicy::for_test(
+                    decaf377::Element::GENERATOR,
+                    u128::MAX,
+                    decaf377::Element::GENERATOR,
+                ),
+                true,
+            )
+            .await
+            .unwrap();
+        state
+            .test_only_add_compliance_leaf(ComplianceLeaf::registered_for_test(
+                address.clone(),
+                asset_id,
+            ))
+            .await
+            .unwrap();
+
+        state
+            .admit_note_seizure(&address, asset_id, 1, 40)
+            .await
+            .expect_err("active leaf cannot admit seizure");
+        state
+            .apply_user_status_action(&address, asset_id, UserAssetStatusAction::Freeze, 40)
+            .await
+            .unwrap();
+        state
+            .admit_note_seizure(&address, asset_id, 2, 40)
+            .await
+            .expect_err("wrong generation cannot admit seizure");
+
+        let first = state
+            .admit_note_seizure(&address, asset_id, 1, 40)
+            .await
+            .unwrap();
+        assert_eq!(first.previous_status, UserAssetStatus::Frozen);
+        assert_eq!(first.leaf.status, UserAssetStatus::Seized);
+        assert!(first.status_change.is_some());
+        let seized_root = state.get_user_tree_root().await.unwrap();
+
+        let next = state
+            .admit_note_seizure(&address, asset_id, 1, 40)
+            .await
+            .unwrap();
+        assert_eq!(next.previous_status, UserAssetStatus::Seized);
+        assert_eq!(next.leaf.status, UserAssetStatus::Seized);
+        assert!(next.status_change.is_none());
+        assert_eq!(state.get_user_tree_root().await.unwrap(), seized_root);
+        state
+            .apply_user_status_action(&address, asset_id, UserAssetStatusAction::Unfreeze, 41)
+            .await
+            .expect_err("seized leaf cannot be unfrozen");
+    }
+
+    #[tokio::test]
+    async fn add_compliance_leaf_rejects_identity_capability_before_mutation() {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
-        let address = Address::dummy(&mut rand::thread_rng());
-        let expected_d = crate::derive_compliance_scalar(&address);
-        let invalid_d = expected_d + Fq::from(1u64);
-        let leaf = ComplianceLeaf::new_unchecked(address, asset::Id(Fq::from(1u64)), invalid_d);
+        let mut leaf = ComplianceLeaf::registered_for_test(
+            Address::dummy(&mut rand::thread_rng()),
+            asset::Id(Fq::from(1u64)),
+        );
+        leaf.capk = decaf377::Element::IDENTITY;
 
         let err = state
             .add_compliance_leaf(leaf)
             .await
-            .expect_err("durable state must reject an invalid compliance derivation");
+            .expect_err("durable state must reject an identity capability");
 
         assert!(
-            err.to_string()
-                .contains("d does not match the canonical address derivation"),
+            err.to_string().contains("capk must be nonidentity"),
             "unexpected error: {err:#}"
         );
         assert_eq!(state.get_user_count().await.unwrap(), 0);
@@ -2138,7 +2310,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
-        let leaf = ComplianceLeaf::new(
+        let leaf = ComplianceLeaf::registered_for_test(
             Address::dummy(&mut rand::thread_rng()),
             asset::Id(Fq::from(0u64)),
         );
@@ -2167,7 +2339,7 @@ mod tests {
         let capacity = QuadTree::max_leaves_for_depth(crate::tree::DEFAULT_DEPTH);
         state.put_proto(state_key::user_count().to_string(), capacity);
 
-        let leaf = ComplianceLeaf::new(
+        let leaf = ComplianceLeaf::registered_for_test(
             Address::dummy(&mut rand::thread_rng()),
             asset::Id(Fq::from(1u64)),
         );
@@ -2193,7 +2365,7 @@ mod tests {
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
 
-        let leaf = ComplianceLeaf::new(
+        let leaf = ComplianceLeaf::registered_for_test(
             Address::dummy(&mut rand::thread_rng()),
             asset::Id(Fq::from(1u64)),
         );
@@ -2216,7 +2388,7 @@ mod tests {
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
 
-        let leaf = ComplianceLeaf::new(
+        let leaf = ComplianceLeaf::registered_for_test(
             Address::dummy(&mut rand::thread_rng()),
             asset::Id(Fq::from(1u64)),
         );
@@ -2248,7 +2420,7 @@ mod tests {
         state
             .register_regulated_asset(
                 asset_id,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -2278,7 +2450,7 @@ mod tests {
         state
             .register_regulated_asset(
                 asset_id,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -2322,7 +2494,7 @@ mod tests {
         state
             .register_regulated_asset(
                 asset::Id(Fq::from(777u64)),
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -2346,7 +2518,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
-        let policy = AssetPolicy::simple(
+        let policy = AssetPolicy::for_test(
             decaf377::Element::GENERATOR,
             u128::MAX,
             decaf377::Element::GENERATOR,
@@ -2384,7 +2556,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
-        let policy = AssetPolicy::simple(
+        let policy = AssetPolicy::for_test(
             decaf377::Element::GENERATOR,
             u128::MAX,
             decaf377::Element::GENERATOR,
@@ -2417,7 +2589,7 @@ mod tests {
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
         let mut rng = rand::rngs::StdRng::seed_from_u64(0x5eed);
-        let policy = AssetPolicy::simple(
+        let policy = AssetPolicy::for_test(
             decaf377::Element::GENERATOR,
             u128::MAX,
             decaf377::Element::GENERATOR,
@@ -2428,7 +2600,7 @@ mod tests {
         for step in 0..32u64 {
             if rng.gen_bool(0.5) {
                 let asset_id = asset::Id(Fq::from(10_000u64 + step));
-                let leaf = ComplianceLeaf::new(Address::dummy(&mut rng), asset_id);
+                let leaf = ComplianceLeaf::registered_for_test(Address::dummy(&mut rng), asset_id);
                 let commitment = leaf.commit();
                 let position = state.add_compliance_leaf(leaf).await.unwrap();
                 user_positions.push((position, commitment));
@@ -2501,7 +2673,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
-        let policy = AssetPolicy::simple(
+        let policy = AssetPolicy::for_test(
             decaf377::Element::GENERATOR,
             u128::MAX,
             decaf377::Element::GENERATOR,
@@ -2555,7 +2727,7 @@ mod tests {
         state
             .register_regulated_asset(
                 asset_id,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -2563,7 +2735,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let leaf = ComplianceLeaf::new(Address::dummy(&mut rng), asset_id);
+        let leaf = ComplianceLeaf::registered_for_test(Address::dummy(&mut rng), asset_id);
         let position = state.add_compliance_leaf(leaf).await.unwrap();
 
         state.object_delete(state_key::cache::cached_user_tree());
@@ -2586,8 +2758,10 @@ mod tests {
 
         // Add multiple leaves
         for i in 0..5 {
-            let leaf =
-                ComplianceLeaf::new(Address::dummy(&mut rng), asset::Id(Fq::from(i as u64 + 1)));
+            let leaf = ComplianceLeaf::registered_for_test(
+                Address::dummy(&mut rng),
+                asset::Id(Fq::from(i as u64 + 1)),
+            );
             state.add_compliance_leaf(leaf).await.unwrap();
         }
 
@@ -2614,7 +2788,7 @@ mod tests {
         state
             .register_regulated_asset(
                 asset_id,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -2635,7 +2809,7 @@ mod tests {
         state
             .register_regulated_asset(
                 asset_id,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -2662,7 +2836,10 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Create a compliance leaf
-        let leaf = ComplianceLeaf::new(Address::dummy(&mut rng), asset::Id(Fq::from(100u64)));
+        let leaf = ComplianceLeaf::registered_for_test(
+            Address::dummy(&mut rng),
+            asset::Id(Fq::from(100u64)),
+        );
 
         // Before adding, verification should fail
         let verified = state.verify_compliance_leaf(&leaf).await.unwrap();
@@ -2676,8 +2853,10 @@ mod tests {
         assert!(verified, "Leaf should be verified after being added");
 
         // Create a different leaf with same asset but different wallet
-        let different_leaf =
-            ComplianceLeaf::new(Address::dummy(&mut rng), asset::Id(Fq::from(100u64)));
+        let different_leaf = ComplianceLeaf::registered_for_test(
+            Address::dummy(&mut rng),
+            asset::Id(Fq::from(100u64)),
+        );
 
         // Different leaf should not verify
         let verified = state.verify_compliance_leaf(&different_leaf).await.unwrap();
@@ -2689,8 +2868,10 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Create a compliance leaf
-        let original_leaf =
-            ComplianceLeaf::new(Address::dummy(&mut rng), asset::Id(Fq::from(200u64)));
+        let original_leaf = ComplianceLeaf::registered_for_test(
+            Address::dummy(&mut rng),
+            asset::Id(Fq::from(200u64)),
+        );
 
         // Export to JSON
         let json = original_leaf
@@ -2727,7 +2908,10 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // User creates their compliance leaf (private)
-        let user_leaf = ComplianceLeaf::new(Address::dummy(&mut rng), asset::Id(Fq::from(300u64)));
+        let user_leaf = ComplianceLeaf::registered_for_test(
+            Address::dummy(&mut rng),
+            asset::Id(Fq::from(300u64)),
+        );
 
         // User registers on-chain
         state.add_compliance_leaf(user_leaf.clone()).await.unwrap();
@@ -2761,7 +2945,10 @@ mod tests {
         // Add multiple leaves
         let mut leaves = Vec::new();
         for i in 0..5u64 {
-            let leaf = ComplianceLeaf::new(Address::dummy(&mut rng), asset::Id(Fq::from(i + 1)));
+            let leaf = ComplianceLeaf::registered_for_test(
+                Address::dummy(&mut rng),
+                asset::Id(Fq::from(i + 1)),
+            );
             state.add_compliance_leaf(leaf.clone()).await.unwrap();
             leaves.push(leaf);
         }
@@ -2773,7 +2960,10 @@ mod tests {
         }
 
         // A new leaf not in the tree should not verify
-        let new_leaf = ComplianceLeaf::new(Address::dummy(&mut rng), asset::Id(Fq::from(999u64)));
+        let new_leaf = ComplianceLeaf::registered_for_test(
+            Address::dummy(&mut rng),
+            asset::Id(Fq::from(999u64)),
+        );
         let verified = state.verify_compliance_leaf(&new_leaf).await.unwrap();
         assert!(!verified, "Non-registered leaf should not verify");
     }
@@ -2791,7 +2981,7 @@ mod tests {
         state
             .register_regulated_asset(
                 usdc_asset_id,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -2815,11 +3005,11 @@ mod tests {
         let shieldd_proof = state.get_asset_proof_data(shieldd_asset_id).await.unwrap();
         assert!(!shieldd_proof.is_regulated);
 
-        // Distinct users derive distinct audit keys from their full addresses.
+        // Distinct users derive distinct capabilities from their full addresses.
         let wallet1 = Address::dummy(&mut rng);
-        let leaf1 = ComplianceLeaf::new(wallet1.clone(), usdc_asset_id);
-        let leaf2 = ComplianceLeaf::new(Address::dummy(&mut rng), usdc_asset_id);
-        let leaf3 = ComplianceLeaf::new(Address::dummy(&mut rng), usdc_asset_id);
+        let leaf1 = ComplianceLeaf::registered_for_test(wallet1.clone(), usdc_asset_id);
+        let leaf2 = ComplianceLeaf::registered_for_test(Address::dummy(&mut rng), usdc_asset_id);
+        let leaf3 = ComplianceLeaf::registered_for_test(Address::dummy(&mut rng), usdc_asset_id);
 
         state.add_compliance_leaf(leaf1.clone()).await.unwrap();
         state.add_compliance_leaf(leaf2.clone()).await.unwrap();
@@ -2858,7 +3048,7 @@ mod tests {
         state
             .register_regulated_asset(
                 dai_asset_id,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -2866,7 +3056,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let leaf1_dai = ComplianceLeaf::new(wallet1, dai_asset_id);
+        let leaf1_dai = ComplianceLeaf::registered_for_test(wallet1, dai_asset_id);
         state.add_compliance_leaf(leaf1_dai.clone()).await.unwrap();
         assert!(state.verify_compliance_leaf(&leaf1).await.unwrap());
         assert!(state.verify_compliance_leaf(&leaf1_dai).await.unwrap());
@@ -2886,9 +3076,9 @@ mod tests {
         let usdc = asset::Id(Fq::from(12345u64));
         let dai = asset::Id(Fq::from(67890u64));
 
-        let leaf1 = ComplianceLeaf::new(wallet1.clone(), usdc);
-        let leaf2 = ComplianceLeaf::new(wallet1.clone(), dai);
-        let leaf3 = ComplianceLeaf::new(wallet2.clone(), usdc);
+        let leaf1 = ComplianceLeaf::registered_for_test(wallet1.clone(), usdc);
+        let leaf2 = ComplianceLeaf::registered_for_test(wallet1.clone(), dai);
+        let leaf3 = ComplianceLeaf::registered_for_test(wallet2.clone(), usdc);
 
         state.add_compliance_leaf(leaf1.clone()).await.unwrap();
         state.add_compliance_leaf(leaf2.clone()).await.unwrap();
@@ -2937,60 +3127,6 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn audit_key_ownership_is_global_and_duplicate_check_is_consensus_backed() {
-        let storage = TempStorage::new().await.unwrap();
-        let mut state = cnidarium::StateDelta::new(storage.latest_snapshot());
-        let mut rng = rand::thread_rng();
-        let address = Address::dummy(&mut rng);
-        let other_address = Address::dummy(&mut rng);
-        let asset1 = asset::Id(Fq::from(101u64));
-        let asset2 = asset::Id(Fq::from(102u64));
-        let asset3 = asset::Id(Fq::from(103u64));
-        let first = ComplianceLeaf::new(address.clone(), asset1);
-        let same_key_other_asset = ComplianceLeaf::new(address.clone(), asset2);
-        state.add_compliance_leaf(first.clone()).await.unwrap();
-        state
-            .add_compliance_leaf(same_key_other_asset)
-            .await
-            .expect("one address must be able to use its one audit key across assets");
-
-        state.put_raw(
-            state_key::user_audit_key(&address),
-            (first.d + Fq::from(1u64)).to_bytes().to_vec(),
-        );
-        let different_key = ComplianceLeaf::new(address.clone(), asset3);
-        let error = state
-            .add_compliance_leaf(different_key)
-            .await
-            .expect_err("one address must not acquire a second audit key");
-        assert!(error.to_string().contains("different audit key"));
-        state.put_raw(
-            state_key::user_audit_key(&address),
-            first.d.to_bytes().to_vec(),
-        );
-
-        let shared_key = ComplianceLeaf::new(other_address, asset3);
-        state.put_raw(
-            state_key::user_audit_key_owner(&shared_key.d),
-            address.to_vec(),
-        );
-        let error = state
-            .add_compliance_leaf(shared_key)
-            .await
-            .expect_err("one audit key must not be shared by two addresses");
-        assert!(error.to_string().contains("already registered"));
-
-        state.delete(state_key::user_leaf_record(&address, &asset1));
-        let error = state
-            .add_compliance_leaf(first)
-            .await
-            .expect_err("duplicate rejection must survive a missing typed leaf record");
-        assert!(error
-            .to_string()
-            .contains("already registered for address and asset"));
-    }
-
     /// Tests that get_user_leaf() returns the exact registered leaf (catches ACK mismatch bugs).
     #[tokio::test]
     async fn test_user_leaf_roundtrip() {
@@ -3003,7 +3139,7 @@ mod tests {
         let wallet = Address::dummy(&mut rng);
         let asset_id = asset::Id(Fq::from(12345u64));
 
-        let original_leaf = ComplianceLeaf::new(wallet.clone(), asset_id);
+        let original_leaf = ComplianceLeaf::registered_for_test(wallet.clone(), asset_id);
         state
             .add_compliance_leaf(original_leaf.clone())
             .await
@@ -3034,7 +3170,7 @@ mod tests {
 
         let wallet = Address::dummy(&mut rng);
         let asset_id = asset::Id(Fq::from(54321u64));
-        let leaf = ComplianceLeaf::new(wallet.clone(), asset_id);
+        let leaf = ComplianceLeaf::registered_for_test(wallet.clone(), asset_id);
         let position = state.add_compliance_leaf(leaf.clone()).await.unwrap();
 
         let record = state
@@ -3060,9 +3196,10 @@ mod tests {
             .unwrap()
             .is_none());
 
+        let corrupt_leaf = leaf.clone().with_status_for_test(UserAssetStatus::Frozen);
         let corrupt = UserLeafRecord {
             position,
-            leaf: ComplianceLeaf::new_unchecked(wallet.clone(), asset_id, leaf.d + Fq::from(1u64)),
+            leaf: corrupt_leaf,
         };
         state.put_raw(
             state_key::user_leaf_record(&wallet, &asset_id),
@@ -3072,7 +3209,7 @@ mod tests {
             .get_user_leaf(&wallet, asset_id)
             .await
             .expect_err("record that disagrees with the tree must be rejected");
-        assert!(format!("{error:#}").contains("does not match the canonical address derivation"));
+        assert!(format!("{error:#}").contains("does not match the committed user tree"));
     }
 
     // ========== IMT Tests ==========
@@ -3089,7 +3226,7 @@ mod tests {
         state
             .register_regulated_asset(
                 asset_id,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -3120,15 +3257,15 @@ mod tests {
         let cases = [
             (
                 "detection key",
-                AssetPolicy::simple(decaf377::Element::IDENTITY, 1, decaf377::Element::GENERATOR),
+                AssetPolicy::for_test(decaf377::Element::IDENTITY, 1, decaf377::Element::GENERATOR),
             ),
             (
                 "ring key",
-                AssetPolicy::simple(decaf377::Element::GENERATOR, 1, decaf377::Element::IDENTITY),
+                AssetPolicy::for_test(decaf377::Element::GENERATOR, 1, decaf377::Element::IDENTITY),
             ),
             (
                 "registration authority key",
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     1,
                     decaf377::Element::GENERATOR,
@@ -3181,7 +3318,7 @@ mod tests {
         state
             .register_regulated_asset(
                 asset_id,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -3192,7 +3329,7 @@ mod tests {
         state
             .register_regulated_asset(
                 asset_id,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -3215,7 +3352,7 @@ mod tests {
         state
             .register_regulated_asset(
                 asset_id,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -3255,7 +3392,7 @@ mod tests {
         state
             .register_regulated_asset(
                 regulated_asset,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -3295,7 +3432,7 @@ mod tests {
             state
                 .register_regulated_asset(
                     *asset_id,
-                    AssetPolicy::simple(
+                    AssetPolicy::for_test(
                         decaf377::Element::GENERATOR,
                         u128::MAX,
                         decaf377::Element::GENERATOR,
@@ -3337,12 +3474,15 @@ mod tests {
         state.put_block_height(1);
 
         // Add a user and asset
-        let leaf = ComplianceLeaf::new(Address::dummy(&mut rng), asset::Id(Fq::from(100u64)));
+        let leaf = ComplianceLeaf::registered_for_test(
+            Address::dummy(&mut rng),
+            asset::Id(Fq::from(100u64)),
+        );
         state.add_compliance_leaf(leaf).await.unwrap();
         state
             .register_regulated_asset(
                 asset::Id(Fq::from(200u64)),
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -3427,7 +3567,10 @@ mod tests {
 
         // Add a user and record at height 2
         state.put_block_height(2);
-        let leaf = ComplianceLeaf::new(Address::dummy(&mut rng), asset::Id(Fq::from(100u64)));
+        let leaf = ComplianceLeaf::registered_for_test(
+            Address::dummy(&mut rng),
+            asset::Id(Fq::from(100u64)),
+        );
         state.add_compliance_leaf(leaf).await.unwrap();
         state.record_compliance_anchors(2).await.unwrap();
         let anchor_at_2 = state.get_user_tree_root().await.unwrap();
@@ -3479,7 +3622,10 @@ mod tests {
         let old_asset_anchor = state.get_asset_imt_root().await.unwrap();
 
         // Add something to change the tree roots (so old anchors remain distinct)
-        let leaf = ComplianceLeaf::new(Address::dummy(&mut rng), asset::Id(Fq::from(9999u64)));
+        let leaf = ComplianceLeaf::registered_for_test(
+            Address::dummy(&mut rng),
+            asset::Id(Fq::from(9999u64)),
+        );
         state.add_compliance_leaf(leaf).await.unwrap();
 
         // Advance beyond the retained-history window. The rejection is based on
@@ -3555,7 +3701,7 @@ mod tests {
         state
             .register_regulated_asset(
                 asset::Id(Fq::from(4242u64)),
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -3613,7 +3759,7 @@ mod tests {
 
         state.put_block_height(2);
         state
-            .add_compliance_leaf(ComplianceLeaf::new(
+            .add_compliance_leaf(ComplianceLeaf::registered_for_test(
                 Address::dummy(&mut rng),
                 asset::Id(Fq::from(9090u64)),
             ))
@@ -3672,7 +3818,7 @@ mod tests {
         state
             .register_regulated_asset(
                 usdc_id,
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,
@@ -3723,7 +3869,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_register_asset_with_custom_threshold() {
+    async fn test_register_asset_with_custom_daily_volume_limit() {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
@@ -3731,11 +3877,11 @@ mod tests {
         let asset_id = asset::Id(Fq::from(555u64));
         let dk_pub = decaf377::Element::GENERATOR;
 
-        // Register with threshold=500
+        // Register with daily_volume_limit=500
         state
             .register_regulated_asset(
                 asset_id,
-                AssetPolicy::simple(dk_pub, 500u128, decaf377::Element::GENERATOR),
+                AssetPolicy::for_test(dk_pub, 500u128, decaf377::Element::GENERATOR),
             )
             .await
             .unwrap();
@@ -3751,8 +3897,8 @@ mod tests {
             .unwrap()
             .expect("policy should be set after registration");
         assert_eq!(
-            policy.params.threshold, 500u128,
-            "threshold should survive round-trip"
+            policy.params.daily_volume_limit, 500u128,
+            "daily_volume_limit should survive round-trip"
         );
         assert_eq!(policy.params.dk_pub, dk_pub);
     }
@@ -3765,7 +3911,7 @@ mod tests {
 
         let present_asset = asset::Id(Fq::from(77u64));
         let missing_asset = asset::Id(Fq::from(88u64));
-        let policy = AssetPolicy::simple(
+        let policy = AssetPolicy::for_test(
             decaf377::Element::GENERATOR,
             u128::MAX,
             decaf377::Element::GENERATOR,
@@ -3815,7 +3961,7 @@ mod tests {
 
         state.put_block_height(2);
         state
-            .add_compliance_leaf(ComplianceLeaf::new(
+            .add_compliance_leaf(ComplianceLeaf::registered_for_test(
                 Address::dummy(&mut rng),
                 asset::Id(Fq::from(4242u64)),
             ))
@@ -3840,20 +3986,16 @@ mod tests {
         put_test_compliance_params(&mut state);
 
         let route = crate::IbcRoute::transfer("channel-0", "connection-0", "channel-7");
-        let policy = AssetPolicy::new(
+        let mut policy = AssetPolicy::for_test(
             decaf377::Element::GENERATOR,
             500,
-            vec![route.clone()],
-            Some(crate::IbcAssetOrigin {
-                route,
-                base_denom: "ubank".to_string(),
-            }),
-            String::new(),
             decaf377::Element::GENERATOR,
-            String::new(),
-            String::new(),
-            String::new(),
         );
+        policy.replace_allowed_ibc_routes(vec![route.clone()]);
+        policy.params.ibc_origin = Some(crate::IbcAssetOrigin {
+            route,
+            base_denom: "ubank".to_string(),
+        });
 
         let asset_id = asset::Id(Fq::from(700u64));
         state
@@ -3883,17 +4025,12 @@ mod tests {
 
         let old_route = crate::IbcRoute::transfer("channel-0", "connection-0", "channel-7");
         let new_route = crate::IbcRoute::transfer("channel-1", "connection-1", "channel-8");
-        let policy = AssetPolicy::new(
+        let mut policy = AssetPolicy::for_test(
             decaf377::Element::GENERATOR,
             500,
-            vec![old_route.clone()],
-            None,
-            String::new(),
             decaf377::Element::GENERATOR,
-            String::new(),
-            String::new(),
-            String::new(),
         );
+        policy.replace_allowed_ibc_routes(vec![old_route.clone()]);
         let expected_hash = indexed_tree::route_policy_to_fq(&policy.params).to_bytes();
         let asset_id = asset::Id(Fq::from(702u64));
 

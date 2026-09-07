@@ -36,7 +36,7 @@ func DecodeCanonicalVerifyingKeyJSON(data []byte) (VerifyingKeyJSON, error) {
 	return vk, nil
 }
 
-// DecodeCanonicalCircuitMetadataJSON accepts exactly the v2 metadata encoding.
+// DecodeCanonicalCircuitMetadataJSON accepts exactly the canonical metadata encoding.
 func DecodeCanonicalCircuitMetadataJSON(data []byte) (CircuitMetadataJSON, error) {
 	var metadata CircuitMetadataJSON
 	if err := decodeCanonicalJSON(data, &metadata, "circuit metadata JSON"); err != nil {

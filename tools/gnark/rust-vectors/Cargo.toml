@@ -15,6 +15,7 @@ poseidon-parameters = { git = "https://github.com/mizufinance/poseidon377", bran
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
+sha2 = "0.10"
 
 [patch.crates-io]
 decaf377 = { git = "https://github.com/mizufinance/decaf377", branch = "main" }

@@ -98,9 +98,24 @@ trait Inner: StateWrite {
             .pending_rolled_up_payloads()
             .into_iter()
             .map(|(pos, commitment)| (pos, commitment.into()));
+        let volume_accumulator_payloads = self
+            .pending_volume_accumulator_payloads()
+            .into_iter()
+            .map(|(pos, payload, source)| {
+                (
+                    pos,
+                    crate::StatePayload::VolumeAccumulator {
+                        source: source.stripped(),
+                        payload: Box::new(payload),
+                    },
+                )
+            });
 
         // Sort the payloads by position and put them in the compact block
-        let mut state_payloads = note_payloads.chain(rolled_up_payloads).collect::<Vec<_>>();
+        let mut state_payloads = note_payloads
+            .chain(rolled_up_payloads)
+            .chain(volume_accumulator_payloads)
+            .collect::<Vec<_>>();
         state_payloads.sort_by_key(|(pos, _)| *pos);
         let state_payloads = state_payloads
             .into_iter()

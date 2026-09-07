@@ -9,7 +9,7 @@ impl serde::Serialize for AssetPolicy {
         if !self.dk_pub.is_empty() {
             len += 1;
         }
-        if !self.threshold.is_empty() {
+        if !self.daily_volume_limit.is_empty() {
             len += 1;
         }
         if !self.allowed_ibc_routes.is_empty() {
@@ -36,16 +36,19 @@ impl serde::Serialize for AssetPolicy {
         if self.ibc_origin.is_some() {
             len += 1;
         }
+        if self.seizure_authority_vk.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.compliance.v1.AssetPolicy", len)?;
         if !self.dk_pub.is_empty() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("dkPub", pbjson::private::base64::encode(&self.dk_pub).as_str())?;
         }
-        if !self.threshold.is_empty() {
+        if !self.daily_volume_limit.is_empty() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("threshold", pbjson::private::base64::encode(&self.threshold).as_str())?;
+            struct_ser.serialize_field("dailyVolumeLimit", pbjson::private::base64::encode(&self.daily_volume_limit).as_str())?;
         }
         if !self.allowed_ibc_routes.is_empty() {
             struct_ser.serialize_field("allowedIbcRoutes", &self.allowed_ibc_routes)?;
@@ -73,6 +76,9 @@ impl serde::Serialize for AssetPolicy {
         if let Some(v) = self.ibc_origin.as_ref() {
             struct_ser.serialize_field("ibcOrigin", v)?;
         }
+        if let Some(v) = self.seizure_authority_vk.as_ref() {
+            struct_ser.serialize_field("seizureAuthorityVk", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -85,7 +91,8 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
         const FIELDS: &[&str] = &[
             "dk_pub",
             "dkPub",
-            "threshold",
+            "daily_volume_limit",
+            "dailyVolumeLimit",
             "allowed_ibc_routes",
             "allowedIbcRoutes",
             "ring_id",
@@ -100,12 +107,14 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
             "registrationAuthorityVk",
             "ibc_origin",
             "ibcOrigin",
+            "seizure_authority_vk",
+            "seizureAuthorityVk",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             DkPub,
-            Threshold,
+            DailyVolumeLimit,
             AllowedIbcRoutes,
             RingId,
             RingPk,
@@ -114,6 +123,7 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
             Resource,
             RegistrationAuthorityVk,
             IbcOrigin,
+            SeizureAuthorityVk,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -137,7 +147,7 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
                     {
                         match value {
                             "dkPub" | "dk_pub" => Ok(GeneratedField::DkPub),
-                            "threshold" => Ok(GeneratedField::Threshold),
+                            "dailyVolumeLimit" | "daily_volume_limit" => Ok(GeneratedField::DailyVolumeLimit),
                             "allowedIbcRoutes" | "allowed_ibc_routes" => Ok(GeneratedField::AllowedIbcRoutes),
                             "ringId" | "ring_id" => Ok(GeneratedField::RingId),
                             "ringPk" | "ring_pk" => Ok(GeneratedField::RingPk),
@@ -146,6 +156,7 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
                             "resource" => Ok(GeneratedField::Resource),
                             "registrationAuthorityVk" | "registration_authority_vk" => Ok(GeneratedField::RegistrationAuthorityVk),
                             "ibcOrigin" | "ibc_origin" => Ok(GeneratedField::IbcOrigin),
+                            "seizureAuthorityVk" | "seizure_authority_vk" => Ok(GeneratedField::SeizureAuthorityVk),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -166,7 +177,7 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut dk_pub__ = None;
-                let mut threshold__ = None;
+                let mut daily_volume_limit__ = None;
                 let mut allowed_ibc_routes__ = None;
                 let mut ring_id__ = None;
                 let mut ring_pk__ = None;
@@ -175,6 +186,7 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
                 let mut resource__ = None;
                 let mut registration_authority_vk__ = None;
                 let mut ibc_origin__ = None;
+                let mut seizure_authority_vk__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::DkPub => {
@@ -185,11 +197,11 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::Threshold => {
-                            if threshold__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("threshold"));
+                        GeneratedField::DailyVolumeLimit => {
+                            if daily_volume_limit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dailyVolumeLimit"));
                             }
-                            threshold__ =
+                            daily_volume_limit__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -243,6 +255,12 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
                             }
                             ibc_origin__ = map_.next_value()?;
                         }
+                        GeneratedField::SeizureAuthorityVk => {
+                            if seizure_authority_vk__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("seizureAuthorityVk"));
+                            }
+                            seizure_authority_vk__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -250,7 +268,7 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
                 }
                 Ok(AssetPolicy {
                     dk_pub: dk_pub__.unwrap_or_default(),
-                    threshold: threshold__.unwrap_or_default(),
+                    daily_volume_limit: daily_volume_limit__.unwrap_or_default(),
                     allowed_ibc_routes: allowed_ibc_routes__.unwrap_or_default(),
                     ring_id: ring_id__.unwrap_or_default(),
                     ring_pk: ring_pk__.unwrap_or_default(),
@@ -259,6 +277,7 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
                     resource: resource__.unwrap_or_default(),
                     registration_authority_vk: registration_authority_vk__,
                     ibc_origin: ibc_origin__,
+                    seizure_authority_vk: seizure_authority_vk__,
                 })
             }
         }
@@ -412,7 +431,7 @@ impl serde::Serialize for AssetRegistrationGrantBody {
         if !self.dk_pub.is_empty() {
             len += 1;
         }
-        if !self.threshold.is_empty() {
+        if !self.daily_volume_limit.is_empty() {
             len += 1;
         }
         if !self.allowed_ibc_routes.is_empty() {
@@ -442,6 +461,9 @@ impl serde::Serialize for AssetRegistrationGrantBody {
         if self.ibc_origin.is_some() {
             len += 1;
         }
+        if self.seizure_authority_vk.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.compliance.v1.AssetRegistrationGrantBody", len)?;
         if let Some(v) = self.asset_id.as_ref() {
             struct_ser.serialize_field("assetId", v)?;
@@ -454,10 +476,10 @@ impl serde::Serialize for AssetRegistrationGrantBody {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("dkPub", pbjson::private::base64::encode(&self.dk_pub).as_str())?;
         }
-        if !self.threshold.is_empty() {
+        if !self.daily_volume_limit.is_empty() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("threshold", pbjson::private::base64::encode(&self.threshold).as_str())?;
+            struct_ser.serialize_field("dailyVolumeLimit", pbjson::private::base64::encode(&self.daily_volume_limit).as_str())?;
         }
         if !self.allowed_ibc_routes.is_empty() {
             struct_ser.serialize_field("allowedIbcRoutes", &self.allowed_ibc_routes)?;
@@ -490,6 +512,9 @@ impl serde::Serialize for AssetRegistrationGrantBody {
         if let Some(v) = self.ibc_origin.as_ref() {
             struct_ser.serialize_field("ibcOrigin", v)?;
         }
+        if let Some(v) = self.seizure_authority_vk.as_ref() {
+            struct_ser.serialize_field("seizureAuthorityVk", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -506,7 +531,8 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
             "isRegulated",
             "dk_pub",
             "dkPub",
-            "threshold",
+            "daily_volume_limit",
+            "dailyVolumeLimit",
             "allowed_ibc_routes",
             "allowedIbcRoutes",
             "ring_pk",
@@ -523,6 +549,8 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
             "validUntilUnix",
             "ibc_origin",
             "ibcOrigin",
+            "seizure_authority_vk",
+            "seizureAuthorityVk",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -530,7 +558,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
             AssetId,
             IsRegulated,
             DkPub,
-            Threshold,
+            DailyVolumeLimit,
             AllowedIbcRoutes,
             RingPk,
             RingId,
@@ -540,6 +568,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
             RegistrationAuthorityVk,
             ValidUntilUnix,
             IbcOrigin,
+            SeizureAuthorityVk,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -565,7 +594,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                             "assetId" | "asset_id" => Ok(GeneratedField::AssetId),
                             "isRegulated" | "is_regulated" => Ok(GeneratedField::IsRegulated),
                             "dkPub" | "dk_pub" => Ok(GeneratedField::DkPub),
-                            "threshold" => Ok(GeneratedField::Threshold),
+                            "dailyVolumeLimit" | "daily_volume_limit" => Ok(GeneratedField::DailyVolumeLimit),
                             "allowedIbcRoutes" | "allowed_ibc_routes" => Ok(GeneratedField::AllowedIbcRoutes),
                             "ringPk" | "ring_pk" => Ok(GeneratedField::RingPk),
                             "ringId" | "ring_id" => Ok(GeneratedField::RingId),
@@ -575,6 +604,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                             "registrationAuthorityVk" | "registration_authority_vk" => Ok(GeneratedField::RegistrationAuthorityVk),
                             "validUntilUnix" | "valid_until_unix" => Ok(GeneratedField::ValidUntilUnix),
                             "ibcOrigin" | "ibc_origin" => Ok(GeneratedField::IbcOrigin),
+                            "seizureAuthorityVk" | "seizure_authority_vk" => Ok(GeneratedField::SeizureAuthorityVk),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -597,7 +627,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                 let mut asset_id__ = None;
                 let mut is_regulated__ = None;
                 let mut dk_pub__ = None;
-                let mut threshold__ = None;
+                let mut daily_volume_limit__ = None;
                 let mut allowed_ibc_routes__ = None;
                 let mut ring_pk__ = None;
                 let mut ring_id__ = None;
@@ -607,6 +637,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                 let mut registration_authority_vk__ = None;
                 let mut valid_until_unix__ = None;
                 let mut ibc_origin__ = None;
+                let mut seizure_authority_vk__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::AssetId => {
@@ -629,11 +660,11 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::Threshold => {
-                            if threshold__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("threshold"));
+                        GeneratedField::DailyVolumeLimit => {
+                            if daily_volume_limit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dailyVolumeLimit"));
                             }
-                            threshold__ =
+                            daily_volume_limit__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -695,6 +726,12 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                             }
                             ibc_origin__ = map_.next_value()?;
                         }
+                        GeneratedField::SeizureAuthorityVk => {
+                            if seizure_authority_vk__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("seizureAuthorityVk"));
+                            }
+                            seizure_authority_vk__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -704,7 +741,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                     asset_id: asset_id__,
                     is_regulated: is_regulated__.unwrap_or_default(),
                     dk_pub: dk_pub__.unwrap_or_default(),
-                    threshold: threshold__.unwrap_or_default(),
+                    daily_volume_limit: daily_volume_limit__.unwrap_or_default(),
                     allowed_ibc_routes: allowed_ibc_routes__.unwrap_or_default(),
                     ring_pk: ring_pk__.unwrap_or_default(),
                     ring_id: ring_id__.unwrap_or_default(),
@@ -714,6 +751,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                     registration_authority_vk: registration_authority_vk__,
                     valid_until_unix: valid_until_unix__.unwrap_or_default(),
                     ibc_origin: ibc_origin__,
+                    seizure_authority_vk: seizure_authority_vk__,
                 })
             }
         }
@@ -1030,7 +1068,7 @@ impl serde::Serialize for ComplianceAssetStatusResponse {
         if !self.dk_pub.is_empty() {
             len += 1;
         }
-        if !self.threshold.is_empty() {
+        if !self.daily_volume_limit.is_empty() {
             len += 1;
         }
         if self.asset_policy.is_some() {
@@ -1051,10 +1089,10 @@ impl serde::Serialize for ComplianceAssetStatusResponse {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("dkPub", pbjson::private::base64::encode(&self.dk_pub).as_str())?;
         }
-        if !self.threshold.is_empty() {
+        if !self.daily_volume_limit.is_empty() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("threshold", pbjson::private::base64::encode(&self.threshold).as_str())?;
+            struct_ser.serialize_field("dailyVolumeLimit", pbjson::private::base64::encode(&self.daily_volume_limit).as_str())?;
         }
         if let Some(v) = self.asset_policy.as_ref() {
             struct_ser.serialize_field("assetPolicy", v)?;
@@ -1077,7 +1115,8 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
             "isRegulated",
             "dk_pub",
             "dkPub",
-            "threshold",
+            "daily_volume_limit",
+            "dailyVolumeLimit",
             "asset_policy",
             "assetPolicy",
         ];
@@ -1088,7 +1127,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
             IsRegistered,
             IsRegulated,
             DkPub,
-            Threshold,
+            DailyVolumeLimit,
             AssetPolicy,
             __SkipField__,
         }
@@ -1116,7 +1155,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
                             "isRegistered" | "is_registered" => Ok(GeneratedField::IsRegistered),
                             "isRegulated" | "is_regulated" => Ok(GeneratedField::IsRegulated),
                             "dkPub" | "dk_pub" => Ok(GeneratedField::DkPub),
-                            "threshold" => Ok(GeneratedField::Threshold),
+                            "dailyVolumeLimit" | "daily_volume_limit" => Ok(GeneratedField::DailyVolumeLimit),
                             "assetPolicy" | "asset_policy" => Ok(GeneratedField::AssetPolicy),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
@@ -1141,7 +1180,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
                 let mut is_registered__ = None;
                 let mut is_regulated__ = None;
                 let mut dk_pub__ = None;
-                let mut threshold__ = None;
+                let mut daily_volume_limit__ = None;
                 let mut asset_policy__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -1171,11 +1210,11 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::Threshold => {
-                            if threshold__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("threshold"));
+                        GeneratedField::DailyVolumeLimit => {
+                            if daily_volume_limit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dailyVolumeLimit"));
                             }
-                            threshold__ =
+                            daily_volume_limit__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -1195,7 +1234,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceAssetStatusResponse {
                     is_registered: is_registered__.unwrap_or_default(),
                     is_regulated: is_regulated__.unwrap_or_default(),
                     dk_pub: dk_pub__.unwrap_or_default(),
-                    threshold: threshold__.unwrap_or_default(),
+                    daily_volume_limit: daily_volume_limit__.unwrap_or_default(),
                     asset_policy: asset_policy__,
                 })
             }
@@ -1564,10 +1603,22 @@ impl serde::Serialize for ComplianceLeaf {
         if self.asset_id.is_some() {
             len += 1;
         }
-        if !self.d.is_empty() {
+        if !self.capk.is_empty() {
+            len += 1;
+        }
+        if !self.rnk_dh_pk.is_empty() {
+            len += 1;
+        }
+        if !self.rnk_commitment.is_empty() {
             len += 1;
         }
         if self.status != 0 {
+            len += 1;
+        }
+        if self.freeze_generation != 0 {
+            len += 1;
+        }
+        if self.frozen_since_height != 0 {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.compliance.v1.ComplianceLeaf", len)?;
@@ -1577,15 +1628,35 @@ impl serde::Serialize for ComplianceLeaf {
         if let Some(v) = self.asset_id.as_ref() {
             struct_ser.serialize_field("assetId", v)?;
         }
-        if !self.d.is_empty() {
+        if !self.capk.is_empty() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("d", pbjson::private::base64::encode(&self.d).as_str())?;
+            struct_ser.serialize_field("capk", pbjson::private::base64::encode(&self.capk).as_str())?;
+        }
+        if !self.rnk_dh_pk.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("rnkDhPk", pbjson::private::base64::encode(&self.rnk_dh_pk).as_str())?;
+        }
+        if !self.rnk_commitment.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("rnkCommitment", pbjson::private::base64::encode(&self.rnk_commitment).as_str())?;
         }
         if self.status != 0 {
             let v = UserAssetStatus::try_from(self.status)
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.status)))?;
             struct_ser.serialize_field("status", &v)?;
+        }
+        if self.freeze_generation != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("freezeGeneration", ToString::to_string(&self.freeze_generation).as_str())?;
+        }
+        if self.frozen_since_height != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("frozenSinceHeight", ToString::to_string(&self.frozen_since_height).as_str())?;
         }
         struct_ser.end()
     }
@@ -1600,16 +1671,28 @@ impl<'de> serde::Deserialize<'de> for ComplianceLeaf {
             "address",
             "asset_id",
             "assetId",
-            "d",
+            "capk",
+            "rnk_dh_pk",
+            "rnkDhPk",
+            "rnk_commitment",
+            "rnkCommitment",
             "status",
+            "freeze_generation",
+            "freezeGeneration",
+            "frozen_since_height",
+            "frozenSinceHeight",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Address,
             AssetId,
-            D,
+            Capk,
+            RnkDhPk,
+            RnkCommitment,
             Status,
+            FreezeGeneration,
+            FrozenSinceHeight,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -1634,8 +1717,12 @@ impl<'de> serde::Deserialize<'de> for ComplianceLeaf {
                         match value {
                             "address" => Ok(GeneratedField::Address),
                             "assetId" | "asset_id" => Ok(GeneratedField::AssetId),
-                            "d" => Ok(GeneratedField::D),
+                            "capk" => Ok(GeneratedField::Capk),
+                            "rnkDhPk" | "rnk_dh_pk" => Ok(GeneratedField::RnkDhPk),
+                            "rnkCommitment" | "rnk_commitment" => Ok(GeneratedField::RnkCommitment),
                             "status" => Ok(GeneratedField::Status),
+                            "freezeGeneration" | "freeze_generation" => Ok(GeneratedField::FreezeGeneration),
+                            "frozenSinceHeight" | "frozen_since_height" => Ok(GeneratedField::FrozenSinceHeight),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -1657,8 +1744,12 @@ impl<'de> serde::Deserialize<'de> for ComplianceLeaf {
             {
                 let mut address__ = None;
                 let mut asset_id__ = None;
-                let mut d__ = None;
+                let mut capk__ = None;
+                let mut rnk_dh_pk__ = None;
+                let mut rnk_commitment__ = None;
                 let mut status__ = None;
+                let mut freeze_generation__ = None;
+                let mut frozen_since_height__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Address => {
@@ -1673,11 +1764,27 @@ impl<'de> serde::Deserialize<'de> for ComplianceLeaf {
                             }
                             asset_id__ = map_.next_value()?;
                         }
-                        GeneratedField::D => {
-                            if d__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("d"));
+                        GeneratedField::Capk => {
+                            if capk__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("capk"));
                             }
-                            d__ =
+                            capk__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::RnkDhPk => {
+                            if rnk_dh_pk__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rnkDhPk"));
+                            }
+                            rnk_dh_pk__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::RnkCommitment => {
+                            if rnk_commitment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rnkCommitment"));
+                            }
+                            rnk_commitment__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -1687,6 +1794,22 @@ impl<'de> serde::Deserialize<'de> for ComplianceLeaf {
                             }
                             status__ = Some(map_.next_value::<UserAssetStatus>()? as i32);
                         }
+                        GeneratedField::FreezeGeneration => {
+                            if freeze_generation__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("freezeGeneration"));
+                            }
+                            freeze_generation__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::FrozenSinceHeight => {
+                            if frozen_since_height__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("frozenSinceHeight"));
+                            }
+                            frozen_since_height__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -1695,8 +1818,12 @@ impl<'de> serde::Deserialize<'de> for ComplianceLeaf {
                 Ok(ComplianceLeaf {
                     address: address__,
                     asset_id: asset_id__,
-                    d: d__.unwrap_or_default(),
+                    capk: capk__.unwrap_or_default(),
+                    rnk_dh_pk: rnk_dh_pk__.unwrap_or_default(),
+                    rnk_commitment: rnk_commitment__.unwrap_or_default(),
                     status: status__.unwrap_or_default(),
+                    freeze_generation: freeze_generation__.unwrap_or_default(),
+                    frozen_since_height: frozen_since_height__.unwrap_or_default(),
                 })
             }
         }
@@ -2533,6 +2660,149 @@ impl<'de> serde::Deserialize<'de> for ComplianceViewingKey {
         deserializer.deserialize_struct("shieldd.core.component.compliance.v1.ComplianceViewingKey", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for DleqProof {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.commitment_g.is_empty() {
+            len += 1;
+        }
+        if !self.commitment_h.is_empty() {
+            len += 1;
+        }
+        if !self.response.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("shieldd.core.component.compliance.v1.DleqProof", len)?;
+        if !self.commitment_g.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("commitmentG", pbjson::private::base64::encode(&self.commitment_g).as_str())?;
+        }
+        if !self.commitment_h.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("commitmentH", pbjson::private::base64::encode(&self.commitment_h).as_str())?;
+        }
+        if !self.response.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("response", pbjson::private::base64::encode(&self.response).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for DleqProof {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "commitment_g",
+            "commitmentG",
+            "commitment_h",
+            "commitmentH",
+            "response",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            CommitmentG,
+            CommitmentH,
+            Response,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "commitmentG" | "commitment_g" => Ok(GeneratedField::CommitmentG),
+                            "commitmentH" | "commitment_h" => Ok(GeneratedField::CommitmentH),
+                            "response" => Ok(GeneratedField::Response),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = DleqProof;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct shieldd.core.component.compliance.v1.DleqProof")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<DleqProof, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut commitment_g__ = None;
+                let mut commitment_h__ = None;
+                let mut response__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::CommitmentG => {
+                            if commitment_g__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("commitmentG"));
+                            }
+                            commitment_g__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::CommitmentH => {
+                            if commitment_h__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("commitmentH"));
+                            }
+                            commitment_h__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Response => {
+                            if response__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("response"));
+                            }
+                            response__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(DleqProof {
+                    commitment_g: commitment_g__.unwrap_or_default(),
+                    commitment_h: commitment_h__.unwrap_or_default(),
+                    response: response__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("shieldd.core.component.compliance.v1.DleqProof", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for EventAssetRegistered {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -3198,6 +3468,9 @@ impl serde::Serialize for GenesisContent {
         if self.compliance_params.is_some() {
             len += 1;
         }
+        if !self.user_registrations.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.compliance.v1.GenesisContent", len)?;
         if !self.native_assets.is_empty() {
             struct_ser.serialize_field("nativeAssets", &self.native_assets)?;
@@ -3207,6 +3480,9 @@ impl serde::Serialize for GenesisContent {
         }
         if let Some(v) = self.compliance_params.as_ref() {
             struct_ser.serialize_field("complianceParams", v)?;
+        }
+        if !self.user_registrations.is_empty() {
+            struct_ser.serialize_field("userRegistrations", &self.user_registrations)?;
         }
         struct_ser.end()
     }
@@ -3224,6 +3500,8 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
             "complianceRegistrarVk",
             "compliance_params",
             "complianceParams",
+            "user_registrations",
+            "userRegistrations",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -3231,6 +3509,7 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
             NativeAssets,
             ComplianceRegistrarVk,
             ComplianceParams,
+            UserRegistrations,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -3256,6 +3535,7 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
                             "nativeAssets" | "native_assets" => Ok(GeneratedField::NativeAssets),
                             "complianceRegistrarVk" | "compliance_registrar_vk" => Ok(GeneratedField::ComplianceRegistrarVk),
                             "complianceParams" | "compliance_params" => Ok(GeneratedField::ComplianceParams),
+                            "userRegistrations" | "user_registrations" => Ok(GeneratedField::UserRegistrations),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -3278,6 +3558,7 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
                 let mut native_assets__ = None;
                 let mut compliance_registrar_vk__ = None;
                 let mut compliance_params__ = None;
+                let mut user_registrations__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::NativeAssets => {
@@ -3298,6 +3579,12 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
                             }
                             compliance_params__ = map_.next_value()?;
                         }
+                        GeneratedField::UserRegistrations => {
+                            if user_registrations__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("userRegistrations"));
+                            }
+                            user_registrations__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -3307,10 +3594,124 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
                     native_assets: native_assets__.unwrap_or_default(),
                     compliance_registrar_vk: compliance_registrar_vk__.unwrap_or_default(),
                     compliance_params: compliance_params__,
+                    user_registrations: user_registrations__.unwrap_or_default(),
                 })
             }
         }
         deserializer.deserialize_struct("shieldd.core.component.compliance.v1.GenesisContent", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GenesisUserRegistration {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.leaf.is_some() {
+            len += 1;
+        }
+        if self.capability_certificate.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("shieldd.core.component.compliance.v1.GenesisUserRegistration", len)?;
+        if let Some(v) = self.leaf.as_ref() {
+            struct_ser.serialize_field("leaf", v)?;
+        }
+        if let Some(v) = self.capability_certificate.as_ref() {
+            struct_ser.serialize_field("capabilityCertificate", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GenesisUserRegistration {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "leaf",
+            "capability_certificate",
+            "capabilityCertificate",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Leaf,
+            CapabilityCertificate,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "leaf" => Ok(GeneratedField::Leaf),
+                            "capabilityCertificate" | "capability_certificate" => Ok(GeneratedField::CapabilityCertificate),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GenesisUserRegistration;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct shieldd.core.component.compliance.v1.GenesisUserRegistration")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GenesisUserRegistration, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut leaf__ = None;
+                let mut capability_certificate__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Leaf => {
+                            if leaf__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("leaf"));
+                            }
+                            leaf__ = map_.next_value()?;
+                        }
+                        GeneratedField::CapabilityCertificate => {
+                            if capability_certificate__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("capabilityCertificate"));
+                            }
+                            capability_certificate__ = map_.next_value()?;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(GenesisUserRegistration {
+                    leaf: leaf__,
+                    capability_certificate: capability_certificate__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("shieldd.core.component.compliance.v1.GenesisUserRegistration", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for IbcAssetOrigin {
@@ -3732,7 +4133,7 @@ impl serde::Serialize for IndexedLeafData {
         if !self.dk_pub.is_empty() {
             len += 1;
         }
-        if !self.threshold.is_empty() {
+        if !self.daily_volume_limit.is_empty() {
             len += 1;
         }
         if !self.route_policy_hash.is_empty() {
@@ -3774,10 +4175,10 @@ impl serde::Serialize for IndexedLeafData {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("dkPub", pbjson::private::base64::encode(&self.dk_pub).as_str())?;
         }
-        if !self.threshold.is_empty() {
+        if !self.daily_volume_limit.is_empty() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("threshold", pbjson::private::base64::encode(&self.threshold).as_str())?;
+            struct_ser.serialize_field("dailyVolumeLimit", pbjson::private::base64::encode(&self.daily_volume_limit).as_str())?;
         }
         if !self.route_policy_hash.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -3826,7 +4227,8 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
             "nextValue",
             "dk_pub",
             "dkPub",
-            "threshold",
+            "daily_volume_limit",
+            "dailyVolumeLimit",
             "route_policy_hash",
             "routePolicyHash",
             "ring_pk",
@@ -3847,7 +4249,7 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
             NextIndex,
             NextValue,
             DkPub,
-            Threshold,
+            DailyVolumeLimit,
             RoutePolicyHash,
             RingPk,
             RingIdHash,
@@ -3880,7 +4282,7 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                             "nextIndex" | "next_index" => Ok(GeneratedField::NextIndex),
                             "nextValue" | "next_value" => Ok(GeneratedField::NextValue),
                             "dkPub" | "dk_pub" => Ok(GeneratedField::DkPub),
-                            "threshold" => Ok(GeneratedField::Threshold),
+                            "dailyVolumeLimit" | "daily_volume_limit" => Ok(GeneratedField::DailyVolumeLimit),
                             "routePolicyHash" | "route_policy_hash" => Ok(GeneratedField::RoutePolicyHash),
                             "ringPk" | "ring_pk" => Ok(GeneratedField::RingPk),
                             "ringIdHash" | "ring_id_hash" => Ok(GeneratedField::RingIdHash),
@@ -3910,7 +4312,7 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                 let mut next_index__ = None;
                 let mut next_value__ = None;
                 let mut dk_pub__ = None;
-                let mut threshold__ = None;
+                let mut daily_volume_limit__ = None;
                 let mut route_policy_hash__ = None;
                 let mut ring_pk__ = None;
                 let mut ring_id_hash__ = None;
@@ -3951,11 +4353,11 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::Threshold => {
-                            if threshold__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("threshold"));
+                        GeneratedField::DailyVolumeLimit => {
+                            if daily_volume_limit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dailyVolumeLimit"));
                             }
-                            threshold__ =
+                            daily_volume_limit__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -4017,7 +4419,7 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                     next_index: next_index__.unwrap_or_default(),
                     next_value: next_value__.unwrap_or_default(),
                     dk_pub: dk_pub__.unwrap_or_default(),
-                    threshold: threshold__.unwrap_or_default(),
+                    daily_volume_limit: daily_volume_limit__.unwrap_or_default(),
                     route_policy_hash: route_policy_hash__.unwrap_or_default(),
                     ring_pk: ring_pk__.unwrap_or_default(),
                     ring_id_hash: ring_id_hash__.unwrap_or_default(),
@@ -4240,7 +4642,7 @@ impl serde::Serialize for MsgRegisterAsset {
         if !self.dk_pub.is_empty() {
             len += 1;
         }
-        if !self.threshold.is_empty() {
+        if !self.daily_volume_limit.is_empty() {
             len += 1;
         }
         if !self.allowed_ibc_routes.is_empty() {
@@ -4270,6 +4672,9 @@ impl serde::Serialize for MsgRegisterAsset {
         if self.ibc_origin.is_some() {
             len += 1;
         }
+        if self.seizure_authority_vk.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.compliance.v1.MsgRegisterAsset", len)?;
         if let Some(v) = self.asset_id.as_ref() {
             struct_ser.serialize_field("assetId", v)?;
@@ -4282,10 +4687,10 @@ impl serde::Serialize for MsgRegisterAsset {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("dkPub", pbjson::private::base64::encode(&self.dk_pub).as_str())?;
         }
-        if !self.threshold.is_empty() {
+        if !self.daily_volume_limit.is_empty() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("threshold", pbjson::private::base64::encode(&self.threshold).as_str())?;
+            struct_ser.serialize_field("dailyVolumeLimit", pbjson::private::base64::encode(&self.daily_volume_limit).as_str())?;
         }
         if !self.allowed_ibc_routes.is_empty() {
             struct_ser.serialize_field("allowedIbcRoutes", &self.allowed_ibc_routes)?;
@@ -4316,6 +4721,9 @@ impl serde::Serialize for MsgRegisterAsset {
         if let Some(v) = self.ibc_origin.as_ref() {
             struct_ser.serialize_field("ibcOrigin", v)?;
         }
+        if let Some(v) = self.seizure_authority_vk.as_ref() {
+            struct_ser.serialize_field("seizureAuthorityVk", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -4332,7 +4740,8 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
             "isRegulated",
             "dk_pub",
             "dkPub",
-            "threshold",
+            "daily_volume_limit",
+            "dailyVolumeLimit",
             "allowed_ibc_routes",
             "allowedIbcRoutes",
             "ring_pk",
@@ -4349,6 +4758,8 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
             "assetRegistrationGrant",
             "ibc_origin",
             "ibcOrigin",
+            "seizure_authority_vk",
+            "seizureAuthorityVk",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4356,7 +4767,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
             AssetId,
             IsRegulated,
             DkPub,
-            Threshold,
+            DailyVolumeLimit,
             AllowedIbcRoutes,
             RingPk,
             RingId,
@@ -4366,6 +4777,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
             RegistrationAuthorityVk,
             AssetRegistrationGrant,
             IbcOrigin,
+            SeizureAuthorityVk,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -4391,7 +4803,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                             "assetId" | "asset_id" => Ok(GeneratedField::AssetId),
                             "isRegulated" | "is_regulated" => Ok(GeneratedField::IsRegulated),
                             "dkPub" | "dk_pub" => Ok(GeneratedField::DkPub),
-                            "threshold" => Ok(GeneratedField::Threshold),
+                            "dailyVolumeLimit" | "daily_volume_limit" => Ok(GeneratedField::DailyVolumeLimit),
                             "allowedIbcRoutes" | "allowed_ibc_routes" => Ok(GeneratedField::AllowedIbcRoutes),
                             "ringPk" | "ring_pk" => Ok(GeneratedField::RingPk),
                             "ringId" | "ring_id" => Ok(GeneratedField::RingId),
@@ -4401,6 +4813,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                             "registrationAuthorityVk" | "registration_authority_vk" => Ok(GeneratedField::RegistrationAuthorityVk),
                             "assetRegistrationGrant" | "asset_registration_grant" => Ok(GeneratedField::AssetRegistrationGrant),
                             "ibcOrigin" | "ibc_origin" => Ok(GeneratedField::IbcOrigin),
+                            "seizureAuthorityVk" | "seizure_authority_vk" => Ok(GeneratedField::SeizureAuthorityVk),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -4423,7 +4836,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                 let mut asset_id__ = None;
                 let mut is_regulated__ = None;
                 let mut dk_pub__ = None;
-                let mut threshold__ = None;
+                let mut daily_volume_limit__ = None;
                 let mut allowed_ibc_routes__ = None;
                 let mut ring_pk__ = None;
                 let mut ring_id__ = None;
@@ -4433,6 +4846,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                 let mut registration_authority_vk__ = None;
                 let mut asset_registration_grant__ = None;
                 let mut ibc_origin__ = None;
+                let mut seizure_authority_vk__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::AssetId => {
@@ -4455,11 +4869,11 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::Threshold => {
-                            if threshold__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("threshold"));
+                        GeneratedField::DailyVolumeLimit => {
+                            if daily_volume_limit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dailyVolumeLimit"));
                             }
-                            threshold__ =
+                            daily_volume_limit__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -4519,6 +4933,12 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                             }
                             ibc_origin__ = map_.next_value()?;
                         }
+                        GeneratedField::SeizureAuthorityVk => {
+                            if seizure_authority_vk__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("seizureAuthorityVk"));
+                            }
+                            seizure_authority_vk__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -4528,7 +4948,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                     asset_id: asset_id__,
                     is_regulated: is_regulated__.unwrap_or_default(),
                     dk_pub: dk_pub__.unwrap_or_default(),
-                    threshold: threshold__.unwrap_or_default(),
+                    daily_volume_limit: daily_volume_limit__.unwrap_or_default(),
                     allowed_ibc_routes: allowed_ibc_routes__.unwrap_or_default(),
                     ring_pk: ring_pk__.unwrap_or_default(),
                     ring_id: ring_id__.unwrap_or_default(),
@@ -4538,6 +4958,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                     registration_authority_vk: registration_authority_vk__,
                     asset_registration_grant: asset_registration_grant__,
                     ibc_origin: ibc_origin__,
+                    seizure_authority_vk: seizure_authority_vk__,
                 })
             }
         }
@@ -4558,12 +4979,18 @@ impl serde::Serialize for MsgRegisterUser {
         if self.grant.is_some() {
             len += 1;
         }
+        if self.capability_certificate.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.compliance.v1.MsgRegisterUser", len)?;
         if let Some(v) = self.leaf.as_ref() {
             struct_ser.serialize_field("leaf", v)?;
         }
         if let Some(v) = self.grant.as_ref() {
             struct_ser.serialize_field("grant", v)?;
+        }
+        if let Some(v) = self.capability_certificate.as_ref() {
+            struct_ser.serialize_field("capabilityCertificate", v)?;
         }
         struct_ser.end()
     }
@@ -4577,12 +5004,15 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterUser {
         const FIELDS: &[&str] = &[
             "leaf",
             "grant",
+            "capability_certificate",
+            "capabilityCertificate",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Leaf,
             Grant,
+            CapabilityCertificate,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -4607,6 +5037,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterUser {
                         match value {
                             "leaf" => Ok(GeneratedField::Leaf),
                             "grant" => Ok(GeneratedField::Grant),
+                            "capabilityCertificate" | "capability_certificate" => Ok(GeneratedField::CapabilityCertificate),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -4628,6 +5059,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterUser {
             {
                 let mut leaf__ = None;
                 let mut grant__ = None;
+                let mut capability_certificate__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Leaf => {
@@ -4642,6 +5074,12 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterUser {
                             }
                             grant__ = map_.next_value()?;
                         }
+                        GeneratedField::CapabilityCertificate => {
+                            if capability_certificate__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("capabilityCertificate"));
+                            }
+                            capability_certificate__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -4650,6 +5088,7 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterUser {
                 Ok(MsgRegisterUser {
                     leaf: leaf__,
                     grant: grant__,
+                    capability_certificate: capability_certificate__,
                 })
             }
         }
@@ -4676,6 +5115,24 @@ impl serde::Serialize for NativeAssetRegistration {
         if self.registration_authority_vk.is_some() {
             len += 1;
         }
+        if self.seizure_authority_vk.is_some() {
+            len += 1;
+        }
+        if !self.ring_pk.is_empty() {
+            len += 1;
+        }
+        if !self.ring_id.is_empty() {
+            len += 1;
+        }
+        if !self.policy_id.is_empty() {
+            len += 1;
+        }
+        if !self.permission.is_empty() {
+            len += 1;
+        }
+        if !self.resource.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.compliance.v1.NativeAssetRegistration", len)?;
         if let Some(v) = self.asset_id.as_ref() {
             struct_ser.serialize_field("assetId", v)?;
@@ -4690,6 +5147,26 @@ impl serde::Serialize for NativeAssetRegistration {
         }
         if let Some(v) = self.registration_authority_vk.as_ref() {
             struct_ser.serialize_field("registrationAuthorityVk", v)?;
+        }
+        if let Some(v) = self.seizure_authority_vk.as_ref() {
+            struct_ser.serialize_field("seizureAuthorityVk", v)?;
+        }
+        if !self.ring_pk.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("ringPk", pbjson::private::base64::encode(&self.ring_pk).as_str())?;
+        }
+        if !self.ring_id.is_empty() {
+            struct_ser.serialize_field("ringId", &self.ring_id)?;
+        }
+        if !self.policy_id.is_empty() {
+            struct_ser.serialize_field("policyId", &self.policy_id)?;
+        }
+        if !self.permission.is_empty() {
+            struct_ser.serialize_field("permission", &self.permission)?;
+        }
+        if !self.resource.is_empty() {
+            struct_ser.serialize_field("resource", &self.resource)?;
         }
         struct_ser.end()
     }
@@ -4709,6 +5186,16 @@ impl<'de> serde::Deserialize<'de> for NativeAssetRegistration {
             "dkPub",
             "registration_authority_vk",
             "registrationAuthorityVk",
+            "seizure_authority_vk",
+            "seizureAuthorityVk",
+            "ring_pk",
+            "ringPk",
+            "ring_id",
+            "ringId",
+            "policy_id",
+            "policyId",
+            "permission",
+            "resource",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4717,6 +5204,12 @@ impl<'de> serde::Deserialize<'de> for NativeAssetRegistration {
             IsRegulated,
             DkPub,
             RegistrationAuthorityVk,
+            SeizureAuthorityVk,
+            RingPk,
+            RingId,
+            PolicyId,
+            Permission,
+            Resource,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -4743,6 +5236,12 @@ impl<'de> serde::Deserialize<'de> for NativeAssetRegistration {
                             "isRegulated" | "is_regulated" => Ok(GeneratedField::IsRegulated),
                             "dkPub" | "dk_pub" => Ok(GeneratedField::DkPub),
                             "registrationAuthorityVk" | "registration_authority_vk" => Ok(GeneratedField::RegistrationAuthorityVk),
+                            "seizureAuthorityVk" | "seizure_authority_vk" => Ok(GeneratedField::SeizureAuthorityVk),
+                            "ringPk" | "ring_pk" => Ok(GeneratedField::RingPk),
+                            "ringId" | "ring_id" => Ok(GeneratedField::RingId),
+                            "policyId" | "policy_id" => Ok(GeneratedField::PolicyId),
+                            "permission" => Ok(GeneratedField::Permission),
+                            "resource" => Ok(GeneratedField::Resource),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -4766,6 +5265,12 @@ impl<'de> serde::Deserialize<'de> for NativeAssetRegistration {
                 let mut is_regulated__ = None;
                 let mut dk_pub__ = None;
                 let mut registration_authority_vk__ = None;
+                let mut seizure_authority_vk__ = None;
+                let mut ring_pk__ = None;
+                let mut ring_id__ = None;
+                let mut policy_id__ = None;
+                let mut permission__ = None;
+                let mut resource__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::AssetId => {
@@ -4794,6 +5299,44 @@ impl<'de> serde::Deserialize<'de> for NativeAssetRegistration {
                             }
                             registration_authority_vk__ = map_.next_value()?;
                         }
+                        GeneratedField::SeizureAuthorityVk => {
+                            if seizure_authority_vk__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("seizureAuthorityVk"));
+                            }
+                            seizure_authority_vk__ = map_.next_value()?;
+                        }
+                        GeneratedField::RingPk => {
+                            if ring_pk__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ringPk"));
+                            }
+                            ring_pk__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::RingId => {
+                            if ring_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ringId"));
+                            }
+                            ring_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::PolicyId => {
+                            if policy_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("policyId"));
+                            }
+                            policy_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Permission => {
+                            if permission__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("permission"));
+                            }
+                            permission__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Resource => {
+                            if resource__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("resource"));
+                            }
+                            resource__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -4804,10 +5347,155 @@ impl<'de> serde::Deserialize<'de> for NativeAssetRegistration {
                     is_regulated: is_regulated__.unwrap_or_default(),
                     dk_pub: dk_pub__.unwrap_or_default(),
                     registration_authority_vk: registration_authority_vk__,
+                    seizure_authority_vk: seizure_authority_vk__,
+                    ring_pk: ring_pk__.unwrap_or_default(),
+                    ring_id: ring_id__.unwrap_or_default(),
+                    policy_id: policy_id__.unwrap_or_default(),
+                    permission: permission__.unwrap_or_default(),
+                    resource: resource__.unwrap_or_default(),
                 })
             }
         }
         deserializer.deserialize_struct("shieldd.core.component.compliance.v1.NativeAssetRegistration", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for OrbisCapabilityCertificate {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.chain_id.is_empty() {
+            len += 1;
+        }
+        if !self.r_point.is_empty() {
+            len += 1;
+        }
+        if !self.response.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("shieldd.core.component.compliance.v1.OrbisCapabilityCertificate", len)?;
+        if !self.chain_id.is_empty() {
+            struct_ser.serialize_field("chainId", &self.chain_id)?;
+        }
+        if !self.r_point.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("rPoint", pbjson::private::base64::encode(&self.r_point).as_str())?;
+        }
+        if !self.response.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("response", pbjson::private::base64::encode(&self.response).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for OrbisCapabilityCertificate {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "chain_id",
+            "chainId",
+            "r_point",
+            "rPoint",
+            "response",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ChainId,
+            RPoint,
+            Response,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "chainId" | "chain_id" => Ok(GeneratedField::ChainId),
+                            "rPoint" | "r_point" => Ok(GeneratedField::RPoint),
+                            "response" => Ok(GeneratedField::Response),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = OrbisCapabilityCertificate;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct shieldd.core.component.compliance.v1.OrbisCapabilityCertificate")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<OrbisCapabilityCertificate, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut chain_id__ = None;
+                let mut r_point__ = None;
+                let mut response__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ChainId => {
+                            if chain_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("chainId"));
+                            }
+                            chain_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::RPoint => {
+                            if r_point__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rPoint"));
+                            }
+                            r_point__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Response => {
+                            if response__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("response"));
+                            }
+                            response__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(OrbisCapabilityCertificate {
+                    chain_id: chain_id__.unwrap_or_default(),
+                    r_point: r_point__.unwrap_or_default(),
+                    response: response__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("shieldd.core.component.compliance.v1.OrbisCapabilityCertificate", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for UserAssetStatus {
@@ -4820,6 +5508,7 @@ impl serde::Serialize for UserAssetStatus {
             Self::Unspecified => "USER_ASSET_STATUS_UNSPECIFIED",
             Self::Active => "USER_ASSET_STATUS_ACTIVE",
             Self::Frozen => "USER_ASSET_STATUS_FROZEN",
+            Self::Seized => "USER_ASSET_STATUS_SEIZED",
         };
         serializer.serialize_str(variant)
     }
@@ -4834,6 +5523,7 @@ impl<'de> serde::Deserialize<'de> for UserAssetStatus {
             "USER_ASSET_STATUS_UNSPECIFIED",
             "USER_ASSET_STATUS_ACTIVE",
             "USER_ASSET_STATUS_FROZEN",
+            "USER_ASSET_STATUS_SEIZED",
         ];
 
         struct GeneratedVisitor;
@@ -4877,6 +5567,7 @@ impl<'de> serde::Deserialize<'de> for UserAssetStatus {
                     "USER_ASSET_STATUS_UNSPECIFIED" => Ok(UserAssetStatus::Unspecified),
                     "USER_ASSET_STATUS_ACTIVE" => Ok(UserAssetStatus::Active),
                     "USER_ASSET_STATUS_FROZEN" => Ok(UserAssetStatus::Frozen),
+                    "USER_ASSET_STATUS_SEIZED" => Ok(UserAssetStatus::Seized),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

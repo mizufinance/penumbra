@@ -2,6 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cnidarium::StateWrite;
 use shieldd_sdk_asset::Value;
+use shieldd_sdk_compliance::{ComplianceLeaf, ComplianceRegistryRead, UserAssetStatus};
 use shieldd_sdk_keys::Address;
 use shieldd_sdk_sct::component::tree::SctManager;
 use shieldd_sdk_sct::CommitmentSource;
@@ -13,7 +14,7 @@ use super::StateReadExt;
 #[cfg(test)]
 use super::StateWriteExt;
 use crate::state_key;
-use crate::{Note, NotePayload, Rseed};
+use crate::{Note, NotePayload, Rseed, VolumeAccumulatorPayload};
 
 #[cfg(feature = "benchmark-helpers")]
 use shieldd_sdk_ibc::benchmarking::{record_inbound_stage, InboundStage};
@@ -22,7 +23,7 @@ use std::time::Instant;
 
 /// Manages the addition of new notes to the chain state.
 #[async_trait]
-pub trait NoteManager: StateWrite + StateReadExt {
+pub trait NoteManager: StateWrite + StateReadExt + ComplianceRegistryRead {
     /// Mint a new (public) note into the shielded pool.
     ///
     /// Most notes in the shielded pool are created by client transactions.
@@ -39,6 +40,19 @@ pub trait NoteManager: StateWrite + StateReadExt {
         let mint_note_start = Instant::now();
 
         tracing::debug!(?value, ?address, "minting tokens");
+        let recovery_capk = if self.is_asset_regulated(value.asset_id).await? {
+            let leaf = self
+                .get_user_leaf(address, value.asset_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("regulated mint recipient is not registered"))?;
+            anyhow::ensure!(
+                leaf.status == UserAssetStatus::Active,
+                "regulated mint recipient is not active"
+            );
+            leaf.capk
+        } else {
+            ComplianceLeaf::synthetic_unregulated(address.clone(), value.asset_id).capk
+        };
         // These notes are public, so we don't need a blinding factor for
         // privacy, but since the note commitments are determined by the note
         // contents, we need to have unique (deterministic) blinding factors for
@@ -54,7 +68,8 @@ pub trait NoteManager: StateWrite + StateReadExt {
             .add_sct_commitment_from_position(source_for_append, |position| {
                 #[cfg(feature = "benchmark-helpers")]
                 let note_build_start = Instant::now();
-                let note_payload = build_position_derived_mint_payload(value, address, position)?;
+                let note_payload =
+                    build_position_derived_mint_payload(value, address, position, recovery_capk)?;
                 #[cfg(feature = "benchmark-helpers")]
                 record_inbound_stage(InboundStage::MintNoteBuild, note_build_start.elapsed());
 
@@ -130,6 +145,20 @@ pub trait NoteManager: StateWrite + StateReadExt {
         self.object_put(state_key::pending_rolled_up_payloads(), payloads);
     }
 
+    async fn add_volume_accumulator_payload(
+        &mut self,
+        payload: VolumeAccumulatorPayload,
+        source: CommitmentSource,
+    ) {
+        let position = self
+            .add_sct_commitment(payload.commitment, source.clone())
+            .await
+            .expect("volume accumulator SCT insertion must fit in the block");
+        let mut payloads = self.pending_volume_accumulator_payloads();
+        payloads.push_back((position, payload, source));
+        self.object_put(state_key::pending_volume_accumulator_payloads(), payloads);
+    }
+
     fn pending_note_payloads(
         &self,
     ) -> imbl::Vector<(tct::Position, NotePayload, CommitmentSource)> {
@@ -141,17 +170,30 @@ pub trait NoteManager: StateWrite + StateReadExt {
         self.object_get(state_key::pending_rolled_up_payloads())
             .unwrap_or_default()
     }
+
+    fn pending_volume_accumulator_payloads(
+        &self,
+    ) -> imbl::Vector<(tct::Position, VolumeAccumulatorPayload, CommitmentSource)> {
+        self.object_get(state_key::pending_volume_accumulator_payloads())
+            .unwrap_or_default()
+    }
 }
 
-impl<T: StateWrite + StateReadExt + ?Sized> NoteManager for T {}
+impl<T: StateWrite + StateReadExt + ComplianceRegistryRead + ?Sized> NoteManager for T {}
 
 pub fn build_position_derived_mint_payload(
     value: Value,
     address: &Address,
     position: tct::Position,
+    recovery_capk: decaf377::Element,
 ) -> Result<NotePayload> {
-    let note = Note::from_parts(address.clone(), value, mint_rseed(position)?)?;
-    Ok(note.payload())
+    let (note, capsule) = Note::from_parts_with_recovery(
+        address.clone(),
+        value,
+        mint_rseed(position)?,
+        recovery_capk,
+    )?;
+    Ok(note.payload(capsule))
 }
 
 fn mint_rseed(position: tct::Position) -> Result<Rseed> {
@@ -186,6 +228,7 @@ mod tests {
             amount: Amount::from(1u64),
             asset_id: *BASE_ASSET_ID,
         };
+        let capk = ComplianceLeaf::synthetic_unregulated(address.clone(), value.asset_id).capk;
 
         state
             .mint_note(value, &address, CommitmentSource::Genesis)
@@ -202,8 +245,13 @@ mod tests {
         assert_ne!(payloads[0].1.note_commitment, payloads[1].1.note_commitment);
 
         for (position, payload, source) in payloads {
-            let expected_note = Note::from_parts(address.clone(), value, mint_rseed(position)?)?;
-            let expected_payload = expected_note.payload();
+            let (expected_note, capsule) = Note::from_parts_with_recovery(
+                address.clone(),
+                value,
+                mint_rseed(position)?,
+                capk,
+            )?;
+            let expected_payload = expected_note.payload(capsule);
             assert_eq!(payload.note_commitment, expected_payload.note_commitment);
             assert_eq!(payload.ephemeral_key.0, expected_payload.ephemeral_key.0);
             assert_eq!(payload.encrypted_note.0, expected_payload.encrypted_note.0);
@@ -223,6 +271,7 @@ mod tests {
             amount: Amount::from(1u64),
             asset_id: *BASE_ASSET_ID,
         };
+        let capk = ComplianceLeaf::synthetic_unregulated(address.clone(), value.asset_id).capk;
 
         state
             .mint_note(value, &address, CommitmentSource::Genesis)
@@ -230,7 +279,8 @@ mod tests {
         let payloads = state.pending_note_payloads();
         let (position, immediate_payload, _) = &payloads[0];
 
-        let rebuilt_payload = build_position_derived_mint_payload(value, &address, *position)?;
+        let rebuilt_payload =
+            build_position_derived_mint_payload(value, &address, *position, capk)?;
 
         assert_eq!(
             immediate_payload.note_commitment,

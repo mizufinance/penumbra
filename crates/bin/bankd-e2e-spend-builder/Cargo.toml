@@ -24,13 +24,13 @@ hex = { workspace = true }
 rand_core = { workspace = true }
 shieldd-sdk-app = { workspace = true, features = ["parallel"], default-features = true }
 shieldd-sdk-asset = { workspace = true, default-features = true }
-shieldd-sdk-compliance = { workspace = true, default-features = true, features = ["poc-orbis-v0"] }
+shieldd-sdk-compliance = { workspace = true, default-features = true, features = ["poc-orbis"] }
 shieldd-sdk-keys = { workspace = true, default-features = true }
 shieldd-sdk-mock-client = { workspace = true }
 shieldd-sdk-num = { workspace = true, default-features = true }
 shieldd-sdk-proof-params = { workspace = true, default-features = true }
 shieldd-sdk-proto = { workspace = true, default-features = true }
-shieldd-sdk-shielded-pool = { workspace = true, features = ["component", "poc-orbis-v0"], default-features = true }
+shieldd-sdk-shielded-pool = { workspace = true, features = ["component", "poc-orbis"], default-features = true }
 shieldd-sdk-transaction = { workspace = true, features = ["parallel"], default-features = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

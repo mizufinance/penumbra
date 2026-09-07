@@ -4,22 +4,21 @@ use decaf377::Fq;
 
 use crate::{
     gnark::{
-        note_reshape_witness::NoteReshapeWitnessV6,
-        transfer_proof_result::parse_binary_proof_result,
+        note_reshape_witness::NoteReshapeWitness, transfer_proof_result::parse_binary_proof_result,
     },
     note_reshape::{NoteReshapeProof, NoteReshapeProofPrivate, NoteReshapeProofPublic},
     NoteReshapeFamilyId,
 };
 
-pub fn encode_note_reshape_witness_v6(
+pub fn encode_note_reshape_witness(
     public: &NoteReshapeProofPublic,
     private: &NoteReshapeProofPrivate,
 ) -> Result<Vec<u8>> {
-    NoteReshapeWitnessV6::from_public_private(public, private)?.encode()
+    NoteReshapeWitness::from_public_private(public, private)?.encode()
 }
 
-pub fn decode_note_reshape_witness_v6(bytes: &[u8]) -> Result<NoteReshapeWitnessV6> {
-    NoteReshapeWitnessV6::decode(bytes)
+pub fn decode_note_reshape_witness(bytes: &[u8]) -> Result<NoteReshapeWitness> {
+    NoteReshapeWitness::decode(bytes)
 }
 
 pub fn translate_note_reshape_proof_result(
@@ -39,21 +38,21 @@ pub fn translate_note_reshape_proof_result(
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_note_reshape_witness_v6, encode_note_reshape_witness_v6};
+    use super::{decode_note_reshape_witness, encode_note_reshape_witness};
     use crate::{
-        gnark::NoteReshapeWitnessV6, test_proof_helpers::proof_test_helpers, NoteReshapeFamilyId,
+        gnark::NoteReshapeWitness, test_proof_helpers::proof_test_helpers, NoteReshapeFamilyId,
     };
 
     #[test]
-    fn note_reshape_witness_v6_roundtrip() {
+    fn note_reshape_witness_roundtrip() {
         for family_id in NoteReshapeFamilyId::ALL {
             let (public, private) =
                 proof_test_helpers::build_note_reshape_roundtrip_inputs(family_id);
-            let encoded = encode_note_reshape_witness_v6(&public, &private)
+            let encoded = encode_note_reshape_witness(&public, &private)
                 .expect("encode note_reshape witness");
             let decoded =
-                decode_note_reshape_witness_v6(&encoded).expect("decode note_reshape witness");
-            let expected = NoteReshapeWitnessV6::from_public_private(&public, &private)
+                decode_note_reshape_witness(&encoded).expect("decode note_reshape witness");
+            let expected = NoteReshapeWitness::from_public_private(&public, &private)
                 .expect("build note_reshape witness");
             assert_eq!(decoded, expected, "family {}", family_id.label());
         }
@@ -63,29 +62,22 @@ mod tests {
         let (public, private) = proof_test_helpers::build_note_reshape_roundtrip_inputs(
             NoteReshapeFamilyId::EightByOne,
         );
-        encode_note_reshape_witness_v6(&public, &private).expect("encode note_reshape witness")
+        encode_note_reshape_witness(&public, &private).expect("encode note_reshape witness")
     }
 
     #[test]
-    fn note_reshape_witness_v6_rejects_bad_magic() {
+    fn note_reshape_witness_rejects_bad_magic() {
         let mut encoded = corrupt();
         encoded[0] = b'X';
-        assert!(decode_note_reshape_witness_v6(&encoded).is_err());
+        assert!(decode_note_reshape_witness(&encoded).is_err());
     }
 
     #[test]
-    fn note_reshape_witness_v6_rejects_bad_version() {
-        let mut encoded = corrupt();
-        encoded[4..8].copy_from_slice(&2u32.to_le_bytes());
-        assert!(decode_note_reshape_witness_v6(&encoded).is_err());
-    }
-
-    #[test]
-    fn note_reshape_witness_v6_rejects_bad_length() {
+    fn note_reshape_witness_rejects_bad_length() {
         let mut encoded = corrupt();
         let wrong_len = (encoded.len() as u32).saturating_sub(1);
-        encoded[8..12].copy_from_slice(&wrong_len.to_le_bytes());
-        assert!(decode_note_reshape_witness_v6(&encoded).is_err());
+        encoded[4..8].copy_from_slice(&wrong_len.to_le_bytes());
+        assert!(decode_note_reshape_witness(&encoded).is_err());
     }
 }
 
@@ -160,7 +152,7 @@ mod native {
             public: &NoteReshapeProofPublic,
             private: &NoteReshapeProofPrivate,
         ) -> Result<NoteReshapeProof> {
-            let witness_model = NoteReshapeWitnessV6::from_public_private(public, private)?;
+            let witness_model = NoteReshapeWitness::from_public_private(public, private)?;
             let expected_hash = Fq::from_bytes_checked(&witness_model.claimed_statement_hash)
                 .map_err(|_| {
                     anyhow::anyhow!(

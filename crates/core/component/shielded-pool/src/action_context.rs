@@ -95,6 +95,7 @@ pub struct ActionWitness {
     pub asset: AssetWitness,
     pub user_root: StateCommitment,
     pub sender: UserWitness,
+    pub policy: Option<AssetPolicy>,
 }
 
 impl From<ActionWitness> for pb::ActionWitness {
@@ -103,6 +104,7 @@ impl From<ActionWitness> for pb::ActionWitness {
             asset: Some(value.asset.into()),
             user_root: Some(value.user_root.into()),
             sender: Some(value.sender.into()),
+            policy: value.policy.map(Into::into),
         }
     }
 }
@@ -123,6 +125,7 @@ impl TryFrom<pb::ActionWitness> for ActionWitness {
                 .sender
                 .context("missing ActionWitness.sender")?
                 .try_into()?,
+            policy: value.policy.map(TryInto::try_into).transpose()?,
         })
     }
 }
@@ -132,7 +135,6 @@ impl TryFrom<pb::ActionWitness> for ActionWitness {
 pub struct TransferContext {
     pub witness: ActionWitness,
     pub recipient: UserWitness,
-    pub policy: Option<AssetPolicy>,
     pub timestamp: u64,
     pub nonce: Fr,
 }
@@ -142,7 +144,6 @@ impl From<TransferContext> for pb::TransferContext {
         Self {
             witness: Some(value.witness.into()),
             recipient: Some(value.recipient.into()),
-            policy: value.policy.map(Into::into),
             timestamp: value.timestamp,
             nonce: value.nonce.to_bytes().to_vec(),
         }
@@ -161,7 +162,6 @@ impl TryFrom<pb::TransferContext> for TransferContext {
                 .recipient
                 .context("missing TransferContext.recipient")?
                 .try_into()?,
-            policy: value.policy.map(TryInto::try_into).transpose()?,
             timestamp: value.timestamp,
             nonce: crate::compliance_helpers::parse_tx_blinding_nonce(&value.nonce)?,
         })
@@ -230,6 +230,32 @@ impl TryFrom<pb::WithdrawalContext> for WithdrawalContext {
 }
 
 impl ActionWitness {
+    pub fn nullifier_key(
+        &self,
+        fvk: &shieldd_sdk_keys::FullViewingKey,
+    ) -> Result<shieldd_sdk_keys::keys::NullifierKey> {
+        if !self.asset.is_regulated {
+            return Ok(*fvk.nullifier_key());
+        }
+        let policy = self
+            .policy
+            .as_ref()
+            .context("regulated action missing asset policy")?;
+        let key = shieldd_sdk_compliance::derive_regulated_nullifier_key(
+            fvk.incoming(),
+            &self.sender.leaf.address,
+            self.asset.asset_id,
+            policy.ring.ring_pk,
+            self.sender.leaf.rnk_dh_pk,
+        )?;
+        ensure!(
+            shieldd_sdk_compliance::compliance_nullifier_key_commitment(key)
+                == self.sender.leaf.rnk_commitment,
+            "wallet compliance nullifier key does not match the registered sender leaf"
+        );
+        Ok(shieldd_sdk_keys::keys::NullifierKey(key))
+    }
+
     pub fn validate(&self, asset_id: asset::Id, sender: &Address) -> Result<()> {
         ensure!(
             self.asset.asset_id == asset_id,
@@ -258,6 +284,21 @@ impl ActionWitness {
                         || asset_id.0 < self.asset.leaf.next_value),
                 "unregulated asset witness must prove non-membership"
             );
+        }
+        match (&self.policy, self.asset.is_regulated) {
+            (Some(policy), true) => ensure!(
+                self.asset.leaf
+                    == IndexedLeaf::from_policy(
+                        self.asset.leaf.value,
+                        self.asset.leaf.next_index,
+                        self.asset.leaf.next_value,
+                        policy
+                    ),
+                "policy does not match the asset witness"
+            ),
+            (None, true) => anyhow::bail!("regulated action missing asset policy"),
+            (Some(_), false) => anyhow::bail!("unregulated action must not carry a policy"),
+            (None, false) => {}
         }
         self.validate_user(&self.sender, sender)
     }

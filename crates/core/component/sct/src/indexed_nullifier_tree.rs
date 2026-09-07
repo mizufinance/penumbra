@@ -10,7 +10,7 @@ use crate::Nullifier;
 pub const DEPTH: u8 = 20;
 pub const CAPACITY: u64 = 1u64 << (DEPTH as u32 * 2);
 
-pub static LEAF_DOMAIN: Lazy<Fq> = Lazy::new(|| domain(b"shieldd.nullifier.imt.leaf.v1"));
+pub static LEAF_DOMAIN: Lazy<Fq> = Lazy::new(|| domain(b"shieldd.nullifier.imt.leaf"));
 
 pub static ZERO_HASHES: Lazy<Vec<Fq>> = Lazy::new(|| {
     let mut hashes = Vec::with_capacity(DEPTH as usize + 1);

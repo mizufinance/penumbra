@@ -68,7 +68,7 @@ func shieldedIcs20WithdrawalFamilyForCircuit(circuit string) (generated.Shielded
 }
 
 func packProofResult(witnessPayload []byte, proof *groth16bls.Proof, proveMS float64) ([]byte, error) {
-	witness, _, err := abi.DecodeShieldedIcs20WithdrawalWitnessV12(witnessPayload)
+	witness, _, err := abi.DecodeShieldedIcs20WithdrawalWitness(witnessPayload)
 	if err != nil {
 		return nil, fmt.Errorf("decode shielded ICS-20 withdrawal witness: %w", err)
 	}
@@ -142,7 +142,7 @@ func shieldd_gnark_shielded_ics20_withdrawal_prove(handle C.uint64_t, witnessDat
 }
 
 func proveContext(ctx *proverContext, witnessPayload []byte) ([]byte, float64, error) {
-	assignment, _, err := abi.NewShieldedIcs20WithdrawalCircuitAssignmentFromWitnessV12(witnessPayload)
+	assignment, _, err := abi.NewShieldedIcs20WithdrawalCircuitAssignmentFromWitness(witnessPayload)
 	if err != nil {
 		return nil, 0, fmt.Errorf("decode shielded ICS-20 withdrawal witness: %w", err)
 	}

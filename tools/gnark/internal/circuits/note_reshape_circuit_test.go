@@ -46,7 +46,7 @@ func (c *sharedDivGenCommitmentParityCircuit) Define(api frontend.API) error {
 		return err
 	}
 	perNoteCommitment, err := NoteCommitmentWithCompressedDivGen(
-		api, c.Blinding, c.Amount, c.AssetID, perNoteFq, c.TransmissionKeyS,
+		api, c.Blinding, c.Amount, c.AssetID, perNoteFq, c.TransmissionKeyS, 0,
 	)
 	if err != nil {
 		return err
@@ -58,7 +58,7 @@ func (c *sharedDivGenCommitmentParityCircuit) Define(api frontend.API) error {
 		return err
 	}
 	sharedCommitment, err := NoteCommitmentWithCompressedDivGen(
-		api, c.Blinding, c.Amount, c.AssetID, sharedFq, c.TransmissionKeyS,
+		api, c.Blinding, c.Amount, c.AssetID, sharedFq, c.TransmissionKeyS, 0,
 	)
 	if err != nil {
 		return err

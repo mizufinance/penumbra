@@ -70,7 +70,7 @@ func TestTransferComplianceMetadataRejectsFqModulusSalt(t *testing.T) {
 	modulus := littleEndian32(primitives.ScalarField())
 	encoded.Write(modulus[:])
 
-	_, err := readTransferComplianceMetadataV20(bytes.NewReader(encoded.Bytes()))
+	_, err := readTransferComplianceMetadata(bytes.NewReader(encoded.Bytes()))
 	if err == nil || !strings.Contains(err.Error(), "non-canonical Fq") {
 		t.Fatalf("read transfer metadata salt at Fq modulus: expected canonicality error, got %v", err)
 	}

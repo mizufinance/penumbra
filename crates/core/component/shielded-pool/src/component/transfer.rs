@@ -24,7 +24,8 @@ use ibc_types::{
 };
 use shieldd_sdk_asset::{asset, asset::Metadata, Value};
 use shieldd_sdk_compliance::{
-    AssetPolicy, ComplianceRegistryRead as _, IbcComplianceMetadata, IbcRoute,
+    AssetPolicy, AuditEffect, AuditEffectRecord, AuditLogWrite as _, AuditSource,
+    ComplianceRegistryRead as _, IbcComplianceMetadata, IbcOperation, IbcRoute,
 };
 use shieldd_sdk_ibc::component::{ChannelStateReadExt, ConnectionStateReadExt};
 use shieldd_sdk_keys::Address;
@@ -33,7 +34,7 @@ use shieldd_sdk_proto::{
     shieldd::core::component::ibc::v1::FungibleTokenPacketData, DomainType as _, StateReadProto,
     StateWriteProto,
 };
-use shieldd_sdk_sct::CommitmentSource;
+use shieldd_sdk_sct::{component::clock::EpochRead as _, CommitmentSource};
 
 #[cfg(feature = "benchmark-helpers")]
 use shieldd_sdk_ibc::benchmarking::{record_inbound_stage, InboundStage};
@@ -78,6 +79,38 @@ struct ResolvedIbcRoute {
     route: IbcRoute,
     channel: ChannelEnd,
     connection: ConnectionEnd,
+}
+
+struct IbcPublicDeposit {
+    value: Value,
+    recipient: Address,
+}
+
+async fn append_ibc_public_deposit<S: StateWrite + ?Sized>(
+    state: &mut S,
+    packet: &Packet,
+    local_channel: &ChannelId,
+    operation: IbcOperation,
+    deposit: &IbcPublicDeposit,
+) -> Result<()> {
+    let height = state.get_block_height().await?;
+    state
+        .append_audit_effect(AuditEffectRecord {
+            source: AuditSource::Ibc {
+                height,
+                channel_id: local_channel.0.clone(),
+                packet_sequence: packet.sequence.0,
+                operation,
+                effect_index: 0,
+            },
+            effect: AuditEffect::PublicDeposit {
+                asset_id: deposit.value.asset_id,
+                amount: deposit.value.amount.value(),
+                recipient: deposit.recipient.clone(),
+            },
+        })
+        .await?;
+    Ok(())
 }
 
 async fn resolve_ibc_route<S: StateRead + ?Sized>(
@@ -279,6 +312,16 @@ async fn check_regulated_inbound_ics20<S: StateRead>(
             route.connection_id,
             route.counterparty_port,
             route.counterparty_channel
+        );
+        let recipient = state
+            .get_user_leaf(&context.receiver_address, received_asset_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("regulated IBC recipient is not registered for the asset")
+            })?;
+        anyhow::ensure!(
+            recipient.status == shieldd_sdk_compliance::UserAssetStatus::Active,
+            "regulated IBC recipient is not active"
         );
     }
 
@@ -592,7 +635,7 @@ impl AppHandlerCheck for Ics20Transfer {
 async fn recv_transfer_packet_inner<S: StateWrite>(
     mut state: S,
     msg: &MsgRecvPacket,
-) -> Result<()> {
+) -> Result<IbcPublicDeposit> {
     // parse if we are source or dest, and mint or burn accordingly
     //
     // see this part of the spec for this logic:
@@ -642,7 +685,7 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
 
     // 2. check if we are the source chain for the denom.
     let mint_unescrow_start = Instant::now();
-    if context.returned_to_source {
+    let credited_value = if context.returned_to_source {
         // mint tokens to receiver in the amount of packet_data.amount in the denom of denom (with
         // the source removed, since we're the source)
         let denom = context.received_denom.clone();
@@ -674,6 +717,10 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
             anyhow::bail!("transfer coins failed");
         }
 
+        let new_value_balance = value_balance
+            .checked_sub(&context.receiver_amount)
+            .context("underflow subtracting value balance in ics20 transfer")?;
+
         state
             .mint_note(
                 value,
@@ -688,11 +735,6 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
             .await
             .context("unable to mint note when receiving ics20 transfer packet")?;
 
-        // update the value balance
-        // note: this arithmetic was checked above, but we do it again anyway.
-        let new_value_balance = value_balance
-            .checked_sub(&context.receiver_amount)
-            .context("underflow subtracing value balance in ics20 transfer")?;
         #[cfg(feature = "benchmark-helpers")]
         let value_balance_write_start = Instant::now();
         state.put(
@@ -720,6 +762,7 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
         );
         #[cfg(feature = "benchmark-helpers")]
         record_inbound_stage(InboundStage::EventRecord, event_record_start.elapsed());
+        value
     } else {
         // create new denom:
         //
@@ -739,20 +782,6 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
             asset_id: denom.id(),
         };
 
-        state
-            .mint_note(
-                value,
-                &context.receiver_address,
-                CommitmentSource::Ics20Transfer {
-                    packet_seq: msg.packet.sequence.0,
-                    // We are chain A
-                    channel_id: msg.packet.chan_on_a.0.clone(),
-                    sender: context.packet_data.sender.clone(),
-                },
-            )
-            .await
-            .context("failed to mint notes in ibc transfer")?;
-
         // update the value balance
         #[cfg(feature = "benchmark-helpers")]
         let value_balance_read_start = Instant::now();
@@ -770,6 +799,21 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
         );
 
         let new_value_balance = value_balance.saturating_add(&value.amount);
+
+        state
+            .mint_note(
+                value,
+                &context.receiver_address,
+                CommitmentSource::Ics20Transfer {
+                    packet_seq: msg.packet.sequence.0,
+                    // We are chain A
+                    channel_id: msg.packet.chan_on_a.0.clone(),
+                    sender: context.packet_data.sender.clone(),
+                },
+            )
+            .await
+            .context("failed to mint notes in ibc transfer")?;
+
         #[cfg(feature = "benchmark-helpers")]
         let value_balance_write_start = Instant::now();
         state.put(
@@ -797,7 +841,8 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
         );
         #[cfg(feature = "benchmark-helpers")]
         record_inbound_stage(InboundStage::EventRecord, event_record_start.elapsed());
-    }
+        value
+    };
     let mint_unescrow_elapsed = mint_unescrow_start.elapsed();
     #[cfg(feature = "benchmark-helpers")]
     record_inbound_stage(InboundStage::MintUnescrowAccounting, mint_unescrow_elapsed);
@@ -818,7 +863,10 @@ async fn recv_transfer_packet_inner<S: StateWrite>(
         );
     }
 
-    Ok(())
+    Ok(IbcPublicDeposit {
+        value: credited_value,
+        recipient: context.receiver_address,
+    })
 }
 
 // see: https://github.com/cosmos/ibc/blob/8326e26e7e1188b95c32481ff00348a705b23700/spec/app/ics-020-fungible-token-transfer/README.md?plain=1#L297
@@ -864,6 +912,10 @@ async fn refund_tokens<S: StateWrite>(
             anyhow::bail!("couldn't return coins in timeout: not enough value balance");
         }
 
+        let new_value_balance = value_balance
+            .checked_sub(&amount)
+            .context("underflow in ics20 timeout packet value balance subtraction")?;
+
         state
             .mint_note(
                 value,
@@ -877,11 +929,6 @@ async fn refund_tokens<S: StateWrite>(
             .await
             .context("couldn't mint note in timeout_packet_inner")?;
 
-        // update the value balance
-        // note: this arithmetic was checked above, but we do it again anyway.
-        let new_value_balance = value_balance
-            .checked_sub(&amount)
-            .context("underflow in ics20 timeout packet value balance subtraction")?;
         state.put(
             state_key::ics20_value_balance::by_asset_id(&packet.chan_on_a, &denom.id()),
             new_value_balance,
@@ -889,7 +936,7 @@ async fn refund_tokens<S: StateWrite>(
         state.record_proto(
             event::EventOutboundFungibleTokenRefund {
                 value,
-                sender: receiver, // note, this comes from packet_data.sender
+                sender: receiver.clone(), // note, this comes from packet_data.sender
                 receiver: packet_data.receiver.clone(),
                 reason,
                 // Use the destination channel, i.e. our name for it, to be consistent across events.
@@ -931,7 +978,7 @@ async fn refund_tokens<S: StateWrite>(
         state.record_proto(
             event::EventOutboundFungibleTokenRefund {
                 value,
-                sender: receiver, // note, this comes from packet_data.sender
+                sender: receiver.clone(), // note, this comes from packet_data.sender
                 receiver: packet_data.receiver.clone(),
                 reason,
                 // Use the destination channel, i.e. our name for it, to be consistent across events.
@@ -943,6 +990,18 @@ async fn refund_tokens<S: StateWrite>(
             .to_proto(),
         );
     }
+
+    append_ibc_public_deposit(
+        &mut state,
+        packet,
+        &packet.chan_on_a,
+        IbcOperation::Refund,
+        &IbcPublicDeposit {
+            value,
+            recipient: receiver,
+        },
+    )
+    .await?;
 
     Ok(())
 }
@@ -960,7 +1019,15 @@ impl AppHandlerExecute for Ics20Transfer {
         // recv packet should never fail a transaction, but it should record a failure acknowledgement.
         let app_execute_start = Instant::now();
         let ack: Vec<u8> = match recv_transfer_packet_inner(&mut state, msg).await {
-            Ok(_) => {
+            Ok(deposit) => {
+                append_ibc_public_deposit(
+                    &mut state,
+                    &msg.packet,
+                    &msg.packet.chan_on_b,
+                    IbcOperation::Receive,
+                    &deposit,
+                )
+                .await?;
                 // record packet acknowledgement without error
                 TokenTransferAcknowledgement::success().into()
             }
@@ -1118,7 +1185,7 @@ mod tests {
     }
 
     fn policy_authorizing(routes: Vec<IbcRoute>) -> AssetPolicy {
-        let mut policy = AssetPolicy::simple(
+        let mut policy = AssetPolicy::for_test(
             decaf377::Element::GENERATOR,
             u128::MAX,
             decaf377::Element::GENERATOR,
@@ -1500,7 +1567,7 @@ mod tests {
         state
             .test_only_register_asset(
                 withdrawal.denom.id(),
-                AssetPolicy::simple(
+                AssetPolicy::for_test(
                     decaf377::Element::GENERATOR,
                     u128::MAX,
                     decaf377::Element::GENERATOR,

@@ -272,7 +272,7 @@ mod tests {
     use shieldd_sdk_num::Amount;
     use shieldd_sdk_sct::Nullifier;
     use shieldd_sdk_shielded_pool::{
-        EncryptedBackref, Ics20Withdrawal, Note, NotePayload, NoteView, Rseed,
+        EncryptedBackref, Ics20Withdrawal, Note, NotePayload, NoteView, RecoveryCommitment, Rseed,
         ShieldedIcs20Withdrawal, ShieldedIcs20WithdrawalBody, ShieldedIcs20WithdrawalChangeBody,
         ShieldedIcs20WithdrawalProof, ShieldedIcs20WithdrawalView, TransferInputBody,
     };
@@ -290,6 +290,7 @@ mod tests {
             address: AddressView::Opaque {
                 address: note.address(),
             },
+            recovery_commitment: note.recovery_commitment(),
         }
     }
 
@@ -302,15 +303,17 @@ mod tests {
                 asset_id: *BASE_ASSET_ID,
             },
             Rseed([1u8; 32]),
+            RecoveryCommitment::unavailable(),
         )
         .expect("valid spent note");
-        let change_note = Note::from_parts(
+        let (change_note, change_capsule) = Note::from_parts_with_recovery(
             shieldd_sdk_keys::test_keys::ADDRESS_0.clone(),
             Value {
                 amount: Amount::from(3u64),
                 asset_id: *BASE_ASSET_ID,
             },
             Rseed([2u8; 32]),
+            decaf377::Element::GENERATOR,
         )
         .expect("valid change note");
 
@@ -349,6 +352,7 @@ mod tests {
                                         note_commitment: StateCommitment(Fq::from(3u64)),
                                         ephemeral_key: change_note.ephemeral_public_key(),
                                         encrypted_note: change_note.encrypt(),
+                                        recovery_capsule: Some(change_capsule),
                                     },
                                     wrapped_memo_key: WrappedMemoKey([0u8; 48]),
                                     ovk_wrapped_key: OvkWrappedKey([0u8; 48]),
@@ -358,6 +362,14 @@ mod tests {
                                 asset_anchor: StateCommitment(Fq::from(5u64)),
                                 routing_tag: Default::default(),
                                 routing_parameter_set_id: Fq::from(0u64),
+                                withdrawal_compliance_ciphertext:
+                                    shieldd_sdk_compliance::WithdrawalComplianceCiphertext {
+                                        epk: decaf377::Element::GENERATOR,
+                                        c2: Fq::from(6u64),
+                                        key_confirmation: Fq::from(7u64),
+                                        encrypted_sender_address: [0u8; 96],
+                                    },
+                                volume_accumulator: shieldd_sdk_shielded_pool::VolumeAccumulatorPayload::canonical_fee_funding(),
                             },
                             auth_sigs: vec![[0u8; 64].into()],
                             proof: ShieldedIcs20WithdrawalProof::default(),

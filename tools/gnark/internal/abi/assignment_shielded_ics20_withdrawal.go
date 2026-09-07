@@ -8,10 +8,10 @@ import (
 	"github.com/mizufinance/shieldd/tools/gnark/internal/primitives"
 )
 
-func NewShieldedIcs20WithdrawalCircuitAssignmentFromWitnessV12(payload []byte) (*circuits.ShieldedIcs20WithdrawalCircuit, generated.ShieldedIcs20WithdrawalFamilySpec, error) {
-	witness, family, err := DecodeShieldedIcs20WithdrawalWitnessV12(payload)
+func NewShieldedIcs20WithdrawalCircuitAssignmentFromWitness(payload []byte) (*circuits.ShieldedIcs20WithdrawalCircuit, generated.ShieldedIcs20WithdrawalFamilySpec, error) {
+	witness, family, err := DecodeShieldedIcs20WithdrawalWitness(payload)
 	if err != nil {
-		return nil, generated.ShieldedIcs20WithdrawalFamilySpec{}, fmt.Errorf("decode ShieldedIcs20WithdrawalWitnessV12: %w", err)
+		return nil, generated.ShieldedIcs20WithdrawalFamilySpec{}, fmt.Errorf("decode ShieldedIcs20WithdrawalWitness: %w", err)
 	}
 	assignment, err := newShieldedIcs20WithdrawalCircuitAssignment(witness, family.NIn)
 	if err != nil {
@@ -21,7 +21,7 @@ func NewShieldedIcs20WithdrawalCircuitAssignmentFromWitnessV12(payload []byte) (
 }
 
 func newShieldedIcs20WithdrawalRequiredSpendCircuitFields(
-	witness *ShieldedIcs20WithdrawalRequiredSpendWitnessV12Binary,
+	witness *ShieldedIcs20WithdrawalRequiredSpendWitnessBinary,
 ) (circuits.ShieldedIcs20WithdrawalRequiredSpendCircuitFields, error) {
 	var zero circuits.ShieldedIcs20WithdrawalRequiredSpendCircuitFields
 	statePath, err := statePathFromBinary(witness.StateCommitmentAuthPath)
@@ -32,8 +32,9 @@ func newShieldedIcs20WithdrawalRequiredSpendCircuitFields(
 		Nullifier: fqString(witness.Nullifier),
 		RK:        point2DString(witness.RKAffine),
 		Note: circuits.ShieldedIcs20WithdrawalNoteCircuitFields{
-			Blinding: fqString(witness.SpentNoteBlinding),
-			Amount:   fqString(witness.SpentNoteAmount),
+			Blinding:           fqString(witness.SpentNoteBlinding),
+			Amount:             fqString(witness.SpentNoteAmount),
+			RecoveryCommitment: fqString(witness.SpentNoteRecoveryCommitment),
 		},
 		StateProof: circuits.ShieldedIcs20WithdrawalStatePathCircuitFields{
 			Position: witness.StateCommitmentPosition,
@@ -45,10 +46,10 @@ func newShieldedIcs20WithdrawalRequiredSpendCircuitFields(
 }
 
 func newShieldedIcs20WithdrawalOptionalSpendCircuitFields(
-	witness *ShieldedIcs20WithdrawalOptionalSpendWitnessV12Binary,
+	witness *ShieldedIcs20WithdrawalOptionalSpendWitnessBinary,
 ) (circuits.ShieldedIcs20WithdrawalOptionalSpendCircuitFields, error) {
 	spend, err := newShieldedIcs20WithdrawalRequiredSpendCircuitFields(
-		&witness.ShieldedIcs20WithdrawalRequiredSpendWitnessV12Binary,
+		&witness.ShieldedIcs20WithdrawalRequiredSpendWitnessBinary,
 	)
 	if err != nil {
 		return circuits.ShieldedIcs20WithdrawalOptionalSpendCircuitFields{}, err
@@ -61,25 +62,27 @@ func newShieldedIcs20WithdrawalOptionalSpendCircuitFields(
 }
 
 func newShieldedIcs20WithdrawalChangeCircuitFields(
-	witness *ShieldedIcs20WithdrawalChangeWitnessV12Binary,
+	witness *ShieldedIcs20WithdrawalChangeWitnessBinary,
 ) circuits.ShieldedIcs20WithdrawalChangeCircuitFields {
 	return circuits.ShieldedIcs20WithdrawalChangeCircuitFields{
 		NoteCommitment: fqString(witness.NoteCommitment),
 		Note: circuits.ShieldedIcs20WithdrawalNoteCircuitFields{
-			Blinding: fqString(witness.CreatedNoteBlinding),
-			Amount:   fqString(witness.CreatedNoteAmount),
+			Blinding:           fqString(witness.CreatedNoteBlinding),
+			Amount:             fqString(witness.CreatedNoteAmount),
+			RecoveryCommitment: fqString(witness.RecoveryCommitment),
 		},
+		Recovery: recoveryCapsuleFields(witness.RecoveryCommitment, witness.RecoveryCapsule),
 	}
 }
 
 func newShieldedIcs20WithdrawalCircuitAssignment(
-	witness *ShieldedIcs20WithdrawalWitnessV12Binary,
+	witness *ShieldedIcs20WithdrawalWitnessBinary,
 	expectedNIn int,
 ) (*circuits.ShieldedIcs20WithdrawalCircuit, error) {
 	if int(witness.NIn) != expectedNIn {
 		return nil, fmt.Errorf("shielded ICS-20 withdrawal witness shape mismatch: got %d inputs, expected %d", witness.NIn, expectedNIn)
 	}
-	reconstructedHash, err := reconstructedShieldedIcs20WithdrawalStatementHashFromWitnessV12(witness)
+	reconstructedHash, err := reconstructedShieldedIcs20WithdrawalStatementHashFromWitness(witness)
 	if err != nil {
 		return nil, err
 	}
@@ -112,6 +115,17 @@ func newShieldedIcs20WithdrawalCircuitAssignment(
 	assignment.ClaimedStatementHash = fqString(witness.ClaimedStatementHash)
 	assignment.RoutingTag = fqString(witness.RoutingTag)
 	assignment.RoutingParameterSetID = fqString(witness.RoutingParameterSetID)
+	assignment.Compliance = circuits.ShieldedIcs20WithdrawalComplianceCircuitFields{
+		EPK:             point2DString(witness.WithdrawalEPKAffine),
+		C2:              fqString(witness.WithdrawalC2),
+		KeyConfirmation: fqString(witness.WithdrawalKeyConfirmation),
+		Seed:            fqString(witness.WithdrawalSeed),
+		Randomizer:      fqString(witness.WithdrawalRandomizer),
+	}
+	for index := range witness.WithdrawalEncryptedSenderAddress {
+		assignment.Compliance.EncryptedSenderAddress[index] =
+			fqString(witness.WithdrawalEncryptedSenderAddress[index])
+	}
 	assignment.RecentPositionFloor = fqString(witness.RecentPositionFloor)
 	assignment.Anchor = fqString(witness.Anchor)
 	assignment.AssetAnchor = fqString(witness.AssetAnchor)
@@ -129,29 +143,35 @@ func newShieldedIcs20WithdrawalCircuitAssignment(
 	assignment.UnregulatedPrecision = witness.UnregulatedPrecision
 	assignment.RoutingAsOfHeight = witness.RoutingAsOfHeight
 	assignment.RoutingNonce = fqString(witness.RoutingNonce)
+	volumeAccumulator, err := newVolumeAccumulatorCircuitFields(&witness.VolumeAccumulator, witness.TargetTimestamp)
+	if err != nil {
+		return nil, err
+	}
+	assignment.VolumeAccumulator = volumeAccumulator
+	assignment.VolumeAccumulatorSeed = fqString(witness.VolumeAccumulatorSeed)
 	assignment.Auth = circuits.TransferAuthSharedFields{
 		AK:           point2DString(witness.AKAffine),
 		NK:           primitives.LittleEndianBytesToBigInt(witness.NK[:]).String(),
 		IVKReduced:   ivkReduced.String(),
 		IVKQuotientA: quotientA,
 	}
-	assignment.Asset = circuits.ShieldedIcs20WithdrawalAssetCircuitFields{
-		Leaf: circuits.ShieldedIcs20WithdrawalAssetLeafCircuitFields{
-			Value:      fqString(witness.AssetIndexedLeaf.Value),
-			NextIndex:  witness.AssetIndexedLeaf.NextIndex,
-			NextValue:  fqString(witness.AssetIndexedLeaf.NextValue),
-			ParamsHash: fqString(witness.AssetIndexedLeaf.ParamsHash),
-			RingHash:   fqString(witness.AssetIndexedLeaf.RingHash),
-		},
+	assignment.Asset = circuits.AssetTreeFields{
+		Leaf: indexedLeafFieldsFromIndexedLeafBinary(
+			witness.AssetIndexedLeaf,
+			witness.AssetIndexedLeafDKPubAffine,
+			witness.AssetIndexedLeafRingPKAffine,
+		),
 		Path:     assetPath,
 		Position: witness.AssetPosition,
 	}
 	assignment.Sender = circuits.ShieldedIcs20WithdrawalSenderCircuitFields{
-		DivGen:   point2DString(witness.SenderDiversifiedGenerator),
-		D:        fqString(witness.SenderD),
-		Status:   fqString(witness.SenderStatus),
-		Path:     senderPath,
-		Position: witness.SenderCompliancePosition,
+		DivGen:        point2DString(witness.SenderDiversifiedGenerator),
+		Capk:          point2DString(witness.SenderCapkAffine),
+		RnkDhPk:       point2DString(witness.SenderRnkDhPkAffine),
+		RnkCommitment: fqString(witness.SenderRnkCommitment),
+		Status:        fqString(witness.SenderStatus),
+		Path:          senderPath,
+		Position:      witness.SenderCompliancePosition,
 	}
 	requiredSpend, err := newShieldedIcs20WithdrawalRequiredSpendCircuitFields(
 		&witness.RequiredSpend,

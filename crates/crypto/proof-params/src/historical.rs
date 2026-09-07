@@ -22,11 +22,11 @@ pub const CHUNK_PROOF_BYTES: usize = 480;
 
 const GENERATION_VK_JSON: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../tools/gnark/artifacts/historical_generation_indexed_v2/generation_verifying_key.json"
+    "/../../../tools/gnark/artifacts/historical_generation_indexed/generation_verifying_key.json"
 ));
 const CHUNK_VK_JSON: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../tools/gnark/artifacts/historical_generation_indexed_v2/chunk_verifying_key.json"
+    "/../../../tools/gnark/artifacts/historical_generation_indexed/chunk_verifying_key.json"
 ));
 
 static GENERATION_PVK: Lazy<PreparedVerifyingKey<Bls12_377>> = Lazy::new(|| {
@@ -408,11 +408,18 @@ fn parse_field(value: &str, label: &str) -> anyhow::Result<Bw6Base> {
 mod tests {
     use super::*;
     use ark_serialize::{CanonicalSerialize, Compress};
+    use shieldd_sdk_sct::{
+        indexed_nullifier_tree::{
+            IndexedNullifierLeaf, IndexedNullifierWitness, DEPTH, ZERO_HASHES,
+        },
+        nullifier_generation::{append_history, empty_history_head},
+        Nullifier,
+    };
 
     fn artifact_bytes(name: &str) -> Vec<u8> {
         std::fs::read(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../tools/gnark/artifacts/historical_generation_indexed_v2")
+                .join("../../../tools/gnark/artifacts/historical_generation_indexed")
                 .join(name),
         )
         .unwrap()
@@ -436,6 +443,55 @@ mod tests {
                 + 2 * Bw6G1::default().serialized_size(Compress::Yes),
             CHUNK_PROOF_BYTES
         );
+    }
+
+    #[test]
+    fn artifact_roots_match_the_live_sct_domains() {
+        let lower = IndexedNullifierLeaf {
+            value: BlsScalar::from(0u64).to_bytes(),
+            next_index: 1,
+            next_value: BlsScalar::from(7u64).to_bytes(),
+            is_lower_sentinel: true,
+            is_terminal: false,
+        };
+        let witness = IndexedNullifierWitness {
+            leaf_position: 1,
+            leaf: IndexedNullifierLeaf::ordinary(
+                Nullifier(BlsScalar::from(7u64)),
+                0,
+                BlsScalar::from(0u64).to_bytes(),
+                true,
+            ),
+            auth_path: (0..DEPTH)
+                .map(|level| {
+                    let sibling = ZERO_HASHES[level as usize].to_bytes();
+                    if level == 0 {
+                        [lower.commitment().unwrap().to_bytes(), sibling, sibling]
+                    } else {
+                        [sibling, sibling, sibling]
+                    }
+                })
+                .collect(),
+        };
+        let root = witness.root().unwrap();
+        assert_eq!(root, artifact_hex("generation_root.txt"));
+
+        let mut head = empty_history_head();
+        assert_eq!(head, artifact_hex("start_history_head.txt"));
+        for generation in 0..10u64 {
+            head = append_history(
+                head,
+                generation,
+                root,
+                generation << 32,
+                (generation + 1) << 32,
+            )
+            .unwrap();
+            if generation == 0 {
+                assert_eq!(head, artifact_hex("first_end_history_head.txt"));
+            }
+        }
+        assert_eq!(head, artifact_hex("end_history_head.txt"));
     }
 
     #[test]

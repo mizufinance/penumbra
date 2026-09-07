@@ -63,6 +63,18 @@ pub fn asset_count() -> &'static str {
     "compliance/asset_count"
 }
 
+pub mod audit_log {
+    pub fn state() -> &'static str {
+        "compliance/audit_log/state"
+    }
+
+    pub fn record(index: u64) -> Vec<u8> {
+        let mut key = b"compliance/audit_log/record/".to_vec();
+        key.extend_from_slice(&index.to_be_bytes());
+        key
+    }
+}
+
 /// Prefix for compliance registrar verification keys.
 pub fn compliance_registrar_vk_prefix() -> &'static str {
     "compliance/registrar/vk/"
@@ -97,8 +109,8 @@ pub mod cache {
     }
 }
 
-/// State key for asset-specific compliance policy (dk_pub, threshold).
-/// This stores issuer-defined policies for threshold-based flagging.
+/// State key for asset-specific compliance policy (dk_pub, daily_volume_limit).
+/// This stores issuer-defined policies for daily_volume_limit-based flagging.
 pub fn asset_policy(asset_id: &shieldd_sdk_asset::asset::Id) -> String {
     format!("compliance/asset_policy/{}", asset_id)
 }
@@ -112,7 +124,7 @@ pub fn ibc_origin_asset(base_denom: &str) -> String {
     format!("compliance/ibc_origin/{}", hex::encode(hash.as_bytes()))
 }
 
-/// Nonverifiable key for a user's position and full compliance leaf.
+/// Consensus key for a user's position and full compliance leaf.
 pub fn user_leaf_record(
     address: &shieldd_sdk_keys::Address,
     asset_id: &shieldd_sdk_asset::asset::Id,
@@ -124,23 +136,7 @@ pub fn user_leaf_record(
     )
 }
 
-/// Consensus index from a canonical address to its one audit derivation.
-pub fn user_audit_key(address: &shieldd_sdk_keys::Address) -> String {
-    format!(
-        "compliance/user/audit_key/{}",
-        hex::encode(address.to_vec())
-    )
-}
-
-/// Consensus index preventing one audit derivation from being shared by addresses.
-pub fn user_audit_key_owner(d: &decaf377::Fq) -> String {
-    format!(
-        "compliance/user/audit_key_owner/{}",
-        hex::encode(d.to_bytes())
-    )
-}
-
-/// Consensus duplicate index for one address and regulated asset.
+/// Consensus registration marker for one address and asset.
 pub fn user_asset_position(
     address: &shieldd_sdk_keys::Address,
     asset_id: &shieldd_sdk_asset::asset::Id,

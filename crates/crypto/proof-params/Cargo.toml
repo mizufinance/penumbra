@@ -54,6 +54,7 @@ tracing = {workspace = true}
 ark-r1cs-std = {workspace = true}
 ark-relations = {workspace = true}
 rand_chacha = {workspace = true}
+shieldd-sdk-sct = { workspace = true, default-features = false, features = ["std"] }
 
 [package.metadata.docs.rs]
 features = [] # docs.rs

@@ -1,5 +1,5 @@
 {
-  "schema": "shieldd.shielded_ics20_withdrawal_families.v1",
+  "schema": "shieldd.shielded_ics20_withdrawal_families",
   "families": [
     {
       "id": 1,

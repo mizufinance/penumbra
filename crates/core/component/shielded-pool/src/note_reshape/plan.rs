@@ -55,19 +55,17 @@ impl NoteReshapePlan {
         Ok(plan)
     }
 
-    fn padder_for(
-        spends: &[ShieldedInputPlan],
-        _outputs: &[ShieldedOutputPlan],
-        value_blinding: Fr,
-    ) -> HiddenArityPadder {
-        let first_spend = spends
+    fn padder(&self) -> HiddenArityPadder {
+        let first_spend = self
+            .spends
             .first()
             .expect("note reshape must contain a real spend");
         HiddenArityPadder {
-            value_blinding,
+            value_blinding: self.value_blinding,
             first_spend_randomizer: first_spend.randomizer,
             sender_address: first_spend.note.address(),
             asset_id: first_spend.note.asset_id(),
+            capk: self.compliance.witness.sender.leaf.capk,
             nullifier_domain_sep_label: b"shieldd.note_reshape.synthetic_dummy.nullifier",
             nullifier_seed_label: b"shieldd.note_reshape.synthetic_dummy.nullifier_seed",
             spend_auth_key_label: b"shieldd.note_reshape.synthetic_dummy.spend_auth_key",
@@ -76,10 +74,6 @@ impl NoteReshapePlan {
             input_note_label: b"shieldd.note_reshape.synthetic_dummy.input_note",
             output_note_label: b"shieldd.note_reshape.synthetic_dummy.output_note",
         }
-    }
-
-    fn padder(&self) -> HiddenArityPadder {
-        Self::padder_for(&self.spends, &self.outputs, self.value_blinding)
     }
 
     pub fn synthetic_dummy_auth_sig(
@@ -92,6 +86,7 @@ impl NoteReshapePlan {
 
     fn encrypted_output_body(
         note: crate::Note,
+        recovery_capsule: crate::RecoveryCapsule,
         fvk: &FullViewingKey,
         memo_key: &PayloadKey,
         action_balance_commitment: shieldd_sdk_asset::balance::Commitment,
@@ -104,7 +99,7 @@ impl NoteReshapePlan {
         );
         let ovk_wrapped_key = note.encrypt_key(fvk.outgoing(), action_balance_commitment);
         NoteReshapeOutputBody {
-            note_payload: note.payload(),
+            note_payload: note.payload(recovery_capsule),
             wrapped_memo_key,
             ovk_wrapped_key,
         }
@@ -193,12 +188,17 @@ impl NoteReshapePlan {
         }
 
         let padder = self.padder();
+        let nullifier_key = self
+            .compliance
+            .witness
+            .nullifier_key(fvk)
+            .map_err(|error| crate::ProofError::InvalidPrivateInput(error.to_string()))?;
         let mut input_publics = self
             .spends
             .iter()
             .map(|spend| {
                 Ok(NoteReshapeInputPublic {
-                    nullifier: spend.nullifier(fvk),
+                    nullifier: spend.nullifier(&nullifier_key),
                     rk: spend.rk(fvk),
                     history_required: shieldd_sdk_sct::nullifier_generation::is_old(
                         u64::from(spend.position),
@@ -220,8 +220,10 @@ impl NoteReshapePlan {
             .outputs
             .iter()
             .map(|output| {
+                let note = output.output_note(self.compliance.witness.sender.leaf.capk);
                 Ok(NoteReshapeOutputPublic {
-                    note_commitment: output.output_note().commit(),
+                    note_commitment: note.commit(),
+                    recovery_commitment: note.recovery_commitment(),
                 })
             })
             .collect::<Result<Vec<_>, crate::ProofError>>()?;
@@ -230,6 +232,9 @@ impl NoteReshapePlan {
             self.family_id().output_count(),
             |slot| NoteReshapeOutputPublic {
                 note_commitment: padder.synthetic_dummy_output_note(slot).commit(),
+                recovery_commitment: padder
+                    .synthetic_dummy_output_note(slot)
+                    .recovery_commitment(),
             },
         );
 
@@ -266,7 +271,7 @@ impl NoteReshapePlan {
             .iter()
             .map(|output| {
                 Ok(NoteReshapeOutputPrivate {
-                    created_note: output.output_note(),
+                    created_note: output.output_note(self.compliance.witness.sender.leaf.capk),
                 })
             })
             .collect::<Result<Vec<_>, crate::ProofError>>()?;
@@ -330,11 +335,13 @@ impl NoteReshapePlan {
         self.validate()?;
         let padder = self.padder();
         let action_balance_commitment = self.balance().commit(self.value_blinding);
+        let nullifier_key = self.compliance.witness.nullifier_key(fvk)?;
         let mut inputs = self
             .spends
             .iter()
             .map(|spend| {
-                let spend_body = spend.action_input_body(fvk, recent_position_floor)?;
+                let spend_body =
+                    spend.action_input_body(fvk, &nullifier_key, recent_position_floor)?;
                 Ok(NoteReshapeInputBody {
                     nullifier: spend_body.nullifier,
                     rk: spend_body.rk,
@@ -357,8 +364,11 @@ impl NoteReshapePlan {
             .outputs
             .iter()
             .map(|output| {
+                let (note, recovery_capsule) =
+                    output.output_note_and_capsule(self.compliance.witness.sender.leaf.capk);
                 Self::encrypted_output_body(
-                    output.output_note(),
+                    note,
+                    recovery_capsule,
                     fvk,
                     memo_key,
                     action_balance_commitment,
@@ -366,8 +376,10 @@ impl NoteReshapePlan {
             })
             .collect::<Vec<_>>();
         pad_to_len(&mut outputs, self.family_id().output_count(), |slot| {
+            let (note, recovery_capsule) = padder.synthetic_dummy_output_note_and_capsule(slot);
             Self::encrypted_output_body(
-                padder.synthetic_dummy_output_note(slot),
+                note,
+                recovery_capsule,
                 fvk,
                 memo_key,
                 action_balance_commitment,

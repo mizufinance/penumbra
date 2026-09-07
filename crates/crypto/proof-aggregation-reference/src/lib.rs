@@ -33,7 +33,7 @@ type G2 = <P as Pairing>::G2;
 type Fr = <P as Pairing>::ScalarField;
 
 const DEV_SRS_SEED: [u8; 32] = [0x50; 32];
-const CHALLENGE_DOMAIN: &[u8] = b"shieldd.snarkpack.challenge.v1\0";
+const CHALLENGE_DOMAIN: &[u8] = b"shieldd.snarkpack.challenge\0";
 
 pub type ReferenceResult<T> = Result<T, ReferencePathError>;
 
@@ -712,12 +712,12 @@ fn challenge_preimage(
 
 fn transcript_family_domain(family_id: ProofFamilyId) -> Vec<u8> {
     match family_id {
-        ProofFamilyId::Transfer => b"shieldd.snarkpack.transfer.v1".to_vec(),
+        ProofFamilyId::Transfer => b"shieldd.snarkpack.transfer".to_vec(),
         ProofFamilyId::NoteReshape(family_id) => {
-            format!("shieldd.snarkpack.{}.v1", family_id.label()).into_bytes()
+            format!("shieldd.snarkpack.{}", family_id.label()).into_bytes()
         }
         ProofFamilyId::ShieldedIcs20Withdrawal(family_id) => {
-            format!("shieldd.snarkpack.{}.v1", family_id.label()).into_bytes()
+            format!("shieldd.snarkpack.{}", family_id.label()).into_bytes()
         }
     }
 }
@@ -773,8 +773,7 @@ fn reference_srs_id(srs: &DevSrs, serialized_srs: &[u8]) -> [u8; 32] {
     sha2::Digest::update(
         &mut hasher,
         format!(
-            "shieldd.proof_aggregation.srs.v{}:backend={}:curve={}:max_padded_count={}",
-            shieldd_sdk_proof_aggregation::DEV_SRS_VERSION,
+            "shieldd.proof_aggregation.srs:backend={}:curve={}:max_padded_count={}",
             shieldd_sdk_proof_aggregation::DEV_SRS_BACKEND_ID,
             shieldd_sdk_proof_aggregation::DEV_SRS_CURVE_ID,
             srs.max_padded_count

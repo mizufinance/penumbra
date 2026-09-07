@@ -7,7 +7,7 @@ and does not use fuzzy message detection.
 For every address, the stable routing word is
 
 ```text
-Trunc32(Poseidon("shieldd.discovery.route.v2", transmission_key_s))
+Trunc32(Poseidon("shieldd.discovery.route", transmission_key_s))
 ```
 
 The hash excludes the asset, regulation class, precision, height, time, epoch,
@@ -61,11 +61,13 @@ recovery requires downloading the full range or adding one of those mechanisms.
 
 ## Issuer audit routing
 
-Detection-key screening first authenticates the asset, regulated flag, sender
-and receiver slots, and the encrypted routing permutation. The auditor then
-applies the registered subject selector for that asset locally. The result is a
-small action set suitable for later fixed-size Orbis processing; routing does
-not change consensus validity or grant an external system spending authority.
+Detection-key screening authenticates the asset, regulated flag, sender and
+receiver routing classes, and the encrypted routing permutation. Slots do not
+identify an address and no registered subject selector prefilters ciphertexts.
+An authorized target-address history proof submits every required unflagged
+core tier in the authenticated range to Orbis for private match/non-match
+classification. Routing does not change consensus validity or grant an
+external system spending authority.
 
 ## Performance baseline
 

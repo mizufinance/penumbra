@@ -14,8 +14,8 @@ use crate::{
 pub const AGGREGATE_PROTOCOL_VERSION: u32 =
     ark_ip_proofs::app_verifier::APP_VERIFY_PROTOCOL_VERSION;
 
-const STATEMENT_DIGEST_DOMAIN: &[u8] = b"shieldd.snarkpack.statement_digest.v1\0";
-const VK_DIGEST_DOMAIN: &[u8] = b"shieldd.snarkpack.vk_digest.v1\0";
+const STATEMENT_DIGEST_DOMAIN: &[u8] = b"shieldd.snarkpack.statement_digest\0";
+const VK_DIGEST_DOMAIN: &[u8] = b"shieldd.snarkpack.vk_digest\0";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AggregateStatementError {
@@ -1197,7 +1197,7 @@ mod tests {
 
         let preimage = challenge_preimage(&context, stage, nonce, &messages);
         let mut expected = Vec::new();
-        expected.extend_from_slice(b"shieldd.snarkpack.challenge.v1\0");
+        expected.extend_from_slice(b"shieldd.snarkpack.challenge\0");
         expected.extend_from_slice(&(stage.len() as u32).to_le_bytes());
         expected.extend_from_slice(stage);
         expected.extend_from_slice(context.as_bytes());

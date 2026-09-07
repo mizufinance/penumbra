@@ -10,6 +10,20 @@ shieldd_devnet_home="${SHIELDD_DEVNET_HOME:-$HOME/.shieldd}"
 export SHIELDD_DEVNET_HOME="$shieldd_devnet_home"
 network_data_dir="${shieldd_devnet_home}/network_data"
 compliance_dev_registrar_vk_hex="${COMPLIANCE_DEV_REGISTRAR_VK_HEX:-0800000000000000000000000000000000000000000000000000000000000000}"
+compliance_genesis_input_file="${COMPLIANCE_GENESIS_INPUT_FILE:-}"
+compliance_genesis_args=(
+    --compliance-registrar-vk-hex "$compliance_dev_registrar_vk_hex"
+)
+if [[ -n "$compliance_genesis_input_file" ]]; then
+    if [[ ! -f "$compliance_genesis_input_file" ]]; then
+        >&2 echo "ERROR: compliance genesis file does not exist: $compliance_genesis_input_file"
+        exit 1
+    fi
+    compliance_genesis_args+=(
+        --preserve-chain-id
+        --compliance-genesis-input-file "$compliance_genesis_input_file"
+    )
+fi
 pd_cargo_args=()
 case "${SHIELDD_PD_INTEGRATION_DEV_SRS:-0}" in
     0)
@@ -41,7 +55,7 @@ else
         --chain-id shieldd-local-devnet \
         --epoch-duration 302400 \
         --gas-price-simple 1000 \
-        --compliance-registrar-vk-hex "$compliance_dev_registrar_vk_hex" \
+        "${compliance_genesis_args[@]}" \
         --timeout-commit 500ms \
         --tendermint-rpc-bind "0.0.0.0:${SHIELDD_COMETBFT_RPC_PORT}" \
         --tendermint-p2p-bind "0.0.0.0:${SHIELDD_COMETBFT_P2P_PORT}" \

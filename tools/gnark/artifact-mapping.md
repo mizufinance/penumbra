@@ -18,5 +18,5 @@ The prover daemon and shared library use the same registry and witness ABI.
 Runtime configuration may select a transport and artifact directory but cannot
 replace consensus verifying keys.
 
-`historical_generation_indexed_v2/` is an unsafe development fixture for the
+`historical_generation_indexed/` is an unsafe development fixture for the
 historical nullifier prototype. It is not part of the deployed family registry.

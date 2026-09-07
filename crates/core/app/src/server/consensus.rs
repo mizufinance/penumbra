@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
+use prost::bytes::Bytes;
 use sha2::Digest as _;
 
 use cnidarium::Storage;
@@ -19,6 +20,7 @@ use crate::app::App;
 use crate::block_tx_indexing::BlockTxIndexingMode;
 use crate::metrics;
 use crate::stateless_cache::StatelessCache;
+use shieldd_sdk_transaction::Transaction;
 
 pub struct Consensus {
     queue: mpsc::Receiver<Message<Request, Response, tower::BoxError>>,
@@ -29,6 +31,8 @@ pub struct Consensus {
     current_block_delivered_txs: usize,
     prepared_proposal_height: Option<u64>,
     prepared_proposal_digests: HashSet<[u8; 32]>,
+    approved_internal_tx_height: Option<u64>,
+    approved_internal_txs: Vec<Bytes>,
     aggregate_retry_cache: Option<crate::app::CachedProposalAggregate>,
 }
 
@@ -89,7 +93,29 @@ impl Consensus {
             current_block_delivered_txs: 0,
             prepared_proposal_height: None,
             prepared_proposal_digests: HashSet::new(),
+            approved_internal_tx_height: None,
+            approved_internal_txs: Vec::new(),
             aggregate_retry_cache: None,
+        }
+    }
+
+    fn aggregate_bundle_tail(txs: &[Bytes]) -> Option<Bytes> {
+        let bytes = txs.last()?.clone();
+        let tx = Transaction::decode_canonical(bytes.as_ref()).ok()?;
+        App::ensure_aggregate_bundle_tx_shape(&tx).ok()?;
+        Some(bytes)
+    }
+
+    fn approve_internal_tx(&mut self, height: u64, tx: Option<Bytes>) {
+        let Some(tx) = tx else {
+            return;
+        };
+        if self.approved_internal_tx_height != Some(height) {
+            self.approved_internal_tx_height = Some(height);
+            self.approved_internal_txs.clear();
+        }
+        if !self.approved_internal_txs.contains(&tx) {
+            self.approved_internal_txs.push(tx);
         }
     }
 
@@ -255,6 +281,7 @@ impl Consensus {
         self.aggregate_retry_cache = tmp_app.aggregate_retry_cache();
         let response_digest = Self::proposal_digest(&response.txs);
         self.prepared_proposal_digests.insert(response_digest);
+        self.approve_internal_tx(proposal_height, Self::aggregate_bundle_tail(&response.txs));
         let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
         let included_tx_count = response.txs.len();
         let included_tx_bytes = response.txs.iter().map(|tx| tx.len()).sum::<usize>();
@@ -288,6 +315,7 @@ impl Consensus {
         );
         Self::record_block_tx_count("processed", proposal_tx_count);
         let proposal_digest = Self::proposal_digest(&proposal.txs);
+        let aggregate_bundle_tail = Self::aggregate_bundle_tail(&proposal.txs);
         if can_reuse_prepared_proposal(
             self.prepared_proposal_height,
             &self.prepared_proposal_digests,
@@ -304,6 +332,7 @@ impl Consensus {
                 "process_proposal_finish"
             );
             Self::record_phase_duration("process_proposal", started);
+            self.approve_internal_tx(proposal_height, aggregate_bundle_tail);
             return Ok(response::ProcessProposal::Accept);
         }
         // Proposal validation applies effects to an isolated state fork.
@@ -318,6 +347,9 @@ impl Consensus {
             response::ProcessProposal::Reject => "reject",
             response::ProcessProposal::Unknown => "unknown",
         };
+        if matches!(response, response::ProcessProposal::Accept) {
+            self.approve_internal_tx(proposal_height, aggregate_bundle_tail);
+        }
         tracing::info!(
             height = proposal_height,
             verdict,
@@ -337,6 +369,11 @@ impl Consensus {
         // We don't need to print the block height, because it will already be
         // included in the span modeling the abci request handling.
         tracing::info!(time = ?begin_block.header.time, "beginning block");
+        let block_height = begin_block.header.height.value() as u64;
+        if self.approved_internal_tx_height != Some(block_height) {
+            self.approved_internal_tx_height = None;
+            self.approved_internal_txs.clear();
+        }
         self.current_block_delivered_txs = 0;
         self.prepared_proposal_height = None;
         self.prepared_proposal_digests.clear();
@@ -349,6 +386,17 @@ impl Consensus {
     }
 
     async fn deliver_tx(&mut self, deliver_tx: request::DeliverTx) -> response::DeliverTx {
+        if let Some(index) = self
+            .approved_internal_txs
+            .iter()
+            .position(|approved| approved == &deliver_tx.tx)
+        {
+            self.approved_internal_txs.swap_remove(index);
+            self.current_block_delivered_txs += 1;
+            tracing::debug!("delivered approved aggregate bundle transaction");
+            return response::DeliverTx::default();
+        }
+
         // Unlike the other messages, DeliverTx is fallible, so
         // inspect the response to report errors.
         let rsp = self
@@ -409,6 +457,8 @@ impl Consensus {
         self.last_commit_finished_at = Some(Instant::now());
         self.prepared_proposal_height = None;
         self.prepared_proposal_digests.clear();
+        self.approved_internal_tx_height = None;
+        self.approved_internal_txs.clear();
         self.aggregate_retry_cache = None;
 
         Ok(response::Commit {

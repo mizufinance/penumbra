@@ -561,7 +561,7 @@ mod tests {
         ) -> anyhow::Result<GenerationNonmembershipProof> {
             let proof_json = include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../tools/gnark/artifacts/historical_generation_indexed_v2/sample_generation_proof.json"
+                "/../../tools/gnark/artifacts/historical_generation_indexed/sample_generation_proof.json"
             ));
             Ok(GenerationNonmembershipProof {
                 generation_index: archived.generation_index,

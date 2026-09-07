@@ -564,7 +564,7 @@ mod tests {
 
         assert!(
             dk.try_decrypt_detection(&epk, &ciphertext, &alias).is_err(),
-            "V16 word 0 must bind the exact asset independently of the flag"
+            "ciphertext word 0 must bind the exact asset independently of the flag"
         );
     }
 }

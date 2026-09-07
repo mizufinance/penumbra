@@ -1,5 +1,5 @@
 {
-  "schema": "shieldd.note_reshape_families.v1",
+  "schema": "shieldd.note_reshape_families",
   "families": [
     {
       "id": 2,

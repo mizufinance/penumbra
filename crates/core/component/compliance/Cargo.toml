@@ -22,14 +22,17 @@ component = [
 default = ["component"]
 sqlite-bundled = ["rusqlite/bundled"]
 test-helpers = ["decaf377-ka"]
-poc-orbis-v0 = ["dep:aes-gcm", "dep:hkdf"]
+poc-orbis = ["dep:aes-gcm", "dep:hkdf"]
+
+[[example]]
+name = "dev_orbis_registration"
+required-features = ["test-helpers"]
 
 [dependencies]
 anyhow = {workspace = true}
 aes-gcm = {version = "0.10", optional = true}
 ark-ff = {workspace = true}
 base64 = {workspace = true}
-ark-serialize = {workspace = true}
 async-trait = {workspace = true}
 bincode = {workspace = true}
 cnidarium = {workspace = true, optional = true, default-features = true}
@@ -62,6 +65,7 @@ tonic = {workspace = true, optional = true}
 tracing = {workspace = true}
 
 [dev-dependencies]
+ark-serialize = {workspace = true}
 decaf377-ka = {workspace = true}
 shieldd-sdk-keys = {workspace = true, features = ["demo"]}
 rand = {workspace = true}

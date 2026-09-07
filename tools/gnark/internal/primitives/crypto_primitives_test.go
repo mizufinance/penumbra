@@ -263,13 +263,14 @@ type noteCommitmentDerivationCircuit struct {
 	In2    frontend.Variable
 	In3    frontend.Variable
 	In4    frontend.Variable
+	In5    frontend.Variable
 
 	Expected frontend.Variable `gnark:",public"`
 }
 
 func (c *noteCommitmentDerivationCircuit) Define(api frontend.API) error {
-	result, err := Poseidon377Hash5(api, c.Domain, [5]frontend.Variable{
-		c.In0, c.In1, c.In2, c.In3, c.In4,
+	result, err := Poseidon377Hash6(api, c.Domain, [6]frontend.Variable{
+		c.In0, c.In1, c.In2, c.In3, c.In4, c.In5,
 	})
 	if err != nil {
 		return err
@@ -283,7 +284,7 @@ func TestNoteCommitmentDerivationMatchesShielddVectors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load vectors: %v", err)
 	}
-	if got, want := len(vectors.Poseidon377.NoteCommitInputs), 5; got != want {
+	if got, want := len(vectors.Poseidon377.NoteCommitInputs), 6; got != want {
 		t.Fatalf("note commit input length mismatch: got %d want %d", got, want)
 	}
 
@@ -294,6 +295,7 @@ func TestNoteCommitmentDerivationMatchesShielddVectors(t *testing.T) {
 		In2:      vectors.Poseidon377.NoteCommitInputs[2],
 		In3:      vectors.Poseidon377.NoteCommitInputs[3],
 		In4:      vectors.Poseidon377.NoteCommitInputs[4],
+		In5:      vectors.Poseidon377.NoteCommitInputs[5],
 		Expected: vectors.Poseidon377.NoteCommitOutput,
 	}
 
@@ -323,9 +325,9 @@ func (c *noteReshapeStatementSeamCircuit) Define(api frontend.API) error {
 	var label string
 	var nIn, nOut int
 	switch len(c.Fields) {
-	case 32:
+	case 33:
 		label, nIn, nOut = "note_reshape8x1", 8, 1
-	case 18:
+	case 26:
 		label, nIn, nOut = "note_reshape1x8", 1, 8
 	default:
 		return fmt.Errorf("unsupported note reshape statement field count %d", len(c.Fields))

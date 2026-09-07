@@ -26,6 +26,7 @@ pub fn witness(asset_id: asset::Id, sender: &Address) -> ActionWitness {
             path,
             is_regulated: false,
         },
+        policy: None,
         user_root,
         sender,
     }
@@ -45,7 +46,6 @@ pub fn transfer_context(spend: &ShieldedInputPlan, recipient: &Address) -> Trans
     TransferContext {
         witness: witness(spend.note.asset_id(), &spend.note.address()),
         recipient: user_witness(spend.note.asset_id(), recipient),
-        policy: None,
         timestamp: TIMESTAMP,
         nonce: Fr::rand(&mut rand_core::OsRng),
     }
@@ -63,11 +63,38 @@ pub fn transfer(
             .context("fixture requires an output")?
             .dest_address,
     );
+    let volume_accumulator = crate::VolumeAccumulatorPlan::padding(context.timestamp);
     TransferPlan::new(
         spends,
         outputs,
         blinding,
         context,
+        volume_accumulator,
+        crate::TransferProofContext::Ordinary,
+        crate::discovery::Parameters::default(),
+    )
+}
+
+pub fn fee_funding(
+    spends: Vec<ShieldedInputPlan>,
+    outputs: Vec<ShieldedOutputPlan>,
+    blinding: Fr,
+) -> Result<TransferPlan> {
+    let context = transfer_context(
+        spends.first().context("fixture requires a spend")?,
+        &outputs
+            .first()
+            .context("fixture requires an output")?
+            .dest_address,
+    );
+    let volume = crate::VolumeAccumulatorPlan::padding(context.timestamp);
+    TransferPlan::new(
+        spends,
+        outputs,
+        blinding,
+        context,
+        volume,
+        crate::TransferProofContext::FeeFunding,
         crate::discovery::Parameters::default(),
     )
 }
@@ -108,12 +135,14 @@ pub fn ics20_withdrawal(
     blinding: Fr,
 ) -> Result<ShieldedIcs20WithdrawalPlan> {
     let context = withdrawal_context(spends.first().context("fixture requires a spend")?);
+    let volume_accumulator = crate::VolumeAccumulatorPlan::padding(context.timestamp);
     ShieldedIcs20WithdrawalPlan::new(
         spends,
         change,
         withdrawal,
         blinding,
         context,
+        volume_accumulator,
         crate::discovery::Parameters::default(),
     )
 }
@@ -125,12 +154,14 @@ pub fn host_withdrawal(
     blinding: Fr,
 ) -> Result<ShieldedHostWithdrawalPlan> {
     let context = withdrawal_context(spends.first().context("fixture requires a spend")?);
+    let volume_accumulator = crate::VolumeAccumulatorPlan::padding(context.timestamp);
     ShieldedHostWithdrawalPlan::new(
         spends,
         change,
         withdrawal,
         blinding,
         context,
+        volume_accumulator,
         crate::discovery::Parameters::default(),
     )
 }

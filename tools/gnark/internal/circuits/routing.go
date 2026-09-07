@@ -20,10 +20,10 @@ func routingDomain(label string) *big.Int {
 }
 
 var (
-	routeDomain       = routingDomain("shieldd.discovery.route.v2")
-	tagRandomDomain   = routingDomain("shieldd.discovery.tag_random.v2")
-	permutationDomain = routingDomain("shieldd.discovery.permutation.v2")
-	parametersDomain  = routingDomain("shieldd.discovery.parameters.v2")
+	routeDomain       = routingDomain("shieldd.discovery.route")
+	tagRandomDomain   = routingDomain("shieldd.discovery.tag_random")
+	permutationDomain = routingDomain("shieldd.discovery.permutation")
+	parametersDomain  = routingDomain("shieldd.discovery.parameters")
 )
 
 func routingPrecisionBits(
@@ -140,7 +140,7 @@ func verifyRoutingAssetRegistry(
 	trace(
 		"gadget.asset_registry_params_hash",
 		"dk_pub_fq=asset.leaf.dk_pub_fq",
-		"threshold=asset.leaf.threshold",
+		"daily_volume_limit=asset.leaf.daily_volume_limit",
 		"route_policy_hash=asset.leaf.route_policy_hash",
 		"out=asset.leaf.params_hash",
 	)
@@ -149,7 +149,7 @@ func verifyRoutingAssetRegistry(
 		MustBigInt(vectors.Poseidon377.IMTParamsDomain),
 		[3]frontend.Variable{
 			dkPubFq,
-			asset.Leaf.Threshold,
+			asset.Leaf.DailyVolumeLimit,
 			asset.Leaf.RoutePolicyHash,
 		},
 	)
@@ -334,7 +334,7 @@ func (c *TransferCircuit) verifyTransferRouting(
 	api frontend.API,
 	shared *transferSharedContext,
 	statementData *transferStatementData,
-) error {
+) (frontend.Variable, error) {
 	c.traceWiring(
 		"routing.precision.select",
 		"regulated=regulated_precision",
@@ -362,7 +362,7 @@ func (c *TransferCircuit) verifyTransferRouting(
 		},
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c.traceWiring(
 		"routing.parameters.bind",
@@ -384,7 +384,7 @@ func (c *TransferCircuit) verifyTransferRouting(
 	)
 	senderWord, err := Poseidon377Hash1(api, routeDomain, shared.senderTransmissionFq)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c.traceWiring(
 		"routing.route_word",
@@ -394,7 +394,7 @@ func (c *TransferCircuit) verifyTransferRouting(
 	)
 	receiverWord, err := Poseidon377Hash1(api, routeDomain, statementData.receiverTransmissionFq)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c.traceWiring(
 		"routing.permutation.hash",
@@ -403,7 +403,7 @@ func (c *TransferCircuit) verifyTransferRouting(
 	)
 	permutationWord, err := routingPermutationWord(api, c.Compliance.TransferNonceRoot)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c.traceWiring(
 		"routing.permutation.compose",
@@ -443,8 +443,8 @@ func (c *TransferCircuit) verifyTransferRouting(
 			publicTagBits,
 		)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return swapped, nil
 }

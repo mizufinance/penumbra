@@ -411,7 +411,7 @@ mod tests {
         // with the following synthetic blinding factor:
         let b0 = b1 - b2 - b3 + b4 + b5 - b6;
 
-        // so c0 = 0 * G_v1 + 0 * G_v2 + b0 * H
+        // so c0 = 0 * G_pen + 0 * G_atom + b0 * H
         assert_eq!(c0.0, b0 * VALUE_BLINDING_GENERATOR.deref());
 
         // Now we do the same, but using the `Balance` structure.

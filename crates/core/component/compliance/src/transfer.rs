@@ -5,7 +5,10 @@ use shieldd_sdk_asset::Value;
 use shieldd_sdk_keys::Address;
 
 use crate::{
-    crypto::{compliance_stream_block, encrypt_tier_bytes, ISSUER_DETECTION_DOMAIN},
+    crypto::{
+        compliance_stream_block, encrypt_tier_bytes, transfer_key_confirmation,
+        ISSUER_DETECTION_DOMAIN,
+    },
     issuer_keys::detection_flag_plaintext,
     structs::{C2_BYTES, DETECTION_TAG_BYTES, EPK_BYTES, FQ_BYTES},
 };
@@ -20,6 +23,7 @@ pub const TRANSFER_CIPHERTEXT_FQS: usize = TRANSFER_DETECTION_FQS
     + TRANSFER_EXT_CIPHERTEXT_FQS;
 pub const TRANSFER_WIRE_BYTES: usize = EPK_BYTES * 4
     + C2_BYTES * 4
+    + FQ_BYTES * 2
     + DETECTION_TAG_BYTES
     + FQ_BYTES * TRANSFER_CORE_CIPHERTEXT_FQS
     + FQ_BYTES * TRANSFER_EXT_CIPHERTEXT_FQS
@@ -36,6 +40,8 @@ pub struct TransferComplianceCiphertext {
     pub sender_ext_c2: Fq,
     pub output_core_c2: Fq,
     pub output_ext_c2: Fq,
+    pub sender_core_key_confirmation: Fq,
+    pub output_core_key_confirmation: Fq,
     pub detection_tag: [u8; DETECTION_TAG_BYTES],
     pub encrypted_sender_core: [u8; FQ_BYTES * TRANSFER_CORE_CIPHERTEXT_FQS],
     pub encrypted_sender_ext: [u8; FQ_BYTES * TRANSFER_EXT_CIPHERTEXT_FQS],
@@ -53,6 +59,8 @@ pub struct TransferCompliancePublicInputs {
     pub sender_ext_c2: Fq,
     pub output_core_c2: Fq,
     pub output_ext_c2: Fq,
+    pub sender_core_key_confirmation: Fq,
+    pub output_core_key_confirmation: Fq,
     pub detection_ciphertext: [Fq; TRANSFER_DETECTION_FQS],
     pub sender_core_ciphertext: [Fq; TRANSFER_CORE_CIPHERTEXT_FQS],
     pub sender_ext_ciphertext: [Fq; TRANSFER_EXT_CIPHERTEXT_FQS],
@@ -99,6 +107,8 @@ impl TransferComplianceCiphertext {
         bytes.extend_from_slice(&self.sender_ext_c2.to_bytes());
         bytes.extend_from_slice(&self.output_core_c2.to_bytes());
         bytes.extend_from_slice(&self.output_ext_c2.to_bytes());
+        bytes.extend_from_slice(&self.sender_core_key_confirmation.to_bytes());
+        bytes.extend_from_slice(&self.output_core_key_confirmation.to_bytes());
         bytes.extend_from_slice(&self.detection_tag);
         bytes.extend_from_slice(&self.encrypted_sender_core);
         bytes.extend_from_slice(&self.encrypted_sender_ext);
@@ -156,6 +166,8 @@ impl TransferComplianceCiphertext {
         let sender_ext_c2 = read_fq(&mut offset)?;
         let output_core_c2 = read_fq(&mut offset)?;
         let output_ext_c2 = read_fq(&mut offset)?;
+        let sender_core_key_confirmation = read_fq(&mut offset)?;
+        let output_core_key_confirmation = read_fq(&mut offset)?;
 
         let detection_tag: [u8; DETECTION_TAG_BYTES] = read_fq_words(
             &mut offset,
@@ -202,6 +214,8 @@ impl TransferComplianceCiphertext {
             sender_ext_c2,
             output_core_c2,
             output_ext_c2,
+            sender_core_key_confirmation,
+            output_core_key_confirmation,
             detection_tag,
             encrypted_sender_core,
             encrypted_sender_ext,
@@ -230,6 +244,8 @@ impl TransferComplianceCiphertext {
             sender_ext_c2: self.sender_ext_c2,
             output_core_c2: self.output_core_c2,
             output_ext_c2: self.output_ext_c2,
+            sender_core_key_confirmation: self.sender_core_key_confirmation,
+            output_core_key_confirmation: self.output_core_key_confirmation,
             detection_ciphertext: decode_fqs(&self.detection_tag),
             sender_core_ciphertext: decode_fqs(&self.encrypted_sender_core),
             sender_ext_ciphertext: decode_fqs(&self.encrypted_sender_ext),
@@ -260,6 +276,8 @@ pub fn encrypt_transfer(
     receiver_value: Value,
     is_flagged: bool,
     detection_salt: Fq,
+    sender_core_salt: Fq,
+    output_core_salt: Fq,
 ) -> Result<TransferEncryptionResult> {
     let sender = PartyTierMaterial {
         core: TierSecretMaterial {
@@ -312,6 +330,16 @@ pub fn encrypt_transfer(
     let sender_ext_c2 = sender.ext.seed + sender_ext_shared.vartime_compress_to_field();
     let output_core_c2 = output.core.seed + output_core_shared.vartime_compress_to_field();
     let output_ext_c2 = output.ext.seed + output_ext_shared.vartime_compress_to_field();
+    let sender_core_key_confirmation = transfer_key_confirmation(
+        sender.core.seed,
+        sender_core_epk.vartime_compress_to_field(),
+        sender_core_salt,
+    );
+    let output_core_key_confirmation = transfer_key_confirmation(
+        output.core.seed,
+        output_core_epk.vartime_compress_to_field(),
+        output_core_salt,
+    );
 
     let ss_detection = *dk_pub * sender.core.r;
     let sender_core_epk_fq = sender_core_epk.vartime_compress_to_field();
@@ -358,6 +386,8 @@ pub fn encrypt_transfer(
             sender_ext_c2,
             output_core_c2,
             output_ext_c2,
+            sender_core_key_confirmation,
+            output_core_key_confirmation,
             detection_tag,
             encrypted_sender_core,
             encrypted_sender_ext,
@@ -439,6 +469,8 @@ mod tests {
             sender_ext_c2: Fq::from(0u64),
             output_core_c2: Fq::from(0u64),
             output_ext_c2: Fq::from(0u64),
+            sender_core_key_confirmation: Fq::from(0u64),
+            output_core_key_confirmation: Fq::from(0u64),
             detection_tag: [0; DETECTION_TAG_BYTES],
             encrypted_sender_core: [0; FQ_BYTES * TRANSFER_CORE_CIPHERTEXT_FQS],
             encrypted_sender_ext: [0; FQ_BYTES * TRANSFER_EXT_CIPHERTEXT_FQS],
@@ -454,7 +486,7 @@ mod tests {
             .expect("canonical transfer ciphertext must decode");
 
         let ciphertext_offset = 4 * EPK_BYTES + 4 * C2_BYTES;
-        for word in 0..TRANSFER_CIPHERTEXT_FQS {
+        for word in 0..(2 + TRANSFER_CIPHERTEXT_FQS) {
             let mut noncanonical = canonical.clone();
             let start = ciphertext_offset + word * FQ_BYTES;
             noncanonical[start..start + FQ_BYTES].fill(0xff);
@@ -463,5 +495,18 @@ mod tests {
                 "noncanonical transfer ciphertext word {word} must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn transfer_ciphertext_roundtrip_preserves_key_confirmations() {
+        let mut ciphertext = canonical_ciphertext();
+        ciphertext.sender_core_key_confirmation = Fq::from(41u64);
+        ciphertext.output_core_key_confirmation = Fq::from(42u64);
+
+        let encoded = ciphertext.to_bytes();
+        assert_eq!(encoded.len(), TRANSFER_WIRE_BYTES);
+        let decoded = TransferComplianceCiphertext::from_bytes(&encoded).unwrap();
+        assert_eq!(decoded.sender_core_key_confirmation, Fq::from(41u64));
+        assert_eq!(decoded.output_core_key_confirmation, Fq::from(42u64));
     }
 }

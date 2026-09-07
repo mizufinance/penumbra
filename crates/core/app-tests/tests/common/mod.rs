@@ -38,7 +38,7 @@ pub async fn register_test_users_for_compliance<S: StateWrite>(
 ) -> anyhow::Result<()> {
     for address in addresses {
         for &asset_id in asset_ids {
-            let leaf = ComplianceLeaf::new(address.clone(), asset_id);
+            let leaf = ComplianceLeaf::synthetic_unregulated(address.clone(), asset_id);
             state.test_only_add_compliance_leaf(leaf).await?;
         }
     }
@@ -66,7 +66,7 @@ pub async fn state_with_compliance_for_build(
     // Register users with real d (matching what the circuit derives from the address)
     for address in addresses {
         for &asset_id in asset_ids {
-            let leaf = ComplianceLeaf::new(address.clone(), asset_id);
+            let leaf = ComplianceLeaf::synthetic_unregulated(address.clone(), asset_id);
             delta.test_only_add_compliance_leaf(leaf).await?;
         }
     }

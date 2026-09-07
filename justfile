@@ -69,9 +69,17 @@ gnark-proof-tests-fast:
     cargo test -p shieldd-sdk-shielded-pool gnark:: --lib
     cargo test -p shieldd-sdk-shielded-pool public_input_hash:: --lib
 
+# Exercise the note-seizure daemon, consensus verifier, and host state transition.
+note-seizure-proof-tests:
+    mkdir -p target/gnark-test
+    cd tools/gnark && go build -o ../../target/gnark-test/proverdaemon ./cmd/proverdaemon
+    SHIELDD_GNARK_NOTE_SEIZURE_DAEMON="$PWD/target/gnark-test/proverdaemon" SHIELDD_GNARK_NOTE_SEIZURE_ARTIFACT_DIR="$PWD/tools/gnark/artifacts/note_seizure" cargo test --release -p shieldd-sdk-shielded-pool gnark::note_seizure::tests::gnark_daemon_proof_note_seizure_roundtrip --lib -- --exact --ignored --test-threads=1
+    SHIELDD_GNARK_NOTE_SEIZURE_DAEMON="$PWD/target/gnark-test/proverdaemon" SHIELDD_GNARK_NOTE_SEIZURE_ARTIFACT_DIR="$PWD/tools/gnark/artifacts/note_seizure" cargo test --release -p shieldd-sdk-app app::host::tests::note_seizure_verifies_capsule_release_and_commits_once --lib -- --exact --ignored --test-threads=1
+
 # Run the slow end-to-end gnark proof-generation suite.
 gnark-proof-tests-slow:
     python3 scripts/proof_artifacts.py materialize --bundle runtime
+    just note-seizure-proof-tests
     bash scripts/gnark-proof-tests-slow.sh
 
 # Run ignored slow SnarkPack parity tests.

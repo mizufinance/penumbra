@@ -16,8 +16,8 @@ nullifier, and value constraints are tracked in
 - Policy admission rejects identity detection and ring keys before the asset
   leaf can enter durable registry state.
 - Unregulated values select fixed sink ring/DK points and empty-string policy
-  hashes. Their authenticated predecessor-leaf threshold remains a comparator
-  input but cannot affect the regulation-gated flag.
+  hashes. Their authenticated predecessor-leaf daily limit remains in the
+  fixed witness but cannot enable accumulation or disclosure.
 - `is_regulated` is boolean and cannot be chosen independently of the tree.
 - Mutation coverage: regulated/unregulated fixtures, bad gap bounds, wrong
   asset leaf, and selected-policy field changes.
@@ -29,7 +29,7 @@ nullifier, and value constraints are tracked in
   matches native key/address allocation and prevents identity-DTK ownership
   aliasing; it is not merely an honest-construction precondition.
 - Regulated transfers bind the diversified generator, transmission key, asset
-  id, canonical address-derived `d`, and status into version-5 compliance-leaf
+  ID, capability, RNK commitment, and lifecycle into compliance-leaf
   commitments under the accepted compliance anchor.
 - Native registration rejects a derived `d = 0`, preventing an identity ACK.
 - Regulated sender and receiver statuses must both equal `Active`.
@@ -39,18 +39,23 @@ nullifier, and value constraints are tracked in
 - Mutation coverage: leaf fields, paths, positions, anchor, derivation, and ACK
   inputs.
 
-### Threshold And Detection
+### Daily Volume And Detection
 
-- The flag is exactly
-  `is_regulated * (amount >= authenticated_leaf_threshold)`.
-- An unregulated transfer is therefore never flagged, including when its
-  receiver amount is `u128::MAX`.
+- An eligible real transition proves a canonical day origin or SCT predecessor,
+  checked `u128` addition, and `candidate <= daily_volume_limit`.
+- Eligible padding means disclosure; ineligible padding remains unflagged.
+- An unregulated transfer is never flagged, including when its receiver amount
+  is `u128::MAX`.
+- UTC midnight alone selects the next day, and fee funding is constrained
+  to its statement-bound disabled context.
 - Detection encryption is unconditional and uses the selected DK shared secret,
-  sender-core EPK, asset id, detection salt, canonical flag, and reserved zero.
-- Address candidate filtering uses the separate proof-bound routing tags.
+  sender-core EPK, asset ID/flag, and detection salt.
+- The exact plaintext order is asset, salt, flag, reserved zero. The flag is
+  boolean and no slot, role permutation, derivation, or address index appears.
 - The detection ciphertext is part of the public statement.
-- Mutation coverage: threshold boundary, flag, reserved word, salt, EPK, and each
-  detection ciphertext word.
+- Mutation coverage: origin, continuation, exact limit, over-limit candidate,
+  successor amount, transition mode, timestamp decomposition, flag, reserved
+  word, salt, EPK, and each detection ciphertext word.
 
 ### Audit-Tier Encryption
 
@@ -60,6 +65,8 @@ nullifier, and value constraints are tracked in
   `c2 = seed + compress(shared_secret)`, and every Poseidon stream word.
 - These equations are unconditional in both regulated and unregulated branches.
 - Each tier uses an independent witness randomizer and EPK.
+- Every published tier EPK is constrained outside both Decaf identity
+  representatives.
 - Honest construction rejection-samples each tier scalar until nonzero.
 - Address tiers encrypt the canonical two-field, 64-byte address encoding split
   into 31-byte words. The circuit's native binary decomposition enforces
@@ -73,8 +80,8 @@ nullifier, and value constraints are tracked in
 
 ### Factored Metadata
 
-- One metadata record binds exactly 9 facts: four selected policy hashes,
-  `target_timestamp`, and four tier salts.
+- One metadata record binds exactly nine facts: four selected policy hashes,
+  `target_timestamp`, and four tier salts. It publishes no subject derivation.
 - The four salts are structural tier domains in the fixed tier order.
 - The serialized record is exactly 264 bytes: eight canonical Fq encodings plus
   one little-endian u64.
@@ -85,12 +92,13 @@ nullifier, and value constraints are tracked in
 
 ### Public Statement
 
-- Rust and Go reconstruct the same 45-field preimage.
-- The statement hash domain is transfer `v7`.
+- Rust and Go reconstruct the same 53-field preimage.
+- The statement hash uses the canonical transfer domain.
 - The preimage binds the consensus recent-position floor and one
   `history_required` bit per spend.
-- The public tail commits all eight non-duplicate metadata Fq values.
-- ABI tests reject stale witness versions and wrong vector lengths.
+- The public tail commits both core key confirmations and all eight
+  non-duplicate metadata Fq values.
+- ABI tests reject malformed headers and wrong vector lengths.
 - Differential tests compare native Rust/Go reconstruction, circuit public
   assignment, and statement hash.
 
@@ -107,16 +115,17 @@ nullifier, and value constraints are tracked in
 - Spend signatures cover a Transfer effect hash containing the exact receiver
   ciphertext and metadata; delegated construction cannot replace those bytes
   after authorization.
-- Transaction-wide nullifier insertion and the binding signature remain
-  external acceptance requirements.
+- Transaction-wide spend-nullifier insertion, temporary scoped daily-volume
+  nullifier insertion, and the binding signature remain external acceptance
+  requirements.
 
 ### Wire Shape
 
-- Only the receiver output may carry the 640-byte ciphertext and 264-byte
+- Only the receiver output may carry the 704-byte ciphertext and 264-byte
   metadata.
 - Inputs and the change output carry neither.
 - Point and Fq decoders reject noncanonical values and wrong lengths.
-- The wire contains no upload bundle, PRE envelope, shared point, or DLEQ proof.
+- The wire contains no capsule-release evidence, shared point, or DLEQ proof.
 
 ## Scanner And Evidence Checks
 
@@ -131,7 +140,7 @@ nullifier, and value constraints are tracked in
 - `scanner_ciphertexts` stores the exact accepted ciphertext and optional
   metadata bytes.
 - `validate_and_save_evidence_object` requires both to match evidence exactly.
-- Detection asset, flag, and salt facts must match the persisted
+- Detection asset, flag, salt, and reserved-zero facts must match the persisted
   detection row.
 - Failures are persisted with bounded attacker-controlled reason text.
 
@@ -139,6 +148,5 @@ nullifier, and value constraints are tracked in
 
 - Audit completion requires `evidence_valid`.
 - Flagged rows may complete through issuer-DK tier decryption.
-- The scanner exposes no PRE export/import interface.
-- Unflagged ACK-tier audit therefore cannot complete until a confidentiality-
-  safe PRE v1 is specified, circuit-bound, and reviewed.
+- No scanner capsule-release import workflow is exposed. Unflagged ACK-tier audit therefore
+  remains incomplete even when transaction evidence is valid.

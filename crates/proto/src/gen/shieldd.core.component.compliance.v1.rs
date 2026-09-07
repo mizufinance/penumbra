@@ -41,12 +41,24 @@ pub struct ComplianceLeaf {
     /// The asset ID this compliance leaf applies to.
     #[prost(message, optional, tag = "2")]
     pub asset_id: ::core::option::Option<super::super::super::asset::v1::AssetId>,
-    /// Orbis scalar derived from the full canonical address bytes and verified at registration.
+    /// Ordinary-Orbis address capability for this asset's ring.
     #[prost(bytes = "vec", tag = "3")]
-    pub d: ::prost::alloc::vec::Vec<u8>,
+    pub capk: ::prost::alloc::vec::Vec<u8>,
+    /// Orbis ring public key evaluated on this address's diversified generator.
+    #[prost(bytes = "vec", tag = "4")]
+    pub rnk_dh_pk: ::prost::alloc::vec::Vec<u8>,
+    /// Poseidon commitment to the regulated nullifier key derivable by the wallet and daily_volume_limit Orbis.
+    #[prost(bytes = "vec", tag = "5")]
+    pub rnk_commitment: ::prost::alloc::vec::Vec<u8>,
     /// Current authorization state for this address and asset.
-    #[prost(enumeration = "UserAssetStatus", tag = "4")]
+    #[prost(enumeration = "UserAssetStatus", tag = "6")]
     pub status: i32,
+    /// Monotonic freeze generation. Zero until the first freeze.
+    #[prost(uint64, tag = "7")]
+    pub freeze_generation: u64,
+    /// Block height at which the current freeze generation began. Zero unless frozen or seized.
+    #[prost(uint64, tag = "8")]
+    pub frozen_since_height: u64,
 }
 impl ::prost::Name for ComplianceLeaf {
     const NAME: &'static str = "ComplianceLeaf";
@@ -70,9 +82,9 @@ pub struct MsgRegisterAsset {
     /// Issuer's detection key public (32 bytes, optional).
     #[prost(bytes = "vec", tag = "3")]
     pub dk_pub: ::prost::alloc::vec::Vec<u8>,
-    /// Amount threshold for flagging (16 bytes, little-endian u128).
+    /// Daily undisclosed-volume limit (16-byte little-endian u128).
     #[prost(bytes = "vec", tag = "4")]
-    pub threshold: ::prost::alloc::vec::Vec<u8>,
+    pub daily_volume_limit: ::prost::alloc::vec::Vec<u8>,
     /// Direct IBC routes allowed for this regulated asset. Empty = IBC blocked.
     #[prost(message, repeated, tag = "5")]
     pub allowed_ibc_routes: ::prost::alloc::vec::Vec<IbcRoute>,
@@ -102,6 +114,11 @@ pub struct MsgRegisterAsset {
     /// External IBC origin for a regulated voucher asset, if any.
     #[prost(message, optional, tag = "13")]
     pub ibc_origin: ::core::option::Option<IbcAssetOrigin>,
+    /// Immutable authority key that authorizes note seizures for this asset.
+    #[prost(message, optional, tag = "14")]
+    pub seizure_authority_vk: ::core::option::Option<
+        super::super::super::super::crypto::decaf377_rdsa::v1::SpendVerificationKey,
+    >,
 }
 impl ::prost::Name for MsgRegisterAsset {
     const NAME: &'static str = "MsgRegisterAsset";
@@ -123,7 +140,7 @@ pub struct AssetRegistrationGrantBody {
     #[prost(bytes = "vec", tag = "3")]
     pub dk_pub: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "4")]
-    pub threshold: ::prost::alloc::vec::Vec<u8>,
+    pub daily_volume_limit: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, repeated, tag = "5")]
     pub allowed_ibc_routes: ::prost::alloc::vec::Vec<IbcRoute>,
     #[prost(bytes = "vec", tag = "6")]
@@ -144,6 +161,10 @@ pub struct AssetRegistrationGrantBody {
     pub valid_until_unix: u64,
     #[prost(message, optional, tag = "13")]
     pub ibc_origin: ::core::option::Option<IbcAssetOrigin>,
+    #[prost(message, optional, tag = "14")]
+    pub seizure_authority_vk: ::core::option::Option<
+        super::super::super::super::crypto::decaf377_rdsa::v1::SpendVerificationKey,
+    >,
 }
 impl ::prost::Name for AssetRegistrationGrantBody {
     const NAME: &'static str = "AssetRegistrationGrantBody";
@@ -272,6 +293,9 @@ pub struct MsgRegisterUser {
     /// Grant authorizing this registration.
     #[prost(message, optional, tag = "2")]
     pub grant: ::core::option::Option<UserRegistrationGrant>,
+    /// Orbis daily_volume_limit certificate for the address-diversified ring public key.
+    #[prost(message, optional, tag = "3")]
+    pub capability_certificate: ::core::option::Option<OrbisCapabilityCertificate>,
 }
 impl ::prost::Name for MsgRegisterUser {
     const NAME: &'static str = "MsgRegisterUser";
@@ -281,6 +305,29 @@ impl ::prost::Name for MsgRegisterUser {
     }
     fn type_url() -> ::prost::alloc::string::String {
         "/shieldd.core.component.compliance.v1.MsgRegisterUser".into()
+    }
+}
+/// DailyVolumeLimit-Orbis attestation for an address-diversified ring public key.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OrbisCapabilityCertificate {
+    /// Chain on which this certificate may be used.
+    #[prost(string, tag = "1")]
+    pub chain_id: ::prost::alloc::string::String,
+    /// FROST group commitment R.
+    #[prost(bytes = "vec", tag = "2")]
+    pub r_point: ::prost::alloc::vec::Vec<u8>,
+    /// Canonical FROST response scalar z.
+    #[prost(bytes = "vec", tag = "3")]
+    pub response: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for OrbisCapabilityCertificate {
+    const NAME: &'static str = "OrbisCapabilityCertificate";
+    const PACKAGE: &'static str = "shieldd.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "shieldd.core.component.compliance.v1.OrbisCapabilityCertificate".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/shieldd.core.component.compliance.v1.OrbisCapabilityCertificate".into()
     }
 }
 /// A Merkle path in the Quad Merkle Tree (arity 4).
@@ -349,14 +396,16 @@ pub struct ComplianceAssetStatusResponse {
     #[prost(bool, tag = "3")]
     pub is_regulated: bool,
     /// Optional: Issuer's detection key public (32 bytes compressed point).
-    /// Present if the asset has a threshold policy.
+    /// Present if the asset has a daily volume policy.
     #[prost(bytes = "vec", tag = "4")]
     pub dk_pub: ::prost::alloc::vec::Vec<u8>,
-    /// Amount threshold for flagging (16 bytes, little-endian u128).
-    /// Transfers at or above this amount are encrypted to issuer's DK instead of user's daily key.
+    /// Daily undisclosed-volume limit (16-byte little-endian u128).
+    /// Maximum accumulated undisclosed outgoing volume. A candidate above this
+    /// amount discloses only the current action to the issuer; equality remains
+    /// undisclosed. Compliance encryption uses per-action key material.
     /// u128::MAX means never flag.
     #[prost(bytes = "vec", tag = "5")]
-    pub threshold: ::prost::alloc::vec::Vec<u8>,
+    pub daily_volume_limit: ::prost::alloc::vec::Vec<u8>,
     /// Full asset policy for regulated assets.
     #[prost(message, optional, tag = "6")]
     pub asset_policy: ::core::option::Option<AssetPolicy>,
@@ -600,7 +649,7 @@ pub struct IndexedLeafData {
     #[prost(bytes = "vec", tag = "4")]
     pub dk_pub: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "5")]
-    pub threshold: ::prost::alloc::vec::Vec<u8>,
+    pub daily_volume_limit: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "6")]
     pub route_policy_hash: ::prost::alloc::vec::Vec<u8>,
     /// Orbis-decided policy (RingData)
@@ -632,7 +681,7 @@ pub struct AssetPolicy {
     #[prost(bytes = "vec", tag = "1")]
     pub dk_pub: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "2")]
-    pub threshold: ::prost::alloc::vec::Vec<u8>,
+    pub daily_volume_limit: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, repeated, tag = "3")]
     pub allowed_ibc_routes: ::prost::alloc::vec::Vec<IbcRoute>,
     /// RingData
@@ -652,6 +701,10 @@ pub struct AssetPolicy {
     >,
     #[prost(message, optional, tag = "10")]
     pub ibc_origin: ::core::option::Option<IbcAssetOrigin>,
+    #[prost(message, optional, tag = "11")]
+    pub seizure_authority_vk: ::core::option::Option<
+        super::super::super::super::crypto::decaf377_rdsa::v1::SpendVerificationKey,
+    >,
 }
 impl ::prost::Name for AssetPolicy {
     const NAME: &'static str = "AssetPolicy";
@@ -674,6 +727,9 @@ pub struct GenesisContent {
     >,
     #[prost(message, optional, tag = "3")]
     pub compliance_params: ::core::option::Option<ComplianceParameters>,
+    /// Active users that must exist before regulated genesis allocations are minted.
+    #[prost(message, repeated, tag = "4")]
+    pub user_registrations: ::prost::alloc::vec::Vec<GenesisUserRegistration>,
 }
 impl ::prost::Name for GenesisContent {
     const NAME: &'static str = "GenesisContent";
@@ -683,6 +739,24 @@ impl ::prost::Name for GenesisContent {
     }
     fn type_url() -> ::prost::alloc::string::String {
         "/shieldd.core.component.compliance.v1.GenesisContent".into()
+    }
+}
+/// Certified active user installed at genesis.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GenesisUserRegistration {
+    #[prost(message, optional, tag = "1")]
+    pub leaf: ::core::option::Option<ComplianceLeaf>,
+    #[prost(message, optional, tag = "2")]
+    pub capability_certificate: ::core::option::Option<OrbisCapabilityCertificate>,
+}
+impl ::prost::Name for GenesisUserRegistration {
+    const NAME: &'static str = "GenesisUserRegistration";
+    const PACKAGE: &'static str = "shieldd.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "shieldd.core.component.compliance.v1.GenesisUserRegistration".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/shieldd.core.component.compliance.v1.GenesisUserRegistration".into()
     }
 }
 /// Native asset registration configured at genesis.
@@ -698,6 +772,20 @@ pub struct NativeAssetRegistration {
     pub registration_authority_vk: ::core::option::Option<
         super::super::super::super::crypto::decaf377_rdsa::v1::SpendVerificationKey,
     >,
+    #[prost(message, optional, tag = "5")]
+    pub seizure_authority_vk: ::core::option::Option<
+        super::super::super::super::crypto::decaf377_rdsa::v1::SpendVerificationKey,
+    >,
+    #[prost(bytes = "vec", tag = "6")]
+    pub ring_pk: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "7")]
+    pub ring_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "8")]
+    pub policy_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "9")]
+    pub permission: ::prost::alloc::string::String,
+    #[prost(string, tag = "10")]
+    pub resource: ::prost::alloc::string::String,
 }
 impl ::prost::Name for NativeAssetRegistration {
     const NAME: &'static str = "NativeAssetRegistration";
@@ -707,6 +795,25 @@ impl ::prost::Name for NativeAssetRegistration {
     }
     fn type_url() -> ::prost::alloc::string::String {
         "/shieldd.core.component.compliance.v1.NativeAssetRegistration".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DleqProof {
+    #[prost(bytes = "vec", tag = "1")]
+    pub commitment_g: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub commitment_h: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "3")]
+    pub response: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for DleqProof {
+    const NAME: &'static str = "DleqProof";
+    const PACKAGE: &'static str = "shieldd.core.component.compliance.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "shieldd.core.component.compliance.v1.DleqProof".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/shieldd.core.component.compliance.v1.DleqProof".into()
     }
 }
 /// Emitted when a user is registered in the compliance tree.
@@ -844,6 +951,7 @@ pub enum UserAssetStatus {
     Unspecified = 0,
     Active = 1,
     Frozen = 2,
+    Seized = 3,
 }
 impl UserAssetStatus {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -855,6 +963,7 @@ impl UserAssetStatus {
             Self::Unspecified => "USER_ASSET_STATUS_UNSPECIFIED",
             Self::Active => "USER_ASSET_STATUS_ACTIVE",
             Self::Frozen => "USER_ASSET_STATUS_FROZEN",
+            Self::Seized => "USER_ASSET_STATUS_SEIZED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -863,6 +972,7 @@ impl UserAssetStatus {
             "USER_ASSET_STATUS_UNSPECIFIED" => Some(Self::Unspecified),
             "USER_ASSET_STATUS_ACTIVE" => Some(Self::Active),
             "USER_ASSET_STATUS_FROZEN" => Some(Self::Frozen),
+            "USER_ASSET_STATUS_SEIZED" => Some(Self::Seized),
             _ => None,
         }
     }

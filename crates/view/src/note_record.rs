@@ -2,7 +2,7 @@ use shieldd_sdk_asset::Value;
 use shieldd_sdk_keys::{keys::AddressIndex, Address, AddressView};
 use shieldd_sdk_proto::{view::v1 as pb, DomainType};
 use shieldd_sdk_sct::{CommitmentSource, Nullifier};
-use shieldd_sdk_shielded_pool::{note, Note, Rseed};
+use shieldd_sdk_shielded_pool::{note, Note, RecoveryCommitment, Rseed};
 use shieldd_sdk_tct::Position;
 
 use r2d2_sqlite::rusqlite::Row;
@@ -109,6 +109,7 @@ impl TryFrom<&Row<'_>> for SpendableNoteRecord {
                     asset_id: row.get::<_, Vec<u8>>("asset_id")?[..].try_into()?,
                 },
                 Rseed(row.get::<_, [u8; 32]>("rseed")?),
+                RecoveryCommitment::try_from(row.get::<_, [u8; 32]>("recovery_commitment")?)?,
             )?,
             source: CommitmentSource::decode(&row.get::<_, Vec<u8>>("source")?[..])?,
             return_address,

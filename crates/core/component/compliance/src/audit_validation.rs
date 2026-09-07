@@ -12,7 +12,7 @@ pub enum AuditValidationStatus {
 
 /// Validate the canonical evidence object committed by an accepted transfer.
 ///
-/// PRE packages are intentionally absent: Orbis v0 exposes the seed-opening DH
+/// PRE packages are intentionally absent: the Orbis prototype exposes the seed-opening DH
 /// point and is not a valid evidence or authorization boundary.
 pub fn validate_audit_evidence(input: AuditValidationInput) -> AuditValidationStatus {
     match input.evidence.validate_payload_hash() {

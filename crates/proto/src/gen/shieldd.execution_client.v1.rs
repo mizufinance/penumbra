@@ -36,6 +36,40 @@ impl ::prost::Name for ArchivedNullifierProofResponse {
     }
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct NullifierWindowRequest {
+    #[prost(message, optional, tag = "1")]
+    pub request: ::core::option::Option<
+        super::super::core::component::sct::v1::NullifierWindowRequest,
+    >,
+}
+impl ::prost::Name for NullifierWindowRequest {
+    const NAME: &'static str = "NullifierWindowRequest";
+    const PACKAGE: &'static str = "shieldd.execution_client.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "shieldd.execution_client.v1.NullifierWindowRequest".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/shieldd.execution_client.v1.NullifierWindowRequest".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NullifierWindowResponse {
+    #[prost(message, optional, tag = "1")]
+    pub response: ::core::option::Option<
+        super::super::core::component::sct::v1::NullifierWindowResponse,
+    >,
+}
+impl ::prost::Name for NullifierWindowResponse {
+    const NAME: &'static str = "NullifierWindowResponse";
+    const PACKAGE: &'static str = "shieldd.execution_client.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "shieldd.execution_client.v1.NullifierWindowResponse".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/shieldd.execution_client.v1.NullifierWindowResponse".into()
+    }
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct AppParametersRequest {
     #[prost(message, optional, tag = "1")]
     pub request: ::core::option::Option<
@@ -484,6 +518,9 @@ pub struct ApplyComplianceActionResponse {
     pub current_status: i32,
     #[prost(bool, tag = "4")]
     pub replayed: bool,
+    /// Monotonic generation of the latest freeze for this address and asset.
+    #[prost(uint64, tag = "5")]
+    pub freeze_generation: u64,
 }
 impl ::prost::Name for ApplyComplianceActionResponse {
     const NAME: &'static str = "ApplyComplianceActionResponse";
@@ -493,6 +530,51 @@ impl ::prost::Name for ApplyComplianceActionResponse {
     }
     fn type_url() -> ::prost::alloc::string::String {
         "/shieldd.execution_client.v1.ApplyComplianceActionResponse".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SeizeNoteRequest {
+    #[prost(message, optional, tag = "1")]
+    pub source: ::core::option::Option<HostSource>,
+    #[prost(message, optional, tag = "2")]
+    pub seizure: ::core::option::Option<
+        super::super::core::component::shielded_pool::v1::NoteSeizure,
+    >,
+}
+impl ::prost::Name for SeizeNoteRequest {
+    const NAME: &'static str = "SeizeNoteRequest";
+    const PACKAGE: &'static str = "shieldd.execution_client.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "shieldd.execution_client.v1.SeizeNoteRequest".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/shieldd.execution_client.v1.SeizeNoteRequest".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SeizeNoteResponse {
+    #[prost(message, optional, tag = "1")]
+    pub source: ::core::option::Option<HostSource>,
+    #[prost(bool, tag = "2")]
+    pub replayed: bool,
+    #[prost(message, optional, tag = "3")]
+    pub withdrawal: ::core::option::Option<HostWithdrawal>,
+    #[prost(
+        enumeration = "super::super::core::component::compliance::v1::UserAssetStatus",
+        tag = "4"
+    )]
+    pub current_status: i32,
+    #[prost(uint64, tag = "5")]
+    pub freeze_generation: u64,
+}
+impl ::prost::Name for SeizeNoteResponse {
+    const NAME: &'static str = "SeizeNoteResponse";
+    const PACKAGE: &'static str = "shieldd.execution_client.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "shieldd.execution_client.v1.SeizeNoteResponse".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/shieldd.execution_client.v1.SeizeNoteResponse".into()
     }
 }
 /// CheckTxRequest carries a Shieldd transaction to validate without applying
@@ -1057,6 +1139,37 @@ pub mod execution_client_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /// SeizeNote consumes one frozen regulated note and returns the exact host
+        /// settlement that Bankd must apply atomically with this call.
+        pub async fn seize_note(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SeizeNoteRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SeizeNoteResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/shieldd.execution_client.v1.ExecutionClientService/SeizeNote",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "shieldd.execution_client.v1.ExecutionClientService",
+                        "SeizeNote",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /// CheckTx validates a Shieldd transaction supplied by the host chain without
         /// applying state changes.
         pub async fn check_tx(
@@ -1291,6 +1404,36 @@ pub mod execution_client_service_client {
                     GrpcMethod::new(
                         "shieldd.execution_client.v1.ExecutionClientService",
                         "ArchivedNullifierProof",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// NullifierWindow returns the committed nullifier-generation planning window.
+        pub async fn nullifier_window(
+            &mut self,
+            request: impl tonic::IntoRequest<super::NullifierWindowRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::NullifierWindowResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/shieldd.execution_client.v1.ExecutionClientService/NullifierWindow",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "shieldd.execution_client.v1.ExecutionClientService",
+                        "NullifierWindow",
                     ),
                 );
             self.inner.unary(req, path, codec).await
@@ -1552,6 +1695,15 @@ pub mod execution_client_service_server {
             tonic::Response<super::ApplyComplianceActionResponse>,
             tonic::Status,
         >;
+        /// SeizeNote consumes one frozen regulated note and returns the exact host
+        /// settlement that Bankd must apply atomically with this call.
+        async fn seize_note(
+            &self,
+            request: tonic::Request<super::SeizeNoteRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SeizeNoteResponse>,
+            tonic::Status,
+        >;
         /// CheckTx validates a Shieldd transaction supplied by the host chain without
         /// applying state changes.
         async fn check_tx(
@@ -1609,6 +1761,14 @@ pub mod execution_client_service_server {
             request: tonic::Request<super::ArchivedNullifierProofRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ArchivedNullifierProofResponse>,
+            tonic::Status,
+        >;
+        /// NullifierWindow returns the committed nullifier-generation planning window.
+        async fn nullifier_window(
+            &self,
+            request: tonic::Request<super::NullifierWindowRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::NullifierWindowResponse>,
             tonic::Status,
         >;
         /// AppParameters returns the committed Shieldd application parameters.
@@ -1930,6 +2090,52 @@ pub mod execution_client_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ApplyComplianceActionSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/shieldd.execution_client.v1.ExecutionClientService/SeizeNote" => {
+                    #[allow(non_camel_case_types)]
+                    struct SeizeNoteSvc<T: ExecutionClientService>(pub Arc<T>);
+                    impl<
+                        T: ExecutionClientService,
+                    > tonic::server::UnaryService<super::SeizeNoteRequest>
+                    for SeizeNoteSvc<T> {
+                        type Response = super::SeizeNoteResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::SeizeNoteRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ExecutionClientService>::seize_note(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = SeizeNoteSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
@@ -2308,6 +2514,55 @@ pub mod execution_client_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ArchivedNullifierProofSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/shieldd.execution_client.v1.ExecutionClientService/NullifierWindow" => {
+                    #[allow(non_camel_case_types)]
+                    struct NullifierWindowSvc<T: ExecutionClientService>(pub Arc<T>);
+                    impl<
+                        T: ExecutionClientService,
+                    > tonic::server::UnaryService<super::NullifierWindowRequest>
+                    for NullifierWindowSvc<T> {
+                        type Response = super::NullifierWindowResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::NullifierWindowRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ExecutionClientService>::nullifier_window(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = NullifierWindowSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

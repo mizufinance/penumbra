@@ -102,7 +102,7 @@ func TestDecodeCanonicalCircuitMetadataJSONRejectsOldOrAlternateEncodings(t *tes
 	oldSchema := bytes.Replace(
 		canonical,
 		[]byte(CircuitMetadataSchema),
-		[]byte("shieldd.gnark.circuit_metadata.v0"),
+		[]byte("shieldd.gnark.wrong_metadata"),
 		1,
 	)
 	if _, err := DecodeCanonicalCircuitMetadataJSON(oldSchema); err == nil {
@@ -126,7 +126,7 @@ func TestDecodeCanonicalCircuitMetadataJSONRejectsOldOrAlternateEncodings(t *tes
 		1,
 	)
 	if _, err := DecodeCanonicalCircuitMetadataJSON(optionalID); err == nil {
-		t.Fatal("metadata fields outside the exact v2 schema must fail")
+		t.Fatal("metadata fields outside the exact schema must fail")
 	}
 
 	missingPin := bytes.Replace(

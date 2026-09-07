@@ -4,7 +4,7 @@ use shieldd_sdk_proof_params::batch::BatchItem;
 
 use crate::app_verifier::app_verify_prepare_public_input_rows_core;
 
-pub const PADDING_RULE_DOMAIN: &[u8] = b"shieldd.snarkpack.padding.repeat-final-row.v1\0";
+pub const PADDING_RULE_DOMAIN: &[u8] = b"shieldd.snarkpack.padding.repeat-final-row\0";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedVerifyInputs {

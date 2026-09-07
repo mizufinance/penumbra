@@ -7,7 +7,7 @@ and certify one exact Shieldd commit.
 
 | Area | Authoritative for | Checked by |
 | --- | --- | --- |
-| `docs/compliance/` | Bankd ownership boundary, compliance flow, enforcement/seizure plan, wire reference, constraints, and tests. | referenced tests |
+| `docs/compliance/` | Compliance flow, enforcement and seizure, wire reference, constraints, and tests. | referenced tests |
 | `docs/snarkpack/` | SnarkPack runtime design and verification. | runtime tests and `scripts/check-snarkpack-runtime-invariants.sh` |
 | `docs/protocol/` | Protocol background for crypto constructions, keys, and addresses. Do not cite it as implementation evidence. | none |
 | `docs/transfer-circuit/` | Transfer-circuit constraint checklist (referenced by `docs/compliance/`). | referenced tests |

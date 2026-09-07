@@ -27,6 +27,7 @@ include!(concat!(env!("OUT_DIR"), "/gnark_bundled.rs"));
 include!("gen/gnark/transfer_registry.rs");
 include!("gen/gnark/note_reshape_registry.rs");
 include!("gen/gnark/shielded_ics20_withdrawal_registry.rs");
+include!("gen/gnark/note_seizure_registry.rs");
 
 /// Closed identity for every proof key deployed by consensus.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -35,14 +36,16 @@ pub enum DeployedProofKey {
     NoteReshapeOneByEight,
     NoteReshapeEightByOne,
     ShieldedIcs20WithdrawalCanonical,
+    NoteSeizure,
 }
 
 impl DeployedProofKey {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Transfer,
         Self::NoteReshapeOneByEight,
         Self::NoteReshapeEightByOne,
         Self::ShieldedIcs20WithdrawalCanonical,
+        Self::NoteSeizure,
     ];
 
     /// Resolve this closed identity to its bundled prepared verification key.
@@ -54,6 +57,7 @@ impl DeployedProofKey {
             Self::ShieldedIcs20WithdrawalCanonical => {
                 shielded_ics20_withdrawal_proof_verification_key(1)
             }
+            Self::NoteSeizure => note_seizure_proof_verification_key(),
         }
     }
 }
@@ -154,13 +158,17 @@ mod gnark_artifact_tests {
             shielded_ics20_withdrawal_verifying_key_json_bytes(1),
             shielded_ics20_withdrawal_proof_verification_key(1),
         );
+        assert_bundled_verification_key(
+            note_seizure_verifying_key_json_bytes(),
+            note_seizure_proof_verification_key(),
+        );
     }
 
     #[test]
     fn deployed_proof_key_registry_is_exhaustive_and_pairwise_distinct() {
         assert_eq!(
             DeployedProofKey::ALL.len(),
-            1 + GENERATED_NOTE_RESHAPE_PROOF_FAMILIES.len()
+            2 + GENERATED_NOTE_RESHAPE_PROOF_FAMILIES.len()
                 + GENERATED_SHIELDED_ICS20_WITHDRAWAL_PROOF_FAMILIES.len(),
             "closed deployed-key registry must track every generated proof family"
         );
@@ -190,6 +198,10 @@ mod gnark_artifact_tests {
                     (key, &**family.verification_key)
                 }),
         );
+        generated.push((
+            DeployedProofKey::NoteSeizure,
+            note_seizure_proof_verification_key(),
+        ));
 
         for deployed_key in DeployedProofKey::ALL {
             let matches = generated

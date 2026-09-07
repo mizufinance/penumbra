@@ -454,7 +454,7 @@ impl TestNodeWithIBC {
                 asset_id,
                 is_regulated: false,
                 dk_pub: None,
-                threshold: None,
+                daily_volume_limit: None,
                 allowed_ibc_routes: vec![],
                 ibc_origin: None,
                 ring_pk: None,
@@ -463,6 +463,7 @@ impl TestNodeWithIBC {
                 permission: String::new(),
                 resource: String::new(),
                 registration_authority_vk: None,
+                seizure_authority_vk: None,
                 asset_registration_grant: None,
             };
             actions.push(Action::ComplianceRegisterAsset(msg));
@@ -471,8 +472,12 @@ impl TestNodeWithIBC {
         // Create MsgRegisterUser for each (address, asset) pair
         for address in addresses {
             for &asset_id in asset_ids {
-                let leaf = ComplianceLeaf::new(address.clone(), asset_id);
-                let msg = MsgRegisterUser { leaf, grant: None };
+                let leaf = ComplianceLeaf::synthetic_unregulated(address.clone(), asset_id);
+                let msg = MsgRegisterUser {
+                    leaf,
+                    grant: None,
+                    capability_certificate: None,
+                };
                 actions.push(Action::ComplianceRegisterUser(msg));
             }
         }
@@ -523,15 +528,16 @@ impl TestNodeWithIBC {
             asset_id: asset,
             is_regulated: true,
             dk_pub: Some(decaf377::Element::GENERATOR),
-            threshold: None,
+            daily_volume_limit: None,
             allowed_ibc_routes,
             ibc_origin,
-            ring_pk: None,
-            ring_id: String::new(),
+            ring_pk: Some(decaf377::Element::GENERATOR),
+            ring_id: "benchmark-ring".to_owned(),
             policy_id: "benchmark-policy".to_string(),
-            permission: String::new(),
-            resource: String::new(),
+            permission: "read".to_owned(),
+            resource: "document".to_owned(),
             registration_authority_vk: Some(authority_vk),
+            seizure_authority_vk: Some(authority_vk),
             asset_registration_grant: None,
         };
         let body = asset_msg.registration_grant_body(VALID_UNTIL_UNIX);
@@ -545,8 +551,20 @@ impl TestNodeWithIBC {
         });
         actions.push(Action::ComplianceRegisterAsset(asset_msg));
 
+        let policy = shieldd_sdk_compliance::AssetPolicy::new(
+            decaf377::Element::GENERATOR,
+            u128::MAX,
+            vec![],
+            None,
+            "benchmark-ring".to_owned(),
+            decaf377::Element::GENERATOR,
+            "benchmark-policy".to_string(),
+            "read".to_owned(),
+            "document".to_owned(),
+        );
+
         for address in addresses {
-            let leaf = ComplianceLeaf::new(address.clone(), asset);
+            let leaf = ComplianceLeaf::registered_for_test(address.clone(), asset);
             let body = UserRegistrationGrantBody {
                 leaf: leaf.clone(),
                 policy_id: "benchmark-policy".to_string(),
@@ -554,7 +572,15 @@ impl TestNodeWithIBC {
                 nonce: address.to_string().into_bytes(),
             };
             actions.push(Action::ComplianceRegisterUser(MsgRegisterUser {
-                leaf,
+                leaf: leaf.clone(),
+                capability_certificate: Some(
+                    shieldd_sdk_compliance::structs::OrbisCapabilityCertificate::sign_for_test(
+                        &self.chain_id,
+                        &leaf,
+                        &policy,
+                        decaf377::Fr::from(1u64),
+                    )?,
+                ),
                 grant: Some(UserRegistrationGrant {
                     signature: authority_sk.sign(
                         rand_chacha::ChaChaRng::seed_from_u64(2 + actions.len() as u64),

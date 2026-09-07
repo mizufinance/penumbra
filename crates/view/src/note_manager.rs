@@ -159,6 +159,8 @@ pub struct NoteManager<R: RngCore + CryptoRng> {
     transaction_parameters: TransactionParameters,
     memo_text: Option<String>,
     memo_return_address: Option<Address>,
+    target_timestamp: Option<u64>,
+    disclose_to_issuer: bool,
 }
 
 impl<R: RngCore + CryptoRng> NoteManager<R> {
@@ -170,6 +172,8 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
             transaction_parameters: TransactionParameters::default(),
             memo_text: None,
             memo_return_address: None,
+            target_timestamp: None,
+            disclose_to_issuer: false,
         }
     }
 
@@ -195,6 +199,16 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
 
     pub fn memo_return_address(&mut self, address: Address) -> &mut Self {
         self.memo_return_address = Some(address);
+        self
+    }
+
+    pub fn disclose_to_issuer(&mut self, disclose: bool) -> &mut Self {
+        self.disclose_to_issuer = disclose;
+        self
+    }
+
+    pub fn target_timestamp(&mut self, target_timestamp: u64) -> &mut Self {
+        self.target_timestamp = Some(target_timestamp);
         self
     }
 
@@ -1439,12 +1453,48 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         }
 
         let discovery_params = view.discovery_parameters().await?;
+        let timestamp = match self.target_timestamp {
+            Some(timestamp) => timestamp,
+            None => view.latest_block_timestamp().await?,
+        };
+        let day_start = shieldd_sdk_shielded_pool::select_accumulator_day(timestamp);
+
         complete_plan_with_compliance(
             intent,
-            |queries| view.compliance_data(queries),
+            |queries| async move {
+                let compliance = view.compliance_data(queries.clone()).await?;
+                let mut volumes = Vec::new();
+                let mut subjects = std::collections::BTreeSet::new();
+                for query in queries {
+                    if compliance
+                        .asset_proofs
+                        .get(&query.asset_id)
+                        .is_some_and(|asset| asset.is_regulated)
+                    {
+                        subjects.insert(
+                            shieldd_sdk_shielded_pool::VolumeAccumulatorState::subject(
+                                &query.address,
+                                query.asset_id,
+                            ),
+                        );
+                    }
+                }
+                for subject in subjects {
+                    volumes.push(crate::VolumeRecoveryRecord {
+                        subject,
+                        day_start,
+                        recovery: view.volume_accumulator_recovery(subject, day_start).await?,
+                    });
+                }
+                Ok(crate::CompletionData {
+                    compliance,
+                    volumes,
+                })
+            },
             &mut self.rng,
             discovery_params,
-            None,
+            Some(timestamp),
+            self.disclose_to_issuer,
         )
         .await
     }
@@ -1580,7 +1630,7 @@ mod tests {
     use shieldd_sdk_proto::view::v1 as pb;
     use shieldd_sdk_sct::{CommitmentSource, Nullifier};
     use shieldd_sdk_shielded_pool::{
-        discovery, HostTransfer, HostWithdrawalDestination, Note, Rseed,
+        discovery, HostTransfer, HostWithdrawalDestination, Note, RecoveryCommitment, Rseed,
     };
     use shieldd_sdk_transaction::gas::GasCost;
     use shieldd_sdk_transaction::plan::ActionPlan;
@@ -1633,6 +1683,7 @@ mod tests {
                 asset_id,
             },
             Rseed::generate(rng),
+            RecoveryCommitment::unavailable(),
         )
         .expect("valid test note");
 
@@ -1733,6 +1784,17 @@ mod tests {
 
     #[async_trait::async_trait]
     impl PlanningIo for MockNoteManagerView {
+        async fn latest_block_timestamp(&mut self) -> Result<u64> {
+            Ok(1_700_000_000)
+        }
+        async fn volume_accumulator_recovery(
+            &mut self,
+            _: decaf377::Fq,
+            _: u64,
+        ) -> Result<crate::storage::VolumeAccumulatorRecovery> {
+            Ok(crate::storage::VolumeAccumulatorRecovery::Absent)
+        }
+
         async fn chain_id(&mut self) -> Result<String> {
             Ok("test-chain".to_owned())
         }
@@ -2134,8 +2196,13 @@ mod tests {
         let view_addresses = BTreeMap::from([(source, address.clone())]);
         let mut view = MockNoteManagerView::new(vec![], view_addresses);
 
-        let leaf = shieldd_sdk_compliance::ComplianceLeaf::new(address, *BASE_ASSET_ID);
-        let msg = shieldd_sdk_compliance::structs::MsgRegisterUser { leaf, grant: None };
+        let leaf =
+            shieldd_sdk_compliance::ComplianceLeaf::synthetic_unregulated(address, *BASE_ASSET_ID);
+        let msg = shieldd_sdk_compliance::structs::MsgRegisterUser {
+            leaf,
+            grant: None,
+            capability_certificate: None,
+        };
 
         let mut note_manager = NoteManager::new(OsRng);
         note_manager.set_gas_prices(GasPrices::zero());

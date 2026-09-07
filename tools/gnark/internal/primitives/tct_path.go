@@ -64,23 +64,40 @@ func VerifyStateCommitmentPath(
 }
 
 func VerifyStateCommitmentPathNative(fixture SpendFixture) (*big.Int, error) {
+	path := make([][3]*big.Int, len(fixture.Private.StateCommitmentProof.AuthPath))
+	for i, siblings := range fixture.Private.StateCommitmentProof.AuthPath {
+		for j := range siblings {
+			path[i][j] = MustBigInt(siblings[j])
+		}
+	}
+	return VerifyStateCommitmentPathNativeFromParts(
+		MustBigInt(fixture.Private.StateCommitmentProof.Commitment),
+		fixture.Private.StateCommitmentProof.Position,
+		path,
+	)
+}
+
+func VerifyStateCommitmentPathNativeFromParts(
+	commitment *big.Int,
+	position uint64,
+	authPath [][3]*big.Int,
+) (*big.Int, error) {
 	vectors, err := LoadPrototypeVectors()
 	if err != nil {
 		return nil, err
 	}
 	domain := MustBigInt(vectors.Poseidon377.TCTDomain)
-	current, err := Poseidon377Hash1Native(domain, MustBigInt(fixture.Private.StateCommitmentProof.Commitment))
+	current, err := Poseidon377Hash1Native(domain, commitment)
 	if err != nil {
 		return nil, err
 	}
 
-	position := fixture.Private.StateCommitmentProof.Position
-	for height := 1; height <= len(fixture.Private.StateCommitmentProof.AuthPath); height++ {
+	for height := 1; height <= len(authPath); height++ {
 		shift := 2 * (height - 1)
 		bit0 := (position >> shift) & 1
 		bit1 := (position >> (shift + 1)) & 1
 		index := int(bit0 + 2*bit1)
-		siblings := fixture.Private.StateCommitmentProof.AuthPath[len(fixture.Private.StateCommitmentProof.AuthPath)-height]
+		siblings := authPath[len(authPath)-height]
 
 		children := [4]*big.Int{}
 		siblingIdx := 0
@@ -88,7 +105,7 @@ func VerifyStateCommitmentPathNative(fixture SpendFixture) (*big.Int, error) {
 			if i == index {
 				children[i] = current
 			} else {
-				children[i] = MustBigInt(siblings[siblingIdx])
+				children[i] = siblings[siblingIdx]
 				siblingIdx++
 			}
 		}

@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-const noteReshapeManifestSHA256 = "a521a23aecf101dbdcba0c5117abdd63a9f3ad596812a31626850fcb199bcf22"
+const noteReshapeManifestSHA256 = "0f290fcec8649c6e288e27ba1b72cf3d1b6a7e95bacdeec92f4683e6e2bcd307"
 
 type noteReshapeManifest struct {
 	Schema   string                      `json:"schema"`
@@ -73,7 +73,7 @@ func TestNoteReshapeGeneratedRegistryMatchesManifest(t *testing.T) {
 	if err := json.Unmarshal(contents, &manifest); err != nil {
 		t.Fatalf("decode note reshape manifest: %v", err)
 	}
-	if manifest.Schema != "shieldd.note_reshape_families.v1" {
+	if manifest.Schema != "shieldd.note_reshape_families" {
 		t.Fatalf("unexpected note reshape manifest schema %q", manifest.Schema)
 	}
 	generated := make([]NoteReshapeFamilySpec, len(manifest.Families))

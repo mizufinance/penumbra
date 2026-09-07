@@ -9,10 +9,8 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 const DAEMON_READY_MAGIC: &str = "PGDR";
-const DAEMON_READY_VERSION: u32 = 1;
 const DAEMON_REQUEST_MAGIC: &[u8; 4] = b"PGRQ";
 const DAEMON_RESPONSE_MAGIC: &[u8; 4] = b"PGRS";
-const DAEMON_PROTOCOL_VERSION: u32 = 1;
 const DAEMON_OP_PROVE: u32 = 1;
 const DAEMON_OP_SHUTDOWN: u32 = 2;
 // Witness payloads are a few KB; match the Go daemon cap.
@@ -24,7 +22,6 @@ pub(crate) const GNARK_MAX_RESULT_BYTES: usize = 1024 * 1024;
 #[serde(deny_unknown_fields)]
 pub(crate) struct GnarkDaemonReady {
     pub magic: String,
-    pub version: u32,
     pub status: String,
     pub circuit: String,
     pub curve: String,
@@ -80,9 +77,6 @@ impl GnarkDaemonProcess {
             serde_json::from_str(ready_line.trim_end()).context("decode gnark daemon readiness")?;
         if ready.magic != DAEMON_READY_MAGIC {
             bail!("invalid gnark daemon ready magic {}", ready.magic);
-        }
-        if ready.version != DAEMON_READY_VERSION {
-            bail!("unsupported gnark daemon ready version {}", ready.version);
         }
         if ready.status != "ready" {
             bail!("gnark daemon reported non-ready status {}", ready.status);
@@ -182,9 +176,8 @@ fn write_frame(mut writer: impl Write, op: u32, payload: &[u8]) -> Result<()> {
         );
     }
     let total_len =
-        u32::try_from(16usize + payload.len()).context("gnark daemon request too large")?;
+        u32::try_from(12usize + payload.len()).context("gnark daemon request too large")?;
     writer.write_all(DAEMON_REQUEST_MAGIC)?;
-    writer.write_all(&DAEMON_PROTOCOL_VERSION.to_le_bytes())?;
     writer.write_all(&total_len.to_le_bytes())?;
     writer.write_all(&op.to_le_bytes())?;
     writer.write_all(payload)?;
@@ -192,21 +185,17 @@ fn write_frame(mut writer: impl Write, op: u32, payload: &[u8]) -> Result<()> {
 }
 
 fn read_frame(mut reader: impl Read) -> Result<(u32, Vec<u8>)> {
-    let mut header = [0u8; 16];
+    let mut header = [0u8; 12];
     reader.read_exact(&mut header)?;
     if &header[..4] != DAEMON_RESPONSE_MAGIC {
         bail!("invalid gnark daemon response magic");
     }
-    let version = u32::from_le_bytes(header[4..8].try_into().expect("slice length"));
-    if version != DAEMON_PROTOCOL_VERSION {
-        bail!("unsupported gnark daemon response version {version}");
-    }
-    let total_len = u32::from_le_bytes(header[8..12].try_into().expect("slice length")) as usize;
-    if total_len < 16 {
+    let total_len = u32::from_le_bytes(header[4..8].try_into().expect("slice length")) as usize;
+    if total_len < 12 {
         bail!("invalid gnark daemon response length {total_len}");
     }
-    let status = u32::from_le_bytes(header[12..16].try_into().expect("slice length"));
-    let payload_len = total_len - 16;
+    let status = u32::from_le_bytes(header[8..12].try_into().expect("slice length"));
+    let payload_len = total_len - 12;
     if payload_len > GNARK_MAX_RESULT_BYTES {
         bail!(
             "gnark daemon response payload {payload_len} bytes exceeds limit {GNARK_MAX_RESULT_BYTES}"
@@ -236,10 +225,9 @@ mod tests {
 
     #[test]
     fn read_frame_rejects_oversized_response_before_payload_allocation() {
-        let total_len = 16usize + GNARK_MAX_RESULT_BYTES + 1;
+        let total_len = 12usize + GNARK_MAX_RESULT_BYTES + 1;
         let mut header = Vec::new();
         header.extend_from_slice(DAEMON_RESPONSE_MAGIC);
-        header.extend_from_slice(&DAEMON_PROTOCOL_VERSION.to_le_bytes());
         header.extend_from_slice(&(total_len as u32).to_le_bytes());
         header.extend_from_slice(&0u32.to_le_bytes());
 

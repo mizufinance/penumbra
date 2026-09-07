@@ -59,25 +59,6 @@ func TestRunExportWiringTranscriptRejectsUnsupportedCircuit(t *testing.T) {
 	}
 }
 
-func TestWitnessFormatVersionReadsBoundPayloadHeader(t *testing.T) {
-	version, err := witnessFormatVersion([]byte{
-		'P', 'T', 'W', 'G',
-		9, 0, 0, 0,
-	})
-	if err != nil {
-		t.Fatalf("read witness format version: %v", err)
-	}
-	if version != 9 {
-		t.Fatalf("witness format version = %d, want 9", version)
-	}
-}
-
-func TestWitnessFormatVersionRejectsShortPayload(t *testing.T) {
-	if _, err := witnessFormatVersion(make([]byte, 7)); err == nil {
-		t.Fatal("expected short witness header to fail")
-	}
-}
-
 func TestValidateSetupSelfTestFlagsRequiresUniqueCasesAndWitnesses(t *testing.T) {
 	if err := validateSetupSelfTestFlags(
 		[]string{"regulated_unflagged", "unregulated_hidden"},

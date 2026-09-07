@@ -44,7 +44,7 @@ pub struct VerifyingKeyJson {
     pub gamma_abc_g1: Vec<G1PointJson>,
 }
 
-const CIRCUIT_METADATA_SCHEMA: &str = "shieldd.gnark.circuit_metadata.v2";
+const CIRCUIT_METADATA_SCHEMA: &str = "shieldd.gnark.circuit_metadata";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

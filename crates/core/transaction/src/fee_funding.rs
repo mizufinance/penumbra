@@ -25,6 +25,15 @@ pub struct FeeFundingPlan {
 }
 
 impl FeeFundingPlan {
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.transfer.proof_context
+                == shieldd_sdk_shielded_pool::TransferProofContext::FeeFunding,
+            "fee funding requires its explicit proof context"
+        );
+        self.transfer.validate()
+    }
+
     #[cfg(any(unix, windows))]
     pub fn build_unauth(
         &self,
@@ -33,6 +42,8 @@ impl FeeFundingPlan {
         memo_key: &shieldd_sdk_keys::symmetric::PayloadKey,
         recent_position_floor: u64,
     ) -> Result<FeeFunding> {
+        self.validate()?;
+        let transfer_plan = &self.transfer;
         let auth_paths = self
             .transfer
             .spends
@@ -47,8 +58,7 @@ impl FeeFundingPlan {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let transfer = self
-            .transfer
+        let transfer = transfer_plan
             .build_unauth_transfer(
                 fvk,
                 vec![[0; 64].into(); self.transfer.spends.len()],
@@ -76,7 +86,9 @@ impl FeeFundingPlan {
         memo_key: &shieldd_sdk_keys::symmetric::PayloadKey,
         recent_position_floor: u64,
     ) -> Result<EffectHash> {
-        self.transfer
+        self.validate()?;
+        let transfer = &self.transfer;
+        transfer
             .transfer_body(
                 fvk,
                 memo_key,
@@ -159,8 +171,9 @@ impl DomainType for FeeFundingPlan {
 
 impl From<FeeFundingPlan> for pbt::FeeFundingPlan {
     fn from(value: FeeFundingPlan) -> Self {
+        let transfer = value.transfer;
         Self {
-            transfer: Some(value.transfer.into()),
+            transfer: Some(transfer.into()),
         }
     }
 }
@@ -169,11 +182,12 @@ impl TryFrom<pbt::FeeFundingPlan> for FeeFundingPlan {
     type Error = Error;
 
     fn try_from(proto: pbt::FeeFundingPlan) -> Result<Self, Self::Error> {
-        Ok(Self {
-            transfer: proto
-                .transfer
-                .ok_or_else(|| anyhow!("missing fee funding transfer plan"))?
-                .try_into()?,
-        })
+        let transfer: TransferPlan = proto
+            .transfer
+            .ok_or_else(|| anyhow!("missing fee funding transfer plan"))?
+            .try_into()?;
+        let plan = Self { transfer };
+        plan.validate()?;
+        Ok(plan)
     }
 }

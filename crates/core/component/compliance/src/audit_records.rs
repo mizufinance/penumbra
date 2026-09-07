@@ -123,28 +123,6 @@ pub fn filter_subject_candidates(
         .collect()
 }
 
-pub fn classify_orbis_import_row(row: Option<AuditImportRow>) -> OrbisImportEligibility {
-    match row {
-        Some(row)
-            if !row.is_flagged
-                && (row.audit_status == AuditStatus::EvidenceValid
-                    || row.audit_status == AuditStatus::DecryptFailed
-                    || row.audit_status == AuditStatus::AuditComplete) =>
-        {
-            OrbisImportEligibility::Eligible
-        }
-        Some(row) => OrbisImportEligibility::Ineligible {
-            reason: format!(
-                "row is not an evidence-valid unflagged detection: {}",
-                row.audit_status
-            ),
-        },
-        None => OrbisImportEligibility::Ineligible {
-            reason: "detected row not found".to_owned(),
-        },
-    }
-}
-
 pub fn detected_ref_from_row_parts(row: DetectedRefRowParts) -> AuditDetectedRef {
     AuditDetectedRef {
         height: row.height,
@@ -165,52 +143,6 @@ fn private_transfer_flow_type() -> FlowType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn row(audit_status: AuditStatus, is_flagged: bool) -> AuditImportRow {
-        AuditImportRow {
-            audit_status,
-            is_flagged,
-        }
-    }
-
-    #[test]
-    fn unflagged_valid_orbis_statuses_are_eligible() {
-        for status in [
-            AuditStatus::EvidenceValid,
-            AuditStatus::DecryptFailed,
-            AuditStatus::AuditComplete,
-        ] {
-            assert_eq!(
-                classify_orbis_import_row(Some(row(status, false))),
-                OrbisImportEligibility::Eligible
-            );
-        }
-    }
-
-    #[test]
-    fn flagged_or_invalid_orbis_rows_are_ineligible_with_status_reason() {
-        for (status, is_flagged) in [
-            (AuditStatus::EvidenceValid, true),
-            (AuditStatus::Pending, false),
-            (AuditStatus::EvidenceInvalid, false),
-        ] {
-            assert_eq!(
-                classify_orbis_import_row(Some(row(status, is_flagged))),
-                OrbisImportEligibility::Ineligible {
-                    reason: format!("row is not an evidence-valid unflagged detection: {status}")
-                }
-            );
-        }
-    }
-
-    #[test]
-    fn missing_orbis_row_is_ineligible_with_missing_reason() {
-        assert_eq!(
-            classify_orbis_import_row(None),
-            OrbisImportEligibility::Ineligible {
-                reason: "detected row not found".to_owned()
-            }
-        );
-    }
 
     #[test]
     fn detected_ref_projection_preserves_fields_and_hex_encodes_tx_hash() {

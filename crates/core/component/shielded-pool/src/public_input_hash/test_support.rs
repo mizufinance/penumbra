@@ -100,7 +100,7 @@ pub fn note_reshape_statement_hash_var(
 ) -> Result<FqVar, SynthesisError> {
     hash_statement_fields_var(
         cs,
-        &note_reshape_statement_hash_constant(family_id, "v4"),
+        &note_reshape_statement_hash_constant(family_id, "statement"),
         note_reshape_statement_hash_constant(family_id, "pad0"),
         note_reshape_statement_hash_constant(family_id, "pad1"),
         fields,
@@ -112,7 +112,7 @@ pub fn transfer_statement_hash_var(
     cs: ConstraintSystemRef<Fq>,
     fields: &[FqVar],
 ) -> Result<FqVar, SynthesisError> {
-    let domain = transfer_statement_hash_constant("v7");
+    let domain = transfer_statement_hash_constant("statement");
     let pad_0 = transfer_statement_hash_constant("pad0");
     let pad_1 = transfer_statement_hash_constant("pad1");
     hash_statement_fields_var(

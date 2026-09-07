@@ -7,8 +7,8 @@ use std::{
 use digest::{Digest, Output};
 use sha2::Sha256;
 
-const CHALLENGE_DOMAIN: &[u8] = b"shieldd.snarkpack.challenge.v1\0";
-const CHALLENGE_CONTEXT_DOMAIN: &[u8] = b"shieldd.snarkpack.challenge_context.v1\0";
+const CHALLENGE_DOMAIN: &[u8] = b"shieldd.snarkpack.challenge\0";
+const CHALLENGE_CONTEXT_DOMAIN: &[u8] = b"shieldd.snarkpack.challenge_context\0";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChallengeContext {

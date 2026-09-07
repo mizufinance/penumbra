@@ -24,6 +24,8 @@ pub enum PayloadKind {
     Memo,
     /// Swap is action-scoped.
     Swap,
+    /// Daily undisclosed-volume accumulator state is transfer-scoped.
+    VolumeAccumulator,
 }
 
 impl PayloadKind {
@@ -33,6 +35,7 @@ impl PayloadKind {
             Self::MemoKey => [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             Self::Swap => [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             Self::Memo => [3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            Self::VolumeAccumulator => [4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         }
     }
 }
@@ -104,6 +107,27 @@ impl PayloadKey {
 
         let key = kdf.finalize();
         Self(*Key::from_slice(key.as_bytes()))
+    }
+
+    /// Derives the key for an outgoing daily-volume accumulator payload.
+    pub fn derive_volume_accumulator(ovk: &OutgoingViewingKey, cm: StateCommitment) -> Self {
+        let cm_bytes: [u8; 32] = cm.into();
+        let mut params = blake2b_simd::Params::new();
+        params.personal(b"Shieldd_Volume");
+        params.hash_length(32);
+        let mut kdf = params.to_state();
+        kdf.update(&ovk.to_bytes());
+        kdf.update(&cm_bytes);
+        let key = kdf.finalize();
+        Self(*Key::from_slice(key.as_bytes()))
+    }
+
+    pub fn encrypt_volume_accumulator(&self, plaintext: Vec<u8>) -> Vec<u8> {
+        self.encrypt(plaintext, PayloadKind::VolumeAccumulator)
+    }
+
+    pub fn decrypt_volume_accumulator(&self, ciphertext: Vec<u8>) -> Result<Vec<u8>> {
+        self.decrypt(ciphertext, PayloadKind::VolumeAccumulator)
     }
 
     /// Encrypt a swap using the `PayloadKey`.

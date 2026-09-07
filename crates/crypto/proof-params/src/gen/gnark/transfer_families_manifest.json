@@ -1,6 +1,6 @@
 {
-  "schema": "shieldd.transfer_family_projection.v1",
-  "source_sha256": "0f75ef45326e733fa5d2859e8ce0064d6d4da8c14c4bf06b294f6b9b3d27acd3",
+  "schema": "shieldd.transfer_family_projection",
+  "source_sha256": "e2d39dd967a27ce7c4faa9d7b8af844443df8b3412d6f7815053f5ff6ed397bc",
   "families": [
     {
       "label": "transfer",

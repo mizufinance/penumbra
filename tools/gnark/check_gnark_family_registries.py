@@ -227,7 +227,7 @@ def render_transfer_projection(
     values: list[dict[str, object]], source_hash: str
 ) -> str:
     projection = {
-        "schema": "shieldd.transfer_family_projection.v1",
+        "schema": "shieldd.transfer_family_projection",
         "source_sha256": source_hash,
         "families": values,
     }
@@ -1058,7 +1058,7 @@ pub fn shielded_ics20_withdrawal_circuit_metadata(family_id: u32) -> &'static [u
 
 def note_reshape_families() -> list[dict[str, object]]:
     manifest = strict_json(NOTE_RESHAPE_MANIFEST)
-    if manifest.get("schema") != "shieldd.note_reshape_families.v1":
+    if manifest.get("schema") != "shieldd.note_reshape_families":
         fail("unexpected NoteReshape family manifest schema")
     values = manifest.get("families")
     if (
@@ -1077,7 +1077,7 @@ def note_reshape_families() -> list[dict[str, object]]:
 def generated_outputs() -> dict[Path, str]:
     transfer = families(
         TRANSFER_MANIFEST,
-        "shieldd.transfer_families.v1",
+        "shieldd.transfer_families",
         {
             "label",
             "artifact_name",
@@ -1089,7 +1089,7 @@ def generated_outputs() -> dict[Path, str]:
     )
     withdrawal = families(
         WITHDRAWAL_MANIFEST,
-        "shieldd.shielded_ics20_withdrawal_families.v1",
+        "shieldd.shielded_ics20_withdrawal_families",
         {
             "id",
             "rust_name",

@@ -24,7 +24,7 @@ fn main() {
 
     let generated_roster = generated_deployed_family_roster();
     gnark_artifact_validation::validate_deployed_family_roster(&generated_roster)
-        .expect("generated proof-family roster matches the exact four deployed families");
+        .expect("generated proof-family roster matches the exact deployed families");
 
     let artifact_root = repo_root()
         .expect("resolve repository root")
@@ -63,7 +63,8 @@ fn generated_deployed_family_roster() -> Vec<gnark_artifact_validation::Deployed
     let mut roster = Vec::with_capacity(
         GENERATED_TRANSFER_FAMILIES.len()
             + GENERATED_NOTE_RESHAPE_FAMILIES.len()
-            + GENERATED_SHIELDED_ICS20_WITHDRAWAL_FAMILIES.len(),
+            + GENERATED_SHIELDED_ICS20_WITHDRAWAL_FAMILIES.len()
+            + 1,
     );
     roster.extend(
         GENERATED_TRANSFER_FAMILIES
@@ -125,6 +126,20 @@ fn generated_deployed_family_roster() -> Vec<gnark_artifact_validation::Deployed
                 max_real_outputs: family.n_out,
             }),
     );
+    roster.push(DeployedFamily {
+        kind: FamilyKind::NoteSeizure,
+        id: None,
+        label: "note_seizure",
+        artifact_name: "note_seizure",
+        n_in: 1,
+        n_out: 0,
+        input_padding: InputPadding::Fixed,
+        output_padding: OutputPadding::Fixed,
+        min_real_inputs: 1,
+        max_real_inputs: 1,
+        min_real_outputs: 0,
+        max_real_outputs: 0,
+    });
     roster
 }
 
@@ -368,7 +383,8 @@ fn build_gnark_library(
         .arg(package);
 
     let output = command.output().with_context(|| {
-        format!("run `go build` for bundled gnark runtime (install Go to use bundled-proving-keys)")
+        "run `go build` for bundled gnark runtime (install Go to use bundled-proving-keys)"
+            .to_owned()
     })?;
 
     if !output.status.success() {

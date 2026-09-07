@@ -220,7 +220,7 @@ pub fn preflight_aggregate_verify<'a>(
 }
 
 /// Shipping preflight plus a pure projection of every authenticated byte and
-/// scalar field consumed by the v1 protocol.
+/// scalar field consumed by the aggregation protocol.
 #[doc(hidden)]
 pub(crate) fn preflight_shipping_aggregate_verify<'a>(
     application_call: AppVerifyShippingCall,

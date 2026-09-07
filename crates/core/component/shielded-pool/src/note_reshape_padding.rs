@@ -1,5 +1,5 @@
 use blake2b_simd;
-use decaf377::{Fq, Fr};
+use decaf377::{Element, Fq, Fr};
 use decaf377_rdsa::{Signature, SigningKey, SpendAuth, VerificationKey};
 use shieldd_sdk_asset::asset;
 use shieldd_sdk_keys::Address;
@@ -7,13 +7,14 @@ use shieldd_sdk_num::Amount;
 use shieldd_sdk_sct::Nullifier;
 use shieldd_sdk_tct as tct;
 
-use crate::{Note, Rseed};
+use crate::{Note, RecoveryCapsule, Rseed};
 
 pub(crate) struct HiddenArityPadder {
     pub value_blinding: Fr,
     pub first_spend_randomizer: Fr,
     pub sender_address: Address,
     pub asset_id: asset::Id,
+    pub capk: Element,
     pub nullifier_domain_sep_label: &'static [u8],
     pub nullifier_seed_label: &'static [u8],
     pub spend_auth_key_label: &'static [u8],
@@ -90,14 +91,28 @@ impl HiddenArityPadder {
         self.synthetic_dummy_note(slot, self.output_note_label)
     }
 
+    pub fn synthetic_dummy_output_note_and_capsule(&self, slot: usize) -> (Note, RecoveryCapsule) {
+        self.synthetic_dummy_note_and_capsule(slot, self.output_note_label)
+    }
+
     fn synthetic_dummy_note(&self, slot: usize, label: &[u8]) -> Note {
-        Note::from_parts(
+        self.synthetic_dummy_note_and_capsule(slot, label).0
+    }
+
+    fn synthetic_dummy_note_and_capsule(
+        &self,
+        slot: usize,
+        label: &[u8],
+    ) -> (Note, RecoveryCapsule) {
+        let rseed = self.synthetic_dummy_rseed(slot, label);
+        Note::from_parts_with_recovery(
             self.sender_address.clone(),
             shieldd_sdk_asset::Value {
                 amount: Amount::zero(),
                 asset_id: self.asset_id,
             },
-            self.synthetic_dummy_rseed(slot, label),
+            rseed,
+            self.capk,
         )
         .expect("synthetic hidden-arity dummy note is valid")
     }

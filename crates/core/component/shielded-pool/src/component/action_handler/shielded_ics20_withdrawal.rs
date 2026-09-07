@@ -12,7 +12,7 @@ use shieldd_sdk_txhash::{EffectingData, TransactionContext};
 
 use crate::{
     component::{
-        action_handler::note_reshape,
+        action_handler::{note_reshape, shielded_withdrawal},
         transfer::{withdrawal_check, withdrawal_execute},
     },
     ShieldedIcs20Withdrawal, ShieldedIcs20WithdrawalChangePublic,
@@ -79,6 +79,14 @@ fn shielded_ics20_withdrawal_extract_public(
             .collect(),
         change_output: ShieldedIcs20WithdrawalChangePublic {
             note_commitment: action.body.change_output.note_payload.note_commitment,
+            recovery_commitment: action
+                .body
+                .change_output
+                .note_payload
+                .recovery_capsule
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("missing shielded withdrawal recovery capsule"))?
+                .commitment(),
         },
         outbound_asset_id: action.body.withdrawal.denom.id().0,
         outbound_amount: decaf377::Fq::from(action.body.withdrawal.amount),
@@ -86,7 +94,13 @@ fn shielded_ics20_withdrawal_extract_public(
             crate::shielded_ics20_withdrawal::withdrawal_effect_hash_limbs(effect_hash_bytes),
         routing_tag: action.body.routing_tag,
         routing_parameter_set_id: action.body.routing_parameter_set_id,
+        withdrawal_compliance_ciphertext: action.body.withdrawal_compliance_ciphertext.clone(),
         recent_position_floor: context.recent_position_floor,
+        volume_accumulator: crate::VolumeAccumulatorPublic {
+            nullifier: action.body.volume_accumulator.nullifier,
+            commitment: action.body.volume_accumulator.commitment,
+            day_start: action.body.volume_accumulator.day_start,
+        },
     };
     public
         .validate_shape()
@@ -140,6 +154,7 @@ pub async fn shielded_ics20_withdrawal_execute_verified<S: StateWrite>(
     )?;
 
     let current_block_time = block_time;
+    shielded_withdrawal::validate_volume(&state, &action.body.volume_accumulator).await?;
     let checked = withdrawal_check(&mut state, &action.body.withdrawal, current_block_time).await?;
     note_reshape::execute_proof_bound_effects(
         &mut state,
@@ -149,6 +164,7 @@ pub async fn shielded_ics20_withdrawal_execute_verified<S: StateWrite>(
         |output| &output.note_payload,
     )
     .await?;
+    shielded_withdrawal::execute_volume(&mut state, &action.body.volume_accumulator).await?;
     withdrawal_execute(&mut state, checked).await
 }
 

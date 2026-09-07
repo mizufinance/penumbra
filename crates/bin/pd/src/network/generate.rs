@@ -3,6 +3,9 @@
 //! for Shieldd.
 use crate::network::config::{get_network_dir, NetworkTendermintConfig, ValidatorKeys};
 use anyhow::{Context, Result};
+use decaf377::Fq;
+#[cfg(test)]
+use decaf377::Fr;
 use decaf377_rdsa::{SpendAuth, VerificationKey};
 use serde::{de, Deserialize};
 use shieldd_sdk_app::{
@@ -10,9 +13,14 @@ use shieldd_sdk_app::{
     params::AppParameters,
 };
 use shieldd_sdk_asset::BASE_ASSET_ID;
-use shieldd_sdk_compliance::genesis::Content as ComplianceContent;
+use shieldd_sdk_compliance::{
+    genesis::{Content as ComplianceContent, GenesisUserRegistration, NativeAssetRegistration},
+    structs::OrbisCapabilityCertificate,
+    ComplianceLeaf,
+};
 use shieldd_sdk_fee::genesis::Content as FeeContent;
 use shieldd_sdk_keys::Address;
+use shieldd_sdk_proto::DomainType;
 use shieldd_sdk_sct::genesis::Content as SctContent;
 use shieldd_sdk_sct::params::SctParameters;
 use shieldd_sdk_shielded_pool::{
@@ -56,6 +64,26 @@ pub struct NetworkConfig {
     pub tendermint_p2p_bind: SocketAddr,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ComplianceGenesisInput {
+    #[serde(default)]
+    native_assets:
+        Vec<shieldd_sdk_proto::shieldd::core::component::compliance::v1::NativeAssetRegistration>,
+    #[serde(default)]
+    users: Vec<ComplianceGenesisUserInput>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ComplianceGenesisUserInput {
+    address: String,
+    asset_id: shieldd_sdk_proto::shieldd::core::asset::v1::AssetId,
+    rnk_dh_pk_hex: String,
+    rnk_commitment_hex: String,
+    capability_certificate_hex: String,
+}
+
 impl NetworkConfig {
     /// Create a new testnet configuration, optionally customizing the allocations and validator
     /// set. By default, will use the prepared Discord allocations and Shieldd Labs CI validator
@@ -73,6 +101,7 @@ impl NetworkConfig {
         epoch_duration: Option<u64>,
         gas_price_simple: Option<u64>,
         compliance_registrar_vk: Vec<VerificationKey<SpendAuth>>,
+        compliance_genesis_input_file: Option<PathBuf>,
         tendermint_rpc_bind: SocketAddr,
         tendermint_p2p_bind: SocketAddr,
     ) -> anyhow::Result<NetworkConfig> {
@@ -91,12 +120,15 @@ impl NetworkConfig {
             tracing::info!(%address, "adding dynamic allocation to genesis");
             allocations.extend(NetworkAllocation::simple(address));
         }
+        let mut compliance_content =
+            Self::collect_compliance_genesis(compliance_genesis_input_file, chain_id)?;
+        compliance_content.compliance_registrar_vk = compliance_registrar_vk;
         let app_state = Self::make_genesis_content(
             chain_id,
             allocations,
             epoch_duration,
             gas_price_simple,
-            compliance_registrar_vk,
+            compliance_content,
         )?;
         let mut genesis = Self::make_genesis(app_state)?;
         genesis.validators = network_validators
@@ -171,7 +203,7 @@ impl NetworkConfig {
         allocations: Vec<Allocation>,
         epoch_duration: Option<u64>,
         gas_price_simple: Option<u64>,
-        compliance_registrar_vk: Vec<VerificationKey<SpendAuth>>,
+        compliance_content: ComplianceContent,
     ) -> anyhow::Result<shieldd_sdk_app::genesis::Content> {
         // Look up default app params, so we can fill in defaults.
         let default_app_params = AppParameters::default();
@@ -192,10 +224,7 @@ impl NetworkConfig {
                     fixed_alt_gas_prices: vec![],
                 },
             },
-            compliance_content: ComplianceContent {
-                compliance_registrar_vk,
-                ..Default::default()
-            },
+            compliance_content,
             shielded_pool_content: ShieldedPoolContent {
                 shielded_pool_params: ShieldedPoolParameters::default(),
                 allocations: allocations.clone(),
@@ -212,6 +241,85 @@ impl NetworkConfig {
             ..Default::default()
         };
         Ok(app_state)
+    }
+
+    fn collect_compliance_genesis(
+        input_file: Option<PathBuf>,
+        chain_id: &str,
+    ) -> anyhow::Result<ComplianceContent> {
+        let Some(input_file) = input_file else {
+            return Ok(ComplianceContent::default());
+        };
+        let file = File::open(&input_file).with_context(|| {
+            format!(
+                "could not open compliance genesis input {}",
+                input_file.display()
+            )
+        })?;
+        let input: ComplianceGenesisInput = serde_json::from_reader(file).with_context(|| {
+            format!(
+                "could not parse compliance genesis input {}",
+                input_file.display()
+            )
+        })?;
+        let native_assets: Vec<NativeAssetRegistration> = input
+            .native_assets
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        for registration in &native_assets {
+            registration.asset_policy()?;
+        }
+        let mut user_registrations = Vec::with_capacity(input.users.len());
+        for user in input.users {
+            let address: Address = user
+                .address
+                .parse()
+                .context("genesis user address must be a valid Shieldd address")?;
+            let asset_id: shieldd_sdk_asset::asset::Id = user.asset_id.try_into()?;
+            let registration = native_assets
+                .iter()
+                .find(|registration| registration.asset_id == asset_id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("genesis user asset {asset_id} is not registered in this input")
+                })?;
+            anyhow::ensure!(
+                registration.is_regulated,
+                "genesis user asset {asset_id} is not regulated"
+            );
+            let rnk_dh_pk_bytes: [u8; 32] = hex::decode(&user.rnk_dh_pk_hex)
+                .context("genesis user rnkDhPkHex must be hex")?
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("genesis user rnkDhPkHex must encode 32 bytes"))?;
+            let rnk_dh_pk = decaf377::Encoding(rnk_dh_pk_bytes)
+                .vartime_decompress()
+                .map_err(|_| anyhow::anyhow!("genesis user rnkDhPkHex is invalid"))?;
+            let rnk_commitment_bytes: [u8; 32] = hex::decode(&user.rnk_commitment_hex)
+                .context("genesis user rnkCommitmentHex must be hex")?
+                .try_into()
+                .map_err(|_| {
+                    anyhow::anyhow!("genesis user rnkCommitmentHex must encode 32 bytes")
+                })?;
+            let rnk_commitment = Fq::from_bytes_checked(&rnk_commitment_bytes)
+                .map_err(|_| anyhow::anyhow!("genesis user rnkCommitmentHex is not canonical"))?;
+            let ring_pk = registration.asset_policy()?.ring.ring_pk;
+            let leaf =
+                ComplianceLeaf::registered(address, asset_id, ring_pk, rnk_dh_pk, rnk_commitment)?;
+            let certificate_bytes = hex::decode(&user.capability_certificate_hex)
+                .context("genesis user capabilityCertificateHex must be hex")?;
+            let capability_certificate =
+                OrbisCapabilityCertificate::decode(certificate_bytes.as_slice())?;
+            capability_certificate.verify(&leaf, &registration.asset_policy()?, chain_id)?;
+            user_registrations.push(GenesisUserRegistration {
+                leaf,
+                capability_certificate,
+            });
+        }
+        Ok(ComplianceContent {
+            native_assets,
+            user_registrations,
+            ..Default::default()
+        })
     }
 
     /// Build Tendermint genesis data, based on Shieldd initial application state.
@@ -323,6 +431,7 @@ pub fn network_generate(
     allocation_address: Option<Address>,
     gas_price_simple: Option<u64>,
     compliance_registrar_vk: Vec<VerificationKey<SpendAuth>>,
+    compliance_genesis_input_file: Option<PathBuf>,
     tendermint_rpc_bind: SocketAddr,
     tendermint_p2p_bind: SocketAddr,
 ) -> anyhow::Result<()> {
@@ -339,6 +448,7 @@ pub fn network_generate(
         epoch_duration,
         gas_price_simple,
         compliance_registrar_vk,
+        compliance_genesis_input_file,
         tendermint_rpc_bind,
         tendermint_p2p_bind,
     )?;
@@ -616,6 +726,120 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parses_compliance_genesis_assets_and_users() -> anyhow::Result<()> {
+        let input = tempfile::NamedTempFile::new()?;
+        let address_text = "shieldd1u29dhz4vxgnek6a3vzxlejg0l83wegpu7hgs3yphdvljcnnnh89dvs6lc9hxxw94w464t7lh5x36cxnxyx0";
+        let address: Address = address_text.parse()?;
+        let rnk_dh_pk_hex = hex::encode(address.diversified_generator().vartime_compress().0);
+        let rnk_commitment_hex = hex::encode(
+            shieldd_sdk_compliance::compliance_nullifier_key_commitment(Fq::from(1u64)).to_bytes(),
+        );
+        let asset_id = shieldd_sdk_asset::asset::REGISTRY
+            .parse_denom("wregulated_usd")
+            .expect("regulated test asset is registered")
+            .id();
+        let leaf = ComplianceLeaf::registered(
+            address.clone(),
+            asset_id,
+            decaf377::Element::GENERATOR,
+            address.diversified_generator().clone(),
+            shieldd_sdk_compliance::compliance_nullifier_key_commitment(Fq::from(1u64)),
+        )?;
+        let policy = shieldd_sdk_compliance::AssetPolicy::new(
+            decaf377::Element::GENERATOR,
+            u128::MAX,
+            Vec::new(),
+            None,
+            "shieldd-dev-ring".to_owned(),
+            decaf377::Element::GENERATOR,
+            "shieldd-dev-policy".to_owned(),
+            "read".to_owned(),
+            "document".to_owned(),
+        );
+        let certificate_hex = hex::encode(
+            OrbisCapabilityCertificate::sign_for_test(
+                "shieldd-local-devnet",
+                &leaf,
+                &policy,
+                Fr::from(1u64),
+            )?
+            .encode_to_vec(),
+        );
+        std::fs::write(
+            input.path(),
+            r#"{
+                "nativeAssets": [{
+                    "assetId": {"altBaseDenom": "wregulated_usd"},
+                    "isRegulated": true,
+                    "dkPub": "QlNHQToHVpSZCJ18OhmzH2AMcS1aygS57dqgrxArQBI=",
+                    "registrationAuthorityVk": {
+                        "inner": "suz5uQgtYwZTi+c7DW7nQRQfMiIVLaeGhdZZbvyMFQY="
+                    },
+                    "seizureAuthorityVk": {
+                        "inner": "Lr1C3TojBwg8g055+554fjUt0z4NcZ+GrkrbAv44JAk="
+                    },
+                    "ringPk": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                    "ringId": "shieldd-dev-ring",
+                    "policyId": "shieldd-dev-policy",
+                    "permission": "read",
+                    "resource": "document"
+                }],
+                "users": [{
+                    "address": "__ADDRESS__",
+                    "assetId": {"altBaseDenom": "wregulated_usd"},
+                    "rnkDhPkHex": "__RNK_DH_PK__",
+                    "rnkCommitmentHex": "__RNK_COMMITMENT__",
+                    "capabilityCertificateHex": "__CERTIFICATE__"
+                }]
+            }"#
+            .replace("__ADDRESS__", address_text)
+            .replace("__RNK_DH_PK__", &rnk_dh_pk_hex)
+            .replace("__RNK_COMMITMENT__", &rnk_commitment_hex)
+            .replace("__CERTIFICATE__", &certificate_hex),
+        )?;
+
+        let content = NetworkConfig::collect_compliance_genesis(
+            Some(input.path().to_path_buf()),
+            "shieldd-local-devnet",
+        )?;
+        let chain_error = NetworkConfig::collect_compliance_genesis(
+            Some(input.path().to_path_buf()),
+            "another-chain",
+        )
+        .expect_err("genesis capability certificate must bind the configured chain");
+        assert!(chain_error.to_string().contains("chain_id mismatch"));
+        assert_eq!(content.native_assets.len(), 1);
+        assert_eq!(content.user_registrations.len(), 1);
+        let registration = &content.native_assets[0];
+        let expected_asset_id: shieldd_sdk_asset::asset::Id =
+            shieldd_sdk_proto::shieldd::core::asset::v1::AssetId {
+                inner: Vec::new(),
+                alt_bech32m: String::new(),
+                alt_base_denom: "wregulated_usd".to_owned(),
+            }
+            .try_into()?;
+        assert_eq!(registration.asset_id, expected_asset_id);
+        assert!(registration.is_regulated);
+        let expected_dk_pub: [u8; 32] =
+            hex::decode("425347413a07569499089d7c3a19b31f600c712d5aca04b9eddaa0af102b4012")?
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("detection key is not 32 bytes"))?;
+        assert_eq!(registration.dk_pub, Some(expected_dk_pub));
+        assert!(registration.registration_authority_vk.is_some());
+        assert!(registration.seizure_authority_vk.is_some());
+        assert_eq!(registration.ring_id, "shieldd-dev-ring");
+        assert_eq!(registration.policy_id, "shieldd-dev-policy");
+        let leaf = &content.user_registrations[0].leaf;
+        assert_eq!(leaf.asset_id, expected_asset_id);
+        assert_eq!(
+            leaf.rnk_commitment,
+            shieldd_sdk_compliance::compliance_nullifier_key_commitment(Fq::from(1u64))
+        );
+        leaf.validate_registration(registration.asset_policy()?.ring.ring_pk)?;
+        Ok(())
+    }
+
+    #[test]
     fn parse_allocations_from_good_csv() -> anyhow::Result<()> {
         let csv_content = r#"
 "amount","denom","address"
@@ -665,6 +889,7 @@ mod tests {
             None,
             None,
             vec![],
+            None,
             SocketAddr::from_str("0.0.0.0:26657")?,
             SocketAddr::from_str("0.0.0.0:26656")?,
         )?;
@@ -706,6 +931,7 @@ mod tests {
             None,
             None,
             vec![],
+            None,
             SocketAddr::from_str("0.0.0.0:26657")?,
             SocketAddr::from_str("0.0.0.0:26656")?,
         )?;

@@ -6,6 +6,7 @@ use crate::{
         compliance_leaf_from_typed, indexed_leaf_from_typed, merkle_path_from_typed,
         point_affine_bytes, IndexedLeafBinary, MerklePathBinary, PointAffineBytes,
     },
+    gnark::RecoveryCapsuleWitness,
     note_reshape::{
         NoteReshapeInputPrivate, NoteReshapeInputPublic, NoteReshapeOutputPrivate,
         NoteReshapeOutputPublic, NoteReshapeProofPrivate, NoteReshapeProofPublic,
@@ -15,12 +16,13 @@ use crate::{
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NoteReshapeSpendWitnessV6 {
+pub struct NoteReshapeSpendWitness {
     pub(crate) is_dummy: bool,
     pub nullifier: [u8; 32],
     pub(crate) dummy_nullifier_seed: [u8; 32],
     pub spent_note_blinding: [u8; 32],
     pub spent_note_amount: [u8; 32],
+    pub spent_note_recovery_commitment: [u8; 32],
     pub state_commitment_commitment: [u8; 32],
     pub state_commitment_position: u64,
     pub state_commitment_auth_path: Vec<[[u8; 32]; 3]>,
@@ -30,20 +32,22 @@ pub struct NoteReshapeSpendWitnessV6 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NoteReshapeOutputWitnessV6 {
+pub struct NoteReshapeOutputWitness {
     pub note_commitment: [u8; 32],
+    pub recovery_commitment: [u8; 32],
     pub created_note_blinding: [u8; 32],
     pub created_note_amount: [u8; 32],
+    pub recovery_capsule: RecoveryCapsuleWitness,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NoteReshapeSharedNoteContextWitnessV6 {
+pub struct NoteReshapeSharedNoteContextWitness {
     pub asset_id: [u8; 32],
     pub diversified_generator_affine: PointAffineBytes,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NoteReshapeWitnessV6 {
+pub struct NoteReshapeWitness {
     pub family_id: NoteReshapeFamilyId,
     pub total_length: u32,
     pub n_in: u32,
@@ -69,17 +73,26 @@ pub struct NoteReshapeWitnessV6 {
     pub routing_nonce: [u8; 32],
     pub sender_compliance_path: MerklePathBinary,
     pub sender_compliance_position: u64,
-    pub sender_d: [u8; 32],
+    pub sender_capk_affine: PointAffineBytes,
+    pub sender_rnk_dh_pk_affine: PointAffineBytes,
+    pub sender_rnk_commitment: [u8; 32],
     pub sender_status: [u8; 32],
-    pub shared: NoteReshapeSharedNoteContextWitnessV6,
-    pub spends: Vec<NoteReshapeSpendWitnessV6>,
-    pub outputs: Vec<NoteReshapeOutputWitnessV6>,
+    pub shared: NoteReshapeSharedNoteContextWitness,
+    pub spends: Vec<NoteReshapeSpendWitness>,
+    pub outputs: Vec<NoteReshapeOutputWitness>,
     pub balance_commitment_affine: PointAffineBytes,
     pub ak_affine: PointAffineBytes,
 }
 
-fn compliance_leaf_parts(leaf: &crate::gnark::typed::ComplianceLeafBinary) -> ([u8; 32], [u8; 32]) {
-    (leaf.d, leaf.status)
+fn compliance_leaf_parts(
+    leaf: &crate::gnark::typed::ComplianceLeafBinary,
+) -> (PointAffineBytes, PointAffineBytes, [u8; 32], [u8; 32]) {
+    (
+        leaf.capk_affine.clone(),
+        leaf.rnk_dh_pk_affine.clone(),
+        leaf.rnk_commitment,
+        leaf.status,
+    )
 }
 
 fn verification_key_point(
@@ -95,19 +108,20 @@ fn spend_witness(
     public: &NoteReshapeInputPublic,
     private: &NoteReshapeInputPrivate,
     index: usize,
-) -> Result<NoteReshapeSpendWitnessV6> {
+) -> Result<NoteReshapeSpendWitness> {
     let state_commitment_auth_path = private
         .state_commitment_proof
         .auth_path()
         .iter()
         .map(|siblings| siblings.map(|sibling| Fq::from(sibling).to_bytes()))
         .collect::<Vec<_>>();
-    Ok(NoteReshapeSpendWitnessV6 {
+    Ok(NoteReshapeSpendWitness {
         is_dummy: private.is_dummy,
         nullifier: public.nullifier.0.to_bytes(),
         dummy_nullifier_seed: private.dummy_nullifier_seed.to_bytes(),
         spent_note_blinding: private.spent_note.note_blinding().to_bytes(),
         spent_note_amount: Fq::from(private.spent_note.value().amount).to_bytes(),
+        spent_note_recovery_commitment: private.spent_note.recovery_commitment().0.to_bytes(),
         state_commitment_commitment: private.state_commitment_proof.commitment().0.to_bytes(),
         state_commitment_position: u64::from(private.state_commitment_proof.position()),
         state_commitment_auth_path,
@@ -120,15 +134,18 @@ fn spend_witness(
 fn output_witness(
     public: &NoteReshapeOutputPublic,
     private: &NoteReshapeOutputPrivate,
-) -> Result<NoteReshapeOutputWitnessV6> {
-    Ok(NoteReshapeOutputWitnessV6 {
+    capk: decaf377::Element,
+) -> Result<NoteReshapeOutputWitness> {
+    Ok(NoteReshapeOutputWitness {
         note_commitment: public.note_commitment.0.to_bytes(),
+        recovery_commitment: public.recovery_commitment.0.to_bytes(),
         created_note_blinding: private.created_note.note_blinding().to_bytes(),
         created_note_amount: Fq::from(private.created_note.value().amount).to_bytes(),
+        recovery_capsule: RecoveryCapsuleWitness::from_note(&private.created_note, capk)?,
     })
 }
 
-impl NoteReshapeWitnessV6 {
+impl NoteReshapeWitness {
     pub fn from_public_private(
         public: &NoteReshapeProofPublic,
         private: &NoteReshapeProofPrivate,
@@ -161,20 +178,21 @@ impl NoteReshapeWitnessV6 {
             .outputs
             .iter()
             .zip(private.outputs.iter())
-            .map(|(public, private)| output_witness(public, private))
+            .map(|(public, output)| output_witness(public, output, private.sender_leaf.capk))
             .collect::<Result<Vec<_>>>()?;
         let first_input = private
             .inputs
             .first()
             .ok_or_else(|| anyhow!("note reshape witness requires a real first input"))?;
-        let shared = NoteReshapeSharedNoteContextWitnessV6 {
+        let shared = NoteReshapeSharedNoteContextWitness {
             asset_id: first_input.spent_note.asset_id().0.to_bytes(),
             diversified_generator_affine: point_affine_bytes(
                 first_input.spent_note.diversified_generator(),
             )?,
         };
         let sender_leaf = compliance_leaf_from_typed(&private.sender_leaf)?;
-        let (sender_d, sender_status) = compliance_leaf_parts(&sender_leaf);
+        let (sender_capk_affine, sender_rnk_dh_pk_affine, sender_rnk_commitment, sender_status) =
+            compliance_leaf_parts(&sender_leaf);
 
         let mut witness = Self {
             family_id: public.family_id,
@@ -206,7 +224,9 @@ impl NoteReshapeWitnessV6 {
             routing_nonce: private.routing_nonce.to_bytes(),
             sender_compliance_path: merkle_path_from_typed(&private.sender_compliance_path)?,
             sender_compliance_position: private.sender_compliance_position,
-            sender_d,
+            sender_capk_affine,
+            sender_rnk_dh_pk_affine,
+            sender_rnk_commitment,
             sender_status,
             shared,
             spends,

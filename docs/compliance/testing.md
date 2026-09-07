@@ -10,6 +10,7 @@ The process-compose smoke test creates its own temporary development state.
 | `just test` | Ordinary Rust tests; ignored tests are excluded |
 | `just go-check` | Gnark Go formatting, compilation, tests, and vet |
 | `just gnark-proof-tests` | Fast witness, statement, and Go checks |
+| `just note-seizure-proof-tests` | Real seizure proofs and host state transitions |
 | `just gnark-proof-tests-slow` | Real release-mode proofs using both library and daemon transports |
 | `just snarkpack-slow` | Release-mode oracle and two-way aggregation interoperability |
 | `just snarkpack-dos-gate` | Release latency and bounded-size rejection gate |
@@ -22,8 +23,8 @@ The process-compose smoke test creates its own temporary development state.
 
 Proof-generating unit tests are explicitly ignored. `just gnark-proof-tests-slow`
 selects only these tests in release mode and validates their prerequisites.
-It exercises Transfer, both NoteReshape families, and withdrawal, including both
-withdrawal callers. Missing artifacts or transports fail the command.
+It exercises Transfer, both NoteReshape families, both withdrawal callers, and
+daemon-backed NoteSeizure. Missing artifacts or transports fail the command.
 Fixture-blessing tests remain separate and are never selected by this command.
 
 ## Scanner

@@ -186,7 +186,7 @@ impl ComplianceAssetTree {
 
     /// Load tree from SQLite storage.
     ///
-    /// Loads full leaf data including policy (dk_pub, threshold) to ensure
+    /// Loads full leaf data including policy (dk_pub, daily_volume_limit) to ensure
     /// correct tree reconstruction with matching leaf commitments.
     pub fn from_store(store: &mut ComplianceTreeStore<'_, '_>) -> Result<Self> {
         use shieldd_sdk_compliance::indexed_tree::{LeafParams, LeafRing};
@@ -251,7 +251,7 @@ impl ComplianceAssetTree {
                 next_value,
                 params: LeafParams {
                     dk_pub,
-                    threshold: leaf_data.threshold,
+                    daily_volume_limit: leaf_data.daily_volume_limit,
                     route_policy_hash,
                 },
                 ring: LeafRing {
@@ -268,7 +268,7 @@ impl ComplianceAssetTree {
                 position = pos,
                 value = ?leaf_data.value,
                 next_index = leaf_data.next_index,
-                threshold = leaf_data.threshold,
+                daily_volume_limit = leaf_data.daily_volume_limit,
                 dk_pub_first_byte = leaf_data.dk_pub[0],
                 "ComplianceAssetTree::from_store: loaded leaf"
             );
@@ -301,7 +301,7 @@ impl ComplianceAssetTree {
     /// Sync a leaf from an EventAssetRegistered (preserves policy data).
     ///
     /// This is the correct method to use when syncing from CompactBlock events,
-    /// as it preserves the full IndexedLeaf data including policy (dk_pub, threshold).
+    /// as it preserves the full IndexedLeaf data including policy (dk_pub, daily_volume_limit).
     pub fn sync_from_event(
         &mut self,
         new_leaf: IndexedLeaf,
@@ -390,7 +390,7 @@ impl ComplianceAssetTree {
                     next_index: leaf.next_index,
                     next_value: leaf.next_value.to_bytes(),
                     dk_pub: leaf.params.dk_pub.vartime_compress().0,
-                    threshold: leaf.params.threshold,
+                    daily_volume_limit: leaf.params.daily_volume_limit,
                     route_policy_hash: leaf.params.route_policy_hash.to_bytes(),
                     ring_pk: leaf.ring.ring_pk.vartime_compress().0,
                     ring_id_hash: leaf.ring.ring_id_hash.to_bytes(),
@@ -499,7 +499,7 @@ mod tests {
 
         // Create a leaf with non-default policy (simulating a regulated asset)
         let dk_pub = decaf377::Element::GENERATOR; // Non-identity element
-        let threshold = 1000u128;
+        let daily_volume_limit = 1000u128;
 
         let new_leaf = IndexedLeaf {
             value: Fq::from(12345u64),
@@ -507,7 +507,7 @@ mod tests {
             next_value: FQ_MAX.clone(),
             params: LeafParams {
                 dk_pub,
-                threshold,
+                daily_volume_limit,
                 route_policy_hash: shieldd_sdk_compliance::indexed_tree::string_to_fq(""),
             },
             ring: LeafRing::default(),
@@ -537,7 +537,7 @@ mod tests {
         assert_eq!(position, 1);
         assert!(is_regulated);
         assert_eq!(retrieved_leaf.params.dk_pub, dk_pub);
-        assert_eq!(retrieved_leaf.params.threshold, threshold);
+        assert_eq!(retrieved_leaf.params.daily_volume_limit, daily_volume_limit);
     }
 
     #[test]

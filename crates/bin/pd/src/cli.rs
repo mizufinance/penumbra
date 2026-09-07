@@ -175,6 +175,9 @@ pub enum NetworkCommand {
         /// Compliance registrar verification key to authorize asset registration grants.
         #[clap(long = "compliance-registrar-vk-hex")]
         compliance_registrar_vk_hex: Vec<String>,
+        /// Path to JSON containing native compliance assets and genesis users.
+        #[clap(long, parse(from_os_str))]
+        compliance_genesis_input_file: Option<PathBuf>,
         /// Base hostname for a validator's p2p service. If multiple validators
         /// exist in the genesis, e.g. via `--validators-input-file`, then
         /// numeric suffixes are automatically added, e.g. "-0", "-1", etc.

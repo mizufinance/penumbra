@@ -31,9 +31,9 @@ const (
 )
 
 var (
-	leafDomain         = fqDomain("shieldd.nullifier.imt.leaf.v1")
-	historyEmptyDomain = fqDomain("shieldd.nullifier.history.empty.v2")
-	historyNodeDomain  = fqDomain("shieldd.nullifier.history.node.v2")
+	leafDomain         = fqDomain("shieldd.nullifier.imt.leaf")
+	historyEmptyDomain = fqDomain("shieldd.nullifier.history.empty")
+	historyNodeDomain  = fqDomain("shieldd.nullifier.history.node")
 )
 
 type indexedLeaf struct {
@@ -478,7 +478,7 @@ func writeArtifacts(dir string, innerPK groth16.ProvingKey, innerVK groth16.Veri
 	if err := artifacts.WriteJSON(filepath.Join(dir, "sample_chunk_proof.json"), bw6ProofJSON{A: artifacts.G1PointJSON{X: bw6Proof.Ar.X.String(), Y: bw6Proof.Ar.Y.String()}, B: artifacts.G1PointJSON{X: bw6Proof.Bs.X.String(), Y: bw6Proof.Bs.Y.String()}, C: artifacts.G1PointJSON{X: bw6Proof.Krs.X.String(), Y: bw6Proof.Krs.Y.String()}, Commitment: artifacts.G1PointJSON{X: bw6Proof.Commitments[0].X.String(), Y: bw6Proof.Commitments[0].Y.String()}, CommitmentPok: artifacts.G1PointJSON{X: bw6Proof.CommitmentPok.X.String(), Y: bw6Proof.CommitmentPok.Y.String()}}); err != nil {
 		return err
 	}
-	metadata := map[string]any{"schema": "shieldd.historical-proof.indexed.v2", "unsafe_test_setup": true, "protocol_version": protocolVersion, "tree_depth": treeDepth, "chunk_width": 10, "inner_constraints": innerConstraints, "outer_constraints": outerConstraints, "generation_wire_proof_bytes": 192, "chunk_wire_proof_bytes": 480}
+	metadata := map[string]any{"schema": "shieldd.historical-proof.indexed", "unsafe_test_setup": true, "protocol_version": protocolVersion, "tree_depth": treeDepth, "chunk_width": 10, "inner_constraints": innerConstraints, "outer_constraints": outerConstraints, "generation_wire_proof_bytes": 192, "chunk_wire_proof_bytes": 480}
 	if err := artifacts.WriteJSON(filepath.Join(dir, "metadata.json"), metadata); err != nil {
 		return err
 	}

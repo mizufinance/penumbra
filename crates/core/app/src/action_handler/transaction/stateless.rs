@@ -111,6 +111,9 @@ mod tests {
                 asset_anchor: StateCommitment(decaf377::Fq::from(0u64)),
                 routing: Default::default(),
                 routing_parameter_set_id: Fq::from(0u64),
+                volume_accumulator:
+                    shieldd_sdk_shielded_pool::VolumeAccumulatorPayload::canonical_fee_funding(),
+                proof_context: shieldd_sdk_shielded_pool::TransferProofContext::Ordinary,
             },
             auth_sigs: Vec::new(),
             proof: TransferProof::default(),
@@ -203,6 +206,9 @@ mod tests {
                 asset_anchor: StateCommitment(Fq::from(0u64)),
                 routing: Default::default(),
                 routing_parameter_set_id: Fq::from(0u64),
+                volume_accumulator:
+                    shieldd_sdk_shielded_pool::VolumeAccumulatorPayload::canonical_fee_funding(),
+                proof_context: shieldd_sdk_shielded_pool::TransferProofContext::Ordinary,
             },
             auth_sigs: Vec::new(),
             proof: TransferProof::default(),

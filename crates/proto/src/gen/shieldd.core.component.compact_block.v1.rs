@@ -84,7 +84,7 @@ pub struct StatePayload {
     #[prost(message, optional, tag = "1")]
     pub source: ::core::option::Option<super::super::sct::v1::CommitmentSource>,
     /// The state payload itself.
-    #[prost(oneof = "state_payload::StatePayload", tags = "2, 3")]
+    #[prost(oneof = "state_payload::StatePayload", tags = "2, 3, 4")]
     pub state_payload: ::core::option::Option<state_payload::StatePayload>,
 }
 /// Nested message and enum types in `StatePayload`.
@@ -123,6 +123,25 @@ pub mod state_payload {
             "/shieldd.core.component.compact_block.v1.StatePayload.Note".into()
         }
     }
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct VolumeAccumulator {
+        #[prost(message, optional, tag = "1")]
+        pub payload: ::core::option::Option<
+            super::super::super::shielded_pool::v1::VolumeAccumulatorPayload,
+        >,
+    }
+    impl ::prost::Name for VolumeAccumulator {
+        const NAME: &'static str = "VolumeAccumulator";
+        const PACKAGE: &'static str = "shieldd.core.component.compact_block.v1";
+        fn full_name() -> ::prost::alloc::string::String {
+            "shieldd.core.component.compact_block.v1.StatePayload.VolumeAccumulator"
+                .into()
+        }
+        fn type_url() -> ::prost::alloc::string::String {
+            "/shieldd.core.component.compact_block.v1.StatePayload.VolumeAccumulator"
+                .into()
+        }
+    }
     /// The state payload itself.
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum StatePayload {
@@ -130,6 +149,8 @@ pub mod state_payload {
         RolledUp(RolledUp),
         #[prost(message, tag = "3")]
         Note(Note),
+        #[prost(message, tag = "4")]
+        VolumeAccumulator(VolumeAccumulator),
     }
 }
 impl ::prost::Name for StatePayload {

@@ -8,15 +8,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(crate) const CIRCUIT_METADATA_SCHEMA: &str = "shieldd.gnark.circuit_metadata.v2";
-const CONSTRAINT_MANIFEST_SCHEMA: &str = "shieldd.gnark.constraint_manifest.v1";
-const SETUP_PROVENANCE_SCHEMA: &str = "shieldd.gnark.setup_provenance.v2";
+pub(crate) const CIRCUIT_METADATA_SCHEMA: &str = "shieldd.gnark.circuit_metadata";
+const CONSTRAINT_MANIFEST_SCHEMA: &str = "shieldd.gnark.constraint_manifest";
+const SETUP_PROVENANCE_SCHEMA: &str = "shieldd.gnark.setup_provenance";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FamilyKind {
     Transfer,
     NoteReshape,
     ShieldedIcs20Withdrawal,
+    NoteSeizure,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,7 +49,7 @@ pub(crate) struct DeployedFamily {
     pub max_real_outputs: usize,
 }
 
-pub(crate) const DEPLOYED_FAMILIES: [DeployedFamily; 4] = [
+pub(crate) const DEPLOYED_FAMILIES: [DeployedFamily; 5] = [
     DeployedFamily {
         kind: FamilyKind::Transfer,
         id: None,
@@ -105,12 +106,26 @@ pub(crate) const DEPLOYED_FAMILIES: [DeployedFamily; 4] = [
         min_real_outputs: 1,
         max_real_outputs: 1,
     },
+    DeployedFamily {
+        kind: FamilyKind::NoteSeizure,
+        id: None,
+        label: "note_seizure",
+        artifact_name: "note_seizure",
+        n_in: 1,
+        n_out: 0,
+        input_padding: InputPadding::Fixed,
+        output_padding: OutputPadding::Fixed,
+        min_real_inputs: 1,
+        max_real_inputs: 1,
+        min_real_outputs: 0,
+        max_real_outputs: 0,
+    },
 ];
 
 pub(crate) fn validate_deployed_family_roster(actual: &[DeployedFamily]) -> Result<()> {
     if actual != DEPLOYED_FAMILIES {
         bail!(
-            "generated proof-family roster does not match the exact four deployed families:\nexpected: {:#?}\nactual: {actual:#?}",
+            "generated proof-family roster does not match the exact deployed families:\nexpected: {:#?}\nactual: {actual:#?}",
             DEPLOYED_FAMILIES
         );
     }
@@ -170,7 +185,6 @@ pub(crate) struct CircuitMetadataJson {
 #[serde(deny_unknown_fields)]
 struct GenerationSelfTestJson {
     proof_case: String,
-    witness_format_version: u64,
     witness_sha256_hex: String,
     proved_and_verified_in_process: bool,
 }
@@ -599,7 +613,6 @@ fn validate_setup_provenance(
     let mut witness_hashes = BTreeSet::new();
     for test in &setup.generation_self_tests {
         if test.proof_case.is_empty()
-            || test.witness_format_version == 0
             || !is_lower_sha256(&test.witness_sha256_hex)
             || !test.proved_and_verified_in_process
         {
@@ -876,7 +889,6 @@ mod tests {
             verifying_key_json_sha256_hex: hash(&vk_json),
             generation_self_tests: vec![GenerationSelfTestJson {
                 proof_case: "synthetic".into(),
-                witness_format_version: 1,
                 witness_sha256_hex: hash(b"witness"),
                 proved_and_verified_in_process: true,
             }],
@@ -966,7 +978,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_roster_and_all_four_repository_artifacts_validate() {
+    fn exact_roster_and_all_repository_artifacts_validate() {
         validate_deployed_family_roster(&DEPLOYED_FAMILIES).expect("exact roster validates");
         let artifact_root =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tools/gnark/artifacts");
@@ -993,7 +1005,7 @@ mod tests {
             let (fixture, family) = synthetic_fixture();
             if mutation == 0 {
                 rewrite_metadata(&fixture, family, |metadata| {
-                    metadata.schema = "shieldd.gnark.circuit_metadata.v1".into()
+                    metadata.schema = "shieldd.gnark.wrong_metadata".into()
                 });
             } else if mutation == 1 {
                 rewrite_metadata(&fixture, family, |metadata| {

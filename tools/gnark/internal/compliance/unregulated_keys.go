@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	unregulatedDKPubDomain  = "shieldd.compliance.unregulated.dk-pub.v1"
-	unregulatedRingPKDomain = "shieldd.compliance.unregulated.ring-pk.v1"
+	unregulatedDKPubDomain  = "shieldd.compliance.unregulated.dk-pub"
+	unregulatedRingPKDomain = "shieldd.compliance.unregulated.ring-pk"
 )
 
 func deriveUnregulatedSinkPoint(domain string) (gnarkte.Point, error) {

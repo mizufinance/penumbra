@@ -12,7 +12,7 @@ mod preflight;
 mod srs;
 mod statement;
 mod strict_deserialize;
-mod torus_v2;
+mod torus;
 mod transcript;
 mod transfer_family_dispatch;
 
@@ -23,9 +23,9 @@ use shieldd_sdk_proof_params::batch::BatchItem;
 
 pub use aggregate_proof_wrapper::{
     decode_wrapped_aggregate_proof, decode_wrapped_aggregate_proof_inner_range,
-    decode_wrapped_torus_v2_aggregate_proof, encode_wrapped_aggregate_proof,
-    encode_wrapped_torus_v2_aggregate_proof, AggregateProofBytesError,
-    AGGREGATE_PROOF_TORUS_V2_WRAPPER_DOMAIN, AGGREGATE_PROOF_WRAPPER_DOMAIN,
+    decode_wrapped_torus_aggregate_proof, encode_wrapped_aggregate_proof,
+    encode_wrapped_torus_aggregate_proof, AggregateProofBytesError,
+    AGGREGATE_PROOF_TORUS_WRAPPER_DOMAIN, AGGREGATE_PROOF_WRAPPER_DOMAIN,
     MAX_AGGREGATE_PROOF_BYTES,
 };
 #[doc(hidden)]
@@ -53,7 +53,7 @@ pub use preflight::{
 pub use srs::{
     load_active_production_srs, load_production_srs_for_id, srs_id, srs_report, DevSrs,
     DevSrsReport, DEFAULT_DEV_SRS_ID, DEFAULT_MAX_PADDED_PROOF_COUNT, DEV_SRS_BACKEND_ID,
-    DEV_SRS_CURVE_ID, DEV_SRS_VERSION, PRODUCTION_SRS_ARTIFACT_DIR_ENV,
+    DEV_SRS_CURVE_ID, PRODUCTION_SRS_ARTIFACT_DIR_ENV,
 };
 pub use statement::{
     aggregate_verification_key_digest, challenge_context, encode_statement, statement_digest,
@@ -72,12 +72,12 @@ pub fn aggregate_family(
 
 /// Build the SnarkPack torus-v2 wire format while retaining the v1 proof
 /// relation and Fiat-Shamir transcript.
-pub fn aggregate_family_torus_v2(
+pub fn aggregate_family_torus(
     statement: &AggregateStatement,
     items: &[BatchItem],
     srs: &DevSrs,
 ) -> Result<Vec<u8>> {
-    SnarkpackBackend::aggregate_family_torus_v2(statement, items, srs)
+    SnarkpackBackend::aggregate_family_torus(statement, items, srs)
 }
 
 pub fn verify_family_aggregate(
@@ -89,15 +89,15 @@ pub fn verify_family_aggregate(
     SnarkpackBackend::verify_family_aggregate(statement, pvk, aggregate_proof_bytes, srs)
 }
 
-/// Verify a torus-v2 aggregate after reconstructing and validating every v1
+/// Verify a torus aggregate after reconstructing and validating every standard
 /// target-group value.
-pub fn verify_family_aggregate_torus_v2(
+pub fn verify_family_aggregate_torus(
     statement: &AggregateStatement,
     pvk: &PreparedVerifyingKey<Bls12_377>,
     aggregate_proof_bytes: &[u8],
     srs: &DevSrs,
 ) -> std::result::Result<(), AggregateVerifyError> {
-    SnarkpackBackend::verify_family_aggregate_torus_v2(statement, pvk, aggregate_proof_bytes, srs)
+    SnarkpackBackend::verify_family_aggregate_torus(statement, pvk, aggregate_proof_bytes, srs)
 }
 
 #[doc(hidden)]

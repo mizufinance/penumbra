@@ -5,6 +5,14 @@ pub use enrichment::{
 
 pub mod event;
 
+pub mod audit_log;
+pub use audit_log::{
+    audit_bytes_commitment, AuditEffect, AuditEffectRecord, AuditLogState, AuditSource,
+    IbcOperation, WithdrawalKind, AUDIT_LOG_VERSION, MAX_AUDIT_RECORD_BYTES,
+};
+#[cfg(feature = "component")]
+pub use audit_log::{AuditLogRead, AuditLogWrite};
+
 pub mod issuer_keys;
 pub use event::{
     EventAssetRegistered, EventComplianceAnchor, EventUserAssetStatusChanged, EventUserRegistered,
@@ -16,6 +24,9 @@ pub use issuer_keys::{
 
 pub mod structs;
 pub use structs::{
+    compliance_nullifier_key_commitment,
+    derive_regulated_nullifier_key,
+    effective_nullifier_key,
     AssetParams,
     AssetPolicy,
     ComplianceLeaf,
@@ -48,6 +59,18 @@ pub use transfer::{
     TRANSFER_WIRE_BYTES,
 };
 
+pub mod dleq_evidence;
+pub use dleq_evidence::{fq_to_challenge_scalar, verify_dleq, DleqProof, IssuerDhEvidence};
+
+pub mod withdrawal;
+pub use withdrawal::{
+    address_components, classify_withdrawal_with_issuer, derive_withdrawal_encryption_material,
+    encrypt_withdrawal, encrypt_withdrawal_with_material, withdrawal_encryption_key,
+    withdrawal_key_confirmation, WithdrawalComplianceCiphertext, WithdrawalEncryptionResult,
+    WITHDRAWAL_ADDRESS_BYTES, WITHDRAWAL_ADDRESS_CIPHERTEXT_FQS, WITHDRAWAL_COMPLIANCE_WIRE_BYTES,
+    WITHDRAWAL_KEY_CONFIRMATION_DOMAIN,
+};
+
 pub mod tree;
 pub use tree::{QuadTree, DEFAULT_DEPTH, ZERO_HASHES};
 
@@ -67,7 +90,7 @@ pub mod registry;
 #[cfg(feature = "component")]
 pub use registry::{
     AssetGrantAdmission, ComplianceRegistryRead, ComplianceRegistryWrite, GenesisAssetAdmission,
-    UserGrantAdmission, UserLeafRecord,
+    NoteSeizureLifecycle, UserGrantAdmission, UserLeafRecord,
 };
 
 #[cfg(feature = "component")]
@@ -86,18 +109,25 @@ pub use genesis::Content as GenesisContent;
 pub mod crypto;
 pub use crypto::{
     compliance_derivation, decrypt_detection_tier, decrypt_tier_bytes, derive_compliance_scalar,
-    encrypt_tier_bytes, COMPLIANCE_STREAM_CIPHER_DOMAIN, ISSUER_DETECTION_DOMAIN,
-    UNREGULATED_SINK_DK_PUB, UNREGULATED_SINK_RING_PK,
+    encrypt_tier_bytes, transfer_key_confirmation, COMPLIANCE_STREAM_CIPHER_DOMAIN,
+    ISSUER_DETECTION_DOMAIN, TRANSFER_KEY_CONFIRMATION_DOMAIN, UNREGULATED_SINK_DK_PUB,
+    UNREGULATED_SINK_RING_PK,
 };
 
 pub mod scanning;
-pub use scanning::{decrypt_full_flagged, AddressData, FullComplianceData};
+pub use scanning::{
+    decrypt_core_amount_if_key_matches, decrypt_flagged_withdrawal_sender, decrypt_full_flagged,
+    AddressData, FullComplianceData, WithdrawalComplianceData,
+};
 
 pub mod refs;
-pub use refs::{ActionRef, BlockRef, OutputRef, TxRef};
+pub use refs::{ActionRef, BlockRef, ComplianceRecordRef, OutputRef, TxRef};
 
 pub mod evidence;
-pub use evidence::{ComplianceEvidenceObject, EvidenceObjectType, COMPLIANCE_EVIDENCE_VERSION};
+pub use evidence::{
+    ComplianceEvidenceCiphertext, ComplianceEvidenceMetadata, ComplianceEvidenceObject,
+    EvidenceObjectType, WithdrawalEvidencePublicData,
+};
 
 pub mod audit_validation;
 pub use audit_validation::{validate_audit_evidence, AuditValidationInput, AuditValidationStatus};
@@ -141,9 +171,9 @@ pub use ibc::IbcComplianceMetadata;
 pub mod decode_object;
 pub use decode_object::{TransferComplianceMetadata, TRANSFER_COMPLIANCE_METADATA_BYTES};
 
-#[cfg(feature = "poc-orbis-v0")]
+#[cfg(feature = "poc-orbis")]
 pub mod poc_orbis_audit;
-#[cfg(feature = "poc-orbis-v0")]
+#[cfg(feature = "poc-orbis")]
 pub use poc_orbis_audit::{
     build_poc_orbis_audit_package, decrypt_reencrypted_seed, parse_element,
     validate_decrypted_seed, PocOrbisAccess, PocOrbisAuditBundle, PocOrbisAuditPackage,
@@ -232,7 +262,7 @@ mod tests {
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
-        let leaf = ComplianceLeaf::new(
+        let leaf = ComplianceLeaf::synthetic_unregulated(
             Address::dummy(&mut rand::thread_rng()),
             asset::Id(Fq::from(100u64)),
         );
@@ -294,7 +324,10 @@ mod tests {
         let mut commitments = Vec::new();
 
         for i in 0..4u64 {
-            let leaf = ComplianceLeaf::new(Address::dummy(&mut rng), asset::Id(Fq::from(i + 1)));
+            let leaf = ComplianceLeaf::synthetic_unregulated(
+                Address::dummy(&mut rng),
+                asset::Id(Fq::from(i + 1)),
+            );
             commitments.push(leaf.commit());
             state.test_only_add_compliance_leaf(leaf).await.unwrap();
         }
@@ -324,15 +357,20 @@ mod tests {
         let mut leaves = Vec::new();
         for &pos in &positions {
             while state.get_user_count().await.unwrap() < pos {
-                let dummy_leaf =
-                    ComplianceLeaf::new(Address::dummy(&mut rng), asset::Id(Fq::from(1u64)));
+                let dummy_leaf = ComplianceLeaf::synthetic_unregulated(
+                    Address::dummy(&mut rng),
+                    asset::Id(Fq::from(1u64)),
+                );
                 state
                     .test_only_add_compliance_leaf(dummy_leaf)
                     .await
                     .unwrap();
             }
 
-            let leaf = ComplianceLeaf::new(Address::dummy(&mut rng), asset::Id(Fq::from(pos + 1)));
+            let leaf = ComplianceLeaf::synthetic_unregulated(
+                Address::dummy(&mut rng),
+                asset::Id(Fq::from(pos + 1)),
+            );
             state
                 .test_only_add_compliance_leaf(leaf.clone())
                 .await
@@ -374,7 +412,7 @@ mod tests {
         state
             .test_only_register_asset(
                 asset_id,
-                AssetPolicy::simple(issuer_dk_pub, 1_000_000, ring_pk),
+                AssetPolicy::for_test(issuer_dk_pub, 1_000_000, ring_pk),
                 true,
             )
             .await
@@ -382,8 +420,22 @@ mod tests {
 
         let sender_address = Address::dummy(&mut rng);
         let receiver_address = Address::dummy(&mut rng);
-        let sender_leaf = ComplianceLeaf::new(sender_address.clone(), asset_id);
-        let receiver_leaf = ComplianceLeaf::new(receiver_address.clone(), asset_id);
+        let sender_leaf = ComplianceLeaf::registered_from_rnk(
+            sender_address.clone(),
+            asset_id,
+            ring_pk,
+            sender_address.diversified_generator() * decaf377::Fr::from(999u64),
+            Fq::from(1u64),
+        )
+        .unwrap();
+        let receiver_leaf = ComplianceLeaf::registered_from_rnk(
+            receiver_address.clone(),
+            asset_id,
+            ring_pk,
+            receiver_address.diversified_generator() * decaf377::Fr::from(999u64),
+            Fq::from(2u64),
+        )
+        .unwrap();
 
         state
             .test_only_add_compliance_leaf(sender_leaf.clone())
@@ -407,9 +459,8 @@ mod tests {
 
         let sender_auth_path = state.get_user_auth_path(sender_position).await.unwrap();
         let receiver_auth_path = state.get_user_auth_path(receiver_position).await.unwrap();
-        let sender_ack = ring_pk * decaf377::Fr::from_le_bytes_mod_order(&sender_leaf.d.to_bytes());
-        let receiver_ack =
-            ring_pk * decaf377::Fr::from_le_bytes_mod_order(&receiver_leaf.d.to_bytes());
+        let sender_ack = sender_leaf.capk;
+        let receiver_ack = receiver_leaf.capk;
 
         let ciphertext = encrypt_transfer(
             &mut OsRng,
@@ -424,10 +475,11 @@ mod tests {
             },
             false,
             Fq::from(0u64),
+            Fq::from(1u64),
+            Fq::from(2u64),
         )
         .unwrap()
         .ciphertext;
-
         assert_eq!(ciphertext.to_bytes().len(), TRANSFER_WIRE_BYTES);
         assert_eq!(sender_auth_path.len(), DEFAULT_DEPTH as usize);
         assert_eq!(receiver_auth_path.len(), DEFAULT_DEPTH as usize);
@@ -492,9 +544,22 @@ mod tests {
             Value { amount, asset_id },
             true,
             Fq::from(7u64),
+            Fq::from(8u64),
+            Fq::from(9u64),
         )
         .unwrap()
         .ciphertext;
+        let metadata = TransferComplianceMetadata::from_identifiers(
+            "ring",
+            "policy",
+            "resource",
+            "permission",
+            1,
+            Fq::from(8u64),
+            Fq::from(10u64),
+            Fq::from(9u64),
+            Fq::from(11u64),
+        );
 
         let tx = ProtoTransaction {
             body: Some(TransactionBody {
@@ -511,6 +576,7 @@ mod tests {
                             ),
                             outputs: vec![TransferOutputBody {
                                 compliance_ciphertext: ciphertext.to_bytes(),
+                                compliance_metadata: metadata.to_bytes().unwrap(),
                                 ..Default::default()
                             }],
                             ..Default::default()
@@ -556,7 +622,11 @@ mod tests {
             .count();
         assert_eq!(wrong_detected, 0);
 
-        let decrypted = decrypt_full_flagged(issuer_dk.inner(), &detected_ciphertexts[0], asset_id)
+        let scanner::types::ComplianceCiphertext::Transfer(ciphertext) = &detected_ciphertexts[0]
+        else {
+            panic!("transfer action must yield transfer compliance ciphertext");
+        };
+        let decrypted = decrypt_full_flagged(issuer_dk.inner(), ciphertext, &metadata, asset_id)
             .unwrap()
             .expect("flagged transfer should decrypt");
         assert_eq!(decrypted.amount, amount);

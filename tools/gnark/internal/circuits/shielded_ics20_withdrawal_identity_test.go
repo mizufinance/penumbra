@@ -133,6 +133,7 @@ func (c *unguardedWithdrawalIdentitySenderCircuit) Define(api frontend.API) erro
 		c.AssetID,
 		divGenFq,
 		transmissionFq,
+		0,
 	)
 	if err != nil {
 		return err
@@ -175,12 +176,13 @@ func withdrawalIdentitySenderValues(
 	if err != nil {
 		t.Fatalf("load prototype vectors: %v", err)
 	}
-	commitment, err := primitives.Poseidon377Hash5Native(
+	commitment, err := primitives.Poseidon377Hash6Native(
 		primitives.MustBigInt(vectors.Poseidon377.NoteCommitDomain),
-		[5]*big.Int{
+		[6]*big.Int{
 			big.NewInt(1234),
 			big.NewInt(55),
 			big.NewInt(777),
+			big.NewInt(0),
 			big.NewInt(0),
 			big.NewInt(0),
 		},

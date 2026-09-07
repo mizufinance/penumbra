@@ -107,6 +107,48 @@ where
         }
     }
 
+    /// Sends a [`ConsensusRequest::PrepareProposal`] request to the ABCI application.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn prepare_proposal(
+        &mut self,
+        request: request::PrepareProposal,
+    ) -> Result<response::PrepareProposal, anyhow::Error> {
+        let service = self.service().await?;
+        match service
+            .call(ConsensusRequest::PrepareProposal(request))
+            .await
+            .tap_err(|error| error!(?error, "consensus service returned error"))
+            .map_err(|_| anyhow!("consensus service returned error"))?
+        {
+            ConsensusResponse::PrepareProposal(response) => Ok(response),
+            response => {
+                error!(?response, "unexpected PrepareProposal response");
+                Err(anyhow!("unexpected PrepareProposal response"))
+            }
+        }
+    }
+
+    /// Sends a [`ConsensusRequest::ProcessProposal`] request to the ABCI application.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn process_proposal(
+        &mut self,
+        request: request::ProcessProposal,
+    ) -> Result<response::ProcessProposal, anyhow::Error> {
+        let service = self.service().await?;
+        match service
+            .call(ConsensusRequest::ProcessProposal(request))
+            .await
+            .tap_err(|error| error!(?error, "consensus service returned error"))
+            .map_err(|_| anyhow!("consensus service returned error"))?
+        {
+            ConsensusResponse::ProcessProposal(response) => Ok(response),
+            response => {
+                error!(?response, "unexpected ProcessProposal response");
+                Err(anyhow!("unexpected ProcessProposal response"))
+            }
+        }
+    }
+
     /// Sends a [`ConsensusRequest::EndBlock`] request to the ABCI application.
     #[instrument(level = "debug", skip_all)]
     pub async fn end_block(&mut self) -> Result<response::EndBlock, anyhow::Error> {

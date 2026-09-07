@@ -147,6 +147,82 @@ pub(crate) fn parse_batch_compliance(
     })
 }
 
+#[derive(Clone, Debug)]
+pub struct VolumeRecoveryRecord {
+    pub subject: decaf377::Fq,
+    pub day_start: u64,
+    pub recovery: crate::storage::VolumeAccumulatorRecovery,
+}
+
+pub struct CompletionData {
+    pub compliance: BatchComplianceData,
+    pub volumes: Vec<VolumeRecoveryRecord>,
+}
+
+fn select_volume_accumulator(
+    witness: &shieldd_sdk_shielded_pool::ActionWitness,
+    timestamp: u64,
+    amount: u128,
+    eligible: bool,
+    disclose_to_issuer: bool,
+    records: &[VolumeRecoveryRecord],
+    rng: &mut (impl rand_core::RngCore + rand_core::CryptoRng),
+) -> Result<shieldd_sdk_shielded_pool::VolumeAccumulatorPlan> {
+    use crate::storage::VolumeAccumulatorRecovery;
+    use shieldd_sdk_shielded_pool::{
+        accumulated_volume, select_accumulator_day, VolumeAccumulatorPlan, VolumeAccumulatorState,
+    };
+    let padding = VolumeAccumulatorPlan::padding(timestamp);
+    if disclose_to_issuer || !witness.asset.is_regulated || !eligible {
+        return Ok(padding);
+    }
+    let limit = witness
+        .policy
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("regulated action missing policy"))?
+        .params
+        .daily_volume_limit;
+    let subject =
+        VolumeAccumulatorState::subject(&witness.sender.leaf.address, witness.asset.asset_id);
+    let day_start = select_accumulator_day(timestamp);
+    let recovery = &records
+        .iter()
+        .find(|record| record.subject == subject && record.day_start == day_start)
+        .ok_or_else(|| anyhow::anyhow!("missing volume accumulator recovery"))?
+        .recovery;
+    let blinding = decaf377::Fq::rand(rng);
+    match recovery {
+        VolumeAccumulatorRecovery::Absent => match accumulated_volume(0, amount, limit) {
+            Some(undisclosed_volume) => Ok(VolumeAccumulatorPlan::origin(VolumeAccumulatorState {
+                subject,
+                day_start,
+                undisclosed_volume,
+                blinding,
+            })),
+            None => Ok(padding),
+        },
+        VolumeAccumulatorRecovery::Complete(confirmed) => {
+            anyhow::ensure!(
+                confirmed.state.subject == subject
+                    && confirmed.state.day_start == day_start
+                    && confirmed.state.commitment() == confirmed.commitment,
+                "recovered accumulator does not match action or commitment"
+            );
+            match accumulated_volume(confirmed.state.undisclosed_volume, amount, limit) {
+                Some(volume) => VolumeAccumulatorPlan::continuation(
+                    confirmed.state.clone(),
+                    confirmed.commitment,
+                    u64::from(confirmed.position),
+                    volume,
+                    blinding,
+                ),
+                None => Ok(padding),
+            }
+        }
+        VolumeAccumulatorRecovery::Incomplete => Ok(padding),
+    }
+}
+
 /// Completes wallet intent with one batch of authenticated compliance witnesses.
 pub async fn complete_plan_with_compliance<P, F>(
     intent: crate::planning_intent::TransactionIntent,
@@ -154,10 +230,11 @@ pub async fn complete_plan_with_compliance<P, F>(
     rng: &mut (impl rand_core::RngCore + rand_core::CryptoRng),
     routing: shieldd_sdk_shielded_pool::discovery::Parameters,
     timestamp_override: Option<u64>,
+    disclose_to_issuer: bool,
 ) -> Result<TransactionPlan>
 where
     P: FnOnce(Vec<ComplianceQuery>) -> F,
-    F: std::future::Future<Output = Result<BatchComplianceData>>,
+    F: std::future::Future<Output = Result<CompletionData>>,
 {
     use crate::planning_intent::ActionIntent;
     use shieldd_sdk_shielded_pool::{
@@ -203,9 +280,14 @@ where
             .await?,
         )
     };
+    let volumes = batch
+        .as_ref()
+        .map(|data| data.volumes.as_slice())
+        .unwrap_or_default();
     let batch_ref = || {
         batch
             .as_ref()
+            .map(|data| &data.compliance)
             .ok_or_else(|| anyhow::anyhow!("missing compliance batch"))
     };
     let mut used_nonces = BTreeSet::new();
@@ -236,6 +318,10 @@ where
                 timestamp,
                 fresh_action_nonce(rng, &mut used_nonces)?,
                 routing.clone(),
+                shieldd_sdk_shielded_pool::TransferProofContext::Ordinary,
+                disclose_to_issuer,
+                volumes,
+                rng,
             )?),
             ActionIntent::NoteReshape(reshape) => {
                 let witness = action_witness(batch_ref()?, &reshape.spends)?;
@@ -258,12 +344,22 @@ where
                     timestamp,
                     nonce: fresh_action_nonce(rng, &mut used_nonces)?,
                 };
+                let volume_accumulator = select_volume_accumulator(
+                    &context.witness,
+                    timestamp,
+                    withdrawal.withdrawal.amount.value(),
+                    true,
+                    disclose_to_issuer,
+                    volumes,
+                    rng,
+                )?;
                 ActionPlan::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalPlan::new(
                     withdrawal.spends,
                     withdrawal.change_output,
                     withdrawal.withdrawal,
                     withdrawal.value_blinding,
                     context,
+                    volume_accumulator,
                     routing.clone(),
                 )?)
             }
@@ -273,12 +369,22 @@ where
                     timestamp,
                     nonce: fresh_action_nonce(rng, &mut used_nonces)?,
                 };
+                let volume_accumulator = select_volume_accumulator(
+                    &context.witness,
+                    timestamp,
+                    withdrawal.withdrawal.value.amount.value(),
+                    true,
+                    disclose_to_issuer,
+                    volumes,
+                    rng,
+                )?;
                 ActionPlan::ShieldedHostWithdrawal(ShieldedHostWithdrawalPlan::new(
                     withdrawal.spends,
                     withdrawal.change_output,
                     withdrawal.withdrawal,
                     withdrawal.value_blinding,
                     context,
+                    volume_accumulator,
                     routing.clone(),
                 )?)
             }
@@ -295,6 +401,10 @@ where
                     timestamp,
                     fresh_action_nonce(rng, &mut used_nonces)?,
                     routing,
+                    shieldd_sdk_shielded_pool::TransferProofContext::FeeFunding,
+                    true,
+                    volumes,
+                    rng,
                 )?,
             })
         })
@@ -316,6 +426,10 @@ fn complete_transfer(
     timestamp: u64,
     nonce: Fr,
     routing: shieldd_sdk_shielded_pool::discovery::Parameters,
+    proof_context: shieldd_sdk_shielded_pool::TransferProofContext,
+    disclose_to_issuer: bool,
+    volumes: &[VolumeRecoveryRecord],
+    rng: &mut (impl rand_core::RngCore + rand_core::CryptoRng),
 ) -> Result<shieldd_sdk_shielded_pool::TransferPlan> {
     use shieldd_sdk_shielded_pool::{TransferContext, TransferPlan};
     let witness = action_witness(batch, &intent.spends)?;
@@ -324,17 +438,15 @@ fn complete_transfer(
         .first()
         .ok_or_else(|| anyhow::anyhow!("transfer requires a recipient"))?;
     let recipient = user_witness(batch, &recipient.dest_address, witness.asset.asset_id)?;
-    let policy = if witness.asset.is_regulated {
-        Some(
-            batch
-                .asset_policies
-                .get(&witness.asset.asset_id)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("missing regulated asset policy"))?,
-        )
-    } else {
-        None
-    };
+    let volume_accumulator = select_volume_accumulator(
+        &witness,
+        timestamp,
+        intent.outputs[0].value.amount.value(),
+        recipient.leaf.address != witness.sender.leaf.address,
+        disclose_to_issuer,
+        volumes,
+        rng,
+    )?;
     TransferPlan::new(
         intent.spends,
         intent.outputs,
@@ -342,10 +454,11 @@ fn complete_transfer(
         TransferContext {
             witness,
             recipient,
-            policy,
             timestamp,
             nonce,
         },
+        volume_accumulator,
+        proof_context,
         routing,
     )
 }
@@ -371,6 +484,17 @@ fn action_witness(
             position: asset.position,
             path: asset.auth_path.clone(),
             is_regulated: asset.is_regulated,
+        },
+        policy: if asset.is_regulated {
+            Some(
+                batch
+                    .asset_policies
+                    .get(&asset_id)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("missing regulated asset policy"))?,
+            )
+        } else {
+            None
         },
         user_root: batch.compliance_anchor,
         sender: user_witness(batch, &spend.note.address(), asset_id)?,
@@ -543,6 +667,68 @@ mod tests {
     }
 
     #[test]
+    fn volume_completion_preserves_limits_recovery_and_disclosure() {
+        use crate::storage::{ConfirmedVolumeAccumulator, VolumeAccumulatorRecovery};
+        use shieldd_sdk_shielded_pool::test_proof_helpers::proof_test_helpers::generate_base_test_data;
+        use shieldd_sdk_shielded_pool::{
+            select_accumulator_day, VolumeAccumulatorPlan, VolumeAccumulatorState,
+        };
+        let mut rng = StdRng::seed_from_u64(23);
+        let base = generate_base_test_data(&mut rng, 1, 100, true);
+        let witness = base.action_witness();
+        witness
+            .validate(witness.asset.asset_id, &witness.sender.leaf.address)
+            .unwrap();
+        let timestamp = base.target_timestamp;
+        let subject =
+            VolumeAccumulatorState::subject(&witness.sender.leaf.address, witness.asset.asset_id);
+        let day_start = select_accumulator_day(timestamp);
+        let select = |amount, eligible, disclose, records: &[super::VolumeRecoveryRecord]| {
+            super::select_volume_accumulator(
+                &witness,
+                timestamp,
+                amount,
+                eligible,
+                disclose,
+                records,
+                &mut StdRng::seed_from_u64(31),
+            )
+        };
+        assert!(select(1, true, false, &[]).is_err());
+        assert!(!select(1, true, true, &[]).unwrap().is_real());
+        assert!(!select(1, false, false, &[]).unwrap().is_real());
+        let mut record = super::VolumeRecoveryRecord {
+            subject,
+            day_start,
+            recovery: VolumeAccumulatorRecovery::Absent,
+        };
+        let origin = select(10, true, false, &[record.clone()]).unwrap();
+        assert!(matches!(origin, VolumeAccumulatorPlan::Origin { .. }));
+        assert_eq!(origin.successor_state().unwrap().undisclosed_volume, 10);
+        let prior = origin.successor_state().unwrap();
+        record.recovery = VolumeAccumulatorRecovery::Complete(ConfirmedVolumeAccumulator {
+            commitment: prior.commitment(),
+            state: prior.clone(),
+            position: 7u64.into(),
+        });
+        let continuation = select(20, true, false, &[record.clone()]).unwrap();
+        assert_eq!(continuation.prior_position(), 7);
+        assert_eq!(
+            continuation.successor_state().unwrap().undisclosed_volume,
+            30
+        );
+        assert!(!select(u128::MAX, true, false, &[record.clone()])
+            .unwrap()
+            .is_real());
+        if let VolumeAccumulatorRecovery::Complete(confirmed) = &mut record.recovery {
+            confirmed.state.day_start += 86_400;
+        }
+        assert!(select(1, true, false, &[record.clone()]).is_err());
+        record.recovery = VolumeAccumulatorRecovery::Incomplete;
+        assert!(!select(1, true, false, &[record]).unwrap().is_real());
+    }
+
+    #[test]
     fn rpc_merkle_path_parser_requires_canonical_fixed_shape() {
         parse_proto_merkle_path(Some(MerklePath::default().into()), "test_path")
             .expect("canonical fixed-width path");
@@ -590,10 +776,16 @@ mod tests {
         };
         let plan = complete_plan_with_compliance(
             intent,
-            |queries| async move { UnregulatedProofProvider.get_batch_proofs(&queries).await },
+            |queries| async move {
+                Ok(super::CompletionData {
+                    compliance: UnregulatedProofProvider.get_batch_proofs(&queries).await?,
+                    volumes: vec![],
+                })
+            },
             &mut rng,
             Default::default(),
             Some(1_700_000_000),
+            false,
         )
         .await
         .expect("complete NoteReshape");
@@ -622,10 +814,16 @@ mod tests {
         };
         let plan = complete_plan_with_compliance(
             intent,
-            |queries| async move { UnregulatedProofProvider.get_batch_proofs(&queries).await },
+            |queries| async move {
+                Ok(super::CompletionData {
+                    compliance: UnregulatedProofProvider.get_batch_proofs(&queries).await?,
+                    volumes: vec![],
+                })
+            },
             &mut rng,
             Default::default(),
             Some(1_700_000_000),
+            false,
         )
         .await
         .expect("complete transfers");

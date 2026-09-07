@@ -243,13 +243,13 @@ impl Worker {
                 asset_id = ?event.asset_id,
                 position = event.position,
                 is_regulated = event.is_regulated,
-                threshold = event.indexed_leaf.params.threshold,
+                daily_volume_limit = event.indexed_leaf.params.daily_volume_limit,
                 dk_pub_first_byte = event.indexed_leaf.params.dk_pub.vartime_compress().0[0],
                 low_leaf_position = event.low_leaf_position,
                 "worker: syncing asset registration"
             );
 
-            // Use sync_from_event to preserve policy data (dk_pub, threshold)
+            // Use sync_from_event to preserve policy data (dk_pub, daily_volume_limit)
             // This is critical for correct leaf commitments in proofs
             next_asset_tree.sync_from_event(
                 event.indexed_leaf.clone(),
@@ -465,8 +465,14 @@ impl Worker {
                 self.sync_height_tx.send(height)?;
             } else {
                 // Otherwise, scan the block and commit its changes:
-                let mut filtered_block =
-                    scan_block(&self.fvk, &mut sct_guard, block, &self.storage).await?;
+                let mut filtered_block = scan_block(
+                    &self.fvk,
+                    &mut sct_guard,
+                    block,
+                    &self.storage,
+                    compliance_plan.as_ref(),
+                )
+                .await?;
 
                 // Download any transactions we detected.
                 let transactions = self.fetch_transactions(&mut filtered_block).await?;
@@ -731,7 +737,7 @@ mod compliance_projection_tests {
     #[test]
     fn status_projection_authenticates_the_previous_leaf_and_event_order() {
         let mut rng = rand::thread_rng();
-        let mut active = ComplianceLeaf::new(
+        let mut active = ComplianceLeaf::synthetic_unregulated(
             shieldd_sdk_keys::Address::dummy(&mut rng),
             asset::Id(decaf377::Fq::from(7u64)),
         );
