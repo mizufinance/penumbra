@@ -89,12 +89,20 @@ async fn compliance_enrichment_preserves_sender_diversifier_on_supported_transfe
             true,
         )
         .await?;
-    common::register_test_users_for_compliance(
-        &mut build_state,
-        &[sender.clone(), recipient.clone()],
-        &[asset_id],
-    )
-    .await?;
+    for address in [sender.clone(), recipient.clone()] {
+        let rnk_dh_pk = address.diversified_generator().clone();
+        let rnk = shieldd_sdk_compliance::derive_regulated_nullifier_key(
+            client.fvk.incoming(),
+            &address,
+            asset_id,
+            ring_pk,
+            rnk_dh_pk,
+        )?;
+        let leaf = shieldd_sdk_compliance::ComplianceLeaf::registered_from_rnk(
+            address, asset_id, ring_pk, rnk_dh_pk, rnk,
+        )?;
+        build_state.test_only_add_compliance_leaf(leaf).await?;
+    }
 
     let spend = ShieldedInputPlan::new(
         &mut OsRng,
