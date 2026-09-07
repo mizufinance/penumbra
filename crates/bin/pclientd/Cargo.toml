@@ -14,7 +14,6 @@ dist = true
 [features]
 default = ["std"]
 std = ["ibc-types/std"]
-integration-testnet = []
 sct-divergence-check = ["shieldd-sdk-view/sct-divergence-check"]
 # Enable to use rayon parallelism for crypto operations
 parallel = ["shieldd-sdk-transaction/parallel"]

@@ -263,10 +263,6 @@ rustdocs:
 test:
     cargo nextest run --release
 
-# Run integration tests against the testnet, for validating HTTPS support
-integration-testnet:
-    cargo nextest run --release ${CARGO_FEATURE_ARGS:-} --features integration-testnet -E 'test(/_testnet$/)'
-
 # Run smoke test suite, via process-compose config.
 smoke:
     ./deployments/scripts/check-nix-shell

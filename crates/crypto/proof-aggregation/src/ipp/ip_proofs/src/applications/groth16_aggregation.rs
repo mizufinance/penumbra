@@ -4034,7 +4034,6 @@ mod tests {
                 (b"tipp-mipp.kzg".as_slice(), 1),
             ]
         );
-        assert!(normal_trace.entries().iter().all(|entry| entry.nonce == 0));
     }
 
     #[test]

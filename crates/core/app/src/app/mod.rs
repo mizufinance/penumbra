@@ -4602,6 +4602,12 @@ mod tests {
         }
     }
 
+    const SRS_ID_MISMATCH: &str = if cfg!(feature = "orbis-dev-srs") {
+        "Orbis integration SnarkPack SRS id mismatch"
+    } else {
+        "test/fuzz SnarkPack SRS id mismatch"
+    };
+
     #[cfg(feature = "orbis-dev-srs")]
     #[test]
     fn orbis_dev_srs_selects_only_the_insecure_integration_fixture() -> Result<()> {
@@ -6205,9 +6211,7 @@ mod tests {
             App::verify_aggregate_bundle_for_artifacts_raw_public(&artifacts, &bad_srs, None)
                 .await
                 .expect_err("bad SRS id must fail verification");
-        assert!(srs_error
-            .to_string()
-            .contains("test/fuzz SnarkPack SRS id mismatch"));
+        assert!(srs_error.to_string().contains(SRS_ID_MISMATCH));
 
         let mut empty_families = bundle.clone();
         empty_families.families.clear();
@@ -6241,11 +6245,8 @@ mod tests {
         wrong_full_length_srs_id[0] ^= 0x01;
 
         for (srs_id, expected_error) in [
-            (vec![0; 3], "test/fuzz SnarkPack SRS id mismatch"),
-            (
-                wrong_full_length_srs_id,
-                "test/fuzz SnarkPack SRS id mismatch",
-            ),
+            (vec![0; 3], SRS_ID_MISMATCH),
+            (wrong_full_length_srs_id, SRS_ID_MISMATCH),
         ] {
             let bundle = AggregateBundle {
                 version: AGGREGATE_PROTOCOL_VERSION,
