@@ -409,15 +409,6 @@ export COMPLIANCE_USER_2_CAPABILITY_CERTIFICATE_HEX="$compliance_dev_capability_
 >&2 echo "  Compliance env vars exported."
 >&2 echo "Compliance smoke test setup complete."
 
-bash "${repo_root}/deployments/scripts/check-reduced-surface.sh"
-
-# Export devnet parameters for integration tests.
-# Must match values in run-local-devnet.sh.
-export UNBONDING_DELAY=201
-export SHIELDD_REDUCED_ACTION_SURFACE=1
-export SHIELDD_NODE_PD_URL
-export SHIELDD_NODE_CMT_URL
-
 # Run the integration tests. Using `just` targets so that the exact
 # invocations are easily reusable on the CLI in dev loops.
 just integration-pclientd
