@@ -22,14 +22,9 @@ use url::Url;
 #[case(r"^pd_async_sleep_drift_microseconds \d+")]
 #[case(r"^pd_process_cpu_seconds_total \d+")]
 #[case(r"^pd_process_open_fds \d+")]
-// TODO: re-enable once epoch duration is reduced for smoke tests
-// #[case(r"^shieldd_funding_streams_total_processing_time_milliseconds_count_milliseconds \d+")]
 #[tokio::test]
 #[ignore]
 /// Confirm that prometheus metrics are being exported for scraping.
-/// Several times while bumping related crates we've missed a breakage
-/// to metrics, and only noticed when we checked the grafana boards
-/// for the preview environment post-deploy.
 async fn confirm_metrics_emission(#[case] pattern: &str) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     let metrics_url = std::env::var("SHIELDD_NODE_PD_METRICS_URL")

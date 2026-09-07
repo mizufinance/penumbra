@@ -2,12 +2,11 @@
 
 A Shieldd transaction is a Bankd-internal bundle of _actions_ that effects
 changes to Shieldd state, together with additional data controlling execution
-or providing additional metadata. All actions in the transaction are executed together, and the transaction succeeds or fails atomically. A transaction body has four parts:
+or providing additional metadata. All actions in the transaction are executed together, and the transaction succeeds or fails atomically. A transaction body contains:
 
 1. A list of actions effecting changes to Shieldd state;
 2. A set of `TransactionParameters` describing conditions under which the actions may be executed;
-3. An optional set of `DetectionData` that helps third-party servers detect transactions using [Fuzzy Message Detection](./crypto/fmd.md);
-4. An optional `MemoCiphertext` with an [encrypted memo](./transactions/memo.md) visible only to the sender and receiver(s) of the transaction.
+3. An optional `MemoCiphertext` with an [encrypted memo](./transactions/memo.md) visible only to the sender and receiver(s) of the transaction.
 
 The [Transaction Signing](./transactions/signing.md) section describes transaction authorization.
 

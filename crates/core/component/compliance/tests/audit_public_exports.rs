@@ -1,4 +1,4 @@
-use shieldd_sdk_compliance::{AuditDetectedRef, AuditScanExport, OrbisAuditEntry};
+use shieldd_sdk_compliance::{AuditDetectedRef, AuditScanExport};
 
 #[test]
 fn audit_dtos_importable_from_crate_root() {
@@ -6,5 +6,4 @@ fn audit_dtos_importable_from_crate_root() {
 
     assert_importable::<AuditDetectedRef>();
     assert_importable::<AuditScanExport>();
-    assert_importable::<OrbisAuditEntry>();
 }

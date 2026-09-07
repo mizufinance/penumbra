@@ -194,8 +194,7 @@ mod tests {
     use crate::{
         component::NoteManager as _,
         note_reshape_padding::{dummy_spend_auth_sig, dummy_state_commitment_proof},
-        Ics20Withdrawal, Note, ShieldedIcs20WithdrawalFamilyId, ShieldedIcs20WithdrawalPlan,
-        ShieldedInputPlan,
+        Ics20Withdrawal, Note, ShieldedIcs20WithdrawalFamilyId, ShieldedInputPlan,
     };
 
     fn test_action() -> ShieldedIcs20Withdrawal {
@@ -216,8 +215,13 @@ mod tests {
             ics20_memo: String::new(),
             use_transparent_address: false,
         };
-        let plan = ShieldedIcs20WithdrawalPlan::new(vec![spend], None, withdrawal, Fr::from(7u64))
-            .expect("one-spend withdrawal plan should be valid");
+        let plan = crate::test_plan_helpers::ics20_withdrawal(
+            vec![spend],
+            None,
+            withdrawal,
+            Fr::from(7u64),
+        )
+        .expect("one-spend withdrawal plan should be valid");
         let anchor = shieldd_sdk_tct::Tree::default().root();
         ShieldedIcs20Withdrawal {
             body: plan
@@ -250,8 +254,13 @@ mod tests {
             ics20_memo: String::new(),
             use_transparent_address: false,
         };
-        let plan = ShieldedIcs20WithdrawalPlan::new(vec![spend], None, withdrawal, Fr::from(7u64))
-            .expect("withdrawal plan should be valid");
+        let plan = crate::test_plan_helpers::ics20_withdrawal(
+            vec![spend],
+            None,
+            withdrawal,
+            Fr::from(7u64),
+        )
+        .expect("withdrawal plan should be valid");
         let anchor = shieldd_sdk_tct::Tree::default().root();
         let mut body = plan
             .action_body(&test_keys::FULL_VIEWING_KEY, &[7u8; 32].into(), anchor, 0)
@@ -296,8 +305,13 @@ mod tests {
             ics20_memo: String::new(),
             use_transparent_address: false,
         };
-        let plan = ShieldedIcs20WithdrawalPlan::new(vec![spend], None, withdrawal, Fr::from(7u64))
-            .expect("one-spend withdrawal plan should be valid");
+        let plan = crate::test_plan_helpers::ics20_withdrawal(
+            vec![spend],
+            None,
+            withdrawal,
+            Fr::from(7u64),
+        )
+        .expect("one-spend withdrawal plan should be valid");
         let anchor = shieldd_sdk_tct::Tree::default().root();
         let body = plan
             .action_body(&test_keys::FULL_VIEWING_KEY, &[7u8; 32].into(), anchor, 0)
@@ -378,8 +392,13 @@ mod tests {
             ics20_memo: String::new(),
             use_transparent_address: false,
         };
-        let plan = ShieldedIcs20WithdrawalPlan::new(vec![spend], None, withdrawal, Fr::from(7u64))
-            .expect("one-spend withdrawal plan should be valid");
+        let plan = crate::test_plan_helpers::ics20_withdrawal(
+            vec![spend],
+            None,
+            withdrawal,
+            Fr::from(7u64),
+        )
+        .expect("one-spend withdrawal plan should be valid");
         let anchor = shieldd_sdk_tct::Tree::default().root();
         let proofs = vec![dummy_state_commitment_proof(note_commitment)];
         let (proving_public, _) = plan

@@ -97,7 +97,7 @@ impl<'de> serde::Deserialize<'de> for DkgRound1Package {
                             if proof_of_knowledge__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("proofOfKnowledge"));
                             }
-                            proof_of_knowledge__ = 
+                            proof_of_knowledge__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -293,7 +293,7 @@ impl<'de> serde::Deserialize<'de> for NonceCommitment {
                             if element__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("element"));
                             }
-                            element__ = 
+                            element__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -392,7 +392,7 @@ impl<'de> serde::Deserialize<'de> for SignatureShare {
                             if scalar__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("scalar"));
                             }
-                            scalar__ = 
+                            scalar__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -603,7 +603,7 @@ impl<'de> serde::Deserialize<'de> for SigningShare {
                             if scalar__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("scalar"));
                             }
-                            scalar__ = 
+                            scalar__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -700,7 +700,7 @@ impl<'de> serde::Deserialize<'de> for VerifiableSecretSharingCommitment {
                             if elements__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("elements"));
                             }
-                            elements__ = 
+                            elements__ =
                                 Some(map_.next_value::<Vec<::pbjson::private::BytesDeserialize<_>>>()?
                                     .into_iter().map(|x| x.0).collect())
                             ;

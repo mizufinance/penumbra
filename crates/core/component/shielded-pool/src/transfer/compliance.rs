@@ -10,7 +10,7 @@ use shieldd_sdk_compliance::{
     TransferEncryptionResult,
 };
 use shieldd_sdk_compliance::{
-    derive_transfer_salt, encrypt_transfer, AssetPolicy, IndexedLeaf, TransferComplianceCiphertext,
+    derive_transfer_salt, encrypt_transfer, TransferComplianceCiphertext,
     TransferComplianceMetadata, TransferCompliancePublicInputs,
 };
 
@@ -140,27 +140,24 @@ fn transfer_is_flagged(is_regulated: bool, amount: u128, threshold: u128) -> boo
 
 pub(crate) fn build_transfer_compliance(
     outputs: &[ShieldedOutputPlan],
-    sender_leaf: &shieldd_sdk_compliance::ComplianceLeaf,
-    asset_policy: Option<&AssetPolicy>,
-    asset_indexed_leaf: &IndexedLeaf,
-    target_timestamp: u64,
-    transfer_nonce_root: Fr,
+    context: &crate::TransferContext,
 ) -> Result<BuildTransferComplianceResult> {
+    let sender_leaf = &context.witness.sender.leaf;
+    let receiver_leaf = &context.recipient.leaf;
+    let asset_policy = context.policy.as_ref();
+    let asset_indexed_leaf = &context.witness.asset.leaf;
+    let target_timestamp = context.timestamp;
+    let transfer_nonce_root = context.nonce;
     let receiver_output = outputs
         .get(RECEIVER_OUTPUT_INDEX)
         .ok_or_else(|| anyhow!("transfer requires at least one output"))?;
     let receiver_note = receiver_output.output_note();
-    let receiver_leaf = receiver_output
-        .compliance_leaf
-        .clone()
-        .ok_or_else(|| anyhow!("receiver output missing compliance leaf"))?;
-
-    let ring_pk = if receiver_output.is_regulated {
+    let ring_pk = if context.witness.asset.is_regulated {
         asset_indexed_leaf.ring.ring_pk
     } else {
         *shieldd_sdk_compliance::UNREGULATED_SINK_RING_PK
     };
-    let dk_pub = if receiver_output.is_regulated {
+    let dk_pub = if context.witness.asset.is_regulated {
         asset_indexed_leaf.params.dk_pub
     } else {
         *shieldd_sdk_compliance::UNREGULATED_SINK_DK_PUB
@@ -173,7 +170,7 @@ pub(crate) fn build_transfer_compliance(
     // `u128::MAX` as a sentinel is insufficient because a maximum-value note
     // would meet that threshold.
     let is_flagged = transfer_is_flagged(
-        receiver_output.is_regulated,
+        context.witness.asset.is_regulated,
         receiver_amount,
         asset_indexed_leaf.params.threshold,
     );
@@ -206,7 +203,7 @@ pub(crate) fn build_transfer_compliance(
     // A non-membership witness carries the predecessor leaf. None of that
     // unrelated predecessor's policy identifiers may enter the public
     // statement for an unregulated transfer.
-    let (ring_id, policy_id, resource, permission) = if receiver_output.is_regulated {
+    let (ring_id, policy_id, resource, permission) = if context.witness.asset.is_regulated {
         let asset_policy =
             asset_policy.ok_or_else(|| anyhow!("regulated transfer missing asset policy"))?;
         (
@@ -232,7 +229,7 @@ pub(crate) fn build_transfer_compliance(
     metadata.validate()?;
 
     #[cfg(feature = "poc-orbis-v0")]
-    let poc_orbis_audit_bundle = if receiver_output.is_regulated {
+    let poc_orbis_audit_bundle = if context.witness.asset.is_regulated {
         let mut audit_rng = StdRng::from_seed(transfer_orbis_audit_rng_seed(transfer_nonce_root));
         Some(PocOrbisAuditBundle {
             subject: build_orbis_tier_bundle(

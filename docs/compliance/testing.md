@@ -1,93 +1,45 @@
-# Testing Guide
+# Compliance verification
 
-## Prerequisites
+Use `nix develop` for the repository toolchain, or install the Rust version in
+`rust-toolchain.toml`, Go from `tools/gnark/go.mod`, and a CGO-capable C compiler.
+The process-compose smoke test creates its own temporary development state.
 
-**Recommended for CI parity**: Use nix for the correct toolchain (includes cargo-nextest and the bundled gnark runtime toolchain):
-```bash
-nix develop
-```
+| Command | Coverage |
+| --- | --- |
+| `just check` | Native compilation, formatting, and focused aggregation invariants |
+| `just test` | Ordinary Rust tests; ignored tests are excluded |
+| `just go-check` | Gnark Go formatting, compilation, tests, and vet |
+| `just gnark-proof-tests` | Fast witness, statement, and Go checks |
+| `just gnark-proof-tests-slow` | Real release-mode proofs using both library and daemon transports |
+| `just snarkpack-slow` | Release-mode oracle and two-way aggregation interoperability |
+| `just snarkpack-dos-gate` | Release latency and bounded-size rejection gate |
+| `just proto-check` | Deterministic Rust/Go generation and schema closure |
+| `just features-check` | Independent native crate feature builds |
+| `just wasm-check` | Supported domain crates without component features on WASM |
+| `just smoke` | Fresh process-compose network, wallet, CLI, and node integration |
 
-**For day-to-day local Rust/gnark work without nix**: Install dependencies manually:
-```bash
-# cargo-nextest (required for `just test`)
-# Note: Requires compatible Rust version - check rust-toolchain.toml
-cargo install cargo-nextest
+## Real proof tests
 
-# Go toolchain for tools/gnark and bundled gnark runtime compilation
-# plus a CGO-capable C toolchain (clang or gcc)
+Proof-generating unit tests are explicitly ignored. `just gnark-proof-tests-slow`
+selects only these tests in release mode and validates their prerequisites.
+It exercises Transfer, both NoteReshape families, and withdrawal, including both
+withdrawal callers. Missing artifacts or transports fail the command.
+Fixture-blessing tests remain separate and are never selected by this command.
 
-# For smoke/integration tests: clean network state
-pd network unsafe-reset-all
-```
+## Scanner
 
-## Quick Reference
+`cargo test -p shieldd-sdk-compliance --lib` covers atomic block persistence,
+restart/replay, reorg rollback, bounded invalid outcomes, and audit validation.
+The transaction crate's
+`compliance_scanner_transaction_id_matches_canonical_transaction_id` test checks
+scanner output identities against `Transaction::id()`.
 
-| Command | Scope | When to Use |
-|---------|-------|-------------|
-| `cargo test --release -p <crate> --lib` | Single crate | Active development |
-| `just test` | All unit tests (nextest) | Before commit |
-| `just go-test` | `tools/gnark` Go tests only | Fast circuit/gadget iteration |
-| `just go-check` | `tools/gnark` format/build/test/vet | Before commit on gnark changes |
-| `just gnark-proof-tests` | Fast gnark inner-loop checks | During transfer/NoteReshape development |
-| `just gnark-proof-tests-slow` | End-to-end gnark proof generation | Before PR on shielded-action changes |
-| `just smoke` | End-to-end | Before PR (transaction changes) |
-| `just integration-pcli` | pcli tests | Before PR (CLI changes) |
+Scanner databases use a schema guard. Recreate incompatible development state;
+there is no migration or version-adoption path.
 
-## Scanner Core
+## Orbis
 
-Use these when changing issuer compliance scanning:
-
-```bash
-cargo test -p shieldd-sdk-compliance --lib scanner::
-cargo test -p shieldd-sdk-compliance --lib audit::
-cargo test -p shieldd-sdk-compliance --lib evidence::
-cargo test -p shieldd-sdk-compliance --lib audit_validation::
-cargo test -p shieldd-sdk-transaction compliance_scanner_transaction_id_matches_canonical_transaction_id --lib
-cargo check -p shieldd-sdk-compliance -p shieldd-sdk-transaction -p pcli -p orbis-audit -p orbis-integration
-cd tools/gnark && go test ./internal/circuits ./internal/compliance
-```
-
-The transaction parity test is mandatory: the scanner-side transaction hash
-helper must continue to match `Transaction::id()`.
-
-Proof-generating Rust round trips still require a release build with real
-proving keys:
-
-```bash
-cargo test --release -p shieldd-sdk-shielded-pool --features bundled-proving-keys transfer_proof_roundtrip --lib
-```
-
-If a CI lane does not provide bundled proving keys, treat that command as
-optional coverage and rely on the mandatory gnark assignment metamorphic tests
-above for semantic mutation coverage.
-
-Smoke the scanner CLI shape with:
-
-```bash
-pcli tx compliance scan run --node http://127.0.0.1:8080 --db /tmp/compliance-scanner.db --dk-hex <hex> --scan-asset-id <asset>
-pcli tx compliance scan catch-up --node http://127.0.0.1:8080 --db /tmp/compliance-scanner.db --dk-hex <hex> --scan-asset-id <asset>
-```
-
-Only the DB-backed scanner commands above are supported. Audit-demo exports
-frontend-compatible `scan`, `scanner`, `ledgerRows`, and `audits` state from the
-scanner DB.
-
-## Standard Preflight
-
-```bash
-just ci-preflight
-cargo fmt --all
-just fmt
-just check
-just test
-just go-check
-just gnark-proof-tests
-just gnark-proof-tests-slow
-just smoke
-just proto
-```
-
-```bash
-# One-shot local Orbis run
-just orbis-integration
-```
+`just orbis-integration-up` builds the binaries and starts Shieldd and the pinned
+Orbis/Vera Compose stack. `just orbis-integration-setup-ring /tmp/orbis-state.json`
+creates the test ring and policy. Use `just orbis-integration-down` for cleanup.
+The retained Docker workflow requires Docker Compose v2.

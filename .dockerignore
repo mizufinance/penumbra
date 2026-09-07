@@ -15,19 +15,13 @@
 !web/packages/wasm/crate/src/
 !web/packages/wasm/crate/src/lib.rs
 
-# localnet for 'pd testnet generate' defaults
-!deployments/000-localnet/
-!deployments/audit-demo/
-# cometbft config template and CI validators
-!testnets/
 # metrics containers
 !deployments/config/
 # relayer container
 !deployments/relayer/
-# summonerd tool, for orchestrating contributions
-!tools/summonerd/
-# parameter setup tool, for wrangling circuit configuration
-!tools/parameter-setup/
+# Patched runtime dependencies
+!third_party/
+!third_party/**
 # gnark circuit metadata and proving/verifying keys required by proof-params
 !tools/gnark/
 !tools/gnark/**

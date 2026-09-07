@@ -19,7 +19,6 @@ mod compliance_tree;
 mod historical_proof_cache;
 mod historical_proof_worker;
 mod issued_address;
-mod metrics;
 mod note_manager;
 mod note_record;
 mod service;
@@ -30,22 +29,22 @@ mod transaction_info;
 mod worker;
 
 pub use crate::client::ViewClient;
-pub use crate::client_compliance::{
-    enrich_plan_with_compliance, ViewClientComplianceExt, ViewClientComplianceProvider,
-};
+pub use crate::client_compliance::complete_plan_with_compliance;
 pub use crate::compliance_tree::{ComplianceAssetTree, ComplianceUserTree};
 pub use crate::historical_proof_cache::{
     advance_historical_proof_cache, HistoricalProofCache, HistoricalProofCacheState,
     HistoricalProofProvider, HistoricalProofUpdateError, HistoricalWitnessSource,
 };
 pub use crate::issued_address::{AddressPurpose, IssuedAddress};
-pub use crate::metrics::register_metrics;
 pub use crate::note_manager::{
-    NoteManager, NoteManagerPlanningResult, NoteManagerResumeToken, TransferPlanningResult,
-    TransferResumeToken,
+    NoteManager, NoteManagerPlanningResult, NoteManagerResumeToken, TransferResumeToken,
 };
 pub use crate::note_record::SpendableNoteRecord;
 pub use crate::service::ViewServer;
 pub use crate::status::StatusStreamResponse;
 pub use crate::storage::Storage;
 pub use crate::transaction_info::TransactionInfo;
+
+pub mod planning_intent;
+
+pub mod planning_io;

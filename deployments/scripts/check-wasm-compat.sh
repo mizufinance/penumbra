@@ -1,26 +1,9 @@
 #!/usr/bin/env bash
-# CI script for checking that the Shieldd monorepo does not accidentally
-# break compatibility with downstream web APIs, via the WASM crate.
-# Historically, this breakage has taken the form of inadvertently introducing
-# dependencies on std, e.g. via `mio`.
-#
-# More broadly, we want to ensure that monorepo crates with the "component"
-# feature build without that (default) feature enabled. Testing this on the wasm
-# target will help ensure compat.
+# Check each web-facing crate without native component features.
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "${repo_root}"
-
-run_cargo() {
-    cargo "$@"
-}
-
-# Consider checking the web repo's wasm Cargo.toml periodically:
-#
-#   ❯ rg ^shieldd packages/wasm/crate/Cargo.toml --no-line-number | cut -f1 -d' '  | sort
-#
-# to make sure at least all of those crates are tracked here.
 
 packages=(
     shieldd-sdk-asset
@@ -33,20 +16,11 @@ packages=(
     shieldd-sdk-tct
     shieldd-sdk-transaction
     shieldd-sdk-txhash
-    # N.B. we can't include those ones because they rely on `getrandom`,
-    # but there's a `js` feature...
-    # decaf377-frost
-    # decaf377-ka
-    # shieldd-num
-    # shieldd-proof-params
-    # shieldd-proto
 )
 
-# We intentionally loop over the packages one by one to make error-reporting clearer.
-# Ostensibly this would be slow, but in CI with a warm cache it's quick.
 for p in "${packages[@]}" ; do
     echo "Checking package for wasm compat: $p ..."
-    if ! run_cargo check --release --target wasm32-unknown-unknown --no-default-features --package "$p" ; then
+    if ! cargo check --release --target wasm32-unknown-unknown --no-default-features --package "$p" ; then
         >&2 echo "ERROR: package appears not to be wasm-compatible: '$p'"
         exit 1
     fi

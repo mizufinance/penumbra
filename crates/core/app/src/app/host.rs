@@ -239,6 +239,7 @@ impl HostExecution {
                 self.phase = HostExecutionPhase::InitializedGenesis;
             }
             AppState::Checkpoint(expected_root_hash) => {
+                crate::app_version::check_app_version(&self.storage).await?;
                 ensure!(
                     self.storage.latest_version() != u64::MAX,
                     "checkpoint genesis requires initialized storage"
@@ -497,6 +498,7 @@ impl App {
             .expect("state Arc should not be referenced elsewhere");
         match app_state {
             AppState::Content(genesis) => {
+                crate::app_version::initialize_app_version(&mut state_tx);
                 state_tx.put_chain_id(genesis.chain_id.clone());
                 Sct::init_chain(&mut state_tx, Some(&genesis.sct_content)).await;
                 ShieldedPool::init_chain(&mut state_tx, Some(&genesis.shielded_pool_content)).await;

@@ -16,10 +16,8 @@ use {
     shieldd_sdk_num::Amount,
     shieldd_sdk_proto::DomainType,
     shieldd_sdk_sct::component::tree::SctRead as _,
-    shieldd_sdk_shielded_pool::{ShieldedInputPlan, ShieldedOutputPlan, TransferPlan},
-    shieldd_sdk_transaction::{
-        memo::MemoPlaintext, plan::MemoPlan, TransactionParameters, TransactionPlan,
-    },
+    shieldd_sdk_shielded_pool::{ShieldedInputPlan, ShieldedOutputPlan},
+    shieldd_sdk_transaction::{memo::MemoPlaintext, plan::MemoPlan, TransactionParameters},
     tap::TapFallible,
 };
 
@@ -41,6 +39,8 @@ async fn app_can_transfer_notes_and_detect_new_notes() -> anyhow::Result<()> {
             .await
             .tap_ok(|e| tracing::info!(hash = %e.last_app_hash_hex(), "finished init chain"))?
     };
+
+    test_node.block().execute().await?;
 
     let mut client = MockClient::new(test_keys::SPEND_KEY.clone())
         .with_sync_to_storage(&storage)
@@ -67,7 +67,6 @@ async fn app_can_transfer_notes_and_detect_new_notes() -> anyhow::Result<()> {
         .amount()
         .checked_sub(&send_amount)
         .expect("test input note amount must cover the requested send amount");
-    let mut spend = spend;
     let output = ShieldedOutputPlan::new(
         &mut OsRng,
         Value {
@@ -84,12 +83,13 @@ async fn app_can_transfer_notes_and_detect_new_notes() -> anyhow::Result<()> {
         },
         input_note.address(),
     );
-    let mut outputs = [output, change];
-    common::align_transfer_planning_metadata(std::slice::from_mut(&mut spend), &mut outputs);
-    let [output, change] = outputs;
-    let transfer = TransferPlan::new(vec![spend], vec![output, change], Fr::from(1u64))?;
+    let transfer = shieldd_sdk_mock_client::TransferIntent {
+        spends: vec![spend],
+        outputs: vec![output, change],
+        value_blinding: Fr::from(1u64),
+    };
 
-    let mut plan = TransactionPlan {
+    let intent = shieldd_sdk_mock_client::TransactionIntent {
         nullifier_window: None,
         actions: vec![transfer.into()],
         memo: Some(MemoPlan::new(
@@ -103,9 +103,10 @@ async fn app_can_transfer_notes_and_detect_new_notes() -> anyhow::Result<()> {
         },
     };
 
-    let tx = client
-        .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
+    let plan = client
+        .complete_intent(intent, storage.latest_snapshot())
         .await?;
+    let tx = client.witness_auth_build(&plan).await?;
 
     let pre_tx_snapshot = storage.latest_snapshot();
     test_node

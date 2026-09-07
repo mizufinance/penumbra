@@ -41,7 +41,7 @@ use shieldd_sdk_proto::{
 };
 use shieldd_sdk_shielded_pool::{Ics20Withdrawal, NoteReshapeFamilyId};
 use shieldd_sdk_transaction::Transaction;
-use shieldd_sdk_view::{NoteManager, TransferPlanningResult, ViewClient};
+use shieldd_sdk_view::{NoteManager, NoteManagerPlanningResult, ViewClient};
 use tonic::transport::{Channel, ClientTlsConfig};
 use url::Url;
 
@@ -293,10 +293,10 @@ impl TxCmd {
                     .await
                     .context("can't build transfer transaction")?
                 {
-                    TransferPlanningResult::Ready { transaction_plan } => {
+                    NoteManagerPlanningResult::Ready { transaction_plan } => {
                         app.build_and_submit_transaction(transaction_plan).await?;
                     }
-                    TransferPlanningResult::NeedsMaintenance {
+                    NoteManagerPlanningResult::NeedsMaintenance {
                         maintenance_plan, ..
                     } => {
                         anyhow::bail!(
@@ -304,10 +304,10 @@ impl TxCmd {
                             maintenance_plan
                         );
                     }
-                    TransferPlanningResult::InsufficientBalance => {
+                    NoteManagerPlanningResult::InsufficientBalance => {
                         anyhow::bail!("insufficient balance for requested transfer");
                     }
-                    TransferPlanningResult::UnsupportedIntent { reason } => {
+                    NoteManagerPlanningResult::UnsupportedIntent { reason } => {
                         anyhow::bail!("{reason}");
                     }
                 }
@@ -335,16 +335,16 @@ impl TxCmd {
                     .await
                     .context("can't build note reshape transaction")?
                 {
-                    TransferPlanningResult::Ready { transaction_plan } => {
+                    NoteManagerPlanningResult::Ready { transaction_plan } => {
                         app.build_and_submit_transaction(transaction_plan).await?;
                     }
-                    TransferPlanningResult::NeedsMaintenance { .. } => {
+                    NoteManagerPlanningResult::NeedsMaintenance { .. } => {
                         anyhow::bail!("note reshape planning unexpectedly requested maintenance");
                     }
-                    TransferPlanningResult::InsufficientBalance => {
+                    NoteManagerPlanningResult::InsufficientBalance => {
                         anyhow::bail!("insufficient balance for requested note reshape");
                     }
-                    TransferPlanningResult::UnsupportedIntent { reason } => {
+                    NoteManagerPlanningResult::UnsupportedIntent { reason } => {
                         anyhow::bail!("{reason}");
                     }
                 }
@@ -398,18 +398,18 @@ impl TxCmd {
                     .await
                     .context("can't build note reshape transaction")?
                 {
-                    TransferPlanningResult::Ready { transaction_plan } => {
+                    NoteManagerPlanningResult::Ready { transaction_plan } => {
                         app.build_and_submit_transaction(transaction_plan).await?;
                     }
-                    TransferPlanningResult::NeedsMaintenance { .. } => {
+                    NoteManagerPlanningResult::NeedsMaintenance { .. } => {
                         anyhow::bail!("note reshape planning unexpectedly requested maintenance");
                     }
-                    TransferPlanningResult::InsufficientBalance => {
+                    NoteManagerPlanningResult::InsufficientBalance => {
                         anyhow::bail!(
                             "selected note does not cover requested note reshape outputs and fee"
                         );
                     }
-                    TransferPlanningResult::UnsupportedIntent { reason } => {
+                    NoteManagerPlanningResult::UnsupportedIntent { reason } => {
                         anyhow::bail!("{reason}");
                     }
                 }
@@ -569,10 +569,10 @@ impl TxCmd {
                     .await
                     .context("can't build ICS-20 withdrawal transaction")?
                 {
-                    TransferPlanningResult::Ready { transaction_plan } => {
+                    NoteManagerPlanningResult::Ready { transaction_plan } => {
                         app.build_and_submit_transaction(transaction_plan).await?;
                     }
-                    TransferPlanningResult::NeedsMaintenance {
+                    NoteManagerPlanningResult::NeedsMaintenance {
                         maintenance_plan, ..
                     } => {
                         anyhow::bail!(
@@ -580,10 +580,10 @@ impl TxCmd {
                             maintenance_plan
                         );
                     }
-                    TransferPlanningResult::InsufficientBalance => {
+                    NoteManagerPlanningResult::InsufficientBalance => {
                         anyhow::bail!("insufficient balance for requested ICS-20 withdrawal");
                     }
-                    TransferPlanningResult::UnsupportedIntent { reason } => {
+                    NoteManagerPlanningResult::UnsupportedIntent { reason } => {
                         anyhow::bail!("{reason}");
                     }
                 }

@@ -80,7 +80,7 @@ impl<'de> serde::Deserialize<'de> for BindingSignature {
                             if inner__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("inner"));
                             }
-                            inner__ = 
+                            inner__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -179,7 +179,7 @@ impl<'de> serde::Deserialize<'de> for SpendAuthSignature {
                             if inner__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("inner"));
                             }
-                            inner__ = 
+                            inner__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -278,7 +278,7 @@ impl<'de> serde::Deserialize<'de> for SpendVerificationKey {
                             if inner__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("inner"));
                             }
-                            inner__ = 
+                            inner__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }

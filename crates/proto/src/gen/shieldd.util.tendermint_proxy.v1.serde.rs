@@ -112,7 +112,7 @@ impl<'de> serde::Deserialize<'de> for AbciQueryRequest {
                             if data__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("data"));
                             }
-                            data__ = 
+                            data__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -126,7 +126,7 @@ impl<'de> serde::Deserialize<'de> for AbciQueryRequest {
                             if height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("height"));
                             }
-                            height__ = 
+                            height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -247,7 +247,7 @@ impl<'de> serde::Deserialize<'de> for BroadcastTxAsyncRequest {
                             if params__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("params"));
                             }
-                            params__ = 
+                            params__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -255,7 +255,7 @@ impl<'de> serde::Deserialize<'de> for BroadcastTxAsyncRequest {
                             if req_id__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("reqId"));
                             }
-                            req_id__ = 
+                            req_id__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -389,7 +389,7 @@ impl<'de> serde::Deserialize<'de> for BroadcastTxAsyncResponse {
                             if code__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("code"));
                             }
-                            code__ = 
+                            code__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -397,7 +397,7 @@ impl<'de> serde::Deserialize<'de> for BroadcastTxAsyncResponse {
                             if data__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("data"));
                             }
-                            data__ = 
+                            data__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -411,7 +411,7 @@ impl<'de> serde::Deserialize<'de> for BroadcastTxAsyncResponse {
                             if hash__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("hash"));
                             }
-                            hash__ = 
+                            hash__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -526,7 +526,7 @@ impl<'de> serde::Deserialize<'de> for BroadcastTxSyncRequest {
                             if params__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("params"));
                             }
-                            params__ = 
+                            params__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -534,7 +534,7 @@ impl<'de> serde::Deserialize<'de> for BroadcastTxSyncRequest {
                             if req_id__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("reqId"));
                             }
-                            req_id__ = 
+                            req_id__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -668,7 +668,7 @@ impl<'de> serde::Deserialize<'de> for BroadcastTxSyncResponse {
                             if code__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("code"));
                             }
-                            code__ = 
+                            code__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -676,7 +676,7 @@ impl<'de> serde::Deserialize<'de> for BroadcastTxSyncResponse {
                             if data__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("data"));
                             }
-                            data__ = 
+                            data__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -690,7 +690,7 @@ impl<'de> serde::Deserialize<'de> for BroadcastTxSyncResponse {
                             if hash__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("hash"));
                             }
-                            hash__ = 
+                            hash__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -792,7 +792,7 @@ impl<'de> serde::Deserialize<'de> for GetBlockByHeightRequest {
                             if height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("height"));
                             }
-                            height__ = 
+                            height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -973,7 +973,7 @@ impl<'de> serde::Deserialize<'de> for GetTxRequest {
                             if hash__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("hash"));
                             }
-                            hash__ = 
+                            hash__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -1126,7 +1126,7 @@ impl<'de> serde::Deserialize<'de> for GetTxResponse {
                             if hash__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("hash"));
                             }
-                            hash__ = 
+                            hash__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -1134,7 +1134,7 @@ impl<'de> serde::Deserialize<'de> for GetTxResponse {
                             if height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("height"));
                             }
-                            height__ = 
+                            height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1142,7 +1142,7 @@ impl<'de> serde::Deserialize<'de> for GetTxResponse {
                             if index__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("index"));
                             }
-                            index__ = 
+                            index__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1156,7 +1156,7 @@ impl<'de> serde::Deserialize<'de> for GetTxResponse {
                             if tx__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("tx"));
                             }
-                            tx__ = 
+                            tx__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -1308,7 +1308,7 @@ impl<'de> serde::Deserialize<'de> for SyncInfo {
                             if latest_block_hash__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("latestBlockHash"));
                             }
-                            latest_block_hash__ = 
+                            latest_block_hash__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -1316,7 +1316,7 @@ impl<'de> serde::Deserialize<'de> for SyncInfo {
                             if latest_app_hash__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("latestAppHash"));
                             }
-                            latest_app_hash__ = 
+                            latest_app_hash__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -1324,7 +1324,7 @@ impl<'de> serde::Deserialize<'de> for SyncInfo {
                             if latest_block_height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("latestBlockHeight"));
                             }
-                            latest_block_height__ = 
+                            latest_block_height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1461,7 +1461,7 @@ impl<'de> serde::Deserialize<'de> for Tag {
                             if key__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("key"));
                             }
-                            key__ = 
+                            key__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -1469,7 +1469,7 @@ impl<'de> serde::Deserialize<'de> for Tag {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("value"));
                             }
-                            value__ = 
+                            value__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -1616,7 +1616,7 @@ impl<'de> serde::Deserialize<'de> for TxResult {
                             if gas_wanted__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("gasWanted"));
                             }
-                            gas_wanted__ = 
+                            gas_wanted__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1624,7 +1624,7 @@ impl<'de> serde::Deserialize<'de> for TxResult {
                             if gas_used__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("gasUsed"));
                             }
-                            gas_used__ = 
+                            gas_used__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }

@@ -47,6 +47,16 @@ They are not migration promises.
 - Run focused tests after each meaningful section; relevant full checks before final handoff.
 - Say explicitly whether prover/release-gated tests were actually run.
 
+## Local Resource Limits
+
+- Run only one heavy verification job at a time across all agents and tasks: Rust builds/checks, test suites, proof generation, or container builds. Do not queue competing Cargo commands behind the build lock.
+- Default to `CARGO_BUILD_JOBS=2`, `RAYON_NUM_THREADS=2`, and `GOMAXPROCS=2`; use `go build/test -p 2`. Limit nextest to `-j 2` and Rust test harnesses to `--test-threads=2`; run expensive proof tests serially. These limits are starting bounds, not guarantees against memory pressure.
+- Build container architectures sequentially. Prefer the native architecture; run emulated builds only when required. Confirm Docker CPU/memory limits and bound build-tool parallelism inside the container before starting. Do not increase Docker's global resource allocation without the user's approval.
+- Check available memory, swap pressure, disk space, and existing workloads before heavy verification; monitor during it. If memory pressure, sustained swapping, severe slowdown, or Docker unresponsiveness appears, stop this task's heavy jobs immediately. Do not terminate unrelated user processes or restart Docker globally.
+- Reuse build caches and completed verification. Repeat checks only for relevant changes, failures, or unresolved concerns; avoid concurrent builds with separate target directories to bypass Cargo's lock.
+- Do not edit scripts while they are executing. Finish or stop the invocation before changing and rerunning them.
+- After a crash or resource-related interruption, keep heavy verification paused until the user explicitly resumes it. Report interrupted checks as incomplete and resume with reduced concurrency; never restart the previous workload automatically.
+
 ## Style
 
 - Modularity and simplicity over cleverness.

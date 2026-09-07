@@ -38,5 +38,5 @@ pbjson-types = { workspace = true }
 shieldd-sdk-asset = { workspace = true, default-features = true }
 shieldd-sdk-ibc = { workspace = true, default-features = false }
 shieldd-sdk-sct = { workspace = true, default-features = false }
-shieldd-sdk-shielded-pool = { workspace = true, default-features = false }
+shieldd-sdk-shielded-pool = { workspace = true, default-features = false, features = ["benchmark-helpers"] }
 toml = {workspace = true}

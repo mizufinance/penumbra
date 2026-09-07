@@ -237,15 +237,14 @@ impl MockRelayer {
                     },
                     client.fvk.payment_address(AddressIndex::new(0)),
                 );
-                let mut plan = {
-                    let ics20_msg = ShieldedIcs20WithdrawalPlan::new(
-                        vec![spend_plan],
-                        Some(change_output),
-                        withdrawal,
-                        Fr::from(1312u64 + ordinal as u64),
-                    )
-                    .expect("valid shielded ICS-20 withdrawal plan");
-                    TransactionPlan {
+                let intent = {
+                    let ics20_msg = shieldd_sdk_mock_client::WithdrawalIntent {
+                        spends: vec![spend_plan],
+                        change_output: Some(change_output),
+                        withdrawal: withdrawal,
+                        value_blinding: Fr::from(1312u64 + ordinal as u64),
+                    };
+                    shieldd_sdk_mock_client::TransactionIntent {
                         nullifier_window: None,
                         actions: vec![ics20_msg.into()],
                         memo: None,
@@ -257,7 +256,7 @@ impl MockRelayer {
                     }
                 };
                 let tx = client
-                    .witness_auth_build_with_compliance(&mut plan, snapshot)
+                    .witness_auth_build(&client.complete_intent(intent, snapshot).await?)
                     .await?;
                 Ok::<(usize, Vec<u8>), anyhow::Error>((ordinal, tx.encode_to_vec()))
             });
@@ -1820,15 +1819,14 @@ impl MockRelayer {
             chain_a_client.fvk.payment_address(AddressIndex::new(0)),
         );
 
-        let mut plan = {
-            let ics20_msg = ShieldedIcs20WithdrawalPlan::new(
-                vec![spend_plan],
-                Some(change_output),
-                withdrawal,
-                Fr::from(1312u64),
-            )
-            .expect("valid shielded ICS-20 withdrawal plan");
-            TransactionPlan {
+        let intent = {
+            let ics20_msg = shieldd_sdk_mock_client::WithdrawalIntent {
+                spends: vec![spend_plan],
+                change_output: Some(change_output),
+                withdrawal: withdrawal,
+                value_blinding: Fr::from(1312u64),
+            };
+            shieldd_sdk_mock_client::TransactionIntent {
                 nullifier_window: None,
                 actions: vec![ics20_msg.into()],
                 // Now fill out the remaining parts of the transaction needed for verification:
@@ -1840,15 +1838,10 @@ impl MockRelayer {
                 },
             }
         };
-        let tx = self
-            .chain_a_ibc
-            .client()
-            .await?
-            .witness_auth_build_with_compliance(
-                &mut plan,
-                self.chain_a_ibc.storage.latest_snapshot(),
-            )
+        let plan = chain_a_client
+            .complete_intent(intent, self.chain_a_ibc.storage.latest_snapshot())
             .await?;
+        let tx = chain_a_client.witness_auth_build(&plan).await?;
 
         let (_end_block_events, deliver_tx_events) = self
             .chain_a_ibc

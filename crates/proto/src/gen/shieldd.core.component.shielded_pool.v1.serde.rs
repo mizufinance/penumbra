@@ -1,3 +1,133 @@
+impl serde::Serialize for ActionWitness {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.asset.is_some() {
+            len += 1;
+        }
+        if self.user_root.is_some() {
+            len += 1;
+        }
+        if self.sender.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("shieldd.core.component.shielded_pool.v1.ActionWitness", len)?;
+        if let Some(v) = self.asset.as_ref() {
+            struct_ser.serialize_field("asset", v)?;
+        }
+        if let Some(v) = self.user_root.as_ref() {
+            struct_ser.serialize_field("userRoot", v)?;
+        }
+        if let Some(v) = self.sender.as_ref() {
+            struct_ser.serialize_field("sender", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ActionWitness {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "asset",
+            "user_root",
+            "userRoot",
+            "sender",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Asset,
+            UserRoot,
+            Sender,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "asset" => Ok(GeneratedField::Asset),
+                            "userRoot" | "user_root" => Ok(GeneratedField::UserRoot),
+                            "sender" => Ok(GeneratedField::Sender),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ActionWitness;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct shieldd.core.component.shielded_pool.v1.ActionWitness")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ActionWitness, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut asset__ = None;
+                let mut user_root__ = None;
+                let mut sender__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Asset => {
+                            if asset__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("asset"));
+                            }
+                            asset__ = map_.next_value()?;
+                        }
+                        GeneratedField::UserRoot => {
+                            if user_root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("userRoot"));
+                            }
+                            user_root__ = map_.next_value()?;
+                        }
+                        GeneratedField::Sender => {
+                            if sender__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sender"));
+                            }
+                            sender__ = map_.next_value()?;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(ActionWitness {
+                    asset: asset__,
+                    user_root: user_root__,
+                    sender: sender__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("shieldd.core.component.shielded_pool.v1.ActionWitness", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for AssetMetadataByIdRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -382,6 +512,192 @@ impl<'de> serde::Deserialize<'de> for AssetMetadataByIdsResponse {
         deserializer.deserialize_struct("shieldd.core.component.shielded_pool.v1.AssetMetadataByIdsResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for AssetWitness {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.asset_id.is_some() {
+            len += 1;
+        }
+        if self.root.is_some() {
+            len += 1;
+        }
+        if self.leaf.is_some() {
+            len += 1;
+        }
+        if self.position != 0 {
+            len += 1;
+        }
+        if self.path.is_some() {
+            len += 1;
+        }
+        if self.is_regulated {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("shieldd.core.component.shielded_pool.v1.AssetWitness", len)?;
+        if let Some(v) = self.asset_id.as_ref() {
+            struct_ser.serialize_field("assetId", v)?;
+        }
+        if let Some(v) = self.root.as_ref() {
+            struct_ser.serialize_field("root", v)?;
+        }
+        if let Some(v) = self.leaf.as_ref() {
+            struct_ser.serialize_field("leaf", v)?;
+        }
+        if self.position != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("position", ToString::to_string(&self.position).as_str())?;
+        }
+        if let Some(v) = self.path.as_ref() {
+            struct_ser.serialize_field("path", v)?;
+        }
+        if self.is_regulated {
+            struct_ser.serialize_field("isRegulated", &self.is_regulated)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AssetWitness {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "asset_id",
+            "assetId",
+            "root",
+            "leaf",
+            "position",
+            "path",
+            "is_regulated",
+            "isRegulated",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            AssetId,
+            Root,
+            Leaf,
+            Position,
+            Path,
+            IsRegulated,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "assetId" | "asset_id" => Ok(GeneratedField::AssetId),
+                            "root" => Ok(GeneratedField::Root),
+                            "leaf" => Ok(GeneratedField::Leaf),
+                            "position" => Ok(GeneratedField::Position),
+                            "path" => Ok(GeneratedField::Path),
+                            "isRegulated" | "is_regulated" => Ok(GeneratedField::IsRegulated),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AssetWitness;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct shieldd.core.component.shielded_pool.v1.AssetWitness")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AssetWitness, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut asset_id__ = None;
+                let mut root__ = None;
+                let mut leaf__ = None;
+                let mut position__ = None;
+                let mut path__ = None;
+                let mut is_regulated__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::AssetId => {
+                            if asset_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("assetId"));
+                            }
+                            asset_id__ = map_.next_value()?;
+                        }
+                        GeneratedField::Root => {
+                            if root__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("root"));
+                            }
+                            root__ = map_.next_value()?;
+                        }
+                        GeneratedField::Leaf => {
+                            if leaf__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("leaf"));
+                            }
+                            leaf__ = map_.next_value()?;
+                        }
+                        GeneratedField::Position => {
+                            if position__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("position"));
+                            }
+                            position__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Path => {
+                            if path__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("path"));
+                            }
+                            path__ = map_.next_value()?;
+                        }
+                        GeneratedField::IsRegulated => {
+                            if is_regulated__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("isRegulated"));
+                            }
+                            is_regulated__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(AssetWitness {
+                    asset_id: asset_id__,
+                    root: root__,
+                    leaf: leaf__,
+                    position: position__.unwrap_or_default(),
+                    path: path__,
+                    is_regulated: is_regulated__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("shieldd.core.component.shielded_pool.v1.AssetWitness", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for DiscoveryParameters {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -487,7 +803,7 @@ impl<'de> serde::Deserialize<'de> for DiscoveryParameters {
                             if regulated_precision_bits__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("regulatedPrecisionBits"));
                             }
-                            regulated_precision_bits__ = 
+                            regulated_precision_bits__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -495,7 +811,7 @@ impl<'de> serde::Deserialize<'de> for DiscoveryParameters {
                             if unregulated_precision_bits__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("unregulatedPrecisionBits"));
                             }
-                            unregulated_precision_bits__ = 
+                            unregulated_precision_bits__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -503,7 +819,7 @@ impl<'de> serde::Deserialize<'de> for DiscoveryParameters {
                             if as_of_height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("asOfHeight"));
                             }
-                            as_of_height__ = 
+                            as_of_height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1338,7 +1654,7 @@ impl<'de> serde::Deserialize<'de> for EvmCall {
                             if contract__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("contract"));
                             }
-                            contract__ = 
+                            contract__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -1346,7 +1662,7 @@ impl<'de> serde::Deserialize<'de> for EvmCall {
                             if calldata__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("calldata"));
                             }
-                            calldata__ = 
+                            calldata__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -1462,7 +1778,7 @@ impl<'de> serde::Deserialize<'de> for FungibleTokenTransferPacketMetadata {
                             if sequence__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("sequence"));
                             }
-                            sequence__ = 
+                            sequence__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1832,7 +2148,7 @@ impl<'de> serde::Deserialize<'de> for HostExecution {
                             if gas_limit__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("gasLimit"));
                             }
-                            gas_limit__ = 
+                            gas_limit__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -2190,7 +2506,7 @@ impl<'de> serde::Deserialize<'de> for Note {
                             if rseed__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("rseed"));
                             }
-                            rseed__ = 
+                            rseed__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -2297,7 +2613,7 @@ impl<'de> serde::Deserialize<'de> for NoteCiphertext {
                             if inner__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("inner"));
                             }
-                            inner__ = 
+                            inner__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -2425,7 +2741,7 @@ impl<'de> serde::Deserialize<'de> for NotePayload {
                             if ephemeral_key__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("ephemeralKey"));
                             }
-                            ephemeral_key__ = 
+                            ephemeral_key__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -2748,7 +3064,7 @@ impl<'de> serde::Deserialize<'de> for NoteReshapeBody {
                             if family_id__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("familyId"));
                             }
-                            family_id__ = 
+                            family_id__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -2786,7 +3102,7 @@ impl<'de> serde::Deserialize<'de> for NoteReshapeBody {
                             if routing_parameter_set_id__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("routingParameterSetId"));
                             }
-                            routing_parameter_set_id__ = 
+                            routing_parameter_set_id__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -2821,6 +3137,122 @@ impl<'de> serde::Deserialize<'de> for NoteReshapeBody {
             }
         }
         deserializer.deserialize_struct("shieldd.core.component.shielded_pool.v1.NoteReshapeBody", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for NoteReshapeContext {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.witness.is_some() {
+            len += 1;
+        }
+        if !self.nonce.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("shieldd.core.component.shielded_pool.v1.NoteReshapeContext", len)?;
+        if let Some(v) = self.witness.as_ref() {
+            struct_ser.serialize_field("witness", v)?;
+        }
+        if !self.nonce.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("nonce", pbjson::private::base64::encode(&self.nonce).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for NoteReshapeContext {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "witness",
+            "nonce",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Witness,
+            Nonce,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "witness" => Ok(GeneratedField::Witness),
+                            "nonce" => Ok(GeneratedField::Nonce),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = NoteReshapeContext;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct shieldd.core.component.shielded_pool.v1.NoteReshapeContext")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<NoteReshapeContext, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut witness__ = None;
+                let mut nonce__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Witness => {
+                            if witness__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("witness"));
+                            }
+                            witness__ = map_.next_value()?;
+                        }
+                        GeneratedField::Nonce => {
+                            if nonce__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nonce"));
+                            }
+                            nonce__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(NoteReshapeContext {
+                    witness: witness__,
+                    nonce: nonce__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("shieldd.core.component.shielded_pool.v1.NoteReshapeContext", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for NoteReshapeInputBody {
@@ -2949,7 +3381,7 @@ impl<'de> serde::Deserialize<'de> for NoteReshapeInputBody {
                             if encrypted_backref__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("encryptedBackref"));
                             }
-                            encrypted_backref__ = 
+                            encrypted_backref__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -3088,7 +3520,7 @@ impl<'de> serde::Deserialize<'de> for NoteReshapeOutputBody {
                             if wrapped_memo_key__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("wrappedMemoKey"));
                             }
-                            wrapped_memo_key__ = 
+                            wrapped_memo_key__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -3096,7 +3528,7 @@ impl<'de> serde::Deserialize<'de> for NoteReshapeOutputBody {
                             if ovk_wrapped_key__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("ovkWrappedKey"));
                             }
-                            ovk_wrapped_key__ = 
+                            ovk_wrapped_key__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -3138,6 +3570,9 @@ impl serde::Serialize for NoteReshapePlan {
         if self.routing_parameters.is_some() {
             len += 1;
         }
+        if self.compliance.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.shielded_pool.v1.NoteReshapePlan", len)?;
         if !self.value_blinding.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -3155,6 +3590,9 @@ impl serde::Serialize for NoteReshapePlan {
         }
         if let Some(v) = self.routing_parameters.as_ref() {
             struct_ser.serialize_field("routingParameters", v)?;
+        }
+        if let Some(v) = self.compliance.as_ref() {
+            struct_ser.serialize_field("compliance", v)?;
         }
         struct_ser.end()
     }
@@ -3174,6 +3612,7 @@ impl<'de> serde::Deserialize<'de> for NoteReshapePlan {
             "familyId",
             "routing_parameters",
             "routingParameters",
+            "compliance",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -3183,6 +3622,7 @@ impl<'de> serde::Deserialize<'de> for NoteReshapePlan {
             Outputs,
             FamilyId,
             RoutingParameters,
+            Compliance,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -3210,6 +3650,7 @@ impl<'de> serde::Deserialize<'de> for NoteReshapePlan {
                             "outputs" => Ok(GeneratedField::Outputs),
                             "familyId" | "family_id" => Ok(GeneratedField::FamilyId),
                             "routingParameters" | "routing_parameters" => Ok(GeneratedField::RoutingParameters),
+                            "compliance" => Ok(GeneratedField::Compliance),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -3234,13 +3675,14 @@ impl<'de> serde::Deserialize<'de> for NoteReshapePlan {
                 let mut outputs__ = None;
                 let mut family_id__ = None;
                 let mut routing_parameters__ = None;
+                let mut compliance__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ValueBlinding => {
                             if value_blinding__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("valueBlinding"));
                             }
-                            value_blinding__ = 
+                            value_blinding__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -3260,7 +3702,7 @@ impl<'de> serde::Deserialize<'de> for NoteReshapePlan {
                             if family_id__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("familyId"));
                             }
-                            family_id__ = 
+                            family_id__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -3269,6 +3711,12 @@ impl<'de> serde::Deserialize<'de> for NoteReshapePlan {
                                 return Err(serde::de::Error::duplicate_field("routingParameters"));
                             }
                             routing_parameters__ = map_.next_value()?;
+                        }
+                        GeneratedField::Compliance => {
+                            if compliance__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compliance"));
+                            }
+                            compliance__ = map_.next_value()?;
                         }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
@@ -3281,6 +3729,7 @@ impl<'de> serde::Deserialize<'de> for NoteReshapePlan {
                     outputs: outputs__.unwrap_or_default(),
                     family_id: family_id__.unwrap_or_default(),
                     routing_parameters: routing_parameters__,
+                    compliance: compliance__,
                 })
             }
         }
@@ -3754,7 +4203,7 @@ impl<'de> serde::Deserialize<'de> for NoteView {
                             if rseed__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("rseed"));
                             }
-                            rseed__ = 
+                            rseed__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -3870,7 +4319,7 @@ impl<'de> serde::Deserialize<'de> for RoutingSelector {
                             if precision_bits__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("precisionBits"));
                             }
-                            precision_bits__ = 
+                            precision_bits__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -3878,7 +4327,7 @@ impl<'de> serde::Deserialize<'de> for RoutingSelector {
                             if prefix__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("prefix"));
                             }
-                            prefix__ = 
+                            prefix__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -3976,7 +4425,7 @@ impl<'de> serde::Deserialize<'de> for RoutingTag {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("value"));
                             }
-                            value__ = 
+                            value__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -4315,7 +4764,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedHostWithdrawalBody {
                             if family_id__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("familyId"));
                             }
-                            family_id__ = 
+                            family_id__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -4353,7 +4802,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedHostWithdrawalBody {
                             if target_timestamp__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("targetTimestamp"));
                             }
-                            target_timestamp__ = 
+                            target_timestamp__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -4379,7 +4828,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedHostWithdrawalBody {
                             if routing_parameter_set_id__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("routingParameterSetId"));
                             }
-                            routing_parameter_set_id__ = 
+                            routing_parameter_set_id__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -4429,6 +4878,9 @@ impl serde::Serialize for ShieldedHostWithdrawalPlan {
         if self.routing_parameters.is_some() {
             len += 1;
         }
+        if self.compliance.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.shielded_pool.v1.ShieldedHostWithdrawalPlan", len)?;
         if !self.value_blinding.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -4446,6 +4898,9 @@ impl serde::Serialize for ShieldedHostWithdrawalPlan {
         }
         if let Some(v) = self.routing_parameters.as_ref() {
             struct_ser.serialize_field("routingParameters", v)?;
+        }
+        if let Some(v) = self.compliance.as_ref() {
+            struct_ser.serialize_field("compliance", v)?;
         }
         struct_ser.end()
     }
@@ -4465,6 +4920,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedHostWithdrawalPlan {
             "withdrawal",
             "routing_parameters",
             "routingParameters",
+            "compliance",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4474,6 +4930,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedHostWithdrawalPlan {
             ChangeOutput,
             Withdrawal,
             RoutingParameters,
+            Compliance,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -4501,6 +4958,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedHostWithdrawalPlan {
                             "changeOutput" | "change_output" => Ok(GeneratedField::ChangeOutput),
                             "withdrawal" => Ok(GeneratedField::Withdrawal),
                             "routingParameters" | "routing_parameters" => Ok(GeneratedField::RoutingParameters),
+                            "compliance" => Ok(GeneratedField::Compliance),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -4525,13 +4983,14 @@ impl<'de> serde::Deserialize<'de> for ShieldedHostWithdrawalPlan {
                 let mut change_output__ = None;
                 let mut withdrawal__ = None;
                 let mut routing_parameters__ = None;
+                let mut compliance__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ValueBlinding => {
                             if value_blinding__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("valueBlinding"));
                             }
-                            value_blinding__ = 
+                            value_blinding__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -4559,6 +5018,12 @@ impl<'de> serde::Deserialize<'de> for ShieldedHostWithdrawalPlan {
                             }
                             routing_parameters__ = map_.next_value()?;
                         }
+                        GeneratedField::Compliance => {
+                            if compliance__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compliance"));
+                            }
+                            compliance__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -4570,6 +5035,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedHostWithdrawalPlan {
                     change_output: change_output__,
                     withdrawal: withdrawal__,
                     routing_parameters: routing_parameters__,
+                    compliance: compliance__,
                 })
             }
         }
@@ -5255,7 +5721,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedIcs20WithdrawalBody {
                             if family_id__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("familyId"));
                             }
-                            family_id__ = 
+                            family_id__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -5293,7 +5759,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedIcs20WithdrawalBody {
                             if target_timestamp__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("targetTimestamp"));
                             }
-                            target_timestamp__ = 
+                            target_timestamp__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -5319,7 +5785,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedIcs20WithdrawalBody {
                             if routing_parameter_set_id__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("routingParameterSetId"));
                             }
-                            routing_parameter_set_id__ = 
+                            routing_parameter_set_id__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -5459,7 +5925,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedIcs20WithdrawalChangeBody {
                             if wrapped_memo_key__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("wrappedMemoKey"));
                             }
-                            wrapped_memo_key__ = 
+                            wrapped_memo_key__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -5467,7 +5933,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedIcs20WithdrawalChangeBody {
                             if ovk_wrapped_key__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("ovkWrappedKey"));
                             }
-                            ovk_wrapped_key__ = 
+                            ovk_wrapped_key__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -5509,6 +5975,9 @@ impl serde::Serialize for ShieldedIcs20WithdrawalPlan {
         if self.routing_parameters.is_some() {
             len += 1;
         }
+        if self.compliance.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.shielded_pool.v1.ShieldedIcs20WithdrawalPlan", len)?;
         if !self.value_blinding.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -5526,6 +5995,9 @@ impl serde::Serialize for ShieldedIcs20WithdrawalPlan {
         }
         if let Some(v) = self.routing_parameters.as_ref() {
             struct_ser.serialize_field("routingParameters", v)?;
+        }
+        if let Some(v) = self.compliance.as_ref() {
+            struct_ser.serialize_field("compliance", v)?;
         }
         struct_ser.end()
     }
@@ -5545,6 +6017,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedIcs20WithdrawalPlan {
             "withdrawal",
             "routing_parameters",
             "routingParameters",
+            "compliance",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5554,6 +6027,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedIcs20WithdrawalPlan {
             ChangeOutput,
             Withdrawal,
             RoutingParameters,
+            Compliance,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -5581,6 +6055,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedIcs20WithdrawalPlan {
                             "changeOutput" | "change_output" => Ok(GeneratedField::ChangeOutput),
                             "withdrawal" => Ok(GeneratedField::Withdrawal),
                             "routingParameters" | "routing_parameters" => Ok(GeneratedField::RoutingParameters),
+                            "compliance" => Ok(GeneratedField::Compliance),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -5605,13 +6080,14 @@ impl<'de> serde::Deserialize<'de> for ShieldedIcs20WithdrawalPlan {
                 let mut change_output__ = None;
                 let mut withdrawal__ = None;
                 let mut routing_parameters__ = None;
+                let mut compliance__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ValueBlinding => {
                             if value_blinding__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("valueBlinding"));
                             }
-                            value_blinding__ = 
+                            value_blinding__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -5639,6 +6115,12 @@ impl<'de> serde::Deserialize<'de> for ShieldedIcs20WithdrawalPlan {
                             }
                             routing_parameters__ = map_.next_value()?;
                         }
+                        GeneratedField::Compliance => {
+                            if compliance__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compliance"));
+                            }
+                            compliance__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -5650,6 +6132,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedIcs20WithdrawalPlan {
                     change_output: change_output__,
                     withdrawal: withdrawal__,
                     routing_parameters: routing_parameters__,
+                    compliance: compliance__,
                 })
             }
         }
@@ -6033,42 +6516,6 @@ impl serde::Serialize for ShieldedInputPlan {
         if !self.value_blinding.is_empty() {
             len += 1;
         }
-        if self.target_timestamp != 0 {
-            len += 1;
-        }
-        if self.is_regulated {
-            len += 1;
-        }
-        if self.compliance_leaf.is_some() {
-            len += 1;
-        }
-        if !self.tx_blinding_nonce.is_empty() {
-            len += 1;
-        }
-        if self.compliance_anchor.is_some() {
-            len += 1;
-        }
-        if self.asset_anchor.is_some() {
-            len += 1;
-        }
-        if self.compliance_path.is_some() {
-            len += 1;
-        }
-        if self.compliance_position != 0 {
-            len += 1;
-        }
-        if self.asset_path.is_some() {
-            len += 1;
-        }
-        if self.asset_position != 0 {
-            len += 1;
-        }
-        if self.asset_indexed_leaf.is_some() {
-            len += 1;
-        }
-        if self.asset_policy.is_some() {
-            len += 1;
-        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.shielded_pool.v1.ShieldedInputPlan", len)?;
         if let Some(v) = self.note.as_ref() {
             struct_ser.serialize_field("note", v)?;
@@ -6088,50 +6535,6 @@ impl serde::Serialize for ShieldedInputPlan {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("valueBlinding", pbjson::private::base64::encode(&self.value_blinding).as_str())?;
         }
-        if self.target_timestamp != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("targetTimestamp", ToString::to_string(&self.target_timestamp).as_str())?;
-        }
-        if self.is_regulated {
-            struct_ser.serialize_field("isRegulated", &self.is_regulated)?;
-        }
-        if let Some(v) = self.compliance_leaf.as_ref() {
-            struct_ser.serialize_field("complianceLeaf", v)?;
-        }
-        if !self.tx_blinding_nonce.is_empty() {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("txBlindingNonce", pbjson::private::base64::encode(&self.tx_blinding_nonce).as_str())?;
-        }
-        if let Some(v) = self.compliance_anchor.as_ref() {
-            struct_ser.serialize_field("complianceAnchor", v)?;
-        }
-        if let Some(v) = self.asset_anchor.as_ref() {
-            struct_ser.serialize_field("assetAnchor", v)?;
-        }
-        if let Some(v) = self.compliance_path.as_ref() {
-            struct_ser.serialize_field("compliancePath", v)?;
-        }
-        if self.compliance_position != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("compliancePosition", ToString::to_string(&self.compliance_position).as_str())?;
-        }
-        if let Some(v) = self.asset_path.as_ref() {
-            struct_ser.serialize_field("assetPath", v)?;
-        }
-        if self.asset_position != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("assetPosition", ToString::to_string(&self.asset_position).as_str())?;
-        }
-        if let Some(v) = self.asset_indexed_leaf.as_ref() {
-            struct_ser.serialize_field("assetIndexedLeaf", v)?;
-        }
-        if let Some(v) = self.asset_policy.as_ref() {
-            struct_ser.serialize_field("assetPolicy", v)?;
-        }
         struct_ser.end()
     }
 }
@@ -6147,30 +6550,6 @@ impl<'de> serde::Deserialize<'de> for ShieldedInputPlan {
             "randomizer",
             "value_blinding",
             "valueBlinding",
-            "target_timestamp",
-            "targetTimestamp",
-            "is_regulated",
-            "isRegulated",
-            "compliance_leaf",
-            "complianceLeaf",
-            "tx_blinding_nonce",
-            "txBlindingNonce",
-            "compliance_anchor",
-            "complianceAnchor",
-            "asset_anchor",
-            "assetAnchor",
-            "compliance_path",
-            "compliancePath",
-            "compliance_position",
-            "compliancePosition",
-            "asset_path",
-            "assetPath",
-            "asset_position",
-            "assetPosition",
-            "asset_indexed_leaf",
-            "assetIndexedLeaf",
-            "asset_policy",
-            "assetPolicy",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -6179,18 +6558,6 @@ impl<'de> serde::Deserialize<'de> for ShieldedInputPlan {
             Position,
             Randomizer,
             ValueBlinding,
-            TargetTimestamp,
-            IsRegulated,
-            ComplianceLeaf,
-            TxBlindingNonce,
-            ComplianceAnchor,
-            AssetAnchor,
-            CompliancePath,
-            CompliancePosition,
-            AssetPath,
-            AssetPosition,
-            AssetIndexedLeaf,
-            AssetPolicy,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -6217,18 +6584,6 @@ impl<'de> serde::Deserialize<'de> for ShieldedInputPlan {
                             "position" => Ok(GeneratedField::Position),
                             "randomizer" => Ok(GeneratedField::Randomizer),
                             "valueBlinding" | "value_blinding" => Ok(GeneratedField::ValueBlinding),
-                            "targetTimestamp" | "target_timestamp" => Ok(GeneratedField::TargetTimestamp),
-                            "isRegulated" | "is_regulated" => Ok(GeneratedField::IsRegulated),
-                            "complianceLeaf" | "compliance_leaf" => Ok(GeneratedField::ComplianceLeaf),
-                            "txBlindingNonce" | "tx_blinding_nonce" => Ok(GeneratedField::TxBlindingNonce),
-                            "complianceAnchor" | "compliance_anchor" => Ok(GeneratedField::ComplianceAnchor),
-                            "assetAnchor" | "asset_anchor" => Ok(GeneratedField::AssetAnchor),
-                            "compliancePath" | "compliance_path" => Ok(GeneratedField::CompliancePath),
-                            "compliancePosition" | "compliance_position" => Ok(GeneratedField::CompliancePosition),
-                            "assetPath" | "asset_path" => Ok(GeneratedField::AssetPath),
-                            "assetPosition" | "asset_position" => Ok(GeneratedField::AssetPosition),
-                            "assetIndexedLeaf" | "asset_indexed_leaf" => Ok(GeneratedField::AssetIndexedLeaf),
-                            "assetPolicy" | "asset_policy" => Ok(GeneratedField::AssetPolicy),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -6252,18 +6607,6 @@ impl<'de> serde::Deserialize<'de> for ShieldedInputPlan {
                 let mut position__ = None;
                 let mut randomizer__ = None;
                 let mut value_blinding__ = None;
-                let mut target_timestamp__ = None;
-                let mut is_regulated__ = None;
-                let mut compliance_leaf__ = None;
-                let mut tx_blinding_nonce__ = None;
-                let mut compliance_anchor__ = None;
-                let mut asset_anchor__ = None;
-                let mut compliance_path__ = None;
-                let mut compliance_position__ = None;
-                let mut asset_path__ = None;
-                let mut asset_position__ = None;
-                let mut asset_indexed_leaf__ = None;
-                let mut asset_policy__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Note => {
@@ -6276,7 +6619,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedInputPlan {
                             if position__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("position"));
                             }
-                            position__ = 
+                            position__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -6284,7 +6627,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedInputPlan {
                             if randomizer__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("randomizer"));
                             }
-                            randomizer__ = 
+                            randomizer__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -6292,89 +6635,9 @@ impl<'de> serde::Deserialize<'de> for ShieldedInputPlan {
                             if value_blinding__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("valueBlinding"));
                             }
-                            value_blinding__ = 
+                            value_blinding__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
-                        }
-                        GeneratedField::TargetTimestamp => {
-                            if target_timestamp__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("targetTimestamp"));
-                            }
-                            target_timestamp__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::IsRegulated => {
-                            if is_regulated__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("isRegulated"));
-                            }
-                            is_regulated__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::ComplianceLeaf => {
-                            if compliance_leaf__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("complianceLeaf"));
-                            }
-                            compliance_leaf__ = map_.next_value()?;
-                        }
-                        GeneratedField::TxBlindingNonce => {
-                            if tx_blinding_nonce__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("txBlindingNonce"));
-                            }
-                            tx_blinding_nonce__ = 
-                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::ComplianceAnchor => {
-                            if compliance_anchor__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("complianceAnchor"));
-                            }
-                            compliance_anchor__ = map_.next_value()?;
-                        }
-                        GeneratedField::AssetAnchor => {
-                            if asset_anchor__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("assetAnchor"));
-                            }
-                            asset_anchor__ = map_.next_value()?;
-                        }
-                        GeneratedField::CompliancePath => {
-                            if compliance_path__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("compliancePath"));
-                            }
-                            compliance_path__ = map_.next_value()?;
-                        }
-                        GeneratedField::CompliancePosition => {
-                            if compliance_position__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("compliancePosition"));
-                            }
-                            compliance_position__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::AssetPath => {
-                            if asset_path__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("assetPath"));
-                            }
-                            asset_path__ = map_.next_value()?;
-                        }
-                        GeneratedField::AssetPosition => {
-                            if asset_position__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("assetPosition"));
-                            }
-                            asset_position__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::AssetIndexedLeaf => {
-                            if asset_indexed_leaf__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("assetIndexedLeaf"));
-                            }
-                            asset_indexed_leaf__ = map_.next_value()?;
-                        }
-                        GeneratedField::AssetPolicy => {
-                            if asset_policy__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("assetPolicy"));
-                            }
-                            asset_policy__ = map_.next_value()?;
                         }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
@@ -6386,18 +6649,6 @@ impl<'de> serde::Deserialize<'de> for ShieldedInputPlan {
                     position: position__.unwrap_or_default(),
                     randomizer: randomizer__.unwrap_or_default(),
                     value_blinding: value_blinding__.unwrap_or_default(),
-                    target_timestamp: target_timestamp__.unwrap_or_default(),
-                    is_regulated: is_regulated__.unwrap_or_default(),
-                    compliance_leaf: compliance_leaf__,
-                    tx_blinding_nonce: tx_blinding_nonce__.unwrap_or_default(),
-                    compliance_anchor: compliance_anchor__,
-                    asset_anchor: asset_anchor__,
-                    compliance_path: compliance_path__,
-                    compliance_position: compliance_position__.unwrap_or_default(),
-                    asset_path: asset_path__,
-                    asset_position: asset_position__.unwrap_or_default(),
-                    asset_indexed_leaf: asset_indexed_leaf__,
-                    asset_policy: asset_policy__,
                 })
             }
         }
@@ -6424,42 +6675,6 @@ impl serde::Serialize for ShieldedOutputPlan {
         if !self.value_blinding.is_empty() {
             len += 1;
         }
-        if self.target_timestamp != 0 {
-            len += 1;
-        }
-        if self.is_regulated {
-            len += 1;
-        }
-        if self.compliance_leaf.is_some() {
-            len += 1;
-        }
-        if !self.tx_blinding_nonce.is_empty() {
-            len += 1;
-        }
-        if self.compliance_anchor.is_some() {
-            len += 1;
-        }
-        if self.asset_anchor.is_some() {
-            len += 1;
-        }
-        if self.compliance_path.is_some() {
-            len += 1;
-        }
-        if self.compliance_position != 0 {
-            len += 1;
-        }
-        if self.asset_path.is_some() {
-            len += 1;
-        }
-        if self.asset_position != 0 {
-            len += 1;
-        }
-        if self.asset_indexed_leaf.is_some() {
-            len += 1;
-        }
-        if self.asset_policy.is_some() {
-            len += 1;
-        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.shielded_pool.v1.ShieldedOutputPlan", len)?;
         if let Some(v) = self.value.as_ref() {
             struct_ser.serialize_field("value", v)?;
@@ -6477,50 +6692,6 @@ impl serde::Serialize for ShieldedOutputPlan {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("valueBlinding", pbjson::private::base64::encode(&self.value_blinding).as_str())?;
         }
-        if self.target_timestamp != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("targetTimestamp", ToString::to_string(&self.target_timestamp).as_str())?;
-        }
-        if self.is_regulated {
-            struct_ser.serialize_field("isRegulated", &self.is_regulated)?;
-        }
-        if let Some(v) = self.compliance_leaf.as_ref() {
-            struct_ser.serialize_field("complianceLeaf", v)?;
-        }
-        if !self.tx_blinding_nonce.is_empty() {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("txBlindingNonce", pbjson::private::base64::encode(&self.tx_blinding_nonce).as_str())?;
-        }
-        if let Some(v) = self.compliance_anchor.as_ref() {
-            struct_ser.serialize_field("complianceAnchor", v)?;
-        }
-        if let Some(v) = self.asset_anchor.as_ref() {
-            struct_ser.serialize_field("assetAnchor", v)?;
-        }
-        if let Some(v) = self.compliance_path.as_ref() {
-            struct_ser.serialize_field("compliancePath", v)?;
-        }
-        if self.compliance_position != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("compliancePosition", ToString::to_string(&self.compliance_position).as_str())?;
-        }
-        if let Some(v) = self.asset_path.as_ref() {
-            struct_ser.serialize_field("assetPath", v)?;
-        }
-        if self.asset_position != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("assetPosition", ToString::to_string(&self.asset_position).as_str())?;
-        }
-        if let Some(v) = self.asset_indexed_leaf.as_ref() {
-            struct_ser.serialize_field("assetIndexedLeaf", v)?;
-        }
-        if let Some(v) = self.asset_policy.as_ref() {
-            struct_ser.serialize_field("assetPolicy", v)?;
-        }
         struct_ser.end()
     }
 }
@@ -6537,30 +6708,6 @@ impl<'de> serde::Deserialize<'de> for ShieldedOutputPlan {
             "rseed",
             "value_blinding",
             "valueBlinding",
-            "target_timestamp",
-            "targetTimestamp",
-            "is_regulated",
-            "isRegulated",
-            "compliance_leaf",
-            "complianceLeaf",
-            "tx_blinding_nonce",
-            "txBlindingNonce",
-            "compliance_anchor",
-            "complianceAnchor",
-            "asset_anchor",
-            "assetAnchor",
-            "compliance_path",
-            "compliancePath",
-            "compliance_position",
-            "compliancePosition",
-            "asset_path",
-            "assetPath",
-            "asset_position",
-            "assetPosition",
-            "asset_indexed_leaf",
-            "assetIndexedLeaf",
-            "asset_policy",
-            "assetPolicy",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -6569,18 +6716,6 @@ impl<'de> serde::Deserialize<'de> for ShieldedOutputPlan {
             DestAddress,
             Rseed,
             ValueBlinding,
-            TargetTimestamp,
-            IsRegulated,
-            ComplianceLeaf,
-            TxBlindingNonce,
-            ComplianceAnchor,
-            AssetAnchor,
-            CompliancePath,
-            CompliancePosition,
-            AssetPath,
-            AssetPosition,
-            AssetIndexedLeaf,
-            AssetPolicy,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -6607,18 +6742,6 @@ impl<'de> serde::Deserialize<'de> for ShieldedOutputPlan {
                             "destAddress" | "dest_address" => Ok(GeneratedField::DestAddress),
                             "rseed" => Ok(GeneratedField::Rseed),
                             "valueBlinding" | "value_blinding" => Ok(GeneratedField::ValueBlinding),
-                            "targetTimestamp" | "target_timestamp" => Ok(GeneratedField::TargetTimestamp),
-                            "isRegulated" | "is_regulated" => Ok(GeneratedField::IsRegulated),
-                            "complianceLeaf" | "compliance_leaf" => Ok(GeneratedField::ComplianceLeaf),
-                            "txBlindingNonce" | "tx_blinding_nonce" => Ok(GeneratedField::TxBlindingNonce),
-                            "complianceAnchor" | "compliance_anchor" => Ok(GeneratedField::ComplianceAnchor),
-                            "assetAnchor" | "asset_anchor" => Ok(GeneratedField::AssetAnchor),
-                            "compliancePath" | "compliance_path" => Ok(GeneratedField::CompliancePath),
-                            "compliancePosition" | "compliance_position" => Ok(GeneratedField::CompliancePosition),
-                            "assetPath" | "asset_path" => Ok(GeneratedField::AssetPath),
-                            "assetPosition" | "asset_position" => Ok(GeneratedField::AssetPosition),
-                            "assetIndexedLeaf" | "asset_indexed_leaf" => Ok(GeneratedField::AssetIndexedLeaf),
-                            "assetPolicy" | "asset_policy" => Ok(GeneratedField::AssetPolicy),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -6642,18 +6765,6 @@ impl<'de> serde::Deserialize<'de> for ShieldedOutputPlan {
                 let mut dest_address__ = None;
                 let mut rseed__ = None;
                 let mut value_blinding__ = None;
-                let mut target_timestamp__ = None;
-                let mut is_regulated__ = None;
-                let mut compliance_leaf__ = None;
-                let mut tx_blinding_nonce__ = None;
-                let mut compliance_anchor__ = None;
-                let mut asset_anchor__ = None;
-                let mut compliance_path__ = None;
-                let mut compliance_position__ = None;
-                let mut asset_path__ = None;
-                let mut asset_position__ = None;
-                let mut asset_indexed_leaf__ = None;
-                let mut asset_policy__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Value => {
@@ -6672,7 +6783,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedOutputPlan {
                             if rseed__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("rseed"));
                             }
-                            rseed__ = 
+                            rseed__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -6680,89 +6791,9 @@ impl<'de> serde::Deserialize<'de> for ShieldedOutputPlan {
                             if value_blinding__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("valueBlinding"));
                             }
-                            value_blinding__ = 
+                            value_blinding__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
-                        }
-                        GeneratedField::TargetTimestamp => {
-                            if target_timestamp__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("targetTimestamp"));
-                            }
-                            target_timestamp__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::IsRegulated => {
-                            if is_regulated__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("isRegulated"));
-                            }
-                            is_regulated__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::ComplianceLeaf => {
-                            if compliance_leaf__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("complianceLeaf"));
-                            }
-                            compliance_leaf__ = map_.next_value()?;
-                        }
-                        GeneratedField::TxBlindingNonce => {
-                            if tx_blinding_nonce__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("txBlindingNonce"));
-                            }
-                            tx_blinding_nonce__ = 
-                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::ComplianceAnchor => {
-                            if compliance_anchor__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("complianceAnchor"));
-                            }
-                            compliance_anchor__ = map_.next_value()?;
-                        }
-                        GeneratedField::AssetAnchor => {
-                            if asset_anchor__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("assetAnchor"));
-                            }
-                            asset_anchor__ = map_.next_value()?;
-                        }
-                        GeneratedField::CompliancePath => {
-                            if compliance_path__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("compliancePath"));
-                            }
-                            compliance_path__ = map_.next_value()?;
-                        }
-                        GeneratedField::CompliancePosition => {
-                            if compliance_position__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("compliancePosition"));
-                            }
-                            compliance_position__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::AssetPath => {
-                            if asset_path__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("assetPath"));
-                            }
-                            asset_path__ = map_.next_value()?;
-                        }
-                        GeneratedField::AssetPosition => {
-                            if asset_position__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("assetPosition"));
-                            }
-                            asset_position__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::AssetIndexedLeaf => {
-                            if asset_indexed_leaf__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("assetIndexedLeaf"));
-                            }
-                            asset_indexed_leaf__ = map_.next_value()?;
-                        }
-                        GeneratedField::AssetPolicy => {
-                            if asset_policy__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("assetPolicy"));
-                            }
-                            asset_policy__ = map_.next_value()?;
                         }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
@@ -6774,18 +6805,6 @@ impl<'de> serde::Deserialize<'de> for ShieldedOutputPlan {
                     dest_address: dest_address__,
                     rseed: rseed__.unwrap_or_default(),
                     value_blinding: value_blinding__.unwrap_or_default(),
-                    target_timestamp: target_timestamp__.unwrap_or_default(),
-                    is_regulated: is_regulated__.unwrap_or_default(),
-                    compliance_leaf: compliance_leaf__,
-                    tx_blinding_nonce: tx_blinding_nonce__.unwrap_or_default(),
-                    compliance_anchor: compliance_anchor__,
-                    asset_anchor: asset_anchor__,
-                    compliance_path: compliance_path__,
-                    compliance_position: compliance_position__.unwrap_or_default(),
-                    asset_path: asset_path__,
-                    asset_position: asset_position__.unwrap_or_default(),
-                    asset_indexed_leaf: asset_indexed_leaf__,
-                    asset_policy: asset_policy__,
                 })
             }
         }
@@ -6892,7 +6911,7 @@ impl<'de> serde::Deserialize<'de> for ShieldedPoolParameters {
                             if discovery_grace_period_blocks__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("discoveryGracePeriodBlocks"));
                             }
-                            discovery_grace_period_blocks__ = 
+                            discovery_grace_period_blocks__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -7233,7 +7252,7 @@ impl<'de> serde::Deserialize<'de> for TransferBody {
                             if target_timestamp__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("targetTimestamp"));
                             }
-                            target_timestamp__ = 
+                            target_timestamp__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -7259,7 +7278,7 @@ impl<'de> serde::Deserialize<'de> for TransferBody {
                             if routing_parameter_set_id__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("routingParameterSetId"));
                             }
-                            routing_parameter_set_id__ = 
+                            routing_parameter_set_id__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -7282,6 +7301,177 @@ impl<'de> serde::Deserialize<'de> for TransferBody {
             }
         }
         deserializer.deserialize_struct("shieldd.core.component.shielded_pool.v1.TransferBody", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for TransferContext {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.witness.is_some() {
+            len += 1;
+        }
+        if self.recipient.is_some() {
+            len += 1;
+        }
+        if self.policy.is_some() {
+            len += 1;
+        }
+        if self.timestamp != 0 {
+            len += 1;
+        }
+        if !self.nonce.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("shieldd.core.component.shielded_pool.v1.TransferContext", len)?;
+        if let Some(v) = self.witness.as_ref() {
+            struct_ser.serialize_field("witness", v)?;
+        }
+        if let Some(v) = self.recipient.as_ref() {
+            struct_ser.serialize_field("recipient", v)?;
+        }
+        if let Some(v) = self.policy.as_ref() {
+            struct_ser.serialize_field("policy", v)?;
+        }
+        if self.timestamp != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("timestamp", ToString::to_string(&self.timestamp).as_str())?;
+        }
+        if !self.nonce.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("nonce", pbjson::private::base64::encode(&self.nonce).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for TransferContext {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "witness",
+            "recipient",
+            "policy",
+            "timestamp",
+            "nonce",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Witness,
+            Recipient,
+            Policy,
+            Timestamp,
+            Nonce,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "witness" => Ok(GeneratedField::Witness),
+                            "recipient" => Ok(GeneratedField::Recipient),
+                            "policy" => Ok(GeneratedField::Policy),
+                            "timestamp" => Ok(GeneratedField::Timestamp),
+                            "nonce" => Ok(GeneratedField::Nonce),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = TransferContext;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct shieldd.core.component.shielded_pool.v1.TransferContext")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<TransferContext, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut witness__ = None;
+                let mut recipient__ = None;
+                let mut policy__ = None;
+                let mut timestamp__ = None;
+                let mut nonce__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Witness => {
+                            if witness__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("witness"));
+                            }
+                            witness__ = map_.next_value()?;
+                        }
+                        GeneratedField::Recipient => {
+                            if recipient__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("recipient"));
+                            }
+                            recipient__ = map_.next_value()?;
+                        }
+                        GeneratedField::Policy => {
+                            if policy__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("policy"));
+                            }
+                            policy__ = map_.next_value()?;
+                        }
+                        GeneratedField::Timestamp => {
+                            if timestamp__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timestamp"));
+                            }
+                            timestamp__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Nonce => {
+                            if nonce__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nonce"));
+                            }
+                            nonce__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(TransferContext {
+                    witness: witness__,
+                    recipient: recipient__,
+                    policy: policy__,
+                    timestamp: timestamp__.unwrap_or_default(),
+                    nonce: nonce__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("shieldd.core.component.shielded_pool.v1.TransferContext", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for TransferInputBody {
@@ -7423,7 +7613,7 @@ impl<'de> serde::Deserialize<'de> for TransferInputBody {
                             if encrypted_backref__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("encryptedBackref"));
                             }
-                            encrypted_backref__ = 
+                            encrypted_backref__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -7431,7 +7621,7 @@ impl<'de> serde::Deserialize<'de> for TransferInputBody {
                             if compliance_ciphertext__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("complianceCiphertext"));
                             }
-                            compliance_ciphertext__ = 
+                            compliance_ciphertext__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -7597,7 +7787,7 @@ impl<'de> serde::Deserialize<'de> for TransferOutputBody {
                             if wrapped_memo_key__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("wrappedMemoKey"));
                             }
-                            wrapped_memo_key__ = 
+                            wrapped_memo_key__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -7605,7 +7795,7 @@ impl<'de> serde::Deserialize<'de> for TransferOutputBody {
                             if ovk_wrapped_key__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("ovkWrappedKey"));
                             }
-                            ovk_wrapped_key__ = 
+                            ovk_wrapped_key__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -7613,7 +7803,7 @@ impl<'de> serde::Deserialize<'de> for TransferOutputBody {
                             if compliance_ciphertext__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("complianceCiphertext"));
                             }
-                            compliance_ciphertext__ = 
+                            compliance_ciphertext__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -7621,7 +7811,7 @@ impl<'de> serde::Deserialize<'de> for TransferOutputBody {
                             if compliance_metadata__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("complianceMetadata"));
                             }
-                            compliance_metadata__ = 
+                            compliance_metadata__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -7662,6 +7852,9 @@ impl serde::Serialize for TransferPlan {
         if self.routing_parameters.is_some() {
             len += 1;
         }
+        if self.compliance.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.shielded_pool.v1.TransferPlan", len)?;
         if !self.value_blinding.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -7676,6 +7869,9 @@ impl serde::Serialize for TransferPlan {
         }
         if let Some(v) = self.routing_parameters.as_ref() {
             struct_ser.serialize_field("routingParameters", v)?;
+        }
+        if let Some(v) = self.compliance.as_ref() {
+            struct_ser.serialize_field("compliance", v)?;
         }
         struct_ser.end()
     }
@@ -7693,6 +7889,7 @@ impl<'de> serde::Deserialize<'de> for TransferPlan {
             "outputs",
             "routing_parameters",
             "routingParameters",
+            "compliance",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -7701,6 +7898,7 @@ impl<'de> serde::Deserialize<'de> for TransferPlan {
             Spends,
             Outputs,
             RoutingParameters,
+            Compliance,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -7727,6 +7925,7 @@ impl<'de> serde::Deserialize<'de> for TransferPlan {
                             "spends" => Ok(GeneratedField::Spends),
                             "outputs" => Ok(GeneratedField::Outputs),
                             "routingParameters" | "routing_parameters" => Ok(GeneratedField::RoutingParameters),
+                            "compliance" => Ok(GeneratedField::Compliance),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -7750,13 +7949,14 @@ impl<'de> serde::Deserialize<'de> for TransferPlan {
                 let mut spends__ = None;
                 let mut outputs__ = None;
                 let mut routing_parameters__ = None;
+                let mut compliance__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ValueBlinding => {
                             if value_blinding__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("valueBlinding"));
                             }
-                            value_blinding__ = 
+                            value_blinding__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -7778,6 +7978,12 @@ impl<'de> serde::Deserialize<'de> for TransferPlan {
                             }
                             routing_parameters__ = map_.next_value()?;
                         }
+                        GeneratedField::Compliance => {
+                            if compliance__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compliance"));
+                            }
+                            compliance__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -7788,6 +7994,7 @@ impl<'de> serde::Deserialize<'de> for TransferPlan {
                     spends: spends__.unwrap_or_default(),
                     outputs: outputs__.unwrap_or_default(),
                     routing_parameters: routing_parameters__,
+                    compliance: compliance__,
                 })
             }
         }
@@ -8246,6 +8453,276 @@ impl<'de> serde::Deserialize<'de> for transfer_view::Visible {
         deserializer.deserialize_struct("shieldd.core.component.shielded_pool.v1.TransferView.Visible", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for UserWitness {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.leaf.is_some() {
+            len += 1;
+        }
+        if self.position != 0 {
+            len += 1;
+        }
+        if self.path.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("shieldd.core.component.shielded_pool.v1.UserWitness", len)?;
+        if let Some(v) = self.leaf.as_ref() {
+            struct_ser.serialize_field("leaf", v)?;
+        }
+        if self.position != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("position", ToString::to_string(&self.position).as_str())?;
+        }
+        if let Some(v) = self.path.as_ref() {
+            struct_ser.serialize_field("path", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for UserWitness {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "leaf",
+            "position",
+            "path",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Leaf,
+            Position,
+            Path,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "leaf" => Ok(GeneratedField::Leaf),
+                            "position" => Ok(GeneratedField::Position),
+                            "path" => Ok(GeneratedField::Path),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = UserWitness;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct shieldd.core.component.shielded_pool.v1.UserWitness")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<UserWitness, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut leaf__ = None;
+                let mut position__ = None;
+                let mut path__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Leaf => {
+                            if leaf__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("leaf"));
+                            }
+                            leaf__ = map_.next_value()?;
+                        }
+                        GeneratedField::Position => {
+                            if position__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("position"));
+                            }
+                            position__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Path => {
+                            if path__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("path"));
+                            }
+                            path__ = map_.next_value()?;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(UserWitness {
+                    leaf: leaf__,
+                    position: position__.unwrap_or_default(),
+                    path: path__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("shieldd.core.component.shielded_pool.v1.UserWitness", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for WithdrawalContext {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.witness.is_some() {
+            len += 1;
+        }
+        if self.timestamp != 0 {
+            len += 1;
+        }
+        if !self.nonce.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("shieldd.core.component.shielded_pool.v1.WithdrawalContext", len)?;
+        if let Some(v) = self.witness.as_ref() {
+            struct_ser.serialize_field("witness", v)?;
+        }
+        if self.timestamp != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("timestamp", ToString::to_string(&self.timestamp).as_str())?;
+        }
+        if !self.nonce.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("nonce", pbjson::private::base64::encode(&self.nonce).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for WithdrawalContext {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "witness",
+            "timestamp",
+            "nonce",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Witness,
+            Timestamp,
+            Nonce,
+            __SkipField__,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "witness" => Ok(GeneratedField::Witness),
+                            "timestamp" => Ok(GeneratedField::Timestamp),
+                            "nonce" => Ok(GeneratedField::Nonce),
+                            _ => Ok(GeneratedField::__SkipField__),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = WithdrawalContext;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct shieldd.core.component.shielded_pool.v1.WithdrawalContext")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<WithdrawalContext, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut witness__ = None;
+                let mut timestamp__ = None;
+                let mut nonce__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Witness => {
+                            if witness__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("witness"));
+                            }
+                            witness__ = map_.next_value()?;
+                        }
+                        GeneratedField::Timestamp => {
+                            if timestamp__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timestamp"));
+                            }
+                            timestamp__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Nonce => {
+                            if nonce__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nonce"));
+                            }
+                            nonce__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::__SkipField__ => {
+                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(WithdrawalContext {
+                    witness: witness__,
+                    timestamp: timestamp__.unwrap_or_default(),
+                    nonce: nonce__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("shieldd.core.component.shielded_pool.v1.WithdrawalContext", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ZkNoteReshapeProof {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -8328,7 +8805,7 @@ impl<'de> serde::Deserialize<'de> for ZkNoteReshapeProof {
                             if inner__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("inner"));
                             }
-                            inner__ = 
+                            inner__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -8427,7 +8904,7 @@ impl<'de> serde::Deserialize<'de> for ZkShieldedIcs20WithdrawalProof {
                             if inner__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("inner"));
                             }
-                            inner__ = 
+                            inner__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -8526,7 +9003,7 @@ impl<'de> serde::Deserialize<'de> for ZkTransferProof {
                             if inner__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("inner"));
                             }
-                            inner__ = 
+                            inner__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }

@@ -107,7 +107,7 @@ impl<'de> serde::Deserialize<'de> for MerklePathChunk {
                             if sibling_1__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("sibling1"));
                             }
-                            sibling_1__ = 
+                            sibling_1__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -115,7 +115,7 @@ impl<'de> serde::Deserialize<'de> for MerklePathChunk {
                             if sibling_2__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("sibling2"));
                             }
-                            sibling_2__ = 
+                            sibling_2__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -123,7 +123,7 @@ impl<'de> serde::Deserialize<'de> for MerklePathChunk {
                             if sibling_3__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("sibling3"));
                             }
-                            sibling_3__ = 
+                            sibling_3__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -224,7 +224,7 @@ impl<'de> serde::Deserialize<'de> for MerkleRoot {
                             if inner__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("inner"));
                             }
-                            inner__ = 
+                            inner__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -323,7 +323,7 @@ impl<'de> serde::Deserialize<'de> for StateCommitment {
                             if inner__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("inner"));
                             }
-                            inner__ = 
+                            inner__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -450,7 +450,7 @@ impl<'de> serde::Deserialize<'de> for StateCommitmentProof {
                             if position__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("position"));
                             }
-                            position__ = 
+                            position__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }

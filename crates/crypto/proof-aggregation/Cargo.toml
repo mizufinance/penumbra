@@ -13,7 +13,6 @@ fuzzing = []
 # Bench-only A/B seam (compile-time, never on in production). Forwards to the
 # RIPP backend's retained pre-optimization paths. See
 # optimization-playbook.md (in this crate).
-bench-baseline = ["ark-ip-proofs/bench-baseline"]
 
 [[bench]]
 name = "snarkpack"

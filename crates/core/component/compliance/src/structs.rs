@@ -1338,65 +1338,6 @@ impl shieldd_sdk_txhash::EffectingData for MsgRegisterAsset {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    try_from = "pb::UpdateAssetIbcPolicy",
-    into = "pb::UpdateAssetIbcPolicy"
-)]
-pub struct UpdateAssetIbcPolicy {
-    pub asset_id: asset::Id,
-    pub expected_route_policy_hash: [u8; 32],
-    pub allowed_ibc_routes: Vec<IbcRoute>,
-}
-
-impl DomainType for UpdateAssetIbcPolicy {
-    type Proto = pb::UpdateAssetIbcPolicy;
-}
-
-impl TryFrom<pb::UpdateAssetIbcPolicy> for UpdateAssetIbcPolicy {
-    type Error = anyhow::Error;
-
-    fn try_from(value: pb::UpdateAssetIbcPolicy) -> Result<Self, Self::Error> {
-        let expected_route_policy_hash =
-            value
-                .expected_route_policy_hash
-                .try_into()
-                .map_err(|v: Vec<u8>| {
-                    anyhow::anyhow!(
-                        "expected_route_policy_hash must be 32 bytes, got {}",
-                        v.len()
-                    )
-                })?;
-        let allowed_ibc_routes = value
-            .allowed_ibc_routes
-            .into_iter()
-            .map(TryInto::try_into)
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        Ok(Self {
-            asset_id: value
-                .asset_id
-                .ok_or_else(|| anyhow::anyhow!("missing asset_id"))?
-                .try_into()?,
-            expected_route_policy_hash,
-            allowed_ibc_routes: canonical_routes(allowed_ibc_routes),
-        })
-    }
-}
-
-impl From<UpdateAssetIbcPolicy> for pb::UpdateAssetIbcPolicy {
-    fn from(value: UpdateAssetIbcPolicy) -> Self {
-        Self {
-            asset_id: Some(value.asset_id.into()),
-            expected_route_policy_hash: value.expected_route_policy_hash.to_vec(),
-            allowed_ibc_routes: value
-                .allowed_ibc_routes
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-        }
-    }
-}
-
 /// Message to register a user's address for a regulated asset.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "pb::MsgRegisterUser", into = "pb::MsgRegisterUser")]

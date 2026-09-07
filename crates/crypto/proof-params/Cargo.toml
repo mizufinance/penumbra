@@ -25,7 +25,6 @@ parallel = [
     "decaf377/parallel",
     "ark-groth16/parallel",
     "ark-std/parallel",
-    "ark-r1cs-std/parallel",
 ]
 
 [dependencies]
@@ -34,17 +33,15 @@ ark-ec = {workspace = true}
 ark-bw6-761 = {workspace = true}
 ark-ff = {workspace = true, default-features = false}
 ark-groth16 = {workspace = true, default-features = false}
-ark-r1cs-std = {workspace = true, default-features = false}
-ark-relations = {workspace = true}
 ark-serialize = {workspace = true}
 ark-snark = {workspace = true}
 ark-std = {workspace = true, default-features = false}
 bech32 = {workspace = true}
-decaf377 = {workspace = true, features = ["r1cs"], default-features = true}
+decaf377 = {workspace = true, default-features = true}
 hex = {workspace = true}
 num-bigint = {workspace = true}
 once_cell = {workspace = true}
-poseidon377 = {workspace = true, features = ["r1cs"]}
+poseidon377 = {workspace = true}
 rand = {workspace = true}
 rand_core = {workspace = true, features = ["getrandom"]}
 rayon = { version = "1.10", optional = true }
@@ -54,6 +51,8 @@ sha2 = {workspace = true}
 tracing = {workspace = true}
 
 [dev-dependencies]
+ark-r1cs-std = {workspace = true}
+ark-relations = {workspace = true}
 rand_chacha = {workspace = true}
 
 [package.metadata.docs.rs]

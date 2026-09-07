@@ -175,7 +175,7 @@ impl<'de> serde::Deserialize<'de> for ClientCounter {
                             if counter__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("counter"));
                             }
-                            counter__ = 
+                            counter__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -326,7 +326,7 @@ impl<'de> serde::Deserialize<'de> for ClientData {
                             if processed_height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("processedHeight"));
                             }
-                            processed_height__ = 
+                            processed_height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -428,7 +428,7 @@ impl<'de> serde::Deserialize<'de> for ConnectionCounter {
                             if counter__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("counter"));
                             }
-                            counter__ = 
+                            counter__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1057,9 +1057,6 @@ impl serde::Serialize for Ics20Withdrawal {
         if !self.source_channel.is_empty() {
             len += 1;
         }
-        if self.use_compat_address {
-            len += 1;
-        }
         if !self.ics20_memo.is_empty() {
             len += 1;
         }
@@ -1090,9 +1087,6 @@ impl serde::Serialize for Ics20Withdrawal {
         if !self.source_channel.is_empty() {
             struct_ser.serialize_field("sourceChannel", &self.source_channel)?;
         }
-        if self.use_compat_address {
-            struct_ser.serialize_field("useCompatAddress", &self.use_compat_address)?;
-        }
         if !self.ics20_memo.is_empty() {
             struct_ser.serialize_field("ics20Memo", &self.ics20_memo)?;
         }
@@ -1121,8 +1115,6 @@ impl<'de> serde::Deserialize<'de> for Ics20Withdrawal {
             "timeoutTime",
             "source_channel",
             "sourceChannel",
-            "use_compat_address",
-            "useCompatAddress",
             "ics20_memo",
             "ics20Memo",
             "use_transparent_address",
@@ -1138,7 +1130,6 @@ impl<'de> serde::Deserialize<'de> for Ics20Withdrawal {
             TimeoutHeight,
             TimeoutTime,
             SourceChannel,
-            UseCompatAddress,
             Ics20Memo,
             UseTransparentAddress,
             __SkipField__,
@@ -1170,7 +1161,6 @@ impl<'de> serde::Deserialize<'de> for Ics20Withdrawal {
                             "timeoutHeight" | "timeout_height" => Ok(GeneratedField::TimeoutHeight),
                             "timeoutTime" | "timeout_time" => Ok(GeneratedField::TimeoutTime),
                             "sourceChannel" | "source_channel" => Ok(GeneratedField::SourceChannel),
-                            "useCompatAddress" | "use_compat_address" => Ok(GeneratedField::UseCompatAddress),
                             "ics20Memo" | "ics20_memo" => Ok(GeneratedField::Ics20Memo),
                             "useTransparentAddress" | "use_transparent_address" => Ok(GeneratedField::UseTransparentAddress),
                             _ => Ok(GeneratedField::__SkipField__),
@@ -1199,7 +1189,6 @@ impl<'de> serde::Deserialize<'de> for Ics20Withdrawal {
                 let mut timeout_height__ = None;
                 let mut timeout_time__ = None;
                 let mut source_channel__ = None;
-                let mut use_compat_address__ = None;
                 let mut ics20_memo__ = None;
                 let mut use_transparent_address__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -1238,7 +1227,7 @@ impl<'de> serde::Deserialize<'de> for Ics20Withdrawal {
                             if timeout_time__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("timeoutTime"));
                             }
-                            timeout_time__ = 
+                            timeout_time__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1247,12 +1236,6 @@ impl<'de> serde::Deserialize<'de> for Ics20Withdrawal {
                                 return Err(serde::de::Error::duplicate_field("sourceChannel"));
                             }
                             source_channel__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::UseCompatAddress => {
-                            if use_compat_address__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("useCompatAddress"));
-                            }
-                            use_compat_address__ = Some(map_.next_value()?);
                         }
                         GeneratedField::Ics20Memo => {
                             if ics20_memo__.is_some() {
@@ -1279,7 +1262,6 @@ impl<'de> serde::Deserialize<'de> for Ics20Withdrawal {
                     timeout_height: timeout_height__,
                     timeout_time: timeout_time__.unwrap_or_default(),
                     source_channel: source_channel__.unwrap_or_default(),
-                    use_compat_address: use_compat_address__.unwrap_or_default(),
                     ics20_memo: ics20_memo__.unwrap_or_default(),
                     use_transparent_address: use_transparent_address__.unwrap_or_default(),
                 })

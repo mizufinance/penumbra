@@ -286,7 +286,7 @@ impl<'de> serde::Deserialize<'de> for coordinator_round2::IdentifiedCommitments 
                             if identifier__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("identifier"));
                             }
-                            identifier__ = 
+                            identifier__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -529,7 +529,7 @@ impl<'de> serde::Deserialize<'de> for DkgRound1 {
                             if nullifier_commitment__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("nullifierCommitment"));
                             }
-                            nullifier_commitment__ = 
+                            nullifier_commitment__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -537,7 +537,7 @@ impl<'de> serde::Deserialize<'de> for DkgRound1 {
                             if epk__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("epk"));
                             }
-                            epk__ = 
+                            epk__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -545,7 +545,7 @@ impl<'de> serde::Deserialize<'de> for DkgRound1 {
                             if vk__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("vk"));
                             }
-                            vk__ = 
+                            vk__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -675,7 +675,7 @@ impl<'de> serde::Deserialize<'de> for DkgRound2 {
                             if vk__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("vk"));
                             }
-                            vk__ = 
+                            vk__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -683,7 +683,7 @@ impl<'de> serde::Deserialize<'de> for DkgRound2 {
                             if sig__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("sig"));
                             }
-                            sig__ = 
+                            sig__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -801,7 +801,7 @@ impl<'de> serde::Deserialize<'de> for dkg_round2::Inner {
                             if nullifier__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("nullifier"));
                             }
-                            nullifier__ = 
+                            nullifier__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -914,7 +914,7 @@ impl<'de> serde::Deserialize<'de> for dkg_round2::TargetedPackage {
                             if vk__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("vk"));
                             }
-                            vk__ = 
+                            vk__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -922,7 +922,7 @@ impl<'de> serde::Deserialize<'de> for dkg_round2::TargetedPackage {
                             if encrypted_package__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("encryptedPackage"));
                             }
-                            encrypted_package__ = 
+                            encrypted_package__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -1470,7 +1470,7 @@ impl<'de> serde::Deserialize<'de> for Signature {
                             if inner__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("inner"));
                             }
-                            inner__ = 
+                            inner__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -1569,7 +1569,7 @@ impl<'de> serde::Deserialize<'de> for VerificationKey {
                             if inner__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("inner"));
                             }
-                            inner__ = 
+                            inner__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }

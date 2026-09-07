@@ -374,17 +374,11 @@ configure_wallet_view_service() {
     return 1
 }
 
-docker_compose_flavor() {
-    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-        printf 'docker-compose-v2\n'
-        return 0
+require_docker_compose() {
+    if ! docker compose version >/dev/null 2>&1; then
+        log_error "Docker Compose v2 is required"
+        return 1
     fi
-    if command -v docker-compose >/dev/null 2>&1; then
-        printf 'docker-compose-v1\n'
-        return 0
-    fi
-    log_error "docker compose not found"
-    return 1
 }
 
 docker_daemon_ready() {
@@ -475,18 +469,10 @@ orbis_compose_project_name() {
 run_orbis_compose() {
     local compose_file="$1"
     shift
-    local flavor
-    flavor="$(docker_compose_flavor)" || return 1
+    require_docker_compose || return 1
     local project_name
     project_name="$(orbis_compose_project_name)"
-    case "$flavor" in
-        docker-compose-v2)
-            docker compose -p "$project_name" -f "$compose_file" "$@"
-            ;;
-        docker-compose-v1)
-            docker-compose -p "$project_name" -f "$compose_file" "$@"
-            ;;
-    esac
+    docker compose -p "$project_name" -f "$compose_file" "$@"
 }
 
 orbis_published_port() {

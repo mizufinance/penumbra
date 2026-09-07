@@ -20,15 +20,13 @@ use tokio::sync::watch;
 use tonic::transport::Channel;
 use tracing::{debug, info, instrument, warn};
 
-use super::advice::AuditAdviceProvider;
 use super::screener::{ComplianceScreener, ScreeningResult};
 use super::storage::ScannerStore;
 use super::sync::{extract_clear_flows, extract_compliance_ciphertexts};
-use super::types::{BlockRef, DetectionEvent, TxRef};
-use crate::audit::EVIDENCE_STAGE_BUILD;
-use crate::{
-    issuer_keys::DetectionKey, ComplianceEvidenceObject, OutputRef, TransferComplianceMetadata,
+use super::types::{
+    BlockRef, CandidateEvidence, OutputOutcome, ScannedBlock, ScannedOutput, TxRef,
 };
+use crate::issuer_keys::DetectionKey;
 
 const MAX_CB_SIZE_BYTES: usize = 64 * 1024 * 1024;
 const BLOCK_IDENTITY_MAX_ATTEMPTS: usize = 5;
@@ -130,7 +128,6 @@ pub struct IssuerComplianceWorker {
     target_asset_id: asset::Id,
     storage: Arc<dyn ScannerStore>,
     block_identity: Arc<dyn BlockIdentityProvider>,
-    _advice: Arc<dyn AuditAdviceProvider>,
     channel: Channel,
     error_slot: Arc<Mutex<Option<anyhow::Error>>>,
     sync_height_tx: watch::Sender<u64>,
@@ -142,7 +139,6 @@ impl IssuerComplianceWorker {
         target_asset_id: asset::Id,
         storage: Arc<dyn ScannerStore>,
         block_identity: Arc<dyn BlockIdentityProvider>,
-        advice: Arc<dyn AuditAdviceProvider>,
         channel: Channel,
     ) -> Result<(Self, WorkerHandle)> {
         let error_slot = Arc::new(Mutex::new(None));
@@ -158,7 +154,6 @@ impl IssuerComplianceWorker {
             target_asset_id,
             storage,
             block_identity,
-            _advice: advice,
             channel,
             error_slot: error_slot.clone(),
             sync_height_tx,
@@ -340,13 +335,12 @@ impl IssuerComplianceWorker {
     }
 
     async fn process_block(&self, block: BlockRef) -> Result<()> {
-        self.storage.begin_block(&block).await?;
+        let mut scanned = ScannedBlock::new(block.clone());
         let transactions = self.fetch_transactions(block.height).await?;
 
         let mut detection_count = 0u64;
         let mut invalid_count = 0u64;
         let mut flagged_count = 0u64;
-        let mut evidence_work = Vec::new();
 
         for (tx_index, tx) in transactions.iter().enumerate() {
             let tx_ref = TxRef {
@@ -356,47 +350,35 @@ impl IssuerComplianceWorker {
             };
 
             for extracted in extract_compliance_ciphertexts(&tx_ref, tx) {
-                let output_ref = extracted.output_ref.clone();
-                let metadata_bytes = extracted.metadata_bytes.clone();
-                self.storage.save_ciphertext(&extracted).await?;
-                match self.screener.screen(extracted) {
-                    ScreeningResult::Irrelevant => {
-                        self.storage.mark_ciphertext_irrelevant(&output_ref).await?;
-                    }
+                let outcome = match self.screener.screen(extracted.clone()) {
+                    ScreeningResult::Irrelevant => OutputOutcome::Irrelevant,
                     ScreeningResult::Detected(event) => {
                         detection_count += 1;
-                        if event.is_flagged {
-                            flagged_count += 1;
-                        }
-                        evidence_work.push(PendingEvidenceWork {
-                            output_ref: event.output_ref.clone(),
-                            event: event.clone(),
-                            metadata_bytes,
-                        });
-                        self.storage.save_detection(&event).await?;
+                        flagged_count += u64::from(event.is_flagged);
+                        let evidence = CandidateEvidence::from_detection(
+                            &event,
+                            extracted.metadata_bytes.as_deref(),
+                        );
+                        OutputOutcome::Detected { event, evidence }
                     }
                     ScreeningResult::InvalidCiphertext(invalid) => {
                         invalid_count += 1;
-                        self.storage.save_invalid_ciphertext(&invalid).await?;
+                        OutputOutcome::Invalid {
+                            reason: invalid.reason,
+                        }
                     }
-                }
+                };
+                scanned.outputs.push(ScannedOutput {
+                    ciphertext: extracted,
+                    outcome,
+                });
             }
-
             for clear_flow in extract_clear_flows(&tx_ref, tx) {
-                self.storage.save_clear_flow(&clear_flow).await?;
+                scanned.clear_flows.push(clear_flow);
             }
         }
 
-        self.storage.commit_block(&block).await?;
-        for work in evidence_work {
-            if let Err(error) = self.validate_detected_evidence(work).await {
-                warn!(
-                    height = block.height,
-                    ?error,
-                    "failed to validate compliance evidence for detected output"
-                );
-            }
-        }
+        self.storage.commit_scanned_block(&scanned).await?;
         let _ = self.sync_height_tx.send(block.height);
 
         if detection_count > 0 || invalid_count > 0 {
@@ -412,56 +394,6 @@ impl IssuerComplianceWorker {
             info!(height = block.height, "synced compliance scanner");
         }
 
-        Ok(())
-    }
-
-    async fn validate_detected_evidence(&self, work: PendingEvidenceWork) -> Result<()> {
-        let output_ref = &work.output_ref;
-        let Some(metadata_bytes) = work.metadata_bytes.as_deref() else {
-            self.storage
-                .record_evidence_failure(
-                    output_ref,
-                    EVIDENCE_STAGE_BUILD,
-                    "detected output is missing transfer compliance metadata",
-                )
-                .await?;
-            return Ok(());
-        };
-        let metadata = match TransferComplianceMetadata::from_bytes(metadata_bytes) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                self.storage
-                    .record_evidence_failure(
-                        output_ref,
-                        EVIDENCE_STAGE_BUILD,
-                        &format!("failed to decode transfer compliance metadata: {error}"),
-                    )
-                    .await?;
-                return Ok(());
-            }
-        };
-        let evidence = match ComplianceEvidenceObject::new_transfer(
-            output_ref.clone(),
-            work.event.asset_id,
-            work.event.is_flagged,
-            work.event.salt,
-            work.event.ciphertext,
-            metadata,
-        ) {
-            Ok(evidence) => evidence,
-            Err(error) => {
-                self.storage
-                    .record_evidence_failure(
-                        output_ref,
-                        EVIDENCE_STAGE_BUILD,
-                        &format!("failed to build compliance evidence: {error}"),
-                    )
-                    .await?;
-                return Ok(());
-            }
-        };
-
-        self.storage.validate_and_save_evidence(&evidence).await?;
         Ok(())
     }
 
@@ -488,12 +420,6 @@ enum ReorgDecision {
     AlreadyProcessed,
     Process,
     RollbackTo(u64),
-}
-
-struct PendingEvidenceWork {
-    output_ref: OutputRef,
-    event: DetectionEvent,
-    metadata_bytes: Option<Vec<u8>>,
 }
 
 fn parse_block_ref(
@@ -553,7 +479,7 @@ mod tests {
     use shieldd_sdk_proto::util::tendermint_proxy::v1::GetBlockByHeightResponse;
     use std::collections::HashMap;
 
-    use crate::scanner::{NoopAuditAdviceProvider, SqliteScannerStore};
+    use crate::scanner::SqliteScannerStore;
     use crate::ExtractedComplianceCiphertext;
 
     #[derive(Default)]
@@ -601,15 +527,16 @@ mod tests {
     async fn worker_creation_uses_stored_height() {
         let store = SqliteScannerStore::new(":memory:").unwrap();
         let block = block(7, 7, 6);
-        store.begin_block(&block).await.unwrap();
-        store.commit_block(&block).await.unwrap();
+        store
+            .commit_scanned_block(&ScannedBlock::new(block.clone()))
+            .await
+            .unwrap();
         let identity = Arc::new(MemoryBlockIdentity::default());
         let (_worker, handle) = IssuerComplianceWorker::new(
             DetectionKey::demo(),
             asset::Id(decaf377::Fq::from(12345u64)),
             Arc::new(store),
             identity,
-            Arc::new(NoopAuditAdviceProvider),
             Channel::from_static("http://localhost:8080").connect_lazy(),
         )
         .await
@@ -622,8 +549,10 @@ mod tests {
     async fn reorg_decision_accepts_matching_parent() {
         let store = Arc::new(SqliteScannerStore::new(":memory:").unwrap());
         let b1 = block(1, 1, 0);
-        store.begin_block(&b1).await.unwrap();
-        store.commit_block(&b1).await.unwrap();
+        store
+            .commit_scanned_block(&ScannedBlock::new(b1.clone()))
+            .await
+            .unwrap();
         let identity = Arc::new(MemoryBlockIdentity::default());
         identity.insert(b1);
         let (worker, _) = IssuerComplianceWorker::new(
@@ -631,7 +560,6 @@ mod tests {
             asset::Id(decaf377::Fq::from(1u64)),
             store,
             identity,
-            Arc::new(NoopAuditAdviceProvider),
             Channel::from_static("http://localhost:8080").connect_lazy(),
         )
         .await
@@ -647,8 +575,10 @@ mod tests {
     async fn reorg_decision_walks_back_to_common_ancestor() {
         let store = Arc::new(SqliteScannerStore::new(":memory:").unwrap());
         for block in [block(1, 1, 0), block(2, 2, 1), block(3, 3, 2)] {
-            store.begin_block(&block).await.unwrap();
-            store.commit_block(&block).await.unwrap();
+            store
+                .commit_scanned_block(&ScannedBlock::new(block.clone()))
+                .await
+                .unwrap();
         }
 
         let identity = Arc::new(MemoryBlockIdentity::default());
@@ -660,7 +590,6 @@ mod tests {
             asset::Id(decaf377::Fq::from(1u64)),
             store,
             identity,
-            Arc::new(NoopAuditAdviceProvider),
             Channel::from_static("http://localhost:8080").connect_lazy(),
         )
         .await
@@ -677,7 +606,7 @@ mod tests {
         let store = Arc::new(SqliteScannerStore::new(":memory:").unwrap());
         let (evidence, metadata) = crate::evidence::tests::valid_evidence_fixture();
         let block = evidence.output_ref.action.tx.block.clone();
-        let event = DetectionEvent {
+        let event = crate::scanner::DetectionEvent {
             output_ref: evidence.output_ref.clone(),
             asset_id: evidence.asset_id,
             is_flagged: evidence.is_flagged,
@@ -687,35 +616,24 @@ mod tests {
             raw_bytes: evidence.transfer_ciphertext.to_bytes(),
         };
 
-        store.begin_block(&block).await.unwrap();
+        let metadata_bytes = metadata.to_bytes().unwrap();
+        let candidate = CandidateEvidence::from_detection(&event, Some(&metadata_bytes));
         store
-            .save_ciphertext(&ExtractedComplianceCiphertext {
-                output_ref: evidence.output_ref.clone(),
-                routing_tags: [11, 22],
-                raw_bytes: evidence.transfer_ciphertext.to_bytes(),
-                metadata_bytes: Some(metadata.to_bytes().unwrap()),
-            })
-            .await
-            .unwrap();
-        store.save_detection(&event).await.unwrap();
-        store.commit_block(&block).await.unwrap();
-
-        let (worker, _) = IssuerComplianceWorker::new(
-            DetectionKey::demo(),
-            evidence.asset_id,
-            store.clone(),
-            Arc::new(MemoryBlockIdentity::default()),
-            Arc::new(NoopAuditAdviceProvider),
-            Channel::from_static("http://localhost:8080").connect_lazy(),
-        )
-        .await
-        .unwrap();
-
-        worker
-            .validate_detected_evidence(PendingEvidenceWork {
-                output_ref: evidence.output_ref.clone(),
-                event,
-                metadata_bytes: Some(metadata.to_bytes().unwrap()),
+            .commit_scanned_block(&ScannedBlock {
+                block,
+                outputs: vec![ScannedOutput {
+                    ciphertext: ExtractedComplianceCiphertext {
+                        output_ref: evidence.output_ref.clone(),
+                        routing_tags: [11, 22],
+                        raw_bytes: evidence.transfer_ciphertext.to_bytes(),
+                        metadata_bytes: Some(metadata_bytes),
+                    },
+                    outcome: OutputOutcome::Detected {
+                        event,
+                        evidence: candidate,
+                    },
+                }],
+                clear_flows: vec![],
             })
             .await
             .unwrap();

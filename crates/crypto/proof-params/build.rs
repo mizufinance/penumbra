@@ -295,9 +295,6 @@ fn write_bundled_gnark_runtime_paths() -> anyhow::Result<()> {
         note_reshape_lib_path.display(),
         shielded_ics20_withdrawal_lib_path.display(),
     );
-    let _ = GENERATED_TRANSFER_FAMILIES;
-    let _ = GENERATED_NOTE_RESHAPE_FAMILIES;
-    let _ = GENERATED_SHIELDED_ICS20_WITHDRAWAL_FAMILIES;
     std::fs::write(&include_path, include_body).context("write gnark runtime include file")?;
 
     Ok(())
@@ -309,9 +306,6 @@ fn write_empty_gnark_runtime_include(include_path: &Path) -> anyhow::Result<()> 
          pub const GNARK_NOTE_RESHAPE_BUNDLED_LIBRARY_PATH: Option<&str> = None;\n\
          pub const GNARK_SHIELDED_ICS20_WITHDRAWAL_BUNDLED_LIBRARY_PATH: Option<&str> = None;\n",
     );
-    let _ = GENERATED_TRANSFER_FAMILIES;
-    let _ = GENERATED_NOTE_RESHAPE_FAMILIES;
-    let _ = GENERATED_SHIELDED_ICS20_WITHDRAWAL_FAMILIES;
     std::fs::write(include_path, include_body)?;
     Ok(())
 }

@@ -68,10 +68,4 @@ These are the current types of state fragment recorded by Shieldd:
 The nullifier key for a note is the nullifier key component of the full viewing
 key for the address controlling the note.
 
-**Uniqueness**: Nullifiers are unique, to prevent faerie gold attacks, as they are derived from the position in the state commitment tree which is unique. 
-
-### Swaps
-
-The nullifier key for a swap is the nullifier key component of the full viewing key for the claim address that controls the swap outputs.
-
-**Uniqueness**: TODO
+**Uniqueness**: Nullifiers are unique, to prevent faerie gold attacks, as they are derived from the position in the state commitment tree which is unique.

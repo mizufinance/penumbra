@@ -1,5 +1,7 @@
 pub mod enrichment;
-pub use enrichment::{AssetProofData, BatchComplianceData, ComplianceProofProvider, UserProofData};
+pub use enrichment::{
+    AssetProofData, BatchComplianceData, ComplianceProofProvider, ComplianceQuery, UserProofData,
+};
 
 pub mod event;
 
@@ -24,7 +26,6 @@ pub use structs::{
     MsgRegisterAsset,
     MsgRegisterUser,
     RingData,
-    UpdateAssetIbcPolicy,
     UserAssetStatus,
     UserAssetStatusAction,
     ADDRESS_BYTES,
@@ -65,9 +66,8 @@ pub use params::ComplianceParameters;
 pub mod registry;
 #[cfg(feature = "component")]
 pub use registry::{
-    AssetGrantAdmission, ComplianceRegistryRead, ComplianceRegistryWrite,
-    EnactedGovernanceAssetPolicyAdmission, GenesisAssetAdmission, UserGrantAdmission,
-    UserLeafRecord,
+    AssetGrantAdmission, ComplianceRegistryRead, ComplianceRegistryWrite, GenesisAssetAdmission,
+    UserGrantAdmission, UserLeafRecord,
 };
 
 #[cfg(feature = "component")]
@@ -108,7 +108,7 @@ pub use audit_status::{AuditStatus, DecryptedVia, FlowType};
 pub mod audit_records;
 pub use audit_records::{
     filter_subject_candidates, AuditDetectedRef, AuditRoutingSelector, AuditScanExport,
-    AuditSubjectCandidate, AuditSubjectRegistration, AuditSubjectRole, OrbisAuditEntry,
+    AuditSubjectCandidate, AuditSubjectRegistration, AuditSubjectRole,
 };
 
 #[cfg(feature = "component")]
@@ -116,9 +116,8 @@ pub mod audit;
 #[cfg(feature = "component")]
 pub use audit::{
     decrypt_flagged_rows, export_detected_refs, export_ledger_rows, export_ledger_rows_json,
-    export_orbis_pending_scan, export_scan_json, import_orbis_audit_entries, mark_row_audited,
-    record_address_alias, record_evidence_failure, scanner_health_json,
-    validate_and_save_evidence_object,
+    export_scan_json, mark_row_audited, record_address_alias, record_evidence_failure,
+    scanner_health_json, validate_and_save_evidence_object,
 };
 
 mod tx_id;
@@ -129,12 +128,11 @@ pub use tx_id::scanner_transaction_id_from_proto;
 pub mod scanner;
 #[cfg(feature = "component")]
 pub use scanner::{
-    extract_clear_flows, extract_compliance_ciphertexts, AuditAdviceProvider, AuditLedgerRow,
-    AuditRowKey, BlockIdentityProvider, ClearFlowEvent, ClearFlowKind, ComplianceScreener,
+    extract_clear_flows, extract_compliance_ciphertexts, AuditLedgerRow, AuditRowKey,
+    BlockIdentityProvider, CandidateEvidence, ClearFlowEvent, ClearFlowKind, ComplianceScreener,
     DetectionEvent, ExtractedComplianceCiphertext, InvalidCiphertext, IssuerComplianceWorker,
-    NoopAuditAdviceProvider, RingInfo, RpcAuditAdviceProvider, ScannerStore, ScreeningResult,
-    SqliteScannerStore, TendermintProxyBlockIdentityProvider, WorkerHandle,
-    MAX_INVALID_CIPHERTEXTS_PER_BLOCK,
+    OutputOutcome, ScannedBlock, ScannedOutput, ScannerStore, ScreeningResult, SqliteScannerStore,
+    TendermintProxyBlockIdentityProvider, WorkerHandle, MAX_INVALID_CIPHERTEXTS_PER_BLOCK,
 };
 
 pub mod ibc;

@@ -470,6 +470,8 @@ pub struct TransferPlan {
     /// Protocol routing parameter set used to construct and prove the action.
     #[prost(message, optional, tag = "6")]
     pub routing_parameters: ::core::option::Option<DiscoveryParameters>,
+    #[prost(message, optional, tag = "7")]
+    pub compliance: ::core::option::Option<TransferContext>,
 }
 impl ::prost::Name for TransferPlan {
     const NAME: &'static str = "TransferPlan";
@@ -736,6 +738,8 @@ pub struct ShieldedHostWithdrawalPlan {
     /// Protocol-wide routing parameters bound by the reused withdrawal proof.
     #[prost(message, optional, tag = "7")]
     pub routing_parameters: ::core::option::Option<DiscoveryParameters>,
+    #[prost(message, optional, tag = "8")]
+    pub compliance: ::core::option::Option<WithdrawalContext>,
 }
 impl ::prost::Name for ShieldedHostWithdrawalPlan {
     const NAME: &'static str = "ShieldedHostWithdrawalPlan";
@@ -939,6 +943,8 @@ pub struct ShieldedIcs20WithdrawalPlan {
     /// Protocol routing parameter set used to construct and prove the action.
     #[prost(message, optional, tag = "7")]
     pub routing_parameters: ::core::option::Option<DiscoveryParameters>,
+    #[prost(message, optional, tag = "8")]
+    pub compliance: ::core::option::Option<WithdrawalContext>,
 }
 impl ::prost::Name for ShieldedIcs20WithdrawalPlan {
     const NAME: &'static str = "ShieldedIcs20WithdrawalPlan";
@@ -1152,6 +1158,8 @@ pub struct NoteReshapePlan {
     /// Protocol routing parameter set used to construct and prove the action.
     #[prost(message, optional, tag = "7")]
     pub routing_parameters: ::core::option::Option<DiscoveryParameters>,
+    #[prost(message, optional, tag = "8")]
+    pub compliance: ::core::option::Option<NoteReshapeContext>,
 }
 impl ::prost::Name for NoteReshapePlan {
     const NAME: &'static str = "NoteReshapePlan";
@@ -1199,64 +1207,14 @@ impl ::prost::Name for EventNoteCreated {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ShieldedInputPlan {
-    /// The plaintext note we plan to spend.
     #[prost(message, optional, tag = "1")]
     pub note: ::core::option::Option<Note>,
-    /// The position of the note we plan to spend.
     #[prost(uint64, tag = "2")]
     pub position: u64,
-    /// The randomizer to use for the spend.
     #[prost(bytes = "vec", tag = "3")]
     pub randomizer: ::prost::alloc::vec::Vec<u8>,
-    /// The blinding factor to use for the value commitment.
     #[prost(bytes = "vec", tag = "4")]
     pub value_blinding: ::prost::alloc::vec::Vec<u8>,
-    /// Target timestamp for compliance verification (Unix UTC seconds).
-    #[prost(uint64, tag = "7")]
-    pub target_timestamp: u64,
-    /// Whether the asset is regulated (requires compliance).
-    #[prost(bool, tag = "9")]
-    pub is_regulated: bool,
-    /// Compliance leaf for ZK proof (sender's registry entry).
-    #[prost(message, optional, tag = "10")]
-    pub compliance_leaf: ::core::option::Option<
-        super::super::compliance::v1::ComplianceLeaf,
-    >,
-    /// Shared transaction blinding nonce (same for spend and output in one transaction).
-    #[prost(bytes = "vec", tag = "14")]
-    pub tx_blinding_nonce: ::prost::alloc::vec::Vec<u8>,
-    /// The compliance anchor (user tree root) for proof generation.
-    #[prost(message, optional, tag = "15")]
-    pub compliance_anchor: ::core::option::Option<
-        super::super::super::super::crypto::tct::v1::StateCommitment,
-    >,
-    /// The asset anchor (asset tree root) for proof generation.
-    #[prost(message, optional, tag = "16")]
-    pub asset_anchor: ::core::option::Option<
-        super::super::super::super::crypto::tct::v1::StateCommitment,
-    >,
-    /// Compliance Merkle path for proving user is in the compliance registry.
-    #[prost(message, optional, tag = "17")]
-    pub compliance_path: ::core::option::Option<
-        super::super::compliance::v1::MerklePath,
-    >,
-    /// Position of the user's compliance leaf in the compliance tree.
-    #[prost(uint64, tag = "18")]
-    pub compliance_position: u64,
-    /// Asset Merkle path for proving asset is in the asset registry.
-    #[prost(message, optional, tag = "19")]
-    pub asset_path: ::core::option::Option<super::super::compliance::v1::MerklePath>,
-    /// Position of the asset in the asset registry tree.
-    #[prost(uint64, tag = "20")]
-    pub asset_position: u64,
-    /// Indexed leaf data for IMT proof verification (value, next_index, next_value).
-    #[prost(message, optional, tag = "21")]
-    pub asset_indexed_leaf: ::core::option::Option<
-        super::super::compliance::v1::IndexedLeafData,
-    >,
-    /// Full compliance asset policy for regulated assets.
-    #[prost(message, optional, tag = "30")]
-    pub asset_policy: ::core::option::Option<super::super::compliance::v1::AssetPolicy>,
 }
 impl ::prost::Name for ShieldedInputPlan {
     const NAME: &'static str = "ShieldedInputPlan";
@@ -1270,64 +1228,14 @@ impl ::prost::Name for ShieldedInputPlan {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ShieldedOutputPlan {
-    /// The value to send to this output.
     #[prost(message, optional, tag = "1")]
     pub value: ::core::option::Option<super::super::super::asset::v1::Value>,
-    /// The destination address to send it to.
     #[prost(message, optional, tag = "2")]
     pub dest_address: ::core::option::Option<super::super::super::keys::v1::Address>,
-    /// The rseed to use for the new note.
     #[prost(bytes = "vec", tag = "3")]
     pub rseed: ::prost::alloc::vec::Vec<u8>,
-    /// The blinding factor to use for the value commitment.
     #[prost(bytes = "vec", tag = "4")]
     pub value_blinding: ::prost::alloc::vec::Vec<u8>,
-    /// Target timestamp for compliance verification (Unix UTC seconds).
-    #[prost(uint64, tag = "7")]
-    pub target_timestamp: u64,
-    /// Whether the asset is regulated (requires compliance).
-    #[prost(bool, tag = "9")]
-    pub is_regulated: bool,
-    /// Compliance leaf for ZK proof (recipient's registry entry).
-    #[prost(message, optional, tag = "10")]
-    pub compliance_leaf: ::core::option::Option<
-        super::super::compliance::v1::ComplianceLeaf,
-    >,
-    /// Shared transaction blinding nonce (same for spend and output in one transaction).
-    #[prost(bytes = "vec", tag = "14")]
-    pub tx_blinding_nonce: ::prost::alloc::vec::Vec<u8>,
-    /// The compliance anchor (user tree root) for proof generation.
-    #[prost(message, optional, tag = "15")]
-    pub compliance_anchor: ::core::option::Option<
-        super::super::super::super::crypto::tct::v1::StateCommitment,
-    >,
-    /// The asset anchor (asset tree root) for proof generation.
-    #[prost(message, optional, tag = "16")]
-    pub asset_anchor: ::core::option::Option<
-        super::super::super::super::crypto::tct::v1::StateCommitment,
-    >,
-    /// Compliance Merkle path for proving user is in the compliance registry.
-    #[prost(message, optional, tag = "17")]
-    pub compliance_path: ::core::option::Option<
-        super::super::compliance::v1::MerklePath,
-    >,
-    /// Position of the user's compliance leaf in the compliance tree.
-    #[prost(uint64, tag = "18")]
-    pub compliance_position: u64,
-    /// Asset Merkle path for proving asset is in the asset registry.
-    #[prost(message, optional, tag = "19")]
-    pub asset_path: ::core::option::Option<super::super::compliance::v1::MerklePath>,
-    /// Position of the asset in the asset registry tree.
-    #[prost(uint64, tag = "20")]
-    pub asset_position: u64,
-    /// Indexed leaf data for IMT proof verification (value, next_index, next_value).
-    #[prost(message, optional, tag = "21")]
-    pub asset_indexed_leaf: ::core::option::Option<
-        super::super::compliance::v1::IndexedLeafData,
-    >,
-    /// Full compliance asset policy for regulated assets.
-    #[prost(message, optional, tag = "39")]
-    pub asset_policy: ::core::option::Option<super::super::compliance::v1::AssetPolicy>,
 }
 impl ::prost::Name for ShieldedOutputPlan {
     const NAME: &'static str = "ShieldedOutputPlan";
@@ -1559,6 +1467,132 @@ impl ::prost::Name for EventInboundFungibleTokenTransfer {
     fn type_url() -> ::prost::alloc::string::String {
         "/shieldd.core.component.shielded_pool.v1.EventInboundFungibleTokenTransfer"
             .into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AssetWitness {
+    #[prost(message, optional, tag = "1")]
+    pub asset_id: ::core::option::Option<super::super::super::asset::v1::AssetId>,
+    #[prost(message, optional, tag = "2")]
+    pub root: ::core::option::Option<
+        super::super::super::super::crypto::tct::v1::StateCommitment,
+    >,
+    #[prost(message, optional, tag = "3")]
+    pub leaf: ::core::option::Option<super::super::compliance::v1::IndexedLeafData>,
+    #[prost(uint64, tag = "4")]
+    pub position: u64,
+    #[prost(message, optional, tag = "5")]
+    pub path: ::core::option::Option<super::super::compliance::v1::MerklePath>,
+    #[prost(bool, tag = "6")]
+    pub is_regulated: bool,
+}
+impl ::prost::Name for AssetWitness {
+    const NAME: &'static str = "AssetWitness";
+    const PACKAGE: &'static str = "shieldd.core.component.shielded_pool.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "shieldd.core.component.shielded_pool.v1.AssetWitness".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/shieldd.core.component.shielded_pool.v1.AssetWitness".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UserWitness {
+    #[prost(message, optional, tag = "1")]
+    pub leaf: ::core::option::Option<super::super::compliance::v1::ComplianceLeaf>,
+    #[prost(uint64, tag = "2")]
+    pub position: u64,
+    #[prost(message, optional, tag = "3")]
+    pub path: ::core::option::Option<super::super::compliance::v1::MerklePath>,
+}
+impl ::prost::Name for UserWitness {
+    const NAME: &'static str = "UserWitness";
+    const PACKAGE: &'static str = "shieldd.core.component.shielded_pool.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "shieldd.core.component.shielded_pool.v1.UserWitness".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/shieldd.core.component.shielded_pool.v1.UserWitness".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ActionWitness {
+    #[prost(message, optional, tag = "1")]
+    pub asset: ::core::option::Option<AssetWitness>,
+    #[prost(message, optional, tag = "2")]
+    pub user_root: ::core::option::Option<
+        super::super::super::super::crypto::tct::v1::StateCommitment,
+    >,
+    #[prost(message, optional, tag = "3")]
+    pub sender: ::core::option::Option<UserWitness>,
+}
+impl ::prost::Name for ActionWitness {
+    const NAME: &'static str = "ActionWitness";
+    const PACKAGE: &'static str = "shieldd.core.component.shielded_pool.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "shieldd.core.component.shielded_pool.v1.ActionWitness".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/shieldd.core.component.shielded_pool.v1.ActionWitness".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TransferContext {
+    #[prost(message, optional, tag = "1")]
+    pub witness: ::core::option::Option<ActionWitness>,
+    #[prost(message, optional, tag = "2")]
+    pub recipient: ::core::option::Option<UserWitness>,
+    #[prost(message, optional, tag = "3")]
+    pub policy: ::core::option::Option<super::super::compliance::v1::AssetPolicy>,
+    #[prost(uint64, tag = "4")]
+    pub timestamp: u64,
+    #[prost(bytes = "vec", tag = "5")]
+    pub nonce: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for TransferContext {
+    const NAME: &'static str = "TransferContext";
+    const PACKAGE: &'static str = "shieldd.core.component.shielded_pool.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "shieldd.core.component.shielded_pool.v1.TransferContext".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/shieldd.core.component.shielded_pool.v1.TransferContext".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NoteReshapeContext {
+    #[prost(message, optional, tag = "1")]
+    pub witness: ::core::option::Option<ActionWitness>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub nonce: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for NoteReshapeContext {
+    const NAME: &'static str = "NoteReshapeContext";
+    const PACKAGE: &'static str = "shieldd.core.component.shielded_pool.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "shieldd.core.component.shielded_pool.v1.NoteReshapeContext".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/shieldd.core.component.shielded_pool.v1.NoteReshapeContext".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WithdrawalContext {
+    #[prost(message, optional, tag = "1")]
+    pub witness: ::core::option::Option<ActionWitness>,
+    #[prost(uint64, tag = "2")]
+    pub timestamp: u64,
+    #[prost(bytes = "vec", tag = "3")]
+    pub nonce: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for WithdrawalContext {
+    const NAME: &'static str = "WithdrawalContext";
+    const PACKAGE: &'static str = "shieldd.core.component.shielded_pool.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        "shieldd.core.component.shielded_pool.v1.WithdrawalContext".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/shieldd.core.component.shielded_pool.v1.WithdrawalContext".into()
     }
 }
 /// Generated client implementations.

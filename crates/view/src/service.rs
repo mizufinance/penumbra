@@ -1,3 +1,4 @@
+use shieldd_sdk_compliance::ComplianceQuery;
 use std::{
     collections::{BTreeMap, BTreeSet},
     pin::Pin,
@@ -36,8 +37,7 @@ use shieldd_sdk_proto::{
     view::v1::{
         self as pb,
         broadcast_transaction_response::{BroadcastSuccess, Confirmed, Status as BroadcastStatus},
-        view_service_client::ViewServiceClient,
-        view_service_server::{ViewService, ViewServiceServer},
+        view_service_server::ViewService,
         AppParametersResponse, AssetMetadataByIdRequest, AssetMetadataByIdResponse,
         BroadcastTransactionResponse, DiscoveryParametersResponse, GasPricesResponse,
         NoteByCommitmentResponse, NullifierWindowResponse, StatusResponse,
@@ -53,8 +53,8 @@ use shieldd_sdk_transaction::{
 
 use crate::{
     compliance_tree::ComplianceSnapshot, historical_proof_worker::HistoricalProofWorker,
-    worker::Worker, AddressPurpose, HistoricalProofProvider, IssuedAddress, NoteManager, Storage,
-    TransferPlanningResult,
+    worker::Worker, AddressPurpose, HistoricalProofProvider, IssuedAddress, NoteManager,
+    NoteManagerPlanningResult, Storage,
 };
 
 /// A [`futures::Stream`] of broadcast transaction responses.
@@ -227,6 +227,223 @@ pub struct ViewServer {
 }
 
 impl ViewServer {
+    async fn query_compliance_batch(
+        &self,
+        request_inner: pb::ComplianceBatchMerkleProofsRequest,
+    ) -> Result<pb::ComplianceBatchMerkleProofsResponse, Status> {
+        let snapshot = self.compliance_snapshot.read().clone();
+        let user_tree = &snapshot.user_tree;
+        let asset_tree = &snapshot.asset_tree;
+
+        let user_anchor = user_tree.root();
+        let asset_anchor = asset_tree.root();
+
+        // Debug: log anchors at read time
+        tracing::debug!(
+            user_anchor = ?user_anchor.0.to_bytes(),
+            asset_anchor = ?asset_anchor.0.to_bytes(),
+            num_queries = request_inner.queries.len(),
+            "compliance_batch_merkle_proofs: read anchors from local trees"
+        );
+
+        let mut results = Vec::with_capacity(request_inner.queries.len());
+
+        // Lazy gRPC client - only created if we have cache misses
+        use shieldd_sdk_proto::core::component::compliance::v1::{
+            query_service_client::QueryServiceClient as ComplianceQueryServiceClient,
+            ComplianceMerkleProofsRequest,
+        };
+        let mut grpc_client: Option<ComplianceQueryServiceClient<tonic::transport::Channel>> = None;
+
+        for query in request_inner.queries {
+            // Parse address and asset_id
+            let address: shieldd_sdk_keys::Address = query
+                .address
+                .clone()
+                .ok_or_else(|| tonic::Status::invalid_argument("missing address in query"))?
+                .try_into()
+                .map_err(|e| tonic::Status::invalid_argument(format!("invalid address: {e}")))?;
+
+            let asset_id: shieldd_sdk_asset::asset::Id = query
+                .asset_id
+                .clone()
+                .ok_or_else(|| tonic::Status::invalid_argument("missing asset_id in query"))?
+                .try_into()
+                .map_err(|e| tonic::Status::invalid_argument(format!("invalid asset_id: {e}")))?;
+
+            // Get asset proof from local tree (using held reference)
+            let (asset_position, indexed_leaf, asset_path, is_regulated) = asset_tree
+                .get_proof_data(asset_id)
+                .map_err(|e| tonic::Status::internal(format!("failed to get asset proof: {e}")))?;
+
+            // Debug: log proof data
+            let leaf_commitment = indexed_leaf.commit();
+            tracing::debug!(
+                asset_id = ?asset_id.0.to_bytes(),
+                position = asset_position,
+                is_regulated,
+                leaf_value = ?indexed_leaf.value.to_bytes(),
+                leaf_next_index = indexed_leaf.next_index,
+                leaf_threshold = indexed_leaf.params.threshold,
+                leaf_dk_pub_first_byte = indexed_leaf.params.dk_pub.vartime_compress().0[0],
+                leaf_commitment = ?leaf_commitment.0.to_bytes(),
+                "compliance_batch_merkle_proofs: asset proof data"
+            );
+
+            // Returns (user_registered, compliance_position, compliance_path, compliance_leaf).
+            // Prefer real user proofs whenever a leaf exists, even for unregulated assets.
+            let local_leaf_data = self
+                .storage
+                .get_compliance_leaf_data(&address, &asset_id)
+                .await
+                .map_err(|e| tonic::Status::internal(format!("storage error: {e}")))?;
+
+            let (user_registered, compliance_position, compliance_path, compliance_leaf) =
+                match local_leaf_data {
+                    Some(leaf_data) => {
+                        let position = leaf_data.position;
+                        if user_tree.commitment(position) != Some(leaf_data.commitment) {
+                            return Err(tonic::Status::unavailable(
+                                "compliance projection advanced while building the proof; retry",
+                            ));
+                        }
+                        let path = user_tree.witness(position).map_err(|e| {
+                            tonic::Status::internal(format!("failed to compute path: {e}"))
+                        })?;
+
+                        let leaf_proto = compliance_pb::ComplianceLeaf {
+                            address: Some(address.clone().into()),
+                            asset_id: Some(asset_id.into()),
+                            d: leaf_data.d.to_vec(),
+                            status: compliance_pb::UserAssetStatus::from(leaf_data.status) as i32,
+                        };
+
+                        tracing::debug!(
+                            ?address,
+                            ?asset_id,
+                            position,
+                            is_regulated,
+                            "using local storage for batch user proof"
+                        );
+                        (true, position, path, Some(leaf_proto))
+                    }
+                    None => {
+                        tracing::debug!(
+                            ?address,
+                            ?asset_id,
+                            is_regulated,
+                            "local storage miss, fetching from pd for batch"
+                        );
+
+                        if grpc_client.is_none() {
+                            let endpoint =
+                                get_pd_endpoint(self.node.clone()).await.map_err(|e| {
+                                    tonic::Status::internal(format!("failed to connect to pd: {e}"))
+                                })?;
+                            let channel = endpoint.connect().await.map_err(|e| {
+                                tonic::Status::internal(format!("failed to connect to pd: {e}"))
+                            })?;
+                            grpc_client = Some(ComplianceQueryServiceClient::new(channel));
+                        }
+                        let client = grpc_client
+                            .as_mut()
+                            .expect("gRPC client is initialized above");
+
+                        let proof_request = ComplianceMerkleProofsRequest {
+                            address: query.address.clone(),
+                            asset_id: query.asset_id.clone(),
+                        };
+                        let proof_response = client
+                            .compliance_merkle_proofs(tonic::Request::new(proof_request))
+                            .await?
+                            .into_inner();
+                        if proof_response.compliance_anchor.as_slice() != user_anchor.0.to_bytes()
+                            || proof_response.asset_anchor.as_slice() != asset_anchor.0.to_bytes()
+                        {
+                            return Err(tonic::Status::unavailable(
+                                "remote compliance proof is newer than the local snapshot; retry",
+                            ));
+                        }
+
+                        if !proof_response.user_registered {
+                            (
+                                false,
+                                0,
+                                shieldd_sdk_compliance::structs::MerklePath::default(),
+                                None,
+                            )
+                        } else {
+                            let path = proof_response
+                                .compliance_path
+                                .map(shieldd_sdk_compliance::structs::MerklePath::try_from)
+                                .transpose()
+                                .map_err(|error| {
+                                    tonic::Status::internal(format!(
+                                        "invalid compliance_path in pd response: {error}"
+                                    ))
+                                })?
+                                .ok_or_else(|| {
+                                    tonic::Status::internal(
+                                        "compliance_path missing from pd response",
+                                    )
+                                })?;
+
+                            (
+                                proof_response.user_registered,
+                                proof_response.compliance_position,
+                                path,
+                                proof_response.compliance_leaf,
+                            )
+                        }
+                    }
+                };
+
+            // Convert local types to proto types
+            let compliance_path_proto = compliance_pb::MerklePath {
+                layers: compliance_path
+                    .layers
+                    .into_iter()
+                    .map(|layer| compliance_pb::MerklePathLayer {
+                        siblings: layer.siblings,
+                    })
+                    .collect(),
+            };
+
+            let asset_path_proto = compliance_pb::MerklePath {
+                layers: asset_path
+                    .layers
+                    .into_iter()
+                    .map(|layer| compliance_pb::MerklePathLayer {
+                        siblings: layer.siblings,
+                    })
+                    .collect(),
+            };
+
+            let asset_indexed_leaf_proto: compliance_pb::IndexedLeafData =
+                indexed_leaf.clone().into();
+
+            results.push(pb::ComplianceMerkleProofsResponse {
+                user_registered,
+                asset_registered: true, // Always true with IMT (membership or non-membership)
+                is_regulated,
+                compliance_path: Some(compliance_path_proto),
+                compliance_position,
+                asset_path: Some(asset_path_proto),
+                asset_position,
+                compliance_anchor: user_anchor.0.to_bytes().to_vec(),
+                asset_anchor: asset_anchor.0.to_bytes().to_vec(),
+                asset_indexed_leaf: Some(asset_indexed_leaf_proto),
+                compliance_leaf,
+            });
+        }
+
+        Ok(pb::ComplianceBatchMerkleProofsResponse {
+            compliance_anchor: user_anchor.0.to_bytes().to_vec(),
+            asset_anchor: asset_anchor.0.to_bytes().to_vec(),
+            results,
+        })
+    }
+
     fn address_purpose(purpose: Option<pb::AddressPurpose>) -> Result<AddressPurpose, Status> {
         match purpose.and_then(|purpose| purpose.regulated_asset_id) {
             Some(asset_id) => Ok(AddressPurpose::Regulated {
@@ -607,13 +824,13 @@ impl ViewServer {
 
     #[instrument(skip(self))]
     pub async fn status(&self) -> anyhow::Result<StatusResponse> {
-        let full_sync_height = self.storage.last_sync_height().await?.unwrap_or(0);
+        let sync_height = self.storage.last_sync_height().await?.unwrap_or(0);
 
         let (latest_known_block_height, node_catching_up) =
             self.latest_known_block_height().await?;
 
         let height_diff = latest_known_block_height
-            .checked_sub(full_sync_height)
+            .checked_sub(sync_height)
             .ok_or_else(|| anyhow!("sync height ahead of node height"))?;
 
         let catching_up = match (node_catching_up, height_diff) {
@@ -628,9 +845,8 @@ impl ViewServer {
         };
 
         Ok(StatusResponse {
-            full_sync_height,
+            sync_height,
             catching_up,
-            partial_sync_height: full_sync_height, // Set these as the same for backwards compatibility following adding the partial_sync_height
         })
     }
 }
@@ -748,29 +964,18 @@ impl ViewService for ViewServer {
                 }
             }
 
-            let mut client_of_self = ViewServiceClient::new(ViewServiceServer::new(self.clone()));
+            let mut planning_io = LocalPlanningIo(self);
             let planning_result = note_manager
-                .plan_transfer(&mut client_of_self, source.into(), value, address)
+                .plan_transfer(&mut planning_io, source.into(), value, address)
                 .await
                 .context("could not plan wallet-facing shielded transfer")
                 .map_err(|e| tonic::Status::invalid_argument(format!("{e:#}")))?;
 
-            let transaction_plan = match planning_result {
-                TransferPlanningResult::Ready { transaction_plan } => transaction_plan,
-                TransferPlanningResult::NeedsMaintenance { .. } => {
-                    return Err(tonic::Status::invalid_argument(
-                        "wallet-facing shielded transfer requires note maintenance first",
-                    ));
-                }
-                TransferPlanningResult::InsufficientBalance => {
-                    return Err(tonic::Status::invalid_argument(
-                        "insufficient balance for requested transfer",
-                    ));
-                }
-                TransferPlanningResult::UnsupportedIntent { reason } => {
-                    return Err(tonic::Status::invalid_argument(reason));
-                }
-            };
+            let transaction_plan = planning_result_to_rpc(
+                planning_result,
+                "wallet-facing shielded transfer requires note maintenance first",
+                "insufficient balance for requested transfer",
+            )?;
 
             return Ok(tonic::Response::new(TransactionPlannerResponse {
                 plan: Some(transaction_plan.into()),
@@ -809,29 +1014,18 @@ impl ViewService for ViewServer {
                 .set_gas_prices(gas_prices)
                 .expiry_height(prq.expiry_height);
 
-            let mut client_of_self = ViewServiceClient::new(ViewServiceServer::new(self.clone()));
+            let mut planning_io = LocalPlanningIo(self);
             let planning_result = note_manager
-                .plan_ics20_withdrawal(&mut client_of_self, source.into(), withdrawal)
+                .plan_ics20_withdrawal(&mut planning_io, source.into(), withdrawal)
                 .await
                 .context("could not plan wallet-facing ICS-20 withdrawal")
                 .map_err(|e| tonic::Status::invalid_argument(format!("{e:#}")))?;
 
-            let transaction_plan = match planning_result {
-                TransferPlanningResult::Ready { transaction_plan } => transaction_plan,
-                TransferPlanningResult::NeedsMaintenance { .. } => {
-                    return Err(tonic::Status::invalid_argument(
-                        "wallet-facing ICS-20 withdrawal requires note maintenance first",
-                    ));
-                }
-                TransferPlanningResult::InsufficientBalance => {
-                    return Err(tonic::Status::invalid_argument(
-                        "insufficient balance for requested ICS-20 withdrawal",
-                    ));
-                }
-                TransferPlanningResult::UnsupportedIntent { reason } => {
-                    return Err(tonic::Status::invalid_argument(reason));
-                }
-            };
+            let transaction_plan = planning_result_to_rpc(
+                planning_result,
+                "wallet-facing ICS-20 withdrawal requires note maintenance first",
+                "insufficient balance for requested ICS-20 withdrawal",
+            )?;
 
             return Ok(tonic::Response::new(TransactionPlannerResponse {
                 plan: Some(transaction_plan.into()),
@@ -870,29 +1064,18 @@ impl ViewService for ViewServer {
                 .set_gas_prices(gas_prices)
                 .expiry_height(prq.expiry_height);
 
-            let mut client_of_self = ViewServiceClient::new(ViewServiceServer::new(self.clone()));
+            let mut planning_io = LocalPlanningIo(self);
             let planning_result = note_manager
-                .plan_host_withdrawal(&mut client_of_self, source.into(), withdrawal)
+                .plan_host_withdrawal(&mut planning_io, source.into(), withdrawal)
                 .await
                 .context("could not plan wallet-facing host withdrawal")
                 .map_err(|e| tonic::Status::invalid_argument(format!("{e:#}")))?;
 
-            let transaction_plan = match planning_result {
-                TransferPlanningResult::Ready { transaction_plan } => transaction_plan,
-                TransferPlanningResult::NeedsMaintenance { .. } => {
-                    return Err(tonic::Status::invalid_argument(
-                        "wallet-facing host withdrawal requires note maintenance first",
-                    ));
-                }
-                TransferPlanningResult::InsufficientBalance => {
-                    return Err(tonic::Status::invalid_argument(
-                        "insufficient balance for requested host withdrawal",
-                    ));
-                }
-                TransferPlanningResult::UnsupportedIntent { reason } => {
-                    return Err(tonic::Status::invalid_argument(reason));
-                }
-            };
+            let transaction_plan = planning_result_to_rpc(
+                planning_result,
+                "wallet-facing host withdrawal requires note maintenance first",
+                "insufficient balance for requested host withdrawal",
+            )?;
 
             return Ok(tonic::Response::new(TransactionPlannerResponse {
                 plan: Some(transaction_plan.into()),
@@ -926,29 +1109,18 @@ impl ViewService for ViewServer {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let mut client_of_self = ViewServiceClient::new(ViewServiceServer::new(self.clone()));
+            let mut planning_io = LocalPlanningIo(self);
             let planning_result = note_manager
-                .plan_actions_with_transfer_funding(&mut client_of_self, source.into(), actions)
+                .plan_actions_with_transfer_funding(&mut planning_io, source.into(), actions)
                 .await
                 .context("could not plan wallet-facing IBC relay transaction")
                 .map_err(|e| tonic::Status::invalid_argument(format!("{e:#}")))?;
 
-            let transaction_plan = match planning_result {
-                TransferPlanningResult::Ready { transaction_plan } => transaction_plan,
-                TransferPlanningResult::NeedsMaintenance { .. } => {
-                    return Err(tonic::Status::invalid_argument(
-                        "wallet-facing IBC relay transaction requires note maintenance first",
-                    ));
-                }
-                TransferPlanningResult::InsufficientBalance => {
-                    return Err(tonic::Status::invalid_argument(
-                        "insufficient balance for requested IBC relay transaction",
-                    ));
-                }
-                TransferPlanningResult::UnsupportedIntent { reason } => {
-                    return Err(tonic::Status::invalid_argument(reason));
-                }
-            };
+            let transaction_plan = planning_result_to_rpc(
+                planning_result,
+                "wallet-facing IBC relay transaction requires note maintenance first",
+                "insufficient balance for requested IBC relay transaction",
+            )?;
 
             return Ok(tonic::Response::new(TransactionPlannerResponse {
                 plan: Some(transaction_plan.into()),
@@ -1469,8 +1641,7 @@ impl ViewService for ViewServer {
             while let Some(sync_height) = sync_height_stream.next().await {
                 yield pb::StatusStreamResponse {
                     latest_known_block_height,
-                    full_sync_height: sync_height,
-                    partial_sync_height: sync_height, // Set these as the same for backwards compatibility following adding the partial_sync_height
+                    sync_height: sync_height,
                 };
                 if sync_height >= latest_known_block_height {
                     break;
@@ -2362,227 +2533,13 @@ impl ViewService for ViewServer {
         }))
     }
 
-    #[instrument(skip_all, level = "trace")]
     async fn compliance_batch_merkle_proofs(
         &self,
-        request: tonic::Request<pb::ComplianceBatchMerkleProofsRequest>,
-    ) -> Result<tonic::Response<pb::ComplianceBatchMerkleProofsResponse>, tonic::Status> {
-        let request_inner = request.into_inner();
-
-        let snapshot = self.compliance_snapshot.read().clone();
-        let user_tree = &snapshot.user_tree;
-        let asset_tree = &snapshot.asset_tree;
-
-        let user_anchor = user_tree.root();
-        let asset_anchor = asset_tree.root();
-
-        // Debug: log anchors at read time
-        tracing::debug!(
-            user_anchor = ?user_anchor.0.to_bytes(),
-            asset_anchor = ?asset_anchor.0.to_bytes(),
-            num_queries = request_inner.queries.len(),
-            "compliance_batch_merkle_proofs: read anchors from local trees"
-        );
-
-        let mut results = Vec::with_capacity(request_inner.queries.len());
-
-        // Lazy gRPC client - only created if we have cache misses
-        use shieldd_sdk_proto::core::component::compliance::v1::{
-            query_service_client::QueryServiceClient as ComplianceQueryServiceClient,
-            ComplianceMerkleProofsRequest,
-        };
-        let mut grpc_client: Option<ComplianceQueryServiceClient<tonic::transport::Channel>> = None;
-
-        for query in request_inner.queries {
-            // Parse address and asset_id
-            let address: shieldd_sdk_keys::Address = query
-                .address
-                .clone()
-                .ok_or_else(|| tonic::Status::invalid_argument("missing address in query"))?
-                .try_into()
-                .map_err(|e| tonic::Status::invalid_argument(format!("invalid address: {e}")))?;
-
-            let asset_id: shieldd_sdk_asset::asset::Id = query
-                .asset_id
-                .clone()
-                .ok_or_else(|| tonic::Status::invalid_argument("missing asset_id in query"))?
-                .try_into()
-                .map_err(|e| tonic::Status::invalid_argument(format!("invalid asset_id: {e}")))?;
-
-            // Get asset proof from local tree (using held reference)
-            let (asset_position, indexed_leaf, asset_path, is_regulated) = asset_tree
-                .get_proof_data(asset_id)
-                .map_err(|e| tonic::Status::internal(format!("failed to get asset proof: {e}")))?;
-
-            // Debug: log proof data
-            let leaf_commitment = indexed_leaf.commit();
-            tracing::debug!(
-                asset_id = ?asset_id.0.to_bytes(),
-                position = asset_position,
-                is_regulated,
-                leaf_value = ?indexed_leaf.value.to_bytes(),
-                leaf_next_index = indexed_leaf.next_index,
-                leaf_threshold = indexed_leaf.params.threshold,
-                leaf_dk_pub_first_byte = indexed_leaf.params.dk_pub.vartime_compress().0[0],
-                leaf_commitment = ?leaf_commitment.0.to_bytes(),
-                "compliance_batch_merkle_proofs: asset proof data"
-            );
-
-            // Returns (user_registered, compliance_position, compliance_path, compliance_leaf).
-            // Prefer real user proofs whenever a leaf exists, even for unregulated assets.
-            let local_leaf_data = self
-                .storage
-                .get_compliance_leaf_data(&address, &asset_id)
-                .await
-                .map_err(|e| tonic::Status::internal(format!("storage error: {e}")))?;
-
-            let (user_registered, compliance_position, compliance_path, compliance_leaf) =
-                match local_leaf_data {
-                    Some(leaf_data) => {
-                        let position = leaf_data.position;
-                        if user_tree.commitment(position) != Some(leaf_data.commitment) {
-                            return Err(tonic::Status::unavailable(
-                                "compliance projection advanced while building the proof; retry",
-                            ));
-                        }
-                        let path = user_tree.witness(position).map_err(|e| {
-                            tonic::Status::internal(format!("failed to compute path: {e}"))
-                        })?;
-
-                        let leaf_proto = compliance_pb::ComplianceLeaf {
-                            address: Some(address.clone().into()),
-                            asset_id: Some(asset_id.into()),
-                            d: leaf_data.d.to_vec(),
-                            status: compliance_pb::UserAssetStatus::from(leaf_data.status) as i32,
-                        };
-
-                        tracing::debug!(
-                            ?address,
-                            ?asset_id,
-                            position,
-                            is_regulated,
-                            "using local storage for batch user proof"
-                        );
-                        (true, position, path, Some(leaf_proto))
-                    }
-                    None => {
-                        tracing::debug!(
-                            ?address,
-                            ?asset_id,
-                            is_regulated,
-                            "local storage miss, fetching from pd for batch"
-                        );
-
-                        if grpc_client.is_none() {
-                            let endpoint =
-                                get_pd_endpoint(self.node.clone()).await.map_err(|e| {
-                                    tonic::Status::internal(format!("failed to connect to pd: {e}"))
-                                })?;
-                            let channel = endpoint.connect().await.map_err(|e| {
-                                tonic::Status::internal(format!("failed to connect to pd: {e}"))
-                            })?;
-                            grpc_client = Some(ComplianceQueryServiceClient::new(channel));
-                        }
-                        let client = grpc_client
-                            .as_mut()
-                            .expect("gRPC client is initialized above");
-
-                        let proof_request = ComplianceMerkleProofsRequest {
-                            address: query.address.clone(),
-                            asset_id: query.asset_id.clone(),
-                        };
-                        let proof_response = client
-                            .compliance_merkle_proofs(tonic::Request::new(proof_request))
-                            .await?
-                            .into_inner();
-                        if proof_response.compliance_anchor.as_slice() != user_anchor.0.to_bytes()
-                            || proof_response.asset_anchor.as_slice() != asset_anchor.0.to_bytes()
-                        {
-                            return Err(tonic::Status::unavailable(
-                                "remote compliance proof is newer than the local snapshot; retry",
-                            ));
-                        }
-
-                        if !proof_response.user_registered {
-                            (
-                                false,
-                                0,
-                                shieldd_sdk_compliance::structs::MerklePath::default(),
-                                None,
-                            )
-                        } else {
-                            let path = proof_response
-                                .compliance_path
-                                .map(shieldd_sdk_compliance::structs::MerklePath::try_from)
-                                .transpose()
-                                .map_err(|error| {
-                                    tonic::Status::internal(format!(
-                                        "invalid compliance_path in pd response: {error}"
-                                    ))
-                                })?
-                                .ok_or_else(|| {
-                                    tonic::Status::internal(
-                                        "compliance_path missing from pd response",
-                                    )
-                                })?;
-
-                            (
-                                proof_response.user_registered,
-                                proof_response.compliance_position,
-                                path,
-                                proof_response.compliance_leaf,
-                            )
-                        }
-                    }
-                };
-
-            // Convert local types to proto types
-            let compliance_path_proto = compliance_pb::MerklePath {
-                layers: compliance_path
-                    .layers
-                    .into_iter()
-                    .map(|layer| compliance_pb::MerklePathLayer {
-                        siblings: layer.siblings,
-                    })
-                    .collect(),
-            };
-
-            let asset_path_proto = compliance_pb::MerklePath {
-                layers: asset_path
-                    .layers
-                    .into_iter()
-                    .map(|layer| compliance_pb::MerklePathLayer {
-                        siblings: layer.siblings,
-                    })
-                    .collect(),
-            };
-
-            let asset_indexed_leaf_proto: compliance_pb::IndexedLeafData =
-                indexed_leaf.clone().into();
-
-            results.push(pb::ComplianceMerkleProofsResponse {
-                user_registered,
-                asset_registered: true, // Always true with IMT (membership or non-membership)
-                is_regulated,
-                compliance_path: Some(compliance_path_proto),
-                compliance_position,
-                asset_path: Some(asset_path_proto),
-                asset_position,
-                compliance_anchor: user_anchor.0.to_bytes().to_vec(),
-                asset_anchor: asset_anchor.0.to_bytes().to_vec(),
-                asset_indexed_leaf: Some(asset_indexed_leaf_proto),
-                compliance_leaf,
-            });
-        }
-
-        // Return as ViewService response
-        Ok(tonic::Response::new(
-            pb::ComplianceBatchMerkleProofsResponse {
-                compliance_anchor: user_anchor.0.to_bytes().to_vec(),
-                asset_anchor: asset_anchor.0.to_bytes().to_vec(),
-                results,
-            },
-        ))
+        request: Request<pb::ComplianceBatchMerkleProofsRequest>,
+    ) -> Result<Response<pb::ComplianceBatchMerkleProofsResponse>, Status> {
+        self.query_compliance_batch(request.into_inner())
+            .await
+            .map(Response::new)
     }
 }
 
@@ -2604,4 +2561,107 @@ async fn get_pd_endpoint(node: Url) -> anyhow::Result<Endpoint> {
         .keep_alive_timeout(std::time::Duration::from_secs(20))
         .keep_alive_while_idle(true);
     Ok(endpoint)
+}
+
+struct LocalPlanningIo<'a>(&'a ViewServer);
+
+#[async_trait]
+impl crate::planning_io::PlanningIo for LocalPlanningIo<'_> {
+    async fn chain_id(&mut self) -> anyhow::Result<String> {
+        Ok(self.0.storage.app_params().await?.chain_id)
+    }
+    async fn nullifier_window(
+        &mut self,
+    ) -> anyhow::Result<shieldd_sdk_sct::nullifier_generation::NullifierWindow> {
+        self.0.storage.nullifier_window().await
+    }
+    async fn discovery_parameters(
+        &mut self,
+    ) -> anyhow::Result<shieldd_sdk_shielded_pool::discovery::Parameters> {
+        self.0.storage.discovery_parameters().await
+    }
+    async fn notes(
+        &mut self,
+        request: pb::NotesRequest,
+    ) -> anyhow::Result<Vec<crate::SpendableNoteRecord>> {
+        self.0.check_worker().await?;
+        self.0
+            .storage
+            .notes(
+                request.include_spent,
+                request.asset_id.map(TryInto::try_into).transpose()?,
+                request.address_index.map(TryInto::try_into).transpose()?,
+                request.amount_to_spend.map(TryInto::try_into).transpose()?,
+            )
+            .await
+    }
+    async fn address_by_index(&mut self, index: AddressIndex) -> anyhow::Result<Address> {
+        let fvk = self.0.storage.full_viewing_key().await?;
+        Ok(self
+            .0
+            .persist_issued_address(index, fvk.payment_address(index), AddressPurpose::General)
+            .await?)
+    }
+    async fn index_by_address(&mut self, address: Address) -> anyhow::Result<Option<AddressIndex>> {
+        Ok(self
+            .0
+            .storage
+            .full_viewing_key()
+            .await?
+            .address_index(&address))
+    }
+    async fn compliance_data(
+        &mut self,
+        queries: Vec<ComplianceQuery>,
+    ) -> anyhow::Result<shieldd_sdk_compliance::BatchComplianceData> {
+        let batch = self
+            .0
+            .query_compliance_batch(pb::ComplianceBatchMerkleProofsRequest {
+                queries: queries
+                    .iter()
+                    .map(
+                        |ComplianceQuery { address, asset_id }| pb::ComplianceBatchQuery {
+                            address: Some(address.clone().into()),
+                            asset_id: Some((*asset_id).into()),
+                        },
+                    )
+                    .collect(),
+            })
+            .await?;
+        let assets = queries
+            .iter()
+            .zip(&batch.results)
+            .filter_map(|(query, result)| result.is_regulated.then_some(query.asset_id))
+            .collect::<BTreeSet<_>>();
+        let mut policies = BTreeMap::new();
+        for asset in assets {
+            let policy = self
+                .0
+                .storage
+                .get_asset_policy(&asset)
+                .await?
+                .ok_or_else(|| anyhow!("missing regulated asset policy"))?;
+            policies.insert(asset, policy);
+        }
+        crate::client_compliance::parse_batch_compliance(&queries, batch, policies)
+    }
+}
+
+fn planning_result_to_rpc(
+    result: NoteManagerPlanningResult,
+    maintenance: &str,
+    insufficient: &str,
+) -> Result<TransactionPlan, Status> {
+    match result {
+        NoteManagerPlanningResult::Ready { transaction_plan } => Ok(transaction_plan),
+        NoteManagerPlanningResult::NeedsMaintenance { .. } => {
+            Err(Status::invalid_argument(maintenance))
+        }
+        NoteManagerPlanningResult::InsufficientBalance => {
+            Err(Status::invalid_argument(insufficient))
+        }
+        NoteManagerPlanningResult::UnsupportedIntent { reason } => {
+            Err(Status::invalid_argument(reason))
+        }
+    }
 }

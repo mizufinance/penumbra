@@ -272,7 +272,7 @@ impl<'de> serde::Deserialize<'de> for CompactBlock {
                             if height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("height"));
                             }
-                            height__ = 
+                            height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -334,7 +334,7 @@ impl<'de> serde::Deserialize<'de> for CompactBlock {
                             if epoch_index__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("epochIndex"));
                             }
-                            epoch_index__ = 
+                            epoch_index__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -342,7 +342,7 @@ impl<'de> serde::Deserialize<'de> for CompactBlock {
                             if compliance_user_anchor__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("complianceUserAnchor"));
                             }
-                            compliance_user_anchor__ = 
+                            compliance_user_anchor__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -350,7 +350,7 @@ impl<'de> serde::Deserialize<'de> for CompactBlock {
                             if compliance_asset_anchor__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("complianceAssetAnchor"));
                             }
-                            compliance_asset_anchor__ = 
+                            compliance_asset_anchor__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -521,7 +521,7 @@ impl<'de> serde::Deserialize<'de> for CompactBlockRangeRequest {
                             if start_height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("startHeight"));
                             }
-                            start_height__ = 
+                            start_height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -529,7 +529,7 @@ impl<'de> serde::Deserialize<'de> for CompactBlockRangeRequest {
                             if end_height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("endHeight"));
                             }
-                            end_height__ = 
+                            end_height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -732,7 +732,7 @@ impl<'de> serde::Deserialize<'de> for CompactBlockRequest {
                             if height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("height"));
                             }
-                            height__ = 
+                            height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -954,7 +954,7 @@ impl<'de> serde::Deserialize<'de> for RoutingActionPayloads {
                             if action_index__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("actionIndex"));
                             }
-                            action_index__ = 
+                            action_index__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1104,7 +1104,7 @@ impl<'de> serde::Deserialize<'de> for RoutingBlock {
                             if height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("height"));
                             }
-                            height__ = 
+                            height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1245,7 +1245,7 @@ impl<'de> serde::Deserialize<'de> for RoutingBlockRangeRequest {
                             if start_height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("startHeight"));
                             }
-                            start_height__ = 
+                            start_height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1253,7 +1253,7 @@ impl<'de> serde::Deserialize<'de> for RoutingBlockRangeRequest {
                             if end_height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("endHeight"));
                             }
-                            end_height__ = 
+                            end_height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1473,7 +1473,7 @@ impl<'de> serde::Deserialize<'de> for RoutingCandidatesRequest {
                             if start_height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("startHeight"));
                             }
-                            start_height__ = 
+                            start_height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1481,7 +1481,7 @@ impl<'de> serde::Deserialize<'de> for RoutingCandidatesRequest {
                             if end_height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("endHeight"));
                             }
-                            end_height__ = 
+                            end_height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1750,7 +1750,7 @@ impl<'de> serde::Deserialize<'de> for RoutingRecord {
                             if height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("height"));
                             }
-                            height__ = 
+                            height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1764,7 +1764,7 @@ impl<'de> serde::Deserialize<'de> for RoutingRecord {
                             if action_index__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("actionIndex"));
                             }
-                            action_index__ = 
+                            action_index__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1772,7 +1772,7 @@ impl<'de> serde::Deserialize<'de> for RoutingRecord {
                             if tag_slot__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("tagSlot"));
                             }
-                            tag_slot__ = 
+                            tag_slot__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }

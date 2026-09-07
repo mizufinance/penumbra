@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::audit_status::{AuditStatus, DecryptedVia, FlowType};
+use crate::audit_status::{AuditStatus, FlowType};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditDetectedRef {
@@ -24,19 +24,6 @@ pub struct AuditDetectedRef {
 pub struct AuditScanExport {
     pub scan_info: serde_json::Value,
     pub detected: Vec<AuditDetectedRef>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct OrbisAuditEntry {
-    pub height: u64,
-    pub tx_hash: String,
-    pub action_index: u32,
-    #[serde(default)]
-    pub output_index: u32,
-    pub amount: String,
-    pub self_address: String,
-    pub counterparty: String,
-    pub decrypted_via: DecryptedVia,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -319,25 +306,5 @@ mod tests {
         assert_eq!(candidates.len(), 2);
         assert_eq!(candidates[0].detected.asset_id, "asset-a");
         assert_eq!(candidates[1].detected.asset_id, "asset-b");
-    }
-
-    #[test]
-    fn orbis_audit_entries_accept_orbis_pre_decryption_label() {
-        for label in ["orbis_pre"] {
-            let entry: OrbisAuditEntry = serde_json::from_value(serde_json::json!({
-                "height": 42,
-                "tx_hash": "abcd",
-                "action_index": 0,
-                "output_index": 0,
-                "amount": "1234",
-                "self_address": "receiver",
-                "counterparty": "sender",
-                "decrypted_via": label,
-            }))
-            .expect("orbis-audit output should parse");
-
-            assert_eq!(entry.decrypted_via, DecryptedVia::OrbisPre);
-            assert_eq!(entry.decrypted_via.as_str(), label);
-        }
     }
 }

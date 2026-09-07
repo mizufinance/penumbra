@@ -26,11 +26,9 @@ use shieldd_sdk_mock_client::MockClient;
 use shieldd_sdk_mock_consensus::TestNode;
 use shieldd_sdk_num::Amount;
 use shieldd_sdk_proto::DomainType;
-use shieldd_sdk_shielded_pool::{
-    genesis::Allocation, ShieldedInputPlan, ShieldedOutputPlan, TransferPlan,
-};
+use shieldd_sdk_shielded_pool::{genesis::Allocation, ShieldedInputPlan, ShieldedOutputPlan};
 use shieldd_sdk_transaction::{
-    memo::MemoPlaintext, plan::MemoPlan, Transaction, TransactionParameters, TransactionPlan,
+    memo::MemoPlaintext, plan::MemoPlan, Transaction, TransactionParameters,
 };
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -187,7 +185,7 @@ pub async fn build_proof_transactions(
             let spend = ShieldedInputPlan::new(&mut OsRng, note.clone(), position);
             let send_amount = Amount::from(1u64);
             let change_amount = note.amount() - send_amount;
-            let mut output = ShieldedOutputPlan::new(
+            let output = ShieldedOutputPlan::new(
                 &mut OsRng,
                 Value {
                     amount: send_amount,
@@ -195,7 +193,7 @@ pub async fn build_proof_transactions(
                 },
                 test_keys::ADDRESS_1.deref().clone(),
             );
-            let mut change = ShieldedOutputPlan::new(
+            let change = ShieldedOutputPlan::new(
                 &mut OsRng,
                 Value {
                     amount: change_amount,
@@ -203,24 +201,13 @@ pub async fn build_proof_transactions(
                 },
                 note.address(),
             );
-            for output in [&mut output, &mut change] {
-                output.asset_anchor = spend.asset_anchor;
-                output.compliance_anchor = spend.compliance_anchor;
-                output.target_timestamp = spend.target_timestamp;
-                output.is_regulated = spend.is_regulated;
-                output.tx_blinding_nonce = spend.tx_blinding_nonce;
-                output.asset_indexed_leaf = spend.asset_indexed_leaf.clone();
-                output.asset_path = spend.asset_path.clone();
-                output.asset_position = spend.asset_position;
-                output.asset_policy = spend.asset_policy.clone();
-            }
 
-            let mut plan = TransactionPlan {
-                actions: vec![TransferPlan::new(
-                    vec![spend.into()],
-                    vec![output.into(), change.into()],
-                    decaf377::Fr::from(1u64),
-                )?
+            let intent = shieldd_sdk_mock_client::TransactionIntent {
+                actions: vec![shieldd_sdk_mock_client::TransferIntent {
+                    spends: vec![spend.into()],
+                    outputs: vec![output.into(), change.into()],
+                    value_blinding: decaf377::Fr::from(1u64),
+                }
                 .into()],
                 fee_funding: None,
                 memo: Some(MemoPlan::new(
@@ -234,9 +221,8 @@ pub async fn build_proof_transactions(
                 nullifier_window: None,
             };
 
-            let tx = client
-                .witness_auth_build_with_compliance(&mut plan, snapshot)
-                .await?;
+            let plan = client.complete_intent(intent, snapshot).await?;
+            let tx = client.witness_auth_build(&plan).await?;
             Ok::<(usize, Vec<u8>), anyhow::Error>((ordinal, tx.encode_to_vec()))
         });
     }

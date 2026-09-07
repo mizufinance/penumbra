@@ -1,5 +1,5 @@
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, SerializationError};
-#[cfg(not(feature = "bench-baseline"))]
+
 use ark_serialize::{Compress, Validate};
 
 /// Accept only the serializer's canonical image: full byte consumption plus an
@@ -28,7 +28,7 @@ where
 ///
 /// This is used when an equivalent validation
 /// kernel replaces a type's default `Valid::check` implementation.
-#[cfg(not(feature = "bench-baseline"))]
+
 pub(crate) fn deserialize_compressed_strict_with<T>(
     bytes: &[u8],
     validate: impl FnOnce(&T) -> Result<(), SerializationError>,

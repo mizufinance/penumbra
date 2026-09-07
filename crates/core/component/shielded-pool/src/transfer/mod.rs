@@ -4,8 +4,6 @@ mod generated;
 mod plan;
 mod proof;
 mod prover_runtime;
-#[cfg(test)]
-mod test_runtime;
 mod view;
 
 pub use action::{Transfer, TransferBody, TransferInputBody, TransferOutputBody};

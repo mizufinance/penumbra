@@ -4,7 +4,6 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 #[cfg(test)]
 use ark_std::cfg_iter;
 use ark_std::rand::Rng;
-use ark_std::{end_timer, start_timer};
 #[cfg(test)]
 use core::convert::TryInto;
 use digest::Digest;
@@ -19,7 +18,7 @@ use crate::{
         challenge_digest, sample_bounded_challenge, ChallengeContext, ChallengeTraceSink,
         NoopChallengeTraceSink,
     },
-    gipa::{GIPAProof, GipaBuildProfile, GIPA},
+    gipa::{GIPAProof, GIPA},
     Error,
 };
 #[cfg(test)]
@@ -39,14 +38,12 @@ use ark_inner_products::{cfg_multi_pairing, InnerProduct};
 
 pub mod structured_scalar_message;
 
-//TODO: Could generalize: Don't need TIPA over G1 and G2, would work with G1 and G1 or over different pairing engines
 pub trait TIPACompatibleSetup {}
 
 impl<G: CurveGroup> TIPACompatibleSetup for PedersenCommitment<G> {}
 impl<P: Pairing> TIPACompatibleSetup for AFGHOCommitmentG1<P> {}
 impl<P: Pairing> TIPACompatibleSetup for AFGHOCommitmentG2<P> {}
 
-//TODO: May need to add "reverse" MultiexponentiationInnerProduct to allow for MIP with G2 messages (because TIP hard-coded G1 left and G2 right)
 pub struct TIPA<IP, LMC, RMC, IPC, P, D> {
     _inner_product: PhantomData<IP>,
     _left_commitment: PhantomData<LMC>,
@@ -54,28 +51,6 @@ pub struct TIPA<IP, LMC, RMC, IPC, P, D> {
     _inner_product_commitment: PhantomData<IPC>,
     _pair: PhantomData<P>,
     _digest: PhantomData<D>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct TipaBuildProfile {
-    pub total_ms: f64,
-    pub gipa_ms: f64,
-    pub transcript_inverse_ms: f64,
-    pub kzg_challenge_ms: f64,
-    pub kzg_coefficient_build_ms: f64,
-    pub kzg_eval_quotient_ms: f64,
-    pub kzg_opening_msm_ms: f64,
-    pub kzg_opening_ck_a_ms: f64,
-    pub kzg_opening_ck_b_ms: f64,
-    pub gipa: GipaBuildProfile,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct KzgOpeningBuildProfile {
-    pub total_ms: f64,
-    pub coefficient_build_ms: f64,
-    pub eval_quotient_ms: f64,
-    pub opening_msm_ms: f64,
 }
 
 #[derive(CanonicalSerialize, CanonicalDeserialize)]
@@ -186,7 +161,6 @@ type PairingTipaProof<P, D> = TIPAProof<
 #[cfg(test)]
 const PAIRING_GIPA_RESCALE_THRESHOLD: usize = 64;
 
-//TODO: Change SRS to return reference iterator - requires changes to TIPA and GIPA signatures
 impl<P: Pairing> SRS<P> {
     pub fn get_commitment_keys(&self) -> (Vec<P::G2>, Vec<P::G1>) {
         let ck_1 = even_power_projection_core(&self.h_beta_powers);
@@ -271,20 +245,6 @@ where
 }
 
 #[cfg(test)]
-fn rescale_fold_curve_profiled<G>(
-    scaled_half: &[G],
-    unscaled_half: &[G],
-    scalar: &G::ScalarField,
-) -> (Vec<G>, f64)
-where
-    G: CurveGroup + Send + Sync,
-{
-    let started = std::time::Instant::now();
-    let folded = rescale_fold_curve(scaled_half, unscaled_half, scalar);
-    (folded, started.elapsed().as_secs_f64() * 1000.0)
-}
-
-#[cfg(test)]
 fn prepare_g2_affine_vec<P: Pairing>(points: &[P::G2Affine]) -> Vec<P::G2Prepared> {
     let mut prepared = Vec::with_capacity(points.len());
 
@@ -324,32 +284,26 @@ fn pairing_affine_with_prepared_g2<P: Pairing>(
 }
 
 #[cfg(test)]
-pub(crate) fn prove_pairing_inner_product_with_prepared_srs_shift_profiled<P, D>(
+pub(crate) fn prove_pairing_inner_product_with_prepared_srs_shift<P, D>(
     context: &ChallengeContext,
     trace: &mut impl ChallengeTraceSink,
     prepared_srs: &PreparedProvingSrs<P>,
     values: (&[P::G1], &[P::G2]),
     ck: (&[P::G2], &[P::G1], &HomomorphicPlaceholderValue),
     r_shift: &P::ScalarField,
-) -> Result<(PairingTipaProof<P, D>, TipaBuildProfile), Error>
+) -> Result<PairingTipaProof<P, D>, Error>
 where
     P: Pairing,
     D: Digest,
 {
-    let total_started = std::time::Instant::now();
-    let mut profile = TipaBuildProfile::default();
-
-    let gipa_started = std::time::Instant::now();
-    let (proof, aux, gipa_profile) =
-        prove_pairing_inner_product_gipa_with_aux_profiled::<P, D>(context, trace, values, ck)?;
-    profile.gipa_ms = gipa_started.elapsed().as_secs_f64() * 1000.0;
-    profile.gipa = gipa_profile;
+    let (proof, aux) =
+        prove_pairing_inner_product_gipa_with_aux::<P, D>(context, trace, values, ck)?;
 
     let (ck_a_final, ck_b_final) = aux.ck_base;
     let transcript = aux.r_transcript;
-    let transcript_inverse_started = std::time::Instant::now();
+
     let transcript_inverse = transcript.iter().map(|x| x.inverse().unwrap()).collect();
-    profile.transcript_inverse_ms = transcript_inverse_started.elapsed().as_secs_f64() * 1000.0;
+
     let r_inverse = r_shift.inverse().ok_or_else(|| {
         Box::new(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -357,7 +311,6 @@ where
         )) as Error
     })?;
 
-    let kzg_challenge_started = std::time::Instant::now();
     let c = sample_bounded_challenge::<_, Error, _>(|nonce| {
         let mut hash_input = Vec::new();
         if let Some(first) = transcript.first() {
@@ -369,48 +322,31 @@ where
             &challenge_digest::<D, _>(context, trace, b"tipa.ab.kzg", nonce, &hash_input),
         ))
     })?;
-    profile.kzg_challenge_ms = kzg_challenge_started.elapsed().as_secs_f64() * 1000.0;
 
-    let kzg_opening_ck_a_started = std::time::Instant::now();
-    let (ck_a_kzg_opening, ck_a_kzg_profile) =
-        prove_commitment_key_kzg_opening_with_affine_profiled(
-            prepared_srs.h_beta_powers_affine(),
-            &transcript_inverse,
-            &r_inverse,
-            &c,
-        )?;
-    profile.kzg_opening_ck_a_ms = kzg_opening_ck_a_started.elapsed().as_secs_f64() * 1000.0;
-    profile.kzg_coefficient_build_ms += ck_a_kzg_profile.coefficient_build_ms;
-    profile.kzg_eval_quotient_ms += ck_a_kzg_profile.eval_quotient_ms;
-    profile.kzg_opening_msm_ms += ck_a_kzg_profile.opening_msm_ms;
+    let ck_a_kzg_opening = prove_commitment_key_kzg_opening_with_affine(
+        prepared_srs.h_beta_powers_affine(),
+        &transcript_inverse,
+        &r_inverse,
+        &c,
+    )?;
 
-    let kzg_opening_ck_b_started = std::time::Instant::now();
-    let (ck_b_kzg_opening, ck_b_kzg_profile) =
-        prove_commitment_key_kzg_opening_with_affine_profiled(
-            prepared_srs.g_alpha_powers_affine(),
-            &transcript,
-            &P::ScalarField::one(),
-            &c,
-        )?;
-    profile.kzg_opening_ck_b_ms = kzg_opening_ck_b_started.elapsed().as_secs_f64() * 1000.0;
-    profile.kzg_coefficient_build_ms += ck_b_kzg_profile.coefficient_build_ms;
-    profile.kzg_eval_quotient_ms += ck_b_kzg_profile.eval_quotient_ms;
-    profile.kzg_opening_msm_ms += ck_b_kzg_profile.opening_msm_ms;
-    profile.total_ms = total_started.elapsed().as_secs_f64() * 1000.0;
+    let ck_b_kzg_opening = prove_commitment_key_kzg_opening_with_affine(
+        prepared_srs.g_alpha_powers_affine(),
+        &transcript,
+        &P::ScalarField::one(),
+        &c,
+    )?;
 
-    Ok((
-        TIPAProof {
-            gipa_proof: proof,
-            final_ck: (ck_a_final, ck_b_final),
-            final_ck_proof: (ck_a_kzg_opening, ck_b_kzg_opening),
-            _pair: PhantomData,
-        },
-        profile,
-    ))
+    Ok(TIPAProof {
+        gipa_proof: proof,
+        final_ck: (ck_a_final, ck_b_final),
+        final_ck_proof: (ck_a_kzg_opening, ck_b_kzg_opening),
+        _pair: PhantomData,
+    })
 }
 
 #[cfg(test)]
-fn prove_pairing_inner_product_gipa_with_aux_profiled<P, D>(
+fn prove_pairing_inner_product_gipa_with_aux<P, D>(
     context: &ChallengeContext,
     trace: &mut impl ChallengeTraceSink,
     values: (&[P::G1], &[P::G2]),
@@ -431,7 +367,6 @@ fn prove_pairing_inner_product_gipa_with_aux_profiled<P, D>(
             IdentityCommitment<ark_ec::pairing::PairingOutput<P>, P::ScalarField>,
             D,
         >,
-        GipaBuildProfile,
     ),
     Error,
 >
@@ -439,13 +374,12 @@ where
     P: Pairing,
     D: Digest,
 {
-    let total_started = std::time::Instant::now();
     let (mut m_a, mut m_b) = (values.0.to_vec(), values.1.to_vec());
     let (mut ck_a, mut ck_b) = (ck.0.to_vec(), ck.1.to_vec());
     let ck_t = ck.2;
     let mut r_commitment_steps = Vec::new();
     let mut r_transcript: Vec<P::ScalarField> = Vec::new();
-    let mut profile = GipaBuildProfile::default();
+
     assert!(m_a.len().is_power_of_two());
 
     let (m_base, ck_base) = 'recurse: loop {
@@ -476,19 +410,15 @@ where
         let m_b_2_prepared = prepare_g2_affine_vec::<P>(&m_b_2_affine);
 
         let commit_l = || {
-            let commit_started = std::time::Instant::now();
-            let ip_started = std::time::Instant::now();
             let ip = pairing_affine_with_prepared_g2::<P>(&m_a_1_affine, &m_b_1_prepared)
                 .map_err(|err| err.to_string())?;
-            let ip_ms = ip_started.elapsed().as_secs_f64() * 1000.0;
-            let com_a_started = std::time::Instant::now();
+
             let com_a =
                 pairing_affine::<P>(&m_a_1_affine, ck_a_1_affine).map_err(|err| err.to_string())?;
-            let com_a_ms = com_a_started.elapsed().as_secs_f64() * 1000.0;
-            let com_b_started = std::time::Instant::now();
+
             let com_b = pairing_affine_with_prepared_g2::<P>(&ck_b_1_affine, &m_b_1_prepared)
                 .map_err(|err| err.to_string())?;
-            let com_b_ms = com_b_started.elapsed().as_secs_f64() * 1000.0;
+
             let com = (
                 com_a,
                 com_b,
@@ -498,28 +428,18 @@ where
                 )
                 .map_err(|err| err.to_string())?,
             );
-            Ok::<_, String>((
-                com,
-                commit_started.elapsed().as_secs_f64() * 1000.0,
-                ip_ms,
-                com_a_ms,
-                com_b_ms,
-            ))
+            Ok::<_, String>(com)
         };
         let commit_r = || {
-            let commit_started = std::time::Instant::now();
-            let ip_started = std::time::Instant::now();
             let ip = pairing_affine_with_prepared_g2::<P>(&m_a_2_affine, &m_b_2_prepared)
                 .map_err(|err| err.to_string())?;
-            let ip_ms = ip_started.elapsed().as_secs_f64() * 1000.0;
-            let com_a_started = std::time::Instant::now();
+
             let com_a =
                 pairing_affine::<P>(&m_a_2_affine, ck_a_2_affine).map_err(|err| err.to_string())?;
-            let com_a_ms = com_a_started.elapsed().as_secs_f64() * 1000.0;
-            let com_b_started = std::time::Instant::now();
+
             let com_b = pairing_affine_with_prepared_g2::<P>(&ck_b_2_affine, &m_b_2_prepared)
                 .map_err(|err| err.to_string())?;
-            let com_b_ms = com_b_started.elapsed().as_secs_f64() * 1000.0;
+
             let com = (
                 com_a,
                 com_b,
@@ -529,35 +449,21 @@ where
                 )
                 .map_err(|err| err.to_string())?,
             );
-            Ok::<_, String>((
-                com,
-                commit_started.elapsed().as_secs_f64() * 1000.0,
-                ip_ms,
-                com_a_ms,
-                com_b_ms,
-            ))
+            Ok::<_, String>(com)
         };
 
-        #[cfg(all(feature = "parallel", not(feature = "bench-baseline")))]
+        #[cfg(feature = "parallel")]
         let (commit_l_result, commit_r_result) = rayon::join(commit_l, commit_r);
 
-        #[cfg(any(not(feature = "parallel"), feature = "bench-baseline"))]
+        #[cfg(not(feature = "parallel"))]
         let (commit_l_result, commit_r_result) = (commit_l(), commit_r());
 
-        let (com_1, commit_l_ms, ip_l_ms, com_a_l_ms, com_b_l_ms) =
-            commit_l_result.map_err(|err: String| std::io::Error::other(err))?;
-        let (com_2, commit_r_ms, ip_r_ms, com_a_r_ms, com_b_r_ms) =
-            commit_r_result.map_err(|err: String| std::io::Error::other(err))?;
+        let com_1 = commit_l_result.map_err(|err: String| std::io::Error::other(err))?;
+        let com_2 = commit_r_result.map_err(|err: String| std::io::Error::other(err))?;
         // Per-task self-times: under the parallel seam `commit_l`/`commit_r` run
         // concurrently, so the `_l`/`_r` fields overlap in wall-clock and are not
         // additive (their sum can exceed the round's elapsed time).
-        profile.commit_l_ms += commit_l_ms;
-        profile.commit_r_ms += commit_r_ms;
-        profile.commit_ab_ms += ip_l_ms + ip_r_ms;
-        profile.commit_com_a_ms += com_a_l_ms + com_a_r_ms;
-        profile.commit_com_b_ms += com_b_l_ms + com_b_r_ms;
 
-        let challenge_started = std::time::Instant::now();
         let default_transcript = Default::default();
         let transcript = r_transcript.last().unwrap_or(&default_transcript);
         let (c, c_inv) = sample_bounded_challenge::<_, Error, _>(|nonce| {
@@ -578,53 +484,38 @@ where
             .into();
             Ok(c.inverse().map(|c_inv| (c_inv, c)))
         })?;
-        profile.challenge_ms += challenge_started.elapsed().as_secs_f64() * 1000.0;
 
-        #[cfg(all(feature = "parallel", not(feature = "bench-baseline")))]
-        let (
-            (next_m_a, rescale_m1_ms),
-            (next_m_b, rescale_m2_ms),
-            (next_ck_a, rescale_ck1_ms),
-            (next_ck_b, rescale_ck2_ms),
-        ) = {
+        #[cfg(feature = "parallel")]
+        let (next_m_a, next_m_b, next_ck_a, next_ck_b) = {
             let ((next_m_a, next_m_b), (next_ck_a, next_ck_b)) = rayon::join(
                 || {
                     rayon::join(
-                        || rescale_fold_curve_profiled(m_a_1, m_a_2, &c),
-                        || rescale_fold_curve_profiled(m_b_2, m_b_1, &c_inv),
+                        || rescale_fold_curve(m_a_1, m_a_2, &c),
+                        || rescale_fold_curve(m_b_2, m_b_1, &c_inv),
                     )
                 },
                 || {
                     rayon::join(
-                        || rescale_fold_curve_profiled(ck_a_2, ck_a_1, &c_inv),
-                        || rescale_fold_curve_profiled(ck_b_1, ck_b_2, &c),
+                        || rescale_fold_curve(ck_a_2, ck_a_1, &c_inv),
+                        || rescale_fold_curve(ck_b_1, ck_b_2, &c),
                     )
                 },
             );
             (next_m_a, next_m_b, next_ck_a, next_ck_b)
         };
 
-        #[cfg(any(not(feature = "parallel"), feature = "bench-baseline"))]
-        let (
-            (next_m_a, rescale_m1_ms),
-            (next_m_b, rescale_m2_ms),
-            (next_ck_a, rescale_ck1_ms),
-            (next_ck_b, rescale_ck2_ms),
-        ) = (
-            rescale_fold_curve_profiled(m_a_1, m_a_2, &c),
-            rescale_fold_curve_profiled(m_b_2, m_b_1, &c_inv),
-            rescale_fold_curve_profiled(ck_a_2, ck_a_1, &c_inv),
-            rescale_fold_curve_profiled(ck_b_1, ck_b_2, &c),
+        #[cfg(not(feature = "parallel"))]
+        let (next_m_a, next_m_b, next_ck_a, next_ck_b) = (
+            rescale_fold_curve(m_a_1, m_a_2, &c),
+            rescale_fold_curve(m_b_2, m_b_1, &c_inv),
+            rescale_fold_curve(ck_a_2, ck_a_1, &c_inv),
+            rescale_fold_curve(ck_b_1, ck_b_2, &c),
         );
 
         m_a = next_m_a;
         m_b = next_m_b;
         ck_a = next_ck_a;
         ck_b = next_ck_b;
-        profile.rescale_m1_ms += rescale_m1_ms;
-        profile.rescale_m2_ms += rescale_m2_ms;
-        profile.rescale_ck1_ms += rescale_ck1_ms;
-        profile.rescale_ck2_ms += rescale_ck2_ms;
 
         r_commitment_steps.push((com_1, com_2));
         r_transcript.push(c);
@@ -632,7 +523,6 @@ where
 
     r_transcript.reverse();
     r_commitment_steps.reverse();
-    profile.total_ms = total_started.elapsed().as_secs_f64() * 1000.0;
 
     Ok((
         GIPAProof {
@@ -645,7 +535,6 @@ where
             ck_base,
             _gipa: PhantomData,
         },
-        profile,
     ))
 }
 
@@ -699,6 +588,7 @@ where
 
     // Shifts KZG proof for left message by scalar r (used for efficient composition with aggregation protocols)
     // LMC commitment key should already be shifted before being passed as input
+
     pub fn prove_with_srs_shift(
         context: &ChallengeContext,
         srs: &SRS<P>,
@@ -706,21 +596,8 @@ where
         ck: (&[LMC::Key], &[RMC::Key], &IPC::Key),
         r_shift: &P::ScalarField,
     ) -> Result<TIPAProof<IP, LMC, RMC, IPC, P, D>, Error> {
-        let (proof, profile) =
-            Self::prove_with_srs_shift_profiled(context, srs, values, ck, r_shift)?;
-        debug_assert!(profile.total_ms >= 0.0);
-        Ok(proof)
-    }
-
-    pub fn prove_with_srs_shift_profiled(
-        context: &ChallengeContext,
-        srs: &SRS<P>,
-        values: (&[IP::LeftMessage], &[IP::RightMessage]),
-        ck: (&[LMC::Key], &[RMC::Key], &IPC::Key),
-        r_shift: &P::ScalarField,
-    ) -> Result<(TIPAProof<IP, LMC, RMC, IPC, P, D>, TipaBuildProfile), Error> {
         let prepared_srs = srs.prepare_for_proving();
-        Self::prove_with_prepared_srs_shift_profiled(context, &prepared_srs, values, ck, r_shift)
+        Self::prove_with_prepared_srs_shift(context, &prepared_srs, values, ck, r_shift)
     }
 
     pub fn prove_with_prepared_srs_shift(
@@ -730,26 +607,8 @@ where
         ck: (&[LMC::Key], &[RMC::Key], &IPC::Key),
         r_shift: &P::ScalarField,
     ) -> Result<TIPAProof<IP, LMC, RMC, IPC, P, D>, Error> {
-        let (proof, profile) = Self::prove_with_prepared_srs_shift_profiled(
-            context,
-            prepared_srs,
-            values,
-            ck,
-            r_shift,
-        )?;
-        debug_assert!(profile.total_ms >= 0.0);
-        Ok(proof)
-    }
-
-    pub fn prove_with_prepared_srs_shift_profiled(
-        context: &ChallengeContext,
-        prepared_srs: &PreparedProvingSrs<P>,
-        values: (&[IP::LeftMessage], &[IP::RightMessage]),
-        ck: (&[LMC::Key], &[RMC::Key], &IPC::Key),
-        r_shift: &P::ScalarField,
-    ) -> Result<(TIPAProof<IP, LMC, RMC, IPC, P, D>, TipaBuildProfile), Error> {
         let mut trace = NoopChallengeTraceSink;
-        Self::prove_with_prepared_srs_shift_profiled_with_trace(
+        Self::prove_with_prepared_srs_shift_with_trace(
             context,
             &mut trace,
             prepared_srs,
@@ -759,18 +618,18 @@ where
         )
     }
 
-    pub fn prove_with_prepared_srs_shift_profiled_with_trace<S>(
+    pub fn prove_with_prepared_srs_shift_with_trace<S>(
         context: &ChallengeContext,
         trace: &mut S,
         prepared_srs: &PreparedProvingSrs<P>,
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &[RMC::Key], &IPC::Key),
         r_shift: &P::ScalarField,
-    ) -> Result<(TIPAProof<IP, LMC, RMC, IPC, P, D>, TipaBuildProfile), Error>
+    ) -> Result<TIPAProof<IP, LMC, RMC, IPC, P, D>, Error>
     where
         S: ChallengeTraceSink,
     {
-        Self::prove_with_prepared_srs_shift_profiled_with_labels_with_trace(
+        Self::prove_with_prepared_srs_shift_with_labels_with_trace(
             context,
             trace,
             b"tipa.generic.gipa.round",
@@ -782,7 +641,7 @@ where
         )
     }
 
-    fn prove_with_prepared_srs_shift_profiled_with_labels_with_trace<S>(
+    fn prove_with_prepared_srs_shift_with_labels_with_trace<S>(
         context: &ChallengeContext,
         trace: &mut S,
         gipa_stage_label: &'static [u8],
@@ -791,32 +650,26 @@ where
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &[RMC::Key], &IPC::Key),
         r_shift: &P::ScalarField,
-    ) -> Result<(TIPAProof<IP, LMC, RMC, IPC, P, D>, TipaBuildProfile), Error>
+    ) -> Result<TIPAProof<IP, LMC, RMC, IPC, P, D>, Error>
     where
         S: ChallengeTraceSink,
     {
-        let total_started = std::time::Instant::now();
-        let mut profile = TipaBuildProfile::default();
-
         // Run GIPA
-        let gipa_started = std::time::Instant::now();
-        let (proof, aux, gipa_profile) =
-            <GIPA<IP, LMC, RMC, IPC, D>>::prove_with_aux_profiled_with_stage_with_trace(
-                context,
-                trace,
-                gipa_stage_label,
-                values,
-                (ck.0, ck.1, &vec![ck.2.clone()]),
-            )?;
-        profile.gipa_ms = gipa_started.elapsed().as_secs_f64() * 1000.0;
-        profile.gipa = gipa_profile;
+
+        let (proof, aux) = <GIPA<IP, LMC, RMC, IPC, D>>::prove_with_aux_with_stage_with_trace(
+            context,
+            trace,
+            gipa_stage_label,
+            values,
+            (ck.0, ck.1, &vec![ck.2.clone()]),
+        )?;
 
         // Prove final commitment keys are wellformed
         let (ck_a_final, ck_b_final) = aux.ck_base;
         let transcript = aux.r_transcript;
-        let transcript_inverse_started = std::time::Instant::now();
+
         let transcript_inverse = transcript.iter().map(|x| x.inverse().unwrap()).collect();
-        profile.transcript_inverse_ms = transcript_inverse_started.elapsed().as_secs_f64() * 1000.0;
+
         let r_inverse = r_shift.inverse().ok_or_else(|| {
             Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -825,7 +678,7 @@ where
         })?;
 
         // KZG challenge point
-        let kzg_challenge_started = std::time::Instant::now();
+
         let c = sample_bounded_challenge::<_, Error, _>(|nonce| {
             let mut hash_input = Vec::new();
             if let Some(first) = transcript.first() {
@@ -841,44 +694,29 @@ where
                 &hash_input,
             )))
         })?;
-        profile.kzg_challenge_ms = kzg_challenge_started.elapsed().as_secs_f64() * 1000.0;
 
         // Complete KZG proofs
-        let kzg_opening_ck_a_started = std::time::Instant::now();
-        let (ck_a_kzg_opening, ck_a_kzg_profile) =
-            prove_commitment_key_kzg_opening_with_affine_profiled(
-                prepared_srs.h_beta_powers_affine(),
-                &transcript_inverse,
-                &r_inverse,
-                &c,
-            )?;
-        profile.kzg_opening_ck_a_ms = kzg_opening_ck_a_started.elapsed().as_secs_f64() * 1000.0;
-        profile.kzg_coefficient_build_ms += ck_a_kzg_profile.coefficient_build_ms;
-        profile.kzg_eval_quotient_ms += ck_a_kzg_profile.eval_quotient_ms;
-        profile.kzg_opening_msm_ms += ck_a_kzg_profile.opening_msm_ms;
-        let kzg_opening_ck_b_started = std::time::Instant::now();
-        let (ck_b_kzg_opening, ck_b_kzg_profile) =
-            prove_commitment_key_kzg_opening_with_affine_profiled(
-                prepared_srs.g_alpha_powers_affine(),
-                &transcript,
-                &<P::ScalarField>::one(),
-                &c,
-            )?;
-        profile.kzg_opening_ck_b_ms = kzg_opening_ck_b_started.elapsed().as_secs_f64() * 1000.0;
-        profile.kzg_coefficient_build_ms += ck_b_kzg_profile.coefficient_build_ms;
-        profile.kzg_eval_quotient_ms += ck_b_kzg_profile.eval_quotient_ms;
-        profile.kzg_opening_msm_ms += ck_b_kzg_profile.opening_msm_ms;
-        profile.total_ms = total_started.elapsed().as_secs_f64() * 1000.0;
 
-        Ok((
-            TIPAProof {
-                gipa_proof: proof,
-                final_ck: (ck_a_final, ck_b_final),
-                final_ck_proof: (ck_a_kzg_opening, ck_b_kzg_opening),
-                _pair: PhantomData,
-            },
-            profile,
-        ))
+        let ck_a_kzg_opening = prove_commitment_key_kzg_opening_with_affine(
+            prepared_srs.h_beta_powers_affine(),
+            &transcript_inverse,
+            &r_inverse,
+            &c,
+        )?;
+
+        let ck_b_kzg_opening = prove_commitment_key_kzg_opening_with_affine(
+            prepared_srs.g_alpha_powers_affine(),
+            &transcript,
+            &<P::ScalarField>::one(),
+            &c,
+        )?;
+
+        Ok(TIPAProof {
+            gipa_proof: proof,
+            final_ck: (ck_a_final, ck_b_final),
+            final_ck_proof: (ck_a_kzg_opening, ck_b_kzg_opening),
+            _pair: PhantomData,
+        })
     }
 
     pub fn verify(
@@ -986,7 +824,7 @@ where
                 "r_shift must be non-zero before inversion",
             )) as Error
         })?;
-        #[cfg(all(feature = "parallel", not(feature = "bench-baseline")))]
+        #[cfg(feature = "parallel")]
         let (ck_a_result, ck_b_result) = rayon::join(
             || {
                 verify_commitment_key_g2_kzg_opening::<P>(
@@ -1012,7 +850,7 @@ where
             },
         );
 
-        #[cfg(any(not(feature = "parallel"), feature = "bench-baseline"))]
+        #[cfg(not(feature = "parallel"))]
         let (ck_a_result, ck_b_result) = (
             verify_commitment_key_g2_kzg_opening::<P>(
                 v_srs,
@@ -1057,29 +895,8 @@ pub fn prove_commitment_key_kzg_opening<G: CurveGroup>(
     kzg_challenge: &G::ScalarField,
 ) -> Result<G, Error> {
     let affines = G::normalize_batch(srs_powers);
-    let (opening, profile) = prove_commitment_key_kzg_opening_with_affine_profiled(
-        &affines,
-        transcript,
-        r_shift,
-        kzg_challenge,
-    )?;
-    debug_assert!(profile.total_ms >= 0.0);
-    Ok(opening)
-}
-
-pub fn prove_commitment_key_kzg_opening_with_affine<G: CurveGroup>(
-    srs_powers: &[G::Affine],
-    transcript: &Vec<G::ScalarField>,
-    r_shift: &G::ScalarField,
-    kzg_challenge: &G::ScalarField,
-) -> Result<G, Error> {
-    let (opening, profile) = prove_commitment_key_kzg_opening_with_affine_profiled(
-        srs_powers,
-        transcript,
-        r_shift,
-        kzg_challenge,
-    )?;
-    debug_assert!(profile.total_ms >= 0.0);
+    let opening =
+        prove_commitment_key_kzg_opening_with_affine(&affines, transcript, r_shift, kzg_challenge)?;
     Ok(opening)
 }
 
@@ -1110,227 +927,28 @@ where
     descending
 }
 
-/// Exact MSM boundary of a prover KZG opening.
-///
-/// Coefficient construction and synthetic division remain ordinary Rust
-/// control flow. Only the affine MSM itself is delegated to the curve
-/// backend, with the complete base and scalar vectors visible at this seam.
-trait KzgOpeningMsmPrimitive<F, A, G, E> {
-    fn msm(&mut self, bases: &[A], scalars: &[F]) -> Result<G, E>;
-}
-
-fn kzg_opening_msm_adapter_core<F, A, G, E, FX>(
-    bases: &[A],
-    scalars: &[F],
-    effect: &mut FX,
-) -> Result<G, E>
-where
-    FX: KzgOpeningMsmPrimitive<F, A, G, E>,
-{
-    effect.msm(bases, scalars)
-}
-
-struct ArkworksKzgOpeningMsm<G: CurveGroup>(PhantomData<fn() -> G>);
-
-impl<G: CurveGroup> Default for ArkworksKzgOpeningMsm<G> {
-    fn default() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<G: CurveGroup> KzgOpeningMsmPrimitive<G::ScalarField, G::Affine, G, String>
-    for ArkworksKzgOpeningMsm<G>
-{
-    fn msm(&mut self, bases: &[G::Affine], scalars: &[G::ScalarField]) -> Result<G, String> {
-        G::msm(bases, scalars).map_err(|_| "KZG opening MSM length mismatch".to_owned())
-    }
-}
-
-/// Retained values from the production KZG-opening construction. The public
-/// API still projects only `opening`; this record makes the exact polynomial,
-/// evaluation, quotient, and backend result available to extraction.
-#[allow(dead_code)]
-struct KzgOpeningExecution<F, G> {
-    coefficients: Vec<F>,
-    evaluation: F,
-    quotient_coefficients: Vec<F>,
-    opening: G,
-}
-
-fn kzg_opening_execution_from_parts<F, G>(
-    coefficients: Vec<F>,
-    evaluation: F,
-    quotient_coefficients: Vec<F>,
-    opening: G,
-) -> KzgOpeningExecution<F, G> {
-    KzgOpeningExecution {
-        coefficients,
-        evaluation,
-        quotient_coefficients,
-        opening,
-    }
-}
-
-/// External steps used by the complete KZG-opening construction core.
-///
-/// The production implementation below computes coefficients, evaluation,
-/// and synthetic division with the existing Rust helpers. The trait boundary
-/// lets extraction retain each exact call and isolates only the affine MSM.
-trait KzgOpeningPrimitive<F, A, G, E> {
-    fn coefficients(&mut self, transcript: &Vec<F>, r_shift: &F) -> Vec<F>;
-    fn evaluation_and_quotient(
-        &mut self,
-        coefficients: &[F],
-        transcript: &Vec<F>,
-        r_shift: &F,
-        challenge: &F,
-    ) -> (F, Vec<F>);
-    fn msm(&mut self, bases: &[A], scalars: &[F]) -> Result<G, E>;
-}
-
-fn prove_commitment_key_kzg_opening_adapter_core<F, A, G, E, FX>(
-    srs_powers: &[A],
-    transcript: &Vec<F>,
-    r_shift: &F,
-    kzg_challenge: &F,
-    effect: &mut FX,
-) -> Result<KzgOpeningExecution<F, G>, E>
-where
-    F: Clone + Zero,
-    FX: KzgOpeningPrimitive<F, A, G, E>,
-{
-    let coefficients = effect.coefficients(transcript, r_shift);
-    assert_eq!(srs_powers.len(), coefficients.len());
-    let (evaluation, mut quotient_coefficients) =
-        effect.evaluation_and_quotient(&coefficients, transcript, r_shift, kzg_challenge);
-    let opening = if quotient_coefficients.len() < srs_powers.len() {
-        effect.msm(
-            &srs_powers[..quotient_coefficients.len()],
-            &quotient_coefficients,
-        )?
-    } else {
-        effect.msm(srs_powers, &quotient_coefficients)?
-    };
-    // Keep the execution record aligned with the SRS length.
-    quotient_coefficients.resize(srs_powers.len(), F::zero());
-    Ok(kzg_opening_execution_from_parts(
-        coefficients,
-        evaluation,
-        quotient_coefficients,
-        opening,
-    ))
-}
-
-struct ArkworksKzgOpeningEffect<G: CurveGroup> {
-    profile: KzgOpeningBuildProfile,
-    _curve: PhantomData<fn() -> G>,
-}
-
-impl<G: CurveGroup> Default for ArkworksKzgOpeningEffect<G> {
-    fn default() -> Self {
-        Self {
-            profile: KzgOpeningBuildProfile::default(),
-            _curve: PhantomData,
-        }
-    }
-}
-
-impl<G: CurveGroup> KzgOpeningPrimitive<G::ScalarField, G::Affine, G, String>
-    for ArkworksKzgOpeningEffect<G>
-{
-    fn coefficients(
-        &mut self,
-        transcript: &Vec<G::ScalarField>,
-        r_shift: &G::ScalarField,
-    ) -> Vec<G::ScalarField> {
-        let started = std::time::Instant::now();
-        let coefficients = polynomial_coefficients_from_transcript(transcript, r_shift);
-        self.profile.coefficient_build_ms = started.elapsed().as_secs_f64() * 1000.0;
-        coefficients
-    }
-
-    fn evaluation_and_quotient(
-        &mut self,
-        coefficients: &[G::ScalarField],
-        transcript: &Vec<G::ScalarField>,
-        r_shift: &G::ScalarField,
-        challenge: &G::ScalarField,
-    ) -> (G::ScalarField, Vec<G::ScalarField>) {
-        let started = std::time::Instant::now();
-
-        let eval = start_timer!(|| "polynomial eval");
-        let evaluation =
-            polynomial_evaluation_product_form_from_transcript(transcript, challenge, r_shift);
-        end_timer!(eval);
-
-        let quotient = start_timer!(|| "polynomial quotient");
-        let quotient_coefficients = synthetic_division_coefficients(coefficients, challenge);
-        end_timer!(quotient);
-
-        debug_assert!(
-            coefficients.len() <= 1
-                || coefficients[0] - evaluation + *challenge * quotient_coefficients[0]
-                    == G::ScalarField::zero(),
-            "product-form evaluation must match the extracted coefficient polynomial"
-        );
-        self.profile.eval_quotient_ms = started.elapsed().as_secs_f64() * 1000.0;
-        (evaluation, quotient_coefficients)
-    }
-
-    fn msm(&mut self, bases: &[G::Affine], scalars: &[G::ScalarField]) -> Result<G, String> {
-        let started = std::time::Instant::now();
-        let multiexp = start_timer!(|| "opening multiexp");
-        let mut msm_effect = ArkworksKzgOpeningMsm::<G>::default();
-        let opening = kzg_opening_msm_adapter_core(bases, scalars, &mut msm_effect)?;
-        end_timer!(multiexp);
-        self.profile.opening_msm_ms = started.elapsed().as_secs_f64() * 1000.0;
-        Ok(opening)
-    }
-}
-
-pub fn prove_commitment_key_kzg_opening_with_affine_profiled<G: CurveGroup>(
+pub fn prove_commitment_key_kzg_opening_with_affine<G: CurveGroup>(
     srs_powers: &[G::Affine],
     transcript: &Vec<G::ScalarField>,
     r_shift: &G::ScalarField,
-    kzg_challenge: &G::ScalarField,
-) -> Result<(G, KzgOpeningBuildProfile), Error> {
-    let total_started = std::time::Instant::now();
-    let mut effect = ArkworksKzgOpeningEffect::<G>::default();
-    let execution = prove_commitment_key_kzg_opening_adapter_core(
-        srs_powers,
-        transcript,
-        r_shift,
-        kzg_challenge,
-        &mut effect,
-    )
-    .map_err(|error| Box::new(std::io::Error::other(error)) as Error)?;
-    effect.profile.total_ms = total_started.elapsed().as_secs_f64() * 1000.0;
-    Ok((execution.opening, effect.profile))
-}
-
-pub(crate) trait PairingEffect<G1, G2, GT> {
-    fn multi_pairing(&self, left: &[G1], right: &[G2]) -> Option<GT>;
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct ArkworksPairingEffect<P: Pairing>(PhantomData<P>);
-
-impl<P: Pairing> Default for ArkworksPairingEffect<P> {
-    fn default() -> Self {
-        Self(PhantomData)
+    challenge: &G::ScalarField,
+) -> Result<G, Error> {
+    let coefficients = polynomial_coefficients_from_transcript(transcript, r_shift);
+    assert_eq!(srs_powers.len(), coefficients.len());
+    let quotient = synthetic_division_coefficients(&coefficients, challenge);
+    #[cfg(debug_assertions)]
+    {
+        let evaluation =
+            polynomial_evaluation_product_form_from_transcript(transcript, challenge, r_shift);
+        debug_assert!(
+            coefficients.len() <= 1
+                || coefficients[0] - evaluation + *challenge * quotient[0]
+                    == G::ScalarField::zero(),
+            "product-form evaluation must match the coefficient polynomial"
+        );
     }
-}
-
-impl<P: Pairing> PairingEffect<P::G1, P::G2, ark_ec::pairing::PairingOutput<P>>
-    for ArkworksPairingEffect<P>
-{
-    fn multi_pairing(
-        &self,
-        left: &[P::G1],
-        right: &[P::G2],
-    ) -> Option<ark_ec::pairing::PairingOutput<P>> {
-        cfg_multi_pairing::<P>(left, right)
-    }
+    G::msm(&srs_powers[..quotient.len()], &quotient)
+        .map_err(|_| Box::new(std::io::Error::other("KZG opening MSM length mismatch")) as Error)
 }
 
 #[derive(Clone)]
@@ -1369,11 +987,11 @@ where
         + std::ops::Neg<Output = G1>,
     G2: Clone + std::ops::Mul<F, Output = G2> + std::ops::Sub<Output = G2>,
     GT: Zero,
-    E: PairingEffect<G1, G2, GT>,
+    E: Fn(&[G1], &[G2]) -> Option<GT>,
 {
     let right_0 = input.ck_final - input.h * input.eval.clone();
     let left_1 = -(input.g_beta - input.g.clone() * input.z.clone());
-    match pairing.multi_pairing(&[input.g, left_1], &[right_0, input.ck_opening]) {
+    match pairing(&[input.g, left_1], &[right_0, input.ck_opening]) {
         Some(output) => output.is_zero(),
         None => false,
     }
@@ -1391,11 +1009,11 @@ where
         + std::ops::Neg<Output = G1>,
     G2: Clone + std::ops::Mul<F, Output = G2> + std::ops::Sub<Output = G2>,
     GT: Zero,
-    E: PairingEffect<G1, G2, GT>,
+    E: Fn(&[G1], &[G2]) -> Option<GT>,
 {
     let left_0 = input.ck_final - input.g * input.eval.clone();
     let right_1 = input.h_alpha - input.h.clone() * input.z.clone();
-    match pairing.multi_pairing(&[left_0, -input.ck_opening], &[input.h, right_1]) {
+    match pairing(&[left_0, -input.ck_opening], &[input.h, right_1]) {
         Some(output) => output.is_zero(),
         None => false,
     }
@@ -1420,7 +1038,7 @@ where
         + std::ops::Neg<Output = G1>,
     G2: Clone + std::ops::Mul<F, Output = G2> + std::ops::Sub<Output = G2>,
     GT: Zero,
-    E: PairingEffect<G1, G2, GT>,
+    E: Fn(&[G1], &[G2]) -> Option<GT>,
 {
     let eval = polynomial_evaluation_product_form_from_transcript(transcript, z, r_shift);
     verify_commitment_key_g2_kzg_equation_core(
@@ -1457,7 +1075,7 @@ where
         + std::ops::Neg<Output = G1>,
     G2: Clone + std::ops::Mul<F, Output = G2> + std::ops::Sub<Output = G2>,
     GT: Zero,
-    E: PairingEffect<G1, G2, GT>,
+    E: Fn(&[G1], &[G2]) -> Option<GT>,
 {
     let eval = polynomial_evaluation_product_form_from_transcript(transcript, z, r_shift);
     verify_commitment_key_g1_kzg_equation_core(
@@ -1492,7 +1110,7 @@ pub fn verify_commitment_key_g2_kzg_opening<P: Pairing>(
         transcript,
         r_shift,
         kzg_challenge,
-        &ArkworksPairingEffect::<P>::default(),
+        &cfg_multi_pairing::<P>,
     ))
 }
 
@@ -1513,7 +1131,7 @@ pub fn verify_commitment_key_g1_kzg_opening<P: Pairing>(
         transcript,
         r_shift,
         kzg_challenge,
-        &ArkworksPairingEffect::<P>::default(),
+        &cfg_multi_pairing::<P>,
     ))
 }
 
@@ -1604,134 +1222,6 @@ mod tests {
 
     const TEST_SIZE: usize = 8;
 
-    #[derive(Default)]
-    struct RecordingKzgMsm {
-        bases: Vec<u64>,
-        scalars: Vec<u64>,
-        fail: bool,
-    }
-
-    impl KzgOpeningMsmPrimitive<u64, u64, u64, String> for RecordingKzgMsm {
-        fn msm(&mut self, bases: &[u64], scalars: &[u64]) -> Result<u64, String> {
-            self.bases = bases.to_vec();
-            self.scalars = scalars.to_vec();
-            if self.fail {
-                return Err("msm".to_owned());
-            }
-            Ok(bases
-                .iter()
-                .zip(scalars)
-                .map(|(base, scalar)| base.wrapping_mul(*scalar))
-                .fold(0, u64::wrapping_add))
-        }
-    }
-
-    #[derive(Default)]
-    struct RecordingKzgOpening {
-        calls: Vec<&'static str>,
-        msm_bases: Vec<u64>,
-        msm_scalars: Vec<u64>,
-        fail_msm: bool,
-    }
-
-    impl KzgOpeningPrimitive<u64, u64, u64, String> for RecordingKzgOpening {
-        fn coefficients(&mut self, transcript: &Vec<u64>, r_shift: &u64) -> Vec<u64> {
-            self.calls.push("coefficients");
-            vec![transcript[0], *r_shift, transcript[1]]
-        }
-
-        fn evaluation_and_quotient(
-            &mut self,
-            coefficients: &[u64],
-            transcript: &Vec<u64>,
-            r_shift: &u64,
-            challenge: &u64,
-        ) -> (u64, Vec<u64>) {
-            self.calls.push("evaluation-and-quotient");
-            assert_eq!(coefficients, &[2, 5, 3]);
-            assert_eq!(transcript, &[2, 3]);
-            assert_eq!(*r_shift, 5);
-            assert_eq!(*challenge, 7);
-            (11, vec![13, 17])
-        }
-
-        fn msm(&mut self, bases: &[u64], scalars: &[u64]) -> Result<u64, String> {
-            self.calls.push("msm");
-            self.msm_bases = bases.to_vec();
-            self.msm_scalars = scalars.to_vec();
-            if self.fail_msm {
-                Err("msm".to_owned())
-            } else {
-                Ok(19)
-            }
-        }
-    }
-
-    #[test]
-    fn kzg_opening_core_owns_construction_order_and_projection() {
-        let mut effect = RecordingKzgOpening::default();
-        let output = prove_commitment_key_kzg_opening_adapter_core(
-            &[23, 29, 31],
-            &vec![2, 3],
-            &5,
-            &7,
-            &mut effect,
-        )
-        .expect("scripted opening must construct");
-
-        assert_eq!(
-            effect.calls,
-            vec!["coefficients", "evaluation-and-quotient", "msm"]
-        );
-        assert_eq!(effect.msm_bases, vec![23, 29]);
-        assert_eq!(effect.msm_scalars, vec![13, 17]);
-        assert_eq!(output.coefficients, vec![2, 5, 3]);
-        assert_eq!(output.evaluation, 11);
-        assert_eq!(output.quotient_coefficients, vec![13, 17, 0]);
-        assert_eq!(output.opening, 19);
-
-        let mut failing = RecordingKzgOpening {
-            fail_msm: true,
-            ..Default::default()
-        };
-        assert!(matches!(
-            prove_commitment_key_kzg_opening_adapter_core(
-                &[23, 29, 31],
-                &vec![2, 3],
-                &5,
-                &7,
-                &mut failing,
-            ),
-            Err(ref error) if error == "msm"
-        ));
-        assert_eq!(
-            failing.calls,
-            vec!["coefficients", "evaluation-and-quotient", "msm"]
-        );
-    }
-
-    #[test]
-    fn kzg_opening_msm_core_forwards_exact_vectors_and_error() {
-        let mut effect = RecordingKzgMsm::default();
-        assert_eq!(
-            kzg_opening_msm_adapter_core(&[2, 3, 5], &[7, 11, 13], &mut effect),
-            Ok(2 * 7 + 3 * 11 + 5 * 13)
-        );
-        assert_eq!(effect.bases, vec![2, 3, 5]);
-        assert_eq!(effect.scalars, vec![7, 11, 13]);
-
-        let mut failing = RecordingKzgMsm {
-            fail: true,
-            ..Default::default()
-        };
-        assert_eq!(
-            kzg_opening_msm_adapter_core(&[2, 3], &[7, 11], &mut failing),
-            Err("msm".to_owned())
-        );
-        assert_eq!(failing.bases, vec![2, 3]);
-        assert_eq!(failing.scalars, vec![7, 11]);
-    }
-
     #[test]
     fn polynomial_coefficients_match_direct_expansion() {
         type Scalar = <Bls12_377 as Pairing>::ScalarField;
@@ -1818,14 +1308,6 @@ mod tests {
         }
     }
 
-    struct FailingPairingEffect;
-
-    impl<G1, G2, GT> PairingEffect<G1, G2, GT> for FailingPairingEffect {
-        fn multi_pairing(&self, _left: &[G1], _right: &[G2]) -> Option<GT> {
-            None
-        }
-    }
-
     fn assert_kzg_adapter_parity<P: Pairing>() {
         let v_srs: VerifierSRS<P> = VerifierSRSData {
             g: P::G1::generator(),
@@ -1867,12 +1349,10 @@ mod tests {
             &transcript,
             &r_shift,
             &challenge,
-            &ArkworksPairingEffect::<P>::default(),
+            &cfg_multi_pairing::<P>,
         );
-        let equation_g2 = verify_commitment_key_g2_kzg_equation_core(
-            g2_input.clone(),
-            &ArkworksPairingEffect::<P>::default(),
-        );
+        let equation_g2 =
+            verify_commitment_key_g2_kzg_equation_core(g2_input.clone(), &cfg_multi_pairing::<P>);
         assert_eq!(delegated_g2, core_g2);
         assert_eq!(delegated_g2, equation_g2);
         assert!(delegated_g2);
@@ -1891,7 +1371,7 @@ mod tests {
             &transcript,
             &r_shift,
             &challenge,
-            &FailingPairingEffect,
+            &|_: &[P::G1], _: &[P::G2]| None::<ark_ec::pairing::PairingOutput<P>>,
         ));
 
         let invalid_g2_final = v_srs.h.clone() * eval.clone() + P::G2::generator();
@@ -1923,12 +1403,10 @@ mod tests {
             &transcript,
             &r_shift,
             &challenge,
-            &ArkworksPairingEffect::<P>::default(),
+            &cfg_multi_pairing::<P>,
         );
-        let equation_invalid_g2 = verify_commitment_key_g2_kzg_equation_core(
-            invalid_g2_input,
-            &ArkworksPairingEffect::<P>::default(),
-        );
+        let equation_invalid_g2 =
+            verify_commitment_key_g2_kzg_equation_core(invalid_g2_input, &cfg_multi_pairing::<P>);
         assert_eq!(delegated_invalid_g2, core_invalid_g2);
         assert_eq!(delegated_invalid_g2, equation_invalid_g2);
         assert!(!delegated_invalid_g2);
@@ -1961,12 +1439,10 @@ mod tests {
             &transcript,
             &r_shift,
             &challenge,
-            &ArkworksPairingEffect::<P>::default(),
+            &cfg_multi_pairing::<P>,
         );
-        let equation_g1 = verify_commitment_key_g1_kzg_equation_core(
-            g1_input.clone(),
-            &ArkworksPairingEffect::<P>::default(),
-        );
+        let equation_g1 =
+            verify_commitment_key_g1_kzg_equation_core(g1_input.clone(), &cfg_multi_pairing::<P>);
         assert_eq!(delegated_g1, core_g1);
         assert_eq!(delegated_g1, equation_g1);
         assert!(delegated_g1);
@@ -1985,7 +1461,7 @@ mod tests {
             &transcript,
             &r_shift,
             &challenge,
-            &FailingPairingEffect,
+            &|_: &[P::G1], _: &[P::G2]| None::<ark_ec::pairing::PairingOutput<P>>,
         ));
 
         let invalid_g1_final = v_srs.g.clone() * eval + P::G1::generator();
@@ -2021,12 +1497,10 @@ mod tests {
             &transcript,
             &r_shift,
             &challenge,
-            &ArkworksPairingEffect::<P>::default(),
+            &cfg_multi_pairing::<P>,
         );
-        let equation_invalid_g1 = verify_commitment_key_g1_kzg_equation_core(
-            invalid_g1_input,
-            &ArkworksPairingEffect::<P>::default(),
-        );
+        let equation_invalid_g1 =
+            verify_commitment_key_g1_kzg_equation_core(invalid_g1_input, &cfg_multi_pairing::<P>);
         assert_eq!(delegated_invalid_g1, core_invalid_g1);
         assert_eq!(delegated_invalid_g1, equation_invalid_g1);
         assert!(!delegated_invalid_g1);
@@ -2251,21 +1725,20 @@ mod tests {
         let com_t = IPC::commit(&vec![ck_t.clone()], &t).unwrap();
 
         let mut generic_trace = NoopChallengeTraceSink;
-        let (generic, _) =
-            PairingTIPA::prove_with_prepared_srs_shift_profiled_with_labels_with_trace(
-                &challenge_context,
-                &mut generic_trace,
-                b"tipa.ab.gipa.round",
-                b"tipa.ab.kzg",
-                &prepared,
-                (&m_a_r, &m_b),
-                (&ck_a_r, &ck_b, &ck_t),
-                &r_scalar,
-            )
-            .unwrap();
+        let generic = PairingTIPA::prove_with_prepared_srs_shift_with_labels_with_trace(
+            &challenge_context,
+            &mut generic_trace,
+            b"tipa.ab.gipa.round",
+            b"tipa.ab.kzg",
+            &prepared,
+            (&m_a_r, &m_b),
+            (&ck_a_r, &ck_b, &ck_t),
+            &r_scalar,
+        )
+        .unwrap();
         let mut trace = NoopChallengeTraceSink;
-        let (specialized, profile) =
-            prove_pairing_inner_product_with_prepared_srs_shift_profiled::<Bls12_381, Blake2b>(
+        let specialized =
+            prove_pairing_inner_product_with_prepared_srs_shift::<Bls12_381, Blake2b>(
                 &challenge_context,
                 &mut trace,
                 &prepared,
@@ -2283,9 +1756,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(generic_bytes, specialized_bytes);
-        assert!(profile.gipa.commit_ab_ms >= 0.0);
-        assert!(profile.gipa.commit_com_a_ms >= 0.0);
-        assert!(profile.gipa.commit_com_b_ms >= 0.0);
+
         assert!(PairingTIPA::verify_with_srs_shift_and_labels(
             &challenge_context,
             b"tipa.ab.gipa.round",
@@ -2339,19 +1810,16 @@ mod tests {
 
         let projective_opening =
             prove_commitment_key_kzg_opening(&powers, &transcript, &r_shift, &challenge).unwrap();
-        let (affine_opening, profile) = prove_commitment_key_kzg_opening_with_affine_profiled::<
+        let affine_opening = prove_commitment_key_kzg_opening_with_affine::<
             <Bls12_381 as Pairing>::G1,
         >(&affines, &transcript, &r_shift, &challenge)
         .unwrap();
 
         assert_eq!(projective_opening, affine_opening);
-        assert!(profile.coefficient_build_ms >= 0.0);
-        assert!(profile.eval_quotient_ms >= 0.0);
-        assert!(profile.opening_msm_ms >= 0.0);
     }
 
     #[test]
-    fn affine_kzg_profiled_projects_exact_quotient_msm() {
+    fn affine_kzg_matches_exact_quotient_msm() {
         type G = <Bls12_381 as Pairing>::G1;
         type F = <Bls12_381 as Pairing>::ScalarField;
 
@@ -2369,13 +1837,13 @@ mod tests {
         quotient.resize(affines.len(), F::zero());
         let expected = G::msm(&affines, &quotient).expect("lengths match");
 
-        let (opening, _) = prove_commitment_key_kzg_opening_with_affine_profiled::<G>(
+        let opening = prove_commitment_key_kzg_opening_with_affine::<G>(
             &affines,
             &transcript,
             &r_shift,
             &challenge,
         )
-        .expect("profiled opening must construct");
+        .expect("opening must construct");
         assert_eq!(opening, expected);
     }
 }

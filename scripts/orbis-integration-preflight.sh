@@ -37,7 +37,7 @@ for bin in cometbft curl jq; do
         exit 1
     fi
 done
-docker_compose_flavor >/dev/null
+require_docker_compose
 ensure_docker_daemon
 log_success "Runtime dependencies found"
 

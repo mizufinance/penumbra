@@ -1,6 +1,3 @@
-use cnidarium::Storage;
-use tonic::service::Routes;
-
 use super::HostInterface;
 
 mod client_query;
@@ -10,8 +7,6 @@ mod utils;
 
 use std::marker::PhantomData;
 
-// TODO: hide and replace with a routes() constructor that
-// bundles up all the internal services
 #[derive(Clone)]
 pub struct IbcQuery<HI: HostInterface> {
     storage: cnidarium::Storage,
@@ -25,8 +20,4 @@ impl<HI: HostInterface> IbcQuery<HI> {
             _marker: PhantomData,
         }
     }
-}
-
-pub fn routes(_storage: Storage) -> Routes {
-    unimplemented!("functionality we need is only in tonic 0.10")
 }

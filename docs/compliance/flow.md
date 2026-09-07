@@ -240,11 +240,6 @@ Flagged regulated transfers encrypt every audit tier to the issuer DK. After
 evidence validation, the issuer can decrypt them locally and complete the
 audit.
 
-Unflagged regulated tiers encrypt to the sender or receiver ACK. Orbis v0
-would disclose the seed-opening DH point, so both
-`export_orbis_pending_scan` and `import_orbis_audit_entries` fail closed. An
-unflagged row therefore cannot currently complete through PRE.
-
-This is an intentional availability restriction, not a confidentiality
-exception. A future PRE v1 must provide a non-disclosing, circuit-bound seed
-ciphertext and independent review before the export/import path is enabled.
+Unflagged regulated tiers encrypt to the sender or receiver ACK. The scanner
+has no PRE export/import interface: disclosing the seed-opening DH point would
+compromise confidentiality. Unflagged rows cannot currently complete through PRE.

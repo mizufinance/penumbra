@@ -14,12 +14,10 @@ use shieldd_sdk_mock_client::MockClient;
 use shieldd_sdk_num::Amount;
 use shieldd_sdk_proto::DomainType;
 use shieldd_sdk_shielded_pool::{
-    component::StateReadExt as _, EvmCall, HostExecution, HostTransfer, HostWithdrawal,
-    HostWithdrawalDestination, ShieldedHostWithdrawalPlan, ShieldedInputPlan, ShieldedOutputPlan,
+    EvmCall, HostExecution, HostTransfer, HostWithdrawal, HostWithdrawalDestination,
+    ShieldedInputPlan, ShieldedOutputPlan,
 };
-use shieldd_sdk_transaction::{
-    memo::MemoPlaintext, plan::MemoPlan, TransactionParameters, TransactionPlan,
-};
+use shieldd_sdk_transaction::{memo::MemoPlaintext, plan::MemoPlan, TransactionParameters};
 
 struct Opt {
     db: PathBuf,
@@ -155,12 +153,12 @@ async fn build_host_withdrawal_tx(opt: Opt) -> Result<Vec<u8>> {
     let position = client
         .position(input_note.commit())
         .ok_or_else(|| anyhow!("input note commitment was unknown to mock client"))?;
-    let mut spend = ShieldedInputPlan::new(&mut OsRng, input_note.clone(), position);
+    let spend = ShieldedInputPlan::new(&mut OsRng, input_note.clone(), position);
     let change_amount = input_note
         .amount()
         .checked_sub(&opt.amount)
         .context("input note amount must cover withdrawal amount")?;
-    let mut change = if change_amount == Amount::zero() {
+    let change = if change_amount == Amount::zero() {
         None
     } else {
         Some(ShieldedOutputPlan::new(
@@ -172,7 +170,6 @@ async fn build_host_withdrawal_tx(opt: Opt) -> Result<Vec<u8>> {
             input_note.address(),
         ))
     };
-    align_withdrawal_planning_metadata(&mut spend, change.as_mut());
 
     let withdrawal = HostWithdrawal {
         value: Value {
@@ -181,9 +178,13 @@ async fn build_host_withdrawal_tx(opt: Opt) -> Result<Vec<u8>> {
         },
         destination: opt.destination,
     };
-    let withdrawal_plan =
-        ShieldedHostWithdrawalPlan::new(vec![spend], change, withdrawal, Fr::from(1u64))?;
-    let mut plan = TransactionPlan {
+    let withdrawal_plan = shieldd_sdk_mock_client::WithdrawalIntent {
+        spends: vec![spend],
+        change_output: change,
+        withdrawal: withdrawal,
+        value_blinding: Fr::from(1u64),
+    };
+    let intent = shieldd_sdk_mock_client::TransactionIntent {
         actions: vec![withdrawal_plan.into()],
         memo: Some(MemoPlan::new(
             &mut OsRng,
@@ -198,32 +199,10 @@ async fn build_host_withdrawal_tx(opt: Opt) -> Result<Vec<u8>> {
     };
 
     let snapshot = storage.latest_snapshot();
-    let routing_parameters = snapshot
-        .get_current_discovery_parameters()
-        .await
-        .context("failed to read Shieldd discovery parameters")?;
-    plan.populate_routing_parameters(routing_parameters);
+    let plan = client.complete_intent(intent, snapshot).await?;
     let tx = client
-        .witness_auth_build_with_compliance(&mut plan, snapshot)
+        .witness_auth_build(&plan)
         .await
         .context("failed to build Shieldd host withdrawal transaction")?;
     Ok(tx.encode_to_vec())
-}
-
-fn align_withdrawal_planning_metadata(
-    spend: &mut ShieldedInputPlan,
-    change: Option<&mut ShieldedOutputPlan>,
-) {
-    let Some(change) = change else {
-        return;
-    };
-    change.asset_anchor = spend.asset_anchor;
-    change.compliance_anchor = spend.compliance_anchor;
-    change.target_timestamp = spend.target_timestamp;
-    change.is_regulated = spend.is_regulated;
-    change.tx_blinding_nonce = spend.tx_blinding_nonce;
-    change.asset_indexed_leaf = spend.asset_indexed_leaf.clone();
-    change.asset_path = spend.asset_path.clone();
-    change.asset_position = spend.asset_position;
-    change.asset_policy = spend.asset_policy.clone();
 }

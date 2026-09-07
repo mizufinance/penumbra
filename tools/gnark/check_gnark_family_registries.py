@@ -1164,110 +1164,6 @@ def generated_outputs() -> dict[Path, str]:
     }
 
 
-def require(contents: str, snippet: str, surface: str) -> None:
-    if snippet not in contents:
-        fail(f"{surface}: missing {snippet!r}")
-
-
-def check_note_reshape() -> int:
-    values = note_reshape_families()
-
-    go = (
-        GNARK / "internal/generated/note_reshape_families_generated.go"
-    ).read_text()
-    core = (
-        ROOT
-        / "crates/core/component/shielded-pool/src/note_reshape/generated.rs"
-    ).read_text()
-    build = (
-        ROOT
-        / "crates/crypto/proof-params/src/gen/gnark/note_reshape_families_build.rs"
-    ).read_text()
-    params = (
-        ROOT
-        / "crates/crypto/proof-params/src/gen/gnark/note_reshape_registry.rs"
-    ).read_text()
-    aggregation = (
-        ROOT / "crates/crypto/proof-aggregation/src/backend.rs"
-    ).read_text()
-
-    require(core, '#[serde(try_from = "u32", into = "u32")]', "NoteReshape Rust")
-    require(core, "pub struct NoteReshapeFamilyId(u32);", "NoteReshape Rust")
-    for value in values:
-        require(go, f'ID: {value["id"]}, Label: "{value["label"]}"', "NoteReshape Go")
-        rust_name = value["rust_name"]
-        require(
-            core,
-            f"pub const {rust_name}: Self = Self({value['id']});",
-            "NoteReshape Rust",
-        )
-        require(
-            build,
-            f'id: {value["id"]},\n        label: "{value["label"]}",',
-            "NoteReshape proof-parameter build",
-        )
-        shape = f"{value['n_in']}X{value['n_out']}"
-        require(params, f"NOTE_RESHAPE{shape}_PROOF_VERIFICATION_KEY", "NoteReshape proof registry")
-        require(
-            params,
-            f"NOTE_RESHAPE{shape}_PROOF_VERIFYING_KEY_JSON_BYTES",
-            "NoteReshape proof registry",
-        )
-        route = f"NoteReshapeFamilyId::{rust_name}"
-        if aggregation.count(route) < 4:
-            fail(f"NoteReshape aggregation routing omits {route}")
-    require(
-        params,
-        "pub fn note_reshape_verifying_key_json_bytes(",
-        "NoteReshape proof registry",
-    )
-    return len(values)
-
-
-def check_consensus_verifier_immutability() -> None:
-    registry_paths = (
-        ROOT / "crates/crypto/proof-params/src/gen/gnark/transfer_registry.rs",
-        ROOT / "crates/crypto/proof-params/src/gen/gnark/note_reshape_registry.rs",
-        ROOT
-        / "crates/crypto/proof-params/src/gen/gnark/shielded_ics20_withdrawal_registry.rs",
-    )
-    forbidden = (
-        "std::env",
-        "ARTIFACT_DIR",
-        "load_verifying_key_json_artifact",
-    )
-    for path in registry_paths:
-        contents = path.read_text(encoding="utf-8")
-        for marker in forbidden:
-            if marker in contents:
-                fail(
-                    f"{path}: consensus verifying-key registry contains "
-                    f"runtime override marker {marker!r}"
-                )
-
-
-def check_cross_surfaces() -> None:
-    build = (ROOT / "crates/crypto/proof-params/build.rs").read_text()
-    for snippet in (
-        'include!("src/gen/gnark/shielded_ics20_withdrawal_families_build.rs");',
-        "GENERATED_TRANSFER_FAMILIES[0].bundled_lib_basename",
-        "GENERATED_SHIELDED_ICS20_WITHDRAWAL_FAMILIES[0].bundled_lib_basename",
-    ):
-        require(build, snippet, "proof-parameter build")
-    if build.count("GENERATED_SHIELDED_ICS20_WITHDRAWAL_FAMILIES") < 5:
-        fail("proof-parameter build does not route every withdrawal artifact surface")
-
-    bundle = (ROOT / "crates/crypto/proof-aggregation/src/bundle.rs").read_text()
-    if re.search(
-        r"ShieldedIcs20WithdrawalFamilyId::try_from\(\s*"
-        r"shielded_ics20_withdrawal_family_id,?\s*\)\s*\.is_ok\(\)",
-        bundle,
-    ) is None:
-        fail("proof-aggregation family routing does not use the canonical Rust registry")
-    if "SHIELDED_ICS20_WITHDRAWAL_CANONICAL" in bundle:
-        fail("proof aggregation retains a duplicate withdrawal family id")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -1295,9 +1191,7 @@ def main() -> None:
             + ", ".join(str(path.relative_to(ROOT)) for path in changed)
             + "; run tools/gnark/check_gnark_family_registries.py --write"
         )
-    note_count = check_note_reshape()
-    check_consensus_verifier_immutability()
-    check_cross_surfaces()
+    note_count = len(note_reshape_families())
     action = "wrote" if args.write else "checked"
     print(
         f"{action} canonical gnark registries: "

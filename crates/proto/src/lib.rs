@@ -1,19 +1,5 @@
-//! Protobuf definitions for Shieldd.
-//!
-//! This crate only contains the `.proto` files and the Rust types generated
-//! from them.  These types only handle parsing the wire format; validation
-//! should be performed by converting them into an appropriate domain type, as
-//! in the following diagram:
-//!
-//! ```ascii
-//! ┌───────┐          ┌──────────────┐               ┌──────────────┐
-//! │encoded│ protobuf │shieldd_sdk_proto│ TryFrom/Into  │ domain types │
-//! │ bytes │<──wire ─>│    types     │<─validation ─>│(other crates)│
-//! └───────┘  format  └──────────────┘   boundary    └──────────────┘
-//! ```
-//!
-//! The [`DomainType`] marker trait can be implemented on a domain type to ensure
-//! these conversions exist.
+//! Protobuf wire types for Shieldd.
+//! Convert into domain types through [`DomainType`] to validate decoded data.
 
 // The autogen code is not clippy-clean, so we disable some clippy warnings for this crate.
 #![allow(clippy::derive_partial_eq_without_eq)]

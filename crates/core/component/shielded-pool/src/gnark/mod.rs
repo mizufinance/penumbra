@@ -1,9 +1,13 @@
+#[cfg(any(unix, windows))]
 mod artifacts;
 mod binary;
 mod note_reshape;
 mod note_reshape_witness;
 mod note_reshape_witness_binary;
-pub mod runtime;
+#[cfg(any(unix, windows))]
+pub(crate) mod prover_worker;
+#[cfg(any(unix, windows))]
+mod runtime;
 mod shielded_ics20_withdrawal;
 mod shielded_ics20_withdrawal_witness;
 mod shielded_ics20_withdrawal_witness_binary;
@@ -11,134 +15,27 @@ mod transfer;
 mod transfer_proof_result;
 mod transfer_witness;
 mod transfer_witness_binary;
+#[cfg(any(unix, windows))]
 mod transport;
 mod typed;
 
-pub use artifacts::GnarkArtifactMetadata;
 pub use note_reshape::{
     decode_note_reshape_witness_v6, encode_note_reshape_witness_v6,
-    translate_note_reshape_proof_result, GnarkNoteReshapeClient,
+    translate_note_reshape_proof_result,
 };
 pub use note_reshape_witness::NoteReshapeWitnessV6;
 pub use shielded_ics20_withdrawal::{
     decode_shielded_ics20_withdrawal_witness_v12, encode_shielded_ics20_withdrawal_witness_v12,
-    translate_shielded_ics20_withdrawal_proof_result, GnarkShieldedIcs20WithdrawalClient,
+    translate_shielded_ics20_withdrawal_proof_result,
 };
 pub use shielded_ics20_withdrawal_witness::ShieldedIcs20WithdrawalWitnessV12;
 pub use transfer::{
     decode_transfer_witness_v20, encode_transfer_witness_v20, translate_transfer_proof_result,
-    GnarkTransferClient,
 };
 pub use transfer_witness::TransferWitnessV20;
 #[cfg(test)]
 pub(crate) use typed::point_affine_compress_to_field_bytes;
 pub use typed::{ComplianceLeafBinary, IndexedLeafBinary, MerklePathBinary, PointAffineBytes};
-
-#[cfg(all(test, any(unix, windows)))]
-mod repo_local_demo_library_tests {
-    use std::path::PathBuf;
-
-    use libloading::Library;
-
-    fn repo_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../../")
-            .canonicalize()
-            .expect("repo root should resolve")
-    }
-
-    fn shared_lib_ext() -> &'static str {
-        if cfg!(target_os = "macos") {
-            "dylib"
-        } else if cfg!(target_os = "linux") {
-            "so"
-        } else {
-            "dll"
-        }
-    }
-
-    #[test]
-    fn repo_local_demo_gnark_libraries_are_loadable() {
-        let gnark_dir = repo_root().join("tools/gnark");
-        let cases = [
-            (
-                "transfer",
-                "artifacts/transfer",
-                "transfer",
-                b"shieldd_gnark_transfer_init" as &[u8],
-            ),
-            (
-                "note_reshape1x8",
-                "artifacts/note_reshape1x8",
-                "note_reshape",
-                b"shieldd_gnark_note_reshape_init" as &[u8],
-            ),
-            (
-                "note_reshape8x1",
-                "artifacts/note_reshape8x1",
-                "note_reshape",
-                b"shieldd_gnark_note_reshape_init" as &[u8],
-            ),
-            (
-                "shielded_ics20_withdrawal",
-                "artifacts/shielded_ics20_withdrawal",
-                "shielded_ics20_withdrawal",
-                b"shieldd_gnark_shielded_ics20_withdrawal_init" as &[u8],
-            ),
-        ];
-
-        let available_cases = cases
-            .into_iter()
-            .map(|(family, artifact_dir, library_name, init_symbol)| {
-                (
-                    family,
-                    artifact_dir,
-                    library_name,
-                    init_symbol,
-                    gnark_dir.join(format!(
-                        "libshieldd_gnark_{library_name}.{}",
-                        shared_lib_ext()
-                    )),
-                )
-            })
-            .filter(|(_, _, _, _, lib_path)| lib_path.exists())
-            .collect::<Vec<_>>();
-
-        if available_cases.is_empty() {
-            eprintln!(
-                "skipping repo-local demo gnark library smoke test; no local shared libraries found in {}",
-                gnark_dir.display()
-            );
-            return;
-        }
-
-        for (family, artifact_dir, _, init_symbol, lib_path) in available_cases {
-            let metadata_path = gnark_dir.join(artifact_dir).join("circuit_metadata.json");
-            assert!(
-                metadata_path.exists(),
-                "expected repo-local demo gnark metadata for {family} at {}",
-                metadata_path.display()
-            );
-
-            let library = unsafe { Library::new(&lib_path) }.unwrap_or_else(|error| {
-                panic!(
-                    "repo-local demo gnark library for {family} failed to load from {}: {error}",
-                    lib_path.display()
-                )
-            });
-
-            unsafe {
-                let _: libloading::Symbol<'_, unsafe extern "C" fn()> =
-                    library.get(init_symbol).unwrap_or_else(|error| {
-                        panic!(
-                            "repo-local demo gnark library for {family} is missing init symbol {:?}: {error}",
-                            std::str::from_utf8(init_symbol).expect("symbol should be utf8")
-                        )
-                    });
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod soundness_fixture_tests {
@@ -308,3 +205,35 @@ mod soundness_fixture_tests {
         write_shielded_ics20_withdrawal_fixture();
     }
 }
+
+#[cfg(all(any(unix, windows), any(test, feature = "benchmark-helpers")))]
+#[derive(Clone, Copy)]
+pub enum ProofTestFamily {
+    Transfer,
+    NoteReshape(crate::NoteReshapeFamilyId),
+    Withdrawal,
+}
+
+#[cfg(all(any(unix, windows), any(test, feature = "benchmark-helpers")))]
+pub fn require_proof_test_runtime(family: ProofTestFamily) -> anyhow::Result<()> {
+    match family {
+        ProofTestFamily::Transfer => transfer::TRANSFER_FAMILY_CONFIG
+            .require_test_prerequisites(shieldd_sdk_proof_params::transfer_proving_key_bytes()),
+        ProofTestFamily::NoteReshape(family) => note_reshape::note_reshape_family_config(family)
+            .require_test_prerequisites(family.proving_key_bytes()),
+        ProofTestFamily::Withdrawal => {
+            let family = crate::ShieldedIcs20WithdrawalFamilyId::Canonical;
+            shielded_ics20_withdrawal::shielded_ics20_withdrawal_family_config(family)
+                .require_test_prerequisites(family.proving_key_bytes())
+        }
+    }
+}
+
+#[cfg(any(unix, windows))]
+pub(crate) use transfer::GnarkTransferClient;
+
+#[cfg(any(unix, windows))]
+pub(crate) use note_reshape::GnarkNoteReshapeClient;
+
+#[cfg(any(unix, windows))]
+pub(crate) use shielded_ics20_withdrawal::GnarkShieldedIcs20WithdrawalClient;

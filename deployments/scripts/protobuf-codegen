@@ -1,38 +1,3 @@
 #!/usr/bin/env bash
-# Generate code for Rust & Go from proto definitions.
-
 set -euo pipefail
-
-repo_root="$(git rev-parse --show-toplevel)"
-
-# Purge the output dirs, to ensure that the codegen is complete:
-# Reset generated outputs before code generation.
-echo "Cleaning output dirs..."
-for d in proto/rust-vendored crates/proto/src/gen ; do
-    rm -r "${repo_root}/${d}/"
-    mkdir -p "${repo_root}/${d}/"
-done
-
-echo "Pulling proto dependencies from BSR..."
-pushd "${repo_root}/proto/"
-# Make sure the lockfile is up to date.
-buf dep update shieldd
-
-# Pull our vendored cosmos/IBC proto defs so we can get reflection for service definitions.
-# The shieldd dependencies will override some of these.
-buf export buf.build/noble-assets/forwarding:5a8609a6772d417584a9c60cd8b80881 --output rust-vendored/
-buf export buf.build/cosmos/cosmos-sdk:e7a85cef453e4b999ad9aff8714ae05f --output rust-vendored/
-buf export buf.build/cosmos/ibc:7ab44ae956a0488ea04e04511efa5f70 --output rust-vendored/
-
-buf export shieldd --output rust-vendored/
-
-# Remove the re-exported Shieldd proto defs, since we version control
-# those directly in this repo, and don't need to duplicate them as output.
-rm -rf rust-vendored/shieldd/
-
-echo "Generating rust code..."
-pushd "${repo_root}/tools/proto-compiler"
-cargo run
-popd
-
-echo "Finished! Consider running a 'cargo check --release' to confirm builds still work."
+exec python3 "$(git rev-parse --show-toplevel)/scripts/protobuf_codegen.py" "$@"

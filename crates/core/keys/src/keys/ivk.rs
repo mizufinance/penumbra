@@ -1,34 +1,9 @@
-use ark_ff::{BigInteger, PrimeField, Zero};
 use rand_core::{CryptoRng, RngCore};
 
-use ark_r1cs_std::prelude::*;
-use ark_relations::r1cs::SynthesisError;
-use decaf377::{
-    r1cs::{ElementVar, FqVar},
-    Fq, Fr,
-};
-
 use super::{AddressIndex, Diversifier, DiversifierKey};
-use crate::{
-    ka,
-    keys::{AuthorizationKeyVar, NullifierKeyVar, IVK_DOMAIN_SEP},
-    Address,
-};
+use crate::{ka, Address};
 
 pub const IVK_LEN_BYTES: usize = 64;
-const MOD_R_QUOTIENT: usize = 4;
-
-fn enforce_incoming_viewing_key_nonzero(
-    cs: ark_relations::r1cs::ConstraintSystemRef<Fq>,
-    ivk: &FqVar,
-) -> Result<(), SynthesisError> {
-    let inverse = FqVar::new_witness(cs.clone(), || {
-        Ok(ivk.value()?.inverse().unwrap_or_default())
-    })?;
-    let one = FqVar::new_constant(cs, Fq::from(1u64))?;
-    (ivk * inverse).enforce_equal(&one)
-}
-
 /// Allows viewing incoming notes, i.e., notes sent to the spending key this
 /// key is derived from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,143 +87,16 @@ impl IncomingViewingKey {
     }
 }
 
-pub struct IncomingViewingKeyVar {
-    inner: FqVar,
-}
-
-impl IncomingViewingKeyVar {
-    fn is_less_than_constant(value: &FqVar, constant: Fq) -> Result<Boolean<Fq>, SynthesisError> {
-        let value_bits = value.to_bits_le()?;
-        let mut constant_bits = constant.into_bigint().to_bits_le();
-        constant_bits.resize(value_bits.len(), false);
-
-        let mut prefix_equal = Boolean::TRUE;
-        let mut is_less = Boolean::FALSE;
-
-        for (value_bit, constant_bit) in value_bits.iter().rev().zip(constant_bits.iter().rev()) {
-            if *constant_bit {
-                let this_bit_proves_less =
-                    Boolean::kary_and(&[prefix_equal.clone(), !value_bit.clone()])?;
-                is_less = Boolean::kary_or(&[is_less, this_bit_proves_less])?;
-                prefix_equal = Boolean::kary_and(&[prefix_equal, value_bit.clone()])?;
-            } else {
-                prefix_equal = Boolean::kary_and(&[prefix_equal, !value_bit.clone()])?;
-            }
-        }
-
-        Ok(is_less)
-    }
-
-    /// Derive the incoming viewing key from the nk and the ak.
-    pub fn derive(nk: &NullifierKeyVar, ak: &AuthorizationKeyVar) -> Result<Self, SynthesisError> {
-        let cs = nk.inner.cs();
-        let ivk_domain_sep = FqVar::new_constant(cs.clone(), *IVK_DOMAIN_SEP)?;
-        let ivk_mod_q = poseidon377::r1cs::hash_2(
-            cs.clone(),
-            &ivk_domain_sep,
-            (nk.inner.clone(), ak.inner.compress_to_field()?),
-        )?;
-
-        // OOC: Reduce `ivk_mod_q` modulo r
-        let r_modulus: Fq = Fq::from(Fr::MODULUS);
-        let ivk_mod_q_ooc: Fq = ivk_mod_q.value().unwrap_or_default();
-        let ivk_mod_r_ooc = Fr::from_le_bytes_mod_order(&ivk_mod_q_ooc.to_bytes());
-
-        // We also need ivk reduced mod r as an Fq for inserting back into the circuit
-        let ivk_mod_r_ooc_q = Fq::from_le_bytes_mod_order(&ivk_mod_r_ooc.to_bytes());
-        let ivk_mod_r = FqVar::new_witness(cs.clone(), || Ok(ivk_mod_r_ooc_q))?;
-
-        // Finally, we figure out how many times we needed to subtract r from ivk_mod_q_ooc to get ivk_mod_r_ooc.
-        let mut temp_ivk_mod_q = ivk_mod_q_ooc;
-        let mut a = 0;
-        while temp_ivk_mod_q > r_modulus {
-            temp_ivk_mod_q -= r_modulus;
-            a += 1;
-        }
-
-        // Now we add constraints to demonstrate that `ivk_mod_r` is the correct
-        // reduction from `ivk_mod_q`.
-        //
-        // Constrain: ivk_mod_q = mod_r * a + ivk_mod_r
-        let mod_r_var = FqVar::new_constant(cs.clone(), r_modulus)?;
-        let a_var = FqVar::new_witness(cs.clone(), || Ok(Fq::from(a as u64)))?;
-        let rhs = &mod_r_var * &a_var + &ivk_mod_r;
-        ivk_mod_q.enforce_equal(&rhs)?;
-
-        // Constrain: a <= 4
-        //
-        // We could use `enforce_cmp` to add an a <= 4 constraint, but it's cheaper
-        // to add constraints to demonstrate a(a-1)(a-2)(a-3)(a-4) = 0.
-        let mut mul = a_var.clone();
-        for i in 1..=MOD_R_QUOTIENT {
-            mul *= a_var.clone() - FqVar::new_constant(cs.clone(), Fq::from(i as u64))?;
-        }
-        let zero = FqVar::new_constant(cs.clone(), Fq::zero())?;
-        mul.enforce_equal(&zero)?;
-
-        // Constrain: ivk_mod_r < r
-        Self::is_less_than_constant(&ivk_mod_r, r_modulus)?.enforce_equal(&Boolean::TRUE)?;
-        enforce_incoming_viewing_key_nonzero(cs.clone(), &ivk_mod_r)?;
-
-        // Constraint: a = 4 => ivk_mod_r < q - 4 * mod_r
-        let is_less_than_q_minus_4_mod_r = Self::is_less_than_constant(
-            &ivk_mod_r,
-            -Fq::from(MOD_R_QUOTIENT as u64) * Fq::from(r_modulus),
-        )?;
-        let overflows = Boolean::kary_and(&[
-            a_var.is_eq(&FqVar::new_constant(
-                cs.clone(),
-                &Fq::from(MOD_R_QUOTIENT as u64),
-            )?)?,
-            !is_less_than_q_minus_4_mod_r.clone(),
-        ])?;
-        overflows.enforce_equal(&Boolean::FALSE)?;
-
-        Ok(IncomingViewingKeyVar { inner: ivk_mod_r })
-    }
-
-    /// Derive a transmission key from the given diversified base.
-    pub fn diversified_public(
-        &self,
-        diversified_generator: &ElementVar,
-    ) -> Result<ElementVar, SynthesisError> {
-        let ivk_vars = self.inner.to_bits_le()?;
-        diversified_generator.scalar_mul_le(ivk_vars.to_bits_le()?.iter())
-    }
-}
-
 #[cfg(test)]
 mod test {
     use crate::{
         keys::{Bip44Path, SeedPhrase, SpendKey},
         test_keys,
     };
-    use ark_relations::r1cs::ConstraintSystem;
     use proptest::prelude::*;
     use std::str::FromStr;
 
     use super::*;
-
-    #[test]
-    fn incoming_viewing_key_var_enforces_nonzero_reduction() {
-        let nonzero_cs = ConstraintSystem::<Fq>::new_ref();
-        let nonzero = FqVar::new_witness(nonzero_cs.clone(), || Ok(Fq::from(1u64)))
-            .expect("a nonzero incoming-viewing-key witness must allocate");
-        enforce_incoming_viewing_key_nonzero(nonzero_cs.clone(), &nonzero)
-            .expect("the nonzero predicate must synthesize for a nonzero witness");
-        assert!(nonzero_cs
-            .is_satisfied()
-            .expect("nonzero incoming-viewing-key satisfaction is defined"));
-
-        let zero_cs = ConstraintSystem::<Fq>::new_ref();
-        let zero = FqVar::new_witness(zero_cs.clone(), || Ok(Fq::zero()))
-            .expect("a zero incoming-viewing-key witness must allocate");
-        enforce_incoming_viewing_key_nonzero(zero_cs.clone(), &zero)
-            .expect("the nonzero predicate must synthesize for a zero witness");
-        assert!(!zero_cs
-            .is_satisfied()
-            .expect("zero incoming-viewing-key satisfaction is defined"));
-    }
 
     #[test]
     fn transparent_address_generation_and_parsing() {
@@ -329,35 +177,5 @@ mod test {
                 .payment_address(AddressIndex::from(0u32));
 
         assert!(!ivk.views_address(&other_address));
-    }
-
-    #[test]
-    fn enforce_field_assumptions() {
-        use num_bigint::BigUint;
-        use num_traits::ops::checked::CheckedSub;
-
-        let fq_modulus: BigUint = Fq::MODULUS.into();
-        let max_q: BigUint = &fq_modulus - 1u32;
-        let fr_modulus: BigUint = Fr::MODULUS.into();
-        assert!(
-            fr_modulus < fq_modulus,
-            "we assume that our scalar field is smaller than our base field"
-        );
-
-        let mut multiple = 0;
-        let mut res = max_q;
-        loop {
-            res = if let Some(x) = res.checked_sub(&fr_modulus) {
-                multiple += 1;
-                x
-            } else {
-                break;
-            };
-        }
-
-        assert_eq!(
-            MOD_R_QUOTIENT, multiple,
-            "`a = fr_modulus * 4 + r mod q` only works on specific curve parameters"
-        );
     }
 }

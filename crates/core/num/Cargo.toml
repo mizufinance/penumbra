@@ -9,38 +9,15 @@ edition = {workspace = true}
 
 [features]
 default = []
-parallel = ["ark-ff/parallel", "decaf377-rdsa/parallel", "ark-groth16/parallel", "ark-std/parallel", "ark-r1cs-std/parallel", "decaf377/parallel"]
+parallel = ["ark-ff/parallel", "decaf377/parallel"]
 
 [dependencies]
-anyhow = {workspace = true}
-ark-ff = {workspace = true, default-features = false}
-ark-groth16 = {workspace = true, default-features = false}
-ark-r1cs-std = {workspace = true, default-features = false}
-ark-relations = {workspace = true}
-ark-serialize = {workspace = true}
-ark-snark = {workspace = true}
-ark-std = {workspace = true, default-features = false}
-base64 = {workspace = true}
-bech32 = {workspace = true}
-blake2b_simd = {workspace = true}
-bytes = {workspace = true}
-decaf377 = {workspace = true, features = ["r1cs"], default-features = true}
-decaf377-rdsa = {workspace = true}
-derivative = {workspace = true}
-ethnum = {workspace = true}
-hex = {workspace = true}
-ibig = {workspace = true}
-num-bigint = {workspace = true}
-once_cell = {workspace = true}
-shieldd-sdk-proto = {workspace = true, default-features = true}
-rand = {workspace = true}
-rand_core = {workspace = true, features = ["getrandom"]}
-regex = {workspace = true}
-serde = {workspace = true, features = ["derive"]}
-sha2 = {workspace = true}
-thiserror = {workspace = true}
-tracing = {workspace = true}
+anyhow = { workspace = true }
+ark-ff = { workspace = true, default-features = false }
+decaf377 = { workspace = true }
+shieldd-sdk-proto = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
-proptest = {workspace = true}
-serde_json = {workspace = true}
+rand = { workspace = true }
+rand_core = { workspace = true, features = ["getrandom"] }

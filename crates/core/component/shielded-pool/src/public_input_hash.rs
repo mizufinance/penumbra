@@ -1,10 +1,9 @@
 use ark_ff::ToConstraintField;
-use ark_relations::r1cs::{ConstraintSystemRef, SynthesisError};
-use decaf377::{r1cs::FqVar, Fq};
+use decaf377::Fq;
 use shieldd_sdk_compliance::{
     TRANSFER_CORE_CIPHERTEXT_FQS, TRANSFER_DETECTION_FQS, TRANSFER_EXT_CIPHERTEXT_FQS,
 };
-use shieldd_sdk_proof_params::statement_hash::{hash_statement_fields, hash_statement_fields_var};
+use shieldd_sdk_proof_params::statement_hash::hash_statement_fields;
 
 use crate::{
     note_reshape::NoteReshapeProofPublic,
@@ -183,12 +182,7 @@ where
                 .ok_or_else(|| field_encoding_error(&format!("note_commitment_{index}")))?,
         );
     }
-    fields.extend(
-        balance_commitment
-            .0
-            .to_field_elements()
-            .ok_or_else(|| field_encoding_error("balance_commitment"))?,
-    );
+    fields.push(balance_commitment.0.vartime_compress_to_field());
     fields.push(Fq::from(recent_position_floor));
     for (index, input) in inputs.iter().enumerate() {
         fields.extend(
@@ -198,11 +192,7 @@ where
                 .to_field_elements()
                 .ok_or_else(|| field_encoding_error(&format!("nullifier_{index}")))?,
         );
-        fields.extend(
-            note_reshape_rk_element(input.rk())?
-                .to_field_elements()
-                .ok_or_else(|| field_encoding_error(&format!("rk_{index}")))?,
-        );
+        fields.push(note_reshape_rk_element(input.rk())?.vartime_compress_to_field());
         fields.push(Fq::from(input.history_required()));
     }
 
@@ -318,13 +308,7 @@ pub fn transfer_statement_fields(
                 })?,
         );
     }
-    fields.extend(
-        public
-            .balance_commitment
-            .0
-            .to_field_elements()
-            .ok_or_else(|| transfer_field_encoding_error("balance_commitment"))?,
-    );
+    fields.push(public.balance_commitment.0.vartime_compress_to_field());
     fields.extend(public.routing.tags.map(|tag| Fq::from(tag.value)));
     fields.push(public.routing_parameter_set_id);
     fields.push(Fq::from(public.recent_position_floor));
@@ -336,11 +320,7 @@ pub fn transfer_statement_fields(
                 .to_field_elements()
                 .ok_or_else(|| transfer_field_encoding_error(&format!("nullifier_{index}")))?,
         );
-        fields.extend(
-            transfer_rk_element(spend)?
-                .to_field_elements()
-                .ok_or_else(|| transfer_field_encoding_error(&format!("rk_{index}")))?,
-        );
+        fields.push(transfer_rk_element(spend)?.vartime_compress_to_field());
         fields.push(Fq::from(spend.history_required));
     }
     fields.extend(
@@ -364,11 +344,7 @@ pub fn transfer_statement_fields(
         ("output_core", &compliance.output_core),
         ("output_ext", &compliance.output_ext),
     ] {
-        fields.extend(
-            tier.epk
-                .to_field_elements()
-                .ok_or_else(|| transfer_field_encoding_error(&format!("{label}_epk")))?,
-        );
+        fields.push(tier.epk.vartime_compress_to_field());
         fields.extend(
             tier.c2
                 .to_field_elements()
@@ -547,46 +523,31 @@ pub fn shielded_ics20_withdrawal_statement_hash_from_public(
     shielded_ics20_withdrawal_statement_hash(&fields)
 }
 
-pub fn note_reshape_statement_hash_var(
-    cs: ConstraintSystemRef<Fq>,
-    family_id: NoteReshapeFamilyId,
-    fields: &[FqVar],
-) -> Result<FqVar, SynthesisError> {
-    hash_statement_fields_var(
-        cs,
-        &note_reshape_statement_hash_constant(family_id, "v4"),
-        note_reshape_statement_hash_constant(family_id, "pad0"),
-        note_reshape_statement_hash_constant(family_id, "pad1"),
-        fields,
-        note_reshape_statement_field_count(family_id.input_count(), family_id.output_count()),
-    )
-}
-
-pub fn transfer_statement_hash_var(
-    cs: ConstraintSystemRef<Fq>,
-    fields: &[FqVar],
-) -> Result<FqVar, SynthesisError> {
-    let domain = transfer_statement_hash_constant("v7");
-    let pad_0 = transfer_statement_hash_constant("pad0");
-    let pad_1 = transfer_statement_hash_constant("pad1");
-    hash_statement_fields_var(
-        cs,
-        &domain,
-        pad_0,
-        pad_1,
-        fields,
-        TRANSFER_STATEMENT_FIELD_COUNT,
-    )
-}
+#[cfg(test)]
+mod test_support;
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::*;
+
+    #[test]
+    fn canonical_element_projection_matches_reference() {
+        for i in 0..64 {
+            let element = decaf377::Element::GENERATOR * decaf377::Fr::from(i as u64);
+            assert_eq!(
+                element.to_field_elements().unwrap(),
+                vec![element.vartime_compress_to_field()]
+            );
+        }
+    }
+
     use super::*;
     use crate::{
         test_proof_helpers::proof_test_helpers, transfer_input_count, transfer_output_count,
     };
     use ark_r1cs_std::{alloc::AllocVar, eq::EqGadget};
     use ark_relations::r1cs::ConstraintSystem;
+    use decaf377::r1cs::FqVar;
     use decaf377::Fq;
 
     fn go_fixture_statement_hash(path: &str) -> (NoteReshapeFamilyId, Fq) {

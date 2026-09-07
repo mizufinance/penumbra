@@ -11,7 +11,7 @@ mod value;
 pub use balance::Balance;
 pub use equivalent_value::EquivalentValue;
 pub use estimated_price::EstimatedPrice;
-pub use value::{Value, ValueVar, ValueView};
+pub use value::{Value, ValueView};
 
 pub static BASE_ASSET_DENOM: Lazy<asset::Metadata> = Lazy::new(|| {
     asset::Cache::with_known_assets()

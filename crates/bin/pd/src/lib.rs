@@ -8,7 +8,7 @@
 pub mod metrics;
 
 pub mod cli;
-pub mod migrate;
+pub mod export;
 pub mod network;
 pub mod nullifier_generation_packs;
 pub mod zipserve;

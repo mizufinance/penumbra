@@ -102,7 +102,7 @@ impl<'de> serde::Deserialize<'de> for AssetId {
                             if inner__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("inner"));
                             }
-                            inner__ = 
+                            inner__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -682,7 +682,7 @@ impl<'de> serde::Deserialize<'de> for BalanceCommitment {
                             if inner__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("inner"));
                             }
-                            inner__ = 
+                            inner__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -900,7 +900,7 @@ impl<'de> serde::Deserialize<'de> for DenomUnit {
                             if exponent__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("exponent"));
                             }
-                            exponent__ = 
+                            exponent__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1041,7 +1041,7 @@ impl<'de> serde::Deserialize<'de> for EquivalentValue {
                             if as_of_height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("asOfHeight"));
                             }
-                            as_of_height__ = 
+                            as_of_height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1187,7 +1187,7 @@ impl<'de> serde::Deserialize<'de> for EstimatedPrice {
                             if numeraire_per_unit__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("numerairePerUnit"));
                             }
-                            numeraire_per_unit__ = 
+                            numeraire_per_unit__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1195,7 +1195,7 @@ impl<'de> serde::Deserialize<'de> for EstimatedPrice {
                             if as_of_height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("asOfHeight"));
                             }
-                            as_of_height__ = 
+                            as_of_height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1449,7 +1449,7 @@ impl<'de> serde::Deserialize<'de> for Metadata {
                             if priority_score__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("priorityScore"));
                             }
-                            priority_score__ = 
+                            priority_score__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }

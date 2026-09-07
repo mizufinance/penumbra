@@ -19,11 +19,16 @@ mod groth16_proof;
 pub mod params;
 pub mod state_key;
 
+mod action_context;
 pub mod note;
 mod note_payload;
 mod note_reshape_padding;
 pub mod rseed;
 mod shielded_note_plan;
+pub use action_context::{
+    ActionWitness, AssetWitness, NoteReshapeContext, TransferContext, UserWitness,
+    WithdrawalContext,
+};
 
 pub use note::{Note, NoteCiphertext, NoteView};
 pub use note_payload::NotePayload;
@@ -77,3 +82,6 @@ pub use transfer::{
 pub mod benchmark_helpers;
 #[cfg(any(test, feature = "benchmark-helpers"))]
 pub mod test_proof_helpers;
+
+#[cfg(any(test, feature = "benchmark-helpers"))]
+pub mod test_plan_helpers;

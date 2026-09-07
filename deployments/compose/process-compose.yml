@@ -19,7 +19,7 @@ log_location: deployments/logs/dev-env-combined.log
 processes:
   # Run pd validator based on generated network.
   pd:
-    command: cargo run --release --bin pd ${SHIELDD_PD_CARGO_ARGS} -- start --home ${SHIELDD_DEVNET_HOME}/network_data/node0/pd --grpc-bind 0.0.0.0:${SHIELDD_PD_GRPC_PORT} --cometbft-addr ${SHIELDD_NODE_CMT_URL}
+    command: ${SHIELDD_PD_BIN} start --home ${SHIELDD_DEVNET_HOME}/network_data/node0/pd --grpc-bind 0.0.0.0:${SHIELDD_PD_GRPC_PORT} --cometbft-addr ${SHIELDD_NODE_CMT_URL}
     readiness_probe:
       http_get:
         host: 127.0.0.1

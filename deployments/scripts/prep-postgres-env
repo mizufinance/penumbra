@@ -4,12 +4,16 @@
 set -euo pipefail
 
 shieldd_devnet_home="${SHIELDD_DEVNET_HOME:-$HOME/.shieldd}"
+postgresql_db_url="postgresql://shieldd:shieldd@127.0.0.1:${SHIELDD_POSTGRES_PORT:-5432}/shieldd_cometbft?sslmode=disable"
+cometbft_config="$shieldd_devnet_home/network_data/node0/cometbft/config/config.toml"
+sed -e '/^psql-conn/d' \
+    -e "s#^indexer.*#indexer = \"psql\"\\npsql-conn = \"$postgresql_db_url\"#" \
+    "$cometbft_config" > "$cometbft_config.tmp"
+mv "$cometbft_config.tmp" "$cometbft_config"
 
 # Set up a write-friendly directory for postgres state.
 # The nix store is read-only by default, so add write capability to copy.
 postgres_config_dir="${shieldd_devnet_home}/network_data/postgresql"
-# While debugging it may be useful to nuke the dir between runs.
-# rm -rf "$postgres_config_dir"
 mkdir -p "${postgres_config_dir}"
 
 # If PG_VERSION exists, then the initdb cmd has already been run.

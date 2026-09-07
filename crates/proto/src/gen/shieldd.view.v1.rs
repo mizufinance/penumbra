@@ -516,12 +516,9 @@ impl ::prost::Name for StatusRequest {
 /// Returns the status of the view service and whether it is synchronized with the chain state.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct StatusResponse {
-    /// The height the view service has synchronized to so far when doing a full linear sync
+    /// The height the view service has synchronized to so far
     #[prost(uint64, tag = "1")]
-    pub full_sync_height: u64,
-    /// The height the view service has synchronized to so far when doing a partial sync
-    #[prost(uint64, tag = "2")]
-    pub partial_sync_height: u64,
+    pub sync_height: u64,
     /// Whether the view service is catching up with the chain state
     #[prost(bool, tag = "3")]
     pub catching_up: bool,
@@ -555,12 +552,9 @@ pub struct StatusStreamResponse {
     /// The latest known block height
     #[prost(uint64, tag = "1")]
     pub latest_known_block_height: u64,
-    /// The height the view service has synchronized to so far when doing a full linear sync
+    /// The height the view service has synchronized to so far
     #[prost(uint64, tag = "2")]
-    pub full_sync_height: u64,
-    /// The height the view service has synchronized to so far when doing a partial sync
-    #[prost(uint64, tag = "3")]
-    pub partial_sync_height: u64,
+    pub sync_height: u64,
 }
 impl ::prost::Name for StatusStreamResponse {
     const NAME: &'static str = "StatusStreamResponse";

@@ -80,7 +80,7 @@ impl<'de> serde::Deserialize<'de> for GetBlockByHeightRequest {
                             if height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("height"));
                             }
-                            height__ = 
+                            height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -223,7 +223,7 @@ impl<'de> serde::Deserialize<'de> for GetBlockByHeightResponse {
                             if height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("height"));
                             }
-                            height__ = 
+                            height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -237,7 +237,7 @@ impl<'de> serde::Deserialize<'de> for GetBlockByHeightResponse {
                             if app_hash__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("appHash"));
                             }
-                            app_hash__ = 
+                            app_hash__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -251,7 +251,7 @@ impl<'de> serde::Deserialize<'de> for GetBlockByHeightResponse {
                             if txs__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("txs"));
                             }
-                            txs__ = 
+                            txs__ =
                                 Some(map_.next_value::<Vec<::pbjson::private::BytesDeserialize<_>>>()?
                                     .into_iter().map(|x| x.0).collect())
                             ;
@@ -461,7 +461,7 @@ impl<'de> serde::Deserialize<'de> for GetStatusResponse {
                             if height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("height"));
                             }
-                            height__ = 
+                            height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -475,7 +475,7 @@ impl<'de> serde::Deserialize<'de> for GetStatusResponse {
                             if app_hash__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("appHash"));
                             }
-                            app_hash__ = 
+                            app_hash__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -583,7 +583,7 @@ impl<'de> serde::Deserialize<'de> for SubmitTxRequest {
                             if tx__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("tx"));
                             }
-                            tx__ = 
+                            tx__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -703,7 +703,7 @@ impl<'de> serde::Deserialize<'de> for SubmitTxResponse {
                             if tx_hash__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("txHash"));
                             }
-                            tx_hash__ = 
+                            tx_hash__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -711,7 +711,7 @@ impl<'de> serde::Deserialize<'de> for SubmitTxResponse {
                             if code__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("code"));
                             }
-                            code__ = 
+                            code__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }

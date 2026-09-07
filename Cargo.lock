@@ -2736,12 +2736,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ethnum"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b90ca2580b73ab6a1f724b76ca11ab632df820fd6040c336200d2c1df7b3c82c"
-
-[[package]]
 name = "event-listener"
 version = "5.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4043,18 +4037,6 @@ dependencies = [
  "displaydoc",
  "serde",
  "serde_derive",
-]
-
-[[package]]
-name = "ibig"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1fcc7f316b2c079dde77564a1360639c1a956a23fa96122732e416cb10717bb"
-dependencies = [
- "cfg-if",
- "num-traits",
- "rand 0.8.6",
- "static_assertions",
 ]
 
 [[package]]
@@ -7839,10 +7821,7 @@ version = "2.1.0"
 dependencies = [
  "anyhow",
  "ark-ff",
- "ark-r1cs-std",
- "ark-relations",
  "ark-serialize",
- "ark-std",
  "base64 0.21.7",
  "bech32",
  "blake2b_simd 1.0.2",
@@ -7850,12 +7829,9 @@ dependencies = [
  "decaf377",
  "decaf377-rdsa",
  "derivative",
- "ethnum",
  "getrandom 0.2.15",
  "hex",
- "ibig",
  "lazy_static",
- "num-bigint",
  "once_cell",
  "pbjson-types",
  "poseidon377",
@@ -8118,24 +8094,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shieldd-sdk-eddy"
-version = "2.1.0"
-dependencies = [
- "anyhow",
- "ark-ff",
- "ark-std",
- "decaf377",
- "futures",
- "merlin",
- "parking_lot",
- "proptest",
- "rand 0.8.6",
- "rand_core 0.6.4",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
 name = "shieldd-sdk-fee"
 version = "2.1.0"
 dependencies = [
@@ -8207,10 +8165,7 @@ dependencies = [
  "aes",
  "anyhow",
  "ark-ff",
- "ark-r1cs-std",
- "ark-relations",
  "ark-serialize",
- "ark-std",
  "base64 0.21.7",
  "bech32",
  "bip32",
@@ -8221,13 +8176,10 @@ dependencies = [
  "decaf377-ka",
  "decaf377-rdsa",
  "derivative",
- "ethnum",
  "f4jumble",
  "getrandom 0.2.15",
  "hex",
  "hmac 0.12.1",
- "ibig",
- "num-bigint",
  "num-traits",
  "once_cell",
  "pbkdf2 0.12.2",
@@ -8307,34 +8259,11 @@ version = "2.1.0"
 dependencies = [
  "anyhow",
  "ark-ff",
- "ark-groth16",
- "ark-r1cs-std",
- "ark-relations",
- "ark-serialize",
- "ark-snark",
- "ark-std",
- "base64 0.21.7",
- "bech32",
- "blake2b_simd 1.0.2",
- "bytes",
  "decaf377",
- "decaf377-rdsa",
- "derivative",
- "ethnum",
- "hex",
- "ibig",
- "num-bigint",
- "once_cell",
- "proptest",
  "rand 0.8.6",
  "rand_core 0.6.4",
- "regex",
  "serde",
- "serde_json",
- "sha2 0.10.8",
  "shieldd-sdk-proto",
- "thiserror 1.0.69",
- "tracing",
 ]
 
 [[package]]
@@ -8477,8 +8406,6 @@ version = "2.1.0"
 dependencies = [
  "anyhow",
  "ark-ff",
- "ark-r1cs-std",
- "ark-relations",
  "ark-serialize",
  "async-trait",
  "bincode",
@@ -8580,8 +8507,6 @@ version = "2.1.0"
 dependencies = [
  "ark-ed-on-bls12-377",
  "ark-ff",
- "ark-r1cs-std",
- "ark-relations",
  "ark-serialize",
  "async-trait",
  "blake2b_simd 1.0.2",

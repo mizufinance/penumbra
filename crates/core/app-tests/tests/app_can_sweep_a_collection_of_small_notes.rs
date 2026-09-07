@@ -42,9 +42,9 @@ async fn wait_for_view_sync(
     let status = view_client.status(StatusRequest {}).await?.into_inner();
     assert!(!status.catching_up, "view client should not be catching up");
     assert!(
-        status.full_sync_height >= min_height,
+        status.sync_height >= min_height,
         "view client should be synced to at least height {min_height}, got {}",
-        status.full_sync_height
+        status.sync_height
     );
     Ok(())
 }

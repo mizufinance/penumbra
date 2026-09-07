@@ -92,7 +92,7 @@ impl<'de> serde::Deserialize<'de> for Amount {
                             if lo__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("lo"));
                             }
-                            lo__ = 
+                            lo__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -100,7 +100,7 @@ impl<'de> serde::Deserialize<'de> for Amount {
                             if hi__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("hi"));
                             }
-                            hi__ = 
+                            hi__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }

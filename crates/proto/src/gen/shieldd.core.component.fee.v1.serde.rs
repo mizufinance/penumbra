@@ -986,7 +986,7 @@ impl<'de> serde::Deserialize<'de> for Gas {
                             if block_space__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("blockSpace"));
                             }
-                            block_space__ = 
+                            block_space__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -994,7 +994,7 @@ impl<'de> serde::Deserialize<'de> for Gas {
                             if compact_block_space__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("compactBlockSpace"));
                             }
-                            compact_block_space__ = 
+                            compact_block_space__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1002,7 +1002,7 @@ impl<'de> serde::Deserialize<'de> for Gas {
                             if verification__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("verification"));
                             }
-                            verification__ = 
+                            verification__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1010,7 +1010,7 @@ impl<'de> serde::Deserialize<'de> for Gas {
                             if execution__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("execution"));
                             }
-                            execution__ = 
+                            execution__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1169,7 +1169,7 @@ impl<'de> serde::Deserialize<'de> for GasPrices {
                             if block_space_price__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("blockSpacePrice"));
                             }
-                            block_space_price__ = 
+                            block_space_price__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1177,7 +1177,7 @@ impl<'de> serde::Deserialize<'de> for GasPrices {
                             if compact_block_space_price__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("compactBlockSpacePrice"));
                             }
-                            compact_block_space_price__ = 
+                            compact_block_space_price__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1185,7 +1185,7 @@ impl<'de> serde::Deserialize<'de> for GasPrices {
                             if verification_price__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("verificationPrice"));
                             }
-                            verification_price__ = 
+                            verification_price__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1193,7 +1193,7 @@ impl<'de> serde::Deserialize<'de> for GasPrices {
                             if execution_price__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("executionPrice"));
                             }
-                            execution_price__ = 
+                            execution_price__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }

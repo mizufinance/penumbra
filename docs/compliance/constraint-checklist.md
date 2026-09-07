@@ -139,7 +139,6 @@ nullifier, and value constraints are tracked in
 
 - Audit completion requires `evidence_valid`.
 - Flagged rows may complete through issuer-DK tier decryption.
-- `export_orbis_pending_scan` and `import_orbis_audit_entries` always fail
-  closed for Orbis v0, even when evidence is valid.
+- The scanner exposes no PRE export/import interface.
 - Unflagged ACK-tier audit therefore cannot complete until a confidentiality-
   safe PRE v1 is specified, circuit-bound, and reviewed.

@@ -18,14 +18,27 @@ use {
         },
         DomainType,
     },
-    shieldd_sdk_view::{NoteManager, SpendableNoteRecord, TransferPlanningResult, ViewClient},
+    shieldd_sdk_view::{NoteManager, NoteManagerPlanningResult, SpendableNoteRecord, ViewClient},
     tap::{Tap, TapFallible},
 };
 
 mod common;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "expensive: real release-mode Gnark proof generation"]
 async fn view_server_can_be_served_on_localhost() -> anyhow::Result<()> {
+    shieldd_sdk_shielded_pool::gnark::require_proof_test_runtime(
+        shieldd_sdk_shielded_pool::gnark::ProofTestFamily::Transfer,
+    )?;
+    run_view_server_case(true).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn local_and_rpc_planning_have_equivalent_outcomes() -> anyhow::Result<()> {
+    run_view_server_case(false).await
+}
+
+async fn run_view_server_case(build_proof: bool) -> anyhow::Result<()> {
     let guard = common::set_tracing_subscriber();
     let storage = TempStorage::new_with_shieldd_prefixes().await?;
     let proxy = shieldd_sdk_mock_tendermint_proxy::TestNodeProxy::new::<Consensus>();
@@ -95,8 +108,7 @@ async fn view_server_can_be_served_on_localhost() -> anyhow::Result<()> {
         assert_eq!(
             status,
             StatusResponse {
-                full_sync_height: 10,
-                partial_sync_height: 10,
+                sync_height: 10,
                 catching_up: false,
             }
         );
@@ -121,15 +133,100 @@ async fn view_server_can_be_served_on_localhost() -> anyhow::Result<()> {
             test_keys::ADDRESS_1.clone(),
         )
         .await?;
-    let mut plan = match planning_result {
-        TransferPlanningResult::Ready { transaction_plan } => transaction_plan,
+    let plan = match planning_result {
+        NoteManagerPlanningResult::Ready { transaction_plan } => transaction_plan,
         other => anyhow::bail!("expected ready transfer plan, got {other:?}"),
     };
 
+    use shieldd_sdk_proto::view::v1::{
+        transaction_planner_request::TransferOutput, TransactionPlannerRequest,
+    };
+    use shieldd_sdk_transaction::{ActionPlan, TransactionPlan};
+    let request = TransactionPlannerRequest {
+        source: Some(AddressIndex::default().into()),
+        outputs: vec![TransferOutput {
+            value: Some(note.value().into()),
+            address: Some(test_keys::ADDRESS_1.clone().into()),
+        }],
+        ..Default::default()
+    };
+    let local_plan: TransactionPlan = view_client
+        .transaction_planner(request.clone())
+        .await?
+        .into_inner()
+        .plan
+        .context("planner response must contain a complete plan")?
+        .try_into()?;
+    assert_eq!(
+        plan.transaction_parameters.encode_to_vec(),
+        local_plan.transaction_parameters.encode_to_vec()
+    );
+    assert_eq!(plan.nullifier_window, local_plan.nullifier_window);
+    let (ActionPlan::Transfer(remote), ActionPlan::Transfer(local)) =
+        (&plan.actions[0], &local_plan.actions[0])
+    else {
+        anyhow::bail!("expected transfer actions from both planning paths");
+    };
+    assert_eq!(
+        remote
+            .spends
+            .iter()
+            .map(|spend| spend.note.commit())
+            .collect::<Vec<_>>(),
+        local
+            .spends
+            .iter()
+            .map(|spend| spend.note.commit())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        remote
+            .outputs
+            .iter()
+            .map(|output| (output.value, output.dest_address.clone()))
+            .collect::<Vec<_>>(),
+        local
+            .outputs
+            .iter()
+            .map(|output| (output.value, output.dest_address.clone()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        remote.compliance.witness.asset.root,
+        local.compliance.witness.asset.root
+    );
+    assert_eq!(
+        remote.compliance.witness.user_root,
+        local.compliance.witness.user_root
+    );
+    let mut insufficient = request;
+    let impossible = shieldd_sdk_asset::Value {
+        amount: u64::MAX.into(),
+        asset_id: *BASE_ASSET_ID,
+    };
+    insufficient.outputs[0].value = Some(impossible.into());
+    let error = view_client
+        .transaction_planner(insufficient)
+        .await
+        .expect_err("insufficient funds must fail");
+    assert!(error.message().contains("insufficient balance"), "{error}");
+    assert!(matches!(
+        note_manager
+            .plan_transfer(
+                &mut view_client,
+                AddressIndex::default(),
+                impossible,
+                test_keys::ADDRESS_1.clone()
+            )
+            .await?,
+        NoteManagerPlanningResult::InsufficientBalance
+    ));
+    if !build_proof {
+        return Ok(());
+    }
+
     client.sync_to_latest(storage.latest_snapshot()).await?;
-    let tx = client
-        .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
-        .await?;
+    let tx = client.witness_auth_build(&plan).await?;
 
     let pre_tx_snapshot = storage.latest_snapshot();
     test_node
@@ -155,8 +252,7 @@ async fn view_server_can_be_served_on_localhost() -> anyhow::Result<()> {
         assert_eq!(
             status,
             StatusResponse {
-                full_sync_height: 11,
-                partial_sync_height: 11,
+                sync_height: 11,
                 catching_up: false,
             }
         );

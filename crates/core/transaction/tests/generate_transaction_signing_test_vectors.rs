@@ -178,7 +178,7 @@ fn shielded_ics20_withdrawal_plan_strategy(
                     use_transparent_address: false,
                     ics20_memo: String::default(),
                 };
-                ShieldedIcs20WithdrawalPlan::new(
+                shieldd_sdk_shielded_pool::test_plan_helpers::ics20_withdrawal(
                     vec![ShieldedInputPlan::new(&mut OsRng, note, position)],
                     None,
                     withdrawal,
@@ -196,7 +196,7 @@ fn transfer_plan_strategy(fvk: &FullViewingKey) -> impl Strategy<Value = Transfe
         address_strategy(),
     )
         .prop_map(|(spend, amount, dest_address)| {
-            let mut output = ShieldedOutputPlan::new(
+            let output = ShieldedOutputPlan::new(
                 &mut OsRng,
                 Value {
                     amount,
@@ -204,20 +204,13 @@ fn transfer_plan_strategy(fvk: &FullViewingKey) -> impl Strategy<Value = Transfe
                 },
                 dest_address,
             );
-            output.asset_anchor = spend.asset_anchor;
-            output.asset_path = spend.asset_path.clone();
-            output.asset_position = spend.asset_position;
-            output.asset_indexed_leaf = spend.asset_indexed_leaf.clone();
-            output.compliance_anchor = spend.compliance_anchor;
-            output.compliance_path = spend.compliance_path.clone();
-            output.compliance_position = spend.compliance_position;
-            output.tx_blinding_nonce = spend.tx_blinding_nonce;
-            output.target_timestamp = spend.target_timestamp;
-            output.is_regulated = spend.is_regulated;
-            output.asset_policy = spend.asset_policy.clone();
 
-            TransferPlan::from_spend_output(spend, output, Fr::rand(&mut OsRng))
-                .expect("valid transfer plan")
+            shieldd_sdk_shielded_pool::test_plan_helpers::transfer(
+                vec![spend],
+                vec![output],
+                Fr::rand(&mut OsRng),
+            )
+            .expect("valid transfer plan")
         })
 }
 
@@ -241,7 +234,7 @@ fn note_reshape_two_to_one_plan_strategy(
                 },
                 addr.clone(),
             );
-            NoteReshapePlan::new(
+            shieldd_sdk_shielded_pool::test_plan_helpers::note_reshape(
                 NoteReshapeFamilyId::EightByOne,
                 vec![
                     ShieldedInputPlan::new(&mut OsRng, note_1, pos_1).into(),
@@ -285,7 +278,7 @@ fn note_reshape_one_to_eight_plan_strategy(
                 addr.clone(),
             ));
 
-            NoteReshapePlan::new(
+            shieldd_sdk_shielded_pool::test_plan_helpers::note_reshape(
                 NoteReshapeFamilyId::OneByEight,
                 vec![ShieldedInputPlan::new(&mut OsRng, note, position).into()],
                 outputs,

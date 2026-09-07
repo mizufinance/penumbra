@@ -230,11 +230,11 @@ fn view_tx_hashes() {
             "--home",
             tmpdir.path().to_str().unwrap(),
             "view",
-            "list-tx-hashes",
+            "list-transaction-hashes",
         ])
         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
     let _view_result = view_cmd
         .assert()
         .try_success()
-        .expect("pcli command failed: 'view list-tx-hashes'");
+        .expect("pcli command failed: 'view list-transaction-hashes'");
 }

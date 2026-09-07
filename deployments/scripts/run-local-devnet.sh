@@ -4,6 +4,7 @@ set -euo pipefail
 
 
 repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
 source "${repo_root}/scripts/lib/common.sh"
 shieldd_devnet_home="${SHIELDD_DEVNET_HOME:-$HOME/.shieldd}"
 export SHIELDD_DEVNET_HOME="$shieldd_devnet_home"
@@ -12,7 +13,6 @@ compliance_dev_registrar_vk_hex="${COMPLIANCE_DEV_REGISTRAR_VK_HEX:-080000000000
 pd_cargo_args=()
 case "${SHIELDD_PD_INTEGRATION_DEV_SRS:-0}" in
     0)
-        export SHIELDD_PD_CARGO_ARGS=""
         ;;
     1)
         if [[ "${SHIELDD_PRODUCTION:-0}" = "1" ]]; then
@@ -20,28 +20,22 @@ case "${SHIELDD_PD_INTEGRATION_DEV_SRS:-0}" in
             exit 1
         fi
         pd_cargo_args=(--features orbis-dev-srs)
-        export SHIELDD_PD_CARGO_ARGS="--features orbis-dev-srs"
         ;;
     *)
         >&2 echo "ERROR: SHIELDD_PD_INTEGRATION_DEV_SRS must be 0 or 1"
         exit 1
         ;;
 esac
-# The process-compose file already respects local state and will reuse it.
-# "${repo_root}/deployments/scripts/warn-about-pd-state"
-
->&2 echo "Building binaries from latest code..."
-cargo build --release --bin pd "${pd_cargo_args[@]}"
-# Also make sure to invoke via `cargo run` so that the process-compose
-# spin-up doesn't block on more building/linking.
-cargo --quiet run --release --bin pd "${pd_cargo_args[@]}" -- --help > /dev/null
+if [[ -z "${SHIELDD_PD_BIN:-}" ]]; then
+    cargo build --release --bin pd "${pd_cargo_args[@]}"
+    export SHIELDD_PD_BIN="${CARGO_TARGET_DIR:-${repo_root}/target}/release/pd"
+fi
 
 # Generate network from latest code, only if network does not already exist.
 if [[ -d "$network_data_dir" ]] ; then
     >&2 echo "network data exists locally, reusing it"
 else
-    # XXX: Manually Add allocation address.
-    cargo run --release --bin pd "${pd_cargo_args[@]}" -- network \
+    "$SHIELDD_PD_BIN" network \
         --network-dir "$network_data_dir" \
         generate \
         --chain-id shieldd-local-devnet \
@@ -55,9 +49,6 @@ else
         --validators-input-file testnets/validators-single.json \
         --allocation-address "shieldd1u29dhz4vxgnek6a3vzxlejg0l83wegpu7hgs3yphdvljcnnnh89dvs6lc9hxxw94w464t7lh5x36cxnxyx0"
 
-    # opt in to cometbft abci indexing to postgres
-    postgresql_db_url="postgresql://shieldd:shieldd@127.0.0.1:${SHIELDD_POSTGRES_PORT}/shieldd_cometbft?sslmode=disable"
-    sed -i -e "s#^indexer.*#indexer = \"psql\"\\npsql-conn = \"$postgresql_db_url\"#" "$network_data_dir/node0/cometbft/config/config.toml"
 fi
 
 # Check for interactive terminal session, enable TUI if yes.

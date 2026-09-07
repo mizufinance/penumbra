@@ -759,7 +759,7 @@ impl<'de> serde::Deserialize<'de> for pre_authorization::Ed25519 {
                             if vk__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("vk"));
                             }
-                            vk__ = 
+                            vk__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -767,7 +767,7 @@ impl<'de> serde::Deserialize<'de> for pre_authorization::Ed25519 {
                             if sig__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("sig"));
                             }
-                            sig__ = 
+                            sig__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }

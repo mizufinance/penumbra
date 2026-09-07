@@ -154,6 +154,41 @@ pub mod proof_test_helpers {
         pub asset_policy: shieldd_sdk_compliance::AssetPolicy,
     }
 
+    impl BaseTestData {
+        pub fn action_witness(&self) -> crate::ActionWitness {
+            crate::ActionWitness {
+                asset: crate::AssetWitness {
+                    asset_id: self.value.asset_id,
+                    root: self.asset_anchor,
+                    leaf: self.asset_indexed_leaf.clone(),
+                    position: self.asset_position,
+                    path: self.asset_path.clone(),
+                    is_regulated: self.asset_indexed_leaf.value == self.value.asset_id.0,
+                },
+                user_root: self.compliance_anchor,
+                sender: crate::UserWitness {
+                    leaf: self.user_leaf.clone(),
+                    position: self.compliance_position,
+                    path: self.compliance_path.clone(),
+                },
+            }
+        }
+
+        pub fn transfer_context(&self, nonce: Fr) -> crate::TransferContext {
+            let witness = self.action_witness();
+            crate::TransferContext {
+                recipient: witness.sender.clone(),
+                policy: witness
+                    .asset
+                    .is_regulated
+                    .then(|| self.asset_policy.clone()),
+                witness,
+                timestamp: self.target_timestamp,
+                nonce,
+            }
+        }
+    }
+
     /// Generate the shared fixture data used by all proof-family tests.
     pub fn generate_base_test_data(
         rng: &mut (impl rand::RngCore + rand_core::CryptoRng),
@@ -344,31 +379,13 @@ pub mod proof_test_helpers {
         let tx_blinding_nonce = Fr::rand(rng);
         let mut spends = Vec::with_capacity(notes.len());
         for (note, proof) in notes.iter().cloned().zip(state_commitment_proofs.iter()) {
-            let mut spend = ShieldedInputPlan::new(rng, note, proof.position());
-            spend.asset_indexed_leaf = base.asset_indexed_leaf.clone();
-            spend.asset_path = base.asset_path.clone();
-            spend.asset_position = base.asset_position;
-            spend.asset_anchor = base.asset_anchor;
-            spend.compliance_anchor = base.compliance_anchor;
-            spend.compliance_path = base.compliance_path.clone();
-            spend.compliance_position = base.compliance_position;
-            spend.is_regulated = is_regulated;
-            spend.target_timestamp = base.target_timestamp;
-            spend.tx_blinding_nonce = tx_blinding_nonce;
-            spend.asset_policy = Some(base.asset_policy.clone());
-            spend
-                .set_compliance_details()
-                .expect("set transfer spend compliance details");
+            let spend = ShieldedInputPlan::new(rng, note, proof.position());
             spends.push(spend);
         }
 
-        let sender_leaf = spends[0]
-            .compliance_leaf
-            .clone()
-            .expect("first transfer spend must have a sender compliance leaf");
         let mut outputs = Vec::with_capacity(output_amounts.len());
         for amount in &output_amounts {
-            let mut output = ShieldedOutputPlan::new(
+            let output = ShieldedOutputPlan::new(
                 rng,
                 Value {
                     amount: Amount::from(*amount),
@@ -376,20 +393,6 @@ pub mod proof_test_helpers {
                 },
                 base.address.clone(),
             );
-            output.asset_indexed_leaf = base.asset_indexed_leaf.clone();
-            output.asset_path = base.asset_path.clone();
-            output.asset_position = base.asset_position;
-            output.asset_anchor = base.asset_anchor;
-            output.compliance_anchor = base.compliance_anchor;
-            output.compliance_path = base.compliance_path.clone();
-            output.compliance_position = base.compliance_position;
-            output.is_regulated = is_regulated;
-            output.target_timestamp = base.target_timestamp;
-            output.tx_blinding_nonce = tx_blinding_nonce;
-            output.asset_policy = Some(base.asset_policy.clone());
-            output
-                .set_compliance_details(&sender_leaf, tx_blinding_nonce)
-                .expect("set transfer output compliance details");
             outputs.push(output);
         }
 
@@ -398,6 +401,8 @@ pub mod proof_test_helpers {
             spends.into_iter().map(Into::into).collect(),
             outputs.into_iter().map(Into::into).collect(),
             value_blinding,
+            base.transfer_context(tx_blinding_nonce),
+            crate::discovery::Parameters::default(),
         )
         .expect("build transfer plan");
 
@@ -435,7 +440,7 @@ pub mod proof_test_helpers {
         send_to_self: bool,
     ) -> (crate::TransferProofPublic, crate::TransferProofPrivate) {
         let base = generate_base_test_data_for_asset(rng, asset_id, 100, is_regulated);
-        build_transfer_hidden_arity_from_base(rng, base, asset_id, is_regulated, send_to_self)
+        build_transfer_hidden_arity_from_base(rng, base, asset_id, send_to_self)
     }
 
     pub(crate) fn build_transfer_flagged_hidden_arity_roundtrip_inputs_with_rng(
@@ -466,7 +471,7 @@ pub mod proof_test_helpers {
             "read".to_string(),
             "document".to_string(),
         );
-        build_transfer_hidden_arity_from_base(rng, base, asset_id, true, false)
+        build_transfer_hidden_arity_from_base(rng, base, asset_id, false)
     }
 
     /// Reproduces the orbis live unregulated non-base transfer: identical to
@@ -497,14 +502,13 @@ pub mod proof_test_helpers {
         base.asset_indexed_leaf = asset_indexed_leaf;
         base.asset_path = asset_path;
         base.asset_position = asset_position;
-        build_transfer_hidden_arity_from_base(rng, base, asset_id, false, send_to_self)
+        build_transfer_hidden_arity_from_base(rng, base, asset_id, send_to_self)
     }
 
     fn build_transfer_hidden_arity_from_base(
         rng: &mut (impl rand::RngCore + rand_core::CryptoRng),
         base: BaseTestData,
         asset_id: shieldd_sdk_asset::asset::Id,
-        is_regulated: bool,
         send_to_self: bool,
     ) -> (crate::TransferProofPublic, crate::TransferProofPrivate) {
         use crate::{ShieldedInputPlan, ShieldedOutputPlan, TransferPlan};
@@ -543,19 +547,7 @@ pub mod proof_test_helpers {
         let anchor = sct.root();
 
         let tx_blinding_nonce = Fr::rand(rng);
-        let mut spend =
-            ShieldedInputPlan::new(rng, note.clone(), state_commitment_proof.position());
-        spend.asset_indexed_leaf = base.asset_indexed_leaf.clone();
-        spend.asset_path = base.asset_path.clone();
-        spend.asset_position = base.asset_position;
-        spend.asset_anchor = base.asset_anchor;
-        spend.is_regulated = is_regulated;
-        spend.target_timestamp = base.target_timestamp;
-        spend.tx_blinding_nonce = tx_blinding_nonce;
-        spend.asset_policy = Some(base.asset_policy.clone());
-        spend
-            .set_compliance_details()
-            .expect("set hidden-arity transfer spend compliance details");
+        let spend = ShieldedInputPlan::new(rng, note.clone(), state_commitment_proof.position());
 
         let recipient_leaf =
             shieldd_sdk_compliance::ComplianceLeaf::new(recipient_address.clone(), asset_id);
@@ -599,11 +591,8 @@ pub mod proof_test_helpers {
                 recipient_position,
             )
         };
-        spend.compliance_anchor = shared_compliance_anchor;
-        spend.compliance_path = sender_compliance_path;
-        spend.compliance_position = sender_compliance_position;
 
-        let mut output = ShieldedOutputPlan::new(
+        let output = ShieldedOutputPlan::new(
             rng,
             Value {
                 amount: Amount::from(100u64),
@@ -611,23 +600,24 @@ pub mod proof_test_helpers {
             },
             recipient_address,
         );
-        output.asset_indexed_leaf = base.asset_indexed_leaf.clone();
-        output.asset_path = base.asset_path.clone();
-        output.asset_position = base.asset_position;
-        output.asset_anchor = base.asset_anchor;
-        output.compliance_anchor = shared_compliance_anchor;
-        output.compliance_path = recipient_compliance_path;
-        output.compliance_position = recipient_compliance_position;
-        output.is_regulated = is_regulated;
-        output.target_timestamp = base.target_timestamp;
-        output.tx_blinding_nonce = tx_blinding_nonce;
-        output.asset_policy = Some(base.asset_policy.clone());
-        output
-            .set_compliance_details(&recipient_leaf, tx_blinding_nonce)
-            .expect("set hidden-arity transfer output compliance details");
 
-        let transfer = TransferPlan::new(vec![spend], vec![output], Fr::rand(rng))
-            .expect("build hidden-arity transfer plan");
+        let mut context = base.transfer_context(tx_blinding_nonce);
+        context.witness.user_root = shared_compliance_anchor;
+        context.witness.sender.path = sender_compliance_path;
+        context.witness.sender.position = sender_compliance_position;
+        context.recipient = crate::UserWitness {
+            leaf: recipient_leaf,
+            path: recipient_compliance_path,
+            position: recipient_compliance_position,
+        };
+        let transfer = TransferPlan::new(
+            vec![spend],
+            vec![output],
+            Fr::rand(rng),
+            context,
+            crate::discovery::Parameters::default(),
+        )
+        .expect("build hidden-arity transfer plan");
 
         transfer
             .transfer_public_private(&base.fvk, &[state_commitment_proof], anchor, 0)
@@ -719,31 +709,13 @@ pub mod proof_test_helpers {
         let tx_blinding_nonce = Fr::rand(&mut rng);
         let mut spends = Vec::with_capacity(notes.len());
         for (note, proof) in notes.iter().cloned().zip(state_commitment_proofs.iter()) {
-            let mut spend = ShieldedInputPlan::new(&mut rng, note, proof.position());
-            spend.asset_indexed_leaf = base.asset_indexed_leaf.clone();
-            spend.asset_path = base.asset_path.clone();
-            spend.asset_position = base.asset_position;
-            spend.asset_anchor = base.asset_anchor;
-            spend.compliance_anchor = base.compliance_anchor;
-            spend.compliance_path = base.compliance_path.clone();
-            spend.compliance_position = base.compliance_position;
-            spend.is_regulated = is_regulated;
-            spend.target_timestamp = base.target_timestamp;
-            spend.tx_blinding_nonce = tx_blinding_nonce;
-            spend.asset_policy = Some(base.asset_policy.clone());
-            spend
-                .set_compliance_details()
-                .expect("set transfer spend compliance details");
+            let spend = ShieldedInputPlan::new(&mut rng, note, proof.position());
             spends.push(spend);
         }
 
-        let sender_leaf = spends[0]
-            .compliance_leaf
-            .clone()
-            .expect("first transfer spend must have a sender compliance leaf");
         let mut outputs = Vec::with_capacity(output_amounts.len());
         for amount in &output_amounts {
-            let mut output = ShieldedOutputPlan::new(
+            let output = ShieldedOutputPlan::new(
                 &mut rng,
                 Value {
                     amount: Amount::from(*amount),
@@ -751,20 +723,6 @@ pub mod proof_test_helpers {
                 },
                 base.address.clone(),
             );
-            output.asset_indexed_leaf = base.asset_indexed_leaf.clone();
-            output.asset_path = base.asset_path.clone();
-            output.asset_position = base.asset_position;
-            output.asset_anchor = base.asset_anchor;
-            output.compliance_anchor = base.compliance_anchor;
-            output.compliance_path = base.compliance_path.clone();
-            output.compliance_position = base.compliance_position;
-            output.is_regulated = is_regulated;
-            output.target_timestamp = base.target_timestamp;
-            output.tx_blinding_nonce = tx_blinding_nonce;
-            output.asset_policy = Some(base.asset_policy.clone());
-            output
-                .set_compliance_details(&sender_leaf, tx_blinding_nonce)
-                .expect("set transfer output compliance details");
             outputs.push(output);
         }
 
@@ -773,6 +731,8 @@ pub mod proof_test_helpers {
             spends.into_iter().map(Into::into).collect(),
             outputs.into_iter().map(Into::into).collect(),
             value_blinding,
+            base.transfer_context(tx_blinding_nonce),
+            crate::discovery::Parameters::default(),
         )
         .expect("build transfer plan");
 
@@ -910,6 +870,11 @@ pub mod proof_test_helpers {
             spends.into_iter().map(Into::into).collect(),
             outputs.into_iter().map(Into::into).collect(),
             Fr::rand(rng),
+            crate::NoteReshapeContext {
+                witness: base.action_witness(),
+                nonce: Fr::rand(rng),
+            },
+            crate::discovery::Parameters::default(),
         )
         .expect("build note reshape plan");
         plan.note_reshape_public_private(&base.fvk, &state_commitment_proofs, anchor, 0)
@@ -969,21 +934,8 @@ pub mod proof_test_helpers {
         )
         .expect("create shielded ICS-20 withdrawal note b");
 
-        let mut spend_a = ShieldedInputPlan::new(rng, note_a.clone(), 0u64.into());
-        let mut spend_b = ShieldedInputPlan::new(rng, note_b.clone(), 1u64.into());
-        for (index, spend) in [&mut spend_a, &mut spend_b].into_iter().enumerate() {
-            spend.is_regulated = is_regulated;
-            spend.tx_blinding_nonce = Fr::from(11u64 + index as u64);
-            spend.target_timestamp = base.target_timestamp;
-            spend.compliance_anchor = base.compliance_anchor;
-            spend.compliance_path = base.compliance_path.clone();
-            spend.compliance_position = base.compliance_position;
-            spend.asset_anchor = base.asset_anchor;
-            spend.asset_path = base.asset_path.clone();
-            spend.asset_position = base.asset_position;
-            spend.asset_indexed_leaf = base.asset_indexed_leaf.clone();
-            spend.compliance_leaf = Some(base.user_leaf.clone());
-        }
+        let spend_a = ShieldedInputPlan::new(rng, note_a.clone(), 0u64.into());
+        let spend_b = ShieldedInputPlan::new(rng, note_b.clone(), 1u64.into());
 
         let mut sct = tct::Tree::new();
         sct.insert(tct::Witness::Keep, note_a.commit()).unwrap();

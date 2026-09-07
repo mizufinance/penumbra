@@ -737,7 +737,7 @@ impl<'de> serde::Deserialize<'de> for TransactionsByHeightRequest {
                             if block_height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("blockHeight"));
                             }
-                            block_height__ = 
+                            block_height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -853,7 +853,7 @@ impl<'de> serde::Deserialize<'de> for TransactionsByHeightResponse {
                             if block_height__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("blockHeight"));
                             }
-                            block_height__ = 
+                            block_height__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }

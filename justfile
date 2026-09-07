@@ -2,12 +2,10 @@
 default:
     @just --list
 
-# Creates and runs a local devnet with solo validator. Includes ancillary services
-
-# like metrics and PostgreSQL for storing ABCI events.
+# Run a local development network with metrics and PostgreSQL event storage.
 dev:
     ./deployments/scripts/check-nix-shell && \
-        ./deployments/scripts/run-local-devnet.sh \
+        SHIELDD_PD_INTEGRATION_DEV_SRS=1 ./deployments/scripts/run-local-devnet.sh \
         --keep-project \
         --config ./deployments/compose/process-compose-postgres.yml \
         --config ./deployments/compose/process-compose-metrics.yml \
@@ -23,33 +21,28 @@ build:
 
 # Runs 'cargo check' on all rust files in the project.
 check:
+    just tooling-test
     just snarkpack-invariants
     # check, failing on warnings
     RUSTFLAGS="-D warnings" cargo check --release --all-targets --all-features --target-dir=target/check
     # fmt dry-run, failing on any suggestions
     cargo fmt --all -- --check
 
+tooling-test:
+    python3 -m unittest discover -s scripts/tests
+    python3 -m unittest discover -s scripts/ci -p 'test_*.py'
+    python3 -m unittest discover -s deployments/scripts/tests
+
 # Go formatting check for the gnark runtime.
 go-fmt-check:
-    bash -lc 'cd tools/gnark && \
-      files="$(gofmt -l .)"; \
-      if test -z "$files"; then \
-        exit 0; \
-      fi; \
-      echo "unformatted Go files:"; \
-      printf "%s\n" "$files"; \
-      if test -n "$CI"; then \
-        echo "run: cd tools/gnark && gofmt -w $files"; \
-        exit 1; \
-      fi; \
-      echo "auto-fixing with gofmt -w"; \
-      gofmt -w $files; \
-      remaining="$(gofmt -l .)"; \
-      if test -n "$remaining"; then \
-        echo "still unformatted after gofmt:"; \
-        printf "%s\n" "$remaining"; \
-        exit 1; \
-      fi'
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd tools/gnark
+    files="$(gofmt -l .)"
+    if [[ -n "$files" ]]; then
+        printf 'Run just go-fmt to format:\n%s\n' "$files" >&2
+        exit 1
+    fi
 
 # Format the gnark Go module.
 go-fmt:
@@ -79,12 +72,10 @@ gnark-proof-tests-fast:
 # Run the slow end-to-end gnark proof-generation suite.
 gnark-proof-tests-slow:
     python3 scripts/proof_artifacts.py materialize --bundle runtime
-    cargo test --release -p shieldd-sdk-shielded-pool --features bundled-proving-keys transfer_proof_roundtrip --lib
-    cargo test --release -p shieldd-sdk-shielded-pool --lib
+    bash scripts/gnark-proof-tests-slow.sh
 
 # Run ignored slow SnarkPack parity tests.
 snarkpack-slow:
-    just snarkpack-slow-one legacy
     just snarkpack-slow-one oracle
     just snarkpack-slow-one interop
 
@@ -93,10 +84,6 @@ snarkpack-slow-one test:
     #!/usr/bin/env bash
     set -euo pipefail
     case "{{test}}" in
-      legacy)
-        package=shieldd-sdk-proof-aggregation
-        filter=snarkpack_matches_legacy_batch_across_families_and_counts_slow
-        ;;
       oracle)
         package=shieldd-sdk-proof-aggregation
         filter=snarkpack_matches_single_and_batch_groth16_oracles_slow
@@ -110,7 +97,7 @@ snarkpack-slow-one test:
         exit 2
         ;;
     esac
-    cargo test -p "$package" "$filter" --lib -- --ignored --test-threads=1
+    cargo test --release -p "$package" "$filter" --lib -- --ignored --test-threads=1
 
 # Run the exact ordinary tests anchoring the bounded challenge sampler and its
 # public prover/verifier exhaustion mappings.
@@ -246,6 +233,15 @@ protocol-docs:
 proto:
     ./deployments/scripts/protobuf-codegen
 
+proto-check:
+    ./deployments/scripts/protobuf-codegen --check
+
+features-check:
+    ./deployments/scripts/check-crate-feature-sets
+
+wasm-check:
+    ./deployments/scripts/check-wasm-compat.sh
+
 # Run a local prometheus/grafana setup, to scrape a local node.
 metrics:
     ./deployments/scripts/check-nix-shell && \
@@ -268,9 +264,6 @@ smoke:
     ./deployments/scripts/check-nix-shell
     ./deployments/scripts/smoke-test.sh
 
-reduced-surface-check:
-    bash ./deployments/scripts/check-reduced-surface.sh
-
 # Run integration tests for pclientd. Assumes specific dev env is already running.
 integration-pclientd:
     python3 scripts/proof_artifacts.py materialize --bundle runtime
@@ -292,13 +285,3 @@ integration-pd:
 # Build the container image locally
 container:
     docker build -t ghcr.io/mizufinance/shieldd:local -f ./deployments/containerfiles/Dockerfile .
-
-# Run the testnet locally entirely
-testnet:
-    just --justfile {{ justfile() }} testnet-clean
-    docker compose -f deployments/compose/docker-compose.yml up
-
-# clean up the testnet, removing all volumes
-testnet-clean:
-    docker compose -f deployments/compose/docker-compose.yml down --volumes
-    docker volume rm compose_shieldd-pd-node0 --force || true

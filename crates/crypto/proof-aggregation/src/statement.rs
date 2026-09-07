@@ -1,24 +1,14 @@
 use std::fmt;
 
 use ark_groth16::PreparedVerifyingKey;
-use ark_ip_proofs::{
-    challenge::{challenge_context_preimage, ChallengeContext},
-    statement_binding::{
-        statement_hash_effect_core, StatementBindingExecution, StatementHashCoreInput,
-        StatementHashEffect, StatementHashExecution,
-    },
-};
+use ark_ip_proofs::challenge::ChallengeContext;
 use ark_serialize::CanonicalSerialize;
 use decaf377::{Bls12_377, Fq};
 use sha2::{Digest as _, Sha256};
 
 use crate::{
-    app_verifier::{
-        app_verify_shipping_rows_from_parts, app_verify_statement_row_bytes_from_parts,
-    },
-    bundle::family_proto_fields,
-    padding::PADDING_RULE_DOMAIN,
-    ProofFamilyId, DEV_SRS_BACKEND_ID, DEV_SRS_CURVE_ID,
+    bundle::family_proto_fields, padding::PADDING_RULE_DOMAIN, ProofFamilyId, DEV_SRS_BACKEND_ID,
+    DEV_SRS_CURVE_ID,
 };
 
 pub const AGGREGATE_PROTOCOL_VERSION: u32 =
@@ -195,92 +185,14 @@ impl From<Vec<Vec<Vec<u8>>>> for StatementPaddedRows {
     }
 }
 
-/// Exact validated values supplied to the shipping statement-hash effect.
-///
-/// The public-input arity and row serialization remain inside the effect so
-/// their failures retain the deployed order after the VK digest is computed.
+/// Canonical bytes that bind a verified statement to its key and challenge context.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ShippingStatementHashInput {
-    version: u32,
-    family_id: ProofFamilyId,
-    srs_id: [u8; 32],
-    real_count: u32,
-    padded_count: u32,
-    expected_public_input_arity: usize,
-    padded_public_inputs: Vec<Vec<Fq>>,
-}
-
-/// Concrete byte operations executed by the shipping statement constructor.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ShippingStatementHashEffect {
-    encoded_statement_input: Option<StatementEncodingInput>,
-}
-
-pub(crate) type ShippingStatementHashExecution =
-    StatementHashExecution<ShippingStatementHashInput, ShippingStatementHashEffect>;
-
-pub(crate) type ShippingStatementBindingExecution<DecodeEffect> = StatementBindingExecution<
-    ShippingStatementHashInput,
-    ShippingStatementHashEffect,
-    DecodeEffect,
->;
-
-impl StatementHashEffect<ShippingStatementHashInput, AggregateStatementError>
-    for ShippingStatementHashEffect
-{
-    fn vk_preimage(&mut self, serialized_vk: &[u8]) -> Result<Vec<u8>, AggregateStatementError> {
-        vk_digest_preimage(serialized_vk)
-    }
-
-    fn sha256(&mut self, preimage: &[u8]) -> Result<Vec<u8>, AggregateStatementError> {
-        Ok(sha256_bytes(preimage).to_vec())
-    }
-
-    fn canonical_statement(
-        &mut self,
-        canonical_input: &ShippingStatementHashInput,
-        vk_digest: &[u8],
-    ) -> Result<Vec<u8>, AggregateStatementError> {
-        let vk_digest = exact_sha256_digest("vk_digest", vk_digest)?;
-        let public_input_arity = u32::try_from(canonical_input.expected_public_input_arity)
-            .map_err(|_| AggregateStatementError::OversizeBytes {
-                field: "public_input_arity",
-                max: u32::MAX as usize,
-                got: canonical_input.expected_public_input_arity,
-            })?;
-        let padded_public_inputs_bytes =
-            statement_row_bytes_core(&canonical_input.padded_public_inputs)?;
-        let input = statement_encoding_input_core(
-            canonical_input.version,
-            canonical_input.family_id,
-            canonical_input.srs_id,
-            vk_digest,
-            canonical_input.real_count,
-            canonical_input.padded_count,
-            public_input_arity,
-            padded_public_inputs_bytes,
-        );
-        let canonical_statement = encode_statement(&input)?;
-        self.encoded_statement_input = Some(input);
-        Ok(canonical_statement)
-    }
-
-    fn statement_preimage(
-        &mut self,
-        canonical_statement: &[u8],
-    ) -> Result<Vec<u8>, AggregateStatementError> {
-        Ok(statement_digest_preimage(canonical_statement))
-    }
-
-    fn challenge_context_preimage(
-        &mut self,
-        statement_digest: &[u8],
-    ) -> Result<Vec<u8>, AggregateStatementError> {
-        Ok(challenge_context_preimage(exact_sha256_digest(
-            "statement_digest",
-            statement_digest,
-        )?))
-    }
+pub(crate) struct StatementIdentity {
+    pub serialized_vk: Vec<u8>,
+    pub vk_digest: Vec<u8>,
+    pub canonical_statement: Vec<u8>,
+    pub statement_digest: Vec<u8>,
+    pub challenge_context: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -296,7 +208,7 @@ pub struct AggregateStatement {
     canonical_bytes: Vec<u8>,
     statement_digest: [u8; 32],
     challenge_context: ChallengeContext,
-    hash_execution: ShippingStatementHashExecution,
+    serialized_vk: Vec<u8>,
 }
 
 /// Allocation-free view of the exact rows authenticated by a statement and
@@ -342,46 +254,28 @@ impl AggregateStatement {
         validate_row_arity(padded_public_inputs, expected_arity)?;
 
         let serialized_vk = aggregate_verification_key_bytes(pvk)?;
-        let hash_execution = statement_hash_effect_core(
-            StatementHashCoreInput {
-                serialized_vk,
-                canonical_input: ShippingStatementHashInput {
-                    version,
-                    family_id,
-                    srs_id,
-                    real_count,
-                    padded_count,
-                    expected_public_input_arity: expected_arity,
-                    padded_public_inputs: padded_public_inputs.to_vec(),
-                },
-            },
-            ShippingStatementHashEffect::default(),
-        )?;
-        let encoded_statement_input = hash_execution
-            .effect
-            .encoded_statement_input
-            .as_ref()
-            .ok_or_else(|| {
-                AggregateStatementError::EncodingFailed(
-                    "shipping statement hash omitted its canonical input".to_string(),
-                )
+        let vk_digest = aggregate_verification_key_digest_from_bytes(&serialized_vk)?;
+        let public_input_arity =
+            u32::try_from(expected_arity).map_err(|_| AggregateStatementError::OversizeBytes {
+                field: "public_input_arity",
+                max: u32::MAX as usize,
+                got: expected_arity,
             })?;
-
-        let family_id = hash_execution.canonical_input.family_id;
-        let srs_id = encoded_statement_input.srs_id;
-        let vk_digest = encoded_statement_input.vk_digest;
-        let real_count = encoded_statement_input.real_count;
-        let padded_count = encoded_statement_input.padded_count;
-        let public_input_arity = encoded_statement_input.public_input_arity;
-        let padded_public_inputs = hash_execution.canonical_input.padded_public_inputs.clone();
-        let padded_public_input_bytes = encoded_statement_input.padded_public_inputs.clone();
-        let canonical_bytes = hash_execution.canonical_statement.clone();
-        let statement_digest =
-            exact_sha256_digest("statement_digest", &hash_execution.statement_digest)?;
-        let challenge_context = ChallengeContext::from_bytes(exact_sha256_digest(
-            "challenge_context",
-            &hash_execution.challenge_context,
-        )?);
+        let padded_public_input_bytes = statement_row_bytes_core(padded_public_inputs)?;
+        let input = statement_encoding_input_core(
+            version,
+            family_id,
+            srs_id,
+            vk_digest,
+            real_count,
+            padded_count,
+            public_input_arity,
+            padded_public_input_bytes.clone(),
+        );
+        let canonical_bytes = encode_statement(&input)?;
+        let statement_digest = statement_digest_from_canonical(&canonical_bytes);
+        let challenge_context = ChallengeContext::from_statement_digest(statement_digest);
+        let padded_public_inputs = padded_public_inputs.to_vec();
 
         Ok(Self {
             family_id,
@@ -395,7 +289,7 @@ impl AggregateStatement {
             canonical_bytes,
             statement_digest,
             challenge_context,
-            hash_execution,
+            serialized_vk,
         })
     }
 
@@ -424,13 +318,13 @@ impl AggregateStatement {
     }
 
     pub(crate) fn shipping_rows(&self) -> AggregateStatementRows<'_> {
-        let projection = app_verify_shipping_rows_from_parts(
-            self.real_count,
-            self.padded_count,
-            self.public_input_arity,
-            self.padded_public_inputs.as_slice(),
-            &self.padded_public_input_bytes,
-        );
+        let projection = ark_ip_proofs::app_verifier::AppVerifyShippingRowsProjection {
+            real_count: self.real_count,
+            padded_count: self.padded_count,
+            public_input_arity: self.public_input_arity,
+            fields: self.padded_public_inputs.as_slice(),
+            serialized: &self.padded_public_input_bytes,
+        };
         AggregateStatementRows {
             real_count: projection.real_count,
             padded_count: projection.padded_count,
@@ -452,8 +346,18 @@ impl AggregateStatement {
         &self.challenge_context
     }
 
-    pub(crate) fn hash_execution(&self) -> &ShippingStatementHashExecution {
-        &self.hash_execution
+    pub(crate) fn serialized_vk(&self) -> &[u8] {
+        &self.serialized_vk
+    }
+
+    pub(crate) fn identity(&self) -> StatementIdentity {
+        StatementIdentity {
+            serialized_vk: self.serialized_vk.clone(),
+            vk_digest: self.vk_digest.to_vec(),
+            canonical_statement: self.canonical_bytes.clone(),
+            statement_digest: self.statement_digest.to_vec(),
+            challenge_context: self.challenge_context.as_bytes().to_vec(),
+        }
     }
 }
 
@@ -690,18 +594,6 @@ fn sha256_bytes(preimage: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-fn exact_sha256_digest(
-    field: &'static str,
-    digest: &[u8],
-) -> Result<[u8; 32], AggregateStatementError> {
-    <[u8; 32]>::try_from(digest).map_err(|_| {
-        AggregateStatementError::EncodingFailed(format!(
-            "{field} must contain exactly 32 SHA-256 bytes, got {}",
-            digest.len()
-        ))
-    })
-}
-
 /// Exact Arkworks serialization boundary for the padded rows committed by the
 /// canonical statement and later copied into the shipping preflight record.
 pub(crate) fn statement_row_bytes_core(
@@ -723,7 +615,10 @@ pub(crate) fn statement_row_bytes_core(
         })
         .collect::<Result<Vec<_>, _>>()
         .map(StatementPaddedRows::new)?;
-    let projection = app_verify_statement_row_bytes_from_parts(rows, serialized_rows);
+    let projection = ark_ip_proofs::app_verifier::AppVerifyStatementRowBytesProjection {
+        source_rows: rows,
+        serialized_rows: serialized_rows,
+    };
     Ok(projection.serialized_rows)
 }
 
@@ -825,37 +720,25 @@ mod tests {
         );
         assert_eq!(statement.padded_public_inputs(), rows.as_slice());
 
-        let execution = statement.hash_execution();
+        let identity = statement.identity();
         assert_eq!(
-            execution.serialized_vk,
+            identity.serialized_vk,
             aggregate_verification_key_bytes(&pvk).expect("VK serialization should repeat")
         );
-        assert_eq!(execution.canonical_input.family_id, ProofFamilyId::Transfer);
-        assert_eq!(execution.canonical_input.padded_public_inputs, rows);
         assert_eq!(
-            execution.canonical_statement.as_slice(),
+            identity.canonical_statement.as_slice(),
             statement.canonical_bytes()
         );
         assert_eq!(
-            execution.statement_digest.as_slice(),
+            identity.statement_digest.as_slice(),
             statement.statement_digest()
         );
         assert_eq!(
-            execution.challenge_context.as_slice(),
+            identity.challenge_context.as_slice(),
             statement.challenge_context().as_bytes()
         );
-        let encoded_input = execution
-            .effect
-            .encoded_statement_input
-            .as_ref()
-            .expect("successful shipping effect retains its encoder input");
-        assert_eq!(encoded_input.vk_digest, statement.vk_digest());
         assert_eq!(
-            encoded_input.padded_public_inputs,
-            statement.padded_public_input_bytes
-        );
-        assert_eq!(
-            aggregate_verification_key_digest_from_bytes(&execution.serialized_vk)
+            aggregate_verification_key_digest_from_bytes(&identity.serialized_vk)
                 .expect("byte-derived VK digest should succeed"),
             statement.vk_digest()
         );

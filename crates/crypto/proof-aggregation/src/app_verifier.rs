@@ -1,22 +1,19 @@
-//! Application projection into the extracted aggregate-verifier state machine.
+//! Application facts consumed by aggregate-verifier validation.
 
 use crate::{bundle::family_proto_fields, ProofFamilyId};
 
 #[doc(hidden)]
 pub use ark_ip_proofs::app_verifier::{
     app_verify_accepted_join_projection_core, app_verify_family_count_core,
-    app_verify_join_acceptance_core, app_verify_normal_acceptance_core,
-    app_verify_plan_identity_core, app_verify_plan_ids_core, app_verify_plan_padding_core,
-    app_verify_preflight_core, app_verify_prepare_public_input_rows_core,
-    app_verify_profiled_acceptance_core, app_verify_protocol_version_core, app_verify_reduce_core,
-    app_verify_shipping_call_from_parts, app_verify_shipping_into_parts_core,
-    app_verify_shipping_projection_core, app_verify_shipping_result_from_parts,
-    app_verify_shipping_rows_from_parts, app_verify_shipping_wrapper_projection_from_parts,
-    app_verify_statement_row_bytes_from_parts, AppVerifyAcceptedJoinProjection,
-    AppVerifyAcceptedJoinProjectionError, AppVerifyCallId, AppVerifyCallResult,
-    AppVerifyExpectedCall, AppVerifyFamilyCode, AppVerifyPlanError,
+    app_verify_join_acceptance_core, app_verify_plan_identity_core, app_verify_plan_ids_core,
+    app_verify_plan_padding_core, app_verify_preflight_core,
+    app_verify_prepare_public_input_rows_core, app_verify_reduce_core,
+    app_verify_shipping_into_parts_core, app_verify_shipping_projection_core,
+    AppVerifyAcceptedJoinProjection, AppVerifyAcceptedJoinProjectionError, AppVerifyCallId,
+    AppVerifyCallResult, AppVerifyExpectedCall, AppVerifyFamilyCode, AppVerifyPlanError,
     AppVerifyPlannerIndexedExecutedRecord, AppVerifyPreflightError, AppVerifyReductionError,
     AppVerifySegmentRange, AppVerifyShippingCall, AppVerifyShippingInput, AppVerifyShippingResult,
+    APP_VERIFY_PROTOCOL_VERSION,
 };
 
 #[doc(hidden)]

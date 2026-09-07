@@ -48,5 +48,4 @@ print-trace = [ "ark-std/print-trace" ]
 # pre-optimization `*_baseline` implementations so the same release bench can be
 # built twice and compared. Never enabled in production. See
 # crates/crypto/proof-aggregation/optimization-playbook.md.
-bench-baseline = []
 # Formal-verification campaign only: exposes the monomorphic BLS12-377 Fq

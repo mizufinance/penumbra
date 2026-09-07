@@ -12,53 +12,8 @@ pub use {
 
 use cnidarium::StateWrite;
 use shieldd_sdk_asset::asset;
-use shieldd_sdk_compliance::{ComplianceLeaf, ComplianceRegistryRead, ComplianceRegistryWrite};
+use shieldd_sdk_compliance::{ComplianceLeaf, ComplianceRegistryWrite};
 use shieldd_sdk_keys::Address;
-use shieldd_sdk_shielded_pool::{ShieldedInputPlan, ShieldedOutputPlan};
-
-#[allow(dead_code)]
-pub fn align_transfer_planning_metadata(
-    spends: &mut [ShieldedInputPlan],
-    outputs: &mut [ShieldedOutputPlan],
-) {
-    let Some(first_spend) = spends.first().cloned() else {
-        return;
-    };
-    for spend in spends.iter_mut() {
-        spend.asset_anchor = first_spend.asset_anchor;
-        spend.compliance_anchor = first_spend.compliance_anchor;
-        spend.target_timestamp = first_spend.target_timestamp;
-        spend.is_regulated = first_spend.is_regulated;
-        spend.tx_blinding_nonce = first_spend.tx_blinding_nonce;
-    }
-    for output in outputs {
-        output.asset_anchor = first_spend.asset_anchor;
-        output.compliance_anchor = first_spend.compliance_anchor;
-        output.target_timestamp = first_spend.target_timestamp;
-        output.is_regulated = first_spend.is_regulated;
-        output.tx_blinding_nonce = first_spend.tx_blinding_nonce;
-        output.asset_indexed_leaf = first_spend.asset_indexed_leaf.clone();
-        output.asset_path = first_spend.asset_path.clone();
-        output.asset_position = first_spend.asset_position;
-        output.asset_policy = first_spend.asset_policy.clone();
-    }
-}
-
-/// Register assets as unregulated in the compliance registry.
-///
-/// With the IMT design, unregulated assets are NOT stored in the tree.
-/// Their unregulated status is proven via non-membership proofs.
-/// This function is now a no-op but kept for API compatibility.
-#[allow(dead_code)]
-pub async fn register_assets_for_compliance<S: StateWrite + ComplianceRegistryRead>(
-    _state: &mut S,
-    _asset_ids: &[asset::Id],
-) -> anyhow::Result<()> {
-    // No-op: unregulated assets don't need to be registered.
-    // They are proven via IMT non-membership proofs.
-    Ok(())
-}
-
 /// Register test users in the compliance registry with BLACK_HOLE_ACK.
 ///
 /// This helper registers the given addresses for the specified assets as unregulated

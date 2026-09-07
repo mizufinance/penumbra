@@ -24,8 +24,6 @@ parallel = ["shieldd-sdk-tct/parallel", "dep:rayon"]
 [dependencies]
 anyhow = {workspace = true}
 ark-ff = {workspace = true, default-features = false}
-ark-r1cs-std = {workspace = true, default-features = false}
-ark-relations = {workspace = true}
 ark-serialize = {workspace = true}
 async-trait = {workspace = true}
 bincode = {workspace = true}
@@ -33,7 +31,7 @@ blake2b_simd = {workspace = true}
 bytes = {workspace = true}
 cnidarium = {workspace = true, optional = true, default-features = true}
 cnidarium-component = {workspace = true, optional = true, default-features = true}
-decaf377 = {workspace = true, features = ["r1cs"], default-features = true}
+decaf377 = {workspace = true, default-features = true}
 decaf377-rdsa = {workspace = true}
 hex = {workspace = true}
 futures = {workspace = true}
@@ -45,7 +43,7 @@ shieldd-sdk-keys = {workspace = true, default-features = false}
 shieldd-sdk-proto = {workspace = true, default-features = false}
 shieldd-sdk-tct = {workspace = true, default-features = true}
 shieldd-sdk-txhash = {workspace = true, default-features = false}
-poseidon377 = {workspace = true, features = ["r1cs"]}
+poseidon377 = {workspace = true}
 rand = {workspace = true}
 rand_core = {workspace = true, features = ["getrandom"]}
 rayon = { version = "1.10", optional = true }

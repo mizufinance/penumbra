@@ -3,7 +3,6 @@ use decaf377::{Fq, Fr};
 use decaf377_rdsa::{Signature, SpendAuth, VerificationKey};
 use serde::{Deserialize, Serialize};
 use shieldd_sdk_asset::{asset, balance, Balance};
-use shieldd_sdk_compliance::{AssetPolicy, ComplianceLeaf};
 use shieldd_sdk_keys::{
     keys::OutgoingViewingKey,
     symmetric::{OvkWrappedKey, PayloadKey, WrappedMemoKey},
@@ -40,6 +39,7 @@ pub struct TransferPlan {
     pub spends: Vec<ShieldedInputPlan>,
     pub outputs: Vec<ShieldedOutputPlan>,
     pub routing_parameters: Parameters,
+    pub compliance: crate::TransferContext,
 }
 
 impl TransferPlan {
@@ -47,23 +47,18 @@ impl TransferPlan {
         spends: Vec<ShieldedInputPlan>,
         outputs: Vec<ShieldedOutputPlan>,
         value_blinding: Fr,
+        compliance: crate::TransferContext,
+        routing_parameters: Parameters,
     ) -> anyhow::Result<Self> {
         let plan = Self {
             value_blinding,
             spends,
             outputs,
-            routing_parameters: Parameters::default(),
+            routing_parameters,
+            compliance,
         };
         plan.validate()?;
         Ok(plan)
-    }
-
-    pub fn from_spend_output(
-        spend: ShieldedInputPlan,
-        output: ShieldedOutputPlan,
-        value_blinding: Fr,
-    ) -> anyhow::Result<Self> {
-        Self::new(vec![spend], vec![output], value_blinding)
     }
 
     pub fn shape(&self) -> (usize, usize) {
@@ -78,23 +73,12 @@ impl TransferPlan {
         &self.outputs
     }
 
-    pub fn set_routing_parameters(&mut self, parameters: Parameters) {
-        self.routing_parameters = parameters;
-    }
-
     #[cfg(feature = "poc-orbis-v0")]
     pub fn poc_orbis_audit_bundle(
         &self,
     ) -> anyhow::Result<Option<shieldd_sdk_compliance::PocOrbisAuditBundle>> {
         self.validate()?;
-        let result = build_transfer_compliance(
-            &self.outputs,
-            &sender_leaf(self.first_spend()),
-            self.asset_policy()?,
-            &self.first_spend().asset_indexed_leaf,
-            self.first_spend().target_timestamp,
-            self.first_spend().tx_blinding_nonce,
-        )?;
+        let result = build_transfer_compliance(&self.outputs, &self.compliance)?;
         Ok(result.poc_orbis_audit_bundle)
     }
 
@@ -139,12 +123,11 @@ impl TransferPlan {
     }
 
     fn routing(&self) -> (crate::discovery::TransferRouting, bool) {
-        let routing_nonce =
-            Fq::from_le_bytes_mod_order(&self.first_spend().tx_blinding_nonce.to_bytes());
+        let routing_nonce = Fq::from_le_bytes_mod_order(&self.compliance.nonce.to_bytes());
         discovery::transfer_routing(
             &self.sender_address(),
             &self.outputs[0].dest_address,
-            self.first_spend().is_regulated,
+            self.compliance.witness.asset.is_regulated,
             self.outputs.get(CHANGE_OUTPUT_INDEX).is_some(),
             &self.routing_parameters,
             routing_nonce,
@@ -202,18 +185,6 @@ impl TransferPlan {
         self.padder().synthetic_dummy_output_note(slot)
     }
 
-    fn asset_policy(&self) -> anyhow::Result<Option<&AssetPolicy>> {
-        let plan_policy = self
-            .spends
-            .first()
-            .and_then(|spend| spend.asset_policy.as_ref());
-        ensure!(
-            !self.first_spend().is_regulated || plan_policy.is_some(),
-            "regulated transfer missing asset policy"
-        );
-        Ok(plan_policy)
-    }
-
     pub fn validate(&self) -> anyhow::Result<()> {
         ensure!(
             !self.spends.is_empty(),
@@ -246,44 +217,8 @@ impl TransferPlan {
                 "transfer spends must use the same asset",
             );
             ensure!(
-                spend.asset_anchor == first_spend.asset_anchor,
-                "transfer spend asset anchors must match",
-            );
-            ensure!(
-                spend.compliance_anchor == first_spend.compliance_anchor,
-                "transfer spend compliance anchors must match",
-            );
-            ensure!(
-                spend.target_timestamp == first_spend.target_timestamp,
-                "transfer spend timestamps must match",
-            );
-            ensure!(
-                spend.tx_blinding_nonce == first_spend.tx_blinding_nonce,
-                "transfer spend tx blinding nonce must match",
-            );
-            ensure!(
                 spend.note.address() == sender_address,
                 "transfer spends must use the same sender address",
-            );
-            ensure!(
-                spend.compliance_position == first_spend.compliance_position
-                    && spend.compliance_path == first_spend.compliance_path
-                    && spend.compliance_leaf == first_spend.compliance_leaf,
-                "transfer spends must use the same sender compliance witness",
-            );
-            ensure!(
-                spend.asset_position == first_spend.asset_position
-                    && spend.asset_path == first_spend.asset_path
-                    && spend.asset_indexed_leaf == first_spend.asset_indexed_leaf,
-                "transfer spends must use the same asset registry witness",
-            );
-            ensure!(
-                spend.asset_policy == first_spend.asset_policy,
-                "transfer spends must use the same asset policy",
-            );
-            ensure!(
-                spend.is_regulated == first_spend.is_regulated,
-                "transfer spend regulation flags must match",
             );
         }
         for output in &self.outputs {
@@ -291,48 +226,35 @@ impl TransferPlan {
                 output.value.asset_id == first_spend.note.asset_id(),
                 "transfer outputs must use the same asset as spends",
             );
-            ensure!(
-                output.asset_anchor == first_spend.asset_anchor,
-                "transfer output asset anchors must match spends",
-            );
-            ensure!(
-                output.compliance_anchor == first_spend.compliance_anchor,
-                "transfer output compliance anchors must match spends",
-            );
-            ensure!(
-                output.target_timestamp == first_spend.target_timestamp,
-                "transfer output timestamps must match spends",
-            );
-            ensure!(
-                output.tx_blinding_nonce == first_spend.tx_blinding_nonce,
-                "transfer output tx blinding nonce must match spends",
-            );
-            ensure!(
-                output.is_regulated == first_spend.is_regulated,
-                "transfer output regulation flags must match spends",
-            );
-            ensure!(
-                output.asset_position == first_spend.asset_position
-                    && output.asset_path == first_spend.asset_path
-                    && output.asset_indexed_leaf == first_spend.asset_indexed_leaf,
-                "transfer outputs must use the same asset registry witness as spends",
-            );
-            ensure!(
-                output.asset_policy == first_spend.asset_policy,
-                "transfer outputs must use the same asset policy as spends",
-            );
         }
         if let Some(change_output) = self.outputs.get(CHANGE_OUTPUT_INDEX) {
             ensure!(
                 change_output.dest_address == sender_address,
                 "transfer change output must be sender-owned",
             );
-            ensure!(
-                change_output.compliance_position == first_spend.compliance_position
-                    && change_output.compliance_path == first_spend.compliance_path
-                    && change_output.compliance_leaf == first_spend.compliance_leaf,
-                "transfer change output must use the sender compliance witness",
-            );
+        }
+        self.compliance
+            .witness
+            .validate(first_spend.note.asset_id(), &first_spend.note.address())?;
+        ensure!(self.compliance.timestamp > 0, "missing action timestamp");
+        self.compliance
+            .witness
+            .validate_user(&self.compliance.recipient, &self.outputs[0].dest_address)?;
+        let asset = &self.compliance.witness.asset;
+        match (&self.compliance.policy, asset.is_regulated) {
+            (Some(policy), true) => ensure!(
+                asset.leaf
+                    == shieldd_sdk_compliance::IndexedLeaf::from_policy(
+                        asset.leaf.value,
+                        asset.leaf.next_index,
+                        asset.leaf.next_value,
+                        policy,
+                    ),
+                "transfer policy does not match the asset witness"
+            ),
+            (None, true) => anyhow::bail!("regulated transfer missing asset policy"),
+            (Some(_), false) => anyhow::bail!("unregulated transfer must not carry a policy"),
+            (None, false) => {}
         }
         Ok(())
     }
@@ -345,21 +267,8 @@ impl TransferPlan {
         recent_position_floor: u64,
     ) -> anyhow::Result<TransferBody> {
         self.validate()?;
-        let sender_leaf = sender_leaf(
-            self.spends
-                .first()
-                .ok_or_else(|| anyhow!("transfer requires at least one spend"))?,
-        );
-        let asset_policy = self.asset_policy()?;
         let (routing, _) = self.routing();
-        let compliance = build_transfer_compliance(
-            &self.outputs,
-            &sender_leaf,
-            asset_policy,
-            &self.spends[0].asset_indexed_leaf,
-            self.spends[0].target_timestamp,
-            self.spends[0].tx_blinding_nonce,
-        )?;
+        let compliance = build_transfer_compliance(&self.outputs, &self.compliance)?;
 
         let inputs = self
             .spends
@@ -434,9 +343,9 @@ impl TransferPlan {
             balance_commitment: action_balance_commitment,
             inputs,
             outputs,
-            target_timestamp: self.spends[0].target_timestamp,
-            compliance_anchor: self.spends[0].compliance_anchor,
-            asset_anchor: self.spends[0].asset_anchor,
+            target_timestamp: self.compliance.timestamp,
+            compliance_anchor: self.compliance.witness.user_root,
+            asset_anchor: self.compliance.witness.asset.root,
             routing,
             routing_parameter_set_id: self.routing_parameters.id(),
         })
@@ -458,20 +367,10 @@ impl TransferPlan {
                 state_commitment_proofs.len()
             )));
         }
-        let sender_leaf = sender_leaf(&self.spends[0]);
-        let asset_policy = self
-            .asset_policy()
-            .map_err(|e| crate::ProofError::InvalidPublicInput(e.to_string()))?;
+        let sender_leaf = self.compliance.witness.sender.leaf.clone();
         let (routing, _) = self.routing();
-        let compliance = build_transfer_compliance(
-            &self.outputs,
-            &sender_leaf,
-            asset_policy,
-            &self.spends[0].asset_indexed_leaf,
-            self.spends[0].target_timestamp,
-            self.spends[0].tx_blinding_nonce,
-        )
-        .map_err(|e| crate::ProofError::InvalidPublicInput(e.to_string()))?;
+        let compliance = build_transfer_compliance(&self.outputs, &self.compliance)
+            .map_err(|e| crate::ProofError::InvalidPublicInput(e.to_string()))?;
 
         let input_publics = self
             .spends
@@ -550,9 +449,9 @@ impl TransferPlan {
             .expect("validated transfer plan has a receiver output");
         let receiver_created_note = receiver.output_note();
         let receiver_output = TransferReceiverOutputPrivate {
-            recipient_compliance_path: receiver.compliance_path.clone(),
-            recipient_compliance_position: receiver.compliance_position,
-            recipient_leaf: recipient_leaf(receiver, &receiver_created_note),
+            recipient_compliance_path: self.compliance.recipient.path.clone(),
+            recipient_compliance_position: self.compliance.recipient.position,
+            recipient_leaf: self.compliance.recipient.leaf.clone(),
             created_note: receiver_created_note,
         };
         let change_output = TransferChangeOutputPrivate {
@@ -567,9 +466,9 @@ impl TransferPlan {
             TransferProofPublic {
                 anchor,
                 balance_commitment: self.balance().commit(self.value_blinding),
-                asset_anchor: self.spends[0].asset_anchor,
-                compliance_anchor: self.spends[0].compliance_anchor,
-                target_timestamp: Fq::from(self.spends[0].target_timestamp),
+                asset_anchor: self.compliance.witness.asset.root,
+                compliance_anchor: self.compliance.witness.user_root,
+                target_timestamp: Fq::from(self.compliance.timestamp),
                 inputs: input_publics,
                 outputs: output_publics,
                 compliance: compliance.public,
@@ -581,13 +480,13 @@ impl TransferPlan {
                 action_balance_blinding: self.value_blinding,
                 ak: *fvk.spend_verification_key(),
                 nk: *fvk.nullifier_key(),
-                asset_path: self.spends[0].asset_path.clone(),
-                asset_position: self.spends[0].asset_position,
-                asset_indexed_leaf: self.spends[0].asset_indexed_leaf.clone(),
-                is_regulated: self.spends[0].is_regulated,
+                asset_path: self.compliance.witness.asset.path.clone(),
+                asset_position: self.compliance.witness.asset.position,
+                asset_indexed_leaf: self.compliance.witness.asset.leaf.clone(),
+                is_regulated: self.compliance.witness.asset.is_regulated,
                 routing_parameters: self.routing_parameters.clone(),
-                sender_compliance_path: self.spends[0].compliance_path.clone(),
-                sender_compliance_position: self.spends[0].compliance_position,
+                sender_compliance_path: self.compliance.witness.sender.path.clone(),
+                sender_compliance_position: self.compliance.witness.sender.position,
                 sender_leaf,
                 compliance: compliance.private,
                 required_input,
@@ -697,6 +596,7 @@ impl From<TransferPlan> for pb::TransferPlan {
             spends: msg.spends.into_iter().map(Into::into).collect(),
             outputs: msg.outputs.into_iter().map(Into::into).collect(),
             routing_parameters: Some(msg.routing_parameters.into()),
+            compliance: Some(msg.compliance.into()),
         }
     }
 }
@@ -723,6 +623,10 @@ impl TryFrom<pb::TransferPlan> for TransferPlan {
                 .into_iter()
                 .map(TryInto::try_into)
                 .collect::<Result<Vec<_>, _>>()?,
+            compliance: proto
+                .compliance
+                .ok_or_else(|| anyhow!("missing action compliance context"))?
+                .try_into()?,
             routing_parameters: proto
                 .routing_parameters
                 .ok_or_else(|| anyhow!("missing routing parameters"))?
@@ -731,24 +635,6 @@ impl TryFrom<pb::TransferPlan> for TransferPlan {
         plan.validate()?;
         Ok(plan)
     }
-}
-
-fn sender_leaf(spend: &ShieldedInputPlan) -> ComplianceLeaf {
-    spend.compliance_leaf.clone().unwrap_or_else(|| {
-        shieldd_sdk_compliance::ComplianceLeaf::synthetic_unregulated(
-            spend.note.address().clone(),
-            spend.note.asset_id(),
-        )
-    })
-}
-
-fn recipient_leaf(output: &ShieldedOutputPlan, created_note: &crate::Note) -> ComplianceLeaf {
-    output.compliance_leaf.clone().unwrap_or_else(|| {
-        shieldd_sdk_compliance::ComplianceLeaf::synthetic_unregulated(
-            created_note.address().clone(),
-            created_note.asset_id(),
-        )
-    })
 }
 
 fn transfer_output_parts(
@@ -794,10 +680,9 @@ mod tests {
         sct.insert(tct::Witness::Keep, note.commit())
             .expect("insert transfer input note");
         let state_commitment_proof = sct.witness(note.commit()).expect("input note witness");
-        let mut spend = ShieldedInputPlan::new(&mut rng, note, state_commitment_proof.position());
-        spend.target_timestamp = 1_700_000_000;
+        let spend = ShieldedInputPlan::new(&mut rng, note, state_commitment_proof.position());
 
-        let mut output = ShieldedOutputPlan::new(
+        let output = ShieldedOutputPlan::new(
             &mut rng,
             Value {
                 amount: Amount::from(receiver_amount),
@@ -805,14 +690,13 @@ mod tests {
             },
             test_keys::ADDRESS_1.clone(),
         );
-        align_output_metadata(&mut output, &spend);
 
         (spend, output, state_commitment_proof, sct.root())
     }
 
-    fn change_output(spend: &ShieldedInputPlan, amount: u64) -> ShieldedOutputPlan {
+    fn change_output(_spend: &ShieldedInputPlan, amount: u64) -> ShieldedOutputPlan {
         let mut rng = OsRng;
-        let mut output = ShieldedOutputPlan::new(
+        let output = ShieldedOutputPlan::new(
             &mut rng,
             Value {
                 amount: Amount::from(amount),
@@ -820,23 +704,10 @@ mod tests {
             },
             test_keys::ADDRESS_0.clone(),
         );
-        align_output_metadata(&mut output, spend);
         output
     }
 
-    fn align_output_metadata(output: &mut ShieldedOutputPlan, spend: &ShieldedInputPlan) {
-        output.asset_anchor = spend.asset_anchor;
-        output.compliance_anchor = spend.compliance_anchor;
-        output.target_timestamp = spend.target_timestamp;
-        output.is_regulated = spend.is_regulated;
-        output.tx_blinding_nonce = spend.tx_blinding_nonce;
-        output.asset_indexed_leaf = spend.asset_indexed_leaf.clone();
-        output.asset_path = spend.asset_path.clone();
-        output.asset_position = spend.asset_position;
-        output.asset_policy = spend.asset_policy.clone();
-    }
-
-    fn aligned_spend(
+    fn additional_spend(
         first: &ShieldedInputPlan,
         address: &Address,
         amount: u64,
@@ -850,25 +721,14 @@ mod tests {
                 asset_id: first.note.asset_id(),
             },
         );
-        let mut spend = ShieldedInputPlan::new(&mut rng, note, 1u64.into());
-        spend.target_timestamp = first.target_timestamp;
-        spend.asset_anchor = first.asset_anchor;
-        spend.compliance_anchor = first.compliance_anchor;
-        spend.tx_blinding_nonce = first.tx_blinding_nonce;
-        spend.is_regulated = first.is_regulated;
-        spend.compliance_path = first.compliance_path.clone();
-        spend.compliance_position = first.compliance_position;
-        spend.asset_path = first.asset_path.clone();
-        spend.asset_position = first.asset_position;
-        spend.asset_indexed_leaf = first.asset_indexed_leaf.clone();
-        spend.asset_policy = first.asset_policy.clone();
+        let spend = ShieldedInputPlan::new(&mut rng, note, 1u64.into());
         spend
     }
 
     fn two_spend_plan() -> TransferPlan {
         let (first, output, _, _) = transfer_parts(100, 200);
-        let second = aligned_spend(&first, &first.note.address(), 100);
-        TransferPlan::new(vec![first, second], vec![output], Fr::from(5u64))
+        let second = additional_spend(&first, &first.note.address(), 100);
+        crate::test_plan_helpers::transfer(vec![first, second], vec![output], Fr::from(5u64))
             .expect("aligned two-spend transfer plan should be valid")
     }
 
@@ -890,44 +750,10 @@ mod tests {
     }
 
     #[test]
-    fn new_rejects_mismatched_transfer_public_inputs() {
-        let (spend, output, _, _) = transfer_parts(100, 100);
-
-        let mut bad_asset_anchor = output.clone();
-        bad_asset_anchor.asset_anchor = tct::StateCommitment(Fq::from(99u64));
-        let err = TransferPlan::new(vec![spend.clone()], vec![bad_asset_anchor], Fr::from(5u64))
-            .expect_err("asset anchor mismatch should fail");
-        assert!(err
-            .to_string()
-            .contains("transfer output asset anchors must match spends"));
-
-        let mut bad_compliance_anchor = output.clone();
-        bad_compliance_anchor.compliance_anchor = tct::StateCommitment(Fq::from(88u64));
-        let err = TransferPlan::new(
-            vec![spend.clone()],
-            vec![bad_compliance_anchor],
-            Fr::from(5u64),
-        )
-        .expect_err("compliance anchor mismatch should fail");
-        assert!(err
-            .to_string()
-            .contains("transfer output compliance anchors must match spends"));
-
-        let mut bad_timestamp = output.clone();
-        bad_timestamp.target_timestamp += 1;
-        let err = TransferPlan::new(vec![spend.clone()], vec![bad_timestamp], Fr::from(5u64))
-            .expect_err("timestamp mismatch should fail");
-        assert!(err
-            .to_string()
-            .contains("transfer output timestamps must match spends"));
-
-        let mut bad_regulation = output;
-        bad_regulation.is_regulated = !spend.is_regulated;
-        let err = TransferPlan::new(vec![spend], vec![bad_regulation], Fr::from(5u64))
-            .expect_err("regulation mismatch should fail");
-        assert!(err
-            .to_string()
-            .contains("transfer output regulation flags must match spends"));
+    fn decoding_rejects_policy_not_bound_by_the_asset_witness() {
+        let mut plan = two_spend_plan();
+        plan.compliance.policy = Some(shieldd_sdk_compliance::AssetPolicy::default_unregulated());
+        assert_validation_and_decode_reject(plan, "unregulated transfer must not carry a policy");
     }
 
     #[test]
@@ -952,42 +778,14 @@ mod tests {
         spend_asset.spends[1].note = Note::generate(&mut OsRng, &test_keys::ADDRESS_0, value);
         assert_validation_and_decode_reject(spend_asset, "same asset");
 
-        let mut spend_asset_anchor = two_spend_plan();
-        spend_asset_anchor.spends[1].asset_anchor = tct::StateCommitment(Fq::from(0xA55E7u64));
-        assert_validation_and_decode_reject(spend_asset_anchor, "asset anchors must match");
-
-        let mut spend_compliance_anchor = two_spend_plan();
-        spend_compliance_anchor.spends[1].compliance_anchor =
-            tct::StateCommitment(Fq::from(0xC0FF1u64));
-        assert_validation_and_decode_reject(
-            spend_compliance_anchor,
-            "compliance anchors must match",
-        );
-
-        let mut spend_timestamp = two_spend_plan();
-        spend_timestamp.spends[1].target_timestamp += 1;
-        assert_validation_and_decode_reject(spend_timestamp, "timestamps must match");
-
-        let mut spend_nonce = two_spend_plan();
-        spend_nonce.spends[1].tx_blinding_nonce += Fr::from(1u64);
-        assert_validation_and_decode_reject(spend_nonce, "tx blinding nonce must match");
-
-        let mut spend_regulation = two_spend_plan();
-        spend_regulation.spends[1].is_regulated = !spend_regulation.spends[0].is_regulated;
-        assert_validation_and_decode_reject(spend_regulation, "regulation flags must match");
-
         let mut output_asset = two_spend_plan();
         output_asset.outputs[0].value.asset_id = asset::Id(Fq::from(0xA55E7u64));
         assert_validation_and_decode_reject(output_asset, "same asset as spends");
 
-        let mut output_nonce = two_spend_plan();
-        output_nonce.outputs[0].tx_blinding_nonce += Fr::from(1u64);
-        assert_validation_and_decode_reject(output_nonce, "tx blinding nonce must match spends");
-
         let (spend, receiver, _, _) = transfer_parts(100, 60);
         let change = change_output(&spend, 40);
         let mut change_owner =
-            TransferPlan::new(vec![spend], vec![receiver, change], Fr::from(5u64))
+            crate::test_plan_helpers::transfer(vec![spend], vec![receiver, change], Fr::from(5u64))
                 .expect("aligned transfer plan should be valid");
         change_owner.outputs[CHANGE_OUTPUT_INDEX].dest_address = test_keys::ADDRESS_1.clone();
         assert_validation_and_decode_reject(change_owner, "change output must be sender-owned");
@@ -996,7 +794,7 @@ mod tests {
     #[test]
     fn materializers_reject_missing_compliance_inputs_and_count_mismatches() {
         let (spend, output, _, anchor) = transfer_parts(100, 100);
-        let plan = TransferPlan::new(vec![spend], vec![output], Fr::from(5u64))
+        let plan = crate::test_plan_helpers::transfer(vec![spend], vec![output], Fr::from(5u64))
             .expect("transfer plan should be valid");
 
         let error = plan
@@ -1019,49 +817,15 @@ mod tests {
         assert!(error
             .to_string()
             .contains("transfer expected 1 auth sigs, got 0"));
-
-        let mut missing_receiver_leaf = plan.clone();
-        missing_receiver_leaf.outputs[0].compliance_leaf = None;
-        let error = missing_receiver_leaf
-            .transfer_body(
-                &test_keys::FULL_VIEWING_KEY,
-                &PayloadKey::random_key(&mut OsRng),
-                anchor,
-                0,
-            )
-            .expect_err("receiver compliance leaf must be authoritative");
-        assert!(error
-            .to_string()
-            .contains("receiver output missing compliance leaf"));
-
-        let mut missing_policy = plan;
-        for spend in &mut missing_policy.spends {
-            spend.is_regulated = true;
-            spend.asset_policy = None;
-        }
-        for output in &mut missing_policy.outputs {
-            output.is_regulated = true;
-            output.asset_policy = None;
-        }
-        let error = missing_policy
-            .transfer_body(
-                &test_keys::FULL_VIEWING_KEY,
-                &PayloadKey::random_key(&mut OsRng),
-                anchor,
-                0,
-            )
-            .expect_err("regulated transfer must carry its authoritative policy");
-        assert!(error
-            .to_string()
-            .contains("regulated transfer missing asset policy"));
     }
 
     #[test]
     fn new_and_decode_reject_multi_spend_sender_mismatch() {
         let (first, output, _, _) = transfer_parts(100, 200);
-        let second = aligned_spend(&first, &test_keys::ADDRESS_1, 100);
-        let err = TransferPlan::new(vec![first, second], vec![output], Fr::from(5u64))
-            .expect_err("sender mismatch must fail during plan construction");
+        let second = additional_spend(&first, &test_keys::ADDRESS_1, 100);
+        let err =
+            crate::test_plan_helpers::transfer(vec![first, second], vec![output], Fr::from(5u64))
+                .expect_err("sender mismatch must fail during plan construction");
         assert!(err
             .to_string()
             .contains("transfer spends must use the same sender address"));
@@ -1084,149 +848,9 @@ mod tests {
     }
 
     #[test]
-    fn new_and_decode_reject_multi_spend_compliance_witness_mismatch() {
-        let (first, output, _, _) = transfer_parts(100, 200);
-        let mut second = aligned_spend(&first, &first.note.address(), 100);
-        second.compliance_path.layers[0].siblings[0] = Fq::from(123u64).to_bytes().to_vec();
-        let err = TransferPlan::new(vec![first, second], vec![output], Fr::from(5u64))
-            .expect_err("sender compliance path mismatch must fail during plan construction");
-        assert!(err
-            .to_string()
-            .contains("transfer spends must use the same sender compliance witness"));
-
-        let mut proto: pb::TransferPlan = two_spend_plan().into();
-        proto.spends[1].compliance_position = proto.spends[1].compliance_position.wrapping_add(1);
-        let err = TransferPlan::try_from(proto)
-            .expect_err("sender compliance position mismatch must fail during plan decoding");
-        assert!(err
-            .to_string()
-            .contains("transfer spends must use the same sender compliance witness"));
-    }
-
-    #[test]
-    fn validation_rejects_every_redundant_multi_spend_witness_mutation() {
-        let mut bad_leaf = two_spend_plan();
-        bad_leaf.spends[1]
-            .compliance_leaf
-            .as_mut()
-            .expect("test spend has a compliance leaf")
-            .status = shieldd_sdk_compliance::UserAssetStatus::Frozen;
-        assert_validation_and_decode_reject(
-            bad_leaf,
-            "transfer spends must use the same sender compliance witness",
-        );
-
-        let mut bad_asset_path = two_spend_plan();
-        bad_asset_path.spends[1].asset_path.layers[0].siblings[0] =
-            Fq::from(321u64).to_bytes().to_vec();
-        assert_validation_and_decode_reject(
-            bad_asset_path,
-            "transfer spends must use the same asset registry witness",
-        );
-
-        let mut bad_asset_position = two_spend_plan();
-        bad_asset_position.spends[1].asset_position =
-            bad_asset_position.spends[1].asset_position.wrapping_add(1);
-        assert_validation_and_decode_reject(
-            bad_asset_position,
-            "transfer spends must use the same asset registry witness",
-        );
-
-        let mut bad_indexed_leaf = two_spend_plan();
-        bad_indexed_leaf.spends[1].asset_indexed_leaf.next_index = bad_indexed_leaf.spends[1]
-            .asset_indexed_leaf
-            .next_index
-            .wrapping_add(1);
-        assert_validation_and_decode_reject(
-            bad_indexed_leaf,
-            "transfer spends must use the same asset registry witness",
-        );
-
-        let mut bad_policy = two_spend_plan();
-        bad_policy.spends[1].asset_policy = Some(AssetPolicy::default_unregulated());
-        assert_validation_and_decode_reject(
-            bad_policy,
-            "transfer spends must use the same asset policy",
-        );
-    }
-
-    #[test]
-    fn validation_rejects_every_redundant_output_asset_witness_mutation() {
-        let mut bad_asset_path = two_spend_plan();
-        bad_asset_path.outputs[0].asset_path.layers[0].siblings[0] =
-            Fq::from(654u64).to_bytes().to_vec();
-        assert_validation_and_decode_reject(
-            bad_asset_path,
-            "transfer outputs must use the same asset registry witness as spends",
-        );
-
-        let mut bad_asset_position = two_spend_plan();
-        bad_asset_position.outputs[0].asset_position =
-            bad_asset_position.outputs[0].asset_position.wrapping_add(1);
-        assert_validation_and_decode_reject(
-            bad_asset_position,
-            "transfer outputs must use the same asset registry witness as spends",
-        );
-
-        let mut bad_indexed_leaf = two_spend_plan();
-        bad_indexed_leaf.outputs[0].asset_indexed_leaf.next_index = bad_indexed_leaf.outputs[0]
-            .asset_indexed_leaf
-            .next_index
-            .wrapping_add(1);
-        assert_validation_and_decode_reject(
-            bad_indexed_leaf,
-            "transfer outputs must use the same asset registry witness as spends",
-        );
-
-        let mut bad_policy = two_spend_plan();
-        bad_policy.outputs[0].asset_policy = Some(AssetPolicy::default_unregulated());
-        assert_validation_and_decode_reject(
-            bad_policy,
-            "transfer outputs must use the same asset policy as spends",
-        );
-    }
-
-    #[test]
-    fn validation_rejects_every_redundant_change_sender_witness_mutation() {
-        let (spend, receiver, _, _) = transfer_parts(100, 60);
-        let change = change_output(&spend, 40);
-        let plan = TransferPlan::new(vec![spend], vec![receiver, change], Fr::from(5u64))
-            .expect("aligned transfer plan should be valid");
-
-        let mut bad_path = plan.clone();
-        bad_path.outputs[CHANGE_OUTPUT_INDEX].compliance_path.layers[0].siblings[0] =
-            Fq::from(987u64).to_bytes().to_vec();
-        assert_validation_and_decode_reject(
-            bad_path,
-            "transfer change output must use the sender compliance witness",
-        );
-
-        let mut bad_position = plan.clone();
-        bad_position.outputs[CHANGE_OUTPUT_INDEX].compliance_position = bad_position.outputs
-            [CHANGE_OUTPUT_INDEX]
-            .compliance_position
-            .wrapping_add(1);
-        assert_validation_and_decode_reject(
-            bad_position,
-            "transfer change output must use the sender compliance witness",
-        );
-
-        let mut bad_leaf = plan;
-        bad_leaf.outputs[CHANGE_OUTPUT_INDEX]
-            .compliance_leaf
-            .as_mut()
-            .expect("change output has a compliance leaf")
-            .status = shieldd_sdk_compliance::UserAssetStatus::Frozen;
-        assert_validation_and_decode_reject(
-            bad_leaf,
-            "transfer change output must use the sender compliance witness",
-        );
-    }
-
-    #[test]
     fn plan_proto_roundtrip_derives_balance_and_fixed_arity() {
         let (spend, output, _, _) = transfer_parts(100, 100);
-        let plan = TransferPlan::new(vec![spend], vec![output], Fr::from(5u64))
+        let plan = crate::test_plan_helpers::transfer(vec![spend], vec![output], Fr::from(5u64))
             .expect("transfer plan should be valid");
         let expected_balance = plan.balance();
         let decoded = TransferPlan::try_from(pb::TransferPlan::from(plan))
@@ -1248,27 +872,19 @@ mod tests {
     }
 
     #[test]
-    fn enriched_metadata_materializes_directly_into_the_body() {
+    fn action_context_materializes_directly_into_the_body() {
         let (spend, output, _, _) = transfer_parts(100, 100);
-        let mut plan = TransferPlan::new(vec![spend], vec![output], Fr::from(5u64))
-            .expect("transfer plan should be valid");
+        let mut plan =
+            crate::test_plan_helpers::transfer(vec![spend], vec![output], Fr::from(5u64))
+                .expect("transfer plan should be valid");
 
-        let new_asset_anchor = tct::StateCommitment(Fq::from(0xA55E7u64));
-        let new_compliance_anchor = tct::StateCommitment(Fq::from(0xC0FF1u64));
-        let new_timestamp = plan.spends[0].target_timestamp + 42;
-        for spend in &mut plan.spends {
-            spend.asset_anchor = new_asset_anchor;
-            spend.compliance_anchor = new_compliance_anchor;
-            spend.target_timestamp = new_timestamp;
-        }
-        for output in &mut plan.outputs {
-            output.asset_anchor = new_asset_anchor;
-            output.compliance_anchor = new_compliance_anchor;
-            output.target_timestamp = new_timestamp;
-        }
+        let new_asset_anchor = plan.compliance.witness.asset.root;
+        let new_compliance_anchor = plan.compliance.witness.user_root;
+        let new_timestamp = plan.compliance.timestamp + 42;
+        plan.compliance.timestamp = new_timestamp;
 
         plan.validate()
-            .expect("canonical spend/output metadata should need no cache refresh");
+            .expect("complete action context should validate");
         let body = plan
             .transfer_body(
                 &test_keys::FULL_VIEWING_KEY,
@@ -1276,7 +892,7 @@ mod tests {
                 tct::Tree::default().root(),
                 0,
             )
-            .expect("enriched plan should materialize");
+            .expect("complete plan should materialize");
         assert_eq!(body.asset_anchor, new_asset_anchor);
         assert_eq!(body.compliance_anchor, new_compliance_anchor);
         assert_eq!(body.target_timestamp, new_timestamp);
@@ -1289,7 +905,7 @@ mod tests {
     #[test]
     fn effect_hash_binds_proof_bound_compliance_records_but_not_witness_anchor() {
         let (spend, output, _, anchor) = transfer_parts(100, 100);
-        let plan = TransferPlan::new(vec![spend], vec![output], Fr::from(5u64))
+        let plan = crate::test_plan_helpers::transfer(vec![spend], vec![output], Fr::from(5u64))
             .expect("transfer plan should be valid");
         let body = plan
             .transfer_body(
@@ -1332,8 +948,9 @@ mod tests {
     fn receiver_and_change_output_indices_preserve_plan_order() {
         let (spend, receiver, proof, anchor) = transfer_parts(100, 60);
         let change = change_output(&spend, 40);
-        let plan = TransferPlan::new(vec![spend], vec![receiver, change], Fr::from(5u64))
-            .expect("transfer plan with change should be valid");
+        let plan =
+            crate::test_plan_helpers::transfer(vec![spend], vec![receiver, change], Fr::from(5u64))
+                .expect("transfer plan with change should be valid");
         let expected_receiver = plan.outputs[0].output_note().commit();
         let expected_change = plan.outputs[1].output_note().commit();
 
@@ -1351,7 +968,7 @@ mod tests {
     #[test]
     fn transfer_body_hides_padding_and_wraps_all_outputs_under_action_commitment() {
         let (spend, receiver, _, anchor) = transfer_parts(100, 60);
-        let plan = TransferPlan::new(vec![spend], vec![receiver], Fr::from(5u64))
+        let plan = crate::test_plan_helpers::transfer(vec![spend], vec![receiver], Fr::from(5u64))
             .expect("transfer plan should be valid");
         let mut rng = OsRng;
         let memo_key = PayloadKey::random_key(&mut rng);
@@ -1422,5 +1039,49 @@ mod tests {
             &receiver.note_payload.ephemeral_key,
         )
         .is_err());
+    }
+    #[test]
+    fn decoding_requires_complete_context_and_canonical_nonce() {
+        let plan = two_spend_plan();
+        let mut proto: pb::TransferPlan = plan.clone().into();
+        proto.compliance = None;
+        assert!(TransferPlan::try_from(proto)
+            .unwrap_err()
+            .to_string()
+            .contains("missing action compliance context"));
+        let mut proto: pb::TransferPlan = plan.clone().into();
+        proto.compliance.as_mut().unwrap().recipient = None;
+        assert!(TransferPlan::try_from(proto).is_err());
+        let mut proto: pb::TransferPlan = plan.into();
+        proto.compliance.as_mut().unwrap().nonce.clear();
+        assert!(TransferPlan::try_from(proto).is_err());
+    }
+
+    #[test]
+    fn validation_rejects_invalid_action_witnesses() {
+        let plan = two_spend_plan();
+        let mut wrong_asset = plan.clone();
+        wrong_asset.compliance.witness.asset.asset_id = asset::Id(Fq::from(17u64));
+        assert_validation_and_decode_reject(
+            wrong_asset,
+            "action asset witness does not match notes",
+        );
+        let mut wrong_path = plan.clone();
+        wrong_path.compliance.witness.asset.path.layers[0].siblings[0] =
+            Fq::from(17u64).to_bytes().to_vec();
+        assert_validation_and_decode_reject(wrong_path, "invalid asset witness root or path");
+        let mut wrong_recipient = plan.clone();
+        wrong_recipient.compliance.recipient.leaf =
+            shieldd_sdk_compliance::ComplianceLeaf::synthetic_unregulated(
+                test_keys::ADDRESS_0.clone(),
+                *BASE_ASSET_ID,
+            );
+        assert_validation_and_decode_reject(
+            wrong_recipient,
+            "user witness asset or address mismatch",
+        );
+        let mut no_timestamp = plan;
+        no_timestamp.compliance.timestamp = 0;
+        assert_validation_and_decode_reject(no_timestamp, "missing action timestamp");
     }
 }

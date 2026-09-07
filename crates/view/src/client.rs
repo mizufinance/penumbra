@@ -1,3 +1,4 @@
+use shieldd_sdk_compliance::ComplianceQuery;
 use std::{collections::BTreeMap, future::Future, pin::Pin};
 
 use anyhow::Result;
@@ -360,7 +361,7 @@ pub trait ViewClient {
     /// because it makes a single gRPC call and fetches the tree anchors only once.
     fn compliance_batch_merkle_proofs(
         &mut self,
-        queries: Vec<(Address, asset::Id)>,
+        queries: Vec<ComplianceQuery>,
     ) -> Pin<
         Box<dyn Future<Output = Result<pb::ComplianceBatchMerkleProofsResponse>> + Send + 'static>,
     >;
@@ -1043,7 +1044,7 @@ where
 
     fn compliance_batch_merkle_proofs(
         &mut self,
-        queries: Vec<(Address, asset::Id)>,
+        queries: Vec<ComplianceQuery>,
     ) -> Pin<
         Box<dyn Future<Output = Result<pb::ComplianceBatchMerkleProofsResponse>> + Send + 'static>,
     > {
@@ -1051,10 +1052,12 @@ where
         async move {
             let proto_queries = queries
                 .into_iter()
-                .map(|(address, asset_id)| pb::ComplianceBatchQuery {
-                    address: Some(address.into()),
-                    asset_id: Some(asset_id.into()),
-                })
+                .map(
+                    |ComplianceQuery { address, asset_id }| pb::ComplianceBatchQuery {
+                        address: Some(address.into()),
+                        asset_id: Some(asset_id.into()),
+                    },
+                )
                 .collect();
 
             let request = pb::ComplianceBatchMerkleProofsRequest {

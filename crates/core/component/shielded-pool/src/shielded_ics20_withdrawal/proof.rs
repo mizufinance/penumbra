@@ -260,10 +260,7 @@ impl TryFrom<pb::ZkShieldedIcs20WithdrawalProof> for ShieldedIcs20WithdrawalProo
 #[cfg(test)]
 mod tests {
     use super::{withdrawal_effect_hash_limbs, ShieldedIcs20WithdrawalProof};
-    use crate::{
-        shielded_ics20_withdrawal::test_runtime, test_proof_helpers::proof_test_helpers,
-        ShieldedIcs20WithdrawalFamilyId,
-    };
+    use crate::{test_proof_helpers::proof_test_helpers, ShieldedIcs20WithdrawalFamilyId};
     use decaf377::Fq;
 
     #[test]
@@ -316,10 +313,10 @@ mod tests {
 
     #[cfg(any(unix, windows))]
     #[test]
-    fn shielded_ics20_withdrawal_proof_roundtrip() {
-        if test_runtime::should_skip_shielded_ics20_withdrawal_proof_roundtrip_tests() {
-            return;
-        }
+    #[ignore = "expensive: real release-mode Gnark proof generation"]
+    fn gnark_proof_shielded_ics20_withdrawal_proof_roundtrip() {
+        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Withdrawal)
+            .expect("proof test prerequisites must be present");
 
         let (public, private) =
             proof_test_helpers::build_shielded_ics20_withdrawal_roundtrip_inputs(

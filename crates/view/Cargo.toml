@@ -23,7 +23,7 @@ async-trait = {workspace = true}
 bytes = {workspace = true, features = ["serde"]}
 camino = {workspace = true}
 cnidarium = {workspace = true, features = ["rpc"]}
-decaf377 = {workspace = true, features = ["r1cs"], default-features = true}
+decaf377 = {workspace = true, default-features = true}
 digest = "0.9"
 futures = {workspace = true}
 genawaiter = "0.99"

@@ -10,12 +10,10 @@ pub mod applications;
 pub mod challenge;
 pub mod gipa;
 #[doc(hidden)]
-pub mod statement_binding;
 pub mod tipa;
 
 pub type Error = Box<dyn ErrorTrait>;
 
-//TODO: helper function for mul because relying on MulAssign
 pub(crate) fn mul_helper<T: MulAssign<F> + Clone, F: Clone>(t: &T, f: &F) -> T {
     let mut clone = t.clone();
     clone.mul_assign(f.clone());

@@ -17,10 +17,6 @@ pub enum ProofError {
     #[error("proof verification failed: {0}")]
     ProofVerificationFailed(String),
 
-    /// Constraint synthesis error.
-    #[error("constraint synthesis error: {0}")]
-    SynthesisError(#[from] ark_relations::r1cs::SynthesisError),
-
     /// Invalid public input.
     #[error("invalid public input: {0}")]
     InvalidPublicInput(String),

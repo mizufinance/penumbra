@@ -33,14 +33,6 @@ ALLOWED_LFS_PATHS = {
     for family in FAMILIES
 }
 EXPECTED_WORKFLOW_RESTORES: dict[str, int] = {}
-FORMAL_WORKFLOWS = {
-    "formal-scheduled.yml",
-    "formal.yml",
-    "fv-toolchain-image.yml",
-    "snarkpack-fv-toolchain-image.yml",
-    "snarkpack-release-audit.yml",
-    "soundness-provers.yml",
-}
 
 
 def fail(message: str) -> None:
@@ -161,7 +153,7 @@ def enforce_workflow_fanout() -> None:
     rust = (workflows / "rust.yml").read_text(encoding="utf-8")
     checks = extract_job(rust, "checks")
     if "proof-artifacts" in checks:
-        fail("the non-formal Rust checks job depends on proof-artifact hydration")
+        fail("the Rust checks job depends on proof-artifact hydration")
     tests = extract_job(rust, "tests")
     if "/restore-proof-artifacts" in tests:
         fail("the Rust tests job restores proof artifacts on candidate runs")
@@ -176,14 +168,11 @@ def enforce_workflow_fanout() -> None:
     for name in ("containers.yml", "docs-lint.yml", "orbis-integration.yml", "release.yml", "smoke.yml"):
         text = (workflows / name).read_text(encoding="utf-8")
         if "proof-artifacts" in text:
-            fail(f"the non-formal {name} workflow depends on proof-artifact hydration")
+            fail(f"the {name} workflow depends on proof-artifact hydration")
 
 
 def enforce_proof_scheduling() -> None:
     workflows = ROOT / ".github" / "workflows"
-    remaining = sorted(name for name in FORMAL_WORKFLOWS if (workflows / name).exists())
-    if remaining:
-        fail(f"formal verification workflows belong in shieldd-formal: {remaining}")
     for relative in ("rust.yml",):
         workflow = workflows / relative
         if re.search(r"(?m)^\s+schedule:\s*$", workflow.read_text()):

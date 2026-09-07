@@ -116,9 +116,7 @@ impl NetworkConfig {
         })
     }
 
-    /// Prepare set of initial validators present at genesis. Optionally reads config values from a
-    /// JSON file, otherwise falls back to the Shieldd Labs CI validator configs used for
-    /// testnets.
+    /// Read supplied validators or use the bundled development defaults.
     fn collect_validators(
         validators_input_file: Option<PathBuf>,
         peer_address_template: Option<String>,
@@ -127,15 +125,10 @@ impl NetworkConfig {
         let testnet_validators = if let Some(validators_input_file) = validators_input_file {
             NetworkValidator::from_json(validators_input_file)?
         } else {
-            static LATEST_VALIDATORS: &str = include_str!(env!("PD_LATEST_TESTNET_VALIDATORS"));
-            NetworkValidator::from_reader(std::io::Cursor::new(LATEST_VALIDATORS)).with_context(
-                || {
-                    format!(
-                        "could not parse default latest testnet validators file {:?}",
-                        env!("PD_LATEST_TESTNET_VALIDATORS")
-                    )
-                },
-            )?
+            NetworkValidator::from_reader(std::io::Cursor::new(include_str!(
+                "defaults/validators.json"
+            )))
+            .context("parse bundled development validators")?
         };
 
         if !external_addresses.is_empty() && external_addresses.len() != testnet_validators.len() {
@@ -153,9 +146,7 @@ impl NetworkConfig {
             .collect())
     }
 
-    /// Prepare a set of initial [Allocation]s present at genesis. Optionally reads allocation
-    /// files a CSV file, otherwise falls back to the historical requests of the testnet faucet
-    /// in the Shieldd Discord channel.
+    /// Read supplied allocations or use the bundled development defaults.
     fn collect_allocations(
         allocations_input_file: Option<PathBuf>,
     ) -> anyhow::Result<Vec<Allocation>> {
@@ -166,17 +157,10 @@ impl NetworkConfig {
                 )?,
             )
         } else {
-            // Default to latest testnet allocations computed in the build script.
-            static LATEST_ALLOCATIONS: &str = include_str!(env!("PD_LATEST_TESTNET_ALLOCATIONS"));
-            Ok(
-                NetworkAllocation::from_reader(std::io::Cursor::new(LATEST_ALLOCATIONS))
-                    .with_context(|| {
-                        format!(
-                            "could not parse default latest testnet allocations file {:?}",
-                            env!("PD_LATEST_TESTNET_ALLOCATIONS")
-                        )
-                    })?,
-            )
+            NetworkAllocation::from_reader(std::io::Cursor::new(include_str!(
+                "defaults/allocations.csv"
+            )))
+            .context("parse bundled development allocations")
         }
     }
 
@@ -282,19 +266,6 @@ impl NetworkConfig {
             validators: vec![],
         };
         Ok(genesis)
-    }
-
-    pub(crate) fn make_checkpoint(
-        genesis: Genesis<shieldd_sdk_app::genesis::AppState>,
-        checkpoint: Option<Vec<u8>>,
-    ) -> Genesis<shieldd_sdk_app::genesis::AppState> {
-        match checkpoint {
-            Some(checkpoint) => Genesis {
-                app_state: shieldd_sdk_app::genesis::AppState::Checkpoint(checkpoint),
-                ..genesis
-            },
-            None => genesis,
-        }
     }
 
     /// Generate and write to disk the Tendermint configs for each validator at genesis.
@@ -700,11 +671,10 @@ mod tests {
         assert_eq!(testnet_config.name, "test-chain-1234");
         assert_eq!(testnet_config.genesis.validators.len(), 2);
         // When no validators_input_file is provided, validators are loaded from
-        // PD_LATEST_TESTNET_VALIDATORS (testnets/validators-ci.json) which has 2 validators.
         let shieldd_sdk_app::genesis::AppState::Content(app_state) =
             testnet_config.genesis.app_state
         else {
-            unimplemented!("TODO: support checkpointed app state")
+            panic!("network generation must produce content genesis")
         };
         assert_eq!(
             app_state
@@ -722,7 +692,8 @@ mod tests {
     /// Generate a config suitable for a public testnet: custom validators input file,
     /// increasing the default validators from 1 -> 2.
     fn generate_network_config() -> anyhow::Result<()> {
-        let ci_validators_filepath = PathBuf::from("../../../testnets/validators-ci.json");
+        let ci_validators_filepath =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/network/defaults/validators.json");
         let testnet_config = NetworkConfig::generate(
             "test-chain-4567",
             None,
@@ -743,7 +714,7 @@ mod tests {
         let shieldd_sdk_app::genesis::AppState::Content(app_state) =
             testnet_config.genesis.app_state
         else {
-            unimplemented!("TODO: support checkpointed app state")
+            panic!("network generation must produce content genesis")
         };
         assert_eq!(
             app_state

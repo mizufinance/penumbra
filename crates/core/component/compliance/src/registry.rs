@@ -263,25 +263,6 @@ impl GenesisAssetAdmission {
     }
 }
 
-/// A policy transition admitted by the governance proposal state machine.
-pub struct EnactedGovernanceAssetPolicyAdmission {
-    proposal_id: u64,
-    update: crate::structs::UpdateAssetIbcPolicy,
-}
-
-impl EnactedGovernanceAssetPolicyAdmission {
-    /// Bind an enacted proposal identifier to its decoded policy payload.
-    pub fn from_passed_proposal(
-        proposal_id: u64,
-        update: crate::structs::UpdateAssetIbcPolicy,
-    ) -> Self {
-        Self {
-            proposal_id,
-            update,
-        }
-    }
-}
-
 /// Compact proof-service index for one registered compliance leaf.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserLeafRecord {
@@ -1569,6 +1550,7 @@ trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "test-helpers"))]
     async fn replace_asset_ibc_policy(
         &mut self,
         asset_id: asset::Id,
@@ -1894,25 +1876,6 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
         .await
     }
 
-    /// Apply a route-policy transition admitted by the governance state machine.
-    async fn apply_enacted_governance_asset_policy(
-        &mut self,
-        admission: EnactedGovernanceAssetPolicyAdmission,
-    ) -> Result<IndexedLeaf> {
-        tracing::info!(
-            proposal_id = admission.proposal_id,
-            asset_id = %admission.update.asset_id,
-            "applying enacted compliance asset policy"
-        );
-        <Self as ComplianceRegistryRawWrite>::replace_asset_ibc_policy(
-            self,
-            admission.update.asset_id,
-            admission.update.expected_route_policy_hash,
-            admission.update.allowed_ibc_routes,
-        )
-        .await
-    }
-
     /// Store validated ICS-20 compliance metadata.
     fn store_ibc_compliance_metadata(
         &mut self,
@@ -1943,6 +1906,22 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
     #[cfg(any(test, feature = "test-helpers"))]
     async fn test_only_add_compliance_leaf(&mut self, leaf: ComplianceLeaf) -> Result<u64> {
         <Self as ComplianceRegistryRawWrite>::add_compliance_leaf(self, leaf).await
+    }
+
+    #[cfg(any(test, feature = "test-helpers"))]
+    async fn test_only_replace_asset_ibc_policy(
+        &mut self,
+        asset_id: asset::Id,
+        expected_hash: [u8; 32],
+        routes: Vec<crate::IbcRoute>,
+    ) -> Result<IndexedLeaf> {
+        <Self as ComplianceRegistryRawWrite>::replace_asset_ibc_policy(
+            self,
+            asset_id,
+            expected_hash,
+            routes,
+        )
+        .await
     }
 
     /// Insert an asset policy in test/benchmark state without a registrar grant.
