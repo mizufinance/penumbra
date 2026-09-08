@@ -2,7 +2,7 @@ mod action;
 mod generated;
 mod plan;
 mod proof;
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 mod prover_runtime;
 mod view;
 

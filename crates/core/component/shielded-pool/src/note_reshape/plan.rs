@@ -7,13 +7,13 @@ use shieldd_sdk_keys::symmetric::{PayloadKey, WrappedMemoKey};
 use shieldd_sdk_keys::FullViewingKey;
 use shieldd_sdk_proto::{core::component::shielded_pool::v1 as pb, DomainType};
 use shieldd_sdk_tct as tct;
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 use shieldd_sdk_txhash::EffectingData;
 use std::convert::{TryFrom, TryInto};
 
 use crate::discovery::{self, Parameters};
 
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 use super::{NoteReshape, NoteReshapeProof};
 use super::{
     NoteReshapeBody, NoteReshapeFamilyId, NoteReshapeInputBody, NoteReshapeInputPrivate,
@@ -408,7 +408,7 @@ impl NoteReshapePlan {
         })
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     pub fn note_reshape(
         &self,
         fvk: &FullViewingKey,

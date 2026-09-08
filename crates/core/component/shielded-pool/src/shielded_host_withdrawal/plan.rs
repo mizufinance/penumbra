@@ -488,7 +488,7 @@ impl ShieldedHostWithdrawalPlan {
         })
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     pub fn build_unauth_shielded_host_withdrawal(
         &self,
         fvk: &FullViewingKey,
@@ -764,7 +764,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_padded_host_withdrawal_proof_roundtrip() {

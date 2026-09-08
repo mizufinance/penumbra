@@ -217,7 +217,7 @@ impl ShieldedIcs20WithdrawalProof {
         Ok(())
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     pub fn prove(
         public: ShieldedIcs20WithdrawalProofPublic,
         private: ShieldedIcs20WithdrawalProofPrivate,
@@ -321,7 +321,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_shielded_ics20_withdrawal_proof_roundtrip() {
@@ -388,7 +388,7 @@ mod tests {
         }
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_shielded_ics20_withdrawal_accumulator_branches_roundtrip() {

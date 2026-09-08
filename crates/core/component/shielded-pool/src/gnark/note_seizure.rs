@@ -1,4 +1,4 @@
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 use anyhow::bail;
 use anyhow::Result;
 use ark_serialize::CanonicalSerialize;
@@ -34,7 +34,7 @@ pub fn translate_note_seizure_proof_result(payload: &[u8]) -> Result<(Fq, NoteSe
     Ok((claimed_hash, proof))
 }
 
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 mod native {
     use super::*;
     use crate::gnark::transport::{GnarkClient, GnarkFamilyConfig};
@@ -110,12 +110,15 @@ mod native {
         }
     }
 }
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 pub use native::GnarkNoteSeizureClient;
-#[cfg(all(any(unix, windows), any(test, feature = "benchmark-helpers")))]
+#[cfg(all(
+    all(feature = "prover", any(unix, windows)),
+    any(test, feature = "benchmark-helpers")
+))]
 pub(crate) use native::NOTE_SEIZURE_FAMILY_CONFIG;
 
-#[cfg(all(test, any(unix, windows)))]
+#[cfg(all(test, all(feature = "prover", any(unix, windows))))]
 mod tests {
     use decaf377::Fr;
     use shieldd_sdk_asset::{asset, Value};
@@ -217,5 +220,5 @@ mod tests {
     }
 }
 
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 pub(super) use native::resolved_configuration;

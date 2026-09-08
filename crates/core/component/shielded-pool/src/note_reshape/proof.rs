@@ -241,7 +241,7 @@ impl NoteReshapeProof {
             .ok_or_else(|| anyhow!("{} proof did not verify", public.family_id.label()))
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     pub fn prove(
         public: NoteReshapeProofPublic,
         private: NoteReshapeProofPrivate,
@@ -328,21 +328,21 @@ mod tests {
         }
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_note_reshape_1x8_roundtrip() {
         assert_roundtrip(NoteReshapeFamilyId::ALL[0]);
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_note_reshape_8x1_roundtrip() {
         assert_roundtrip(NoteReshapeFamilyId::ALL[1]);
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     fn assert_roundtrip(family_id: NoteReshapeFamilyId) {
         crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::NoteReshape(
             family_id,

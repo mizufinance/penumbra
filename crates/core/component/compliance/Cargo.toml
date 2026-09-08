@@ -11,13 +11,13 @@ edition = {workspace = true}
 component = [
     "cnidarium",
     "cnidarium-component",
-    "ibc-proto",
+    "dep:ibc-proto",
     "shieldd-sdk-proto/cnidarium",
     "shieldd-sdk-sct/component",
-    "tokio",
+    "dep:tokio",
 ]
 default = ["component"]
-scanner = ["component", "dep:rusqlite"]
+scanner = ["dep:rusqlite", "dep:tokio", "tokio/sync", "tokio/time", "dep:ibc-proto"]
 sqlite-bundled = ["scanner", "rusqlite/bundled"]
 test-helpers = ["decaf377-ka"]
 poc-orbis = ["dep:aes-gcm", "dep:hkdf"]

@@ -22,5 +22,5 @@ sha2 = { workspace = true }
 shieldd-orbis-client = { workspace = true }
 shieldd-sdk-compliance = { workspace = true, default-features = false, features = ["poc-orbis"] }
 shieldd-sdk-keys = { workspace = true, default-features = true }
-shieldd-sdk-shielded-pool = { workspace = true, default-features = true }
+shieldd-sdk-shielded-pool = { workspace = true, default-features = false }
 tokio = { workspace = true, features = ["full"] }

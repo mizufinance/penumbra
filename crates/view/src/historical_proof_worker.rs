@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use async_trait::async_trait;
+#[cfg(feature = "rpc")]
 use shieldd_sdk_proto::core::component::sct::v1::{
     query_service_client::QueryServiceClient as SctQueryServiceClient,
     ArchivedNullifierProofRequest,
@@ -11,6 +12,7 @@ use shieldd_sdk_sct::{
     Nullifier,
 };
 use tokio::sync::watch;
+#[cfg(feature = "rpc")]
 use tonic::transport::Channel;
 
 use crate::{
@@ -18,10 +20,12 @@ use crate::{
     HistoricalProofProvider, HistoricalProofUpdateError, HistoricalWitnessSource, Storage,
 };
 
+#[cfg(feature = "rpc")]
 pub struct RpcHistoricalWitnessSource {
     pub channel: Channel,
 }
 
+#[cfg(feature = "rpc")]
 #[async_trait]
 impl HistoricalWitnessSource for RpcHistoricalWitnessSource {
     async fn nonmembership_proof(

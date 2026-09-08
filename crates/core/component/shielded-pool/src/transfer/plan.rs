@@ -601,7 +601,7 @@ impl TransferPlan {
         ))
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     pub fn build_unauth_transfer(
         &self,
         fvk: &FullViewingKey,

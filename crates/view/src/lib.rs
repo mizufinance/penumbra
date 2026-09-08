@@ -40,7 +40,9 @@ pub mod planning_io;
 
 pub use worker::{SyncWorker, WalletBlock};
 
-pub use historical_proof_worker::{HistoricalProofWorker, RpcHistoricalWitnessSource};
+pub use historical_proof_worker::HistoricalProofWorker;
+#[cfg(feature = "rpc")]
+pub use historical_proof_worker::RpcHistoricalWitnessSource;
 
 mod storage_planning;
 pub use storage_planning::StoragePlanningIo;

@@ -17,7 +17,7 @@ anyhow = {workspace = true}
 async-trait = {workspace = true}
 bech32 = {workspace = true}
 bytes = {workspace = true, features = ["serde"]}
-cnidarium = {workspace = true, optional = true, default-features = true, features = ["rpc"]}
+cnidarium = {workspace = true, optional = true, default-features = true}
 decaf377-rdsa = {workspace = true}
 futures = {workspace = true}
 hex = {workspace = true}

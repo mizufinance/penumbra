@@ -43,7 +43,7 @@ ark-serialize                    = { workspace = true }
 async-trait                      = { workspace = true }
 bincode                          = { workspace = true }
 cfg-if                           = "1.0"
-cnidarium                        = { workspace = true, optional = true, features = ["migration", "rpc"], default-features = true }
+cnidarium                        = { workspace = true, optional = true, features = ["migration"], default-features = true }
 cnidarium-component              = { workspace = true, optional = true, default-features = true }
 decaf377                         = { workspace = true, default-features = true }
 decaf377-rdsa                    = { workspace = true }

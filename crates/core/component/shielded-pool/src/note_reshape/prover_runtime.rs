@@ -1,4 +1,4 @@
-#![cfg(any(unix, windows))]
+#![cfg(all(feature = "prover", any(unix, windows)))]
 
 use crate::NoteReshapeFamilyId;
 use crate::{

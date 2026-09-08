@@ -8,7 +8,7 @@ license = {workspace = true}
 edition = {workspace = true}
 
 [features]
-benchmark-helpers = ["component", "shieldd-sdk-ibc/benchmark-helpers"]
+benchmark-helpers = ["prover", "component", "shieldd-sdk-ibc/benchmark-helpers"]
 component = [
     "shieldd-sdk-ibc/component",
     "cnidarium-component",
@@ -16,12 +16,11 @@ component = [
     "shieldd-sdk-compliance/component",
     "shieldd-sdk-proto/cnidarium",
     "shieldd-sdk-sct/component",
-    "ibc-proto/server",
-    "ibc-proto/transport",
 ]
 default = ["std", "component"]
 std = ["ark-ff/std"]
-bundled-proving-keys = ["shieldd-sdk-proof-params/bundled-proving-keys"]
+prover = ["dep:libloading"]
+bundled-proving-keys = ["prover", "shieldd-sdk-proof-params/bundled-proving-keys"]
 parallel = [
     "shieldd-sdk-tct/parallel",
     "ark-ff/parallel",
@@ -57,7 +56,7 @@ ibc-proto = {workspace = true, default-features = false}
 ibc-types = {workspace = true, features = ["with_serde"], default-features = false}
 imbl = {workspace = true}
 jmt = {workspace = true}
-libloading = {workspace = true}
+libloading = {workspace = true, optional = true}
 metrics = {workspace = true}
 once_cell = {workspace = true}
 shieldd-sdk-asset = {workspace = true, default-features = false}
@@ -84,6 +83,7 @@ thiserror = {workspace = true}
 tracing = {workspace = true}
 
 [dev-dependencies]
+shieldd-sdk-shielded-pool = {path = ".", default-features = false, features = ["prover"]}
 decaf377 = {workspace = true, features = ["r1cs"]}
 poseidon377 = {workspace = true, features = ["r1cs"]}
 ark-r1cs-std = {workspace = true}

@@ -204,7 +204,7 @@ impl TransferProof {
         Ok(())
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     pub fn prove(
         public: TransferProofPublic,
         private: TransferProofPrivate,
@@ -243,7 +243,7 @@ impl TryFrom<pb::ZkTransferProof> for TransferProof {
 }
 
 #[cfg(feature = "component")]
-#[cfg(all(test, any(unix, windows)))]
+#[cfg(all(test, all(feature = "prover", any(unix, windows))))]
 mod tests {
     use std::sync::{LazyLock, Mutex};
 
@@ -301,6 +301,15 @@ mod tests {
             sender_compliance_path,
             recipient_compliance_path,
         )
+    }
+
+    #[test]
+    fn transfer_public_projection_matches_builder_without_proving() {
+        for regulated in [false, true] {
+            let (transfer, expected, context) = crate::test_proof_helpers::proof_test_helpers::build_transfer_action_and_public_without_proof(regulated);
+            let actual = transfer_extract_public(&transfer, &context).expect("extract public inputs");
+            assert_eq!(actual.statement_hash().unwrap(), expected.statement_hash().unwrap());
+        }
     }
 
     #[test]

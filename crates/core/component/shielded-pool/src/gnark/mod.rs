@@ -1,4 +1,4 @@
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 mod artifacts;
 mod binary;
 mod note_reshape;
@@ -7,11 +7,11 @@ mod note_reshape_witness_binary;
 mod note_seizure;
 mod note_seizure_witness;
 mod note_seizure_witness_binary;
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 pub(crate) mod prover_worker;
 mod recovery_capsule_witness;
 mod recovery_capsule_witness_binary;
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 mod runtime;
 mod shielded_ics20_withdrawal;
 mod shielded_ics20_withdrawal_witness;
@@ -20,7 +20,7 @@ mod transfer;
 mod transfer_proof_result;
 mod transfer_witness;
 mod transfer_witness_binary;
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 mod transport;
 mod typed;
 
@@ -28,7 +28,7 @@ pub use note_reshape::{
     decode_note_reshape_witness, encode_note_reshape_witness, translate_note_reshape_proof_result,
 };
 pub use note_reshape_witness::NoteReshapeWitness;
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 pub use note_seizure::GnarkNoteSeizureClient;
 pub use note_seizure::{
     decode_note_seizure_witness, encode_note_seizure_witness, translate_note_seizure_proof_result,
@@ -285,7 +285,10 @@ mod soundness_fixture_tests {
     }
 }
 
-#[cfg(all(any(unix, windows), any(test, feature = "benchmark-helpers")))]
+#[cfg(all(
+    all(feature = "prover", any(unix, windows)),
+    any(test, feature = "benchmark-helpers")
+))]
 #[derive(Clone, Copy)]
 pub enum ProofTestFamily {
     NoteSeizure,
@@ -294,7 +297,10 @@ pub enum ProofTestFamily {
     Withdrawal,
 }
 
-#[cfg(all(any(unix, windows), any(test, feature = "benchmark-helpers")))]
+#[cfg(all(
+    all(feature = "prover", any(unix, windows)),
+    any(test, feature = "benchmark-helpers")
+))]
 pub fn require_proof_test_runtime(family: ProofTestFamily) -> anyhow::Result<()> {
     match family {
         ProofTestFamily::NoteSeizure => {
@@ -312,17 +318,17 @@ pub fn require_proof_test_runtime(family: ProofTestFamily) -> anyhow::Result<()>
     }
 }
 
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 pub(crate) use transfer::GnarkTransferClient;
 
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 pub(crate) use note_reshape::GnarkNoteReshapeClient;
 
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 pub(crate) use shielded_ics20_withdrawal::GnarkShieldedIcs20WithdrawalClient;
 
 /// Explicitly selected proving capability; verification does not require one.
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 pub enum ProverCapability {
     Transfer,
     NoteReshape(crate::NoteReshapeFamilyId),
@@ -331,7 +337,7 @@ pub enum ProverCapability {
 }
 
 /// Resolves process configuration once without loading keys or starting a prover.
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 pub fn initialize_prover(capability: ProverCapability) -> anyhow::Result<()> {
     match capability {
         ProverCapability::Transfer => transfer::resolved_configuration()?,
