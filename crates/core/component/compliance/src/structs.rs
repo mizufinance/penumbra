@@ -1795,6 +1795,36 @@ impl OrbisCapabilityCertificate {
         Ok(())
     }
 
+    /// Issue a certificate with a single ring secret and a fresh signing nonce.
+    pub fn sign<R: rand_core::RngCore + rand_core::CryptoRng>(
+        chain_id: impl Into<String>,
+        leaf: &ComplianceLeaf,
+        policy: &AssetPolicy,
+        ring_sk: Fr,
+        mut rng: R,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            Element::GENERATOR * ring_sk == policy.ring.ring_pk,
+            "ring secret does not match policy ring key"
+        );
+        leaf.validate_registration(policy.ring.ring_pk)?;
+        let nonce = loop {
+            let candidate = Fr::rand(&mut rng);
+            if candidate != Fr::from(0u64) {
+                break candidate;
+            }
+        };
+        let mut certificate = Self {
+            chain_id: chain_id.into(),
+            r_point: Element::GENERATOR * nonce,
+            response: Fr::from(0u64),
+        };
+        let message = Self::signing_bytes(&certificate.chain_id, leaf, policy)?;
+        certificate.response =
+            nonce + certificate.challenge(policy.ring.ring_pk, &message) * ring_sk;
+        Ok(certificate)
+    }
+
     #[cfg(any(test, feature = "test-helpers"))]
     pub fn sign_for_test(
         chain_id: impl Into<String>,
@@ -1987,6 +2017,38 @@ mod tests {
             OrbisCapabilityCertificate::sign_for_test("shieldd-test", &leaf, &policy, ring_sk)
                 .unwrap();
         (leaf, policy, certificate, ring_sk)
+    }
+
+    #[test]
+    fn issued_capability_certificate_verifies_and_uses_fresh_nonces() {
+        let (leaf, policy, _, ring_sk) = certified_leaf();
+        let first = OrbisCapabilityCertificate::sign(
+            "shieldd-test",
+            &leaf,
+            &policy,
+            ring_sk,
+            rand_core::OsRng,
+        )
+        .unwrap();
+        let second = OrbisCapabilityCertificate::sign(
+            "shieldd-test",
+            &leaf,
+            &policy,
+            ring_sk,
+            rand_core::OsRng,
+        )
+        .unwrap();
+        first.verify(&leaf, &policy, "shieldd-test").unwrap();
+        second.verify(&leaf, &policy, "shieldd-test").unwrap();
+        assert_ne!(first.r_point, second.r_point);
+        assert!(OrbisCapabilityCertificate::sign(
+            "shieldd-test",
+            &leaf,
+            &policy,
+            Fr::from(1u64),
+            rand_core::OsRng
+        )
+        .is_err());
     }
 
     #[test]
