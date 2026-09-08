@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-exec python3 "$(git rev-parse --show-toplevel)/scripts/protobuf_codegen.py" "$@"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$script_dir/../../scripts/protobuf_codegen.py" "$@"
