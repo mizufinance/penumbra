@@ -1,9 +1,7 @@
-//! Values (?)
+//! Asset values and their display metadata.
 
 use ark_ff::ToConstraintField;
-use ark_r1cs_std::prelude::*;
-use ark_relations::r1cs::SynthesisError;
-use decaf377::{r1cs::FqVar, Fq};
+use decaf377::Fq;
 
 use std::{
     convert::{TryFrom, TryInto},
@@ -13,12 +11,12 @@ use std::{
 use anyhow::Context;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use shieldd_sdk_num::{Amount, AmountVar};
+use shieldd_sdk_num::Amount;
 use shieldd_sdk_proto::{shieldd::core::asset::v1 as pb, DomainType};
 
 use crate::EquivalentValue;
 use crate::{
-    asset::{AssetIdVar, Cache, Id, Metadata, REGISTRY},
+    asset::{Cache, Id, Metadata, REGISTRY},
     EstimatedPrice,
 };
 
@@ -281,77 +279,12 @@ impl Value {
     }
 }
 
-#[derive(Clone)]
-pub struct ValueVar {
-    pub amount: AmountVar,
-    pub asset_id: AssetIdVar,
-}
-
-impl AllocVar<Value, Fq> for ValueVar {
-    fn new_variable<T: std::borrow::Borrow<Value>>(
-        cs: impl Into<ark_relations::r1cs::Namespace<Fq>>,
-        f: impl FnOnce() -> Result<T, SynthesisError>,
-        mode: ark_r1cs_std::prelude::AllocationMode,
-    ) -> Result<Self, SynthesisError> {
-        let ns = cs.into();
-        let cs = ns.cs();
-        let inner: Value = *f()?.borrow();
-
-        let amount_var = AmountVar::new_variable(cs.clone(), || Ok(inner.amount), mode)?;
-        let asset_id_var = AssetIdVar::new_variable(cs, || Ok(inner.asset_id), mode)?;
-        Ok(Self {
-            amount: amount_var,
-            asset_id: asset_id_var,
-        })
-    }
-}
-
 impl ToConstraintField<Fq> for Value {
     fn to_field_elements(&self) -> Option<Vec<Fq>> {
         let mut elements = Vec::new();
         elements.extend_from_slice(&self.amount.to_field_elements()?);
         elements.extend_from_slice(&self.asset_id.to_field_elements()?);
         Some(elements)
-    }
-}
-
-impl EqGadget<Fq> for ValueVar {
-    fn is_eq(&self, other: &Self) -> Result<Boolean<Fq>, SynthesisError> {
-        let amount_eq = self.amount.is_eq(&other.amount)?;
-        let asset_id_eq = self.asset_id.is_eq(&other.asset_id)?;
-        Boolean::kary_and(&[amount_eq, asset_id_eq])
-    }
-}
-
-impl R1CSVar<Fq> for ValueVar {
-    type Value = Value;
-
-    fn cs(&self) -> ark_relations::r1cs::ConstraintSystemRef<Fq> {
-        self.amount.cs()
-    }
-
-    fn value(&self) -> Result<Self::Value, SynthesisError> {
-        Ok(Value {
-            amount: self.amount.value()?,
-            asset_id: self.asset_id.value()?,
-        })
-    }
-}
-
-impl ValueVar {
-    pub fn amount(&self) -> FqVar {
-        self.amount.amount.clone()
-    }
-
-    pub fn negate(&self) -> Result<ValueVar, SynthesisError> {
-        Ok(ValueVar {
-            amount: self.amount.negate()?,
-            asset_id: self.asset_id.clone(),
-        })
-    }
-
-    pub fn asset_id(&self) -> FqVar {
-        self.asset_id.asset_id.clone()
     }
 }
 

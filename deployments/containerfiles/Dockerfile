@@ -32,24 +32,20 @@ RUN case "${TARGETARCH}" in \
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 WORKDIR /usr/src/shieldd
-# Add rust dependency lockfiles first, to cache downloads.
-COPY Cargo.lock Cargo.toml rust-toolchain.toml .
-
-# If any rust code changed, the cache will break on copying `crates/`.
-# Ideally we'd copy in all Cargo.toml files first, fetch, then copy crates.
-COPY crates ./crates
-# Copy static assets.
-COPY assets ./assets
-# Copy in summonerd contribution orchestrator.
-COPY tools ./tools
-# Download all workspace dependencies specified in Cargo.toml
-RUN rustup install && cargo fetch
-# Build Shieldd binaries
+ARG BUILD_JOBS=2
+ENV CARGO_BUILD_JOBS=${BUILD_JOBS} \
+    RAYON_NUM_THREADS=${BUILD_JOBS} \
+    GOMAXPROCS=${BUILD_JOBS} \
+    GOFLAGS="-p=${BUILD_JOBS}"
 COPY . .
-# Use `--bins` flag to force dependency resolution per-binary, rather than once for the workspace.
-# Doing so ensures the minimal feature set is used, leaving ledger support for pcli as off by default.
-RUN cargo build --release --bins
-RUN cd tools/gnark && go build -o /usr/src/shieldd/target/release/proverdaemon ./cmd/proverdaemon
+RUN cargo build --locked --release -p pd -p pcli -p pclientd -p orbis-audit -p orbis-integration \
+    --features pcli/bundled-proving-keys,pclientd/bundled-proving-keys
+RUN mkdir -p /usr/lib/shieldd \
+    && cd tools/gnark \
+    && go build -o /usr/src/shieldd/target/release/proverdaemon ./cmd/proverdaemon \
+    && go build -buildmode=c-shared -o /usr/lib/shieldd/libshieldd_gnark_transfer.so ./cmd/transferlib \
+    && go build -buildmode=c-shared -o /usr/lib/shieldd/libshieldd_gnark_note_reshape.so ./cmd/note_reshapelib \
+    && go build -buildmode=c-shared -o /usr/lib/shieldd/libshieldd_gnark_shielded_ics20_withdrawal.so ./cmd/shieldedics20withdrawallib
 
 # Runtime image.
 FROM docker.io/debian:bookworm-slim
@@ -75,19 +71,9 @@ COPY --from=build-env \
             /usr/src/shieldd/target/release/pclientd \
             /usr/src/shieldd/target/release/pd \
             /usr/src/shieldd/target/release/proverdaemon \
-            /usr/src/shieldd/target/release/tct-live-edit \
             /usr/bin/
 
-# pcli loads gnark proof libraries from the compile-time OUT_DIR path.
-COPY --from=build-env \
-            /usr/src/shieldd/target/release/build \
-            /usr/src/shieldd/target/release/build
-
-# Runtime deployments need only proving keys; other artifacts add about 510 MB.
-COPY --from=build-env /usr/src/shieldd/tools/gnark/artifacts/note_reshape1x8/proving_key.bin /usr/share/shieldd/gnark/artifacts/note_reshape1x8/proving_key.bin
-COPY --from=build-env /usr/src/shieldd/tools/gnark/artifacts/note_reshape8x1/proving_key.bin /usr/share/shieldd/gnark/artifacts/note_reshape8x1/proving_key.bin
-COPY --from=build-env /usr/src/shieldd/tools/gnark/artifacts/shielded_ics20_withdrawal/proving_key.bin /usr/share/shieldd/gnark/artifacts/shielded_ics20_withdrawal/proving_key.bin
-COPY --from=build-env /usr/src/shieldd/tools/gnark/artifacts/transfer/proving_key.bin /usr/share/shieldd/gnark/artifacts/transfer/proving_key.bin
+COPY --from=build-env /usr/lib/shieldd/*.so /usr/lib/shieldd/
 
 WORKDIR /home/${USERNAME}
 USER ${USERNAME}

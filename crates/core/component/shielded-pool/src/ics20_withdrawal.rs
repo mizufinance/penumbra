@@ -150,7 +150,6 @@ impl DomainType for Ics20Withdrawal {
     type Proto = pb::Ics20Withdrawal;
 }
 
-#[allow(deprecated)]
 impl From<Ics20Withdrawal> for pb::Ics20Withdrawal {
     fn from(w: Ics20Withdrawal) -> Self {
         pb::Ics20Withdrawal {
@@ -161,21 +160,15 @@ impl From<Ics20Withdrawal> for pb::Ics20Withdrawal {
             timeout_height: Some(w.timeout_height.into()),
             timeout_time: w.timeout_time,
             source_channel: w.source_channel.to_string(),
-            use_compat_address: false,
             ics20_memo: w.ics20_memo.to_string(),
             use_transparent_address: w.use_transparent_address,
         }
     }
 }
 
-#[allow(deprecated)]
 impl TryFrom<pb::Ics20Withdrawal> for Ics20Withdrawal {
     type Error = anyhow::Error;
     fn try_from(s: pb::Ics20Withdrawal) -> Result<Self, Self::Error> {
-        anyhow::ensure!(
-            !s.use_compat_address,
-            "deprecated ICS-20 compatibility return-address encoding is unsupported"
-        );
         let withdrawal = Self {
             amount: s
                 .amount
@@ -207,7 +200,6 @@ impl TryFrom<pb::Ics20Withdrawal> for Ics20Withdrawal {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use std::ops::Deref;
 
@@ -228,22 +220,6 @@ mod tests {
             ics20_memo: String::new(),
             use_transparent_address: false,
         }
-    }
-
-    #[test]
-    fn unsupported_compat_address_flag_is_rejected_on_decode() {
-        let mut proto: pb::Ics20Withdrawal = withdrawal().into();
-        proto.use_compat_address = true;
-
-        let error = Ics20Withdrawal::try_from(proto)
-            .expect_err("the unsupported compatibility flag must fail closed");
-        assert!(error.to_string().contains("compatibility"));
-    }
-
-    #[test]
-    fn domain_encoding_clears_compat_address_flag() {
-        let proto: pb::Ics20Withdrawal = withdrawal().into();
-        assert!(!proto.use_compat_address);
     }
 
     #[test]

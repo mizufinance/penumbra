@@ -2021,15 +2021,10 @@ mod tests {
         .expect("the original policy must authorize the live route");
 
         state
-            .apply_enacted_governance_asset_policy(
-                shieldd_sdk_compliance::EnactedGovernanceAssetPolicyAdmission::from_passed_proposal(
-                    1,
-                    shieldd_sdk_compliance::UpdateAssetIbcPolicy {
-                        asset_id: withdrawal.denom.id(),
-                        expected_route_policy_hash,
-                        allowed_ibc_routes: vec![route],
-                    },
-                ),
+            .test_only_replace_asset_ibc_policy(
+                withdrawal.denom.id(),
+                expected_route_policy_hash,
+                vec![route],
             )
             .await
             .expect("replacement policy must remain route-authorizing");

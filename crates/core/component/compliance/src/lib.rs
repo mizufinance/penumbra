@@ -1,5 +1,7 @@
 pub mod enrichment;
-pub use enrichment::{AssetProofData, BatchComplianceData, ComplianceProofProvider, UserProofData};
+pub use enrichment::{
+    AssetProofData, BatchComplianceData, ComplianceProofProvider, ComplianceQuery, UserProofData,
+};
 
 pub mod event;
 
@@ -35,7 +37,6 @@ pub use structs::{
     MsgRegisterAsset,
     MsgRegisterUser,
     RingData,
-    UpdateAssetIbcPolicy,
     UserAssetStatus,
     UserAssetStatusAction,
     ADDRESS_BYTES,
@@ -88,9 +89,8 @@ pub use params::ComplianceParameters;
 pub mod registry;
 #[cfg(feature = "component")]
 pub use registry::{
-    AssetGrantAdmission, ComplianceRegistryRead, ComplianceRegistryWrite,
-    EnactedGovernanceAssetPolicyAdmission, GenesisAssetAdmission, NoteSeizureLifecycle,
-    UserGrantAdmission, UserLeafRecord,
+    AssetGrantAdmission, ComplianceRegistryRead, ComplianceRegistryWrite, GenesisAssetAdmission,
+    NoteSeizureLifecycle, UserGrantAdmission, UserLeafRecord,
 };
 
 #[cfg(feature = "component")]
@@ -158,12 +158,11 @@ pub use tx_id::scanner_transaction_id_from_proto;
 pub mod scanner;
 #[cfg(feature = "component")]
 pub use scanner::{
-    extract_clear_flows, extract_compliance_ciphertexts, AuditAdviceProvider, AuditLedgerRow,
-    AuditRowKey, BlockIdentityProvider, ClearFlowEvent, ClearFlowKind, ComplianceScreener,
+    extract_clear_flows, extract_compliance_ciphertexts, AuditLedgerRow, AuditRowKey,
+    BlockIdentityProvider, CandidateEvidence, ClearFlowEvent, ClearFlowKind, ComplianceScreener,
     DetectionEvent, ExtractedComplianceCiphertext, InvalidCiphertext, IssuerComplianceWorker,
-    NoopAuditAdviceProvider, RingInfo, RpcAuditAdviceProvider, ScannerStore, ScreeningResult,
-    SqliteScannerStore, TendermintProxyBlockIdentityProvider, WorkerHandle,
-    MAX_INVALID_CIPHERTEXTS_PER_BLOCK,
+    OutputOutcome, ScannedBlock, ScannedOutput, ScannerStore, ScreeningResult, SqliteScannerStore,
+    TendermintProxyBlockIdentityProvider, WorkerHandle, MAX_INVALID_CIPHERTEXTS_PER_BLOCK,
 };
 
 pub mod ibc;

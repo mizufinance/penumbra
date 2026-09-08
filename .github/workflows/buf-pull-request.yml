@@ -31,55 +31,21 @@ jobs:
           input: "proto"
           buf_token: ${{ secrets.BUF_TOKEN }}
 
-      - name: Check for module path changes
-        shell: bash
-        run: |
-          cd proto
-          for attempt in 1 2 3; do
-              if buf dep update shieldd; then
-                  break
-              fi
-              if [[ "$attempt" -eq 3 ]]; then
-                  echo "ERROR: 'buf dep update shieldd' failed after ${attempt} attempts"
-                  exit 1
-              fi
-              echo "buf dep update failed on attempt ${attempt}, retrying..."
-              sleep 5
-          done
-          s="$(git status --porcelain)"
-          if [[ -n "$s" ]]; then
-              echo "ERROR: run 'buf dep update' to synchronize buf.lock"
-              echo "$s"
-              exit 1
-          else
-              echo "OK: no changes required to buf.lock"
-          fi
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: tools/proto-compiler/go.mod
+          cache-dependency-path: tools/proto-compiler/go.sum
+
+      - name: Install just
+        run: cargo install just --version 1.43.1 --locked
 
       - name: Install protobuf compiler
         shell: bash
         run: |
+          PROTOC_VERSION="$(python3 -c 'import json; print(json.load(open("proto/codegen.json"))["protoc_version"])')"
           cd /tmp
           curl -sSfL -O https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip
           unzip protoc-${PROTOC_VERSION}-linux-x86_64.zip -d $HOME/.local
-        env:
-          PROTOC_VERSION: "24.4"
 
-      # We exclude the proto_descriptor file from diff inspection, since
-      # different versions of `protoc` can generate non-substantive changes,
-      # causing noisy CI failures.
-      - name: Compile protobuf specs into rust src files
-        shell: bash
-        run: |
-          ./deployments/scripts/protobuf-codegen
-          # https://github.com/mizufinance/shieldd/issues/3038#issuecomment-1722534133
-          git checkout crates/proto/src/gen/proto_descriptor.bin.no_lfs
-          s="$(git status --porcelain)"
-          if [[ -n "$s" ]]; then
-              echo "ERROR: protobuf files must be regenerated and committed."
-              echo "Run this command locally: ./deployments/scripts/protobuf-codegen"
-              echo "These are the files that reported differences:"
-              echo "$s"
-              exit 1
-          else
-              echo "OK: no changes required to protobuf specs"
-          fi
+      - name: Check deterministic Rust and Go generation
+        run: just proto-check

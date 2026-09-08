@@ -113,13 +113,6 @@ message IbcAssetOrigin {
   string base_denom = 2;
 }
 
-// Governance-controlled replacement of a regulated asset's IBC route policy.
-message UpdateAssetIbcPolicy {
-  asset.v1.AssetId asset_id = 1;
-  bytes expected_route_policy_hash = 2;
-  repeated IbcRoute allowed_ibc_routes = 3;
-}
-
 // Chain-registrar authorization for an asset registration.
 message AssetRegistrationGrant {
   AssetRegistrationGrantBody body = 1;

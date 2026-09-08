@@ -1,29 +1,32 @@
+use crate::planning_intent::{
+    intent_gas, ActionIntent, NoteReshapeIntent, TransactionIntent, TransferIntent,
+    WithdrawalIntent,
+};
 use anyhow::{anyhow, Context, Result};
 use decaf377::Fr;
 use rand::CryptoRng;
 use rand_core::RngCore;
 use shieldd_sdk_asset::{asset, Balance, Value, BASE_ASSET_ID};
+#[cfg(test)]
+use shieldd_sdk_compliance::ComplianceQuery;
 use shieldd_sdk_fee::{Fee, FeeTier, GasPrices};
 use shieldd_sdk_keys::{keys::AddressIndex, Address};
 use shieldd_sdk_num::Amount;
 use shieldd_sdk_proto::view::v1::NotesRequest;
 use shieldd_sdk_sct::nullifier_generation::NullifierWindow;
 use shieldd_sdk_shielded_pool::{
-    note, HostWithdrawal, Ics20Withdrawal, NoteReshapeFamilyId, NoteReshapePlan,
-    ShieldedHostWithdrawalPlan, ShieldedIcs20WithdrawalPlan, ShieldedInputPlan, ShieldedOutputPlan,
-    TransferPlan,
+    note, HostWithdrawal, Ics20Withdrawal, NoteReshapeFamilyId, ShieldedInputPlan,
+    ShieldedOutputPlan,
 };
 use shieldd_sdk_transaction::{
-    gas::GasCost,
     memo::MemoPlaintext,
     plan::{ActionPlan, MemoPlan, TransactionPlan},
-    FeeFundingPlan, TransactionParameters,
+    TransactionParameters,
 };
 use std::collections::BTreeSet;
 
 use crate::{
-    client_compliance::{enrich_plan_with_compliance, ViewClientComplianceProvider},
-    SpendableNoteRecord, ViewClient,
+    client_compliance::complete_plan_with_compliance, planning_io::PlanningIo, SpendableNoteRecord,
 };
 
 #[derive(Clone, Debug)]
@@ -130,8 +133,6 @@ pub enum NoteManagerPlanningResult {
     },
 }
 
-pub type TransferPlanningResult = NoteManagerPlanningResult;
-
 enum BaseFeeFundingSelection {
     Ready { selected: Vec<SpendableNoteRecord> },
     NeedsMaintenance { maintenance_plan: TransactionPlan },
@@ -142,49 +143,13 @@ enum BaseFeeFundingSelection {
 fn price_transaction_plan(
     gas_prices: GasPrices,
     fee_tier: FeeTier,
-    actions: &[ActionPlan],
-    fee_funding: Option<&FeeFundingPlan>,
+    actions: &[ActionIntent],
+    fee_funding: Option<&TransferIntent>,
     nullifier_window: NullifierWindow,
 ) -> Fee {
     gas_prices
-        .fee(
-            &TransactionPlan {
-                actions: actions.to_vec(),
-                transaction_parameters: TransactionParameters::default(),
-                fee_funding: fee_funding.cloned(),
-                memo: None,
-                nullifier_window: Some(nullifier_window),
-            }
-            .gas_cost(),
-        )
+        .fee(&intent_gas(actions, fee_funding, nullifier_window))
         .apply_tier(fee_tier)
-}
-
-fn align_shielded_planning_metadata(
-    spends: &mut [ShieldedInputPlan],
-    outputs: &mut [ShieldedOutputPlan],
-) {
-    let Some(first_spend) = spends.first().cloned() else {
-        return;
-    };
-    for spend in spends.iter_mut() {
-        spend.asset_anchor = first_spend.asset_anchor;
-        spend.compliance_anchor = first_spend.compliance_anchor;
-        spend.target_timestamp = first_spend.target_timestamp;
-        spend.is_regulated = first_spend.is_regulated;
-        spend.tx_blinding_nonce = first_spend.tx_blinding_nonce;
-    }
-    for output in outputs {
-        output.asset_anchor = first_spend.asset_anchor;
-        output.compliance_anchor = first_spend.compliance_anchor;
-        output.target_timestamp = first_spend.target_timestamp;
-        output.is_regulated = first_spend.is_regulated;
-        output.tx_blinding_nonce = first_spend.tx_blinding_nonce;
-        output.asset_indexed_leaf = first_spend.asset_indexed_leaf.clone();
-        output.asset_path = first_spend.asset_path.clone();
-        output.asset_position = first_spend.asset_position;
-        output.asset_policy = first_spend.asset_policy.clone();
-    }
 }
 
 pub struct NoteManager<R: RngCore + CryptoRng> {
@@ -195,6 +160,7 @@ pub struct NoteManager<R: RngCore + CryptoRng> {
     memo_text: Option<String>,
     memo_return_address: Option<Address>,
     target_timestamp: Option<u64>,
+    disclose_to_issuer: bool,
 }
 
 impl<R: RngCore + CryptoRng> NoteManager<R> {
@@ -207,6 +173,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
             memo_text: None,
             memo_return_address: None,
             target_timestamp: None,
+            disclose_to_issuer: false,
         }
     }
 
@@ -235,12 +202,17 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         self
     }
 
+    pub fn disclose_to_issuer(&mut self, disclose: bool) -> &mut Self {
+        self.disclose_to_issuer = disclose;
+        self
+    }
+
     pub fn target_timestamp(&mut self, target_timestamp: u64) -> &mut Self {
         self.target_timestamp = Some(target_timestamp);
         self
     }
 
-    pub async fn plan_transfer<V: ViewClient + Send + ?Sized>(
+    pub async fn plan_transfer<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         source: AddressIndex,
@@ -251,7 +223,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
             .await
     }
 
-    pub async fn plan_transfer_values<V: ViewClient + Send + ?Sized>(
+    pub async fn plan_transfer_values<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         source: AddressIndex,
@@ -354,7 +326,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
                             zero_base_fee(),
                         )?;
                         let fee_funding = self.build_fee_funding_plan(&fee_notes, fee)?;
-                        let actions = vec![ActionPlan::Transfer(transfer.clone())];
+                        let actions = vec![ActionIntent::Transfer(transfer.clone())];
                         let new_fee = price_transaction_plan(
                             gas_prices,
                             self.fee_tier,
@@ -424,7 +396,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
             }
 
             let transfer = self.build_transfer_plan(&selected, recipient.clone(), value, fee)?;
-            let actions = vec![ActionPlan::Transfer(transfer.clone())];
+            let actions = vec![ActionIntent::Transfer(transfer.clone())];
             let new_fee =
                 price_transaction_plan(gas_prices, self.fee_tier, &actions, None, nullifier_window);
 
@@ -433,7 +405,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
                     .finalize_wallet_plan(
                         view,
                         source,
-                        vec![ActionPlan::Transfer(transfer)],
+                        vec![ActionIntent::Transfer(transfer)],
                         None,
                         new_fee,
                         nullifier_window,
@@ -453,7 +425,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         Err(anyhow!("transfer planning did not converge"))
     }
 
-    pub async fn resume_transfer<V: ViewClient + Send + ?Sized>(
+    pub async fn resume_transfer<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         resume_token: TransferResumeToken,
@@ -467,7 +439,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         .await
     }
 
-    pub async fn resume<V: ViewClient + Send + ?Sized>(
+    pub async fn resume<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         resume_token: NoteManagerResumeToken,
@@ -489,7 +461,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         }
     }
 
-    pub async fn plan_actions_with_transfer_funding<V: ViewClient + Send + ?Sized>(
+    pub async fn plan_actions_with_transfer_funding<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         source: AddressIndex,
@@ -519,13 +491,18 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         if let Some(result) = ensure_base_gas_prices(gas_prices) {
             return Ok(result);
         }
+        let intents = actions
+            .iter()
+            .cloned()
+            .map(ActionIntent::Complete)
+            .collect::<Vec<_>>();
         if gas_prices_are_zero(gas_prices) {
             let nullifier_window = view.nullifier_window().await?;
             let plan = self
                 .finalize_wallet_plan(
                     view,
                     source,
-                    actions,
+                    intents,
                     None,
                     zero_base_fee(),
                     nullifier_window,
@@ -538,13 +515,13 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         self.plan_actions_with_base_fee_funding(
             view,
             source,
-            actions.clone(),
+            intents,
             NoteManagerResumeToken::ActionFunding(ActionFundingResumeToken { source, actions }),
         )
         .await
     }
 
-    pub async fn resume_action_funding<V: ViewClient + Send + ?Sized>(
+    pub async fn resume_action_funding<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         resume_token: ActionFundingResumeToken,
@@ -553,7 +530,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
             .await
     }
 
-    pub async fn plan_ics20_withdrawal<V: ViewClient + Send + ?Sized>(
+    pub async fn plan_ics20_withdrawal<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         source: AddressIndex,
@@ -563,7 +540,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
             .await
     }
 
-    pub async fn plan_host_withdrawal<V: ViewClient + Send + ?Sized>(
+    pub async fn plan_host_withdrawal<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         source: AddressIndex,
@@ -573,7 +550,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
             .await
     }
 
-    async fn plan_wallet_withdrawal<V: ViewClient + Send + ?Sized>(
+    async fn plan_wallet_withdrawal<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         source: AddressIndex,
@@ -747,7 +724,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         Err(anyhow!("{label} planning did not converge"))
     }
 
-    pub async fn resume_ics20_withdrawal<V: ViewClient + Send + ?Sized>(
+    pub async fn resume_ics20_withdrawal<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         resume_token: Ics20WithdrawalResumeToken,
@@ -756,7 +733,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
             .await
     }
 
-    pub async fn resume_host_withdrawal<V: ViewClient + Send + ?Sized>(
+    pub async fn resume_host_withdrawal<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         resume_token: HostWithdrawalResumeToken,
@@ -765,7 +742,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
             .await
     }
 
-    pub async fn resume_note_reshape<V: ViewClient + Send + ?Sized>(
+    pub async fn resume_note_reshape<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         resume_token: NoteReshapeResumeToken,
@@ -789,7 +766,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         }
     }
 
-    pub async fn plan_note_reshape_from_notes<V: ViewClient + Send + ?Sized>(
+    pub async fn plan_note_reshape_from_notes<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         source: AddressIndex,
@@ -877,9 +854,13 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
                 },
                 sender_address,
             )];
-            let note_reshape =
-                NoteReshapePlan::new(family_id, spends, outputs, Fr::rand(&mut self.rng))?;
-            let actions = vec![ActionPlan::NoteReshape(note_reshape.clone())];
+            let note_reshape = NoteReshapeIntent {
+                family_id,
+                spends,
+                outputs,
+                value_blinding: Fr::rand(&mut self.rng),
+            };
+            let actions = vec![ActionIntent::NoteReshape(note_reshape.clone())];
             self.plan_actions_with_base_fee_funding(
                 view,
                 source,
@@ -896,7 +877,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         }
     }
 
-    pub async fn plan_note_reshape_from_note<V: ViewClient + Send + ?Sized>(
+    pub async fn plan_note_reshape_from_note<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         source: AddressIndex,
@@ -969,10 +950,14 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
                     )
                 })
                 .collect::<Vec<_>>();
-            let note_reshape =
-                NoteReshapePlan::new(family_id, spends, outputs, Fr::rand(&mut self.rng))?;
+            let note_reshape = NoteReshapeIntent {
+                family_id,
+                spends,
+                outputs,
+                value_blinding: Fr::rand(&mut self.rng),
+            };
             if gas_prices_are_zero(gas_prices) {
-                let actions = vec![ActionPlan::NoteReshape(note_reshape.clone())];
+                let actions = vec![ActionIntent::NoteReshape(note_reshape.clone())];
                 let new_fee = price_transaction_plan(
                     gas_prices,
                     self.fee_tier,
@@ -985,7 +970,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
                         .finalize_wallet_plan(
                             view,
                             source,
-                            vec![ActionPlan::NoteReshape(note_reshape)],
+                            vec![ActionIntent::NoteReshape(note_reshape)],
                             None,
                             new_fee,
                             nullifier_window,
@@ -995,7 +980,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
                 }
                 fee = new_fee;
             } else {
-                let actions = vec![ActionPlan::NoteReshape(note_reshape.clone())];
+                let actions = vec![ActionIntent::NoteReshape(note_reshape.clone())];
                 return self
                     .plan_actions_with_base_fee_funding(
                         view,
@@ -1016,7 +1001,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         Err(anyhow!("note reshape planning did not converge"))
     }
 
-    async fn plan_auto_note_reshape_step<V: ViewClient + Send + ?Sized>(
+    async fn plan_auto_note_reshape_step<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         source: AddressIndex,
@@ -1040,7 +1025,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
             .await
     }
 
-    async fn build_note_reshape_transaction<V: ViewClient + Send + ?Sized>(
+    async fn build_note_reshape_transaction<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         source: AddressIndex,
@@ -1081,9 +1066,13 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
                 output_value,
                 sender_address.clone(),
             )];
-            let note_reshape =
-                NoteReshapePlan::new(family_id, spends, outputs, Fr::rand(&mut self.rng))?;
-            let actions = vec![ActionPlan::NoteReshape(note_reshape.clone())];
+            let note_reshape = NoteReshapeIntent {
+                family_id,
+                spends,
+                outputs,
+                value_blinding: Fr::rand(&mut self.rng),
+            };
+            let actions = vec![ActionIntent::NoteReshape(note_reshape.clone())];
             let new_fee =
                 price_transaction_plan(gas_prices, self.fee_tier, &actions, None, nullifier_window);
             if new_fee == fee {
@@ -1091,7 +1080,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
                     .finalize_wallet_plan(
                         view,
                         source,
-                        vec![ActionPlan::NoteReshape(note_reshape)],
+                        vec![ActionIntent::NoteReshape(note_reshape)],
                         None,
                         new_fee,
                         nullifier_window,
@@ -1111,7 +1100,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         recipient: Address,
         value: Value,
         fee: Fee,
-    ) -> Result<TransferPlan> {
+    ) -> Result<TransferIntent> {
         let sender_address = selected
             .first()
             .map(|record| record.note.address())
@@ -1129,7 +1118,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         }
 
         let change_amount = total_input - total_required;
-        let mut spends = selected
+        let spends = selected
             .iter()
             .map(|record| {
                 ShieldedInputPlan::new(&mut self.rng, record.note.clone(), record.position)
@@ -1147,9 +1136,12 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
                 sender_address,
             ));
         }
-        align_shielded_planning_metadata(&mut spends, &mut outputs);
 
-        TransferPlan::new(spends, outputs, Fr::rand(&mut self.rng))
+        Ok(TransferIntent {
+            spends,
+            outputs,
+            value_blinding: Fr::rand(&mut self.rng),
+        })
     }
 
     fn build_self_funded_transfer_plan(
@@ -1157,7 +1149,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         selected: &[SpendableNoteRecord],
         asset_id: asset::Id,
         fee: Fee,
-    ) -> Result<TransferPlan> {
+    ) -> Result<TransferIntent> {
         let sender_address = selected
             .first()
             .map(|record| record.note.address())
@@ -1174,13 +1166,13 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         );
 
         let change_amount = total_input - fee.amount();
-        let mut spends = selected
+        let spends = selected
             .iter()
             .map(|record| {
                 ShieldedInputPlan::new(&mut self.rng, record.note.clone(), record.position)
             })
             .collect::<Vec<_>>();
-        let mut outputs = vec![ShieldedOutputPlan::new(
+        let outputs = vec![ShieldedOutputPlan::new(
             &mut self.rng,
             Value {
                 amount: change_amount,
@@ -1188,22 +1180,23 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
             },
             sender_address,
         )];
-        align_shielded_planning_metadata(&mut spends, &mut outputs);
 
-        TransferPlan::new(spends, outputs, Fr::rand(&mut self.rng))
+        Ok(TransferIntent {
+            spends,
+            outputs,
+            value_blinding: Fr::rand(&mut self.rng),
+        })
     }
 
     fn build_fee_funding_plan(
         &mut self,
         selected: &[SpendableNoteRecord],
         fee: Fee,
-    ) -> Result<FeeFundingPlan> {
-        let mut transfer = self.build_self_funded_transfer_plan(selected, *BASE_ASSET_ID, fee)?;
-        transfer.set_fee_funding_context();
-        Ok(FeeFundingPlan { transfer })
+    ) -> Result<TransferIntent> {
+        self.build_self_funded_transfer_plan(selected, *BASE_ASSET_ID, fee)
     }
 
-    async fn select_base_fee_funding<V: ViewClient + Send + ?Sized>(
+    async fn select_base_fee_funding<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         source: AddressIndex,
@@ -1256,11 +1249,11 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         Ok(BaseFeeFundingSelection::Ready { selected })
     }
 
-    async fn plan_actions_with_base_fee_funding<V: ViewClient + Send + ?Sized>(
+    async fn plan_actions_with_base_fee_funding<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         source: AddressIndex,
-        primary_actions: Vec<ActionPlan>,
+        primary_actions: Vec<ActionIntent>,
         resume_token: NoteManagerResumeToken,
     ) -> Result<NoteManagerPlanningResult> {
         let gas_prices = self
@@ -1345,7 +1338,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         selected: &[SpendableNoteRecord],
         withdrawal: WalletWithdrawal,
         fee: Fee,
-    ) -> Result<ActionPlan> {
+    ) -> Result<ActionIntent> {
         let label = withdrawal.label();
         let withdrawal_amount = withdrawal.amount();
         let asset_id = withdrawal.asset_id();
@@ -1365,14 +1358,14 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         }
 
         let change_amount = total_input - total_required;
-        let mut spends = selected
+        let spends = selected
             .iter()
             .map(|record| {
                 ShieldedInputPlan::new(&mut self.rng, record.note.clone(), record.position)
             })
             .collect::<Vec<_>>();
 
-        let mut change_output = if change_amount > Amount::zero() {
+        let change_output = if change_amount > Amount::zero() {
             Some(ShieldedOutputPlan::new(
                 &mut self.rng,
                 Value {
@@ -1384,32 +1377,26 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         } else {
             None
         };
-        match change_output.as_mut() {
-            Some(output) => {
-                align_shielded_planning_metadata(&mut spends, std::slice::from_mut(output))
+        let value_blinding = Fr::rand(&mut self.rng);
+        Ok(match withdrawal {
+            WalletWithdrawal::Ics20(withdrawal) => {
+                ActionIntent::Ics20Withdrawal(WithdrawalIntent {
+                    spends,
+                    change_output,
+                    withdrawal,
+                    value_blinding,
+                })
             }
-            None => align_shielded_planning_metadata(&mut spends, &mut []),
-        }
-
-        match withdrawal {
-            WalletWithdrawal::Ics20(withdrawal) => ShieldedIcs20WithdrawalPlan::new(
+            WalletWithdrawal::Host(withdrawal) => ActionIntent::HostWithdrawal(WithdrawalIntent {
                 spends,
                 change_output,
                 withdrawal,
-                Fr::rand(&mut self.rng),
-            )
-            .map(ActionPlan::ShieldedIcs20Withdrawal),
-            WalletWithdrawal::Host(withdrawal) => ShieldedHostWithdrawalPlan::new(
-                spends,
-                change_output,
-                withdrawal,
-                Fr::rand(&mut self.rng),
-            )
-            .map(ActionPlan::ShieldedHostWithdrawal),
-        }
+                value_blinding,
+            }),
+        })
     }
 
-    async fn load_notes_for_asset<V: ViewClient + Send + ?Sized>(
+    async fn load_notes_for_asset<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         source: AddressIndex,
@@ -1426,20 +1413,20 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         Ok(prioritize_and_filter_spendable_notes(records))
     }
 
-    async fn finalize_wallet_plan<V: ViewClient + Send + ?Sized>(
+    async fn finalize_wallet_plan<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         source: AddressIndex,
-        actions: Vec<ActionPlan>,
-        fee_funding: Option<FeeFundingPlan>,
+        actions: Vec<ActionIntent>,
+        fee_funding: Option<TransferIntent>,
         fee: Fee,
         nullifier_window: NullifierWindow,
     ) -> Result<TransactionPlan> {
         let mut transaction_parameters = self.transaction_parameters.clone();
         transaction_parameters.fee = fee;
-        transaction_parameters.chain_id = view.app_params().await?.chain_id;
+        transaction_parameters.chain_id = view.chain_id().await?;
 
-        let mut plan = TransactionPlan {
+        let mut intent = TransactionIntent {
             actions,
             transaction_parameters,
             fee_funding,
@@ -1447,7 +1434,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
             nullifier_window: Some(nullifier_window),
         };
 
-        if plan.num_outputs() > 0 {
+        if intent.has_outputs() {
             let return_address = if let Some(ref address) = self.memo_return_address {
                 anyhow::ensure!(
                     view.index_by_address(address.clone()).await?.is_some(),
@@ -1458,7 +1445,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
                 view.address_by_index(source).await?
             };
 
-            plan.memo = Some(MemoPlan::new(
+            intent.memo = Some(MemoPlan::new(
                 &mut self.rng,
                 MemoPlaintext::new(return_address, self.memo_text.clone().unwrap_or_default())
                     .context("could not create memo plaintext")?,
@@ -1466,13 +1453,50 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         }
 
         let discovery_params = view.discovery_parameters().await?;
-        plan.populate_routing_parameters(discovery_params);
-        plan.sort_actions();
-        let provider = ViewClientComplianceProvider::new(view);
-        enrich_plan_with_compliance(&mut plan, &provider, &mut self.rng, self.target_timestamp)
-            .await?;
+        let timestamp = match self.target_timestamp {
+            Some(timestamp) => timestamp,
+            None => view.latest_block_timestamp().await?,
+        };
+        let day_start = shieldd_sdk_shielded_pool::select_accumulator_day(timestamp);
 
-        Ok(plan)
+        complete_plan_with_compliance(
+            intent,
+            |queries| async move {
+                let compliance = view.compliance_data(queries.clone()).await?;
+                let mut volumes = Vec::new();
+                let mut subjects = std::collections::BTreeSet::new();
+                for query in queries {
+                    if compliance
+                        .asset_proofs
+                        .get(&query.asset_id)
+                        .is_some_and(|asset| asset.is_regulated)
+                    {
+                        subjects.insert(
+                            shieldd_sdk_shielded_pool::VolumeAccumulatorState::subject(
+                                &query.address,
+                                query.asset_id,
+                            ),
+                        );
+                    }
+                }
+                for subject in subjects {
+                    volumes.push(crate::VolumeRecoveryRecord {
+                        subject,
+                        day_start,
+                        recovery: view.volume_accumulator_recovery(subject, day_start).await?,
+                    });
+                }
+                Ok(crate::CompletionData {
+                    compliance,
+                    volumes,
+                })
+            },
+            &mut self.rng,
+            discovery_params,
+            Some(timestamp),
+            self.disclose_to_issuer,
+        )
+        .await
     }
 }
 
@@ -1530,7 +1554,7 @@ fn selected_note_commitments(selected: &[SpendableNoteRecord]) -> BTreeSet<note:
 }
 
 fn fee_funding_excluded_note_commitments(
-    actions: &[ActionPlan],
+    actions: &[ActionIntent],
 ) -> BTreeSet<note::StateCommitment> {
     let mut commitments = BTreeSet::new();
     for action in actions {
@@ -1594,30 +1618,23 @@ fn select_notes_covering(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{StatusStreamResponse, TransactionInfo};
     use decaf377::Fq;
-    use futures::{FutureExt, Stream};
     use ibc_types::core::{channel::ChannelId, client::Height as IbcHeight};
     use rand_core::OsRng;
-    use shieldd_sdk_app::params::AppParameters;
     use shieldd_sdk_asset::BASE_ASSET_ID;
     use shieldd_sdk_fee::GasPrices;
     use shieldd_sdk_ibc::IbcRelay;
     use shieldd_sdk_keys::keys::SeedPhrase;
     use shieldd_sdk_keys::keys::{AddressIndex, Bip44Path, SpendKey};
     use shieldd_sdk_keys::symmetric::PayloadKey;
-    use shieldd_sdk_proto::core::component::compliance::v1 as compliance_pb;
     use shieldd_sdk_proto::view::v1 as pb;
     use shieldd_sdk_sct::{CommitmentSource, Nullifier};
     use shieldd_sdk_shielded_pool::{
-        discovery, note, HostTransfer, HostWithdrawalDestination, Note, RecoveryCommitment, Rseed,
+        discovery, HostTransfer, HostWithdrawalDestination, Note, RecoveryCommitment, Rseed,
     };
-    use shieldd_sdk_transaction::{
-        plan::ActionPlan, txhash::TransactionId, AuthorizationData, Transaction, WitnessData,
-    };
+    use shieldd_sdk_transaction::gas::GasCost;
+    use shieldd_sdk_transaction::plan::ActionPlan;
     use std::collections::BTreeMap;
-    use std::future::Future;
-    use std::pin::Pin;
     use std::str::FromStr;
     use std::sync::{Arc, Mutex};
 
@@ -1730,22 +1747,6 @@ mod tests {
         )));
     }
 
-    fn default_indexed_leaf() -> compliance_pb::IndexedLeafData {
-        compliance_pb::IndexedLeafData {
-            value: vec![0u8; 32],
-            next_index: 0,
-            next_value: vec![0u8; 32],
-            dk_pub: vec![0u8; 32],
-            daily_volume_limit: u128::MAX.to_le_bytes().to_vec(),
-            route_policy_hash: vec![0u8; 32],
-            ring_pk: vec![0u8; 32],
-            ring_id_hash: vec![0u8; 32],
-            policy_id_hash: vec![0u8; 32],
-            permission_hash: vec![0u8; 32],
-            resource_hash: vec![0u8; 32],
-        }
-    }
-
     struct MockNoteManagerView {
         notes: Arc<Mutex<Vec<SpendableNoteRecord>>>,
         addresses: BTreeMap<AddressIndex, Address>,
@@ -1781,308 +1782,91 @@ mod tests {
         }
     }
 
-    impl ViewClient for MockNoteManagerView {
-        fn status(
+    #[async_trait::async_trait]
+    impl PlanningIo for MockNoteManagerView {
+        async fn latest_block_timestamp(&mut self) -> Result<u64> {
+            Ok(1_700_000_000)
+        }
+        async fn volume_accumulator_recovery(
             &mut self,
-        ) -> Pin<Box<dyn Future<Output = Result<pb::StatusResponse>> + Send + 'static>> {
-            unimplemented!()
+            _: decaf377::Fq,
+            _: u64,
+        ) -> Result<crate::storage::VolumeAccumulatorRecovery> {
+            Ok(crate::storage::VolumeAccumulatorRecovery::Absent)
         }
 
-        fn status_stream(
-            &mut self,
-        ) -> Pin<
-            Box<
-                dyn Future<
-                        Output = Result<
-                            Pin<
-                                Box<
-                                    dyn Stream<Item = Result<StatusStreamResponse>>
-                                        + Send
-                                        + 'static,
-                                >,
-                            >,
-                        >,
-                    > + Send
-                    + 'static,
-            >,
-        > {
-            unimplemented!()
+        async fn chain_id(&mut self) -> Result<String> {
+            Ok("test-chain".to_owned())
         }
-
-        fn app_params(
-            &mut self,
-        ) -> Pin<Box<dyn Future<Output = Result<AppParameters>> + Send + 'static>> {
-            async move {
-                Ok(AppParameters {
-                    chain_id: "test-chain".to_string(),
-                    ..Default::default()
-                })
-            }
-            .boxed()
+        async fn nullifier_window(&mut self) -> Result<NullifierWindow> {
+            Ok(self.nullifier_window)
         }
-
-        fn gas_prices(
-            &mut self,
-        ) -> Pin<Box<dyn Future<Output = Result<GasPrices>> + Send + 'static>> {
-            async move { Ok(GasPrices::zero()) }.boxed()
+        async fn discovery_parameters(&mut self) -> Result<discovery::Parameters> {
+            Ok(Default::default())
         }
-
-        fn nullifier_window(
-            &mut self,
-        ) -> Pin<
-            Box<
-                dyn Future<Output = Result<shieldd_sdk_sct::nullifier_generation::NullifierWindow>>
-                    + Send
-                    + 'static,
-            >,
-        > {
-            let nullifier_window = self.nullifier_window;
-            async move { Ok(nullifier_window) }.boxed()
-        }
-
-        fn discovery_parameters(
-            &mut self,
-        ) -> Pin<Box<dyn Future<Output = Result<discovery::Parameters>> + Send + 'static>> {
-            async move { Ok(discovery::Parameters::default()) }.boxed()
-        }
-
-        fn notes(
-            &mut self,
-            request: pb::NotesRequest,
-        ) -> Pin<Box<dyn Future<Output = Result<Vec<SpendableNoteRecord>>> + Send + 'static>>
-        {
-            let requested_asset_id = request
-                .asset_id
-                .map(TryInto::try_into)
-                .transpose()
-                .expect("valid asset id");
-            let requested_index = request
-                .address_index
-                .map(TryInto::try_into)
-                .transpose()
-                .expect("valid address index");
-            let notes = self
+        async fn notes(&mut self, request: pb::NotesRequest) -> Result<Vec<SpendableNoteRecord>> {
+            let asset: Option<asset::Id> = request.asset_id.map(TryInto::try_into).transpose()?;
+            let index: Option<AddressIndex> =
+                request.address_index.map(TryInto::try_into).transpose()?;
+            Ok(self
                 .notes
                 .lock()
                 .expect("notes mutex")
-                .clone()
-                .into_iter()
+                .iter()
                 .filter(|record| {
-                    requested_asset_id
-                        .map(|asset_id| record.note.asset_id() == asset_id)
-                        .unwrap_or(true)
-                        && requested_index
-                            .map(|index| record.address_index == index)
-                            .unwrap_or(true)
+                    asset.map_or(true, |asset| record.note.asset_id() == asset)
+                        && index.map_or(true, |index| record.address_index == index)
                 })
-                .collect();
-            async move { Ok(notes) }.boxed()
-        }
-
-        fn balances(
-            &mut self,
-            _: AddressIndex,
-            _: Option<asset::Id>,
-        ) -> Pin<Box<dyn Future<Output = Result<Vec<(asset::Id, Amount)>>> + Send + 'static>>
-        {
-            unimplemented!()
-        }
-
-        fn note_by_commitment(
-            &mut self,
-            _: note::StateCommitment,
-        ) -> Pin<Box<dyn Future<Output = Result<SpendableNoteRecord>> + Send + 'static>> {
-            unimplemented!()
-        }
-
-        fn nullifier_status(
-            &mut self,
-            _: Nullifier,
-        ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'static>> {
-            unimplemented!()
-        }
-
-        fn await_nullifier(
-            &mut self,
-            _: Nullifier,
-        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>> {
-            unimplemented!()
-        }
-
-        fn await_note_by_commitment(
-            &mut self,
-            _: note::StateCommitment,
-        ) -> Pin<Box<dyn Future<Output = Result<SpendableNoteRecord>> + Send + 'static>> {
-            unimplemented!()
-        }
-
-        fn witness(
-            &mut self,
-            _: &TransactionPlan,
-        ) -> Pin<Box<dyn Future<Output = Result<WitnessData>> + Send + 'static>> {
-            unimplemented!()
-        }
-
-        fn witness_and_build(
-            &mut self,
-            _: TransactionPlan,
-            _: AuthorizationData,
-        ) -> Pin<Box<dyn Future<Output = Result<Transaction>> + Send + 'static>> {
-            unimplemented!()
-        }
-
-        fn assets(
-            &mut self,
-        ) -> Pin<Box<dyn Future<Output = Result<asset::Cache>> + Send + 'static>> {
-            unimplemented!()
-        }
-
-        fn transaction_info_by_hash(
-            &mut self,
-            _: TransactionId,
-        ) -> Pin<Box<dyn Future<Output = Result<TransactionInfo>> + Send + 'static>> {
-            unimplemented!()
-        }
-
-        fn transaction_info(
-            &mut self,
-            _: Option<u64>,
-            _: Option<u64>,
-        ) -> Pin<Box<dyn Future<Output = Result<Vec<TransactionInfo>>> + Send + 'static>> {
-            unimplemented!()
-        }
-
-        fn broadcast_transaction(
-            &mut self,
-            _: Transaction,
-            _: bool,
-        ) -> crate::client::BroadcastStatusStream {
-            unimplemented!()
-        }
-
-        fn address_by_index(
-            &mut self,
-            address_index: AddressIndex,
-        ) -> Pin<Box<dyn Future<Output = Result<Address>> + Send + 'static>> {
-            let address = self
-                .addresses
-                .get(&address_index)
                 .cloned()
-                .expect("known test address index");
-            async move { Ok(address) }.boxed()
+                .collect())
         }
-
-        fn index_by_address(
-            &mut self,
-            address: Address,
-        ) -> Pin<Box<dyn Future<Output = Result<Option<AddressIndex>>> + Send + 'static>> {
-            let index = self
+        async fn address_by_index(&mut self, index: AddressIndex) -> Result<Address> {
+            self.addresses
+                .get(&index)
+                .cloned()
+                .context("unknown fixture address")
+        }
+        async fn index_by_address(&mut self, address: Address) -> Result<Option<AddressIndex>> {
+            Ok(self
                 .addresses
                 .iter()
-                .find_map(|(index, known_address)| (*known_address == address).then_some(*index));
-            async move { Ok(index) }.boxed()
+                .find_map(|(index, known)| (*known == address).then_some(*index)))
         }
-
-        fn compliance_asset_status(
+        async fn compliance_data(
             &mut self,
-            _: asset::Id,
-        ) -> Pin<Box<dyn Future<Output = Result<Option<bool>>> + Send + 'static>> {
-            async move { Ok(Some(false)) }.boxed()
-        }
-
-        fn compliance_asset_policy(
-            &mut self,
-            _: asset::Id,
-        ) -> Pin<Box<dyn Future<Output = Result<pb::ComplianceAssetStatusResponse>> + Send + 'static>>
-        {
-            async move {
-                Ok(pb::ComplianceAssetStatusResponse {
-                    asset_id: None,
-                    is_registered: false,
-                    is_regulated: false,
-                    dk_pub: vec![0u8; 32],
-                    daily_volume_limit: u128::MAX.to_le_bytes().to_vec(),
-                    asset_policy: None,
-                })
+            queries: Vec<ComplianceQuery>,
+        ) -> Result<shieldd_sdk_compliance::BatchComplianceData> {
+            use shieldd_sdk_compliance::{
+                AssetProofData, BatchComplianceData, ComplianceLeaf, MerklePath, UserProofData,
+            };
+            let (root, _, _, _) = shieldd_sdk_compliance::create_default_imt_proof(BASE_ASSET_ID.0);
+            let mut batch = BatchComplianceData {
+                asset_anchor: root,
+                ..Default::default()
+            };
+            for ComplianceQuery { address, asset_id } in queries {
+                let (asset_root, indexed_leaf, auth_path, position) =
+                    shieldd_sdk_compliance::create_default_imt_proof(asset_id.0);
+                assert_eq!(asset_root, root);
+                batch.asset_proofs.insert(
+                    asset_id,
+                    AssetProofData {
+                        auth_path,
+                        position,
+                        indexed_leaf,
+                        is_regulated: false,
+                    },
+                );
+                batch.user_proofs.insert(
+                    (address.clone(), asset_id),
+                    UserProofData {
+                        auth_path: MerklePath::default(),
+                        position: 0,
+                        leaf: ComplianceLeaf::synthetic_unregulated(address, asset_id),
+                    },
+                );
             }
-            .boxed()
-        }
-
-        fn compliance_anchors(
-            &mut self,
-        ) -> Pin<
-            Box<
-                dyn Future<
-                        Output = Result<(
-                            shieldd_sdk_tct::StateCommitment,
-                            shieldd_sdk_tct::StateCommitment,
-                        )>,
-                    > + Send
-                    + 'static,
-            >,
-        > {
-            async move {
-                Ok((
-                    shieldd_sdk_tct::StateCommitment(Fq::from(0u64)),
-                    shieldd_sdk_tct::StateCommitment(Fq::from(0u64)),
-                ))
-            }
-            .boxed()
-        }
-
-        fn compliance_merkle_proofs(
-            &mut self,
-            _: Address,
-            _: asset::Id,
-        ) -> Pin<
-            Box<dyn Future<Output = Result<pb::ComplianceMerkleProofsResponse>> + Send + 'static>,
-        > {
-            unimplemented!()
-        }
-
-        fn compliance_user_leaf(
-            &mut self,
-            _: Address,
-            _: asset::Id,
-        ) -> Pin<Box<dyn Future<Output = Result<pb::ComplianceUserLeafResponse>> + Send + 'static>>
-        {
-            unimplemented!()
-        }
-
-        fn compliance_batch_merkle_proofs(
-            &mut self,
-            queries: Vec<(Address, asset::Id)>,
-        ) -> Pin<
-            Box<
-                dyn Future<Output = Result<pb::ComplianceBatchMerkleProofsResponse>>
-                    + Send
-                    + 'static,
-            >,
-        > {
-            let results = queries
-                .into_iter()
-                .map(|_| pb::ComplianceMerkleProofsResponse {
-                    user_registered: false,
-                    asset_registered: false,
-                    is_regulated: false,
-                    compliance_path: Some(shieldd_sdk_compliance::MerklePath::default().into()),
-                    compliance_position: 0,
-                    asset_path: Some(shieldd_sdk_compliance::MerklePath::default().into()),
-                    asset_position: 0,
-                    compliance_anchor: vec![0u8; 32],
-                    asset_anchor: vec![0u8; 32],
-                    asset_indexed_leaf: Some(default_indexed_leaf()),
-                    compliance_leaf: None,
-                })
-                .collect();
-            async move {
-                Ok(pb::ComplianceBatchMerkleProofsResponse {
-                    compliance_anchor: vec![0u8; 32],
-                    asset_anchor: vec![0u8; 32],
-                    results,
-                })
-            }
-            .boxed()
+            Ok(batch)
         }
     }
 

@@ -81,9 +81,7 @@ pub enum RootCommand {
             long,
             env = "SHIELDD_PD_COMETBFT_PROXY_URL",
             default_value = "http://127.0.0.1:26657",
-            display_order = 401,
-            // Support old arg name for a while, as we migrate Tendermint -> CometBFT.
-            alias = "tendermint-addr",
+            display_order = 401
         )]
         cometbft_addr: Url,
         /// Enable expensive RPCs, currently a no-op.
@@ -106,15 +104,12 @@ pub enum RootCommand {
         #[clap(long, env = "SHIELDD_PD_HOME", display_order = 100)]
         home: PathBuf,
         /// The directory where the exported node state will be written.
-        #[clap(long, display_order = 200, alias = "export-path")]
+        #[clap(long, display_order = 200)]
         export_directory: PathBuf,
         /// An optional filepath for a compressed archive containing the exported
         /// node state, e.g. ~/pd-backup.tar.gz.
         #[clap(long, display_order = 200)]
         export_archive: Option<PathBuf>,
-        /// Whether to prune the JMT tree.
-        #[clap(long, display_order = 300)]
-        prune: bool,
     },
 
     /// Build, verify, and optionally prune one retired nullifier generation pack.
@@ -139,50 +134,6 @@ pub enum RootCommand {
         #[clap(long)]
         generation: u64,
     },
-
-    /// Run a migration before resuming post-upgrade.
-    Migrate {
-        /// The home directory of the full node.
-        ///
-        /// Migration is performed in-place on the home directory.
-        #[clap(long, env = "SHIELDD_PD_HOME", display_order = 100)]
-        home: Option<PathBuf>,
-        /// If set, also migrate the CometBFT state located in this home directory.
-        /// If both `--home` and `--comet-home` are unset, will attempt to migrate
-        /// CometBFT state alongside the auto-located `pd` state.
-        // Note: this does _NOT_ use an env var because we are trying to
-        // get explicit consent to muck around in another daemon's state.
-        #[clap(long, display_order = 200)]
-        comet_home: Option<PathBuf>,
-        /// Allow migration despite a detected state-version mismatch.
-        #[clap(long, display_order = 1000)]
-        force: bool,
-        /// Optional migration subcommand. If not specified, runs the default migration.
-        #[clap(subcommand)]
-        migration_type: Option<MigrateCommand>,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-pub enum MigrateCommand {
-    /// Perform IBC client recovery, overwriting an old client ID with a new one.
-    IbcRecovery {
-        /// The old IBC client ID to replace.
-        #[clap(long, short = 'o', value_name = "OLD_CLIENT_ID")]
-        old_client_id: String,
-        /// The new IBC client ID to use.
-        #[clap(long, short = 'n', value_name = "NEW_CLIENT_ID")]
-        new_client_id: String,
-        /// Optional app version to set during migration.
-        #[clap(long, value_name = "VERSION")]
-        target_app_version: Option<u64>,
-    },
-    /// Perform a no-op migration that produces a new genesis.
-    NoOp {
-        /// Optional app version to set during migration.
-        #[clap(long, value_name = "VERSION")]
-        target_app_version: Option<u64>,
-    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -199,7 +150,7 @@ pub enum NetworkCommand {
         /// Whether to preserve the chain ID (useful for public networks) or append a random suffix (useful for dev/testing).
         #[clap(long)]
         preserve_chain_id: bool,
-        /// Path to CSV file containing initial allocations [default: latest testnet].
+        /// Path to CSV file containing initial allocations [default: bundled development configuration].
         #[clap(long, parse(from_os_str))]
         allocations_input_file: Option<PathBuf>,
         /// Shieldd wallet address to include in genesis allocations.
@@ -209,9 +160,9 @@ pub enum NetworkCommand {
         #[clap(long)]
         allocation_address: Option<shieldd_sdk_keys::Address>,
         #[clap(long, parse(from_os_str))]
-        /// Path to JSON file containing initial validator configs [default: latest testnet].
+        /// Path to JSON file containing initial validator configs [default: bundled development configuration].
         validators_input_file: Option<PathBuf>,
-        /// Testnet name [default: latest testnet].
+        /// Testnet name [default: bundled development configuration].
         #[clap(long)]
         chain_id: Option<String>,
         /// The fixed gas price for all transactions on the network.

@@ -4,8 +4,6 @@ resolver = "2"
 
 exclude = [
   "tools/proto-compiler",
-  "crates/bin/orbis-test",
-  "poc",
   "third_party/h2-0.3.27",
 ]
 
@@ -37,7 +35,6 @@ members = [
   "crates/core/txhash",
   "crates/crypto/decaf377-frost",
   "crates/crypto/decaf377-ka",
-  "crates/crypto/eddy",
   "crates/crypto/proof-aggregation",
   "crates/crypto/proof-aggregation-fuzz",
   "crates/crypto/proof-aggregation-reference",

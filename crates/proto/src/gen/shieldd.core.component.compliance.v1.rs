@@ -218,26 +218,6 @@ impl ::prost::Name for IbcAssetOrigin {
         "/shieldd.core.component.compliance.v1.IbcAssetOrigin".into()
     }
 }
-/// Governance-controlled replacement of a regulated asset's IBC route policy.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct UpdateAssetIbcPolicy {
-    #[prost(message, optional, tag = "1")]
-    pub asset_id: ::core::option::Option<super::super::super::asset::v1::AssetId>,
-    #[prost(bytes = "vec", tag = "2")]
-    pub expected_route_policy_hash: ::prost::alloc::vec::Vec<u8>,
-    #[prost(message, repeated, tag = "3")]
-    pub allowed_ibc_routes: ::prost::alloc::vec::Vec<IbcRoute>,
-}
-impl ::prost::Name for UpdateAssetIbcPolicy {
-    const NAME: &'static str = "UpdateAssetIbcPolicy";
-    const PACKAGE: &'static str = "shieldd.core.component.compliance.v1";
-    fn full_name() -> ::prost::alloc::string::String {
-        "shieldd.core.component.compliance.v1.UpdateAssetIbcPolicy".into()
-    }
-    fn type_url() -> ::prost::alloc::string::String {
-        "/shieldd.core.component.compliance.v1.UpdateAssetIbcPolicy".into()
-    }
-}
 /// Chain-registrar authorization for an asset registration.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AssetRegistrationGrant {

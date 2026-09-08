@@ -10,13 +10,16 @@ use shieldd_sdk_sct::{
     component::{clock::EpochRead, tree::SctRead},
     Nullifier,
 };
-use shieldd_sdk_shielded_pool::{note, Note};
+use shieldd_sdk_shielded_pool::{component::StateReadExt as _, note, Note};
 use shieldd_sdk_tct as tct;
 use shieldd_sdk_transaction::{
     memo::MemoPlaintext, plan::MemoPlan, AuthorizationData, Transaction, TransactionPlan,
     WitnessData,
 };
-use shieldd_sdk_view::enrich_plan_with_compliance;
+use shieldd_sdk_view::complete_plan_with_compliance;
+pub use shieldd_sdk_view::planning_intent::{
+    ActionIntent, NoteReshapeIntent, TransactionIntent, TransferIntent, WithdrawalIntent,
+};
 use std::collections::BTreeMap;
 
 /// A bare-bones mock client for use exercising the state machine.
@@ -260,60 +263,58 @@ impl MockClient {
             .await
     }
 
-    /// Build a transaction with compliance enrichment from state.
-    ///
-    /// This method enriches the plan with compliance data (anchors, Merkle paths, etc.)
-    /// from the provided state before building the transaction.
-    pub async fn witness_auth_build_with_compliance<S: StateRead + Send + Sync>(
+    /// Complete a fixture intent using the current chain witnesses and parameters.
+    pub async fn complete_intent<S: StateRead + Send + Sync>(
         &self,
-        plan: &mut TransactionPlan,
+        mut intent: TransactionIntent,
         state: S,
-    ) -> Result<Transaction, Error> {
-        if plan.num_spends() > 0 {
-            plan.nullifier_window = Some(
+    ) -> Result<TransactionPlan, Error> {
+        if intent
+            .actions
+            .iter()
+            .any(|action| !action.spends().is_empty())
+            || intent.fee_funding.is_some()
+        {
+            intent.nullifier_window = Some(
                 shieldd_sdk_sct::nullifier_tree::generation_state(&state)
                     .await?
                     .window(),
             );
         }
-
-        // Use chain time for deterministic freshness checks.
-        let block_ts = state
+        let timestamp = state
             .get_current_block_timestamp()
-            .await
-            .ok()
-            .map(|t| t.unix_timestamp() as u64);
-
-        // Enrich the plan with compliance data
-        self.enrich_plan_with_compliance_internal(plan, state, block_ts)
-            .await?;
-        // Populate memo if outputs exist but no memo set.
-        if plan.memo.is_none() && plan.num_outputs() > 0 {
-            let return_address = self.fvk.incoming().payment_address(0u32.into());
-            plan.memo = Some(MemoPlan::new(
+            .await?
+            .unix_timestamp()
+            .try_into()?;
+        let routing = state.get_current_discovery_parameters().await?;
+        if intent.memo.is_none() && intent.has_outputs() {
+            intent.memo = Some(MemoPlan::new(
                 &mut OsRng,
-                MemoPlaintext::new(return_address, String::new())?,
+                MemoPlaintext::new(
+                    self.fvk.incoming().payment_address(0u32.into()),
+                    String::new(),
+                )?,
             ));
         }
-        // Then build normally
-        let witness_data = self.witness_plan(plan)?;
-        let auth_data = self.authorize_plan(plan)?;
-        plan.clone()
-            .build_concurrent(&self.fvk, &witness_data, &auth_data)
-            .await
-    }
-
-    /// Enrich a transaction plan with compliance data from state.
-    ///
-    /// Uses the shared enrichment function from the view crate with StateReadComplianceProvider.
-    async fn enrich_plan_with_compliance_internal<S: StateRead + Send + Sync>(
-        &self,
-        plan: &mut TransactionPlan,
-        state: S,
-        target_timestamp: Option<u64>,
-    ) -> Result<(), Error> {
         let provider = StateReadComplianceProvider::new(state);
-        enrich_plan_with_compliance(plan, &provider, &mut OsRng, target_timestamp).await
+        complete_plan_with_compliance(
+            intent,
+            |queries| async move {
+                shieldd_sdk_compliance::ComplianceProofProvider::get_batch_proofs(
+                    &provider, &queries,
+                )
+                .await
+                .map(|compliance| shieldd_sdk_view::CompletionData {
+                    compliance,
+                    volumes: vec![],
+                })
+            },
+            &mut OsRng,
+            routing,
+            Some(timestamp),
+            true,
+        )
+        .await
     }
 
     pub fn notes_by_asset(
@@ -458,7 +459,7 @@ impl<S: StateRead + Send + Sync> shieldd_sdk_compliance::ComplianceProofProvider
     /// serialization issues or timing).
     async fn get_batch_proofs(
         &self,
-        queries: &[(shieldd_sdk_keys::Address, shieldd_sdk_asset::asset::Id)],
+        queries: &[shieldd_sdk_compliance::ComplianceQuery],
     ) -> anyhow::Result<shieldd_sdk_compliance::BatchComplianceData> {
         use shieldd_sdk_compliance::{AssetProofData, BatchComplianceData, UserProofData};
         use std::collections::BTreeMap;
@@ -475,7 +476,7 @@ impl<S: StateRead + Send + Sync> shieldd_sdk_compliance::ComplianceProofProvider
         let mut asset_policies = BTreeMap::new();
         let mut user_proofs = BTreeMap::new();
 
-        for (address, asset_id) in queries {
+        for shieldd_sdk_compliance::ComplianceQuery { address, asset_id } in queries {
             // Generate asset proof with the same membership/non-membership
             // semantics enforced by the circuit.
             if !asset_proofs.contains_key(asset_id) {
@@ -595,7 +596,7 @@ mod tests {
     use shieldd_sdk_asset::{asset, Value};
     use shieldd_sdk_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
     use shieldd_sdk_shielded_pool::{
-        Note, RecoveryCommitment, Rseed, ShieldedInputPlan, ShieldedOutputPlan, TransferPlan,
+        Note, RecoveryCommitment, Rseed, ShieldedInputPlan, ShieldedOutputPlan,
     };
     use shieldd_sdk_tct::Witness;
     use shieldd_sdk_transaction::{ActionPlan, FeeFundingPlan, TransactionPlan};
@@ -626,7 +627,7 @@ mod tests {
             .expect("insert note commitment");
 
         let spend = ShieldedInputPlan::new(&mut OsRng, note.clone(), 0u64.into());
-        let mut output = ShieldedOutputPlan::new(
+        let output = ShieldedOutputPlan::new(
             &mut OsRng,
             Value {
                 amount: 60u64.into(),
@@ -634,17 +635,13 @@ mod tests {
             },
             address,
         );
-        output.asset_anchor = spend.asset_anchor;
-        output.compliance_anchor = spend.compliance_anchor;
-        output.target_timestamp = spend.target_timestamp;
-        output.is_regulated = spend.is_regulated;
-        output.tx_blinding_nonce = spend.tx_blinding_nonce;
-        output.asset_indexed_leaf = spend.asset_indexed_leaf.clone();
-        output.asset_path = spend.asset_path.clone();
-        output.asset_position = spend.asset_position;
-        output.asset_policy = spend.asset_policy.clone();
-        let transfer = TransferPlan::from_spend_output(spend.into(), output.into(), Fr::from(9u64))
-            .expect("build transfer");
+
+        let transfer = shieldd_sdk_shielded_pool::test_plan_helpers::transfer(
+            vec![spend.into()],
+            vec![output.into()],
+            Fr::from(9u64),
+        )
+        .expect("build transfer");
         let plan = TransactionPlan {
             actions: vec![ActionPlan::Transfer(transfer)],
             ..Default::default()
@@ -687,7 +684,7 @@ mod tests {
             .expect("insert note commitment");
 
         let spend = ShieldedInputPlan::new(&mut OsRng, note.clone(), 0u64.into());
-        let mut output = ShieldedOutputPlan::new(
+        let output = ShieldedOutputPlan::new(
             &mut OsRng,
             Value {
                 amount: 100u64.into(),
@@ -695,17 +692,13 @@ mod tests {
             },
             address,
         );
-        output.asset_anchor = spend.asset_anchor;
-        output.compliance_anchor = spend.compliance_anchor;
-        output.target_timestamp = spend.target_timestamp;
-        output.is_regulated = spend.is_regulated;
-        output.tx_blinding_nonce = spend.tx_blinding_nonce;
-        output.asset_indexed_leaf = spend.asset_indexed_leaf.clone();
-        output.asset_path = spend.asset_path.clone();
-        output.asset_position = spend.asset_position;
-        output.asset_policy = spend.asset_policy.clone();
-        let transfer = TransferPlan::from_spend_output(spend.into(), output.into(), Fr::from(9u64))
-            .expect("build fee-funding transfer");
+
+        let transfer = shieldd_sdk_shielded_pool::test_plan_helpers::fee_funding(
+            vec![spend.into()],
+            vec![output.into()],
+            Fr::from(9u64),
+        )
+        .expect("build fee-funding transfer");
         let plan = TransactionPlan {
             fee_funding: Some(FeeFundingPlan { transfer }),
             ..Default::default()

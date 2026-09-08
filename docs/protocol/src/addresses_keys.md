@@ -3,8 +3,7 @@
 The key hierarchy is a modification of the design in Zcash [Sapling].  The main
 differences are that it is designed for use with BLS12-377 rather than
 BLS12-381, that it also uses Poseidon[^1] as a hash and PRF, `decaf377` as the embedded
-group, and that it includes support for [fuzzy message
-detection](./crypto/fmd.md).
+group.
 
 All key material within a particular spend authority - an *account* - is ultimately derived from
 a single root secret.  The internal key components and their derivations are

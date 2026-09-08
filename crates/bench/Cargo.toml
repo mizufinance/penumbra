@@ -94,7 +94,7 @@ shieldd-sdk-proof-params = { workspace = true, default-features = true, features
 shieldd-sdk-proof-aggregation = {workspace = true}
 shieldd-sdk-shielded-pool = {workspace = true, default-features = true, features = ["benchmark-helpers"]}
 shieldd-sdk-sct = {workspace = true, default-features = true}
-shieldd-sdk-tct = {workspace = true, features = ["r1cs"], default-features = true}
+shieldd-sdk-tct = {workspace = true, default-features = true}
 shieldd-sdk-transaction = {workspace = true, default-features = true}
 shieldd-sdk-num = {workspace = true, default-features = true}
 shieldd-sdk-view = {workspace = true, default-features = true}

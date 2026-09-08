@@ -40,7 +40,7 @@ Benchmarks track aggregation, verification, prepared G2 reuse, parsing, and
 attacker-controlled rejection paths. Limits must bound allocation and expensive
 curve work before untrusted sizes are accepted.
 
-## X3 — Optimization byte lock
+## Canonical bytes
 
 Optimizations must preserve aggregate-proof and transcript bytes. If a protocol
 change intentionally changes bytes, update the version, domain separation,
@@ -55,10 +55,17 @@ The committed baselines cover:
 
 ## CI
 
-`scripts/check-snarkpack-runtime-invariants.sh` checks crate boundaries,
-canonical codecs, challenge construction, preflight use, SRS registration, and
-fuzz corpus presence. Rust tests cover the algebra, rejection cases,
-interoperability, and byte locks.
+`just snarkpack-invariants` compares generated family registries and runs the
+focused tests for immutable bundled verification keys, supported families,
+bounded preflight rejection, and SRS registration. The full workspace unit suite
+also covers algebra, independent reference verification, interoperability, and
+canonical bytes.
+
+`just snarkpack-slow` runs the ignored oracle and two-way interoperability tests
+in release mode. `just snarkpack-dos-gate` enforces rejection and verification
+latency thresholds. `just snarkpack-fuzz-smoke` runs the three seeded fuzz targets.
+These commands are separate from ordinary PR tests; invoking the unit suite
+does not run ignored tests or fuzzing.
 
 Production SRS loading fails closed until the compile-time registry contains a
 reviewed artifact and identifier. Runtime configuration may locate registered

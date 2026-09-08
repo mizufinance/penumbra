@@ -1,16 +1,9 @@
 # Shieldd deployments
 
-See the [Shieldd Guide] for setup steps on running a Shieldd node.
+Run `just dev` for the process-compose development network and `just smoke`
+for the local smoke suite. Optional process-compose configurations add metrics,
+PostgreSQL event storage, and development tools.
+Local development and smoke tests use the insecure development aggregation SRS.
 
-## Directory structure
-
-```
-.
-├── systemd/ # example systemd configs for node operators
-├── containerfiles/ # OCI container image manifests
-├── scripts/ # scripts related to testing shieldd in ci
-├── containerfiles/ # OCI container image manifests
-├── compose/ # example docker-compose configs, unmaintained
-```
-
-[Shieldd Guide]: https://github.com/mizufinance/guide
+The [Orbis stack](orbis/README.md) uses Docker Compose v2.
+The [runtime image](containerfiles/Dockerfile) packages the supported services.

@@ -19,8 +19,6 @@ use crate::{
 
 use super::{AddressIndex, DiversifierKey, IncomingViewingKey, NullifierKey, OutgoingViewingKey};
 
-pub mod r1cs;
-
 pub(crate) static IVK_DOMAIN_SEP: Lazy<Fq> =
     Lazy::new(|| Fq::from_le_bytes_mod_order(b"shieldd.derive.ivk"));
 

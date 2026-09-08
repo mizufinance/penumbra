@@ -14,9 +14,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use shieldd_sdk_proto::{serializers::bech32str, shieldd::core::keys::v1 as pb, DomainType};
 
-mod r1cs;
-pub use r1cs::AddressVar;
-
 mod view;
 pub use view::AddressView;
 
@@ -208,16 +205,6 @@ impl Address {
         format!("{}…", &full_address[0..num_chars_to_display])
     }
 
-    /// Encodes the address with Bech32.
-    pub fn compat_encoding(&self) -> String {
-        let proto_address = pb::Address::from(self);
-        bech32str::encode(
-            &proto_address.inner,
-            bech32str::compat_address::BECH32_PREFIX,
-            bech32str::Bech32,
-        )
-    }
-
     /// Generate a Noble forwarding address.
     pub fn noble_forwarding_address(&self, channel: &str) -> NobleForwardingAddress {
         NobleForwardingAddress {
@@ -356,16 +343,6 @@ impl std::str::FromStr for Address {
             }
 
             Ok(address)
-        } else if s.starts_with(bech32str::compat_address::BECH32_PREFIX) {
-            pb::Address {
-                inner: bech32str::decode(
-                    s,
-                    bech32str::compat_address::BECH32_PREFIX,
-                    bech32str::Bech32,
-                )?,
-                alt_bech32m: String::new(),
-            }
-            .try_into()
         } else {
             pb::Address {
                 inner: bech32str::decode(s, bech32str::address::BECH32_PREFIX, bech32str::Bech32m)?,
@@ -475,28 +452,6 @@ mod tests {
         assert_eq!(addr2, dest);
         assert_eq!(addr3, dest);
         assert_eq!(addr_from_proto, dest);
-    }
-
-    #[test]
-    fn bech32_encoding_round_trip() {
-        let rng = OsRng;
-        let seed_phrase = SeedPhrase::generate(rng);
-        let sk = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0))
-            .expect("generated spend key satisfies key refinements");
-        let fvk = sk.full_viewing_key();
-        let ivk = fvk.incoming();
-        let dest = ivk.payment_address(0u32.into());
-
-        let bech32_addr = dest.compat_encoding();
-
-        let addr = Address::from_str(&bech32_addr).expect("can decode valid address");
-
-        let proto_addr = dest.encode_to_vec();
-
-        let addr2 = Address::decode(proto_addr.as_ref()).expect("can decode valid address");
-
-        assert_eq!(addr, dest);
-        assert_eq!(addr2, dest);
     }
 
     #[test]

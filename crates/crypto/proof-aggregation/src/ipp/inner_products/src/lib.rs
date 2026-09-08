@@ -1,5 +1,5 @@
 use ark_ec::{
-    pairing::{MillerLoopOutput, Pairing, PairingOutput},
+    pairing::{Pairing, PairingOutput},
     CurveGroup,
 };
 use ark_ff::Field;
@@ -9,10 +9,10 @@ use std::{
     fmt::{Display, Formatter, Result as FmtResult},
     marker::PhantomData,
     ops::Add,
-    sync::{Mutex, OnceLock},
-    time::Instant,
 };
 
+#[cfg(feature = "parallel")]
+use ark_ec::pairing::MillerLoopOutput;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
@@ -44,50 +44,6 @@ impl Add for PairingPreparationCount {
             g2_prepared_elements: self.g2_prepared_elements + other.g2_prepared_elements,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct PairingComputationProfile {
-    pub normalize_batch_ms: f64,
-    pub prepare_ms: f64,
-    pub miller_loop_ms: f64,
-    pub final_exponentiation_ms: f64,
-    pub preparation: PairingPreparationCount,
-}
-
-impl PairingComputationProfile {
-    fn merge(&mut self, other: &Self) {
-        self.normalize_batch_ms += other.normalize_batch_ms;
-        self.prepare_ms += other.prepare_ms;
-        self.miller_loop_ms += other.miller_loop_ms;
-        self.final_exponentiation_ms += other.final_exponentiation_ms;
-        self.preparation = self.preparation + other.preparation;
-    }
-}
-
-fn pairing_profile_accumulator() -> &'static Mutex<PairingComputationProfile> {
-    static ACCUMULATOR: OnceLock<Mutex<PairingComputationProfile>> = OnceLock::new();
-    ACCUMULATOR.get_or_init(|| Mutex::new(PairingComputationProfile::default()))
-}
-
-pub fn reset_pairing_profile_accumulator() {
-    *pairing_profile_accumulator()
-        .lock()
-        .expect("pairing profile accumulator mutex poisoned") =
-        PairingComputationProfile::default();
-}
-
-pub fn pairing_profile_snapshot() -> PairingComputationProfile {
-    *pairing_profile_accumulator()
-        .lock()
-        .expect("pairing profile accumulator mutex poisoned")
-}
-
-fn record_pairing_profile_delta(delta: &PairingComputationProfile) {
-    pairing_profile_accumulator()
-        .lock()
-        .expect("pairing profile accumulator mutex poisoned")
-        .merge(delta);
 }
 
 #[derive(Debug)]
@@ -174,21 +130,17 @@ fn cpu_multi_pairing_projective<P: Pairing>(
     left: &[P::G1],
     right: &[P::G2],
 ) -> Option<PairingOutput<P>> {
-    let mut profile = PairingComputationProfile::default();
-
     // We make the input affine, then convert to prepared. We do this for speed, since the
     // conversion from projective to prepared always goes through affine.
-    let normalize_started = Instant::now();
+
     let aff_left = P::G1::normalize_batch(left);
     let aff_right = P::G2::normalize_batch(right);
-    profile.normalize_batch_ms = normalize_started.elapsed().as_secs_f64() * 1000.0;
 
     #[cfg(feature = "parallel")]
     let use_parallel = left.len() >= PAIRING_PARALLEL_THRESHOLD;
     #[cfg(not(feature = "parallel"))]
     let use_parallel = false;
 
-    let prepare_started = Instant::now();
     let left = if use_parallel {
         cfg_iter!(aff_left)
             .map(P::G1Prepared::from)
@@ -211,17 +163,8 @@ fn cpu_multi_pairing_projective<P: Pairing>(
             .map(P::G2Prepared::from)
             .collect::<Vec<_>>()
     };
-    profile.prepare_ms = prepare_started.elapsed().as_secs_f64() * 1000.0;
-    profile.preparation = PairingPreparationCount {
-        g1_normalization_batches: 1,
-        g2_normalization_batches: 1,
-        g1_normalized_elements: left.len(),
-        g2_normalized_elements: right.len(),
-        g1_prepared_elements: left.len(),
-        g2_prepared_elements: right.len(),
-    };
 
-    cfg_multi_pairing_prepared_with_profile::<P>(&left, &right, use_parallel, profile)
+    cfg_multi_pairing_prepared::<P>(&left, &right, use_parallel)
 }
 
 /// Prepared G1 operands that can be reused across independent pairing products.
@@ -250,17 +193,13 @@ impl<P: Pairing> PreparedG2<P> {
 
 /// Normalize and prepare one reusable G1 operand vector.
 pub fn prepare_g1<P: Pairing>(values: &[P::G1]) -> PreparedG1<P> {
-    let mut profile = PairingComputationProfile::default();
-    let normalize_started = Instant::now();
     let affine = P::G1::normalize_batch(values);
-    profile.normalize_batch_ms = normalize_started.elapsed().as_secs_f64() * 1000.0;
 
     #[cfg(feature = "parallel")]
     let use_parallel = values.len() >= PAIRING_PARALLEL_THRESHOLD;
     #[cfg(not(feature = "parallel"))]
     let use_parallel = false;
 
-    let prepare_started = Instant::now();
     let prepared = if use_parallel {
         cfg_iter!(affine)
             .map(P::G1Prepared::from)
@@ -272,33 +211,29 @@ pub fn prepare_g1<P: Pairing>(values: &[P::G1]) -> PreparedG1<P> {
             .map(P::G1Prepared::from)
             .collect::<Vec<_>>()
     };
-    profile.prepare_ms = prepare_started.elapsed().as_secs_f64() * 1000.0;
-    profile.preparation = PairingPreparationCount {
+
+    let preparation = PairingPreparationCount {
         g1_normalization_batches: 1,
         g1_normalized_elements: values.len(),
         g1_prepared_elements: values.len(),
         ..PairingPreparationCount::default()
     };
-    record_pairing_profile_delta(&profile);
+
     PreparedG1 {
         values: prepared,
-        preparation: profile.preparation,
+        preparation,
     }
 }
 
 /// Normalize and prepare one reusable G2 operand vector.
 pub fn prepare_g2<P: Pairing>(values: &[P::G2]) -> PreparedG2<P> {
-    let mut profile = PairingComputationProfile::default();
-    let normalize_started = Instant::now();
     let affine = P::G2::normalize_batch(values);
-    profile.normalize_batch_ms = normalize_started.elapsed().as_secs_f64() * 1000.0;
 
     #[cfg(feature = "parallel")]
     let use_parallel = values.len() >= PAIRING_PARALLEL_THRESHOLD;
     #[cfg(not(feature = "parallel"))]
     let use_parallel = false;
 
-    let prepare_started = Instant::now();
     let prepared = if use_parallel {
         cfg_iter!(affine)
             .map(P::G2Prepared::from)
@@ -310,17 +245,17 @@ pub fn prepare_g2<P: Pairing>(values: &[P::G2]) -> PreparedG2<P> {
             .map(P::G2Prepared::from)
             .collect::<Vec<_>>()
     };
-    profile.prepare_ms = prepare_started.elapsed().as_secs_f64() * 1000.0;
-    profile.preparation = PairingPreparationCount {
+
+    let preparation = PairingPreparationCount {
         g2_normalization_batches: 1,
         g2_normalized_elements: values.len(),
         g2_prepared_elements: values.len(),
         ..PairingPreparationCount::default()
     };
-    record_pairing_profile_delta(&profile);
+
     PreparedG2 {
         values: prepared,
-        preparation: profile.preparation,
+        preparation,
     }
 }
 
@@ -337,27 +272,19 @@ pub fn pair_prepared<P: Pairing>(
     #[cfg(not(feature = "parallel"))]
     let use_parallel = false;
 
-    cfg_multi_pairing_prepared_with_profile::<P>(
-        &left.values,
-        &right.values,
-        use_parallel,
-        PairingComputationProfile::default(),
-    )
-    .ok_or_else(|| Box::new(InnerProductError::PairingUnavailable) as Error)
+    cfg_multi_pairing_prepared::<P>(&left.values, &right.values, use_parallel)
+        .ok_or_else(|| Box::new(InnerProductError::PairingUnavailable) as Error)
 }
 
 pub fn cfg_multi_pairing_g1_affine_g2_prepared<P: Pairing>(
     left: &[P::G1Affine],
     right: &[P::G2Prepared],
 ) -> Option<PairingOutput<P>> {
-    let mut profile = PairingComputationProfile::default();
-
     #[cfg(feature = "parallel")]
     let use_parallel = left.len() >= PAIRING_PARALLEL_THRESHOLD;
     #[cfg(not(feature = "parallel"))]
     let use_parallel = false;
 
-    let prepare_started = Instant::now();
     let left = if use_parallel {
         cfg_iter!(left).map(P::G1Prepared::from).collect::<Vec<_>>()
     } else {
@@ -366,55 +293,34 @@ pub fn cfg_multi_pairing_g1_affine_g2_prepared<P: Pairing>(
             .map(P::G1Prepared::from)
             .collect::<Vec<_>>()
     };
-    profile.prepare_ms = prepare_started.elapsed().as_secs_f64() * 1000.0;
-    profile.preparation = PairingPreparationCount {
-        g1_prepared_elements: left.len(),
-        ..PairingPreparationCount::default()
-    };
 
-    cfg_multi_pairing_prepared_with_profile::<P>(&left, right, use_parallel, profile)
+    cfg_multi_pairing_prepared::<P>(&left, right, use_parallel)
 }
 
-fn cfg_multi_pairing_prepared_with_profile<P: Pairing>(
+fn cfg_multi_pairing_prepared<P: Pairing>(
     left: &[P::G1Prepared],
     right: &[P::G2Prepared],
     use_parallel: bool,
-    mut profile: PairingComputationProfile,
 ) -> Option<PairingOutput<P>> {
     debug_assert_eq!(left.len(), right.len());
 
-    let chunk_size = if use_parallel {
-        let num_chunks = rayon::current_num_threads();
-        if num_chunks <= left.len() {
-            left.len() / num_chunks
-        } else {
-            1
-        }
-    } else {
-        left.len().max(1)
-    };
-
-    // Compute all the (partial) pairings and take the product. We have to take the product over
-    // P::TargetField because MillerLoopOutput doesn't impl Product
-    let miller_loop_started = Instant::now();
-    let ml_result = if use_parallel {
-        left.par_chunks(chunk_size)
+    #[cfg(feature = "parallel")]
+    if use_parallel {
+        let chunk_size = (left.len() / rayon::current_num_threads()).max(1);
+        // MillerLoopOutput does not implement Product; multiply its target fields.
+        let product = left
+            .par_chunks(chunk_size)
             .zip(right.par_chunks(chunk_size))
-            .map(|(aa, bb)| P::multi_miller_loop(aa.iter().cloned(), bb.iter().cloned()).0)
-            .product()
-    } else {
-        left.chunks(chunk_size)
-            .zip(right.chunks(chunk_size))
-            .map(|(aa, bb)| P::multi_miller_loop(aa.iter().cloned(), bb.iter().cloned()).0)
-            .product()
-    };
-    profile.miller_loop_ms = miller_loop_started.elapsed().as_secs_f64() * 1000.0;
-
-    let final_exponentiation_started = Instant::now();
-    let result = P::final_exponentiation(MillerLoopOutput(ml_result));
-    profile.final_exponentiation_ms = final_exponentiation_started.elapsed().as_secs_f64() * 1000.0;
-    record_pairing_profile_delta(&profile);
-    result
+            .map(|(a, b)| P::multi_miller_loop(a.iter().cloned(), b.iter().cloned()).0)
+            .product();
+        return P::final_exponentiation(MillerLoopOutput(product));
+    }
+    #[cfg(not(feature = "parallel"))]
+    let _ = use_parallel;
+    P::final_exponentiation(P::multi_miller_loop(
+        left.iter().cloned(),
+        right.iter().cloned(),
+    ))
 }
 
 #[derive(Copy, Clone)]
@@ -474,16 +380,9 @@ mod tests {
     use ark_ec::CurveGroup;
     use ark_ff::UniformRand;
     use ark_std::rand::{rngs::StdRng, SeedableRng};
-    use std::sync::{Mutex, OnceLock};
-
-    fn test_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     #[test]
     fn cfg_multi_pairing_matches_reference_across_threshold_boundary() {
-        let _guard = test_lock().lock().expect("test lock mutex poisoned");
         let mut rng = StdRng::seed_from_u64(7);
         let below_threshold = PAIRING_PARALLEL_THRESHOLD.saturating_sub(1).max(1);
         let sizes = [1usize, below_threshold, PAIRING_PARALLEL_THRESHOLD];
@@ -507,30 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn cfg_multi_pairing_records_stage_profile() {
-        let _guard = test_lock().lock().expect("test lock mutex poisoned");
-        let mut rng = StdRng::seed_from_u64(9);
-        let size = 4usize;
-        let left = (0..size)
-            .map(|_| <Bls12_381 as Pairing>::G1::rand(&mut rng))
-            .collect::<Vec<_>>();
-        let right = (0..size)
-            .map(|_| <Bls12_381 as Pairing>::G2::rand(&mut rng))
-            .collect::<Vec<_>>();
-
-        reset_pairing_profile_accumulator();
-        let _ = cfg_multi_pairing::<Bls12_381>(&left, &right).expect("pairing result");
-        let profile = pairing_profile_snapshot();
-
-        assert!(profile.normalize_batch_ms >= 0.0);
-        assert!(profile.prepare_ms >= 0.0);
-        assert!(profile.miller_loop_ms >= 0.0);
-        assert!(profile.final_exponentiation_ms >= 0.0);
-    }
-
-    #[test]
     fn cfg_multi_pairing_g1_affine_g2_prepared_matches_projective_path() {
-        let _guard = test_lock().lock().expect("test lock mutex poisoned");
         let mut rng = StdRng::seed_from_u64(29);
         let size = 4usize;
         let left = (0..size)
@@ -545,43 +421,12 @@ mod tests {
             .map(<Bls12_381 as Pairing>::G2Prepared::from)
             .collect::<Vec<_>>();
 
-        reset_pairing_profile_accumulator();
         let projective = cfg_multi_pairing::<Bls12_381>(&left, &right).expect("projective result");
 
-        reset_pairing_profile_accumulator();
         let prepared =
             cfg_multi_pairing_g1_affine_g2_prepared::<Bls12_381>(&left_affine, &right_prepared)
                 .expect("prepared result");
-        let profile = pairing_profile_snapshot();
 
         assert_eq!(projective, prepared);
-        assert_eq!(profile.normalize_batch_ms, 0.0);
-        assert!(profile.prepare_ms >= 0.0);
-    }
-
-    #[test]
-    fn pairing_profile_survives_cross_thread_collection() {
-        let _guard = test_lock().lock().expect("test lock mutex poisoned");
-        reset_pairing_profile_accumulator();
-        std::thread::spawn(|| {
-            record_pairing_profile_delta(&PairingComputationProfile {
-                normalize_batch_ms: 1.0,
-                prepare_ms: 2.0,
-                miller_loop_ms: 3.0,
-                final_exponentiation_ms: 4.0,
-                preparation: PairingPreparationCount::default(),
-            });
-        })
-        .join()
-        .expect("pairing writer thread should join");
-
-        let snapshot = std::thread::spawn(pairing_profile_snapshot)
-            .join()
-            .expect("pairing reader thread should join");
-
-        assert_eq!(snapshot.normalize_batch_ms, 1.0);
-        assert_eq!(snapshot.prepare_ms, 2.0);
-        assert_eq!(snapshot.miller_loop_ms, 3.0);
-        assert_eq!(snapshot.final_exponentiation_ms, 4.0);
     }
 }

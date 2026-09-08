@@ -8,7 +8,7 @@ use {
     serde::{Deserialize, Serialize},
     sha2::Digest as _,
     shieldd_sdk_app::{
-        app::{App, ExecutionBlockProfile, PrepareProposalProfile, ProcessProposalProfile},
+        app::{App, ExecutionBlockProfile},
         block_tx_indexing::BlockTxIndexingMode,
         stateless_cache::StatelessCache,
     },
@@ -22,7 +22,7 @@ use {
     shieldd_sdk_mock_consensus::NodeResumeState,
     shieldd_sdk_num::Amount,
     shieldd_sdk_proto::DomainType as _,
-    shieldd_sdk_shielded_pool::{ShieldedInputPlan, ShieldedOutputPlan, TransferPlan},
+    shieldd_sdk_shielded_pool::{ShieldedInputPlan, ShieldedOutputPlan},
     shieldd_sdk_transaction::{
         memo::MemoPlaintext, plan::MemoPlan, Action, ActionPlan, Transaction,
         TransactionParameters, TransactionPlan,
@@ -373,41 +373,23 @@ struct DetailedRunReport {
     delay_block_count: usize,
     delay_block_wall_ms: f64,
     direct_artifact_extract_ms: f64,
-    direct_artifact_extract_action_ms: f64,
-    direct_artifact_extract_public_ms: f64,
-    direct_artifact_to_batch_item_ms: f64,
+
     direct_zk_batch_verify_ms: f64,
     checktx_cold_wall_ms: f64,
     checktx_warm_wall_ms: f64,
     prepare_proposal_wall_ms: f64,
-    prepare_zk_proof_verify_ms: f64,
-    prepare_stateful_filter_ms: f64,
+
     process_proposal_wall_ms: f64,
-    process_independent_zk_verify_ms: f64,
-    process_stateful_replay_ms: f64,
+
     execute_block_tx_count: usize,
     execute_begin_block_ms: f64,
     execute_deliver_txs_wall_ms: f64,
     execute_profiled_wall_ms: f64,
     execute_execute_tx_ms: f64,
-    execute_begin_state_tx_ms: f64,
-    execute_index_tx_ms: f64,
-    execute_get_block_height_ms: f64,
-    execute_clone_tx_ms: f64,
-    execute_proto_convert_ms: f64,
-    execute_put_block_transaction_ms: f64,
-    execute_tx_log_read_ms: f64,
-    execute_tx_log_encode_ms: f64,
-    execute_tx_log_put_raw_ms: f64,
-    execute_check_and_execute_ms: f64,
-    execute_set_source_ms: f64,
-    execute_pay_fee_ms: f64,
-    execute_historical_state_ms: f64,
-    execute_action_ms: f64,
+
     execute_commit_ms: f64,
     execute_end_block_ms: f64,
-    execute_other_action_ms: f64,
-    execute_apply_ms: f64,
+
     inbound_receive: InboundReceiveBreakdownReport,
 }
 
@@ -1071,7 +1053,7 @@ async fn build_inner_transfer_txs(
             );
             let send_amount = Amount::from(1u64);
             let change_amount = note.amount() - send_amount;
-            let mut output = ShieldedOutputPlan::new(
+            let output = ShieldedOutputPlan::new(
                 &mut OsRng,
                 Value {
                     amount: send_amount,
@@ -1079,7 +1061,7 @@ async fn build_inner_transfer_txs(
                 },
                 test_keys::ADDRESS_1.deref().clone(),
             );
-            let mut change = ShieldedOutputPlan::new(
+            let change = ShieldedOutputPlan::new(
                 &mut OsRng,
                 Value {
                     amount: change_amount,
@@ -1087,15 +1069,14 @@ async fn build_inner_transfer_txs(
                 },
                 note.address(),
             );
-            align_metadata(&spend, &mut [&mut output, &mut change]);
 
-            let mut plan = TransactionPlan {
+            let intent = shieldd_sdk_mock_client::TransactionIntent {
                 nullifier_window: None,
-                actions: vec![TransferPlan::new(
-                    vec![spend.into()],
-                    vec![output.into(), change.into()],
-                    Fr::from(1u64),
-                )?
+                actions: vec![shieldd_sdk_mock_client::TransferIntent {
+                    spends: vec![spend.into()],
+                    outputs: vec![output.into(), change.into()],
+                    value_blinding: Fr::from(1u64),
+                }
                 .into()],
                 fee_funding: None,
                 memo: Some(MemoPlan::new(
@@ -1107,9 +1088,8 @@ async fn build_inner_transfer_txs(
                     ..Default::default()
                 },
             };
-            let tx = client
-                .witness_auth_build_with_compliance(&mut plan, snapshot)
-                .await?;
+            let plan = client.complete_intent(intent, snapshot).await?;
+            let tx = client.witness_auth_build(&plan).await?;
             Ok::<(usize, Vec<u8>), anyhow::Error>((ordinal, tx.encode_to_vec()))
         });
     }
@@ -1120,20 +1100,6 @@ async fn build_inner_transfer_txs(
         txs[ordinal] = bytes;
     }
     Ok(txs)
-}
-
-fn align_metadata(spend: &ShieldedInputPlan, outputs: &mut [&mut ShieldedOutputPlan]) {
-    for output in outputs {
-        output.asset_anchor = spend.asset_anchor;
-        output.compliance_anchor = spend.compliance_anchor;
-        output.target_timestamp = spend.target_timestamp;
-        output.is_regulated = spend.is_regulated;
-        output.tx_blinding_nonce = spend.tx_blinding_nonce;
-        output.asset_indexed_leaf = spend.asset_indexed_leaf.clone();
-        output.asset_path = spend.asset_path.clone();
-        output.asset_position = spend.asset_position;
-        output.asset_policy = spend.asset_policy.clone();
-    }
 }
 
 async fn rebuild_ibc_relay_txs(
@@ -1388,19 +1354,14 @@ async fn profile_block(chain: &mut TestNodeWithIBC, txs: Vec<Vec<u8>>) -> Result
         })
         .collect::<Result<Vec<_>>>()?;
     apply_shape_counts(&mut detailed, &decoded_txs);
-    let (artifacts, artifact_profile) =
-        App::build_tx_artifacts_extracted_profiled_public("ibc_vs_transfer_extract", &decoded_txs)
+    let artifacts =
+        App::build_tx_artifacts_extracted_for_stage_public("ibc_vs_transfer_extract", &decoded_txs)
             .await?;
     detailed.direct_artifact_extract_ms = elapsed_ms(proof_start);
-    detailed.direct_artifact_extract_action_ms = artifact_profile.action_extract_ms;
-    detailed.direct_artifact_extract_public_ms = artifact_profile.action_extract_public_ms;
-    detailed.direct_artifact_to_batch_item_ms = artifact_profile.action_to_batch_item_ms;
 
     let zk_start = Instant::now();
-    detailed.direct_zk_batch_verify_ms = App::batch_verify_artifacts_for_bench(&artifacts).await?;
-    if detailed.direct_zk_batch_verify_ms == 0.0 {
-        detailed.direct_zk_batch_verify_ms = elapsed_ms(zk_start);
-    }
+    App::batch_verify_artifacts_for_bench(&artifacts).await?;
+    detailed.direct_zk_batch_verify_ms = elapsed_ms(zk_start);
 
     detailed.checktx_cold_wall_ms = run_checktx_cold(chain, &txs).await?;
     detailed.checktx_warm_wall_ms = run_checktx_warm(chain, &txs, &artifacts).await?;
@@ -1409,11 +1370,9 @@ async fn profile_block(chain: &mut TestNodeWithIBC, txs: Vec<Vec<u8>>) -> Result
     let mut proposer = App::new(chain.storage.latest_snapshot());
     proposer.set_block_tx_indexing_mode(BlockTxIndexingMode::DeferredBatch);
     let prepare_start = Instant::now();
-    let (prepared, prepare_profile, sidecar) = proposer
-        .prepare_proposal_profiled(prepare_request, None, true)
-        .await;
+    let (prepared, sidecar) = proposer.prepare_proposal(prepare_request, None, true).await;
     detailed.prepare_proposal_wall_ms = elapsed_ms(prepare_start);
-    apply_prepare_profile(&mut detailed, &prepare_profile);
+
     ensure_prepare_preserved_user_txs(&txs, &prepared)?;
     let sidecar = sidecar.context("profiled proposal must retain its artifact sidecar")?;
     let envelope = App::candidate_envelope_from_prepared_proposal_public(
@@ -1425,29 +1384,29 @@ async fn profile_block(chain: &mut TestNodeWithIBC, txs: Vec<Vec<u8>>) -> Result
     let process_request = process_request_from_prepare_response(&prepared);
     let mut validator = App::new(chain.storage.latest_snapshot());
     let process_start = Instant::now();
-    let (process_verdict, process_profile) = validator
-        .process_proposal_profiled(process_request, None, Some(&sidecar), true)
+    let process_verdict = validator
+        .process_proposal(process_request, None, Some(&sidecar), true)
         .await;
     detailed.process_proposal_wall_ms = elapsed_ms(process_start);
     anyhow::ensure!(
         matches!(process_verdict, response::ProcessProposal::Accept),
-        "process proposal rejected profiled block: {process_verdict:?}"
+        "process proposal rejected benchmark block: {process_verdict:?}"
     );
-    apply_process_profile(&mut detailed, &process_profile);
 
     let mut executor = App::new(chain.storage.latest_snapshot());
     executor.set_block_tx_indexing_mode(BlockTxIndexingMode::DeferredBatch);
-    benchmarking::reset_inbound_receive_breakdown();
     let execute_start = Instant::now();
-    let execution_profile = executor
-        .execute_validated_candidate_envelope_profiled(&envelope, chain.storage.as_ref().clone())
-        .await?;
+    let (execution_profile, inbound_timings) = benchmarking::measure_inbound_receive(
+        executor.execute_validated_candidate_envelope_profiled(
+            &envelope,
+            chain.storage.as_ref().clone(),
+        ),
+    )
+    .await;
+    let execution_profile = execution_profile?;
     detailed.execute_profiled_wall_ms = elapsed_ms(execute_start);
     apply_execution_profile(&mut detailed, &execution_profile);
-    detailed
-        .inbound_receive
-        .add_snapshot(benchmarking::snapshot_inbound_receive_breakdown());
-    benchmarking::reset_inbound_receive_breakdown();
+    detailed.inbound_receive.add_snapshot(inbound_timings);
 
     Ok(ProfiledBlock {
         wall_ms: detailed.execute_profiled_wall_ms,
@@ -1477,9 +1436,9 @@ async fn run_checktx_cold(chain: &TestNodeWithIBC, txs: &[Vec<u8>]) -> Result<f6
     let start = Instant::now();
     let mut app = App::new(chain.storage.latest_snapshot());
     for tx in txs {
-        app.deliver_tx_bytes_uncached_profiled(tx)
+        app.deliver_tx_bytes(tx, None)
             .await
-            .context("cold CheckTx profile failed")?;
+            .context("cold CheckTx failed")?;
     }
     Ok(elapsed_ms(start))
 }
@@ -1497,9 +1456,9 @@ async fn run_checktx_warm(
     let start = Instant::now();
     let mut app = App::new(chain.storage.latest_snapshot());
     for tx in txs {
-        app.deliver_tx_bytes_profiled(tx, Some(&cache))
+        app.deliver_tx_bytes(tx, Some(&cache))
             .await
-            .context("warm CheckTx profile failed")?;
+            .context("warm CheckTx failed")?;
     }
     Ok(elapsed_ms(start))
 }
@@ -1513,41 +1472,23 @@ impl DetailedRunReport {
         self.delay_block_count += block.delay_block_count;
         self.delay_block_wall_ms += block.delay_block_wall_ms;
         self.direct_artifact_extract_ms += block.direct_artifact_extract_ms;
-        self.direct_artifact_extract_action_ms += block.direct_artifact_extract_action_ms;
-        self.direct_artifact_extract_public_ms += block.direct_artifact_extract_public_ms;
-        self.direct_artifact_to_batch_item_ms += block.direct_artifact_to_batch_item_ms;
+
         self.direct_zk_batch_verify_ms += block.direct_zk_batch_verify_ms;
         self.checktx_cold_wall_ms += block.checktx_cold_wall_ms;
         self.checktx_warm_wall_ms += block.checktx_warm_wall_ms;
         self.prepare_proposal_wall_ms += block.prepare_proposal_wall_ms;
-        self.prepare_zk_proof_verify_ms += block.prepare_zk_proof_verify_ms;
-        self.prepare_stateful_filter_ms += block.prepare_stateful_filter_ms;
+
         self.process_proposal_wall_ms += block.process_proposal_wall_ms;
-        self.process_independent_zk_verify_ms += block.process_independent_zk_verify_ms;
-        self.process_stateful_replay_ms += block.process_stateful_replay_ms;
+
         self.execute_block_tx_count += block.execute_block_tx_count;
         self.execute_begin_block_ms += block.execute_begin_block_ms;
         self.execute_deliver_txs_wall_ms += block.execute_deliver_txs_wall_ms;
         self.execute_profiled_wall_ms += block.execute_profiled_wall_ms;
         self.execute_execute_tx_ms += block.execute_execute_tx_ms;
-        self.execute_begin_state_tx_ms += block.execute_begin_state_tx_ms;
-        self.execute_index_tx_ms += block.execute_index_tx_ms;
-        self.execute_get_block_height_ms += block.execute_get_block_height_ms;
-        self.execute_clone_tx_ms += block.execute_clone_tx_ms;
-        self.execute_proto_convert_ms += block.execute_proto_convert_ms;
-        self.execute_put_block_transaction_ms += block.execute_put_block_transaction_ms;
-        self.execute_tx_log_read_ms += block.execute_tx_log_read_ms;
-        self.execute_tx_log_encode_ms += block.execute_tx_log_encode_ms;
-        self.execute_tx_log_put_raw_ms += block.execute_tx_log_put_raw_ms;
-        self.execute_check_and_execute_ms += block.execute_check_and_execute_ms;
-        self.execute_set_source_ms += block.execute_set_source_ms;
-        self.execute_pay_fee_ms += block.execute_pay_fee_ms;
-        self.execute_historical_state_ms += block.execute_historical_state_ms;
-        self.execute_action_ms += block.execute_action_ms;
+
         self.execute_commit_ms += block.execute_commit_ms;
         self.execute_end_block_ms += block.execute_end_block_ms;
-        self.execute_other_action_ms += block.execute_other_action_ms;
-        self.execute_apply_ms += block.execute_apply_ms;
+
         self.inbound_receive.add(block.inbound_receive);
     }
 }
@@ -1659,39 +1600,14 @@ impl StageTimingReport {
     }
 }
 
-fn apply_prepare_profile(report: &mut DetailedRunReport, profile: &PrepareProposalProfile) {
-    report.prepare_zk_proof_verify_ms += profile.artifact_fill_batch_verify_ms;
-    report.prepare_stateful_filter_ms += profile.stateful_filter_execute_ms;
-}
-
-fn apply_process_profile(report: &mut DetailedRunReport, profile: &ProcessProposalProfile) {
-    report.process_independent_zk_verify_ms += profile.aggregate_verify_ms;
-    report.process_stateful_replay_ms += profile.stateful_replay_execute_ms;
-}
-
 fn apply_execution_profile(report: &mut DetailedRunReport, profile: &ExecutionBlockProfile) {
     report.execute_block_tx_count += profile.block_tx_count;
     report.execute_begin_block_ms += profile.begin_block_ms;
     report.execute_deliver_txs_wall_ms += profile.deliver_txs_wall_ms;
     report.execute_execute_tx_ms += profile.execute_tx_ms;
-    report.execute_begin_state_tx_ms += profile.begin_state_tx_ms;
-    report.execute_index_tx_ms += profile.index_tx_ms;
-    report.execute_get_block_height_ms += profile.get_block_height_ms;
-    report.execute_clone_tx_ms += profile.clone_tx_ms;
-    report.execute_proto_convert_ms += profile.proto_convert_ms;
-    report.execute_put_block_transaction_ms += profile.put_block_transaction_ms;
-    report.execute_tx_log_read_ms += profile.tx_log_read_ms;
-    report.execute_tx_log_encode_ms += profile.tx_log_encode_ms;
-    report.execute_tx_log_put_raw_ms += profile.tx_log_put_raw_ms;
-    report.execute_check_and_execute_ms += profile.check_and_execute_ms;
-    report.execute_set_source_ms += profile.set_source_ms;
-    report.execute_pay_fee_ms += profile.pay_fee_ms;
-    report.execute_historical_state_ms += profile.read_historical_check_ms;
-    report.execute_action_ms += profile.action_execute_ms;
+
     report.execute_commit_ms += profile.commit_ms;
     report.execute_end_block_ms += profile.end_block_ms;
-    report.execute_other_action_ms += profile.other_action_execute_ms;
-    report.execute_apply_ms += profile.apply_ms;
 }
 
 fn prepare_request(txs: &[Vec<u8>]) -> request::PrepareProposal {
@@ -1996,15 +1912,7 @@ fn render_markdown(report: &BenchmarkReport) -> String {
         append_detail_ms_row(&mut out, scenario, "direct artifact extract", |d| {
             d.direct_artifact_extract_ms
         });
-        append_detail_ms_row(&mut out, scenario, "direct artifact action extract", |d| {
-            d.direct_artifact_extract_action_ms
-        });
-        append_detail_ms_row(&mut out, scenario, "direct artifact public extract", |d| {
-            d.direct_artifact_extract_public_ms
-        });
-        append_detail_ms_row(&mut out, scenario, "direct artifact to batch item", |d| {
-            d.direct_artifact_to_batch_item_ms
-        });
+
         append_detail_ms_row(&mut out, scenario, "direct ZK batch verify", |d| {
             d.direct_zk_batch_verify_ms
         });
@@ -2017,23 +1925,9 @@ fn render_markdown(report: &BenchmarkReport) -> String {
         append_detail_ms_row(&mut out, scenario, "PrepareProposal wall", |d| {
             d.prepare_proposal_wall_ms
         });
-        append_detail_ms_row(&mut out, scenario, "PrepareProposal ZK verify", |d| {
-            d.prepare_zk_proof_verify_ms
-        });
-        append_detail_ms_row(&mut out, scenario, "PrepareProposal stateful filter", |d| {
-            d.prepare_stateful_filter_ms
-        });
+
         append_detail_ms_row(&mut out, scenario, "ProcessProposal wall", |d| {
             d.process_proposal_wall_ms
-        });
-        append_detail_ms_row(
-            &mut out,
-            scenario,
-            "ProcessProposal independent ZK verify",
-            |d| d.process_independent_zk_verify_ms,
-        );
-        append_detail_ms_row(&mut out, scenario, "ProcessProposal stateful replay", |d| {
-            d.process_stateful_replay_ms
         });
     }
     out.push_str(
@@ -2054,23 +1948,7 @@ fn render_markdown(report: &BenchmarkReport) -> String {
         append_detail_ms_row(&mut out, scenario, "execute tx total", |d| {
             d.execute_execute_tx_ms
         });
-        append_detail_ms_row(&mut out, scenario, "begin state tx", |d| {
-            d.execute_begin_state_tx_ms
-        });
-        append_detail_ms_row(&mut out, scenario, "index tx", |d| d.execute_index_tx_ms);
-        append_detail_ms_row(&mut out, scenario, "check and execute", |d| {
-            d.execute_check_and_execute_ms
-        });
-        append_detail_ms_row(&mut out, scenario, "historical/read total", |d| {
-            d.execute_historical_state_ms
-        });
-        append_detail_ms_row(&mut out, scenario, "action execute", |d| {
-            d.execute_action_ms
-        });
-        append_detail_ms_row(&mut out, scenario, "other action", |d| {
-            d.execute_other_action_ms
-        });
-        append_detail_ms_row(&mut out, scenario, "state tx apply", |d| d.execute_apply_ms);
+
         append_detail_ms_row(&mut out, scenario, "end block", |d| d.execute_end_block_ms);
         append_detail_ms_row(&mut out, scenario, "commit", |d| d.execute_commit_ms);
     }

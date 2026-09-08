@@ -25,3 +25,6 @@ shieldd-sdk-tct = {workspace = true, default-features = true}
 shieldd-sdk-transaction = {workspace = true, default-features = true}
 shieldd-sdk-view = {workspace = true, default-features = true}
 rand_core = {workspace = true}
+
+[dev-dependencies]
+shieldd-sdk-shielded-pool = {workspace = true, features = ["benchmark-helpers"]}

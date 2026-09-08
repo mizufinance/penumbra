@@ -39,7 +39,6 @@ pub enum ViewCmd {
     /// but this command can be used to "pre-sync" before interactive use.
     Sync,
     /// Get transaction hashes and block heights of spendable notes.
-    #[clap(visible_alias = "list-tx-hashes")]
     ListTransactionHashes(TransactionHashesCmd),
     /// Displays a transaction's details by hash.
     Tx(TxCmd),

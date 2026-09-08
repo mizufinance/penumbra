@@ -4,27 +4,7 @@ use ark_ip_proofs::challenge::ChallengeContext;
 use decaf377::{Bls12_377, Fq};
 use shieldd_sdk_proof_params::batch::BatchItem;
 
-use crate::{
-    backend::{AggregateBuildBackendProfile, AggregateVerificationProfile, AggregateVerifyError},
-    srs::DevSrs,
-    transcript::TransferTranscriptDigest,
-};
-
-pub(crate) fn verify_transfer_aggregate_profiled_status(
-    challenge_context: &ChallengeContext,
-    pvk: &PreparedVerifyingKey<Bls12_377>,
-    aggregate_proof_bytes: &[u8],
-    padded_public_inputs: &[Vec<Fq>],
-    srs: &DevSrs,
-) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
-    crate::backend::verify_with_digest_profiled::<TransferTranscriptDigest>(
-        challenge_context,
-        pvk,
-        aggregate_proof_bytes,
-        padded_public_inputs,
-        srs,
-    )
-}
+use crate::{backend::AggregateVerifyError, srs::DevSrs, transcript::TransferTranscriptDigest};
 
 pub(crate) fn aggregate_transfer_real_count(
     challenge_context: &ChallengeContext,
@@ -53,19 +33,5 @@ pub(crate) fn verify_transfer_aggregate(
         aggregate_proof_bytes,
         padded_public_inputs,
         srs,
-    )
-}
-
-pub(crate) fn aggregate_transfer_profiled_real_count(
-    items: &[BatchItem],
-    real_count: usize,
-    srs: &DevSrs,
-    challenge_context: &ChallengeContext,
-) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
-    crate::backend::aggregate_with_digest_profiled_real_count::<TransferTranscriptDigest>(
-        items,
-        real_count,
-        srs,
-        challenge_context,
     )
 }

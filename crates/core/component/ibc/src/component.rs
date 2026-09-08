@@ -12,7 +12,6 @@ pub mod rpc;
 
 mod host_interface;
 mod ibc_component;
-mod metrics;
 mod msg_handler;
 mod proof_verification;
 mod view;
@@ -24,7 +23,6 @@ pub mod state_key;
 
 use msg_handler::MsgHandler;
 
-pub use self::metrics::register_metrics;
 pub use channel::StateReadExt as ChannelStateReadExt;
 pub use channel::StateWriteExt as ChannelStateWriteExt;
 pub use client::ClientStatus;

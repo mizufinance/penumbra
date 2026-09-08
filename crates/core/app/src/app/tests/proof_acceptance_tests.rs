@@ -36,10 +36,7 @@ use shieldd_sdk_ibc::{
 };
 use shieldd_sdk_proto::{StateReadProto as _, StateWriteProto as _};
 use shieldd_sdk_sct::component::tree::SctRead as _;
-use shieldd_sdk_shielded_pool::{
-    Ics20Withdrawal, Note, NoteReshapeFamilyId, NoteReshapePlan, ShieldedIcs20WithdrawalPlan,
-};
-use shieldd_sdk_transaction::{ActionPlan, FeeFundingPlan};
+use shieldd_sdk_shielded_pool::{Ics20Withdrawal, Note, NoteReshapeFamilyId};
 use tendermint::v0_37::abci::response;
 use tokio::sync::OnceCell;
 
@@ -160,7 +157,8 @@ async fn build_family_fixture_set() -> Result<FamilyFixtureSet> {
         Fr::from(1u64),
         test_keys::ADDRESS_1.deref().clone(),
     )?;
-    let fee_funding_body_action = ActionPlan::from(transfer_action.clone());
+    let fee_funding_body_action =
+        shieldd_sdk_mock_client::ActionIntent::from(transfer_action.clone());
 
     let fee_funding_note = notes[note_cursor].clone();
     note_cursor += 1;
@@ -173,7 +171,7 @@ async fn build_family_fixture_set() -> Result<FamilyFixtureSet> {
 
     let mut family_actions = vec![(
         DeployedProofFamily::Transfer,
-        ActionPlan::from(transfer_action),
+        shieldd_sdk_mock_client::ActionIntent::from(transfer_action),
     )];
 
     for family in NoteReshapeFamilyId::ALL {
@@ -206,10 +204,15 @@ async fn build_family_fixture_set() -> Result<FamilyFixtureSet> {
                 )
             })
             .collect();
-        let action = NoteReshapePlan::new(family, spends, outputs, Fr::from(family.get()))?;
+        let action = shieldd_sdk_mock_client::NoteReshapeIntent {
+            family_id: family,
+            spends: spends,
+            outputs: outputs,
+            value_blinding: Fr::from(family.get()),
+        };
         family_actions.push((
             DeployedProofFamily::NoteReshape(family),
-            ActionPlan::from(action),
+            shieldd_sdk_mock_client::ActionIntent::from(action),
         ));
     }
 
@@ -218,18 +221,16 @@ async fn build_family_fixture_set() -> Result<FamilyFixtureSet> {
     let withdrawal_action = withdrawal_plan(&client, withdrawal_note, Fr::from(29u64))?;
     family_actions.push((
         DeployedProofFamily::ShieldedIcs20Withdrawal,
-        ActionPlan::from(withdrawal_action),
+        shieldd_sdk_mock_client::ActionIntent::from(withdrawal_action),
     ));
 
     let mut withdrawal_rollback_actions = Vec::with_capacity(2);
     for balance_blinding in [30u64, 31u64] {
         let note = notes[note_cursor].clone();
         note_cursor += 1;
-        withdrawal_rollback_actions.push(ActionPlan::from(withdrawal_plan(
-            &client,
-            note,
-            Fr::from(balance_blinding),
-        )?));
+        withdrawal_rollback_actions.push(shieldd_sdk_mock_client::ActionIntent::from(
+            withdrawal_plan(&client, note, Fr::from(balance_blinding))?,
+        ));
     }
     anyhow::ensure!(
         note_cursor == FIXTURE_REQUIRED_NOTES,
@@ -238,7 +239,7 @@ async fn build_family_fixture_set() -> Result<FamilyFixtureSet> {
 
     let mut fixtures = Vec::with_capacity(family_actions.len());
     for (family, action) in family_actions {
-        let mut plan = TransactionPlan {
+        let plan = shieldd_sdk_mock_client::TransactionIntent {
             actions: vec![action],
             memo: None,
             fee_funding: None,
@@ -249,18 +250,20 @@ async fn build_family_fixture_set() -> Result<FamilyFixtureSet> {
             nullifier_window: Some(test_nullifier_window()),
         };
         let tx = client
-            .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
+            .witness_auth_build(
+                &client
+                    .complete_intent(plan, storage.latest_snapshot())
+                    .await?,
+            )
             .await
             .with_context(|| format!("building {} transaction fixture", family.label()))?;
         fixtures.push(FamilyFixture::body_action(family, tx.encode_to_vec()));
     }
 
-    let mut fee_funding_plan = TransactionPlan {
+    let fee_funding_plan = shieldd_sdk_mock_client::TransactionIntent {
         actions: vec![fee_funding_body_action],
         memo: None,
-        fee_funding: Some(FeeFundingPlan {
-            transfer: fee_funding_transfer,
-        }),
+        fee_funding: Some(fee_funding_transfer),
         transaction_parameters: TransactionParameters {
             chain_id: TestNode::<()>::CHAIN_ID.to_string(),
             ..Default::default()
@@ -268,12 +271,16 @@ async fn build_family_fixture_set() -> Result<FamilyFixtureSet> {
         nullifier_window: Some(test_nullifier_window()),
     };
     let fee_funding_tx = client
-        .witness_auth_build_with_compliance(&mut fee_funding_plan, storage.latest_snapshot())
+        .witness_auth_build(
+            &client
+                .complete_intent(fee_funding_plan, storage.latest_snapshot())
+                .await?,
+        )
         .await
         .context("building fee-funding Transfer transaction fixture")?;
     let fee_funding_fixture = FamilyFixture::fee_funding(fee_funding_tx.encode_to_vec());
 
-    let mut withdrawal_rollback_plan = TransactionPlan {
+    let withdrawal_rollback_plan = shieldd_sdk_mock_client::TransactionIntent {
         actions: withdrawal_rollback_actions,
         memo: None,
         fee_funding: None,
@@ -284,9 +291,10 @@ async fn build_family_fixture_set() -> Result<FamilyFixtureSet> {
         nullifier_window: Some(test_nullifier_window()),
     };
     let withdrawal_rollback_tx = client
-        .witness_auth_build_with_compliance(
-            &mut withdrawal_rollback_plan,
-            storage.latest_snapshot(),
+        .witness_auth_build(
+            &client
+                .complete_intent(withdrawal_rollback_plan, storage.latest_snapshot())
+                .await?,
         )
         .await
         .context("building two-withdrawal rollback fixture")?;
@@ -349,9 +357,9 @@ fn transfer_plan(
     note: Note,
     value_blinding: Fr,
     receiver_address: shieldd_sdk_keys::Address,
-) -> Result<TransferPlan> {
+) -> Result<shieldd_sdk_mock_client::TransferIntent> {
     let spend = spend_plan(client, note.clone())?;
-    let mut receiver = ShieldedOutputPlan::new(
+    let receiver = ShieldedOutputPlan::new(
         &mut OsRng,
         Value {
             amount: Amount::from(1u64),
@@ -359,7 +367,7 @@ fn transfer_plan(
         },
         receiver_address,
     );
-    let mut change = ShieldedOutputPlan::new(
+    let change = ShieldedOutputPlan::new(
         &mut OsRng,
         Value {
             amount: note.amount() - Amount::from(1u64),
@@ -367,25 +375,19 @@ fn transfer_plan(
         },
         note.address(),
     );
-    for output in [&mut receiver, &mut change] {
-        output.asset_anchor = spend.asset_anchor;
-        output.compliance_anchor = spend.compliance_anchor;
-        output.target_timestamp = spend.target_timestamp;
-        output.is_regulated = spend.is_regulated;
-        output.tx_blinding_nonce = spend.tx_blinding_nonce;
-        output.asset_indexed_leaf = spend.asset_indexed_leaf.clone();
-        output.asset_path = spend.asset_path.clone();
-        output.asset_position = spend.asset_position;
-        output.asset_policy = spend.asset_policy.clone();
-    }
-    TransferPlan::new(vec![spend], vec![receiver, change], value_blinding)
+
+    Ok(shieldd_sdk_mock_client::TransferIntent {
+        spends: vec![spend],
+        outputs: vec![receiver, change],
+        value_blinding: value_blinding,
+    })
 }
 
 fn withdrawal_plan(
     client: &MockClient,
     note: Note,
     balance_blinding: Fr,
-) -> Result<ShieldedIcs20WithdrawalPlan> {
+) -> Result<shieldd_sdk_mock_client::WithdrawalIntent<Ics20Withdrawal>> {
     let withdrawal_amount = Amount::from(1u64);
     let withdrawal = Ics20Withdrawal {
         amount: withdrawal_amount,
@@ -409,7 +411,12 @@ fn withdrawal_plan(
         },
         note.address(),
     );
-    ShieldedIcs20WithdrawalPlan::new(vec![spend], Some(change), withdrawal, balance_blinding)
+    Ok(shieldd_sdk_mock_client::WithdrawalIntent {
+        spends: vec![spend],
+        change_output: Some(change),
+        withdrawal: withdrawal,
+        value_blinding: balance_blinding,
+    })
 }
 
 fn mutate_to_decodable_invalid_proof(fixture: &FamilyFixture) -> Result<(Transaction, Vec<u8>)> {
@@ -641,7 +648,7 @@ async fn artifact_build_rejects_decodable_invalid_groth16() -> Result<()> {
 
     for fixture in &family_set.fixtures {
         let (invalid_tx, _) = mutate_to_decodable_invalid_proof(fixture)?;
-        let error = App::build_tx_artifacts_profiled(&[Arc::new(invalid_tx)])
+        let error = App::build_tx_artifacts(&[Arc::new(invalid_tx)])
             .await
             .err()
             .expect("artifact construction must reject an invalid proof");
@@ -666,8 +673,8 @@ async fn process_proposal_rejects_decodable_invalid_groth16() -> Result<()> {
         let mut app = App::new(family_set._storage_guard.latest_snapshot());
         let proposal = process_request(&app, &invalid_bytes).await?;
 
-        let (verdict, _) = app
-            .process_proposal_profiled(proposal, Some(&cache), None, false)
+        let verdict = app
+            .process_proposal(proposal, Some(&cache), None, false)
             .await;
         assert!(
             matches!(verdict, response::ProcessProposal::Reject),
@@ -691,8 +698,8 @@ async fn fee_funding_process_proposal_rejects_invalid_groth16() -> Result<()> {
     let mut app = App::new(family_set._storage_guard.latest_snapshot());
     let proposal = process_request(&app, &invalid_bytes).await?;
 
-    let (verdict, _) = app
-        .process_proposal_profiled(proposal, Some(&cache), None, false)
+    let verdict = app
+        .process_proposal(proposal, Some(&cache), None, false)
         .await;
     assert!(
         matches!(verdict, response::ProcessProposal::Reject),
@@ -827,9 +834,7 @@ async fn prepare_proposal_excludes_decodable_invalid_groth16() -> Result<()> {
         let mut app = App::new(family_set._storage_guard.latest_snapshot());
         let proposal = prepare_request(&app, invalid_bytes.clone()).await?;
 
-        let (prepared, _, _) = app
-            .prepare_proposal_profiled(proposal, Some(&cache), false)
-            .await;
+        let (prepared, _) = app.prepare_proposal(proposal, Some(&cache), false).await;
         assert!(
             prepared
                 .txs
@@ -1229,8 +1234,8 @@ async fn cache_promotion_never_exceeds_exact_groth16_attestation() -> Result<()>
     let mut process_app = App::new(family_set._storage_guard.latest_snapshot());
     stage_spent_nullifier(&mut process_app, &valid_tx).await?;
     let proposal = process_request(&process_app, &transfer.tx_bytes).await?;
-    let (verdict, _) = process_app
-        .process_proposal_profiled(proposal, Some(&process_cache), None, false)
+    let verdict = process_app
+        .process_proposal(proposal, Some(&process_cache), None, false)
         .await;
     assert!(matches!(verdict, response::ProcessProposal::Reject));
     assert_cache_not_promoted(

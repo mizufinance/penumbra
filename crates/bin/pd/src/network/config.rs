@@ -36,10 +36,8 @@ impl NetworkTendermintConfig {
     ) -> anyhow::Result<Self> {
         tracing::debug!("List of CometBFT peers: {:?}", peers);
         let moniker: Moniker = Moniker::from_str(node_name)?;
-        let mut tm_config = TendermintConfig::parse_toml(include_str!(
-            "../../../../../testnets/cometbft_config_template.toml"
-        ))
-        .context("Failed to parse the TOML config template for CometBFT")?;
+        let mut tm_config = TendermintConfig::parse_toml(include_str!("defaults/cometbft.toml"))
+            .context("Failed to parse the TOML config template for CometBFT")?;
         tm_config.moniker = moniker;
         tm_config.p2p.seeds = peers;
         tracing::debug!("External address looks like: {:?}", external_address);

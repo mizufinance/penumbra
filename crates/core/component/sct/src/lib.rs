@@ -19,5 +19,5 @@ pub mod state_key;
 mod nullifier;
 mod source;
 
-pub use nullifier::{Nullifier, NullifierVar};
+pub use nullifier::Nullifier;
 pub use source::CommitmentSource;

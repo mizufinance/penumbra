@@ -8,8 +8,8 @@ use shieldd_sdk_compliance::structs::{
     MsgRegisterUser, OrbisCapabilityCertificate, UserRegistrationGrant, UserRegistrationGrantBody,
 };
 use shieldd_sdk_compliance::{
-    issuer_keys::DetectionKey, ComplianceLeaf, IssuerComplianceWorker, RpcAuditAdviceProvider,
-    SqliteScannerStore, TendermintProxyBlockIdentityProvider,
+    issuer_keys::DetectionKey, ComplianceLeaf, IssuerComplianceWorker, SqliteScannerStore,
+    TendermintProxyBlockIdentityProvider,
 };
 use shieldd_sdk_keys::{ensure_nonidentity_spend_auth_key, Address};
 use shieldd_sdk_proto::util::tendermint_proxy::v1::{
@@ -17,7 +17,7 @@ use shieldd_sdk_proto::util::tendermint_proxy::v1::{
 };
 use shieldd_sdk_proto::DomainType;
 use shieldd_sdk_transaction::{ActionPlan, TransactionPlan};
-use shieldd_sdk_view::{NoteManager, TransferPlanningResult, ViewClient};
+use shieldd_sdk_view::{NoteManager, NoteManagerPlanningResult, ViewClient};
 use tonic::transport::Channel;
 use url::Url;
 
@@ -335,7 +335,6 @@ impl ComplianceCmd {
             target_asset_id,
             Arc::new(storage),
             Arc::new(TendermintProxyBlockIdentityProvider::new(channel.clone())),
-            Arc::new(RpcAuditAdviceProvider::new(channel.clone())),
             channel.clone(),
         )
         .await?;
@@ -928,8 +927,8 @@ where
         .await
         .context("can't build transaction")?
     {
-        TransferPlanningResult::Ready { transaction_plan } => Ok(transaction_plan),
-        TransferPlanningResult::NeedsMaintenance {
+        NoteManagerPlanningResult::Ready { transaction_plan } => Ok(transaction_plan),
+        NoteManagerPlanningResult::NeedsMaintenance {
             maintenance_plan, ..
         } => {
             anyhow::bail!(
@@ -937,10 +936,10 @@ where
                 maintenance_plan
             );
         }
-        TransferPlanningResult::InsufficientBalance => {
+        NoteManagerPlanningResult::InsufficientBalance => {
             anyhow::bail!("insufficient balance for compliance registration fees");
         }
-        TransferPlanningResult::UnsupportedIntent { reason } => {
+        NoteManagerPlanningResult::UnsupportedIntent { reason } => {
             anyhow::bail!("{reason}");
         }
     }

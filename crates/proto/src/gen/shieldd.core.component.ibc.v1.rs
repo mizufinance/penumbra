@@ -73,11 +73,6 @@ pub struct Ics20Withdrawal {
     /// The source channel used for the withdrawal
     #[prost(string, tag = "7")]
     pub source_channel: ::prost::alloc::string::String,
-    /// Whether to use a "compat" (bech32, non-m) address for the return address in the withdrawal,
-    /// for compatability with chains that expect to be able to parse the return address as bech32.
-    #[deprecated]
-    #[prost(bool, tag = "8")]
-    pub use_compat_address: bool,
     /// Arbitrary string data to be included in the `memo` field
     /// of the ICS-20 FungibleTokenPacketData for this withdrawal.
     /// Commonly used for packet forwarding support, or other protocols that may support usage of the memo field.

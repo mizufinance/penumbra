@@ -14,9 +14,9 @@ use crate::{
         challenge_digest, sample_bounded_challenge, ChallengeContext, ChallengeTraceSink,
         NoopChallengeTraceSink,
     },
-    gipa::{GIPAProof, GipaBuildProfile, GIPA},
+    gipa::{GIPAProof, GIPA},
     tipa::{
-        prove_commitment_key_kzg_opening_with_affine_profiled, structured_generators_scalar_power,
+        prove_commitment_key_kzg_opening_with_affine, structured_generators_scalar_power,
         verify_commitment_key_g2_kzg_opening, PreparedProvingSrs, TIPACompatibleSetup, VerifierSRS,
         SRS,
     },
@@ -24,10 +24,6 @@ use crate::{
 };
 use ark_dh_commitments::{identity::HomomorphicPlaceholderValue, DoublyHomomorphicCommitment};
 use ark_inner_products::InnerProduct;
-
-//TODO: Properly generalize the non-committed message approach of SIPP and MIPP to GIPA
-//TODO: Structured message is a special case of the non-committed message and does not rely on TIPA
-//TODO: Can support structured group element messages as well as structured scalar messages
 
 // Use placeholder commitment to commit to vector in clear during GIPA execution
 #[derive(Clone)]
@@ -79,8 +75,8 @@ where
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &IPC::Key),
     ) -> Result<GIPAProof<IP, LMC, SSMPlaceholderCommitment<LMC::Scalar>, IPC, D>, Error> {
-        let (proof, _, _) =
-            <GIPA<IP, LMC, SSMPlaceholderCommitment<LMC::Scalar>, IPC, D>>::prove_with_aux_profiled_with_stage(
+        let (proof, _) =
+            <GIPA<IP, LMC, SSMPlaceholderCommitment<LMC::Scalar>, IPC, D>>::prove_with_aux_with_stage(
                 context,
                 b"tipa.generic.ssm.gipa.round",
                 values,
@@ -148,19 +144,6 @@ pub struct TIPAWithSSM<IP, LMC, IPC, P, D> {
     _digest: PhantomData<D>,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct TipaWithSsmBuildProfile {
-    pub total_ms: f64,
-    pub gipa_ms: f64,
-    pub transcript_inverse_ms: f64,
-    pub kzg_challenge_ms: f64,
-    pub kzg_coefficient_build_ms: f64,
-    pub kzg_eval_quotient_ms: f64,
-    pub kzg_opening_msm_ms: f64,
-    pub kzg_opening_ck_a_ms: f64,
-    pub gipa: GipaBuildProfile,
-}
-
 #[derive(CanonicalSerialize, CanonicalDeserialize)]
 pub struct TIPAWithSSMProof<IP, LMC, IPC, P, D>
 where
@@ -219,7 +202,6 @@ where
     LMC::Output: Send,
     IPC::Output: Send,
 {
-    //TODO: Don't need full TIPA SRS since only using one set of powers
     pub fn setup<R: Rng>(rng: &mut R, size: usize) -> Result<(SRS<P>, IPC::Key), Error> {
         let alpha = <P::ScalarField>::rand(rng);
         let beta = <P::ScalarField>::rand(rng);
@@ -242,27 +224,9 @@ where
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &IPC::Key),
     ) -> Result<TIPAWithSSMProof<IP, LMC, IPC, P, D>, Error> {
-        let (proof, profile) =
-            Self::prove_with_structured_scalar_message_profiled(context, srs, values, ck)?;
-        debug_assert!(profile.total_ms >= 0.0);
-        Ok(proof)
-    }
-
-    pub fn prove_with_structured_scalar_message_profiled(
-        context: &ChallengeContext,
-        srs: &SRS<P>,
-        values: (&[IP::LeftMessage], &[IP::RightMessage]),
-        ck: (&[LMC::Key], &IPC::Key),
-    ) -> Result<
-        (
-            TIPAWithSSMProof<IP, LMC, IPC, P, D>,
-            TipaWithSsmBuildProfile,
-        ),
-        Error,
-    > {
         let prepared_srs = srs.prepare_for_proving();
         let mut trace = NoopChallengeTraceSink;
-        Self::prove_with_prepared_structured_scalar_message_profiled(
+        Self::prove_with_prepared_structured_scalar_message(
             context,
             &mut trace,
             &prepared_srs,
@@ -271,68 +235,26 @@ where
         )
     }
 
-    pub fn prove_with_prepared_structured_scalar_message(
-        context: &ChallengeContext,
-        trace: &mut impl ChallengeTraceSink,
-        prepared_srs: &PreparedProvingSrs<P>,
-        values: (&[IP::LeftMessage], &[IP::RightMessage]),
-        ck: (&[LMC::Key], &IPC::Key),
-    ) -> Result<TIPAWithSSMProof<IP, LMC, IPC, P, D>, Error> {
-        let (proof, profile) = Self::prove_with_prepared_structured_scalar_message_profiled(
-            context,
-            trace,
-            prepared_srs,
-            values,
-            ck,
-        )?;
-        debug_assert!(profile.total_ms >= 0.0);
-        Ok(proof)
-    }
-
-    pub fn prove_with_prepared_structured_scalar_message_with_trace(
-        context: &ChallengeContext,
-        trace: &mut impl ChallengeTraceSink,
-        prepared_srs: &PreparedProvingSrs<P>,
-        values: (&[IP::LeftMessage], &[IP::RightMessage]),
-        ck: (&[LMC::Key], &IPC::Key),
-    ) -> Result<TIPAWithSSMProof<IP, LMC, IPC, P, D>, Error> {
-        Self::prove_with_prepared_structured_scalar_message(
-            context,
-            trace,
-            prepared_srs,
-            values,
-            ck,
-        )
-    }
-
-    pub fn prove_with_prepared_structured_scalar_message_profiled<S>(
+    pub fn prove_with_prepared_structured_scalar_message<S>(
         context: &ChallengeContext,
         trace: &mut S,
         prepared_srs: &PreparedProvingSrs<P>,
         values: (&[IP::LeftMessage], &[IP::RightMessage]),
         ck: (&[LMC::Key], &IPC::Key),
-    ) -> Result<
-        (
-            TIPAWithSSMProof<IP, LMC, IPC, P, D>,
-            TipaWithSsmBuildProfile,
-        ),
-        Error,
-    >
+    ) -> Result<TIPAWithSSMProof<IP, LMC, IPC, P, D>, Error>
     where
         S: ChallengeTraceSink,
     {
-        let total_started = std::time::Instant::now();
-        let mut profile = TipaWithSsmBuildProfile::default();
         // Run GIPA
         let gipa = start_timer!(|| "GIPA");
-        let gipa_started = std::time::Instant::now();
-        let (proof, aux, gipa_profile) = <GIPA<
+
+        let (proof, aux) = <GIPA<
             IP,
             LMC,
             SSMPlaceholderCommitment<P::ScalarField>,
             IPC,
             D,
-        >>::prove_with_aux_profiled_with_stage_with_trace(
+        >>::prove_with_aux_with_stage_with_trace(
             context,
             trace,
             b"tipa.c.gipa.round",
@@ -344,21 +266,18 @@ where
             ),
         )?;
         end_timer!(gipa);
-        profile.gipa_ms = gipa_started.elapsed().as_secs_f64() * 1000.0;
-        profile.gipa = gipa_profile;
 
         // Prove final commitment key is wellformed
         let ck_kzg = start_timer!(|| "Prove commitment key");
         let (ck_a_final, _) = aux.ck_base;
         let transcript = aux.r_transcript;
-        let transcript_inverse_started = std::time::Instant::now();
+
         let transcript_inverse = cfg_iter!(transcript)
             .map(|x| x.inverse().unwrap())
             .collect();
-        profile.transcript_inverse_ms = transcript_inverse_started.elapsed().as_secs_f64() * 1000.0;
 
         // KZG challenge point
-        let kzg_challenge_started = std::time::Instant::now();
+
         let c = sample_bounded_challenge::<_, Error, _>(|nonce| {
             let mut hash_input = Vec::new();
             if let Some(first) = transcript.first() {
@@ -373,33 +292,24 @@ where
                 &hash_input,
             )))
         })?;
-        profile.kzg_challenge_ms = kzg_challenge_started.elapsed().as_secs_f64() * 1000.0;
 
         // Complete KZG proof
-        let kzg_opening_ck_a_started = std::time::Instant::now();
-        let (ck_a_kzg_opening, ck_a_kzg_profile) =
-            prove_commitment_key_kzg_opening_with_affine_profiled(
-                prepared_srs.h_beta_powers_affine(),
-                &transcript_inverse,
-                &<P::ScalarField>::one(),
-                &c,
-            )?;
-        profile.kzg_opening_ck_a_ms = kzg_opening_ck_a_started.elapsed().as_secs_f64() * 1000.0;
-        profile.kzg_coefficient_build_ms = ck_a_kzg_profile.coefficient_build_ms;
-        profile.kzg_eval_quotient_ms = ck_a_kzg_profile.eval_quotient_ms;
-        profile.kzg_opening_msm_ms = ck_a_kzg_profile.opening_msm_ms;
-        end_timer!(ck_kzg);
-        profile.total_ms = total_started.elapsed().as_secs_f64() * 1000.0;
 
-        Ok((
-            TIPAWithSSMProof {
-                gipa_proof: proof,
-                final_ck: ck_a_final,
-                final_ck_proof: ck_a_kzg_opening,
-                _pairing: PhantomData,
-            },
-            profile,
-        ))
+        let ck_a_kzg_opening = prove_commitment_key_kzg_opening_with_affine(
+            prepared_srs.h_beta_powers_affine(),
+            &transcript_inverse,
+            &<P::ScalarField>::one(),
+            &c,
+        )?;
+
+        end_timer!(ck_kzg);
+
+        Ok(TIPAWithSSMProof {
+            gipa_proof: proof,
+            final_ck: ck_a_final,
+            final_ck_proof: ck_a_kzg_opening,
+            _pairing: PhantomData,
+        })
     }
 
     pub fn verify_with_structured_scalar_message(

@@ -50,15 +50,6 @@ address index gives a distinct shielded payment address. Because these
 addresses share a common incoming viewing key, the cost of scanning the
 blockchain does not increase with the number of addresses in use.
 
-Finally, Shieldd also allows outsourcing *probabilistic* transaction detection
-to third parties using [fuzzy message detection](../crypto/fmd.md).  Each
-address has a *detection key*; a third party can use this key to detect
-transactions that might be relevant to that key.  Like a Bloom filter, this
-detection has false positives but no false negatives, so detection will find all
-relevant transactions, as well as some amount of unrelated cover traffic.
-Unlike incoming viewing keys, detection keys are not shared between diversified
-addresses, allowing fine-grained control of delegation.
-
 This diagram shows only the user-visible parts of the key hierarchy.
 Internally, each of these keys has different components, described in detail in
 the [Addresses and Keys](../addresses_keys.md) chapter.

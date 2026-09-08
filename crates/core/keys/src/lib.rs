@@ -11,7 +11,7 @@ pub mod prf;
 pub mod symmetric;
 pub mod test_keys;
 
-pub use address::{Address, AddressError, AddressVar, AddressView};
+pub use address::{Address, AddressError, AddressView};
 pub use keys::{FullViewingKey, FullViewingKeyError, SpendKeyError};
 pub use symmetric::{BackreferenceKey, PayloadKey, PositionMetadataKey};
 

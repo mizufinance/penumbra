@@ -1,5 +1,5 @@
-use crate::Action;
-use crate::WitnessData;
+#[cfg(any(unix, windows))]
+use crate::{Action, WitnessData};
 use anyhow::anyhow;
 #[cfg(any(unix, windows))]
 use anyhow::{Context, Result};
@@ -17,7 +17,7 @@ use shieldd_sdk_shielded_pool::{
 };
 use shieldd_sdk_txhash::{EffectHash, EffectingData};
 
-/// A declaration of a planned [`Action`], for use in transaction creation.
+/// A declaration of a planned [`crate::Action`], for use in transaction creation.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(try_from = "pb_t::ActionPlan", into = "pb_t::ActionPlan")]
 #[allow(clippy::large_enum_variant)]
@@ -49,7 +49,7 @@ impl ActionPlan {
         }
     }
 
-    /// Builds a planned [`Action`] specified by this [`ActionPlan`].
+    /// Builds a planned [`crate::Action`] specified by this [`ActionPlan`].
     #[cfg(any(unix, windows))]
     pub fn build_unauth(
         action_plan: ActionPlan,
@@ -394,7 +394,12 @@ impl TryFrom<pb_t::ActionPlan> for ActionPlan {
             .ok_or_else(|| anyhow!("missing action in ActionPlan proto"))?
         {
             pb_t::action_plan::Action::Transfer(inner) => {
-                Ok(ActionPlan::Transfer(inner.try_into()?))
+                let plan: TransferPlan = inner.try_into()?;
+                anyhow::ensure!(
+                    plan.proof_context == shieldd_sdk_shielded_pool::TransferProofContext::Ordinary,
+                    "body transfer requires ordinary proof context"
+                );
+                Ok(ActionPlan::Transfer(plan))
             }
             pb_t::action_plan::Action::NoteReshape(inner) => {
                 Ok(ActionPlan::NoteReshape(inner.try_into()?))

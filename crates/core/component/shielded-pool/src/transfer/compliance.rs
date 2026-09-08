@@ -10,7 +10,7 @@ use shieldd_sdk_compliance::{
     TransferEncryptionResult,
 };
 use shieldd_sdk_compliance::{
-    derive_transfer_salt, encrypt_transfer, AssetPolicy, IndexedLeaf, TransferComplianceCiphertext,
+    derive_transfer_salt, encrypt_transfer, TransferComplianceCiphertext,
     TransferComplianceMetadata, TransferCompliancePublicInputs,
 };
 
@@ -136,23 +136,20 @@ fn build_orbis_tier_bundle(
 
 pub(crate) fn build_transfer_compliance(
     outputs: &[ShieldedOutputPlan],
-    sender_leaf: &shieldd_sdk_compliance::ComplianceLeaf,
-    asset_policy: Option<&AssetPolicy>,
-    asset_indexed_leaf: &IndexedLeaf,
-    target_timestamp: u64,
-    transfer_nonce_root: Fr,
+    context: &crate::TransferContext,
     is_flagged: bool,
 ) -> Result<BuildTransferComplianceResult> {
+    let sender_leaf = &context.witness.sender.leaf;
+    let receiver_leaf = &context.recipient.leaf;
+    let asset_policy = context.witness.policy.as_ref();
+    let asset_indexed_leaf = &context.witness.asset.leaf;
+    let target_timestamp = context.timestamp;
+    let transfer_nonce_root = context.nonce;
     let receiver_output = outputs
         .get(RECEIVER_OUTPUT_INDEX)
         .ok_or_else(|| anyhow!("transfer requires at least one output"))?;
-    let receiver_note = receiver_output.output_note();
-    let receiver_leaf = receiver_output
-        .compliance_leaf
-        .clone()
-        .ok_or_else(|| anyhow!("receiver output missing compliance leaf"))?;
-
-    let dk_pub = if receiver_output.is_regulated {
+    let receiver_note = receiver_output.output_note(receiver_leaf.capk);
+    let dk_pub = if context.witness.asset.is_regulated {
         asset_indexed_leaf.params.dk_pub
     } else {
         *shieldd_sdk_compliance::UNREGULATED_SINK_DK_PUB
@@ -188,7 +185,7 @@ pub(crate) fn build_transfer_compliance(
     // A non-membership witness carries the predecessor leaf. None of that
     // unrelated predecessor's policy identifiers may enter the public
     // statement for an unregulated transfer.
-    let asset_policy = if receiver_output.is_regulated {
+    let asset_policy = if context.witness.asset.is_regulated {
         Some(asset_policy.ok_or_else(|| anyhow!("regulated transfer missing asset policy"))?)
     } else {
         None

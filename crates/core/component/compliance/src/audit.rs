@@ -13,9 +13,7 @@ use crate::decode_object::TransferComplianceMetadata;
 use crate::scanner::storage::SqliteScannerStore;
 use crate::scanner::types::AuditLedgerRow;
 #[cfg(test)]
-use crate::scanner::types::{
-    AUDIT_STATUS_EVIDENCE_INVALID, AUDIT_STATUS_EVIDENCE_VALID, AUDIT_STATUS_PENDING,
-};
+use crate::scanner::types::{AUDIT_STATUS_EVIDENCE_INVALID, AUDIT_STATUS_EVIDENCE_VALID};
 use crate::scanning::{decrypt_flagged_withdrawal_sender, decrypt_full_flagged};
 use crate::transfer::TransferComplianceCiphertext;
 use crate::withdrawal::WithdrawalComplianceCiphertext;
@@ -350,10 +348,29 @@ pub fn record_evidence_failure(
     Ok(())
 }
 
-struct PersistedEvidenceFacts {
-    raw_bytes: Option<Vec<u8>>,
+struct DetectedEvidenceFacts {
+    asset_id: String,
+    is_flagged: bool,
+    salt: Vec<u8>,
+}
+
+pub(crate) enum EvidencePersistence {
+    Valid([u8; 32]),
+    Invalid(String),
+}
+
+struct PersistedCiphertext {
+    record_type: i64,
+    withdrawal_public_data: Option<Vec<u8>>,
+    block_hash: Vec<u8>,
+    tx_index: u32,
+    raw_bytes: Vec<u8>,
     metadata_bytes: Option<Vec<u8>>,
-    detection: Option<(String, i64, Vec<u8>)>,
+}
+
+struct PersistedEvidenceFacts {
+    ciphertext: Option<PersistedCiphertext>,
+    detection: Option<DetectedEvidenceFacts>,
 }
 
 struct EvidenceValidationFailure {
@@ -372,11 +389,47 @@ fn classify_evidence_for_persistence(
         }));
     }
 
-    let ciphertext_bytes = evidence.ciphertext_bytes();
-    if facts.raw_bytes.as_deref() != Some(ciphertext_bytes.as_slice()) {
+    let transfer_bytes = evidence.ciphertext_bytes();
+    let Some(ciphertext) = &facts.ciphertext else {
+        return Ok(Some(EvidenceValidationFailure {
+            stage: EVIDENCE_STAGE_VALIDATE,
+            reason: "missing persisted scanner ciphertext".to_owned(),
+        }));
+    };
+    if ciphertext.block_hash != evidence.output_ref().action.tx.block.block_hash
+        || ciphertext.tx_index != evidence.output_ref().action.tx.tx_index
+    {
+        return Ok(Some(EvidenceValidationFailure {
+            stage: EVIDENCE_STAGE_VALIDATE,
+            reason: "evidence block or transaction identity mismatch".to_owned(),
+        }));
+    }
+    if ciphertext.raw_bytes != transfer_bytes {
         return Ok(Some(EvidenceValidationFailure {
             stage: EVIDENCE_STAGE_VALIDATE,
             reason: "evidence ciphertext does not match persisted scanner ciphertext".to_owned(),
+        }));
+    }
+
+    let expected_withdrawal = evidence
+        .withdrawal
+        .as_ref()
+        .map(|public| {
+            serde_json::to_vec(&crate::scanner::types::PublicWithdrawalData {
+                asset_id: evidence.asset_id,
+                amount: public.amount,
+                self_address: public.self_address.clone(),
+                destination: public.destination.clone(),
+            })
+        })
+        .transpose()?;
+    if ciphertext.record_type != evidence.object_type as i64
+        || ciphertext.withdrawal_public_data != expected_withdrawal
+    {
+        return Ok(Some(EvidenceValidationFailure {
+            stage: EVIDENCE_STAGE_VALIDATE,
+            reason: "evidence does not match the scanned action type or public withdrawal facts"
+                .to_owned(),
         }));
     }
 
@@ -385,21 +438,18 @@ fn classify_evidence_for_persistence(
         crate::ComplianceEvidenceMetadata::Transfer(_) => Some(metadata_bytes.as_slice()),
         crate::ComplianceEvidenceMetadata::Withdrawal => None,
     };
-    if facts.metadata_bytes.as_deref() != expected_metadata {
+    if ciphertext.metadata_bytes.as_deref() != expected_metadata {
         return Ok(Some(EvidenceValidationFailure {
             stage: EVIDENCE_STAGE_METADATA,
             reason: "evidence metadata does not match persisted scanner metadata".to_owned(),
         }));
     }
 
-    let detected_matches = facts
-        .detection
-        .as_ref()
-        .is_some_and(|(asset_id, is_flagged, salt)| {
-            asset_id == &evidence.asset_id.to_string()
-                && (*is_flagged != 0) == evidence.is_flagged
-                && *salt == evidence.detection_salt.to_bytes()
-        });
+    let detected_matches = facts.detection.as_ref().is_some_and(|detected| {
+        detected.asset_id == evidence.asset_id.to_string()
+            && detected.is_flagged == evidence.is_flagged
+            && detected.salt == evidence.detection_salt.to_bytes()
+    });
     if !detected_matches {
         return Ok(Some(EvidenceValidationFailure {
             stage: EVIDENCE_STAGE_VALIDATE,
@@ -424,43 +474,33 @@ pub fn validate_and_save_evidence_object(
     store: &SqliteScannerStore,
     evidence: &ComplianceEvidenceObject,
 ) -> Result<[u8; 32]> {
-    let output_ref = evidence.output_ref();
-    let tx_ref = &output_ref.action.tx;
     let conn = store.lock_conn()?;
     let tx = conn.unchecked_transaction()?;
+    let outcome = validate_and_save_evidence_tx(&tx, &evidence.output_ref(), evidence)?;
+    tx.commit()?;
+    match outcome {
+        EvidencePersistence::Valid(hash) => Ok(hash),
+        EvidencePersistence::Invalid(reason) => anyhow::bail!(reason),
+    }
+}
 
-    let persisted_raw_bytes: Option<Vec<u8>> = tx
-        .query_row(
-            "SELECT raw_bytes
-             FROM scanner_ciphertexts
-             WHERE height = ?1 AND tx_hash = ?2 AND action_index = ?3 AND output_index = ?4",
-            params![
-                tx_ref.block.height as i64,
-                tx_ref.tx_hash.as_ref(),
-                output_ref.action.action_index as i64,
-                output_ref.output_index as i64,
-            ],
-            |row| row.get(0),
-        )
-        .optional()?;
+pub(crate) fn validate_and_save_evidence_tx(
+    tx: &rusqlite::Transaction<'_>,
+    output_ref: &OutputRef,
+    evidence: &ComplianceEvidenceObject,
+) -> Result<EvidencePersistence> {
+    let tx_ref = &output_ref.action.tx;
 
-    let persisted_metadata_bytes: Option<Vec<u8>> = tx
-        .query_row(
-            "SELECT compliance_metadata_bytes
-             FROM scanner_ciphertexts
-             WHERE height = ?1 AND tx_hash = ?2 AND action_index = ?3 AND output_index = ?4",
-            params![
-                tx_ref.block.height as i64,
-                tx_ref.tx_hash.as_ref(),
-                output_ref.action.action_index as i64,
-                output_ref.output_index as i64,
-            ],
-            |row| row.get(0),
-        )
-        .optional()?
-        .flatten();
+    let ciphertext: Option<PersistedCiphertext> = tx.query_row(
+        "SELECT block_hash, tx_index, raw_bytes, compliance_metadata_bytes, record_type, withdrawal_public_data FROM scanner_ciphertexts
+         WHERE height = ?1 AND tx_hash = ?2 AND action_index = ?3 AND output_index = ?4",
+        params![tx_ref.block.height as i64, tx_ref.tx_hash.as_ref(),
+            output_ref.action.action_index as i64, output_ref.output_index as i64],
+        |row| Ok(PersistedCiphertext { block_hash: row.get(0)?, tx_index: row.get(1)?,
+            raw_bytes: row.get(2)?, metadata_bytes: row.get(3)?, record_type: row.get(4)?, withdrawal_public_data: row.get(5)? }),
+    ).optional()?;
 
-    let detected: Option<(String, i64, Vec<u8>)> = tx
+    let detected: Option<DetectedEvidenceFacts> = tx
         .query_row(
             "SELECT asset_id, is_flagged, salt
              FROM scanner_detections
@@ -471,15 +511,34 @@ pub fn validate_and_save_evidence_object(
                 output_ref.action.action_index as i64,
                 output_ref.output_index as i64,
             ],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok(DetectedEvidenceFacts {
+                    asset_id: row.get(0)?,
+                    is_flagged: row.get(1)?,
+                    salt: row.get(2)?,
+                })
+            },
         )
         .optional()?;
     let facts = PersistedEvidenceFacts {
-        raw_bytes: persisted_raw_bytes,
-        metadata_bytes: persisted_metadata_bytes,
+        ciphertext,
         detection: detected,
     };
-    if let Some(failure) = classify_evidence_for_persistence(evidence, &facts)? {
+    let failure = if evidence.output_ref() != *output_ref {
+        Some(EvidenceValidationFailure {
+            stage: EVIDENCE_STAGE_VALIDATE,
+            reason: "evidence output identity mismatch".to_owned(),
+        })
+    } else {
+        match classify_evidence_for_persistence(evidence, &facts) {
+            Ok(failure) => failure,
+            Err(error) => Some(EvidenceValidationFailure {
+                stage: EVIDENCE_STAGE_VALIDATE,
+                reason: error.to_string(),
+            }),
+        }
+    };
+    if let Some(failure) = failure {
         record_evidence_failure_tx(
             &tx,
             tx_ref.block.height,
@@ -489,8 +548,7 @@ pub fn validate_and_save_evidence_object(
             failure.stage,
             &failure.reason,
         )?;
-        tx.commit()?;
-        anyhow::bail!(failure.reason);
+        return Ok(EvidencePersistence::Invalid(failure.reason));
     }
 
     let object_hash = evidence.object_hash();
@@ -556,8 +614,7 @@ pub fn validate_and_save_evidence_object(
             output_ref.output_index as i64,
         ],
     )?;
-    tx.commit()?;
-    Ok(object_hash)
+    Ok(EvidencePersistence::Valid(object_hash))
 }
 
 pub fn export_detected_refs(store: &SqliteScannerStore) -> Result<Vec<AuditDetectedRef>> {
@@ -814,7 +871,7 @@ fn record_failure_tx(
     Ok(())
 }
 
-fn record_evidence_failure_tx(
+pub(crate) fn record_evidence_failure_tx(
     tx: &rusqlite::Transaction<'_>,
     height: u64,
     tx_hash: &[u8],
@@ -978,7 +1035,7 @@ mod tests {
         let store = SqliteScannerStore::new(":memory:").unwrap();
         let (evidence, metadata) = crate::evidence::tests::valid_evidence_fixture();
         let output_ref = evidence.output_ref();
-        persist_evidence_detection(&store, &evidence, &metadata, false).await;
+        persist_evidence_detection(&store, &evidence, &metadata, true).await;
         let conn = store.lock_conn().unwrap();
         conn.execute(
             "UPDATE scanner_detections SET is_flagged = 1
@@ -1008,7 +1065,10 @@ mod tests {
             decrypt_flagged_rows(&store, &DetectionKey::demo()).unwrap(),
             0
         );
-        assert_eq!(audit_status(&store, &evidence), AUDIT_STATUS_PENDING);
+        assert_eq!(
+            audit_status(&store, &evidence),
+            AUDIT_STATUS_EVIDENCE_INVALID
+        );
     }
 
     #[tokio::test]
@@ -1116,11 +1176,22 @@ mod tests {
                 )
                 .unwrap();
                 let block = evidence.output_ref().action.tx.block;
-                store.begin_block(&block).await.unwrap();
-                store.save_ciphertext(&extracted).await.unwrap();
-                store.save_detection(&event).await.unwrap();
-                store.commit_block(&block).await.unwrap();
-                validate_and_save_evidence_object(&store, &evidence).unwrap();
+                store
+                    .commit_scanned_block(&crate::scanner::ScannedBlock {
+                        block,
+                        outputs: vec![crate::scanner::ScannedOutput {
+                            ciphertext: extracted,
+                            outcome: crate::scanner::OutputOutcome::Detected {
+                                event,
+                                evidence: crate::scanner::CandidateEvidence::Ready(
+                                    evidence.clone(),
+                                ),
+                            },
+                        }],
+                        clear_flows: vec![],
+                    })
+                    .await
+                    .unwrap();
                 assert_eq!(audit_status(&store, &evidence), AUDIT_STATUS_EVIDENCE_VALID);
                 assert_eq!(
                     decrypt_flagged_rows(&store, &DetectionKey::demo()).unwrap(),
@@ -1134,6 +1205,45 @@ mod tests {
                         AUDIT_STATUS_EVIDENCE_VALID
                     }
                 );
+                let mut changed_public = evidence.withdrawal.clone().unwrap();
+                changed_public.amount = 999u64.into();
+                let crate::ComplianceEvidenceCiphertext::Withdrawal(ct) = &evidence.ciphertext
+                else {
+                    panic!("withdrawal fixture expected")
+                };
+                let changed = ComplianceEvidenceObject::new_withdrawal(
+                    evidence.record_ref.clone(),
+                    asset_id,
+                    flagged,
+                    ct.clone(),
+                    changed_public,
+                )
+                .unwrap();
+                assert!(
+                    validate_and_save_evidence_object(&store, &changed).is_err(),
+                    "evidence must bind the public withdrawal amount"
+                );
+                let swapped = match &evidence.record_ref {
+                    crate::ComplianceRecordRef::HostWithdrawal(action) => {
+                        crate::ComplianceRecordRef::Ics20Withdrawal(action.clone())
+                    }
+                    crate::ComplianceRecordRef::Ics20Withdrawal(action) => {
+                        crate::ComplianceRecordRef::HostWithdrawal(action.clone())
+                    }
+                    _ => panic!("withdrawal fixture expected"),
+                };
+                let changed = ComplianceEvidenceObject::new_withdrawal(
+                    swapped,
+                    asset_id,
+                    flagged,
+                    ct.clone(),
+                    evidence.withdrawal.clone().unwrap(),
+                )
+                .unwrap();
+                assert!(
+                    validate_and_save_evidence_object(&store, &changed).is_err(),
+                    "evidence must bind the withdrawal action type"
+                );
             }
         }
     }
@@ -1144,42 +1254,162 @@ mod tests {
         metadata: &crate::TransferComplianceMetadata,
         tamper_ciphertext: bool,
     ) {
+        store
+            .commit_scanned_block(&scanned_evidence(evidence, metadata, tamper_ciphertext))
+            .await
+            .unwrap();
+    }
+
+    fn scanned_evidence(
+        evidence: &ComplianceEvidenceObject,
+        metadata: &crate::TransferComplianceMetadata,
+        tamper_ciphertext: bool,
+    ) -> crate::scanner::ScannedBlock {
         let block = evidence.output_ref().action.tx.block.clone();
         let mut raw_bytes = evidence.ciphertext_bytes();
         if tamper_ciphertext {
             raw_bytes[0] ^= 1;
         }
-        store.begin_block(&block).await.unwrap();
-        store
-            .save_ciphertext(&ExtractedComplianceCiphertext {
-                record_ref: evidence.record_ref.clone(),
-                kind: crate::scanner::types::ComplianceCiphertextKind::Transfer,
-                routing_tags: [11, 22],
-                raw_bytes,
-                metadata_bytes: Some(metadata.to_bytes().unwrap()),
-                public_withdrawal: None,
-            })
-            .await
+        let event = DetectionEvent {
+            record_ref: evidence.record_ref.clone(),
+            asset_id: evidence.asset_id,
+            is_flagged: evidence.is_flagged,
+            salt: evidence.detection_salt,
+            routing_tags: [11, 22],
+            ciphertext: match &evidence.ciphertext {
+                crate::ComplianceEvidenceCiphertext::Transfer(ct) => {
+                    crate::scanner::types::ComplianceCiphertext::Transfer(ct.clone())
+                }
+                _ => panic!("transfer fixture expected"),
+            },
+            public_withdrawal: None,
+            raw_bytes: evidence.ciphertext_bytes(),
+        };
+        crate::scanner::ScannedBlock {
+            block,
+            outputs: vec![crate::scanner::ScannedOutput {
+                ciphertext: ExtractedComplianceCiphertext {
+                    record_ref: evidence.record_ref.clone(),
+                    kind: crate::scanner::types::ComplianceCiphertextKind::Transfer,
+                    public_withdrawal: None,
+                    routing_tags: [11, 22],
+                    raw_bytes,
+                    metadata_bytes: Some(metadata.to_bytes().unwrap()),
+                },
+                outcome: crate::scanner::OutputOutcome::Detected {
+                    event,
+                    evidence: crate::scanner::CandidateEvidence::Ready(evidence.clone()),
+                },
+            }],
+            clear_flows: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn committed_detection_has_evidence_after_restart() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let (evidence, metadata) = crate::evidence::tests::valid_evidence_fixture();
+        {
+            let store = SqliteScannerStore::new(file.path()).unwrap();
+            persist_evidence_detection(&store, &evidence, &metadata, false).await;
+            assert_eq!(
+                store.last_scanned_block().await.unwrap(),
+                Some(evidence.output_ref().action.tx.block.clone()),
+            );
+        }
+        let reopened = SqliteScannerStore::new(file.path()).unwrap();
+        assert_eq!(
+            audit_status(&reopened, &evidence),
+            AUDIT_STATUS_EVIDENCE_VALID
+        );
+    }
+
+    #[tokio::test]
+    async fn persistence_failure_rolls_back_results_evidence_and_cursor() {
+        for (table, operation) in [
+            ("scanner_ciphertexts", "INSERT"),
+            ("scanner_detections", "INSERT"),
+            ("compliance_evidence_objects", "INSERT"),
+            ("scanner_sync", "UPDATE"),
+        ] {
+            let file = tempfile::NamedTempFile::new().unwrap();
+            let (evidence, metadata) = crate::evidence::tests::valid_evidence_fixture();
+            let scanned = scanned_evidence(&evidence, &metadata, false);
+            {
+                let store = SqliteScannerStore::new(file.path()).unwrap();
+                store
+                    .lock_conn()
+                    .unwrap()
+                    .execute_batch(&format!(
+                        "CREATE TRIGGER fail_persistence BEFORE {operation} ON {table}
+                     BEGIN SELECT RAISE(ABORT, 'injected persistence failure'); END;"
+                    ))
+                    .unwrap();
+                assert!(store.commit_scanned_block(&scanned).await.is_err());
+                assert!(store.last_scanned_block().await.unwrap().is_none());
+                let conn = store.lock_conn().unwrap();
+                for table in [
+                    "scanner_blocks",
+                    "scanner_ciphertexts",
+                    "scanner_detections",
+                    "compliance_evidence_objects",
+                    "audit_evidence_failures",
+                    "audit_rows",
+                ] {
+                    let count: i64 = conn
+                        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                            row.get(0)
+                        })
+                        .unwrap();
+                    assert_eq!(count, 0, "{table} survived rollback");
+                }
+                conn.execute_batch("DROP TRIGGER fail_persistence").unwrap();
+            }
+            let reopened = SqliteScannerStore::new(file.path()).unwrap();
+            assert!(reopened.last_scanned_block().await.unwrap().is_none());
+            reopened.commit_scanned_block(&scanned).await.unwrap();
+            reopened.commit_scanned_block(&scanned).await.unwrap();
+            assert_eq!(reopened.detection_count().await.unwrap(), 1);
+            assert_eq!(
+                audit_status(&reopened, &evidence),
+                AUDIT_STATUS_EVIDENCE_VALID
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_candidate_commits_invalid_outcome_alongside_valid_output() {
+        use crate::scanner::OutputOutcome;
+        let store = SqliteScannerStore::new(":memory:").unwrap();
+        let (evidence, metadata) = crate::evidence::tests::valid_evidence_fixture();
+        let mut scanned = scanned_evidence(&evidence, &metadata, false);
+        let mut malformed = scanned.outputs[0].clone();
+        let crate::ComplianceRecordRef::TransferOutput(output_ref) =
+            &mut malformed.ciphertext.record_ref
+        else {
+            panic!("transfer fixture expected")
+        };
+        output_ref.output_index += 1;
+        if let OutputOutcome::Detected { event, .. } = &mut malformed.outcome {
+            event.record_ref = malformed.ciphertext.record_ref.clone();
+        }
+        scanned.outputs.push(malformed);
+        store.commit_scanned_block(&scanned).await.unwrap();
+        assert_eq!(audit_status(&store, &evidence), AUDIT_STATUS_EVIDENCE_VALID);
+        let invalid: i64 = store
+            .lock_conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM scanner_detections WHERE audit_status = 'evidence_invalid'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
-        store
-            .save_detection(&DetectionEvent {
-                record_ref: evidence.record_ref.clone(),
-                asset_id: evidence.asset_id,
-                is_flagged: evidence.is_flagged,
-                salt: evidence.detection_salt,
-                routing_tags: [11, 22],
-                ciphertext: crate::scanner::types::ComplianceCiphertext::Transfer(match &evidence
-                    .ciphertext
-                {
-                    crate::ComplianceEvidenceCiphertext::Transfer(value) => value.clone(),
-                    _ => panic!("transfer fixture expected"),
-                }),
-                raw_bytes: evidence.ciphertext_bytes(),
-                public_withdrawal: None,
-            })
-            .await
-            .unwrap();
-        store.commit_block(&block).await.unwrap();
+        assert_eq!(invalid, 1);
+        assert_eq!(
+            store.last_scanned_block().await.unwrap(),
+            Some(scanned.block)
+        );
     }
 
     fn audit_status(store: &SqliteScannerStore, evidence: &ComplianceEvidenceObject) -> String {

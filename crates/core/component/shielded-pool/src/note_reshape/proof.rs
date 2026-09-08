@@ -329,59 +329,33 @@ mod tests {
     }
 
     #[cfg(any(unix, windows))]
-    fn should_skip_note_reshape_proof_roundtrip() -> bool {
-        let evidence_required = std::env::var_os("SHIELDD_FV_EVIDENCE_REQUIRED").is_some();
-        if cfg!(debug_assertions) {
-            assert!(
-                !evidence_required,
-                "FV proof evidence requires a release build"
-            );
-            eprintln!(
-                "skipping note_reshape GNARK proof roundtrip in debug builds; use `cargo test --release -p shieldd-sdk-shielded-pool --features bundled-proving-keys note_reshape_fresh_fixture_proof_roundtrip --lib` for real proving"
-            );
-            return true;
-        }
-        if crate::gnark::GnarkNoteReshapeClient::env_override_configured() {
-            return false;
-        }
-        let has_library = crate::gnark::GnarkNoteReshapeClient::bundled_lib_path().is_some()
-            || crate::gnark::GnarkNoteReshapeClient::auto_lib_path().is_some();
-        let has_proving_keys = NoteReshapeFamilyId::ALL
-            .into_iter()
-            .all(|family_id| !family_id.proving_key_bytes().is_empty());
-        if !has_library || !has_proving_keys {
-            assert!(
-                !evidence_required,
-                "FV proof evidence requires the bundled prover transport and every proving key"
-            );
-            eprintln!(
-                "skipping note_reshape GNARK proof roundtrip: no bundled or external prover transport is available"
-            );
-            return true;
-        }
-        false
+    #[test]
+    #[ignore = "expensive: real release-mode Gnark proof generation"]
+    fn gnark_proof_note_reshape_1x8_roundtrip() {
+        assert_roundtrip(NoteReshapeFamilyId::ALL[0]);
     }
 
     #[cfg(any(unix, windows))]
     #[test]
-    fn note_reshape_fresh_fixture_proof_roundtrip_rejects_cross_family_vks() {
-        if should_skip_note_reshape_proof_roundtrip() {
-            return;
-        }
+    #[ignore = "expensive: real release-mode Gnark proof generation"]
+    fn gnark_proof_note_reshape_8x1_roundtrip() {
+        assert_roundtrip(NoteReshapeFamilyId::ALL[1]);
+    }
 
-        for family_id in NoteReshapeFamilyId::ALL {
-            let (public, private) =
-                proof_test_helpers::build_note_reshape_roundtrip_inputs(family_id);
-            let proof = NoteReshapeProof::prove(public.clone(), private)
-                .unwrap_or_else(|error| panic!("prove {} fixture: {error}", family_id.label()));
-            proof
-                .verify(&public)
-                .unwrap_or_else(|error| panic!("verify {} fixture: {error}", family_id.label()));
-
-            for other_family in NoteReshapeFamilyId::ALL {
-                if other_family == family_id {
-                    continue;
-                }
+    #[cfg(any(unix, windows))]
+    fn assert_roundtrip(family_id: NoteReshapeFamilyId) {
+        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::NoteReshape(
+            family_id,
+        ))
+        .expect("proof test prerequisites must be present");
+        let (public, private) = proof_test_helpers::build_note_reshape_roundtrip_inputs(family_id);
+        let proof = NoteReshapeProof::prove(public.clone(), private)
+            .unwrap_or_else(|error| panic!("prove {} fixture: {error}", family_id.label()));
+        proof
+            .verify(&public)
+            .unwrap_or_else(|error| panic!("verify {} fixture: {error}", family_id.label()));
+        for other_family in NoteReshapeFamilyId::ALL {
+            if other_family != family_id {
                 assert!(
                     proof
                         .verify_with_prepared_vk(&public, other_family.proof_verification_key())

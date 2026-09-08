@@ -67,13 +67,13 @@ jobs:
         run: >-
           nix develop .#ci --command python3 scripts/ci/run_with_annotation.py
           --title "Rust crate feature checks"
-          -- ./deployments/scripts/check-crate-feature-sets
+          -- just features-check
 
       - name: Check wasm compatibility
         run: >-
           nix develop .#ci --command python3 scripts/ci/run_with_annotation.py
           --title "Rust wasm compatibility"
-          -- ./deployments/scripts/check-wasm-compat.sh
+          -- just wasm-check
 
   tests:
     name: Rust and gnark tests
@@ -100,31 +100,8 @@ jobs:
           go-version-file: tools/gnark/go.mod
           cache-dependency-path: tools/gnark/go.sum
 
-      - name: Check Go formatting
-        working-directory: tools/gnark
-        shell: bash
-        run: |
-          files="$(gofmt -l .)"
-          if test -n "$files"; then
-            echo "unformatted Go files:"
-            printf "%s\n" "$files"
-            exit 1
-          fi
-
-      - name: Build gnark Go module
-        working-directory: tools/gnark
-        run: go build ./...
-
-      - name: Test gnark Go module
-        working-directory: tools/gnark
-        run: go test ./...
-
-      - name: Vet gnark Go module
-        working-directory: tools/gnark
-        run: go vet ./...
-
-      - name: Verify note-seizure daemon and host path
-        run: nix develop --command just note-seizure-proof-tests
+      - name: Check gnark Go module
+        run: nix develop .#ci --command just go-check
 
       - name: Prepare full proof artifacts for manual replay
         if: github.event_name != 'pull_request' && github.event_name != 'merge_group'

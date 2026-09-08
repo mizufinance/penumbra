@@ -18,6 +18,7 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT_ROOT = REPO_ROOT / "tools" / "gnark" / "artifacts"
 FAMILIES = (
+    "note_seizure",
     "note_reshape1x8",
     "note_reshape8x1",
     "shielded_ics20_withdrawal",

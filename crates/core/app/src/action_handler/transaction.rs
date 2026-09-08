@@ -1,7 +1,5 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
@@ -55,35 +53,8 @@ use stateless::{
     valid_binding_signature,
 };
 
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct TransactionExecutionProfile {
-    pub set_source_ms: f64,
-    pub pay_fee_ms: f64,
-    pub action_execute_ms: f64,
-    pub read_local_precheck_ms: f64,
-    pub read_lookup_wait_or_join_ms: f64,
-    pub read_historical_check_ms: f64,
-    pub read_nullifier_wait_ms: f64,
-    pub read_anchor_cache_wait_ms: f64,
-    pub read_anchor_validation_ms: f64,
-    pub read_committed_nullifier_ms: f64,
-    pub read_effects_build_ms: f64,
-    pub nullifier_lookup_count: usize,
-    pub spend_action_execute_ms: f64,
-    pub spend_nullifier_check_ms: f64,
-    pub spend_nullifier_tx_local_scan_ms: f64,
-    pub spend_nullifier_block_log_lookup_ms: f64,
-    pub spend_nullifier_committed_check_ms: f64,
-    pub spend_nullifier_enqueue_ms: f64,
-    pub spend_nullifier_stage_ms: f64,
-    pub spend_nullifier_merge_ms: f64,
-    pub output_action_execute_ms: f64,
-    pub output_add_note_payload_ms: f64,
-    pub other_action_execute_ms: f64,
-}
-
 #[derive(Clone, Debug, Default)]
-pub(crate) struct PreparedCandidateEffects {
+pub(crate) struct PreparedCandidateRead {
     pub spend_nullifiers: Vec<Nullifier>,
     pub volume_nullifiers: Vec<VolumeNullifier>,
     pub sct_payloads: Vec<StatePayload>,
@@ -91,120 +62,44 @@ pub(crate) struct PreparedCandidateEffects {
     pub audit_effects: Vec<AuditEffectRecord>,
 }
 
-#[derive(Clone, Debug, Default)]
-pub(crate) struct PreparedCandidateRead {
-    pub check_historical_ms: f64,
-    pub read_wall_ms: f64,
-    pub checktx_fast_context_load_ms: f64,
-    pub checktx_fast_read_queue_wait_ms: f64,
-    pub checktx_fast_read_blocking_total_ms: f64,
-    pub execution_profile: TransactionExecutionProfile,
-    pub effects: PreparedCandidateEffects,
-}
-
 type AnchorValidationKey = (StateCommitment, StateCommitment, u64);
 type ClaimedAnchorKey = shieldd_sdk_tct::Root;
+type ValidationCell = Arc<OnceCell<std::result::Result<(), String>>>;
 
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct HistoricalCheckProfile {
-    pub total_ms: f64,
-    pub await_ms: f64,
+#[derive(Debug)]
+pub(crate) struct ValidationCache<K> {
+    entries: RwLock<HashMap<K, ValidationCell>>,
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct AnchorValidationCache {
-    entries: RwLock<HashMap<AnchorValidationKey, Arc<OnceCell<std::result::Result<(), String>>>>>,
-    hits: AtomicUsize,
-    misses: AtomicUsize,
-}
-
-impl AnchorValidationCache {
-    fn entry(
-        &self,
-        key: AnchorValidationKey,
-    ) -> (Arc<OnceCell<std::result::Result<(), String>>>, bool, f64) {
-        let read_wait_start = Instant::now();
-        let existing = self
-            .entries
-            .read()
-            .expect("anchor cache poisoned")
-            .get(&key)
-            .cloned();
-        let mut wait_ms = read_wait_start.elapsed().as_secs_f64() * 1000.0;
-        if let Some(cell) = existing {
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            return (cell, true, wait_ms);
+impl<K> Default for ValidationCache<K> {
+    fn default() -> Self {
+        Self {
+            entries: RwLock::new(HashMap::new()),
         }
-
-        let write_wait_start = Instant::now();
-        let mut entries = self.entries.write().expect("anchor cache poisoned");
-        wait_ms += write_wait_start.elapsed().as_secs_f64() * 1000.0;
-        if let Some(cell) = entries.get(&key).cloned() {
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            return (cell, true, wait_ms);
-        }
-
-        let cell = Arc::new(OnceCell::new());
-        entries.insert(key, cell.clone());
-        self.misses.fetch_add(1, Ordering::Relaxed);
-        (cell, false, wait_ms)
-    }
-
-    pub(crate) fn stats(&self) -> (usize, usize, usize) {
-        (
-            self.hits.load(Ordering::Relaxed),
-            self.misses.load(Ordering::Relaxed),
-            self.entries.read().expect("anchor cache poisoned").len(),
-        )
     }
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct ClaimedAnchorValidationCache {
-    entries: RwLock<HashMap<ClaimedAnchorKey, Arc<OnceCell<std::result::Result<(), String>>>>>,
-    hits: AtomicUsize,
-    misses: AtomicUsize,
-}
-
-impl ClaimedAnchorValidationCache {
-    fn entry(
-        &self,
-        anchor: ClaimedAnchorKey,
-    ) -> (Arc<OnceCell<std::result::Result<(), String>>>, bool) {
+impl<K: Eq + std::hash::Hash> ValidationCache<K> {
+    fn entry(&self, key: K) -> ValidationCell {
         if let Some(cell) = self
             .entries
             .read()
-            .expect("claimed anchor cache poisoned")
-            .get(&anchor)
-            .cloned()
+            .expect("validation cache poisoned")
+            .get(&key)
         {
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            return (cell, true);
+            return cell.clone();
         }
-
-        let mut entries = self.entries.write().expect("claimed anchor cache poisoned");
-        if let Some(cell) = entries.get(&anchor).cloned() {
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            return (cell, true);
-        }
-
-        let cell = Arc::new(OnceCell::new());
-        entries.insert(anchor, cell.clone());
-        self.misses.fetch_add(1, Ordering::Relaxed);
-        (cell, false)
-    }
-
-    pub(crate) fn stats(&self) -> (usize, usize, usize) {
-        (
-            self.hits.load(Ordering::Relaxed),
-            self.misses.load(Ordering::Relaxed),
-            self.entries
-                .read()
-                .expect("claimed anchor cache poisoned")
-                .len(),
-        )
+        self.entries
+            .write()
+            .expect("validation cache poisoned")
+            .entry(key)
+            .or_insert_with(|| Arc::new(OnceCell::new()))
+            .clone()
     }
 }
+
+type AnchorValidationCache = ValidationCache<AnchorValidationKey>;
+type ClaimedAnchorValidationCache = ValidationCache<ClaimedAnchorKey>;
 
 #[derive(Clone, Debug)]
 struct TxExecutionContext {
@@ -631,24 +526,22 @@ async fn check_nullifier_read_only<S>(
     state: &S,
     _context: &HistoricalCheckContext,
     nullifier: shieldd_sdk_sct::Nullifier,
-) -> Result<f64>
+) -> Result<()>
 where
     S: StateRead,
 {
-    let committed_check_start = Instant::now();
     state.check_nullifier_unspent(nullifier).await?;
-    Ok(committed_check_start.elapsed().as_secs_f64() * 1000.0)
+    Ok(())
 }
 
-async fn check_volume_nullifier_read_only<S>(state: &S, scoped: VolumeNullifier) -> Result<f64>
+async fn check_volume_nullifier_read_only<S>(state: &S, scoped: VolumeNullifier) -> Result<()>
 where
     S: StateRead,
 {
-    let start = Instant::now();
     state
         .check_volume_nullifier_unspent(scoped.day_start, scoped.nullifier)
         .await?;
-    Ok(start.elapsed().as_secs_f64() * 1000.0)
+    Ok(())
 }
 
 async fn validate_compliance_anchors_read_only<S: StateRead>(
@@ -657,10 +550,10 @@ async fn validate_compliance_anchors_read_only<S: StateRead>(
     asset_anchor: &StateCommitment,
     block_height: u64,
     anchor_cache: Arc<AnchorValidationCache>,
-) -> Result<(f64, f64)> {
+) -> Result<()> {
     let anchor_key = (*user_anchor, *asset_anchor, block_height);
-    let validate_start = Instant::now();
-    let (cell, _, cache_wait_ms) = anchor_cache.entry(anchor_key);
+
+    let cell = anchor_cache.entry(anchor_key);
 
     let result = cell
         .get_or_init(|| async move {
@@ -691,10 +584,7 @@ async fn validate_compliance_anchors_read_only<S: StateRead>(
         .await;
 
     match result {
-        Ok(()) => Ok((
-            validate_start.elapsed().as_secs_f64() * 1000.0,
-            cache_wait_ms,
-        )),
+        Ok(()) => Ok(()),
         Err(error) => anyhow::bail!(error.clone()),
     }
 }
@@ -703,10 +593,10 @@ async fn validate_claimed_anchor_read_only<S: StateRead>(
     state: Arc<S>,
     tx: Arc<Transaction>,
     claimed_anchor_cache: Arc<ClaimedAnchorValidationCache>,
-) -> Result<f64> {
+) -> Result<()> {
     let anchor = tx.anchor;
-    let wait_start = Instant::now();
-    let (cell, _) = claimed_anchor_cache.entry(anchor);
+
+    let cell = claimed_anchor_cache.entry(anchor);
     let result = cell
         .get_or_init(|| async move {
             claimed_anchor_is_valid(state, Arc::as_ref(&tx))
@@ -714,10 +604,9 @@ async fn validate_claimed_anchor_read_only<S: StateRead>(
                 .map_err(|e| e.to_string())
         })
         .await;
-    let elapsed_ms = wait_start.elapsed().as_secs_f64() * 1000.0;
 
     match result {
-        Ok(()) => Ok(elapsed_ms),
+        Ok(()) => Ok(()),
         Err(error) => anyhow::bail!(error.clone()),
     }
 }
@@ -740,20 +629,18 @@ fn check_nullifier_read_only_sync(
     snapshot: &Snapshot,
     _context: &HistoricalCheckContext,
     nullifier: shieldd_sdk_sct::Nullifier,
-) -> Result<f64> {
-    let committed_check_start = Instant::now();
+) -> Result<()> {
     handle.block_on(snapshot.check_nullifier_unspent(nullifier))?;
-    Ok(committed_check_start.elapsed().as_secs_f64() * 1000.0)
+    Ok(())
 }
 
 fn check_volume_nullifier_read_only_sync(
     handle: &tokio::runtime::Handle,
     snapshot: &Snapshot,
     scoped: VolumeNullifier,
-) -> Result<f64> {
-    let start = Instant::now();
+) -> Result<()> {
     handle.block_on(snapshot.check_volume_nullifier_unspent(scoped.day_start, scoped.nullifier))?;
-    Ok(start.elapsed().as_secs_f64() * 1000.0)
+    Ok(())
 }
 
 fn validate_compliance_anchors_read_only_sync(
@@ -763,10 +650,10 @@ fn validate_compliance_anchors_read_only_sync(
     asset_anchor: &StateCommitment,
     block_height: u64,
     anchor_cache: Arc<AnchorValidationCache>,
-) -> Result<(f64, f64)> {
+) -> Result<()> {
     let anchor_key = (*user_anchor, *asset_anchor, block_height);
-    let validate_start = Instant::now();
-    let (cell, _, cache_wait_ms) = anchor_cache.entry(anchor_key);
+
+    let cell = anchor_cache.entry(anchor_key);
     let snapshot = snapshot.clone();
     let user_anchor = *user_anchor;
     let asset_anchor = *asset_anchor;
@@ -801,10 +688,7 @@ fn validate_compliance_anchors_read_only_sync(
         .clone();
 
     match result {
-        Ok(()) => Ok((
-            validate_start.elapsed().as_secs_f64() * 1000.0,
-            cache_wait_ms,
-        )),
+        Ok(()) => Ok(()),
         Err(error) => anyhow::bail!(error),
     }
 }
@@ -814,10 +698,10 @@ fn validate_claimed_anchor_read_only_sync(
     snapshot: &Snapshot,
     tx: &Transaction,
     claimed_anchor_cache: Arc<ClaimedAnchorValidationCache>,
-) -> Result<f64> {
+) -> Result<()> {
     let anchor = tx.anchor;
-    let wait_start = Instant::now();
-    let (cell, _) = claimed_anchor_cache.entry(anchor);
+
+    let cell = claimed_anchor_cache.entry(anchor);
     let snapshot = snapshot.clone();
 
     let result = handle
@@ -846,21 +730,18 @@ fn validate_claimed_anchor_read_only_sync(
             }
         }))
         .clone();
-    let elapsed_ms = wait_start.elapsed().as_secs_f64() * 1000.0;
 
     match result {
-        Ok(()) => Ok(elapsed_ms),
+        Ok(()) => Ok(()),
         Err(error) => anyhow::bail!(error),
     }
 }
 
-pub(crate) async fn check_historical_with_context_profiled<S: StateRead + 'static>(
+pub(crate) async fn check_historical_with_context<S: StateRead + 'static>(
     tx: &Transaction,
     state: Arc<S>,
     context: &HistoricalCheckContext,
-) -> Result<HistoricalCheckProfile> {
-    let total_start = Instant::now();
-    let mut await_ms = 0.0;
+) -> Result<()> {
     let mut action_checks = JoinSet::new();
 
     ensure_transaction_resource_bounds(tx)?;
@@ -869,14 +750,13 @@ pub(crate) async fn check_historical_with_context_profiled<S: StateRead + 'stati
     discovery_parameters_valid_with_context(tx, context)?;
 
     let claimed_anchor_tx = Arc::new(tx.clone());
-    let claimed_anchor_wait_start = Instant::now();
+
     validate_claimed_anchor_read_only(
         state.clone(),
         claimed_anchor_tx,
         context.claimed_anchor_cache.clone(),
     )
     .await?;
-    await_ms += claimed_anchor_wait_start.elapsed().as_secs_f64() * 1000.0;
 
     for (i, action) in tx.actions().cloned().enumerate() {
         if !action_requires_historical_check(&action) {
@@ -889,94 +769,62 @@ pub(crate) async fn check_historical_with_context_profiled<S: StateRead + 'stati
     }
 
     while !action_checks.is_empty() {
-        let join_wait_start = Instant::now();
         let check = action_checks
             .join_next()
             .await
             .expect("join set must yield while not empty");
-        await_ms += join_wait_start.elapsed().as_secs_f64() * 1000.0;
+
         check??;
     }
 
-    Ok(HistoricalCheckProfile {
-        total_ms: total_start.elapsed().as_secs_f64() * 1000.0,
-        await_ms,
-    })
+    Ok(())
 }
 
-pub(crate) async fn check_historical_with_context<S: StateRead + 'static>(
-    tx: &Transaction,
-    state: Arc<S>,
-    context: &HistoricalCheckContext,
-) -> Result<()> {
-    check_historical_with_context_profiled(tx, state, context)
-        .await
-        .map(|_| ())
-}
-
-pub(crate) fn check_historical_with_context_sync_profiled(
+pub(crate) fn check_historical_with_context_sync(
     tx: &Transaction,
     snapshot: &Snapshot,
     context: &HistoricalCheckContext,
     handle: &tokio::runtime::Handle,
-) -> Result<HistoricalCheckProfile> {
-    let total_start = Instant::now();
-
+) -> Result<()> {
     ensure_transaction_resource_bounds(tx)?;
     tx_parameters_historical_check_with_context(tx, context)?;
     stateful::nullifier_window_valid_with_context(tx, context)?;
     discovery_parameters_valid_with_context(tx, context)?;
 
-    let await_ms = validate_claimed_anchor_read_only_sync(
+    validate_claimed_anchor_read_only_sync(
         handle,
         snapshot,
         tx,
         context.claimed_anchor_cache.clone(),
     )?;
 
-    Ok(HistoricalCheckProfile {
-        total_ms: total_start.elapsed().as_secs_f64() * 1000.0,
-        await_ms,
-    })
+    Ok(())
 }
 
-pub(crate) async fn check_and_execute_profiled<S>(
-    artifact: &VerifiedTxArtifact,
-    mut state: S,
-) -> Result<TransactionExecutionProfile>
+pub(crate) async fn check_and_execute<S>(artifact: &VerifiedTxArtifact, mut state: S) -> Result<()>
 where
     S: StateWrite,
 {
     let tx = artifact.tx().as_ref();
     artifact.ensure_historical_coverage()?;
-    let mut profile = TransactionExecutionProfile::default();
+
     ensure_transaction_resource_bounds(tx)?;
     let tx_context = tx.context();
     let tx_id = tx.id();
     let action_spans_enabled = tracing::enabled!(tracing::Level::INFO);
 
-    let set_source_start = Instant::now();
     state.put_current_source(Some(tx_id.clone()));
-    profile.set_source_ms = set_source_start.elapsed().as_secs_f64() * 1000.0;
 
-    let pay_fee_start = Instant::now();
     let gas_used = tx.gas_cost();
     let fee = tx.transaction_body.transaction_parameters.fee;
     state.pay_fee(gas_used, fee).await?;
-    profile.pay_fee_ms = pay_fee_start.elapsed().as_secs_f64() * 1000.0;
 
-    let action_execute_start = Instant::now();
-    // Stage action records first so deterministic effects emitted by nested
-    // handlers follow the transaction's canonical action order. The enclosing
-    // state delta discards all of these records if execution fails.
     let height = state.get_block_height().await?;
     append_transaction_audit_effects(&mut state, transaction_audit_effects(tx, height)?).await?;
-
     // Fee funding is hashed before body actions and validates against the
     // pre-transaction roots used to build its proof. Its effects remain in
     // their original post-body position to preserve commitment ordering.
     let validated_fee_funding = if let Some(fee_funding) = &tx.transaction_body.fee_funding {
-        let action_start = Instant::now();
         let validated = transfer_validate_verified(
             &fee_funding.transfer,
             &tx_context,
@@ -985,13 +833,12 @@ where
             &mut state,
         )
         .await?;
-        profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
+
         Some(validated)
     } else {
         None
     };
     for (i, action) in tx.actions().enumerate() {
-        let action_start = Instant::now();
         match action {
             Action::Transfer(action) => {
                 transfer_execute_verified(
@@ -1002,7 +849,6 @@ where
                     &mut state,
                 )
                 .await?;
-                profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
             }
             Action::NoteReshape(action) => {
                 note_reshape_execute_verified(
@@ -1012,7 +858,6 @@ where
                     &mut state,
                 )
                 .await?;
-                profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
             }
             Action::ShieldedIcs20Withdrawal(action) => {
                 shielded_ics20_withdrawal_execute_verified(
@@ -1022,7 +867,6 @@ where
                     &mut state,
                 )
                 .await?;
-                profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
             }
             Action::ShieldedHostWithdrawal(action) => {
                 shielded_host_withdrawal_execute_verified(
@@ -1032,7 +876,6 @@ where
                     &mut state,
                 )
                 .await?;
-                profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
             }
             Action::IbcRelay(action) => {
                 let relay = action.clone().with_handler::<Ics20Transfer, ShielddHost>();
@@ -1043,7 +886,6 @@ where
                 } else {
                     execute.await?;
                 }
-                profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
             }
             action @ Action::ComplianceRegisterAsset(registration) => {
                 if registration.is_regulated {
@@ -1064,7 +906,6 @@ where
                 } else {
                     action.check_and_execute(&mut state).await?;
                 }
-                profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
             }
             action @ Action::ComplianceRegisterUser(_) => {
                 if action_spans_enabled {
@@ -1076,7 +917,6 @@ where
                 } else {
                     action.check_and_execute(&mut state).await?;
                 }
-                profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
             }
             Action::AggregateBundle(_) => anyhow::bail!(
                 "aggregate bundle actions are only permitted in the dedicated aggregation pipeline"
@@ -1084,7 +924,6 @@ where
         }
     }
     if let Some(fee_funding) = &tx.transaction_body.fee_funding {
-        let action_start = Instant::now();
         transfer_execute_validated(
             &fee_funding.transfer,
             &tx_context,
@@ -1092,21 +931,18 @@ where
             &mut state,
         )
         .await?;
-        profile.other_action_execute_ms += action_start.elapsed().as_secs_f64() * 1000.0;
     }
     state.stage_routing_actions(transaction_routing_actions(tx)?);
-    profile.action_execute_ms = action_execute_start.elapsed().as_secs_f64() * 1000.0;
 
-    Ok(profile)
+    Ok(())
 }
 
-pub(crate) async fn prepare_candidate_read_profiled<S: StateRead + 'static>(
+pub(crate) async fn prepare_candidate_read<S: StateRead + 'static>(
     tx: Arc<Transaction>,
     state: Arc<S>,
     context: HistoricalCheckContext,
     skip_historical: bool,
 ) -> Result<PreparedCandidateRead> {
-    let read_start = Instant::now();
     let mut prepared = PreparedCandidateRead::default();
     ensure_transaction_resource_bounds(tx.as_ref())?;
 
@@ -1120,8 +956,6 @@ pub(crate) async fn prepare_candidate_read_profiled<S: StateRead + 'static>(
     let mut tx_nullifiers = HashSet::new();
     let mut volume_nullifiers = Vec::new();
     let mut tx_volume_nullifiers = HashSet::new();
-    let action_execute_start = Instant::now();
-    let local_precheck_start = Instant::now();
 
     for (i, action) in tx.actions().enumerate() {
         match action {
@@ -1267,136 +1101,65 @@ pub(crate) async fn prepare_candidate_read_profiled<S: StateRead + 'static>(
     }
     let read_nullifiers = spend_nullifiers.clone();
     let read_volume_nullifiers = volume_nullifiers.clone();
-    prepared.execution_profile.read_local_precheck_ms =
-        local_precheck_start.elapsed().as_secs_f64() * 1000.0;
-
-    enum ReadTaskResult {
-        Anchor { elapsed_ms: f64, cache_wait_ms: f64 },
-        Nullifier(f64),
-        VolumeNullifier(f64),
-    }
 
     let historical_future = async {
-        if skip_historical {
-            Ok(HistoricalCheckProfile::default())
-        } else {
-            check_historical_with_context_profiled(Arc::as_ref(&tx), state.clone(), &context).await
+        if !skip_historical {
+            check_historical_with_context(tx.as_ref(), state.clone(), &context).await?;
         }
+        Ok::<(), anyhow::Error>(())
     };
-
     let mut read_tasks = JoinSet::new();
     for (user_anchor, asset_anchor) in anchor_pairs {
         let state = state.clone();
         let anchor_cache = context.anchor_cache.clone();
+        let block_height = context.block_height;
         read_tasks.spawn(async move {
             validate_compliance_anchors_read_only(
-                Arc::as_ref(&state),
+                state.as_ref(),
                 &user_anchor,
                 &asset_anchor,
-                context.block_height,
+                block_height,
                 anchor_cache,
             )
             .await
-            .map(|(elapsed_ms, cache_wait_ms)| ReadTaskResult::Anchor {
-                elapsed_ms,
-                cache_wait_ms,
-            })
         });
     }
-    for nullifier in &read_nullifiers {
+    for nullifier in read_nullifiers {
         let state = state.clone();
-        let nullifier = *nullifier;
         let context = context.clone();
         read_tasks.spawn(async move {
-            check_nullifier_read_only(Arc::as_ref(&state), &context, nullifier)
-                .await
-                .map(ReadTaskResult::Nullifier)
+            check_nullifier_read_only(state.as_ref(), &context, nullifier).await
         });
     }
     for scoped in read_volume_nullifiers {
         let state = state.clone();
         read_tasks.spawn(async move {
-            check_volume_nullifier_read_only(Arc::as_ref(&state), scoped)
-                .await
-                .map(ReadTaskResult::VolumeNullifier)
+            check_volume_nullifier_read_only(Arc::as_ref(&state), scoped).await
         });
     }
-
     let read_task_future = async {
-        let mut execution_profile = TransactionExecutionProfile::default();
         while let Some(result) = read_tasks.join_next().await {
-            match result?? {
-                ReadTaskResult::Anchor {
-                    elapsed_ms,
-                    cache_wait_ms,
-                } => {
-                    execution_profile.read_anchor_validation_ms += elapsed_ms;
-                    execution_profile.read_anchor_cache_wait_ms += cache_wait_ms;
-                }
-                ReadTaskResult::Nullifier(elapsed_ms) => {
-                    execution_profile.read_committed_nullifier_ms += elapsed_ms;
-                    execution_profile.read_nullifier_wait_ms += elapsed_ms;
-                    execution_profile.spend_nullifier_committed_check_ms += elapsed_ms;
-                    execution_profile.spend_nullifier_check_ms += elapsed_ms;
-                    execution_profile.nullifier_lookup_count += 1;
-                }
-                ReadTaskResult::VolumeNullifier(elapsed_ms) => {
-                    execution_profile.read_committed_nullifier_ms += elapsed_ms;
-                    execution_profile.nullifier_lookup_count += 1;
-                }
-            }
+            result??;
         }
-        Ok::<TransactionExecutionProfile, anyhow::Error>(execution_profile)
+        Ok::<(), anyhow::Error>(())
     };
+    tokio::try_join!(historical_future, read_task_future)?;
 
-    let read_lookup_wait_start = Instant::now();
-    let (historical_profile, read_task_profile) =
-        tokio::try_join!(historical_future, read_task_future)?;
-    prepared.execution_profile.read_lookup_wait_or_join_ms =
-        read_lookup_wait_start.elapsed().as_secs_f64() * 1000.0;
-
-    prepared.check_historical_ms = historical_profile.total_ms;
-    prepared.execution_profile.read_historical_check_ms = historical_profile.await_ms;
-    prepared.execution_profile.read_anchor_validation_ms +=
-        read_task_profile.read_anchor_validation_ms;
-    prepared.execution_profile.read_anchor_cache_wait_ms +=
-        read_task_profile.read_anchor_cache_wait_ms;
-    prepared.execution_profile.read_committed_nullifier_ms +=
-        read_task_profile.read_committed_nullifier_ms;
-    prepared.execution_profile.read_nullifier_wait_ms += read_task_profile.read_nullifier_wait_ms;
-    prepared
-        .execution_profile
-        .spend_nullifier_committed_check_ms += read_task_profile.spend_nullifier_committed_check_ms;
-    prepared.execution_profile.spend_nullifier_check_ms +=
-        read_task_profile.spend_nullifier_check_ms;
-    prepared.execution_profile.nullifier_lookup_count += read_task_profile.nullifier_lookup_count;
-
-    let effects_build_start = Instant::now();
-    prepared.effects.spend_nullifiers = spend_nullifiers;
-    prepared.effects.volume_nullifiers = volume_nullifiers;
-    prepared.effects.sct_payloads = sct_payloads;
-    prepared.effects.routing_actions = transaction_routing_actions(tx.as_ref())?;
-    prepared.effects.audit_effects = transaction_audit_effects(tx.as_ref(), context.block_height)?;
-    prepared.execution_profile.read_effects_build_ms =
-        effects_build_start.elapsed().as_secs_f64() * 1000.0;
-    prepared.execution_profile.output_add_note_payload_ms =
-        prepared.execution_profile.read_effects_build_ms;
-    prepared.execution_profile.output_action_execute_ms =
-        prepared.execution_profile.read_effects_build_ms;
-    prepared.execution_profile.action_execute_ms =
-        action_execute_start.elapsed().as_secs_f64() * 1000.0;
-    prepared.read_wall_ms = read_start.elapsed().as_secs_f64() * 1000.0;
+    prepared.spend_nullifiers = spend_nullifiers;
+    prepared.volume_nullifiers = volume_nullifiers;
+    prepared.sct_payloads = sct_payloads;
+    prepared.routing_actions = transaction_routing_actions(tx.as_ref())?;
+    prepared.audit_effects = transaction_audit_effects(tx.as_ref(), context.block_height)?;
     Ok(prepared)
 }
 
-pub(crate) fn prepare_candidate_read_blocking_profiled(
+pub(crate) fn prepare_candidate_read_blocking(
     tx: Arc<Transaction>,
     snapshot: Snapshot,
     context: HistoricalCheckContext,
     skip_historical: bool,
     handle: tokio::runtime::Handle,
 ) -> Result<PreparedCandidateRead> {
-    let read_start = Instant::now();
     let mut prepared = PreparedCandidateRead::default();
     ensure_transaction_resource_bounds(tx.as_ref())?;
 
@@ -1410,8 +1173,6 @@ pub(crate) fn prepare_candidate_read_blocking_profiled(
     let mut tx_nullifiers = HashSet::new();
     let mut volume_nullifiers = Vec::new();
     let mut tx_volume_nullifiers = HashSet::new();
-    let action_execute_start = Instant::now();
-    let local_precheck_start = Instant::now();
 
     for (i, action) in tx.actions().enumerate() {
         match action {
@@ -1550,25 +1311,14 @@ pub(crate) fn prepare_candidate_read_blocking_profiled(
     }
     let read_nullifiers = spend_nullifiers.clone();
     let read_volume_nullifiers = volume_nullifiers.clone();
-    prepared.execution_profile.read_local_precheck_ms =
-        local_precheck_start.elapsed().as_secs_f64() * 1000.0;
 
-    let lookup_wait_start = Instant::now();
     if skip_historical {
-        prepared.check_historical_ms = 0.0;
     } else {
-        let historical_profile = check_historical_with_context_sync_profiled(
-            Arc::as_ref(&tx),
-            &snapshot,
-            &context,
-            &handle,
-        )?;
-        prepared.check_historical_ms = historical_profile.total_ms;
-        prepared.execution_profile.read_historical_check_ms = historical_profile.await_ms;
+        check_historical_with_context_sync(Arc::as_ref(&tx), &snapshot, &context, &handle)?;
     }
 
     for (user_anchor, asset_anchor) in anchor_pairs {
-        let (elapsed_ms, cache_wait_ms) = validate_compliance_anchors_read_only_sync(
+        validate_compliance_anchors_read_only_sync(
             &handle,
             &snapshot,
             &user_anchor,
@@ -1576,42 +1326,18 @@ pub(crate) fn prepare_candidate_read_blocking_profiled(
             context.block_height,
             context.anchor_cache.clone(),
         )?;
-        prepared.execution_profile.read_anchor_validation_ms += elapsed_ms;
-        prepared.execution_profile.read_anchor_cache_wait_ms += cache_wait_ms;
     }
     for nullifier in &read_nullifiers {
-        let elapsed_ms = check_nullifier_read_only_sync(&handle, &snapshot, &context, *nullifier)?;
-        prepared.execution_profile.read_committed_nullifier_ms += elapsed_ms;
-        prepared.execution_profile.read_nullifier_wait_ms += elapsed_ms;
-        prepared
-            .execution_profile
-            .spend_nullifier_committed_check_ms += elapsed_ms;
-        prepared.execution_profile.spend_nullifier_check_ms += elapsed_ms;
-        prepared.execution_profile.nullifier_lookup_count += 1;
+        check_nullifier_read_only_sync(&handle, &snapshot, &context, *nullifier)?;
     }
     for scoped in read_volume_nullifiers {
-        let elapsed_ms = check_volume_nullifier_read_only_sync(&handle, &snapshot, scoped)?;
-        prepared.execution_profile.read_committed_nullifier_ms += elapsed_ms;
-        prepared.execution_profile.nullifier_lookup_count += 1;
+        check_volume_nullifier_read_only_sync(&handle, &snapshot, scoped)?;
     }
-    prepared.execution_profile.read_lookup_wait_or_join_ms =
-        lookup_wait_start.elapsed().as_secs_f64() * 1000.0;
-
-    let effects_build_start = Instant::now();
-    prepared.effects.spend_nullifiers = spend_nullifiers;
-    prepared.effects.volume_nullifiers = volume_nullifiers;
-    prepared.effects.sct_payloads = sct_payloads;
-    prepared.effects.routing_actions = transaction_routing_actions(tx.as_ref())?;
-    prepared.effects.audit_effects = transaction_audit_effects(tx.as_ref(), context.block_height)?;
-    prepared.execution_profile.read_effects_build_ms =
-        effects_build_start.elapsed().as_secs_f64() * 1000.0;
-    prepared.execution_profile.output_add_note_payload_ms =
-        prepared.execution_profile.read_effects_build_ms;
-    prepared.execution_profile.output_action_execute_ms =
-        prepared.execution_profile.read_effects_build_ms;
-    prepared.execution_profile.action_execute_ms =
-        action_execute_start.elapsed().as_secs_f64() * 1000.0;
-    prepared.read_wall_ms = read_start.elapsed().as_secs_f64() * 1000.0;
+    prepared.spend_nullifiers = spend_nullifiers;
+    prepared.volume_nullifiers = volume_nullifiers;
+    prepared.sct_payloads = sct_payloads;
+    prepared.routing_actions = transaction_routing_actions(tx.as_ref())?;
+    prepared.audit_effects = transaction_audit_effects(tx.as_ref(), context.block_height)?;
     Ok(prepared)
 }
 
@@ -1645,7 +1371,10 @@ impl AppActionHandler for Transaction {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     // Serializes tests that read/write SHIELDD_BENCH_ALLOW_ZERO_TARGET_TIMESTAMP to
     // prevent env-var races when tests run in parallel.
@@ -1684,13 +1413,18 @@ mod tests {
             100,
         );
 
+        let initializations = Arc::new(AtomicUsize::new(0));
         let mut tasks = tokio::task::JoinSet::new();
         for _ in 0..8 {
             let cache = cache.clone();
+            let initializations = initializations.clone();
             tasks.spawn(async move {
-                let (cell, _hit, _wait_ms) = cache.entry(key);
+                let cell = cache.entry(key);
                 let result = cell
-                    .get_or_init(|| async { Ok::<(), String>(()) })
+                    .get_or_init(|| async {
+                        initializations.fetch_add(1, Ordering::Relaxed);
+                        Ok::<(), String>(())
+                    })
                     .await
                     .clone();
                 anyhow::ensure!(result.is_ok(), "cache cell should initialize successfully");
@@ -1702,10 +1436,8 @@ mod tests {
             result??;
         }
 
-        let (hits, misses, unique_pairs) = cache.stats();
-        assert_eq!(misses, 1);
-        assert_eq!(hits, 7);
-        assert_eq!(unique_pairs, 1);
+        assert_eq!(initializations.load(Ordering::Relaxed), 1);
+        assert_eq!(cache.entries.read().unwrap().len(), 1);
 
         Ok(())
     }
@@ -1715,13 +1447,18 @@ mod tests {
         let cache = Arc::new(ClaimedAnchorValidationCache::default());
         let anchor = shieldd_sdk_tct::Tree::new().root();
 
+        let initializations = Arc::new(AtomicUsize::new(0));
         let mut tasks = tokio::task::JoinSet::new();
         for _ in 0..8 {
             let cache = cache.clone();
+            let initializations = initializations.clone();
             tasks.spawn(async move {
-                let (cell, _hit) = cache.entry(anchor);
+                let cell = cache.entry(anchor);
                 let result = cell
-                    .get_or_init(|| async { Ok::<(), String>(()) })
+                    .get_or_init(|| async {
+                        initializations.fetch_add(1, Ordering::Relaxed);
+                        Ok::<(), String>(())
+                    })
                     .await
                     .clone();
                 anyhow::ensure!(
@@ -1736,10 +1473,8 @@ mod tests {
             result??;
         }
 
-        let (hits, misses, unique_values) = cache.stats();
-        assert_eq!(misses, 1);
-        assert_eq!(hits, 7);
-        assert_eq!(unique_values, 1);
+        assert_eq!(initializations.load(Ordering::Relaxed), 1);
+        assert_eq!(cache.entries.read().unwrap().len(), 1);
 
         Ok(())
     }

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,33 +15,21 @@ import sys
 from proof_artifacts import (
     ArtifactError,
     BUNDLE_BYTE_BUDGETS,
+    FAMILIES,
     Bundle,
     POINTER_VERSION,
     cache_info,
+    parse_lfs_pointer,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
 LFS_ATTRIBUTES = "filter=lfs diff=lfs merge=lfs -text"
-FAMILIES = (
-    "note_reshape1x8",
-    "note_reshape8x1",
-    "shielded_ics20_withdrawal",
-    "transfer",
-)
 ALLOWED_LFS_PATHS = {
     f"tools/gnark/artifacts/{family}/{family}.sr1cs"
     for family in FAMILIES
 }
 EXPECTED_WORKFLOW_RESTORES: dict[str, int] = {}
-FORMAL_WORKFLOWS = {
-    "formal-scheduled.yml",
-    "formal.yml",
-    "fv-toolchain-image.yml",
-    "snarkpack-fv-toolchain-image.yml",
-    "snarkpack-release-audit.yml",
-    "soundness-provers.yml",
-}
 
 
 def fail(message: str) -> None:
@@ -161,7 +150,7 @@ def enforce_workflow_fanout() -> None:
     rust = (workflows / "rust.yml").read_text(encoding="utf-8")
     checks = extract_job(rust, "checks")
     if "proof-artifacts" in checks:
-        fail("the non-formal Rust checks job depends on proof-artifact hydration")
+        fail("the Rust checks job depends on proof-artifact hydration")
     tests = extract_job(rust, "tests")
     if "/restore-proof-artifacts" in tests:
         fail("the Rust tests job restores proof artifacts on candidate runs")
@@ -176,14 +165,11 @@ def enforce_workflow_fanout() -> None:
     for name in ("containers.yml", "docs-lint.yml", "orbis-integration.yml", "release.yml", "smoke.yml"):
         text = (workflows / name).read_text(encoding="utf-8")
         if "proof-artifacts" in text:
-            fail(f"the non-formal {name} workflow depends on proof-artifact hydration")
+            fail(f"the {name} workflow depends on proof-artifact hydration")
 
 
 def enforce_proof_scheduling() -> None:
     workflows = ROOT / ".github" / "workflows"
-    remaining = sorted(name for name in FORMAL_WORKFLOWS if (workflows / name).exists())
-    if remaining:
-        fail(f"formal verification workflows belong in shieldd-formal: {remaining}")
     for relative in ("rust.yml",):
         workflow = workflows / relative
         if re.search(r"(?m)^\s+schedule:\s*$", workflow.read_text()):
@@ -213,14 +199,43 @@ def enforce_bundle_budgets() -> None:
             )
 
 
+def committed_content_hash(revision: str, path: str) -> str | None:
+    exists = subprocess.run(
+        ["git", "cat-file", "-e", f"{revision}:{path}"],
+        cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    if exists.returncode:
+        return None
+    with subprocess.Popen(
+        ["git", "cat-file", "blob", f"{revision}:{path}"],
+        cwd=ROOT, stdout=subprocess.PIPE,
+    ) as process:
+        assert process.stdout is not None
+        prefix = process.stdout.read(1024)
+        digest = hashlib.sha256(prefix)
+        for chunk in iter(lambda: process.stdout.read(1024 * 1024), b""):
+            digest.update(chunk)
+        if process.wait():
+            fail(f"could not read committed artifact {revision}:{path}")
+    if prefix.startswith(f"version {POINTER_VERSION}\n".encode()):
+        try:
+            return parse_lfs_pointer(prefix.decode(), path).oid
+        except (ArtifactError, UnicodeDecodeError) as error:
+            fail(str(error))
+    return digest.hexdigest()
+
+
 def enforce_paired_rotations(base: str | None) -> None:
     if base is None:
         return
     changed = set(run_git("diff", "--name-only", f"{base}...HEAD").splitlines())
     for family in FAMILIES:
         root = f"tools/gnark/artifacts/{family}"
-        sr1cs_changed = f"{root}/{family}.sr1cs" in changed
-        proving_key_changed = f"{root}/proving_key.bin" in changed
+        def content_changed(path: str) -> bool:
+            return path in changed and committed_content_hash(base, path) != committed_content_hash("HEAD", path)
+
+        sr1cs_changed = content_changed(f"{root}/{family}.sr1cs")
+        proving_key_changed = content_changed(f"{root}/proving_key.bin")
         if sr1cs_changed != proving_key_changed:
             fail(
                 f"{family} rotates only one setup object; SR1CS and proving key "

@@ -21,8 +21,6 @@ pub mod info;
 pub mod mempool;
 pub mod snapshot;
 
-#[cfg(any(test, feature = "benchmark-helpers"))]
-mod diagnostics;
 mod events;
 
 /// Returns a newly instantiated ABCI [`Server`], backed by the provided [`Storage`].

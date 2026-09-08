@@ -19,17 +19,7 @@ pub fn remote_addr<B>(req: &http::Request<B>) -> Option<SocketAddr> {
         .and_then(|i| i.remote_addr())
 }
 
-pub mod v034 {
-    mod request_ext;
-    pub use request_ext::RequestExt;
-}
-
 pub mod v037 {
-    mod request_ext;
-    pub use request_ext::RequestExt;
-}
-
-pub mod v038 {
     mod request_ext;
     pub use request_ext::RequestExt;
 }

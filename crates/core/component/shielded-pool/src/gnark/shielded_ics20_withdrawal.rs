@@ -1,21 +1,11 @@
-use std::path::{Path, PathBuf};
-
-use anyhow::{bail, Result};
-use ark_groth16::PreparedVerifyingKey;
+use anyhow::Result;
 use ark_serialize::CanonicalSerialize;
-use decaf377::{Bls12_377, Fq};
-
-#[cfg(any(unix, windows))]
-use crate::gnark::transport::{auto_lib_path, load_bundled_transport, load_library_transport};
+use decaf377::Fq;
 
 use crate::{
     gnark::{
         shielded_ics20_withdrawal_witness::ShieldedIcs20WithdrawalWitness,
         transfer_proof_result::parse_binary_proof_result,
-        transport::{
-            load_daemon_transport, load_from_env_paths, prove_with_transport, shutdown_transport,
-            GnarkFamilyConfig, GnarkTransport,
-        },
     },
     shielded_ics20_withdrawal::{
         ShieldedIcs20WithdrawalProof, ShieldedIcs20WithdrawalProofPrivate,
@@ -23,47 +13,6 @@ use crate::{
     },
     ShieldedIcs20WithdrawalFamilyId,
 };
-
-const SHIELDED_ICS20_WITHDRAWAL_LIB_BASENAME: &str = "libshieldd_gnark_shielded_ics20_withdrawal";
-const SHIELDED_ICS20_WITHDRAWAL_ENV_ARTIFACT_DIR: &str =
-    "SHIELDD_GNARK_SHIELDED_ICS20_WITHDRAWAL_ARTIFACT_DIR";
-const SHIELDED_ICS20_WITHDRAWAL_ENV_LIB: &str = "SHIELDD_GNARK_SHIELDED_ICS20_WITHDRAWAL_LIB";
-const SHIELDED_ICS20_WITHDRAWAL_ENV_DAEMON: &str = "SHIELDD_GNARK_SHIELDED_ICS20_WITHDRAWAL_DAEMON";
-
-const SHIELDED_ICS20_WITHDRAWAL_INIT_SYMBOL: &[u8] =
-    b"shieldd_gnark_shielded_ics20_withdrawal_init";
-const SHIELDED_ICS20_WITHDRAWAL_INIT_FROM_BYTES_SYMBOL: &[u8] =
-    b"shieldd_gnark_shielded_ics20_withdrawal_init_from_bytes";
-const SHIELDED_ICS20_WITHDRAWAL_PROVE_SYMBOL: &[u8] =
-    b"shieldd_gnark_shielded_ics20_withdrawal_prove";
-const SHIELDED_ICS20_WITHDRAWAL_FREE_SYMBOL: &[u8] =
-    b"shieldd_gnark_shielded_ics20_withdrawal_free";
-const SHIELDED_ICS20_WITHDRAWAL_SHUTDOWN_SYMBOL: &[u8] =
-    b"shieldd_gnark_shielded_ics20_withdrawal_shutdown";
-
-static SHIELDED_ICS20_WITHDRAWAL_FAMILY_CONFIG: GnarkFamilyConfig = GnarkFamilyConfig {
-    family: "shielded_ics20_withdrawal",
-    env_artifact_dir: SHIELDED_ICS20_WITHDRAWAL_ENV_ARTIFACT_DIR,
-    env_lib: SHIELDED_ICS20_WITHDRAWAL_ENV_LIB,
-    env_daemon: SHIELDED_ICS20_WITHDRAWAL_ENV_DAEMON,
-    init_symbol: SHIELDED_ICS20_WITHDRAWAL_INIT_SYMBOL,
-    init_from_bytes_symbol: SHIELDED_ICS20_WITHDRAWAL_INIT_FROM_BYTES_SYMBOL,
-    prove_symbol: SHIELDED_ICS20_WITHDRAWAL_PROVE_SYMBOL,
-    free_symbol: SHIELDED_ICS20_WITHDRAWAL_FREE_SYMBOL,
-    shutdown_symbol: SHIELDED_ICS20_WITHDRAWAL_SHUTDOWN_SYMBOL,
-};
-
-fn shielded_ics20_withdrawal_family_config(
-    family_id: ShieldedIcs20WithdrawalFamilyId,
-) -> &'static GnarkFamilyConfig {
-    match family_id {
-        ShieldedIcs20WithdrawalFamilyId::Canonical => &SHIELDED_ICS20_WITHDRAWAL_FAMILY_CONFIG,
-        _ => panic!(
-            "unknown shielded ICS-20 withdrawal family id {}",
-            family_id.get()
-        ),
-    }
-}
 
 pub fn encode_shielded_ics20_withdrawal_witness(
     public: &ShieldedIcs20WithdrawalProofPublic,
@@ -76,196 +25,6 @@ pub fn decode_shielded_ics20_withdrawal_witness(
     bytes: &[u8],
 ) -> Result<ShieldedIcs20WithdrawalWitness> {
     ShieldedIcs20WithdrawalWitness::decode(bytes)
-}
-
-pub struct GnarkShieldedIcs20WithdrawalClient {
-    family_id: ShieldedIcs20WithdrawalFamilyId,
-    transport: GnarkTransport,
-    verifying_key: PreparedVerifyingKey<Bls12_377>,
-}
-
-enum ShieldedIcs20WithdrawalTransportSource<'a> {
-    #[cfg(any(unix, windows))]
-    Library {
-        lib_path: &'a Path,
-        artifact_dir: &'a Path,
-    },
-    Daemon {
-        binary: &'a Path,
-        artifact_dir: &'a Path,
-    },
-    #[cfg(any(unix, windows))]
-    Bundled {
-        lib_path: &'a Path,
-        pk_bytes: &'a [u8],
-        vk_json_bytes: &'a [u8],
-        metadata: &'a [u8],
-    },
-}
-
-unsafe impl Send for GnarkShieldedIcs20WithdrawalClient {}
-unsafe impl Sync for GnarkShieldedIcs20WithdrawalClient {}
-
-impl GnarkShieldedIcs20WithdrawalClient {
-    fn load_transport(
-        family_id: ShieldedIcs20WithdrawalFamilyId,
-        source: ShieldedIcs20WithdrawalTransportSource<'_>,
-    ) -> Result<Self> {
-        let config = shielded_ics20_withdrawal_family_config(family_id);
-        let (transport, verifying_key) = match source {
-            #[cfg(any(unix, windows))]
-            ShieldedIcs20WithdrawalTransportSource::Library {
-                lib_path,
-                artifact_dir,
-            } => load_library_transport(lib_path, artifact_dir, config)?,
-            ShieldedIcs20WithdrawalTransportSource::Daemon {
-                binary,
-                artifact_dir,
-            } => load_daemon_transport(binary, artifact_dir, config)?,
-            #[cfg(any(unix, windows))]
-            ShieldedIcs20WithdrawalTransportSource::Bundled {
-                lib_path,
-                pk_bytes,
-                vk_json_bytes,
-                metadata,
-            } => load_bundled_transport(lib_path, pk_bytes, vk_json_bytes, metadata, config)?,
-        };
-        Ok(Self {
-            family_id,
-            transport,
-            verifying_key,
-        })
-    }
-
-    pub fn from_env(family_id: ShieldedIcs20WithdrawalFamilyId) -> Result<Self> {
-        let config = shielded_ics20_withdrawal_family_config(family_id);
-        let (artifact_dir, lib_path, daemon_path) = load_from_env_paths(config)?;
-        match (lib_path, daemon_path) {
-            (Some(lib_path), None) => {
-                #[cfg(any(unix, windows))]
-                {
-                    Self::load_transport(
-                        family_id,
-                        ShieldedIcs20WithdrawalTransportSource::Library {
-                            lib_path: &lib_path,
-                            artifact_dir: &artifact_dir,
-                        },
-                    )
-                }
-                #[cfg(not(any(unix, windows)))]
-                {
-                    let _ = (&lib_path, &artifact_dir, family_id);
-                    bail!("gnark library transport is not supported on this platform")
-                }
-            }
-            (None, Some(daemon_path)) => Self::load_transport(
-                family_id,
-                ShieldedIcs20WithdrawalTransportSource::Daemon {
-                    binary: &daemon_path,
-                    artifact_dir: &artifact_dir,
-                },
-            ),
-            (Some(_), Some(_)) => bail!(
-                "{} and {} are mutually exclusive",
-                config.env_lib,
-                config.env_daemon
-            ),
-            (None, None) => bail!(
-                "expected {} or {} to be set",
-                config.env_lib,
-                config.env_daemon
-            ),
-        }
-    }
-
-    pub fn from_bundled(
-        lib_path: &Path,
-        pk_bytes: &[u8],
-        vk_json_bytes: &[u8],
-        metadata: &[u8],
-        family_id: ShieldedIcs20WithdrawalFamilyId,
-    ) -> Result<Self> {
-        #[cfg(any(unix, windows))]
-        {
-            Self::load_transport(
-                family_id,
-                ShieldedIcs20WithdrawalTransportSource::Bundled {
-                    lib_path,
-                    pk_bytes,
-                    vk_json_bytes,
-                    metadata,
-                },
-            )
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            let _ = (lib_path, pk_bytes, vk_json_bytes, metadata, family_id);
-            bail!("gnark bundled library loading is not supported on this platform")
-        }
-    }
-
-    pub fn bundled_lib_path() -> Option<PathBuf> {
-        shieldd_sdk_proof_params::GNARK_SHIELDED_ICS20_WITHDRAWAL_BUNDLED_LIBRARY_PATH
-            .map(PathBuf::from)
-    }
-
-    #[cfg(any(unix, windows))]
-    pub fn auto_lib_path() -> Option<PathBuf> {
-        auto_lib_path(SHIELDED_ICS20_WITHDRAWAL_LIB_BASENAME)
-    }
-
-    pub fn env_override_configured() -> bool {
-        std::env::var_os(SHIELDED_ICS20_WITHDRAWAL_ENV_LIB).is_some()
-            || std::env::var_os(SHIELDED_ICS20_WITHDRAWAL_ENV_DAEMON).is_some()
-            || std::env::var_os(SHIELDED_ICS20_WITHDRAWAL_ENV_ARTIFACT_DIR).is_some()
-    }
-
-    pub fn bundled_transport_available(family_id: ShieldedIcs20WithdrawalFamilyId) -> bool {
-        let lib_path = Self::bundled_lib_path().or_else(|| {
-            #[cfg(any(unix, windows))]
-            {
-                Self::auto_lib_path()
-            }
-            #[cfg(not(any(unix, windows)))]
-            {
-                None
-            }
-        });
-        lib_path.is_some() && !family_id.proving_key_bytes().is_empty()
-    }
-
-    pub fn prove(
-        &self,
-        public: &ShieldedIcs20WithdrawalProofPublic,
-        private: &ShieldedIcs20WithdrawalProofPrivate,
-    ) -> Result<ShieldedIcs20WithdrawalProof> {
-        let witness_model = ShieldedIcs20WithdrawalWitness::from_public_private(public, private)?;
-        let expected_hash =
-            Fq::from_bytes_checked(&witness_model.claimed_statement_hash).map_err(|_| {
-                anyhow::anyhow!(
-                    "{} witness statement hash is non-canonical",
-                    self.family_id.label()
-                )
-            })?;
-        let witness = witness_model.encode()?;
-        let payload = prove_with_transport(&self.transport, &witness, self.family_id.label())?;
-        let (claimed_hash, proof) =
-            translate_shielded_ics20_withdrawal_proof_result(&payload, self.family_id)?;
-        if claimed_hash != expected_hash {
-            bail!(
-                "gnark {} proof returned wrong statement hash: expected {expected_hash}, got {claimed_hash}",
-                self.family_id.label()
-            );
-        }
-        proof.verify_with_prepared_vk(public, &self.verifying_key)?;
-        Ok(proof)
-    }
-}
-
-impl Drop for GnarkShieldedIcs20WithdrawalClient {
-    fn drop(&mut self) {
-        shutdown_transport(&mut self.transport);
-    }
 }
 
 pub fn translate_shielded_ics20_withdrawal_proof_result(
@@ -326,7 +85,7 @@ mod tests {
         assert_eq!(
             recomposed,
             private.asset_indexed_leaf.commit(),
-            "withdrawal policy opening must recompose the canonical native commitment"
+            "compact leaf view must recompose the canonical native commitment"
         );
     }
 
@@ -382,7 +141,7 @@ mod tests {
         public.outbound_amount += Fq::from(1u64);
 
         ShieldedIcs20WithdrawalWitness::from_public_private(&public, &private)
-            .expect_err("witness must reject non-conserving withdrawal amounts");
+            .expect_err("withdrawal witness must reject non-conserving withdrawal amounts");
     }
 
     #[test]
@@ -395,6 +154,112 @@ mod tests {
         public.balance_commitment = Balance::default().commit(Fr::from(999u64));
 
         ShieldedIcs20WithdrawalWitness::from_public_private(&public, &private)
-            .expect_err("witness must reject a non-blinding-only balance commitment");
+            .expect_err("withdrawal witness must reject a non-blinding-only balance commitment");
     }
 }
+
+#[cfg(any(unix, windows))]
+mod native {
+    use super::*;
+    use crate::gnark::transport::{BundledArtifacts, GnarkClient, GnarkFamilyConfig};
+    use anyhow::bail;
+    const SHIELDED_ICS20_WITHDRAWAL_LIB_BASENAME: &str =
+        "libshieldd_gnark_shielded_ics20_withdrawal";
+    const SHIELDED_ICS20_WITHDRAWAL_ENV_ARTIFACT_DIR: &str =
+        "SHIELDD_GNARK_SHIELDED_ICS20_WITHDRAWAL_ARTIFACT_DIR";
+    const SHIELDED_ICS20_WITHDRAWAL_ENV_LIB: &str = "SHIELDD_GNARK_SHIELDED_ICS20_WITHDRAWAL_LIB";
+    const SHIELDED_ICS20_WITHDRAWAL_ENV_DAEMON: &str =
+        "SHIELDD_GNARK_SHIELDED_ICS20_WITHDRAWAL_DAEMON";
+
+    const SHIELDED_ICS20_WITHDRAWAL_INIT_SYMBOL: &[u8] =
+        b"shieldd_gnark_shielded_ics20_withdrawal_init";
+    const SHIELDED_ICS20_WITHDRAWAL_INIT_FROM_BYTES_SYMBOL: &[u8] =
+        b"shieldd_gnark_shielded_ics20_withdrawal_init_from_bytes";
+    const SHIELDED_ICS20_WITHDRAWAL_PROVE_SYMBOL: &[u8] =
+        b"shieldd_gnark_shielded_ics20_withdrawal_prove";
+    const SHIELDED_ICS20_WITHDRAWAL_FREE_SYMBOL: &[u8] =
+        b"shieldd_gnark_shielded_ics20_withdrawal_free";
+    const SHIELDED_ICS20_WITHDRAWAL_SHUTDOWN_SYMBOL: &[u8] =
+        b"shieldd_gnark_shielded_ics20_withdrawal_shutdown";
+
+    static SHIELDED_ICS20_WITHDRAWAL_FAMILY_CONFIG: GnarkFamilyConfig = GnarkFamilyConfig {
+        family: "shielded_ics20_withdrawal",
+        lib_basename: SHIELDED_ICS20_WITHDRAWAL_LIB_BASENAME,
+        bundled_library:
+            shieldd_sdk_proof_params::GNARK_SHIELDED_ICS20_WITHDRAWAL_BUNDLED_LIBRARY_PATH,
+        env_artifact_dir: SHIELDED_ICS20_WITHDRAWAL_ENV_ARTIFACT_DIR,
+        env_lib: SHIELDED_ICS20_WITHDRAWAL_ENV_LIB,
+        env_daemon: SHIELDED_ICS20_WITHDRAWAL_ENV_DAEMON,
+        init_symbol: SHIELDED_ICS20_WITHDRAWAL_INIT_SYMBOL,
+        init_from_bytes_symbol: SHIELDED_ICS20_WITHDRAWAL_INIT_FROM_BYTES_SYMBOL,
+        prove_symbol: SHIELDED_ICS20_WITHDRAWAL_PROVE_SYMBOL,
+        free_symbol: SHIELDED_ICS20_WITHDRAWAL_FREE_SYMBOL,
+        shutdown_symbol: SHIELDED_ICS20_WITHDRAWAL_SHUTDOWN_SYMBOL,
+    };
+
+    pub(crate) fn shielded_ics20_withdrawal_family_config(
+        family_id: ShieldedIcs20WithdrawalFamilyId,
+    ) -> &'static GnarkFamilyConfig {
+        match family_id {
+            ShieldedIcs20WithdrawalFamilyId::Canonical => &SHIELDED_ICS20_WITHDRAWAL_FAMILY_CONFIG,
+            _ => panic!(
+                "unknown shielded ICS-20 withdrawal family id {}",
+                family_id.get()
+            ),
+        }
+    }
+
+    pub(crate) struct GnarkShieldedIcs20WithdrawalClient {
+        family_id: ShieldedIcs20WithdrawalFamilyId,
+        inner: GnarkClient,
+    }
+
+    impl GnarkShieldedIcs20WithdrawalClient {
+        pub(crate) fn load(family_id: ShieldedIcs20WithdrawalFamilyId) -> Result<Self> {
+            Ok(Self {
+                family_id,
+                inner: GnarkClient::load(
+                    shielded_ics20_withdrawal_family_config(family_id),
+                    BundledArtifacts {
+                        proving_key: family_id.proving_key_bytes(),
+                        verifying_key: family_id.verifying_key_json_bytes(),
+                        metadata: family_id.circuit_metadata_bytes(),
+                    },
+                )?,
+            })
+        }
+
+        pub fn prove(
+            &self,
+            public: &ShieldedIcs20WithdrawalProofPublic,
+            private: &ShieldedIcs20WithdrawalProofPrivate,
+        ) -> Result<ShieldedIcs20WithdrawalProof> {
+            let witness_model =
+                ShieldedIcs20WithdrawalWitness::from_public_private(public, private)?;
+            let expected_hash = Fq::from_bytes_checked(&witness_model.claimed_statement_hash)
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "{} witness statement hash is non-canonical",
+                        self.family_id.label()
+                    )
+                })?;
+            let witness = witness_model.encode()?;
+            let payload = self.inner.prove(&witness)?;
+            let (claimed_hash, proof) =
+                translate_shielded_ics20_withdrawal_proof_result(&payload, self.family_id)?;
+            if claimed_hash != expected_hash {
+                bail!(
+                "gnark {} proof returned wrong statement hash: expected {expected_hash}, got {claimed_hash}",
+                self.family_id.label()
+            );
+            }
+            proof.verify_with_prepared_vk(public, &self.inner.verifying_key)?;
+            Ok(proof)
+        }
+    }
+}
+
+#[cfg(all(any(unix, windows), any(test, feature = "benchmark-helpers")))]
+pub(crate) use native::shielded_ics20_withdrawal_family_config;
+#[cfg(any(unix, windows))]
+pub(crate) use native::GnarkShieldedIcs20WithdrawalClient;

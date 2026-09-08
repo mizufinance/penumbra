@@ -338,8 +338,8 @@ mod tests {
     use shieldd_sdk_asset::{Value, BASE_ASSET_DENOM};
     use shieldd_sdk_keys::{test_keys, PayloadKey};
     use shieldd_sdk_shielded_pool::{
-        Ics20Withdrawal, Note, ShieldedIcs20Withdrawal, ShieldedIcs20WithdrawalPlan,
-        ShieldedIcs20WithdrawalProof, ShieldedIcs20WithdrawalView, ShieldedInputPlan,
+        Ics20Withdrawal, Note, ShieldedIcs20Withdrawal, ShieldedIcs20WithdrawalProof,
+        ShieldedIcs20WithdrawalView, ShieldedInputPlan,
     };
     use shieldd_sdk_tct::Tree;
 
@@ -357,7 +357,7 @@ mod tests {
             },
         );
         let spend = ShieldedInputPlan::new(&mut OsRng, spent_note.clone(), 0u64.into());
-        let plan = ShieldedIcs20WithdrawalPlan::new(
+        let plan = shieldd_sdk_shielded_pool::test_plan_helpers::ics20_withdrawal(
             vec![spend],
             None,
             Ics20Withdrawal {

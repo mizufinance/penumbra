@@ -34,7 +34,6 @@ pub struct Consensus {
     approved_internal_tx_height: Option<u64>,
     approved_internal_txs: Vec<Bytes>,
     aggregate_retry_cache: Option<crate::app::CachedProposalAggregate>,
-    force_process_proposal_profile: bool,
 }
 
 pub type ConsensusService = tower_actor::Actor<Request, Response, BoxError>;
@@ -58,11 +57,8 @@ fn can_reuse_prepared_proposal(
     prepared_digests: &HashSet<[u8; 32]>,
     proposal_height: u64,
     proposal_digest: &[u8; 32],
-    force_profile: bool,
 ) -> bool {
-    prepared_height == Some(proposal_height)
-        && prepared_digests.contains(proposal_digest)
-        && !force_profile
+    prepared_height == Some(proposal_height) && prepared_digests.contains(proposal_digest)
 }
 
 impl Consensus {
@@ -88,10 +84,6 @@ impl Consensus {
     ) -> Self {
         let mut app = App::new(storage.latest_snapshot());
         app.set_block_tx_indexing_mode(BlockTxIndexingMode::DeferredBatch);
-        #[cfg(any(test, feature = "benchmark-helpers"))]
-        let force_process_proposal_profile = super::diagnostics::force_process_proposal_profile();
-        #[cfg(not(any(test, feature = "benchmark-helpers")))]
-        let force_process_proposal_profile = false;
         Self {
             queue,
             storage,
@@ -104,7 +96,6 @@ impl Consensus {
             approved_internal_tx_height: None,
             approved_internal_txs: Vec::new(),
             aggregate_retry_cache: None,
-            force_process_proposal_profile,
         }
     }
 
@@ -284,8 +275,8 @@ impl Consensus {
         tmp_app.set_aggregate_retry_cache(self.aggregate_retry_cache.clone());
         // Once we are done, we discard it so that the application state doesn't get corrupted
         // if another round of consensus is required because the proposal fails to finalize.
-        let (response, profile, _) = tmp_app
-            .prepare_proposal_profiled(proposal, Some(self.stateless_cache.as_ref()), false)
+        let (response, _) = tmp_app
+            .prepare_proposal(proposal, Some(self.stateless_cache.as_ref()), false)
             .await;
         self.aggregate_retry_cache = tmp_app.aggregate_retry_cache();
         let response_digest = Self::proposal_digest(&response.txs);
@@ -299,7 +290,6 @@ impl Consensus {
             candidate_tx_count,
             included_tx_count,
             included_tx_bytes,
-            tail_tx_count = profile.tail_tx_count,
             elapsed_ms,
             "prepare_proposal_finish"
         );
@@ -331,7 +321,6 @@ impl Consensus {
             &self.prepared_proposal_digests,
             proposal_height,
             &proposal_digest,
-            self.force_process_proposal_profile,
         ) {
             let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
             tracing::info!(
@@ -346,12 +335,11 @@ impl Consensus {
             self.approve_internal_tx(proposal_height, aggregate_bundle_tail);
             return Ok(response::ProcessProposal::Accept);
         }
-        // We process the proposal in an isolated state fork. Eventually, we should cache this work and
-        // re-use it when processing a `FinalizeBlock` message (starting in `0.38.x`).
+        // Proposal validation applies effects to an isolated state fork.
         let mut tmp_app = App::new(self.storage.latest_snapshot());
         tmp_app.set_block_tx_indexing_mode(BlockTxIndexingMode::NoIndex);
-        let (response, profile) = tmp_app
-            .process_proposal_profiled(proposal, Some(self.stateless_cache.as_ref()), None, false)
+        let response = tmp_app
+            .process_proposal(proposal, Some(self.stateless_cache.as_ref()), None, false)
             .await;
         let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
         let verdict = match response {
@@ -366,7 +354,6 @@ impl Consensus {
             height = proposal_height,
             verdict,
             cache_reuse = false,
-            aggregate_verify_ms = profile.aggregate_verify_ms,
             elapsed_ms,
             "process_proposal_finish"
         );
@@ -488,7 +475,7 @@ mod tests {
     use super::can_reuse_prepared_proposal;
 
     #[test]
-    fn prepared_proposal_reuse_requires_same_height_exact_digest_and_normal_mode() {
+    fn prepared_proposal_reuse_requires_same_height_exact_digest() {
         let exact_digest = [7u8; 32];
         let prepared_digests = HashSet::from([exact_digest]);
 
@@ -497,35 +484,24 @@ mod tests {
             &prepared_digests,
             42,
             &exact_digest,
-            false,
         ));
         assert!(!can_reuse_prepared_proposal(
             Some(42),
             &prepared_digests,
             43,
             &exact_digest,
-            false,
         ));
         assert!(!can_reuse_prepared_proposal(
             Some(42),
             &prepared_digests,
             42,
             &[8u8; 32],
-            false,
-        ));
-        assert!(!can_reuse_prepared_proposal(
-            Some(42),
-            &prepared_digests,
-            42,
-            &exact_digest,
-            true,
         ));
         assert!(!can_reuse_prepared_proposal(
             None,
             &prepared_digests,
             42,
             &exact_digest,
-            false,
         ));
     }
 }

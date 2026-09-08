@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::audit_status::FlowType;
+use crate::audit_status::{AuditStatus, FlowType};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditDetectedRef {
@@ -24,6 +24,18 @@ pub struct AuditDetectedRef {
 pub struct AuditScanExport {
     pub scan_info: serde_json::Value,
     pub detected: Vec<AuditDetectedRef>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuditImportRow {
+    pub audit_status: AuditStatus,
+    pub is_flagged: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OrbisImportEligibility {
+    Eligible,
+    Ineligible { reason: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

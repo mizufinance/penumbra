@@ -1,8 +1,4 @@
-//! Transaction plan compliance enrichment trait.
-//!
-//! This module defines the trait for compliance proof providers. The actual
-//! enrichment function lives in the crates that have access to TransactionPlan
-//! (view, mock-client) since compliance cannot depend on transaction.
+//! Batched compliance witnesses for completing wallet plans.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -12,6 +8,12 @@ use shieldd_sdk_tct::StateCommitment;
 use std::collections::BTreeMap;
 
 use crate::{indexed_tree::IndexedLeaf, structs::AssetPolicy, ComplianceLeaf, MerklePath};
+
+#[derive(Clone, Debug)]
+pub struct ComplianceQuery {
+    pub address: Address,
+    pub asset_id: asset::Id,
+}
 
 /// Proof data for an asset in the indexed asset tree.
 #[derive(Clone, Debug)]
@@ -97,10 +99,7 @@ pub trait ComplianceProofProvider: Send + Sync {
     ///
     /// The default implementation falls back to individual calls. Implementations
     /// that have access to a batch endpoint (like ViewClient) should override this.
-    async fn get_batch_proofs(
-        &self,
-        queries: &[(Address, asset::Id)],
-    ) -> Result<BatchComplianceData> {
+    async fn get_batch_proofs(&self, queries: &[ComplianceQuery]) -> Result<BatchComplianceData> {
         let compliance_anchor = self.get_compliance_anchor().await?;
         let asset_anchor = self.get_asset_anchor().await?;
 
@@ -108,7 +107,7 @@ pub trait ComplianceProofProvider: Send + Sync {
         let mut asset_policies = BTreeMap::new();
         let mut user_proofs = BTreeMap::new();
 
-        for (address, asset_id) in queries {
+        for ComplianceQuery { address, asset_id } in queries {
             if !asset_proofs.contains_key(asset_id) {
                 let proof = self.get_asset_proof(*asset_id).await?;
                 if proof.is_regulated {

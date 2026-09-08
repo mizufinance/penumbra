@@ -11,6 +11,8 @@ RUN test -n "$VERA_REF" \
     && git fetch --depth 1 origin "$VERA_REF" \
     && git checkout --detach FETCH_HEAD
 WORKDIR /src
+ARG BUILD_JOBS=2
+ENV GOMAXPROCS=${BUILD_JOBS} GOFLAGS="-p=${BUILD_JOBS}"
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     GODEBUG=http2client=0 go mod download \

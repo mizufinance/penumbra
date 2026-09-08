@@ -1,3 +1,4 @@
+use shieldd_sdk_compliance::ComplianceQuery;
 use std::{
     collections::{BTreeMap, BTreeSet},
     pin::Pin,
@@ -37,8 +38,7 @@ use shieldd_sdk_proto::{
     view::v1::{
         self as pb,
         broadcast_transaction_response::{BroadcastSuccess, Confirmed, Status as BroadcastStatus},
-        view_service_client::ViewServiceClient,
-        view_service_server::{ViewService, ViewServiceServer},
+        view_service_server::ViewService,
         AppParametersResponse, AssetMetadataByIdRequest, AssetMetadataByIdResponse,
         BroadcastTransactionResponse, DiscoveryParametersResponse, GasPricesResponse,
         NoteByCommitmentResponse, NullifierWindowResponse, StatusResponse,
@@ -55,7 +55,7 @@ use shieldd_sdk_transaction::{
 use crate::{
     compliance_tree::ComplianceSnapshot, historical_proof_worker::HistoricalProofWorker,
     storage::compliance::UserLeafData, worker::Worker, AddressPurpose, HistoricalProofProvider,
-    IssuedAddress, NoteManager, Storage, TransferPlanningResult,
+    IssuedAddress, NoteManager, NoteManagerPlanningResult, Storage,
 };
 
 fn compliance_leaf_proto(
@@ -245,6 +245,219 @@ pub struct ViewServer {
 }
 
 impl ViewServer {
+    async fn query_compliance_batch(
+        &self,
+        request_inner: pb::ComplianceBatchMerkleProofsRequest,
+    ) -> Result<pb::ComplianceBatchMerkleProofsResponse, Status> {
+        let snapshot = self.compliance_snapshot.read().clone();
+        let user_tree = &snapshot.user_tree;
+        let asset_tree = &snapshot.asset_tree;
+
+        let user_anchor = user_tree.root();
+        let asset_anchor = asset_tree.root();
+
+        // Debug: log anchors at read time
+        tracing::debug!(
+            user_anchor = ?user_anchor.0.to_bytes(),
+            asset_anchor = ?asset_anchor.0.to_bytes(),
+            num_queries = request_inner.queries.len(),
+            "compliance_batch_merkle_proofs: read anchors from local trees"
+        );
+
+        let mut results = Vec::with_capacity(request_inner.queries.len());
+
+        // Lazy gRPC client - only created if we have cache misses
+        use shieldd_sdk_proto::core::component::compliance::v1::{
+            query_service_client::QueryServiceClient as ComplianceQueryServiceClient,
+            ComplianceMerkleProofsRequest,
+        };
+        let mut grpc_client: Option<ComplianceQueryServiceClient<tonic::transport::Channel>> = None;
+
+        for query in request_inner.queries {
+            // Parse address and asset_id
+            let address: shieldd_sdk_keys::Address = query
+                .address
+                .clone()
+                .ok_or_else(|| tonic::Status::invalid_argument("missing address in query"))?
+                .try_into()
+                .map_err(|e| tonic::Status::invalid_argument(format!("invalid address: {e}")))?;
+
+            let asset_id: shieldd_sdk_asset::asset::Id = query
+                .asset_id
+                .clone()
+                .ok_or_else(|| tonic::Status::invalid_argument("missing asset_id in query"))?
+                .try_into()
+                .map_err(|e| tonic::Status::invalid_argument(format!("invalid asset_id: {e}")))?;
+
+            // Get asset proof from local tree (using held reference)
+            let (asset_position, indexed_leaf, asset_path, is_regulated) = asset_tree
+                .get_proof_data(asset_id)
+                .map_err(|e| tonic::Status::internal(format!("failed to get asset proof: {e}")))?;
+
+            // Debug: log proof data
+            let leaf_commitment = indexed_leaf.commit();
+            tracing::debug!(
+                asset_id = ?asset_id.0.to_bytes(),
+                position = asset_position,
+                is_regulated,
+                leaf_value = ?indexed_leaf.value.to_bytes(),
+                leaf_next_index = indexed_leaf.next_index,
+                leaf_daily_volume_limit = indexed_leaf.params.daily_volume_limit,
+                leaf_dk_pub_first_byte = indexed_leaf.params.dk_pub.vartime_compress().0[0],
+                leaf_commitment = ?leaf_commitment.0.to_bytes(),
+                "compliance_batch_merkle_proofs: asset proof data"
+            );
+
+            // Returns (user_registered, compliance_position, compliance_path, compliance_leaf).
+            // Prefer real user proofs whenever a leaf exists, even for unregulated assets.
+            let local_leaf_data = self
+                .storage
+                .get_compliance_leaf_data(&address, &asset_id)
+                .await
+                .map_err(|e| tonic::Status::internal(format!("storage error: {e}")))?;
+
+            let (user_registered, compliance_position, compliance_path, compliance_leaf) =
+                match local_leaf_data {
+                    Some(leaf_data) => {
+                        let position = leaf_data.position;
+                        if user_tree.commitment(position) != Some(leaf_data.commitment) {
+                            return Err(tonic::Status::unavailable(
+                                "compliance projection advanced while building the proof; retry",
+                            ));
+                        }
+                        let path = user_tree.witness(position).map_err(|e| {
+                            tonic::Status::internal(format!("failed to compute path: {e}"))
+                        })?;
+
+                        let leaf_proto = compliance_leaf_proto(&address, asset_id, &leaf_data);
+
+                        tracing::debug!(
+                            ?address,
+                            ?asset_id,
+                            position,
+                            is_regulated,
+                            "using local storage for batch user proof"
+                        );
+                        (true, position, path, Some(leaf_proto))
+                    }
+                    None => {
+                        tracing::debug!(
+                            ?address,
+                            ?asset_id,
+                            is_regulated,
+                            "local storage miss, fetching from pd for batch"
+                        );
+
+                        if grpc_client.is_none() {
+                            let endpoint =
+                                get_pd_endpoint(self.node.clone()).await.map_err(|e| {
+                                    tonic::Status::internal(format!("failed to connect to pd: {e}"))
+                                })?;
+                            let channel = endpoint.connect().await.map_err(|e| {
+                                tonic::Status::internal(format!("failed to connect to pd: {e}"))
+                            })?;
+                            grpc_client = Some(ComplianceQueryServiceClient::new(channel));
+                        }
+                        let client = grpc_client
+                            .as_mut()
+                            .expect("gRPC client is initialized above");
+
+                        let proof_request = ComplianceMerkleProofsRequest {
+                            address: query.address.clone(),
+                            asset_id: query.asset_id.clone(),
+                        };
+                        let proof_response = client
+                            .compliance_merkle_proofs(tonic::Request::new(proof_request))
+                            .await?
+                            .into_inner();
+                        if proof_response.compliance_anchor.as_slice() != user_anchor.0.to_bytes()
+                            || proof_response.asset_anchor.as_slice() != asset_anchor.0.to_bytes()
+                        {
+                            return Err(tonic::Status::unavailable(
+                                "remote compliance proof is newer than the local snapshot; retry",
+                            ));
+                        }
+
+                        if !proof_response.user_registered {
+                            (
+                                false,
+                                0,
+                                shieldd_sdk_compliance::structs::MerklePath::default(),
+                                None,
+                            )
+                        } else {
+                            let path = proof_response
+                                .compliance_path
+                                .map(shieldd_sdk_compliance::structs::MerklePath::try_from)
+                                .transpose()
+                                .map_err(|error| {
+                                    tonic::Status::internal(format!(
+                                        "invalid compliance_path in pd response: {error}"
+                                    ))
+                                })?
+                                .ok_or_else(|| {
+                                    tonic::Status::internal(
+                                        "compliance_path missing from pd response",
+                                    )
+                                })?;
+
+                            (
+                                proof_response.user_registered,
+                                proof_response.compliance_position,
+                                path,
+                                proof_response.compliance_leaf,
+                            )
+                        }
+                    }
+                };
+
+            // Convert local types to proto types
+            let compliance_path_proto = compliance_pb::MerklePath {
+                layers: compliance_path
+                    .layers
+                    .into_iter()
+                    .map(|layer| compliance_pb::MerklePathLayer {
+                        siblings: layer.siblings,
+                    })
+                    .collect(),
+            };
+
+            let asset_path_proto = compliance_pb::MerklePath {
+                layers: asset_path
+                    .layers
+                    .into_iter()
+                    .map(|layer| compliance_pb::MerklePathLayer {
+                        siblings: layer.siblings,
+                    })
+                    .collect(),
+            };
+
+            let asset_indexed_leaf_proto: compliance_pb::IndexedLeafData =
+                indexed_leaf.clone().into();
+
+            results.push(pb::ComplianceMerkleProofsResponse {
+                user_registered,
+                asset_registered: true, // Always true with IMT (membership or non-membership)
+                is_regulated,
+                compliance_path: Some(compliance_path_proto),
+                compliance_position,
+                asset_path: Some(asset_path_proto),
+                asset_position,
+                compliance_anchor: user_anchor.0.to_bytes().to_vec(),
+                asset_anchor: asset_anchor.0.to_bytes().to_vec(),
+                asset_indexed_leaf: Some(asset_indexed_leaf_proto),
+                compliance_leaf,
+            });
+        }
+
+        // Return as ViewService response
+        Ok(pb::ComplianceBatchMerkleProofsResponse {
+            compliance_anchor: user_anchor.0.to_bytes().to_vec(),
+            asset_anchor: asset_anchor.0.to_bytes().to_vec(),
+            results,
+        })
+    }
+
     async fn release_volume_reservations(
         &self,
         reservations: &[shieldd_sdk_shielded_pool::VolumeNullifier],
@@ -253,130 +466,6 @@ impl ViewServer {
             if let Err(error) = self.storage.release_volume_reservation(*reservation).await {
                 tracing::warn!(?error, "failed to release volume accumulator reservation");
             }
-        }
-    }
-
-    async fn enrich_volume_accumulator(
-        &self,
-        plan: &mut TransactionPlan,
-        disclose_to_issuer: bool,
-    ) -> anyhow::Result<()> {
-        for action in &mut plan.actions {
-            match action {
-                ActionPlan::Transfer(transfer) => {
-                    let spend = transfer
-                        .spends
-                        .first()
-                        .ok_or_else(|| anyhow!("transfer accumulator requires a sender spend"))?;
-                    let output = transfer.outputs.first().ok_or_else(|| {
-                        anyhow!("transfer accumulator requires a receiver output")
-                    })?;
-                    let eligible = output.dest_address != spend.note.address();
-                    let accumulator = self
-                        .select_volume_accumulator(
-                            spend,
-                            output.value.amount.value(),
-                            eligible,
-                            disclose_to_issuer,
-                        )
-                        .await?;
-                    transfer.set_volume_accumulator(accumulator);
-                }
-                ActionPlan::ShieldedHostWithdrawal(withdrawal) => {
-                    let spend = withdrawal.spends.first().ok_or_else(|| {
-                        anyhow!("host withdrawal accumulator requires a sender spend")
-                    })?;
-                    let accumulator = self
-                        .select_volume_accumulator(
-                            spend,
-                            withdrawal.withdrawal.value.amount.value(),
-                            true,
-                            disclose_to_issuer,
-                        )
-                        .await?;
-                    withdrawal.set_volume_accumulator(accumulator);
-                }
-                ActionPlan::ShieldedIcs20Withdrawal(withdrawal) => {
-                    let spend = withdrawal.spends.first().ok_or_else(|| {
-                        anyhow!("ICS-20 withdrawal accumulator requires a sender spend")
-                    })?;
-                    let accumulator = self
-                        .select_volume_accumulator(
-                            spend,
-                            withdrawal.withdrawal.amount.value(),
-                            true,
-                            disclose_to_issuer,
-                        )
-                        .await?;
-                    withdrawal.set_volume_accumulator(accumulator);
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-
-    async fn select_volume_accumulator(
-        &self,
-        spend: &shieldd_sdk_shielded_pool::ShieldedInputPlan,
-        outgoing_amount: u128,
-        eligible: bool,
-        disclose_to_issuer: bool,
-    ) -> anyhow::Result<shieldd_sdk_shielded_pool::VolumeAccumulatorPlan> {
-        let padding =
-            shieldd_sdk_shielded_pool::VolumeAccumulatorPlan::padding(spend.target_timestamp);
-        if disclose_to_issuer || !spend.is_regulated || !eligible {
-            return Ok(padding);
-        }
-        let limit = spend
-            .asset_policy
-            .as_ref()
-            .ok_or_else(|| anyhow!("regulated outgoing action is missing its asset policy"))?
-            .params
-            .daily_volume_limit;
-        let day_start = shieldd_sdk_shielded_pool::select_accumulator_day(spend.target_timestamp);
-        let subject = shieldd_sdk_shielded_pool::VolumeAccumulatorState::subject(
-            &spend.note.address(),
-            spend.note.asset_id(),
-        );
-        let recovery = self
-            .storage
-            .volume_accumulator_recovery(subject, day_start)
-            .await?;
-        let successor_blinding = Fq::from_le_bytes_mod_order(&OsRng.gen::<[u8; 32]>());
-        match recovery {
-            crate::storage::VolumeAccumulatorRecovery::Absent => {
-                let Some(successor_volume) =
-                    shieldd_sdk_shielded_pool::accumulated_volume(0, outgoing_amount, limit)
-                else {
-                    return Ok(padding);
-                };
-                Ok(shieldd_sdk_shielded_pool::VolumeAccumulatorPlan::origin(
-                    shieldd_sdk_shielded_pool::VolumeAccumulatorState {
-                        subject,
-                        day_start,
-                        undisclosed_volume: successor_volume,
-                        blinding: successor_blinding,
-                    },
-                ))
-            }
-            crate::storage::VolumeAccumulatorRecovery::Complete(confirmed) => {
-                let Some(successor_volume) = shieldd_sdk_shielded_pool::accumulated_volume(
-                    confirmed.state.undisclosed_volume,
-                    outgoing_amount,
-                    limit,
-                ) else {
-                    return Ok(padding);
-                };
-                shieldd_sdk_shielded_pool::VolumeAccumulatorPlan::continuation(
-                    confirmed.state,
-                    confirmed.commitment,
-                    u64::from(confirmed.position),
-                    successor_volume,
-                    successor_blinding,
-                )
-            }
-            crate::storage::VolumeAccumulatorRecovery::Incomplete => Ok(padding),
         }
     }
 
@@ -845,13 +934,13 @@ impl ViewServer {
 
     #[instrument(skip(self))]
     pub async fn status(&self) -> anyhow::Result<StatusResponse> {
-        let full_sync_height = self.storage.last_sync_height().await?.unwrap_or(0);
+        let sync_height = self.storage.last_sync_height().await?.unwrap_or(0);
 
         let (latest_known_block_height, node_catching_up, latest_block_timestamp) =
             self.latest_known_block().await?;
 
         let height_diff = latest_known_block_height
-            .checked_sub(full_sync_height)
+            .checked_sub(sync_height)
             .ok_or_else(|| anyhow!("sync height ahead of node height"))?;
 
         let catching_up = match (node_catching_up, height_diff) {
@@ -866,9 +955,8 @@ impl ViewServer {
         };
 
         Ok(StatusResponse {
-            full_sync_height,
+            sync_height,
             catching_up,
-            partial_sync_height: full_sync_height, // Set these as the same for backwards compatibility following adding the partial_sync_height
             latest_block_timestamp,
         })
     }
@@ -876,6 +964,33 @@ impl ViewServer {
 
 #[async_trait]
 impl ViewService for ViewServer {
+    async fn volume_accumulator_recovery(
+        &self,
+        request: Request<pb::VolumeAccumulatorRecoveryRequest>,
+    ) -> Result<Response<pb::VolumeAccumulatorRecoveryResponse>, Status> {
+        let request = request.into_inner();
+        let bytes: [u8; 32] = request
+            .subject
+            .try_into()
+            .map_err(|_| Status::invalid_argument("subject must be 32 bytes"))?;
+        let subject = Fq::from_bytes_checked(&bytes)
+            .map_err(|_| Status::invalid_argument("invalid subject"))?;
+        if shieldd_sdk_shielded_pool::select_accumulator_day(request.day_start) != request.day_start
+        {
+            return Err(Status::invalid_argument(
+                "day_start must be a UTC day boundary",
+            ));
+        }
+        let recovery = self
+            .storage
+            .volume_accumulator_recovery(subject, request.day_start)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        Ok(Response::new(crate::planning_io::encode_volume_recovery(
+            recovery,
+        )))
+    }
+
     type NotesStream =
         Pin<Box<dyn futures::Stream<Item = Result<pb::NotesResponse, tonic::Status>> + Send>>;
     type AssetsStream =
@@ -980,7 +1095,8 @@ impl ViewService for ViewServer {
             note_manager
                 .set_gas_prices(gas_prices)
                 .expiry_height(prq.expiry_height)
-                .target_timestamp(chain_timestamp);
+                .target_timestamp(chain_timestamp)
+                .disclose_to_issuer(disclose_to_issuer);
             if let Some(memo) = prq.memo {
                 note_manager.memo(memo.text);
                 if let Some(return_address) = memo.return_address {
@@ -992,33 +1108,18 @@ impl ViewService for ViewServer {
                 }
             }
 
-            let mut client_of_self = ViewServiceClient::new(ViewServiceServer::new(self.clone()));
+            let mut planning_io = LocalPlanningIo(self);
             let planning_result = note_manager
-                .plan_transfer(&mut client_of_self, source.into(), value, address)
+                .plan_transfer(&mut planning_io, source.into(), value, address)
                 .await
                 .context("could not plan wallet-facing shielded transfer")
                 .map_err(|e| tonic::Status::invalid_argument(format!("{e:#}")))?;
 
-            let mut transaction_plan = match planning_result {
-                TransferPlanningResult::Ready { transaction_plan } => transaction_plan,
-                TransferPlanningResult::NeedsMaintenance { .. } => {
-                    return Err(tonic::Status::invalid_argument(
-                        "wallet-facing shielded transfer requires note maintenance first",
-                    ));
-                }
-                TransferPlanningResult::InsufficientBalance => {
-                    return Err(tonic::Status::invalid_argument(
-                        "insufficient balance for requested transfer",
-                    ));
-                }
-                TransferPlanningResult::UnsupportedIntent { reason } => {
-                    return Err(tonic::Status::invalid_argument(reason));
-                }
-            };
-            self.enrich_volume_accumulator(&mut transaction_plan, disclose_to_issuer)
-                .await
-                .context("could not plan daily volume accumulator")
-                .map_err(|e| tonic::Status::failed_precondition(format!("{e:#}")))?;
+            let transaction_plan = planning_result_to_rpc(
+                planning_result,
+                "wallet-facing shielded transfer requires note maintenance first",
+                "insufficient balance for requested transfer",
+            )?;
 
             return Ok(tonic::Response::new(TransactionPlannerResponse {
                 plan: Some(transaction_plan.into()),
@@ -1056,35 +1157,21 @@ impl ViewService for ViewServer {
             note_manager
                 .set_gas_prices(gas_prices)
                 .expiry_height(prq.expiry_height)
-                .target_timestamp(chain_timestamp);
+                .target_timestamp(chain_timestamp)
+                .disclose_to_issuer(disclose_to_issuer);
 
-            let mut client_of_self = ViewServiceClient::new(ViewServiceServer::new(self.clone()));
+            let mut planning_io = LocalPlanningIo(self);
             let planning_result = note_manager
-                .plan_ics20_withdrawal(&mut client_of_self, source.into(), withdrawal)
+                .plan_ics20_withdrawal(&mut planning_io, source.into(), withdrawal)
                 .await
                 .context("could not plan wallet-facing ICS-20 withdrawal")
                 .map_err(|e| tonic::Status::invalid_argument(format!("{e:#}")))?;
 
-            let mut transaction_plan = match planning_result {
-                TransferPlanningResult::Ready { transaction_plan } => transaction_plan,
-                TransferPlanningResult::NeedsMaintenance { .. } => {
-                    return Err(tonic::Status::invalid_argument(
-                        "wallet-facing ICS-20 withdrawal requires note maintenance first",
-                    ));
-                }
-                TransferPlanningResult::InsufficientBalance => {
-                    return Err(tonic::Status::invalid_argument(
-                        "insufficient balance for requested ICS-20 withdrawal",
-                    ));
-                }
-                TransferPlanningResult::UnsupportedIntent { reason } => {
-                    return Err(tonic::Status::invalid_argument(reason));
-                }
-            };
-            self.enrich_volume_accumulator(&mut transaction_plan, disclose_to_issuer)
-                .await
-                .context("could not plan ICS-20 daily volume accumulator")
-                .map_err(|e| tonic::Status::failed_precondition(format!("{e:#}")))?;
+            let transaction_plan = planning_result_to_rpc(
+                planning_result,
+                "wallet-facing ICS-20 withdrawal requires note maintenance first",
+                "insufficient balance for requested ICS-20 withdrawal",
+            )?;
 
             return Ok(tonic::Response::new(TransactionPlannerResponse {
                 plan: Some(transaction_plan.into()),
@@ -1122,35 +1209,21 @@ impl ViewService for ViewServer {
             note_manager
                 .set_gas_prices(gas_prices)
                 .expiry_height(prq.expiry_height)
-                .target_timestamp(chain_timestamp);
+                .target_timestamp(chain_timestamp)
+                .disclose_to_issuer(disclose_to_issuer);
 
-            let mut client_of_self = ViewServiceClient::new(ViewServiceServer::new(self.clone()));
+            let mut planning_io = LocalPlanningIo(self);
             let planning_result = note_manager
-                .plan_host_withdrawal(&mut client_of_self, source.into(), withdrawal)
+                .plan_host_withdrawal(&mut planning_io, source.into(), withdrawal)
                 .await
                 .context("could not plan wallet-facing host withdrawal")
                 .map_err(|e| tonic::Status::invalid_argument(format!("{e:#}")))?;
 
-            let mut transaction_plan = match planning_result {
-                TransferPlanningResult::Ready { transaction_plan } => transaction_plan,
-                TransferPlanningResult::NeedsMaintenance { .. } => {
-                    return Err(tonic::Status::invalid_argument(
-                        "wallet-facing host withdrawal requires note maintenance first",
-                    ));
-                }
-                TransferPlanningResult::InsufficientBalance => {
-                    return Err(tonic::Status::invalid_argument(
-                        "insufficient balance for requested host withdrawal",
-                    ));
-                }
-                TransferPlanningResult::UnsupportedIntent { reason } => {
-                    return Err(tonic::Status::invalid_argument(reason));
-                }
-            };
-            self.enrich_volume_accumulator(&mut transaction_plan, disclose_to_issuer)
-                .await
-                .context("could not plan host-withdrawal daily volume accumulator")
-                .map_err(|e| tonic::Status::failed_precondition(format!("{e:#}")))?;
+            let transaction_plan = planning_result_to_rpc(
+                planning_result,
+                "wallet-facing host withdrawal requires note maintenance first",
+                "insufficient balance for requested host withdrawal",
+            )?;
 
             return Ok(tonic::Response::new(TransactionPlannerResponse {
                 plan: Some(transaction_plan.into()),
@@ -1162,7 +1235,8 @@ impl ViewService for ViewServer {
             note_manager
                 .set_gas_prices(gas_prices)
                 .expiry_height(prq.expiry_height)
-                .target_timestamp(chain_timestamp);
+                .target_timestamp(chain_timestamp)
+                .disclose_to_issuer(disclose_to_issuer);
             if let Some(memo) = prq.memo {
                 note_manager.memo(memo.text);
                 if let Some(return_address) = memo.return_address {
@@ -1185,29 +1259,18 @@ impl ViewService for ViewServer {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let mut client_of_self = ViewServiceClient::new(ViewServiceServer::new(self.clone()));
+            let mut planning_io = LocalPlanningIo(self);
             let planning_result = note_manager
-                .plan_actions_with_transfer_funding(&mut client_of_self, source.into(), actions)
+                .plan_actions_with_transfer_funding(&mut planning_io, source.into(), actions)
                 .await
                 .context("could not plan wallet-facing IBC relay transaction")
                 .map_err(|e| tonic::Status::invalid_argument(format!("{e:#}")))?;
 
-            let transaction_plan = match planning_result {
-                TransferPlanningResult::Ready { transaction_plan } => transaction_plan,
-                TransferPlanningResult::NeedsMaintenance { .. } => {
-                    return Err(tonic::Status::invalid_argument(
-                        "wallet-facing IBC relay transaction requires note maintenance first",
-                    ));
-                }
-                TransferPlanningResult::InsufficientBalance => {
-                    return Err(tonic::Status::invalid_argument(
-                        "insufficient balance for requested IBC relay transaction",
-                    ));
-                }
-                TransferPlanningResult::UnsupportedIntent { reason } => {
-                    return Err(tonic::Status::invalid_argument(reason));
-                }
-            };
+            let transaction_plan = planning_result_to_rpc(
+                planning_result,
+                "wallet-facing IBC relay transaction requires note maintenance first",
+                "insufficient balance for requested IBC relay transaction",
+            )?;
 
             return Ok(tonic::Response::new(TransactionPlannerResponse {
                 plan: Some(transaction_plan.into()),
@@ -1728,8 +1791,7 @@ impl ViewService for ViewServer {
             while let Some(sync_height) = sync_height_stream.next().await {
                 yield pb::StatusStreamResponse {
                     latest_known_block_height,
-                    full_sync_height: sync_height,
-                    partial_sync_height: sync_height, // Set these as the same for backwards compatibility following adding the partial_sync_height
+                    sync_height: sync_height,
                 };
                 if sync_height >= latest_known_block_height {
                     break;
@@ -1930,13 +1992,7 @@ impl ViewService for ViewServer {
             .unwrap_or_default();
 
         let zero_amount = 0u64.into();
-        let all_spend_notes = || {
-            tx_plan
-                .actions
-                .iter()
-                .flat_map(|action| action.spends())
-                .chain(tx_plan.fee_funding.iter().flat_map(|f| &f.transfer.spends))
-        };
+        let all_spend_notes = || tx_plan.spends().map(|planned| planned.spend);
 
         let real_spend_count = all_spend_notes()
             .filter(|spend| spend.note.amount() != zero_amount)
@@ -1957,11 +2013,15 @@ impl ViewService for ViewServer {
             let fvk = self.storage.full_viewing_key().await.map_err(|error| {
                 tonic::Status::unavailable(format!("error getting full viewing key: {error}"))
             })?;
-            for spend in all_spend_notes().filter(|spend| {
-                spend.note.amount() != zero_amount
-                    && u64::from(spend.position) < plan_window.recent_position_floor
+            for planned in tx_plan.spends().filter(|planned| {
+                planned.spend.note.amount() != zero_amount
+                    && u64::from(planned.spend.position) < plan_window.recent_position_floor
             }) {
-                let nullifier = spend.nullifier(&fvk);
+                let key = planned
+                    .witness
+                    .nullifier_key(&fvk)
+                    .map_err(|e| Status::invalid_argument(e.to_string()))?;
+                let nullifier = planned.spend.nullifier(&key);
                 let cache = self
                     .storage
                     .historical_proof_cache(nullifier)
@@ -2611,222 +2671,13 @@ impl ViewService for ViewServer {
         }))
     }
 
-    #[instrument(skip_all, level = "trace")]
     async fn compliance_batch_merkle_proofs(
         &self,
-        request: tonic::Request<pb::ComplianceBatchMerkleProofsRequest>,
-    ) -> Result<tonic::Response<pb::ComplianceBatchMerkleProofsResponse>, tonic::Status> {
-        let request_inner = request.into_inner();
-
-        let snapshot = self.compliance_snapshot.read().clone();
-        let user_tree = &snapshot.user_tree;
-        let asset_tree = &snapshot.asset_tree;
-
-        let user_anchor = user_tree.root();
-        let asset_anchor = asset_tree.root();
-
-        // Debug: log anchors at read time
-        tracing::debug!(
-            user_anchor = ?user_anchor.0.to_bytes(),
-            asset_anchor = ?asset_anchor.0.to_bytes(),
-            num_queries = request_inner.queries.len(),
-            "compliance_batch_merkle_proofs: read anchors from local trees"
-        );
-
-        let mut results = Vec::with_capacity(request_inner.queries.len());
-
-        // Lazy gRPC client - only created if we have cache misses
-        use shieldd_sdk_proto::core::component::compliance::v1::{
-            query_service_client::QueryServiceClient as ComplianceQueryServiceClient,
-            ComplianceMerkleProofsRequest,
-        };
-        let mut grpc_client: Option<ComplianceQueryServiceClient<tonic::transport::Channel>> = None;
-
-        for query in request_inner.queries {
-            // Parse address and asset_id
-            let address: shieldd_sdk_keys::Address = query
-                .address
-                .clone()
-                .ok_or_else(|| tonic::Status::invalid_argument("missing address in query"))?
-                .try_into()
-                .map_err(|e| tonic::Status::invalid_argument(format!("invalid address: {e}")))?;
-
-            let asset_id: shieldd_sdk_asset::asset::Id = query
-                .asset_id
-                .clone()
-                .ok_or_else(|| tonic::Status::invalid_argument("missing asset_id in query"))?
-                .try_into()
-                .map_err(|e| tonic::Status::invalid_argument(format!("invalid asset_id: {e}")))?;
-
-            // Get asset proof from local tree (using held reference)
-            let (asset_position, indexed_leaf, asset_path, is_regulated) = asset_tree
-                .get_proof_data(asset_id)
-                .map_err(|e| tonic::Status::internal(format!("failed to get asset proof: {e}")))?;
-
-            // Debug: log proof data
-            let leaf_commitment = indexed_leaf.commit();
-            tracing::debug!(
-                asset_id = ?asset_id.0.to_bytes(),
-                position = asset_position,
-                is_regulated,
-                leaf_value = ?indexed_leaf.value.to_bytes(),
-                leaf_next_index = indexed_leaf.next_index,
-                leaf_daily_volume_limit = indexed_leaf.params.daily_volume_limit,
-                leaf_dk_pub_first_byte = indexed_leaf.params.dk_pub.vartime_compress().0[0],
-                leaf_commitment = ?leaf_commitment.0.to_bytes(),
-                "compliance_batch_merkle_proofs: asset proof data"
-            );
-
-            // Returns (user_registered, compliance_position, compliance_path, compliance_leaf).
-            // Prefer real user proofs whenever a leaf exists, even for unregulated assets.
-            let local_leaf_data = self
-                .storage
-                .get_compliance_leaf_data(&address, &asset_id)
-                .await
-                .map_err(|e| tonic::Status::internal(format!("storage error: {e}")))?;
-
-            let (user_registered, compliance_position, compliance_path, compliance_leaf) =
-                match local_leaf_data {
-                    Some(leaf_data) => {
-                        let position = leaf_data.position;
-                        if user_tree.commitment(position) != Some(leaf_data.commitment) {
-                            return Err(tonic::Status::unavailable(
-                                "compliance projection advanced while building the proof; retry",
-                            ));
-                        }
-                        let path = user_tree.witness(position).map_err(|e| {
-                            tonic::Status::internal(format!("failed to compute path: {e}"))
-                        })?;
-
-                        let leaf_proto = compliance_leaf_proto(&address, asset_id, &leaf_data);
-
-                        tracing::debug!(
-                            ?address,
-                            ?asset_id,
-                            position,
-                            is_regulated,
-                            "using local storage for batch user proof"
-                        );
-                        (true, position, path, Some(leaf_proto))
-                    }
-                    None => {
-                        tracing::debug!(
-                            ?address,
-                            ?asset_id,
-                            is_regulated,
-                            "local storage miss, fetching from pd for batch"
-                        );
-
-                        if grpc_client.is_none() {
-                            let endpoint =
-                                get_pd_endpoint(self.node.clone()).await.map_err(|e| {
-                                    tonic::Status::internal(format!("failed to connect to pd: {e}"))
-                                })?;
-                            let channel = endpoint.connect().await.map_err(|e| {
-                                tonic::Status::internal(format!("failed to connect to pd: {e}"))
-                            })?;
-                            grpc_client = Some(ComplianceQueryServiceClient::new(channel));
-                        }
-                        let client = grpc_client
-                            .as_mut()
-                            .expect("gRPC client is initialized above");
-
-                        let proof_request = ComplianceMerkleProofsRequest {
-                            address: query.address.clone(),
-                            asset_id: query.asset_id.clone(),
-                        };
-                        let proof_response = client
-                            .compliance_merkle_proofs(tonic::Request::new(proof_request))
-                            .await?
-                            .into_inner();
-                        if proof_response.compliance_anchor.as_slice() != user_anchor.0.to_bytes()
-                            || proof_response.asset_anchor.as_slice() != asset_anchor.0.to_bytes()
-                        {
-                            return Err(tonic::Status::unavailable(
-                                "remote compliance proof is newer than the local snapshot; retry",
-                            ));
-                        }
-
-                        if !proof_response.user_registered {
-                            (
-                                false,
-                                0,
-                                shieldd_sdk_compliance::structs::MerklePath::default(),
-                                None,
-                            )
-                        } else {
-                            let path = proof_response
-                                .compliance_path
-                                .map(shieldd_sdk_compliance::structs::MerklePath::try_from)
-                                .transpose()
-                                .map_err(|error| {
-                                    tonic::Status::internal(format!(
-                                        "invalid compliance_path in pd response: {error}"
-                                    ))
-                                })?
-                                .ok_or_else(|| {
-                                    tonic::Status::internal(
-                                        "compliance_path missing from pd response",
-                                    )
-                                })?;
-
-                            (
-                                proof_response.user_registered,
-                                proof_response.compliance_position,
-                                path,
-                                proof_response.compliance_leaf,
-                            )
-                        }
-                    }
-                };
-
-            // Convert local types to proto types
-            let compliance_path_proto = compliance_pb::MerklePath {
-                layers: compliance_path
-                    .layers
-                    .into_iter()
-                    .map(|layer| compliance_pb::MerklePathLayer {
-                        siblings: layer.siblings,
-                    })
-                    .collect(),
-            };
-
-            let asset_path_proto = compliance_pb::MerklePath {
-                layers: asset_path
-                    .layers
-                    .into_iter()
-                    .map(|layer| compliance_pb::MerklePathLayer {
-                        siblings: layer.siblings,
-                    })
-                    .collect(),
-            };
-
-            let asset_indexed_leaf_proto: compliance_pb::IndexedLeafData =
-                indexed_leaf.clone().into();
-
-            results.push(pb::ComplianceMerkleProofsResponse {
-                user_registered,
-                asset_registered: true, // Always true with IMT (membership or non-membership)
-                is_regulated,
-                compliance_path: Some(compliance_path_proto),
-                compliance_position,
-                asset_path: Some(asset_path_proto),
-                asset_position,
-                compliance_anchor: user_anchor.0.to_bytes().to_vec(),
-                asset_anchor: asset_anchor.0.to_bytes().to_vec(),
-                asset_indexed_leaf: Some(asset_indexed_leaf_proto),
-                compliance_leaf,
-            });
-        }
-
-        // Return as ViewService response
-        Ok(tonic::Response::new(
-            pb::ComplianceBatchMerkleProofsResponse {
-                compliance_anchor: user_anchor.0.to_bytes().to_vec(),
-                asset_anchor: asset_anchor.0.to_bytes().to_vec(),
-                results,
-            },
-        ))
+        request: Request<pb::ComplianceBatchMerkleProofsRequest>,
+    ) -> Result<Response<pb::ComplianceBatchMerkleProofsResponse>, Status> {
+        self.query_compliance_batch(request.into_inner())
+            .await
+            .map(Response::new)
     }
 }
 
@@ -2848,4 +2699,121 @@ async fn get_pd_endpoint(node: Url) -> anyhow::Result<Endpoint> {
         .keep_alive_timeout(std::time::Duration::from_secs(20))
         .keep_alive_while_idle(true);
     Ok(endpoint)
+}
+
+struct LocalPlanningIo<'a>(&'a ViewServer);
+
+#[async_trait]
+impl crate::planning_io::PlanningIo for LocalPlanningIo<'_> {
+    async fn latest_block_timestamp(&mut self) -> anyhow::Result<u64> {
+        Ok(self.0.latest_known_block().await?.2)
+    }
+    async fn volume_accumulator_recovery(
+        &mut self,
+        subject: Fq,
+        day_start: u64,
+    ) -> anyhow::Result<crate::storage::VolumeAccumulatorRecovery> {
+        self.0
+            .storage
+            .volume_accumulator_recovery(subject, day_start)
+            .await
+    }
+
+    async fn chain_id(&mut self) -> anyhow::Result<String> {
+        Ok(self.0.storage.app_params().await?.chain_id)
+    }
+    async fn nullifier_window(
+        &mut self,
+    ) -> anyhow::Result<shieldd_sdk_sct::nullifier_generation::NullifierWindow> {
+        self.0.storage.nullifier_window().await
+    }
+    async fn discovery_parameters(
+        &mut self,
+    ) -> anyhow::Result<shieldd_sdk_shielded_pool::discovery::Parameters> {
+        self.0.storage.discovery_parameters().await
+    }
+    async fn notes(
+        &mut self,
+        request: pb::NotesRequest,
+    ) -> anyhow::Result<Vec<crate::SpendableNoteRecord>> {
+        self.0.check_worker().await?;
+        self.0
+            .storage
+            .notes(
+                request.include_spent,
+                request.asset_id.map(TryInto::try_into).transpose()?,
+                request.address_index.map(TryInto::try_into).transpose()?,
+                request.amount_to_spend.map(TryInto::try_into).transpose()?,
+            )
+            .await
+    }
+    async fn address_by_index(&mut self, index: AddressIndex) -> anyhow::Result<Address> {
+        let fvk = self.0.storage.full_viewing_key().await?;
+        Ok(self
+            .0
+            .persist_issued_address(index, fvk.payment_address(index), AddressPurpose::General)
+            .await?)
+    }
+    async fn index_by_address(&mut self, address: Address) -> anyhow::Result<Option<AddressIndex>> {
+        Ok(self
+            .0
+            .storage
+            .full_viewing_key()
+            .await?
+            .address_index(&address))
+    }
+    async fn compliance_data(
+        &mut self,
+        queries: Vec<ComplianceQuery>,
+    ) -> anyhow::Result<shieldd_sdk_compliance::BatchComplianceData> {
+        let batch = self
+            .0
+            .query_compliance_batch(pb::ComplianceBatchMerkleProofsRequest {
+                queries: queries
+                    .iter()
+                    .map(
+                        |ComplianceQuery { address, asset_id }| pb::ComplianceBatchQuery {
+                            address: Some(address.clone().into()),
+                            asset_id: Some((*asset_id).into()),
+                        },
+                    )
+                    .collect(),
+            })
+            .await?;
+        let assets = queries
+            .iter()
+            .zip(&batch.results)
+            .filter_map(|(query, result)| result.is_regulated.then_some(query.asset_id))
+            .collect::<BTreeSet<_>>();
+        let mut policies = BTreeMap::new();
+        for asset in assets {
+            let policy = self
+                .0
+                .storage
+                .get_asset_policy(&asset)
+                .await?
+                .ok_or_else(|| anyhow!("missing regulated asset policy"))?;
+            policies.insert(asset, policy);
+        }
+        crate::client_compliance::parse_batch_compliance(&queries, batch, policies)
+    }
+}
+
+fn planning_result_to_rpc(
+    result: NoteManagerPlanningResult,
+    maintenance: &str,
+    insufficient: &str,
+) -> Result<TransactionPlan, Status> {
+    match result {
+        NoteManagerPlanningResult::Ready { transaction_plan } => Ok(transaction_plan),
+        NoteManagerPlanningResult::NeedsMaintenance { .. } => {
+            Err(Status::invalid_argument(maintenance))
+        }
+        NoteManagerPlanningResult::InsufficientBalance => {
+            Err(Status::invalid_argument(insufficient))
+        }
+        NoteManagerPlanningResult::UnsupportedIntent { reason } => {
+            Err(Status::invalid_argument(reason))
+        }
+    }
 }

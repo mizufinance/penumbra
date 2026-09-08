@@ -64,32 +64,11 @@ impl From<tendermint::abci::EventAttribute> for shieldd_sdk_pb::Tag {
         Self {
             key: event_attr.key_bytes().into(),
             value: event_attr.value_bytes().into(),
-            // TODO(kate): this was set to false previously, but it should probably use the
-            // index field from the tendermint object. for now, carry out a refactor and avoid
-            // changing behavior while doing so.
+            // Proxy tags are not indexed.
             index: false,
         }
     }
 }
-
-// impl From<tendermint::abci::event::v0_37::EventAttribute> for shieldd_sdk_pb::Tag {
-//     fn from(
-//         tendermint::abci::event::v0_37::EventAttribute {
-//             key,
-//             value,
-//             index: _,
-//         }: tendermint::abci::EventAttribute,
-//     ) -> Self {
-//         Self {
-//             key: key.into_bytes(),
-//             value: value.into_bytes(),
-//             // TODO(kate): this was set to false previously, but it should probably use the
-//             // index field from the tendermint object. for now, carry out a refactor and avoid
-//             // changing behavior while doing so.
-//             index: false,
-//         }
-//     }
-// }
 
 // === broadcast_tx_async ===
 
@@ -518,8 +497,6 @@ impl TryFrom<tendermint::evidence::List> for crate::tendermint::types::EvidenceL
     }
 }
 
-// TODO(kate): this should be decomposed further at a later point, i am refraining from doing
-// so right now.
 impl TryFrom<tendermint::evidence::Evidence> for crate::tendermint::types::Evidence {
     type Error = anyhow::Error;
     fn try_from(evidence: tendermint::evidence::Evidence) -> Result<Self, Self::Error> {

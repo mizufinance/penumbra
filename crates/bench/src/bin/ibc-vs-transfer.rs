@@ -5,9 +5,7 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use clap::Parser;
 use serde::Serialize;
-use shieldd_sdk_app::app::{
-    App, ExecutionBlockProfile, PrepareProposalProfile, ProcessProposalProfile,
-};
+use shieldd_sdk_app::app::{App, ExecutionBlockProfile};
 use shieldd_sdk_app::block_tx_indexing::BlockTxIndexingMode;
 use shieldd_sdk_bench_support::proof_txs::{
     build_proof_tx_pool, build_proof_tx_workload, default_pool_dir, load_proof_tx_pool,
@@ -84,10 +82,8 @@ struct RunReport {
     tps: f64,
     ms_per_tx: f64,
     projected_5000_tx_ms: f64,
-    proof_verification_share: f64,
+
     execution_and_commit_share: f64,
-    prepare_profile: PrepareProposalProfile,
-    process_profile: ProcessProposalProfile,
     execution_profile: ExecutionBlockProfile,
 }
 
@@ -99,7 +95,7 @@ struct ScenarioSummary {
     p50_ms_per_tx: f64,
     p95_ms_per_tx: f64,
     p99_ms_per_tx: f64,
-    mean_proof_verification_share: f64,
+
     mean_execution_and_commit_share: f64,
     projected_5000_tx_ms_from_mean: f64,
 }
@@ -229,9 +225,7 @@ async fn run_inner_transfer(args: &Args, txs: &[Vec<u8>]) -> Result<ScenarioRepo
         proposer.set_block_tx_indexing_mode(BlockTxIndexingMode::DeferredBatch);
         let prepare_request = prepare_request(txs);
         let prepare_start = Instant::now();
-        let (prepared, prepare_profile, sidecar) = proposer
-            .prepare_proposal_profiled(prepare_request, None, true)
-            .await;
+        let (prepared, sidecar) = proposer.prepare_proposal(prepare_request, None, true).await;
         let prepare_wall_ms = elapsed_ms(prepare_start);
         ensure_prepare_preserved_user_txs(txs, &prepared)?;
         let sidecar = sidecar.context("profiled proposal must retain its artifact sidecar")?;
@@ -244,8 +238,8 @@ async fn run_inner_transfer(args: &Args, txs: &[Vec<u8>]) -> Result<ScenarioRepo
         let process_request = process_request_from_prepare_response(&prepared);
         let mut validator = App::new(storage.latest_snapshot());
         let process_start = Instant::now();
-        let (process_verdict, process_profile) = validator
-            .process_proposal_profiled(process_request, None, Some(&sidecar), true)
+        let process_verdict = validator
+            .process_proposal(process_request, None, Some(&sidecar), true)
             .await;
         let process_wall_ms = elapsed_ms(process_start);
         anyhow::ensure!(
@@ -266,8 +260,7 @@ async fn run_inner_transfer(args: &Args, txs: &[Vec<u8>]) -> Result<ScenarioRepo
         let tx_count = args.tx_count as f64;
         let tps = tx_count / (total_wall_ms / 1000.0);
         let ms_per_tx = total_wall_ms / tx_count;
-        let proof_verification_ms =
-            prepare_profile.artifact_fill_batch_verify_ms + process_profile.aggregate_verify_ms;
+
         let execution_and_commit_ms = execution_profile.deliver_txs_wall_ms
             + execution_profile.end_block_ms
             + execution_profile.commit_ms;
@@ -281,10 +274,9 @@ async fn run_inner_transfer(args: &Args, txs: &[Vec<u8>]) -> Result<ScenarioRepo
             tps,
             ms_per_tx,
             projected_5000_tx_ms: ms_per_tx * 5_000.0,
-            proof_verification_share: share(proof_verification_ms, total_wall_ms),
+
             execution_and_commit_share: share(execution_and_commit_ms, total_wall_ms),
-            prepare_profile,
-            process_profile,
+
             execution_profile,
         });
     }
@@ -358,7 +350,7 @@ fn summarize(runs: &[RunReport]) -> ScenarioSummary {
         p50_ms_per_tx: percentile(&mut ms_per_tx, 0.50),
         p95_ms_per_tx: percentile(&mut ms_per_tx, 0.95),
         p99_ms_per_tx: percentile(&mut ms_per_tx, 0.99),
-        mean_proof_verification_share: mean(runs.iter().map(|run| run.proof_verification_share)),
+
         mean_execution_and_commit_share: mean(
             runs.iter().map(|run| run.execution_and_commit_share),
         ),

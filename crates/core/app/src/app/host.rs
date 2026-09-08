@@ -268,6 +268,7 @@ impl HostExecution {
                 self.phase = HostExecutionPhase::InitializedGenesis;
             }
             AppState::Checkpoint(expected_root_hash) => {
+                crate::app_version::check_app_version(&self.storage).await?;
                 ensure!(
                     self.storage.latest_version() != u64::MAX,
                     "checkpoint genesis requires initialized storage"
@@ -535,6 +536,7 @@ impl App {
             .expect("state Arc should not be referenced elsewhere");
         match app_state {
             AppState::Content(genesis) => {
+                crate::app_version::initialize_app_version(&mut state_tx);
                 state_tx.put_chain_id(genesis.chain_id.clone());
                 Sct::init_chain(&mut state_tx, Some(&genesis.sct_content)).await;
                 ShieldedPool::init_chain(&mut state_tx, Some(&genesis.shielded_pool_content)).await;
@@ -1617,13 +1619,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "expensive: real release-mode Gnark proof generation"]
     async fn note_seizure_verifies_capsule_release_and_commits_once() -> Result<()> {
-        if !GnarkNoteSeizureClient::env_override_configured() {
-            eprintln!(
-                "skipping host note seizure test without an explicitly configured prover daemon"
-            );
-            return Ok(());
-        }
+        shieldd_sdk_shielded_pool::gnark::require_proof_test_runtime(
+            shieldd_sdk_shielded_pool::gnark::ProofTestFamily::NoteSeizure,
+        )?;
 
         let storage = temp_storage().await;
         let mut host = HostExecution::new(storage.deref().clone());

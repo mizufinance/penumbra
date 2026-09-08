@@ -1,30 +1,28 @@
 use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(not(feature = "bench-baseline"))]
+
 use std::sync::LazyLock;
+#[cfg(test)]
 use std::time::Instant;
 
 use anyhow::{ensure, Result};
-#[cfg(not(feature = "bench-baseline"))]
+
 use ark_ec::{
     pairing::{Pairing, PairingOutput},
     AffineRepr, CurveGroup,
 };
-#[cfg(not(feature = "bench-baseline"))]
+
 use ark_ff::{BigInt, CyclotomicMultSubgroup, Field, PrimeField, Zero};
 use ark_groth16::PreparedVerifyingKey;
 use ark_ip_proofs::app_verifier::{
     app_verify_shipping_result_from_backend_result, AppVerifyShippingBackendResult,
     AppVerifyShippingResult,
 };
-#[cfg(not(feature = "bench-baseline"))]
+
 use ark_ip_proofs::applications::groth16_aggregation::validate_decoded_aggregate_proof;
 use ark_ip_proofs::applications::groth16_aggregation::{
-    aggregate_proofs_profiled_with_real_count, aggregate_proofs_with_real_count,
-    shipping_verifier_executed_result_into_parts, validate_aggregate_proof,
-    verify_validated_aggregate_proof, verify_validated_aggregate_proof_profiled,
-    verify_validated_aggregate_proof_shipping_profiled, AggregateProof, AggregateProofBuildProfile,
-    AggregateProofVerificationProfile, ShippingVerifierExecutionCarrier,
+    aggregate_proofs_with_real_count, shipping_verifier_executed_result_into_parts,
+    validate_aggregate_proof, verify_validated_aggregate_proof,
+    verify_validated_aggregate_proof_shipping, AggregateProof, ShippingVerifierExecutionCarrier,
     ShippingVerifierObservation, ValidatedAggregateProof,
 };
 #[cfg(test)]
@@ -35,18 +33,15 @@ use ark_ip_proofs::challenge::ChallengeContext;
 #[cfg(test)]
 use ark_ip_proofs::challenge::ChallengeTraceSink;
 use ark_serialize::CanonicalSerialize;
-#[cfg(not(feature = "bench-baseline"))]
+
 use ark_serialize::SerializationError;
-#[cfg(not(feature = "bench-baseline"))]
+
 use decaf377::Fp;
 use decaf377::{Bls12_377, Fq};
 use digest::Digest;
 use shieldd_sdk_proof_params::batch::BatchItem;
 use shieldd_sdk_shielded_pool::NoteReshapeFamilyId;
 
-#[cfg(feature = "bench-baseline")]
-use crate::strict_deserialize::deserialize_compressed_strict;
-#[cfg(not(feature = "bench-baseline"))]
 use crate::strict_deserialize::deserialize_compressed_strict_with;
 use crate::{
     aggregate_proof_wrapper::{
@@ -66,10 +61,7 @@ use crate::{
         NoteReshapeTranscriptDigest, ShieldedIcs20WithdrawalTranscriptDigest,
         TransferTranscriptDigest,
     },
-    transfer_family_dispatch::{
-        aggregate_transfer_profiled_real_count, aggregate_transfer_real_count,
-        verify_transfer_aggregate, verify_transfer_aggregate_profiled_status,
-    },
+    transfer_family_dispatch::{aggregate_transfer_real_count, verify_transfer_aggregate},
     ProofFamilyId,
 };
 
@@ -134,27 +126,12 @@ impl From<AggregateProofBytesError> for AggregateVerifyError {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct AggregateVerificationProfile {
-    pub deserialize_ms: f64,
-    pub challenge_ms: f64,
-    pub tipp_mipp_ms: f64,
-    pub public_input_fold_ms: f64,
-    pub ppe_ms: f64,
-    pub core_total_ms: f64,
-    pub total_ms: f64,
-    pub accepted: bool,
-}
-
-/// Backend profile paired with the exact byte-level input authenticated by the
-/// production shipping preflight.
 type ShippingAggregateBackendResult =
     AppVerifyShippingBackendResult<ShippingVerifierExecutionCarrier<Bls12_377>>;
 
 #[doc(hidden)]
 #[derive(Clone, Debug)]
 pub struct ShippingAggregateVerification {
-    pub profile: AggregateVerificationProfile,
     shipping_result: AppVerifyShippingResult,
     execution: ShippingVerifierExecutionCarrier<Bls12_377>,
     _statement_construction: ShippingStatementConstructionProvenance,
@@ -237,111 +214,8 @@ impl ShippingAggregateVerification {
     }
 }
 
-impl Default for AggregateVerificationProfile {
-    fn default() -> Self {
-        Self {
-            deserialize_ms: 0.0,
-            challenge_ms: 0.0,
-            tipp_mipp_ms: 0.0,
-            public_input_fold_ms: 0.0,
-            ppe_ms: 0.0,
-            core_total_ms: 0.0,
-            total_ms: 0.0,
-            accepted: true,
-        }
-    }
-}
-
-impl AggregateVerificationProfile {
-    pub fn merge(&mut self, other: &Self) {
-        self.deserialize_ms += other.deserialize_ms;
-        self.challenge_ms += other.challenge_ms;
-        self.tipp_mipp_ms += other.tipp_mipp_ms;
-        self.public_input_fold_ms += other.public_input_fold_ms;
-        self.ppe_ms += other.ppe_ms;
-        self.core_total_ms += other.core_total_ms;
-        self.total_ms += other.total_ms;
-        self.accepted &= other.accepted;
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct AggregateBuildBackendProfile {
-    pub collect_proofs_ms: f64,
-    pub backend_aggregate_ms: f64,
-    pub backend_point_extract_ms: f64,
-    pub backend_prepared_srs_ms: f64,
-    pub backend_commitment_key_extract_ms: f64,
-    pub backend_commitment_ms: f64,
-    pub backend_com_a_ms: f64,
-    pub backend_com_b_ms: f64,
-    pub backend_com_c_ms: f64,
-    pub backend_pairing_normalize_batch_ms: f64,
-    pub backend_pairing_prepare_ms: f64,
-    pub backend_pairing_miller_loop_ms: f64,
-    pub backend_pairing_final_exponentiation_ms: f64,
-    pub backend_randomizer_ms: f64,
-    pub backend_structured_scalar_ms: f64,
-    pub backend_weighted_b_ms: f64,
-    pub backend_ip_ab_ms: f64,
-    pub backend_agg_c_ms: f64,
-    pub backend_ck_2_r_inv_ms: f64,
-    pub backend_consistency_check_ms: f64,
-    pub backend_tipp_mipp_ms: f64,
-    pub backend_tipp_mipp_gipa_ms: f64,
-    pub backend_tipp_mipp_gipa_commit_l_ms: f64,
-    pub backend_tipp_mipp_gipa_commit_r_ms: f64,
-    pub backend_tipp_mipp_gipa_challenge_ms: f64,
-    pub backend_tipp_mipp_gipa_rescale_m1_ms: f64,
-    pub backend_tipp_mipp_gipa_rescale_m2_ms: f64,
-    pub backend_tipp_mipp_gipa_rescale_m3_ms: f64,
-    pub backend_tipp_mipp_gipa_rescale_r_ms: f64,
-    pub backend_tipp_mipp_gipa_rescale_ck1_ms: f64,
-    pub backend_tipp_mipp_gipa_rescale_ck2_ms: f64,
-    pub backend_tipp_mipp_transcript_inverse_ms: f64,
-    pub backend_tipp_mipp_final_bridge_ms: f64,
-    pub backend_tipp_mipp_kzg_challenge_ms: f64,
-    pub backend_tipp_mipp_kzg_coefficient_build_ms: f64,
-    pub backend_tipp_mipp_kzg_eval_quotient_ms: f64,
-    pub backend_tipp_mipp_kzg_opening_msm_ms: f64,
-    pub backend_tipp_mipp_kzg_opening_ck_v_ms: f64,
-    pub backend_tipp_mipp_kzg_opening_ck_w_ms: f64,
-    pub serialize_ms: f64,
-    pub total_ms: f64,
-}
-
-pub trait AggregationBackend {
-    type Srs;
-
-    fn aggregate_family(
-        statement: &AggregateStatement,
-        pvk: &PreparedVerifyingKey<Bls12_377>,
-        items: &[BatchItem],
-        srs: &Self::Srs,
-    ) -> Result<Vec<u8>>;
-
-    fn verify_family_aggregate(
-        statement: &AggregateStatement,
-        pvk: &PreparedVerifyingKey<Bls12_377>,
-        aggregate_proof_bytes: &[u8],
-        srs: &Self::Srs,
-    ) -> Result<(), AggregateVerifyError>;
-}
-
 pub struct SnarkpackBackend;
 
-/// Per-invocation rayon thread count. 1 = one dedicated thread per GIPA task (default).
-/// 0 = use the global pool (all available threads shared across concurrent tasks).
-static RAYON_THREADS_PER_BATCH: AtomicUsize = AtomicUsize::new(1);
-
-/// Set the rayon thread count used per `aggregate_with_digest_profiled` call.
-/// 1 is the production default (one dedicated thread per GIPA task, no cross-task stealing).
-/// 0 falls back to the global pool.
-pub fn set_rayon_threads_per_batch_for_bench(n: usize) {
-    RAYON_THREADS_PER_BATCH.store(n, Ordering::Relaxed);
-}
-
-#[cfg(not(feature = "bench-baseline"))]
 pub(crate) fn validate_bls12_377_gt_fast(
     value: &PairingOutput<Bls12_377>,
 ) -> Result<(), SerializationError> {
@@ -367,7 +241,6 @@ pub(crate) fn validate_bls12_377_gt_fast(
     Ok(())
 }
 
-#[cfg(not(feature = "bench-baseline"))]
 pub(crate) fn validate_bls12_377_g1_fast(
     value: &<Bls12_377 as Pairing>::G1,
 ) -> Result<(), SerializationError> {
@@ -402,7 +275,6 @@ pub(crate) fn validate_bls12_377_g1_fast(
     Ok(())
 }
 
-#[cfg(not(feature = "bench-baseline"))]
 pub(crate) fn validate_bls12_377_g2_fast(
     value: &<Bls12_377 as Pairing>::G2,
 ) -> Result<(), SerializationError> {
@@ -454,12 +326,6 @@ pub(crate) fn validate_bls12_377_g2_fast(
 pub(crate) fn deserialize_aggregate_proof<D: Digest + Send + Sync>(
     aggregate_proof_bytes: &[u8],
 ) -> Result<ValidatedAggregateProof<Bls12_377, D>, AggregateVerifyError> {
-    #[cfg(feature = "bench-baseline")]
-    let proof =
-        deserialize_compressed_strict::<AggregateProof<Bls12_377, D>>(aggregate_proof_bytes)
-            .map_err(|err| AggregateVerifyError::MalformedProofBytes(err.to_string()))?;
-
-    #[cfg(not(feature = "bench-baseline"))]
     let proof = deserialize_compressed_strict_with::<AggregateProof<Bls12_377, D>>(
         aggregate_proof_bytes,
         |proof| {
@@ -607,22 +473,6 @@ impl SnarkpackBackend {
         Ok(())
     }
 
-    fn verify_transfer_family_aggregate_profiled_status(
-        challenge_context: &ChallengeContext,
-        pvk: &PreparedVerifyingKey<Bls12_377>,
-        aggregate_proof_bytes: &[u8],
-        padded_public_inputs: &[Vec<Fq>],
-        srs: &DevSrs,
-    ) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
-        verify_transfer_aggregate_profiled_status(
-            challenge_context,
-            pvk,
-            aggregate_proof_bytes,
-            padded_public_inputs,
-            srs,
-        )
-    }
-
     fn aggregate_transfer_family(
         challenge_context: &ChallengeContext,
         items: &[BatchItem],
@@ -646,40 +496,6 @@ impl SnarkpackBackend {
             padded_public_inputs,
             srs,
         )
-    }
-
-    fn aggregate_transfer_family_profiled(
-        items: &[BatchItem],
-        real_count: usize,
-        srs: &DevSrs,
-        challenge_context: &ChallengeContext,
-    ) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
-        aggregate_transfer_profiled_real_count(items, real_count, srs, challenge_context)
-    }
-
-    fn aggregate_note_reshape_family_profiled(
-        family_id: NoteReshapeFamilyId,
-        items: &[BatchItem],
-        real_count: usize,
-        srs: &DevSrs,
-        challenge_context: &ChallengeContext,
-    ) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
-        match family_id {
-            NoteReshapeFamilyId::OneByEight => {
-                aggregate_with_digest_profiled_real_count::<
-                    NoteReshapeTranscriptDigest<{ NoteReshapeFamilyId::OneByEight.get() }>,
-                >(items, real_count, srs, challenge_context)
-            }
-            NoteReshapeFamilyId::EightByOne => {
-                aggregate_with_digest_profiled_real_count::<
-                    NoteReshapeTranscriptDigest<{ NoteReshapeFamilyId::EightByOne.get() }>,
-                >(items, real_count, srs, challenge_context)
-            }
-            other => Err(anyhow::anyhow!(
-                "unknown note reshape aggregate family {}",
-                other.get()
-            )),
-        }
     }
 
     fn aggregate_note_reshape_family(
@@ -707,16 +523,16 @@ impl SnarkpackBackend {
         }
     }
 
-    fn verify_note_reshape_family_aggregate_profiled_status(
+    fn verify_note_reshape_family_aggregate(
         challenge_context: &ChallengeContext,
         family_id: NoteReshapeFamilyId,
         pvk: &PreparedVerifyingKey<Bls12_377>,
         aggregate_proof_bytes: &[u8],
         padded_public_inputs: &[Vec<Fq>],
         srs: &DevSrs,
-    ) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
+    ) -> Result<bool, AggregateVerifyError> {
         match family_id {
-            NoteReshapeFamilyId::OneByEight => verify_with_digest_profiled::<
+            NoteReshapeFamilyId::OneByEight => verify_with_digest::<
                 NoteReshapeTranscriptDigest<{ NoteReshapeFamilyId::OneByEight.get() }>,
             >(
                 challenge_context,
@@ -725,7 +541,7 @@ impl SnarkpackBackend {
                 padded_public_inputs,
                 srs,
             ),
-            NoteReshapeFamilyId::EightByOne => verify_with_digest_profiled::<
+            NoteReshapeFamilyId::EightByOne => verify_with_digest::<
                 NoteReshapeTranscriptDigest<{ NoteReshapeFamilyId::EightByOne.get() }>,
             >(
                 challenge_context,
@@ -741,22 +557,7 @@ impl SnarkpackBackend {
         }
     }
 
-    pub fn verify_family_aggregate_profiled_status(
-        statement: &AggregateStatement,
-        pvk: &PreparedVerifyingKey<Bls12_377>,
-        aggregate_proof_bytes: &[u8],
-        srs: &DevSrs,
-    ) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
-        let call = preflight_aggregate_verify(AggregatePreflightInput {
-            statement,
-            pvk,
-            aggregate_proof_bytes,
-            srs,
-        })?;
-        Self::verify_preflighted_family_aggregate_profiled_status(call)
-    }
-
-    pub(crate) fn verify_shipping_family_aggregate_profiled_status(
+    pub(crate) fn verify_shipping_family_aggregate(
         application_call: AppVerifyShippingCall,
         statement: &AggregateStatement,
         pvk: &PreparedVerifyingKey<Bls12_377>,
@@ -780,12 +581,11 @@ impl SnarkpackBackend {
         };
         let (backend_call, padded_public_input_fields, input) =
             app_verify_shipping_into_parts_core(provenance.preflight);
-        let (profile, backend_result) =
-            Self::verify_preflighted_shipping_family_aggregate_profiled_status(
-                call_id,
-                backend_call,
-                &padded_public_input_fields,
-            )?;
+        let backend_result = Self::verify_preflighted_shipping_family_aggregate(
+            call_id,
+            backend_call,
+            &padded_public_input_fields,
+        )?;
         let executed = app_verify_shipping_result_from_backend_result(input, backend_result)
             .map_err(|error| {
                 AggregateVerifyError::BackendRejected(format!(
@@ -794,32 +594,28 @@ impl SnarkpackBackend {
             })?;
         let (shipping_result, execution) = shipping_verifier_executed_result_into_parts(executed);
         Ok(ShippingAggregateVerification {
-            profile,
             shipping_result,
             execution,
             _statement_construction: statement_construction,
         })
     }
 
-    fn verify_preflighted_shipping_family_aggregate_profiled_status(
+    fn verify_preflighted_shipping_family_aggregate(
         call_id: ark_ip_proofs::app_verifier::AppVerifyCallId,
         call: VerifiedAggregateBackendCall<'_>,
         padded_public_input_fields: &[Vec<Fq>],
-    ) -> Result<(AggregateVerificationProfile, ShippingAggregateBackendResult), AggregateVerifyError>
-    {
+    ) -> Result<ShippingAggregateBackendResult, AggregateVerifyError> {
         match call.family_id() {
-            ProofFamilyId::Transfer => {
-                verify_with_digest_shipping_profiled::<TransferTranscriptDigest>(
-                    call_id,
-                    call.challenge_context(),
-                    call.pvk(),
-                    call.inner_proof_bytes(),
-                    padded_public_input_fields,
-                    call.srs(),
-                )
-            }
+            ProofFamilyId::Transfer => verify_with_digest_shipping::<TransferTranscriptDigest>(
+                call_id,
+                call.challenge_context(),
+                call.pvk(),
+                call.inner_proof_bytes(),
+                padded_public_input_fields,
+                call.srs(),
+            ),
             ProofFamilyId::NoteReshape(family_id) => match family_id {
-                NoteReshapeFamilyId::OneByEight => verify_with_digest_shipping_profiled::<
+                NoteReshapeFamilyId::OneByEight => verify_with_digest_shipping::<
                     NoteReshapeTranscriptDigest<{ NoteReshapeFamilyId::OneByEight.get() }>,
                 >(
                     call_id,
@@ -829,7 +625,7 @@ impl SnarkpackBackend {
                     padded_public_input_fields,
                     call.srs(),
                 ),
-                NoteReshapeFamilyId::EightByOne => verify_with_digest_shipping_profiled::<
+                NoteReshapeFamilyId::EightByOne => verify_with_digest_shipping::<
                     NoteReshapeTranscriptDigest<{ NoteReshapeFamilyId::EightByOne.get() }>,
                 >(
                     call_id,
@@ -845,7 +641,7 @@ impl SnarkpackBackend {
                 ))),
             },
             ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
-                verify_with_digest_shipping_profiled::<ShieldedIcs20WithdrawalTranscriptDigest>(
+                verify_with_digest_shipping::<ShieldedIcs20WithdrawalTranscriptDigest>(
                     call_id,
                     call.challenge_context(),
                     call.pvk(),
@@ -856,89 +652,14 @@ impl SnarkpackBackend {
             }
         }
     }
-
-    fn verify_preflighted_family_aggregate_profiled_status(
-        call: VerifiedAggregateBackendCall<'_>,
-    ) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
-        match call.family_id() {
-            ProofFamilyId::Transfer => Self::verify_transfer_family_aggregate_profiled_status(
-                call.challenge_context(),
-                call.pvk(),
-                call.inner_proof_bytes(),
-                call.padded_public_inputs(),
-                call.srs(),
-            ),
-            ProofFamilyId::NoteReshape(family_id) => {
-                Self::verify_note_reshape_family_aggregate_profiled_status(
-                    call.challenge_context(),
-                    family_id,
-                    call.pvk(),
-                    call.inner_proof_bytes(),
-                    call.padded_public_inputs(),
-                    call.srs(),
-                )
-            }
-            ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
-                verify_with_digest_profiled::<ShieldedIcs20WithdrawalTranscriptDigest>(
-                    call.challenge_context(),
-                    call.pvk(),
-                    call.inner_proof_bytes(),
-                    call.padded_public_inputs(),
-                    call.srs(),
-                )
-            }
-        }
-    }
-
-    pub fn verify_family_aggregate_profiled(
-        statement: &AggregateStatement,
-        pvk: &PreparedVerifyingKey<Bls12_377>,
-        aggregate_proof_bytes: &[u8],
-        srs: &DevSrs,
-    ) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
-        let profile = Self::verify_family_aggregate_profiled_status(
-            statement,
-            pvk,
-            aggregate_proof_bytes,
-            srs,
-        )?;
-
-        if !profile.accepted {
-            return Err(AggregateVerifyError::BackendRejected(format!(
-                "{:?}",
-                statement.family_id()
-            )));
-        }
-        Ok(profile)
-    }
 }
 
-fn torus_preflight_frame(bytes: &[u8]) -> Vec<u8> {
-    let retained_len = bytes.len().min(MAX_AGGREGATE_PROOF_BYTES.saturating_add(1));
-    let mut translated = bytes[..retained_len].to_vec();
-
-    if translated.starts_with(AGGREGATE_PROOF_TORUS_WRAPPER_DOMAIN) {
-        if AGGREGATE_PROOF_TORUS_WRAPPER_DOMAIN.len() != AGGREGATE_PROOF_WRAPPER_DOMAIN.len() {
-            translated.clear();
-            return translated;
-        }
-        translated[..AGGREGATE_PROOF_WRAPPER_DOMAIN.len()]
-            .copy_from_slice(AGGREGATE_PROOF_WRAPPER_DOMAIN);
-    } else if translated.starts_with(AGGREGATE_PROOF_WRAPPER_DOMAIN) {
-        translated[0] = 0;
-    }
-
-    translated
-}
-
-impl AggregationBackend for SnarkpackBackend {
-    type Srs = DevSrs;
-
-    fn aggregate_family(
+impl SnarkpackBackend {
+    pub fn aggregate_family(
         statement: &AggregateStatement,
         _pvk: &PreparedVerifyingKey<Bls12_377>,
         items: &[BatchItem],
-        srs: &Self::Srs,
+        srs: &DevSrs,
     ) -> Result<Vec<u8>> {
         let family_id = statement.family_id();
         srs.ensure_supported_count(items.len())?;
@@ -983,11 +704,11 @@ impl AggregationBackend for SnarkpackBackend {
         Ok(wrapped)
     }
 
-    fn verify_family_aggregate(
+    pub fn verify_family_aggregate(
         statement: &AggregateStatement,
         pvk: &PreparedVerifyingKey<Bls12_377>,
         aggregate_proof_bytes: &[u8],
-        srs: &Self::Srs,
+        srs: &DevSrs,
     ) -> Result<(), AggregateVerifyError> {
         let call = preflight_aggregate_verify(AggregatePreflightInput {
             statement,
@@ -1005,17 +726,14 @@ impl AggregationBackend for SnarkpackBackend {
                 call.padded_public_inputs(),
                 call.srs(),
             )?,
-            ProofFamilyId::NoteReshape(family_id) => {
-                Self::verify_note_reshape_family_aggregate_profiled_status(
-                    call.challenge_context(),
-                    family_id,
-                    call.pvk(),
-                    call.inner_proof_bytes(),
-                    call.padded_public_inputs(),
-                    call.srs(),
-                )?
-                .accepted
-            }
+            ProofFamilyId::NoteReshape(family_id) => Self::verify_note_reshape_family_aggregate(
+                call.challenge_context(),
+                family_id,
+                call.pvk(),
+                call.inner_proof_bytes(),
+                call.padded_public_inputs(),
+                call.srs(),
+            )?,
             ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
                 verify_with_digest::<ShieldedIcs20WithdrawalTranscriptDigest>(
                     call.challenge_context(),
@@ -1040,55 +758,22 @@ fn collect_proofs(items: &[BatchItem]) -> Vec<ark_groth16::Proof<Bls12_377>> {
     items.iter().map(|item| item.proof.clone()).collect()
 }
 
-impl SnarkpackBackend {
-    pub fn aggregate_family_profiled(
-        statement: &AggregateStatement,
-        _pvk: &PreparedVerifyingKey<Bls12_377>,
-        items: &[BatchItem],
-        srs: &DevSrs,
-    ) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
-        let family_id = statement.family_id();
-        srs.ensure_supported_count(items.len())?;
-        ensure!(
-            !items.is_empty(),
-            "cannot build an aggregate proof for empty family {:?}",
-            family_id
-        );
+fn torus_preflight_frame(bytes: &[u8]) -> Vec<u8> {
+    let retained_len = bytes.len().min(MAX_AGGREGATE_PROOF_BYTES.saturating_add(1));
+    let mut translated = bytes[..retained_len].to_vec();
 
-        let (bytes, profile) = match family_id {
-            ProofFamilyId::Transfer => Self::aggregate_transfer_family_profiled(
-                items,
-                statement.real_count() as usize,
-                srs,
-                statement.challenge_context(),
-            ),
-            ProofFamilyId::NoteReshape(family_id) => Self::aggregate_note_reshape_family_profiled(
-                family_id,
-                items,
-                statement.real_count() as usize,
-                srs,
-                statement.challenge_context(),
-            ),
-            ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
-                aggregate_with_digest_profiled_real_count::<ShieldedIcs20WithdrawalTranscriptDigest>(
-                    items,
-                    statement.real_count() as usize,
-                    srs,
-                    statement.challenge_context(),
-                )
-            }
-        }?;
-
-        let wrapped = encode_wrapped_aggregate_proof(statement.statement_digest(), &bytes)?;
-        ensure!(
-            wrapped.len() <= MAX_AGGREGATE_PROOF_BYTES,
-            "wrapped aggregate proof bytes {} exceed cap {}",
-            wrapped.len(),
-            MAX_AGGREGATE_PROOF_BYTES
-        );
-
-        Ok((wrapped, profile))
+    if translated.starts_with(AGGREGATE_PROOF_TORUS_WRAPPER_DOMAIN) {
+        if AGGREGATE_PROOF_TORUS_WRAPPER_DOMAIN.len() != AGGREGATE_PROOF_WRAPPER_DOMAIN.len() {
+            translated.clear();
+            return translated;
+        }
+        translated[..AGGREGATE_PROOF_WRAPPER_DOMAIN.len()]
+            .copy_from_slice(AGGREGATE_PROOF_WRAPPER_DOMAIN);
+    } else if translated.starts_with(AGGREGATE_PROOF_WRAPPER_DOMAIN) {
+        translated[0] = 0;
     }
+
+    translated
 }
 
 pub(crate) fn aggregate_with_digest_real_count<D: Digest + Send + Sync>(
@@ -1098,13 +783,24 @@ pub(crate) fn aggregate_with_digest_real_count<D: Digest + Send + Sync>(
     srs: &DevSrs,
 ) -> Result<Vec<u8>> {
     let inner_product_srs = srs.inner_product_srs_for_count(items.len())?;
-    let aggregate = aggregate_proofs_with_real_count::<Bls12_377, D>(
-        challenge_context,
-        &inner_product_srs,
-        &collect_proofs(items),
-        real_count,
-    )
-    .map_err(|e| anyhow::anyhow!("SnarkPack aggregation failed: {e}"))?;
+    // One dedicated worker prevents concurrent family jobs from stealing each other's work.
+    let aggregate = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build_scoped(
+            |thread| thread.run(),
+            |pool| {
+                pool.install(|| {
+                    aggregate_proofs_with_real_count::<Bls12_377, D>(
+                        challenge_context,
+                        &inner_product_srs,
+                        &collect_proofs(items),
+                        real_count,
+                    )
+                    .map_err(|e| anyhow::anyhow!("SnarkPack aggregation failed: {e}"))
+                })
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("rayon pool build error: {e}"))??;
     let mut bytes = Vec::new();
     aggregate.serialize_compressed(&mut bytes)?;
     Ok(bytes)
@@ -1117,13 +813,24 @@ pub(crate) fn aggregate_with_digest_torus_real_count<D: Digest + Send + Sync>(
     srs: &DevSrs,
 ) -> Result<Vec<u8>> {
     let inner_product_srs = srs.inner_product_srs_for_count(items.len())?;
-    let aggregate = aggregate_proofs_with_real_count::<Bls12_377, D>(
-        challenge_context,
-        &inner_product_srs,
-        &collect_proofs(items),
-        real_count,
-    )
-    .map_err(|e| anyhow::anyhow!("SnarkPack aggregation failed: {e}"))?;
+    // One dedicated worker prevents concurrent family jobs from stealing each other's work.
+    let aggregate = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build_scoped(
+            |thread| thread.run(),
+            |pool| {
+                pool.install(|| {
+                    aggregate_proofs_with_real_count::<Bls12_377, D>(
+                        challenge_context,
+                        &inner_product_srs,
+                        &collect_proofs(items),
+                        real_count,
+                    )
+                    .map_err(|e| anyhow::anyhow!("SnarkPack aggregation failed: {e}"))
+                })
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("rayon pool build error: {e}"))??;
     serialize_torus_aggregate_proof(&aggregate)
         .map_err(|e| anyhow::anyhow!("SnarkPack torus serialization failed: {e}"))
 }
@@ -1152,113 +859,6 @@ where
     let mut bytes = Vec::new();
     aggregate.serialize_compressed(&mut bytes)?;
     Ok(bytes)
-}
-
-pub(crate) fn aggregate_with_digest_profiled_real_count<D: Digest + Send + Sync>(
-    items: &[BatchItem],
-    real_count: usize,
-    srs: &DevSrs,
-    challenge_context: &ChallengeContext,
-) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
-    let rayon_threads = RAYON_THREADS_PER_BATCH.load(Ordering::Relaxed);
-    if rayon_threads > 0 {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(rayon_threads)
-            .build_scoped(
-                |thread| thread.run(),
-                |pool| {
-                    pool.install(|| {
-                        aggregate_with_digest_profiled_core::<D>(
-                            challenge_context,
-                            items,
-                            real_count,
-                            srs,
-                        )
-                    })
-                },
-            )
-            .map_err(|e| anyhow::anyhow!("rayon pool build error: {e}"))?
-    } else {
-        aggregate_with_digest_profiled_core::<D>(challenge_context, items, real_count, srs)
-    }
-}
-
-fn aggregate_with_digest_profiled_core<D: Digest + Send + Sync>(
-    challenge_context: &ChallengeContext,
-    items: &[BatchItem],
-    real_count: usize,
-    srs: &DevSrs,
-) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
-    let mut profile = AggregateBuildBackendProfile::default();
-    let total_start = Instant::now();
-
-    let collect_start = Instant::now();
-    let proofs = collect_proofs(items);
-    profile.collect_proofs_ms = collect_start.elapsed().as_secs_f64() * 1000.0;
-
-    let inner_product_srs = srs.inner_product_srs_for_count(items.len())?;
-    let backend_start = Instant::now();
-    let (aggregate, core_profile) = aggregate_proofs_profiled_with_real_count::<Bls12_377, D>(
-        challenge_context,
-        &inner_product_srs,
-        &proofs,
-        real_count,
-    )
-    .map_err(|e| anyhow::anyhow!("SnarkPack aggregation failed: {e}"))?;
-    profile.backend_aggregate_ms = backend_start.elapsed().as_secs_f64() * 1000.0;
-    apply_core_build_profile(&mut profile, &core_profile);
-
-    let serialize_start = Instant::now();
-    let mut bytes = Vec::new();
-    aggregate.serialize_compressed(&mut bytes)?;
-    profile.serialize_ms = serialize_start.elapsed().as_secs_f64() * 1000.0;
-    profile.total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
-
-    Ok((bytes, profile))
-}
-
-fn apply_core_build_profile(
-    profile: &mut AggregateBuildBackendProfile,
-    core_profile: &AggregateProofBuildProfile,
-) {
-    profile.backend_point_extract_ms = core_profile.point_extract_ms;
-    profile.backend_prepared_srs_ms = core_profile.prepared_srs_ms;
-    profile.backend_commitment_key_extract_ms = core_profile.commitment_key_extract_ms;
-    profile.backend_commitment_ms = core_profile.commitment_ms;
-    profile.backend_com_a_ms = core_profile.com_a_ms;
-    profile.backend_com_b_ms = core_profile.com_b_ms;
-    profile.backend_com_c_ms = core_profile.com_c_ms;
-    profile.backend_pairing_normalize_batch_ms = core_profile.pairing_normalize_batch_ms;
-    profile.backend_pairing_prepare_ms = core_profile.pairing_prepare_ms;
-    profile.backend_pairing_miller_loop_ms = core_profile.pairing_miller_loop_ms;
-    profile.backend_pairing_final_exponentiation_ms = core_profile.pairing_final_exponentiation_ms;
-    profile.backend_randomizer_ms = core_profile.randomizer_ms;
-    profile.backend_structured_scalar_ms = core_profile.structured_scalar_ms;
-    profile.backend_weighted_b_ms = core_profile.weighted_b_ms;
-    profile.backend_ip_ab_ms = core_profile.ip_ab_ms;
-    profile.backend_agg_c_ms = core_profile.agg_c_ms;
-    profile.backend_ck_2_r_inv_ms = core_profile.ck_2_r_inv_ms;
-    profile.backend_consistency_check_ms = core_profile.consistency_check_ms;
-    profile.backend_tipp_mipp_ms = core_profile.tipp_mipp_ms;
-    profile.backend_tipp_mipp_gipa_ms = core_profile.tipp_mipp_gipa_ms;
-    profile.backend_tipp_mipp_gipa_commit_l_ms = core_profile.tipp_mipp_gipa_commit_l_ms;
-    profile.backend_tipp_mipp_gipa_commit_r_ms = core_profile.tipp_mipp_gipa_commit_r_ms;
-    profile.backend_tipp_mipp_gipa_challenge_ms = core_profile.tipp_mipp_gipa_challenge_ms;
-    profile.backend_tipp_mipp_gipa_rescale_m1_ms = core_profile.tipp_mipp_gipa_rescale_m1_ms;
-    profile.backend_tipp_mipp_gipa_rescale_m2_ms = core_profile.tipp_mipp_gipa_rescale_m2_ms;
-    profile.backend_tipp_mipp_gipa_rescale_m3_ms = core_profile.tipp_mipp_gipa_rescale_m3_ms;
-    profile.backend_tipp_mipp_gipa_rescale_r_ms = core_profile.tipp_mipp_gipa_rescale_r_ms;
-    profile.backend_tipp_mipp_gipa_rescale_ck1_ms = core_profile.tipp_mipp_gipa_rescale_ck1_ms;
-    profile.backend_tipp_mipp_gipa_rescale_ck2_ms = core_profile.tipp_mipp_gipa_rescale_ck2_ms;
-    profile.backend_tipp_mipp_transcript_inverse_ms = core_profile.tipp_mipp_transcript_inverse_ms;
-    profile.backend_tipp_mipp_final_bridge_ms = core_profile.tipp_mipp_final_bridge_ms;
-    profile.backend_tipp_mipp_kzg_challenge_ms = core_profile.tipp_mipp_kzg_challenge_ms;
-    profile.backend_tipp_mipp_kzg_coefficient_build_ms =
-        core_profile.tipp_mipp_kzg_coefficient_build_ms;
-    profile.backend_tipp_mipp_kzg_eval_quotient_ms = core_profile.tipp_mipp_kzg_eval_quotient_ms;
-    profile.backend_tipp_mipp_kzg_opening_msm_ms = core_profile.tipp_mipp_kzg_opening_msm_ms;
-    profile.backend_tipp_mipp_kzg_opening_ck_v_ms = core_profile.tipp_mipp_kzg_opening_ck_v_ms;
-    profile.backend_tipp_mipp_kzg_opening_ck_w_ms = core_profile.tipp_mipp_kzg_opening_ck_w_ms;
 }
 
 pub(crate) fn verify_with_digest<D: Digest + Send + Sync>(
@@ -1326,51 +926,17 @@ where
     .map_err(|e| AggregateVerifyError::BackendRejected(e.to_string()))
 }
 
-pub(crate) fn verify_with_digest_profiled<D: Digest + Send + Sync>(
-    challenge_context: &ChallengeContext,
-    pvk: &PreparedVerifyingKey<Bls12_377>,
-    aggregate_proof_bytes: &[u8],
-    padded_public_inputs: &[Vec<Fq>],
-    srs: &DevSrs,
-) -> Result<AggregateVerificationProfile, AggregateVerifyError> {
-    let started = Instant::now();
-
-    let deserialize_started = Instant::now();
-    let aggregate = deserialize_aggregate_proof::<D>(aggregate_proof_bytes)?;
-    let deserialize_ms = deserialize_started.elapsed().as_secs_f64() * 1000.0;
-
-    let core_profile = verify_validated_aggregate_proof_profiled::<Bls12_377, D>(
-        challenge_context,
-        srs.verifier_srs()
-            .map_err(|err| AggregateVerifyError::BadPadding(err.to_string()))?,
-        pvk,
-        padded_public_inputs,
-        &aggregate,
-    )
-    .map_err(|e| AggregateVerifyError::BackendRejected(e.to_string()))?;
-
-    Ok(profile_with_deserialize(
-        core_profile,
-        deserialize_ms,
-        started.elapsed().as_secs_f64() * 1000.0,
-    ))
-}
-
-fn verify_with_digest_shipping_profiled<D: Digest + Send + Sync>(
+fn verify_with_digest_shipping<D: Digest + Send + Sync>(
     call_id: ark_ip_proofs::app_verifier::AppVerifyCallId,
     challenge_context: &ChallengeContext,
     pvk: &PreparedVerifyingKey<Bls12_377>,
     aggregate_proof_bytes: &[u8],
     padded_public_inputs: &[Vec<Fq>],
     srs: &DevSrs,
-) -> Result<(AggregateVerificationProfile, ShippingAggregateBackendResult), AggregateVerifyError> {
-    let started = Instant::now();
-
-    let deserialize_started = Instant::now();
+) -> Result<ShippingAggregateBackendResult, AggregateVerifyError> {
     let aggregate = deserialize_aggregate_proof::<D>(aggregate_proof_bytes)?;
-    let deserialize_ms = deserialize_started.elapsed().as_secs_f64() * 1000.0;
 
-    let verification = verify_validated_aggregate_proof_shipping_profiled::<Bls12_377, D>(
+    let verification = verify_validated_aggregate_proof_shipping::<Bls12_377, D>(
         call_id,
         challenge_context,
         srs.verifier_srs()
@@ -1380,30 +946,7 @@ fn verify_with_digest_shipping_profiled<D: Digest + Send + Sync>(
         &aggregate,
     )
     .map_err(|e| AggregateVerifyError::BackendRejected(e.to_string()))?;
-    let (core_profile, backend_result) = verification.into_parts();
-    let profile = profile_with_deserialize(
-        core_profile,
-        deserialize_ms,
-        started.elapsed().as_secs_f64() * 1000.0,
-    );
-    Ok((profile, backend_result))
-}
-
-fn profile_with_deserialize(
-    core_profile: AggregateProofVerificationProfile,
-    deserialize_ms: f64,
-    total_ms: f64,
-) -> AggregateVerificationProfile {
-    AggregateVerificationProfile {
-        deserialize_ms,
-        challenge_ms: core_profile.challenge_ms,
-        tipp_mipp_ms: core_profile.tipp_mipp_ms,
-        public_input_fold_ms: core_profile.public_input_fold_ms,
-        ppe_ms: core_profile.ppe_ms,
-        core_total_ms: core_profile.core_total_ms,
-        total_ms,
-        accepted: core_profile.accepted,
-    }
+    Ok(verification)
 }
 
 #[cfg(test)]
@@ -1418,7 +961,7 @@ mod tests {
     use ark_r1cs_std::{alloc::AllocVar, eq::EqGadget, fields::fp::FpVar};
     use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
     use ark_serialize::CanonicalDeserialize;
-    #[cfg(not(feature = "bench-baseline"))]
+
     use ark_serialize::Valid;
     use ark_snark::SNARK;
     use decaf377::{Fp, Fq};
@@ -1429,17 +972,16 @@ mod tests {
 
     use crate::transcript::TransferTranscriptDigest;
     use crate::{
-        aggregate_family, aggregate_family_profiled, aggregate_family_torus,
-        decode_wrapped_aggregate_proof, decode_wrapped_torus_aggregate_proof,
-        encode_wrapped_aggregate_proof, encode_wrapped_torus_aggregate_proof,
-        pad_items_to_power_of_two, srs_id, statement::aggregate_verification_key_digest,
-        verify_family_aggregate, verify_family_aggregate_profiled, verify_family_aggregate_torus,
-        AggregateStatement, AggregateVerifyError, AGGREGATE_PROTOCOL_VERSION,
+        aggregate_family, aggregate_family_torus, decode_wrapped_aggregate_proof,
+        decode_wrapped_torus_aggregate_proof, encode_wrapped_aggregate_proof,
+        encode_wrapped_torus_aggregate_proof, pad_items_to_power_of_two, srs_id,
+        statement::aggregate_verification_key_digest, verify_family_aggregate,
+        verify_family_aggregate_torus, AggregateStatement, AggregateVerifyError,
+        AGGREGATE_PROTOCOL_VERSION,
     };
 
     use super::*;
 
-    #[cfg(not(feature = "bench-baseline"))]
     #[test]
     fn fast_bls12_377_gt_validation_matches_arkworks_on_structured_inputs() {
         type TargetField = <Bls12_377 as Pairing>::TargetField;
@@ -1535,7 +1077,7 @@ mod tests {
     /// tables (from `PreparedVerifyingKey`) — computes the identical target-group
     /// element as the original three-pairing form, for random inputs. This is the
     /// algebraic equivalence guarding that category-1 optimization (the raw `vk`
-    /// three-pairing form is `verify_ppe_baseline`, compiled under `bench-baseline`).
+    /// three-pairing form is retained here as an independent equation reference).
     #[test]
     fn ppe_optimized_matches_baseline_gt_value() {
         use ark_inner_products::{cfg_multi_pairing, cfg_multi_pairing_g1_affine_g2_prepared};
@@ -1696,19 +1238,19 @@ mod tests {
         padded_count: usize,
     ) -> AppVerifyShippingCall {
         let family = crate::app_verify_family_code(family_id);
-        crate::app_verify_shipping_call_from_parts(
-            crate::AppVerifyCallId {
+        ark_ip_proofs::app_verifier::AppVerifyShippingCall {
+            id: crate::AppVerifyCallId {
                 order_index: 0,
                 segment_index: 0,
                 family_index: 0,
                 family,
             },
-            family,
-            real_count,
-            real_count as u32,
-            padded_count,
-            padded_count as u32,
-        )
+            bundle_family: family,
+            expected_real_count: real_count,
+            bundle_real_count: real_count as u32,
+            expected_padded_count: padded_count,
+            bundle_padded_count: padded_count as u32,
+        }
     }
 
     type BackendG1 = <Bls12_377 as Pairing>::G1;
@@ -1786,7 +1328,6 @@ mod tests {
         panic!("could not sample a G2 non-subgroup point");
     }
 
-    #[cfg(not(feature = "bench-baseline"))]
     #[test]
     fn fast_bls12_377_g1_g2_validation_matches_arkworks() {
         let mut rng = ChaCha20Rng::seed_from_u64(0xe10_377);
@@ -2185,7 +1726,7 @@ mod tests {
             .serialize_compressed(&mut serialized_vk)
             .expect("VK should serialize");
         let application_call = shipping_call(family_id, items.len(), padded_items.len());
-        let verified = SnarkpackBackend::verify_shipping_family_aggregate_profiled_status(
+        let verified = SnarkpackBackend::verify_shipping_family_aggregate(
             application_call,
             &statement,
             &pvk,
@@ -2194,17 +1735,13 @@ mod tests {
         )
         .expect("shipping aggregate should verify");
 
-        assert!(verified.profile.accepted);
+        assert!(verified.shipping_result().result.accepted);
         let observation = verified.shipping_observation();
         assert_eq!(observation.call_id(), application_call.id);
         assert!(observation.accepted());
         assert_eq!(
             observation.challenge_context(),
             statement.challenge_context()
-        );
-        assert!(
-            !observation.challenge_trace_chronological().is_empty(),
-            "accepted shipping verification must expose its deployed challenge trace"
         );
         let input = &verified.shipping_result().input;
         assert_eq!(input.family, crate::app_verify_family_code(family_id));
@@ -2231,11 +1768,7 @@ mod tests {
 
         let construction = verified.statement_construction();
         let binding = &construction.binding_execution;
-        assert_eq!(&binding.statement, statement.hash_execution());
-        assert_eq!(
-            binding.wrapper.max_aggregate_proof_bytes,
-            MAX_AGGREGATE_PROOF_BYTES
-        );
+        assert_eq!(binding.statement, statement.identity());
         assert_eq!(
             binding.wrapper.expected_statement_digest,
             input.statement_digest
@@ -2245,17 +1778,6 @@ mod tests {
             input.wrapped_proof_bytes
         );
         assert_eq!(binding.wrapper.inner_proof_bytes, input.inner_proof_bytes);
-        let inner_range = binding
-            .wrapper
-            .effect
-            .inner_range()
-            .expect("successful shipping decode retains its exact inner range");
-        assert_eq!(
-            wrapped
-                .get(inner_range)
-                .expect("retained range must index the original wrapper"),
-            binding.wrapper.inner_proof_bytes.as_slice()
-        );
         assert_eq!(construction.source_field_rows, padded_public_inputs(&items));
         assert_eq!(
             construction.prepared_serialized_rows.padded_public_inputs,
@@ -2264,7 +1786,7 @@ mod tests {
     }
 
     #[test]
-    fn shipping_and_ordinary_profiled_routes_match_all_registered_families() {
+    fn shipping_and_ordinary_routes_match_all_registered_families() {
         let (pvk, items) = sample_items();
         let srs = DevSrs::default();
         let padded_items =
@@ -2273,25 +1795,24 @@ mod tests {
             let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
             let wrapped = aggregate_family(&statement, &pvk, &padded_items, &srs)
                 .expect("aggregation should succeed");
-            let ordinary = SnarkpackBackend::verify_family_aggregate_profiled_status(
-                &statement, &pvk, &wrapped, &srs,
-            )
-            .expect("ordinary profiled verification should run");
-            let shipping = SnarkpackBackend::verify_shipping_family_aggregate_profiled_status(
+            SnarkpackBackend::verify_family_aggregate(&statement, &pvk, &wrapped, &srs)
+                .expect("ordinary verification should run");
+            let shipping = SnarkpackBackend::verify_shipping_family_aggregate(
                 shipping_call(family_id, items.len(), padded_items.len()),
                 &statement,
                 &pvk,
                 &wrapped,
                 &srs,
             )
-            .expect("shipping profiled verification should run");
+            .expect("shipping verification should run");
 
             assert_eq!(
-                shipping.profile.accepted, ordinary.accepted,
+                shipping.shipping_result().result.accepted,
+                true,
                 "shipping and ordinary digest routes diverged for {family_id:?}"
             );
             assert!(
-                shipping.profile.accepted,
+                shipping.shipping_result().result.accepted,
                 "valid aggregate must be accepted for {family_id:?}"
             );
         }
@@ -2310,7 +1831,7 @@ mod tests {
         let wrong_family =
             ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical);
 
-        let error = SnarkpackBackend::verify_shipping_family_aggregate_profiled_status(
+        let error = SnarkpackBackend::verify_shipping_family_aggregate(
             shipping_call(wrong_family, items.len(), padded_items.len()),
             &statement,
             &pvk,
@@ -2321,7 +1842,7 @@ mod tests {
         assert_eq!(error, AggregateVerifyError::StatementDigestMismatch);
 
         let oversized = vec![0u8; MAX_AGGREGATE_PROOF_BYTES + 1];
-        let error = SnarkpackBackend::verify_shipping_family_aggregate_profiled_status(
+        let error = SnarkpackBackend::verify_shipping_family_aggregate(
             shipping_call(wrong_family, items.len(), padded_items.len()),
             &statement,
             &pvk,
@@ -2866,28 +2387,6 @@ mod tests {
     }
 
     #[test]
-    fn snarkpack_profile_accepts_valid_aggregate() {
-        let (pvk, items) = sample_items();
-        let srs = DevSrs::default();
-        let padded_items =
-            pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
-        let family_id = ProofFamilyId::Transfer;
-        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
-        let aggregate = aggregate_family(&statement, &pvk, &padded_items, &srs)
-            .expect("aggregation should succeed");
-
-        let profile = verify_family_aggregate_profiled(&statement, &pvk, &aggregate, &srs)
-            .expect("aggregate verification should succeed");
-
-        assert!(profile.accepted, "profiled verification should accept");
-        assert!(profile.total_ms >= profile.deserialize_ms);
-        assert!(profile.challenge_ms >= 0.0);
-        assert!(profile.core_total_ms >= profile.tipp_mipp_ms);
-        assert!(profile.public_input_fold_ms >= 0.0);
-        assert!(profile.ppe_ms >= 0.0);
-    }
-
-    #[test]
     fn prover_verifier_acceptance_parity() {
         let (pvk, items) = sample_items();
         let srs = DevSrs::default();
@@ -2926,80 +2425,6 @@ mod tests {
             "challenge trace should not be empty"
         );
         assert_eq!(prover_trace.entries(), verifier_trace.entries());
-    }
-
-    #[test]
-    fn snarkpack_build_profile_exposes_tipp_mipp_subbuckets() {
-        let (pvk, items) = sample_items();
-        let srs = DevSrs::default();
-        let padded_items =
-            pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
-
-        let family_id = ProofFamilyId::Transfer;
-        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
-        let (_aggregate, profile) =
-            aggregate_family_profiled(&statement, &pvk, &padded_items, &srs)
-                .expect("profiled aggregation should succeed");
-
-        assert!(profile.backend_tipp_mipp_ms >= profile.backend_tipp_mipp_gipa_ms);
-        assert!(profile.backend_tipp_mipp_gipa_ms > 0.0);
-        assert!(profile.backend_prepared_srs_ms >= 0.0);
-        assert!(profile.backend_commitment_key_extract_ms >= 0.0);
-        assert!(profile.backend_com_a_ms >= 0.0);
-        assert!(profile.backend_com_b_ms >= 0.0);
-        assert!(profile.backend_com_c_ms >= 0.0);
-        assert!(profile.backend_pairing_normalize_batch_ms >= 0.0);
-        assert!(profile.backend_pairing_prepare_ms >= 0.0);
-        assert!(profile.backend_pairing_miller_loop_ms >= 0.0);
-        assert!(profile.backend_pairing_final_exponentiation_ms >= 0.0);
-        assert!(profile.backend_tipp_mipp_kzg_coefficient_build_ms >= 0.0);
-        assert!(profile.backend_tipp_mipp_kzg_eval_quotient_ms >= 0.0);
-        assert!(profile.backend_tipp_mipp_kzg_opening_msm_ms >= 0.0);
-        assert!(profile.backend_tipp_mipp_kzg_opening_ck_v_ms >= 0.0);
-        assert!(profile.backend_tipp_mipp_kzg_opening_ck_w_ms >= 0.0);
-
-        // Subtotals use only direct children of the combined TIPP/MIPP span.
-        // kzg_coefficient_build_ms, kzg_eval_quotient_ms, and
-        // kzg_opening_msm_ms are accumulated sub-operation sums already
-        // contained within the ck_v/ck_w wrapper spans.
-        let tipp_mipp_subtotal = profile.backend_tipp_mipp_gipa_ms
-            + profile.backend_tipp_mipp_transcript_inverse_ms
-            + profile.backend_tipp_mipp_final_bridge_ms
-            + profile.backend_tipp_mipp_kzg_challenge_ms
-            + profile.backend_tipp_mipp_kzg_opening_ck_v_ms
-            + profile.backend_tipp_mipp_kzg_opening_ck_w_ms;
-
-        assert!(profile.backend_tipp_mipp_ms + 5.0 >= tipp_mipp_subtotal);
-        assert!(
-            profile.backend_tipp_mipp_kzg_opening_ck_v_ms
-                + profile.backend_tipp_mipp_kzg_opening_ck_w_ms
-                + 1.0
-                >= profile.backend_tipp_mipp_kzg_coefficient_build_ms
-                    + profile.backend_tipp_mipp_kzg_eval_quotient_ms
-                    + profile.backend_tipp_mipp_kzg_opening_msm_ms
-        );
-        assert!(
-            profile.backend_tipp_mipp_gipa_rescale_ck1_ms
-                + profile.backend_tipp_mipp_gipa_rescale_ck2_ms
-                > 0.0
-        );
-    }
-
-    #[test]
-    fn note_reshape_shipping_and_profiled_aggregation_bytes_match() {
-        let (pvk, items) = sample_items();
-        let srs = DevSrs::default();
-        let padded_items =
-            pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
-        let family_id = ProofFamilyId::NoteReshape(NoteReshapeFamilyId::EightByOne);
-        let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
-
-        let shipping = aggregate_family(&statement, &pvk, &padded_items, &srs)
-            .expect("shipping aggregation should succeed");
-        let (profiled, _) = aggregate_family_profiled(&statement, &pvk, &padded_items, &srs)
-            .expect("profiled aggregation should succeed");
-
-        assert_eq!(shipping, profiled);
     }
 
     #[test]

@@ -17,7 +17,6 @@ pub const SCREEN_STATUS_PENDING: &str = "pending";
 pub const SCREEN_STATUS_IRRELEVANT: &str = "irrelevant";
 pub const SCREEN_STATUS_DETECTED: &str = "detected";
 pub const SCREEN_STATUS_INVALID: &str = "invalid";
-pub const DETECTION_STATUS_DETECTED: &str = "detected";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FlowType {
@@ -160,44 +159,6 @@ impl FromStr for ScreenStatus {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DetectionStatus {
-    #[serde(rename = "detected")]
-    Detected,
-}
-
-impl DetectionStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Detected => DETECTION_STATUS_DETECTED,
-        }
-    }
-
-    pub fn try_advance(from: Self, to: Self) -> Result<()> {
-        if from == to {
-            return Ok(());
-        }
-        anyhow::bail!("illegal detection status transition {} -> {}", from, to)
-    }
-}
-
-impl fmt::Display for DetectionStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for DetectionStatus {
-    type Err = anyhow::Error;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            DETECTION_STATUS_DETECTED => Ok(Self::Detected),
-            _ => Err(anyhow!("unknown detection status {value:?}")),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuditStatus {
     #[serde(rename = "pending")]
     Pending,
@@ -269,7 +230,7 @@ impl FromStr for AuditStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuditStatus, DetectionStatus, ScreenStatus};
+    use super::{AuditStatus, ScreenStatus};
 
     #[test]
     fn audit_status_transition_table_is_explicit() {
@@ -335,13 +296,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn detection_status_transition_table_is_explicit() {
-        assert!(
-            DetectionStatus::try_advance(DetectionStatus::Detected, DetectionStatus::Detected)
-                .is_ok()
-        );
     }
 }

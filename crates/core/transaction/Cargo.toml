@@ -48,6 +48,7 @@ tokio = {workspace = true, features = ["full"], optional = true}
 tracing = {workspace = true}
 
 [dev-dependencies]
+shieldd-sdk-shielded-pool = { workspace = true, default-features = false, features = ["benchmark-helpers"] }
 proptest = {workspace = true}
 serde_json = {workspace = true}
 shieldd-sdk-tct = {workspace = true, default-features = true, features = ["arbitrary"] }

@@ -1,13 +1,10 @@
-use ark_r1cs_std::prelude::*;
-use ark_relations::r1cs::SynthesisError;
-use decaf377::{r1cs::FqVar, Fq};
+use decaf377::Fq;
 use poseidon377::hash_3;
-use shieldd_sdk_tct as tct;
-use shieldd_sdk_tct::{r1cs::StateCommitmentVar, StateCommitment};
+use shieldd_sdk_tct::StateCommitment;
 
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use shieldd_sdk_keys::keys::{NullifierKey, NullifierKeyVar};
+use shieldd_sdk_keys::keys::NullifierKey;
 use shieldd_sdk_proto::{core::component::sct::v1 as pb, DomainType};
 
 #[derive(PartialEq, Eq, Clone, Copy, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -100,69 +97,6 @@ impl TryFrom<Vec<u8>> for Nullifier {
 
     fn try_from(vec: Vec<u8>) -> Result<Nullifier, Self::Error> {
         Self::try_from(&vec[..])
-    }
-}
-
-pub struct NullifierVar {
-    pub inner: FqVar,
-}
-
-impl AllocVar<Nullifier, Fq> for NullifierVar {
-    fn new_variable<T: std::borrow::Borrow<Nullifier>>(
-        cs: impl Into<ark_relations::r1cs::Namespace<Fq>>,
-        f: impl FnOnce() -> Result<T, SynthesisError>,
-        mode: ark_r1cs_std::prelude::AllocationMode,
-    ) -> Result<Self, SynthesisError> {
-        let ns = cs.into();
-        let cs = ns.cs();
-        let inner: Nullifier = *f()?.borrow();
-        match mode {
-            AllocationMode::Constant => unimplemented!(),
-            AllocationMode::Input => Ok(Self {
-                inner: FqVar::new_input(cs, || Ok(inner.0))?,
-            }),
-            AllocationMode::Witness => unimplemented!(),
-        }
-    }
-}
-
-impl R1CSVar<Fq> for NullifierVar {
-    type Value = Nullifier;
-
-    fn cs(&self) -> ark_relations::r1cs::ConstraintSystemRef<Fq> {
-        self.inner.cs()
-    }
-
-    fn value(&self) -> Result<Self::Value, SynthesisError> {
-        Ok(Nullifier(self.inner.value()?))
-    }
-}
-
-impl EqGadget<Fq> for NullifierVar {
-    fn is_eq(&self, other: &Self) -> Result<Boolean<Fq>, SynthesisError> {
-        self.inner.is_eq(&other.inner)
-    }
-}
-
-impl NullifierVar {
-    pub fn derive(
-        nk: &NullifierKeyVar,
-        position: &tct::r1cs::PositionVar,
-        state_commitment: &StateCommitmentVar,
-    ) -> Result<NullifierVar, SynthesisError> {
-        let cs = state_commitment.inner.cs();
-        let domain_sep = FqVar::new_constant(cs.clone(), *NULLIFIER_DOMAIN_SEP)?;
-        let nullifier = poseidon377::r1cs::hash_3(
-            cs,
-            &domain_sep,
-            (
-                nk.inner.clone(),
-                state_commitment.inner.clone(),
-                position.position.clone(),
-            ),
-        )?;
-
-        Ok(NullifierVar { inner: nullifier })
     }
 }
 

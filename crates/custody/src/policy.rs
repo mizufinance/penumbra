@@ -292,7 +292,7 @@ mod tests {
         )
         .expect("valid test note");
         let spend = ShieldedInputPlan::new(&mut rng, note, 0u64.into());
-        let mut output = ShieldedOutputPlan::new(
+        let output = ShieldedOutputPlan::new(
             &mut rng,
             Value {
                 amount: 4u64.into(),
@@ -300,18 +300,13 @@ mod tests {
             },
             dest_address,
         );
-        output.asset_anchor = spend.asset_anchor;
-        output.compliance_anchor = spend.compliance_anchor;
-        output.target_timestamp = spend.target_timestamp;
-        output.is_regulated = spend.is_regulated;
-        output.tx_blinding_nonce = spend.tx_blinding_nonce;
-        output.asset_indexed_leaf = spend.asset_indexed_leaf.clone();
-        output.asset_path = spend.asset_path.clone();
-        output.asset_position = spend.asset_position;
-        output.asset_policy = spend.asset_policy.clone();
 
-        TransferPlan::from_spend_output(spend.into(), output.into(), Fr::from(1u64))
-            .expect("valid transfer plan")
+        shieldd_sdk_shielded_pool::test_plan_helpers::transfer(
+            vec![spend.into()],
+            vec![output.into()],
+            Fr::from(1u64),
+        )
+        .expect("valid transfer plan")
     }
 
     #[test]

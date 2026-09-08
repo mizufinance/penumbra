@@ -31,11 +31,9 @@ pub use aggregate_proof_wrapper::{
 #[doc(hidden)]
 pub use app_verifier::{
     app_verify_accepted_join_projection_core, app_verify_family_code, app_verify_family_count_core,
-    app_verify_join_acceptance_core, app_verify_normal_acceptance_core,
-    app_verify_plan_identity_core, app_verify_plan_ids_core, app_verify_plan_padding_core,
-    app_verify_preflight_core, app_verify_profiled_acceptance_core, app_verify_reduce_core,
-    app_verify_shipping_call_from_parts, app_verify_shipping_projection_core,
-    app_verify_shipping_result_from_parts, AppVerifyAcceptedJoinProjection,
+    app_verify_join_acceptance_core, app_verify_plan_identity_core, app_verify_plan_ids_core,
+    app_verify_plan_padding_core, app_verify_preflight_core, app_verify_reduce_core,
+    app_verify_shipping_projection_core, AppVerifyAcceptedJoinProjection,
     AppVerifyAcceptedJoinProjectionError, AppVerifyCallId, AppVerifyCallResult,
     AppVerifyExpectedCall, AppVerifyFamilyCode, AppVerifyPlanError,
     AppVerifyPlannerIndexedExecutedRecord, AppVerifyPreflightError, AppVerifyReductionError,
@@ -43,12 +41,8 @@ pub use app_verifier::{
 };
 #[doc(hidden)]
 pub use ark_ip_proofs::applications::groth16_aggregation::ShippingVerifierObservation;
-pub use backend::AggregateBuildBackendProfile;
 use backend::SnarkpackBackend;
-pub use backend::{
-    set_rayon_threads_per_batch_for_bench, AggregateVerificationProfile, AggregateVerifyError,
-    AggregationBackend, ShippingAggregateVerification,
-};
+pub use backend::{AggregateVerifyError, ShippingAggregateVerification};
 pub use bundle::{AggregateBundle, FamilyAggregate, ProofFamilyId};
 pub use padding::PADDING_RULE_DOMAIN;
 pub use padding::{pad_items_to_power_of_two, prepare_verify_inputs, PreparedVerifyInputs};
@@ -76,16 +70,7 @@ pub fn aggregate_family(
     SnarkpackBackend::aggregate_family(statement, pvk, items, srs)
 }
 
-pub fn aggregate_family_profiled(
-    statement: &AggregateStatement,
-    pvk: &PreparedVerifyingKey<Bls12_377>,
-    items: &[BatchItem],
-    srs: &DevSrs,
-) -> Result<(Vec<u8>, AggregateBuildBackendProfile)> {
-    SnarkpackBackend::aggregate_family_profiled(statement, pvk, items, srs)
-}
-
-/// Build the compact torus wire format while retaining the standard proof
+/// Build the SnarkPack torus-v2 wire format while retaining the v1 proof
 /// relation and Fiat-Shamir transcript.
 pub fn aggregate_family_torus(
     statement: &AggregateStatement,
@@ -115,38 +100,15 @@ pub fn verify_family_aggregate_torus(
     SnarkpackBackend::verify_family_aggregate_torus(statement, pvk, aggregate_proof_bytes, srs)
 }
 
-pub fn verify_family_aggregate_profiled(
-    statement: &AggregateStatement,
-    pvk: &PreparedVerifyingKey<Bls12_377>,
-    aggregate_proof_bytes: &[u8],
-    srs: &DevSrs,
-) -> std::result::Result<AggregateVerificationProfile, AggregateVerifyError> {
-    SnarkpackBackend::verify_family_aggregate_profiled(statement, pvk, aggregate_proof_bytes, srs)
-}
-
-pub fn verify_family_aggregate_profiled_status(
-    statement: &AggregateStatement,
-    pvk: &PreparedVerifyingKey<Bls12_377>,
-    aggregate_proof_bytes: &[u8],
-    srs: &DevSrs,
-) -> std::result::Result<AggregateVerificationProfile, AggregateVerifyError> {
-    SnarkpackBackend::verify_family_aggregate_profiled_status(
-        statement,
-        pvk,
-        aggregate_proof_bytes,
-        srs,
-    )
-}
-
 #[doc(hidden)]
-pub fn verify_shipping_family_aggregate_profiled_status(
+pub fn verify_shipping_family_aggregate(
     application_call: AppVerifyShippingCall,
     statement: &AggregateStatement,
     pvk: &PreparedVerifyingKey<Bls12_377>,
     aggregate_proof_bytes: &[u8],
     srs: &DevSrs,
 ) -> std::result::Result<ShippingAggregateVerification, AggregateVerifyError> {
-    SnarkpackBackend::verify_shipping_family_aggregate_profiled_status(
+    SnarkpackBackend::verify_shipping_family_aggregate(
         application_call,
         statement,
         pvk,

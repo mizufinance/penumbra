@@ -22,7 +22,7 @@ use shieldd_sdk_keys::{keys::SpendKey, test_keys, Address};
 use shieldd_sdk_mock_client::MockClient;
 use shieldd_sdk_num::Amount;
 use shieldd_sdk_proto::DomainType;
-use shieldd_sdk_shielded_pool::{ShieldedInputPlan, ShieldedOutputPlan, TransferPlan};
+use shieldd_sdk_shielded_pool::{ShieldedInputPlan, ShieldedOutputPlan};
 use shieldd_sdk_transaction::{
     memo::MemoPlaintext, plan::MemoPlan, ActionPlan, Transaction, TransactionParameters,
     TransactionPlan,
@@ -310,13 +310,13 @@ async fn build_spend_tx(
     let position = client
         .position(input_note.commit())
         .ok_or_else(|| anyhow!("input note commitment was unknown to mock client"))?;
-    let mut spend = ShieldedInputPlan::new(&mut OsRng, input_note.clone(), position);
+    let spend = ShieldedInputPlan::new(&mut OsRng, input_note.clone(), position);
     let change_amount = input_note
         .amount()
         .checked_sub(&send_amount)
         .context("input note amount must cover send amount")?;
 
-    let mut output = ShieldedOutputPlan::new(
+    let output = ShieldedOutputPlan::new(
         &mut OsRng,
         Value {
             amount: send_amount,
@@ -324,7 +324,7 @@ async fn build_spend_tx(
         },
         recipient,
     );
-    let mut change = ShieldedOutputPlan::new(
+    let change = ShieldedOutputPlan::new(
         &mut OsRng,
         Value {
             amount: change_amount,
@@ -333,10 +333,12 @@ async fn build_spend_tx(
         input_note.address(),
     );
 
-    align_transfer_planning_metadata(&mut spend, [&mut output, &mut change]);
-
-    let transfer = TransferPlan::new(vec![spend], vec![output, change], Fr::from(1u64))?;
-    let mut plan = TransactionPlan {
+    let transfer = shieldd_sdk_mock_client::TransferIntent {
+        spends: vec![spend],
+        outputs: vec![output, change],
+        value_blinding: Fr::from(1u64),
+    };
+    let intent = shieldd_sdk_mock_client::TransactionIntent {
         actions: vec![transfer.into()],
         memo: Some(MemoPlan::new(
             &mut OsRng,
@@ -350,8 +352,11 @@ async fn build_spend_tx(
         nullifier_window: None,
     };
 
+    let plan = client
+        .complete_intent(intent, storage.latest_snapshot())
+        .await?;
     let tx = client
-        .witness_auth_build_with_compliance(&mut plan, storage.latest_snapshot())
+        .witness_auth_build(&plan)
         .await
         .context("failed to build Shieldd spend transaction")?;
     let audit_bundle = match plan.actions.first() {
@@ -526,21 +531,4 @@ fn write_audit_bundle(path: &PathBuf, tx: &Transaction, bundle: PocOrbisAuditBun
     };
     fs::write(path, serde_json::to_vec_pretty(&output)?)
         .with_context(|| format!("failed to write {}", path.display()))
-}
-
-fn align_transfer_planning_metadata(
-    spend: &mut ShieldedInputPlan,
-    outputs: [&mut ShieldedOutputPlan; 2],
-) {
-    for output in outputs {
-        output.asset_anchor = spend.asset_anchor;
-        output.compliance_anchor = spend.compliance_anchor;
-        output.target_timestamp = spend.target_timestamp;
-        output.is_regulated = spend.is_regulated;
-        output.tx_blinding_nonce = spend.tx_blinding_nonce;
-        output.asset_indexed_leaf = spend.asset_indexed_leaf.clone();
-        output.asset_path = spend.asset_path.clone();
-        output.asset_position = spend.asset_position;
-        output.asset_policy = spend.asset_policy.clone();
-    }
 }

@@ -15,7 +15,7 @@ fn routing_scan(c: &mut Criterion) {
     let address = fvk.payment_address(0u32.into());
     let selector =
         RoutingSelector::for_address(&address, Parameters::default().regulated_precision);
-    let (note, recovery_capsule) = ShieldedOutputPlan::new(
+    let output = ShieldedOutputPlan::new(
         &mut rng,
         Value {
             amount: 10u64.into(),
@@ -25,8 +25,12 @@ fn routing_scan(c: &mut Criterion) {
                 .id(),
         },
         address,
-    )
-    .output_note_and_capsule();
+    );
+    let witness = shieldd_sdk_compliance::ComplianceLeaf::synthetic_unregulated(
+        output.dest_address.clone(),
+        output.value.asset_id,
+    );
+    let (note, recovery_capsule) = output.output_note_and_capsule(witness.capk);
     let payload = note.payload(recovery_capsule);
 
     let mut state = 0x9e37_79b9u32;

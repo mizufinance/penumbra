@@ -20,6 +20,7 @@ import "shieldd/core/component/compliance/v1/compliance.proto";
 // responsible for synchronizing and scanning the public chain state with one or
 // more full viewing keys.
 service ViewService {
+  rpc VolumeAccumulatorRecovery(VolumeAccumulatorRecoveryRequest) returns (VolumeAccumulatorRecoveryResponse);
   // Get current status of chain sync
   rpc Status(StatusRequest) returns (StatusResponse);
 
@@ -323,10 +324,8 @@ message StatusRequest {}
 
 // Returns the status of the view service and whether it is synchronized with the chain state.
 message StatusResponse {
-  // The height the view service has synchronized to so far when doing a full linear sync
-  uint64 full_sync_height = 1;
-  // The height the view service has synchronized to so far when doing a partial sync
-  uint64 partial_sync_height = 2;
+  // The height the view service has synchronized to so far
+  uint64 sync_height = 1;
   // Whether the view service is catching up with the chain state
   bool catching_up = 3;
   // Consensus timestamp of the latest block known to the view service.
@@ -340,10 +339,8 @@ message StatusStreamRequest {}
 message StatusStreamResponse {
   // The latest known block height
   uint64 latest_known_block_height = 1;
-  // The height the view service has synchronized to so far when doing a full linear sync
-  uint64 full_sync_height = 2;
-  // The height the view service has synchronized to so far when doing a partial sync
-  uint64 partial_sync_height = 3;
+  // The height the view service has synchronized to so far
+  uint64 sync_height = 2;
 }
 
 // A query for notes known by the view service.
@@ -653,4 +650,27 @@ message ComplianceBatchMerkleProofsResponse {
   bytes asset_anchor = 2;
   // Results for each query, in the same order as the request.
   repeated ComplianceMerkleProofsResponse results = 3;
+}
+
+message VolumeAccumulatorRecoveryRequest {
+  bytes subject = 1;
+  uint64 day_start = 2;
+}
+
+message VolumeAccumulatorRecoveryResponse {
+  message Complete {
+    bytes subject = 1;
+    uint64 day_start = 2;
+    bytes undisclosed_volume = 3;
+    bytes blinding = 4;
+    crypto.tct.v1.StateCommitment commitment = 5;
+    uint64 position = 6;
+  }
+  message Absent {}
+  message Incomplete {}
+  oneof outcome {
+    Absent absent = 1;
+    Complete complete = 2;
+    Incomplete incomplete = 3;
+  }
 }

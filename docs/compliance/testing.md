@@ -1,69 +1,46 @@
-# Testing Guide
+# Compliance verification
 
-## Prerequisites
+Use `nix develop` for the repository toolchain, or install the Rust version in
+`rust-toolchain.toml`, Go from `tools/gnark/go.mod`, and a CGO-capable C compiler.
+The process-compose smoke test creates its own temporary development state.
 
-Use the Nix development shell for the CI Rust, C++, and Go toolchains:
+| Command | Coverage |
+| --- | --- |
+| `just check` | Native compilation, formatting, and focused aggregation invariants |
+| `just test` | Ordinary Rust tests; ignored tests are excluded |
+| `just go-check` | Gnark Go formatting, compilation, tests, and vet |
+| `just gnark-proof-tests` | Fast witness, statement, and Go checks |
+| `just note-seizure-proof-tests` | Real seizure proofs and host state transitions |
+| `just gnark-proof-tests-slow` | Real release-mode proofs using both library and daemon transports |
+| `just snarkpack-slow` | Release-mode oracle and two-way aggregation interoperability |
+| `just snarkpack-dos-gate` | Release latency and bounded-size rejection gate |
+| `just proto-check` | Deterministic Rust/Go generation and schema closure |
+| `just features-check` | Independent native crate feature builds |
+| `just wasm-check` | Supported domain crates without component features on WASM |
+| `just smoke` | Fresh process-compose network, wallet, CLI, and node integration |
 
-```bash
-nix develop
-```
+## Real proof tests
 
-## Quick Reference
+Proof-generating unit tests are explicitly ignored. `just gnark-proof-tests-slow`
+selects only these tests in release mode and validates their prerequisites.
+It exercises Transfer, both NoteReshape families, both withdrawal callers, and
+daemon-backed NoteSeizure. Missing artifacts or transports fail the command.
+Fixture-blessing tests remain separate and are never selected by this command.
 
-| Command | Scope | When to Use |
-|---------|-------|-------------|
-| `cargo test --release -p <crate> --lib` | Single crate | Active development |
-| `just test` | All unit tests (nextest) | Before commit |
-| `just go-test` | `tools/gnark` Go tests only | Fast circuit/gadget iteration |
-| `just go-check` | `tools/gnark` format/build/test/vet | Before commit on gnark changes |
-| `just gnark-proof-tests` | Fast gnark inner-loop checks | During transfer/NoteReshape development |
-| `just note-seizure-proof-tests` | Real daemon, compiled verifier, and host seizure state transition | Every PR and merge candidate |
-| `just gnark-proof-tests-slow` | End-to-end gnark proof generation | Before PR on shielded-action changes |
-| `just smoke` | End-to-end | Before PR (transaction changes) |
-| `just integration-pcli` | pcli tests | Before PR (CLI changes) |
+## Scanner
 
-## Scanner Core
+`cargo test -p shieldd-sdk-compliance --lib` covers atomic block persistence,
+restart/replay, reorg rollback, bounded invalid outcomes, and audit validation.
+The transaction crate's
+`compliance_scanner_transaction_id_matches_canonical_transaction_id` test checks
+scanner output identities against `Transaction::id()`.
 
-Use these when changing issuer compliance scanning:
+Scanner databases use a schema guard. Recreate incompatible development state;
+there is no migration or version-adoption path.
 
-```bash
-cargo test -p shieldd-sdk-compliance --lib scanner::
-cargo test -p shieldd-sdk-compliance --lib audit::
-cargo test -p shieldd-sdk-compliance --lib evidence::
-cargo test -p shieldd-sdk-compliance --lib audit_validation::
-cargo test -p shieldd-sdk-transaction compliance_scanner_transaction_id_matches_canonical_transaction_id --lib
-cargo check -p shieldd-sdk-compliance -p shieldd-sdk-transaction -p pcli -p orbis-audit -p orbis-integration
-cd tools/gnark && go test ./internal/circuits ./internal/compliance
-```
+## Orbis
 
-The transaction parity test is mandatory: the scanner-side transaction hash
-helper must continue to match `Transaction::id()`.
-
-Run the real transfer proof roundtrip with bundled proving keys:
-
-```bash
-cargo test --release -p shieldd-sdk-shielded-pool --features bundled-proving-keys transfer_proof_roundtrip --lib
-```
-
-The note-seizure recipe sets both daemon and artifact paths explicitly. Its
-host test checks invalid-release rollback, successful seizure, duplicate-note
-rejection, persisted audit replay, and exact-source idempotency. Running unit
-tests without those environment variables skips the daemon tests and is not
-proof-path verification.
-
-Smoke the scanner CLI shape with:
-
-```bash
-pcli tx compliance scan run --node http://127.0.0.1:8080 --db /tmp/compliance-scanner.db --dk-hex <hex> --scan-asset-id <asset>
-pcli tx compliance scan catch-up --node http://127.0.0.1:8080 --db /tmp/compliance-scanner.db --dk-hex <hex> --scan-asset-id <asset>
-```
-
-Only the DB-backed scanner commands above are supported. Audit-demo exports
-frontend-compatible `scan`, `scanner`, `ledgerRows`, and `audits` state from the
-scanner DB.
-
-## Standard Preflight
-
-```bash
-just ci-preflight
-```
+`just orbis-integration-up` builds the binaries and starts Shieldd and the pinned
+Orbis/Vera Compose stack. `just orbis-integration-setup-ring /tmp/orbis-state.json`
+creates the test ring and policy. Use `just orbis-integration-down` for cleanup.
+The retained Docker workflow requires Docker Compose v2.

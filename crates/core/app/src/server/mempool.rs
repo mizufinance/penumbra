@@ -110,18 +110,12 @@ impl Mempool {
         app.set_block_tx_indexing_mode(BlockTxIndexingMode::NoIndex);
 
         match app
-            .deliver_tx_bytes_profiled(tx_bytes.as_ref(), Some(stateless_cache.as_ref()))
+            .deliver_tx_bytes(tx_bytes.as_ref(), Some(stateless_cache.as_ref()))
             .await
         {
-            Ok((events, profile)) => {
+            Ok(events) => {
                 let elapsed = start.elapsed();
-                App::emit_checktx_breakdown(&profile);
-                tracing::info!(
-                    ?elapsed,
-                    execute_ms = profile.execute_ms,
-                    check_historical_ms = profile.check_historical_ms,
-                    "tx accepted"
-                );
+                tracing::info!(?elapsed, "tx accepted");
                 metrics::histogram!(
                     metrics::MEMPOOL_CHECKTX_DURATION,
                     "kind" => kind_str,

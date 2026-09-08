@@ -15,9 +15,6 @@ use shieldd_sdk_keys::{
 use shieldd_sdk_proto::shieldd::core::component::shielded_pool::v1 as pb;
 use thiserror;
 
-mod r1cs;
-pub use r1cs::NoteVar;
-
 pub use shieldd_sdk_tct::StateCommitment;
 
 use shieldd_sdk_asset::{asset, balance, Value, ValueView};

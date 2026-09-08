@@ -17,15 +17,13 @@ use {
     shieldd_sdk_keys::{keys::AddressIndex, symmetric::PayloadKey, test_keys},
     shieldd_sdk_mock_client::MockClient,
     shieldd_sdk_mock_consensus::TestNode,
-    shieldd_sdk_shielded_pool::{
-        genesis::Allocation, ShieldedInputPlan, ShieldedOutputPlan, TransferPlan,
-    },
+    shieldd_sdk_shielded_pool::{genesis::Allocation, ShieldedInputPlan, ShieldedOutputPlan},
     shieldd_sdk_transaction::{
         memo::MemoPlaintext,
         plan::{ActionPlan, MemoPlan},
-        TransactionParameters, TransactionPlan,
+        TransactionParameters,
     },
-    shieldd_sdk_view::enrich_plan_with_compliance,
+    shieldd_sdk_view::complete_plan_with_compliance,
     std::ops::Deref,
     tap::{Tap, TapFallible},
     tracing::info,
@@ -91,28 +89,36 @@ async fn compliance_enrichment_preserves_sender_diversifier_on_supported_transfe
             true,
         )
         .await?;
-    common::register_test_users_for_compliance(
-        &mut build_state,
-        &[sender.clone(), recipient.clone()],
-        &[asset_id],
-    )
-    .await?;
+    for address in [sender.clone(), recipient.clone()] {
+        let rnk_dh_pk = address.diversified_generator().clone();
+        let rnk = shieldd_sdk_compliance::derive_regulated_nullifier_key(
+            client.fvk.incoming(),
+            &address,
+            asset_id,
+            ring_pk,
+            rnk_dh_pk,
+        )?;
+        let leaf = shieldd_sdk_compliance::ComplianceLeaf::registered_from_rnk(
+            address, asset_id, ring_pk, rnk_dh_pk, rnk,
+        )?;
+        build_state.test_only_add_compliance_leaf(leaf).await?;
+    }
 
-    let mut spend = ShieldedInputPlan::new(
+    let spend = ShieldedInputPlan::new(
         &mut OsRng,
         note.clone(),
         client
             .position(note.commit())
             .ok_or_else(|| anyhow!("sender note position unknown"))?,
     );
-    let mut output = ShieldedOutputPlan::new(&mut OsRng, note.value(), recipient.clone());
-    common::align_transfer_planning_metadata(
-        std::slice::from_mut(&mut spend),
-        std::slice::from_mut(&mut output),
-    );
-    let transfer = TransferPlan::new(vec![spend], vec![output], Fr::from(1u64))?;
+    let output = ShieldedOutputPlan::new(&mut OsRng, note.value(), recipient.clone());
+    let transfer = shieldd_sdk_mock_client::TransferIntent {
+        spends: vec![spend],
+        outputs: vec![output],
+        value_blinding: Fr::from(1u64),
+    };
 
-    let mut plan = TransactionPlan {
+    let intent = shieldd_sdk_mock_client::TransactionIntent {
         nullifier_window: Some(
             shieldd_sdk_sct::nullifier_tree::generation_state(&build_state)
                 .await?
@@ -131,7 +137,22 @@ async fn compliance_enrichment_preserves_sender_diversifier_on_supported_transfe
     };
 
     let provider = shieldd_sdk_mock_client::StateReadComplianceProvider::new(build_state);
-    enrich_plan_with_compliance(&mut plan, &provider, &mut OsRng, None).await?;
+    let plan = complete_plan_with_compliance(
+        intent,
+        |queries| async move {
+            shieldd_sdk_compliance::ComplianceProofProvider::get_batch_proofs(&provider, &queries)
+                .await
+                .map(|compliance| shieldd_sdk_view::CompletionData {
+                    compliance,
+                    volumes: vec![],
+                })
+        },
+        &mut OsRng,
+        Default::default(),
+        None,
+        true,
+    )
+    .await?;
 
     let witness_data = client.witness_plan(&plan)?;
     let dummy_payload_key: PayloadKey = [0u8; 32].into();

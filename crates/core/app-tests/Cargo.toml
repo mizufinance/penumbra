@@ -8,8 +8,6 @@ repository  = { workspace = true }
 license     = { workspace = true }
 description = "Tests for the Shieldd app"
 publish     = false
-# Disable auto-discovery so we can explicitly list tests
-autotests   = false
 
 [features]
 component = [
@@ -126,47 +124,3 @@ workspace = true
 features = [
     "bundled-proving-keys",
 ]
-
-# Explicitly list tests to run. Tests not listed here are excluded.
-# Many tests need updates to use MockClient::witness_auth_build_with_compliance
-# for compliance anchor support. See CLAUDE.md for details.
-
-# Tests that don't use shielded input/output plans (no compliance anchor needed):
-[[test]]
-name = "app_blocktimes_increment"
-path = "tests/app_blocktimes_increment.rs"
-
-[[test]]
-name = "mock_consensus_can_send_a_sequence_of_empty_blocks"
-path = "tests/mock_consensus_can_send_a_sequence_of_empty_blocks.rs"
-
-# IBC proof verification test (uses IbcRelay action, not regulated):
-[[test]]
-name = "mock_consensus_block_proving"
-path = "tests/mock_consensus_block_proving.rs"
-
-# Tests updated to use compliance registration + witness_auth_build_with_compliance:
-# IBC transfer test with compliance setup:
-[[test]]
-name = "ics23_transfer"
-path = "tests/ics23_transfer.rs"
-
-[[test]]
-name = "ibc_vs_transfer_benchmark"
-path = "tests/ibc_vs_transfer_benchmark.rs"
-
-[[test]]
-name = "app_can_transfer_notes_and_detect_new_notes"
-path = "tests/app_can_transfer_notes_and_detect_new_notes.rs"
-
-[[test]]
-name = "compliance_diversifier_fix"
-path = "tests/compliance_diversifier_fix.rs"
-
-[[test]]
-name = "view_server_can_be_served_on_localhost"
-path = "tests/view_server_can_be_served_on_localhost.rs"
-
-[[test]]
-name = "app_can_sweep_a_collection_of_small_notes"
-path = "tests/app_can_sweep_a_collection_of_small_notes.rs"

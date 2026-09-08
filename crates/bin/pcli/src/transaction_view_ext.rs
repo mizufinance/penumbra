@@ -1,75 +1,37 @@
 use comfy_table::presets;
 use comfy_table::Table;
 use shieldd_sdk_asset::ValueView;
-use shieldd_sdk_fee::Fee;
 use shieldd_sdk_keys::AddressView;
 use shieldd_sdk_transaction::TransactionView;
 
-// Issues identified:
-// TODO: FeeView
-// TODO: TradingPairView
-// Implemented some helper functions which may make more sense as methods on existing Structs
-
-// a helper function to create pretty placeholders for encrypted information
 fn format_opaque_bytes(bytes: &[u8]) -> String {
     if bytes.len() < 8 {
         return String::new();
-    } else {
-        /*
-        // TODO: Hm, this can allow the same color for both, should rejig things to avoid this
-        // Select foreground and background colors based on the first 8 bytes.
-        let fg_color_index = bytes[0] % 8;
-        let bg_color_index = bytes[4] % 8;
-
-        // ANSI escape codes for foreground and background colors.
-        let fg_color_code = 37; // 30 through 37 are foreground colors
-        let bg_color_code = 40; // 40 through 47 are background colors
-        */
-
-        // to be more general, perhaps this should be configurable
-        // an opaque address needs less space than an opaque memo, etc
-        let max_bytes = 32;
-        let rem = if bytes.len() > max_bytes {
-            bytes[0..max_bytes].to_vec()
-        } else {
-            bytes.to_vec()
-        };
-
-        // Convert the rest of the bytes to hexadecimal.
-        let hex_str = hex::encode_upper(rem);
-        let opaque_chars: String = hex_str
-            .chars()
-            .map(|c| {
-                match c {
-                    '0' => "\u{2595}",
-                    '1' => "\u{2581}",
-                    '2' => "\u{2582}",
-                    '3' => "\u{2583}",
-                    '4' => "\u{2584}",
-                    '5' => "\u{2585}",
-                    '6' => "\u{2586}",
-                    '7' => "\u{2587}",
-                    '8' => "\u{2588}",
-                    '9' => "\u{2589}",
-                    'A' => "\u{259A}",
-                    'B' => "\u{259B}",
-                    'C' => "\u{259C}",
-                    'D' => "\u{259D}",
-                    'E' => "\u{259E}",
-                    'F' => "\u{259F}",
-                    _ => "",
-                }
-                .to_string()
-            })
-            .collect();
-
-        //format!("\u{001b}[{};{}m{}", fg_color_code, bg_color_code, block_chars)
-        format!("{}", opaque_chars)
     }
+    hex::encode_upper(&bytes[..bytes.len().min(32)])
+        .chars()
+        .map(|c| match c {
+            '0' => '\u{2595}',
+            '1' => '\u{2581}',
+            '2' => '\u{2582}',
+            '3' => '\u{2583}',
+            '4' => '\u{2584}',
+            '5' => '\u{2585}',
+            '6' => '\u{2586}',
+            '7' => '\u{2587}',
+            '8' => '\u{2588}',
+            '9' => '\u{2589}',
+            'A' => '\u{259A}',
+            'B' => '\u{259B}',
+            'C' => '\u{259C}',
+            'D' => '\u{259D}',
+            'E' => '\u{259E}',
+            'F' => '\u{259F}',
+            _ => unreachable!("hex encoding emits only hexadecimal characters"),
+        })
+        .collect()
 }
 
-// feels like these functions should be extension traits of their respective structs
-// propose moving this to core/keys/src/address/view.rs
 fn format_address_view(address_view: &AddressView) -> String {
     match address_view {
         AddressView::Decoded {
@@ -91,8 +53,6 @@ fn format_address_view(address_view: &AddressView) -> String {
     }
 }
 
-// feels like these functions should be extension traits of their respective structs
-// propose moving this to core/asset/src/value.rs
 fn format_value_view(value_view: &ValueView) -> String {
     match value_view {
         ValueView::KnownAssetId {
@@ -109,11 +69,6 @@ fn format_value_view(value_view: &ValueView) -> String {
     }
 }
 
-fn format_fee(fee: &Fee) -> String {
-    // TODO: Implement FeeView to show decrypted fee.
-    format!("{}", fee.amount())
-}
-
 pub trait TransactionViewExt {
     /// Render this transaction view on stdout.
     fn render_terminal(&self);
@@ -122,8 +77,7 @@ pub trait TransactionViewExt {
 impl TransactionViewExt for TransactionView {
     fn render_terminal(&self) {
         let fee = &self.body_view.transaction_parameters.fee;
-        // the denomination should be visible here... does a FeeView exist?
-        println!("Fee: {}", format_fee(&fee));
+        println!("Fee: {}", fee.amount());
 
         println!(
             "Expiration Height: {}",
@@ -149,7 +103,6 @@ impl TransactionViewExt for TransactionView {
         actions_table.load_preset(presets::NOTHING);
         actions_table.set_header(vec!["Tx Action", "Description"]);
 
-        // Iterate over the ActionViews in the TxView & display as appropriate
         for action_view in &self.body_view.action_views {
             let action: String;
 

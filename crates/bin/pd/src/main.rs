@@ -17,8 +17,7 @@ use cnidarium::Storage;
 use decaf377_rdsa::{SpendAuth, VerificationKey};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use pd::{
-    cli::{MigrateCommand, NetworkCommand, Opt, RootCommand},
-    migrate::Migration::{IbcClientRecovery, NoOp},
+    cli::{NetworkCommand, Opt, RootCommand},
     network::{
         config::{get_network_dir, parse_tm_address, url_has_necessary_parts},
         generate::NetworkConfig,
@@ -28,7 +27,7 @@ use pd::{
 use rand::Rng;
 use rand_core::OsRng;
 use rustls::crypto::aws_lc_rs;
-use shieldd_sdk_app::app_version::check_and_update_app_version;
+use shieldd_sdk_app::app_version::check_app_version;
 use shieldd_sdk_app::{APP_VERSION, SUBSTORE_PREFIXES};
 use shieldd_sdk_keys::ensure_nonidentity_spend_auth_key;
 use shieldd_sdk_tower_trace::remote_addr;
@@ -36,7 +35,6 @@ use tendermint_config::net::Address as TendermintAddress;
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
-use tracing::Instrument as _;
 use tracing_subscriber::{prelude::*, EnvFilter};
 use url::Url;
 
@@ -127,7 +125,7 @@ async fn main() -> anyhow::Result<()> {
                 .context(
                     "Unable to initialize RocksDB storage - is there another `pd` process running?",
                 )?;
-            check_and_update_app_version(storage.clone()).await?;
+            check_app_version(&storage).await?;
             let generation_packs = shieldd_sdk_sct::generation_pack::GenerationPackRepository::new(
                 pd_home.join(pd::nullifier_generation_packs::DIRECTORY),
                 1,
@@ -395,12 +393,11 @@ async fn main() -> anyhow::Result<()> {
         } => {
             // Build script computes the latest testnet name and sets it as an env variable
             let chain_id = match preserve_chain_id {
-                true => chain_id.unwrap_or_else(|| env!("PD_LATEST_TESTNET_NAME").to_string()),
+                true => chain_id.unwrap_or_else(|| "shieldd-localnet".to_string()),
                 false => {
                     // If preserve_chain_id is false, we append a random suffix to avoid collisions
                     let randomizer = OsRng.gen::<u32>();
-                    let chain_id =
-                        chain_id.unwrap_or_else(|| env!("PD_LATEST_TESTNET_NAME").to_string());
+                    let chain_id = chain_id.unwrap_or_else(|| "shieldd-localnet".to_string());
                     // We insert an 'x' in the randomized hex string to ensure it's not parsed as a
                     // revision id.
                     format!("{}-x{}", chain_id, hex::encode(randomizer.to_le_bytes()))
@@ -467,7 +464,6 @@ async fn main() -> anyhow::Result<()> {
             home,
             export_directory,
             export_archive,
-            prune,
         } => {
             use fs_extra;
 
@@ -495,20 +491,9 @@ async fn main() -> anyhow::Result<()> {
             }
             tracing::info!("finished copying node state");
 
-            // If prune=true, then export-directory is required, because we must munge state prior
-            // to compressing. So we'll just mandate the presence of the --export-directory arg
-            // always.
-            if prune {
-                unimplemented!("storage pruning is unimplemented (for now)")
-            }
-
             // Compress to tarball if requested.
             if let Some(archive_filepath) = export_archive {
-                pd::migrate::archive_directory(
-                    export_directory.clone(),
-                    archive_filepath.clone(),
-                    None,
-                )?;
+                pd::export::archive_directory(export_directory.clone(), archive_filepath.clone())?;
                 tracing::info!("export complete: {}", archive_filepath.display());
             } else {
                 // Provide friendly "OK" message that's still accurate without archiving.
@@ -577,81 +562,6 @@ async fn main() -> anyhow::Result<()> {
                 bytes = receipt.byte_length,
                 "nullifier generation pack verified"
             );
-        }
-        RootCommand::Migrate {
-            home,
-            comet_home,
-            force,
-            migration_type,
-        } => {
-            let (pd_home, comet_home) = match home {
-                Some(h) => (h, comet_home),
-                None => {
-                    // If no pd_home was configured, we're assuming we set up the
-                    // data in the default location, in which case we also know where comet lives.
-                    let base = get_network_dir(None).join("node0");
-                    (base.join("pd"), Some(base.join("cometbft")))
-                }
-            };
-            let pd_migrate_span = tracing::error_span!("pd_migrate");
-            pd_migrate_span
-                .in_scope(|| tracing::info!("migrating pd state in {}", pd_home.display()));
-
-            // Handle migration subcommands
-            match migration_type {
-                Some(MigrateCommand::IbcRecovery {
-                    old_client_id,
-                    new_client_id,
-                    target_app_version,
-                }) => {
-                    tracing::info!(
-                        "performing IBC client recovery: {} -> {} (app_version: {:?})",
-                        old_client_id,
-                        new_client_id,
-                        target_app_version
-                    );
-                    IbcClientRecovery
-                        .migrate_with_params(
-                            pd_home,
-                            comet_home,
-                            None,
-                            force,
-                            vec![
-                                old_client_id,
-                                new_client_id,
-                                target_app_version
-                                    .map(|v| v.to_string())
-                                    .unwrap_or_default(),
-                            ],
-                        )
-                        .instrument(pd_migrate_span)
-                        .await
-                        .context("failed to perform IBC client recovery")?;
-                }
-                Some(MigrateCommand::NoOp { target_app_version }) => {
-                    tracing::info!(target_app_version, "performing no-op migration");
-                    NoOp.migrate_with_params(
-                        pd_home,
-                        comet_home,
-                        None,
-                        force,
-                        vec![target_app_version
-                            .map(|v| v.to_string())
-                            .unwrap_or_default()],
-                    )
-                    .instrument(pd_migrate_span)
-                    .await
-                    .context("failed to perform no-op migration")?;
-                }
-                None => {
-                    let genesis_start = pd::migrate::last_block_timestamp(pd_home.clone()).await?;
-                    tracing::info!(?genesis_start, "last block timestamp");
-                    tracing::error!(
-                        app_version = APP_VERSION,
-                        "no default migration is defined for this prototype state version; use an explicit migration command or reset the node state"
-                    );
-                }
-            }
         }
     }
     Ok(())

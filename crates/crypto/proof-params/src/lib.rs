@@ -21,12 +21,6 @@ pub mod batch;
 mod gnark_artifact_validation;
 pub mod historical;
 pub mod statement_hash;
-mod traits;
-
-pub use traits::{
-    generate_constraint_matrices, generate_prepared_test_parameters, generate_test_parameters,
-    DummyWitness, ProvingKeyExt, VerifyingKeyExt,
-};
 
 include!(concat!(env!("OUT_DIR"), "/gnark_bundled.rs"));
 

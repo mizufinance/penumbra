@@ -1,3 +1,4 @@
+use shieldd_sdk_compliance::ComplianceQuery;
 use std::{collections::BTreeMap, future::Future, pin::Pin};
 
 use anyhow::Result;
@@ -43,6 +44,16 @@ pub(crate) type BroadcastStatusStream = Pin<
 ///   enforce that it is a tower `Service`.
 #[allow(clippy::type_complexity)]
 pub trait ViewClient {
+    fn volume_accumulator_recovery(
+        &mut self,
+        subject: decaf377::Fq,
+        day_start: u64,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<crate::storage::VolumeAccumulatorRecovery>> + Send + 'static,
+        >,
+    >;
+
     /// Get the current status of chain sync.
     fn status(
         &mut self,
@@ -360,7 +371,7 @@ pub trait ViewClient {
     /// because it makes a single gRPC call and fetches the tree anchors only once.
     fn compliance_batch_merkle_proofs(
         &mut self,
-        queries: Vec<(Address, asset::Id)>,
+        queries: Vec<ComplianceQuery>,
     ) -> Pin<
         Box<dyn Future<Output = Result<pb::ComplianceBatchMerkleProofsResponse>> + Send + 'static>,
     >;
@@ -380,6 +391,29 @@ where
     T::Future: Send + 'static,
     <T::ResponseBody as tonic::codegen::Body>::Error: Into<tonic::codegen::StdError> + Send,
 {
+    fn volume_accumulator_recovery(
+        &mut self,
+        subject: decaf377::Fq,
+        day_start: u64,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<crate::storage::VolumeAccumulatorRecovery>> + Send + 'static,
+        >,
+    > {
+        let mut client = self.clone();
+        async move {
+            let response = client
+                .volume_accumulator_recovery(pb::VolumeAccumulatorRecoveryRequest {
+                    subject: subject.to_bytes().to_vec(),
+                    day_start,
+                })
+                .await?
+                .into_inner();
+            crate::planning_io::decode_volume_recovery(response, subject, day_start)
+        }
+        .boxed()
+    }
+
     fn status(
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<pb::StatusResponse>> + Send + 'static>> {
@@ -1043,7 +1077,7 @@ where
 
     fn compliance_batch_merkle_proofs(
         &mut self,
-        queries: Vec<(Address, asset::Id)>,
+        queries: Vec<ComplianceQuery>,
     ) -> Pin<
         Box<dyn Future<Output = Result<pb::ComplianceBatchMerkleProofsResponse>> + Send + 'static>,
     > {
@@ -1051,10 +1085,12 @@ where
         async move {
             let proto_queries = queries
                 .into_iter()
-                .map(|(address, asset_id)| pb::ComplianceBatchQuery {
-                    address: Some(address.into()),
-                    asset_id: Some(asset_id.into()),
-                })
+                .map(
+                    |ComplianceQuery { address, asset_id }| pb::ComplianceBatchQuery {
+                        address: Some(address.into()),
+                        asset_id: Some(asset_id.into()),
+                    },
+                )
                 .collect();
 
             let request = pb::ComplianceBatchMerkleProofsRequest {

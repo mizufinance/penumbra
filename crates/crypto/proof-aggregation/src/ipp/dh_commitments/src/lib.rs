@@ -14,9 +14,6 @@ pub mod pedersen;
 
 pub type Error = Box<dyn ErrorTrait>;
 
-//TODO: support CanonicalSerialize
-//TODO: Using MulAssign instead of Mul because the group trait does not support Mul
-
 pub trait DoublyHomomorphicCommitment: Clone {
     type Scalar: PrimeField;
     type Message: CanonicalSerialize

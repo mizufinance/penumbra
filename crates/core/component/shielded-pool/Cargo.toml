@@ -19,7 +19,6 @@ component = [
     "ibc-proto/server",
     "ibc-proto/transport",
 ]
-# proving-keys = ["shieldd-sdk-proof-params/proving-keys"]
 default = ["std", "component"]
 std = ["ark-ff/std"]
 bundled-proving-keys = ["shieldd-sdk-proof-params/bundled-proving-keys"]
@@ -29,7 +28,6 @@ parallel = [
     "poseidon377/parallel",
     "decaf377-rdsa/parallel",
     "ark-groth16/parallel",
-    "ark-r1cs-std/parallel",
     "decaf377/parallel",
     "tonic",
 ]
@@ -42,8 +40,6 @@ anyhow = {workspace = true}
 ark-ec = {workspace = true, default-features = false}
 ark-ff = {workspace = true, default-features = false}
 ark-groth16 = {workspace = true, default-features = false}
-ark-r1cs-std = {workspace = true, default-features = false}
-ark-relations = {workspace = true}
 ark-serialize = {workspace = true}
 ark-snark = {workspace = true}
 async-stream = {workspace = true}
@@ -54,7 +50,7 @@ bytes = {workspace = true}
 chacha20poly1305 = {workspace = true}
 cnidarium = {workspace = true, optional = true, default-features = true}
 cnidarium-component = {workspace = true, optional = true, default-features = true}
-decaf377 = {workspace = true, features = ["r1cs"], default-features = true}
+decaf377 = {workspace = true, default-features = true}
 decaf377-ka = {workspace = true}
 decaf377-rdsa = {workspace = true}
 futures = {workspace = true}
@@ -76,7 +72,7 @@ shieldd-sdk-proto = {workspace = true, default-features = false}
 shieldd-sdk-sct = {workspace = true, default-features = false}
 shieldd-sdk-tct = {workspace = true, default-features = true}
 shieldd-sdk-txhash = {workspace = true, default-features = false}
-poseidon377 = {workspace = true, features = ["r1cs"]}
+poseidon377 = {workspace = true}
 prost = {workspace = true}
 rand = {workspace = true}
 rand_core = {workspace = true, features = ["getrandom"]}
@@ -91,6 +87,10 @@ tonic = {workspace = true, optional = true}
 tracing = {workspace = true}
 
 [dev-dependencies]
+decaf377 = {workspace = true, features = ["r1cs"]}
+poseidon377 = {workspace = true, features = ["r1cs"]}
+ark-r1cs-std = {workspace = true}
+ark-relations = {workspace = true}
 criterion = {workspace = true}
 shieldd-sdk-compliance = {workspace = true, default-features = false, features = ["test-helpers"]}
 shieldd-sdk-proof-params = {workspace = true, default-features = false}

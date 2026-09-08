@@ -295,10 +295,9 @@ message TransferPlan {
   repeated ShieldedOutputPlan outputs = 5;
   // Protocol routing parameter set used to construct and prove the action.
   DiscoveryParameters routing_parameters = 6;
-  // Daily undisclosed-volume transition or a private padding transition.
-  VolumeAccumulatorPlan volume_accumulator = 7;
-  // Ordinary for user actions; fee funding is assigned only by the fee builder.
-  TransferProofContext proof_context = 8;
+  TransferContext compliance = 7;
+  VolumeAccumulatorPlan volume_accumulator = 8;
+  TransferProofContext proof_context = 9;
 }
 
 // Releases shielded value for transfer or execution on the host chain.
@@ -402,8 +401,8 @@ message ShieldedHostWithdrawalPlan {
   HostWithdrawal withdrawal = 6;
   // Protocol-wide routing parameters bound by the reused withdrawal proof.
   DiscoveryParameters routing_parameters = 7;
-  // Daily undisclosed-volume transition or a private padding transition.
-  VolumeAccumulatorPlan volume_accumulator = 8;
+  WithdrawalContext compliance = 8;
+  VolumeAccumulatorPlan volume_accumulator = 9;
 }
 
 message ShieldedIcs20WithdrawalChangeBody {
@@ -484,8 +483,8 @@ message ShieldedIcs20WithdrawalPlan {
   shieldd.core.component.ibc.v1.Ics20Withdrawal withdrawal = 6;
   // Protocol routing parameter set used to construct and prove the action.
   DiscoveryParameters routing_parameters = 7;
-  // Daily undisclosed-volume transition or a private padding transition.
-  VolumeAccumulatorPlan volume_accumulator = 8;
+  WithdrawalContext compliance = 8;
+  VolumeAccumulatorPlan volume_accumulator = 9;
 }
 
 message NoteReshapeInputBody {
@@ -570,6 +569,7 @@ message NoteReshapePlan {
   uint32 family_id = 6;
   // Protocol routing parameter set used to construct and prove the action.
   DiscoveryParameters routing_parameters = 7;
+  NoteReshapeContext compliance = 8;
 }
 
 // ABCI Event recording a spent nullifier.
@@ -583,77 +583,17 @@ message EventNoteCreated {
 }
 
 message ShieldedInputPlan {
-  reserved 5, 6, 8, 11, 12, 13, 22 to 29;
-
-  // The plaintext note we plan to spend.
   Note note = 1;
-  // The position of the note we plan to spend.
   uint64 position = 2;
-  // The randomizer to use for the spend.
   bytes randomizer = 3;
-  // The blinding factor to use for the value commitment.
   bytes value_blinding = 4;
-  // Target timestamp for compliance verification (Unix UTC seconds).
-  uint64 target_timestamp = 7;
-  // Whether the asset is regulated (requires compliance).
-  bool is_regulated = 9;
-  // Compliance leaf for ZK proof (sender's registry entry).
-  compliance.v1.ComplianceLeaf compliance_leaf = 10;
-  // Shared transaction blinding nonce (same for spend and output in one transaction).
-  bytes tx_blinding_nonce = 14;
-  // The compliance anchor (user tree root) for proof generation.
-  crypto.tct.v1.StateCommitment compliance_anchor = 15;
-  // The asset anchor (asset tree root) for proof generation.
-  crypto.tct.v1.StateCommitment asset_anchor = 16;
-  // Compliance Merkle path for proving user is in the compliance registry.
-  compliance.v1.MerklePath compliance_path = 17;
-  // Position of the user's compliance leaf in the compliance tree.
-  uint64 compliance_position = 18;
-  // Asset Merkle path for proving asset is in the asset registry.
-  compliance.v1.MerklePath asset_path = 19;
-  // Position of the asset in the asset registry tree.
-  uint64 asset_position = 20;
-  // Indexed leaf data for IMT proof verification (value, next_index, next_value).
-  compliance.v1.IndexedLeafData asset_indexed_leaf = 21;
-  // Full compliance asset policy for regulated assets.
-  compliance.v1.AssetPolicy asset_policy = 30;
 }
 
 message ShieldedOutputPlan {
-  reserved 5, 6, 8, 11 to 13, 22 to 38;
-
-  // The value to send to this output.
   asset.v1.Value value = 1;
-  // The destination address to send it to.
   keys.v1.Address dest_address = 2;
-  // The rseed to use for the new note.
   bytes rseed = 3;
-  // The blinding factor to use for the value commitment.
   bytes value_blinding = 4;
-  // Target timestamp for compliance verification (Unix UTC seconds).
-  uint64 target_timestamp = 7;
-  // Whether the asset is regulated (requires compliance).
-  bool is_regulated = 9;
-  // Compliance leaf for ZK proof (recipient's registry entry).
-  compliance.v1.ComplianceLeaf compliance_leaf = 10;
-  // Shared transaction blinding nonce (same for spend and output in one transaction).
-  bytes tx_blinding_nonce = 14;
-  // The compliance anchor (user tree root) for proof generation.
-  crypto.tct.v1.StateCommitment compliance_anchor = 15;
-  // The asset anchor (asset tree root) for proof generation.
-  crypto.tct.v1.StateCommitment asset_anchor = 16;
-  // Compliance Merkle path for proving user is in the compliance registry.
-  compliance.v1.MerklePath compliance_path = 17;
-  // Position of the user's compliance leaf in the compliance tree.
-  uint64 compliance_position = 18;
-  // Asset Merkle path for proving asset is in the asset registry.
-  compliance.v1.MerklePath asset_path = 19;
-  // Position of the asset in the asset registry tree.
-  uint64 asset_position = 20;
-  // Indexed leaf data for IMT proof verification (value, next_index, next_value).
-  compliance.v1.IndexedLeafData asset_indexed_leaf = 21;
-  // Full compliance asset policy for regulated assets.
-  compliance.v1.AssetPolicy asset_policy = 39;
 }
 
 // Query operations for the shielded pool component.
@@ -747,4 +687,44 @@ message EventInboundFungibleTokenTransfer {
   // The receiver on this chain.
   core.keys.v1.Address receiver = 3;
   FungibleTokenTransferPacketMetadata meta = 4;
+}
+
+message AssetWitness {
+  asset.v1.AssetId asset_id = 1;
+  crypto.tct.v1.StateCommitment root = 2;
+  compliance.v1.IndexedLeafData leaf = 3;
+  uint64 position = 4;
+  compliance.v1.MerklePath path = 5;
+  bool is_regulated = 6;
+}
+
+message UserWitness {
+  compliance.v1.ComplianceLeaf leaf = 1;
+  uint64 position = 2;
+  compliance.v1.MerklePath path = 3;
+}
+
+message ActionWitness {
+  AssetWitness asset = 1;
+  crypto.tct.v1.StateCommitment user_root = 2;
+  UserWitness sender = 3;
+  compliance.v1.AssetPolicy policy = 4;
+}
+
+message TransferContext {
+  ActionWitness witness = 1;
+  UserWitness recipient = 2;
+  uint64 timestamp = 4;
+  bytes nonce = 5;
+}
+
+message NoteReshapeContext {
+  ActionWitness witness = 1;
+  bytes nonce = 2;
+}
+
+message WithdrawalContext {
+  ActionWitness witness = 1;
+  uint64 timestamp = 2;
+  bytes nonce = 3;
 }

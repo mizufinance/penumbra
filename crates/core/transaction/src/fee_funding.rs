@@ -25,6 +25,15 @@ pub struct FeeFundingPlan {
 }
 
 impl FeeFundingPlan {
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.transfer.proof_context
+                == shieldd_sdk_shielded_pool::TransferProofContext::FeeFunding,
+            "fee funding requires its explicit proof context"
+        );
+        self.transfer.validate()
+    }
+
     #[cfg(any(unix, windows))]
     pub fn build_unauth(
         &self,
@@ -33,8 +42,8 @@ impl FeeFundingPlan {
         memo_key: &shieldd_sdk_keys::symmetric::PayloadKey,
         recent_position_floor: u64,
     ) -> Result<FeeFunding> {
-        let mut transfer_plan = self.transfer.clone();
-        transfer_plan.set_fee_funding_context();
+        self.validate()?;
+        let transfer_plan = &self.transfer;
         let auth_paths = self
             .transfer
             .spends
@@ -77,8 +86,8 @@ impl FeeFundingPlan {
         memo_key: &shieldd_sdk_keys::symmetric::PayloadKey,
         recent_position_floor: u64,
     ) -> Result<EffectHash> {
-        let mut transfer = self.transfer.clone();
-        transfer.set_fee_funding_context();
+        self.validate()?;
+        let transfer = &self.transfer;
         transfer
             .transfer_body(
                 fvk,
@@ -162,8 +171,7 @@ impl DomainType for FeeFundingPlan {
 
 impl From<FeeFundingPlan> for pbt::FeeFundingPlan {
     fn from(value: FeeFundingPlan) -> Self {
-        let mut transfer = value.transfer;
-        transfer.set_fee_funding_context();
+        let transfer = value.transfer;
         Self {
             transfer: Some(transfer.into()),
         }
@@ -174,11 +182,12 @@ impl TryFrom<pbt::FeeFundingPlan> for FeeFundingPlan {
     type Error = Error;
 
     fn try_from(proto: pbt::FeeFundingPlan) -> Result<Self, Self::Error> {
-        let mut transfer: TransferPlan = proto
+        let transfer: TransferPlan = proto
             .transfer
             .ok_or_else(|| anyhow!("missing fee funding transfer plan"))?
             .try_into()?;
-        transfer.set_fee_funding_context();
-        Ok(Self { transfer })
+        let plan = Self { transfer };
+        plan.validate()?;
+        Ok(plan)
     }
 }

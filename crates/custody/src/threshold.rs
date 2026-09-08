@@ -483,20 +483,12 @@ mod test {
         )?;
         let spend =
             shieldd_sdk_shielded_pool::ShieldedInputPlan::new(&mut OsRng, note, 0u64.into());
-        let mut output =
+        let output =
             shieldd_sdk_shielded_pool::ShieldedOutputPlan::new(&mut OsRng, value, recipient);
-        output.asset_anchor = spend.asset_anchor;
-        output.compliance_anchor = spend.compliance_anchor;
-        output.target_timestamp = spend.target_timestamp;
-        output.is_regulated = spend.is_regulated;
-        output.tx_blinding_nonce = spend.tx_blinding_nonce;
-        output.asset_indexed_leaf = spend.asset_indexed_leaf.clone();
-        output.asset_path = spend.asset_path.clone();
-        output.asset_position = spend.asset_position;
-        output.asset_policy = spend.asset_policy.clone();
-        let transfer = shieldd_sdk_shielded_pool::TransferPlan::from_spend_output(
-            spend,
-            output,
+
+        let transfer = shieldd_sdk_shielded_pool::test_plan_helpers::transfer(
+            vec![spend],
+            vec![output],
             decaf377::Fr::rand(&mut OsRng),
         )?;
         let plan = TransactionPlan {

@@ -1,18 +1,15 @@
 # SnarkPack Benchmark Thresholds
 
-Status: CI-enforced baseline.
-
-Date: 2026-06-01
-Baseline runner: GitHub Actions `ubuntu-24.04`, release-mode Rust in the
-`snarkpack-formal` workflow. The local developer Criterion run remains useful
-for diagnosis, but the hard gate is `just snarkpack-dos-gate`.
+The release test `just snarkpack-dos-gate` enforces the bounds below.
+Ordinary unit-test runs exclude this ignored test. Criterion benchmarks report
+measurements and do not enforce these thresholds.
 
 ## Commands
 
-- CI gate:
+- Release gate:
   `just snarkpack-dos-gate`
 - size report:
-  `cargo test -p shieldd-sdk-proof-aggregation aggregate_proof_size_report --lib -- --ignored --nocapture`
+  `cargo test --release -p shieldd-sdk-proof-aggregation aggregate_proof_size_report --lib -- --ignored --nocapture`
 - optional release benchmarks:
   `cargo bench -p shieldd-sdk-proof-aggregation --bench snarkpack`
 

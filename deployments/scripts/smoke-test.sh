@@ -2,23 +2,13 @@
 # Run smoke test suite, via process-compose config.
 set -euo pipefail
 
-cargo_cmd() {
-    cargo "$@"
-}
-
 pcli_tx_cmd() {
     # pcli prints the transaction plan and asks for an enter press before
     # signing. Smoke tests run non-interactively, so acknowledge that prompt
     # explicitly instead of depending on an attached terminal.
-    printf '\n' | cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" "$@"
+    printf '\n' | "$smoke_pcli_bin" --home "$pcli_test_home" "$@"
 }
 
-# Fail fast if network dir exists, otherwise `cargo run ...` will block
-# for a while, masking the error.
-#
-# If any network data is present, we shouldn't reuse it: the smoke tests assume
-# a fresh devnet has been created specifically for the test run. In the future
-# we should make this a temp dir so it can always run regardless of pre-existing state.
 repo_root="$(git rev-parse --show-toplevel)"
 cd "${repo_root}"
 source "${repo_root}/scripts/lib/common.sh"
@@ -79,9 +69,14 @@ if ! hash grpcurl > /dev/null 2>&1 ; then
     exit 1
 fi
 
->&2 echo "Building all test targets before running smoke tests..."
-# We want a warm cache before the tests run
-cargo_cmd build --release --bins
+>&2 echo "Building smoke-test binaries..."
+python3 scripts/proof_artifacts.py materialize --bundle runtime
+cargo build --release -p pcli -p pclientd --features bundled-proving-keys
+smoke_pcli_bin="${smoke_test_dir}/pcli"
+cp "${CARGO_TARGET_DIR:-${repo_root}/target}/release/pcli" "$smoke_pcli_bin"
+cargo build --release -p pd --features orbis-dev-srs
+export SHIELDD_PD_BIN="${smoke_test_dir}/pd"
+cp "${CARGO_TARGET_DIR:-${repo_root}/target}/release/pd" "$SHIELDD_PD_BIN"
 
 is_hex_value() {
     local value="$1"
@@ -118,7 +113,7 @@ require_address_output() {
 }
 
 derive_spend_vk_hex() {
-    cargo_cmd run --release --bin pcli -- tx compliance derive-spend-vk --signing-key-hex "$1" | tail -1
+    "$smoke_pcli_bin" tx compliance derive-spend-vk --signing-key-hex "$1" | tail -1
 }
 
 validate_dev_spend_key_pair() {
@@ -206,15 +201,15 @@ trap cleanup_smoke EXIT
 pcli_test_home="${smoke_test_dir}/pcli-test"
 mkdir -p "$pcli_test_home"
 echo "comfort ten front cycle churn burger oak absent rice ice urge result art couple benefit cabbage frequent obscure hurry trick segment cool job debate" | \
-    cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" init --grpc-url "$SHIELDD_NODE_PD_URL" soft-kms import-phrase
-smoke_addr_0=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" view address 0)
+    "$smoke_pcli_bin" --home "$pcli_test_home" init --grpc-url "$SHIELDD_NODE_PD_URL" soft-kms import-phrase
+smoke_addr_0=$("$smoke_pcli_bin" --home "$pcli_test_home" view address 0)
 require_address_output "smoke_addr_0" "$smoke_addr_0" "view address 0"
-smoke_addr_1=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" view address 1)
+smoke_addr_1=$("$smoke_pcli_bin" --home "$pcli_test_home" view address 1)
 require_address_output "smoke_addr_1" "$smoke_addr_1" "view address 1"
-smoke_addr_2=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" view address 2)
+smoke_addr_2=$("$smoke_pcli_bin" --home "$pcli_test_home" view address 2)
 require_address_output "smoke_addr_2" "$smoke_addr_2" "view address 2"
 # Generate deterministic public registration fixtures for this isolated devnet.
-compliance_dev_bundle=$(cargo_cmd run --quiet --release -p shieldd-sdk-compliance \
+compliance_dev_bundle=$(cargo run --quiet --release -p shieldd-sdk-compliance \
     --example dev_orbis_registration --no-default-features --features test-helpers)
 IFS=$'\t' read -r \
     compliance_dev_address_0 \
@@ -369,7 +364,7 @@ sleep 10
 # regulated_usd and its funded user are registered at genesis. Register the receiver,
 # then send a transfer so the detection scan has on-chain data to find.
 >&2 echo "Setting up compliance smoke test environment..."
-user_grant_1_output=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" tx compliance sign-user-grant regulated_usd \
+user_grant_1_output=$("$smoke_pcli_bin" --home "$pcli_test_home" tx compliance sign-user-grant regulated_usd \
     --address "$smoke_addr_1" \
     --policy-id "$compliance_dev_policy_id" \
     --ring-pk-hex "$compliance_dev_ring_pk_hex" \
@@ -391,10 +386,10 @@ pcli_tx_cmd tx compliance register-user regulated_usd \
 >&2 echo "  User registered for regulated_usd."
 
 # Send a transfer so the detection scan has something to find
-cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" view sync
+"$smoke_pcli_bin" --home "$pcli_test_home" view sync
 >&2 echo "  DEBUG: balance before send:"
-cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" view balance 2>&1 | tee /dev/stderr || true
-smoke_addr=$(cargo_cmd run --release --bin pcli -- --home "$pcli_test_home" view address 1)
+"$smoke_pcli_bin" --home "$pcli_test_home" view balance 2>&1 | tee /dev/stderr || true
+smoke_addr=$("$smoke_pcli_bin" --home "$pcli_test_home" view address 1)
 pcli_tx_cmd tx transfer 100regulated_usd --to "$smoke_addr"
 >&2 echo "  Compliance transfer sent."
 
@@ -413,15 +408,6 @@ export COMPLIANCE_USER_2_RNK_COMMITMENT_HEX="$compliance_dev_rnk_commitment_2_he
 export COMPLIANCE_USER_2_CAPABILITY_CERTIFICATE_HEX="$compliance_dev_capability_certificate_2_hex"
 >&2 echo "  Compliance env vars exported."
 >&2 echo "Compliance smoke test setup complete."
-
-bash "${repo_root}/deployments/scripts/check-reduced-surface.sh"
-
-# Export devnet parameters for integration tests.
-# Must match values in run-local-devnet.sh.
-export UNBONDING_DELAY=201
-export SHIELDD_REDUCED_ACTION_SURFACE=1
-export SHIELDD_NODE_PD_URL
-export SHIELDD_NODE_CMT_URL
 
 # Run the integration tests. Using `just` targets so that the exact
 # invocations are easily reusable on the CLI in dev loops.

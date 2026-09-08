@@ -44,6 +44,7 @@ pub struct ShieldedHostWithdrawalPlan {
     pub change_output: Option<ShieldedOutputPlan>,
     pub withdrawal: HostWithdrawal,
     pub routing_parameters: Parameters,
+    pub compliance: crate::WithdrawalContext,
     pub volume_accumulator: VolumeAccumulatorPlan,
 }
 
@@ -53,18 +54,18 @@ impl ShieldedHostWithdrawalPlan {
         change_output: Option<ShieldedOutputPlan>,
         withdrawal: HostWithdrawal,
         value_blinding: Fr,
+        compliance: crate::WithdrawalContext,
+        volume_accumulator: VolumeAccumulatorPlan,
+        routing_parameters: Parameters,
     ) -> anyhow::Result<Self> {
-        let target_timestamp = spends
-            .first()
-            .map(|spend| spend.target_timestamp)
-            .unwrap_or(0);
         let plan = Self {
             value_blinding,
             spends,
             change_output,
             withdrawal,
-            routing_parameters: Parameters::default(),
-            volume_accumulator: VolumeAccumulatorPlan::padding(target_timestamp),
+            routing_parameters,
+            compliance,
+            volume_accumulator,
         };
         plan.validate()?;
         Ok(plan)
@@ -72,14 +73,6 @@ impl ShieldedHostWithdrawalPlan {
 
     pub fn family_id(&self) -> ShieldedIcs20WithdrawalFamilyId {
         ShieldedIcs20WithdrawalFamilyId::Canonical
-    }
-
-    pub fn set_routing_parameters(&mut self, parameters: Parameters) {
-        self.routing_parameters = parameters;
-    }
-
-    pub fn set_volume_accumulator(&mut self, plan: VolumeAccumulatorPlan) {
-        self.volume_accumulator = plan;
     }
 
     pub fn accumulator_prior_commitment(&self) -> Option<tct::StateCommitment> {
@@ -90,22 +83,14 @@ impl ShieldedHostWithdrawalPlan {
         .then(|| self.volume_accumulator.prior_commitment())
     }
 
-    fn effective_volume_accumulator(&self) -> VolumeAccumulatorPlan {
-        if self.volume_accumulator.is_real() {
-            self.volume_accumulator.clone()
-        } else {
-            VolumeAccumulatorPlan::padding(self.first_spend().target_timestamp)
-        }
-    }
-
     pub fn volume_accumulator_payload(
         &self,
         fvk: &FullViewingKey,
     ) -> crate::VolumeAccumulatorPayload {
-        self.effective_volume_accumulator().selected_payload(
+        self.volume_accumulator.clone().selected_payload(
             fvk.nullifier_key(),
             fvk.outgoing(),
-            Fq::from_le_bytes_mod_order(&self.first_spend().tx_blinding_nonce.to_bytes()),
+            Fq::from_le_bytes_mod_order(&self.compliance.nonce.to_bytes()),
             crate::TransferProofContext::Ordinary,
         )
     }
@@ -158,17 +143,7 @@ impl ShieldedHostWithdrawalPlan {
             first_spend_randomizer: self.first_spend().randomizer,
             sender_address: self.sender_address(),
             asset_id: self.withdrawal_asset_id(),
-            capk: self
-                .first_spend()
-                .compliance_leaf
-                .clone()
-                .unwrap_or_else(|| {
-                    shieldd_sdk_compliance::ComplianceLeaf::synthetic_unregulated(
-                        self.sender_address(),
-                        self.withdrawal_asset_id(),
-                    )
-                })
-                .capk,
+            capk: self.compliance.witness.sender.leaf.capk,
             // Host withdrawals reuse the ICS-20 circuit and its fixed dummy-nullifier domain.
             nullifier_domain_sep_label:
                 b"shieldd.shielded_ics20_withdrawal.synthetic_dummy.nullifier",
@@ -211,36 +186,8 @@ impl ShieldedHostWithdrawalPlan {
                 "shielded host withdrawal spends must use the same asset",
             );
             ensure!(
-                spend.asset_anchor == first_spend.asset_anchor,
-                "shielded host withdrawal spend asset anchors must match",
-            );
-            ensure!(
-                spend.compliance_anchor == first_spend.compliance_anchor,
-                "shielded host withdrawal spend compliance anchors must match",
-            );
-            ensure!(
-                spend.target_timestamp == first_spend.target_timestamp,
-                "shielded host withdrawal spend timestamps must match",
-            );
-            ensure!(
                 spend.note.address() == first_spend.note.address(),
                 "shielded host withdrawal spends must use the same sender address",
-            );
-            ensure!(
-                spend.compliance_leaf == first_spend.compliance_leaf
-                    && spend.compliance_position == first_spend.compliance_position
-                    && spend.compliance_path == first_spend.compliance_path,
-                "shielded host withdrawal spends must use the same sender compliance witness",
-            );
-            ensure!(
-                spend.asset_indexed_leaf == first_spend.asset_indexed_leaf
-                    && spend.asset_position == first_spend.asset_position
-                    && spend.asset_path == first_spend.asset_path,
-                "shielded host withdrawal spends must use the same asset registry witness",
-            );
-            ensure!(
-                spend.is_regulated == first_spend.is_regulated,
-                "shielded host withdrawal spend regulation flags must match",
             );
         }
 
@@ -259,17 +206,16 @@ impl ShieldedHostWithdrawalPlan {
             self.balance() == Balance::default(),
             "shielded host withdrawal must be internally balanced",
         );
+        self.compliance
+            .witness
+            .validate(first_spend.note.asset_id(), &first_spend.note.address())?;
+        ensure!(self.compliance.timestamp > 0, "missing action timestamp");
+        ensure!(
+            self.volume_accumulator.day_start()
+                == crate::select_accumulator_day(self.compliance.timestamp),
+            "volume accumulator day does not match action timestamp"
+        );
         Ok(())
-    }
-
-    fn sender_leaf(&self) -> shieldd_sdk_compliance::ComplianceLeaf {
-        let spend = self.first_spend();
-        spend.compliance_leaf.clone().unwrap_or_else(|| {
-            shieldd_sdk_compliance::ComplianceLeaf::synthetic_unregulated(
-                spend.note.address().clone(),
-                spend.note.asset_id(),
-            )
-        })
     }
 
     fn withdrawal_effect_hash_limbs(&self) -> [Fq; 4] {
@@ -278,15 +224,14 @@ impl ShieldedHostWithdrawalPlan {
     }
 
     fn withdrawal_compliance_encryption(&self) -> anyhow::Result<WithdrawalEncryptionResult> {
-        let sender_leaf = self.sender_leaf();
+        let sender_leaf = &self.compliance.witness.sender.leaf;
         let (encryption_key, _) = withdrawal_encryption_key(
-            self.first_spend().is_regulated,
-            self.first_spend().is_regulated && !self.volume_accumulator.is_real(),
+            self.compliance.witness.asset.is_regulated,
+            self.compliance.witness.asset.is_regulated && !self.volume_accumulator.is_real(),
             &sender_leaf,
-            &self.first_spend().asset_indexed_leaf,
+            &self.compliance.witness.asset.leaf,
         )?;
-        let (seed, randomizer) =
-            derive_withdrawal_encryption_material(self.first_spend().tx_blinding_nonce);
+        let (seed, randomizer) = derive_withdrawal_encryption_material(self.compliance.nonce);
         encrypt_withdrawal_with_material(encryption_key, &self.sender_address(), seed, randomizer)
     }
 
@@ -317,28 +262,18 @@ impl ShieldedHostWithdrawalPlan {
                 state_commitment_proofs.len()
             )));
         }
-        if self.first_spend().is_regulated
-            && shieldd_sdk_compliance::compliance_nullifier_key_commitment(
-                self.first_spend().compliance_nullifier_key(fvk),
-            ) != self
-                .first_spend()
-                .compliance_leaf
-                .as_ref()
-                .expect("validated regulated spend has a compliance leaf")
-                .rnk_commitment
-        {
-            return Err(crate::ProofError::InvalidPrivateInput(
-                "wallet compliance nullifier key does not match the registered sender leaf"
-                    .to_owned(),
-            ));
-        }
+        let nullifier_key = self
+            .compliance
+            .witness
+            .nullifier_key(fvk)
+            .map_err(|error| crate::ProofError::InvalidPrivateInput(error.to_string()))?;
 
         let mut input_publics = self
             .spends
             .iter()
             .map(|spend| {
                 Ok(ShieldedIcs20WithdrawalInputPublic {
-                    nullifier: spend.nullifier(fvk),
+                    nullifier: spend.nullifier(&nullifier_key),
                     rk: spend.rk(fvk),
                     history_required: shieldd_sdk_sct::nullifier_generation::is_old(
                         u64::from(spend.position),
@@ -398,21 +333,20 @@ impl ShieldedHostWithdrawalPlan {
         let change_note = self
             .change_output
             .as_ref()
-            .map(ShieldedOutputPlan::output_note)
+            .map(|output| output.output_note(self.compliance.witness.sender.leaf.capk))
             .unwrap_or_else(|| self.padder().synthetic_dummy_output_note(1));
         let withdrawal_effect_hash_limbs = self.withdrawal_effect_hash_limbs();
-        let routing_nonce =
-            Fq::from_le_bytes_mod_order(&self.first_spend().tx_blinding_nonce.to_bytes());
+        let routing_nonce = Fq::from_le_bytes_mod_order(&self.compliance.nonce.to_bytes());
         let routing_tag = discovery::single_tag(
             &self.sender_address(),
-            self.first_spend().is_regulated,
+            self.compliance.witness.asset.is_regulated,
             &self.routing_parameters,
             routing_nonce,
         );
         let withdrawal_compliance = self
             .withdrawal_compliance_encryption()
             .map_err(|error| crate::ProofError::InvalidPrivateInput(error.to_string()))?;
-        let volume_plan = self.effective_volume_accumulator();
+        let volume_plan = self.volume_accumulator.clone();
         let volume_payload = self.volume_accumulator_payload(fvk);
         let volume_prior_proof = if needs_accumulator_proof {
             state_commitment_proofs[self.spends.len()].clone()
@@ -425,9 +359,9 @@ impl ShieldedHostWithdrawalPlan {
                 family_id: ShieldedIcs20WithdrawalFamilyId::Canonical,
                 anchor,
                 balance_commitment: Balance::default().commit(self.value_blinding),
-                asset_anchor: self.first_spend().asset_anchor,
-                compliance_anchor: self.first_spend().compliance_anchor,
-                target_timestamp: Fq::from(self.first_spend().target_timestamp),
+                asset_anchor: self.compliance.witness.asset.root,
+                compliance_anchor: self.compliance.witness.user_root,
+                target_timestamp: Fq::from(self.compliance.timestamp),
                 inputs: input_publics,
                 change_output: ShieldedIcs20WithdrawalChangePublic {
                     note_commitment: change_note.commit(),
@@ -451,15 +385,15 @@ impl ShieldedHostWithdrawalPlan {
                 action_balance_blinding: self.value_blinding,
                 ak: *fvk.spend_verification_key(),
                 nk: *fvk.nullifier_key(),
-                asset_path: self.first_spend().asset_path.clone(),
-                asset_position: self.first_spend().asset_position,
-                asset_indexed_leaf: self.first_spend().asset_indexed_leaf.clone(),
-                is_regulated: self.first_spend().is_regulated,
+                asset_path: self.compliance.witness.asset.path.clone(),
+                asset_position: self.compliance.witness.asset.position,
+                asset_indexed_leaf: self.compliance.witness.asset.leaf.clone(),
+                is_regulated: self.compliance.witness.asset.is_regulated,
                 routing_parameters: self.routing_parameters.clone(),
                 routing_nonce,
-                sender_compliance_path: self.first_spend().compliance_path.clone(),
-                sender_compliance_position: self.first_spend().compliance_position,
-                sender_leaf: self.sender_leaf(),
+                sender_compliance_path: self.compliance.witness.sender.path.clone(),
+                sender_compliance_position: self.compliance.witness.sender.position,
+                sender_leaf: self.compliance.witness.sender.leaf.clone(),
                 withdrawal_seed: withdrawal_compliance.seed,
                 withdrawal_randomizer: withdrawal_compliance.r,
                 required_input,
@@ -468,7 +402,7 @@ impl ShieldedHostWithdrawalPlan {
                     created_note: change_note,
                 },
                 volume_accumulator_seed: Fq::from_le_bytes_mod_order(
-                    &self.first_spend().tx_blinding_nonce.to_bytes(),
+                    &self.compliance.nonce.to_bytes(),
                 ),
                 volume_accumulator: crate::VolumeAccumulatorPrivate {
                     plan: volume_plan,
@@ -487,10 +421,11 @@ impl ShieldedHostWithdrawalPlan {
     ) -> anyhow::Result<ShieldedHostWithdrawalBody> {
         self.validate()?;
 
+        let nullifier_key = self.compliance.witness.nullifier_key(fvk)?;
         let mut inputs = self
             .spends
             .iter()
-            .map(|spend| spend.action_input_body(fvk, recent_position_floor))
+            .map(|spend| spend.action_input_body(fvk, &nullifier_key, recent_position_floor))
             .collect::<anyhow::Result<Vec<_>>>()?;
         let padder = self.padder();
         pad_to_len(&mut inputs, PADDED_HOST_WITHDRAWAL_INPUTS, |slot| {
@@ -509,7 +444,7 @@ impl ShieldedHostWithdrawalPlan {
         let (change_note, recovery_capsule) = self
             .change_output
             .as_ref()
-            .map(ShieldedOutputPlan::output_note_and_capsule)
+            .map(|output| output.output_note_and_capsule(self.compliance.witness.sender.leaf.capk))
             .unwrap_or_else(|| padder.synthetic_dummy_output_note_and_capsule(1));
         let esk = change_note.ephemeral_secret_key();
         let ovk_wrapped_key = change_note.encrypt_key(
@@ -527,11 +462,10 @@ impl ShieldedHostWithdrawalPlan {
             wrapped_memo_key,
             ovk_wrapped_key,
         };
-        let routing_nonce =
-            Fq::from_le_bytes_mod_order(&self.first_spend().tx_blinding_nonce.to_bytes());
+        let routing_nonce = Fq::from_le_bytes_mod_order(&self.compliance.nonce.to_bytes());
         let routing_tag = discovery::single_tag(
             &self.sender_address(),
-            self.first_spend().is_regulated,
+            self.compliance.witness.asset.is_regulated,
             &self.routing_parameters,
             routing_nonce,
         );
@@ -544,9 +478,9 @@ impl ShieldedHostWithdrawalPlan {
             inputs,
             withdrawal: self.withdrawal.clone(),
             change_output,
-            target_timestamp: self.first_spend().target_timestamp,
-            compliance_anchor: self.first_spend().compliance_anchor,
-            asset_anchor: self.first_spend().asset_anchor,
+            target_timestamp: self.compliance.timestamp,
+            compliance_anchor: self.compliance.witness.user_root,
+            asset_anchor: self.compliance.witness.asset.root,
             routing_tag,
             routing_parameter_set_id: self.routing_parameters.id(),
             withdrawal_compliance_ciphertext: withdrawal_compliance.ciphertext,
@@ -644,6 +578,7 @@ impl From<ShieldedHostWithdrawalPlan> for pb::ShieldedHostWithdrawalPlan {
             spends: value.spends.into_iter().map(Into::into).collect(),
             change_output: value.change_output.map(Into::into),
             withdrawal: Some(value.withdrawal.into()),
+            compliance: Some(value.compliance.into()),
             routing_parameters: Some(value.routing_parameters.into()),
             volume_accumulator: Some(value.volume_accumulator.into()),
         }
@@ -673,6 +608,10 @@ impl TryFrom<pb::ShieldedHostWithdrawalPlan> for ShieldedHostWithdrawalPlan {
                 .withdrawal
                 .ok_or_else(|| anyhow!("missing embedded shielded host withdrawal payload"))?
                 .try_into()?,
+            compliance: value
+                .compliance
+                .ok_or_else(|| anyhow!("missing action compliance context"))?
+                .try_into()?,
             routing_parameters: value
                 .routing_parameters
                 .ok_or_else(|| anyhow!("missing routing parameters"))?
@@ -698,9 +637,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        shielded_ics20_withdrawal::test_runtime, HostTransfer, HostWithdrawalDestination, Note,
-        ShieldedIcs20WithdrawalProof, ShieldedIcs20WithdrawalProofPrivate,
-        ShieldedIcs20WithdrawalProofPublic,
+        HostTransfer, HostWithdrawalDestination, Note, ShieldedIcs20WithdrawalProof,
+        ShieldedIcs20WithdrawalProofPrivate, ShieldedIcs20WithdrawalProofPublic,
     };
 
     fn padded_proof_inputs() -> (
@@ -725,17 +663,19 @@ mod tests {
                 recipient: "bank1recipient".to_owned(),
             }),
         };
-        let mut plan =
-            ShieldedHostWithdrawalPlan::new(vec![spend], None, withdrawal, Fr::from(7u64))
-                .expect("plan should be valid");
-        plan.set_routing_parameters(
-            Parameters::new(
-                crate::discovery::Precision::new(11).unwrap(),
-                crate::discovery::Precision::new(19).unwrap(),
-                42,
-            )
-            .unwrap(),
-        );
+        let mut plan = crate::test_plan_helpers::host_withdrawal(
+            vec![spend],
+            None,
+            withdrawal,
+            Fr::from(7u64),
+        )
+        .expect("plan should be valid");
+        plan.routing_parameters = Parameters::new(
+            crate::discovery::Precision::new(11).unwrap(),
+            crate::discovery::Precision::new(19).unwrap(),
+            42,
+        )
+        .unwrap();
 
         plan.shielded_host_withdrawal_public_private(
             &test_keys::FULL_VIEWING_KEY,
@@ -761,9 +701,13 @@ mod tests {
             }),
         };
 
-        let plan =
-            ShieldedHostWithdrawalPlan::new(vec![spend], None, withdrawal.clone(), Fr::from(7u64))
-                .expect("plan should be valid");
+        let plan = crate::test_plan_helpers::host_withdrawal(
+            vec![spend],
+            None,
+            withdrawal.clone(),
+            Fr::from(7u64),
+        )
+        .expect("plan should be valid");
 
         let body = plan
             .action_body(
@@ -822,10 +766,10 @@ mod tests {
 
     #[cfg(any(unix, windows))]
     #[test]
-    fn padded_host_withdrawal_proof_roundtrip() {
-        if test_runtime::should_skip_shielded_ics20_withdrawal_proof_roundtrip_tests() {
-            return;
-        }
+    #[ignore = "expensive: real release-mode Gnark proof generation"]
+    fn gnark_proof_padded_host_withdrawal_proof_roundtrip() {
+        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Withdrawal)
+            .expect("proof test prerequisites must be present");
 
         let (public, private) = padded_proof_inputs();
         let proof = ShieldedIcs20WithdrawalProof::prove(public.clone(), private)
