@@ -191,10 +191,14 @@ async fn execution_reads_bounded_compact_block_ranges() -> Result<()> {
 }
 #[tokio::test]
 async fn key_value_proves_membership_and_absence_at_committed_root() -> Result<()> {
+    use anyhow::Context as _;
     use cnidarium::{StateDelta, StateWrite as _};
     use ibc_types::core::commitment::{MerklePath, MerkleProof, MerkleRoot};
-    let (storage, client) = initialized_client().await?;
+    // ICS23 requires nonempty leaf values, including absence-proof neighbors.
+    let storage = TempStorage::new_with_prefixes(SUBSTORE_PREFIXES.to_vec()).await?;
+    let client = ExecutionService::new(storage.deref().clone());
     let mut delta = StateDelta::new(storage.latest_snapshot());
+    delta.put_raw("query-proof-present".into(), b"main-store value".to_vec());
     delta.put_raw(
         "ibc-data/query-proof-present".into(),
         b"committed value".to_vec(),
@@ -205,16 +209,8 @@ async fn key_value_proves_membership_and_absence_at_committed_root() -> Result<(
         hash: snapshot.root_hash().await?.0.to_vec(),
     };
     for (key, path, present) in [
-        (
-            "application/data/chain_id",
-            vec!["application/data/chain_id"],
-            true,
-        ),
-        (
-            "application/data/query-proof-absent",
-            vec!["application/data/query-proof-absent"],
-            false,
-        ),
+        ("query-proof-present", vec!["query-proof-present"], true),
+        ("query-proof-absent", vec!["query-proof-absent"], false),
         (
             "ibc-data/query-proof-present",
             vec!["ibc-data", "query-proof-present"],
@@ -246,9 +242,13 @@ async fn key_value_proves_membership_and_absence_at_committed_root() -> Result<(
             key_path: path.into_iter().map(str::to_owned).collect(),
         };
         if let Some(value) = value {
-            proof.verify_membership(&specs, root.clone(), path, value, 0)?;
+            proof
+                .verify_membership(&specs, root.clone(), path, value, 0)
+                .with_context(|| format!("membership proof for {key}"))?;
         } else {
-            proof.verify_non_membership(&specs, root.clone(), path)?;
+            proof
+                .verify_non_membership(&specs, root.clone(), path)
+                .with_context(|| format!("absence proof for {key}"))?;
         }
     }
     Ok(())
