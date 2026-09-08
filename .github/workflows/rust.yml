@@ -101,7 +101,7 @@ jobs:
           cache-dependency-path: tools/gnark/go.sum
 
       - name: Check gnark Go module
-        run: just go-check
+        run: nix develop .#ci --command just go-check
 
       - name: Prepare full proof artifacts for manual replay
         if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
