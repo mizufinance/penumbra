@@ -8,7 +8,7 @@ license = {workspace = true}
 edition = {workspace = true}
 
 [features]
-benchmark-helpers = []
+benchmark-helpers = ["component", "shieldd-sdk-ibc/benchmark-helpers"]
 component = [
     "shieldd-sdk-ibc/component",
     "cnidarium-component",
