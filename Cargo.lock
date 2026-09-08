@@ -6283,6 +6283,7 @@ dependencies = [
  "decaf377",
  "futures",
  "ibc-proto",
+ "ibc-types",
  "prost 0.13.4",
  "shieldd-sdk-app",
  "shieldd-sdk-asset",

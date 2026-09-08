@@ -36,6 +36,16 @@ def verify(directory, expected, target=None):
         raise ValueError("artifact source revision does not match the selected Shieldd commit")
     if target and manifest["target"] != target:
         raise ValueError("artifact target does not match the requested platform")
+    if not manifest["groups"] or any(group not in GROUPS for group in manifest["groups"]):
+        raise ValueError("artifact manifest has no recognized deliverables")
+    required = set()
+    for group in manifest["groups"]:
+        required.update({"include/shieldd.h", "lib/libshieldd.a"} if group == "native"
+                        else {f"bin/{name}" for name in GROUPS[group]})
+    if not required.issubset(manifest["files"]):
+        raise ValueError("artifact manifest omits required deliverables")
+    if "provers" in manifest["groups"] and not any(name.startswith("lib/gnark/") for name in manifest["files"]):
+        raise ValueError("artifact manifest omits gnark libraries")
     for name, checksum in manifest["files"].items():
         path = (directory / name).resolve()
         if not path.is_relative_to(directory.resolve()) or not path.is_file() or digest(path) != checksum:
@@ -90,7 +100,11 @@ def build(group, output, source_revision, target):
         if previous["source_revision"] == source_revision and previous["target"] == target:
             manifest = verify(output, source_revision, target)
         else:
-            raise ValueError("staging directory contains a different revision or target; select an empty output directory")
+            # Remove only previously verified build outputs, preserving unrelated files.
+            verify(output, previous["source_revision"], previous["target"])
+            for name in previous["files"]:
+                (output / name).unlink()
+            (output / "manifest.json").unlink()
     for name, source in copies.items():
         destination = output / name
         destination.parent.mkdir(parents=True, exist_ok=True)

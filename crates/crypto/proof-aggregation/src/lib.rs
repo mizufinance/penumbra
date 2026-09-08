@@ -7,6 +7,7 @@ mod aggregate_proof_wrapper;
 mod app_verifier;
 mod backend;
 mod bundle;
+mod canonical_encoding;
 mod padding;
 mod preflight;
 mod srs;

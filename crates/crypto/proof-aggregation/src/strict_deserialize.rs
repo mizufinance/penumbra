@@ -1,5 +1,6 @@
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, SerializationError};
 
+use crate::canonical_encoding::canonical_encoding_matches;
 use ark_serialize::{Compress, Validate};
 
 /// Accept only the serializer's canonical image: full byte consumption plus an
@@ -17,7 +18,7 @@ where
 
     let mut canonical = Vec::new();
     value.serialize_compressed(&mut canonical)?;
-    if canonical != bytes {
+    if !canonical_encoding_matches(bytes, &canonical) {
         return Err(SerializationError::InvalidData);
     }
 
@@ -45,7 +46,7 @@ where
 
     let mut canonical = Vec::new();
     value.serialize_compressed(&mut canonical)?;
-    if canonical != bytes {
+    if !canonical_encoding_matches(bytes, &canonical) {
         return Err(SerializationError::InvalidData);
     }
 
