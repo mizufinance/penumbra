@@ -430,7 +430,7 @@ message NullifierWindowResponse {
 message GasPricesRequest {}
 
 message GasPricesResponse {
-  // The current gas prices, in the preferred (native) token.
+  // The current base-asset gas prices.
   core.component.fee.v1.GasPrices gas_prices = 1;
 }
 

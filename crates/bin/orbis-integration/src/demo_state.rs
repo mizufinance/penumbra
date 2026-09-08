@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use shieldd_sdk_keys::Address;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditDemoState {
     pub setup: SetupState,
@@ -27,7 +27,7 @@ impl AuditDemoState {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupState {
     pub initialized: bool,
@@ -35,7 +35,7 @@ pub struct SetupState {
     pub updated_at: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserState {
     pub name: String,
@@ -64,7 +64,7 @@ impl UserState {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserAddress {
     pub index: u64,
@@ -86,7 +86,7 @@ impl UserAddress {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RingState {
     pub ring_pk_hex: String,
@@ -142,11 +142,19 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuditDemoState, UserState};
+    use super::{AuditDemoState, RingState, UserState};
 
     #[test]
     fn typed_state_roundtrips() {
         let mut state = AuditDemoState::new();
+        state.setup.initialized = true;
+        state.ring = Some(RingState {
+            ring_pk_hex: "abcd".into(),
+            ring_id: "ring".into(),
+            policy_id: "policy".into(),
+            resource: "document".into(),
+            permission: "read".into(),
+        });
         state.users.push(UserState::new(
             "Alice",
             "alice",
@@ -156,10 +164,7 @@ mod tests {
         let encoded = serde_json::to_vec(&state).expect("state should encode");
         let decoded: AuditDemoState =
             serde_json::from_slice(&encoded).expect("state should decode");
-        assert_eq!(
-            serde_json::to_value(&decoded).unwrap(),
-            serde_json::to_value(&state).unwrap()
-        );
+        assert_eq!(decoded, state);
     }
 
     #[test]

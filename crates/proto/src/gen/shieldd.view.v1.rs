@@ -840,7 +840,7 @@ impl ::prost::Name for GasPricesRequest {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GasPricesResponse {
-    /// The current gas prices, in the preferred (native) token.
+    /// The current base-asset gas prices.
     #[prost(message, optional, tag = "1")]
     pub gas_prices: ::core::option::Option<
         super::super::core::component::fee::v1::GasPrices,

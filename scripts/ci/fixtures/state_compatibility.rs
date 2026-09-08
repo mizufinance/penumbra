@@ -47,10 +47,6 @@ async fn begin(service: &mut ExecutionService, height: i64) -> Result<()> {
 async fn snapshot(service: &ExecutionService) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     service
-        .export_genesis(ExportGenesisRequest {})
-        .await?
-        .encode_length_delimited(&mut bytes)?;
-    service
         .get_committed_state(GetCommittedStateRequest {})
         .await?
         .encode_length_delimited(&mut bytes)?;
@@ -110,7 +106,7 @@ async fn seed(db: &Path) -> Result<ExecutionService> {
     state.put_block_transaction(1, Default::default()).await?;
     storage.commit(state).await?;
     storage.release().await;
-    ExecutionService::open(db).await
+    Ok(ExecutionService::open(db).await?)
 }
 
 async fn persisted_history(db: &Path) -> Result<Vec<u8>> {
