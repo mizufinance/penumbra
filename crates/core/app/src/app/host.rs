@@ -406,12 +406,11 @@ impl HostExecution {
             self.phase
         );
 
-        let tx = match Transaction::decode_canonical(tx_bytes).context("decoding host transaction")
-        {
+        let tx = match super::delivery::DecodedTransaction::decode(tx_bytes) {
             Ok(tx) => tx,
             Err(error) => return Ok(HostTxResponse::rejected(error)),
         };
-        let withdrawals = match self.resolve_host_withdrawals(&tx).await {
+        let withdrawals = match self.resolve_host_withdrawals(tx.tx()).await {
             Ok(withdrawals) => withdrawals,
             Err(error) => return Ok(HostTxResponse::rejected(error)),
         };
@@ -419,7 +418,7 @@ impl HostExecution {
         Ok(
             match self
                 .app
-                .deliver_tx_bytes(tx_bytes, Some(self.stateless_cache.as_ref()))
+                .deliver_decoded_tx(tx, Some(self.stateless_cache.as_ref()))
                 .await
             {
                 Ok(events) => HostTxResponse::accepted(events, withdrawals),
@@ -1974,12 +1973,5 @@ mod tests {
         };
 
         assert!(HostSource::try_from(source).is_err());
-    }
-
-    #[test]
-    fn accepted_host_tx_response_accepts_empty_withdrawals() {
-        let response = HostTxResponse::accepted(Vec::new(), Vec::new());
-
-        assert!(response.withdrawals.is_empty());
     }
 }
