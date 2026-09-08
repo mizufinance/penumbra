@@ -19,8 +19,9 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 pub static malloc_conf: &[u8] = b"dirty_decay_ms:0,muzzy_decay_ms:0\0";
 
 mod ffi;
-mod grpc;
 mod service;
 
-pub use grpc::GrpcExecutionClient;
 pub use service::{ErrorKind, ExecutionService, ServiceError};
+
+#[cfg(test)]
+mod service_contract_tests;

@@ -1795,23 +1795,6 @@ impl Storage {
         }
     }
 
-    pub async fn all_assets(&self) -> anyhow::Result<Vec<Metadata>> {
-        let pool = self.pool.clone();
-
-        spawn_blocking(move || {
-            pool.get()?
-                .prepare_cached("SELECT metadata FROM assets")?
-                .query_and_then([], |row| {
-                    let metadata_json = row.get::<_, String>("metadata")?;
-                    let denom_metadata = serde_json::from_str(&metadata_json)?;
-
-                    anyhow::Ok(denom_metadata)
-                })?
-                .collect()
-        })
-        .await?
-    }
-
     pub async fn asset_by_id(&self, id: &Id) -> anyhow::Result<Option<Metadata>> {
         let id = id.to_bytes().to_vec();
 
@@ -2456,69 +2439,6 @@ impl Storage {
             .await??;
 
         Ok(())
-    }
-
-    pub async fn notes_by_sender(
-        &self,
-        return_address: &Address,
-    ) -> anyhow::Result<Vec<SpendableNoteRecord>> {
-        let pool = self.pool.clone();
-
-        let query = "SELECT notes.note_commitment,
-            spendable_notes.height_created,
-            notes.address,
-            notes.amount,
-            notes.asset_id,
-            notes.rseed,
-            notes.recovery_commitment,
-            spendable_notes.address_index,
-            spendable_notes.source,
-            spendable_notes.height_spent,
-            spendable_notes.nullifier,
-            spendable_notes.position
-            FROM notes
-            JOIN spendable_notes ON notes.note_commitment = spendable_notes.note_commitment
-            JOIN tx ON spendable_notes.tx_hash = tx.tx_hash
-            WHERE tx.return_address = ?1";
-
-        let return_address = return_address.to_vec();
-
-        let records = spawn_blocking(move || {
-            pool.get()?
-                .prepare(query)?
-                .query_and_then([return_address], |record| record.try_into())?
-                .collect::<anyhow::Result<Vec<_>>>()
-        })
-        .await??;
-
-        Ok(records)
-    }
-
-    /// Get all transactions with a matching memo text. The `pattern` argument
-    /// should include SQL wildcards, such as `%` and `_`, to match substrings,
-    /// e.g. `%foo%`.
-    pub async fn transactions_matching_memo(
-        &self,
-        pattern: String,
-    ) -> anyhow::Result<Vec<(u64, Vec<u8>, Transaction, String)>> {
-        let pattern = pattern.to_owned();
-        tracing::trace!(?pattern, "searching for memos matching");
-        let pool = self.pool.clone();
-
-        spawn_blocking(move || {
-            pool.get()?
-                .prepare_cached("SELECT block_height, tx_hash, tx_bytes, memo_text FROM tx WHERE memo_text LIKE ?1 ESCAPE '\\'")?
-                .query_and_then([pattern], |row| {
-                    let block_height: u64 = row.get("block_height")?;
-                    let tx_hash: Vec<u8> = row.get("tx_hash")?;
-                    let tx_bytes: Vec<u8> = row.get("tx_bytes")?;
-                    let tx = Transaction::decode(tx_bytes.as_slice())?;
-                    let memo_text: String = row.get("memo_text")?;
-                    anyhow::Ok((block_height, tx_hash, tx, memo_text))
-                })?
-                .collect()
-        })
-        .await?
     }
 
     /// Update information about an epoch.

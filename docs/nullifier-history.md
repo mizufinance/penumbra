@@ -56,7 +56,7 @@ Production activation requires ceremony-backed keys for both curves, a
 configured prover, canonical release artifacts, gas calibration, and
 independent review of tree ordering, gap constraints, history chaining,
 recursive inputs, and encodings. Formal evidence belongs in
-`mizufinance/shieldd-formal`, pinned to the activating Shieldd commit.
+`mizufinance/shieldd-security`, pinned to the activating Shieldd commit.
 
 Required tests cover lower and upper gaps, zero and maximum nullifiers, path
 ordering, roots, indices, SCT intervals, history heads, proof ordering, flags,

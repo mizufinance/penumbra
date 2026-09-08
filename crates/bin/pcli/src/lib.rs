@@ -4,9 +4,6 @@
 use crate::{command::Command, config::PcliConfig};
 use camino::Utf8PathBuf;
 use directories::ProjectDirs;
-use shieldd_sdk_proto::{
-    box_grpc_svc::BoxGrpcService, custody::v1::custody_service_client::CustodyServiceClient,
-};
 
 pub mod command;
 pub mod config;
@@ -16,7 +13,6 @@ const CONFIG_FILE_NAME: &str = "config.toml";
 
 #[derive(Debug)]
 pub struct App {
-    pub custody: CustodyServiceClient<BoxGrpcService>,
     pub config: PcliConfig,
 }
 

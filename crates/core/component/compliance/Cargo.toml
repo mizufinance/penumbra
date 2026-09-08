@@ -13,14 +13,12 @@ component = [
     "cnidarium-component",
     "ibc-proto",
     "shieldd-sdk-proto/cnidarium",
-    "shieldd-sdk-proto/rpc",
     "shieldd-sdk-sct/component",
-    "rusqlite",
     "tokio",
-    "tonic",
 ]
 default = ["component"]
-sqlite-bundled = ["rusqlite/bundled"]
+scanner = ["component", "dep:rusqlite"]
+sqlite-bundled = ["scanner", "rusqlite/bundled"]
 test-helpers = ["decaf377-ka"]
 poc-orbis = ["dep:aes-gcm", "dep:hkdf"]
 
@@ -61,10 +59,10 @@ rand_core = {workspace = true}
 rusqlite = {version = "0.32", optional = true}
 tendermint = {workspace = true}
 tokio = {workspace = true, optional = true}
-tonic = {workspace = true, optional = true}
 tracing = {workspace = true}
 
 [dev-dependencies]
+shieldd-sdk-compliance = { path = ".", features = ["scanner"] }
 ark-serialize = {workspace = true}
 decaf377-ka = {workspace = true}
 shieldd-sdk-keys = {workspace = true, features = ["demo"]}

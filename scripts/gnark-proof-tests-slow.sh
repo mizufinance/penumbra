@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(git rev-parse --show-toplevel)"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+python3 scripts/stage_artifacts.py provers
+export SHIELDD_ARTIFACT_ROOT="$PWD/target/shieldd"
 
 # Each process selects one transport explicitly; family caches never mix artifact directories.
 for family in TRANSFER NOTE_RESHAPE SHIELDED_ICS20_WITHDRAWAL; do

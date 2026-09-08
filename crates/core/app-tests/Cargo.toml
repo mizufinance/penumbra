@@ -50,7 +50,6 @@ shieldd-sdk-mock-client             = { workspace = true }
 shieldd-sdk-proto                   = { workspace = true, features = ["box-grpc"] }
 shieldd-sdk-test-subscriber         = { workspace = true }
 shieldd-sdk-view                    = { workspace = true }
-shieldd-sdk-wallet                  = { workspace = true }
 rand_core                        = { workspace = true }
 tap                              = { workspace = true }
 

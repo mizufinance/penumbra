@@ -101,7 +101,16 @@ impl GnarkFamilyConfig {
     }
 
     pub fn library_path(&self) -> Option<PathBuf> {
-        self.bundled_library.map(PathBuf::from)
+        let filename = self.bundled_library?;
+        let root = match std::env::var_os("SHIELDD_ARTIFACT_ROOT") {
+            Some(root) => PathBuf::from(root),
+            None => std::env::current_exe()
+                .ok()?
+                .parent()?
+                .parent()?
+                .to_path_buf(),
+        };
+        Some(root.join("lib/gnark").join(filename))
     }
 
     pub fn resolve(&'static self) -> Result<ResolvedGnarkConfig> {

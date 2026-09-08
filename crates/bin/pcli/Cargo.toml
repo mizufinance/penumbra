@@ -8,15 +8,13 @@ repository = {workspace = true}
 license = {workspace = true}
 publish = false
 
-[package.metadata.dist]
-dist = true
-
 [features]
 default = ["demo"]
 demo = ["shieldd-sdk-keys/demo"]
 ledger = ["dep:shieldd-sdk-custody-ledger-usb"]
 
 [dependencies]
+async-trait = {workspace = true}
 anyhow = {workspace = true}
 base64 = {workspace = true}
 bytes = {workspace = true}
@@ -28,21 +26,20 @@ time = "0.3"
 directories = {workspace = true}
 hex = {workspace = true}
 shieldd-sdk-asset = {workspace = true, default-features = false}
-shieldd-sdk-compliance = {workspace = true, default-features = true}
+shieldd-sdk-compliance = {workspace = true, default-features = false}
 shieldd-sdk-custody = {workspace = true}
 shieldd-sdk-custody-ledger-usb = {workspace = true, optional = true}
 shieldd-sdk-keys = {workspace = true, default-features = false}
-shieldd-sdk-proto = {workspace = true, features = ["rpc", "box-grpc"], default-features = true}
-shieldd-sdk-transaction = {workspace = true, default-features = true}
+shieldd-sdk-proto = {workspace = true, default-features = true}
+shieldd-sdk-transaction = {workspace = true, default-features = false}
 rand = {workspace = true}
 rand_core = {workspace = true, features = ["getrandom"]}
 rpassword = {workspace = true}
 serde = {workspace = true, features = ["derive"]}
 serde_json = {workspace = true}
 serde_with = {workspace = true, features = ["hex"]}
-tokio = {workspace = true, features = ["full"]}
+tokio = {workspace = true, features = ["macros", "rt-multi-thread"]}
 toml = {workspace = true, features = ["preserve_order"]}
-tonic = {workspace = true, features = ["tls-webpki-roots", "tls"]}
 termion = {workspace = true}
 tracing = {workspace = true}
 tracing-subscriber = {workspace = true, features = ["env-filter", "ansi"]}

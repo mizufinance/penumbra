@@ -126,6 +126,35 @@ struct TippMippCommitment {
     c: CCommitmentPair,
 }
 
+/// Independently decode the canonical aggregate wire shape using checked Arkworks decoding.
+pub fn reference_decode_aggregate(bytes: &[u8]) -> ReferenceResult<Vec<u8>> {
+    let mut remaining = bytes;
+    let proof = ReferenceAggregateProof::deserialize_compressed(&mut remaining)
+        .map_err(|error| ReferencePathError::MalformedProof(error.to_string()))?;
+    if !remaining.is_empty() {
+        return Err(ReferencePathError::MalformedProof("trailing bytes".into()));
+    }
+    for (left, right) in &proof.tipp_mipp_proof.gipa_proof.r_commitment_steps {
+        for commitment in [left, right] {
+            if commitment.ab.2 .0.len() != 1 || commitment.c.1 .0.len() != 1 {
+                return Err(ReferencePathError::MalformedProof(
+                    "identity output is not a singleton".into(),
+                ));
+            }
+        }
+    }
+    let mut canonical = Vec::new();
+    proof
+        .serialize_compressed(&mut canonical)
+        .map_err(|error| ReferencePathError::MalformedProof(error.to_string()))?;
+    if canonical != bytes {
+        return Err(ReferencePathError::MalformedProof(
+            "noncanonical encoding".into(),
+        ));
+    }
+    Ok(canonical)
+}
+
 #[derive(Clone)]
 struct ReferenceSrs {
     g_alpha_powers: Vec<G1>,

@@ -211,14 +211,6 @@ pub mod tendermint {
     }
 }
 
-pub mod noble {
-    pub mod forwarding {
-        pub mod v1 {
-            include!("gen/noble.forwarding.v1.rs");
-        }
-    }
-}
-
 pub mod cosmos {
     pub mod base {
         pub mod v1beta1 {
@@ -234,44 +226,6 @@ pub mod cosmos {
         pub mod abci {
             pub mod v1beta1 {
                 include!("gen/cosmos.base.abci.v1beta1.rs");
-            }
-        }
-    }
-
-    pub mod auth {
-        pub mod v1beta1 {
-            include!("gen/cosmos.auth.v1beta1.rs");
-        }
-    }
-
-    pub mod bank {
-        pub mod v1beta1 {
-            include!("gen/cosmos.bank.v1beta1.rs");
-        }
-    }
-
-    pub mod tx {
-        pub mod v1beta1 {
-            include!("gen/cosmos.tx.v1beta1.rs");
-        }
-
-        pub mod config {
-            pub mod v1 {
-                include!("gen/cosmos.tx.config.v1.rs");
-            }
-        }
-
-        pub mod signing {
-            pub mod v1beta1 {
-                include!("gen/cosmos.tx.signing.v1beta1.rs");
-            }
-        }
-    }
-
-    pub mod crypto {
-        pub mod multisig {
-            pub mod v1beta1 {
-                include!("gen/cosmos.crypto.multisig.v1beta1.rs");
             }
         }
     }

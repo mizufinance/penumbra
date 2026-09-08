@@ -42,6 +42,3 @@ if [[ -z "${IN_NIX_SHELL:-}" ]] ; then
   nightly_opt="+nightly"
 fi
 cargo $nightly_opt doc --no-deps "${cargo_args[@]}"
-
->&2 echo "Copying newly built index file to docroot for deployment"
-cp -v target/doc/index.html docs/rustdoc/index.html

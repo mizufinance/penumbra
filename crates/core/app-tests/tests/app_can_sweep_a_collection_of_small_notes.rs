@@ -56,13 +56,10 @@ async fn app_can_sweep_a_collection_of_small_notes() -> anyhow::Result<()> {
     assert_eq!(client.notes_by_asset(*BASE_ASSET_ID).count(), COUNT);
     for _ in 0..COUNT {
         let mut reader = StoragePlanningIo::new(wallet.clone()).await?;
-        let plans = shieldd_sdk_wallet::plan::sweep(
-            &mut reader,
-            rand_core::OsRng,
-            wallet.gas_prices().await?,
-        )
-        .await
-        .context("constructing sweep plans")?;
+        let plans =
+            shieldd_sdk_view::sweep(&mut reader, rand_core::OsRng, wallet.gas_prices().await?)
+                .await
+                .context("constructing sweep plans")?;
         if plans.is_empty() {
             break;
         }

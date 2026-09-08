@@ -149,5 +149,5 @@ dependency by itself.
 | Temporary state grows without bound | Day markers and deterministic pruning after the acceptance buffer |
 | Policy/key changes invalidate semantics | Deferred to [shieldd#38](https://github.com/mizufinance/shieldd/issues/38) |
 
-Activation requires `mizufinance/shieldd-formal` to pin the activating Shieldd
+Activation requires `mizufinance/shieldd-security` to pin the activating Shieldd
 commit and update its accumulator and withdrawal models.

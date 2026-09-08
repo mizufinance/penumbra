@@ -12,7 +12,6 @@ component = [
     "cnidarium-component",
     "cnidarium",
     "shieldd-sdk-proto/cnidarium",
-    "tonic",
     "tokio-stream",
     "tokio",
     "shieldd-sdk-compliance/component",
@@ -52,5 +51,4 @@ serde = {workspace = true, features = ["derive"]}
 tendermint = {workspace = true}
 tokio = {workspace = true, optional = true}
 tokio-stream = {workspace = true, optional = true}
-tonic = {workspace = true, optional = true}
 tracing = {workspace = true}

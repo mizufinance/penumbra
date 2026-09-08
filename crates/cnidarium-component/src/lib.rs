@@ -9,3 +9,6 @@ mod component;
 
 pub use action_handler::ActionHandler;
 pub use component::{BlockContext, Component};
+
+mod query_error;
+pub use query_error::{QueryError, QueryErrorKind};

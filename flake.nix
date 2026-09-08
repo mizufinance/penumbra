@@ -60,10 +60,6 @@
             grpcurl
             just
             libusb1
-            mdbook
-            mdbook-katex
-            mdbook-linkcheck
-            mdbook-mermaid
             nix-prefetch-scripts
             protobuf
             llvmPackages.lld

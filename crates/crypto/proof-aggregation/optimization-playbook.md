@@ -27,7 +27,7 @@ The following must remain byte-identical unless the protocol version changes:
 
 An intentional wire change requires a version bump, new domain separation,
 updated fixtures, both runtime implementations, and corresponding work in
-`mizufinance/shieldd-formal`.
+`mizufinance/shieldd-security`.
 
 ## High-value targets
 

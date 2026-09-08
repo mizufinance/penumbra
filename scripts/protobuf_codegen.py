@@ -41,6 +41,15 @@ def identical(left, right):
     ) and all(identical(left / name, right / name) for name in comparison.common_dirs)
 
 
+def filter_rust_rpc(text, package):
+    """Retain only RPC implementations used by the Rust runtime and tools."""
+    pattern = r"^/// Generated (client|server) implementations\.\n.*?(?=^/// Generated (?:client|server) implementations\.\n|\Z)"
+    def retain(match):
+        allowed = MANIFEST[f"rust_rpc_{match[1]}s"]
+        return match[0] if package in allowed else ""
+    return re.sub(pattern, retain, text, flags=re.MULTILINE | re.DOTALL)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="compare without changing tracked files")
@@ -68,7 +77,7 @@ def main():
             if path.name.removesuffix(".rs").removesuffix(".serde") not in packages:
                 path.unlink()
             else:
-                path.write_text("\n".join(line.rstrip() for line in path.read_text().splitlines()) + "\n")
+                path.write_text("\n".join(line.rstrip() for line in filter_rust_rpc(path.read_text(), path.stem).splitlines()) + "\n")
         for package in packages:
             if not (rust / f"{package}.rs").is_file():
                 raise SystemExit(f"missing generated Rust package {package}")

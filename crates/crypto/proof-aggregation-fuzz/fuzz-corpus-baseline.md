@@ -1,37 +1,11 @@
-# SnarkPack Fuzz Corpus Baseline
+# Aggregate decoder corpus
 
-Status: committed minimized corpus baseline.
+The valid inner proofs are extracted from the runtime aggregate byte baseline:
+rows 0–3 cover Transfer counts 1, 2, 4, and 8; rows 7, 11, and 15 cover both
+reshape families and withdrawal at count 8. Runtime tests check acceptance.
+Malformed seeds exercise truncation, trailing bytes, and oversized input.
 
-Date: 2026-06-01
-Host: local macOS arm64 developer runner with `cargo +nightly fuzz`.
-Scope: `crates/crypto/proof-aggregation-fuzz`.
-
-The smoke gate copies the committed corpus into a temporary directory before
-execution, so CI smoke runs seed from it without mutating it. Only the small,
-curated, human-named seeds (`empty`, `oversize`, `valid-wrapper`, `wrong-digest`,
-…) are committed; the bulk SHA1-named machine-minimized corpus is git-ignored
-(`crates/crypto/proof-aggregation-fuzz/.gitignore`) and lives under the local
-working tree only — it bloats the repo and regenerates every run. The figures
-below describe the local coverage-guided sessions, time-boxed at 61 seconds per
-target, run well beyond the 16-run smoke default.
-
-The `feature/coverage` columns below describe machine-fuzzed byte boundaries.
-
-## Minimized Corpora
-
-| target | committed corpus | minimized features | coverage edges | bytes |
-| --- | ---: | ---: | ---: | ---: |
-| `wrapper_inner_range` | 9 files | 52 | 52 | 388 |
-| `preflight_aggregate_verify` | 3 files | 7,048 | 6,867 | 151 |
-| `deserialize_aggregate_proof` | 56 files | 449 | 208 | 23,495 |
-
-## Clean Baseline Runs
-
-| target | clean duration | runs | final coverage | final features | result |
-| --- | ---: | ---: | ---: | ---: | --- |
-| `wrapper_inner_range` | 61s (0.017h) | 1,084,302 | 41 | 41 | clean |
-| `preflight_aggregate_verify` | 61s (0.017h) | 657,865 | 299 | 288 | clean |
-| `deserialize_aggregate_proof` | 61s (0.017h) | 151,302 | 197 | 438 | clean |
-
-No crash, hang, OOM, panic, or sanitizer finding remains in the recorded clean
-baseline. Larger raw corpora and logs are intentionally left under `target/`.
+The target compares the production decoder with the independently defined
+reference wire tree, checked group decoding, singleton identity-output checks,
+and canonical reserialization. It does not verify cryptographic proof soundness.
+Long campaigns and their measured results live in `mizufinance/shieldd-security`.

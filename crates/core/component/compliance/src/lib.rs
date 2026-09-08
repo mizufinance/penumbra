@@ -101,7 +101,7 @@ pub use action_check::RegulatedAssetCheck;
 #[cfg(feature = "component")]
 pub mod component;
 #[cfg(feature = "component")]
-pub use component::{Compliance, RpcServer};
+pub use component::Compliance;
 
 pub mod genesis;
 pub use genesis::Content as GenesisContent;
@@ -141,9 +141,9 @@ pub use audit_records::{
     AuditSubjectCandidate, AuditSubjectRegistration, AuditSubjectRole,
 };
 
-#[cfg(feature = "component")]
+#[cfg(feature = "scanner")]
 pub mod audit;
-#[cfg(feature = "component")]
+#[cfg(feature = "scanner")]
 pub use audit::{
     decrypt_flagged_rows, export_detected_refs, export_ledger_rows, export_ledger_rows_json,
     export_scan_json, mark_row_audited, record_address_alias, record_evidence_failure,
@@ -154,9 +154,9 @@ mod tx_id;
 pub use tx_id::scanner_transaction_id_from_proto;
 
 // Scanner requires tokio and rusqlite for async storage
-#[cfg(feature = "component")]
+#[cfg(feature = "scanner")]
 pub mod scanner;
-#[cfg(feature = "component")]
+#[cfg(feature = "scanner")]
 pub use scanner::{
     extract_clear_flows, extract_compliance_ciphertexts, AuditLedgerRow, AuditRowKey,
     BlockIdentityProvider, CandidateEvidence, ClearFlowEvent, ClearFlowKind, ComplianceScreener,
@@ -247,7 +247,7 @@ pub mod test_helpers {
 }
 
 // Integration tests require cnidarium, tokio, and scanner
-#[cfg(all(test, feature = "component"))]
+#[cfg(all(test, feature = "scanner"))]
 mod tests {
     use super::*;
     use crate::registry::ComplianceRegistryComponentWrite as _;

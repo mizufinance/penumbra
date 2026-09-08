@@ -69,6 +69,6 @@ They are not migration promises.
 
 ## Formal Verification Boundary
 
-Formal verification lives in `mizufinance/shieldd-formal`, which pins an exact
+Formal verification lives in `mizufinance/shieldd-security`, which pins an exact
 Shieldd commit. Do not add formal tools, specifications, generated evidence, or
 CI gates to this repository.

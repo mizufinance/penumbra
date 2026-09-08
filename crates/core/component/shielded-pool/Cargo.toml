@@ -16,7 +16,6 @@ component = [
     "shieldd-sdk-compliance/component",
     "shieldd-sdk-proto/cnidarium",
     "shieldd-sdk-sct/component",
-    "tonic",
     "ibc-proto/server",
     "ibc-proto/transport",
 ]
@@ -30,7 +29,6 @@ parallel = [
     "decaf377-rdsa/parallel",
     "ark-groth16/parallel",
     "decaf377/parallel",
-    "tonic",
 ]
 docsrs = []
 poc-orbis = ["shieldd-sdk-compliance/poc-orbis"]
@@ -83,7 +81,6 @@ sha2 = {workspace = true}
 tap = {workspace = true}
 tendermint = {workspace = true}
 thiserror = {workspace = true}
-tonic = {workspace = true, optional = true}
 tracing = {workspace = true}
 
 [dev-dependencies]

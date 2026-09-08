@@ -1,11 +1,11 @@
 use std::io::{IsTerminal, Read, Write};
 
 use anyhow::Result;
+use async_trait::async_trait;
 use shieldd_sdk_custody::threshold::{SigningRequest, Terminal};
 use shieldd_sdk_keys::FullViewingKey;
 use shieldd_sdk_transaction::TransactionPlan;
 use termion::{color, input::TermRead};
-use tonic::async_trait;
 
 async fn read_password(prompt: &str) -> Result<String> {
     fn get_possibly_empty_string(prompt: &str) -> Result<String> {

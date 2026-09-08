@@ -42,16 +42,9 @@
     "ibc/core/connection/v1/query.proto"
   ],
   "rust_packages": [
-    "cosmos.auth.v1beta1",
-    "cosmos.bank.v1beta1",
     "cosmos.base.abci.v1beta1",
     "cosmos.base.query.v1beta1",
     "cosmos.base.v1beta1",
-    "cosmos.crypto.multisig.v1beta1",
-    "cosmos.tx.config.v1",
-    "cosmos.tx.signing.v1beta1",
-    "cosmos.tx.v1beta1",
-    "noble.forwarding.v1",
     "shieldd.cnidarium.v1",
     "shieldd.core.app.v1",
     "shieldd.core.asset.v1",
@@ -77,5 +70,12 @@
     "tendermint.p2p",
     "tendermint.types",
     "tendermint.version"
+  ],
+  "rust_rpc_clients": [
+    "shieldd.custody.v1",
+    "shieldd.core.component.sct.v1"
+  ],
+  "rust_rpc_servers": [
+    "shieldd.custody.v1"
   ]
 }

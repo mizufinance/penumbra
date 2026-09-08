@@ -112,7 +112,7 @@ snarkpack-challenge-boundaries:
 
 # Run bounded SnarkPack fuzz harness smoke tests.
 snarkpack-fuzz-smoke:
-    bash -lc 'set -euo pipefail; unset ROCKSDB_LIB_DIR ROCKSDB_INCLUDE_DIR; toolchain="${SNARKPACK_FUZZ_TOOLCHAIN:-nightly-2025-09-30}"; export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" RUSTUP_TOOLCHAIN="$toolchain"; runs="${SNARKPACK_FUZZ_RUNS:-16}"; fuzz_dir="crates/crypto/proof-aggregation-fuzz"; tmp="$(mktemp -d)"; trap "rm -rf \"$tmp\"" EXIT; cargo fuzz build --fuzz-dir "$fuzz_dir"; for target in wrapper_inner_range preflight_aggregate_verify deserialize_aggregate_proof; do mkdir -p "$tmp/$target"; cp "$fuzz_dir"/corpus/"$target"/* "$tmp/$target"/; cargo fuzz run --fuzz-dir "$fuzz_dir" "$target" "$tmp/$target" -- -runs="$runs"; done'
+    bash -lc 'set -euo pipefail; unset ROCKSDB_LIB_DIR ROCKSDB_INCLUDE_DIR; toolchain="${SNARKPACK_FUZZ_TOOLCHAIN:-nightly-2025-09-30}"; export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" RUSTUP_TOOLCHAIN="$toolchain"; runs="${SNARKPACK_FUZZ_RUNS:-16}"; fuzz_dir="crates/crypto/proof-aggregation-fuzz"; tmp="$(mktemp -d)"; trap "rm -rf \"$tmp\"" EXIT; cargo fuzz build --fuzz-dir "$fuzz_dir"; for target in deserialize_aggregate_proof; do mkdir -p "$tmp/$target"; cp "$fuzz_dir"/corpus/"$target"/* "$tmp/$target"/; cargo fuzz run --fuzz-dir "$fuzz_dir" "$target" "$tmp/$target" -- -runs="$runs"; done'
 
 # Check durable SnarkPack runtime invariants.
 snarkpack-invariants:
@@ -211,12 +211,6 @@ orbis-integration-down:
 orbis-integration-logs:
     ./scripts/orbis-stack.sh logs
 
-# Render livereload environment for editing the Protocol documentation.
-protocol-docs:
-    # Access local docs at http://127.0.0.1:3002
-    cd docs/protocol && \
-        mdbook serve -n 127.0.0.1 --port 3002
-
 # Generate code for Rust & Go from proto definitions.
 proto:
     ./deployments/scripts/protobuf-codegen
@@ -241,3 +235,13 @@ test:
 # Build the container image locally
 container:
     docker build -t ghcr.io/mizufinance/shieldd:local -f ./deployments/containerfiles/Dockerfile .
+
+# Stage relocatable artifacts for embedded hosts and proof tools.
+artifacts-native:
+    python3 scripts/stage_artifacts.py native
+
+artifacts-provers:
+    python3 scripts/stage_artifacts.py provers
+
+artifacts-audit:
+    python3 scripts/stage_artifacts.py audit

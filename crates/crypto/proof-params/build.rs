@@ -306,9 +306,9 @@ fn write_bundled_gnark_runtime_paths() -> anyhow::Result<()> {
         "pub const GNARK_TRANSFER_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n\
          pub const GNARK_NOTE_RESHAPE_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n\
          pub const GNARK_SHIELDED_ICS20_WITHDRAWAL_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n",
-        transfer_lib_path.display(),
-        note_reshape_lib_path.display(),
-        shielded_ics20_withdrawal_lib_path.display(),
+        transfer_lib_path.file_name().context("gnark library filename")?.to_string_lossy(),
+        note_reshape_lib_path.file_name().context("gnark library filename")?.to_string_lossy(),
+        shielded_ics20_withdrawal_lib_path.file_name().context("gnark library filename")?.to_string_lossy(),
     );
     std::fs::write(&include_path, include_body).context("write gnark runtime include file")?;
 

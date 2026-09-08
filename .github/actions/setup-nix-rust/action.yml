@@ -45,27 +45,6 @@ runs:
         primary-key: nix-${{ runner.os }}-${{ hashFiles(inputs.nix-cache-glob, 'flake.lock') }}
         restore-prefixes-first-match: nix-${{ runner.os }}-
 
-    - name: Install locked TCT visualizer assets
-      shell: bash
-      run: |
-        set -euo pipefail
-        asset_root=""
-        for candidate in \
-          "$GITHUB_WORKSPACE/crates/misc/tct-visualize" \
-          "$GITHUB_WORKSPACE/shieldd/crates/misc/tct-visualize"
-        do
-          if [[ -f "$candidate/package-lock.json" ]]; then
-            asset_root="$candidate"
-            break
-          fi
-        done
-        if [[ -z "$asset_root" ]]; then
-          echo "TCT visualizer package-lock.json was not found" >&2
-          exit 1
-        fi
-        npm ci --ignore-scripts --no-audit --no-bin-links --no-fund \
-          --prefix "$asset_root"
-
     - name: Load rust cache
       if: inputs.rust-cache == 'true' && inputs.rust-cache-prefix == ''
       uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2

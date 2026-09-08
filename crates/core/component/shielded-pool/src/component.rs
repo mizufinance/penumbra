@@ -31,4 +31,4 @@ pub use action_handler::transfer::{
     transfer_validate_verified, ValidatedTransferExecution,
 };
 
-pub mod rpc;
+pub mod query;

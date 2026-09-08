@@ -1,17 +1,7 @@
-use crate::{
-    config::{CustodyConfig, PcliConfig},
-    default_home,
-    terminal::ActualTerminal,
-    App, Command,
-};
+use crate::{config::PcliConfig, default_home, App, Command};
 use anyhow::Result;
 use camino::Utf8PathBuf;
 use clap::Parser;
-use shieldd_sdk_custody::{null_kms::NullKms, soft_kms::SoftKms};
-use shieldd_sdk_proto::box_grpc_svc;
-use shieldd_sdk_proto::custody::v1::{
-    custody_service_client::CustodyServiceClient, custody_service_server::CustodyServiceServer,
-};
 use std::io::IsTerminal as _;
 use tracing_subscriber::EnvFilter;
 
@@ -50,54 +40,7 @@ impl Opt {
 
     pub async fn into_app(self) -> Result<(App, Command)> {
         let config = self.load_config()?;
-        let fvk = config.full_viewing_key.clone();
-
-        // Build the custody service...
-        let custody = match &config.custody {
-            CustodyConfig::ViewOnly => {
-                tracing::info!("using view-only custody service");
-                let null_kms = NullKms::default();
-                let custody_svc = CustodyServiceServer::new(null_kms);
-                CustodyServiceClient::new(box_grpc_svc::local(custody_svc))
-            }
-            CustodyConfig::SoftKms(config) => {
-                tracing::info!("using software KMS custody service");
-                let soft_kms = SoftKms::new(config.clone());
-                let custody_svc = CustodyServiceServer::new(soft_kms);
-                CustodyServiceClient::new(box_grpc_svc::local(custody_svc))
-            }
-            CustodyConfig::Threshold(config) => {
-                tracing::info!("using manual threshold custody service");
-                let threshold_kms = shieldd_sdk_custody::threshold::Threshold::new(
-                    config.clone(),
-                    ActualTerminal {
-                        fvk: Some(fvk.clone()),
-                    },
-                );
-                let custody_svc = CustodyServiceServer::new(threshold_kms);
-                CustodyServiceClient::new(box_grpc_svc::local(custody_svc))
-            }
-            CustodyConfig::Encrypted(config) => {
-                tracing::info!("using encrypted custody service");
-                let encrypted_kms = shieldd_sdk_custody::encrypted::Encrypted::new(
-                    config.clone(),
-                    ActualTerminal {
-                        fvk: Some(fvk.clone()),
-                    },
-                );
-                let custody_svc = CustodyServiceServer::new(encrypted_kms);
-                CustodyServiceClient::new(box_grpc_svc::local(custody_svc))
-            }
-            #[cfg(feature = "ledger")]
-            CustodyConfig::Ledger(config) => {
-                tracing::info!("using ledger custody service");
-                let service = shieldd_sdk_custody_ledger_usb::Service::new(config.clone());
-                let custody_svc = CustodyServiceServer::new(service);
-                CustodyServiceClient::new(box_grpc_svc::local(custody_svc))
-            }
-        };
-
-        let app = App { custody, config };
+        let app = App { config };
         Ok((app, self.cmd))
     }
 }

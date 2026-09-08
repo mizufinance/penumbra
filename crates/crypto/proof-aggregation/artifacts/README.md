@@ -14,7 +14,7 @@ ceremony owner supplies:
   `src/srs.rs`.
 
 Registration must include the artifact, transcript, verification evidence, and
-source digests. Formal evidence is maintained in `mizufinance/shieldd-formal`.
+source digests. Formal evidence is maintained in `mizufinance/shieldd-security`.
 
 Deployments may set `SHIELDD_SNARKPACK_SRS_ARTIFACT_DIR` to an absolute
 distribution directory. The runtime still accepts only the filename, artifact

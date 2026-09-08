@@ -11,7 +11,6 @@ mod historical_proof_worker;
 mod issued_address;
 mod note_manager;
 mod note_record;
-mod status;
 mod storage;
 mod sync;
 mod transaction_info;
@@ -30,7 +29,6 @@ pub use crate::note_manager::{
     NoteManager, NoteManagerPlanningResult, NoteManagerResumeToken, TransferResumeToken,
 };
 pub use crate::note_record::SpendableNoteRecord;
-pub use crate::status::StatusStreamResponse;
 pub use crate::storage::{
     ConfirmedVolumeAccumulator, Storage, VolumeAccumulatorRecovery, VolumeAccumulatorReservation,
 };
@@ -46,3 +44,6 @@ pub use historical_proof_worker::{HistoricalProofWorker, RpcHistoricalWitnessSou
 
 mod storage_planning;
 pub use storage_planning::StoragePlanningIo;
+
+mod sweep;
+pub use sweep::sweep;

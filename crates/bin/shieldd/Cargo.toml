@@ -3,7 +3,7 @@ name = "shieldd"
 version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
-description = "Minimal Shieldd execution-client server"
+description = "Embedded Shieldd execution library"
 repository = { workspace = true }
 license = { workspace = true }
 publish = false
@@ -13,23 +13,22 @@ rust-version = "1.75"
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
+ibc-proto = { workspace = true }
+cnidarium-component = { workspace = true }
 anyhow = { workspace = true }
-clap = { workspace = true, features = ["derive", "env"] }
-cnidarium = { workspace = true, features = ["migration", "rpc"], default-features = true }
+cnidarium = { workspace = true, features = ["migration"], default-features = true }
 futures = { workspace = true }
 prost = { workspace = true }
 shieldd-sdk-app = { workspace = true, features = ["parallel"], default-features = true }
 shieldd-sdk-compact-block = { workspace = true, features = ["component"] }
 shieldd-sdk-compliance = { workspace = true, features = ["component"] }
-shieldd-sdk-proto = { workspace = true, features = ["rpc"], default-features = true }
+shieldd-sdk-proto = { workspace = true, default-features = true }
 shieldd-sdk-sct = { workspace = true, default-features = true }
 shieldd-sdk-shielded-pool = { workspace = true, default-features = false }
 tendermint = { workspace = true }
 tendermint-proto = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
-tonic = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter", "ansi"] }
 
 # Rust-side global allocator. With the baked `dirty_decay_ms:0` config (see lib.rs),
 # freed pages are returned to the OS promptly instead of being held in per-thread
@@ -39,6 +38,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter", "ansi"] }
 tikv-jemallocator = "0.6"
 
 [dev-dependencies]
+ibc-types = { workspace = true }
 decaf377 = { workspace = true, default-features = true }
 shieldd-sdk-asset = { workspace = true, default-features = true }
 shieldd-sdk-keys = { workspace = true, default-features = false }
