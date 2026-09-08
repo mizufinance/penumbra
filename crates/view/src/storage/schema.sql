@@ -149,8 +149,6 @@ CREATE TABLE volume_accumulator_reservations (
 CREATE TABLE historical_proof_cache (
     nullifier                   BLOB PRIMARY KEY NOT NULL,
     protocol_version            BIGINT NOT NULL,
-    covered_generation_count    BIGINT NOT NULL,
-    terminal_history_head       BLOB NOT NULL,
     proof_bundle                BLOB NOT NULL,
     cache_state                 TINYINT NOT NULL,
     last_error                  TEXT

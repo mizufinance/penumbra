@@ -465,8 +465,8 @@ impl<S: StateRead + Send + Sync> shieldd_sdk_compliance::ComplianceProofProvider
         use std::collections::BTreeMap;
 
         // Read trees ONCE to ensure consistency between anchors and proofs
-        let asset_tree = self.state.get_asset_imt().await?;
-        let user_tree = self.state.get_user_tree().await?;
+        let asset_tree = self.state.reconstruct_asset_tree().await?;
+        let user_tree = self.state.reconstruct_user_tree().await?;
 
         // Get anchors from the same tree instances used for proofs
         let asset_anchor = tct::StateCommitment(asset_tree.root().0);

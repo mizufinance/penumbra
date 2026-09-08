@@ -347,12 +347,37 @@ impl TransactionPlan {
     }
 
     #[cfg(any(unix, windows))]
+    fn initialize_provers(&self) -> Result<()> {
+        use shieldd_sdk_shielded_pool::gnark::{initialize_prover, ProverCapability};
+        for action in &self.actions {
+            match action {
+                ActionPlan::Transfer(_) => initialize_prover(ProverCapability::Transfer)?,
+                ActionPlan::NoteReshape(plan) => {
+                    initialize_prover(ProverCapability::NoteReshape(plan.family_id))?
+                }
+                ActionPlan::ShieldedIcs20Withdrawal(plan) => {
+                    initialize_prover(ProverCapability::Withdrawal(plan.family_id()))?
+                }
+                ActionPlan::ShieldedHostWithdrawal(plan) => {
+                    initialize_prover(ProverCapability::Withdrawal(plan.family_id()))?
+                }
+                _ => {}
+            }
+        }
+        if self.fee_funding.is_some() {
+            initialize_prover(ProverCapability::Transfer)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(any(unix, windows))]
     pub fn build(
         self,
         full_viewing_key: &FullViewingKey,
         witness_data: &WitnessData,
         auth_data: &AuthorizationData,
     ) -> Result<Transaction> {
+        self.initialize_provers()?;
         let recent_position_floor = self.recent_position_floor()?;
         let actions = self
             .actions
@@ -394,6 +419,7 @@ impl TransactionPlan {
         witness_data: &WitnessData,
         auth_data: &AuthorizationData,
     ) -> Result<Transaction> {
+        self.initialize_provers()?;
         let recent_position_floor = self.recent_position_floor()?;
         let witness_data = std::sync::Arc::new(witness_data.clone());
 

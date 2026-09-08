@@ -9,7 +9,6 @@ packages=(
     shieldd-sdk-asset
     shieldd-sdk-compact-block
     shieldd-sdk-fee
-    shieldd-sdk-ibc
     shieldd-sdk-keys
     shieldd-sdk-sct
     shieldd-sdk-shielded-pool

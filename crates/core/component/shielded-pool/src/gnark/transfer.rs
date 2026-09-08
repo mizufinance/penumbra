@@ -75,7 +75,6 @@ mod native {
     use super::*;
     use crate::gnark::transport::{BundledArtifacts, GnarkClient, GnarkFamilyConfig};
     use anyhow::bail;
-    const TRANSFER_LIB_BASENAME: &str = "libshieldd_gnark_transfer";
     const TRANSFER_ENV_ARTIFACT_DIR: &str = "SHIELDD_GNARK_TRANSFER_ARTIFACT_DIR";
     const TRANSFER_ENV_LIB: &str = "SHIELDD_GNARK_TRANSFER_LIB";
     const TRANSFER_ENV_DAEMON: &str = "SHIELDD_GNARK_TRANSFER_DAEMON";
@@ -88,7 +87,6 @@ mod native {
 
     pub(crate) static TRANSFER_FAMILY_CONFIG: GnarkFamilyConfig = GnarkFamilyConfig {
         family: "transfer",
-        lib_basename: TRANSFER_LIB_BASENAME,
         bundled_library: shieldd_sdk_proof_params::GNARK_TRANSFER_BUNDLED_LIBRARY_PATH,
         env_artifact_dir: TRANSFER_ENV_ARTIFACT_DIR,
         env_lib: TRANSFER_ENV_LIB,
@@ -104,11 +102,25 @@ mod native {
         inner: GnarkClient,
     }
 
+    static CONFIG: std::sync::LazyLock<
+        Result<super::super::transport::ResolvedGnarkConfig, String>,
+    > = std::sync::LazyLock::new(|| {
+        TRANSFER_FAMILY_CONFIG
+            .resolve()
+            .map_err(|error| error.to_string())
+    });
+
+    pub(crate) fn resolved_configuration(
+    ) -> Result<&'static super::super::transport::ResolvedGnarkConfig> {
+        CONFIG.as_ref().map_err(|error| anyhow::anyhow!("{error}"))
+    }
+
     impl GnarkTransferClient {
         pub(crate) fn load() -> Result<Self> {
+            let config = resolved_configuration()?;
             Ok(Self {
                 inner: GnarkClient::load(
-                    &TRANSFER_FAMILY_CONFIG,
+                    config,
                     BundledArtifacts {
                         proving_key: shieldd_sdk_proof_params::transfer_proving_key_bytes(),
                         verifying_key: shieldd_sdk_proof_params::transfer_verifying_key_json_bytes(
@@ -145,3 +157,6 @@ mod native {
 pub(crate) use native::GnarkTransferClient;
 #[cfg(all(any(unix, windows), any(test, feature = "benchmark-helpers")))]
 pub(crate) use native::TRANSFER_FAMILY_CONFIG;
+
+#[cfg(any(unix, windows))]
+pub(super) use native::resolved_configuration;

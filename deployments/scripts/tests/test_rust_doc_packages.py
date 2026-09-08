@@ -62,16 +62,13 @@ class RustDocPackagesTest(unittest.TestCase):
         selected = set(PACKAGES.workspace_package_specs(metadata))
 
         self.assertTrue(
-            {"shieldd-sdk-proof-params", "shieldd-sdk-shielded-pool"}
+            {"shieldd-sdk-proof-params", "shieldd-sdk-shielded-pool", "pcli"}
             <= selected
         )
         self.assertTrue(
             {
                 "bankd-e2e-host-withdrawal-builder",
                 "bankd-e2e-spend-builder",
-                "pcli",
-                "pclientd",
-                "pd",
                 "shieldd-sdk-app",
                 "shieldd-sdk-app-tests",
                 "shieldd-sdk-bench",

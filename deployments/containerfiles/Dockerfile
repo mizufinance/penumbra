@@ -38,8 +38,7 @@ ENV CARGO_BUILD_JOBS=${BUILD_JOBS} \
     GOMAXPROCS=${BUILD_JOBS} \
     GOFLAGS="-p=${BUILD_JOBS}"
 COPY . .
-RUN cargo build --locked --release -p pd -p pcli -p pclientd -p orbis-audit -p orbis-integration \
-    --features pcli/bundled-proving-keys,pclientd/bundled-proving-keys
+RUN cargo build --locked --release -p shieldd -p pcli -p orbis-audit -p orbis-integration
 RUN mkdir -p /usr/lib/shieldd \
     && cd tools/gnark \
     && go build -o /usr/src/shieldd/target/release/proverdaemon ./cmd/proverdaemon \
@@ -68,8 +67,7 @@ COPY --from=build-env \
             /usr/src/shieldd/target/release/orbis-audit \
             /usr/src/shieldd/target/release/orbis-integration \
             /usr/src/shieldd/target/release/pcli \
-            /usr/src/shieldd/target/release/pclientd \
-            /usr/src/shieldd/target/release/pd \
+            /usr/src/shieldd/target/release/shieldd \
             /usr/src/shieldd/target/release/proverdaemon \
             /usr/bin/
 
@@ -77,4 +75,4 @@ COPY --from=build-env /usr/lib/shieldd/*.so /usr/lib/shieldd/
 
 WORKDIR /home/${USERNAME}
 USER ${USERNAME}
-CMD [ "/usr/bin/pd" ]
+ENTRYPOINT [ "/usr/bin/shieldd" ]

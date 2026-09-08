@@ -4,16 +4,19 @@ use anyhow::Context;
 use rand_core::{CryptoRng, RngCore};
 use shieldd_sdk_proto::view::v1::NotesRequest;
 use shieldd_sdk_transaction::TransactionPlan;
-use shieldd_sdk_view::{NoteManager, NoteManagerPlanningResult, ViewClient};
+use shieldd_sdk_view::{planning_io::PlanningIo, NoteManager, NoteManagerPlanningResult};
 use tracing::instrument;
 
 #[instrument(skip(view, rng))]
-pub async fn sweep<V, R>(view: &mut V, mut rng: R) -> anyhow::Result<Vec<TransactionPlan>>
+pub async fn sweep<V, R>(
+    view: &mut V,
+    mut rng: R,
+    gas_prices: shieldd_sdk_fee::GasPrices,
+) -> anyhow::Result<Vec<TransactionPlan>>
 where
-    V: ViewClient + Send,
+    V: PlanningIo + Send,
     R: RngCore + CryptoRng,
 {
-    let gas_prices = view.gas_prices().await?;
     let mut counts = BTreeMap::new();
     for record in view.notes(NotesRequest::default()).await? {
         if record.note.amount() == 0u64.into() {

@@ -13,6 +13,7 @@ default = []
 parallel = ["shieldd-sdk-transaction/parallel"]
 
 [dependencies]
+shieldd-sdk-fee = { workspace = true }
 anyhow = {workspace = true}
 shieldd-sdk-custody = {workspace = true}
 shieldd-sdk-keys = {workspace = true, default-features = true}

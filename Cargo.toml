@@ -16,8 +16,6 @@ members = [
   "crates/bin/bankd-e2e-host-withdrawal-builder",
   "crates/bin/bankd-e2e-spend-builder",
   "crates/bin/pcli",
-  "crates/bin/pclientd",
-  "crates/bin/pd",
   "crates/bin/shieldd",
   "crates/cnidarium-component",
   "crates/core/app",
@@ -45,12 +43,8 @@ members = [
   "crates/misc/tct-visualize",
   "crates/proto",
   "crates/test/mock-client",
-  "crates/test/mock-consensus",
-  "crates/test/mock-tendermint-proxy",
   "crates/test/tct-property-test",
   "crates/test/tracing-subscriber",
-  "crates/util/auto-https",
-  "crates/util/tendermint-proxy",
   "crates/util/tower-trace",
   "crates/util/orbis-client",
   "crates/view",
@@ -175,8 +169,6 @@ shieldd-sdk-fee                     = { default-features = false, version = "2.1
 shieldd-sdk-ibc                     = { default-features = false, version = "2.1.0", path = "crates/core/component/ibc" }
 shieldd-sdk-keys                    = { default-features = false, version = "2.1.0", path = "crates/core/keys" }
 shieldd-sdk-mock-client             = { version = "2.1.0", path = "crates/test/mock-client" }
-shieldd-sdk-mock-consensus          = { version = "2.1.0", path = "crates/test/mock-consensus" }
-shieldd-sdk-mock-tendermint-proxy   = { version = "2.1.0", path = "crates/test/mock-tendermint-proxy" }
 shieldd-sdk-num                     = { default-features = false, version = "2.1.0", path = "crates/core/num" }
 shieldd-sdk-proof-params            = { default-features = false, version = "2.1.0", path = "crates/crypto/proof-params" }
 shieldd-sdk-proof-aggregation       = { default-features = false, version = "2.1.0", path = "crates/crypto/proof-aggregation" }

@@ -70,7 +70,6 @@ pub(crate) enum GnarkTransport {
 #[derive(Clone, Copy)]
 pub(crate) struct GnarkFamilyConfig {
     pub family: &'static str,
-    pub lib_basename: &'static str,
     pub bundled_library: Option<&'static str>,
     pub env_artifact_dir: &'static str,
     pub env_lib: &'static str,
@@ -102,20 +101,32 @@ impl GnarkFamilyConfig {
     }
 
     pub fn library_path(&self) -> Option<PathBuf> {
-        self.bundled_library
-            .map(PathBuf::from)
-            .filter(|path| path.is_file())
-            .or_else(|| {
-                #[cfg(any(unix, windows))]
-                {
-                    auto_lib_path(self.lib_basename)
-                }
-                #[cfg(not(any(unix, windows)))]
-                {
-                    None
-                }
-            })
+        self.bundled_library.map(PathBuf::from)
     }
+
+    pub fn resolve(&'static self) -> Result<ResolvedGnarkConfig> {
+        let source = if self.env_override_configured() {
+            ArtifactSource::External(self.configured_transport()?)
+        } else {
+            ArtifactSource::Bundled(self.library_path().ok_or_else(|| {
+                anyhow!("gnark {} bundled library is not configured", self.family)
+            })?)
+        };
+        Ok(ResolvedGnarkConfig {
+            family: self,
+            source,
+        })
+    }
+}
+
+pub(crate) struct ResolvedGnarkConfig {
+    family: &'static GnarkFamilyConfig,
+    source: ArtifactSource,
+}
+
+enum ArtifactSource {
+    Bundled(PathBuf),
+    External(ConfiguredTransport),
 }
 
 struct ConfiguredTransport {
@@ -211,28 +222,35 @@ impl GnarkFamilyConfig {
 }
 
 impl GnarkClient {
-    pub fn load(
-        config: &'static GnarkFamilyConfig,
-        artifacts: BundledArtifacts<'_>,
-    ) -> Result<Self> {
-        if config.env_override_configured() {
-            return Self::from_env(config);
+    pub fn load(resolved: &ResolvedGnarkConfig, artifacts: BundledArtifacts<'_>) -> Result<Self> {
+        let config = resolved.family;
+        match &resolved.source {
+            ArtifactSource::Bundled(library) => {
+                anyhow::ensure!(
+                    !artifacts.proving_key.is_empty(),
+                    "gnark {} proving key not bundled (enable bundled-proving-keys feature)",
+                    config.family
+                );
+                Self::from_bundled(config, library, artifacts)
+            }
+            ArtifactSource::External(configured) => Self::from_external(config, configured),
         }
-        let library = config
-            .library_path()
-            .ok_or_else(|| anyhow!("gnark {} library not found", config.family))?;
-        if artifacts.proving_key.is_empty() {
-            bail!(
-                "gnark {} proving key not bundled (enable bundled-proving-keys feature)",
-                config.family
-            );
-        }
-        Self::from_bundled(config, &library, artifacts)
     }
 
-    pub fn from_env(config: &'static GnarkFamilyConfig) -> Result<Self> {
-        let configured = config.configured_transport()?;
-        match configured.executable {
+    pub fn load_external(resolved: &ResolvedGnarkConfig) -> Result<Self> {
+        match &resolved.source {
+            ArtifactSource::External(configured) => {
+                Self::from_external(resolved.family, configured)
+            }
+            ArtifactSource::Bundled(_) => bail!("external prover configuration required"),
+        }
+    }
+
+    fn from_external(
+        config: &'static GnarkFamilyConfig,
+        configured: &ConfiguredTransport,
+    ) -> Result<Self> {
+        match &configured.executable {
             TransportExecutable::Library(library) => {
                 #[cfg(any(unix, windows))]
                 {
@@ -538,20 +556,6 @@ pub(crate) fn shutdown_transport(transport: &mut GnarkTransport) {
     }
     #[cfg(not(any(unix, windows)))]
     let _ = transport;
-}
-
-#[cfg(any(unix, windows))]
-pub(crate) fn auto_lib_path(lib_basename: &str) -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let exe_dir = exe.parent()?;
-    let exts = ["so", "dylib", "dll"];
-    let find_in = |dir: &Path| -> Option<PathBuf> {
-        exts.iter()
-            .map(|e| dir.join(format!("{lib_basename}.{e}")))
-            .find(|p| p.exists())
-    };
-
-    find_in(exe_dir).or_else(|| find_in(&exe_dir.join("../lib/shieldd")))
 }
 
 pub(crate) fn validate_prove_request_len(family: &str, witness: &[u8]) -> Result<()> {

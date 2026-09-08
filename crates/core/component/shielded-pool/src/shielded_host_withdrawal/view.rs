@@ -11,7 +11,7 @@ pub enum ShieldedHostWithdrawalView {
     Visible {
         withdrawal: ShieldedHostWithdrawal,
         spent_notes: Vec<NoteView>,
-        change_note: NoteView,
+        change_note: Option<NoteView>,
         payload_key: PayloadKey,
     },
     Opaque {
@@ -38,7 +38,7 @@ impl From<ShieldedHostWithdrawalView> for pb::ShieldedHostWithdrawalView {
                     pb::shielded_host_withdrawal_view::Visible {
                         withdrawal: Some(withdrawal.into()),
                         spent_notes: spent_notes.into_iter().map(Into::into).collect(),
-                        change_note: Some(change_note.into()),
+                        change_note: change_note.map(Into::into),
                         payload_key: Some(payload_key.into()),
                     },
                 )),
@@ -74,10 +74,7 @@ impl TryFrom<pb::ShieldedHostWithdrawalView> for ShieldedHostWithdrawalView {
                     .into_iter()
                     .map(TryInto::try_into)
                     .collect::<Result<Vec<_>, _>>()?,
-                change_note: visible
-                    .change_note
-                    .ok_or_else(|| anyhow!("missing visible shielded host withdrawal change note"))?
-                    .try_into()?,
+                change_note: visible.change_note.map(TryInto::try_into).transpose()?,
                 payload_key: visible
                     .payload_key
                     .ok_or_else(|| anyhow!("missing visible shielded host withdrawal payload key"))?

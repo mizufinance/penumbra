@@ -3,7 +3,23 @@ use anyhow::Result;
 use shieldd_sdk_custody::{AuthorizeRequest, CustodyClient};
 use shieldd_sdk_keys::FullViewingKey;
 use shieldd_sdk_transaction::{AuthorizationData, Transaction, TransactionPlan};
-use shieldd_sdk_view::ViewClient;
+#[tonic::async_trait]
+pub trait WitnessSource {
+    async fn witness(
+        &mut self,
+        plan: &TransactionPlan,
+    ) -> Result<shieldd_sdk_transaction::WitnessData>;
+}
+
+#[tonic::async_trait]
+impl WitnessSource for shieldd_sdk_view::Storage {
+    async fn witness(
+        &mut self,
+        plan: &TransactionPlan,
+    ) -> Result<shieldd_sdk_transaction::WitnessData> {
+        self.witness_plan(plan).await
+    }
+}
 
 pub async fn build_transaction<V, C>(
     fvk: &FullViewingKey,
@@ -12,7 +28,7 @@ pub async fn build_transaction<V, C>(
     plan: TransactionPlan,
 ) -> Result<Transaction>
 where
-    V: ViewClient,
+    V: WitnessSource,
     C: CustodyClient,
 {
     // Get the authorization data from the custody service...

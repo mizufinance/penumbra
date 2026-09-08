@@ -37,7 +37,6 @@ use shieldd_sdk_ibc::{
 use shieldd_sdk_proto::{StateReadProto as _, StateWriteProto as _};
 use shieldd_sdk_sct::component::tree::SctRead as _;
 use shieldd_sdk_shielded_pool::{Ics20Withdrawal, Note, NoteReshapeFamilyId};
-use tendermint::v0_37::abci::response;
 use tokio::sync::OnceCell;
 
 use crate::app::{HostBlock, HostExecution, MAX_BLOCK_TXS_PAYLOAD_BYTES};
@@ -244,7 +243,7 @@ async fn build_family_fixture_set() -> Result<FamilyFixtureSet> {
             memo: None,
             fee_funding: None,
             transaction_parameters: TransactionParameters {
-                chain_id: TestNode::<()>::CHAIN_ID.to_string(),
+                chain_id: TEST_CHAIN_ID.to_string(),
                 ..Default::default()
             },
             nullifier_window: Some(test_nullifier_window()),
@@ -265,7 +264,7 @@ async fn build_family_fixture_set() -> Result<FamilyFixtureSet> {
         memo: None,
         fee_funding: Some(fee_funding_transfer),
         transaction_parameters: TransactionParameters {
-            chain_id: TestNode::<()>::CHAIN_ID.to_string(),
+            chain_id: TEST_CHAIN_ID.to_string(),
             ..Default::default()
         },
         nullifier_window: Some(test_nullifier_window()),
@@ -285,7 +284,7 @@ async fn build_family_fixture_set() -> Result<FamilyFixtureSet> {
         memo: None,
         fee_funding: None,
         transaction_parameters: TransactionParameters {
-            chain_id: TestNode::<()>::CHAIN_ID.to_string(),
+            chain_id: TEST_CHAIN_ID.to_string(),
             ..Default::default()
         },
         nullifier_window: Some(test_nullifier_window()),
@@ -325,7 +324,7 @@ async fn build_fixture_storage() -> Result<TempStorage> {
     .take(FIXTURE_REQUIRED_NOTES)
     .collect();
     let app_state_bytes = serde_json::to_vec(&AppState::Content(Content {
-        chain_id: TestNode::<()>::CHAIN_ID.to_string(),
+        chain_id: TEST_CHAIN_ID.to_string(),
         shielded_pool_content: shieldd_sdk_shielded_pool::genesis::Content {
             allocations,
             ..Default::default()
@@ -333,15 +332,14 @@ async fn build_fixture_storage() -> Result<TempStorage> {
         ..Default::default()
     }))?;
 
-    let consensus = Consensus::new(storage.as_ref().clone());
     let initial_time = Time::parse_from_rfc3339("2026-01-01T00:00:00Z")?;
-    let mut node = TestNode::builder()
-        .single_validator()
-        .app_state(app_state_bytes)
-        .with_initial_timestamp(initial_time)
-        .init_chain(consensus)
-        .await?;
-    node.block().execute().await?;
+    let mut node = TestHost::new(
+        storage.as_ref().clone(),
+        serde_json::from_slice(&app_state_bytes)?,
+        initial_time,
+    )
+    .await?;
+    node.execute(Vec::new()).await?;
     Ok(storage)
 }
 
@@ -479,31 +477,20 @@ fn mutate_to_decodable_invalid_proof(fixture: &FamilyFixture) -> Result<(Transac
     Ok((tx, invalid_bytes))
 }
 
-async fn process_request(app: &App, tx_bytes: &[u8]) -> Result<request::ProcessProposal> {
+async fn process_request(app: &App, tx_bytes: &[u8]) -> Result<BatchCandidate> {
     let context = app.benchmark_block_context().await?;
-    Ok(request::ProcessProposal {
+    Ok(BatchCandidate {
         txs: vec![tx_bytes.to_vec().into()],
-        proposed_last_commit: None,
-        misbehavior: Vec::new(),
-        hash: Hash::None,
         height: context.height,
-        time: context.time,
-        next_validators_hash: context.next_validators_hash,
-        proposer_address: context.proposer_address,
     })
 }
 
-async fn prepare_request(app: &App, tx_bytes: Vec<u8>) -> Result<request::PrepareProposal> {
+async fn prepare_request(app: &App, tx_bytes: Vec<u8>) -> Result<BatchPreparation> {
     let context = app.benchmark_block_context().await?;
-    Ok(request::PrepareProposal {
+    Ok(BatchPreparation {
         txs: vec![tx_bytes.into()],
         max_tx_bytes: i64::try_from(MAX_BLOCK_TXS_PAYLOAD_BYTES)?,
-        local_last_commit: None,
-        misbehavior: Vec::new(),
         height: context.height,
-        time: context.time,
-        next_validators_hash: Hash::None,
-        proposer_address: account::Id::new([0u8; 20]),
     })
 }
 
@@ -674,10 +661,10 @@ async fn process_proposal_rejects_decodable_invalid_groth16() -> Result<()> {
         let proposal = process_request(&app, &invalid_bytes).await?;
 
         let verdict = app
-            .process_proposal(proposal, Some(&cache), None, false)
+            .validate_batch(proposal, Some(&cache), None, false)
             .await;
         assert!(
-            matches!(verdict, response::ProcessProposal::Reject),
+            matches!(verdict, BatchVerdict::Reject),
             "{}: ProcessProposal accepted a decodable invalid proof",
             fixture.label()
         );
@@ -699,10 +686,10 @@ async fn fee_funding_process_proposal_rejects_invalid_groth16() -> Result<()> {
     let proposal = process_request(&app, &invalid_bytes).await?;
 
     let verdict = app
-        .process_proposal(proposal, Some(&cache), None, false)
+        .validate_batch(proposal, Some(&cache), None, false)
         .await;
     assert!(
-        matches!(verdict, response::ProcessProposal::Reject),
+        matches!(verdict, BatchVerdict::Reject),
         "ProcessProposal accepted an invalid fee-funding Transfer proof"
     );
     assert_cache_not_promoted(&cache, &hash, &invalid_bytes, fixture.label());
@@ -748,7 +735,10 @@ async fn fee_funding_valid_proof_executes_and_persists() -> Result<()> {
     let storage = storage_guard.as_ref().clone();
     let mut app = App::new(storage.latest_snapshot());
     let context = app.benchmark_block_context().await?;
-    let begin_block = App::begin_block_request_from_context(&context);
+    let begin_block = cnidarium_component::BlockContext {
+        height: context.height,
+        time: context.time,
+    };
     app.begin_block(&begin_block).await;
 
     let cache = StatelessCache::new();
@@ -773,15 +763,12 @@ async fn fee_funding_valid_proof_executes_and_persists() -> Result<()> {
         );
     }
 
-    app.end_block(&request::EndBlock {
-        height: i64::try_from(context.height.value())?,
-    })
-    .await;
+    app.end_block(context.height).await;
     app.commit(storage.clone()).await;
 
     let committed = storage.latest_snapshot();
     let compact_block: shieldd_sdk_compact_block::CompactBlock = committed
-        .compact_block(context.height.value())
+        .compact_block(context.height)
         .await?
         .context("committed fee-funding block must retain its compact block")?
         .try_into()?;
@@ -804,9 +791,7 @@ async fn fee_funding_valid_proof_executes_and_persists() -> Result<()> {
             "compact block omitted fee-funding nullifier {nullifier:?}"
         );
     }
-    let transaction_log = committed
-        .transactions_by_height(context.height.value())
-        .await?;
+    let transaction_log = committed.transactions_by_height(context.height).await?;
     let [logged] = transaction_log.transactions.as_slice() else {
         anyhow::bail!(
             "fee-funding block must persist exactly one transaction, got {}",
@@ -834,7 +819,7 @@ async fn prepare_proposal_excludes_decodable_invalid_groth16() -> Result<()> {
         let mut app = App::new(family_set._storage_guard.latest_snapshot());
         let proposal = prepare_request(&app, invalid_bytes.clone()).await?;
 
-        let (prepared, _) = app.prepare_proposal(proposal, Some(&cache), false).await;
+        let (prepared, _) = app.prepare_batch(proposal, Some(&cache), false).await;
         assert!(
             prepared
                 .txs
@@ -1235,9 +1220,9 @@ async fn cache_promotion_never_exceeds_exact_groth16_attestation() -> Result<()>
     stage_spent_nullifier(&mut process_app, &valid_tx).await?;
     let proposal = process_request(&process_app, &transfer.tx_bytes).await?;
     let verdict = process_app
-        .process_proposal(proposal, Some(&process_cache), None, false)
+        .validate_batch(proposal, Some(&process_cache), None, false)
         .await;
-    assert!(matches!(verdict, response::ProcessProposal::Reject));
+    assert!(matches!(verdict, BatchVerdict::Reject));
     assert_cache_not_promoted(
         &process_cache,
         &valid_hash,

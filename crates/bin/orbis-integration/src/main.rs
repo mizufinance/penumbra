@@ -365,7 +365,6 @@ struct AuditDemo {
     demo_dir_rel: String,
     status_file: PathBuf,
     state_file: PathBuf,
-    shieldd_grpc: String,
     orbis_endpoints: OrbisEndpoints,
 }
 
@@ -424,13 +423,6 @@ impl AuditDemo {
             root,
             demo_dir,
             demo_dir_rel,
-            shieldd_grpc: env::var("SHIELDD_GRPC")
-                .or_else(|_| env::var("SHIELDD_NODE_PD_URL"))
-                .unwrap_or_else(|_| {
-                    let port =
-                        env::var("SHIELDD_PD_GRPC_PORT").unwrap_or_else(|_| "8080".to_string());
-                    format!("http://127.0.0.1:{port}")
-                }),
             orbis_endpoints,
         })
     }
@@ -443,7 +435,7 @@ impl AuditDemo {
         }
         let mut child = self
             .pcli_command(slug)
-            .args(["init", "--grpc-url", &self.shieldd_grpc, "soft-kms"])
+            .args(["init", "soft-kms"])
             .arg(if phrase.is_some() {
                 "import-phrase"
             } else {

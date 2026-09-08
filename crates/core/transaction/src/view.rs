@@ -225,9 +225,7 @@ impl NoteFlowView for ShieldedHostWithdrawalView {
 
     fn created_notes(&self) -> Option<&[shieldd_sdk_shielded_pool::NoteView]> {
         match self {
-            ShieldedHostWithdrawalView::Visible { change_note, .. } => {
-                Some(std::slice::from_ref(change_note))
-            }
+            ShieldedHostWithdrawalView::Visible { change_note, .. } => Some(change_note.as_slice()),
             ShieldedHostWithdrawalView::Opaque { .. } => None,
         }
     }
@@ -598,5 +596,137 @@ impl TryFrom<pbt::MemoPlaintextView> for MemoPlaintextView {
             return_address: sender,
             text: v.text,
         })
+    }
+}
+
+#[cfg(test)]
+mod host_tests {
+    use decaf377::{Fq, Fr};
+    use decaf377_rdsa::{SigningKey, SpendAuth};
+    use shieldd_sdk_asset::{Balance, Value, ValueView, BASE_ASSET_ID};
+    use shieldd_sdk_keys::{
+        symmetric::{OvkWrappedKey, PayloadKey, WrappedMemoKey},
+        AddressView,
+    };
+    use shieldd_sdk_num::Amount;
+    use shieldd_sdk_sct::Nullifier;
+    use shieldd_sdk_shielded_pool::{
+        EncryptedBackref, HostTransfer, HostWithdrawal, HostWithdrawalDestination, Note,
+        NotePayload, NoteView, RecoveryCommitment, Rseed, ShieldedHostWithdrawal,
+        ShieldedHostWithdrawalBody, ShieldedHostWithdrawalView, ShieldedIcs20WithdrawalChangeBody,
+        ShieldedIcs20WithdrawalProof, TransferInputBody,
+    };
+    use shieldd_sdk_tct::{StateCommitment, Tree};
+
+    use super::{ActionView, TransactionBodyView, TransactionView};
+
+    fn note_view(note: &Note) -> NoteView {
+        NoteView {
+            value: ValueView::UnknownAssetId {
+                amount: note.amount(),
+                asset_id: note.asset_id(),
+            },
+            rseed: note.rseed(),
+            address: AddressView::Opaque {
+                address: note.address(),
+            },
+            recovery_commitment: note.recovery_commitment(),
+        }
+    }
+
+    #[test]
+    fn summary_includes_visible_shielded_host_withdrawal_note_flow() {
+        let spent_note = Note::from_parts(
+            shieldd_sdk_keys::test_keys::ADDRESS_0.clone(),
+            Value {
+                amount: Amount::from(10u64),
+                asset_id: *BASE_ASSET_ID,
+            },
+            Rseed([1u8; 32]),
+            RecoveryCommitment::unavailable(),
+        )
+        .expect("valid spent note");
+        let (change_note, change_capsule) = Note::from_parts_with_recovery(
+            shieldd_sdk_keys::test_keys::ADDRESS_0.clone(),
+            Value {
+                amount: Amount::from(3u64),
+                asset_id: *BASE_ASSET_ID,
+            },
+            Rseed([2u8; 32]),
+            decaf377::Element::GENERATOR,
+        )
+        .expect("valid change note");
+
+        let txv = TransactionView {
+            body_view: TransactionBodyView {
+                action_views: vec![ActionView::ShieldedHostWithdrawal(
+                    ShieldedHostWithdrawalView::Visible {
+                        withdrawal: ShieldedHostWithdrawal {
+                            body: ShieldedHostWithdrawalBody {
+                                family_id: shieldd_sdk_shielded_pool::ShieldedIcs20WithdrawalFamilyId::Canonical,
+                                anchor: Tree::default().root(),
+                                balance_commitment: Balance::default().commit(Fr::from(1u64)),
+                                inputs: vec![TransferInputBody {
+                                    nullifier: Nullifier(Fq::from(1u64)),
+                                    rk: decaf377_rdsa::VerificationKey::from(
+                                        SigningKey::<SpendAuth>::from(Fr::from(2u64)),
+                                    ),
+                                    encrypted_backref: EncryptedBackref::try_from([1u8; 48])
+                                        .expect("fixed-size encrypted backref"),
+                                    compliance_ciphertext: Vec::new(),
+                                    history_required: false,
+                                }],
+                                withdrawal: HostWithdrawal {
+                                    value: Value { amount: 7u64.into(), asset_id: *BASE_ASSET_ID },
+                                    destination: HostWithdrawalDestination::Transfer(HostTransfer { recipient: "bankd-recipient".into() }),
+                                },
+                                change_output: ShieldedIcs20WithdrawalChangeBody {
+                                    note_payload: NotePayload {
+                                        note_commitment: StateCommitment(Fq::from(3u64)),
+                                        ephemeral_key: change_note.ephemeral_public_key(),
+                                        encrypted_note: change_note.encrypt(),
+                                        recovery_capsule: Some(change_capsule),
+                                    },
+                                    wrapped_memo_key: WrappedMemoKey([0u8; 48]),
+                                    ovk_wrapped_key: OvkWrappedKey([0u8; 48]),
+                                },
+                                target_timestamp: 0,
+                                compliance_anchor: StateCommitment(Fq::from(4u64)),
+                                asset_anchor: StateCommitment(Fq::from(5u64)),
+                                routing_tag: Default::default(),
+                                routing_parameter_set_id: Fq::from(0u64),
+                                withdrawal_compliance_ciphertext:
+                                    shieldd_sdk_compliance::WithdrawalComplianceCiphertext {
+                                        epk: decaf377::Element::GENERATOR,
+                                        c2: Fq::from(6u64),
+                                        key_confirmation: Fq::from(7u64),
+                                        encrypted_sender_address: [0u8; 96],
+                                    },
+                                volume_accumulator: shieldd_sdk_shielded_pool::VolumeAccumulatorPayload::canonical_fee_funding(),
+                            },
+                            auth_sigs: vec![[0u8; 64].into()],
+                            proof: ShieldedIcs20WithdrawalProof::default(),
+                        },
+                        spent_notes: vec![note_view(&spent_note)],
+                        change_note: Some(note_view(&change_note)),
+                        payload_key: PayloadKey::from([0u8; 32]),
+                    },
+                )],
+                transaction_parameters: Default::default(),
+                fee_funding: None,
+                memo_view: None,
+                nullifier_window: None,
+                historical_nullifier_proofs: Vec::new(),
+            },
+            binding_sig: [0u8; 64].into(),
+            anchor: Tree::default().root(),
+        };
+
+        let summary = txv.summary();
+        assert_eq!(summary.effects.len(), 1);
+        assert_eq!(
+            summary.effects[0].balance,
+            Balance::from(spent_note.value()) - Balance::from(change_note.value())
+        );
     }
 }

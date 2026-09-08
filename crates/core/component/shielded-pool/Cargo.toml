@@ -8,12 +8,13 @@ license = {workspace = true}
 edition = {workspace = true}
 
 [features]
+benchmark-helpers = []
 component = [
+    "shieldd-sdk-ibc/component",
     "cnidarium-component",
     "cnidarium",
     "shieldd-sdk-compliance/component",
     "shieldd-sdk-proto/cnidarium",
-    "shieldd-sdk-ibc/component",
     "shieldd-sdk-sct/component",
     "tonic",
     "ibc-proto/server",
@@ -32,7 +33,6 @@ parallel = [
     "tonic",
 ]
 docsrs = []
-benchmark-helpers = ["component", "shieldd-sdk-ibc/benchmark-helpers"]
 poc-orbis = ["shieldd-sdk-compliance/poc-orbis"]
 
 [dependencies]

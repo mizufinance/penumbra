@@ -1,16 +1,11 @@
 use std::io::{IsTerminal, Read, Write};
 
 use anyhow::Result;
-use decaf377_rdsa::{Domain, Signature};
-use shieldd_sdk_asset::asset::Cache;
 use shieldd_sdk_custody::threshold::{SigningRequest, Terminal};
 use shieldd_sdk_keys::FullViewingKey;
-use shieldd_sdk_tct::structure::Hash;
-use shieldd_sdk_transaction::{view, ActionPlan, ActionView, TransactionPlan, TransactionView};
+use shieldd_sdk_transaction::TransactionPlan;
 use termion::{color, input::TermRead};
 use tonic::async_trait;
-
-use crate::transaction_view_ext::TransactionViewExt as _;
 
 async fn read_password(prompt: &str) -> Result<String> {
     fn get_possibly_empty_string(prompt: &str) -> Result<String> {
@@ -33,61 +28,10 @@ async fn read_password(prompt: &str) -> Result<String> {
 }
 
 fn pretty_print_transaction_plan(
-    fvk: Option<FullViewingKey>,
+    _fvk: Option<FullViewingKey>,
     plan: &TransactionPlan,
-) -> anyhow::Result<()> {
-    fn dummy_sig<D: Domain>() -> Signature<D> {
-        Signature::from([0u8; 64])
-    }
-
-    fn convert_action(
-        _cache: &Cache,
-        _fvk: &FullViewingKey,
-        action: &ActionPlan,
-    ) -> Option<ActionView> {
-        match action {
-            ActionPlan::Transfer(_) => None,
-            ActionPlan::NoteReshape(_) => None,
-            ActionPlan::ShieldedIcs20Withdrawal(_) => None,
-            ActionPlan::ShieldedHostWithdrawal(_) => None,
-            ActionPlan::IbcAction(_) => None,
-            ActionPlan::ComplianceRegisterAsset(_) => None,
-            ActionPlan::ComplianceRegisterUser(_) => None,
-        }
-    }
-
-    // Regardless of if we have the FVK, we can print the raw plan
+) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(plan)?);
-
-    // The rest of the printing requires the FVK
-    let fvk = match fvk {
-        None => {
-            return Ok(());
-        }
-        Some(x) => x,
-    };
-
-    let cache = Cache::with_known_assets();
-
-    let view = TransactionView {
-        anchor: shieldd_sdk_tct::Root(Hash::zero()),
-        binding_sig: dummy_sig(),
-        body_view: view::TransactionBodyView {
-            action_views: plan
-                .actions
-                .iter()
-                .filter_map(|x| convert_action(&cache, &fvk, x))
-                .collect(),
-            transaction_parameters: plan.transaction_parameters.clone(),
-            fee_funding: None,
-            memo_view: None,
-            nullifier_window: None,
-            historical_nullifier_proofs: vec![],
-        },
-    };
-
-    view.render_terminal();
-
     Ok(())
 }
 

@@ -439,22 +439,13 @@ pub trait ComplianceRegistryRead: StateRead {
     }
 
     /// Reconstruct the user compliance tree from nonverifiable storage.
-    async fn load_user_tree_from_nv(&self) -> Result<QuadTree> {
+    async fn reconstruct_user_tree(&self) -> Result<QuadTree> {
         let nodes = self.load_user_tree_nodes().await?;
         if nodes.is_empty() {
             Ok(QuadTree::new())
         } else {
             QuadTree::try_from_sparse_nodes(crate::tree::DEFAULT_DEPTH, nodes)
         }
-    }
-
-    /// Get the user compliance tree from state.
-    async fn get_user_tree(&self) -> Result<QuadTree> {
-        if let Some(tree) = self.object_get(state_key::cache::cached_user_tree()) {
-            return Ok(tree);
-        }
-
-        self.load_user_tree_from_nv().await
     }
 
     /// Load asset IMT nodes from nonverifiable storage.
@@ -492,7 +483,7 @@ pub trait ComplianceRegistryRead: StateRead {
     }
 
     /// Reconstruct the asset indexed Merkle tree from nonverifiable storage.
-    async fn load_asset_imt_from_nv(&self) -> Result<IndexedMerkleTree> {
+    async fn reconstruct_asset_tree(&self) -> Result<IndexedMerkleTree> {
         let nodes = self.load_asset_imt_nodes().await?;
         let leaves = self.load_asset_imt_leaves().await?;
         if leaves.is_empty() {
@@ -516,35 +507,11 @@ pub trait ComplianceRegistryRead: StateRead {
         }
     }
 
-    /// Get the asset Indexed Merkle Tree (IMT) from state.
-    async fn get_asset_imt(&self) -> Result<IndexedMerkleTree> {
-        if let Some(tree) =
-            self.object_get::<IndexedMerkleTree>(state_key::cache::cached_asset_imt())
-        {
-            tree.validate_well_formed()?;
-            return Ok(tree);
-        }
-
-        self.load_asset_imt_from_nv().await
-    }
-
     /// Get the asset IMT root hash.
     async fn get_asset_imt_root(&self) -> Result<StateCommitment> {
-        if let Some(root) = self.get(state_key::asset_imt_root()).await? {
-            return Ok(root);
-        }
-        let tree = self.get_asset_imt().await?;
-        Ok(tree.root())
-    }
-
-    async fn get_asset_imt_root_direct(&self) -> Result<StateCommitment> {
-        if let Some(root) = self.get(state_key::asset_imt_root()).await? {
-            return Ok(root);
-        }
-        if self.get_asset_count().await? <= 1 {
-            return Ok(IndexedMerkleTree::new().root());
-        }
-        self.read_asset_node(crate::tree::DEFAULT_DEPTH, 0).await
+        self.get(state_key::asset_imt_root())
+            .await?
+            .context("asset IMT is missing its committed root")
     }
 
     async fn read_user_node(&self, level: u8, position: u64) -> Result<StateCommitment> {
@@ -679,32 +646,16 @@ pub trait ComplianceRegistryRead: StateRead {
 
     /// Verify that compliance trees materialized in NV storage match committed roots.
     async fn verify_committed_tree_roots(&self) -> Result<()> {
-        if let Some(committed) = self
-            .get::<StateCommitment>(state_key::user_tree_root())
-            .await?
-        {
-            let reconstructed = self.load_user_tree_from_nv().await?.root();
-            anyhow::ensure!(
-                reconstructed == committed,
-                "compliance user tree root mismatch: committed {:?}, NV {:?}",
-                committed,
-                reconstructed
-            );
-        }
-
-        if let Some(committed) = self
-            .get::<StateCommitment>(state_key::asset_imt_root())
-            .await?
-        {
-            let reconstructed = self.load_asset_imt_from_nv().await?.root();
-            anyhow::ensure!(
-                reconstructed == committed,
-                "compliance asset IMT root mismatch: committed {:?}, NV {:?}",
-                committed,
-                reconstructed
-            );
-        }
-
+        let user_root = self.get_user_tree_root().await?;
+        let asset_root = self.get_asset_imt_root().await?;
+        anyhow::ensure!(
+            self.reconstruct_user_tree().await?.root() == user_root,
+            "compliance user tree root mismatch"
+        );
+        anyhow::ensure!(
+            self.reconstruct_asset_tree().await?.root() == asset_root,
+            "compliance asset IMT root mismatch"
+        );
         Ok(())
     }
 
@@ -719,7 +670,7 @@ pub trait ComplianceRegistryRead: StateRead {
             "asset value zero is reserved for sentinel leaf"
         );
         let is_regulated = self.is_asset_regulated(asset_id).await?;
-        let root = self.get_asset_imt_root_direct().await?;
+        let root = self.get_asset_imt_root().await?;
 
         if is_regulated {
             let position = self
@@ -849,11 +800,9 @@ pub trait ComplianceRegistryRead: StateRead {
 
     /// Get the user tree root hash.
     async fn get_user_tree_root(&self) -> Result<StateCommitment> {
-        if let Some(root) = self.get(state_key::user_tree_root()).await? {
-            return Ok(root);
-        }
-        let tree = self.get_user_tree().await?;
-        Ok(tree.root())
+        self.get(state_key::user_tree_root())
+            .await?
+            .context("user tree is missing its committed root")
     }
 
     /// Get an authentication path for a user at the given position.
@@ -1021,16 +970,6 @@ impl<T: StateRead + ?Sized> ComplianceRegistryRead for T {}
 /// Internal durable registry operations.
 #[async_trait]
 trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
-    /// Update the in-block cache for the user tree.
-    fn write_user_tree_cache(&mut self, tree: QuadTree) {
-        self.object_put(state_key::cache::cached_user_tree(), tree);
-    }
-
-    /// Update the in-block cache for the asset IMT.
-    fn write_asset_imt_cache(&mut self, tree: IndexedMerkleTree) {
-        self.object_put(state_key::cache::cached_asset_imt(), tree);
-    }
-
     /// Persist touched user-tree nodes to nonverifiable storage.
     fn put_user_tree_nodes(&mut self, nodes: &[(u8, u64, StateCommitment)]) {
         for &(level, position, hash) in nodes {
@@ -1314,7 +1253,6 @@ trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
         self.put_user_tree_nodes(&touched_nodes);
         self.put_proto(state_key::user_count().to_string(), new_count);
         self.put(state_key::user_tree_root().to_string(), root);
-        self.object_delete(state_key::cache::cached_user_tree());
 
         // Store the typed position/leaf record in consensus state and authenticate
         // it against the user-tree root on every read.
@@ -1395,7 +1333,6 @@ trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
             .ok_or_else(|| anyhow::anyhow!("user status update produced no root"))?;
         self.put_user_tree_nodes(&touched_nodes);
         self.put(state_key::user_tree_root().to_string(), root);
-        self.object_delete(state_key::cache::cached_user_tree());
 
         let key = state_key::user_leaf_record(&leaf.address, &leaf.asset_id);
         self.put_raw(
@@ -1510,7 +1447,6 @@ trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
             .ok_or_else(|| anyhow::anyhow!("asset IMT insert produced no root"))?;
         self.put_asset_imt_nodes(&touched_nodes);
         self.put(state_key::asset_imt_root().to_string(), root);
-        self.object_delete(state_key::cache::cached_asset_imt());
 
         self.set_asset_policy(asset_id, policy)?;
 
@@ -1623,7 +1559,6 @@ trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
             .ok_or_else(|| anyhow::anyhow!("asset IMT policy update produced no root"))?;
         self.put_asset_imt_nodes(&touched_nodes);
         self.put(state_key::asset_imt_root().to_string(), root);
-        self.object_delete(state_key::cache::cached_asset_imt());
         self.set_asset_policy(asset_id, policy)?;
         Ok(updated_leaf)
     }
@@ -1827,12 +1762,17 @@ pub struct NoteSeizureLifecycle {
 pub(crate) trait ComplianceRegistryComponentWrite:
     StateWrite + ComplianceRegistryRead
 {
-    fn initialize_user_tree_cache(&mut self, tree: QuadTree) {
-        <Self as ComplianceRegistryRawWrite>::write_user_tree_cache(self, tree);
-    }
-
-    fn initialize_asset_imt_cache(&mut self, tree: IndexedMerkleTree) {
-        <Self as ComplianceRegistryRawWrite>::write_asset_imt_cache(self, tree);
+    async fn initialize_trees(&mut self) -> Result<()> {
+        anyhow::ensure!(
+            self.load_user_tree_nodes().await?.is_empty() && self.get_user_count().await? == 0,
+            "new compliance user tree has existing state"
+        );
+        self.put(
+            state_key::user_tree_root().to_string(),
+            QuadTree::new().root(),
+        );
+        self.put_proto(state_key::user_count().to_string(), 0u64);
+        <Self as ComplianceRegistryRawWrite>::ensure_asset_tree_initialized(self).await
     }
 
     fn admit_genesis_compliance_registrar(&mut self, vk: VerificationKey<SpendAuth>) -> Result<()> {
@@ -2054,6 +1994,24 @@ mod tests {
     use shieldd_sdk_sct::component::clock::EpochManager;
     use std::collections::BTreeMap;
 
+    #[tokio::test]
+    async fn missing_committed_roots_are_not_reconstructed() {
+        let storage = TempStorage::new().await.unwrap();
+        let mut state = cnidarium::StateDelta::new(storage.latest_snapshot());
+        state.initialize_trees().await.unwrap();
+        let leaf = ComplianceLeaf::registered_for_test(
+            Address::dummy(&mut rand::thread_rng()),
+            asset::Id(Fq::from(1u64)),
+        );
+        state.add_compliance_leaf(leaf).await.unwrap();
+        state.ensure_asset_tree_initialized().await.unwrap();
+        for key in [state_key::user_tree_root(), state_key::asset_imt_root()] {
+            let mut corrupted = cnidarium::StateDelta::new(&state);
+            corrupted.delete(key.to_string());
+            assert!(corrupted.verify_committed_tree_roots().await.is_err());
+        }
+    }
+
     async fn nv_count(
         state: &cnidarium::StateDelta<cnidarium::Snapshot>,
         prefix: &'static str,
@@ -2128,6 +2086,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         // Create a dummy compliance leaf
         let leaf = ComplianceLeaf::registered_for_test(
@@ -2151,6 +2110,7 @@ mod tests {
     async fn freeze_and_unfreeze_replace_the_leaf_at_its_existing_position() {
         let storage = TempStorage::new().await.unwrap();
         let mut state = cnidarium::StateDelta::new(storage.latest_snapshot());
+        state.initialize_trees().await.unwrap();
         let address = Address::dummy(&mut rand::thread_rng());
         let asset_id = asset::Id(Fq::from(91u64));
         state
@@ -2220,6 +2180,7 @@ mod tests {
     async fn note_seizure_is_terminal_but_allows_more_notes_from_the_same_freeze() {
         let storage = TempStorage::new().await.unwrap();
         let mut state = cnidarium::StateDelta::new(storage.latest_snapshot());
+        state.initialize_trees().await.unwrap();
         let address = Address::dummy(&mut rand::thread_rng());
         let asset_id = asset::Id(Fq::from(92u64));
         state
@@ -2283,6 +2244,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let mut leaf = ComplianceLeaf::registered_for_test(
             Address::dummy(&mut rand::thread_rng()),
             asset::Id(Fq::from(1u64)),
@@ -2310,6 +2272,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let leaf = ComplianceLeaf::registered_for_test(
             Address::dummy(&mut rand::thread_rng()),
             asset::Id(Fq::from(0u64)),
@@ -2336,6 +2299,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let capacity = QuadTree::max_leaves_for_depth(crate::tree::DEFAULT_DEPTH);
         state.put_proto(state_key::user_count().to_string(), capacity);
 
@@ -2364,6 +2328,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let leaf = ComplianceLeaf::registered_for_test(
             Address::dummy(&mut rand::thread_rng()),
@@ -2377,8 +2342,7 @@ mod tests {
                 <= crate::tree::DEFAULT_DEPTH as usize + 1
         );
 
-        state.object_delete(state_key::cache::cached_user_tree());
-        let reloaded = state.get_user_tree().await.unwrap();
+        let reloaded = state.reconstruct_user_tree().await.unwrap();
         assert_eq!(reloaded.root(), root);
     }
 
@@ -2387,6 +2351,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let leaf = ComplianceLeaf::registered_for_test(
             Address::dummy(&mut rand::thread_rng()),
@@ -2409,6 +2374,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let asset_id = asset::Id(Fq::from(123u64));
 
@@ -2445,6 +2411,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let asset_id = asset::Id(Fq::from(777u64));
         state
@@ -2474,8 +2441,7 @@ mod tests {
             2
         );
 
-        state.object_delete(state_key::cache::cached_asset_imt());
-        let reloaded = state.get_asset_imt().await.unwrap();
+        let reloaded = state.reconstruct_asset_tree().await.unwrap();
         assert_eq!(reloaded.root(), root);
         let proof_after = state.get_asset_proof_data(asset_id).await.unwrap();
         assert_eq!(
@@ -2490,6 +2456,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         state
             .register_regulated_asset(
@@ -2518,6 +2485,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let policy = AssetPolicy::for_test(
             decaf377::Element::GENERATOR,
             u128::MAX,
@@ -2556,6 +2524,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let policy = AssetPolicy::for_test(
             decaf377::Element::GENERATOR,
             u128::MAX,
@@ -2588,6 +2557,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let mut rng = rand::rngs::StdRng::seed_from_u64(0x5eed);
         let policy = AssetPolicy::for_test(
             decaf377::Element::GENERATOR,
@@ -2605,8 +2575,7 @@ mod tests {
                 let position = state.add_compliance_leaf(leaf).await.unwrap();
                 user_positions.push((position, commitment));
 
-                state.object_delete(state_key::cache::cached_user_tree());
-                let reconstructed = state.get_user_tree().await.unwrap();
+                let reconstructed = state.reconstruct_user_tree().await.unwrap();
                 assert_eq!(
                     state.get_user_tree_root().await.unwrap(),
                     reconstructed.root()
@@ -2629,8 +2598,7 @@ mod tests {
                     .unwrap();
                 asset_ids.push(asset_id);
 
-                state.object_delete(state_key::cache::cached_asset_imt());
-                let reconstructed = state.get_asset_imt().await.unwrap();
+                let reconstructed = state.reconstruct_asset_tree().await.unwrap();
                 assert_eq!(
                     state.get_asset_imt_root().await.unwrap(),
                     reconstructed.root()
@@ -2645,7 +2613,7 @@ mod tests {
 
         for (position, commitment) in user_positions {
             let direct_path = state.get_user_auth_path(position).await.unwrap();
-            let reconstructed = state.get_user_tree().await.unwrap();
+            let reconstructed = state.reconstruct_user_tree().await.unwrap();
             assert!(QuadTree::verify_auth_path(
                 position,
                 commitment,
@@ -2656,7 +2624,7 @@ mod tests {
         }
         for asset_id in asset_ids {
             let direct_proof = state.get_asset_proof_data(asset_id).await.unwrap();
-            let reconstructed = state.get_asset_imt().await.unwrap();
+            let reconstructed = state.reconstruct_asset_tree().await.unwrap();
             assert_eq!(
                 indexed_tree::recompute_root(
                     direct_proof.indexed_leaf.commit(),
@@ -2673,6 +2641,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let policy = AssetPolicy::for_test(
             decaf377::Element::GENERATOR,
             u128::MAX,
@@ -2695,8 +2664,7 @@ mod tests {
             asset::Id(*FQ_MAX - Fq::from(1u64)),
         ];
 
-        state.object_delete(state_key::cache::cached_asset_imt());
-        let reconstructed = state.get_asset_imt().await.unwrap();
+        let reconstructed = state.reconstruct_asset_tree().await.unwrap();
         for asset_id in cases {
             let direct = state.get_asset_proof_data(asset_id).await.unwrap();
             if reconstructed.contains(asset_id.0) {
@@ -2721,6 +2689,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let mut rng = rand::thread_rng();
 
         let asset_id = asset::Id(Fq::from(5151u64));
@@ -2738,9 +2707,6 @@ mod tests {
         let leaf = ComplianceLeaf::registered_for_test(Address::dummy(&mut rng), asset_id);
         let position = state.add_compliance_leaf(leaf).await.unwrap();
 
-        state.object_delete(state_key::cache::cached_user_tree());
-        state.object_delete(state_key::cache::cached_asset_imt());
-
         let user_path = state.get_user_auth_path(position).await.unwrap();
         assert_eq!(user_path.len(), crate::tree::DEFAULT_DEPTH as usize);
         let asset_proof = state.get_asset_proof_data(asset_id).await.unwrap();
@@ -2753,6 +2719,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let mut rng = rand::thread_rng();
 
@@ -2781,6 +2748,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let asset_id = asset::Id(Fq::from(789u64));
 
@@ -2802,7 +2770,7 @@ mod tests {
         assert!(proof.is_regulated);
 
         // Get IMT leaf count
-        let imt = state.get_asset_imt().await.unwrap();
+        let imt = state.reconstruct_asset_tree().await.unwrap();
         let count_before = imt.leaf_count();
 
         // Second registration of same asset should be idempotent (succeed but no change)
@@ -2819,7 +2787,7 @@ mod tests {
             .expect("Duplicate registration should be idempotent");
 
         // Verify IMT leaf count didn't increase
-        let imt = state.get_asset_imt().await.unwrap();
+        let imt = state.reconstruct_asset_tree().await.unwrap();
         assert_eq!(
             imt.leaf_count(),
             count_before,
@@ -2832,6 +2800,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let mut rng = rand::thread_rng();
 
@@ -2904,6 +2873,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let mut rng = rand::thread_rng();
 
@@ -2939,6 +2909,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let mut rng = rand::thread_rng();
 
@@ -2973,6 +2944,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let mut rng = rand::thread_rng();
         put_test_compliance_params(&mut state);
 
@@ -3034,7 +3006,7 @@ mod tests {
         let path = state.get_user_auth_path(0).await.unwrap();
         assert_eq!(path.len(), 16);
         let user_root = state.get_user_tree_root().await.unwrap();
-        let tree = state.get_user_tree().await.unwrap();
+        let tree = state.reconstruct_user_tree().await.unwrap();
         assert!(QuadTree::verify_auth_path(
             0,
             leaf1.commit(),
@@ -3068,6 +3040,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         put_test_compliance_params(&mut state);
         let mut rng = rand::thread_rng();
 
@@ -3106,7 +3079,7 @@ mod tests {
         );
 
         // Auth paths verify correctly
-        let tree = state.get_user_tree().await.unwrap();
+        let tree = state.reconstruct_user_tree().await.unwrap();
         let root = tree.root();
         let path0 = state.get_user_auth_path(0).await.unwrap();
         let path1 = state.get_user_auth_path(1).await.unwrap();
@@ -3133,6 +3106,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let mut rng = rand::thread_rng();
         put_test_compliance_params(&mut state);
 
@@ -3165,6 +3139,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let mut rng = rand::thread_rng();
         put_test_compliance_params(&mut state);
 
@@ -3219,6 +3194,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let asset_id = asset::Id(Fq::from(12345u64));
 
@@ -3236,7 +3212,7 @@ mod tests {
             .unwrap();
 
         // Check the asset is in the IMT
-        let tree = state.get_asset_imt().await.unwrap();
+        let tree = state.reconstruct_asset_tree().await.unwrap();
         assert!(tree.contains(asset_id.0));
         assert_eq!(tree.leaf_count(), 2); // sentinel + 1 asset
 
@@ -3278,6 +3254,7 @@ mod tests {
             let storage = TempStorage::new().await.unwrap();
             let snapshot = storage.latest_snapshot();
             let mut state = cnidarium::StateDelta::new(snapshot);
+            state.initialize_trees().await.unwrap();
             let root_before = state.get_asset_imt_root().await.unwrap();
             let asset_id = asset::Id(Fq::from(12345u64 + index as u64));
 
@@ -3296,7 +3273,11 @@ mod tests {
                 "{key_role} changed the asset tree root"
             );
             assert!(
-                !state.get_asset_imt().await.unwrap().contains(asset_id.0),
+                !state
+                    .reconstruct_asset_tree()
+                    .await
+                    .unwrap()
+                    .contains(asset_id.0),
                 "{key_role} inserted an asset leaf"
             );
             assert!(
@@ -3311,6 +3292,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let asset_id = asset::Id(Fq::from(12345u64));
 
@@ -3338,7 +3320,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tree = state.get_asset_imt().await.unwrap();
+        let tree = state.reconstruct_asset_tree().await.unwrap();
         assert_eq!(tree.leaf_count(), 2); // sentinel + 1 asset (not 3)
     }
 
@@ -3347,6 +3329,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let asset_id = asset::Id(Fq::from(12345u64));
         state
@@ -3370,7 +3353,7 @@ mod tests {
         assert_eq!(proof_data.auth_path.layers.len(), 16);
 
         // Verify the path
-        let tree = state.get_asset_imt().await.unwrap();
+        let tree = state.reconstruct_asset_tree().await.unwrap();
         let root = tree.root();
         assert!(IndexedMerkleTree::verify_auth_path(
             proof_data.position,
@@ -3386,6 +3369,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         // Register one asset
         let regulated_asset = asset::Id(Fq::from(100u64));
@@ -3420,6 +3404,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         // Register multiple assets in non-sorted order
         let assets = [
@@ -3442,7 +3427,7 @@ mod tests {
                 .unwrap();
         }
 
-        let tree = state.get_asset_imt().await.unwrap();
+        let tree = state.reconstruct_asset_tree().await.unwrap();
         assert_eq!(tree.leaf_count(), 4); // sentinel + 3 assets
 
         // All should have valid membership proofs
@@ -3467,6 +3452,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let mut rng = rand::thread_rng();
         put_test_compliance_params(&mut state);
 
@@ -3518,6 +3504,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         put_test_compliance_params(&mut state);
 
         // Set block height first (required for validation)
@@ -3557,6 +3544,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let mut rng = rand::thread_rng();
         put_test_compliance_params(&mut state);
 
@@ -3612,6 +3600,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let mut rng = rand::thread_rng();
         put_test_compliance_params(&mut state);
 
@@ -3660,6 +3649,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         put_test_compliance_params(&mut state);
 
         // Set initial height and record anchor
@@ -3690,6 +3680,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         put_test_compliance_params(&mut state);
 
         state.put_block_height(1);
@@ -3727,6 +3718,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         put_test_compliance_params(&mut state);
 
         state.put_block_height(1);
@@ -3750,6 +3742,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let mut rng = rand::thread_rng();
         put_test_compliance_params(&mut state);
 
@@ -3804,6 +3797,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         put_test_compliance_params(&mut state);
 
         // Genesis: IMT is empty, record anchor at height 0
@@ -3873,6 +3867,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let asset_id = asset::Id(Fq::from(555u64));
         let dk_pub = decaf377::Element::GENERATOR;
@@ -3908,6 +3903,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let present_asset = asset::Id(Fq::from(77u64));
         let missing_asset = asset::Id(Fq::from(88u64));
@@ -3952,6 +3948,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let mut rng = rand::thread_rng();
         put_test_compliance_params(&mut state);
 
@@ -3983,6 +3980,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         put_test_compliance_params(&mut state);
 
         let route = crate::IbcRoute::transfer("channel-0", "connection-0", "channel-7");
@@ -4022,6 +4020,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let old_route = crate::IbcRoute::transfer("channel-0", "connection-0", "channel-7");
         let new_route = crate::IbcRoute::transfer("channel-1", "connection-1", "channel-8");
@@ -4062,6 +4061,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         put_test_compliance_params(&mut state);
 
         state.put_block_height(1);

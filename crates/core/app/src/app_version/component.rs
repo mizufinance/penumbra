@@ -1,14 +1,26 @@
 use anyhow::{ensure, Context};
-use cnidarium::Storage;
+use cnidarium::{StateRead, Storage};
+use futures::TryStreamExt;
 use shieldd_sdk_proto::{StateReadProto, StateWriteProto};
 
 use super::APP_VERSION;
 
 /// Reject populated state without the current schema safeguard.
 pub async fn check_app_version(storage: &Storage) -> anyhow::Result<()> {
-    if storage.latest_version() == u64::MAX {
+    let snapshot = storage.latest_snapshot();
+    if storage.latest_version() == u64::MAX
+        && snapshot
+            .nonverifiable_prefix_raw(b"")
+            .try_next()
+            .await?
+            .is_none()
+    {
         return Ok(());
     }
+    ensure!(
+        storage.latest_version() != u64::MAX,
+        "populated state has no readable version; recreate development state"
+    );
     let found: Option<u64> = storage
         .latest_snapshot()
         .nonverifiable_get_proto(crate::app::state_key::app_version::safeguard().as_bytes())

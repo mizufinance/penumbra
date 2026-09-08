@@ -166,6 +166,11 @@ impl ExecutionService {
             .with_context(|| format!("failed to open Shieldd RocksDB at {}", db.display()))
             .map_err(ServiceError::internal)?;
 
+        if let Err(error) = shieldd_sdk_app::app_version::check_app_version(&storage).await {
+            storage.release().await;
+            return Err(ServiceError::failed_precondition(error));
+        }
+
         if storage.latest_version() == u64::MAX {
             tracing::info!("Shieldd app state is not initialized; waiting for InitGenesis");
         } else if App::is_ready(storage.latest_snapshot()).await {
@@ -200,6 +205,7 @@ impl ExecutionService {
         Ok(Self::new_with_generation_packs(storage, generation_packs))
     }
 
+    /// Uses caller-validated storage; `open` checks persisted application compatibility.
     pub fn new(storage: Storage) -> Self {
         Self::new_with_generation_packs(storage, None)
     }
@@ -882,6 +888,68 @@ mod tests {
             .await
             .expect("storage was released");
         reopened.close().await.expect("close reopened service");
+    }
+
+    #[tokio::test]
+    async fn reopening_rejects_incompatible_application_state() -> Result<()> {
+        use cnidarium::StateWrite;
+        use shieldd_sdk_proto::{StateReadProto, StateWriteProto};
+        for (version, verifiable_change) in [
+            (None, false),
+            (None, true),
+            (Some(shieldd_sdk_app::APP_VERSION - 1), true),
+        ] {
+            let directory = tempfile::tempdir()?;
+            let mut service = ExecutionService::open(directory.path()).await?;
+            service.init_genesis(init_genesis_request()).await?;
+            service.commit(CommitRequest {}).await?;
+            let storage = service.storage.as_ref().expect("open storage");
+            let mut state = StateDelta::new(storage.latest_snapshot());
+            if verifiable_change {
+                state.put_raw("test/version-check".into(), vec![1]);
+            }
+            let key = shieldd_sdk_app::app::state_key::app_version::safeguard().as_bytes();
+            match version {
+                Some(version) => state.nonverifiable_put_proto(key.to_vec(), version),
+                None => state.nonverifiable_delete(key.to_vec()),
+            }
+            storage.commit(state).await?;
+            let stored_version = storage.latest_version();
+            assert_eq!(
+                storage
+                    .latest_snapshot()
+                    .nonverifiable_get_proto::<u64>(key)
+                    .await?,
+                version
+            );
+            service.close().await?;
+            match ExecutionService::open(directory.path()).await {
+                Err(error) => assert_eq!(error.kind(), ErrorKind::FailedPrecondition),
+                Ok(mut reopened) => {
+                    reopened.close().await?;
+                    panic!("incompatible application state must not reopen");
+                }
+            }
+            let storage =
+                Storage::load(directory.path().to_path_buf(), SUBSTORE_PREFIXES.to_vec()).await?;
+            assert_eq!(
+                storage.latest_version(),
+                if verifiable_change {
+                    stored_version
+                } else {
+                    u64::MAX
+                }
+            );
+            assert_eq!(
+                storage
+                    .latest_snapshot()
+                    .nonverifiable_get_proto::<u64>(key)
+                    .await?,
+                version
+            );
+            storage.release().await;
+        }
+        Ok(())
     }
 
     #[tokio::test]

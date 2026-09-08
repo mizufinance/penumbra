@@ -1,8 +1,6 @@
+use crate::shieldd::core::component::ibc::v1::IbcRelay;
 use crate::Name;
 use std::convert::{From, TryFrom};
-
-#[cfg(feature = "tendermint")]
-mod tendermint_compat;
 
 /// A marker type that captures the relationships between a domain type (`Self`) and a protobuf type (`Self::Proto`).
 pub trait DomainType
@@ -40,7 +38,6 @@ where
 // This should only be done here in cases where the domain type lives in a crate
 // that shouldn't depend on the Shieldd proto framework.
 
-use crate::shieldd::core::component::ibc::v1::IbcRelay;
 use crate::shieldd::crypto::decaf377_rdsa::v1::{
     BindingSignature, SpendAuthSignature, SpendVerificationKey,
 };

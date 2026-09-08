@@ -11,7 +11,6 @@ use shieldd_sdk_custody::threshold;
 use shieldd_sdk_custody_ledger_usb as ledger;
 use shieldd_sdk_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
 use termion::screen::IntoAlternateScreen;
-use url::Url;
 
 use crate::{
     config::{CustodyConfig, PcliConfig},
@@ -22,17 +21,6 @@ use crate::{
 pub struct InitCmd {
     #[clap(subcommand)]
     pub subcmd: InitTopSubCmd,
-    /// The GRPC URL that will be used in the generated config.
-    #[clap(
-        long,
-        // Note: reading from the environment here means that running
-        // pcli init inside of the test harness (where we override that)
-        // will correctly set the URL, even though we don't subsequently
-        // read it from the environment.
-        env = "SHIELDD_NODE_PD_URL",
-        parse(try_from_str = Url::parse),
-    )]
-    grpc_url: Url,
     /// For configs with spend authority, this will enable password encryption.
     ///
     /// This has no effect on a view only service.
@@ -187,7 +175,7 @@ pub enum ThresholdInitCmd {
     },
 }
 
-fn exec_deal(threshold: u16, home: Vec<Utf8PathBuf>, grpc_url: Url) -> Result<()> {
+fn exec_deal(threshold: u16, home: Vec<Utf8PathBuf>) -> Result<()> {
     if threshold < 2 {
         anyhow::bail!("threshold must be >= 2");
     }
@@ -213,8 +201,6 @@ fn exec_deal(threshold: u16, home: Vec<Utf8PathBuf>, grpc_url: Url) -> Result<()
         let config = PcliConfig {
             custody: CustodyConfig::Threshold(config),
             full_viewing_key,
-            grpc_url: grpc_url.clone(),
-            view_url: None,
             disable_warning: false,
         };
 
@@ -238,7 +224,7 @@ impl InitCmd {
         };
 
         if let InitSubCmd::Threshold(ThresholdInitCmd::Deal { threshold, home }) = &subcmd {
-            exec_deal(threshold.clone(), home.clone(), self.grpc_url.clone())?;
+            exec_deal(threshold.clone(), home.clone())?;
             return Ok(());
         }
         let home_dir = home_dir.as_ref();
@@ -349,8 +335,6 @@ impl InitCmd {
         let config = PcliConfig {
             custody,
             full_viewing_key,
-            grpc_url: self.grpc_url.clone(),
-            view_url: None,
             disable_warning: false,
         };
 

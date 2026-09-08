@@ -10,7 +10,6 @@ use cnidarium::StateWrite;
 use cnidarium_component::Component;
 use shieldd_sdk_proto::state::StateWriteProto as _;
 use shieldd_sdk_proto::DomainType as _;
-use tendermint::abci;
 use tracing::instrument;
 
 pub use fee_pay::{clear_block_fee_price_cache, FeePay};
@@ -40,15 +39,12 @@ impl Component for FeeComponent {
     #[instrument(name = "fee", skip(_state, _begin_block))]
     async fn begin_block<S: StateWrite + 'static>(
         _state: &mut Arc<S>,
-        _begin_block: &abci::request::BeginBlock,
+        _begin_block: &cnidarium_component::BlockContext,
     ) {
     }
 
-    #[instrument(name = "fee", skip(state, _end_block))]
-    async fn end_block<S: StateWrite + 'static>(
-        state: &mut Arc<S>,
-        _end_block: &abci::request::EndBlock,
-    ) {
+    #[instrument(name = "fee", skip(state, _height))]
+    async fn end_block<S: StateWrite + 'static>(state: &mut Arc<S>, _height: u64) {
         let state_ref = Arc::get_mut(state).expect("unique ref in end_block");
         // Grab the total fees and use them to emit an event.
         let fees = state_ref.accumulated_base_fees_and_tips();

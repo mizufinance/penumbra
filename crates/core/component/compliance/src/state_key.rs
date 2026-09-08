@@ -97,16 +97,6 @@ pub mod cache {
     pub fn cached_asset_policies() -> &'static str {
         "compliance/cache/asset_policies"
     }
-
-    /// Cached deserialized user tree for this state delta.
-    pub fn cached_user_tree() -> &'static str {
-        "compliance/cache/user_tree"
-    }
-
-    /// Cached deserialized asset IMT for this state delta.
-    pub fn cached_asset_imt() -> &'static str {
-        "compliance/cache/asset_imt"
-    }
 }
 
 /// State key for asset-specific compliance policy (dk_pub, daily_volume_limit).

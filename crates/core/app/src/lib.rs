@@ -10,7 +10,7 @@ pub static SUBSTORE_PREFIXES: Lazy<Vec<String>> = Lazy::new(|| {
     ]
 });
 
-/// The substore prefix used for storing historical CometBFT block data.
+/// The substore prefix used for historical block transaction data.
 pub static COMETBFT_SUBSTORE_PREFIX: &'static str = "cometbft-data";
 
 pub mod app_version;
@@ -25,16 +25,15 @@ cfg_if::cfg_if! {
         pub mod block_tx_indexing;
         pub mod metrics;
         pub mod nullifier_generation_packs;
-        pub mod rpc;
-        pub mod server;
         pub mod stateless_cache;
+        #[cfg(any(test, feature = "benchmark-helpers"))]
+        pub mod test_support;
 
         mod action_handler;
         mod shieldd_host_chain;
 
         pub use crate::{
-            app::StateWriteExt, metrics::register_metrics,
-            shieldd_host_chain::ShielddHost,
+            app::StateWriteExt, metrics::register_metrics, shieldd_host_chain::ShielddHost,
         };
     }
 }

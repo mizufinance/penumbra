@@ -4,9 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cnidarium::StateWrite;
 use cnidarium_component::{ActionHandler, Component};
-use shieldd_sdk_proto::{StateReadProto, StateWriteProto};
 use shieldd_sdk_sct::component::clock::EpochRead;
-use tendermint::v0_37::abci;
 use tracing::instrument;
 
 use crate::{
@@ -16,18 +14,10 @@ use crate::{
         AssetGrantAdmission, ComplianceRegistryComponentWrite, ComplianceRegistryRead,
         ComplianceRegistryWrite, GenesisAssetAdmission, GenesisUserAdmission, UserGrantAdmission,
     },
-    state_key,
     structs::{MsgRegisterAsset, MsgRegisterUser},
 };
 
-// Note: QuadTree is still used for the user tree.
-// Asset tree has been migrated to IMT (Indexed Merkle Tree).
-
-/// The Compliance component manages on-chain registries for regulated assets.
-///
-/// It maintains two Quad Merkle Trees:
-/// - User tree: Maps users to their address compliance keys (ACKs) for regulated assets
-/// - Asset tree: Tracks which assets are regulated
+/// The durable registry for regulated assets and user status.
 pub struct Compliance {}
 
 #[async_trait]
@@ -46,44 +36,16 @@ impl Component for Compliance {
             .unwrap_or_default();
         state.put_compliance_params(compliance_params);
 
-        // Initialize empty trees if they don't exist
-        // This ensures the trees are properly set up at genesis
-
-        // Initialize user tree if not present
-        // Note: get_user_tree() returns a new empty tree if nothing is stored,
-        // so we just need to handle errors and ensure we persist the initial state.
-        match state.get_user_tree().await {
-            Ok(tree) => {
-                state.put(crate::state_key::user_tree_root().to_string(), tree.root());
-                state.initialize_user_tree_cache(tree);
-                // Initialize count if not set
-                if state
-                    .get_proto::<u64>(state_key::user_count())
-                    .await
-                    .ok()
-                    .flatten()
-                    .is_none()
-                {
-                    state.put_proto(crate::state_key::user_count().to_string(), 0u64);
-                }
-            }
-            Err(e) => {
-                tracing::error!(?e, "failed to load compliance user tree during init_chain");
-                panic!("compliance user tree initialization failed: {}", e);
-            }
-        }
-
-        // Initialize asset IMT if not present
-        // Note: get_asset_imt() returns a new empty tree if nothing is stored.
-        match state.get_asset_imt().await {
-            Ok(tree) => {
-                state.put(crate::state_key::asset_imt_root().to_string(), tree.root());
-                state.initialize_asset_imt_cache(tree);
-            }
-            Err(e) => {
-                tracing::error!(?e, "failed to load compliance asset IMT during init_chain");
-                panic!("compliance asset IMT initialization failed: {}", e);
-            }
+        if app_state.is_some() {
+            state
+                .initialize_trees()
+                .await
+                .expect("initialize compliance trees");
+        } else {
+            state
+                .verify_committed_tree_roots()
+                .await
+                .expect("verify checkpoint compliance trees");
         }
 
         // Register native assets from genesis configuration.
@@ -198,19 +160,15 @@ impl Component for Compliance {
     #[instrument(name = "compliance", skip(_state, _begin_block))]
     async fn begin_block<S: StateWrite + 'static>(
         _state: &mut Arc<S>,
-        _begin_block: &abci::request::BeginBlock,
+        _begin_block: &cnidarium_component::BlockContext,
     ) {
         // No-op for compliance component
     }
 
-    #[instrument(name = "compliance", skip(state, end_block))]
-    async fn end_block<S: StateWrite + 'static>(
-        state: &mut Arc<S>,
-        end_block: &abci::request::EndBlock,
-    ) {
+    #[instrument(name = "compliance", skip(state, height))]
+    async fn end_block<S: StateWrite + 'static>(state: &mut Arc<S>, height: u64) {
         // Record compliance tree anchors at this block height.
         // This enables historical anchor validation for proofs generated at past blocks.
-        let height = end_block.height as u64;
         let state = Arc::get_mut(state).expect("state should be unique");
         state
             .finish_block_compliance_anchors(height)
@@ -522,8 +480,8 @@ mod tests {
         Compliance::init_chain(&mut state, Some(&genesis)).await;
 
         // Verify trees were initialized
-        let user_tree = state.get_user_tree().await.unwrap();
-        let asset_imt = state.get_asset_imt().await.unwrap();
+        let user_tree = state.reconstruct_user_tree().await.unwrap();
+        let asset_imt = state.reconstruct_asset_tree().await.unwrap();
 
         assert_eq!(user_tree.depth(), 16);
         assert_eq!(asset_imt.depth(), 16);
@@ -536,11 +494,12 @@ mod tests {
         let mut state = cnidarium::StateDelta::new(snapshot);
 
         // Initialize without genesis content
+        Compliance::init_chain(&mut state, Some(&genesis::Content::default())).await;
         Compliance::init_chain(&mut state, None).await;
 
         // Trees should be initialized
-        let user_tree = state.get_user_tree().await.unwrap();
-        let asset_imt = state.get_asset_imt().await.unwrap();
+        let user_tree = state.reconstruct_user_tree().await.unwrap();
+        let asset_imt = state.reconstruct_asset_tree().await.unwrap();
 
         assert_eq!(user_tree.depth(), 16);
         // IMT contains only the sentinel until regulated assets are registered.

@@ -1,15 +1,12 @@
+set export
+export CARGO_BUILD_JOBS := "2"
+export RAYON_NUM_THREADS := "2"
+export GOMAXPROCS := "2"
+export GOFLAGS := "-p=2"
+
 # Prints the list of recipes.
 default:
     @just --list
-
-# Run a local development network with metrics and PostgreSQL event storage.
-dev:
-    ./deployments/scripts/check-nix-shell && \
-        SHIELDD_PD_INTEGRATION_DEV_SRS=1 ./deployments/scripts/run-local-devnet.sh \
-        --keep-project \
-        --config ./deployments/compose/process-compose-postgres.yml \
-        --config ./deployments/compose/process-compose-metrics.yml \
-        --config ./deployments/compose/process-compose-dev-tooling.yml
 
 # Formats the rust files in the project.
 fmt:
@@ -139,10 +136,10 @@ ci-check:
 # CI wrapper for `test`.
 ci-test:
     if command -v cargo-nextest >/dev/null 2>&1; then \
-      cargo nextest run --cargo-profile ci --no-fail-fast; \
+      cargo nextest run --cargo-profile ci --no-fail-fast -j 2; \
     else \
       echo "warning: cargo-nextest not found; falling back to 'cargo test --release --no-fail-fast'"; \
-      cargo test --release --no-fail-fast; \
+      cargo test --release --no-fail-fast -- --test-threads=2; \
     fi
 
 # CI wrapper for `go-check`.
@@ -179,15 +176,6 @@ ci-preflight:
     just ci-test
     just ci-go-check
     just ci-gnark-proof-tests
-    if command -v nix >/dev/null 2>&1; then \
-      nix develop --command just smoke; \
-    else \
-      just smoke; \
-    fi
-
-# Bring up Shieldd infra for the Orbis compliance flow.
-shieldd-up:
-    ./scripts/shieldd-up.sh
 
 # Validate local dependencies for the Orbis integration flow.
 orbis-integration-preflight:
@@ -197,23 +185,16 @@ orbis-integration-preflight:
 orbis-integration-preflight-binaries:
     ./scripts/orbis-integration-preflight.sh --require-binaries
 
-# Validate binaries and local ports before bringing up the stack.
-orbis-integration-preflight-bringup:
-    ./scripts/orbis-integration-preflight.sh --require-binaries --check-ports-free
-
 # Build the binaries required by the Orbis integration flow.
 orbis-integration-build:
     python3 scripts/proof_artifacts.py materialize --bundle runtime
-    cargo build --release -p pcli -p pclientd --features bundled-proving-keys
-    # Insecure deterministic SRS is confined to the local Orbis integration node.
-    cargo build --release -p pd --features orbis-dev-srs
+    cargo build --release -p pcli
     cargo build --release -p orbis-audit -p orbis-integration
 
-# Bring up Shieldd and Orbis for phased local debugging.
+# Bring up the Orbis stack for use with Bankd.
 orbis-integration-up:
     just orbis-integration-build
-    just orbis-integration-preflight-bringup
-    ./scripts/shieldd-up.sh
+    just orbis-integration-preflight-binaries
     ./scripts/orbis-stack.sh up
 
 # Create a ring and policy against an already running Orbis/Vera stack.
@@ -225,7 +206,6 @@ orbis-integration-setup-ring output_json:
 # Tear down the Orbis integration stack.
 orbis-integration-down:
     ./scripts/orbis-stack.sh down
-    ./scripts/shieldd-down.sh
 
 # Print Docker logs for the Orbis stack.
 orbis-integration-logs:
@@ -250,41 +230,13 @@ features-check:
 wasm-check:
     ./deployments/scripts/check-wasm-compat.sh
 
-# Run a local prometheus/grafana setup, to scrape a local node.
-metrics:
-    ./deployments/scripts/check-nix-shell && \
-        process-compose --no-server --config ./deployments/compose/process-compose-metrics.yml up --keep-tui
-
 # Rebuild Rust crate documentation
 rustdocs:
     ./deployments/scripts/rust-docs
 
 # Run rust unit tests, via cargo-nextest
 test:
-    cargo nextest run --release
-
-# Run smoke test suite, via process-compose config.
-smoke:
-    ./deployments/scripts/check-nix-shell
-    ./deployments/scripts/smoke-test.sh
-
-# Run integration tests for pclientd. Assumes specific dev env is already running.
-integration-pclientd:
-    python3 scripts/proof_artifacts.py materialize --bundle runtime
-    cargo test --release --features bundled-proving-keys,sct-divergence-check --package pclientd --test network_integration -- \
-      --ignored --test-threads 1 --nocapture
-
-# Run integration tests for pcli. Assumes specific dev env is already running.
-integration-pcli:
-    python3 scripts/proof_artifacts.py materialize --bundle runtime
-    cargo test --release --features bundled-proving-keys,sct-divergence-check --package pcli --test network_integration -- \
-      --ignored --test-threads 1 --nocapture
-    cargo test --release --features bundled-proving-keys,sct-divergence-check --package pcli --test compliance_network -- \
-      --ignored --test-threads 1 --nocapture
-
-# Run integration tests for pd. Assumes specific dev env is already running.
-integration-pd:
-    cargo test --release --package pd --test network_integration -- --ignored --test-threads 1 --nocapture
+    cargo nextest run --release -j 2
 
 # Build the container image locally
 container:

@@ -162,7 +162,7 @@ def enforce_workflow_fanout() -> None:
     ):
         fail("manual Rust proof replay is not isolated from candidate runs")
 
-    for name in ("containers.yml", "docs-lint.yml", "orbis-integration.yml", "release.yml", "smoke.yml"):
+    for name in ("containers.yml", "docs-lint.yml", "orbis-integration.yml", "release.yml"):
         text = (workflows / name).read_text(encoding="utf-8")
         if "proof-artifacts" in text:
             fail(f"the {name} workflow depends on proof-artifact hydration")

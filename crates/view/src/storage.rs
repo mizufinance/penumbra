@@ -1,7 +1,5 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    num::NonZeroU64,
-    sync::Arc,
     time::Duration,
 };
 
@@ -9,19 +7,15 @@ use anyhow::{anyhow, Context};
 use camino::Utf8Path;
 use decaf377::Fq;
 use once_cell::sync::Lazy;
-use parking_lot::Mutex;
 use r2d2_sqlite::{
     rusqlite::{self, OpenFlags, OptionalExtension},
     SqliteConnectionManager,
 };
 use sha2::{Digest, Sha256};
-use tap::{Tap, TapFallible};
 use tokio::{
     sync::broadcast::{self, error::RecvError},
     task::spawn_blocking,
 };
-use tracing::{error_span, Instrument};
-use url::Url;
 
 use sct::TreeStore;
 use shieldd_sdk_app::params::AppParameters;
@@ -33,13 +27,7 @@ use shieldd_sdk_keys::{
     Address, FullViewingKey,
 };
 use shieldd_sdk_num::Amount;
-use shieldd_sdk_proto::{
-    core::app::v1::{
-        query_service_client::QueryServiceClient as AppQueryServiceClient, AppParametersRequest,
-    },
-    core::component::sct::v1 as pb_sct,
-    DomainType, Message,
-};
+use shieldd_sdk_proto::{core::component::sct::v1 as pb_sct, DomainType, Message};
 use shieldd_sdk_sct::{nullifier_generation::NullifierWindow, CommitmentSource, Nullifier};
 use shieldd_sdk_shielded_pool::{
     discovery, note, Note, Rseed, VolumeAccumulatorPayload, VolumeAccumulatorState,
@@ -97,6 +85,19 @@ pub(crate) struct ComplianceLeafUpdate {
 pub(crate) struct ComplianceAssetPolicyUpdate {
     pub asset_id: asset::Id,
     pub policy: AssetPolicy,
+}
+
+pub(crate) struct CompletedEpoch {
+    pub index: u64,
+    pub root: Root,
+}
+
+#[derive(Default)]
+pub(crate) struct WalletBlockMetadata {
+    pub timestamp: u64,
+    pub assets: Vec<Metadata>,
+    pub epoch: Option<CompletedEpoch>,
+    pub counterparties: BTreeSet<Address>,
 }
 
 #[derive(Debug, Clone)]
@@ -275,9 +276,15 @@ mod compliance_projection_tests {
             volume_accumulators: Vec::new(),
         };
         let mut sct = tct::Tree::new();
-        let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:1").connect_lazy();
         storage
-            .record_block(filtered_block, Vec::new(), &mut sct, channel, Some(plan))
+            .record_block(
+                filtered_block,
+                Vec::new(),
+                &mut sct,
+                None,
+                Some(plan),
+                WalletBlockMetadata::default(),
+            )
             .await
             .expect_err("injected sync-height failure must abort the wallet transaction");
 
@@ -682,15 +689,6 @@ static SCHEMA_HASH: Lazy<String> =
 pub struct Storage {
     pool: r2d2::Pool<SqliteConnectionManager>,
 
-    /// This allows an optimization where we only commit to the database after
-    /// scanning a nonempty block.
-    ///
-    /// If this is `Some`, we have uncommitted empty blocks up to the inner height.
-    /// If this is `None`, we don't.
-    ///
-    /// Using a `NonZeroU64` ensures that `Option<NonZeroU64>` fits in 8 bytes.
-    uncommitted_height: Arc<Mutex<Option<NonZeroU64>>>,
-
     scanned_notes_tx: tokio::sync::broadcast::Sender<SpendableNoteRecord>,
     scanned_nullifiers_tx: tokio::sync::broadcast::Sender<Nullifier>,
 }
@@ -876,20 +874,16 @@ impl Storage {
         let proof: pb_sct::HistoricalNullifierProof = cache.proof.clone().into();
         connection.execute(
             "INSERT INTO historical_proof_cache
-             (nullifier, protocol_version, covered_generation_count, terminal_history_head, proof_bundle, cache_state, last_error)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             (nullifier, protocol_version, proof_bundle, cache_state, last_error)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(nullifier) DO UPDATE SET
                protocol_version = excluded.protocol_version,
-               covered_generation_count = excluded.covered_generation_count,
-               terminal_history_head = excluded.terminal_history_head,
                proof_bundle = excluded.proof_bundle,
                cache_state = excluded.cache_state,
                last_error = excluded.last_error",
             rusqlite::params![
-                cache.nullifier.to_bytes().to_vec(),
+                cache.proof.nullifier.to_bytes().to_vec(),
                 cache.protocol_version,
-                cache.covered_generation_count,
-                cache.terminal_history_head.to_vec(),
                 proof.encode_to_vec(),
                 cache.state.storage_id(),
                 cache.last_error.as_deref(),
@@ -910,58 +904,36 @@ impl Storage {
         .await?
     }
 
+    fn decode_historical_cache(row: &rusqlite::Row<'_>) -> anyhow::Result<HistoricalProofCache> {
+        let key: Vec<u8> = row.get(0)?;
+        let bundle: Vec<u8> = row.get(2)?;
+        let cache = HistoricalProofCache {
+            protocol_version: row.get(1)?,
+            proof: pb_sct::HistoricalNullifierProof::decode(bundle.as_slice())?.try_into()?,
+            state: HistoricalProofCacheState::from_storage_id(row.get(3)?)?,
+            last_error: row.get(4)?,
+        };
+        anyhow::ensure!(
+            cache.proof.nullifier == Nullifier::try_from(key)?,
+            "historical proof cache nullifier mismatch"
+        );
+        cache.validate()?;
+        Ok(cache)
+    }
+
     pub async fn historical_proof_cache(
         &self,
         nullifier: Nullifier,
     ) -> anyhow::Result<Option<HistoricalProofCache>> {
         let pool = self.pool.clone();
         spawn_blocking(move || {
-            let row = pool
-                .get()?
-                .prepare_cached(
-                    "SELECT protocol_version, covered_generation_count, terminal_history_head,
-                            proof_bundle, cache_state, last_error
-                     FROM historical_proof_cache WHERE nullifier = ?1",
-                )?
-                .query_row([nullifier.to_bytes().to_vec()], |row| {
-                    Ok((
-                        row.get::<_, u32>(0)?,
-                        row.get::<_, u64>(1)?,
-                        row.get::<_, Vec<u8>>(2)?,
-                        row.get::<_, Vec<u8>>(3)?,
-                        row.get::<_, i64>(4)?,
-                        row.get::<_, Option<String>>(5)?,
-                    ))
-                })
-                .optional()?;
-            let Some((
-                protocol_version,
-                covered_generation_count,
-                terminal_history_head,
-                proof_bundle,
-                cache_state,
-                last_error,
-            )) = row
-            else {
-                return Ok(None);
-            };
-            let terminal_history_head: [u8; 32] =
-                terminal_history_head.try_into().map_err(|bytes: Vec<u8>| {
-                    anyhow!("history head must be 32 bytes, got {}", bytes.len())
-                })?;
-            let proof =
-                pb_sct::HistoricalNullifierProof::decode(proof_bundle.as_slice())?.try_into()?;
-            let cache = HistoricalProofCache {
-                protocol_version,
-                nullifier,
-                covered_generation_count,
-                terminal_history_head,
-                proof,
-                state: HistoricalProofCacheState::from_storage_id(cache_state)?,
-                last_error,
-            };
-            cache.validate()?;
-            Ok(Some(cache))
+            let connection = pool.get()?;
+            let mut statement = connection.prepare_cached(
+                "SELECT nullifier, protocol_version, proof_bundle, cache_state, last_error
+                 FROM historical_proof_cache WHERE nullifier = ?1",
+            )?;
+            let mut rows = statement.query([nullifier.to_bytes().to_vec()])?;
+            rows.next()?.map(Self::decode_historical_cache).transpose()
         })
         .await?
     }
@@ -973,35 +945,13 @@ impl Storage {
         spawn_blocking(move || {
             let connection = pool.get()?;
             let mut statement = connection.prepare_cached(
-                "SELECT c.nullifier, c.protocol_version, c.covered_generation_count,
-                        c.terminal_history_head, c.proof_bundle, c.cache_state, c.last_error
+                "SELECT c.nullifier, c.protocol_version, c.proof_bundle, c.cache_state, c.last_error
                  FROM historical_proof_cache c
                  JOIN spendable_notes n ON n.nullifier = c.nullifier
-                 WHERE n.height_spent IS NULL
-                 ORDER BY n.position ASC",
+                 WHERE n.height_spent IS NULL ORDER BY n.position ASC",
             )?;
             let caches = statement
-                .query_and_then([], |row| {
-                    let nullifier_bytes: Vec<u8> = row.get(0)?;
-                    let terminal_history_head: Vec<u8> = row.get(3)?;
-                    let proof_bundle: Vec<u8> = row.get(4)?;
-                    let cache = HistoricalProofCache {
-                        protocol_version: row.get(1)?,
-                        nullifier: Nullifier::try_from(nullifier_bytes)?,
-                        covered_generation_count: row.get(2)?,
-                        terminal_history_head: terminal_history_head.try_into().map_err(
-                            |bytes: Vec<u8>| {
-                                anyhow!("history head must be 32 bytes, got {}", bytes.len())
-                            },
-                        )?,
-                        proof: pb_sct::HistoricalNullifierProof::decode(proof_bundle.as_slice())?
-                            .try_into()?,
-                        state: HistoricalProofCacheState::from_storage_id(row.get(5)?)?,
-                        last_error: row.get(6)?,
-                    };
-                    cache.validate()?;
-                    anyhow::Ok(cache)
-                })?
+                .query_and_then([], Self::decode_historical_cache)?
                 .collect::<anyhow::Result<Vec<_>>>()?;
             Ok(caches)
         })
@@ -1025,13 +975,12 @@ impl Storage {
         skip_all,
         fields(
             path = ?storage_path.as_ref().map(|p| p.as_ref().as_str()),
-            url = %node,
         )
     )]
     pub async fn load_or_initialize(
         storage_path: Option<impl AsRef<Utf8Path>>,
         fvk: &FullViewingKey,
-        node: Url,
+        params: AppParameters,
     ) -> anyhow::Result<Self> {
         if let Some(path) = storage_path.as_ref().map(AsRef::as_ref) {
             if path.exists() {
@@ -1041,20 +990,6 @@ impl Storage {
                 tracing::debug!(?path, "database does not exist");
             }
         };
-
-        let mut client = AppQueryServiceClient::connect(node.to_string())
-            .instrument(error_span!("connecting_to_endpoint"))
-            .await
-            .tap_err(|error| {
-                tracing::error!(?error, "failed to connect to app query service endpoint")
-            })?
-            .tap(|_| tracing::debug!("connected to app query service endpoint"));
-        let params = client
-            .app_parameters(tonic::Request::new(AppParametersRequest {}))
-            .instrument(error_span!("getting_app_parameters"))
-            .await?
-            .into_inner()
-            .try_into()?;
 
         Self::initialize(storage_path, fvk.clone(), params).await
     }
@@ -1103,7 +1038,6 @@ impl Storage {
     pub async fn load(path: impl AsRef<Utf8Path>) -> anyhow::Result<Self> {
         let storage = Self {
             pool: Self::connect(Some(path))?,
-            uncommitted_height: Arc::new(Mutex::new(None)),
             scanned_notes_tx: broadcast::channel(128).0,
             scanned_nullifiers_tx: broadcast::channel(512).0,
         };
@@ -1189,7 +1123,6 @@ impl Storage {
 
             anyhow::Ok(Storage {
                 pool,
-                uncommitted_height: Arc::new(Mutex::new(None)),
                 scanned_notes_tx: broadcast::channel(128).0,
                 scanned_nullifiers_tx: broadcast::channel(512).0,
             })
@@ -1437,11 +1370,6 @@ impl Storage {
 
     /// The last block height we've scanned to, if any.
     pub async fn last_sync_height(&self) -> anyhow::Result<Option<u64>> {
-        // Check if we have uncommitted blocks beyond the database height.
-        if let Some(height) = *self.uncommitted_height.lock() {
-            return Ok(Some(height.get()));
-        }
-
         let pool = self.pool.clone();
 
         spawn_blocking(move || {
@@ -1603,6 +1531,23 @@ impl Storage {
                 .ok_or_else(|| anyhow!("missing app_params in kv table"))?;
 
             AppParameters::decode(params_bytes.as_slice())
+        })
+        .await?
+    }
+
+    pub async fn block_timestamp(&self) -> anyhow::Result<u64> {
+        let pool = self.pool.clone();
+        spawn_blocking(move || {
+            let bytes: Vec<u8> = pool.get()?.query_row(
+                "SELECT v FROM kv WHERE k = 'block_timestamp'",
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(u64::from_le_bytes(
+                bytes
+                    .try_into()
+                    .map_err(|_| anyhow!("invalid stored block timestamp"))?,
+            ))
         })
         .await?
     }
@@ -2040,24 +1985,6 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn record_empty_block(&self, height: u64) -> anyhow::Result<()> {
-        // Check that the incoming block height follows the latest recorded height
-        let last_sync_height = self.last_sync_height().await?.ok_or_else(|| {
-            anyhow::anyhow!("invalid: tried to record empty block as genesis block")
-        })?;
-
-        if height != last_sync_height + 1 {
-            anyhow::bail!(
-                "Wrong block height {} for latest sync height {}",
-                height,
-                last_sync_height
-            );
-        }
-
-        *self.uncommitted_height.lock() = Some(height.try_into()?);
-        Ok(())
-    }
-
     fn record_note_inner(
         dbtx: &r2d2_sqlite::rusqlite::Transaction<'_>,
         note: &Note,
@@ -2199,8 +2126,9 @@ impl Storage {
         filtered_block: FilteredBlock,
         transactions: Vec<Transaction>,
         sct: &mut tct::Tree,
-        channel: tonic::transport::Channel,
+        new_app_parameters: Option<AppParameters>,
         compliance_plan: Option<ComplianceBlockPlan>,
+        metadata: WalletBlockMetadata,
     ) -> anyhow::Result<()> {
         //Check that the incoming block height follows the latest recorded height
         let last_sync_height = self.last_sync_height().await?;
@@ -2221,26 +2149,15 @@ impl Storage {
         }
 
         let pool = self.pool.clone();
-        let uncommitted_height = self.uncommitted_height.clone();
         let scanned_notes_tx = self.scanned_notes_tx.clone();
         let scanned_nullifiers_tx = self.scanned_nullifiers_tx.clone();
 
         let fvk = self.full_viewing_key().await?;
 
-        // If the app parameters have changed, update them.
-        let new_app_parameters: Option<AppParameters> = if filtered_block.app_parameters_updated {
-            // Fetch the latest parameters
-            let mut client = AppQueryServiceClient::new(channel);
-            Some(
-                client
-                    .app_parameters(tonic::Request::new(AppParametersRequest {}))
-                    .await?
-                    .into_inner()
-                    .try_into()?,
-            )
-        } else {
-            None
-        };
+        anyhow::ensure!(
+            filtered_block.app_parameters_updated == new_app_parameters.is_some(),
+            "wallet block parameter update is missing or unsolicited"
+        );
 
         // Cloning the SCT is cheap because it's a copy-on-write structure, so we move an owned copy
         // into the spawned thread. This means that if for any reason the thread panics or throws an
@@ -2487,6 +2404,24 @@ impl Storage {
                 Storage::record_compliance_plan_inner(&mut dbtx, plan)?;
             }
 
+            for asset in metadata.assets {
+                dbtx.execute("INSERT OR REPLACE INTO assets (asset_id, denom, metadata) VALUES (?1, ?2, ?3)",
+                    (asset.id().to_bytes().to_vec(), asset.base_denom().denom, serde_json::to_string(&asset)?))?;
+            }
+            if let Some(epoch) = metadata.epoch {
+                dbtx.execute("INSERT INTO epochs(epoch_index, root) VALUES (?1, ?2)
+                    ON CONFLICT(epoch_index) DO UPDATE SET root = excluded.root",
+                    (epoch.index, epoch.root.encode_to_vec()))?;
+                dbtx.execute("INSERT INTO epochs(epoch_index, start_height) VALUES (?1, ?2)
+                    ON CONFLICT(epoch_index) DO UPDATE SET start_height = excluded.start_height",
+                    (epoch.index.checked_add(1).context("epoch overflow")?, filtered_block.height.checked_add(1).context("height overflow")?))?;
+            }
+            for address in metadata.counterparties {
+                compliance::ComplianceTreeStore(&mut dbtx).add_counterparty(&address.to_vec(), filtered_block.height)?;
+            }
+            dbtx.execute("INSERT INTO kv(k, v) VALUES ('block_timestamp', ?1)
+                ON CONFLICT(k) DO UPDATE SET v = excluded.v", [metadata.timestamp.to_le_bytes().to_vec()])?;
+
             // Record block height as latest synced height
             let latest_sync_height = filtered_block.height as i64;
             dbtx.execute("UPDATE sync_height SET height = ?1", [latest_sync_height])?;
@@ -2498,10 +2433,6 @@ impl Storage {
             // If there is a panic or error past this point, the database will be left in out of
             // sync with the in-memory copy of the SCT, which means that it will become corrupted as
             // synchronization continues.
-
-            // It's critical to reset the uncommitted height here, since we've just
-            // invalidated it by committing.
-            uncommitted_height.lock().take();
 
             // Broadcast all committed note records to channel
             // Done following tx.commit() to avoid notifying of a new SpendableNoteRecord before it is actually committed to the database
@@ -2813,3 +2744,5 @@ impl Storage {
         .await?
     }
 }
+
+mod witness;

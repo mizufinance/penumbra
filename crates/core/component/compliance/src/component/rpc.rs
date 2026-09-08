@@ -417,6 +417,7 @@ impl QueryService for Server {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::ComplianceRegistryComponentWrite as _;
     use crate::registry::ComplianceRegistryWrite as _;
     use crate::structs::{AssetPolicy, ComplianceLeaf};
     use cnidarium::TempStorage;
@@ -429,6 +430,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
         let stale_user_root = state.get_user_tree_root().await.unwrap();
         let stale_asset_root = state.get_asset_imt_root().await.unwrap();
         state

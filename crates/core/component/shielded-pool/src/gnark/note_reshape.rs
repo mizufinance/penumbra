@@ -86,7 +86,6 @@ mod native {
     use super::*;
     use crate::gnark::transport::{BundledArtifacts, GnarkClient, GnarkFamilyConfig};
     use anyhow::bail;
-    const NOTE_RESHAPE_LIB_BASENAME: &str = "libshieldd_gnark_note_reshape";
     const NOTE_RESHAPE_ENV_ARTIFACT_DIR: &str = "SHIELDD_GNARK_NOTE_RESHAPE_ARTIFACT_DIR";
     const NOTE_RESHAPE_ENV_LIB: &str = "SHIELDD_GNARK_NOTE_RESHAPE_LIB";
     const NOTE_RESHAPE_ENV_DAEMON: &str = "SHIELDD_GNARK_NOTE_RESHAPE_DAEMON";
@@ -100,7 +99,6 @@ mod native {
 
     static NOTE_RESHAPE_FAMILY_CONFIG: GnarkFamilyConfig = GnarkFamilyConfig {
         family: "note_reshape8x1",
-        lib_basename: NOTE_RESHAPE_LIB_BASENAME,
         bundled_library: shieldd_sdk_proof_params::GNARK_NOTE_RESHAPE_BUNDLED_LIBRARY_PATH,
         env_artifact_dir: NOTE_RESHAPE_ENV_ARTIFACT_DIR,
         env_lib: NOTE_RESHAPE_ENV_LIB,
@@ -132,12 +130,42 @@ mod native {
         inner: GnarkClient,
     }
 
+    static CONFIGS: std::sync::LazyLock<
+        std::collections::BTreeMap<
+            NoteReshapeFamilyId,
+            Result<super::super::transport::ResolvedGnarkConfig, String>,
+        >,
+    > = std::sync::LazyLock::new(|| {
+        NoteReshapeFamilyId::ALL
+            .into_iter()
+            .map(|id| {
+                (
+                    id,
+                    note_reshape_family_config(id)
+                        .resolve()
+                        .map_err(|error| error.to_string()),
+                )
+            })
+            .collect()
+    });
+
+    pub(crate) fn resolved_configuration(
+        family_id: NoteReshapeFamilyId,
+    ) -> Result<&'static super::super::transport::ResolvedGnarkConfig> {
+        CONFIGS
+            .get(&family_id)
+            .expect("known proof family")
+            .as_ref()
+            .map_err(|error| anyhow::anyhow!("{error}"))
+    }
+
     impl GnarkNoteReshapeClient {
         pub(crate) fn load(family_id: NoteReshapeFamilyId) -> Result<Self> {
+            let config = resolved_configuration(family_id)?;
             Ok(Self {
                 family_id,
                 inner: GnarkClient::load(
-                    note_reshape_family_config(family_id),
+                    config,
                     BundledArtifacts {
                         proving_key: family_id.proving_key_bytes(),
                         verifying_key: family_id.verifying_key_json_bytes(),
@@ -180,3 +208,6 @@ mod native {
 pub(crate) use native::note_reshape_family_config;
 #[cfg(any(unix, windows))]
 pub(crate) use native::GnarkNoteReshapeClient;
+
+#[cfg(any(unix, windows))]
+pub(super) use native::resolved_configuration;

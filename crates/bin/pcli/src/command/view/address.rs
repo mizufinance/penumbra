@@ -29,9 +29,6 @@ pub struct AddressCmd {
 
 impl AddressCmd {
     /// Determine if this command requires a network sync before it executes.
-    pub fn offline(&self) -> bool {
-        true
-    }
 
     pub fn exec(&self, fvk: &FullViewingKey) -> Result<()> {
         let index: Result<u32, _> = self.address_or_index.parse();

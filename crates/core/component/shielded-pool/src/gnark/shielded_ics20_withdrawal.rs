@@ -163,8 +163,6 @@ mod native {
     use super::*;
     use crate::gnark::transport::{BundledArtifacts, GnarkClient, GnarkFamilyConfig};
     use anyhow::bail;
-    const SHIELDED_ICS20_WITHDRAWAL_LIB_BASENAME: &str =
-        "libshieldd_gnark_shielded_ics20_withdrawal";
     const SHIELDED_ICS20_WITHDRAWAL_ENV_ARTIFACT_DIR: &str =
         "SHIELDD_GNARK_SHIELDED_ICS20_WITHDRAWAL_ARTIFACT_DIR";
     const SHIELDED_ICS20_WITHDRAWAL_ENV_LIB: &str = "SHIELDD_GNARK_SHIELDED_ICS20_WITHDRAWAL_LIB";
@@ -184,7 +182,6 @@ mod native {
 
     static SHIELDED_ICS20_WITHDRAWAL_FAMILY_CONFIG: GnarkFamilyConfig = GnarkFamilyConfig {
         family: "shielded_ics20_withdrawal",
-        lib_basename: SHIELDED_ICS20_WITHDRAWAL_LIB_BASENAME,
         bundled_library:
             shieldd_sdk_proof_params::GNARK_SHIELDED_ICS20_WITHDRAWAL_BUNDLED_LIBRARY_PATH,
         env_artifact_dir: SHIELDED_ICS20_WITHDRAWAL_ENV_ARTIFACT_DIR,
@@ -214,12 +211,42 @@ mod native {
         inner: GnarkClient,
     }
 
+    static CONFIGS: std::sync::LazyLock<
+        std::collections::BTreeMap<
+            ShieldedIcs20WithdrawalFamilyId,
+            Result<super::super::transport::ResolvedGnarkConfig, String>,
+        >,
+    > = std::sync::LazyLock::new(|| {
+        ShieldedIcs20WithdrawalFamilyId::ALL
+            .into_iter()
+            .map(|id| {
+                (
+                    id,
+                    shielded_ics20_withdrawal_family_config(id)
+                        .resolve()
+                        .map_err(|error| error.to_string()),
+                )
+            })
+            .collect()
+    });
+
+    pub(crate) fn resolved_configuration(
+        family_id: ShieldedIcs20WithdrawalFamilyId,
+    ) -> Result<&'static super::super::transport::ResolvedGnarkConfig> {
+        CONFIGS
+            .get(&family_id)
+            .expect("known proof family")
+            .as_ref()
+            .map_err(|error| anyhow::anyhow!("{error}"))
+    }
+
     impl GnarkShieldedIcs20WithdrawalClient {
         pub(crate) fn load(family_id: ShieldedIcs20WithdrawalFamilyId) -> Result<Self> {
+            let config = resolved_configuration(family_id)?;
             Ok(Self {
                 family_id,
                 inner: GnarkClient::load(
-                    shielded_ics20_withdrawal_family_config(family_id),
+                    config,
                     BundledArtifacts {
                         proving_key: family_id.proving_key_bytes(),
                         verifying_key: family_id.verifying_key_json_bytes(),
@@ -263,3 +290,6 @@ mod native {
 pub(crate) use native::shielded_ics20_withdrawal_family_config;
 #[cfg(any(unix, windows))]
 pub(crate) use native::GnarkShieldedIcs20WithdrawalClient;
+
+#[cfg(any(unix, windows))]
+pub(super) use native::resolved_configuration;

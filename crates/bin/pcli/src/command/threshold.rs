@@ -10,12 +10,6 @@ pub enum ThresholdCmd {
 }
 
 impl ThresholdCmd {
-    pub fn offline(&self) -> bool {
-        match self {
-            ThresholdCmd::Sign => true,
-        }
-    }
-
     #[tracing::instrument(skip(self, app))]
     pub async fn exec(&self, app: &mut App) -> Result<()> {
         let config = match app.config.custody.clone() {
