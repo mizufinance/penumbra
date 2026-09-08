@@ -398,13 +398,12 @@ mod tests {
     use crate::planning_intent::{
         ActionIntent, NoteReshapeIntent, TransactionIntent, TransferIntent,
     };
-    use async_trait::async_trait;
     use decaf377::Fr;
     use rand::{rngs::StdRng, SeedableRng};
     use rand_core::{CryptoRng, Error as RandError, RngCore};
-    use shieldd_sdk_asset::{asset, Value, BASE_ASSET_ID};
+    use shieldd_sdk_asset::{Value, BASE_ASSET_ID};
     use shieldd_sdk_compliance::{
-        AssetPolicy, AssetProofData, ComplianceLeaf, ComplianceProofProvider, MerklePath,
+        AssetProofData, BatchComplianceData, ComplianceLeaf, ComplianceQuery, MerklePath,
         UserProofData,
     };
     use shieldd_sdk_keys::Address;
@@ -438,48 +437,33 @@ mod tests {
 
     impl CryptoRng for RepeatingRng {}
 
-    struct UnregulatedProofProvider;
-
-    #[async_trait]
-    impl ComplianceProofProvider for UnregulatedProofProvider {
-        async fn get_compliance_anchor(&self) -> anyhow::Result<StateCommitment> {
-            Ok(StateCommitment(decaf377::Fq::from(0u64)))
-        }
-
-        async fn get_asset_anchor(&self) -> anyhow::Result<StateCommitment> {
-            let (root, _, _, _) = shieldd_sdk_compliance::create_default_imt_proof(BASE_ASSET_ID.0);
-            Ok(root)
-        }
-
-        async fn get_asset_proof(&self, asset_id: asset::Id) -> anyhow::Result<AssetProofData> {
+    fn unregulated_proofs(queries: &[ComplianceQuery]) -> BatchComplianceData {
+        let (asset_anchor, _, _, _) =
+            shieldd_sdk_compliance::create_default_imt_proof(BASE_ASSET_ID.0);
+        let mut data = BatchComplianceData {
+            asset_anchor,
+            ..Default::default()
+        };
+        for ComplianceQuery { address, asset_id } in queries {
             let (_, indexed_leaf, auth_path, position) =
                 shieldd_sdk_compliance::create_default_imt_proof(asset_id.0);
-            Ok(AssetProofData {
-                auth_path,
-                position,
-                indexed_leaf,
-                is_regulated: false,
-            })
+            data.asset_proofs
+                .entry(*asset_id)
+                .or_insert(AssetProofData {
+                    auth_path,
+                    position,
+                    indexed_leaf,
+                    is_regulated: false,
+                });
+            data.user_proofs
+                .entry((address.clone(), *asset_id))
+                .or_insert_with(|| UserProofData {
+                    auth_path: MerklePath::default(),
+                    position: 0,
+                    leaf: ComplianceLeaf::synthetic_unregulated(address.clone(), *asset_id),
+                });
         }
-
-        async fn get_asset_policy(
-            &self,
-            _asset_id: asset::Id,
-        ) -> anyhow::Result<Option<AssetPolicy>> {
-            Ok(None)
-        }
-
-        async fn get_user_proof(
-            &self,
-            address: &Address,
-            asset_id: asset::Id,
-        ) -> anyhow::Result<UserProofData> {
-            Ok(UserProofData {
-                auth_path: MerklePath::default(),
-                position: 0,
-                leaf: ComplianceLeaf::synthetic_unregulated(address.clone(), asset_id),
-            })
-        }
+        data
     }
 
     fn self_transfer_intent(rng: &mut StdRng) -> TransferIntent {
@@ -621,7 +605,7 @@ mod tests {
             intent,
             |queries| async move {
                 Ok(super::CompletionData {
-                    compliance: UnregulatedProofProvider.get_batch_proofs(&queries).await?,
+                    compliance: unregulated_proofs(&queries),
                     volumes: vec![],
                 })
             },
@@ -659,7 +643,7 @@ mod tests {
             intent,
             |queries| async move {
                 Ok(super::CompletionData {
-                    compliance: UnregulatedProofProvider.get_batch_proofs(&queries).await?,
+                    compliance: unregulated_proofs(&queries),
                     volumes: vec![],
                 })
             },

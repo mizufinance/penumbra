@@ -1,7 +1,5 @@
 pub mod enrichment;
-pub use enrichment::{
-    AssetProofData, BatchComplianceData, ComplianceProofProvider, ComplianceQuery, UserProofData,
-};
+pub use enrichment::{AssetProofData, BatchComplianceData, ComplianceQuery, UserProofData};
 
 pub mod event;
 
@@ -92,11 +90,6 @@ pub use registry::{
     AssetGrantAdmission, ComplianceRegistryRead, ComplianceRegistryWrite, GenesisAssetAdmission,
     NoteSeizureLifecycle, UserGrantAdmission, UserLeafRecord,
 };
-
-#[cfg(feature = "component")]
-pub mod action_check;
-#[cfg(feature = "component")]
-pub use action_check::RegulatedAssetCheck;
 
 #[cfg(feature = "component")]
 pub mod component;
