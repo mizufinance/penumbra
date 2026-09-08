@@ -20,6 +20,8 @@ them or there is clear evidence of an external protocol/client contract.
 Schema versions are guardrails against accidentally opening stale local data.
 They are not migration promises.
 
+For task-specific code, ownership and commands, start at [docs/README.md](docs/README.md).
+
 ## Workflow
 
 - Discuss goal, risks, and shape before writing a detailed plan.

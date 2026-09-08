@@ -1,6 +1,9 @@
-## How to compile fresh proto structs
+# Protobuf compiler
 
-* `cargo run` in the compiler folder.
+Run `just proto` from the repository root; `just proto-check` checks drift.
+The wrapper reads `proto/codegen.json`, stages the pinned import closure, and
+writes Rust to `crates/proto/src/gen` and Go to `proto/go/gen`.
 
-The resultant structs will be created in the `proto/src/prost` folder.
-Build the `tendermint-proto` crate.
+The Rust compiler takes input directory, output directory and explicit root
+schemas. Use the wrapper for reproducible generation and Go compilation.
+See [development](../../docs/development.md).

@@ -1,4 +1,4 @@
-# Compliance verification
+# Development and verification
 
 Use `nix develop` for the repository toolchain, or install the Rust version in
 `rust-toolchain.toml`, Go from `tools/gnark/go.mod`, and a CGO-capable C compiler.
@@ -21,7 +21,9 @@ Direct host integration tests use temporary storage. Bankd owns the live localne
 
 ## Real proof tests
 
-Proof-generating unit tests are explicitly ignored. `just gnark-proof-tests-slow`
+Many Rust proof-generating unit tests are explicitly ignored. Ordinary app
+integration tests also build real transactions and can require staged prover
+artifacts; Go tests include both solver checks and explicit real proofs. `just gnark-proof-tests-slow`
 selects only these tests in release mode and validates their prerequisites.
 It exercises Transfer, both NoteReshape families, the shared withdrawal proof and host withdrawal caller, and
 daemon-backed NoteSeizure. Missing artifacts or transports fail the command.
@@ -44,3 +46,30 @@ there is no migration or version-adoption path.
 Orbis/Vera Compose stack. `just orbis-integration-setup-ring /tmp/orbis-state.json`
 creates the test ring and policy. Use `just orbis-integration-down` for cleanup.
 The retained Docker workflow requires Docker Compose v2.
+
+## Builds and features
+
+Use `just proto` to regenerate bindings and `just proto-check` to verify them.
+`proto/codegen.json` lists retained roots; imports form the Rust/Go schema closure.
+The generator checks the pinned protoc version and compiles its generated Go output.
+
+Native proof construction is opt-in with `prover` on shielded-pool and transaction.
+`bundled-proving-keys` includes proving; external artifacts need `prover` alone.
+Compliance `scanner` enables SQLite and worker dependencies without `component`.
+View `rpc` enables its historical-witness RPC adapter. Isolated builds matter:
+workspace feature unification can conceal missing feature declarations.
+
+[Embedded artifacts](embedded-artifacts.md) defines native/prover/audit staging
+and relocation. [AGENTS.md](../AGENTS.md) defines resource limits, prototype
+contracts and the rule to pause heavy verification after a resource interruption.
+Run one heavy job at a time with Rust/Rayon/Go parallelism bounded at two;
+run expensive proof tests serially.
+
+Benchmarks, fuzz campaigns and fixture generation are explicit developer tasks.
+Keep independent reference/property cases and regression seeds. Fixture blessing
+changes frozen vectors and is separate from correctness verification. Do not infer
+real proof, release, platform or vendor coverage from an ordinary workspace run.
+
+`just gnark-profile` runs opt-in constraint diagnostics. `just gnark-bless-seizure`
+regenerates the frozen seizure witness; ordinary Go tests cannot write it.
+Rust witness blessing remains explicitly ignored and selected by exact name.

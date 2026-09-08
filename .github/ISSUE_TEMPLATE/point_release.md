@@ -24,7 +24,10 @@ Is an external consumer blocked on a new RPC?
 - [ ] Feature foo in PR: 
 - [ ] Feature bar in PR: 
 
-## Compatibility
-As this is a point-release, all changes must be fully compatible for all nodes and clients.
-Careful attention should be given to the delta between most recent tag on the main branch:
-https://github.com/mizufinance/shieldd/compare/v(X.Y.(Z-1)..main
+## Integration checks
+
+- [ ] Identify affected host/protocol interfaces and required Bankd changes.
+- [ ] Record the exact source revision and staged artifact verification.
+- [ ] Record ordinary and release/prover checks actually run.
+
+Internal prototype formats follow [the contract policy](../../AGENTS.md).
