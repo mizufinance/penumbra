@@ -150,16 +150,6 @@ pub struct FeeParameters {
     /// dynamic gas pricing.
     #[prost(message, optional, tag = "1")]
     pub fixed_gas_prices: ::core::option::Option<GasPrices>,
-    /// Fixed gas prices in other tokens used to compute transactions' base fees.
-    ///
-    /// In the future, this should be removed and replaced with fixed multiples of
-    /// the native token's price (so that there is one set of dynamically
-    /// determined gas prices in the native token, and derived gas prices in other
-    /// alternative tokens).
-    ///
-    /// If this is empty, no other tokens are accepted for gas.
-    #[prost(message, repeated, tag = "2")]
-    pub fixed_alt_gas_prices: ::prost::alloc::vec::Vec<GasPrices>,
 }
 impl ::prost::Name for FeeParameters {
     const NAME: &'static str = "FeeParameters";
@@ -205,9 +195,6 @@ pub struct CurrentGasPricesResponse {
     /// The current gas prices, in the preferred (native) token.
     #[prost(message, optional, tag = "1")]
     pub gas_prices: ::core::option::Option<GasPrices>,
-    /// Other gas prices for other accepted tokens.
-    #[prost(message, repeated, tag = "2")]
-    pub alt_gas_prices: ::prost::alloc::vec::Vec<GasPrices>,
 }
 impl ::prost::Name for CurrentGasPricesResponse {
     const NAME: &'static str = "CurrentGasPricesResponse";

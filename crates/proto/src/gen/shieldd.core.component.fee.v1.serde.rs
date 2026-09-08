@@ -81,15 +81,9 @@ impl serde::Serialize for CurrentGasPricesResponse {
         if self.gas_prices.is_some() {
             len += 1;
         }
-        if !self.alt_gas_prices.is_empty() {
-            len += 1;
-        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.fee.v1.CurrentGasPricesResponse", len)?;
         if let Some(v) = self.gas_prices.as_ref() {
             struct_ser.serialize_field("gasPrices", v)?;
-        }
-        if !self.alt_gas_prices.is_empty() {
-            struct_ser.serialize_field("altGasPrices", &self.alt_gas_prices)?;
         }
         struct_ser.end()
     }
@@ -103,14 +97,11 @@ impl<'de> serde::Deserialize<'de> for CurrentGasPricesResponse {
         const FIELDS: &[&str] = &[
             "gas_prices",
             "gasPrices",
-            "alt_gas_prices",
-            "altGasPrices",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             GasPrices,
-            AltGasPrices,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -134,7 +125,6 @@ impl<'de> serde::Deserialize<'de> for CurrentGasPricesResponse {
                     {
                         match value {
                             "gasPrices" | "gas_prices" => Ok(GeneratedField::GasPrices),
-                            "altGasPrices" | "alt_gas_prices" => Ok(GeneratedField::AltGasPrices),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -155,7 +145,6 @@ impl<'de> serde::Deserialize<'de> for CurrentGasPricesResponse {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut gas_prices__ = None;
-                let mut alt_gas_prices__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::GasPrices => {
@@ -164,12 +153,6 @@ impl<'de> serde::Deserialize<'de> for CurrentGasPricesResponse {
                             }
                             gas_prices__ = map_.next_value()?;
                         }
-                        GeneratedField::AltGasPrices => {
-                            if alt_gas_prices__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("altGasPrices"));
-                            }
-                            alt_gas_prices__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -177,7 +160,6 @@ impl<'de> serde::Deserialize<'de> for CurrentGasPricesResponse {
                 }
                 Ok(CurrentGasPricesResponse {
                     gas_prices: gas_prices__,
-                    alt_gas_prices: alt_gas_prices__.unwrap_or_default(),
                 })
             }
         }
@@ -588,15 +570,9 @@ impl serde::Serialize for FeeParameters {
         if self.fixed_gas_prices.is_some() {
             len += 1;
         }
-        if !self.fixed_alt_gas_prices.is_empty() {
-            len += 1;
-        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.fee.v1.FeeParameters", len)?;
         if let Some(v) = self.fixed_gas_prices.as_ref() {
             struct_ser.serialize_field("fixedGasPrices", v)?;
-        }
-        if !self.fixed_alt_gas_prices.is_empty() {
-            struct_ser.serialize_field("fixedAltGasPrices", &self.fixed_alt_gas_prices)?;
         }
         struct_ser.end()
     }
@@ -610,14 +586,11 @@ impl<'de> serde::Deserialize<'de> for FeeParameters {
         const FIELDS: &[&str] = &[
             "fixed_gas_prices",
             "fixedGasPrices",
-            "fixed_alt_gas_prices",
-            "fixedAltGasPrices",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             FixedGasPrices,
-            FixedAltGasPrices,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -641,7 +614,6 @@ impl<'de> serde::Deserialize<'de> for FeeParameters {
                     {
                         match value {
                             "fixedGasPrices" | "fixed_gas_prices" => Ok(GeneratedField::FixedGasPrices),
-                            "fixedAltGasPrices" | "fixed_alt_gas_prices" => Ok(GeneratedField::FixedAltGasPrices),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -662,7 +634,6 @@ impl<'de> serde::Deserialize<'de> for FeeParameters {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut fixed_gas_prices__ = None;
-                let mut fixed_alt_gas_prices__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::FixedGasPrices => {
@@ -671,12 +642,6 @@ impl<'de> serde::Deserialize<'de> for FeeParameters {
                             }
                             fixed_gas_prices__ = map_.next_value()?;
                         }
-                        GeneratedField::FixedAltGasPrices => {
-                            if fixed_alt_gas_prices__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("fixedAltGasPrices"));
-                            }
-                            fixed_alt_gas_prices__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -684,7 +649,6 @@ impl<'de> serde::Deserialize<'de> for FeeParameters {
                 }
                 Ok(FeeParameters {
                     fixed_gas_prices: fixed_gas_prices__,
-                    fixed_alt_gas_prices: fixed_alt_gas_prices__.unwrap_or_default(),
                 })
             }
         }

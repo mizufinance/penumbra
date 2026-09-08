@@ -845,11 +845,6 @@ pub struct GasPricesResponse {
     pub gas_prices: ::core::option::Option<
         super::super::core::component::fee::v1::GasPrices,
     >,
-    /// Other gas prices for other accepted tokens.
-    #[prost(message, repeated, tag = "2")]
-    pub alt_gas_prices: ::prost::alloc::vec::Vec<
-        super::super::core::component::fee::v1::GasPrices,
-    >,
 }
 impl ::prost::Name for GasPricesResponse {
     const NAME: &'static str = "GasPricesResponse";

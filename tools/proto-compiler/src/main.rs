@@ -37,11 +37,7 @@ fn main() -> anyhow::Result<()> {
         // We need to feature-gate the RPCs.
         .server_mod_attribute(".", rpc_doc_attr)
         .client_mod_attribute(".", rpc_doc_attr)
-        .compile_protos_with_config(
-            config,
-            &roots,
-            &[input_dir],
-        )?;
+        .compile_protos_with_config(config, &roots, &[input_dir])?;
 
     // Finally, build pbjson Serialize, Deserialize impls:
     let descriptor_set = std::fs::read(target_dir.join(descriptor_file_name))?;
@@ -50,14 +46,6 @@ fn main() -> anyhow::Result<()> {
         .register_descriptors(&descriptor_set)?
         .ignore_unknown_fields()
         .out_dir(&target_dir)
-        // These are all excluded because they're part of the Tendermint proxy,
-        // so they use `tendermint` types that may not be Serialize/Deserialize,
-        // and we don't need to serialize them with Serde anyways.
-        .exclude([
-            ".shieldd.util.tendermint_proxy.v1.ABCIQueryResponse".to_owned(),
-            ".shieldd.util.tendermint_proxy.v1.GetBlockByHeightResponse".to_owned(),
-            ".shieldd.util.tendermint_proxy.v1.GetStatusResponse".to_owned(),
-        ])
         .build(&[".shieldd"])?;
 
     Ok(())
