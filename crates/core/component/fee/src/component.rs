@@ -12,7 +12,7 @@ use shieldd_sdk_proto::DomainType as _;
 use tracing::instrument;
 
 pub use fee_pay::{clear_block_fee_price_cache, FeePay};
-pub use view::{StateReadExt, StateWriteExt};
+pub use view::{BlockFees, StateReadExt, StateWriteExt};
 
 // Fee component
 pub struct FeeComponent {}
@@ -46,20 +46,13 @@ impl Component for FeeComponent {
     async fn end_block<S: StateWrite + 'static>(state: &mut Arc<S>, _height: u64) {
         let state_ref = Arc::get_mut(state).expect("unique ref in end_block");
         // Grab the total fees and use them to emit an event.
-        let fees = state_ref.accumulated_base_fees_and_tips();
-
-        let (swapped_base, swapped_tip) = fees
-            .get(&*shieldd_sdk_asset::BASE_ASSET_ID)
-            .cloned()
-            .unwrap_or_default();
-
-        let swapped_total = swapped_base + swapped_tip;
+        let fees = state_ref.block_fees();
 
         state_ref.record_proto(
             EventBlockFees {
-                swapped_fee_total: Fee::from_staking_token_amount(swapped_total),
-                swapped_base_fee_total: Fee::from_staking_token_amount(swapped_base),
-                swapped_tip_total: Fee::from_staking_token_amount(swapped_tip),
+                swapped_fee_total: Fee::from_staking_token_amount(fees.base + fees.tip),
+                swapped_base_fee_total: Fee::from_staking_token_amount(fees.base),
+                swapped_tip_total: Fee::from_staking_token_amount(fees.tip),
             }
             .to_proto(),
         );

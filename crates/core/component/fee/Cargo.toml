@@ -21,22 +21,14 @@ docsrs = []
 anyhow = {workspace = true}
 ark-ff = {workspace = true, default-features = false}
 async-trait = {workspace = true}
-blake2b_simd = {workspace = true}
-bytes = {workspace = true}
 cnidarium = {workspace = true, optional = true, default-features = true}
 cnidarium-component = {workspace = true, optional = true, default-features = true}
 decaf377 = {workspace = true, default-features = true}
-decaf377-rdsa = {workspace = true}
-imbl = {workspace = true}
-metrics = {workspace = true}
 shieldd-sdk-asset = {workspace = true, default-features = false}
 shieldd-sdk-num = {workspace = true, default-features = false}
 shieldd-sdk-proto = {workspace = true, default-features = false}
-rand = {workspace = true}
-rand_core = {workspace = true, features = ["getrandom"]}
 serde = {workspace = true, features = ["derive"]}
-tendermint = {workspace = true}
 tracing = {workspace = true}
 
 [dev-dependencies]
-getrandom = {workspace = true}
+tokio = {workspace = true, features = ["macros", "rt"]}

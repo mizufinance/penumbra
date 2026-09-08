@@ -56,21 +56,15 @@ trait Inner: StateWrite {
 
         let app_parameters_updated = height == 0;
 
-        // Check to see if the gas prices have changed, and include them in the compact block
-        // if they have (this is signaled by `shieldd_sdk_fee::StateWriteExt::put_gas_prices`):
-        let (gas_prices, alt_gas_prices) = if self.gas_prices_changed() || height == 0 {
-            (
-                Some(
-                    self.get_gas_prices()
-                        .await
-                        .context("could not get gas prices")?,
-                ),
-                self.get_alt_gas_prices()
+        // Fee parameter writes mark prices changed for wallet synchronization.
+        let gas_prices = if self.gas_prices_changed() || height == 0 {
+            Some(
+                self.get_gas_prices()
                     .await
-                    .context("could not get alt gas prices")?,
+                    .context("could not get gas prices")?,
             )
         } else {
-            (None, Vec::new())
+            None
         };
 
         let current_discovery_parameters = self
@@ -186,7 +180,6 @@ trait Inner: StateWrite {
             routing_action_payloads,
             app_parameters_updated,
             gas_prices,
-            alt_gas_prices,
             epoch_index,
             compliance_user_anchor,
             compliance_asset_anchor,
