@@ -83,13 +83,6 @@ impl ServiceError {
         }
     }
 
-    fn not_found(source: anyhow::Error) -> Self {
-        Self {
-            kind: ErrorKind::NotFound,
-            source,
-        }
-    }
-
     fn internal(source: anyhow::Error) -> Self {
         Self {
             kind: ErrorKind::Internal,

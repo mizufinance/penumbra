@@ -5,5 +5,4 @@ registration, and audit smoke tests. Run those workflows from the Bankd reposito
 Shieldd tests its execution lifecycle and wallet projection with direct host fixtures.
 
 The [Orbis stack](orbis/README.md) uses Docker Compose v2.
-The [runtime image](containerfiles/Dockerfile) provides the execution-client server,
-offline pcli, audit tools, and proof runtime.
+Bankd packages the [embedded library and tools](../docs/embedded-artifacts.md).

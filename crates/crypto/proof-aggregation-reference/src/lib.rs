@@ -1134,6 +1134,43 @@ mod tests {
     };
     use shieldd_sdk_shielded_pool::{NoteReshapeFamilyId, ShieldedIcs20WithdrawalFamilyId};
 
+    #[test]
+    fn decoder_oracle_rejects_shape_and_canonical_aliases() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../proof-aggregation-fuzz/corpus/deserialize_aggregate_proof");
+        for index in [0, 1, 2, 3, 7, 11, 15] {
+            let bytes = std::fs::read(directory.join(format!("valid-baseline-{index:02}")))
+                .expect("committed seed");
+            assert_eq!(reference_decode_aggregate(&bytes).unwrap(), bytes);
+        }
+        let bytes = std::fs::read(directory.join("valid-baseline-01")).unwrap();
+        let original = ReferenceAggregateProof::deserialize_compressed(&bytes[..]).unwrap();
+        for length in [0, 2] {
+            let mut proof = original.clone();
+            let identity = &mut proof.tipp_mipp_proof.gipa_proof.r_commitment_steps[0]
+                .0
+                .ab
+                .2
+                 .0;
+            identity.resize(length, identity[0]);
+            let mut malformed = Vec::new();
+            proof.serialize_compressed(&mut malformed).unwrap();
+            assert!(reference_decode_aggregate(&malformed).is_err());
+        }
+        let mut proof = original;
+        proof.agg_c = G1::zero();
+        let mut canonical = Vec::new();
+        proof.serialize_compressed(&mut canonical).unwrap();
+        assert!(reference_decode_aggregate(&canonical).is_ok());
+        let offset = proof.com_a.compressed_size()
+            + proof.com_b.compressed_size()
+            + proof.com_c.compressed_size()
+            + proof.ip_ab.compressed_size();
+        canonical[offset] |= 1;
+        assert!(ReferenceAggregateProof::deserialize_compressed(&canonical[..]).is_ok());
+        assert!(reference_decode_aggregate(&canonical).is_err());
+    }
+
     #[derive(Clone)]
     struct SquareCircuit {
         x: Option<Fq>,

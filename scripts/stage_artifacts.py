@@ -24,6 +24,9 @@ def digest(path):
 
 def revision(value):
     if not value:
+        top = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "--show-toplevel"], text=True).strip()
+        if Path(top).resolve() != ROOT.resolve():
+            raise ValueError("nested source requires --revision or SHIELDD_REVISION")
         value = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
     if not re.fullmatch(r"[0-9a-f]{40}", value):
         raise ValueError("an exact source revision is required")
@@ -53,8 +56,8 @@ def verify(directory, expected, target=None):
     return manifest
 
 
-def build(group, output, source_revision, target):
-    command = ["cargo", "build", "--release", "--locked", "--message-format=json-render-diagnostics"]
+def build(group, output, source_revision, target, profile="release"):
+    command = ["cargo", "build", "--profile", profile, "--locked", "--message-format=json-render-diagnostics"]
     if target:
         command += ["--target", target]
     for package in GROUPS[group]:
@@ -121,12 +124,14 @@ def main():
     parser.add_argument("--output", type=Path, default=ROOT / "target/shieldd")
     parser.add_argument("--revision", default=os.environ.get("SHIELDD_REVISION"))
     parser.add_argument("--target")
+    parser.add_argument("--profile", default="release")
     args = parser.parse_args()
     source_revision = revision(args.revision)
-    if args.group == "verify":
-        verify(args.output, source_revision, args.target)
-    else:
-        build(args.group, args.output, source_revision, args.target)
+    if args.group != "verify":
+        build(args.group, args.output, source_revision, args.target, args.profile)
+    manifest = verify(args.output, source_revision, args.target)
+    total = sum((args.output / name).stat().st_size for name in manifest["files"])
+    print(f"Verified {len(manifest['files'])} artifacts ({total} bytes) for {source_revision} on {manifest['target']}")
 
 
 if __name__ == "__main__":

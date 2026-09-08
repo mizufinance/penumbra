@@ -1814,26 +1814,6 @@ impl Storage {
         .await?
     }
 
-    // Get assets whose denoms match the given SQL LIKE pattern, with the `_` and `%` wildcards,
-    // where `\` is the escape character.
-    pub async fn assets_matching(&self, pattern: String) -> anyhow::Result<Vec<Metadata>> {
-        let pattern = pattern.to_owned();
-
-        let pool = self.pool.clone();
-
-        spawn_blocking(move || {
-            pool.get()?
-                .prepare_cached("SELECT metadata FROM assets WHERE denom LIKE ?1 ESCAPE '\\'")?
-                .query_and_then([pattern], |row| {
-                    let metadata_json = row.get::<_, String>("metadata")?;
-                    let denom_metadata = serde_json::from_str(&metadata_json)?;
-                    anyhow::Ok(denom_metadata)
-                })?
-                .collect()
-        })
-        .await?
-    }
-
     pub async fn notes(
         &self,
         include_spent: bool,

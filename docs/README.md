@@ -3,7 +3,8 @@
 Runtime code and protocol records are authoritative here. Formal specifications,
 generated evidence, and their gates live in
 [`mizufinance/shieldd-security`](https://github.com/mizufinance/shieldd-security)
-and certify one exact Shieldd commit.
+and evaluate one exact Shieldd candidate. Successful certification requires all
+applicable proof gates; selecting a commit alone is not certification.
 
 | Area | Authoritative for | Checked by |
 | --- | --- | --- |

@@ -135,11 +135,12 @@ ci-check:
 
 # CI wrapper for `test`.
 ci-test:
+    python3 scripts/stage_artifacts.py provers --profile ci
     if command -v cargo-nextest >/dev/null 2>&1; then \
-      cargo nextest run --cargo-profile ci --no-fail-fast -j 2; \
+      SHIELDD_ARTIFACT_ROOT="$PWD/target/shieldd" cargo nextest run --cargo-profile ci --no-fail-fast -j 2; \
     else \
       echo "warning: cargo-nextest not found; falling back to 'cargo test --release --no-fail-fast'"; \
-      cargo test --release --no-fail-fast -- --test-threads=2; \
+      SHIELDD_ARTIFACT_ROOT="$PWD/target/shieldd" cargo test --release --no-fail-fast -- --test-threads=2; \
     fi
 
 # CI wrapper for `go-check`.
@@ -230,11 +231,8 @@ rustdocs:
 
 # Run rust unit tests, via cargo-nextest
 test:
-    cargo nextest run --release -j 2
-
-# Build the container image locally
-container:
-    docker build -t ghcr.io/mizufinance/shieldd:local -f ./deployments/containerfiles/Dockerfile .
+    python3 scripts/stage_artifacts.py provers
+    SHIELDD_ARTIFACT_ROOT="$PWD/target/shieldd" cargo nextest run --release -j 2
 
 # Stage relocatable artifacts for embedded hosts and proof tools.
 artifacts-native:
