@@ -991,12 +991,8 @@ mod tests {
 
     #[test]
     fn append_csv_upserts_and_keeps_stable_order() {
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "shieldd-bench-runner-test-{}-{}.csv",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("t")
-        ));
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("results.csv");
 
         // Initial rows.
         let initial = vec![
@@ -1014,7 +1010,7 @@ mod tests {
 
         let csv = std::fs::read_to_string(&path).expect("can read csv");
         let lines: Vec<&str> = csv.lines().collect();
-        assert!(lines.len() >= 4, "expected header + 3 rows, got {lines:?}");
+        assert_eq!(lines.len(), 4, "expected header + 3 rows, got {lines:?}");
         assert!(
             lines[1].starts_with("base,"),
             "base should be first data row"
@@ -1034,8 +1030,6 @@ mod tests {
             "expected upserted local samples in row: {}",
             lines[3]
         );
-
-        let _ = std::fs::remove_file(PathBuf::from(path));
     }
 
     #[test]

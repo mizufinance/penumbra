@@ -1510,7 +1510,6 @@ dependencies = [
  "prost 0.13.4",
  "serde",
  "tendermint-proto",
- "tonic 0.12.3",
 ]
 
 [[package]]
@@ -6325,6 +6324,7 @@ dependencies = [
  "shieldd-sdk-proto",
  "shieldd-sdk-shielded-pool",
  "shieldd-sdk-transaction",
+ "tempfile",
  "tendermint",
  "tokio",
  "zstd",
@@ -6466,22 +6466,14 @@ dependencies = [
  "anyhow",
  "ark-ff",
  "async-trait",
- "blake2b_simd 1.0.2",
- "bytes",
  "cnidarium",
  "cnidarium-component",
  "decaf377",
- "decaf377-rdsa",
- "getrandom 0.2.15",
- "imbl",
- "metrics",
- "rand 0.8.6",
- "rand_core 0.6.4",
  "serde",
  "shieldd-sdk-asset",
  "shieldd-sdk-num",
  "shieldd-sdk-proto",
- "tendermint",
+ "tokio",
  "tracing",
 ]
 
@@ -6500,7 +6492,6 @@ dependencies = [
  "ibc-proto",
  "ibc-types",
  "ics23",
- "metrics",
  "num-traits",
  "once_cell",
  "pbjson-types",
@@ -6518,7 +6509,6 @@ dependencies = [
  "tendermint-light-client-verifier",
  "time",
  "tokio",
- "tower 0.4.13",
  "tracing",
 ]
 
@@ -6567,7 +6557,6 @@ name = "shieldd-sdk-mock-client"
 version = "2.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "cnidarium",
  "decaf377",
  "rand_core 0.6.4",
@@ -6589,8 +6578,7 @@ dependencies = [
  "anyhow",
  "ark-ff",
  "decaf377",
- "rand 0.8.6",
- "rand_core 0.6.4",
+ "proptest",
  "serde",
  "shieldd-sdk-proto",
 ]
@@ -6809,6 +6797,7 @@ dependencies = [
  "shieldd-sdk-proof-params",
  "shieldd-sdk-proto",
  "shieldd-sdk-sct",
+ "shieldd-sdk-shielded-pool",
  "shieldd-sdk-tct",
  "shieldd-sdk-txhash",
  "tap",
@@ -6901,6 +6890,7 @@ dependencies = [
  "shieldd-sdk-sct",
  "shieldd-sdk-shielded-pool",
  "shieldd-sdk-tct",
+ "shieldd-sdk-transaction",
  "shieldd-sdk-txhash",
  "thiserror 1.0.69",
  "tokio",

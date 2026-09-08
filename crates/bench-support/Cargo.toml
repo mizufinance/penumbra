@@ -34,3 +34,6 @@ sha2 = { workspace = true }
 tendermint = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros", "time"] }
 zstd = "0.13"
+
+[dev-dependencies]
+tempfile = { workspace = true }

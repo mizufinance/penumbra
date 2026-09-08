@@ -95,10 +95,15 @@ mod tests {
         config2.custody = CustodyConfig::ViewOnly;
         config2.disable_warning = true;
 
-        let toml_config = toml::to_string_pretty(&config).unwrap();
-        let toml_config2 = toml::to_string_pretty(&config2).unwrap();
-
-        println!("{}", toml_config);
-        println!("{}", toml_config2);
+        for original in [config, config2] {
+            let encoded = toml::to_string_pretty(&original).unwrap();
+            let decoded: PcliConfig = toml::from_str(&encoded).unwrap();
+            assert_eq!(decoded.disable_warning, original.disable_warning);
+            assert_eq!(decoded.full_viewing_key, original.full_viewing_key);
+            assert_eq!(
+                serde_json::to_value(&decoded.custody).unwrap(),
+                serde_json::to_value(&original.custody).unwrap(),
+            );
+        }
     }
 }

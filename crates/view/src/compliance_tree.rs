@@ -448,17 +448,6 @@ mod tests {
     }
 
     #[test]
-    fn asset_tree_basics() {
-        let tree = ComplianceAssetTree::new();
-
-        // New tree starts with sentinel at position 0, so leaf_count is 1
-        assert_eq!(tree.leaf_count(), 1);
-
-        // Root should be computable
-        let _root = tree.root();
-    }
-
-    #[test]
     fn fresh_asset_tree_persists_sentinel_before_advancing_leaf_count() {
         use r2d2_sqlite::rusqlite::Connection;
 

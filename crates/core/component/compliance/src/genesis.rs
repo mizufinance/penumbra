@@ -347,10 +347,29 @@ mod tests {
 
     #[test]
     fn test_serde_roundtrip() {
-        let content = Content::default();
+        let authority = VerificationKey::from(&SigningKey::<SpendAuth>::from(Fr::from(7u64)));
+        let content = Content {
+            compliance_registrar_vk: vec![authority],
+            native_assets: vec![NativeAssetRegistration {
+                asset_id: asset::Id(decaf377::Fq::from(2u64)),
+                is_regulated: true,
+                dk_pub: Some(decaf377::Element::GENERATOR.vartime_compress().0),
+                registration_authority_vk: Some(authority),
+                seizure_authority_vk: Some(authority),
+                ring_pk: Some(decaf377::Element::GENERATOR.vartime_compress().0),
+                ring_id: "ring".into(),
+                policy_id: "policy".into(),
+                permission: "read".into(),
+                resource: "document".into(),
+            }],
+            ..Default::default()
+        };
         let json = serde_json::to_string(&content).unwrap();
         let parsed: Content = serde_json::from_str(&json).unwrap();
-        assert_eq!(content.native_assets.len(), parsed.native_assets.len());
+        assert_eq!(
+            serde_json::to_value(&content).unwrap(),
+            serde_json::to_value(&parsed).unwrap()
+        );
     }
 
     #[test]

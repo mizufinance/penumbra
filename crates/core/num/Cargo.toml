@@ -19,5 +19,4 @@ shieldd-sdk-proto = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
-rand = { workspace = true }
-rand_core = { workspace = true, features = ["getrandom"] }
+proptest = { workspace = true }

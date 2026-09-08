@@ -256,10 +256,7 @@ impl Builder {
 mod test {
     use super::*;
 
-    #[test]
-    fn insert_error_sync_send() {
-        static_assertions::assert_impl_all!(InsertError: Sync, Send);
-    }
+    static_assertions::assert_impl_all!(InsertError: Sync, Send);
 
     #[test]
     fn finalized_forget_root_matches_builder_boundaries() -> Result<(), Box<dyn std::error::Error>>

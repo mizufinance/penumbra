@@ -2,8 +2,6 @@ package abi
 
 import (
 	"math/big"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/consensys/gnark/test"
@@ -124,12 +122,6 @@ func TestNoteSeizureWitnessRoundTripAndSolve(t *testing.T) {
 	payload, err := EncodeNoteSeizureWitness(witness)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if os.Getenv("SHIELDD_BLESS_GNARK_FIXTURES") == "1" {
-		path := filepath.Join("..", "testfixtures", "vectors", "note_seizure_witness.bin")
-		if err := os.WriteFile(path, payload, 0o644); err != nil {
-			t.Fatal(err)
-		}
 	}
 	decoded, err := DecodeNoteSeizureWitness(payload)
 	if err != nil {

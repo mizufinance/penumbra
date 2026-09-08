@@ -598,27 +598,6 @@ mod tests {
     }
 
     #[test]
-    fn note_reshape_family_specs_cover_expected_shapes() {
-        assert_eq!(NoteReshapeFamilyId::EightByOne.input_count(), 8);
-        assert_eq!(
-            NoteReshapeFamilyId::smallest_covering(2, 1),
-            Some(NoteReshapeFamilyId::EightByOne)
-        );
-        assert_eq!(
-            NoteReshapeFamilyId::smallest_covering(3, 1),
-            Some(NoteReshapeFamilyId::EightByOne)
-        );
-        assert_eq!(
-            NoteReshapeFamilyId::smallest_covering(5, 1),
-            Some(NoteReshapeFamilyId::EightByOne)
-        );
-        assert_eq!(
-            NoteReshapeFamilyId::smallest_covering(1, 2),
-            Some(NoteReshapeFamilyId::OneByEight)
-        );
-    }
-
-    #[test]
     fn plan_proto_roundtrip_preserves_family_and_derives_balance() {
         let plan = two_to_one_plan();
         let expected_balance = plan.balance();

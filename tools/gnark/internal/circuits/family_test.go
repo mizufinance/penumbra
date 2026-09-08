@@ -218,16 +218,19 @@ func TestCircuitFamiliesCompile(t *testing.T) {
 	}
 }
 
+func checkAssignment(t *testing.T, circuit frontend.Circuit, assignment test.TestingOption) {
+	t.Helper()
+	test.NewAssert(t).CheckCircuit(circuit,
+		test.WithCurves(ecc.BLS12_377),
+		test.WithBackends(backend.GROTH16),
+		assignment,
+	)
+}
+
 func TestCircuitFamiliesAcceptValidAssignment(t *testing.T) {
 	for _, family := range testCircuitFamilies() {
 		t.Run(family.name, func(t *testing.T) {
-			assert := test.NewAssert(t)
-			assert.CheckCircuit(
-				family.circuit(),
-				test.WithCurves(ecc.BLS12_377),
-				test.WithBackends(backend.GROTH16),
-				test.WithValidAssignment(family.assignment(t)),
-			)
+			checkAssignment(t, family.circuit(), test.WithValidAssignment(family.assignment(t)))
 		})
 	}
 }
@@ -244,13 +247,7 @@ func TestShieldedIcs20WithdrawalAccumulatorBranchesAcceptValidAssignment(t *test
 				t.Fatalf("decode withdrawal fixture: %v", err)
 			}
 
-			assert := test.NewAssert(t)
-			assert.CheckCircuit(
-				circuits.NewShieldedIcs20WithdrawalCircuit(2),
-				test.WithCurves(ecc.BLS12_377),
-				test.WithBackends(backend.GROTH16),
-				test.WithValidAssignment(assignment),
-			)
+			checkAssignment(t, circuits.NewShieldedIcs20WithdrawalCircuit(2), test.WithValidAssignment(assignment))
 		})
 	}
 }
@@ -261,13 +258,7 @@ func TestCircuitFamiliesRejectWrongStatementHash(t *testing.T) {
 			assignment := family.assignment(t)
 			family.mutateStatement(assignment)
 
-			assert := test.NewAssert(t)
-			assert.CheckCircuit(
-				family.circuit(),
-				test.WithCurves(ecc.BLS12_377),
-				test.WithBackends(backend.GROTH16),
-				test.WithInvalidAssignment(assignment),
-			)
+			checkAssignment(t, family.circuit(), test.WithInvalidAssignment(assignment))
 		})
 	}
 }
@@ -332,13 +323,7 @@ func TestCircuitFamiliesRejectMutatedComplianceField(t *testing.T) {
 				assignment = noteReshape
 			}
 
-			assert := test.NewAssert(t)
-			assert.CheckCircuit(
-				family.circuit(),
-				test.WithCurves(ecc.BLS12_377),
-				test.WithBackends(backend.GROTH16),
-				test.WithInvalidAssignment(assignment),
-			)
+			checkAssignment(t, family.circuit(), test.WithInvalidAssignment(assignment))
 		})
 	}
 }
@@ -381,13 +366,7 @@ func TestCircuitFamiliesRejectMutatedBalanceCommitment(t *testing.T) {
 				assignment = noteReshape
 			}
 
-			assert := test.NewAssert(t)
-			assert.CheckCircuit(
-				family.circuit(),
-				test.WithCurves(ecc.BLS12_377),
-				test.WithBackends(backend.GROTH16),
-				test.WithInvalidAssignment(assignment),
-			)
+			checkAssignment(t, family.circuit(), test.WithInvalidAssignment(assignment))
 		})
 	}
 }
@@ -451,13 +430,7 @@ func TestCircuitFamiliesRejectMutatedNullifier(t *testing.T) {
 				assignment = noteReshape
 			}
 
-			assert := test.NewAssert(t)
-			assert.CheckCircuit(
-				family.circuit(),
-				test.WithCurves(ecc.BLS12_377),
-				test.WithBackends(backend.GROTH16),
-				test.WithInvalidAssignment(assignment),
-			)
+			checkAssignment(t, family.circuit(), test.WithInvalidAssignment(assignment))
 		})
 	}
 }
@@ -514,13 +487,7 @@ func TestPaddedSpendCircuitsRejectMutatedDummyNullifierSeed(t *testing.T) {
 				t.Fatalf("%s dummy fixture has no dummy spend to mutate", family.name)
 			}
 
-			assert := test.NewAssert(t)
-			assert.CheckCircuit(
-				family.circuit(),
-				test.WithCurves(ecc.BLS12_377),
-				test.WithBackends(backend.GROTH16),
-				test.WithInvalidAssignment(assignment),
-			)
+			checkAssignment(t, family.circuit(), test.WithInvalidAssignment(assignment))
 		})
 	}
 }
@@ -556,13 +523,7 @@ func TestNoteReshapeRejectsDummyOutputCommitmentMutation(t *testing.T) {
 		noteReshape,
 	)
 
-	assert := test.NewAssert(t)
-	assert.CheckCircuit(
-		circuits.NewNoteReshapeCircuit("note_reshape1x8", 1, 8),
-		test.WithCurves(ecc.BLS12_377),
-		test.WithBackends(backend.GROTH16),
-		test.WithInvalidAssignment(noteReshape),
-	)
+	checkAssignment(t, circuits.NewNoteReshapeCircuit("note_reshape1x8", 1, 8), test.WithInvalidAssignment(noteReshape))
 }
 
 func TestNoteReshapeRejectsPaddedOutputPayloadMutation(t *testing.T) {
@@ -584,11 +545,5 @@ func TestNoteReshapeRejectsPaddedOutputPayloadMutation(t *testing.T) {
 		t.Fatal("note_reshape1x8 fixture must contain a zero-note padded output")
 	}
 
-	assert := test.NewAssert(t)
-	assert.CheckCircuit(
-		circuits.NewNoteReshapeCircuit("note_reshape1x8", 1, 8),
-		test.WithCurves(ecc.BLS12_377),
-		test.WithBackends(backend.GROTH16),
-		test.WithInvalidAssignment(noteReshape),
-	)
+	checkAssignment(t, circuits.NewNoteReshapeCircuit("note_reshape1x8", 1, 8), test.WithInvalidAssignment(noteReshape))
 }

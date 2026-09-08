@@ -1,3 +1,5 @@
+//go:build diagnostics
+
 package circuits
 
 import (

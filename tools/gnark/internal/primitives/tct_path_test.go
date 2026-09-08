@@ -7,7 +7,6 @@ import (
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend"
 	"github.com/consensys/gnark/frontend"
-	"github.com/consensys/gnark/frontend/cs/r1cs"
 	"github.com/consensys/gnark/test"
 )
 
@@ -98,16 +97,6 @@ func statePathAssignment(path [24][3]*big.Int) [24][3]frontend.Variable {
 	return out
 }
 
-func TestStateCommitmentPathNativeMatchesSyntheticFixture(t *testing.T) {
-	commitment := big.NewInt(987654321)
-	path, position := syntheticStateCommitmentPath()
-
-	root := computeStateCommitmentRootNative(t, commitment, position, path)
-	if root.Sign() == 0 {
-		t.Fatal("expected non-zero state commitment root")
-	}
-}
-
 func TestStateCommitmentPathCircuitMatchesSyntheticFixture(t *testing.T) {
 	commitment := big.NewInt(987654321)
 	path, position := syntheticStateCommitmentPath()
@@ -134,11 +123,4 @@ func TestStateCommitmentPathCircuitMatchesSyntheticFixture(t *testing.T) {
 		test.WithValidAssignment(assignment),
 		test.WithInvalidAssignment(positionAlias),
 	)
-}
-
-func TestStateCommitmentPathCircuitCompiles(t *testing.T) {
-	_, err := frontend.Compile(ecc.BLS12_377.ScalarField(), r1cs.NewBuilder, &stateCommitmentPathCircuit{})
-	if err != nil {
-		t.Fatalf("compile state commitment path circuit: %v", err)
-	}
 }

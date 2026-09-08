@@ -66,8 +66,5 @@ impl From<Hash> for CachedHash {
 mod test {
     use super::*;
 
-    #[test]
-    fn cached_hash_size() {
-        static_assertions::assert_eq_size!(CachedHash, [u8; 40]);
-    }
+    static_assertions::assert_eq_size!(CachedHash, [u8; 40]);
 }

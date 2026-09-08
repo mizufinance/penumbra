@@ -808,9 +808,12 @@ mod tests {
             .expect("test request has time")
             .seconds = 1_700_000_000;
 
+        request.time.as_mut().expect("time").nanos = 123_456_789;
         let block = decode_host_block(request).expect("valid host block");
 
         assert_eq!(block.height, 7);
+        assert_eq!(block.time.unix_timestamp(), 1_700_000_000);
+        assert_eq!(block.time.unix_timestamp_nanos(), 1_700_000_000_123_456_789);
     }
 
     #[test]

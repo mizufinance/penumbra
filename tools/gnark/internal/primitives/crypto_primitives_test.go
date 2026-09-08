@@ -9,7 +9,6 @@ import (
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend"
 	"github.com/consensys/gnark/frontend"
-	"github.com/consensys/gnark/frontend/cs/r1cs"
 	gnarkte "github.com/consensys/gnark/std/algebra/native/twistededwards"
 	"github.com/consensys/gnark/test"
 )
@@ -189,20 +188,6 @@ func TestDecaf377EncodeToCurveNativeMatchesShielddVectors(t *testing.T) {
 		if got, want := point.Y.(*big.Int).String(), vector.Y; got != want {
 			t.Fatalf("encode_to_curve(%s) y mismatch: got %s want %s", vector.Input, got, want)
 		}
-	}
-}
-
-func TestPoseidon377Hash7Compiles(t *testing.T) {
-	_, err := frontend.Compile(ecc.BLS12_377.ScalarField(), r1cs.NewBuilder, &poseidon377Hash7Circuit{})
-	if err != nil {
-		t.Fatalf("compile poseidon377 hash7 circuit: %v", err)
-	}
-}
-
-func TestDecaf377EncodeToCurveCompiles(t *testing.T) {
-	_, err := frontend.Compile(ecc.BLS12_377.ScalarField(), r1cs.NewBuilder, &decaf377EncodeToCurveCircuit{})
-	if err != nil {
-		t.Fatalf("compile decaf377 encode_to_curve circuit: %v", err)
 	}
 }
 

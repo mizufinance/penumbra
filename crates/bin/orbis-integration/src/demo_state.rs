@@ -156,7 +156,10 @@ mod tests {
         let encoded = serde_json::to_vec(&state).expect("state should encode");
         let decoded: AuditDemoState =
             serde_json::from_slice(&encoded).expect("state should decode");
-        assert_eq!(decoded.users[0].name, "Alice");
+        assert_eq!(
+            serde_json::to_value(&decoded).unwrap(),
+            serde_json::to_value(&state).unwrap()
+        );
     }
 
     #[test]
