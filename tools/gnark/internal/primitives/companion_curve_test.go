@@ -1,11 +1,12 @@
 package primitives
 
 import (
-	te377 "github.com/consensys/gnark-crypto/ecc/bls12-377/twistededwards"
 	"testing"
+
+	te377 "github.com/consensys/gnark-crypto/ecc/bls12-377/twistededwards"
 )
 
-func TestPhase05CompanionCurveMatchesDecaf377(t *testing.T) {
+func TestCompanionCurveMatchesDecaf377(t *testing.T) {
 	vectors, err := LoadPrototypeVectors()
 	if err != nil {
 		t.Fatalf("load vectors: %v", err)

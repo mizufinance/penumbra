@@ -510,10 +510,10 @@ fn panic_message(payload: Box<dyn Any + Send>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cnidarium::proto::v1::{KeyValueRequest, KeyValueResponse};
     use shieldd_sdk_app::genesis::{AppState, Content};
     use shieldd_sdk_asset::asset;
     use shieldd_sdk_keys::test_keys::ADDRESS_0;
+    use shieldd_sdk_proto::cnidarium::v1::{KeyValueRequest, KeyValueResponse};
     use shieldd_sdk_proto::core::app::v1::{AppParametersRequest, AppParametersResponse};
     use shieldd_sdk_proto::core::component::compact_block::v1::{
         CompactBlockRangeRequest, CompactBlockRangeResponse,

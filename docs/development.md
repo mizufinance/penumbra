@@ -17,7 +17,7 @@ Direct host integration tests use temporary storage. Bankd owns the live localne
 | `just proto-check` | Deterministic Rust/Go generation and schema closure |
 | `just features-check` | Independent native crate feature builds |
 | `just wasm-check` | Supported domain crates without component features on WASM |
-| `cargo test -p shieldd-sdk-app-tests --tests -- --test-threads=2` | Host lifecycle, transfers, wallet planning, sweep, and storage query proofs |
+| `cargo test -p shieldd-sdk-app-tests --tests -- --test-threads=1` | Host lifecycle, transfers, wallet planning, sweep, and storage query proofs |
 
 ## Real proof tests
 
