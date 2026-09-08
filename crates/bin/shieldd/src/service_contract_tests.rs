@@ -191,7 +191,7 @@ async fn execution_reads_bounded_compact_block_ranges() -> Result<()> {
 }
 #[tokio::test]
 async fn key_value_proves_membership_and_absence_at_committed_root() -> Result<()> {
-    use cnidarium::{StateDelta, StateRead as _, StateWrite as _};
+    use cnidarium::{StateDelta, StateWrite as _};
     use ibc_types::core::commitment::{MerklePath, MerkleProof, MerkleRoot};
     let (storage, client) = initialized_client().await?;
     let mut delta = StateDelta::new(storage.latest_snapshot());

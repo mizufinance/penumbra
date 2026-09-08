@@ -113,7 +113,7 @@ async fn main() -> Result<()> {
         service.end_block(EndBlockRequest { height: 1 }).await?;
         service.commit(CommitRequest {}).await?;
         service.close().await?;
-        let storage = Storage::load(db, SUBSTORE_PREFIXES.to_vec()).await?;
+        let storage = Storage::load(db.to_path_buf(), SUBSTORE_PREFIXES.to_vec()).await?;
         let mut state = StateDelta::new(storage.latest_snapshot());
         // A spent-marker fixture exercises the persisted nullifier index without proving a spend.
         nullifier_tree::insert_batch(&mut state, [Nullifier(Fq::from(7u64))]).await?;
@@ -134,7 +134,7 @@ async fn main() -> Result<()> {
             "committed queries changed across versions"
         );
         service.close().await?;
-        let storage = Storage::load(db, SUBSTORE_PREFIXES.to_vec()).await?;
+        let storage = Storage::load(db.to_path_buf(), SUBSTORE_PREFIXES.to_vec()).await?;
         ensure!(
             storage
                 .latest_snapshot()

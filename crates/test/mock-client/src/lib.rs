@@ -50,17 +50,7 @@ impl MockClient {
 
     pub async fn with_sync_to_storage(
         mut self,
-        storage: impl AsRef<cnidarium::Storage>,
-    ) -> anyhow::Result<Self> {
-        let latest = storage.as_ref().latest_snapshot();
-        self.sync_to_latest(latest).await?;
-
-        Ok(self)
-    }
-
-    pub async fn with_sync_to_inner_storage(
-        mut self,
-        storage: cnidarium::Storage,
+        storage: &cnidarium::Storage,
     ) -> anyhow::Result<Self> {
         let latest = storage.latest_snapshot();
         self.sync_to_latest(latest).await?;
