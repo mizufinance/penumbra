@@ -196,7 +196,7 @@ async fn key_value_proves_membership_and_absence_at_committed_root() -> Result<(
     let (storage, client) = initialized_client().await?;
     let mut delta = StateDelta::new(storage.latest_snapshot());
     delta.put_raw(
-        "ibc/query-proof-present".into(),
+        "ibc-data/query-proof-present".into(),
         b"committed value".to_vec(),
     );
     storage.commit(delta).await?;
@@ -216,13 +216,13 @@ async fn key_value_proves_membership_and_absence_at_committed_root() -> Result<(
             false,
         ),
         (
-            "ibc/query-proof-present",
-            vec!["ibc", "query-proof-present"],
+            "ibc-data/query-proof-present",
+            vec!["ibc-data", "query-proof-present"],
             true,
         ),
         (
-            "ibc/query-proof-absent",
-            vec!["ibc", "query-proof-absent"],
+            "ibc-data/query-proof-absent",
+            vec!["ibc-data", "query-proof-absent"],
             false,
         ),
     ] {
@@ -240,6 +240,7 @@ async fn key_value_proves_membership_and_absence_at_committed_root() -> Result<(
             value.as_ref()
         );
         assert_eq!(value.is_some(), present);
+        assert_eq!(proof.proofs.len(), path.len(), "proof depth for {key}");
         let specs = vec![cnidarium::ics23_spec(); path.len()];
         let path = MerklePath {
             key_path: path.into_iter().map(str::to_owned).collect(),
