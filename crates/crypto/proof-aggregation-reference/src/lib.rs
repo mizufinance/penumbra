@@ -126,6 +126,35 @@ struct TippMippCommitment {
     c: CCommitmentPair,
 }
 
+/// Independently decode the canonical aggregate wire shape using checked Arkworks decoding.
+pub fn reference_decode_aggregate(bytes: &[u8]) -> ReferenceResult<Vec<u8>> {
+    let mut remaining = bytes;
+    let proof = ReferenceAggregateProof::deserialize_compressed(&mut remaining)
+        .map_err(|error| ReferencePathError::MalformedProof(error.to_string()))?;
+    if !remaining.is_empty() {
+        return Err(ReferencePathError::MalformedProof("trailing bytes".into()));
+    }
+    for (left, right) in &proof.tipp_mipp_proof.gipa_proof.r_commitment_steps {
+        for commitment in [left, right] {
+            if commitment.ab.2 .0.len() != 1 || commitment.c.1 .0.len() != 1 {
+                return Err(ReferencePathError::MalformedProof(
+                    "identity output is not a singleton".into(),
+                ));
+            }
+        }
+    }
+    let mut canonical = Vec::new();
+    proof
+        .serialize_compressed(&mut canonical)
+        .map_err(|error| ReferencePathError::MalformedProof(error.to_string()))?;
+    if canonical != bytes {
+        return Err(ReferencePathError::MalformedProof(
+            "noncanonical encoding".into(),
+        ));
+    }
+    Ok(canonical)
+}
+
 #[derive(Clone)]
 struct ReferenceSrs {
     g_alpha_powers: Vec<G1>,
@@ -1104,6 +1133,43 @@ mod tests {
         verify_family_aggregate, AGGREGATE_PROTOCOL_VERSION,
     };
     use shieldd_sdk_shielded_pool::{NoteReshapeFamilyId, ShieldedIcs20WithdrawalFamilyId};
+
+    #[test]
+    fn decoder_oracle_rejects_shape_and_canonical_aliases() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../proof-aggregation-fuzz/corpus/deserialize_aggregate_proof");
+        for index in [0, 1, 2, 3, 7, 11, 15] {
+            let bytes = std::fs::read(directory.join(format!("valid-baseline-{index:02}")))
+                .expect("committed seed");
+            assert_eq!(reference_decode_aggregate(&bytes).unwrap(), bytes);
+        }
+        let bytes = std::fs::read(directory.join("valid-baseline-01")).unwrap();
+        let original = ReferenceAggregateProof::deserialize_compressed(&bytes[..]).unwrap();
+        for length in [0, 2] {
+            let mut proof = original.clone();
+            let identity = &mut proof.tipp_mipp_proof.gipa_proof.r_commitment_steps[0]
+                .0
+                .ab
+                .2
+                 .0;
+            identity.resize(length, identity[0]);
+            let mut malformed = Vec::new();
+            proof.serialize_compressed(&mut malformed).unwrap();
+            assert!(reference_decode_aggregate(&malformed).is_err());
+        }
+        let mut proof = original;
+        proof.agg_c = G1::zero();
+        let mut canonical = Vec::new();
+        proof.serialize_compressed(&mut canonical).unwrap();
+        assert!(reference_decode_aggregate(&canonical).is_ok());
+        let offset = proof.com_a.compressed_size()
+            + proof.com_b.compressed_size()
+            + proof.com_c.compressed_size()
+            + proof.ip_ab.compressed_size();
+        canonical[offset] |= 1;
+        assert!(ReferenceAggregateProof::deserialize_compressed(&canonical[..]).is_ok());
+        assert!(reference_decode_aggregate(&canonical).is_err());
+    }
 
     #[derive(Clone)]
     struct SquareCircuit {

@@ -228,9 +228,8 @@ async fn build_tx(opt: &Opt) -> Result<BuiltTx> {
         } => spend_key.clone(),
         _ => test_keys::SPEND_KEY.clone(),
     };
-    let mut client = MockClient::new(spend_key);
-    client
-        .sync_to_latest(storage.latest_snapshot())
+    let client = MockClient::new(spend_key)
+        .with_sync_to_storage(&storage)
         .await
         .context("failed to sync Shieldd test wallet to storage")?;
 

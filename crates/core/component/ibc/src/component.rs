@@ -7,9 +7,6 @@ mod connection;
 mod connection_counter;
 mod ics02_validation;
 
-#[cfg(feature = "rpc")]
-pub mod rpc;
-
 mod host_interface;
 mod ibc_component;
 mod msg_handler;

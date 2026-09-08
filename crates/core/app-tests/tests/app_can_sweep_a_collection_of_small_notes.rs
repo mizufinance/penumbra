@@ -1,60 +1,22 @@
-use {
-    anyhow::Context,
-    cnidarium::TempStorage,
-    common::TempStorageExt as _,
-    futures::StreamExt,
-    rand_core::OsRng,
-    shieldd_sdk_app::{
-        genesis::{AppState, Content},
-        server::consensus::Consensus,
-    },
-    shieldd_sdk_asset::{BASE_ASSET_DENOM, BASE_ASSET_ID},
-    shieldd_sdk_keys::{keys::AddressIndex, test_keys},
-    shieldd_sdk_mock_client::MockClient,
-    shieldd_sdk_mock_consensus::TestNode,
-    shieldd_sdk_proto::{
-        view::v1::{
-            view_service_client::ViewServiceClient, view_service_server::ViewServiceServer,
-            StatusRequest,
-        },
-        DomainType,
-    },
-    shieldd_sdk_shielded_pool::genesis::Allocation,
-    shieldd_sdk_view::ViewClient,
-    shieldd_sdk_wallet::plan,
-    std::ops::Deref,
-    tap::{Tap, TapFallible},
-    tokio::time,
+use anyhow::Context;
+use cnidarium::TempStorage;
+use shieldd_sdk_app::{
+    genesis::{AppState, Content},
+    test_support::{TestHost, TEST_CHAIN_ID},
 };
-
+use shieldd_sdk_asset::{BASE_ASSET_DENOM, BASE_ASSET_ID};
+use shieldd_sdk_keys::test_keys;
+use shieldd_sdk_mock_client::MockClient;
+use shieldd_sdk_proto::DomainType;
+use shieldd_sdk_shielded_pool::genesis::Allocation;
+use shieldd_sdk_view::{Storage, StoragePlanningIo};
+use std::ops::Deref;
 mod common;
-
 const COUNT: usize = 5;
 
-async fn wait_for_view_sync(
-    view_client: &mut ViewServiceClient<ViewServiceServer<shieldd_sdk_view::ViewServer>>,
-    min_height: u64,
-) -> anyhow::Result<()> {
-    let mut status_stream = ViewClient::status_stream(view_client).await?;
-    while let Some(status) = status_stream.next().await.transpose()? {
-        tracing::info!(?status, "view client received status stream response");
-    }
-    let status = view_client.status(StatusRequest {}).await?.into_inner();
-    assert!(!status.catching_up, "view client should not be catching up");
-    assert!(
-        status.sync_height >= min_height,
-        "view client should be synced to at least height {min_height}, got {}",
-        status.sync_height
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_can_sweep_a_collection_of_small_notes() -> anyhow::Result<()> {
-    let guard = common::set_tracing_subscriber_with_env_filter("info".into());
-    let storage = TempStorage::new_with_shieldd_prefixes().await?;
-    let proxy = shieldd_sdk_mock_tendermint_proxy::TestNodeProxy::new::<Consensus>();
-
+    let storage = TempStorage::new().await?;
     let allocations = {
         let dust = Allocation {
             raw_amount: 1_u128.into(),
@@ -64,115 +26,56 @@ async fn app_can_sweep_a_collection_of_small_notes() -> anyhow::Result<()> {
         std::iter::repeat(dust).take(COUNT).collect()
     };
 
-    let mut test_node = {
-        let content = Content {
-            chain_id: TestNode::<()>::CHAIN_ID.to_string(),
+    let mut host = TestHost::new(
+        storage.as_ref().clone(),
+        AppState::Content(Content {
+            chain_id: TEST_CHAIN_ID.into(),
             shielded_pool_content: shieldd_sdk_shielded_pool::genesis::Content {
                 allocations,
                 ..Default::default()
             },
             ..Default::default()
-        };
-        let app_state = AppState::Content(content);
-        let app_state = serde_json::to_vec(&app_state).unwrap();
-        let consensus = Consensus::new(storage.as_ref().clone());
-        TestNode::builder()
-            .single_validator()
-            .app_state(app_state)
-            .on_block(proxy.on_block_callback())
-            .init_chain(consensus)
-            .await
-            .tap_ok(|e| tracing::info!(hash = %e.last_app_hash_hex(), "finished init chain"))?
-    };
-
+        }),
+        tendermint::Time::parse_from_rfc3339("2026-01-01T00:00:00Z")?,
+    )
+    .await?;
+    host.execute(vec![]).await?;
+    let wallet = Storage::initialize(
+        None::<&camino::Utf8Path>,
+        (*test_keys::FULL_VIEWING_KEY).clone(),
+        shieldd_sdk_app::params::AppParameters {
+            chain_id: TEST_CHAIN_ID.into(),
+            ..Default::default()
+        },
+    )
+    .await?;
+    common::scan_latest(&storage, &wallet).await?;
     let mut client = MockClient::new(test_keys::SPEND_KEY.clone())
         .with_sync_to_storage(&storage)
-        .await?
-        .tap(
-            |c| tracing::info!(client.notes = %c.notes.len(), "mock client synced to test storage"),
-        );
-
-    test_node
-        .fast_forward(10)
-        .tap(|_| tracing::debug!("fast forwarding past genesis"))
         .await?;
-
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let local_addr = listener.local_addr()?;
-    let grpc_url = format!("http://{local_addr}")
-        .parse::<url::Url>()?
-        .tap(|url| tracing::debug!(%url, "parsed grpc url"));
-
-    {
-        let make_svc = shieldd_sdk_app::rpc::routes(storage.as_ref(), proxy, false)?
-            .into_axum_router()
-            .layer(tower_http::cors::CorsLayer::permissive())
-            .into_make_service();
-        listener.set_nonblocking(true)?;
-        let server = axum_server::from_tcp(listener).serve(make_svc);
-        tokio::spawn(async { server.await.expect("grpc server returned an error") });
-    };
-
-    time::sleep(time::Duration::from_millis(50)).await;
-
-    let view_server = shieldd_sdk_view::ViewServer::load_or_initialize(
-        None::<&camino::Utf8Path>,
-        None::<&camino::Utf8Path>,
-        &*test_keys::FULL_VIEWING_KEY,
-        grpc_url,
-    )
-    .await
-    .map(ViewServiceServer::new)
-    .context("initializing view server")?;
-
-    let mut view_client = ViewServiceClient::new(view_server);
-
-    wait_for_view_sync(&mut view_client, 10).await?;
-
-    client.sync_to_latest(storage.latest_snapshot()).await?;
-    assert_eq!(
-        client
-            .notes_by_asset(BASE_ASSET_ID.deref().to_owned())
-            .count(),
-        COUNT,
-        "client wallet should have {COUNT} notes before sweeping"
-    );
-
-    loop {
-        client.sync_to_latest(storage.latest_snapshot()).await?;
-
-        let plans = plan::sweep(&mut view_client, OsRng)
-            .await
-            .context("constructing sweep plans")?;
+    assert_eq!(client.notes_by_asset(*BASE_ASSET_ID).count(), COUNT);
+    for _ in 0..COUNT {
+        let mut reader = StoragePlanningIo::new(wallet.clone()).await?;
+        let plans =
+            shieldd_sdk_view::sweep(&mut reader, rand_core::OsRng, wallet.gas_prices().await?)
+                .await
+                .context("constructing sweep plans")?;
         if plans.is_empty() {
             break;
         }
         for plan in plans {
             let tx = client.witness_auth_build(&plan).await?;
-            test_node
-                .block()
-                .with_data(vec![tx.encode_to_vec()])
-                .execute()
-                .await?;
+            host.execute(vec![tx.encode_to_vec()]).await?;
             client.sync_to_latest(storage.latest_snapshot()).await?;
-            wait_for_view_sync(&mut view_client, storage.latest_snapshot().version()).await?;
+            common::scan_latest(&storage, &wallet).await?;
         }
     }
-
-    let post_sweep_notes = view_client.unspent_notes_by_address_and_asset().await?;
-    let final_note_count = post_sweep_notes
-        .get(&AddressIndex::from(0))
-        .expect("test wallet could not find any notes")
-        .get(&*BASE_ASSET_ID)
-        .map(Vec::len)
-        .unwrap_or_default();
-    assert!(
-        final_note_count < COUNT,
-        "sweep should reduce note count from {COUNT}, got {final_note_count}"
-    );
-
+    let notes = wallet
+        .notes(false, Some(*BASE_ASSET_ID), None, None)
+        .await?;
+    assert!(notes.len() < COUNT, "sweep should reduce note count");
+    assert!(notes.len() > 0, "sweep must retain the balance");
+    let total: shieldd_sdk_num::Amount = notes.iter().map(|n| n.note.amount()).sum();
+    assert_eq!(total, (COUNT as u64).into());
     Ok(())
-        .tap(|_| drop(test_node))
-        .tap(|_| drop(storage))
-        .tap(|_| drop(guard))
 }

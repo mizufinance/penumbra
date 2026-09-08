@@ -262,17 +262,18 @@ impl IsAction for ShieldedHostWithdrawal {
             });
         };
 
-        let Some(spent_notes) = self
+        let spent_notes = self
             .body
             .inputs
             .iter()
-            .map(|input| txp.spend_nullifiers.get(&input.nullifier).cloned())
-            .collect::<Option<Vec<_>>>()
-        else {
+            .filter_map(|input| txp.spend_nullifiers.get(&input.nullifier).cloned())
+            .collect::<Vec<_>>();
+        if spent_notes.is_empty() {
             return ActionView::ShieldedHostWithdrawal(ShieldedHostWithdrawalView::Opaque {
                 withdrawal: self.to_owned(),
             });
-        };
+        }
+        let sender_address = spent_notes[0].address();
 
         let Ok(change_note) = Note::decrypt_with_payload_key(
             &self.body.change_output.note_payload.encrypted_note,
@@ -297,7 +298,9 @@ impl IsAction for ShieldedHostWithdrawal {
                         .into_iter()
                         .map(|note| txp.view_note(note))
                         .collect(),
-                    change_note: txp.view_note(change_note),
+                    change_note: (change_note.amount() != shieldd_sdk_num::Amount::zero()
+                        || change_note.address() != sender_address)
+                        .then(|| txp.view_note(change_note)),
                     payload_key: decrypted_memo_key,
                 })
             }
@@ -425,6 +428,127 @@ mod tests {
                     change_note.is_none(),
                     "zero sender-owned synthetic change must not appear in the view"
                 );
+            }
+            other => panic!("expected visible withdrawal view, got {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod host_tests {
+
+    use ark_serialize::CanonicalSerialize;
+    use decaf377::Fr;
+    use rand_core::OsRng;
+    use shieldd_sdk_asset::{Value, BASE_ASSET_DENOM};
+    use shieldd_sdk_keys::{test_keys, PayloadKey};
+    use shieldd_sdk_shielded_pool::{
+        Note, ShieldedHostWithdrawal, ShieldedHostWithdrawalView, ShieldedIcs20WithdrawalProof,
+        ShieldedInputPlan,
+    };
+    use shieldd_sdk_tct::Tree;
+
+    use super::{IsAction, TransactionPerspective};
+    use crate::ActionView;
+
+    #[test]
+    fn withdrawal_view_ignores_private_padding_and_hides_synthetic_change() {
+        let spent_note = Note::generate(
+            &mut OsRng,
+            &test_keys::ADDRESS_0,
+            Value {
+                amount: 40_000u64.into(),
+                asset_id: BASE_ASSET_DENOM.id(),
+            },
+        );
+        let spend = ShieldedInputPlan::new(&mut OsRng, spent_note.clone(), 0u64.into());
+        let plan = shieldd_sdk_shielded_pool::test_plan_helpers::host_withdrawal(
+            vec![spend],
+            None,
+            shieldd_sdk_shielded_pool::HostWithdrawal {
+                value: shieldd_sdk_asset::Value {
+                    amount: 40_000u64.into(),
+                    asset_id: (BASE_ASSET_DENOM.clone()).id(),
+                },
+                destination: shieldd_sdk_shielded_pool::HostWithdrawalDestination::Transfer(
+                    shieldd_sdk_shielded_pool::HostTransfer {
+                        recipient: "bank1destination".to_owned(),
+                    },
+                ),
+            },
+            Fr::from(7u64),
+        )
+        .expect("valid withdrawal plan");
+        let memo_key: PayloadKey = [7u8; 32].into();
+        let body = plan
+            .action_body(
+                &test_keys::FULL_VIEWING_KEY,
+                &memo_key,
+                Tree::default().root(),
+                0,
+            )
+            .expect("build withdrawal body");
+        let mut proof_bytes = Vec::new();
+        ark_groth16::Proof::<decaf377::Bls12_377>::default()
+            .serialize_compressed(&mut proof_bytes)
+            .expect("encode proof-shaped view fixture");
+        let action = ShieldedHostWithdrawal {
+            auth_sigs: vec![[0u8; 64].into(); body.family_id.auth_sig_count()],
+            body,
+            proof: ShieldedIcs20WithdrawalProof { inner: proof_bytes },
+        };
+
+        let output = &action.body.change_output;
+        let shared_secret = Note::decrypt_key(
+            output.ovk_wrapped_key.clone(),
+            output.note_payload.note_commitment,
+            action.body.balance_commitment,
+            test_keys::FULL_VIEWING_KEY.outgoing(),
+            &output.note_payload.ephemeral_key,
+        )
+        .expect("unwrap synthetic change payload key");
+        let payload_key = PayloadKey::derive(&shared_secret, &output.note_payload.ephemeral_key);
+
+        let mut perspective = TransactionPerspective::default();
+        perspective
+            .spend_nullifiers
+            .insert(action.body.inputs[0].nullifier, spent_note);
+        perspective
+            .payload_keys
+            .insert(output.note_payload.note_commitment, payload_key);
+        assert!(
+            !perspective
+                .spend_nullifiers
+                .contains_key(&action.body.inputs[1].nullifier),
+            "regression requires the synthetic nullifier to be absent from wallet storage"
+        );
+
+        match action.view_from_perspective(&perspective) {
+            ActionView::ShieldedHostWithdrawal(ShieldedHostWithdrawalView::Visible {
+                spent_notes,
+                change_note,
+                payload_key,
+                ..
+            }) => {
+                assert_eq!(spent_notes.len(), 1);
+                assert!(
+                    change_note.is_none(),
+                    "zero sender-owned synthetic change must not appear in the view"
+                );
+                let view = ShieldedHostWithdrawalView::Visible {
+                    withdrawal: action.clone(),
+                    spent_notes,
+                    change_note,
+                    payload_key,
+                };
+                let encoded = shieldd_sdk_proto::core::component::shielded_pool::v1::ShieldedHostWithdrawalView::from(view);
+                assert!(matches!(
+                    ShieldedHostWithdrawalView::try_from(encoded).unwrap(),
+                    ShieldedHostWithdrawalView::Visible {
+                        change_note: None,
+                        ..
+                    }
+                ));
             }
             other => panic!("expected visible withdrawal view, got {other:?}"),
         }

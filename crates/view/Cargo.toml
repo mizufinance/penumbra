@@ -3,35 +3,26 @@ name = "shieldd-sdk-view"
 version = {workspace = true}
 authors = {workspace = true}
 edition = {workspace = true}
-description = "The view RPC library for the Shieldd Zone"
+description = "Wallet planning, synchronization, and local storage"
 repository = {workspace = true}
 license = {workspace = true}
 publish = true
 
 [features]
 default = ["std"]
-# When this feature is enabled, the view worker will request every single
-# SCT root, to pinpoint exactly where any SCT root divergence occurs.
-sct-divergence-check = []
-std = ["ark-std/std"]
+std = []
 
 [dependencies]
 anyhow = {workspace = true}
-ark-std = {workspace = true, default-features = false}
-async-stream = {workspace = true}
 async-trait = {workspace = true}
 bytes = {workspace = true, features = ["serde"]}
 camino = {workspace = true}
-cnidarium = {workspace = true, features = ["rpc"]}
 decaf377 = {workspace = true, default-features = true}
 digest = "0.9"
-futures = {workspace = true}
 genawaiter = "0.99"
 hex = {workspace = true}
 ibc-types = {workspace = true, default-features = false}
-metrics = {workspace = true}
 once_cell = {workspace = true}
-parking_lot = {workspace = true}
 shieldd-sdk-app = {workspace = true, default-features = false}
 shieldd-sdk-asset = {workspace = true, default-features = true}
 shieldd-sdk-compact-block = {workspace = true, default-features = false}
@@ -53,16 +44,12 @@ rand_core = {workspace = true, features = ["getrandom"]}
 serde = {workspace = true, features = ["derive"]}
 serde_json = {workspace = true}
 sha2 = {workspace = true}
-tap = {workspace = true}
-tendermint = {workspace = true}
-tokio = {workspace = true, features = ["full"]}
-tokio-stream = {workspace = true, features = ["sync"]}
+tokio = {workspace = true, features = ["macros", "rt-multi-thread", "sync"]}
 tonic = {workspace = true, features = ["tls", "tls-webpki-roots"]}
 tracing = {workspace = true}
-url = {workspace = true}
-pbjson-types = { workspace = true }
 
 [dev-dependencies]
+pbjson-types = { workspace = true }
 shieldd-sdk-shielded-pool = {workspace = true, default-features = false, features = ["benchmark-helpers"]}
 shieldd-sdk-compliance = {workspace = true, default-features = false, features = ["test-helpers"]}
 shieldd-sdk-keys = {workspace = true, features = ["demo"]}

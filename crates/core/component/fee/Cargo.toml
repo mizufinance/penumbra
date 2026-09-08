@@ -12,8 +12,6 @@ component = [
     "cnidarium-component",
     "cnidarium",
     "shieldd-sdk-proto/cnidarium",
-    "tonic",
-    "shieldd-sdk-proto/rpc"
 ]
 default = ["std", "component"]
 std = ["ark-ff/std"]
@@ -38,7 +36,6 @@ rand = {workspace = true}
 rand_core = {workspace = true, features = ["getrandom"]}
 serde = {workspace = true, features = ["derive"]}
 tendermint = {workspace = true}
-tonic = {workspace = true, optional = true}
 tracing = {workspace = true}
 
 [dev-dependencies]

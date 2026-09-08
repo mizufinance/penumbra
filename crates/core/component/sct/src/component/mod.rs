@@ -4,8 +4,6 @@
 
 /// Blockchain clocks: epoch indices, block heights and timestamps.
 pub mod clock;
-/// Implementation of the SCT component query server.
-pub mod rpc;
 /// The SCT component implementation.
 pub mod sct;
 /// Tracking commitment sources within a block execution.

@@ -1,7 +1,10 @@
 #[cfg(any(test, feature = "benchmark-helpers"))]
 mod aggregate_diagnostics;
+mod batch_input;
 mod candidate;
 mod host;
+mod lifecycle;
+pub use batch_input::{BatchCandidate, BatchPreparation, BatchVerdict, PreparedBatch};
 mod preconsensus;
 
 pub use self::host::{
@@ -26,7 +29,6 @@ use async_trait::async_trait;
 use cnidarium::{ArcStateDeltaExt, Snapshot, StateDelta, StateRead, StateWrite, Storage};
 use cnidarium_component::Component;
 use decaf377::{Bls12_377, Fq};
-use ibc_types::core::connection::ChainId;
 use jmt::RootHash;
 use prost::bytes::Bytes;
 use prost::Message as _;
@@ -43,8 +45,7 @@ use shieldd_sdk_fee::component::{
     clear_block_fee_price_cache, FeeComponent, FeePay as _, StateReadExt as _, StateWriteExt as _,
 };
 use shieldd_sdk_fee::{Fee, Gas, GasPrices};
-use shieldd_sdk_ibc::component::Ibc;
-use shieldd_sdk_ibc::StateReadExt as _;
+use shieldd_sdk_ibc::{StateReadExt as _, StateWriteExt as _};
 use shieldd_sdk_proof_aggregation::{
     aggregate_family, app_verify_accepted_join_projection_core, app_verify_family_code,
     app_verify_family_count_core, app_verify_join_acceptance_core, app_verify_plan_identity_core,
@@ -82,8 +83,7 @@ use shieldd_sdk_transaction::{
 };
 use shieldd_sdk_txhash::TransactionContext;
 use tendermint::abci::{self, Event};
-use tendermint::v0_37::abci::{request, response};
-use tendermint::{account, block, chain, AppHash, Hash, Time};
+use tendermint::Time;
 use tracing::{instrument, Instrument};
 
 use crate::action_handler::transaction::{
@@ -101,15 +101,13 @@ use crate::stateless_cache::{
 };
 use crate::{metrics, ShielddHost};
 use sha2::Digest as _;
-#[cfg(feature = "benchmark-helpers")]
-use shieldd_sdk_ibc::benchmarking::{record_inbound_stage, InboundStage};
 
 pub mod state_key;
 
 /// The inter-block state being written to by the application.
 type InterBlockState = Arc<StateDelta<Snapshot>>;
 
-/// The maximum size of a CometBFT block payload (1MB)
+/// The default maximum batch payload size (1 MB)
 pub const MAX_BLOCK_TXS_PAYLOAD_BYTES: usize = 1024 * 1024;
 
 /// The maximum size of a single individual transaction (96KB).
@@ -127,9 +125,6 @@ pub const MAX_TRANSACTION_NULLIFIER_COUNT: usize = 256;
 /// The maximum number of proof-bound nullifiers in one block.
 pub const MAX_BLOCK_NULLIFIER_COUNT: usize =
     shieldd_sdk_sct::component::tree::MAX_NULLIFIERS_PER_BLOCK;
-
-/// The maximum size of the evidence portion of a block (30KB).
-pub const MAX_EVIDENCE_SIZE_BYTES: usize = 30 * 1024;
 
 fn extract_fee_funding_proof_item(
     fee_funding: &FeeFunding,
@@ -353,12 +348,8 @@ impl Default for PrepareBlockLocalState {
 #[derive(Clone, Debug)]
 #[cfg(any(test, feature = "benchmark-helpers"))]
 struct BenchBlockContext {
-    height: block::Height,
+    height: u64,
     time: Time,
-    chain_id: chain::Id,
-    proposer_address: account::Id,
-    next_validators_hash: Hash,
-    app_hash: AppHash,
 }
 
 #[derive(Clone)]
@@ -589,8 +580,6 @@ impl BlockSctAppendLog {
         state: &S,
         payloads: Vec<StatePayload>,
     ) -> Result<Vec<(shieldd_sdk_tct::Position, StatePayload)>> {
-        #[cfg(feature = "benchmark-helpers")]
-        let reserve_start = Instant::now();
         if payloads.is_empty() {
             return Ok(Vec::new());
         }
@@ -623,9 +612,6 @@ impl BlockSctAppendLog {
             positioned.push((position, payload));
         }
         self.next_offset += positioned.len() as u64;
-
-        #[cfg(feature = "benchmark-helpers")]
-        record_inbound_stage(InboundStage::DeferredSctReserve, reserve_start.elapsed());
 
         Ok(positioned)
     }
@@ -668,80 +654,35 @@ impl App {
     #[cfg(any(test, feature = "benchmark-helpers"))]
     async fn benchmark_block_context(&self) -> Result<BenchBlockContext> {
         let next_height = self.state.get_block_height().await?.saturating_add(1);
-        let height = block::Height::try_from(next_height)
-            .context("converting execution benchmark height")?;
-        let current_time = self.state.get_current_block_timestamp().await?;
-        let time = current_time
+        let time = self
+            .state
+            .get_current_block_timestamp()
+            .await?
             .checked_add(Duration::from_secs(1))
-            .unwrap_or(current_time);
-        let chain_id = chain::Id::try_from(self.state.get_chain_id().await?)
-            .context("parsing execution benchmark chain id")?;
-        let base_snapshot = self.committed_snapshot.clone();
-        let app_hash = AppHash::try_from(base_snapshot.root_hash().await?.0.to_vec())
-            .context("converting execution benchmark app hash")?;
-
+            .context("execution benchmark timestamp overflow")?;
         Ok(BenchBlockContext {
-            height,
+            height: next_height,
             time,
-            chain_id,
-            proposer_address: account::Id::new([0u8; 20]),
-            next_validators_hash: Hash::None,
-            app_hash,
         })
-    }
-
-    #[cfg(any(test, feature = "benchmark-helpers"))]
-    fn begin_block_request_from_context(context: &BenchBlockContext) -> request::BeginBlock {
-        request::BeginBlock {
-            hash: Hash::None,
-            header: block::Header {
-                version: block::header::Version { block: 11, app: 1 },
-                chain_id: context.chain_id.clone(),
-                height: context.height,
-                time: context.time,
-                last_block_id: None,
-                last_commit_hash: None,
-                data_hash: None,
-                validators_hash: context.next_validators_hash,
-                next_validators_hash: context.next_validators_hash,
-                consensus_hash: Hash::None,
-                app_hash: context.app_hash.clone(),
-                last_results_hash: None,
-                evidence_hash: None,
-                proposer_address: context.proposer_address,
-            },
-            last_commit_info: abci::types::CommitInfo {
-                round: 0u8.into(),
-                votes: Vec::new(),
-            },
-            byzantine_validators: Vec::new(),
-        }
     }
 
     #[cfg(any(test, feature = "benchmark-helpers"))]
     fn process_proposal_request_from_envelope(
         context: &BenchBlockContext,
         envelope: &CandidateEnvelope,
-    ) -> request::ProcessProposal {
+    ) -> BatchCandidate {
         let mut txs = envelope
             .txs
             .iter()
             .cloned()
             .map(Bytes::from)
             .collect::<Vec<_>>();
-        if let Some(bundle_tx_bytes) = &envelope.aggregate_bundle_tx_bytes {
-            txs.push(Bytes::from(bundle_tx_bytes.clone()));
+        if let Some(bundle) = &envelope.aggregate_bundle_tx_bytes {
+            txs.push(Bytes::from(bundle.clone()));
         }
-
-        request::ProcessProposal {
-            txs,
-            proposed_last_commit: None,
-            misbehavior: Vec::new(),
-            hash: Hash::None,
+        BatchCandidate {
             height: context.height,
-            time: context.time,
-            next_validators_hash: context.next_validators_hash,
-            proposer_address: context.proposer_address,
+            txs,
         }
     }
 
@@ -2201,13 +2142,13 @@ impl App {
         &mut self,
         envelope: &CandidateEnvelope,
         stateless_cache: Option<&StatelessCache>,
-    ) -> Result<response::ProcessProposal> {
+    ) -> Result<BatchVerdict> {
         let context = self.benchmark_block_context().await?;
         let proposal = Self::process_proposal_request_from_envelope(&context, envelope);
         let sidecar = ProposalArtifactSidecar::from_record(envelope.sidecar.clone());
 
         Ok(self
-            .process_proposal(proposal, stateless_cache, Some(&sidecar), false)
+            .validate_batch(proposal, stateless_cache, Some(&sidecar), false)
             .await)
     }
 
@@ -2218,7 +2159,10 @@ impl App {
         storage: Storage,
     ) -> Result<ExecutionBlockProfile> {
         let context = self.benchmark_block_context().await?;
-        let begin_block = Self::begin_block_request_from_context(&context);
+        let begin_block = cnidarium_component::BlockContext {
+            height: context.height,
+            time: context.time,
+        };
         let mut profile = ExecutionBlockProfile {
             block_tx_count: envelope.block_tx_count,
             ..Default::default()
@@ -2272,12 +2216,8 @@ impl App {
         }
         profile.deliver_txs_wall_ms = deliver_txs_start.elapsed().as_secs_f64() * 1000.0;
 
-        let end_block = request::EndBlock {
-            height: i64::try_from(context.height.value())
-                .context("converting execution benchmark end_block height")?,
-        };
         let end_block_start = Instant::now();
-        let _events = self.end_block(&end_block).await;
+        let _events = self.end_block(context.height).await;
         profile.end_block_ms = end_block_start.elapsed().as_secs_f64() * 1000.0;
 
         let commit_start = Instant::now();
@@ -2311,7 +2251,7 @@ impl App {
 
     #[cfg(any(test, feature = "benchmark-helpers"))]
     pub fn candidate_envelope_from_prepared_proposal_public(
-        prepared: &response::PrepareProposal,
+        prepared: &PreparedBatch,
         sidecar: &ProposalArtifactSidecar,
         source_builder_label: impl Into<String>,
     ) -> Result<CandidateEnvelope> {
@@ -2978,11 +2918,7 @@ impl App {
         self.checktx_shared_context = Some(context);
     }
 
-    pub(crate) fn set_aggregate_retry_cache(&mut self, cache: Option<CachedProposalAggregate>) {
-        self.aggregate_retry_cache = cache;
-    }
-
-    /// Override the proposer aggregate segment size. Production default is 128.
+    /// Override the proposer aggregate segment size. Production default is 200.
     pub fn set_proposal_segment_tx_count(&mut self, segment_tx_count: Option<usize>) {
         self.proposal_segment_tx_count = segment_tx_count;
     }
@@ -2997,10 +2933,6 @@ impl App {
             None if tx_count > 0 => vec![tx_count],
             None => Vec::new(),
         }
-    }
-
-    pub(crate) fn aggregate_retry_cache(&self) -> Option<CachedProposalAggregate> {
-        self.aggregate_retry_cache.clone()
     }
 
     /// Returns whether the application is ready to start.
@@ -3042,54 +2974,12 @@ impl App {
         events
     }
 
-    pub async fn init_chain(&mut self, app_state: &AppState) {
-        let mut state_tx = self
-            .state
-            .try_begin_transaction()
-            .expect("state Arc should not be referenced elsewhere");
-        match app_state {
-            AppState::Content(genesis) => {
-                crate::app_version::initialize_app_version(&mut state_tx);
-                state_tx.put_chain_id(genesis.chain_id.clone());
-                Sct::init_chain(&mut state_tx, Some(&genesis.sct_content)).await;
-                // Compliance assets and users are admitted before issuance so
-                // regulated genesis notes use their registered recovery capability.
-                Compliance::init_chain(&mut state_tx, Some(&genesis.compliance_content)).await;
-                ShieldedPool::init_chain(&mut state_tx, Some(&genesis.shielded_pool_content)).await;
-                Ibc::init_chain(&mut state_tx, Some(&genesis.ibc_content)).await;
-                FeeComponent::init_chain(&mut state_tx, Some(&genesis.fee_content)).await;
-
-                state_tx
-                    .finish_block()
-                    .await
-                    .expect("must be able to finish compact block");
-            }
-            AppState::Checkpoint(_) => {
-                Compliance::init_chain(&mut state_tx, None).await;
-                ShieldedPool::init_chain(&mut state_tx, None).await;
-                Ibc::init_chain(&mut state_tx, None).await;
-                FeeComponent::init_chain(&mut state_tx, None).await;
-            }
-        };
-
-        // Note that `init_chain` can not emit any events, and we do not want to
-        // work around this as it violates the design principle that events are changes
-        // to initial data.
-        //
-        // This means that indexers are responsible for parsing genesis data and bootstrapping
-        // their initial state before processing chronological events.
-        //
-        // See: https://github.com/mizufinance/shieldd/pull/4449#discussion_r1636868800
-
-        state_tx.apply();
-    }
-
-    pub async fn prepare_proposal(
+    pub async fn prepare_batch(
         &mut self,
-        mut proposal: request::PrepareProposal,
+        mut proposal: BatchPreparation,
         stateless_cache: Option<&StatelessCache>,
         allow_oversized_proposal: bool,
-    ) -> (response::PrepareProposal, Option<ProposalArtifactSidecar>) {
+    ) -> (PreparedBatch, Option<ProposalArtifactSidecar>) {
         let num_candidate_txs = proposal.txs.len();
         truncate_prepare_candidates(&mut proposal.txs);
         tracing::debug!(
@@ -3097,14 +2987,10 @@ impl App {
             num_candidate_txs
         );
 
-        // This is a node controlled parameter that is different from the homonymous
-        // mempool's `max_tx_bytes`. Comet will send us raw proposals that exceed this
-        // limit, presuming that a subset of those transactions will be shed.
-        // More context in https://github.com/cometbft/cometbft/blob/v0.37.5/spec/abci/abci%2B%2B_app_requirements.md
         let max_proposal_size_bytes = prepare_proposal_payload_limit(proposal.max_tx_bytes);
         let (included_txs, sidecar) = match self
             .prepare_proposal_batched(
-                proposal.height.value() as u64,
+                proposal.height,
                 proposal.txs,
                 max_proposal_size_bytes,
                 stateless_cache,
@@ -3119,72 +3005,44 @@ impl App {
             }
         };
 
-        // The evidence payload is validated by Comet, we can lean on three guarantees:
-        // 1. The total payload is bound by `MAX_EVIDENCE_SIZE_BYTES`
-        // 2. Expired evidence is filtered
-        // 3. Evidence is valid.
         tracing::debug!(
             "finished processing PrepareProposal, including {}/{} candidate transactions",
             included_txs.len(),
             num_candidate_txs
         );
 
-        (response::PrepareProposal { txs: included_txs }, sidecar)
+        (PreparedBatch { txs: included_txs }, sidecar)
     }
 
     #[instrument(skip_all, ret, level = "debug")]
-    pub async fn process_proposal(
+    pub async fn validate_batch(
         &mut self,
-        proposal: request::ProcessProposal,
+        proposal: BatchCandidate,
         stateless_cache: Option<&StatelessCache>,
         synthetic_sidecar: Option<&ProposalArtifactSidecar>,
         allow_oversized_proposal: bool,
-    ) -> response::ProcessProposal {
-        tracing::debug!(
-            height = proposal.height.value(),
-            proposer = ?proposal.proposer_address,
-            proposal_hash = ?proposal.hash,
-            "processing proposal"
-        );
+    ) -> BatchVerdict {
+        tracing::debug!(height = proposal.height, "processing proposal");
 
-        let proposal_height = proposal.height.value();
-        let proposal_hash = proposal.hash.to_string();
+        let proposal_height = proposal.height;
         macro_rules! reject_process_proposal {
             ($reason:literal) => {{
                 tracing::warn!(
                     height = proposal_height,
-                    proposal_hash = %proposal_hash,
                     reason = $reason,
                     "process_proposal_reject_reason"
                 );
-                return response::ProcessProposal::Reject;
+                return BatchVerdict::Reject;
             }};
             ($reason:literal, $($field:tt)*) => {{
                 tracing::warn!(
                     height = proposal_height,
-                    proposal_hash = %proposal_hash,
                     reason = $reason,
                     $($field)*,
                     "process_proposal_reject_reason"
                 );
-                return response::ProcessProposal::Reject;
+                return BatchVerdict::Reject;
             }};
-        }
-
-        let mut evidence_buffer: Vec<u8> = Vec::with_capacity(MAX_EVIDENCE_SIZE_BYTES);
-        let mut bytes_tracker = 0usize;
-
-        for evidence in proposal.misbehavior {
-            evidence_buffer.clear();
-            let proto_evidence: tendermint_proto::v0_37::abci::Misbehavior = evidence.into();
-            let evidence_size = match proto_evidence.encode(&mut evidence_buffer) {
-                Ok(_) => evidence_buffer.len(),
-                Err(_) => reject_process_proposal!("misbehavior_encode_failed"),
-            };
-            bytes_tracker = bytes_tracker.saturating_add(evidence_size);
-            if bytes_tracker > MAX_EVIDENCE_SIZE_BYTES {
-                reject_process_proposal!("misbehavior_bytes_exceeded", bytes_tracker);
-            }
         }
 
         enum UserTxData {
@@ -3478,30 +3336,7 @@ impl App {
             }
         }
 
-        response::ProcessProposal::Accept
-    }
-
-    pub async fn begin_block(&mut self, begin_block: &request::BeginBlock) -> Vec<abci::Event> {
-        self.pending_sct_append_log.clear();
-        let mut state_tx = StateDelta::new(self.state.clone());
-
-        clear_block_fee_price_cache(&mut state_tx);
-
-        // Run each of the begin block handlers for each component, in sequence:
-        let mut arc_state_tx = Arc::new(state_tx);
-        Sct::begin_block(&mut arc_state_tx, begin_block).await;
-        ShieldedPool::begin_block(&mut arc_state_tx, begin_block).await;
-        Ibc::begin_block::<ShielddHost, StateDelta<Arc<StateDelta<cnidarium::Snapshot>>>>(
-            &mut arc_state_tx,
-            begin_block,
-        )
-        .await;
-        FeeComponent::begin_block(&mut arc_state_tx, begin_block).await;
-
-        let state_tx = Arc::try_unwrap(arc_state_tx)
-            .expect("components did not retain copies of shared state");
-
-        self.apply(state_tx)
+        BatchVerdict::Accept
     }
 
     /// Verify and execute one transaction, reusing byte-bound cached proof results.
@@ -4081,7 +3916,7 @@ impl App {
         let encoded = transactions_response.encode_to_vec();
 
         state_tx.nonverifiable_put_raw(
-            state_key::cometbft_data::transactions_by_height(height).into(),
+            state_key::block_data::transactions_by_height(height).into(),
             encoded,
         );
 
@@ -4094,8 +3929,6 @@ impl App {
             + shieldd_sdk_sct::component::tree::SctManager
             + shieldd_sdk_shielded_pool::component::NoteManager,
     {
-        #[cfg(feature = "benchmark-helpers")]
-        let materialize_start = Instant::now();
         let entries = self.pending_sct_append_log.take_entries();
         if entries.is_empty() {
             return Ok(());
@@ -4134,8 +3967,6 @@ impl App {
 
         state_tx.finalize_sct_block_forget(sct_entries).await?;
 
-        #[cfg(feature = "benchmark-helpers")]
-        let pending_payload_start = Instant::now();
         state_tx.object_put(
             shieldd_sdk_shielded_pool::state_key::pending_notes(),
             note_payloads,
@@ -4147,16 +3978,6 @@ impl App {
         state_tx.object_put(
             shieldd_sdk_shielded_pool::state_key::pending_volume_accumulator_payloads(),
             volume_accumulator_payloads,
-        );
-        #[cfg(feature = "benchmark-helpers")]
-        record_inbound_stage(
-            InboundStage::DeferredSctPendingPayload,
-            pending_payload_start.elapsed(),
-        );
-        #[cfg(feature = "benchmark-helpers")]
-        record_inbound_stage(
-            InboundStage::DeferredSctMaterialize,
-            materialize_start.elapsed(),
         );
 
         Ok(())
@@ -4179,7 +4000,7 @@ impl App {
             .transactions
             .append(&mut self.deferred_block_transactions);
         state_tx.nonverifiable_put_raw(
-            state_key::cometbft_data::transactions_by_height(height).into(),
+            state_key::block_data::transactions_by_height(height).into(),
             transactions_response.encode_to_vec(),
         );
         state_tx.apply();
@@ -4252,137 +4073,6 @@ impl App {
 
         Ok(events)
     }
-
-    #[tracing::instrument(skip_all, fields(height = %end_block.height))]
-    pub async fn end_block(&mut self, end_block: &request::EndBlock) -> Vec<abci::Event> {
-        self.flush_deferred_block_transactions()
-            .await
-            .expect("must be able to flush deferred block transactions in end_block");
-        let mut state_tx = StateDelta::new(self.state.clone());
-        self.materialize_pending_sct_append_log(&mut state_tx)
-            .await
-            .expect("must be able to materialize deferred SCT payloads in end_block");
-
-        tracing::debug!("running app components' `end_block` hooks");
-        let mut arc_state_tx = Arc::new(state_tx);
-        Sct::end_block(&mut arc_state_tx, end_block).await;
-        ShieldedPool::end_block(&mut arc_state_tx, end_block).await;
-        Ibc::end_block(&mut arc_state_tx, end_block).await;
-        FeeComponent::end_block(&mut arc_state_tx, end_block).await;
-        Compliance::end_block(&mut arc_state_tx, end_block).await;
-        let mut state_tx = Arc::try_unwrap(arc_state_tx)
-            .expect("components did not retain copies of shared state");
-        tracing::debug!("finished app components' `end_block` hooks");
-
-        let current_height = state_tx
-            .get_block_height()
-            .await
-            .expect("able to get block height in end_block");
-        let current_epoch = state_tx
-            .get_current_epoch()
-            .await
-            .expect("able to get current epoch in end_block");
-
-        let is_end_epoch = current_epoch.is_scheduled_epoch_end(
-            current_height,
-            state_tx
-                .get_epoch_duration_parameter()
-                .await
-                .expect("able to get epoch duration in end_block"),
-        ) || state_tx.is_epoch_ending_early().await;
-
-        if is_end_epoch {
-            tracing::info!(%is_end_epoch, ?current_height, "ending epoch");
-
-            let mut arc_state_tx = Arc::new(state_tx);
-
-            Sct::end_epoch(&mut arc_state_tx)
-                .await
-                .expect("able to call end_epoch on Sct component");
-            Ibc::end_epoch(&mut arc_state_tx)
-                .await
-                .expect("able to call end_epoch on IBC component");
-            ShieldedPool::end_epoch(&mut arc_state_tx)
-                .await
-                .expect("able to call end_epoch on shielded pool component");
-            FeeComponent::end_epoch(&mut arc_state_tx)
-                .await
-                .expect("able to call end_epoch on Fee component");
-
-            let mut state_tx = Arc::try_unwrap(arc_state_tx)
-                .expect("components did not retain copies of shared state");
-
-            state_tx
-                .finish_epoch()
-                .await
-                .expect("must be able to finish compact block");
-
-            // set the epoch for the next block
-            shieldd_sdk_sct::component::clock::EpochManager::put_epoch_by_height(
-                &mut state_tx,
-                current_height + 1,
-                Epoch {
-                    index: current_epoch.index + 1,
-                    start_height: current_height + 1,
-                },
-            );
-
-            self.apply(state_tx)
-        } else {
-            // set the epoch for the next block
-            shieldd_sdk_sct::component::clock::EpochManager::put_epoch_by_height(
-                &mut state_tx,
-                current_height + 1,
-                current_epoch,
-            );
-
-            state_tx
-                .finish_block()
-                .await
-                .expect("must be able to finish compact block");
-
-            self.apply(state_tx)
-        }
-    }
-
-    /// Commits the application state to persistent storage,
-    /// returning the new root hash and storage version.
-    ///
-    /// This method also resets `self` as if it were constructed
-    /// as an empty state over top of the newly written storage.
-    pub async fn commit(&mut self, storage: Storage) -> RootHash {
-        self.state
-            .ensure_nullifier_block_materialized()
-            .expect("cannot commit an open nullifier block");
-
-        self.flush_deferred_block_transactions()
-            .await
-            .expect("must be able to flush deferred block transactions before commit");
-
-        // We need to extract the State we've built up to commit it.  Fill in a dummy state.
-        let dummy_state = StateDelta::new(storage.latest_snapshot());
-        let state = Arc::try_unwrap(std::mem::replace(&mut self.state, Arc::new(dummy_state)))
-            .expect("we have exclusive ownership of the State at commit()");
-
-        // Commit the pending writes, clearing the state.
-
-        let jmt_root = storage
-            .commit(state)
-            .await
-            .expect("must be able to successfully commit to storage");
-
-        tracing::debug!(?jmt_root, "finished committing state");
-
-        // Get the latest version of the state, now that we've committed it.
-
-        let latest_snapshot = storage.latest_snapshot();
-        self.snapshot_version = latest_snapshot.version();
-        self.committed_snapshot = latest_snapshot.clone();
-        self.state = Arc::new(StateDelta::new(latest_snapshot));
-        self.pending_sct_append_log.clear();
-
-        jmt_root
-    }
 }
 
 #[async_trait]
@@ -4416,19 +4106,18 @@ pub trait StateReadExt: StateRead {
         }
     }
 
-    /// Gets the chain revision number, from the chain ID
+    /// Gets the chain revision number from the chain ID.
     async fn get_revision_number(&self) -> Result<u64> {
-        let cid_str = self.get_chain_id().await?;
-
-        Ok(ChainId::from_string(&cid_str).version())
+        let chain_id = self.get_chain_id().await?;
+        Ok(ibc_types::core::connection::ChainId::from_string(&chain_id).version())
     }
 
     /// Returns the set of app parameters
     async fn get_app_params(&self) -> Result<AppParameters> {
         let chain_id = self.get_chain_id().await?;
         let compliance_params = self.get_compliance_params().await?;
-        let ibc_params = self.get_ibc_params().await?;
         let fee_params = self.get_fee_params().await?;
+        let ibc_params = self.get_ibc_params().await?;
         let sct_params = self.get_sct_params().await?;
         let shielded_pool_params = self.get_shielded_pool_params().await?;
 
@@ -4448,7 +4137,7 @@ pub trait StateReadExt: StateRead {
     ) -> Result<TransactionsByHeightResponse> {
         let transactions = match self
             .nonverifiable_get_raw(
-                state_key::cometbft_data::transactions_by_height(block_height).as_bytes(),
+                state_key::block_data::transactions_by_height(block_height).as_bytes(),
             )
             .await?
         {
@@ -4468,7 +4157,6 @@ impl<
         T: StateRead
             + shieldd_sdk_fee::component::StateReadExt
             + shieldd_sdk_sct::component::clock::EpochRead
-            + shieldd_sdk_ibc::component::StateReadExt
             + ?Sized,
     > StateReadExt for T
 {
@@ -4481,10 +4169,7 @@ pub trait StateWriteExt: StateWrite {
         self.put_raw(state_key::data::chain_id().into(), chain_id.into_bytes());
     }
 
-    /// Stores the transactions that occurred during a CometBFT block.
-    /// This is used to create a durable transaction log for clients to retrieve;
-    /// the CometBFT `get_block_by_height` RPC call will only return data for blocks
-    /// since the last checkpoint, so we need to store the transactions separately.
+    /// Appends a transaction to the durable block log consumed by host queries.
     async fn put_block_transaction(
         &mut self,
         height: u64,
@@ -4499,7 +4184,7 @@ pub trait StateWriteExt: StateWrite {
             .collect();
 
         self.nonverifiable_put_raw(
-            state_key::cometbft_data::transactions_by_height(height).into(),
+            state_key::block_data::transactions_by_height(height).into(),
             transactions_response.encode_to_vec(),
         );
         Ok(())
@@ -4516,6 +4201,7 @@ mod tests {
     use std::ops::Deref;
     use std::sync::Arc;
 
+    use crate::test_support::{TestHost, TEST_CHAIN_ID};
     use anyhow::{anyhow, Context, Result};
     use ark_ff::Zero;
     use ark_serialize::CanonicalSerialize;
@@ -4540,7 +4226,6 @@ mod tests {
     use shieldd_sdk_fee::Fee;
     use shieldd_sdk_keys::{test_keys, Address};
     use shieldd_sdk_mock_client::MockClient;
-    use shieldd_sdk_mock_consensus::TestNode;
     use shieldd_sdk_num::Amount;
     #[cfg(feature = "orbis-dev-srs")]
     use shieldd_sdk_proof_aggregation::srs_id;
@@ -4569,10 +4254,9 @@ mod tests {
         Action, ActionPlan, Transaction, TransactionParameters, TransactionPlan,
     };
     use shieldd_sdk_txhash::AuthorizingData;
-    use tendermint::v0_37::abci::{request, response};
-    use tendermint::{account, block, Hash, Time};
+    use tendermint::Time;
 
-    use super::PrepareBlockLocalState;
+    use super::{BatchCandidate, BatchPreparation, BatchVerdict, PrepareBlockLocalState};
     use crate::action_handler::transaction::{
         prepare_candidate_read, prepare_candidate_read_blocking, supports_parallel_prepare,
         HistoricalCheckContext,
@@ -4583,7 +4267,6 @@ mod tests {
     use crate::app::ProposalArtifactSidecar;
     use crate::app::{candidate_digest_from_hashes, CandidateEnvelope};
     use crate::genesis::{AppState, Content};
-    use crate::server::consensus::{Consensus, ConsensusService};
     use crate::stateless_cache::{CacheEntry, StatelessCache, TxArtifact};
     use crate::SUBSTORE_PREFIXES;
 
@@ -4933,9 +4616,7 @@ mod tests {
         Ok(())
     }
 
-    async fn setup_test_txs(
-        tx_count: usize,
-    ) -> Result<(TempStorage, TestNode<ConsensusService>, Vec<Vec<u8>>)> {
+    async fn setup_test_txs(tx_count: usize) -> Result<(TempStorage, TestHost, Vec<Vec<u8>>)> {
         let storage = TempStorage::new_with_prefixes(SUBSTORE_PREFIXES.to_vec()).await?;
 
         let allocations: Vec<Allocation> = std::iter::repeat(Allocation {
@@ -4947,7 +4628,7 @@ mod tests {
         .collect();
 
         let app_state_bytes = serde_json::to_vec(&AppState::Content(Content {
-            chain_id: TestNode::<()>::CHAIN_ID.to_string(),
+            chain_id: TEST_CHAIN_ID.to_string(),
             shielded_pool_content: shieldd_sdk_shielded_pool::genesis::Content {
                 allocations,
                 ..Default::default()
@@ -4955,16 +4636,14 @@ mod tests {
             ..Default::default()
         }))?;
 
-        let consensus = Consensus::new(storage.as_ref().clone());
         let initial_time = tendermint::Time::parse_from_rfc3339("2026-01-01T00:00:00Z")?;
-        let mut test_node = TestNode::builder()
-            .single_validator()
-            .app_state(app_state_bytes)
-            .with_initial_timestamp(initial_time)
-            .init_chain(consensus)
-            .await?;
-
-        test_node.block().execute().await?;
+        let mut test_node = TestHost::new(
+            storage.as_ref().clone(),
+            serde_json::from_slice(&app_state_bytes)?,
+            initial_time,
+        )
+        .await?;
+        test_node.execute(Vec::new()).await?;
 
         let client = Arc::new(
             MockClient::new(test_keys::SPEND_KEY.clone())
@@ -5023,7 +4702,7 @@ mod tests {
                 )),
                 fee_funding: None,
                 transaction_parameters: TransactionParameters {
-                    chain_id: TestNode::<()>::CHAIN_ID.to_string(),
+                    chain_id: TEST_CHAIN_ID.to_string(),
                     ..Default::default()
                 },
                 nullifier_window: Some(test_nullifier_window()),
@@ -5043,7 +4722,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn regulated_genesis_note_transfers_through_consensus_and_compact_block() -> Result<()> {
+    async fn regulated_genesis_note_transfers_through_host_and_compact_block() -> Result<()> {
         let storage = TempStorage::new_with_prefixes(SUBSTORE_PREFIXES.to_vec()).await?;
         let authority_vk = rdsa::VerificationKey::from(test_keys::SPEND_KEY.spend_auth_key());
         let regulated_denom = "wregulated_usd";
@@ -5081,12 +4760,12 @@ mod tests {
         let genesis_leaf = make_leaf(test_keys::ADDRESS_0.deref().clone())?;
         let runtime_leaf = make_leaf(test_keys::ADDRESS_1.deref().clone())?;
         let app_state_bytes = serde_json::to_vec(&AppState::Content(Content {
-            chain_id: TestNode::<()>::CHAIN_ID.to_string(),
+            chain_id: TEST_CHAIN_ID.to_string(),
             compliance_content: shieldd_sdk_compliance::genesis::Content {
                 native_assets: vec![native_asset],
                 user_registrations: vec![GenesisUserRegistration {
                     capability_certificate: OrbisCapabilityCertificate::sign_for_test(
-                        TestNode::<()>::CHAIN_ID,
+                        TEST_CHAIN_ID,
                         &genesis_leaf,
                         &policy,
                         decaf377::Fr::from(1u64),
@@ -5113,16 +4792,13 @@ mod tests {
             ..Default::default()
         }))?;
 
-        let consensus = Consensus::new(storage.as_ref().clone());
-        let mut test_node = TestNode::builder()
-            .single_validator()
-            .app_state(app_state_bytes)
-            .with_initial_timestamp(tendermint::Time::parse_from_rfc3339(
-                "2026-01-01T00:00:00Z",
-            )?)
-            .init_chain(consensus)
-            .await?;
-        test_node.block().execute().await?;
+        let mut test_node = TestHost::new(
+            storage.as_ref().clone(),
+            serde_json::from_slice(&app_state_bytes)?,
+            tendermint::Time::parse_from_rfc3339("2026-01-01T00:00:00Z")?,
+        )
+        .await?;
+        test_node.execute(Vec::new()).await?;
 
         let mut client = MockClient::new(test_keys::SPEND_KEY.clone())
             .with_sync_to_storage(&storage)
@@ -5136,7 +4812,7 @@ mod tests {
         let registration = MsgRegisterUser {
             leaf: runtime_leaf.clone(),
             capability_certificate: Some(OrbisCapabilityCertificate::sign_for_test(
-                TestNode::<()>::CHAIN_ID,
+                TEST_CHAIN_ID,
                 &runtime_leaf,
                 &policy,
                 decaf377::Fr::from(1u64),
@@ -5153,16 +4829,14 @@ mod tests {
             memo: None,
             fee_funding: None,
             transaction_parameters: TransactionParameters {
-                chain_id: TestNode::<()>::CHAIN_ID.to_string(),
+                chain_id: TEST_CHAIN_ID.to_string(),
                 ..Default::default()
             },
             nullifier_window: None,
         };
         let registration_tx = client.witness_auth_build(&registration_plan).await?;
         test_node
-            .block()
-            .with_data(vec![registration_tx.encode_to_vec()])
-            .execute()
+            .execute(vec![registration_tx.encode_to_vec()])
             .await?;
         client.sync_to_latest(storage.latest_snapshot()).await?;
         let note = client
@@ -5235,7 +4909,7 @@ mod tests {
             )),
             fee_funding: Some(fee_funding_transfer),
             transaction_parameters: TransactionParameters {
-                chain_id: TestNode::<()>::CHAIN_ID.to_string(),
+                chain_id: TEST_CHAIN_ID.to_string(),
                 ..Default::default()
             },
             nullifier_window: Some(test_nullifier_window()),
@@ -5252,7 +4926,7 @@ mod tests {
             .deliver_tx_bytes(tx_bytes.as_slice(), Some(&cache))
             .await?;
 
-        test_node.block().execute().await?;
+        test_node.execute(Vec::new()).await?;
         let mut recheck_app = App::new(storage.latest_snapshot());
         recheck_app.set_block_tx_indexing_mode(BlockTxIndexingMode::NoIndex);
         recheck_app
@@ -5260,45 +4934,40 @@ mod tests {
             .await
             .context("regulated transfer must remain valid during next-block mempool recheck")?;
 
-        let proposal = request::PrepareProposal {
+        let proposal = BatchPreparation {
             txs: vec![tx_bytes.into()],
             max_tx_bytes: 1024 * 1024,
-            local_last_commit: None,
-            misbehavior: Vec::new(),
-            height: block::Height::from(4u32),
-            time: Time::unix_epoch(),
-            next_validators_hash: Hash::None,
-            proposer_address: account::Id::new([0u8; 20]),
+            height: 4,
         };
-        let prepared = test_node.prepare_proposal(proposal).await?;
+        let mut batch_app = App::new(storage.latest_snapshot());
+        let (prepared, sidecar) = batch_app.prepare_batch(proposal, Some(&cache), false).await;
         assert_eq!(
             prepared.txs.len(),
             2,
             "proposal must include the regulated transfer and aggregate bundle"
         );
-        let verdict = test_node
-            .process_proposal(request::ProcessProposal {
-                txs: prepared.txs.clone(),
-                proposed_last_commit: None,
-                misbehavior: Vec::new(),
-                hash: Hash::None,
-                height: block::Height::from(4u32),
-                time: Time::unix_epoch(),
-                next_validators_hash: Hash::None,
-                proposer_address: account::Id::new([0u8; 20]),
-            })
-            .await?;
-        assert!(matches!(verdict, response::ProcessProposal::Accept));
+        let mut validator = App::new(storage.latest_snapshot());
+        let verdict = validator
+            .validate_batch(
+                BatchCandidate {
+                    txs: prepared.txs.clone(),
+                    height: 4,
+                },
+                Some(&cache),
+                sidecar.as_ref(),
+                false,
+            )
+            .await;
+        assert!(matches!(verdict, BatchVerdict::Accept));
         test_node
-            .block()
-            .with_data(
+            .execute(
                 prepared
                     .txs
                     .into_iter()
+                    .take(1)
                     .map(|bytes| bytes.to_vec())
                     .collect(),
             )
-            .execute()
             .await?;
         client.sync_to_latest(storage.latest_snapshot()).await?;
         assert!(
@@ -6049,7 +5718,7 @@ mod tests {
             shieldd_sdk_sct::nullifier_tree::generation_state(Arc::as_ref(&app.state)).await?;
 
         let verdict = app.process_candidate_envelope(&envelope, None).await?;
-        assert!(matches!(verdict, response::ProcessProposal::Accept));
+        assert!(matches!(verdict, BatchVerdict::Accept));
         assert_eq!(app.state.pending_nullifiers().len(), 4);
         assert!(!app.state.nullifier_block_is_materialized());
         assert_eq!(
@@ -6296,7 +5965,7 @@ mod tests {
         let verdict = preflight_app
             .process_candidate_envelope(&envelope, None)
             .await?;
-        assert!(matches!(verdict, response::ProcessProposal::Accept));
+        assert!(matches!(verdict, BatchVerdict::Accept));
 
         let mut execution_only = envelope.clone();
         execution_only.tx_hashes.clear();
@@ -6496,9 +6165,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn app_readiness_accepts_empty_pregenesis_state() -> Result<()> {
+    async fn app_readiness_requires_initialized_state() -> Result<()> {
         let storage = TempStorage::new_with_prefixes(SUBSTORE_PREFIXES.to_vec()).await?;
-        assert!(App::is_ready(storage.latest_snapshot()).await);
+        assert!(!App::is_ready(storage.latest_snapshot()).await);
         Ok(())
     }
 
@@ -6506,6 +6175,11 @@ mod tests {
     async fn app_readiness_fails_on_corrupted_nullifier_tree_nv() -> Result<()> {
         let storage = TempStorage::new_with_prefixes(SUBSTORE_PREFIXES.to_vec()).await?;
         let mut state = StateDelta::new(storage.latest_snapshot());
+        <shieldd_sdk_compliance::Compliance as cnidarium_component::Component>::init_chain(
+            &mut state,
+            Some(&Default::default()),
+        )
+        .await;
         shieldd_sdk_sct::nullifier_tree::insert_batch(&mut state, [Nullifier(Fq::from(91u64))])
             .await?;
         storage.commit(state).await?;
@@ -6538,6 +6212,11 @@ mod tests {
     async fn app_readiness_fails_on_corrupted_sct_nv() -> Result<()> {
         let storage = TempStorage::new_with_prefixes(SUBSTORE_PREFIXES.to_vec()).await?;
         let mut state = StateDelta::new(storage.latest_snapshot());
+        <shieldd_sdk_compliance::Compliance as cnidarium_component::Component>::init_chain(
+            &mut state,
+            Some(&Default::default()),
+        )
+        .await;
         shieldd_sdk_sct::nullifier_tree::initialize(&mut state).await?;
         state.put_sct_params(SctParameters {
             epoch_duration: 10,
@@ -6580,6 +6259,11 @@ mod tests {
     async fn app_readiness_fails_on_corrupted_compliance_nv() -> Result<()> {
         let storage = TempStorage::new_with_prefixes(SUBSTORE_PREFIXES.to_vec()).await?;
         let mut state = StateDelta::new(storage.latest_snapshot());
+        <shieldd_sdk_compliance::Compliance as cnidarium_component::Component>::init_chain(
+            &mut state,
+            Some(&Default::default()),
+        )
+        .await;
         shieldd_sdk_sct::nullifier_tree::initialize(&mut state).await?;
         state
             .test_only_add_compliance_leaf(ComplianceLeaf::registered_for_test(
@@ -6720,7 +6404,7 @@ mod tests {
             .map(|tx| hex::encode(sha2::Sha256::digest(tx.as_slice())))
             .collect::<Vec<_>>();
 
-        node.block().with_data(txs).execute().await?;
+        node.execute(txs).await?;
 
         let snapshot = storage.latest_snapshot();
         let height = snapshot.get_block_height().await?;
@@ -6773,20 +6457,13 @@ mod tests {
 
         let mut proposer = App::new(storage.latest_snapshot());
         proposer.set_block_tx_indexing_mode(BlockTxIndexingMode::DeferredBatch);
-        let proposal = request::PrepareProposal {
+        let proposal = BatchPreparation {
             txs: vec![tx_bytes.clone().into()],
             max_tx_bytes: 1024 * 1024,
-            local_last_commit: None,
-            misbehavior: Vec::new(),
-            height: block::Height::from(1u32),
-            time: Time::unix_epoch(),
-            next_validators_hash: Hash::None,
-            proposer_address: account::Id::new([0u8; 20]),
+            height: 1,
         };
 
-        let (prepared, _) = proposer
-            .prepare_proposal(proposal, Some(&cache), false)
-            .await;
+        let (prepared, _) = proposer.prepare_batch(proposal, Some(&cache), false).await;
         assert_eq!(
             prepared.txs.len(),
             2,
@@ -6825,20 +6502,13 @@ mod tests {
 
         let mut proposer = App::new(storage.latest_snapshot());
         proposer.set_block_tx_indexing_mode(BlockTxIndexingMode::DeferredBatch);
-        let proposal = request::PrepareProposal {
+        let proposal = BatchPreparation {
             txs: vec![tx_bytes.clone().into()],
             max_tx_bytes: 1024 * 1024,
-            local_last_commit: None,
-            misbehavior: Vec::new(),
-            height: block::Height::from(1u32),
-            time: Time::unix_epoch(),
-            next_validators_hash: Hash::None,
-            proposer_address: account::Id::new([0u8; 20]),
+            height: 1,
         };
 
-        let (prepared, _) = proposer
-            .prepare_proposal(proposal, Some(&cache), false)
-            .await;
+        let (prepared, _) = proposer.prepare_batch(proposal, Some(&cache), false).await;
         assert_eq!(
             prepared.txs.len(),
             2,
@@ -6874,25 +6544,18 @@ mod tests {
             _ => anyhow::bail!("CheckTx must cache the verified transaction"),
         };
         assert!(cached.has_matching_historical_validation(storage.latest_snapshot().version()));
-        node.block().execute().await?;
+        node.execute(Vec::new()).await?;
         assert!(!cached.has_matching_historical_validation(storage.latest_snapshot().version()));
 
         let mut proposer = App::new(storage.latest_snapshot());
         proposer.set_block_tx_indexing_mode(BlockTxIndexingMode::DeferredBatch);
-        let proposal = request::PrepareProposal {
+        let proposal = BatchPreparation {
             txs: vec![tx_bytes.into()],
             max_tx_bytes: 1024 * 1024,
-            local_last_commit: None,
-            misbehavior: Vec::new(),
-            height: block::Height::from(2u32),
-            time: Time::unix_epoch(),
-            next_validators_hash: Hash::None,
-            proposer_address: account::Id::new([0u8; 20]),
+            height: 2,
         };
 
-        let (prepared, _) = proposer
-            .prepare_proposal(proposal, Some(&cache), false)
-            .await;
+        let (prepared, _) = proposer.prepare_batch(proposal, Some(&cache), false).await;
         assert_eq!(
             prepared.txs.len(),
             2,

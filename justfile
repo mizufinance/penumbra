@@ -1,15 +1,12 @@
+set export
+export CARGO_BUILD_JOBS := "2"
+export RAYON_NUM_THREADS := "2"
+export GOMAXPROCS := "2"
+export GOFLAGS := "-p=2"
+
 # Prints the list of recipes.
 default:
     @just --list
-
-# Run a local development network with metrics and PostgreSQL event storage.
-dev:
-    ./deployments/scripts/check-nix-shell && \
-        SHIELDD_PD_INTEGRATION_DEV_SRS=1 ./deployments/scripts/run-local-devnet.sh \
-        --keep-project \
-        --config ./deployments/compose/process-compose-postgres.yml \
-        --config ./deployments/compose/process-compose-metrics.yml \
-        --config ./deployments/compose/process-compose-dev-tooling.yml
 
 # Formats the rust files in the project.
 fmt:
@@ -115,7 +112,7 @@ snarkpack-challenge-boundaries:
 
 # Run bounded SnarkPack fuzz harness smoke tests.
 snarkpack-fuzz-smoke:
-    bash -lc 'set -euo pipefail; unset ROCKSDB_LIB_DIR ROCKSDB_INCLUDE_DIR; toolchain="${SNARKPACK_FUZZ_TOOLCHAIN:-nightly-2025-09-30}"; export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" RUSTUP_TOOLCHAIN="$toolchain"; runs="${SNARKPACK_FUZZ_RUNS:-16}"; fuzz_dir="crates/crypto/proof-aggregation-fuzz"; tmp="$(mktemp -d)"; trap "rm -rf \"$tmp\"" EXIT; cargo fuzz build --fuzz-dir "$fuzz_dir"; for target in wrapper_inner_range preflight_aggregate_verify deserialize_aggregate_proof; do mkdir -p "$tmp/$target"; cp "$fuzz_dir"/corpus/"$target"/* "$tmp/$target"/; cargo fuzz run --fuzz-dir "$fuzz_dir" "$target" "$tmp/$target" -- -runs="$runs"; done'
+    bash -lc 'set -euo pipefail; unset ROCKSDB_LIB_DIR ROCKSDB_INCLUDE_DIR; toolchain="${SNARKPACK_FUZZ_TOOLCHAIN:-nightly-2025-09-30}"; export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" RUSTUP_TOOLCHAIN="$toolchain"; runs="${SNARKPACK_FUZZ_RUNS:-16}"; fuzz_dir="crates/crypto/proof-aggregation-fuzz"; tmp="$(mktemp -d)"; trap "rm -rf \"$tmp\"" EXIT; cargo fuzz build --fuzz-dir "$fuzz_dir"; for target in deserialize_aggregate_proof; do mkdir -p "$tmp/$target"; cp "$fuzz_dir"/corpus/"$target"/* "$tmp/$target"/; cargo fuzz run --fuzz-dir "$fuzz_dir" "$target" "$tmp/$target" -- -runs="$runs"; done'
 
 # Check durable SnarkPack runtime invariants.
 snarkpack-invariants:
@@ -138,11 +135,12 @@ ci-check:
 
 # CI wrapper for `test`.
 ci-test:
+    python3 scripts/stage_artifacts.py provers --profile ci
     if command -v cargo-nextest >/dev/null 2>&1; then \
-      cargo nextest run --cargo-profile ci --no-fail-fast; \
+      SHIELDD_ARTIFACT_ROOT="$PWD/target/shieldd" cargo nextest run --cargo-profile ci --no-fail-fast -j 2; \
     else \
       echo "warning: cargo-nextest not found; falling back to 'cargo test --release --no-fail-fast'"; \
-      cargo test --release --no-fail-fast; \
+      SHIELDD_ARTIFACT_ROOT="$PWD/target/shieldd" cargo test --release --no-fail-fast -- --test-threads=2; \
     fi
 
 # CI wrapper for `go-check`.
@@ -179,15 +177,6 @@ ci-preflight:
     just ci-test
     just ci-go-check
     just ci-gnark-proof-tests
-    if command -v nix >/dev/null 2>&1; then \
-      nix develop --command just smoke; \
-    else \
-      just smoke; \
-    fi
-
-# Bring up Shieldd infra for the Orbis compliance flow.
-shieldd-up:
-    ./scripts/shieldd-up.sh
 
 # Validate local dependencies for the Orbis integration flow.
 orbis-integration-preflight:
@@ -197,23 +186,16 @@ orbis-integration-preflight:
 orbis-integration-preflight-binaries:
     ./scripts/orbis-integration-preflight.sh --require-binaries
 
-# Validate binaries and local ports before bringing up the stack.
-orbis-integration-preflight-bringup:
-    ./scripts/orbis-integration-preflight.sh --require-binaries --check-ports-free
-
 # Build the binaries required by the Orbis integration flow.
 orbis-integration-build:
     python3 scripts/proof_artifacts.py materialize --bundle runtime
-    cargo build --release -p pcli -p pclientd --features bundled-proving-keys
-    # Insecure deterministic SRS is confined to the local Orbis integration node.
-    cargo build --release -p pd --features orbis-dev-srs
+    cargo build --release -p pcli
     cargo build --release -p orbis-audit -p orbis-integration
 
-# Bring up Shieldd and Orbis for phased local debugging.
+# Bring up the Orbis stack for use with Bankd.
 orbis-integration-up:
     just orbis-integration-build
-    just orbis-integration-preflight-bringup
-    ./scripts/shieldd-up.sh
+    just orbis-integration-preflight-binaries
     ./scripts/orbis-stack.sh up
 
 # Create a ring and policy against an already running Orbis/Vera stack.
@@ -225,17 +207,10 @@ orbis-integration-setup-ring output_json:
 # Tear down the Orbis integration stack.
 orbis-integration-down:
     ./scripts/orbis-stack.sh down
-    ./scripts/shieldd-down.sh
 
 # Print Docker logs for the Orbis stack.
 orbis-integration-logs:
     ./scripts/orbis-stack.sh logs
-
-# Render livereload environment for editing the Protocol documentation.
-protocol-docs:
-    # Access local docs at http://127.0.0.1:3002
-    cd docs/protocol && \
-        mdbook serve -n 127.0.0.1 --port 3002
 
 # Generate code for Rust & Go from proto definitions.
 proto:
@@ -250,42 +225,21 @@ features-check:
 wasm-check:
     ./deployments/scripts/check-wasm-compat.sh
 
-# Run a local prometheus/grafana setup, to scrape a local node.
-metrics:
-    ./deployments/scripts/check-nix-shell && \
-        process-compose --no-server --config ./deployments/compose/process-compose-metrics.yml up --keep-tui
-
 # Rebuild Rust crate documentation
 rustdocs:
     ./deployments/scripts/rust-docs
 
 # Run rust unit tests, via cargo-nextest
 test:
-    cargo nextest run --release
+    python3 scripts/stage_artifacts.py provers
+    SHIELDD_ARTIFACT_ROOT="$PWD/target/shieldd" cargo nextest run --release -j 2
 
-# Run smoke test suite, via process-compose config.
-smoke:
-    ./deployments/scripts/check-nix-shell
-    ./deployments/scripts/smoke-test.sh
+# Stage relocatable artifacts for embedded hosts and proof tools.
+artifacts-native:
+    python3 scripts/stage_artifacts.py native
 
-# Run integration tests for pclientd. Assumes specific dev env is already running.
-integration-pclientd:
-    python3 scripts/proof_artifacts.py materialize --bundle runtime
-    cargo test --release --features bundled-proving-keys,sct-divergence-check --package pclientd --test network_integration -- \
-      --ignored --test-threads 1 --nocapture
+artifacts-provers:
+    python3 scripts/stage_artifacts.py provers
 
-# Run integration tests for pcli. Assumes specific dev env is already running.
-integration-pcli:
-    python3 scripts/proof_artifacts.py materialize --bundle runtime
-    cargo test --release --features bundled-proving-keys,sct-divergence-check --package pcli --test network_integration -- \
-      --ignored --test-threads 1 --nocapture
-    cargo test --release --features bundled-proving-keys,sct-divergence-check --package pcli --test compliance_network -- \
-      --ignored --test-threads 1 --nocapture
-
-# Run integration tests for pd. Assumes specific dev env is already running.
-integration-pd:
-    cargo test --release --package pd --test network_integration -- --ignored --test-threads 1 --nocapture
-
-# Build the container image locally
-container:
-    docker build -t ghcr.io/mizufinance/shieldd:local -f ./deployments/containerfiles/Dockerfile .
+artifacts-audit:
+    python3 scripts/stage_artifacts.py audit

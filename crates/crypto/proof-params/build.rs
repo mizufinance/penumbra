@@ -15,12 +15,10 @@ include!("src/gen/gnark/note_reshape_families_build.rs");
 include!("src/gen/gnark/shielded_ics20_withdrawal_families_build.rs");
 
 fn main() {
-    emit_transfer_family_rerun_hints().expect("emit transfer family rerun-if-changed hints");
-    emit_shielded_ics20_withdrawal_family_rerun_hints()
-        .expect("emit shielded ICS-20 withdrawal family rerun-if-changed hints");
-    emit_note_reshape_family_rerun_hints()
-        .expect("emit note reshape family rerun-if-changed hints");
-    emit_gnark_runtime_rerun_hints().expect("emit gnark runtime rerun-if-changed hints");
+    emit_family_rerun_hints().expect("emit proof-family rerun-if-changed hints");
+    if cfg!(feature = "bundled-proving-keys") {
+        emit_gnark_runtime_rerun_hints().expect("emit gnark runtime rerun-if-changed hints");
+    }
 
     let generated_roster = generated_deployed_family_roster();
     gnark_artifact_validation::validate_deployed_family_roster(&generated_roster)
@@ -174,57 +172,16 @@ fn emit_rerun_hints_recursive(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn emit_transfer_family_rerun_hints() -> anyhow::Result<()> {
-    let repo_root = repo_root()?;
-    for relative_path in [
-        "tools/gnark/transfer_families.json",
-        "tools/gnark/internal/generated/transfer_families_generated.go",
-        "crates/core/component/shielded-pool/src/transfer/generated.rs",
-        "crates/crypto/proof-params/src/gen/gnark/transfer_families_manifest.json",
-        "crates/crypto/proof-params/src/gen/gnark/transfer_families_build.rs",
-        "crates/crypto/proof-params/src/gen/gnark/transfer_registry.rs",
-        "crates/crypto/proof-aggregation/src/transfer_family_dispatch.rs",
-    ] {
-        println!(
-            "cargo:rerun-if-changed={}",
-            repo_root.join(relative_path).display()
-        );
-    }
-    Ok(())
-}
-
-fn emit_shielded_ics20_withdrawal_family_rerun_hints() -> anyhow::Result<()> {
-    let repo_root = repo_root()?;
-    for relative_path in [
-        "tools/gnark/shielded_ics20_withdrawal_families.json",
-        "tools/gnark/internal/generated/shielded_ics20_withdrawal_families_generated.go",
-        "crates/core/component/shielded-pool/src/shielded_ics20_withdrawal/generated.rs",
-        "crates/crypto/proof-params/src/gen/gnark/shielded_ics20_withdrawal_families_build.rs",
-        "crates/crypto/proof-params/src/gen/gnark/shielded_ics20_withdrawal_registry.rs",
-        "crates/crypto/proof-aggregation/src/bundle.rs",
-    ] {
-        println!(
-            "cargo:rerun-if-changed={}",
-            repo_root.join(relative_path).display()
-        );
-    }
-    Ok(())
-}
-
-fn emit_note_reshape_family_rerun_hints() -> anyhow::Result<()> {
-    let repo_root = repo_root()?;
-    for relative_path in [
-        "tools/gnark/note_reshape_families.json",
-        "tools/gnark/internal/generated/note_reshape_families_generated.go",
-        "crates/core/component/shielded-pool/src/note_reshape/generated.rs",
-        "crates/crypto/proof-params/src/gen/gnark/note_reshape_families_build.rs",
-        "crates/crypto/proof-params/src/gen/gnark/note_reshape_registry.rs",
-        "crates/crypto/proof-aggregation/src/backend.rs",
-    ] {
-        println!(
-            "cargo:rerun-if-changed={}",
-            repo_root.join(relative_path).display()
-        );
+fn emit_family_rerun_hints() -> anyhow::Result<()> {
+    let root = repo_root()?;
+    for family in ["transfer", "note_reshape", "shielded_ics20_withdrawal"] {
+        for relative in [
+            format!("tools/gnark/{family}_families.json"),
+            format!("crates/crypto/proof-params/src/gen/gnark/{family}_families_build.rs"),
+            format!("crates/crypto/proof-params/src/gen/gnark/{family}_registry.rs"),
+        ] {
+            println!("cargo:rerun-if-changed={}", root.join(relative).display());
+        }
     }
     Ok(())
 }
@@ -306,9 +263,9 @@ fn write_bundled_gnark_runtime_paths() -> anyhow::Result<()> {
         "pub const GNARK_TRANSFER_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n\
          pub const GNARK_NOTE_RESHAPE_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n\
          pub const GNARK_SHIELDED_ICS20_WITHDRAWAL_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n",
-        transfer_lib_path.display(),
-        note_reshape_lib_path.display(),
-        shielded_ics20_withdrawal_lib_path.display(),
+        transfer_lib_path.file_name().context("gnark library filename")?.to_string_lossy(),
+        note_reshape_lib_path.file_name().context("gnark library filename")?.to_string_lossy(),
+        shielded_ics20_withdrawal_lib_path.file_name().context("gnark library filename")?.to_string_lossy(),
     );
     std::fs::write(&include_path, include_body).context("write gnark runtime include file")?;
 

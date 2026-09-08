@@ -81,6 +81,8 @@ jobs:
     timeout-minutes: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 150 || 300 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
 
       - uses: ./.github/actions/setup-nix-rust
         with:
@@ -93,6 +95,9 @@ jobs:
           -- just ci-test
         env:
           CARGO_TERM_COLOR: always
+
+      - name: Check pre-change database and nested source compatibility
+        run: nix develop .#ci --command bash scripts/ci/check_state_compatibility.sh
 
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5

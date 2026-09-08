@@ -44,7 +44,6 @@ mod native {
 
     pub(crate) static NOTE_SEIZURE_FAMILY_CONFIG: GnarkFamilyConfig = GnarkFamilyConfig {
         family: "note_seizure",
-        lib_basename: "",
         bundled_library: None,
         env_artifact_dir: NOTE_SEIZURE_ENV_ARTIFACT_DIR,
         env_lib: NOTE_SEIZURE_ENV_LIB,
@@ -58,13 +57,28 @@ mod native {
 
     /// Offline note-seizure prover backed by the shared gnark prover daemon.
     pub struct GnarkNoteSeizureClient {
-        inner: GnarkClient,
+        config: &'static crate::gnark::transport::ResolvedGnarkConfig,
+        inner: std::sync::OnceLock<Result<GnarkClient, String>>,
+    }
+
+    static CONFIG: std::sync::LazyLock<
+        Result<crate::gnark::transport::ResolvedGnarkConfig, String>,
+    > = std::sync::LazyLock::new(|| {
+        NOTE_SEIZURE_FAMILY_CONFIG
+            .resolve()
+            .map_err(|e| e.to_string())
+    });
+
+    pub(crate) fn resolved_configuration(
+    ) -> Result<&'static crate::gnark::transport::ResolvedGnarkConfig> {
+        CONFIG.as_ref().map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     impl GnarkNoteSeizureClient {
-        pub fn from_env() -> Result<Self> {
+        pub fn new() -> Result<Self> {
             Ok(Self {
-                inner: GnarkClient::from_env(&NOTE_SEIZURE_FAMILY_CONFIG)?,
+                config: resolved_configuration()?,
+                inner: std::sync::OnceLock::new(),
             })
         }
 
@@ -73,20 +87,25 @@ mod native {
             public: &NoteSeizureProofPublic,
             private: &NoteSeizureProofPrivate,
         ) -> Result<NoteSeizureProof> {
+            let inner = self
+                .inner
+                .get_or_init(|| GnarkClient::load_external(self.config).map_err(|e| e.to_string()))
+                .as_ref()
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
             let witness_model = NoteSeizureWitness::from_public_private(public, private)?;
             let expected_hash = Fq::from_bytes_checked(&witness_model.claimed_statement_hash)
                 .map_err(|_| {
                     anyhow::anyhow!("note seizure witness statement hash is non-canonical")
                 })?;
             let witness = witness_model.encode()?;
-            let payload = self.inner.prove(&witness)?;
+            let payload = inner.prove(&witness)?;
             let (claimed_hash, proof) = translate_note_seizure_proof_result(&payload)?;
             if claimed_hash != expected_hash {
                 bail!(
                 "gnark note seizure proof returned wrong statement hash: expected {expected_hash}, got {claimed_hash}"
             );
             }
-            proof.verify_with_prepared_vk(public, &self.inner.verifying_key)?;
+            proof.verify_with_prepared_vk(public, &inner.verifying_key)?;
             Ok(proof)
         }
     }
@@ -181,7 +200,7 @@ mod tests {
             .expect("proof test prerequisites must be present");
 
         let (public, private) = proof_inputs();
-        let client = GnarkNoteSeizureClient::from_env().expect("start note seizure prover");
+        let client = GnarkNoteSeizureClient::new().expect("start note seizure prover");
         let proof = client
             .prove(&public, &private)
             .expect("prove and verify note seizure through the daemon transport");
@@ -197,3 +216,6 @@ mod tests {
             .expect_err("proof must not verify for a changed authorization statement");
     }
 }
+
+#[cfg(any(unix, windows))]
+pub(super) use native::resolved_configuration;

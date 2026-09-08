@@ -320,3 +320,26 @@ pub(crate) use note_reshape::GnarkNoteReshapeClient;
 
 #[cfg(any(unix, windows))]
 pub(crate) use shielded_ics20_withdrawal::GnarkShieldedIcs20WithdrawalClient;
+
+/// Explicitly selected proving capability; verification does not require one.
+#[cfg(any(unix, windows))]
+pub enum ProverCapability {
+    Transfer,
+    NoteReshape(crate::NoteReshapeFamilyId),
+    Withdrawal(crate::ShieldedIcs20WithdrawalFamilyId),
+    NoteSeizure,
+}
+
+/// Resolves process configuration once without loading keys or starting a prover.
+#[cfg(any(unix, windows))]
+pub fn initialize_prover(capability: ProverCapability) -> anyhow::Result<()> {
+    match capability {
+        ProverCapability::Transfer => transfer::resolved_configuration()?,
+        ProverCapability::NoteReshape(family) => note_reshape::resolved_configuration(family)?,
+        ProverCapability::Withdrawal(family) => {
+            shielded_ics20_withdrawal::resolved_configuration(family)?
+        }
+        ProverCapability::NoteSeizure => note_seizure::resolved_configuration()?,
+    };
+    Ok(())
+}

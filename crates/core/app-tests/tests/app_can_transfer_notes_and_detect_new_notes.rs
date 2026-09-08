@@ -1,24 +1,19 @@
 use {
-    self::common::BuilderExt,
     anyhow::anyhow,
     cnidarium::TempStorage,
     common::TempStorageExt as _,
     decaf377::Fr,
     rand_core::OsRng,
-    shieldd_sdk_app::{
-        genesis::{self, AppState},
-        server::consensus::Consensus,
-    },
+    shieldd_sdk_app::genesis::{self, AppState},
+    shieldd_sdk_app::test_support::{TestHost, TEST_CHAIN_ID},
     shieldd_sdk_asset::{Value, BASE_ASSET_ID},
     shieldd_sdk_keys::test_keys,
     shieldd_sdk_mock_client::MockClient,
-    shieldd_sdk_mock_consensus::TestNode,
     shieldd_sdk_num::Amount,
     shieldd_sdk_proto::DomainType,
     shieldd_sdk_sct::component::tree::SctRead as _,
     shieldd_sdk_shielded_pool::{ShieldedInputPlan, ShieldedOutputPlan},
     shieldd_sdk_transaction::{memo::MemoPlaintext, plan::MemoPlan, TransactionParameters},
-    tap::TapFallible,
 };
 
 mod common;
@@ -28,19 +23,17 @@ async fn app_can_transfer_notes_and_detect_new_notes() -> anyhow::Result<()> {
     let guard = common::set_tracing_subscriber();
     let storage = TempStorage::new_with_shieldd_prefixes().await?;
     let mut test_node = {
-        let app_state = AppState::Content(
-            genesis::Content::default().with_chain_id(TestNode::<()>::CHAIN_ID.to_string()),
-        );
-        let consensus = Consensus::new(storage.as_ref().clone());
-        TestNode::builder()
-            .single_validator()
-            .with_shieldd_auto_app_state(app_state)?
-            .init_chain(consensus)
-            .await
-            .tap_ok(|e| tracing::info!(hash = %e.last_app_hash_hex(), "finished init chain"))?
+        let app_state =
+            AppState::Content(genesis::Content::default().with_chain_id(TEST_CHAIN_ID.to_string()));
+        TestHost::new(
+            storage.as_ref().clone(),
+            app_state,
+            tendermint::Time::parse_from_rfc3339("2026-01-01T00:00:00Z")?,
+        )
+        .await?
     };
 
-    test_node.block().execute().await?;
+    test_node.execute(Vec::new()).await?;
 
     let mut client = MockClient::new(test_keys::SPEND_KEY.clone())
         .with_sync_to_storage(&storage)
@@ -98,7 +91,7 @@ async fn app_can_transfer_notes_and_detect_new_notes() -> anyhow::Result<()> {
         )),
         fee_funding: None,
         transaction_parameters: TransactionParameters {
-            chain_id: TestNode::<()>::CHAIN_ID.to_string(),
+            chain_id: TEST_CHAIN_ID.to_string(),
             ..Default::default()
         },
     };
@@ -109,11 +102,7 @@ async fn app_can_transfer_notes_and_detect_new_notes() -> anyhow::Result<()> {
     let tx = client.witness_auth_build(&plan).await?;
 
     let pre_tx_snapshot = storage.latest_snapshot();
-    test_node
-        .block()
-        .with_data(vec![tx.encode_to_vec()])
-        .execute()
-        .await?;
+    test_node.execute(vec![tx.encode_to_vec()]).await?;
     let post_tx_snapshot = storage.latest_snapshot();
 
     for nf in tx.spent_nullifiers() {

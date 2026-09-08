@@ -31,7 +31,7 @@ exports. Run it without a command for the current command list.
 ## Circuit export boundary
 
 Formal verification belongs to
-[`mizufinance/shieldd-formal`](https://github.com/mizufinance/shieldd-formal).
+[`mizufinance/shieldd-security`](https://github.com/mizufinance/shieldd-security).
 That repository pins a Shieldd commit and obtains deterministic circuit inputs
 with:
 

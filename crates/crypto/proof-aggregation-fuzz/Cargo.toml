@@ -12,30 +12,9 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
-ark-ff = { workspace = true }
-ark-groth16 = { workspace = true, default-features = false }
-ark-r1cs-std = { workspace = true }
-ark-relations = { workspace = true }
-ark-snark = { workspace = true }
-decaf377 = { workspace = true }
 libfuzzer-sys = "0.4"
 shieldd-sdk-proof-aggregation = { workspace = true, features = ["fuzzing"] }
-shieldd-sdk-proof-params = { workspace = true, default-features = false }
-rand_chacha = { workspace = true }
-
-[[bin]]
-name = "wrapper_inner_range"
-path = "fuzz_targets/wrapper_inner_range.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "preflight_aggregate_verify"
-path = "fuzz_targets/preflight_aggregate_verify.rs"
-test = false
-doc = false
-bench = false
+shieldd-sdk-proof-aggregation-reference = { path = "../proof-aggregation-reference" }
 
 [[bin]]
 name = "deserialize_aggregate_proof"

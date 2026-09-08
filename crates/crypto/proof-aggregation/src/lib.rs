@@ -7,6 +7,7 @@ mod aggregate_proof_wrapper;
 mod app_verifier;
 mod backend;
 mod bundle;
+mod canonical_encoding;
 mod padding;
 mod preflight;
 mod srs;
@@ -125,4 +126,24 @@ pub fn deserialize_aggregate_proof_for_fuzz(
         aggregate_proof_bytes,
     )
     .map(|_| ())
+}
+
+#[cfg(test)]
+mod decoder_corpus_tests {
+    #[test]
+    fn curated_inner_proofs_reach_successful_decoding() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../proof-aggregation-fuzz/corpus/deserialize_aggregate_proof");
+        for index in [0, 1, 2, 3, 7, 11, 15] {
+            let name = format!("valid-baseline-{index:02}");
+            let bytes = std::fs::read(directory.join(&name)).expect("committed corpus seed");
+            super::deserialize_aggregate_proof_for_fuzz(&bytes).expect(&name);
+            let mut trailing = bytes.clone();
+            trailing.push(0);
+            assert!(super::deserialize_aggregate_proof_for_fuzz(&trailing).is_err());
+            assert!(
+                super::deserialize_aggregate_proof_for_fuzz(&bytes[..bytes.len() - 1]).is_err()
+            );
+        }
+    }
 }

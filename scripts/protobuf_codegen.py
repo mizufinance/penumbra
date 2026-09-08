@@ -41,6 +41,15 @@ def identical(left, right):
     ) and all(identical(left / name, right / name) for name in comparison.common_dirs)
 
 
+def filter_rust_rpc(text, package):
+    """Retain only RPC implementations used by the Rust runtime and tools."""
+    pattern = r"^/// Generated (client|server) implementations\.\n.*?(?=^/// Generated (?:client|server) implementations\.\n|\Z)"
+    def retain(match):
+        allowed = MANIFEST[f"rust_rpc_{match[1]}s"]
+        return match[0] if package in allowed else ""
+    return re.sub(pattern, retain, text, flags=re.MULTILINE | re.DOTALL)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="compare without changing tracked files")
@@ -68,19 +77,19 @@ def main():
             if path.name.removesuffix(".rs").removesuffix(".serde") not in packages:
                 path.unlink()
             else:
-                path.write_text("\n".join(line.rstrip() for line in path.read_text().splitlines()) + "\n")
+                path.write_text("\n".join(line.rstrip() for line in filter_rust_rpc(path.read_text(), path.stem).splitlines()) + "\n")
         for package in packages:
             if not (rust / f"{package}.rs").is_file():
                 raise SystemExit(f"missing generated Rust package {package}")
         plugin = stage / "protoc-gen-go"
-        run("go", "build", "-mod=readonly", "-o", str(plugin), "google.golang.org/protobuf/cmd/protoc-gen-go", cwd=ROOT / "tools/proto-compiler")
+        run("go", "build", "-p", "2", "-mod=readonly", "-o", str(plugin), "google.golang.org/protobuf/cmd/protoc-gen-go", cwd=ROOT / "tools/proto-compiler")
         go_sources = sorted(name for name in closure if not name.startswith("google/protobuf/"))
         mappings = [f"--go_opt=M{name}=github.com/mizufinance/shieldd/proto/go/gen/{Path(name).parent.as_posix()}" for name in go_sources]
         mappings.extend(f"--go_opt=M{name}=google.golang.org/protobuf/types/{'descriptorpb' if Path(name).stem == 'descriptor' else 'known/' + Path(name).stem.replace('_', '') + 'pb'}" for name in sorted(closure) if name.startswith("google/protobuf/"))
         run("protoc", f"-I{inputs}", f"--plugin=protoc-gen-go={plugin}", f"--go_out={go}", "--go_opt=paths=source_relative", *mappings, *go_sources)
         for name in ("go.mod", "go.sum"):
             shutil.copyfile(ROOT / "proto/go" / name, go.parent / name)
-        run("go", "test", "-mod=readonly", "./...", cwd=go.parent)
+        run("go", "test", "-p", "2", "-mod=readonly", "./...", cwd=go.parent)
         outputs = [(rust, ROOT / "crates/proto/src/gen"), (vendor, ROOT / "proto/rust-vendored")]
         if not args.check:
             outputs.append((go, ROOT / "proto/go/gen"))

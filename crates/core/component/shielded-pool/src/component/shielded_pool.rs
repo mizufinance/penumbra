@@ -13,7 +13,6 @@ use shieldd_sdk_proto::StateWriteProto as _;
 use shieldd_sdk_sct::component::tree::{SctManager as _, SctRead as _, MAX_NULLIFIERS_PER_BLOCK};
 use shieldd_sdk_sct::CommitmentSource;
 use shieldd_sdk_sct::Nullifier;
-use tendermint::v0_37::abci;
 use tracing::instrument;
 
 use super::{AssetRegistry, NoteManager};
@@ -82,9 +81,9 @@ impl Component for ShieldedPool {
     #[instrument(name = "shielded_pool", skip(state, begin_block))]
     async fn begin_block<S: StateWrite + 'static>(
         state: &mut Arc<S>,
-        begin_block: &abci::request::BeginBlock,
+        begin_block: &cnidarium_component::BlockContext,
     ) {
-        let now = u64::try_from(begin_block.header.time.unix_timestamp())
+        let now = u64::try_from(begin_block.time.unix_timestamp())
             .expect("consensus timestamps must be after the Unix epoch");
         Arc::get_mut(state)
             .expect("the state should not be shared")
@@ -94,14 +93,7 @@ impl Component for ShieldedPool {
     }
 
     #[instrument(name = "shielded_pool", skip_all)]
-    async fn end_block<S: StateWrite + 'static>(
-        state: &mut Arc<S>,
-        end_block: &abci::request::EndBlock,
-    ) {
-        let height: u64 = end_block
-            .height
-            .try_into()
-            .expect("height should not be negative");
+    async fn end_block<S: StateWrite + 'static>(state: &mut Arc<S>, height: u64) {
         let state = Arc::get_mut(state).expect("the state should not be shared");
         let configured = state
             .get_shielded_pool_params()

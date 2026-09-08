@@ -43,3 +43,20 @@ fixed proof shape without promising issuer decryptability. See:
 - [compliance flow](docs/compliance/flow.md)
 - [technical reference](docs/compliance/reference.md)
 - [enforcement and seizure](docs/compliance/enforcement-and-seizure.md)
+
+## Integration surfaces
+
+`HostExecution` owns the genesis/block/commit/rollback lifecycle. Component hooks
+receive the host height and timestamp; execution is exposed through the C ABI. Batch preparation and validation remain library
+capabilities for host integration.
+
+`shieldd-sdk-view` scans host-supplied `WalletBlock` records, validates committed
+roots, and persists wallet state atomically. `StoragePlanningIo` plans against a
+fixed local height; hosts can implement `PlanningIo` for external reads. Issuer
+scanners receive canonical block identities and transactions through `ScannerSource`.
+`pcli` provides offline wallet initialization, addresses, custody and compliance-key
+tooling. Bankd owns live wallet queries and transaction submission.
+
+See [testing](docs/compliance/testing.md) for direct host tests and live workflow ownership.
+
+See [embedded artifacts](docs/embedded-artifacts.md) for builds and relocation.

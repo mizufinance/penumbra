@@ -6,7 +6,6 @@ use shieldd_sdk_compliance::{
     AuditEffect, AuditEffectRecord, AuditLogWrite as _, AuditSource, ComplianceRegistryRead as _,
     ComplianceRegistryWrite as _, UserAssetStatus, UserAssetStatusAction,
 };
-use shieldd_sdk_ibc::StateWriteExt as _;
 use shieldd_sdk_keys::Address;
 use shieldd_sdk_num::Amount;
 use shieldd_sdk_proto::execution_client::v1::{
@@ -19,13 +18,11 @@ use shieldd_sdk_shielded_pool::component::{
 };
 use shieldd_sdk_shielded_pool::{CapsuleReleaseRequest, HostWithdrawalDestination, NoteSeizure};
 use std::str::FromStr as _;
-use std::time::Instant;
 
 const HOST_ACTION_SOURCE_PREFIX: &str = "application/host_action/source";
 const HOST_DEPOSIT_DOMAIN: &[u8] = b"shieldd.host_deposit";
 const HOST_COMPLIANCE_ACTION_DOMAIN: &[u8] = b"shieldd.host_compliance_action";
 const HOST_NOTE_SEIZURE_DOMAIN: &[u8] = b"shieldd.host_note_seizure";
-const HOST_PROPOSER_ADDRESS: [u8; 20] = [0u8; 20];
 
 #[derive(Clone, Debug)]
 pub struct HostBlock {
@@ -264,7 +261,7 @@ impl HostExecution {
                     self.storage.latest_version() == u64::MAX,
                     "database already initialized"
                 );
-                self.app.init_host_chain(&genesis).await;
+                self.app.init_chain(&genesis).await;
                 self.phase = HostExecutionPhase::InitializedGenesis;
             }
             AppState::Checkpoint(expected_root_hash) => {
@@ -282,7 +279,7 @@ impl HostExecution {
                     actual_root_hash.0 == expected_root_hash,
                     "checkpoint genesis root hash does not match storage root"
                 );
-                self.app.init_host_chain(&genesis).await;
+                self.app.init_chain(&genesis).await;
                 self.phase = HostExecutionPhase::InitializedCheckpointGenesis;
             }
         }
@@ -321,43 +318,7 @@ impl HostExecution {
         })
     }
 
-    async fn begin_block_request(&self, block: HostBlock) -> Result<request::BeginBlock> {
-        ensure!(block.height > 0, "begin_block height must be positive");
-        let height = u64::try_from(block.height).context("converting host block height")?;
-        let height = block::Height::try_from(height).context("converting host block height")?;
-        let chain_id = chain::Id::try_from(self.app.state.get_chain_id().await?)
-            .context("parsing host chain id")?;
-        let root_hash = self.storage.latest_snapshot().root_hash().await?;
-        let app_hash =
-            AppHash::try_from(root_hash.0.to_vec()).context("converting host app hash")?;
-
-        Ok(request::BeginBlock {
-            hash: Hash::None,
-            header: block::Header {
-                version: block::header::Version { block: 11, app: 1 },
-                chain_id,
-                height,
-                time: block.time,
-                last_block_id: None,
-                last_commit_hash: None,
-                data_hash: None,
-                validators_hash: Hash::None,
-                next_validators_hash: Hash::None,
-                consensus_hash: Hash::None,
-                app_hash,
-                last_results_hash: None,
-                evidence_hash: None,
-                proposer_address: account::Id::new(HOST_PROPOSER_ADDRESS),
-            },
-            last_commit_info: abci::types::CommitInfo {
-                round: 0u8.into(),
-                votes: Vec::new(),
-            },
-            byzantine_validators: Vec::new(),
-        })
-    }
-
-    /// Starts a host block using an ABCI-shaped request with empty validator data.
+    /// Starts execution from host-supplied height and time.
     pub async fn begin_block(&mut self, block: HostBlock) -> Result<HostExecutionResponse> {
         ensure!(
             matches!(
@@ -368,8 +329,21 @@ impl HostExecution {
             self.phase
         );
 
-        let begin_block = self.begin_block_request(block).await?;
-        let events = self.app.begin_host_block(&begin_block).await;
+        ensure!(
+            self.storage.latest_version() != u64::MAX,
+            "host storage must be initialized before begin_block"
+        );
+        crate::app_version::check_app_version(&self.storage).await?;
+        ensure!(block.height > 0, "begin_block height must be positive");
+        ensure!(
+            block.time.unix_timestamp() >= 0,
+            "begin_block time must not precede the Unix epoch"
+        );
+        let begin_block = cnidarium_component::BlockContext {
+            height: u64::try_from(block.height).context("converting host block height")?,
+            time: block.time,
+        };
+        let events = self.app.begin_block(&begin_block).await;
         self.phase = HostExecutionPhase::InBlock;
         Ok(HostExecutionResponse { events })
     }
@@ -481,7 +455,12 @@ impl HostExecution {
             self.phase
         );
 
-        let events = self.app.end_host_block(&request::EndBlock { height }).await;
+        let height = u64::try_from(height).context("invalid end block height")?;
+        ensure!(
+            height == self.app.state.get_block_height().await?,
+            "end_block height differs from the open block"
+        );
+        let events = self.app.end_block(height).await;
         self.phase = HostExecutionPhase::EndedBlock;
         Ok(HostExecutionResponse { events })
     }
@@ -497,7 +476,7 @@ impl HostExecution {
             self.phase
         );
 
-        let root_hash = self.app.commit_host(self.storage.clone()).await;
+        let root_hash = self.app.commit(self.storage.clone()).await;
         self.phase = HostExecutionPhase::Idle;
         Ok(HostCommit {
             root_hash: root_hash.0.to_vec(),
@@ -526,194 +505,6 @@ impl HostExecution {
 }
 
 impl App {
-    /// Initializes the Shieldd execution state for a host-owned chain.
-    ///
-    /// Unlike `App::init_chain`, this skips IBC state.
-    async fn init_host_chain(&mut self, app_state: &AppState) {
-        let mut state_tx = self
-            .state
-            .try_begin_transaction()
-            .expect("state Arc should not be referenced elsewhere");
-        match app_state {
-            AppState::Content(genesis) => {
-                crate::app_version::initialize_app_version(&mut state_tx);
-                state_tx.put_chain_id(genesis.chain_id.clone());
-                Sct::init_chain(&mut state_tx, Some(&genesis.sct_content)).await;
-                ShieldedPool::init_chain(&mut state_tx, Some(&genesis.shielded_pool_content)).await;
-                state_tx.put_host_withdrawals_enabled(true);
-                FeeComponent::init_chain(&mut state_tx, Some(&genesis.fee_content)).await;
-                Compliance::init_chain(&mut state_tx, Some(&genesis.compliance_content)).await;
-                state_tx.put_ibc_params(genesis.ibc_content.ibc_params.clone());
-
-                state_tx
-                    .finish_block()
-                    .await
-                    .expect("must be able to finish compact block");
-            }
-            AppState::Checkpoint(_) => {
-                ShieldedPool::init_chain(&mut state_tx, None).await;
-                FeeComponent::init_chain(&mut state_tx, None).await;
-                Compliance::init_chain(&mut state_tx, None).await;
-            }
-        };
-
-        state_tx.apply();
-    }
-
-    /// Runs per-block hooks for execution components only.
-    ///
-    /// Unlike `App::begin_block`, this skips IBC hooks.
-    async fn begin_host_block(&mut self, begin_block: &request::BeginBlock) -> Vec<abci::Event> {
-        self.pending_sct_append_log.clear();
-        let mut state_tx = StateDelta::new(self.state.clone());
-
-        clear_block_fee_price_cache(&mut state_tx);
-
-        let mut arc_state_tx = Arc::new(state_tx);
-        Sct::begin_block(&mut arc_state_tx, begin_block).await;
-        ShieldedPool::begin_block(&mut arc_state_tx, begin_block).await;
-        FeeComponent::begin_block(&mut arc_state_tx, begin_block).await;
-
-        let state_tx = Arc::try_unwrap(arc_state_tx)
-            .expect("components did not retain copies of shared state");
-
-        self.apply(state_tx)
-    }
-
-    /// Flushes host transactions and closes execution-component block and epoch state.
-    ///
-    /// Unlike `App::end_block`, this skips IBC hooks.
-    async fn end_host_block(&mut self, end_block: &request::EndBlock) -> Vec<abci::Event> {
-        self.flush_deferred_block_transactions()
-            .await
-            .expect("must be able to flush deferred block transactions in end_block");
-        let mut state_tx = StateDelta::new(self.state.clone());
-        self.materialize_pending_sct_append_log(&mut state_tx)
-            .await
-            .expect("must be able to materialize deferred SCT payloads in end_block");
-
-        tracing::debug!("running host app components' `end_block` hooks");
-        let mut arc_state_tx = Arc::new(state_tx);
-        Sct::end_block(&mut arc_state_tx, end_block).await;
-        ShieldedPool::end_block(&mut arc_state_tx, end_block).await;
-        FeeComponent::end_block(&mut arc_state_tx, end_block).await;
-        Compliance::end_block(&mut arc_state_tx, end_block).await;
-        let mut state_tx = Arc::try_unwrap(arc_state_tx)
-            .expect("components did not retain copies of shared state");
-        tracing::debug!("finished host app components' `end_block` hooks");
-
-        let current_height = state_tx
-            .get_block_height()
-            .await
-            .expect("able to get block height in end_block");
-        let current_epoch = state_tx
-            .get_current_epoch()
-            .await
-            .expect("able to get current epoch in end_block");
-
-        let is_end_epoch = current_epoch.is_scheduled_epoch_end(
-            current_height,
-            state_tx
-                .get_epoch_duration_parameter()
-                .await
-                .expect("able to get epoch duration in end_block"),
-        ) || state_tx.is_epoch_ending_early().await;
-
-        if is_end_epoch {
-            tracing::info!(?current_height, "ending host epoch");
-
-            let mut arc_state_tx = Arc::new(state_tx);
-
-            Sct::end_epoch(&mut arc_state_tx)
-                .await
-                .expect("able to call end_epoch on Sct component");
-            ShieldedPool::end_epoch(&mut arc_state_tx)
-                .await
-                .expect("able to call end_epoch on shielded pool component");
-            FeeComponent::end_epoch(&mut arc_state_tx)
-                .await
-                .expect("able to call end_epoch on Fee component");
-
-            let mut state_tx = Arc::try_unwrap(arc_state_tx)
-                .expect("components did not retain copies of shared state");
-
-            state_tx
-                .finish_epoch()
-                .await
-                .expect("must be able to finish compact block");
-
-            shieldd_sdk_sct::component::clock::EpochManager::put_epoch_by_height(
-                &mut state_tx,
-                current_height + 1,
-                Epoch {
-                    index: current_epoch.index + 1,
-                    start_height: current_height + 1,
-                },
-            );
-
-            self.apply(state_tx)
-        } else {
-            shieldd_sdk_sct::component::clock::EpochManager::put_epoch_by_height(
-                &mut state_tx,
-                current_height + 1,
-                current_epoch,
-            );
-
-            state_tx
-                .finish_block()
-                .await
-                .expect("must be able to finish compact block");
-
-            self.apply(state_tx)
-        }
-    }
-
-    /// Persists host execution state and resets snapshots for the next host call.
-    ///
-    /// Unlike `App::commit`, this does not enforce chain halt or pre-upgrade exits.
-    async fn commit_host(&mut self, storage: Storage) -> RootHash {
-        self.state
-            .ensure_nullifier_block_materialized()
-            .expect("cannot commit an open nullifier block");
-        let commit_start = Instant::now();
-        let flush_start = Instant::now();
-        self.flush_deferred_block_transactions()
-            .await
-            .expect("must be able to flush deferred block transactions before commit");
-        let flush_ms = flush_start.elapsed().as_secs_f64() * 1000.0;
-        let dummy_state = StateDelta::new(storage.latest_snapshot());
-        let state = Arc::try_unwrap(std::mem::replace(&mut self.state, Arc::new(dummy_state)))
-            .expect("we have exclusive ownership of the State at commit()");
-
-        let halt_check_ms = 0.0;
-
-        let storage_commit_start = Instant::now();
-        let jmt_root = storage
-            .commit(state)
-            .await
-            .expect("must be able to successfully commit to storage");
-        let storage_commit_ms = storage_commit_start.elapsed().as_secs_f64() * 1000.0;
-
-        tracing::debug!(?jmt_root, "finished committing host state");
-
-        let snapshot_reset_start = Instant::now();
-        let latest_snapshot = storage.latest_snapshot();
-        self.committed_snapshot = latest_snapshot.clone();
-        self.state = Arc::new(StateDelta::new(latest_snapshot));
-        self.pending_sct_append_log.clear();
-        let snapshot_reset_ms = snapshot_reset_start.elapsed().as_secs_f64() * 1000.0;
-        let total_ms = commit_start.elapsed().as_secs_f64() * 1000.0;
-        tracing::info!(
-            commit_total_ms = total_ms,
-            commit_flush_deferred_ms = flush_ms,
-            commit_halt_check_ms = halt_check_ms,
-            commit_storage_commit_ms = storage_commit_ms,
-            commit_snapshot_reset_ms = snapshot_reset_ms,
-            "host_commit_phase_profile"
-        );
-        jmt_root
-    }
-
     pub async fn deposit(&mut self, deposit: DepositRequest) -> Result<HostDepositResult> {
         let mut state_tx = StateDelta::new(self.state.clone());
         let chain_id = state_tx.get_chain_id().await?;
@@ -1329,7 +1120,6 @@ mod tests {
     use shieldd_sdk_keys::test_keys;
     use shieldd_sdk_proto::execution_client::v1::{FreezeUserAsset, UnfreezeUserAsset};
     use shieldd_sdk_sct::component::tree::{SctManager as _, SctRead as _};
-    use shieldd_sdk_shielded_pool::component::StateReadExt as _;
     use shieldd_sdk_shielded_pool::gnark::GnarkNoteSeizureClient;
     use shieldd_sdk_shielded_pool::{
         CapsuleReleaseEvidence, CapsuleReleaseRequest, EvmCall,
@@ -1528,6 +1318,53 @@ mod tests {
         assert_eq!(withdrawal.amount, Amount::from(42u64));
         assert_eq!(current_status, UserAssetStatus::Seized);
         assert_eq!(freeze_generation, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn begin_block_rejects_pre_epoch_time_without_mutation() -> Result<()> {
+        let storage = temp_storage().await;
+        let mut host = HostExecution::new(storage.deref().clone());
+        host.init_genesis(host_genesis()).await?;
+        host.commit().await?;
+        let stored_version = storage.latest_version();
+        let mut block = host_block(1);
+        block.time = Time::from_unix_timestamp(-1, 0)?;
+        assert!(host.begin_block(block).await.is_err());
+        assert_eq!(host.phase(), HostExecutionPhase::Idle);
+        assert_eq!(host.app.state.get_block_height().await?, 0);
+        assert_eq!(storage.latest_version(), stored_version);
+        host.begin_block(host_block(1)).await?;
+        assert_eq!(host.phase(), HostExecutionPhase::InBlock);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn begin_block_rejects_incompatible_state_without_mutation() -> Result<()> {
+        use cnidarium::StateWrite;
+        use shieldd_sdk_proto::StateWriteProto;
+        for version in [None, Some(crate::APP_VERSION - 1)] {
+            let storage = temp_storage().await;
+            let mut host = HostExecution::new(storage.deref().clone());
+            host.init_genesis(host_genesis()).await?;
+            host.commit().await?;
+            drop(host);
+            let mut state = StateDelta::new(storage.latest_snapshot());
+            let key = crate::app::state_key::app_version::safeguard()
+                .as_bytes()
+                .to_vec();
+            match version {
+                Some(version) => state.nonverifiable_put_proto(key, version),
+                None => state.nonverifiable_delete(key),
+            }
+            storage.commit(state).await?;
+            let stored_version = storage.latest_version();
+            let mut host = HostExecution::new(storage.deref().clone());
+            assert!(host.begin_block(host_block(1)).await.is_err());
+            assert_eq!(host.phase(), HostExecutionPhase::Idle);
+            assert_eq!(host.app.state.get_block_height().await?, 0);
+            assert_eq!(storage.latest_version(), stored_version);
+        }
         Ok(())
     }
 
@@ -1735,7 +1572,7 @@ mod tests {
             state_commitment_proof,
             rnk,
         };
-        let proof = GnarkNoteSeizureClient::from_env()?.prove(&proof_public, &proof_private)?;
+        let proof = GnarkNoteSeizureClient::new()?.prove(&proof_public, &proof_private)?;
         let seizure = NoteSeizure {
             authorization: authorization.clone(),
             authority_signature: authority_sk.sign_deterministic(&authorization.signing_bytes()?),
@@ -1861,23 +1698,68 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_execution_begin_block_request_uses_state_chain_id_without_validators(
-    ) -> Result<()> {
+    async fn begin_block_before_genesis_rejects_without_mutation() -> Result<()> {
         let storage = temp_storage().await;
         let mut host = HostExecution::new(storage.deref().clone());
-
+        let error = host
+            .begin_block(host_block(1))
+            .await
+            .expect_err("virgin storage must reject begin block");
+        assert!(error.to_string().contains("initialized"), "{error:#}");
+        assert_eq!(host.phase, HostExecutionPhase::Idle);
+        assert_eq!(storage.latest_version(), u64::MAX);
         host.init_genesis(host_genesis()).await?;
         host.commit().await?;
+        host.begin_block(host_block(1)).await?;
+        Ok(())
+    }
 
-        let begin_block = host.begin_block_request(host_block(7)).await?;
+    #[tokio::test]
+    async fn host_commit_refreshes_snapshot_version() -> Result<()> {
+        let storage = temp_storage().await;
+        let mut host = HostExecution::new(storage.deref().clone());
+        host.init_genesis(host_genesis()).await?;
+        host.commit().await?;
+        assert_eq!(
+            host.app.snapshot_version,
+            storage.latest_snapshot().version()
+        );
+        host.begin_block(host_block(1)).await?;
+        host.end_block(1).await?;
+        host.commit().await?;
+        assert_eq!(
+            host.app.snapshot_version,
+            storage.latest_snapshot().version()
+        );
+        Ok(())
+    }
 
-        assert_eq!(begin_block.header.chain_id.as_str(), "bankd-local");
-        assert_eq!(begin_block.header.height.value(), 7);
-        assert_eq!(begin_block.header.validators_hash, Hash::None);
-        assert_eq!(begin_block.header.next_validators_hash, Hash::None);
-        assert!(begin_block.last_commit_info.votes.is_empty());
-        assert!(begin_block.byzantine_validators.is_empty());
+    #[tokio::test]
+    async fn host_end_block_rejects_mismatched_height_without_closing_block() -> Result<()> {
+        let storage = temp_storage().await;
+        let mut host = HostExecution::new(storage.deref().clone());
+        host.init_genesis(host_genesis()).await?;
+        host.commit().await?;
+        host.begin_block(host_block(1)).await?;
+        assert!(host.end_block(2).await.is_err());
+        assert_eq!(host.phase(), HostExecutionPhase::InBlock);
+        host.end_block(1).await?;
+        host.commit().await?;
+        Ok(())
+    }
 
+    #[tokio::test]
+    async fn host_execution_records_supplied_block_context() -> Result<()> {
+        let storage = temp_storage().await;
+        let mut host = HostExecution::new(storage.deref().clone());
+        host.init_genesis(host_genesis()).await?;
+        host.commit().await?;
+        let block = host_block(7);
+        let time = block.time;
+        host.begin_block(block).await?;
+        assert_eq!(host.app.state.get_block_height().await?, 7);
+        assert_eq!(host.app.state.get_block_timestamp(7).await?, time);
+        assert_eq!(host.app.state.get_chain_id().await?, "bankd-local");
         Ok(())
     }
 
@@ -2020,24 +1902,6 @@ mod tests {
             withdrawals[1].destination,
             HostWithdrawalDestination::Execution(_)
         ));
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn standalone_execution_rejects_host_withdrawals() -> Result<()> {
-        let storage = temp_storage().await;
-        let mut app = App::new(storage.latest_snapshot());
-        app.init_chain(&host_genesis()).await;
-
-        let error = host_withdrawal_action()
-            .check_historical(app.state.clone())
-            .await
-            .expect_err("standalone execution must reject host withdrawals");
-
-        assert!(error
-            .to_string()
-            .contains("shielded host withdrawals are not enabled"));
 
         Ok(())
     }

@@ -1,9 +1,8 @@
 # Shieldd deployments
 
-Run `just dev` for the process-compose development network and `just smoke`
-for the local smoke suite. Optional process-compose configurations add metrics,
-PostgreSQL event storage, and development tools.
-Local development and smoke tests use the insecure development aggregation SRS.
+Bankd owns consensus, localnet startup, and live deposit, transfer, withdrawal,
+registration, and audit smoke tests. Run those workflows from the Bankd repository.
+Shieldd tests its execution lifecycle and wallet projection with direct host fixtures.
 
 The [Orbis stack](orbis/README.md) uses Docker Compose v2.
-The [runtime image](containerfiles/Dockerfile) packages the supported services.
+Bankd packages the [embedded library and tools](../docs/embedded-artifacts.md).

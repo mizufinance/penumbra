@@ -8,14 +8,14 @@ license = {workspace = true}
 edition = {workspace = true}
 
 [features]
+benchmark-helpers = ["component", "shieldd-sdk-ibc/benchmark-helpers"]
 component = [
+    "shieldd-sdk-ibc/component",
     "cnidarium-component",
     "cnidarium",
     "shieldd-sdk-compliance/component",
     "shieldd-sdk-proto/cnidarium",
-    "shieldd-sdk-ibc/component",
     "shieldd-sdk-sct/component",
-    "tonic",
     "ibc-proto/server",
     "ibc-proto/transport",
 ]
@@ -29,10 +29,8 @@ parallel = [
     "decaf377-rdsa/parallel",
     "ark-groth16/parallel",
     "decaf377/parallel",
-    "tonic",
 ]
 docsrs = []
-benchmark-helpers = ["component", "shieldd-sdk-ibc/benchmark-helpers"]
 poc-orbis = ["shieldd-sdk-compliance/poc-orbis"]
 
 [dependencies]
@@ -83,7 +81,6 @@ sha2 = {workspace = true}
 tap = {workspace = true}
 tendermint = {workspace = true}
 thiserror = {workspace = true}
-tonic = {workspace = true, optional = true}
 tracing = {workspace = true}
 
 [dev-dependencies]

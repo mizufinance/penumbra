@@ -20,19 +20,8 @@
     flake-utils.lib.eachDefaultSystem
       (system:
         let
-          # Define versions of Shieldd and CometBFT
+          # Select the Shieldd source
           shielddRelease = null; # Use the local working copy
-          # To update the cometbft hash values, run:
-          # nix-prefetch-git --url https://github.com/cometbft/cometbft --rev <tag>
-          # and review the output.
-          cometBftRelease = {
-            version = "0.37.15";
-            # Set `sha256` to the value `hash` in the nix-prefetch-git output.
-            sha256 = "sha256-sX3hehsMNWWiQYbepMcdVoUAqz+lK4x76/ohjGb/J08=";
-            # Set `vendorHash` to "", run `nix build`, and review the hash.
-            vendorHash = "sha256-F6km3YpvfdpPeIJB1FwA5lQvPda11odny0EHPD8B6kw=";
-          };
-
           # Build grpcui from source, for Reflection v1 support.
           # https://github.com/fullstorydev/grpcui/issues/322
           # To update the grpcui hash values, run:
@@ -65,23 +54,13 @@
             cargo-nextest
             cargo-release
             cargo-watch
-            cometbft
             dbus
-            glibcLocales # for postgres initdb locale support
             go
-            grafana
             grpcui
             grpcurl
             just
             libusb1
-            mdbook
-            mdbook-katex
-            mdbook-linkcheck
-            mdbook-mermaid
             nix-prefetch-scripts
-            postgresql
-            process-compose
-            prometheus
             protobuf
             llvmPackages.lld
             rocksdb
@@ -140,27 +119,8 @@
               pkgs.stdenv.cc.cc
               pkgs.zstd
             ]}:''${LD_LIBRARY_PATH:-}
-            export RUST_LOG="info,network_integration=debug,pclientd=debug,pcli=info,pd=info,shieldd=info"
+            export RUST_LOG="info,network_integration=debug,pcli=info,shieldd=info"
           '';
-
-          # CometBFT
-          cometbft = (buildGoModule rec {
-            pname = "cometbft";
-            version = cometBftRelease.version;
-            subPackages = [ "cmd/cometbft" ];
-            src = fetchFromGitHub {
-              owner = "cometbft";
-              repo = "cometbft";
-              rev = "v${cometBftRelease.version}";
-              hash = cometBftRelease.sha256;
-            };
-            vendorHash = cometBftRelease.vendorHash;
-            meta = {
-              description = "CometBFT (fork of Tendermint Core): A distributed, Byzantine fault-tolerant, deterministic state machine replication engine";
-              homepage = "https://github.com/cometbft/cometbft";
-              license = licenses.asl20;
-            };
-          }).overrideAttrs (_: { doCheck = false; }); # Disable tests to improve build times
 
           # grpcui
           grpcui = (buildGoModule rec {
@@ -214,27 +174,22 @@
                   [ clang dbus openssl rocksdb sqlite ];
 
                 inherit system PKG_CONFIG_PATH LIBCLANG_PATH ROCKSDB_LIB_DIR;
-                cargoExtraArgs = "-p pd -p pcli -p pclientd";
+                cargoExtraArgs = "-p shieldd -p pcli";
                 meta = {
-                  description = "A fully private proof-of-stake network and decentralized exchange for the Cosmos ecosystem";
+                  description = "Host-integrated private execution and offline wallet tooling";
                   license = [ licenses.mit licenses.asl20 ];
                 };
               }).overrideAttrs (_: { doCheck = false; });
-            inherit cometbft;
           };
           apps = {
-            pd.type = "app";
-            pd.program = "${packages.shieldd}/bin/pd";
+            shieldd.type = "app";
+            shieldd.program = "${packages.shieldd}/bin/shieldd";
             pcli.type = "app";
             pcli.program = "${packages.shieldd}/bin/pcli";
-            pclientd.type = "app";
-            pclientd.program = "${packages.shieldd}/bin/pclientd";
-            cometbft.type = "app";
-            cometbft.program = "${cometbft}/bin/cometbft";
           };
           defaultPackage = symlinkJoin {
-            name = "shieldd-and-cometbft";
-            paths = [ packages.shieldd cometbft ];
+            name = "shieldd";
+            paths = [ packages.shieldd ];
           };
           devShells = {
             ci =

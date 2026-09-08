@@ -1,24 +1,9 @@
-use crate::{
-    config::{CustodyConfig, PcliConfig},
-    default_home,
-    terminal::ActualTerminal,
-    App, Command,
-};
+use crate::{config::PcliConfig, default_home, App, Command};
 use anyhow::Result;
 use camino::Utf8PathBuf;
 use clap::Parser;
-use shieldd_sdk_custody::{null_kms::NullKms, soft_kms::SoftKms};
-use shieldd_sdk_proto::box_grpc_svc;
-use shieldd_sdk_proto::{
-    custody::v1::{
-        custody_service_client::CustodyServiceClient, custody_service_server::CustodyServiceServer,
-    },
-    view::v1::{view_service_client::ViewServiceClient, view_service_server::ViewServiceServer},
-};
-use shieldd_sdk_view::ViewServer;
 use std::io::IsTerminal as _;
 use tracing_subscriber::EnvFilter;
-use url::Url;
 
 #[derive(Debug, Parser)]
 #[clap(name = "pcli", about = "The Shieldd command-line interface.", version)]
@@ -28,11 +13,6 @@ pub struct Opt {
     /// The home directory used to store configuration and data.
     #[clap(long, default_value_t = default_home(), env = "SHIELDD_PCLI_HOME")]
     pub home: Utf8PathBuf,
-    /// Override the GRPC URL that will be used to connect to a fullnode.
-    ///
-    /// By default, this URL is provided by pcli's config. See `pcli init` for more information.
-    #[clap(long, parse(try_from_str = Url::parse))]
-    pub grpc_url: Option<Url>,
 }
 
 impl Opt {
@@ -55,106 +35,12 @@ impl Opt {
 
     pub fn load_config(&self) -> Result<PcliConfig> {
         let path = self.home.join(crate::CONFIG_FILE_NAME);
-        let mut config = PcliConfig::load(path)?;
-        if let Some(grpc_url) = &self.grpc_url {
-            config.grpc_url = grpc_url.clone();
-        }
-        Ok(config)
+        PcliConfig::load(path)
     }
 
     pub async fn into_app(self) -> Result<(App, Command)> {
         let config = self.load_config()?;
-        let fvk = config.full_viewing_key.clone();
-
-        // Build the custody service...
-        let custody = match &config.custody {
-            CustodyConfig::ViewOnly => {
-                tracing::info!("using view-only custody service");
-                let null_kms = NullKms::default();
-                let custody_svc = CustodyServiceServer::new(null_kms);
-                CustodyServiceClient::new(box_grpc_svc::local(custody_svc))
-            }
-            CustodyConfig::SoftKms(config) => {
-                tracing::info!("using software KMS custody service");
-                let soft_kms = SoftKms::new(config.clone());
-                let custody_svc = CustodyServiceServer::new(soft_kms);
-                CustodyServiceClient::new(box_grpc_svc::local(custody_svc))
-            }
-            CustodyConfig::Threshold(config) => {
-                tracing::info!("using manual threshold custody service");
-                let threshold_kms = shieldd_sdk_custody::threshold::Threshold::new(
-                    config.clone(),
-                    ActualTerminal {
-                        fvk: Some(fvk.clone()),
-                    },
-                );
-                let custody_svc = CustodyServiceServer::new(threshold_kms);
-                CustodyServiceClient::new(box_grpc_svc::local(custody_svc))
-            }
-            CustodyConfig::Encrypted(config) => {
-                tracing::info!("using encrypted custody service");
-                let encrypted_kms = shieldd_sdk_custody::encrypted::Encrypted::new(
-                    config.clone(),
-                    ActualTerminal {
-                        fvk: Some(fvk.clone()),
-                    },
-                );
-                let custody_svc = CustodyServiceServer::new(encrypted_kms);
-                CustodyServiceClient::new(box_grpc_svc::local(custody_svc))
-            }
-            #[cfg(feature = "ledger")]
-            CustodyConfig::Ledger(config) => {
-                tracing::info!("using ledger custody service");
-                let service = shieldd_sdk_custody_ledger_usb::Service::new(config.clone());
-                let custody_svc = CustodyServiceServer::new(service);
-                CustodyServiceClient::new(box_grpc_svc::local(custody_svc))
-            }
-        };
-
-        // ...and the view service...
-        let view = match (self.cmd.offline(), &config.view_url) {
-            // In offline mode, don't construct a view service at all.
-            (true, _) => None,
-            (false, Some(view_url)) => {
-                // Use a remote view service.
-                tracing::info!(%view_url, "using remote view service");
-
-                let ep = tonic::transport::Endpoint::new(view_url.to_string())?;
-                Some(ViewServiceClient::new(box_grpc_svc::connect(ep).await?))
-            }
-            (false, None) => {
-                // Use an in-memory view service.
-                let path = self.home.join(crate::VIEW_FILE_NAME);
-                tracing::info!(%path, "using local view service");
-
-                let registry_path = self.home.join("registry.json");
-                // Check if the path exists or set it to none
-                let registry_path = if registry_path.exists() {
-                    Some(registry_path)
-                } else {
-                    None
-                };
-
-                let svc = ViewServer::load_or_initialize(
-                    Some(path),
-                    registry_path,
-                    &config.full_viewing_key,
-                    config.grpc_url.clone(),
-                )
-                .await?;
-
-                // Now build the view and custody clients, doing gRPC with ourselves
-                let svc = ViewServiceServer::new(svc);
-                Some(ViewServiceClient::new(box_grpc_svc::local(svc)))
-            }
-        };
-
-        let app = App {
-            view,
-            custody,
-            config,
-            save_transaction_here_instead: None,
-        };
+        let app = App { config };
         Ok((app, self.cmd))
     }
 }

@@ -16,7 +16,6 @@ parallel = [
     "ark-std/parallel",
     "ark-r1cs-std/parallel",
 ]
-bench-mimalloc = ["dep:mimalloc"]
 
 # --- Vanilla benchmarks ---
 
@@ -45,16 +44,10 @@ name = "nullifier_storage"
 path = "benches/state/nullifier_storage.rs"
 harness = false
 
-[[bench]]
-name = "ibc_throughput"
-path = "benches/ibc/ibc_throughput.rs"
-harness = false
-
 
 [dependencies]
 anyhow = {workspace = true}
 bytes = {workspace = true}
-camino = {workspace = true}
 clap = {workspace = true, features = ["derive"]}
 shieldd-sdk-bench-support = { path = "../bench-support" }
 ark-bls12-377 = { workspace = true }
@@ -67,56 +60,21 @@ ark-relations = {workspace = true}
 ark-serialize = {workspace = true}
 ark-snark = {workspace = true}
 ark-std = {workspace = true, default-features = false}
-bech32 = {workspace = true}
 cnidarium = {workspace = true, features = ["migration"], default-features = true}
-csv = "1"
 decaf377 = {workspace = true, features = ["r1cs"], default-features = true}
-decaf377-rdsa = {workspace = true}
-futures = {workspace = true}
-hex = {workspace = true}
-ibc-types = {workspace = true, features = ["with_serde"], default-features = false}
-ics23 = {workspace = true}
-num-bigint = {workspace = true}
-once_cell = {workspace = true}
-parking_lot = {workspace = true}
-pcli = {path = "../bin/pcli", default-features = true}
 shieldd-sdk-app = {workspace = true, features = ["benchmark-helpers"], default-features = true}
-shieldd-sdk-asset = {workspace = true, default-features = true}
-shieldd-sdk-compliance = {workspace = true, default-features = true, features = ["test-helpers"]}
-shieldd-sdk-custody = {workspace = true, default-features = true}
-shieldd-sdk-fee = {workspace = true, default-features = true}
-shieldd-sdk-ibc = {workspace = true, default-features = true}
-shieldd-sdk-keys = {workspace = true, default-features = true}
-shieldd-sdk-mock-client = {workspace = true}
-shieldd-sdk-mock-consensus = {workspace = true}
-shieldd-sdk-proto = {workspace = true, default-features = true, features = ["rpc"]}
 shieldd-sdk-proof-params = { workspace = true, default-features = true, features = ["bundled-proving-keys"] }
 shieldd-sdk-proof-aggregation = {workspace = true}
-shieldd-sdk-shielded-pool = {workspace = true, default-features = true, features = ["benchmark-helpers"]}
 shieldd-sdk-sct = {workspace = true, default-features = true}
-shieldd-sdk-tct = {workspace = true, default-features = true}
-shieldd-sdk-transaction = {workspace = true, default-features = true}
-shieldd-sdk-num = {workspace = true, default-features = true}
-shieldd-sdk-view = {workspace = true, default-features = true}
 rand = {workspace = true}
 rand_core = {workspace = true, features = ["getrandom"]}
-reqwest = {workspace = true}
 serde = {workspace = true, features = ["derive"]}
 serde_json = {workspace = true}
-serde_yaml = "0.9"
-sha2 = {workspace = true}
-tendermint = {workspace = true}
 tokio = {workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"]}
-tonic = {workspace = true, features = ["transport"]}
-tracing = {workspace = true}
-async-channel = "2"
-zstd = "0.13"
-mimalloc = { version = "0.1", optional = true }
 
 [dev-dependencies]
 anyhow = {workspace = true}
 criterion = {workspace = true, features = ["html_reports"]}
 decaf377-ka = {workspace = true}
-decaf377-rdsa = {workspace = true}
 rand_chacha = {workspace = true}
 tempfile = {workspace = true}

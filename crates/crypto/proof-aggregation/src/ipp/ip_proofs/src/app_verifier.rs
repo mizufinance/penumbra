@@ -809,26 +809,6 @@ fn app_verify_call_id_matches(left: AppVerifyCallId, right: AppVerifyCallId) -> 
         && app_verify_family_code_matches(left.family, right.family)
 }
 
-fn app_verify_find_unique_result(
-    expected_id: AppVerifyCallId,
-    results: &[AppVerifyCallResult],
-) -> Option<bool> {
-    let mut matched_acceptances = Vec::new();
-    let mut result_index = 0usize;
-    while result_index < results.len() {
-        let result = results[result_index];
-        if app_verify_call_id_matches(result.id, expected_id) {
-            matched_acceptances.push(result.accepted);
-        }
-        result_index += 1;
-    }
-    if matched_acceptances.len() == 1 {
-        Some(matched_acceptances[0])
-    } else {
-        None
-    }
-}
-
 #[doc(hidden)]
 pub fn app_verify_plan_identity_core(
     id: AppVerifyCallId,
@@ -944,27 +924,25 @@ pub fn app_verify_reduce_core(
         return Err(AppVerifyReductionError::OutcomeCountMismatch);
     }
 
-    let mut rejected_calls = Vec::new();
-    let mut position = 0usize;
-    let mut identities_match = true;
-    while position < expected_call_ids.len() && identities_match {
-        let expected_id = expected_call_ids[position];
-        match app_verify_find_unique_result(expected_id, &results) {
-            Some(accepted) => {
-                if !accepted {
-                    rejected_calls.push(expected_id);
-                }
-                position += 1;
-            }
-            None => {
-                identities_match = false;
-            }
+    let mut accepted = vec![None; expected_call_ids.len()];
+    for result in results {
+        let index = result.id.order_index;
+        let Some(expected) = expected_call_ids.get(index) else {
+            return Err(AppVerifyReductionError::OutcomeIdentityMismatch);
+        };
+        if *expected != result.id || accepted[index].replace(result.accepted).is_some() {
+            return Err(AppVerifyReductionError::OutcomeIdentityMismatch);
         }
     }
-    if !identities_match {
-        return Err(AppVerifyReductionError::OutcomeIdentityMismatch);
-    }
-    Ok(rejected_calls)
+    expected_call_ids
+        .into_iter()
+        .zip(accepted)
+        .filter_map(|(id, accepted)| match accepted {
+            Some(true) => None,
+            Some(false) => Some(Ok(id)),
+            None => Some(Err(AppVerifyReductionError::OutcomeIdentityMismatch)),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1747,5 +1725,35 @@ mod tests {
             ),
             Err(AppVerifyReductionError::OutcomeIdentityMismatch)
         );
+    }
+
+    #[test]
+    fn reduction_checks_full_identity_before_accepting_indexed_results() {
+        let expected = app_verify_plan_ids_core(vec![call(0, 0), call(1, 0)]);
+        for field in 0..4 {
+            let mut wrong = expected[1];
+            match field {
+                0 => wrong.order_index = usize::MAX,
+                1 => wrong.segment_index += 1,
+                2 => wrong.family_index += 1,
+                _ => wrong.family = family(99),
+            }
+            assert_eq!(
+                app_verify_reduce_core(
+                    expected.clone(),
+                    vec![
+                        AppVerifyCallResult {
+                            id: wrong,
+                            accepted: true
+                        },
+                        AppVerifyCallResult {
+                            id: expected[0],
+                            accepted: true
+                        },
+                    ]
+                ),
+                Err(AppVerifyReductionError::OutcomeIdentityMismatch)
+            );
+        }
     }
 }

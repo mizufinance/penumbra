@@ -22,7 +22,6 @@ shieldd-sdk-asset = { workspace = true, default-features = true }
 shieldd-sdk-compliance = { workspace = true, default-features = false, features = ["test-helpers"] }
 shieldd-sdk-keys = { workspace = true, default-features = true }
 shieldd-sdk-mock-client = { workspace = true }
-shieldd-sdk-mock-consensus = { workspace = true }
 shieldd-sdk-num = { workspace = true, default-features = true }
 shieldd-sdk-proto = { workspace = true, default-features = true, features = ["rpc"] }
 shieldd-sdk-proof-params = { workspace = true, default-features = true }

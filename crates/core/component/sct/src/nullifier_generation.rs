@@ -314,6 +314,13 @@ pub struct HistoricalNullifierProof {
     pub tail: Vec<GenerationNonmembershipProof>,
 }
 
+/// Structurally validated coverage; the chain window authenticates the terminal head.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HistoricalCoverage {
+    pub generation_count: u64,
+    pub terminal_head: [u8; 32],
+}
+
 impl DomainType for HistoricalNullifierProof {
     type Proto = pb::HistoricalNullifierProof;
 }
@@ -337,6 +344,25 @@ impl HistoricalNullifierProof {
             "historical tail count does not match the current window"
         );
 
+        let coverage = self.coverage()?;
+        ensure!(
+            coverage.terminal_head == window.archived_history_head,
+            "historical bundle does not end at the current history head"
+        );
+        Ok(())
+    }
+
+    pub fn coverage(&self) -> anyhow::Result<HistoricalCoverage> {
+        ensure!(
+            self.tail.len() < CHUNK_WIDTH as usize,
+            "historical tail must be shorter than a chunk"
+        );
+        let tail_start = u64::try_from(self.completed_chunks.len())?
+            .checked_mul(CHUNK_WIDTH)
+            .context("historical tail index overflow")?;
+        let generation_count = tail_start
+            .checked_add(u64::try_from(self.tail.len())?)
+            .context("historical generation count overflow")?;
         let mut expected_head = empty_history_head();
         for (index, chunk) in self.completed_chunks.iter().enumerate() {
             chunk.validate()?;
@@ -347,10 +373,6 @@ impl HistoricalNullifierProof {
             expected_head = chunk.end_history_head;
         }
 
-        let tail_start = expected
-            .completed_chunks
-            .checked_mul(CHUNK_WIDTH)
-            .context("historical tail index overflow")?;
         for (offset, proof) in self.tail.iter().enumerate() {
             proof.validate()?;
             let expected_generation = tail_start
@@ -368,11 +390,10 @@ impl HistoricalNullifierProof {
                 proof.generation_end_position,
             )?;
         }
-        ensure!(
-            expected_head == window.archived_history_head,
-            "historical bundle does not end at the current history head"
-        );
-        Ok(())
+        Ok(HistoricalCoverage {
+            generation_count,
+            terminal_head: expected_head,
+        })
     }
 }
 

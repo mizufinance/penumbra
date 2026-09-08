@@ -2,7 +2,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use shieldd_sdk_sct::nullifier_generation::{
     append_history, empty_history_head, ArchivedNullifierProof, GenerationNonmembershipProof,
-    HistoricalChunkProof, HistoricalNullifierProof, NullifierWindow, CHUNK_WIDTH, PROTOCOL_VERSION,
+    HistoricalChunkProof, HistoricalCoverage, HistoricalNullifierProof, NullifierWindow,
+    CHUNK_WIDTH, PROTOCOL_VERSION,
 };
 use shieldd_sdk_sct::Nullifier;
 
@@ -64,9 +65,6 @@ impl HistoricalProofCacheState {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HistoricalProofCache {
     pub protocol_version: u32,
-    pub nullifier: Nullifier,
-    pub covered_generation_count: u64,
-    pub terminal_history_head: [u8; 32],
     pub proof: HistoricalNullifierProof,
     pub state: HistoricalProofCacheState,
     pub last_error: Option<String>,
@@ -76,9 +74,6 @@ impl HistoricalProofCache {
     pub fn pending(nullifier: Nullifier) -> Self {
         Self {
             protocol_version: PROTOCOL_VERSION,
-            nullifier,
-            covered_generation_count: 0,
-            terminal_history_head: shieldd_sdk_sct::nullifier_generation::empty_history_head(),
             proof: HistoricalNullifierProof {
                 nullifier,
                 completed_chunks: Vec::new(),
@@ -98,43 +93,19 @@ impl HistoricalProofCache {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        self.validated_coverage().map(|_| ())
+    }
+
+    fn validated_coverage(&self) -> anyhow::Result<HistoricalCoverage> {
         anyhow::ensure!(
             self.protocol_version == PROTOCOL_VERSION,
             "unsupported historical proof cache version"
         );
         anyhow::ensure!(
-            self.proof.nullifier == self.nullifier,
-            "historical proof cache nullifier mismatch"
-        );
-        anyhow::ensure!(
-            self.proof.completed_chunks.len() as u64 == self.covered_generation_count / CHUNK_WIDTH,
-            "historical proof cache chunk count mismatch"
-        );
-        anyhow::ensure!(
-            self.proof.tail.len() as u64 == self.covered_generation_count % CHUNK_WIDTH,
-            "historical proof cache tail count mismatch"
-        );
-        anyhow::ensure!(
             self.last_error.as_ref().map_or(0, String::len) <= 1_024,
             "historical proof cache error exceeds 1024 bytes"
         );
-        if self.covered_generation_count == 0 {
-            anyhow::ensure!(
-                self.terminal_history_head
-                    == shieldd_sdk_sct::nullifier_generation::empty_history_head(),
-                "empty historical proof cache has a nonempty head"
-            );
-        } else {
-            let window = NullifierWindow {
-                protocol_version: self.protocol_version,
-                current_generation: self.covered_generation_count + 1,
-                recent_position_floor: 0,
-                archived_generation_count: self.covered_generation_count,
-                archived_history_head: self.terminal_history_head,
-            };
-            self.proof.validate_structure(window)?;
-        }
-        Ok(())
+        self.proof.coverage()
     }
 
     pub fn transition(&mut self, next: HistoricalProofCacheState) -> anyhow::Result<()> {
@@ -157,18 +128,23 @@ impl HistoricalProofCache {
 
     pub fn block_on_witness_source(&mut self, error: impl Into<String>) -> anyhow::Result<()> {
         self.transition(HistoricalProofCacheState::BlockedOnWitnessSource)?;
-        let mut error = error.into();
-        error.truncate(1_024);
-        self.last_error = Some(error);
+        self.set_error(error.into());
         Ok(())
     }
 
     pub fn block_on_prover(&mut self, error: impl Into<String>) -> anyhow::Result<()> {
         self.transition(HistoricalProofCacheState::BlockedOnProver)?;
-        let mut error = error.into();
-        error.truncate(1_024);
-        self.last_error = Some(error);
+        self.set_error(error.into());
         Ok(())
+    }
+
+    pub(crate) fn set_error(&mut self, mut error: String) {
+        let mut end = error.len().min(1_024);
+        while !error.is_char_boundary(end) {
+            end -= 1;
+        }
+        error.truncate(end);
+        self.last_error = Some(error);
     }
 
     pub fn append_generation(
@@ -180,28 +156,29 @@ impl HistoricalProofCache {
             self.state == HistoricalProofCacheState::Updating,
             "historical proof cache must be updating"
         );
+        let coverage = self.validated_coverage()?;
         generation.validate()?;
         anyhow::ensure!(
-            generation.generation_index == self.covered_generation_count,
+            generation.generation_index == coverage.generation_count,
             "historical generation proof is not the next missing generation"
         );
+        let next_count = coverage
+            .generation_count
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("historical generation count overflow"))?;
         let next_head = append_history(
-            self.terminal_history_head,
+            coverage.terminal_head,
             generation.generation_index,
             generation.generation_root,
             generation.generation_start_position,
             generation.generation_end_position,
         )?;
-        self.proof.tail.push(generation);
-        self.covered_generation_count += 1;
-        self.terminal_history_head = next_head;
-
-        if self.covered_generation_count % CHUNK_WIDTH == 0 {
+        if next_count % CHUNK_WIDTH == 0 {
             let chunk = closed_chunk
                 .ok_or_else(|| anyhow::anyhow!("completed history chunk proof is missing"))?;
             chunk.validate()?;
             anyhow::ensure!(
-                chunk.chunk_index + 1 == self.covered_generation_count / CHUNK_WIDTH,
+                chunk.chunk_index == coverage.generation_count / CHUNK_WIDTH,
                 "completed history chunk has the wrong index"
             );
             anyhow::ensure!(
@@ -215,14 +192,16 @@ impl HistoricalProofCache {
                 closed_chunk.is_none(),
                 "partial historical tail cannot carry a chunk proof"
             );
+            self.proof.tail.push(generation);
         }
-        self.validate()
+        Ok(())
     }
 
     pub fn mark_ready(&mut self, window: NullifierWindow) -> anyhow::Result<()> {
+        let coverage = self.validated_coverage()?;
         anyhow::ensure!(
-            self.covered_generation_count == window.archived_generation_count
-                && self.terminal_history_head == window.archived_history_head,
+            coverage.generation_count == window.archived_generation_count
+                && coverage.terminal_head == window.archived_history_head,
             "historical proof cache does not cover the current window"
         );
         if window.archived_generation_count > 0 {
@@ -238,13 +217,14 @@ impl HistoricalProofCache {
     }
 
     pub fn bundle_for(&self, window: NullifierWindow) -> anyhow::Result<HistoricalNullifierProof> {
+        let coverage = self.validated_coverage()?;
         anyhow::ensure!(
             self.state == HistoricalProofCacheState::Ready,
             "historical proof cache is not ready"
         );
         anyhow::ensure!(
-            self.covered_generation_count == window.archived_generation_count
-                && self.terminal_history_head == window.archived_history_head,
+            coverage.generation_count == window.archived_generation_count
+                && coverage.terminal_head == window.archived_history_head,
             "historical proof cache is stale"
         );
         self.proof.validate_structure(window)?;
@@ -323,12 +303,16 @@ pub async fn advance_historical_proof_cache(
             "cache and chain protocol versions differ"
         )));
     }
-    if cache.covered_generation_count > window.archived_generation_count {
+    let coverage = cache
+        .proof
+        .coverage()
+        .map_err(HistoricalProofUpdateError::Invalid)?;
+    if coverage.generation_count > window.archived_generation_count {
         return Err(HistoricalProofUpdateError::Invalid(anyhow::anyhow!(
             "cache coverage is ahead of the chain window"
         )));
     }
-    if cache.covered_generation_count == window.archived_generation_count {
+    if coverage.generation_count == window.archived_generation_count {
         if cache.state == HistoricalProofCacheState::Ready {
             if window.archived_generation_count > 0 {
                 cache
@@ -357,9 +341,9 @@ pub async fn advance_historical_proof_cache(
             .map_err(HistoricalProofUpdateError::Invalid)?;
     }
 
-    let generation_index = cache.covered_generation_count;
+    let generation_index = coverage.generation_count;
     let archived = witness_source
-        .nonmembership_proof(cache.nullifier, generation_index)
+        .nonmembership_proof(cache.proof.nullifier, generation_index)
         .await
         .map_err(HistoricalProofUpdateError::WitnessSource)?;
     if archived.generation_index != generation_index {
@@ -369,11 +353,11 @@ pub async fn advance_historical_proof_cache(
         )));
     }
     archived
-        .verify_for(cache.nullifier)
+        .verify_for(cache.proof.nullifier)
         .map_err(HistoricalProofUpdateError::WitnessSource)?;
 
     let next_head = append_history(
-        cache.terminal_history_head,
+        coverage.terminal_head,
         generation_index,
         archived.generation_root,
         archived.generation_start_position,
@@ -382,9 +366,9 @@ pub async fn advance_historical_proof_cache(
     .map_err(HistoricalProofUpdateError::WitnessSource)?;
     let generation = prover
         .prove_generation(
-            cache.nullifier,
+            cache.proof.nullifier,
             archived.clone(),
-            cache.terminal_history_head,
+            coverage.terminal_head,
             next_head,
         )
         .await
@@ -398,7 +382,7 @@ pub async fn advance_historical_proof_cache(
             "historical prover returned a proof for the wrong generation claim"
         )));
     }
-    let nullifier: [u8; 32] = cache.nullifier.into();
+    let nullifier: [u8; 32] = cache.proof.nullifier.into();
     historical::verify_generation(
         historical::generation_verification_key(),
         GenerationClaim {
@@ -408,7 +392,7 @@ pub async fn advance_historical_proof_cache(
             generation_root: generation.generation_root,
             generation_start_position: generation.generation_start_position,
             generation_end_position: generation.generation_end_position,
-            start_history_head: cache.terminal_history_head,
+            start_history_head: coverage.terminal_head,
             end_history_head: next_head,
         },
         &generation.groth16_proof,
@@ -432,7 +416,7 @@ pub async fn advance_historical_proof_cache(
         }
         let chunk = prover
             .prove_chunk(
-                cache.nullifier,
+                cache.proof.nullifier,
                 chunk_index,
                 start_history_head,
                 next_head,
@@ -465,7 +449,7 @@ pub async fn advance_historical_proof_cache(
     cache
         .append_generation(generation, chunk)
         .map_err(HistoricalProofUpdateError::Invalid)?;
-    if cache.covered_generation_count == window.archived_generation_count {
+    if generation_index + 1 == window.archived_generation_count {
         cache
             .mark_ready(window)
             .map_err(HistoricalProofUpdateError::Invalid)?;
@@ -481,6 +465,46 @@ mod tests {
         IndexedNullifierLeaf, IndexedNullifierWitness, DEPTH, ZERO_HASHES,
     };
     use shieldd_sdk_sct::nullifier_generation::{BLS12_377_PROOF_BYTES, BW6_761_PROOF_BYTES};
+
+    #[test]
+    fn rejected_append_preserves_cache() -> anyhow::Result<()> {
+        let mut cache = HistoricalProofCache::pending(Nullifier(Fq::from(7u64)));
+        cache.transition(HistoricalProofCacheState::Updating)?;
+        for generation_index in 0..CHUNK_WIDTH {
+            let before = cache.clone();
+            let generation = GenerationNonmembershipProof {
+                generation_index,
+                generation_root: Fq::from(generation_index + 1).to_bytes(),
+                generation_start_position: generation_index << 32,
+                generation_end_position: (generation_index + 1) << 32,
+                groth16_proof: vec![1; BLS12_377_PROOF_BYTES],
+            };
+            if generation_index + 1 == CHUNK_WIDTH {
+                assert!(cache.append_generation(generation, None).is_err());
+                assert_eq!(cache, before);
+            } else {
+                cache.append_generation(generation, None)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn persisted_errors_truncate_at_utf8_boundaries() -> anyhow::Result<()> {
+        for prover in [false, true] {
+            let mut cache = HistoricalProofCache::pending(Nullifier(Fq::from(7u64)));
+            cache.transition(HistoricalProofCacheState::Updating)?;
+            let error = format!("{}é", "x".repeat(1023));
+            if prover {
+                cache.block_on_prover(error)?;
+            } else {
+                cache.block_on_witness_source(error)?;
+            }
+            assert_eq!(cache.last_error.as_deref(), Some("x".repeat(1023).as_str()));
+            cache.validate()?;
+        }
+        Ok(())
+    }
 
     fn archived_fixture() -> (Nullifier, ArchivedNullifierProof) {
         let nullifier = Nullifier(Fq::from(9u64));
@@ -598,7 +622,7 @@ mod tests {
                 groth16_proof: vec![1; BLS12_377_PROOF_BYTES],
             };
             let end_head = append_history(
-                cache.terminal_history_head,
+                cache.proof.coverage()?.terminal_head,
                 generation_index,
                 generation.generation_root,
                 generation.generation_start_position,
@@ -618,7 +642,7 @@ mod tests {
             current_generation: CHUNK_WIDTH + 1,
             recent_position_floor: 0,
             archived_generation_count: CHUNK_WIDTH,
-            archived_history_head: cache.terminal_history_head,
+            archived_history_head: cache.proof.coverage()?.terminal_head,
         })?;
         assert_eq!(cache.state, HistoricalProofCacheState::Ready);
         Ok(())
@@ -654,7 +678,7 @@ mod tests {
         .await?;
 
         assert_eq!(cache.state, HistoricalProofCacheState::Ready);
-        assert_eq!(cache.covered_generation_count, 1);
+        assert_eq!(cache.proof.coverage()?.generation_count, 1);
         assert_eq!(cache.proof.tail.len(), 1);
         cache.bundle_for(window)?;
         Ok(())

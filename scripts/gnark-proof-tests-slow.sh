@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(git rev-parse --show-toplevel)"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+python3 scripts/stage_artifacts.py provers
+export SHIELDD_ARTIFACT_ROOT="$PWD/target/shieldd"
 
 # Each process selects one transport explicitly; family caches never mix artifact directories.
 for family in TRANSFER NOTE_RESHAPE SHIELDED_ICS20_WITHDRAWAL; do
@@ -24,5 +26,3 @@ daemon_tests NOTE_RESHAPE note_reshape1x8 gnark_proof_note_reshape_1x8_roundtrip
 daemon_tests NOTE_RESHAPE note_reshape8x1 gnark_proof_note_reshape_8x1_roundtrip
 daemon_tests SHIELDED_ICS20_WITHDRAWAL shielded_ics20_withdrawal gnark_proof_shielded_ics20_withdrawal_proof_roundtrip
 daemon_tests SHIELDED_ICS20_WITHDRAWAL shielded_ics20_withdrawal gnark_proof_padded_host_withdrawal_proof_roundtrip
-cargo test --release -p shieldd-sdk-app-tests --test view_server_can_be_served_on_localhost \
-    view_server_can_be_served_on_localhost -- --ignored --test-threads=1

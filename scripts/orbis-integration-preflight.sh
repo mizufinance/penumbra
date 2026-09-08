@@ -5,11 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 
 require_binaries=0
-check_ports_free=0
 
 usage() {
     cat >&2 <<'EOF'
-usage: ./scripts/orbis-integration-preflight.sh [--require-binaries] [--check-ports-free]
+usage: ./scripts/orbis-integration-preflight.sh [--require-binaries]
 EOF
     exit 1
 }
@@ -18,9 +17,6 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --require-binaries)
             require_binaries=1
-            ;;
-        --check-ports-free)
-            check_ports_free=1
             ;;
         *)
             usage
@@ -31,7 +27,7 @@ done
 
 print_banner "Orbis Integration Preflight" "dependency and local-state checks"
 
-for bin in cometbft curl jq; do
+for bin in curl jq; do
     if ! command -v "$bin" >/dev/null 2>&1; then
         log_error "$bin not found in PATH"
         exit 1
@@ -44,8 +40,6 @@ log_success "Runtime dependencies found"
 if [ "$require_binaries" -eq 1 ]; then
     for bin in \
         "$COMPLIANCE_REPO_ROOT/target/release/pcli" \
-        "$COMPLIANCE_REPO_ROOT/target/release/pclientd" \
-        "$COMPLIANCE_REPO_ROOT/target/release/pd" \
         "$COMPLIANCE_REPO_ROOT/target/release/orbis-audit" \
         "$COMPLIANCE_REPO_ROOT/target/release/orbis-integration"
     do
@@ -58,17 +52,6 @@ if [ "$require_binaries" -eq 1 ]; then
     log_success "Release binaries found"
 fi
 
-if [ "$check_ports_free" -eq 1 ]; then
-    ensure_ports_available \
-        "$SHIELDD_PD_GRPC_PORT" \
-        "$SHIELDD_COMETBFT_P2P_PORT" \
-        "$SHIELDD_COMETBFT_RPC_PORT" \
-        "$SHIELDD_PCLIENTD_PORT_BASE" \
-        "$((SHIELDD_PCLIENTD_PORT_BASE + 1))" \
-        "$((SHIELDD_PCLIENTD_PORT_BASE + 2))" \
-        "$((SHIELDD_PCLIENTD_PORT_BASE + 3))"
-    log_success "Required TCP ports are available"
-fi
 
 if [ "${SHIELDD_ORBIS_USE_DEMO_GNARK:-0}" = "1" ]; then
     log_info "Demo gnark override mode enabled via SHIELDD_ORBIS_USE_DEMO_GNARK=1"

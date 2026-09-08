@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 use shieldd_sdk_app::{
     genesis::{AppState, Content},
-    server::consensus::{Consensus, ConsensusService},
+    test_support::{TestHost, TEST_CHAIN_ID},
     APP_VERSION, SUBSTORE_PREFIXES,
 };
 use shieldd_sdk_asset::{Value, BASE_ASSET_DENOM, BASE_ASSET_ID};
@@ -26,7 +26,6 @@ use shieldd_sdk_compliance::{
 };
 use shieldd_sdk_keys::test_keys;
 use shieldd_sdk_mock_client::MockClient;
-use shieldd_sdk_mock_consensus::TestNode;
 use shieldd_sdk_num::Amount;
 use shieldd_sdk_proto::DomainType;
 use shieldd_sdk_shielded_pool::{genesis::Allocation, ShieldedInputPlan, ShieldedOutputPlan};
@@ -75,7 +74,7 @@ pub struct ProofTxPoolMetadata {
 
 pub async fn setup_proof_storage(
     n: usize,
-) -> anyhow::Result<(TempStorage, TestNode<ConsensusService>, Arc<MockClient>)> {
+) -> anyhow::Result<(TempStorage, TestHost, Arc<MockClient>)> {
     let storage = TempStorage::new_with_prefixes(SUBSTORE_PREFIXES.to_vec()).await?;
 
     let allocations: Vec<Allocation> = std::iter::repeat(Allocation {
@@ -123,7 +122,7 @@ pub async fn setup_proof_storage(
         )?;
         Ok(GenesisUserRegistration {
             capability_certificate: OrbisCapabilityCertificate::sign_for_test(
-                TestNode::<()>::CHAIN_ID,
+                TEST_CHAIN_ID,
                 &leaf,
                 &policy,
                 decaf377::Fr::from(1u64),
@@ -133,7 +132,7 @@ pub async fn setup_proof_storage(
     })
     .collect::<anyhow::Result<Vec<_>>>()?;
     let content = Content {
-        chain_id: TestNode::<()>::CHAIN_ID.to_string(),
+        chain_id: TEST_CHAIN_ID.to_string(),
         compliance_content: shieldd_sdk_compliance::genesis::Content {
             native_assets: vec![native_asset],
             user_registrations,
@@ -145,19 +144,15 @@ pub async fn setup_proof_storage(
         },
         ..Default::default()
     };
-    let app_state_bytes = serde_json::to_vec(&AppState::Content(content))?;
-
-    let consensus = Consensus::new(storage.as_ref().clone());
     let initial_time = tendermint::Time::parse_from_rfc3339(SYNTHETIC_BENCHMARK_TIME_RFC3339)
         .context("parsing synthetic benchmark initial timestamp")?;
-    let mut test_node = TestNode::builder()
-        .single_validator()
-        .app_state(app_state_bytes)
-        .with_initial_timestamp(initial_time)
-        .init_chain(consensus)
-        .await?;
-
-    test_node.block().execute().await?;
+    let mut test_node = TestHost::new(
+        storage.as_ref().clone(),
+        AppState::Content(content),
+        initial_time,
+    )
+    .await?;
+    test_node.execute(Vec::new()).await?;
 
     let client = Arc::new(
         MockClient::new(test_keys::SPEND_KEY.clone())
@@ -246,7 +241,7 @@ pub async fn build_proof_transactions(
                     MemoPlaintext::blank_memo(test_keys::ADDRESS_0.deref().clone()),
                 )),
                 transaction_parameters: TransactionParameters {
-                    chain_id: TestNode::<()>::CHAIN_ID.to_string(),
+                    chain_id: TEST_CHAIN_ID.to_string(),
                     ..Default::default()
                 },
                 nullifier_window: None,
@@ -347,7 +342,7 @@ pub fn save_proof_tx_pool(out_dir: &Path, pool: &ProofTxPool) -> Result<ProofTxP
     let git_tree_state = git_tree_state();
     let metadata = ProofTxPoolMetadata {
         created_at: unix_ts(),
-        chain_id: TestNode::<()>::CHAIN_ID.to_string(),
+        chain_id: TEST_CHAIN_ID.to_string(),
         tx_shape: POOL_TX_SHAPE.to_string(),
         tx_count: pool.txs.len(),
         shard_count,
@@ -490,7 +485,7 @@ fn validate_pool(txs: &[Arc<Vec<u8>>], expected_hashes: &[String]) -> Result<()>
 
 fn compatibility_fingerprint(tx_count: usize) -> Result<String> {
     let mut hasher = sha2::Sha256::new();
-    hasher.update(TestNode::<()>::CHAIN_ID.as_bytes());
+    hasher.update(TEST_CHAIN_ID.as_bytes());
     hasher.update(POOL_TX_SHAPE.as_bytes());
     hasher.update(POOL_PROOF_FAMILY.as_bytes());
     hasher.update(POOL_ACTION_SHAPE.as_bytes());

@@ -121,9 +121,8 @@ async fn build_host_withdrawal_tx(opt: Opt) -> Result<Vec<u8>> {
         .await
         .with_context(|| format!("failed to open Shieldd RocksDB at {}", opt.db.display()))?;
 
-    let mut client = MockClient::new(test_keys::SPEND_KEY.clone());
-    client
-        .sync_to_latest(storage.latest_snapshot())
+    let client = MockClient::new(test_keys::SPEND_KEY.clone())
+        .with_sync_to_storage(&storage)
         .await
         .context("failed to sync Shieldd test wallet to storage")?;
 

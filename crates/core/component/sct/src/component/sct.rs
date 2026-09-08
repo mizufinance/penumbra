@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use cnidarium::{StateRead, StateWrite};
 use cnidarium_component::Component;
 use shieldd_sdk_proto::{StateReadProto, StateWriteProto};
-use tendermint::v0_37::abci;
 use tracing::instrument;
 
 use crate::{epoch::Epoch, genesis, nullifier_tree, params::SctParameters, state_key};
@@ -52,11 +51,11 @@ impl Component for Sct {
     #[instrument(name = "sct_component", skip(state, begin_block))]
     async fn begin_block<S: StateWrite + 'static>(
         state: &mut Arc<S>,
-        begin_block: &abci::request::BeginBlock,
+        begin_block: &cnidarium_component::BlockContext,
     ) {
         let state = Arc::get_mut(state).expect("there's only one reference to the state");
-        state.put_block_height(begin_block.header.height.into());
-        state.put_block_timestamp(begin_block.header.height.into(), begin_block.header.time);
+        state.put_block_height(begin_block.height);
+        state.put_block_timestamp(begin_block.height, begin_block.time);
         state.object_put(
             state_key::nullifier_generations::pending_block(),
             super::tree::PendingNullifierBlock::default(),
@@ -64,11 +63,8 @@ impl Component for Sct {
         state.object_delete(state_key::cache::block_materialization());
     }
 
-    #[instrument(name = "sct_component", skip(state, _end_block))]
-    async fn end_block<S: StateWrite + 'static>(
-        state: &mut Arc<S>,
-        _end_block: &abci::request::EndBlock,
-    ) {
+    #[instrument(name = "sct_component", skip(state, _height))]
+    async fn end_block<S: StateWrite + 'static>(state: &mut Arc<S>, _height: u64) {
         use super::tree::SctManager as _;
 
         Arc::get_mut(state)

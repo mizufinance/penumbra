@@ -13,9 +13,6 @@ concurrency:
 
 jobs:
   rustdocs:
-    # We use a custom script to generate the rustdoc index page,
-    # and refactors to rust deps can break that generation. Let's ensure this script exits 0
-    # on PRs, but we'll still only deploy after merge into main.
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:

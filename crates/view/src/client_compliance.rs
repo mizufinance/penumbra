@@ -2,150 +2,11 @@
 use anyhow::Result;
 use decaf377::Fr;
 use shieldd_sdk_asset::asset;
+use shieldd_sdk_compliance::BatchComplianceData;
 use shieldd_sdk_compliance::ComplianceQuery;
-use shieldd_sdk_compliance::{
-    AssetPolicy, AssetProofData, BatchComplianceData, ComplianceLeaf, MerklePath, UserProofData,
-};
 use shieldd_sdk_keys::Address;
-use shieldd_sdk_proto::view::v1 as view_pb;
-use shieldd_sdk_tct::StateCommitment;
 use shieldd_sdk_transaction::plan::{ActionPlan, TransactionPlan};
-use std::collections::{BTreeMap, BTreeSet};
-
-/// Convert a proto MerklePath to native MerklePath.
-fn parse_proto_merkle_path(
-    path: Option<shieldd_sdk_proto::core::component::compliance::v1::MerklePath>,
-    label: &str,
-) -> Result<shieldd_sdk_compliance::structs::MerklePath> {
-    path.ok_or_else(|| anyhow::anyhow!("missing {label}"))?
-        .try_into()
-        .map_err(|error| anyhow::anyhow!("invalid {label}: {error}"))
-}
-
-pub(crate) fn parse_batch_compliance(
-    queries: &[ComplianceQuery],
-    batch_response: view_pb::ComplianceBatchMerkleProofsResponse,
-    asset_policies: BTreeMap<asset::Id, AssetPolicy>,
-) -> Result<BatchComplianceData> {
-    anyhow::ensure!(
-        batch_response.results.len() == queries.len(),
-        "batch compliance response count {} does not match query count {}",
-        batch_response.results.len(),
-        queries.len()
-    );
-
-    // Parse anchors
-    let compliance_anchor_bytes: [u8; 32] =
-        batch_response
-            .compliance_anchor
-            .try_into()
-            .map_err(|v: Vec<u8>| {
-                anyhow::anyhow!(
-                    "batch response: compliance_anchor must be 32 bytes, got {}",
-                    v.len()
-                )
-            })?;
-    let compliance_anchor = StateCommitment(
-        decaf377::Fq::from_bytes_checked(&compliance_anchor_bytes)
-            .map_err(|e| anyhow::anyhow!("batch response: invalid compliance_anchor: {}", e))?,
-    );
-
-    let asset_anchor_bytes: [u8; 32] =
-        batch_response
-            .asset_anchor
-            .try_into()
-            .map_err(|v: Vec<u8>| {
-                anyhow::anyhow!(
-                    "batch response: asset_anchor must be 32 bytes, got {}",
-                    v.len()
-                )
-            })?;
-    let asset_anchor = StateCommitment(
-        decaf377::Fq::from_bytes_checked(&asset_anchor_bytes)
-            .map_err(|e| anyhow::anyhow!("batch response: invalid asset_anchor: {}", e))?,
-    );
-
-    let mut asset_proofs: BTreeMap<asset::Id, AssetProofData> = BTreeMap::new();
-    let mut user_proofs: BTreeMap<(Address, asset::Id), UserProofData> = BTreeMap::new();
-
-    // Match results with queries - parse directly since individual results don't have anchors
-    for (i, result) in batch_response.results.into_iter().enumerate() {
-        let ComplianceQuery { address, asset_id } = &queries[i];
-
-        let compliance_path =
-            parse_proto_merkle_path(result.compliance_path, "batch compliance_path")?;
-        let asset_path = parse_proto_merkle_path(result.asset_path, "batch asset_path")?;
-
-        // Cache asset proof
-        if !asset_proofs.contains_key(asset_id) {
-            // Parse indexed_leaf from proto response using TryFrom
-            let indexed_leaf = if let Some(leaf_data) = result.asset_indexed_leaf {
-                shieldd_sdk_compliance::IndexedLeaf::try_from(leaf_data).map_err(|e| {
-                    anyhow::anyhow!("invalid indexed_leaf for asset {}: {}", asset_id, e)
-                })?
-            } else {
-                anyhow::bail!(
-                    "asset_indexed_leaf missing in batch response for asset {} \
-                         (server returned incomplete data)",
-                    asset_id
-                );
-            };
-
-            asset_proofs.insert(
-                *asset_id,
-                AssetProofData {
-                    auth_path: asset_path.clone(),
-                    position: result.asset_position,
-                    indexed_leaf,
-                    is_regulated: result.is_regulated,
-                },
-            );
-        }
-
-        // Build user proof with leaf
-        let key = (address.clone(), *asset_id);
-        if !user_proofs.contains_key(&key) {
-            if result.user_registered {
-                let leaf = ComplianceLeaf::try_from(result.compliance_leaf.ok_or_else(|| {
-                    anyhow::anyhow!("registered user is missing a compliance leaf")
-                })?)?;
-                user_proofs.insert(
-                    key,
-                    UserProofData {
-                        auth_path: compliance_path,
-                        position: result.compliance_position,
-                        leaf,
-                    },
-                );
-            } else if !result.is_regulated {
-                let synthetic_leaf =
-                    ComplianceLeaf::synthetic_unregulated(address.clone(), *asset_id);
-                user_proofs.insert(
-                    key,
-                    UserProofData {
-                        auth_path: MerklePath::default(),
-                        position: 0,
-                        leaf: synthetic_leaf,
-                    },
-                );
-            } else {
-                anyhow::bail!(
-                    "user not registered in compliance tree for address {:?} and asset {:?}",
-                    address,
-                    asset_id
-                );
-            }
-        }
-    }
-
-    Ok(shieldd_sdk_compliance::BatchComplianceData {
-        compliance_anchor,
-        asset_anchor,
-        asset_proofs,
-        asset_policies,
-        user_proofs,
-    })
-}
+use std::collections::BTreeSet;
 
 #[derive(Clone, Debug)]
 pub struct VolumeRecoveryRecord {
@@ -533,7 +394,7 @@ fn fresh_action_nonce(
 
 #[cfg(test)]
 mod tests {
-    use super::{complete_plan_with_compliance, fresh_action_nonce, parse_proto_merkle_path};
+    use super::{complete_plan_with_compliance, fresh_action_nonce};
     use crate::planning_intent::{
         ActionIntent, NoteReshapeIntent, TransactionIntent, TransferIntent,
     };
@@ -547,7 +408,6 @@ mod tests {
         UserProofData,
     };
     use shieldd_sdk_keys::Address;
-    use shieldd_sdk_proto::core::component::compliance::v1 as compliance_pb;
     use shieldd_sdk_shielded_pool::{
         Note, NoteReshapeFamilyId, ShieldedInputPlan, ShieldedOutputPlan,
     };
@@ -726,23 +586,6 @@ mod tests {
         assert!(select(1, true, false, &[record.clone()]).is_err());
         record.recovery = VolumeAccumulatorRecovery::Incomplete;
         assert!(!select(1, true, false, &[record]).unwrap().is_real());
-    }
-
-    #[test]
-    fn rpc_merkle_path_parser_requires_canonical_fixed_shape() {
-        parse_proto_merkle_path(Some(MerklePath::default().into()), "test_path")
-            .expect("canonical fixed-width path");
-
-        parse_proto_merkle_path(None, "test_path").expect_err("missing path must fail");
-
-        let mut short: compliance_pb::MerklePath = MerklePath::default().into();
-        short.layers.pop();
-        parse_proto_merkle_path(Some(short), "test_path").expect_err("short path must fail");
-
-        let mut noncanonical: compliance_pb::MerklePath = MerklePath::default().into();
-        noncanonical.layers[0].siblings[0] = vec![0xff; 32];
-        parse_proto_merkle_path(Some(noncanonical), "test_path")
-            .expect_err("noncanonical field must fail");
     }
 
     #[test]

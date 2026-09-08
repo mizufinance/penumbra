@@ -15,7 +15,4 @@ pub use types::{
     ClearFlowKind, DetectionEvent, ExtractedComplianceCiphertext, InvalidCiphertext, OutputOutcome,
     OutputRef, ScannedBlock, ScannedOutput, TxRef,
 };
-pub use worker::{
-    BlockIdentityProvider, IssuerComplianceWorker, TendermintProxyBlockIdentityProvider,
-    WorkerHandle,
-};
+pub use worker::{BlockIdentityProvider, IssuerComplianceWorker, ScannerSource, WorkerHandle};

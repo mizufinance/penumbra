@@ -16,13 +16,11 @@ pub mod data {
     }
 }
 
-pub mod cometbft_data {
-    use crate::COMETBFT_SUBSTORE_PREFIX;
-
+pub mod block_data {
     pub fn transactions_by_height(block_height: u64) -> String {
         format!(
             "{}/transactions_by_height/{block_height:020}",
-            COMETBFT_SUBSTORE_PREFIX
+            crate::COMETBFT_SUBSTORE_PREFIX
         )
     }
 }

@@ -35,39 +35,4 @@ while IFS= read -r project; do
     fi
 done <<< "$projects"
 
-shopt -s nullglob
-for pid_file in /tmp/orbis-*-*/shieldd-pids.txt; do
-    tmp_root="${pid_file%/shieldd-pids.txt}"
-    if [[ ! "$tmp_root" =~ $TMP_PATTERN ]]; then
-        continue
-    fi
-
-    while IFS='=' read -r _ pid; do
-        [[ "${pid:-}" =~ ^[0-9]+$ ]] || continue
-        [ -d "/proc/$pid" ] || continue
-
-        executable="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
-        executable="${executable% (deleted)}"
-        executable_name="${executable##*/}"
-        case "$executable_name" in
-            pd|cometbft|pclientd) ;;
-            *)
-                log_warning "Skipping PID $pid: unexpected executable $executable_name"
-                continue
-                ;;
-        esac
-
-        cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
-        if [[ "$cmdline" != *"$tmp_root"* ]]; then
-            log_warning "Skipping PID $pid: command line does not contain $tmp_root"
-            continue
-        fi
-
-        log_info "Stopping owned stale $executable_name process: $pid"
-        kill "$pid" 2>/dev/null || true
-    done < "$pid_file"
-
-    rm -f "$pid_file"
-done
-
 log_success "Owned stale Orbis integration resources cleaned"

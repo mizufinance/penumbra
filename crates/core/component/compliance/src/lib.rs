@@ -101,7 +101,7 @@ pub use action_check::RegulatedAssetCheck;
 #[cfg(feature = "component")]
 pub mod component;
 #[cfg(feature = "component")]
-pub use component::{Compliance, RpcServer};
+pub use component::Compliance;
 
 pub mod genesis;
 pub use genesis::Content as GenesisContent;
@@ -141,9 +141,9 @@ pub use audit_records::{
     AuditSubjectCandidate, AuditSubjectRegistration, AuditSubjectRole,
 };
 
-#[cfg(feature = "component")]
+#[cfg(feature = "scanner")]
 pub mod audit;
-#[cfg(feature = "component")]
+#[cfg(feature = "scanner")]
 pub use audit::{
     decrypt_flagged_rows, export_detected_refs, export_ledger_rows, export_ledger_rows_json,
     export_scan_json, mark_row_audited, record_address_alias, record_evidence_failure,
@@ -154,15 +154,15 @@ mod tx_id;
 pub use tx_id::scanner_transaction_id_from_proto;
 
 // Scanner requires tokio and rusqlite for async storage
-#[cfg(feature = "component")]
+#[cfg(feature = "scanner")]
 pub mod scanner;
-#[cfg(feature = "component")]
+#[cfg(feature = "scanner")]
 pub use scanner::{
     extract_clear_flows, extract_compliance_ciphertexts, AuditLedgerRow, AuditRowKey,
     BlockIdentityProvider, CandidateEvidence, ClearFlowEvent, ClearFlowKind, ComplianceScreener,
     DetectionEvent, ExtractedComplianceCiphertext, InvalidCiphertext, IssuerComplianceWorker,
-    OutputOutcome, ScannedBlock, ScannedOutput, ScannerStore, ScreeningResult, SqliteScannerStore,
-    TendermintProxyBlockIdentityProvider, WorkerHandle, MAX_INVALID_CIPHERTEXTS_PER_BLOCK,
+    OutputOutcome, ScannedBlock, ScannedOutput, ScannerSource, ScannerStore, ScreeningResult,
+    SqliteScannerStore, WorkerHandle, MAX_INVALID_CIPHERTEXTS_PER_BLOCK,
 };
 
 pub mod ibc;
@@ -247,9 +247,10 @@ pub mod test_helpers {
 }
 
 // Integration tests require cnidarium, tokio, and scanner
-#[cfg(all(test, feature = "component"))]
+#[cfg(all(test, feature = "scanner"))]
 mod tests {
     use super::*;
+    use crate::registry::ComplianceRegistryComponentWrite as _;
     use cnidarium::{StateDelta, TempStorage};
     use decaf377::Fq;
     use shieldd_sdk_asset::asset;
@@ -261,6 +262,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let leaf = ComplianceLeaf::synthetic_unregulated(
             Address::dummy(&mut rand::thread_rng()),
@@ -273,7 +275,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tree = state.get_user_tree().await.unwrap();
+        let tree = state.reconstruct_user_tree().await.unwrap();
         let path = tree.auth_path(0).unwrap();
 
         assert!(!path.is_empty());
@@ -319,6 +321,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let mut rng = rand::thread_rng();
         let mut commitments = Vec::new();
@@ -332,7 +335,7 @@ mod tests {
             state.test_only_add_compliance_leaf(leaf).await.unwrap();
         }
 
-        let tree = state.get_user_tree().await.unwrap();
+        let tree = state.reconstruct_user_tree().await.unwrap();
         let path = tree.auth_path(0).unwrap();
 
         let first_layer_siblings = path[0];
@@ -351,6 +354,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let mut rng = rand::thread_rng();
         let positions = vec![0, 5, 10];
@@ -378,7 +382,7 @@ mod tests {
             leaves.push((pos, leaf.commit()));
         }
 
-        let tree = state.get_user_tree().await.unwrap();
+        let tree = state.reconstruct_user_tree().await.unwrap();
         let tree_root = tree.root();
 
         for (pos, commitment) in leaves {
@@ -403,6 +407,7 @@ mod tests {
         let storage = TempStorage::new().await.unwrap();
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
+        state.initialize_trees().await.unwrap();
 
         let mut rng = rand::thread_rng();
         let asset_id = asset::Id(Fq::from(1000u64));
@@ -484,7 +489,7 @@ mod tests {
         assert_eq!(sender_auth_path.len(), DEFAULT_DEPTH as usize);
         assert_eq!(receiver_auth_path.len(), DEFAULT_DEPTH as usize);
 
-        let tree = state.get_user_tree().await.unwrap();
+        let tree = state.reconstruct_user_tree().await.unwrap();
         let tree_root = tree.root();
         assert!(QuadTree::verify_auth_path(
             sender_position,

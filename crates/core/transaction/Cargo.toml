@@ -48,6 +48,8 @@ tokio = {workspace = true, features = ["full"], optional = true}
 tracing = {workspace = true}
 
 [dev-dependencies]
+ark-groth16 = { workspace = true }
+ark-serialize = { workspace = true }
 shieldd-sdk-shielded-pool = { workspace = true, default-features = false, features = ["benchmark-helpers"] }
 proptest = {workspace = true}
 serde_json = {workspace = true}

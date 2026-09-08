@@ -1,23 +1,10 @@
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
+use futures::{stream::BoxStream, TryStreamExt};
 use shieldd_sdk_asset::asset;
-use shieldd_sdk_proto::core::{
-    app::v1::{
-        query_service_client::QueryServiceClient as AppQueryServiceClient,
-        TransactionsByHeightRequest,
-    },
-    component::compact_block::v1::{
-        query_service_client::QueryServiceClient as CompactBlockQueryServiceClient,
-        CompactBlockRangeRequest,
-    },
-};
-use shieldd_sdk_proto::util::tendermint_proxy::v1::{
-    tendermint_proxy_service_client::TendermintProxyServiceClient, GetBlockByHeightRequest,
-};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::watch;
-use tonic::transport::Channel;
 use tracing::{debug, info, instrument, warn};
 
 use super::screener::{ComplianceScreener, ScreeningResult};
@@ -28,7 +15,6 @@ use super::types::{
 };
 use crate::issuer_keys::DetectionKey;
 
-const MAX_CB_SIZE_BYTES: usize = 64 * 1024 * 1024;
 const BLOCK_IDENTITY_MAX_ATTEMPTS: usize = 5;
 const BLOCK_IDENTITY_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
 
@@ -37,68 +23,18 @@ pub trait BlockIdentityProvider: Send + Sync {
     async fn block_ref(&self, height: u64) -> Result<BlockRef>;
 }
 
-pub struct TendermintProxyBlockIdentityProvider {
-    channel: Channel,
-    max_attempts: usize,
-    initial_backoff: Duration,
-}
-
-impl TendermintProxyBlockIdentityProvider {
-    pub fn new(channel: Channel) -> Self {
-        Self {
-            channel,
-            max_attempts: BLOCK_IDENTITY_MAX_ATTEMPTS,
-            initial_backoff: BLOCK_IDENTITY_INITIAL_BACKOFF,
-        }
-    }
-
-    async fn fetch_once(&self, height: u64) -> std::result::Result<BlockRef, BlockIdentityError> {
-        let mut client = TendermintProxyServiceClient::new(self.channel.clone());
-        let response = client
-            .get_block_by_height(GetBlockByHeightRequest {
-                height: height as i64,
-            })
-            .await
-            .map_err(|e| BlockIdentityError::Unavailable(anyhow!(e)))?
-            .into_inner();
-
-        parse_block_ref(height, response).map_err(BlockIdentityError::Malformed)
-    }
-}
-
+/// Host-provided canonical blocks and their transaction data.
 #[async_trait]
-impl BlockIdentityProvider for TendermintProxyBlockIdentityProvider {
-    async fn block_ref(&self, height: u64) -> Result<BlockRef> {
-        let mut attempt = 1usize;
-        let mut backoff = self.initial_backoff;
-        loop {
-            match self.fetch_once(height).await {
-                Ok(block) => return Ok(block),
-                Err(BlockIdentityError::Malformed(error)) => return Err(error),
-                Err(BlockIdentityError::Unavailable(error)) if attempt < self.max_attempts => {
-                    warn!(
-                        height,
-                        attempt,
-                        ?error,
-                        "failed to fetch block identity, retrying"
-                    );
-                    tokio::time::sleep(backoff).await;
-                    attempt += 1;
-                    backoff = backoff.saturating_mul(2);
-                }
-                Err(BlockIdentityError::Unavailable(error)) => {
-                    let message =
-                        format!("failed to fetch block identity for height {height} after {attempt} attempts");
-                    return Err(error).context(message);
-                }
-            }
-        }
-    }
-}
-
-enum BlockIdentityError {
-    Unavailable(anyhow::Error),
-    Malformed(anyhow::Error),
+pub trait ScannerSource: BlockIdentityProvider {
+    async fn heights(
+        &self,
+        start: u64,
+        end: Option<u64>,
+    ) -> Result<BoxStream<'static, Result<u64>>>;
+    async fn transactions(
+        &self,
+        block: &BlockRef,
+    ) -> Result<Vec<shieldd_sdk_proto::core::transaction::v1::Transaction>>;
 }
 
 pub struct WorkerHandle {
@@ -127,8 +63,7 @@ pub struct IssuerComplianceWorker {
     screener: ComplianceScreener,
     target_asset_id: asset::Id,
     storage: Arc<dyn ScannerStore>,
-    block_identity: Arc<dyn BlockIdentityProvider>,
-    channel: Channel,
+    source: Arc<dyn ScannerSource>,
     error_slot: Arc<Mutex<Option<anyhow::Error>>>,
     sync_height_tx: watch::Sender<u64>,
 }
@@ -138,8 +73,7 @@ impl IssuerComplianceWorker {
         detection_key: DetectionKey,
         target_asset_id: asset::Id,
         storage: Arc<dyn ScannerStore>,
-        block_identity: Arc<dyn BlockIdentityProvider>,
-        channel: Channel,
+        source: Arc<dyn ScannerSource>,
     ) -> Result<(Self, WorkerHandle)> {
         let error_slot = Arc::new(Mutex::new(None));
         let last_height = storage
@@ -153,8 +87,7 @@ impl IssuerComplianceWorker {
             screener: ComplianceScreener::new(detection_key, target_asset_id),
             target_asset_id,
             storage,
-            block_identity,
-            channel,
+            source,
             error_slot: error_slot.clone(),
             sync_height_tx,
         };
@@ -242,37 +175,32 @@ impl IssuerComplianceWorker {
 
         info!(start_height, end_height, "beginning issuer compliance scan");
 
-        let mut compact_block_client = CompactBlockQueryServiceClient::new(self.channel.clone())
-            .max_decoding_message_size(MAX_CB_SIZE_BYTES);
-
-        let mut stream = compact_block_client
-            .compact_block_range(CompactBlockRangeRequest {
-                start_height,
-                end_height: end_height.unwrap_or(0),
-                keep_alive: end_height.is_none(),
-            })
-            .await
-            .context("failed to start compact block stream")?
-            .into_inner();
-
-        info!("connected to compact block stream");
-
-        while let Some(response) = stream.message().await? {
-            let compact_block = response.compact_block.ok_or_else(|| {
-                anyhow!(
-                    "compliance sync: received empty compact block response from node \
-                     (possible network or node issue)"
-                )
-            })?;
-            self.process_height(compact_block.height).await?;
+        let mut stream = self.source.heights(start_height, end_height).await?;
+        let mut expected_height = Some(start_height);
+        while let Some(height) = stream.try_next().await? {
+            anyhow::ensure!(
+                Some(height) == expected_height && end_height.is_none_or(|end| height <= end),
+                "scanner source returned noncontiguous or out-of-range height"
+            );
+            self.process_height(height).await?;
             self.storage.heartbeat().await?;
+            expected_height = height.checked_add(1);
+        }
+        if let Some(end) = end_height {
+            anyhow::ensure!(
+                self.storage
+                    .last_scanned_block()
+                    .await?
+                    .is_some_and(|block| block.height == end),
+                "scanner source ended before requested height"
+            );
         }
 
         Ok(())
     }
 
     async fn process_height(&self, height: u64) -> Result<()> {
-        let block = self.block_identity.block_ref(height).await?;
+        let block = self.block_ref(height).await?;
         match self.reorg_decision(&block).await? {
             ReorgDecision::AlreadyProcessed => {
                 debug!(height, "scanner block already processed");
@@ -287,7 +215,7 @@ impl IssuerComplianceWorker {
                 );
                 self.storage.rollback_to_height(ancestor_height).await?;
                 for replay_height in ancestor_height + 1..=height {
-                    let replay_block = self.block_identity.block_ref(replay_height).await?;
+                    let replay_block = self.block_ref(replay_height).await?;
                     self.process_block(replay_block).await?;
                 }
                 Ok(())
@@ -324,7 +252,7 @@ impl IssuerComplianceWorker {
             if height == 0 {
                 return Ok(0);
             }
-            let live = self.block_identity.block_ref(height).await?;
+            let live = self.block_ref(height).await?;
             if let Some(stored) = self.storage.block_by_height(height).await? {
                 if stored.block_hash == live.block_hash {
                     return Ok(height);
@@ -336,7 +264,7 @@ impl IssuerComplianceWorker {
 
     async fn process_block(&self, block: BlockRef) -> Result<()> {
         let mut scanned = ScannedBlock::new(block.clone());
-        let transactions = self.fetch_transactions(block.height).await?;
+        let transactions = self.source.transactions(&block).await?;
 
         let mut detection_count = 0u64;
         let mut invalid_count = 0u64;
@@ -397,22 +325,24 @@ impl IssuerComplianceWorker {
         Ok(())
     }
 
-    #[instrument(skip(self))]
-    async fn fetch_transactions(
-        &self,
-        height: u64,
-    ) -> Result<Vec<shieldd_sdk_proto::core::transaction::v1::Transaction>> {
-        let mut client = AppQueryServiceClient::new(self.channel.clone());
-
-        let response = client
-            .transactions_by_height(TransactionsByHeightRequest {
-                block_height: height,
-            })
-            .await
-            .context("failed to fetch transactions")?
-            .into_inner();
-
-        Ok(response.transactions)
+    async fn block_ref(&self, height: u64) -> Result<BlockRef> {
+        let mut backoff = BLOCK_IDENTITY_INITIAL_BACKOFF;
+        for attempt in 1..=BLOCK_IDENTITY_MAX_ATTEMPTS {
+            match self.source.block_ref(height).await {
+                Ok(block) => {
+                    anyhow::ensure!(block.height == height, "host block identity height mismatch");
+                    return Ok(block);
+                }
+                Err(error) if attempt == BLOCK_IDENTITY_MAX_ATTEMPTS => return Err(error)
+                    .with_context(|| format!("failed to fetch block identity for height {height} after {attempt} attempts")),
+                Err(error) => {
+                    warn!(height, attempt, ?error, "failed to fetch block identity, retrying");
+                    tokio::time::sleep(backoff).await;
+                    backoff = backoff.saturating_mul(2);
+                }
+            }
+        }
+        unreachable!("bounded retry returns on its final attempt")
     }
 }
 
@@ -422,61 +352,10 @@ enum ReorgDecision {
     RollbackTo(u64),
 }
 
-fn parse_block_ref(
-    requested_height: u64,
-    response: shieldd_sdk_proto::util::tendermint_proxy::v1::GetBlockByHeightResponse,
-) -> Result<BlockRef> {
-    let block_id = response
-        .block_id
-        .ok_or_else(|| anyhow!("block identity response missing block_id"))?;
-    let block = response
-        .block
-        .ok_or_else(|| anyhow!("block identity response missing block"))?;
-    let header = block
-        .header
-        .ok_or_else(|| anyhow!("block identity response missing block header"))?;
-
-    let header_height = u64::try_from(header.height)
-        .map_err(|_| anyhow!("block header height is negative: {}", header.height))?;
-    anyhow::ensure!(
-        header_height == requested_height,
-        "block identity height mismatch: requested {}, got {}",
-        requested_height,
-        header_height
-    );
-
-    let block_hash = parse_hash(&block_id.hash, "block hash")?;
-    let parent_hash = match header.last_block_id {
-        Some(parent) => {
-            if requested_height == 1 && parent.hash.is_empty() {
-                [0u8; 32]
-            } else {
-                parse_hash(&parent.hash, "parent hash")?
-            }
-        }
-        None if requested_height == 1 => [0u8; 32],
-        None => anyhow::bail!("block identity response missing parent block id"),
-    };
-
-    Ok(BlockRef {
-        height: requested_height,
-        block_hash,
-        parent_hash,
-        block_time_unix: header.time.map(|time| time.seconds),
-    })
-}
-
-fn parse_hash(bytes: &[u8], label: &str) -> Result<[u8; 32]> {
-    bytes
-        .try_into()
-        .map_err(|_| anyhow!("{label} must be 32 bytes, got {}", bytes.len()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use anyhow::bail;
-    use shieldd_sdk_proto::util::tendermint_proxy::v1::GetBlockByHeightResponse;
     use std::collections::HashMap;
 
     use crate::scanner::SqliteScannerStore;
@@ -486,6 +365,7 @@ mod tests {
     struct MemoryBlockIdentity {
         blocks: Mutex<HashMap<u64, BlockRef>>,
         failures: Mutex<HashMap<u64, usize>>,
+        heights: Mutex<Vec<u64>>,
     }
 
     impl MemoryBlockIdentity {
@@ -514,12 +394,59 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl ScannerSource for MemoryBlockIdentity {
+        async fn heights(
+            &self,
+            _start: u64,
+            _end: Option<u64>,
+        ) -> Result<BoxStream<'static, Result<u64>>> {
+            Ok(Box::pin(futures::stream::iter(
+                self.heights.lock().unwrap().clone().into_iter().map(Ok),
+            )))
+        }
+        async fn transactions(
+            &self,
+            _block: &BlockRef,
+        ) -> Result<Vec<shieldd_sdk_proto::core::transaction::v1::Transaction>> {
+            Ok(vec![])
+        }
+    }
+
     fn block(height: u64, hash_byte: u8, parent_byte: u8) -> BlockRef {
         BlockRef {
             height,
             block_hash: [hash_byte; 32],
             parent_hash: [parent_byte; 32],
             block_time_unix: Some(height as i64),
+        }
+    }
+
+    #[tokio::test]
+    async fn catch_up_rejects_skipped_empty_and_truncated_streams() {
+        for heights in [vec![3], vec![], vec![1]] {
+            let store = Arc::new(SqliteScannerStore::new(":memory:").unwrap());
+            let source = Arc::new(MemoryBlockIdentity::default());
+            *source.heights.lock().unwrap() = heights.clone();
+            for height in 1..=3 {
+                source.insert(block(height, height as u8, height as u8 - 1));
+            }
+            let (worker, _) = IssuerComplianceWorker::new(
+                DetectionKey::demo(),
+                asset::Id(decaf377::Fq::from(12345u64)),
+                store.clone(),
+                source,
+            )
+            .await
+            .unwrap();
+            assert!(
+                worker.catch_up_to_height(3).await.is_err(),
+                "accepted {heights:?}"
+            );
+            assert_eq!(
+                store.last_scanned_block().await.unwrap().map(|b| b.height),
+                if heights == vec![1] { Some(1) } else { None }
+            );
         }
     }
 
@@ -537,7 +464,6 @@ mod tests {
             asset::Id(decaf377::Fq::from(12345u64)),
             Arc::new(store),
             identity,
-            Channel::from_static("http://localhost:8080").connect_lazy(),
         )
         .await
         .unwrap();
@@ -560,7 +486,6 @@ mod tests {
             asset::Id(decaf377::Fq::from(1u64)),
             store,
             identity,
-            Channel::from_static("http://localhost:8080").connect_lazy(),
         )
         .await
         .unwrap();
@@ -590,7 +515,6 @@ mod tests {
             asset::Id(decaf377::Fq::from(1u64)),
             store,
             identity,
-            Channel::from_static("http://localhost:8080").connect_lazy(),
         )
         .await
         .unwrap();
@@ -658,26 +582,26 @@ mod tests {
         assert_eq!(evidence_count, 1);
     }
 
-    #[test]
-    fn parse_block_ref_rejects_malformed_hash() {
-        let response = GetBlockByHeightResponse {
-            block_id: Some(shieldd_sdk_proto::tendermint::types::BlockId {
-                hash: vec![1, 2, 3],
-                part_set_header: None,
-            }),
-            block: Some(shieldd_sdk_proto::tendermint::types::Block {
-                header: Some(shieldd_sdk_proto::tendermint::types::Header {
-                    height: 2,
-                    last_block_id: Some(shieldd_sdk_proto::tendermint::types::BlockId {
-                        hash: vec![0u8; 32],
-                        part_set_header: None,
-                    }),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-        };
-
-        assert!(parse_block_ref(2, response).is_err());
+    #[tokio::test]
+    async fn host_identity_retries_transient_failure_and_rejects_wrong_height() {
+        let source = Arc::new(MemoryBlockIdentity::default());
+        source.insert(block(2, 2, 1));
+        source.failures.lock().unwrap().insert(2, 1);
+        let (worker, _) = IssuerComplianceWorker::new(
+            DetectionKey::demo(),
+            asset::Id(decaf377::Fq::from(1u64)),
+            Arc::new(SqliteScannerStore::new(":memory:").unwrap()),
+            source.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(worker.block_ref(2).await.unwrap().height, 2);
+        source.blocks.lock().unwrap().insert(2, block(3, 3, 2));
+        assert!(worker
+            .block_ref(2)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("height mismatch"));
     }
 }

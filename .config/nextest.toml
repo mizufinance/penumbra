@@ -1,3 +1,6 @@
+[profile.default]
+test-threads = 2
+
 [[profile.default.overrides]]
-filter = 'package(shieldd-sdk-app-tests) and binary(ics23_transfer)'
-threads-required = "num-test-threads"
+filter = 'package(shieldd-sdk-app-tests)'
+threads-required = 2

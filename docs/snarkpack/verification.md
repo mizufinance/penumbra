@@ -2,7 +2,7 @@
 
 Shieldd validates aggregation through production tests, an independent
 reference crate, interoperability fixtures, fuzzing, and byte locks. Formal
-specifications and evidence live in `mizufinance/shieldd-formal`.
+specifications and evidence live in `mizufinance/shieldd-security`.
 
 ## Algebra
 
