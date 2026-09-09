@@ -60,7 +60,7 @@ impl Storage {
             commitments.extend(plan.actions.iter().filter_map(|action| match action {
                 ActionPlan::Transfer(plan) => plan.accumulator_prior_commitment(),
                 ActionPlan::ShieldedHostWithdrawal(plan) => plan.accumulator_prior_commitment(),
-                ActionPlan::ShieldedIcs20Withdrawal(plan) => plan.accumulator_prior_commitment(),
+
                 _ => None,
             }));
             let proofs = commitments

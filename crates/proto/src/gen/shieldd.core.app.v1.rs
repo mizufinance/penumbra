@@ -48,11 +48,6 @@ pub struct AppParameters {
     pub sct_params: ::core::option::Option<
         super::super::component::sct::v1::SctParameters,
     >,
-    /// IBC module parameters.
-    #[prost(message, optional, tag = "5")]
-    pub ibc_params: ::core::option::Option<
-        super::super::component::ibc::v1::IbcParameters,
-    >,
     /// Fee module parameters.
     #[prost(message, optional, tag = "7")]
     pub fee_params: ::core::option::Option<
@@ -141,11 +136,6 @@ pub struct GenesisContent {
     #[prost(message, optional, tag = "3")]
     pub shielded_pool_content: ::core::option::Option<
         super::super::component::shielded_pool::v1::GenesisContent,
-    >,
-    /// IBC module genesis state.
-    #[prost(message, optional, tag = "5")]
-    pub ibc_content: ::core::option::Option<
-        super::super::component::ibc::v1::GenesisContent,
     >,
     /// Sct module genesis state.
     #[prost(message, optional, tag = "6")]

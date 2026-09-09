@@ -270,20 +270,20 @@ impl ::prost::Name for ZkNoteReshapeProof {
         "/shieldd.core.component.shielded_pool.v1.ZKNoteReshapeProof".into()
     }
 }
-/// A Shieldd ZK shielded ICS-20 withdrawal proof.
+/// A Shieldd ZK shielded withdrawal proof.
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ZkShieldedIcs20WithdrawalProof {
+pub struct ZkShieldedWithdrawalProof {
     #[prost(bytes = "vec", tag = "1")]
     pub inner: ::prost::alloc::vec::Vec<u8>,
 }
-impl ::prost::Name for ZkShieldedIcs20WithdrawalProof {
-    const NAME: &'static str = "ZKShieldedIcs20WithdrawalProof";
+impl ::prost::Name for ZkShieldedWithdrawalProof {
+    const NAME: &'static str = "ZKShieldedWithdrawalProof";
     const PACKAGE: &'static str = "shieldd.core.component.shielded_pool.v1";
     fn full_name() -> ::prost::alloc::string::String {
-        "shieldd.core.component.shielded_pool.v1.ZKShieldedIcs20WithdrawalProof".into()
+        "shieldd.core.component.shielded_pool.v1.ZKShieldedWithdrawalProof".into()
     }
     fn type_url() -> ::prost::alloc::string::String {
-        "/shieldd.core.component.shielded_pool.v1.ZKShieldedIcs20WithdrawalProof".into()
+        "/shieldd.core.component.shielded_pool.v1.ZKShieldedWithdrawalProof".into()
     }
 }
 /// A proof that one real note is consumed with its canonical compliance nullifier.
@@ -840,7 +840,7 @@ pub struct ShieldedHostWithdrawal {
     >,
     /// The proof that the withdrawal is well-formed.
     #[prost(message, optional, tag = "3")]
-    pub proof: ::core::option::Option<ZkShieldedIcs20WithdrawalProof>,
+    pub proof: ::core::option::Option<ZkShieldedWithdrawalProof>,
 }
 impl ::prost::Name for ShieldedHostWithdrawal {
     const NAME: &'static str = "ShieldedHostWithdrawal";
@@ -875,7 +875,7 @@ pub struct ShieldedHostWithdrawalBody {
     pub withdrawal: ::core::option::Option<HostWithdrawal>,
     /// The sender-owned change note or sender-owned zero-value dummy.
     #[prost(message, optional, tag = "6")]
-    pub change_output: ::core::option::Option<ShieldedIcs20WithdrawalChangeBody>,
+    pub change_output: ::core::option::Option<ShieldedWithdrawalChangeBody>,
     /// Target timestamp for compliance verification (Unix UTC seconds).
     #[prost(uint64, tag = "7")]
     pub target_timestamp: u64,
@@ -1016,7 +1016,7 @@ impl ::prost::Name for ShieldedHostWithdrawalPlan {
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ShieldedIcs20WithdrawalChangeBody {
+pub struct ShieldedWithdrawalChangeBody {
     /// The minimal data required to scan and process the created change note.
     #[prost(message, optional, tag = "1")]
     pub note_payload: ::core::option::Option<NotePayload>,
@@ -1027,204 +1027,14 @@ pub struct ShieldedIcs20WithdrawalChangeBody {
     #[prost(bytes = "vec", tag = "3")]
     pub ovk_wrapped_key: ::prost::alloc::vec::Vec<u8>,
 }
-impl ::prost::Name for ShieldedIcs20WithdrawalChangeBody {
-    const NAME: &'static str = "ShieldedIcs20WithdrawalChangeBody";
+impl ::prost::Name for ShieldedWithdrawalChangeBody {
+    const NAME: &'static str = "ShieldedWithdrawalChangeBody";
     const PACKAGE: &'static str = "shieldd.core.component.shielded_pool.v1";
     fn full_name() -> ::prost::alloc::string::String {
-        "shieldd.core.component.shielded_pool.v1.ShieldedIcs20WithdrawalChangeBody"
-            .into()
+        "shieldd.core.component.shielded_pool.v1.ShieldedWithdrawalChangeBody".into()
     }
     fn type_url() -> ::prost::alloc::string::String {
-        "/shieldd.core.component.shielded_pool.v1.ShieldedIcs20WithdrawalChangeBody"
-            .into()
-    }
-}
-/// Withdraws shielded funds over ICS-20 while keeping shielded change in the same action.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ShieldedIcs20Withdrawal {
-    /// The effecting data of the withdrawal.
-    #[prost(message, optional, tag = "1")]
-    pub body: ::core::option::Option<ShieldedIcs20WithdrawalBody>,
-    /// The authorizing signatures for each consumed input.
-    #[prost(message, repeated, tag = "2")]
-    pub auth_sigs: ::prost::alloc::vec::Vec<
-        super::super::super::super::crypto::decaf377_rdsa::v1::SpendAuthSignature,
-    >,
-    /// The proof that the withdrawal is well-formed.
-    #[prost(message, optional, tag = "3")]
-    pub proof: ::core::option::Option<ZkShieldedIcs20WithdrawalProof>,
-}
-impl ::prost::Name for ShieldedIcs20Withdrawal {
-    const NAME: &'static str = "ShieldedIcs20Withdrawal";
-    const PACKAGE: &'static str = "shieldd.core.component.shielded_pool.v1";
-    fn full_name() -> ::prost::alloc::string::String {
-        "shieldd.core.component.shielded_pool.v1.ShieldedIcs20Withdrawal".into()
-    }
-    fn type_url() -> ::prost::alloc::string::String {
-        "/shieldd.core.component.shielded_pool.v1.ShieldedIcs20Withdrawal".into()
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ShieldedIcs20WithdrawalBody {
-    /// The proving family this action uses.
-    #[prost(uint32, tag = "1")]
-    pub family_id: u32,
-    /// The state commitment tree anchor used during proof generation.
-    #[prost(message, optional, tag = "2")]
-    pub anchor: ::core::option::Option<
-        super::super::super::super::crypto::tct::v1::MerkleRoot,
-    >,
-    /// A commitment to the net balance of the action.
-    #[prost(message, optional, tag = "3")]
-    pub balance_commitment: ::core::option::Option<
-        super::super::super::asset::v1::BalanceCommitment,
-    >,
-    /// The consumed notes.
-    #[prost(message, repeated, tag = "4")]
-    pub inputs: ::prost::alloc::vec::Vec<TransferInputBody>,
-    /// The embedded outbound ICS-20 withdrawal payload.
-    #[prost(message, optional, tag = "5")]
-    pub withdrawal: ::core::option::Option<super::super::ibc::v1::Ics20Withdrawal>,
-    /// The sender-owned change note or sender-owned zero-value dummy.
-    #[prost(message, optional, tag = "6")]
-    pub change_output: ::core::option::Option<ShieldedIcs20WithdrawalChangeBody>,
-    /// Target timestamp for compliance verification (Unix UTC seconds).
-    #[prost(uint64, tag = "7")]
-    pub target_timestamp: u64,
-    /// Compliance tree anchor (user tree root) used during proof generation.
-    #[prost(message, optional, tag = "8")]
-    pub compliance_anchor: ::core::option::Option<
-        super::super::super::super::crypto::tct::v1::StateCommitment,
-    >,
-    /// Asset tree anchor used during proof generation.
-    #[prost(message, optional, tag = "9")]
-    pub asset_anchor: ::core::option::Option<
-        super::super::super::super::crypto::tct::v1::StateCommitment,
-    >,
-    /// Sender routing tag, present even when the change output is dummy.
-    #[prost(message, optional, tag = "10")]
-    pub routing_tag: ::core::option::Option<RoutingTag>,
-    /// Poseidon identifier of the privately selected protocol parameter set.
-    #[prost(bytes = "vec", tag = "11")]
-    pub routing_parameter_set_id: ::prost::alloc::vec::Vec<u8>,
-    /// Proof-bound encryption of the exact sender compliance address.
-    #[prost(bytes = "vec", tag = "12")]
-    pub withdrawal_compliance_ciphertext: ::prost::alloc::vec::Vec<u8>,
-    #[prost(message, optional, tag = "14")]
-    pub volume_accumulator: ::core::option::Option<VolumeAccumulatorPayload>,
-}
-impl ::prost::Name for ShieldedIcs20WithdrawalBody {
-    const NAME: &'static str = "ShieldedIcs20WithdrawalBody";
-    const PACKAGE: &'static str = "shieldd.core.component.shielded_pool.v1";
-    fn full_name() -> ::prost::alloc::string::String {
-        "shieldd.core.component.shielded_pool.v1.ShieldedIcs20WithdrawalBody".into()
-    }
-    fn type_url() -> ::prost::alloc::string::String {
-        "/shieldd.core.component.shielded_pool.v1.ShieldedIcs20WithdrawalBody".into()
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ShieldedIcs20WithdrawalView {
-    #[prost(
-        oneof = "shielded_ics20_withdrawal_view::ShieldedIcs20WithdrawalView",
-        tags = "1, 2"
-    )]
-    pub shielded_ics20_withdrawal_view: ::core::option::Option<
-        shielded_ics20_withdrawal_view::ShieldedIcs20WithdrawalView,
-    >,
-}
-/// Nested message and enum types in `ShieldedIcs20WithdrawalView`.
-pub mod shielded_ics20_withdrawal_view {
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Visible {
-        #[prost(message, optional, tag = "1")]
-        pub withdrawal: ::core::option::Option<super::ShieldedIcs20Withdrawal>,
-        #[prost(message, repeated, tag = "2")]
-        pub spent_notes: ::prost::alloc::vec::Vec<super::NoteView>,
-        #[prost(message, optional, tag = "3")]
-        pub change_note: ::core::option::Option<super::NoteView>,
-        #[prost(message, optional, tag = "4")]
-        pub payload_key: ::core::option::Option<
-            super::super::super::super::keys::v1::PayloadKey,
-        >,
-    }
-    impl ::prost::Name for Visible {
-        const NAME: &'static str = "Visible";
-        const PACKAGE: &'static str = "shieldd.core.component.shielded_pool.v1";
-        fn full_name() -> ::prost::alloc::string::String {
-            "shieldd.core.component.shielded_pool.v1.ShieldedIcs20WithdrawalView.Visible"
-                .into()
-        }
-        fn type_url() -> ::prost::alloc::string::String {
-            "/shieldd.core.component.shielded_pool.v1.ShieldedIcs20WithdrawalView.Visible"
-                .into()
-        }
-    }
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Opaque {
-        #[prost(message, optional, tag = "1")]
-        pub withdrawal: ::core::option::Option<super::ShieldedIcs20Withdrawal>,
-    }
-    impl ::prost::Name for Opaque {
-        const NAME: &'static str = "Opaque";
-        const PACKAGE: &'static str = "shieldd.core.component.shielded_pool.v1";
-        fn full_name() -> ::prost::alloc::string::String {
-            "shieldd.core.component.shielded_pool.v1.ShieldedIcs20WithdrawalView.Opaque"
-                .into()
-        }
-        fn type_url() -> ::prost::alloc::string::String {
-            "/shieldd.core.component.shielded_pool.v1.ShieldedIcs20WithdrawalView.Opaque"
-                .into()
-        }
-    }
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum ShieldedIcs20WithdrawalView {
-        #[prost(message, tag = "1")]
-        Visible(Visible),
-        #[prost(message, tag = "2")]
-        Opaque(Opaque),
-    }
-}
-impl ::prost::Name for ShieldedIcs20WithdrawalView {
-    const NAME: &'static str = "ShieldedIcs20WithdrawalView";
-    const PACKAGE: &'static str = "shieldd.core.component.shielded_pool.v1";
-    fn full_name() -> ::prost::alloc::string::String {
-        "shieldd.core.component.shielded_pool.v1.ShieldedIcs20WithdrawalView".into()
-    }
-    fn type_url() -> ::prost::alloc::string::String {
-        "/shieldd.core.component.shielded_pool.v1.ShieldedIcs20WithdrawalView".into()
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ShieldedIcs20WithdrawalPlan {
-    /// The blinding factor to use for the net balance commitment.
-    #[prost(bytes = "vec", tag = "2")]
-    pub value_blinding: ::prost::alloc::vec::Vec<u8>,
-    /// The shielded input plans fused into this withdrawal.
-    #[prost(message, repeated, tag = "4")]
-    pub spends: ::prost::alloc::vec::Vec<ShieldedInputPlan>,
-    /// The sender-owned change output, if any.
-    #[prost(message, optional, tag = "5")]
-    pub change_output: ::core::option::Option<ShieldedOutputPlan>,
-    /// The embedded outbound ICS-20 withdrawal payload.
-    #[prost(message, optional, tag = "6")]
-    pub withdrawal: ::core::option::Option<super::super::ibc::v1::Ics20Withdrawal>,
-    /// Protocol routing parameter set used to construct and prove the action.
-    #[prost(message, optional, tag = "7")]
-    pub routing_parameters: ::core::option::Option<DiscoveryParameters>,
-    #[prost(message, optional, tag = "8")]
-    pub compliance: ::core::option::Option<WithdrawalContext>,
-    #[prost(message, optional, tag = "9")]
-    pub volume_accumulator: ::core::option::Option<VolumeAccumulatorPlan>,
-}
-impl ::prost::Name for ShieldedIcs20WithdrawalPlan {
-    const NAME: &'static str = "ShieldedIcs20WithdrawalPlan";
-    const PACKAGE: &'static str = "shieldd.core.component.shielded_pool.v1";
-    fn full_name() -> ::prost::alloc::string::String {
-        "shieldd.core.component.shielded_pool.v1.ShieldedIcs20WithdrawalPlan".into()
-    }
-    fn type_url() -> ::prost::alloc::string::String {
-        "/shieldd.core.component.shielded_pool.v1.ShieldedIcs20WithdrawalPlan".into()
+        "/shieldd.core.component.shielded_pool.v1.ShieldedWithdrawalChangeBody".into()
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

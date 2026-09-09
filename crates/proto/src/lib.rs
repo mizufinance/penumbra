@@ -87,13 +87,6 @@ pub mod shieldd {
                 }
             }
 
-            pub mod ibc {
-                pub mod v1 {
-                    include!("gen/shieldd.core.component.ibc.v1.rs");
-                    include!("gen/shieldd.core.component.ibc.v1.serde.rs");
-                }
-            }
-
             pub mod sct {
                 pub mod v1 {
                     include!("gen/shieldd.core.component.sct.v1.rs");
@@ -192,12 +185,6 @@ pub mod cosmos {
     pub mod base {
         pub mod v1beta1 {
             include!("gen/cosmos.base.v1beta1.rs");
-        }
-
-        pub mod query {
-            pub mod v1beta1 {
-                include!("gen/cosmos.base.query.v1beta1.rs");
-            }
         }
     }
 }

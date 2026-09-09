@@ -25,11 +25,10 @@ pub mod proof_test_helpers {
 
     use crate::{
         note_reshape_padding::{dummy_state_commitment_proof, HiddenArityPadder},
-        Note, Rseed, ShieldedIcs20WithdrawalChangePrivate, ShieldedIcs20WithdrawalChangePublic,
-        ShieldedIcs20WithdrawalFamilyId, ShieldedIcs20WithdrawalInputPublic,
-        ShieldedIcs20WithdrawalOptionalInputPrivate, ShieldedIcs20WithdrawalProofPrivate,
-        ShieldedIcs20WithdrawalProofPublic, ShieldedIcs20WithdrawalRequiredInputPrivate,
-        ShieldedInputPlan,
+        Note, Rseed, ShieldedInputPlan, ShieldedWithdrawalChangePrivate,
+        ShieldedWithdrawalChangePublic, ShieldedWithdrawalFamilyId, ShieldedWithdrawalInputPublic,
+        ShieldedWithdrawalOptionalInputPrivate, ShieldedWithdrawalProofPrivate,
+        ShieldedWithdrawalProofPublic, ShieldedWithdrawalRequiredInputPrivate,
     };
 
     #[derive(Clone, Copy)]
@@ -1075,15 +1074,15 @@ pub mod proof_test_helpers {
         build_note_reshape_roundtrip_inputs_with_rng(&mut rng, family_id)
     }
 
-    pub(crate) fn build_shielded_ics20_withdrawal_roundtrip_inputs_with_rng_and_mode(
+    pub(crate) fn build_shielded_withdrawal_roundtrip_inputs_with_rng_and_mode(
         rng: &mut (impl rand::RngCore + rand_core::CryptoRng),
-        family_id: ShieldedIcs20WithdrawalFamilyId,
+        family_id: ShieldedWithdrawalFamilyId,
         is_regulated: bool,
         real_spends: usize,
         accumulator_mode: WithdrawalAccumulatorTestMode,
     ) -> (
-        crate::ShieldedIcs20WithdrawalProofPublic,
-        crate::ShieldedIcs20WithdrawalProofPrivate,
+        crate::ShieldedWithdrawalProofPublic,
+        crate::ShieldedWithdrawalProofPrivate,
     ) {
         assert!(
             (1..=2).contains(&real_spends),
@@ -1109,7 +1108,7 @@ pub mod proof_test_helpers {
             crate::Rseed::generate(rng),
             crate::RecoveryCommitment::unavailable(),
         )
-        .expect("create shielded ICS-20 withdrawal note a");
+        .expect("create shielded withdrawal note a");
         let note_b = crate::Note::from_parts(
             base.address.clone(),
             Value {
@@ -1119,7 +1118,7 @@ pub mod proof_test_helpers {
             crate::Rseed::generate(rng),
             crate::RecoveryCommitment::unavailable(),
         )
-        .expect("create shielded ICS-20 withdrawal note b");
+        .expect("create shielded withdrawal note b");
 
         let spend_a = ShieldedInputPlan::new(rng, note_a.clone(), 0u64.into());
         let spend_b = ShieldedInputPlan::new(rng, note_b.clone(), 1u64.into());
@@ -1166,7 +1165,7 @@ pub mod proof_test_helpers {
             crate::Rseed::generate(rng),
             base.user_leaf.capk,
         )
-        .expect("create shielded ICS-20 withdrawal change note");
+        .expect("create shielded withdrawal change note");
 
         let padder = HiddenArityPadder {
             value_blinding: Fr::from(13u64),
@@ -1174,18 +1173,15 @@ pub mod proof_test_helpers {
             sender_address: base.address.clone(),
             asset_id: base.value.asset_id,
             capk: base.user_leaf.capk,
-            nullifier_domain_sep_label:
-                b"shieldd.shielded_ics20_withdrawal.synthetic_dummy.nullifier",
-            nullifier_seed_label:
-                b"shieldd.shielded_ics20_withdrawal.synthetic_dummy.nullifier_seed",
-            spend_auth_key_label:
-                b"shieldd.shielded_ics20_withdrawal.synthetic_dummy.spend_auth_key",
+            nullifier_domain_sep_label: b"shieldd.shielded_withdrawal.synthetic_dummy.nullifier",
+            nullifier_seed_label: b"shieldd.shielded_withdrawal.synthetic_dummy.nullifier_seed",
+            spend_auth_key_label: b"shieldd.shielded_withdrawal.synthetic_dummy.spend_auth_key",
             spend_auth_randomizer_label:
-                b"shieldd.shielded_ics20_withdrawal.synthetic_dummy.spend_auth_randomizer",
-            input_note_label: b"shieldd.shielded_ics20_withdrawal.synthetic_dummy.input_note",
-            output_note_label: b"shieldd.shielded_ics20_withdrawal.synthetic_dummy.output_note",
+                b"shieldd.shielded_withdrawal.synthetic_dummy.spend_auth_randomizer",
+            input_note_label: b"shieldd.shielded_withdrawal.synthetic_dummy.input_note",
+            output_note_label: b"shieldd.shielded_withdrawal.synthetic_dummy.output_note",
         };
-        let mut input_publics = vec![ShieldedIcs20WithdrawalInputPublic {
+        let mut input_publics = vec![ShieldedWithdrawalInputPublic {
             nullifier: spend_a.nullifier(
                 &base
                     .action_witness()
@@ -1196,7 +1192,7 @@ pub mod proof_test_helpers {
             history_required: false,
         }];
         input_publics.push(if real_spends == 2 {
-            ShieldedIcs20WithdrawalInputPublic {
+            ShieldedWithdrawalInputPublic {
                 nullifier: spend_b.nullifier(
                     &base
                         .action_witness()
@@ -1207,20 +1203,20 @@ pub mod proof_test_helpers {
                 history_required: false,
             }
         } else {
-            ShieldedIcs20WithdrawalInputPublic {
+            ShieldedWithdrawalInputPublic {
                 nullifier: padder.synthetic_dummy_nullifier(1),
                 rk: padder.synthetic_dummy_verification_key(1),
                 history_required: false,
             }
         });
-        let required_input = ShieldedIcs20WithdrawalRequiredInputPrivate {
+        let required_input = ShieldedWithdrawalRequiredInputPrivate {
             state_commitment_proof: required_proof,
             spent_note: note_a,
             spend_auth_randomizer: spend_a.randomizer,
         };
         let optional_input = if let Some(state_commitment_proof) = optional_proof {
-            ShieldedIcs20WithdrawalOptionalInputPrivate {
-                spend: ShieldedIcs20WithdrawalRequiredInputPrivate {
+            ShieldedWithdrawalOptionalInputPrivate {
+                spend: ShieldedWithdrawalRequiredInputPrivate {
                     state_commitment_proof,
                     spent_note: note_b,
                     spend_auth_randomizer: spend_b.randomizer,
@@ -1230,8 +1226,8 @@ pub mod proof_test_helpers {
             }
         } else {
             let dummy_note = padder.synthetic_dummy_input_note(1);
-            ShieldedIcs20WithdrawalOptionalInputPrivate {
-                spend: ShieldedIcs20WithdrawalRequiredInputPrivate {
+            ShieldedWithdrawalOptionalInputPrivate {
+                spend: ShieldedWithdrawalRequiredInputPrivate {
                     state_commitment_proof: dummy_state_commitment_proof(dummy_note.commit()),
                     spent_note: dummy_note,
                     spend_auth_randomizer: padder.synthetic_dummy_spend_auth_randomizer(1),
@@ -1301,7 +1297,7 @@ pub mod proof_test_helpers {
         );
 
         (
-            ShieldedIcs20WithdrawalProofPublic {
+            ShieldedWithdrawalProofPublic {
                 family_id,
                 anchor,
                 balance_commitment: Balance::default().commit(Fr::from(13u64)),
@@ -1309,7 +1305,7 @@ pub mod proof_test_helpers {
                 compliance_anchor: base.compliance_anchor,
                 target_timestamp: Fq::from(base.target_timestamp),
                 inputs: input_publics,
-                change_output: ShieldedIcs20WithdrawalChangePublic {
+                change_output: ShieldedWithdrawalChangePublic {
                     note_commitment: change_note.commit(),
                     recovery_commitment: change_note.recovery_commitment(),
                 },
@@ -1331,7 +1327,7 @@ pub mod proof_test_helpers {
                     day_start: volume_payload.day_start,
                 },
             },
-            ShieldedIcs20WithdrawalProofPrivate {
+            ShieldedWithdrawalProofPrivate {
                 family_id,
                 action_balance_blinding: Fr::from(13u64),
                 ak: *base.fvk.spend_verification_key(),
@@ -1349,7 +1345,7 @@ pub mod proof_test_helpers {
                 withdrawal_randomizer: withdrawal.r,
                 required_input,
                 optional_input,
-                change_output: ShieldedIcs20WithdrawalChangePrivate {
+                change_output: ShieldedWithdrawalChangePrivate {
                     created_note: change_note,
                 },
                 volume_accumulator_seed: Fq::from_le_bytes_mod_order(&Fr::from(11u64).to_bytes()),
@@ -1363,16 +1359,16 @@ pub mod proof_test_helpers {
         )
     }
 
-    pub(crate) fn build_shielded_ics20_withdrawal_roundtrip_inputs_with_rng_and_real_spends(
+    pub(crate) fn build_shielded_withdrawal_roundtrip_inputs_with_rng_and_real_spends(
         rng: &mut (impl rand::RngCore + rand_core::CryptoRng),
-        family_id: ShieldedIcs20WithdrawalFamilyId,
+        family_id: ShieldedWithdrawalFamilyId,
         is_regulated: bool,
         real_spends: usize,
     ) -> (
-        crate::ShieldedIcs20WithdrawalProofPublic,
-        crate::ShieldedIcs20WithdrawalProofPrivate,
+        crate::ShieldedWithdrawalProofPublic,
+        crate::ShieldedWithdrawalProofPrivate,
     ) {
-        build_shielded_ics20_withdrawal_roundtrip_inputs_with_rng_and_mode(
+        build_shielded_withdrawal_roundtrip_inputs_with_rng_and_mode(
             rng,
             family_id,
             is_regulated,
@@ -1381,15 +1377,15 @@ pub mod proof_test_helpers {
         )
     }
 
-    pub(crate) fn build_shielded_ics20_withdrawal_roundtrip_inputs_with_rng(
+    pub(crate) fn build_shielded_withdrawal_roundtrip_inputs_with_rng(
         rng: &mut (impl rand::RngCore + rand_core::CryptoRng),
-        family_id: ShieldedIcs20WithdrawalFamilyId,
+        family_id: ShieldedWithdrawalFamilyId,
         is_regulated: bool,
     ) -> (
-        crate::ShieldedIcs20WithdrawalProofPublic,
-        crate::ShieldedIcs20WithdrawalProofPrivate,
+        crate::ShieldedWithdrawalProofPublic,
+        crate::ShieldedWithdrawalProofPrivate,
     ) {
-        build_shielded_ics20_withdrawal_roundtrip_inputs_with_rng_and_real_spends(
+        build_shielded_withdrawal_roundtrip_inputs_with_rng_and_real_spends(
             rng,
             family_id,
             is_regulated,
@@ -1397,15 +1393,15 @@ pub mod proof_test_helpers {
         )
     }
 
-    pub(crate) fn build_shielded_ics20_withdrawal_roundtrip_inputs(
-        family_id: ShieldedIcs20WithdrawalFamilyId,
+    pub(crate) fn build_shielded_withdrawal_roundtrip_inputs(
+        family_id: ShieldedWithdrawalFamilyId,
         is_regulated: bool,
     ) -> (
-        crate::ShieldedIcs20WithdrawalProofPublic,
-        crate::ShieldedIcs20WithdrawalProofPrivate,
+        crate::ShieldedWithdrawalProofPublic,
+        crate::ShieldedWithdrawalProofPrivate,
     ) {
         let mut rng = rand::thread_rng();
-        build_shielded_ics20_withdrawal_roundtrip_inputs_with_rng(&mut rng, family_id, is_regulated)
+        build_shielded_withdrawal_roundtrip_inputs_with_rng(&mut rng, family_id, is_regulated)
     }
 
     fn split_transfer_amounts(parts: usize, total: u64) -> Vec<u64> {

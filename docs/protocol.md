@@ -81,18 +81,21 @@ source locations and replay-protected receipts. Bankd supplies their authorizati
 Shieldd validates the state/proof prerequisites. [HostExecution](../crates/core/app/src/app/host.rs)
 defines legal lifecycle transitions and exact source/digest encoding.
 
-## IBC and proof systems
+## Withdrawals and proof systems
 
-[IBC](../crates/core/component/ibc/src) retains client verification, relay and
-ICS20 behavior. Shielded ICS20 withdrawal and host withdrawal share the withdrawal
-proof family; their typed destinations and external effects remain distinct.
+`ShieldedHostWithdrawal` is the withdrawal action. Its `HostWithdrawal` carries
+an asset, amount, and either a transfer recipient or host execution calls.
+Bankd settles the resulting host effects and owns all IBC execution.
+`ShieldedWithdrawalProof` binds the host destination effect hash, value and
+compliance facts; the canonical proof family is `shielded_withdrawal`.
 
 [Gnark circuits](../tools/gnark/internal/circuits) and Rust public-input projection
 must agree on fields, canonical encodings, hash domains, dummy branches and
 statement ordering. Exact relation coverage is in the
 [Transfer](transfer-circuit/constraint-checklist.md) and
 [compliance](compliance/constraint-checklist.md) checklists. Proof metadata and
-staged manifests bind exact artifacts; cleanup must not silently regenerate keys.
+staged manifests bind exact artifacts. Setup changes require fresh proof checks
+and coordinated deployment of verifiers and proving clients.
 
 [SnarkPack](snarkpack/design.md) retains full-target v1 and torus v2 encodings
 with the existing transcript, statement and SRS semantics. Independent reference,

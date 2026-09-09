@@ -5,7 +5,6 @@ import "google/protobuf/any.proto";
 import "shieldd/core/asset/v1/asset.proto";
 import "shieldd/core/component/compliance/v1/compliance.proto";
 import "shieldd/core/component/fee/v1/fee.proto";
-import "shieldd/core/component/ibc/v1/ibc.proto";
 import "shieldd/core/component/sct/v1/sct.proto";
 import "shieldd/core/component/shielded_pool/v1/shielded_pool.proto";
 import "shieldd/core/keys/v1/keys.proto";
@@ -68,7 +67,7 @@ enum ProofFamilyId {
   PROOF_FAMILY_ID_UNSPECIFIED = 0;
   PROOF_FAMILY_ID_TRANSFER = 7;
   PROOF_FAMILY_ID_NOTE_RESHAPE = 8;
-  PROOF_FAMILY_ID_SHIELDED_ICS20_WITHDRAWAL = 10;
+  PROOF_FAMILY_ID_SHIELDED_WITHDRAWAL = 10;
 }
 
 message FamilyAggregate {
@@ -78,7 +77,7 @@ message FamilyAggregate {
   bytes aggregate_proof = 5;
   uint32 note_reshape_family_id = 6;
   reserved 7;
-  uint32 shielded_ics20_withdrawal_family_id = 8;
+  uint32 shielded_withdrawal_family_id = 8;
 }
 
 message AggregateBundle {
@@ -89,21 +88,18 @@ message AggregateBundle {
 
 // A state change performed by a transaction.
 message Action {
-  reserved 7, 16, 18, 20;
+  reserved 7, 16, 17, 18, 20, 200;
   oneof action {
     component.shielded_pool.v1.Transfer transfer = 5;
     component.shielded_pool.v1.NoteReshape note_reshape = 6;
 
     // Uncommon actions have numbers > 15.
 
-    component.ibc.v1.IbcRelay ibc_relay_action = 17;
-
     // Compliance
     component.compliance.v1.MsgRegisterAsset compliance_register_asset = 80;
     component.compliance.v1.MsgRegisterUser compliance_register_user = 81;
     AggregateBundle aggregate_bundle = 82;
 
-    component.shielded_pool.v1.ShieldedIcs20Withdrawal shielded_ics20_withdrawal = 200;
     component.shielded_pool.v1.ShieldedHostWithdrawal shielded_host_withdrawal = 201;
   }
 }
@@ -195,20 +191,18 @@ message TransactionBodyView {
 
 // A view of a specific state change action performed by a transaction.
 message ActionView {
-  reserved 7, 16, 18, 20;
+  reserved 7, 16, 17, 18, 20, 200;
   oneof action_view {
     component.shielded_pool.v1.TransferView transfer = 5;
     component.shielded_pool.v1.NoteReshapeView note_reshape = 6;
 
     // Action types without visible/opaque variants
-    component.ibc.v1.IbcRelay ibc_relay_action = 17;
 
     // Compliance
     component.compliance.v1.MsgRegisterAsset compliance_register_asset = 80;
     component.compliance.v1.MsgRegisterUser compliance_register_user = 81;
     AggregateBundle aggregate_bundle = 82;
 
-    component.shielded_pool.v1.ShieldedIcs20WithdrawalView shielded_ics20_withdrawal = 200;
     component.shielded_pool.v1.ShieldedHostWithdrawalView shielded_host_withdrawal = 201;
   }
 }
@@ -266,15 +260,11 @@ message FeeFundingPlan {
 // Some transaction Actions don't have any private data and are treated as being plans
 // themselves.
 message ActionPlan {
-  reserved 7, 16, 18, 20;
+  reserved 7, 16, 17, 18, 20, 200;
   oneof action {
     component.shielded_pool.v1.TransferPlan transfer = 5;
     component.shielded_pool.v1.NoteReshapePlan note_reshape = 6;
 
-    // This is just a message relayed to the chain.
-    component.ibc.v1.IbcRelay ibc_relay_action = 17;
-
-    component.shielded_pool.v1.ShieldedIcs20WithdrawalPlan shielded_ics20_withdrawal = 200;
     component.shielded_pool.v1.ShieldedHostWithdrawalPlan shielded_host_withdrawal = 201;
 
     // Compliance

@@ -12,7 +12,6 @@ impl App {
                 crate::app_version::initialize_app_version(&mut state_tx);
                 state_tx.put_chain_id(genesis.chain_id.clone());
                 state_tx.put_host_withdrawals_enabled(true);
-                state_tx.put_ibc_params(genesis.ibc_content.ibc_params.clone());
                 Sct::init_chain(&mut state_tx, Some(&genesis.sct_content)).await;
                 Compliance::init_chain(&mut state_tx, Some(&genesis.compliance_content)).await;
                 ShieldedPool::init_chain(&mut state_tx, Some(&genesis.shielded_pool_content)).await;

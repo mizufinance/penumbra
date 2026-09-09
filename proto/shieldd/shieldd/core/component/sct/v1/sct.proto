@@ -32,6 +32,7 @@ message Epoch {
 // This message allows clients to track provenance of state commitments, and to
 // decide whether or not to download block data.
 message CommitmentSource {
+  reserved 2;
   // The state commitment was included in the genesis state.
   message Genesis {}
   // The commitment was created by a transaction.
@@ -47,17 +48,9 @@ message CommitmentSource {
     bytes id = 1;
   }
   // The commitment was created by an inbound ICS20 transfer.
-  message Ics20Transfer {
-    // The sequence number of the packet that triggered the transfer
-    uint64 packet_seq = 1;
-    // The channel id the transfer happened on
-    string channel_id = 2;
-    // The sender address on the counterparty chain
-    string sender = 3;
-  }
+
   oneof source {
     Transaction transaction = 1;
-    Ics20Transfer ics_20_transfer = 2;
     Genesis genesis = 40;
   }
 }

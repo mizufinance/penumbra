@@ -16,8 +16,8 @@ const TransferStatementFieldsPerOutput = 2
 const NoteReshapeStatementBaseFields = 7
 const NoteReshapeStatementFieldsPerInput = 3
 const NoteReshapeStatementFieldsPerOutput = 2
-const ShieldedIcs20WithdrawalStatementBaseFields = 25
-const ShieldedIcs20WithdrawalStatementFieldsPerInput = 3
+const ShieldedWithdrawalStatementBaseFields = 25
+const ShieldedWithdrawalStatementFieldsPerInput = 3
 const NoteSeizureStatementFieldCount = 19
 
 func hashStatementFields(
@@ -134,9 +134,9 @@ func NoteReshapeStatementFieldCount(nIn, nOut int) int {
 
 func transferStatementLabel() string { return "transfer" }
 
-func shieldedIcs20WithdrawalStatementLabel(nIn int) string {
+func shieldedWithdrawalStatementLabel(nIn int) string {
 	_ = nIn
-	return "shielded_ics20_withdrawal"
+	return "shielded_withdrawal"
 }
 
 func TransferStatementHashForShape(
@@ -169,17 +169,17 @@ func NoteReshapeStatementHashForShape(
 	)
 }
 
-func ShieldedIcs20WithdrawalStatementFieldCount(nIn int) int {
-	return ShieldedIcs20WithdrawalStatementBaseFields +
-		ShieldedIcs20WithdrawalStatementFieldsPerInput*nIn
+func ShieldedWithdrawalStatementFieldCount(nIn int) int {
+	return ShieldedWithdrawalStatementBaseFields +
+		ShieldedWithdrawalStatementFieldsPerInput*nIn
 }
 
-func ShieldedIcs20WithdrawalStatementHashForShape(
+func ShieldedWithdrawalStatementHashForShape(
 	api frontend.API,
 	nIn int,
 	fields []frontend.Variable,
 ) (frontend.Variable, error) {
-	return shieldedIcs20WithdrawalStatementHash(api, nIn, fields)
+	return shieldedWithdrawalStatementHash(api, nIn, fields)
 }
 
 func NoteSeizureStatementHash(
@@ -204,17 +204,17 @@ func NoteSeizureStatementHashNative(fields []*big.Int) (*big.Int, error) {
 	)
 }
 
-func shieldedIcs20WithdrawalStatementHash(
+func shieldedWithdrawalStatementHash(
 	api frontend.API,
 	nIn int,
 	fields []frontend.Variable,
 ) (frontend.Variable, error) {
 	return transferStatementHashWithDomain(
 		api,
-		shieldedIcs20WithdrawalStatementLabel(nIn),
+		shieldedWithdrawalStatementLabel(nIn),
 		"statement",
 		fields,
-		ShieldedIcs20WithdrawalStatementFieldCount(nIn),
+		ShieldedWithdrawalStatementFieldCount(nIn),
 	)
 }
 
@@ -426,14 +426,14 @@ func NoteReshapeStatementHashNativeForShape(
 	)
 }
 
-func ShieldedIcs20WithdrawalStatementHashNativeForShape(
+func ShieldedWithdrawalStatementHashNativeForShape(
 	fields []*big.Int,
 	nIn int,
 ) (*big.Int, error) {
 	return transferStatementHashNativeWithDomain(
 		fields,
-		shieldedIcs20WithdrawalStatementLabel(nIn),
+		shieldedWithdrawalStatementLabel(nIn),
 		"statement",
-		ShieldedIcs20WithdrawalStatementFieldCount(nIn),
+		ShieldedWithdrawalStatementFieldCount(nIn),
 	)
 }

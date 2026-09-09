@@ -16,8 +16,6 @@ use crate::{ActionView, IsAction, TransactionPerspective};
 pub enum Action {
     Transfer(shieldd_sdk_shielded_pool::Transfer),
     NoteReshape(shieldd_sdk_shielded_pool::NoteReshape),
-    IbcRelay(shieldd_sdk_ibc::IbcRelay),
-    ShieldedIcs20Withdrawal(shieldd_sdk_shielded_pool::ShieldedIcs20Withdrawal),
     ShieldedHostWithdrawal(shieldd_sdk_shielded_pool::ShieldedHostWithdrawal),
     ComplianceRegisterAsset(MsgRegisterAsset),
     ComplianceRegisterUser(MsgRegisterUser),
@@ -29,8 +27,7 @@ impl EffectingData for Action {
         match self {
             Action::Transfer(transfer) => transfer.effect_hash(),
             Action::NoteReshape(note_reshape) => note_reshape.effect_hash(),
-            Action::IbcRelay(payload) => payload.effect_hash(),
-            Action::ShieldedIcs20Withdrawal(withdrawal) => withdrawal.effect_hash(),
+
             Action::ShieldedHostWithdrawal(withdrawal) => withdrawal.effect_hash(),
             Action::ComplianceRegisterAsset(action) => action.effect_hash(),
             Action::ComplianceRegisterUser(action) => action.effect_hash(),
@@ -57,13 +54,7 @@ impl Action {
         match self {
             Action::Transfer(_) => tracing::info_span!("Transfer", ?idx),
             Action::NoteReshape(_) => tracing::info_span!("NoteReshape", ?idx),
-            Action::IbcRelay(msg) => {
-                let action_span = tracing::info_span!("IbcAction", ?idx);
-                msg.create_span(&action_span)
-            }
-            Action::ShieldedIcs20Withdrawal(_) => {
-                tracing::info_span!("ShieldedIcs20Withdrawal", ?idx)
-            }
+
             Action::ShieldedHostWithdrawal(_) => {
                 tracing::info_span!("ShieldedHostWithdrawal", ?idx)
             }
@@ -82,11 +73,11 @@ impl Action {
         match self {
             Action::Transfer(_) => 5,
             Action::NoteReshape(_) => 6,
-            Action::IbcRelay(_) => 17,
+
             Action::ComplianceRegisterAsset(_) => 80,
             Action::ComplianceRegisterUser(_) => 81,
             Action::AggregateBundle(_) => 82,
-            Action::ShieldedIcs20Withdrawal(_) => 200,
+
             Action::ShieldedHostWithdrawal(_) => 201,
         }
     }
@@ -97,9 +88,9 @@ impl IsAction for Action {
         match self {
             Action::Transfer(transfer) => transfer.balance_commitment(),
             Action::NoteReshape(note_reshape) => note_reshape.balance_commitment(),
-            Action::ShieldedIcs20Withdrawal(withdrawal) => withdrawal.balance_commitment(),
+
             Action::ShieldedHostWithdrawal(withdrawal) => withdrawal.balance_commitment(),
-            Action::IbcRelay(action) => action.balance_commitment(),
+
             Action::ComplianceRegisterAsset(_) => balance::Commitment::default(),
             Action::ComplianceRegisterUser(_) => balance::Commitment::default(),
             Action::AggregateBundle(_) => balance::Commitment::default(),
@@ -110,9 +101,9 @@ impl IsAction for Action {
         match self {
             Action::Transfer(action) => action.view_from_perspective(txp),
             Action::NoteReshape(action) => action.view_from_perspective(txp),
-            Action::ShieldedIcs20Withdrawal(action) => action.view_from_perspective(txp),
+
             Action::ShieldedHostWithdrawal(action) => action.view_from_perspective(txp),
-            Action::IbcRelay(action) => ActionView::IbcRelay(action.to_owned()),
+
             Action::ComplianceRegisterAsset(action) => {
                 ActionView::ComplianceRegisterAsset(action.to_owned())
             }
@@ -137,12 +128,7 @@ impl From<Action> for pb::Action {
             Action::NoteReshape(inner) => pb::Action {
                 action: Some(pb::action::Action::NoteReshape(inner.into())),
             },
-            Action::IbcRelay(inner) => pb::Action {
-                action: Some(pb::action::Action::IbcRelayAction(inner.into())),
-            },
-            Action::ShieldedIcs20Withdrawal(inner) => pb::Action {
-                action: Some(pb::action::Action::ShieldedIcs20Withdrawal(inner.into())),
-            },
+
             Action::ShieldedHostWithdrawal(inner) => pb::Action {
                 action: Some(pb::action::Action::ShieldedHostWithdrawal(inner.into())),
             },
@@ -174,10 +160,7 @@ impl TryFrom<pb::Action> for Action {
         {
             pb::action::Action::Transfer(inner) => Ok(Action::Transfer(inner.try_into()?)),
             pb::action::Action::NoteReshape(inner) => Ok(Action::NoteReshape(inner.try_into()?)),
-            pb::action::Action::IbcRelayAction(inner) => Ok(Action::IbcRelay(inner.try_into()?)),
-            pb::action::Action::ShieldedIcs20Withdrawal(inner) => {
-                Ok(Action::ShieldedIcs20Withdrawal(inner.try_into()?))
-            }
+
             pb::action::Action::ShieldedHostWithdrawal(inner) => {
                 Ok(Action::ShieldedHostWithdrawal(inner.try_into()?))
             }

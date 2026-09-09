@@ -186,135 +186,107 @@ async fn withdrawal_scanning_preserves_public_asset_and_completes_flagged_audit(
         screener::{ComplianceScreener, ScreeningResult},
         types::{ComplianceCiphertext, ComplianceCiphertextKind, PublicWithdrawalData},
     };
-    for host in [true, false] {
-        for flagged in [true, false] {
-            let store = SqliteScannerStore::new(":memory:").unwrap();
-            let (transfer, _) = crate::evidence::tests::valid_evidence_fixture();
-            let asset_id = transfer.asset_id;
-            let record_ref = if host {
-                crate::ComplianceRecordRef::HostWithdrawal(transfer.output_ref().action)
+
+    for flagged in [true, false] {
+        let store = SqliteScannerStore::new(":memory:").unwrap();
+        let (transfer, _) = crate::evidence::tests::valid_evidence_fixture();
+        let asset_id = transfer.asset_id;
+        let record_ref = crate::ComplianceRecordRef::HostWithdrawal(transfer.output_ref().action);
+        let sender = crate::test_helpers::make_address(42);
+        let key = if flagged {
+            DetectionKey::demo().public_key()
+        } else {
+            decaf377::Element::GENERATOR
+        };
+        let ciphertext = crate::encrypt_withdrawal(rand_core::OsRng, key, &sender)
+            .unwrap()
+            .ciphertext;
+        let public = PublicWithdrawalData {
+            asset_id,
+            amount: 123u64.into(),
+            self_address: None,
+            destination: "destination".to_owned(),
+        };
+        let extracted = ExtractedComplianceCiphertext {
+            record_ref: record_ref.clone(),
+            kind: ComplianceCiphertextKind::Withdrawal,
+            routing_tags: [11, 0],
+            raw_bytes: ciphertext.to_bytes().to_vec(),
+            metadata_bytes: None,
+            public_withdrawal: Some(public.clone()),
+        };
+        let other_asset = asset::Id(asset_id.0 + decaf377::Fq::from(1u64));
+        assert!(matches!(
+            ComplianceScreener::new(DetectionKey::demo(), other_asset).screen(extracted.clone()),
+            ScreeningResult::Irrelevant
+        ));
+        let ScreeningResult::Detected(event) =
+            ComplianceScreener::new(DetectionKey::demo(), asset_id).screen(extracted.clone())
+        else {
+            panic!("public withdrawal must be detected")
+        };
+        assert_eq!(event.asset_id, asset_id);
+        assert_eq!(event.is_flagged, flagged);
+        assert!(matches!(
+            event.ciphertext,
+            ComplianceCiphertext::Withdrawal(_)
+        ));
+        let evidence = ComplianceEvidenceObject::new_withdrawal(
+            record_ref,
+            asset_id,
+            flagged,
+            ciphertext,
+            crate::WithdrawalEvidencePublicData {
+                amount: public.amount,
+                self_address: public.self_address,
+                destination: public.destination,
+            },
+        )
+        .unwrap();
+        let block = evidence.output_ref().action.tx.block;
+        store
+            .commit_scanned_block(&crate::scanner::ScannedBlock {
+                block,
+                outputs: vec![crate::scanner::ScannedOutput {
+                    ciphertext: extracted,
+                    outcome: crate::scanner::OutputOutcome::Detected {
+                        event,
+                        evidence: crate::scanner::CandidateEvidence::Ready(evidence.clone()),
+                    },
+                }],
+            })
+            .await
+            .unwrap();
+        assert_eq!(audit_status(&store, &evidence), AUDIT_STATUS_EVIDENCE_VALID);
+        assert_eq!(
+            decrypt_flagged_rows(&store, &DetectionKey::demo()).unwrap(),
+            u64::from(flagged)
+        );
+        assert_eq!(
+            audit_status(&store, &evidence),
+            if flagged {
+                crate::scanner::types::AUDIT_STATUS_AUDIT_COMPLETE
             } else {
-                crate::ComplianceRecordRef::Ics20Withdrawal(transfer.output_ref().action)
-            };
-            let sender = crate::test_helpers::make_address(42);
-            let key = if flagged {
-                DetectionKey::demo().public_key()
-            } else {
-                decaf377::Element::GENERATOR
-            };
-            let ciphertext = crate::encrypt_withdrawal(rand_core::OsRng, key, &sender)
-                .unwrap()
-                .ciphertext;
-            let public = PublicWithdrawalData {
-                asset_id,
-                amount: 123u64.into(),
-                self_address: None,
-                destination: "destination".to_owned(),
-            };
-            let extracted = ExtractedComplianceCiphertext {
-                record_ref: record_ref.clone(),
-                kind: ComplianceCiphertextKind::Withdrawal,
-                routing_tags: [11, 0],
-                raw_bytes: ciphertext.to_bytes().to_vec(),
-                metadata_bytes: None,
-                public_withdrawal: Some(public.clone()),
-            };
-            let other_asset = asset::Id(asset_id.0 + decaf377::Fq::from(1u64));
-            assert!(matches!(
-                ComplianceScreener::new(DetectionKey::demo(), other_asset)
-                    .screen(extracted.clone()),
-                ScreeningResult::Irrelevant
-            ));
-            let ScreeningResult::Detected(event) =
-                ComplianceScreener::new(DetectionKey::demo(), asset_id).screen(extracted.clone())
-            else {
-                panic!("public withdrawal must be detected")
-            };
-            assert_eq!(event.asset_id, asset_id);
-            assert_eq!(event.is_flagged, flagged);
-            assert!(matches!(
-                event.ciphertext,
-                ComplianceCiphertext::Withdrawal(_)
-            ));
-            let evidence = ComplianceEvidenceObject::new_withdrawal(
-                record_ref,
-                asset_id,
-                flagged,
-                ciphertext,
-                crate::WithdrawalEvidencePublicData {
-                    amount: public.amount,
-                    self_address: public.self_address,
-                    destination: public.destination,
-                },
-            )
-            .unwrap();
-            let block = evidence.output_ref().action.tx.block;
-            store
-                .commit_scanned_block(&crate::scanner::ScannedBlock {
-                    block,
-                    outputs: vec![crate::scanner::ScannedOutput {
-                        ciphertext: extracted,
-                        outcome: crate::scanner::OutputOutcome::Detected {
-                            event,
-                            evidence: crate::scanner::CandidateEvidence::Ready(evidence.clone()),
-                        },
-                    }],
-                    clear_flows: vec![],
-                })
-                .await
-                .unwrap();
-            assert_eq!(audit_status(&store, &evidence), AUDIT_STATUS_EVIDENCE_VALID);
-            assert_eq!(
-                decrypt_flagged_rows(&store, &DetectionKey::demo()).unwrap(),
-                u64::from(flagged)
-            );
-            assert_eq!(
-                audit_status(&store, &evidence),
-                if flagged {
-                    crate::scanner::types::AUDIT_STATUS_AUDIT_COMPLETE
-                } else {
-                    AUDIT_STATUS_EVIDENCE_VALID
-                }
-            );
-            let mut changed_public = evidence.withdrawal.clone().unwrap();
-            changed_public.amount = 999u64.into();
-            let crate::ComplianceEvidenceCiphertext::Withdrawal(ct) = &evidence.ciphertext else {
-                panic!("withdrawal fixture expected")
-            };
-            let changed = ComplianceEvidenceObject::new_withdrawal(
-                evidence.record_ref.clone(),
-                asset_id,
-                flagged,
-                ct.clone(),
-                changed_public,
-            )
-            .unwrap();
-            assert!(
-                validate_and_save_evidence_object(&store, &changed).is_err(),
-                "evidence must bind the public withdrawal amount"
-            );
-            let swapped = match &evidence.record_ref {
-                crate::ComplianceRecordRef::HostWithdrawal(action) => {
-                    crate::ComplianceRecordRef::Ics20Withdrawal(action.clone())
-                }
-                crate::ComplianceRecordRef::Ics20Withdrawal(action) => {
-                    crate::ComplianceRecordRef::HostWithdrawal(action.clone())
-                }
-                _ => panic!("withdrawal fixture expected"),
-            };
-            let changed = ComplianceEvidenceObject::new_withdrawal(
-                swapped,
-                asset_id,
-                flagged,
-                ct.clone(),
-                evidence.withdrawal.clone().unwrap(),
-            )
-            .unwrap();
-            assert!(
-                validate_and_save_evidence_object(&store, &changed).is_err(),
-                "evidence must bind the withdrawal action type"
-            );
-        }
+                AUDIT_STATUS_EVIDENCE_VALID
+            }
+        );
+        let mut changed_public = evidence.withdrawal.clone().unwrap();
+        changed_public.amount = 999u64.into();
+        let crate::ComplianceEvidenceCiphertext::Withdrawal(ct) = &evidence.ciphertext else {
+            panic!("withdrawal fixture expected")
+        };
+        let changed = ComplianceEvidenceObject::new_withdrawal(
+            evidence.record_ref.clone(),
+            asset_id,
+            flagged,
+            ct.clone(),
+            changed_public,
+        )
+        .unwrap();
+        assert!(
+            validate_and_save_evidence_object(&store, &changed).is_err(),
+            "evidence must bind the public withdrawal amount"
+        );
     }
 }
 
@@ -371,7 +343,6 @@ fn scanned_evidence(
                 evidence: crate::scanner::CandidateEvidence::Ready(evidence.clone()),
             },
         }],
-        clear_flows: vec![],
     }
 }
 

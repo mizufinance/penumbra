@@ -5,7 +5,7 @@ use blake2::{
     digest::{generic_array::GenericArray, FixedOutput, Reset, Update},
     Blake2b,
 };
-use shieldd_sdk_shielded_pool::{NoteReshapeFamilyId, ShieldedIcs20WithdrawalFamilyId};
+use shieldd_sdk_shielded_pool::{NoteReshapeFamilyId, ShieldedWithdrawalFamilyId};
 
 use crate::ProofFamilyId;
 
@@ -15,7 +15,7 @@ pub fn transcript_family_domain(family_id: ProofFamilyId) -> Cow<'static, [u8]> 
         ProofFamilyId::NoteReshape(family_id) => {
             Cow::Owned(format!("shieldd.snarkpack.{}", family_id.label()).into_bytes())
         }
-        ProofFamilyId::ShieldedIcs20Withdrawal(family_id) => {
+        ProofFamilyId::ShieldedWithdrawal(family_id) => {
             Cow::Owned(format!("shieldd.snarkpack.{}", family_id.label()).into_bytes())
         }
     }
@@ -63,8 +63,8 @@ macro_rules! define_family_digest {
 }
 
 define_family_digest!(
-    ShieldedIcs20WithdrawalTranscriptDigest,
-    ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical)
+    ShieldedWithdrawalTranscriptDigest,
+    ProofFamilyId::ShieldedWithdrawal(ShieldedWithdrawalFamilyId::Canonical)
 );
 
 #[derive(Clone)]
@@ -152,13 +152,13 @@ mod tests {
         digest::{FixedOutput, Update},
         Blake2b,
     };
-    use shieldd_sdk_shielded_pool::{NoteReshapeFamilyId, ShieldedIcs20WithdrawalFamilyId};
+    use shieldd_sdk_shielded_pool::{NoteReshapeFamilyId, ShieldedWithdrawalFamilyId};
 
     use ark_ip_proofs::challenge::{challenge_preimage, ChallengeContext};
 
     use super::{
-        transcript_family_domain, NoteReshapeTranscriptDigest,
-        ShieldedIcs20WithdrawalTranscriptDigest, TransferTranscriptDigest,
+        transcript_family_domain, NoteReshapeTranscriptDigest, ShieldedWithdrawalTranscriptDigest,
+        TransferTranscriptDigest,
     };
 
     fn assert_digest_prefix<D>(family: ProofFamilyId, challenge_frame: &[u8])
@@ -193,8 +193,8 @@ mod tests {
                 "shieldd.snarkpack.note_reshape8x1".as_bytes(),
             ),
             (
-                ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical),
-                "shieldd.snarkpack.shielded_ics20_withdrawal".as_bytes(),
+                ProofFamilyId::ShieldedWithdrawal(ShieldedWithdrawalFamilyId::Canonical),
+                "shieldd.snarkpack.shielded_withdrawal".as_bytes(),
             ),
         ];
         let mut domains = BTreeSet::new();
@@ -228,8 +228,8 @@ mod tests {
             ProofFamilyId::NoteReshape(NoteReshapeFamilyId::EightByOne),
             &frame,
         );
-        assert_digest_prefix::<ShieldedIcs20WithdrawalTranscriptDigest>(
-            ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical),
+        assert_digest_prefix::<ShieldedWithdrawalTranscriptDigest>(
+            ProofFamilyId::ShieldedWithdrawal(ShieldedWithdrawalFamilyId::Canonical),
             &frame,
         );
     }

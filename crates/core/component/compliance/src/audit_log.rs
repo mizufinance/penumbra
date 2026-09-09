@@ -71,21 +71,12 @@ pub enum AuditSource {
         message_index: u32,
         effect_index: u32,
     },
-    Ibc {
-        height: u64,
-        channel_id: String,
-        packet_sequence: u64,
-        operation: IbcOperation,
-        effect_index: u32,
-    },
 }
 
 impl AuditSource {
     pub fn height(&self) -> u64 {
         match self {
-            Self::ShielddTransaction { height, .. }
-            | Self::Host { height, .. }
-            | Self::Ibc { height, .. } => *height,
+            Self::ShielddTransaction { height, .. } | Self::Host { height, .. } => *height,
         }
     }
 
@@ -99,16 +90,6 @@ impl AuditSource {
             ensure!(
                 chain_id.len() <= MAX_AUDIT_CHAIN_ID_BYTES,
                 "audit host chain ID exceeds size limit"
-            );
-        }
-        if let Self::Ibc { channel_id, .. } = self {
-            ensure!(
-                !channel_id.is_empty(),
-                "audit IBC channel ID must not be empty"
-            );
-            ensure!(
-                channel_id.len() <= MAX_AUDIT_CHAIN_ID_BYTES,
-                "audit IBC channel ID exceeds size limit"
             );
         }
         Ok(())
@@ -165,27 +146,6 @@ impl AuditSource {
                     audit_bytes_commitment(chain_id.as_bytes()),
                 )
             }
-            Self::Ibc {
-                height,
-                channel_id,
-                packet_sequence,
-                operation,
-                effect_index,
-            } => (
-                poseidon377::hash_7(
-                    &AUDIT_SOURCE_DOMAIN,
-                    (
-                        Fq::from(3u64),
-                        Fq::from(*height),
-                        Fq::from(0u64),
-                        Fq::from(0u64),
-                        Fq::from(*packet_sequence),
-                        Fq::from(*operation as u64),
-                        Fq::from(*effect_index),
-                    ),
-                ),
-                audit_bytes_commitment(channel_id.as_bytes()),
-            ),
         };
         Ok(poseidon377::hash_2(
             &AUDIT_SOURCE_DOMAIN,
@@ -197,14 +157,6 @@ impl AuditSource {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WithdrawalKind {
     Host,
-    Ics20,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum IbcOperation {
-    Receive = 1,
-    Refund = 2,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -243,9 +195,6 @@ pub enum AuditEffect {
     AssetRegistered {
         asset_id: asset::Id,
         is_regulated: bool,
-    },
-    IbcRelay {
-        action_effect_hash: [u8; 64],
     },
     NoteSeized {
         asset_id: asset::Id,
@@ -361,7 +310,6 @@ impl AuditEffect {
             } => {
                 fields[0] = Fq::from(match kind {
                     WithdrawalKind::Host => 1u64,
-                    WithdrawalKind::Ics20 => 2u64,
                 });
                 fields[1] = asset_id.0;
                 fields[2] = Fq::from(*amount);
@@ -411,10 +359,7 @@ impl AuditEffect {
                 fields[1] = Fq::from(u64::from(*is_regulated));
                 7
             }
-            Self::IbcRelay { action_effect_hash } => {
-                put_hash_limbs(&mut fields, action_effect_hash);
-                8
-            }
+
             Self::NoteSeized {
                 asset_id,
                 address,
@@ -557,18 +502,6 @@ impl AuditEffectRecord {
                 message_index: reader.read_u32()?,
                 effect_index: reader.read_u32()?,
             },
-            3 => AuditSource::Ibc {
-                height: reader.read_u64()?,
-                channel_id: String::from_utf8(reader.read_bytes(MAX_AUDIT_CHAIN_ID_BYTES)?)
-                    .context("audit IBC channel ID is not UTF-8")?,
-                packet_sequence: reader.read_u64()?,
-                operation: match reader.read_u8()? {
-                    1 => IbcOperation::Receive,
-                    2 => IbcOperation::Refund,
-                    operation => anyhow::bail!("unknown audit IBC operation {operation}"),
-                },
-                effect_index: reader.read_u32()?,
-            },
             tag => anyhow::bail!("unknown audit source tag {tag}"),
         };
         let effect = match reader.read_u8()? {
@@ -615,9 +548,6 @@ impl AuditEffectRecord {
                     1 => true,
                     value => anyhow::bail!("invalid audit regulation flag {value}"),
                 },
-            },
-            8 => AuditEffect::IbcRelay {
-                action_effect_hash: reader.read_fixed()?,
             },
             9 => AuditEffect::NoteSeized {
                 asset_id: reader.read_asset_id()?,
@@ -671,20 +601,6 @@ impl AuditEffectRecord {
                 put_u32(&mut out, *message_index);
                 put_u32(&mut out, *effect_index);
             }
-            AuditSource::Ibc {
-                height,
-                channel_id,
-                packet_sequence,
-                operation,
-                effect_index,
-            } => {
-                out.push(3);
-                put_u64(&mut out, *height);
-                put_bytes(&mut out, channel_id.as_bytes())?;
-                put_u64(&mut out, *packet_sequence);
-                out.push(*operation as u8);
-                put_u32(&mut out, *effect_index);
-            }
         }
         match &self.effect {
             AuditEffect::TransferOutput {
@@ -707,7 +623,6 @@ impl AuditEffectRecord {
                 out.push(2);
                 out.push(match kind {
                     WithdrawalKind::Host => 1,
-                    WithdrawalKind::Ics20 => 2,
                 });
                 out.extend_from_slice(&asset_id.0.to_bytes());
                 out.extend_from_slice(&amount.to_le_bytes());
@@ -759,10 +674,7 @@ impl AuditEffectRecord {
                 out.extend_from_slice(&asset_id.0.to_bytes());
                 out.push(u8::from(*is_regulated));
             }
-            AuditEffect::IbcRelay { action_effect_hash } => {
-                out.push(8);
-                out.extend_from_slice(action_effect_hash);
-            }
+
             AuditEffect::NoteSeized {
                 asset_id,
                 address,
@@ -859,7 +771,6 @@ fn withdrawal_candidate_commitment(
             Fq::from(2u64),
             Fq::from(match kind {
                 WithdrawalKind::Host => 1u64,
-                WithdrawalKind::Ics20 => 2u64,
             }),
             asset_id.0,
             Fq::from(amount),
@@ -1126,7 +1037,6 @@ impl<'a> AuditReader<'a> {
     fn read_withdrawal_kind(&mut self) -> Result<WithdrawalKind> {
         match self.read_u8()? {
             1 => Ok(WithdrawalKind::Host),
-            2 => Ok(WithdrawalKind::Ics20),
             tag => anyhow::bail!("unknown audit withdrawal kind {tag}"),
         }
     }
@@ -1166,7 +1076,7 @@ mod tests {
                 action_index: 2,
                 effect_index,
             },
-            effect: AuditEffect::IbcRelay {
+            effect: AuditEffect::NoteReshape {
                 action_effect_hash: [byte; 64],
             },
         }
@@ -1258,44 +1168,6 @@ mod tests {
         assert_ne!(base.commitment().unwrap(), other.commitment().unwrap());
         let encoded = base.encode().unwrap();
         assert_eq!(AuditEffectRecord::decode(&encoded).unwrap(), base);
-    }
-
-    #[test]
-    fn ibc_public_deposit_round_trips_and_binds_packet_provenance() {
-        let base = AuditEffectRecord {
-            source: AuditSource::Ibc {
-                height: 20,
-                channel_id: "channel-7".to_owned(),
-                packet_sequence: 42,
-                operation: IbcOperation::Receive,
-                effect_index: 0,
-            },
-            effect: AuditEffect::PublicDeposit {
-                asset_id: asset::Id(Fq::from(9u64)),
-                amount: 7,
-                recipient: Address::dummy(&mut OsRng),
-            },
-        };
-        let encoded = base.encode().unwrap();
-        assert_eq!(AuditEffectRecord::decode(&encoded).unwrap(), base);
-
-        let mut refunded = base.clone();
-        if let AuditSource::Ibc { operation, .. } = &mut refunded.source {
-            *operation = IbcOperation::Refund;
-        }
-        assert_ne!(base.commitment().unwrap(), refunded.commitment().unwrap());
-
-        let mut other_packet = base.clone();
-        if let AuditSource::Ibc {
-            packet_sequence, ..
-        } = &mut other_packet.source
-        {
-            *packet_sequence += 1;
-        }
-        assert_ne!(
-            base.commitment().unwrap(),
-            other_packet.commitment().unwrap()
-        );
     }
 
     #[test]

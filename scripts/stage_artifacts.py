@@ -16,6 +16,12 @@ GROUPS = {
     "audit": ["orbis-audit", "orbis-integration"],
 }
 
+GNARK_LIBRARIES = {
+    "libshieldd_gnark_transfer",
+    "libshieldd_gnark_note_reshape",
+    "libshieldd_gnark_shielded_withdrawal",
+}
+
 
 def digest(path):
     with path.open("rb") as source:
@@ -83,7 +89,7 @@ def build(group, output, source_revision, target, profile="release"):
                 copies[f"bin/{name}"] = Path(event["executable"])
         if event.get("reason") == "build-script-executed" and "shieldd-sdk-proof-params" in event["package_id"]:
             for library in (Path(event["out_dir"]) / "gnark").glob("*/*"):
-                if library.suffix in (".so", ".dylib", ".dll"):
+                if library.stem in GNARK_LIBRARIES and library.suffix in (".so", ".dylib", ".dll"):
                     copies[f"lib/gnark/{library.name}"] = library
     if process.wait():
         raise RuntimeError("artifact build failed")

@@ -3,7 +3,6 @@ package shieldd.core.app.v1;
 
 import "shieldd/core/component/fee/v1/fee.proto";
 import "shieldd/core/component/compliance/v1/compliance.proto";
-import "shieldd/core/component/ibc/v1/ibc.proto";
 import "shieldd/core/component/sct/v1/sct.proto";
 import "shieldd/core/component/shielded_pool/v1/shielded_pool.proto";
 import "shieldd/core/transaction/v1/transaction.proto";
@@ -31,13 +30,11 @@ message TransactionsByHeightResponse {
 }
 
 message AppParameters {
-  reserved 4, 6;
+  reserved 4, 5, 6;
   // The chain identifier.
   string chain_id = 1;
   // Sct module parameters.
   core.component.sct.v1.SctParameters sct_params = 2;
-  // IBC module parameters.
-  core.component.ibc.v1.IbcParameters ibc_params = 5;
   // Fee module parameters.
   core.component.fee.v1.FeeParameters fee_params = 7;
   // Shielded pool module parameters.
@@ -61,13 +58,11 @@ message GenesisAppState {
 }
 
 message GenesisContent {
-  reserved 2, 4;
+  reserved 2, 4, 5;
   // The initial chain identifier.
   string chain_id = 1;
   // Shielded pool module genesis state.
   core.component.shielded_pool.v1.GenesisContent shielded_pool_content = 3;
-  // IBC module genesis state.
-  core.component.ibc.v1.GenesisContent ibc_content = 5;
   // Sct module genesis state.
   core.component.sct.v1.GenesisContent sct_content = 6;
   // Fee module genesis state.

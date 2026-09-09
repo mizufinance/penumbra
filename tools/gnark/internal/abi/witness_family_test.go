@@ -54,48 +54,48 @@ func testWitnessFamilies() []witnessFamily {
 			},
 		},
 		{
-			name: "shielded_ics20_withdrawal",
+			name: "shielded_withdrawal",
 			payload: func(t *testing.T) []byte {
-				return testfixtures.LoadShieldedIcs20WithdrawalWitness("shielded_ics20_withdrawal")
+				return testfixtures.LoadShieldedWithdrawalWitness("shielded_withdrawal")
 			},
 			decode: func(payload []byte) error {
-				_, _, err := DecodeShieldedIcs20WithdrawalWitness(payload)
+				_, _, err := DecodeShieldedWithdrawalWitness(payload)
 				return err
 			},
 		},
 		{
-			name: "shielded_ics20_withdrawal_unregulated",
+			name: "shielded_withdrawal_unregulated",
 			payload: func(t *testing.T) []byte {
-				return testfixtures.LoadShieldedIcs20WithdrawalWitness(
-					"shielded_ics20_withdrawal_unregulated",
+				return testfixtures.LoadShieldedWithdrawalWitness(
+					"shielded_withdrawal_unregulated",
 				)
 			},
 			decode: func(payload []byte) error {
-				_, _, err := DecodeShieldedIcs20WithdrawalWitness(payload)
+				_, _, err := DecodeShieldedWithdrawalWitness(payload)
 				return err
 			},
 		},
 		{
-			name: "shielded_ics20_withdrawal_accumulator_origin",
+			name: "shielded_withdrawal_accumulator_origin",
 			payload: func(t *testing.T) []byte {
-				return testfixtures.LoadShieldedIcs20WithdrawalWitness(
-					"shielded_ics20_withdrawal_accumulator_origin",
+				return testfixtures.LoadShieldedWithdrawalWitness(
+					"shielded_withdrawal_accumulator_origin",
 				)
 			},
 			decode: func(payload []byte) error {
-				_, _, err := DecodeShieldedIcs20WithdrawalWitness(payload)
+				_, _, err := DecodeShieldedWithdrawalWitness(payload)
 				return err
 			},
 		},
 		{
-			name: "shielded_ics20_withdrawal_accumulator_continuation",
+			name: "shielded_withdrawal_accumulator_continuation",
 			payload: func(t *testing.T) []byte {
-				return testfixtures.LoadShieldedIcs20WithdrawalWitness(
-					"shielded_ics20_withdrawal_accumulator_continuation",
+				return testfixtures.LoadShieldedWithdrawalWitness(
+					"shielded_withdrawal_accumulator_continuation",
 				)
 			},
 			decode: func(payload []byte) error {
-				_, _, err := DecodeShieldedIcs20WithdrawalWitness(payload)
+				_, _, err := DecodeShieldedWithdrawalWitness(payload)
 				return err
 			},
 		},
@@ -132,36 +132,36 @@ func TestWitnessFamiliesDecode(t *testing.T) {
 	}
 }
 
-func TestShieldedIcs20WithdrawalFixtureBranchMatrix(t *testing.T) {
+func TestShieldedWithdrawalFixtureBranchMatrix(t *testing.T) {
 	for _, tc := range []struct {
 		label       string
 		isRegulated bool
 		isDummy     bool
 	}{
 		{
-			label:       "shielded_ics20_withdrawal",
+			label:       "shielded_withdrawal",
 			isRegulated: true,
 			isDummy:     false,
 		},
 		{
-			label:       "shielded_ics20_withdrawal_unregulated",
+			label:       "shielded_withdrawal_unregulated",
 			isRegulated: false,
 			isDummy:     true,
 		},
 		{
-			label:       "shielded_ics20_withdrawal_accumulator_origin",
+			label:       "shielded_withdrawal_accumulator_origin",
 			isRegulated: true,
 			isDummy:     false,
 		},
 		{
-			label:       "shielded_ics20_withdrawal_accumulator_continuation",
+			label:       "shielded_withdrawal_accumulator_continuation",
 			isRegulated: true,
 			isDummy:     false,
 		},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
-			witness, _, err := DecodeShieldedIcs20WithdrawalWitness(
-				testfixtures.LoadShieldedIcs20WithdrawalWitness(tc.label),
+			witness, _, err := DecodeShieldedWithdrawalWitness(
+				testfixtures.LoadShieldedWithdrawalWitness(tc.label),
 			)
 			if err != nil {
 				t.Fatalf("decode branch fixture: %v", err)
@@ -218,26 +218,26 @@ func TestTransferAssignmentRejectsSerializedSemanticMutation(t *testing.T) {
 	}
 }
 
-func TestShieldedIcs20WithdrawalAssignmentRejectsClaimedHashMismatch(t *testing.T) {
-	payload := testfixtures.LoadShieldedIcs20WithdrawalWitness("shielded_ics20_withdrawal")
+func TestShieldedWithdrawalAssignmentRejectsClaimedHashMismatch(t *testing.T) {
+	payload := testfixtures.LoadShieldedWithdrawalWitness("shielded_withdrawal")
 	const claimedStatementHashOffset = 16 + 6*32 + 4*32
 	payload[claimedStatementHashOffset] ^= 1
-	if _, _, err := NewShieldedIcs20WithdrawalCircuitAssignmentFromWitness(payload); err == nil {
+	if _, _, err := NewShieldedWithdrawalCircuitAssignmentFromWitness(payload); err == nil {
 		t.Fatal("assignment must reject a claimed hash that disagrees with reconstructed fields")
 	}
 }
 
-func TestShieldedIcs20WithdrawalRejectsOversizedEffectHashLimb(t *testing.T) {
-	payload := testfixtures.LoadShieldedIcs20WithdrawalWitness("shielded_ics20_withdrawal")
+func TestShieldedWithdrawalRejectsOversizedEffectHashLimb(t *testing.T) {
+	payload := testfixtures.LoadShieldedWithdrawalWitness("shielded_withdrawal")
 	const effectHashLimbsOffset = 16 + 6*32
 	payload[effectHashLimbsOffset+16] = 1
-	if _, _, err := DecodeShieldedIcs20WithdrawalWitness(payload); err == nil {
+	if _, _, err := DecodeShieldedWithdrawalWitness(payload); err == nil {
 		t.Fatal("decoder must reject effect-hash limbs wider than 128 bits")
 	}
 }
 
-func TestShieldedIcs20WithdrawalRejectsNonCanonicalBalanceBlinding(t *testing.T) {
-	payload := testfixtures.LoadShieldedIcs20WithdrawalWitness("shielded_ics20_withdrawal")
+func TestShieldedWithdrawalRejectsNonCanonicalBalanceBlinding(t *testing.T) {
+	payload := testfixtures.LoadShieldedWithdrawalWitness("shielded_withdrawal")
 	const volumeAccumulatorBytes = 4*32 + 2 + 4*32 + 8 + (4 + 24*3*32) + 2*32
 	const actionBalanceBlindingOffset = 16 + 22*32 + volumeAccumulatorBytes
 	modulus, err := bigIntToLE32(decaf377.ScalarOrder())
@@ -245,12 +245,12 @@ func TestShieldedIcs20WithdrawalRejectsNonCanonicalBalanceBlinding(t *testing.T)
 		t.Fatalf("encode Decaf377 scalar modulus: %v", err)
 	}
 	copy(payload[actionBalanceBlindingOffset:], modulus[:])
-	if _, _, err := DecodeShieldedIcs20WithdrawalWitness(payload); err == nil {
+	if _, _, err := DecodeShieldedWithdrawalWitness(payload); err == nil {
 		t.Fatal("decoder must reject a non-canonical action balance blinding")
 	}
 }
 
-func TestShieldedIcs20WithdrawalRejectsNonCanonicalBooleanFlags(t *testing.T) {
+func TestShieldedWithdrawalRejectsNonCanonicalBooleanFlags(t *testing.T) {
 	const (
 		headerBytes            = 16
 		topFieldsThroughNK     = 24*32 + 4*32 + 2 + 4*32 + 8 + (4 + 24*3*32) + 2*32
@@ -266,11 +266,11 @@ func TestShieldedIcs20WithdrawalRejectsNonCanonicalBooleanFlags(t *testing.T) {
 		"optional.is_dummy": optionalIsDummyOffset,
 	} {
 		t.Run(name, func(t *testing.T) {
-			payload := testfixtures.LoadShieldedIcs20WithdrawalWitness(
-				"shielded_ics20_withdrawal",
+			payload := testfixtures.LoadShieldedWithdrawalWitness(
+				"shielded_withdrawal",
 			)
 			payload[offset] = 2
-			if _, _, err := DecodeShieldedIcs20WithdrawalWitness(payload); err == nil {
+			if _, _, err := DecodeShieldedWithdrawalWitness(payload); err == nil {
 				t.Fatal("withdrawal decoder must reject non-canonical boolean flags")
 			}
 		})

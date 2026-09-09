@@ -21,7 +21,7 @@ FAMILIES = (
     "note_seizure",
     "note_reshape1x8",
     "note_reshape8x1",
-    "shielded_ics20_withdrawal",
+    "shielded_withdrawal",
     "transfer",
 )
 POINTER_VERSION = "https://git-lfs.github.com/spec/v1"

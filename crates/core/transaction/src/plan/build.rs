@@ -176,47 +176,7 @@ impl TransactionPlan {
                         }
                     }
                 }
-                (
-                    ActionPlan::ShieldedIcs20Withdrawal(plan),
-                    Action::ShieldedIcs20Withdrawal(withdrawal),
-                ) => {
-                    plan.validate().map_err(|error| {
-                        anyhow::anyhow!(
-                            "invalid shielded ICS-20 withdrawal plan at action {action_index}: {error}"
-                        )
-                    })?;
-                    withdrawal.body.validate_shape().map_err(|error| {
-                        anyhow::anyhow!(
-                            "invalid shielded ICS-20 withdrawal shape at action {action_index}: {error}"
-                        )
-                    })?;
-                    anyhow::ensure!(
-                        plan.withdrawal.effect_hash() == withdrawal.body.withdrawal.effect_hash(),
-                        "shielded ICS-20 withdrawal payload at action {action_index} does not match plan"
-                    );
-                    anyhow::ensure!(
-                        withdrawal.auth_sigs.len()
-                            == withdrawal.body.family_id.auth_sig_count(),
-                        "shielded ICS-20 withdrawal action {action_index} expected {} authorization signature slots, got {}",
-                        withdrawal.body.family_id.auth_sig_count(),
-                        withdrawal.auth_sigs.len()
-                    );
-                    anyhow::ensure!(
-                        plan.spends.len() <= withdrawal.auth_sigs.len(),
-                        "shielded ICS-20 withdrawal action {action_index} has fewer authorization signature slots than real spends"
-                    );
-                    for (index, auth_sig) in withdrawal.auth_sigs.iter_mut().enumerate() {
-                        if index < plan.spends.len() {
-                            *auth_sig = spend_auths.next().ok_or_else(|| {
-                                anyhow::anyhow!(
-                                    "missing spend authorization for shielded ICS-20 withdrawal action {action_index} slot {index}"
-                                )
-                            })?;
-                        } else {
-                            *auth_sig = plan.synthetic_dummy_auth_sig(index, effect_hash.as_ref());
-                        }
-                    }
-                }
+
                 (
                     ActionPlan::ShieldedHostWithdrawal(plan),
                     Action::ShieldedHostWithdrawal(withdrawal),
@@ -259,10 +219,6 @@ impl TransactionPlan {
                         }
                     }
                 }
-                (ActionPlan::IbcAction(plan), Action::IbcRelay(action)) => anyhow::ensure!(
-                    plan.effect_hash() == action.effect_hash(),
-                    "IBC relay action {action_index} does not match plan"
-                ),
                 (
                     ActionPlan::ComplianceRegisterAsset(plan),
                     Action::ComplianceRegisterAsset(action),
@@ -355,9 +311,7 @@ impl TransactionPlan {
                 ActionPlan::NoteReshape(plan) => {
                     initialize_prover(ProverCapability::NoteReshape(plan.family_id))?
                 }
-                ActionPlan::ShieldedIcs20Withdrawal(plan) => {
-                    initialize_prover(ProverCapability::Withdrawal(plan.family_id()))?
-                }
+
                 ActionPlan::ShieldedHostWithdrawal(plan) => {
                     initialize_prover(ProverCapability::Withdrawal(plan.family_id()))?
                 }
@@ -475,7 +429,7 @@ impl TransactionPlan {
             let accumulator_commitment = match action {
                 ActionPlan::Transfer(plan) => plan.accumulator_prior_commitment(),
                 ActionPlan::ShieldedHostWithdrawal(plan) => plan.accumulator_prior_commitment(),
-                ActionPlan::ShieldedIcs20Withdrawal(plan) => plan.accumulator_prior_commitment(),
+
                 _ => None,
             };
             if let Some(commitment) = accumulator_commitment {

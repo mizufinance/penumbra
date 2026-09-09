@@ -19,9 +19,8 @@ use shieldd_sdk_sct::nullifier_generation::{empty_history_head, PROTOCOL_VERSION
 use shieldd_sdk_sct::Nullifier;
 use shieldd_sdk_shielded_pool::component::{
     note_reshape_execute_verified, shielded_host_withdrawal_execute_verified,
-    shielded_ics20_withdrawal_execute_verified, transfer_execute_validated,
-    transfer_execute_verified, transfer_validate_verified, AssetRegistryRead as _, Ics20Transfer,
-    StateReadExt as _,
+    transfer_execute_validated, transfer_execute_verified, transfer_validate_verified,
+    AssetRegistryRead as _, StateReadExt as _,
 };
 use shieldd_sdk_shielded_pool::discovery;
 use shieldd_sdk_shielded_pool::TransferProofContext;
@@ -37,7 +36,6 @@ use super::AppActionHandler;
 use crate::{
     app::{StateReadExt as _, MAX_TRANSACTION_ACTION_COUNT, MAX_TRANSACTION_NULLIFIER_COUNT},
     stateless_cache::{ProofSlot, VerifiedTxArtifact},
-    ShielddHost,
 };
 
 mod stateful;
@@ -135,12 +133,7 @@ fn transaction_routing_actions(tx: &Transaction) -> Result<Vec<PendingRoutingAct
                     .map(|output| output.note_payload.clone())
                     .collect(),
             }),
-            Action::ShieldedIcs20Withdrawal(withdrawal) => Some(PendingRoutingAction {
-                transaction_id,
-                action_index,
-                tags: vec![withdrawal.body.routing_tag],
-                note_payloads: vec![withdrawal.body.change_output.note_payload.clone()],
-            }),
+
             Action::ShieldedHostWithdrawal(withdrawal) => Some(PendingRoutingAction {
                 transaction_id,
                 action_index,
@@ -243,27 +236,7 @@ fn transaction_audit_effects(tx: &Transaction, height: u64) -> Result<Vec<AuditE
                     action_effect_hash: note_reshape.effect_hash().0,
                 },
             ),
-            Action::ShieldedIcs20Withdrawal(withdrawal) => {
-                let value = withdrawal.body.withdrawal.value();
-                push_transaction_audit_effect(
-                    &mut records,
-                    height,
-                    transaction_id,
-                    action_index,
-                    0,
-                    AuditEffect::Withdrawal {
-                        kind: WithdrawalKind::Ics20,
-                        asset_id: value.asset_id,
-                        amount: value.amount.value(),
-                        asset_anchor: withdrawal.body.asset_anchor,
-                        compliance_ciphertext: withdrawal
-                            .body
-                            .withdrawal_compliance_ciphertext
-                            .to_bytes()
-                            .to_vec(),
-                    },
-                );
-            }
+
             Action::ShieldedHostWithdrawal(withdrawal) => {
                 let value = withdrawal.body.withdrawal.value;
                 push_transaction_audit_effect(
@@ -285,16 +258,7 @@ fn transaction_audit_effects(tx: &Transaction, height: u64) -> Result<Vec<AuditE
                     },
                 );
             }
-            Action::IbcRelay(relay) => push_transaction_audit_effect(
-                &mut records,
-                height,
-                transaction_id,
-                action_index,
-                0,
-                AuditEffect::IbcRelay {
-                    action_effect_hash: relay.effect_hash().0,
-                },
-            ),
+
             Action::ComplianceRegisterAsset(registration) => push_transaction_audit_effect(
                 &mut records,
                 height,
@@ -616,12 +580,7 @@ pub(crate) fn supports_parallel_prepare(tx: &Transaction) -> bool {
 }
 
 fn action_requires_historical_check(action: &Action) -> bool {
-    matches!(
-        action,
-        Action::IbcRelay(_)
-            | Action::ShieldedIcs20Withdrawal(_)
-            | Action::ShieldedHostWithdrawal(_)
-    )
+    matches!(action, Action::ShieldedHostWithdrawal(_))
 }
 
 fn check_nullifier_read_only_sync(
@@ -859,15 +818,7 @@ where
                 )
                 .await?;
             }
-            Action::ShieldedIcs20Withdrawal(action) => {
-                shielded_ics20_withdrawal_execute_verified(
-                    action,
-                    &tx_context,
-                    artifact.proof_for_slot(ProofSlot::BodyAction(i))?,
-                    &mut state,
-                )
-                .await?;
-            }
+
             Action::ShieldedHostWithdrawal(action) => {
                 shielded_host_withdrawal_execute_verified(
                     action,
@@ -877,16 +828,7 @@ where
                 )
                 .await?;
             }
-            Action::IbcRelay(action) => {
-                let relay = action.clone().with_handler::<Ics20Transfer, ShielddHost>();
-                let execute = relay.check_and_execute(&mut state);
-                if action_spans_enabled {
-                    let span = Action::IbcRelay(action.clone()).create_span(i);
-                    execute.instrument(span).await?;
-                } else {
-                    execute.await?;
-                }
-            }
+
             action @ Action::ComplianceRegisterAsset(registration) => {
                 if registration.is_regulated {
                     anyhow::ensure!(
@@ -1023,19 +965,7 @@ pub(crate) async fn prepare_candidate_read<S: StateRead + 'static>(
                 volume_nullifiers.push(scoped);
                 sct_payloads.push(StatePayload::VolumeAccumulator { source: execution_context.source.clone().into(), payload: Box::new(withdrawal.body.volume_accumulator.clone()) });
             }
-            Action::ShieldedIcs20Withdrawal(withdrawal) => {
-                check_action_timestamp_freshness(withdrawal.body.target_timestamp, execution_context.block_timestamp)?;
-                for input in &withdrawal.body.inputs {
-                    anyhow::ensure!(tx_nullifiers.insert(input.nullifier), "transaction contains duplicate spend nullifier {}", input.nullifier);
-                    spend_nullifiers.push(input.nullifier);
-                }
-                anchor_pairs.insert((withdrawal.body.compliance_anchor, withdrawal.body.asset_anchor));
-                sct_payloads.push((withdrawal.body.change_output.note_payload.clone(), execution_context.source.clone().into()).into());
-                let scoped = withdrawal.body.volume_accumulator.scoped_nullifier();
-                anyhow::ensure!(tx_volume_nullifiers.insert(scoped), "transaction contains duplicate daily volume nullifier {} for day {}", scoped.nullifier, scoped.day_start);
-                volume_nullifiers.push(scoped);
-                sct_payloads.push(StatePayload::VolumeAccumulator { source: execution_context.source.clone().into(), payload: Box::new(withdrawal.body.volume_accumulator.clone()) });
-            }
+
             Action::NoteReshape(note_reshape) => {
                 anchor_pairs.insert((
                     note_reshape.body.compliance_anchor,
@@ -1233,19 +1163,7 @@ pub(crate) fn prepare_candidate_read_blocking(
                 volume_nullifiers.push(scoped);
                 sct_payloads.push(StatePayload::VolumeAccumulator { source: execution_context.source.clone().into(), payload: Box::new(withdrawal.body.volume_accumulator.clone()) });
             }
-            Action::ShieldedIcs20Withdrawal(withdrawal) => {
-                check_action_timestamp_freshness(withdrawal.body.target_timestamp, execution_context.block_timestamp)?;
-                for input in &withdrawal.body.inputs {
-                    anyhow::ensure!(tx_nullifiers.insert(input.nullifier), "transaction contains duplicate spend nullifier {}", input.nullifier);
-                    spend_nullifiers.push(input.nullifier);
-                }
-                anchor_pairs.insert((withdrawal.body.compliance_anchor, withdrawal.body.asset_anchor));
-                sct_payloads.push((withdrawal.body.change_output.note_payload.clone(), execution_context.source.clone().into()).into());
-                let scoped = withdrawal.body.volume_accumulator.scoped_nullifier();
-                anyhow::ensure!(tx_volume_nullifiers.insert(scoped), "transaction contains duplicate daily volume nullifier {} for day {}", scoped.nullifier, scoped.day_start);
-                volume_nullifiers.push(scoped);
-                sct_payloads.push(StatePayload::VolumeAccumulator { source: execution_context.source.clone().into(), payload: Box::new(withdrawal.body.volume_accumulator.clone()) });
-            }
+
             Action::NoteReshape(note_reshape) => {
                 anchor_pairs.insert((
                     note_reshape.body.compliance_anchor,

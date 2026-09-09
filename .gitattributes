@@ -27,5 +27,5 @@
 tools/gnark/artifacts/note_seizure/note_seizure.sr1cs filter=lfs diff=lfs merge=lfs -text
 tools/gnark/artifacts/note_reshape1x8/note_reshape1x8.sr1cs filter=lfs diff=lfs merge=lfs -text
 tools/gnark/artifacts/note_reshape8x1/note_reshape8x1.sr1cs filter=lfs diff=lfs merge=lfs -text
-tools/gnark/artifacts/shielded_ics20_withdrawal/shielded_ics20_withdrawal.sr1cs filter=lfs diff=lfs merge=lfs -text
+tools/gnark/artifacts/shielded_withdrawal/shielded_withdrawal.sr1cs filter=lfs diff=lfs merge=lfs -text
 tools/gnark/artifacts/transfer/transfer.sr1cs filter=lfs diff=lfs merge=lfs -text

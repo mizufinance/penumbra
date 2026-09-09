@@ -156,8 +156,8 @@ func compileCircuitForExport(circuit string) (constraint.ConstraintSystem, *circ
 	if _, ok := generated.TransferFamilyByLabel(circuit); ok {
 		return circuits.CompileTransferForExport()
 	}
-	if family, ok := generated.ShieldedIcs20WithdrawalFamilyByLabel(circuit); ok {
-		return circuits.CompileShieldedIcs20WithdrawalForExport(family.Label, family.NIn)
+	if family, ok := generated.ShieldedWithdrawalFamilyByLabel(circuit); ok {
+		return circuits.CompileShieldedWithdrawalForExport(family.Label, family.NIn)
 	}
 	return nil, nil, fmt.Errorf("unsupported circuit export %q", circuit)
 }
@@ -196,7 +196,7 @@ func runExportWiringTranscript(args []string) error {
 
 func runSetup(args []string) error {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
-	circuit := fs.String("circuit", "", "transferNxM, note reshape, or shielded-ics20-withdrawal family label")
+	circuit := fs.String("circuit", "", "transferNxM, note reshape, or shielded-withdrawal family label")
 	outDir := fs.String("out-dir", "", "output directory")
 	reuseExistingKeys := fs.Bool(
 		"reuse-existing-keys",
@@ -520,7 +520,7 @@ func publishSetupArtifact(source, target string) error {
 
 func runProve(args []string) error {
 	fs := flag.NewFlagSet("prove", flag.ContinueOnError)
-	circuit := fs.String("circuit", "", "transferNxM, note reshape, or shielded-ics20-withdrawal family label")
+	circuit := fs.String("circuit", "", "transferNxM, note reshape, or shielded-withdrawal family label")
 	witnessPath := fs.String("witness", "", "witness binary path")
 	artifactDir := fs.String("artifact-dir", "", "artifact directory")
 	outPath := fs.String("out", "", "output artifacts JSON path")
@@ -646,7 +646,7 @@ func runCheckVKJSON(args []string) error {
 
 func runReplay(args []string) error {
 	fs := flag.NewFlagSet("replay", flag.ContinueOnError)
-	circuit := fs.String("circuit", "transfer", "transfer, note reshape, or shielded-ics20-withdrawal family label")
+	circuit := fs.String("circuit", "transfer", "transfer, note reshape, or shielded-withdrawal family label")
 	witnessPath := fs.String("witness", "", "witness binary path")
 	artifactDir := fs.String("artifact-dir", "", "artifact directory for prove mode")
 	mode := fs.String("mode", "decode", "decode, solve, or prove")
@@ -668,7 +668,7 @@ func runReplay(args []string) error {
 		if *circuit != "note_seizure" {
 			if _, ok := generated.TransferFamilyByLabel(*circuit); !ok {
 				if _, ok := generated.NoteReshapeFamilyByLabel(*circuit); !ok {
-					if _, ok := generated.ShieldedIcs20WithdrawalFamilyByLabel(*circuit); !ok {
+					if _, ok := generated.ShieldedWithdrawalFamilyByLabel(*circuit); !ok {
 						return fmt.Errorf("unsupported --circuit %q", *circuit)
 					}
 				}
@@ -723,15 +723,15 @@ func runReplay(args []string) error {
 			ccs, err = frontend.Compile(primitives.ScalarField(), r1cs.NewBuilder, circuits.NewNoteReshapeCircuit(family.Label, family.NIn, family.NOut))
 			break
 		}
-		if family, ok := generated.ShieldedIcs20WithdrawalFamilyByLabel(*circuit); ok {
-			assignment, _, err = abi.NewShieldedIcs20WithdrawalCircuitAssignmentFromWitness(payload)
+		if family, ok := generated.ShieldedWithdrawalFamilyByLabel(*circuit); ok {
+			assignment, _, err = abi.NewShieldedWithdrawalCircuitAssignmentFromWitness(payload)
 			if err != nil {
 				return err
 			}
 			ccs, err = frontend.Compile(
 				primitives.ScalarField(),
 				r1cs.NewBuilder,
-				circuits.NewShieldedIcs20WithdrawalCircuit(family.NIn),
+				circuits.NewShieldedWithdrawalCircuit(family.NIn),
 			)
 			break
 		}
@@ -869,8 +869,8 @@ func compileCircuit(circuit string) (constraint.ConstraintSystem, float64, error
 		instance = circuits.NewTransferCircuit()
 	} else if family, ok := generated.NoteReshapeFamilyByLabel(circuit); ok {
 		instance = circuits.NewNoteReshapeCircuit(family.Label, family.NIn, family.NOut)
-	} else if family, ok := generated.ShieldedIcs20WithdrawalFamilyByLabel(circuit); ok {
-		instance = circuits.NewShieldedIcs20WithdrawalCircuit(family.NIn)
+	} else if family, ok := generated.ShieldedWithdrawalFamilyByLabel(circuit); ok {
+		instance = circuits.NewShieldedWithdrawalCircuit(family.NIn)
 	} else if circuit == "note_seizure" {
 		instance = circuits.NewNoteSeizureCircuit()
 	} else {
@@ -927,16 +927,16 @@ func witnessAssignment(circuit string, witnessPayload []byte) (frontend.Circuit,
 				StatementFields:      vec32Strings(statementFields),
 			}, err
 		}
-		if _, ok := generated.ShieldedIcs20WithdrawalFamilyByLabel(circuit); ok {
-			decoded, _, err := abi.DecodeShieldedIcs20WithdrawalWitness(witnessPayload)
+		if _, ok := generated.ShieldedWithdrawalFamilyByLabel(circuit); ok {
+			decoded, _, err := abi.DecodeShieldedWithdrawalWitness(witnessPayload)
 			if err != nil {
 				return nil, witnessSummary{}, err
 			}
-			statementFields, err := abi.ReconstructedShieldedIcs20WithdrawalStatementFieldsFromWitness(decoded)
+			statementFields, err := abi.ReconstructedShieldedWithdrawalStatementFieldsFromWitness(decoded)
 			if err != nil {
 				return nil, witnessSummary{}, err
 			}
-			assignment, _, err := abi.NewShieldedIcs20WithdrawalCircuitAssignmentFromWitness(witnessPayload)
+			assignment, _, err := abi.NewShieldedWithdrawalCircuitAssignmentFromWitness(witnessPayload)
 			return assignment, witnessSummary{
 				ClaimedStatementHash: primitives.LittleEndianBytesToBigInt(decoded.ClaimedStatementHash[:]).String(),
 				StatementFields:      vec32Strings(statementFields),

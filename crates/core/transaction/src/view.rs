@@ -4,9 +4,7 @@ use serde::{Deserialize, Serialize};
 use shieldd_sdk_asset::Balance;
 use shieldd_sdk_keys::AddressView;
 use shieldd_sdk_proto::{core::transaction::v1 as pbt, DomainType};
-use shieldd_sdk_shielded_pool::{
-    NoteReshapeView, ShieldedHostWithdrawalView, ShieldedIcs20WithdrawalView, TransferView,
-};
+use shieldd_sdk_shielded_pool::{NoteReshapeView, ShieldedHostWithdrawalView, TransferView};
 
 pub mod action_view;
 mod transaction_perspective;
@@ -138,13 +136,7 @@ impl TransactionView {
                     },
                     &mut effects,
                 ),
-                ActionView::ShieldedIcs20Withdrawal(withdrawal_view) => summarize_note_flow(
-                    withdrawal_view,
-                    |effects, address, balance| {
-                        effects.push(TransactionEffect { address, balance })
-                    },
-                    &mut effects,
-                ),
+
                 ActionView::ShieldedHostWithdrawal(withdrawal_view) => summarize_note_flow(
                     withdrawal_view,
                     |effects, address, balance| {
@@ -197,24 +189,6 @@ impl NoteFlowView for NoteReshapeView {
     }
 }
 
-impl NoteFlowView for ShieldedIcs20WithdrawalView {
-    fn spent_notes(&self) -> Option<&[shieldd_sdk_shielded_pool::NoteView]> {
-        match self {
-            ShieldedIcs20WithdrawalView::Visible { spent_notes, .. } => Some(spent_notes),
-            ShieldedIcs20WithdrawalView::Opaque { .. } => None,
-        }
-    }
-
-    fn created_notes(&self) -> Option<&[shieldd_sdk_shielded_pool::NoteView]> {
-        match self {
-            ShieldedIcs20WithdrawalView::Visible { change_note, .. } => {
-                Some(change_note.as_ref().map_or(&[], std::slice::from_ref))
-            }
-            ShieldedIcs20WithdrawalView::Opaque { .. } => None,
-        }
-    }
-}
-
 impl NoteFlowView for ShieldedHostWithdrawalView {
     fn spent_notes(&self) -> Option<&[shieldd_sdk_shielded_pool::NoteView]> {
         match self {
@@ -254,145 +228,6 @@ fn summarize_note_flow<V: NoteFlowView>(
                 -Balance::from(created_note.value.value()),
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use decaf377::{Fq, Fr};
-    use decaf377_rdsa::{SigningKey, SpendAuth};
-    use ibc_types::{core::channel::ChannelId, core::client::Height};
-    use shieldd_sdk_asset::{Balance, Value, ValueView, BASE_ASSET_DENOM, BASE_ASSET_ID};
-    use shieldd_sdk_keys::{
-        symmetric::{OvkWrappedKey, PayloadKey, WrappedMemoKey},
-        AddressView,
-    };
-    use shieldd_sdk_num::Amount;
-    use shieldd_sdk_sct::Nullifier;
-    use shieldd_sdk_shielded_pool::{
-        EncryptedBackref, Ics20Withdrawal, Note, NotePayload, NoteView, RecoveryCommitment, Rseed,
-        ShieldedIcs20Withdrawal, ShieldedIcs20WithdrawalBody, ShieldedIcs20WithdrawalChangeBody,
-        ShieldedIcs20WithdrawalProof, ShieldedIcs20WithdrawalView, TransferInputBody,
-    };
-    use shieldd_sdk_tct::{StateCommitment, Tree};
-
-    use super::{ActionView, TransactionBodyView, TransactionView};
-
-    fn note_view(note: &Note) -> NoteView {
-        NoteView {
-            value: ValueView::UnknownAssetId {
-                amount: note.amount(),
-                asset_id: note.asset_id(),
-            },
-            rseed: note.rseed(),
-            address: AddressView::Opaque {
-                address: note.address(),
-            },
-            recovery_commitment: note.recovery_commitment(),
-        }
-    }
-
-    #[test]
-    fn summary_includes_visible_shielded_ics20_withdrawal_note_flow() {
-        let spent_note = Note::from_parts(
-            shieldd_sdk_keys::test_keys::ADDRESS_0.clone(),
-            Value {
-                amount: Amount::from(10u64),
-                asset_id: *BASE_ASSET_ID,
-            },
-            Rseed([1u8; 32]),
-            RecoveryCommitment::unavailable(),
-        )
-        .expect("valid spent note");
-        let (change_note, change_capsule) = Note::from_parts_with_recovery(
-            shieldd_sdk_keys::test_keys::ADDRESS_0.clone(),
-            Value {
-                amount: Amount::from(3u64),
-                asset_id: *BASE_ASSET_ID,
-            },
-            Rseed([2u8; 32]),
-            decaf377::Element::GENERATOR,
-        )
-        .expect("valid change note");
-
-        let txv = TransactionView {
-            body_view: TransactionBodyView {
-                action_views: vec![ActionView::ShieldedIcs20Withdrawal(
-                    ShieldedIcs20WithdrawalView::Visible {
-                        withdrawal: ShieldedIcs20Withdrawal {
-                            body: ShieldedIcs20WithdrawalBody {
-                                family_id: shieldd_sdk_shielded_pool::ShieldedIcs20WithdrawalFamilyId::Canonical,
-                                anchor: Tree::default().root(),
-                                balance_commitment: Balance::default().commit(Fr::from(1u64)),
-                                inputs: vec![TransferInputBody {
-                                    nullifier: Nullifier(Fq::from(1u64)),
-                                    rk: decaf377_rdsa::VerificationKey::from(
-                                        SigningKey::<SpendAuth>::from(Fr::from(2u64)),
-                                    ),
-                                    encrypted_backref: EncryptedBackref::try_from([1u8; 48])
-                                        .expect("fixed-size encrypted backref"),
-                                    compliance_ciphertext: Vec::new(),
-                                    history_required: false,
-                                }],
-                                withdrawal: Ics20Withdrawal {
-                                    destination_chain_address: "cosmos1destination".to_string(),
-                                    denom: BASE_ASSET_DENOM.clone(),
-                                    amount: Amount::from(7u64),
-                                    timeout_height: Height::new(1, 10).expect("valid height"),
-                                    timeout_time: 10,
-                                    return_address: shieldd_sdk_keys::test_keys::ADDRESS_0.clone(),
-                                    source_channel: "channel-0".parse::<ChannelId>().expect("valid channel"),
-                                    ics20_memo: String::new(),
-                                    use_transparent_address: false,
-                                },
-                                change_output: ShieldedIcs20WithdrawalChangeBody {
-                                    note_payload: NotePayload {
-                                        note_commitment: StateCommitment(Fq::from(3u64)),
-                                        ephemeral_key: change_note.ephemeral_public_key(),
-                                        encrypted_note: change_note.encrypt(),
-                                        recovery_capsule: Some(change_capsule),
-                                    },
-                                    wrapped_memo_key: WrappedMemoKey([0u8; 48]),
-                                    ovk_wrapped_key: OvkWrappedKey([0u8; 48]),
-                                },
-                                target_timestamp: 0,
-                                compliance_anchor: StateCommitment(Fq::from(4u64)),
-                                asset_anchor: StateCommitment(Fq::from(5u64)),
-                                routing_tag: Default::default(),
-                                routing_parameter_set_id: Fq::from(0u64),
-                                withdrawal_compliance_ciphertext:
-                                    shieldd_sdk_compliance::WithdrawalComplianceCiphertext {
-                                        epk: decaf377::Element::GENERATOR,
-                                        c2: Fq::from(6u64),
-                                        key_confirmation: Fq::from(7u64),
-                                        encrypted_sender_address: [0u8; 96],
-                                    },
-                                volume_accumulator: shieldd_sdk_shielded_pool::VolumeAccumulatorPayload::canonical_fee_funding(),
-                            },
-                            auth_sigs: vec![[0u8; 64].into()],
-                            proof: ShieldedIcs20WithdrawalProof::default(),
-                        },
-                        spent_notes: vec![note_view(&spent_note)],
-                        change_note: Some(note_view(&change_note)),
-                        payload_key: PayloadKey::from([0u8; 32]),
-                    },
-                )],
-                transaction_parameters: Default::default(),
-                fee_funding: None,
-                memo_view: None,
-                nullifier_window: None,
-                historical_nullifier_proofs: Vec::new(),
-            },
-            binding_sig: [0u8; 64].into(),
-            anchor: Tree::default().root(),
-        };
-
-        let summary = txv.summary();
-        assert_eq!(summary.effects.len(), 1);
-        assert_eq!(
-            summary.effects[0].balance,
-            Balance::from(spent_note.value()) - Balance::from(change_note.value())
-        );
     }
 }
 
@@ -600,7 +435,7 @@ impl TryFrom<pbt::MemoPlaintextView> for MemoPlaintextView {
 }
 
 #[cfg(test)]
-mod host_tests {
+mod tests {
     use decaf377::{Fq, Fr};
     use decaf377_rdsa::{SigningKey, SpendAuth};
     use shieldd_sdk_asset::{Balance, Value, ValueView, BASE_ASSET_ID};
@@ -613,8 +448,8 @@ mod host_tests {
     use shieldd_sdk_shielded_pool::{
         EncryptedBackref, HostTransfer, HostWithdrawal, HostWithdrawalDestination, Note,
         NotePayload, NoteView, RecoveryCommitment, Rseed, ShieldedHostWithdrawal,
-        ShieldedHostWithdrawalBody, ShieldedHostWithdrawalView, ShieldedIcs20WithdrawalChangeBody,
-        ShieldedIcs20WithdrawalProof, TransferInputBody,
+        ShieldedHostWithdrawalBody, ShieldedHostWithdrawalView, ShieldedWithdrawalChangeBody,
+        ShieldedWithdrawalProof, TransferInputBody,
     };
     use shieldd_sdk_tct::{StateCommitment, Tree};
 
@@ -663,7 +498,7 @@ mod host_tests {
                     ShieldedHostWithdrawalView::Visible {
                         withdrawal: ShieldedHostWithdrawal {
                             body: ShieldedHostWithdrawalBody {
-                                family_id: shieldd_sdk_shielded_pool::ShieldedIcs20WithdrawalFamilyId::Canonical,
+                                family_id: shieldd_sdk_shielded_pool::ShieldedWithdrawalFamilyId::Canonical,
                                 anchor: Tree::default().root(),
                                 balance_commitment: Balance::default().commit(Fr::from(1u64)),
                                 inputs: vec![TransferInputBody {
@@ -680,7 +515,7 @@ mod host_tests {
                                     value: Value { amount: 7u64.into(), asset_id: *BASE_ASSET_ID },
                                     destination: HostWithdrawalDestination::Transfer(HostTransfer { recipient: "bankd-recipient".into() }),
                                 },
-                                change_output: ShieldedIcs20WithdrawalChangeBody {
+                                change_output: ShieldedWithdrawalChangeBody {
                                     note_payload: NotePayload {
                                         note_commitment: StateCommitment(Fq::from(3u64)),
                                         ephemeral_key: change_note.ephemeral_public_key(),
@@ -705,7 +540,7 @@ mod host_tests {
                                 volume_accumulator: shieldd_sdk_shielded_pool::VolumeAccumulatorPayload::canonical_fee_funding(),
                             },
                             auth_sigs: vec![[0u8; 64].into()],
-                            proof: ShieldedIcs20WithdrawalProof::default(),
+                            proof: ShieldedWithdrawalProof::default(),
                         },
                         spent_notes: vec![note_view(&spent_note)],
                         change_note: Some(note_view(&change_note)),

@@ -12,9 +12,6 @@ impl serde::Serialize for AppParameters {
         if self.sct_params.is_some() {
             len += 1;
         }
-        if self.ibc_params.is_some() {
-            len += 1;
-        }
         if self.fee_params.is_some() {
             len += 1;
         }
@@ -30,9 +27,6 @@ impl serde::Serialize for AppParameters {
         }
         if let Some(v) = self.sct_params.as_ref() {
             struct_ser.serialize_field("sctParams", v)?;
-        }
-        if let Some(v) = self.ibc_params.as_ref() {
-            struct_ser.serialize_field("ibcParams", v)?;
         }
         if let Some(v) = self.fee_params.as_ref() {
             struct_ser.serialize_field("feeParams", v)?;
@@ -57,8 +51,6 @@ impl<'de> serde::Deserialize<'de> for AppParameters {
             "chainId",
             "sct_params",
             "sctParams",
-            "ibc_params",
-            "ibcParams",
             "fee_params",
             "feeParams",
             "shielded_pool_params",
@@ -71,7 +63,6 @@ impl<'de> serde::Deserialize<'de> for AppParameters {
         enum GeneratedField {
             ChainId,
             SctParams,
-            IbcParams,
             FeeParams,
             ShieldedPoolParams,
             ComplianceParams,
@@ -99,7 +90,6 @@ impl<'de> serde::Deserialize<'de> for AppParameters {
                         match value {
                             "chainId" | "chain_id" => Ok(GeneratedField::ChainId),
                             "sctParams" | "sct_params" => Ok(GeneratedField::SctParams),
-                            "ibcParams" | "ibc_params" => Ok(GeneratedField::IbcParams),
                             "feeParams" | "fee_params" => Ok(GeneratedField::FeeParams),
                             "shieldedPoolParams" | "shielded_pool_params" => Ok(GeneratedField::ShieldedPoolParams),
                             "complianceParams" | "compliance_params" => Ok(GeneratedField::ComplianceParams),
@@ -124,7 +114,6 @@ impl<'de> serde::Deserialize<'de> for AppParameters {
             {
                 let mut chain_id__ = None;
                 let mut sct_params__ = None;
-                let mut ibc_params__ = None;
                 let mut fee_params__ = None;
                 let mut shielded_pool_params__ = None;
                 let mut compliance_params__ = None;
@@ -141,12 +130,6 @@ impl<'de> serde::Deserialize<'de> for AppParameters {
                                 return Err(serde::de::Error::duplicate_field("sctParams"));
                             }
                             sct_params__ = map_.next_value()?;
-                        }
-                        GeneratedField::IbcParams => {
-                            if ibc_params__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("ibcParams"));
-                            }
-                            ibc_params__ = map_.next_value()?;
                         }
                         GeneratedField::FeeParams => {
                             if fee_params__.is_some() {
@@ -174,7 +157,6 @@ impl<'de> serde::Deserialize<'de> for AppParameters {
                 Ok(AppParameters {
                     chain_id: chain_id__.unwrap_or_default(),
                     sct_params: sct_params__,
-                    ibc_params: ibc_params__,
                     fee_params: fee_params__,
                     shielded_pool_params: shielded_pool_params__,
                     compliance_params: compliance_params__,
@@ -482,9 +464,6 @@ impl serde::Serialize for GenesisContent {
         if self.shielded_pool_content.is_some() {
             len += 1;
         }
-        if self.ibc_content.is_some() {
-            len += 1;
-        }
         if self.sct_content.is_some() {
             len += 1;
         }
@@ -500,9 +479,6 @@ impl serde::Serialize for GenesisContent {
         }
         if let Some(v) = self.shielded_pool_content.as_ref() {
             struct_ser.serialize_field("shieldedPoolContent", v)?;
-        }
-        if let Some(v) = self.ibc_content.as_ref() {
-            struct_ser.serialize_field("ibcContent", v)?;
         }
         if let Some(v) = self.sct_content.as_ref() {
             struct_ser.serialize_field("sctContent", v)?;
@@ -527,8 +503,6 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
             "chainId",
             "shielded_pool_content",
             "shieldedPoolContent",
-            "ibc_content",
-            "ibcContent",
             "sct_content",
             "sctContent",
             "fee_content",
@@ -541,7 +515,6 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
         enum GeneratedField {
             ChainId,
             ShieldedPoolContent,
-            IbcContent,
             SctContent,
             FeeContent,
             ComplianceContent,
@@ -569,7 +542,6 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
                         match value {
                             "chainId" | "chain_id" => Ok(GeneratedField::ChainId),
                             "shieldedPoolContent" | "shielded_pool_content" => Ok(GeneratedField::ShieldedPoolContent),
-                            "ibcContent" | "ibc_content" => Ok(GeneratedField::IbcContent),
                             "sctContent" | "sct_content" => Ok(GeneratedField::SctContent),
                             "feeContent" | "fee_content" => Ok(GeneratedField::FeeContent),
                             "complianceContent" | "compliance_content" => Ok(GeneratedField::ComplianceContent),
@@ -594,7 +566,6 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
             {
                 let mut chain_id__ = None;
                 let mut shielded_pool_content__ = None;
-                let mut ibc_content__ = None;
                 let mut sct_content__ = None;
                 let mut fee_content__ = None;
                 let mut compliance_content__ = None;
@@ -611,12 +582,6 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
                                 return Err(serde::de::Error::duplicate_field("shieldedPoolContent"));
                             }
                             shielded_pool_content__ = map_.next_value()?;
-                        }
-                        GeneratedField::IbcContent => {
-                            if ibc_content__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("ibcContent"));
-                            }
-                            ibc_content__ = map_.next_value()?;
                         }
                         GeneratedField::SctContent => {
                             if sct_content__.is_some() {
@@ -644,7 +609,6 @@ impl<'de> serde::Deserialize<'de> for GenesisContent {
                 Ok(GenesisContent {
                     chain_id: chain_id__.unwrap_or_default(),
                     shielded_pool_content: shielded_pool_content__,
-                    ibc_content: ibc_content__,
                     sct_content: sct_content__,
                     fee_content: fee_content__,
                     compliance_content: compliance_content__,

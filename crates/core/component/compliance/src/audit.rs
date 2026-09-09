@@ -623,10 +623,6 @@ pub fn export_detected_refs(store: &SqliteScannerStore) -> Result<Vec<AuditDetec
         "SELECT height, tx_hash, action_index, output_index, asset_id, is_flagged,
                 routing_tag_0, routing_tag_1, ?1
          FROM scanner_detections
-         UNION ALL
-         SELECT height, tx_hash, action_index, output_index, asset_id, 0,
-                NULL, NULL, flow_type
-         FROM scanner_clear_flows
          ORDER BY height, tx_hash, action_index, output_index",
     )?;
     let refs = rows

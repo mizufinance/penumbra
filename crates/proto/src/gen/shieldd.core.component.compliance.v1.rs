@@ -900,27 +900,6 @@ impl ::prost::Name for EventAssetRegistered {
         "/shieldd.core.component.compliance.v1.EventAssetRegistered".into()
     }
 }
-/// Compliance metadata embedded in ICS-20 transfer memo field.
-/// Carries the spend ciphertext so the issuer can track regulated assets across IBC.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct IbcComplianceMetadata {
-    /// The compliance ciphertext from the transfer-side input bundle.
-    #[prost(bytes = "vec", tag = "1")]
-    pub compliance_ciphertext: ::prost::alloc::vec::Vec<u8>,
-    /// The asset ID being transferred.
-    #[prost(message, optional, tag = "7")]
-    pub asset_id: ::core::option::Option<super::super::super::asset::v1::AssetId>,
-}
-impl ::prost::Name for IbcComplianceMetadata {
-    const NAME: &'static str = "IbcComplianceMetadata";
-    const PACKAGE: &'static str = "shieldd.core.component.compliance.v1";
-    fn full_name() -> ::prost::alloc::string::String {
-        "shieldd.core.component.compliance.v1.IbcComplianceMetadata".into()
-    }
-    fn type_url() -> ::prost::alloc::string::String {
-        "/shieldd.core.component.compliance.v1.IbcComplianceMetadata".into()
-    }
-}
 /// Emitted at end of block with the current compliance tree roots.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EventComplianceAnchor {

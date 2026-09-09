@@ -1,9 +1,8 @@
 //! Explicit unregulated fixtures for plan and builder tests.
 use crate::{
-    ActionWitness, AssetWitness, HostWithdrawal, Ics20Withdrawal, NoteReshapeContext,
-    NoteReshapeFamilyId, NoteReshapePlan, ShieldedHostWithdrawalPlan, ShieldedIcs20WithdrawalPlan,
-    ShieldedInputPlan, ShieldedOutputPlan, TransferContext, TransferPlan, UserWitness,
-    WithdrawalContext,
+    ActionWitness, AssetWitness, HostWithdrawal, NoteReshapeContext, NoteReshapeFamilyId,
+    NoteReshapePlan, ShieldedHostWithdrawalPlan, ShieldedInputPlan, ShieldedOutputPlan,
+    TransferContext, TransferPlan, UserWitness, WithdrawalContext,
 };
 use anyhow::{Context, Result};
 use decaf377::Fr;
@@ -126,25 +125,6 @@ pub fn withdrawal_context(spend: &ShieldedInputPlan) -> WithdrawalContext {
         timestamp: TIMESTAMP,
         nonce: Fr::rand(&mut rand_core::OsRng),
     }
-}
-
-pub fn ics20_withdrawal(
-    spends: Vec<ShieldedInputPlan>,
-    change: Option<ShieldedOutputPlan>,
-    withdrawal: Ics20Withdrawal,
-    blinding: Fr,
-) -> Result<ShieldedIcs20WithdrawalPlan> {
-    let context = withdrawal_context(spends.first().context("fixture requires a spend")?);
-    let volume_accumulator = crate::VolumeAccumulatorPlan::padding(context.timestamp);
-    ShieldedIcs20WithdrawalPlan::new(
-        spends,
-        change,
-        withdrawal,
-        blinding,
-        context,
-        volume_accumulator,
-        crate::discovery::Parameters::default(),
-    )
 }
 
 pub fn host_withdrawal(

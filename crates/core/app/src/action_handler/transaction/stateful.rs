@@ -93,9 +93,7 @@ pub fn routing_parameters_within_grace_period(
             Action::NoteReshape(reshape) => {
                 parameter_set_ids.push(reshape.body.routing_parameter_set_id);
             }
-            Action::ShieldedIcs20Withdrawal(withdrawal) => {
-                parameter_set_ids.push(withdrawal.body.routing_parameter_set_id);
-            }
+
             Action::ShieldedHostWithdrawal(withdrawal) => {
                 parameter_set_ids.push(withdrawal.body.routing_parameter_set_id);
             }

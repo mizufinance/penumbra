@@ -13,7 +13,6 @@ use crate::{
 pub enum EvidenceObjectType {
     Transfer = 1,
     HostWithdrawal = 2,
-    Ics20Withdrawal = 3,
 }
 
 impl EvidenceObjectType {
@@ -21,7 +20,6 @@ impl EvidenceObjectType {
         match record {
             ComplianceRecordRef::TransferOutput(_) => Self::Transfer,
             ComplianceRecordRef::HostWithdrawal(_) => Self::HostWithdrawal,
-            ComplianceRecordRef::Ics20Withdrawal(_) => Self::Ics20Withdrawal,
         }
     }
 
@@ -29,7 +27,6 @@ impl EvidenceObjectType {
         match byte {
             1 => Ok(Self::Transfer),
             2 => Ok(Self::HostWithdrawal),
-            3 => Ok(Self::Ics20Withdrawal),
             other => bail!("unknown evidence object type {other}"),
         }
     }
@@ -180,7 +177,7 @@ impl ComplianceEvidenceObject {
                     ComplianceEvidenceMetadata::Transfer(_),
                     None
                 ) | (
-                    EvidenceObjectType::HostWithdrawal | EvidenceObjectType::Ics20Withdrawal,
+                    EvidenceObjectType::HostWithdrawal,
                     ComplianceEvidenceCiphertext::Withdrawal(_),
                     ComplianceEvidenceMetadata::Withdrawal,
                     Some(_)
@@ -234,7 +231,7 @@ impl ComplianceEvidenceObject {
                 )?),
                 None,
             ),
-            EvidenceObjectType::HostWithdrawal | EvidenceObjectType::Ics20Withdrawal => {
+            EvidenceObjectType::HostWithdrawal => {
                 let ciphertext = WithdrawalComplianceCiphertext::from_bytes(
                     reader.read_slice(WITHDRAWAL_COMPLIANCE_WIRE_BYTES)?,
                 )?;
@@ -332,7 +329,6 @@ impl EvidenceObjectType {
         match self {
             Self::Transfer => ComplianceRecordRef::TransferOutput(output_ref),
             Self::HostWithdrawal => ComplianceRecordRef::HostWithdrawal(output_ref.action),
-            Self::Ics20Withdrawal => ComplianceRecordRef::Ics20Withdrawal(output_ref.action),
         }
     }
 }
@@ -513,9 +509,8 @@ pub(crate) mod tests {
         (evidence, metadata)
     }
 
-    fn valid_withdrawal_evidence_fixture(
-        host: bool,
-    ) -> (ComplianceEvidenceObject, shieldd_sdk_keys::Address) {
+    fn valid_withdrawal_evidence_fixture() -> (ComplianceEvidenceObject, shieldd_sdk_keys::Address)
+    {
         let dk_pub = crate::DetectionKey::demo().public_key();
         let sender = make_address(19);
         let asset_id = asset::Id(Fq::from(555u64));
@@ -525,11 +520,7 @@ pub(crate) mod tests {
             tx: valid_evidence_fixture().0.output_ref().action.tx,
             action_index: 3,
         };
-        let record_ref = if host {
-            ComplianceRecordRef::HostWithdrawal(action)
-        } else {
-            ComplianceRecordRef::Ics20Withdrawal(action)
-        };
+        let record_ref = ComplianceRecordRef::HostWithdrawal(action);
         let evidence = ComplianceEvidenceObject::new_withdrawal(
             record_ref,
             asset_id,
@@ -606,33 +597,31 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn withdrawal_evidence_round_trips_typed_host_and_ics20_references() {
-        for host in [true, false] {
-            let (evidence, sender) = valid_withdrawal_evidence_fixture(host);
-            let decoded = ComplianceEvidenceObject::from_bytes(&evidence.to_bytes()).unwrap();
-            assert_eq!(decoded.object_hash(), evidence.object_hash());
-            assert_eq!(decoded.record_ref, evidence.record_ref);
-            assert_eq!(decoded.withdrawal, evidence.withdrawal);
-            let ComplianceEvidenceCiphertext::Withdrawal(ciphertext) = &decoded.ciphertext else {
-                panic!("withdrawal evidence must contain withdrawal ciphertext");
-            };
-            let decrypted = crate::decrypt_flagged_withdrawal_sender(
-                crate::DetectionKey::demo().inner(),
-                ciphertext,
-                decoded.asset_id,
-            )
-            .unwrap()
-            .expect("flagged sender should decrypt");
-            assert_eq!(
-                decrypted.sender_address.transmission_key,
-                sender.transmission_key().0
-            );
-        }
+    fn withdrawal_evidence_round_trips_host_reference() {
+        let (evidence, sender) = valid_withdrawal_evidence_fixture();
+        let decoded = ComplianceEvidenceObject::from_bytes(&evidence.to_bytes()).unwrap();
+        assert_eq!(decoded.object_hash(), evidence.object_hash());
+        assert_eq!(decoded.record_ref, evidence.record_ref);
+        assert_eq!(decoded.withdrawal, evidence.withdrawal);
+        let ComplianceEvidenceCiphertext::Withdrawal(ciphertext) = &decoded.ciphertext else {
+            panic!("withdrawal evidence must contain withdrawal ciphertext");
+        };
+        let decrypted = crate::decrypt_flagged_withdrawal_sender(
+            crate::DetectionKey::demo().inner(),
+            ciphertext,
+            decoded.asset_id,
+        )
+        .unwrap()
+        .expect("flagged sender should decrypt");
+        assert_eq!(
+            decrypted.sender_address.transmission_key,
+            sender.transmission_key().0
+        );
     }
 
     #[test]
     fn withdrawal_evidence_hash_binds_public_amount_and_destination() {
-        let (evidence, _) = valid_withdrawal_evidence_fixture(true);
+        let (evidence, _) = valid_withdrawal_evidence_fixture();
         let original = evidence.object_hash();
         let mut amount = evidence.clone();
         amount.withdrawal.as_mut().unwrap().amount = Amount::from(4322u128);

@@ -8,9 +8,8 @@ license = {workspace = true}
 edition = {workspace = true}
 
 [features]
-benchmark-helpers = ["prover", "component", "shieldd-sdk-ibc/benchmark-helpers"]
+benchmark-helpers = ["prover", "component"]
 component = [
-    "shieldd-sdk-ibc/component",
     "cnidarium-component",
     "cnidarium",
     "shieldd-sdk-compliance/component",
@@ -52,8 +51,6 @@ decaf377-ka = {workspace = true}
 decaf377-rdsa = {workspace = true}
 futures = {workspace = true}
 hex = {workspace = true}
-ibc-proto = {workspace = true, default-features = false}
-ibc-types = {workspace = true, features = ["with_serde"], default-features = false}
 imbl = {workspace = true}
 jmt = {workspace = true}
 libloading = {workspace = true, optional = true}
@@ -61,7 +58,6 @@ metrics = {workspace = true}
 once_cell = {workspace = true}
 shieldd-sdk-asset = {workspace = true, default-features = false}
 shieldd-sdk-compliance = {workspace = true, default-features = false}
-shieldd-sdk-ibc = {workspace = true, default-features = false}
 shieldd-sdk-keys = {workspace = true, default-features = false}
 shieldd-sdk-num = {workspace = true, default-features = false}
 shieldd-sdk-proof-params = {workspace = true, default-features = false}

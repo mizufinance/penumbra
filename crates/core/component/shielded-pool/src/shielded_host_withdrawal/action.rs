@@ -9,9 +9,9 @@ use shieldd_sdk_tct as tct;
 use shieldd_sdk_txhash::{EffectHash, EffectingData};
 
 use crate::{
-    discovery::RoutingTag, HostWithdrawal, ShieldedIcs20WithdrawalChangeBody,
-    ShieldedIcs20WithdrawalFamilyId, ShieldedIcs20WithdrawalProof, TransferInputBody,
-    TransferProofContext, VolumeAccumulatorPayload,
+    discovery::RoutingTag, HostWithdrawal, ShieldedWithdrawalChangeBody,
+    ShieldedWithdrawalFamilyId, ShieldedWithdrawalProof, TransferInputBody, TransferProofContext,
+    VolumeAccumulatorPayload,
 };
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -20,12 +20,12 @@ use crate::{
     into = "pb::ShieldedHostWithdrawalBody"
 )]
 pub struct ShieldedHostWithdrawalBody {
-    pub family_id: ShieldedIcs20WithdrawalFamilyId,
+    pub family_id: ShieldedWithdrawalFamilyId,
     pub anchor: tct::Root,
     pub balance_commitment: balance::Commitment,
     pub inputs: Vec<TransferInputBody>,
     pub withdrawal: HostWithdrawal,
-    pub change_output: ShieldedIcs20WithdrawalChangeBody,
+    pub change_output: ShieldedWithdrawalChangeBody,
     pub target_timestamp: u64,
     pub compliance_anchor: tct::StateCommitment,
     pub asset_anchor: tct::StateCommitment,
@@ -39,13 +39,13 @@ pub struct ShieldedHostWithdrawalBody {
 pub struct ShieldedHostWithdrawal {
     pub body: ShieldedHostWithdrawalBody,
     pub auth_sigs: Vec<Signature<SpendAuth>>,
-    pub proof: ShieldedIcs20WithdrawalProof,
+    pub proof: ShieldedWithdrawalProof,
 }
 
 impl ShieldedHostWithdrawalBody {
     pub fn validate_shape(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
-            self.family_id == ShieldedIcs20WithdrawalFamilyId::Canonical,
+            self.family_id == ShieldedWithdrawalFamilyId::Canonical,
             "shielded host withdrawal family must be canonical"
         );
         anyhow::ensure!(

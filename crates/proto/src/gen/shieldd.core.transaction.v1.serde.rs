@@ -18,9 +18,6 @@ impl serde::Serialize for Action {
                 action::Action::NoteReshape(v) => {
                     struct_ser.serialize_field("noteReshape", v)?;
                 }
-                action::Action::IbcRelayAction(v) => {
-                    struct_ser.serialize_field("ibcRelayAction", v)?;
-                }
                 action::Action::ComplianceRegisterAsset(v) => {
                     struct_ser.serialize_field("complianceRegisterAsset", v)?;
                 }
@@ -29,9 +26,6 @@ impl serde::Serialize for Action {
                 }
                 action::Action::AggregateBundle(v) => {
                     struct_ser.serialize_field("aggregateBundle", v)?;
-                }
-                action::Action::ShieldedIcs20Withdrawal(v) => {
-                    struct_ser.serialize_field("shieldedIcs20Withdrawal", v)?;
                 }
                 action::Action::ShieldedHostWithdrawal(v) => {
                     struct_ser.serialize_field("shieldedHostWithdrawal", v)?;
@@ -51,16 +45,12 @@ impl<'de> serde::Deserialize<'de> for Action {
             "transfer",
             "note_reshape",
             "noteReshape",
-            "ibc_relay_action",
-            "ibcRelayAction",
             "compliance_register_asset",
             "complianceRegisterAsset",
             "compliance_register_user",
             "complianceRegisterUser",
             "aggregate_bundle",
             "aggregateBundle",
-            "shielded_ics20_withdrawal",
-            "shieldedIcs20Withdrawal",
             "shielded_host_withdrawal",
             "shieldedHostWithdrawal",
         ];
@@ -69,11 +59,9 @@ impl<'de> serde::Deserialize<'de> for Action {
         enum GeneratedField {
             Transfer,
             NoteReshape,
-            IbcRelayAction,
             ComplianceRegisterAsset,
             ComplianceRegisterUser,
             AggregateBundle,
-            ShieldedIcs20Withdrawal,
             ShieldedHostWithdrawal,
             __SkipField__,
         }
@@ -99,11 +87,9 @@ impl<'de> serde::Deserialize<'de> for Action {
                         match value {
                             "transfer" => Ok(GeneratedField::Transfer),
                             "noteReshape" | "note_reshape" => Ok(GeneratedField::NoteReshape),
-                            "ibcRelayAction" | "ibc_relay_action" => Ok(GeneratedField::IbcRelayAction),
                             "complianceRegisterAsset" | "compliance_register_asset" => Ok(GeneratedField::ComplianceRegisterAsset),
                             "complianceRegisterUser" | "compliance_register_user" => Ok(GeneratedField::ComplianceRegisterUser),
                             "aggregateBundle" | "aggregate_bundle" => Ok(GeneratedField::AggregateBundle),
-                            "shieldedIcs20Withdrawal" | "shielded_ics20_withdrawal" => Ok(GeneratedField::ShieldedIcs20Withdrawal),
                             "shieldedHostWithdrawal" | "shielded_host_withdrawal" => Ok(GeneratedField::ShieldedHostWithdrawal),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
@@ -141,13 +127,6 @@ impl<'de> serde::Deserialize<'de> for Action {
                             action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::NoteReshape)
 ;
                         }
-                        GeneratedField::IbcRelayAction => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("ibcRelayAction"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::IbcRelayAction)
-;
-                        }
                         GeneratedField::ComplianceRegisterAsset => {
                             if action__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("complianceRegisterAsset"));
@@ -167,13 +146,6 @@ impl<'de> serde::Deserialize<'de> for Action {
                                 return Err(serde::de::Error::duplicate_field("aggregateBundle"));
                             }
                             action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::AggregateBundle)
-;
-                        }
-                        GeneratedField::ShieldedIcs20Withdrawal => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("shieldedIcs20Withdrawal"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action::Action::ShieldedIcs20Withdrawal)
 ;
                         }
                         GeneratedField::ShieldedHostWithdrawal => {
@@ -216,12 +188,6 @@ impl serde::Serialize for ActionPlan {
                 action_plan::Action::NoteReshape(v) => {
                     struct_ser.serialize_field("noteReshape", v)?;
                 }
-                action_plan::Action::IbcRelayAction(v) => {
-                    struct_ser.serialize_field("ibcRelayAction", v)?;
-                }
-                action_plan::Action::ShieldedIcs20Withdrawal(v) => {
-                    struct_ser.serialize_field("shieldedIcs20Withdrawal", v)?;
-                }
                 action_plan::Action::ShieldedHostWithdrawal(v) => {
                     struct_ser.serialize_field("shieldedHostWithdrawal", v)?;
                 }
@@ -246,10 +212,6 @@ impl<'de> serde::Deserialize<'de> for ActionPlan {
             "transfer",
             "note_reshape",
             "noteReshape",
-            "ibc_relay_action",
-            "ibcRelayAction",
-            "shielded_ics20_withdrawal",
-            "shieldedIcs20Withdrawal",
             "shielded_host_withdrawal",
             "shieldedHostWithdrawal",
             "compliance_register_asset",
@@ -262,8 +224,6 @@ impl<'de> serde::Deserialize<'de> for ActionPlan {
         enum GeneratedField {
             Transfer,
             NoteReshape,
-            IbcRelayAction,
-            ShieldedIcs20Withdrawal,
             ShieldedHostWithdrawal,
             ComplianceRegisterAsset,
             ComplianceRegisterUser,
@@ -291,8 +251,6 @@ impl<'de> serde::Deserialize<'de> for ActionPlan {
                         match value {
                             "transfer" => Ok(GeneratedField::Transfer),
                             "noteReshape" | "note_reshape" => Ok(GeneratedField::NoteReshape),
-                            "ibcRelayAction" | "ibc_relay_action" => Ok(GeneratedField::IbcRelayAction),
-                            "shieldedIcs20Withdrawal" | "shielded_ics20_withdrawal" => Ok(GeneratedField::ShieldedIcs20Withdrawal),
                             "shieldedHostWithdrawal" | "shielded_host_withdrawal" => Ok(GeneratedField::ShieldedHostWithdrawal),
                             "complianceRegisterAsset" | "compliance_register_asset" => Ok(GeneratedField::ComplianceRegisterAsset),
                             "complianceRegisterUser" | "compliance_register_user" => Ok(GeneratedField::ComplianceRegisterUser),
@@ -330,20 +288,6 @@ impl<'de> serde::Deserialize<'de> for ActionPlan {
                                 return Err(serde::de::Error::duplicate_field("noteReshape"));
                             }
                             action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::NoteReshape)
-;
-                        }
-                        GeneratedField::IbcRelayAction => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("ibcRelayAction"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::IbcRelayAction)
-;
-                        }
-                        GeneratedField::ShieldedIcs20Withdrawal => {
-                            if action__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("shieldedIcs20Withdrawal"));
-                            }
-                            action__ = map_.next_value::<::std::option::Option<_>>()?.map(action_plan::Action::ShieldedIcs20Withdrawal)
 ;
                         }
                         GeneratedField::ShieldedHostWithdrawal => {
@@ -400,9 +344,6 @@ impl serde::Serialize for ActionView {
                 action_view::ActionView::NoteReshape(v) => {
                     struct_ser.serialize_field("noteReshape", v)?;
                 }
-                action_view::ActionView::IbcRelayAction(v) => {
-                    struct_ser.serialize_field("ibcRelayAction", v)?;
-                }
                 action_view::ActionView::ComplianceRegisterAsset(v) => {
                     struct_ser.serialize_field("complianceRegisterAsset", v)?;
                 }
@@ -411,9 +352,6 @@ impl serde::Serialize for ActionView {
                 }
                 action_view::ActionView::AggregateBundle(v) => {
                     struct_ser.serialize_field("aggregateBundle", v)?;
-                }
-                action_view::ActionView::ShieldedIcs20Withdrawal(v) => {
-                    struct_ser.serialize_field("shieldedIcs20Withdrawal", v)?;
                 }
                 action_view::ActionView::ShieldedHostWithdrawal(v) => {
                     struct_ser.serialize_field("shieldedHostWithdrawal", v)?;
@@ -433,16 +371,12 @@ impl<'de> serde::Deserialize<'de> for ActionView {
             "transfer",
             "note_reshape",
             "noteReshape",
-            "ibc_relay_action",
-            "ibcRelayAction",
             "compliance_register_asset",
             "complianceRegisterAsset",
             "compliance_register_user",
             "complianceRegisterUser",
             "aggregate_bundle",
             "aggregateBundle",
-            "shielded_ics20_withdrawal",
-            "shieldedIcs20Withdrawal",
             "shielded_host_withdrawal",
             "shieldedHostWithdrawal",
         ];
@@ -451,11 +385,9 @@ impl<'de> serde::Deserialize<'de> for ActionView {
         enum GeneratedField {
             Transfer,
             NoteReshape,
-            IbcRelayAction,
             ComplianceRegisterAsset,
             ComplianceRegisterUser,
             AggregateBundle,
-            ShieldedIcs20Withdrawal,
             ShieldedHostWithdrawal,
             __SkipField__,
         }
@@ -481,11 +413,9 @@ impl<'de> serde::Deserialize<'de> for ActionView {
                         match value {
                             "transfer" => Ok(GeneratedField::Transfer),
                             "noteReshape" | "note_reshape" => Ok(GeneratedField::NoteReshape),
-                            "ibcRelayAction" | "ibc_relay_action" => Ok(GeneratedField::IbcRelayAction),
                             "complianceRegisterAsset" | "compliance_register_asset" => Ok(GeneratedField::ComplianceRegisterAsset),
                             "complianceRegisterUser" | "compliance_register_user" => Ok(GeneratedField::ComplianceRegisterUser),
                             "aggregateBundle" | "aggregate_bundle" => Ok(GeneratedField::AggregateBundle),
-                            "shieldedIcs20Withdrawal" | "shielded_ics20_withdrawal" => Ok(GeneratedField::ShieldedIcs20Withdrawal),
                             "shieldedHostWithdrawal" | "shielded_host_withdrawal" => Ok(GeneratedField::ShieldedHostWithdrawal),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
@@ -523,13 +453,6 @@ impl<'de> serde::Deserialize<'de> for ActionView {
                             action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::NoteReshape)
 ;
                         }
-                        GeneratedField::IbcRelayAction => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("ibcRelayAction"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::IbcRelayAction)
-;
-                        }
                         GeneratedField::ComplianceRegisterAsset => {
                             if action_view__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("complianceRegisterAsset"));
@@ -549,13 +472,6 @@ impl<'de> serde::Deserialize<'de> for ActionView {
                                 return Err(serde::de::Error::duplicate_field("aggregateBundle"));
                             }
                             action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::AggregateBundle)
-;
-                        }
-                        GeneratedField::ShieldedIcs20Withdrawal => {
-                            if action_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("shieldedIcs20Withdrawal"));
-                            }
-                            action_view__ = map_.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::ShieldedIcs20Withdrawal)
 ;
                         }
                         GeneratedField::ShieldedHostWithdrawal => {
@@ -851,7 +767,7 @@ impl serde::Serialize for FamilyAggregate {
         if self.note_reshape_family_id != 0 {
             len += 1;
         }
-        if self.shielded_ics20_withdrawal_family_id != 0 {
+        if self.shielded_withdrawal_family_id != 0 {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.transaction.v1.FamilyAggregate", len)?;
@@ -874,8 +790,8 @@ impl serde::Serialize for FamilyAggregate {
         if self.note_reshape_family_id != 0 {
             struct_ser.serialize_field("noteReshapeFamilyId", &self.note_reshape_family_id)?;
         }
-        if self.shielded_ics20_withdrawal_family_id != 0 {
-            struct_ser.serialize_field("shieldedIcs20WithdrawalFamilyId", &self.shielded_ics20_withdrawal_family_id)?;
+        if self.shielded_withdrawal_family_id != 0 {
+            struct_ser.serialize_field("shieldedWithdrawalFamilyId", &self.shielded_withdrawal_family_id)?;
         }
         struct_ser.end()
     }
@@ -897,8 +813,8 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
             "aggregateProof",
             "note_reshape_family_id",
             "noteReshapeFamilyId",
-            "shielded_ics20_withdrawal_family_id",
-            "shieldedIcs20WithdrawalFamilyId",
+            "shielded_withdrawal_family_id",
+            "shieldedWithdrawalFamilyId",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -908,7 +824,7 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
             PaddedCount,
             AggregateProof,
             NoteReshapeFamilyId,
-            ShieldedIcs20WithdrawalFamilyId,
+            ShieldedWithdrawalFamilyId,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -936,7 +852,7 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
                             "paddedCount" | "padded_count" => Ok(GeneratedField::PaddedCount),
                             "aggregateProof" | "aggregate_proof" => Ok(GeneratedField::AggregateProof),
                             "noteReshapeFamilyId" | "note_reshape_family_id" => Ok(GeneratedField::NoteReshapeFamilyId),
-                            "shieldedIcs20WithdrawalFamilyId" | "shielded_ics20_withdrawal_family_id" => Ok(GeneratedField::ShieldedIcs20WithdrawalFamilyId),
+                            "shieldedWithdrawalFamilyId" | "shielded_withdrawal_family_id" => Ok(GeneratedField::ShieldedWithdrawalFamilyId),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -961,7 +877,7 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
                 let mut padded_count__ = None;
                 let mut aggregate_proof__ = None;
                 let mut note_reshape_family_id__ = None;
-                let mut shielded_ics20_withdrawal_family_id__ = None;
+                let mut shielded_withdrawal_family_id__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::FamilyId => {
@@ -1002,11 +918,11 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::ShieldedIcs20WithdrawalFamilyId => {
-                            if shielded_ics20_withdrawal_family_id__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("shieldedIcs20WithdrawalFamilyId"));
+                        GeneratedField::ShieldedWithdrawalFamilyId => {
+                            if shielded_withdrawal_family_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("shieldedWithdrawalFamilyId"));
                             }
-                            shielded_ics20_withdrawal_family_id__ =
+                            shielded_withdrawal_family_id__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -1021,7 +937,7 @@ impl<'de> serde::Deserialize<'de> for FamilyAggregate {
                     padded_count: padded_count__.unwrap_or_default(),
                     aggregate_proof: aggregate_proof__.unwrap_or_default(),
                     note_reshape_family_id: note_reshape_family_id__.unwrap_or_default(),
-                    shielded_ics20_withdrawal_family_id: shielded_ics20_withdrawal_family_id__.unwrap_or_default(),
+                    shielded_withdrawal_family_id: shielded_withdrawal_family_id__.unwrap_or_default(),
                 })
             }
         }
@@ -2214,7 +2130,7 @@ impl serde::Serialize for ProofFamilyId {
             Self::Unspecified => "PROOF_FAMILY_ID_UNSPECIFIED",
             Self::Transfer => "PROOF_FAMILY_ID_TRANSFER",
             Self::NoteReshape => "PROOF_FAMILY_ID_NOTE_RESHAPE",
-            Self::ShieldedIcs20Withdrawal => "PROOF_FAMILY_ID_SHIELDED_ICS20_WITHDRAWAL",
+            Self::ShieldedWithdrawal => "PROOF_FAMILY_ID_SHIELDED_WITHDRAWAL",
         };
         serializer.serialize_str(variant)
     }
@@ -2229,7 +2145,7 @@ impl<'de> serde::Deserialize<'de> for ProofFamilyId {
             "PROOF_FAMILY_ID_UNSPECIFIED",
             "PROOF_FAMILY_ID_TRANSFER",
             "PROOF_FAMILY_ID_NOTE_RESHAPE",
-            "PROOF_FAMILY_ID_SHIELDED_ICS20_WITHDRAWAL",
+            "PROOF_FAMILY_ID_SHIELDED_WITHDRAWAL",
         ];
 
         struct GeneratedVisitor;
@@ -2273,7 +2189,7 @@ impl<'de> serde::Deserialize<'de> for ProofFamilyId {
                     "PROOF_FAMILY_ID_UNSPECIFIED" => Ok(ProofFamilyId::Unspecified),
                     "PROOF_FAMILY_ID_TRANSFER" => Ok(ProofFamilyId::Transfer),
                     "PROOF_FAMILY_ID_NOTE_RESHAPE" => Ok(ProofFamilyId::NoteReshape),
-                    "PROOF_FAMILY_ID_SHIELDED_ICS20_WITHDRAWAL" => Ok(ProofFamilyId::ShieldedIcs20Withdrawal),
+                    "PROOF_FAMILY_ID_SHIELDED_WITHDRAWAL" => Ok(ProofFamilyId::ShieldedWithdrawal),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

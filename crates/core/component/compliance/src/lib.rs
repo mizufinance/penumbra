@@ -6,7 +6,7 @@ pub mod event;
 pub mod audit_log;
 pub use audit_log::{
     audit_bytes_commitment, AuditEffect, AuditEffectRecord, AuditLogState, AuditSource,
-    IbcOperation, WithdrawalKind, AUDIT_LOG_VERSION, MAX_AUDIT_RECORD_BYTES,
+    WithdrawalKind, AUDIT_LOG_VERSION, MAX_AUDIT_RECORD_BYTES,
 };
 #[cfg(feature = "component")]
 pub use audit_log::{AuditLogRead, AuditLogWrite};
@@ -151,15 +151,12 @@ pub use tx_id::scanner_transaction_id_from_proto;
 pub mod scanner;
 #[cfg(feature = "scanner")]
 pub use scanner::{
-    extract_clear_flows, extract_compliance_ciphertexts, AuditLedgerRow, AuditRowKey,
-    BlockIdentityProvider, CandidateEvidence, ClearFlowEvent, ClearFlowKind, ComplianceScreener,
-    DetectionEvent, ExtractedComplianceCiphertext, InvalidCiphertext, IssuerComplianceWorker,
-    OutputOutcome, ScannedBlock, ScannedOutput, ScannerSource, ScannerStore, ScreeningResult,
-    SqliteScannerStore, WorkerHandle, MAX_INVALID_CIPHERTEXTS_PER_BLOCK,
+    extract_compliance_ciphertexts, AuditLedgerRow, AuditRowKey, BlockIdentityProvider,
+    CandidateEvidence, ComplianceScreener, DetectionEvent, ExtractedComplianceCiphertext,
+    InvalidCiphertext, IssuerComplianceWorker, OutputOutcome, ScannedBlock, ScannedOutput,
+    ScannerSource, ScannerStore, ScreeningResult, SqliteScannerStore, WorkerHandle,
+    MAX_INVALID_CIPHERTEXTS_PER_BLOCK,
 };
-
-pub mod ibc;
-pub use ibc::IbcComplianceMetadata;
 
 pub mod decode_object;
 pub use decode_object::{TransferComplianceMetadata, TRANSFER_COMPLIANCE_METADATA_BYTES};

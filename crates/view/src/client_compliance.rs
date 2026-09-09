@@ -99,8 +99,7 @@ where
 {
     use crate::planning_intent::ActionIntent;
     use shieldd_sdk_shielded_pool::{
-        NoteReshapeContext, NoteReshapePlan, ShieldedHostWithdrawalPlan,
-        ShieldedIcs20WithdrawalPlan, WithdrawalContext,
+        NoteReshapeContext, NoteReshapePlan, ShieldedHostWithdrawalPlan, WithdrawalContext,
     };
     let timestamp = match timestamp_override {
         Some(timestamp) => timestamp,
@@ -157,7 +156,7 @@ where
             let nonce = match action {
                 ActionPlan::Transfer(plan) => Some(plan.compliance.nonce),
                 ActionPlan::NoteReshape(plan) => Some(plan.compliance.nonce),
-                ActionPlan::ShieldedIcs20Withdrawal(plan) => Some(plan.compliance.nonce),
+
                 ActionPlan::ShieldedHostWithdrawal(plan) => Some(plan.compliance.nonce),
                 _ => None,
             };
@@ -199,31 +198,7 @@ where
                     routing.clone(),
                 )?)
             }
-            ActionIntent::Ics20Withdrawal(withdrawal) => {
-                let context = WithdrawalContext {
-                    witness: action_witness(batch_ref()?, &withdrawal.spends)?,
-                    timestamp,
-                    nonce: fresh_action_nonce(rng, &mut used_nonces)?,
-                };
-                let volume_accumulator = select_volume_accumulator(
-                    &context.witness,
-                    timestamp,
-                    withdrawal.withdrawal.amount.value(),
-                    true,
-                    disclose_to_issuer,
-                    volumes,
-                    rng,
-                )?;
-                ActionPlan::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalPlan::new(
-                    withdrawal.spends,
-                    withdrawal.change_output,
-                    withdrawal.withdrawal,
-                    withdrawal.value_blinding,
-                    context,
-                    volume_accumulator,
-                    routing.clone(),
-                )?)
-            }
+
             ActionIntent::HostWithdrawal(withdrawal) => {
                 let context = WithdrawalContext {
                     witness: action_witness(batch_ref()?, &withdrawal.spends)?,

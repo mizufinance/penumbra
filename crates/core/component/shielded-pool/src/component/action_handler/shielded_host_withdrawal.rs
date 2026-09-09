@@ -12,7 +12,7 @@ use crate::{
         action_handler::{note_reshape, shielded_withdrawal},
         AssetRegistryRead as _, StateReadExt as _,
     },
-    ShieldedHostWithdrawal, ShieldedIcs20WithdrawalProofPublic,
+    ShieldedHostWithdrawal, ShieldedWithdrawalProofPublic,
 };
 
 pub fn shielded_host_withdrawal_verify_auth_sigs(
@@ -30,7 +30,7 @@ pub fn shielded_host_withdrawal_verify_auth_sigs(
 pub fn shielded_host_withdrawal_extract_public(
     action: &ShieldedHostWithdrawal,
     context: &TransactionContext,
-) -> Result<ShieldedIcs20WithdrawalProofPublic> {
+) -> Result<ShieldedWithdrawalProofPublic> {
     shielded_withdrawal::extract_public(
         shielded_withdrawal::ProofPublicData {
             family_id: action.body.family_id,
@@ -54,7 +54,7 @@ pub fn shielded_host_withdrawal_extract_public(
 
 pub fn shielded_host_withdrawal_to_batch_item(
     action: &ShieldedHostWithdrawal,
-    public: ShieldedIcs20WithdrawalProofPublic,
+    public: ShieldedWithdrawalProofPublic,
 ) -> Result<BatchItem> {
     action.proof.to_batch_item(&public)
 }
