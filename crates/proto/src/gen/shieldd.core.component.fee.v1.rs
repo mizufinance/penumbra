@@ -143,23 +143,9 @@ impl ::prost::Name for FeeTier {
 /// Fee component configuration data.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FeeParameters {
-    /// Fixed gas prices in the native token used to compute transactions' base
-    /// fees.
-    ///
-    /// In the future, this should be removed and replaced with parameters for
-    /// dynamic gas pricing.
+    /// Fixed base-asset prices used to compute transaction fees.
     #[prost(message, optional, tag = "1")]
     pub fixed_gas_prices: ::core::option::Option<GasPrices>,
-    /// Fixed gas prices in other tokens used to compute transactions' base fees.
-    ///
-    /// In the future, this should be removed and replaced with fixed multiples of
-    /// the native token's price (so that there is one set of dynamically
-    /// determined gas prices in the native token, and derived gas prices in other
-    /// alternative tokens).
-    ///
-    /// If this is empty, no other tokens are accepted for gas.
-    #[prost(message, repeated, tag = "2")]
-    pub fixed_alt_gas_prices: ::prost::alloc::vec::Vec<GasPrices>,
 }
 impl ::prost::Name for FeeParameters {
     const NAME: &'static str = "FeeParameters";
@@ -202,12 +188,9 @@ impl ::prost::Name for CurrentGasPricesRequest {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CurrentGasPricesResponse {
-    /// The current gas prices, in the preferred (native) token.
+    /// The current base-asset gas prices.
     #[prost(message, optional, tag = "1")]
     pub gas_prices: ::core::option::Option<GasPrices>,
-    /// Other gas prices for other accepted tokens.
-    #[prost(message, repeated, tag = "2")]
-    pub alt_gas_prices: ::prost::alloc::vec::Vec<GasPrices>,
 }
 impl ::prost::Name for CurrentGasPricesResponse {
     const NAME: &'static str = "CurrentGasPricesResponse";
@@ -228,7 +211,7 @@ pub struct EventPaidFee {
     /// The base fee that was required.
     #[prost(message, optional, tag = "2")]
     pub base_fee: ::core::option::Option<Fee>,
-    /// The tip that was paid to the proposer.
+    /// The tip above the required base fee.
     #[prost(message, optional, tag = "3")]
     pub tip: ::core::option::Option<Fee>,
     /// The gas used to compute the base fee.
@@ -248,13 +231,13 @@ impl ::prost::Name for EventPaidFee {
 /// Emitted as a summary of fees in the block.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EventBlockFees {
-    /// The total fees, after swapping to the native token.
+    /// Total base-asset fees.
     #[prost(message, optional, tag = "1")]
     pub swapped_fee_total: ::core::option::Option<Fee>,
-    /// The total base fees, after swapping to the native token.
+    /// Total required base-asset fees.
     #[prost(message, optional, tag = "2")]
     pub swapped_base_fee_total: ::core::option::Option<Fee>,
-    /// The total tips, after swapping to the native token.
+    /// Total base-asset tips.
     #[prost(message, optional, tag = "3")]
     pub swapped_tip_total: ::core::option::Option<Fee>,
 }

@@ -2,12 +2,12 @@ use anyhow::Result;
 use ark_ff::Zero;
 use decaf377::Fr;
 use decaf377_rdsa as rdsa;
-#[cfg(all(feature = "parallel", any(unix, windows)))]
+#[cfg(all(feature = "parallel", all(feature = "prover", any(unix, windows))))]
 use shieldd_sdk_keys::symmetric::PayloadKey;
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 use shieldd_sdk_keys::FullViewingKey;
 use shieldd_sdk_txhash::{AuthorizingData, EffectingData};
-#[cfg(all(feature = "parallel", any(unix, windows)))]
+#[cfg(all(feature = "parallel", all(feature = "prover", any(unix, windows))))]
 use tokio::sync::oneshot;
 
 use super::TransactionPlan;
@@ -346,7 +346,7 @@ impl TransactionPlan {
         Ok(transaction)
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     fn initialize_provers(&self) -> Result<()> {
         use shieldd_sdk_shielded_pool::gnark::{initialize_prover, ProverCapability};
         for action in &self.actions {
@@ -370,7 +370,7 @@ impl TransactionPlan {
         Ok(())
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     pub fn build(
         self,
         full_viewing_key: &FullViewingKey,
@@ -412,7 +412,7 @@ impl TransactionPlan {
         self.apply_auth_data(auth_data, tx)
     }
 
-    #[cfg(all(feature = "parallel", any(unix, windows)))]
+    #[cfg(all(feature = "parallel", all(feature = "prover", any(unix, windows))))]
     pub async fn build_concurrent(
         self,
         full_viewing_key: &FullViewingKey,
@@ -500,7 +500,7 @@ impl TransactionPlan {
     }
 }
 
-#[cfg(all(feature = "parallel", any(unix, windows)))]
+#[cfg(all(feature = "parallel", all(feature = "prover", any(unix, windows))))]
 struct ActionBuildScheduler {
     memo_key: Option<PayloadKey>,
     full_viewing_key: FullViewingKey,
@@ -508,7 +508,7 @@ struct ActionBuildScheduler {
     recent_position_floor: u64,
 }
 
-#[cfg(all(feature = "parallel", any(unix, windows)))]
+#[cfg(all(feature = "parallel", all(feature = "prover", any(unix, windows))))]
 impl ActionBuildScheduler {
     fn new(
         memo_key: Option<PayloadKey>,
@@ -575,7 +575,7 @@ impl ActionBuildScheduler {
     }
 }
 
-#[cfg(all(feature = "parallel", any(unix, windows)))]
+#[cfg(all(feature = "parallel", all(feature = "prover", any(unix, windows))))]
 enum PendingActionTask {
     Tokio(tokio::task::JoinHandle<Result<Action>>),
     Thread(oneshot::Receiver<Result<Action>>),

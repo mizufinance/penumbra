@@ -150,6 +150,19 @@ than the global historical nullifier tree. Entries are retained through
 `day_start + 24h + 30m` and pruned afterward. The owner opening is recovered
 from a fixed 108-byte OVK-authenticated payload in the compact block.
 
+A caller may request voluntary disclosure, which leaves the head unchanged and
+can run concurrently with other transfers spending independent notes. Disclosed
+volume is excluded from later undisclosed-volume calculations. Each selected day
+has a fresh deterministic origin; missing history blocks tracked transfers for
+that day while disclosure remains available. The issuer learns only the current
+transfer, never the running private total. The owner payload contains a 92-byte
+plaintext with the real/padding marker, subject, day, volume and blinding.
+
+Wallet reservation and recovery behavior is defined in [wallet state](../wallet.md).
+The circuit and native code use checked `u128` addition; temporary nullifier
+pruning is strict after the acceptance grace. Activation requires the external
+Shieldd Security models and proof gates for the exact activating commit.
+
 Only the receiver output carries compliance data:
 
 ```text

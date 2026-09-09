@@ -96,7 +96,7 @@ jobs:
         env:
           CARGO_TERM_COLOR: always
 
-      - name: Check pre-change database and nested source compatibility
+      - name: Check current state persistence and nested source parity
         run: nix develop .#ci --command bash scripts/ci/check_state_compatibility.sh
 
       - name: Set up Go

@@ -1,7 +1,7 @@
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 use crate::{Action, WitnessData};
 use anyhow::anyhow;
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 use anyhow::{Context, Result};
 use ark_ff::Zero;
 use decaf377::Fr;
@@ -50,7 +50,7 @@ impl ActionPlan {
     }
 
     /// Builds a planned [`crate::Action`] specified by this [`ActionPlan`].
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     pub fn build_unauth(
         action_plan: ActionPlan,
         fvk: &FullViewingKey,

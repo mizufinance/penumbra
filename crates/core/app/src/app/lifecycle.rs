@@ -155,8 +155,6 @@ impl App {
         let state = Arc::try_unwrap(std::mem::replace(&mut self.state, Arc::new(dummy_state)))
             .expect("we have exclusive ownership of the State at commit()");
 
-        let halt_check_ms = 0.0;
-
         let storage_commit_start = Instant::now();
         let jmt_root = storage
             .commit(state)
@@ -177,7 +175,6 @@ impl App {
         tracing::info!(
             commit_total_ms = total_ms,
             commit_flush_deferred_ms = flush_ms,
-            commit_halt_check_ms = halt_check_ms,
             commit_storage_commit_ms = storage_commit_ms,
             commit_snapshot_reset_ms = snapshot_reset_ms,
             "host_commit_phase_profile"

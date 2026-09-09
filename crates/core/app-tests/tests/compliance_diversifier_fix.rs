@@ -1,7 +1,6 @@
 use {
     anyhow::anyhow,
-    cnidarium::{StateDelta, TempStorage},
-    common::TempStorageExt as _,
+    cnidarium::StateDelta,
     decaf377::Fr,
     rand_core::OsRng,
     shieldd_sdk_app::genesis::{self, AppState},
@@ -31,7 +30,7 @@ mod common;
 async fn compliance_enrichment_preserves_sender_diversifier_on_supported_transfer(
 ) -> anyhow::Result<()> {
     let guard = common::set_tracing_subscriber();
-    let storage = TempStorage::new_with_shieldd_prefixes().await?;
+    let storage = common::new_storage().await?;
     let regulated_denom = "test_regulated_asset";
     let regulated_asset_id = REGISTRY
         .parse_denom(regulated_denom)
@@ -134,12 +133,12 @@ async fn compliance_enrichment_preserves_sender_diversifier_on_supported_transfe
     let plan = complete_plan_with_compliance(
         intent,
         |queries| async move {
-            shieldd_sdk_compliance::ComplianceProofProvider::get_batch_proofs(&provider, &queries)
-                .await
-                .map(|compliance| shieldd_sdk_view::CompletionData {
+            provider.get_batch_proofs(&queries).await.map(|compliance| {
+                shieldd_sdk_view::CompletionData {
                     compliance,
                     volumes: vec![],
-                })
+                }
+            })
         },
         &mut OsRng,
         Default::default(),

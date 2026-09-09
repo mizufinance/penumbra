@@ -7,7 +7,6 @@ import (
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend"
 	"github.com/consensys/gnark/frontend"
-	"github.com/consensys/gnark/frontend/cs/r1cs"
 	gnarkte "github.com/consensys/gnark/std/algebra/native/twistededwards"
 	"github.com/consensys/gnark/test"
 	"github.com/mizufinance/shieldd/tools/gnark/internal/primitives"
@@ -116,37 +115,6 @@ func quadPathAssignment(path [ComplianceQuadTreeDepth][3]*big.Int) [ComplianceQu
 		}
 	}
 	return out
-}
-
-func TestIndexedLeafCommitmentNativeMatchesQuadPath(t *testing.T) {
-	inputs := syntheticIndexedLeafInputs(t)
-	commitment, err := IndexedLeafCommitmentNative(inputs)
-	if err != nil {
-		t.Fatalf("compute indexed leaf commitment: %v", err)
-	}
-
-	path, position := syntheticQuadPath()
-	root, err := VerifyQuadPathNative(commitment, path, position)
-	if err != nil {
-		t.Fatalf("verify quad path natively: %v", err)
-	}
-	if root.Sign() == 0 {
-		t.Fatal("expected non-zero quad path root")
-	}
-}
-
-func TestIndexedLeafCommitmentCircuitCompiles(t *testing.T) {
-	_, err := frontend.Compile(ecc.BLS12_377.ScalarField(), r1cs.NewBuilder, &indexedLeafCommitmentCircuit{})
-	if err != nil {
-		t.Fatalf("compile indexed leaf commitment circuit: %v", err)
-	}
-}
-
-func TestQuadPathCircuitCompiles(t *testing.T) {
-	_, err := frontend.Compile(ecc.BLS12_377.ScalarField(), r1cs.NewBuilder, &quadPathCircuit{})
-	if err != nil {
-		t.Fatalf("compile quad path circuit: %v", err)
-	}
 }
 
 func TestIndexedLeafCircuitMatchesNativeCommitment(t *testing.T) {

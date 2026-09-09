@@ -36,10 +36,10 @@ resolves source files relative to itself, not the enclosing repository root.
 Bankd's `shieldd` Docker target exports only native artifacts; `shieldd-provers`
 exports the proof builders, and `shieldd-audit` exports audit tooling.
 
-CI reopens a database written by the pre-simplification revision, compares
-committed query bytes and proofs, checks persisted spent markers and nonempty transaction history, reimports an
-exported checkpoint, rejects an old host source in a new block, and compares the
-next root with an old-version control.
+CI compares uninterrupted execution with close/reopen and checkpoint reimport,
+checks committed query bytes/proofs, spent markers and nonempty history, rejects
+replayed host sources, and compares the next committed root. The same fixture
+runs under a nested Bankd source directory to check source relocation.
 Bankd owns real transfer/withdrawal integration tests. Manual Rust proof replay
 covers ignored release-gated cases; ordinary PR tests do not imply those ran.
 

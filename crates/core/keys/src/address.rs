@@ -452,22 +452,8 @@ mod tests {
         assert_eq!(addr2, dest);
         assert_eq!(addr3, dest);
         assert_eq!(addr_from_proto, dest);
-    }
-
-    #[test]
-    fn test_bytes_roundtrip() {
-        let rng = OsRng;
-        let seed_phrase = SeedPhrase::generate(rng);
-        let sk = SpendKey::from_seed_phrase_bip44(seed_phrase, &Bip44Path::new(0))
-            .expect("generated spend key satisfies key refinements");
-        let fvk = sk.full_viewing_key();
-        let ivk = fvk.incoming();
-        let dest = ivk.payment_address(0u32.into());
-
-        let bytes = dest.to_vec();
-        let addr: Address = bytes.try_into().expect("can decode valid address");
-
-        assert_eq!(addr, dest);
+        let raw: Address = dest.to_vec().try_into().expect("canonical raw address");
+        assert_eq!(raw, dest);
     }
 
     #[test]

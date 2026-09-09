@@ -24,7 +24,7 @@ pub use action_handler::shielded_ics20_withdrawal::{
     shielded_ics20_withdrawal_check_stateless_and_extract,
     shielded_ics20_withdrawal_execute_verified,
 };
-#[cfg(all(test, any(unix, windows)))]
+#[cfg(all(test, all(feature = "prover", any(unix, windows))))]
 pub(crate) use action_handler::transfer::transfer_extract_public;
 pub use action_handler::transfer::{
     transfer_check_stateless_and_extract, transfer_execute_validated, transfer_execute_verified,

@@ -290,13 +290,11 @@ impl MockClient {
         complete_plan_with_compliance(
             intent,
             |queries| async move {
-                shieldd_sdk_compliance::ComplianceProofProvider::get_batch_proofs(
-                    &provider, &queries,
-                )
-                .await
-                .map(|compliance| shieldd_sdk_view::CompletionData {
-                    compliance,
-                    volumes: vec![],
+                provider.get_batch_proofs(&queries).await.map(|compliance| {
+                    shieldd_sdk_view::CompletionData {
+                        compliance,
+                        volumes: vec![],
+                    }
                 })
             },
             &mut OsRng,
@@ -342,112 +340,9 @@ impl<S> StateReadComplianceProvider<S> {
     }
 }
 
-#[async_trait::async_trait]
-impl<S: StateRead + Send + Sync> shieldd_sdk_compliance::ComplianceProofProvider
-    for StateReadComplianceProvider<S>
-{
-    async fn get_compliance_anchor(&self) -> anyhow::Result<tct::StateCommitment> {
-        let root = self.state.get_user_tree_root().await?;
-        Ok(tct::StateCommitment(root.0))
-    }
-
-    async fn get_asset_anchor(&self) -> anyhow::Result<tct::StateCommitment> {
-        let root = self.state.get_asset_imt_root().await?;
-        Ok(tct::StateCommitment(root.0))
-    }
-
-    async fn get_asset_proof(
-        &self,
-        asset_id: shieldd_sdk_asset::asset::Id,
-    ) -> anyhow::Result<shieldd_sdk_compliance::AssetProofData> {
-        // Use the IMT-based get_asset_proof_data for proper indexed leaf
-        let proof_data = self.state.get_asset_proof_data(asset_id).await?;
-
-        let path = MerklePath {
-            layers: proof_data
-                .auth_path
-                .layers
-                .into_iter()
-                .map(|layer| shieldd_sdk_compliance::MerklePathLayer {
-                    siblings: layer.siblings,
-                })
-                .collect(),
-        };
-        Ok(shieldd_sdk_compliance::AssetProofData {
-            auth_path: path,
-            position: proof_data.position,
-            indexed_leaf: proof_data.indexed_leaf,
-            is_regulated: proof_data.is_regulated,
-        })
-    }
-
-    async fn get_asset_policy(
-        &self,
-        asset_id: shieldd_sdk_asset::asset::Id,
-    ) -> anyhow::Result<Option<shieldd_sdk_compliance::AssetPolicy>> {
-        self.state.get_asset_policy(asset_id).await
-    }
-
-    async fn get_user_proof(
-        &self,
-        address: &shieldd_sdk_keys::Address,
-        asset_id: shieldd_sdk_asset::asset::Id,
-    ) -> anyhow::Result<shieldd_sdk_compliance::UserProofData> {
-        if let Some(position) = self.state.get_user_leaf_position(address, asset_id).await? {
-            let path_layers = self.state.get_user_auth_path(position).await?;
-            let leaf = self
-                .state
-                .get_user_leaf(address, asset_id)
-                .await?
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "user leaf not found for address {:?} and asset {:?}",
-                        address,
-                        asset_id
-                    )
-                })?;
-
-            let path = MerklePath {
-                layers: path_layers
-                    .into_iter()
-                    .map(|siblings| shieldd_sdk_compliance::MerklePathLayer {
-                        siblings: siblings.iter().map(|s| s.0.to_bytes().to_vec()).collect(),
-                    })
-                    .collect(),
-            };
-
-            return Ok(shieldd_sdk_compliance::UserProofData {
-                auth_path: path,
-                position,
-                leaf,
-            });
-        }
-
-        // Unregulated assets can still build without a registered user leaf.
-        let asset_proof = self.get_asset_proof(asset_id).await?;
-        if !asset_proof.is_regulated {
-            let synthetic_leaf = ComplianceLeaf::synthetic_unregulated(address.clone(), asset_id);
-            return Ok(shieldd_sdk_compliance::UserProofData {
-                auth_path: MerklePath::default(),
-                position: 0,
-                leaf: synthetic_leaf,
-            });
-        }
-
-        Err(anyhow::anyhow!(
-            "user not registered in compliance tree for address {:?} and asset {:?}",
-            address,
-            asset_id
-        ))
-    }
-
-    /// Override get_batch_proofs to ensure anchor/proof consistency.
-    ///
-    /// CRITICAL: We read each tree ONCE and use the same instance for both
-    /// the anchor and the proofs. This prevents the bug where anchor and proofs
-    /// come from different tree deserializations (which could differ due to
-    /// serialization issues or timing).
-    async fn get_batch_proofs(
+impl<S: StateRead + Send + Sync> StateReadComplianceProvider<S> {
+    /// Read each tree once so anchors and authentication paths share a snapshot.
+    pub async fn get_batch_proofs(
         &self,
         queries: &[shieldd_sdk_compliance::ComplianceQuery],
     ) -> anyhow::Result<shieldd_sdk_compliance::BatchComplianceData> {

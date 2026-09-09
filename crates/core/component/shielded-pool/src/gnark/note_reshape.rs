@@ -81,7 +81,7 @@ mod tests {
     }
 }
 
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 mod native {
     use super::*;
     use crate::gnark::transport::{BundledArtifacts, GnarkClient, GnarkFamilyConfig};
@@ -204,10 +204,13 @@ mod native {
     }
 }
 
-#[cfg(all(any(unix, windows), any(test, feature = "benchmark-helpers")))]
+#[cfg(all(
+    all(feature = "prover", any(unix, windows)),
+    any(test, feature = "benchmark-helpers")
+))]
 pub(crate) use native::note_reshape_family_config;
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 pub(crate) use native::GnarkNoteReshapeClient;
 
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 pub(super) use native::resolved_configuration;

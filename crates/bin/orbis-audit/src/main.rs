@@ -657,12 +657,6 @@ mod tests {
     }
 
     #[test]
-    fn reversed_window_is_observable_before_network_work() {
-        let window = TimestampRange { start: 20, end: 10 };
-        assert!(window.start > window.end);
-    }
-
-    #[test]
     fn extended_identity_has_an_unambiguous_non_payment_prefix() {
         let mut plaintext = Vec::from(Element::GENERATOR.vartime_compress().0);
         plaintext.extend_from_slice(&[7u8; 32]);

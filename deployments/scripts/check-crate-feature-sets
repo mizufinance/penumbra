@@ -3,6 +3,9 @@
 # This helps us ensure that the feature-gating for e.g. "component" is
 # declared explicitly.
 set -euo pipefail
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
+export RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-2}"
+export GOMAXPROCS="${GOMAXPROCS:-2}"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
@@ -13,3 +16,16 @@ if ! hash cargo-hack >/dev/null 2>&1 ; then
 fi
 
 cargo hack check --workspace --all-targets --all-features --release
+
+# Check boundaries without workspace feature unification.
+cargo check --release -p shieldd --lib
+cargo check --release -p shieldd-sdk-view --no-default-features
+cargo check --release -p shieldd-sdk-view --no-default-features --features rpc
+cargo check --release -p shieldd-sdk-compliance --no-default-features --features scanner
+cargo check --release -p shieldd-sdk-transaction --no-default-features --features prover
+cargo check --release -p orbis-audit
+dependency_tree="$(cargo tree -p shieldd --edges normal --prefix none)"
+if grep -q '^libloading ' <<< "$dependency_tree"; then
+    echo 'ERROR: validator enables native prover loading' >&2
+    exit 1
+fi

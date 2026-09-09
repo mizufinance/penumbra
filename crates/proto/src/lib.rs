@@ -188,29 +188,6 @@ pub mod shieldd {
     }
 }
 
-pub mod tendermint {
-    pub mod crypto {
-        include!("gen/tendermint.crypto.rs");
-    }
-
-    #[allow(clippy::large_enum_variant)]
-    pub mod types {
-        include!("gen/tendermint.types.rs");
-    }
-
-    pub mod version {
-        include!("gen/tendermint.version.rs");
-    }
-
-    pub mod p2p {
-        include!("gen/tendermint.p2p.rs");
-    }
-
-    pub mod abci {
-        include!("gen/tendermint.abci.rs");
-    }
-}
-
 pub mod cosmos {
     pub mod base {
         pub mod v1beta1 {
@@ -220,12 +197,6 @@ pub mod cosmos {
         pub mod query {
             pub mod v1beta1 {
                 include!("gen/cosmos.base.query.v1beta1.rs");
-            }
-        }
-
-        pub mod abci {
-            pub mod v1beta1 {
-                include!("gen/cosmos.base.abci.v1beta1.rs");
             }
         }
     }

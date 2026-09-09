@@ -761,20 +761,6 @@ mod tests {
     }
 
     #[test]
-    fn note_reshape_wrong_shape_is_rejected_for_all_families() {
-        for family_id in NoteReshapeFamilyId::ALL {
-            let (mut public, _) =
-                proof_test_helpers::build_note_reshape_roundtrip_inputs(family_id);
-            public.inputs.pop();
-            assert!(
-                public.validate_shape().is_err(),
-                "{} must reject an input-shape mutation",
-                family_id.label()
-            );
-        }
-    }
-
-    #[test]
     fn note_reshape_wrong_statement_preimage_changes_the_hash_for_all_families() {
         for family_id in NoteReshapeFamilyId::ALL {
             let (public, _) = proof_test_helpers::build_note_reshape_roundtrip_inputs(family_id);

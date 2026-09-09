@@ -10,6 +10,7 @@ edition = {workspace = true}
 [features]
 component = [
     "cnidarium",
+    "dep:tendermint-light-client-verifier",
     "shieldd-sdk-proto/cnidarium",
     "shieldd-sdk-sct/component",
 ]
@@ -30,7 +31,6 @@ hex = {workspace = true}
 ibc-proto = {workspace = true, default-features = false}
 ibc-types = {workspace = true, default-features = false}
 ics23 = {workspace = true}
-metrics = {workspace = true}
 num-traits = {workspace = true, default-features = false}
 once_cell = {workspace = true}
 pbjson-types = {workspace = true}
@@ -45,10 +45,9 @@ serde = {workspace = true, features = ["derive"]}
 serde_json = {workspace = true}
 sha2 = {workspace = true}
 tendermint = {workspace = true}
-tendermint-light-client-verifier = {workspace = true}
+tendermint-light-client-verifier = {workspace = true, optional = true}
 time = {workspace = true}
 tokio = {workspace = true, optional = true, features = ["rt"]}
-tower = {workspace = true}
 tracing = {workspace = true}
 
 [dev-dependencies]

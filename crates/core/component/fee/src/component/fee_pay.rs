@@ -79,10 +79,58 @@ pub trait FeePay: StateWrite {
             tip: Some(tip.into()),
         });
 
-        self.raw_accumulate_base_fee_and_tip(base_fee, tip);
+        self.accumulate_fees(base_fee.amount(), tip.amount());
 
         Ok(())
     }
 }
 
 impl<S: StateWrite + ?Sized> FeePay for S {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{component::BlockFees, FeeParameters, GasPrices};
+
+    #[tokio::test]
+    async fn payments_accumulate_required_fees_and_tips_only_after_validation() -> Result<()> {
+        let storage = cnidarium::TempStorage::new().await?;
+        let mut state = cnidarium::StateDelta::new(storage.latest_snapshot());
+        state.put_fee_params(FeeParameters {
+            fixed_gas_prices: GasPrices {
+                block_space_price: 1_000,
+                ..Default::default()
+            },
+        });
+        assert_eq!(state.block_fees(), BlockFees::default());
+        state
+            .pay_fee(Gas::zero(), Fee::from_staking_token_amount(0u64.into()))
+            .await?;
+        assert_eq!(state.block_fees(), BlockFees::default());
+        let gas = Gas {
+            block_space: 10,
+            ..Gas::zero()
+        };
+        for payment in [10u64, 12] {
+            state
+                .pay_fee(gas, Fee::from_staking_token_amount(payment.into()))
+                .await?;
+        }
+        let expected = BlockFees {
+            base: 20u64.into(),
+            tip: 2u64.into(),
+        };
+        assert_eq!(state.block_fees(), expected);
+        for fee in [
+            Fee::from_staking_token_amount(9u64.into()),
+            Fee(Value {
+                asset_id: shieldd_sdk_asset::asset::Id(decaf377::Fq::from(42u64)),
+                amount: 100u64.into(),
+            }),
+        ] {
+            assert!(state.pay_fee(gas, fee).await.is_err());
+            assert_eq!(state.block_fees(), expected);
+        }
+        Ok(())
+    }
+}

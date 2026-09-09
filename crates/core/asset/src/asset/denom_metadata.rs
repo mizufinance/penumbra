@@ -576,67 +576,17 @@ pub mod parse {
 mod ibc_transfer_path_tests {
     use crate::asset::denom_metadata::parse::ibc_transfer_path as p;
 
-    /// Noble USDC
-    /// transfer/channel-2/uusdc
     #[test]
-    fn single_hop_uusdc() {
-        let got = p("transfer/channel-2/uusdc");
-        assert_eq!(
-            got,
-            Some(("transfer/channel-2".to_string(), "uusdc".to_string()))
-        );
-    }
-
-    /// Beloved shitmos
-    /// transfer/channel-4/factory/osmo1q77cw0mmlluxu0wr29fcdd0tdnh78gzhkvhe4n6ulal9qvrtu43qtd0nh8/shitmos
-    #[test]
-    fn factory_shitmos() {
-        let got = p("transfer/channel-4/factory/osmo1q77cw0mmlluxu0wr29fcdd0tdnh78gzhkvhe4n6ulal9qvrtu43qtd0nh8/shitmos");
-        assert_eq!(
-            got,
-            Some((
-                "transfer/channel-4".to_string(),
-                "factory/osmo1q77cw0mmlluxu0wr29fcdd0tdnh78gzhkvhe4n6ulal9qvrtu43qtd0nh8/shitmos"
-                    .to_string()
-            ))
-        );
-    }
-
-    /// cw20:inj19vy83ne9tzta2yqynj8yg7dq9ghca6yqn9hyej  (NOT an IBC asset)
-    #[test]
-    fn cw20_filtered_out() {
-        let got = p("cw20:inj19vy83ne9tzta2yqynj8yg7dq9ghca6yqn9hyej");
-        assert_eq!(got, None);
-    }
-
-    /// Eureka asset
-    /// transfer/channel-0/transfer/08-wasm-1369/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2
-    #[test]
-    fn multihop_wasm_evm_hex() {
-        let got = p(
-            "transfer/channel-0/transfer/08-wasm-1369/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
-        );
-        assert_eq!(
-            got,
-            Some((
-                "transfer/channel-0/transfer/08-wasm-1369".to_string(),
-                "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2".to_string()
-            ))
-        );
-    }
-
-    /// Gamma pool
-    /// transfer/channel-4/gamm/pool/1402
-    #[test]
-    fn gamm_pool() {
-        let got = p("transfer/channel-4/gamm/pool/1402");
-        assert_eq!(
-            got,
-            Some((
-                "transfer/channel-4".to_string(),
-                "gamm/pool/1402".to_string()
-            ))
-        );
+    fn denom_traces() {
+        for (name, input, expected) in [
+            ("single_hop_uusdc", "transfer/channel-2/uusdc", Some(("transfer/channel-2", "uusdc"))),
+            ("factory_shitmos", "transfer/channel-4/factory/osmo1q77cw0mmlluxu0wr29fcdd0tdnh78gzhkvhe4n6ulal9qvrtu43qtd0nh8/shitmos", Some(("transfer/channel-4", "factory/osmo1q77cw0mmlluxu0wr29fcdd0tdnh78gzhkvhe4n6ulal9qvrtu43qtd0nh8/shitmos"))),
+            ("cw20_filtered_out", "cw20:inj19vy83ne9tzta2yqynj8yg7dq9ghca6yqn9hyej", None),
+            ("multihop_wasm_evm_hex", "transfer/channel-0/transfer/08-wasm-1369/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", Some(("transfer/channel-0/transfer/08-wasm-1369", "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"))),
+            ("gamm_pool", "transfer/channel-4/gamm/pool/1402", Some(("transfer/channel-4", "gamm/pool/1402"))),
+        ] {
+            assert_eq!(p(input), expected.map(|(path, denom)| (path.to_owned(), denom.to_owned())), "{name}");
+        }
     }
 }
 
@@ -683,11 +633,23 @@ mod tests {
           }
         "#;
 
-        let _metadata: super::Metadata = serde_json::from_str(SOME_COSMOS_JSON).unwrap();
-
-        // uncomment to see what our subset looks like
-        //let json2 = serde_json::to_string_pretty(&_metadata).unwrap();
-        //println!("{}", json2);
+        let metadata: super::Metadata = serde_json::from_str(SOME_COSMOS_JSON).unwrap();
+        let encoded = serde_json::to_value(&metadata).unwrap();
+        let original: serde_json::Value = serde_json::from_str(SOME_COSMOS_JSON).unwrap();
+        for field in ["base", "display", "name", "symbol", "description"] {
+            assert_eq!(encoded[field], original[field], "metadata field {field}");
+        }
+        let mut units = metadata
+            .units()
+            .into_iter()
+            .map(|unit| (unit.to_string(), unit.exponent()))
+            .collect::<Vec<_>>();
+        units.sort();
+        assert_eq!(
+            units,
+            vec![("adydx".to_owned(), 0), ("dydx".to_owned(), 18)]
+        );
+        assert_eq!(metadata.default_unit().to_string(), "dydx");
     }
 
     #[test]

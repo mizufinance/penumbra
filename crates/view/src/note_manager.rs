@@ -1870,15 +1870,29 @@ mod tests {
         }
     }
 
+    fn funded_view(
+        rng: &mut OsRng,
+        source: AddressIndex,
+        sender: Address,
+        amounts: &[u64],
+    ) -> MockNoteManagerView {
+        let notes = amounts
+            .iter()
+            .enumerate()
+            .map(|(index, amount)| {
+                spendable_note_record(rng, *amount, source, sender.clone(), index as u64 + 1)
+            })
+            .collect();
+        MockNoteManagerView::new(notes, BTreeMap::from([(source, sender)]))
+    }
+
     #[tokio::test]
     async fn transfer_ready_produces_wallet_facing_transfer_only() {
         let mut rng = OsRng;
         let source = AddressIndex::new(0);
         let sender = test_address(0);
         let recipient = test_address(1);
-        let view_addresses = BTreeMap::from([(source, sender.clone())]);
-        let notes = vec![spendable_note_record(&mut rng, 10, source, sender, 1)];
-        let mut view = MockNoteManagerView::new(notes, view_addresses);
+        let mut view = funded_view(&mut rng, source, sender, &[10]);
 
         let mut note_manager = NoteManager::new(OsRng);
         note_manager.set_gas_prices(GasPrices::zero());
@@ -1912,14 +1926,7 @@ mod tests {
         let source = AddressIndex::new(0);
         let sender = test_address(2);
         let recipient = test_address(3);
-        let view_addresses = BTreeMap::from([(source, sender.clone())]);
-        let notes = vec![
-            spendable_note_record(&mut rng, 4, source, sender.clone(), 1),
-            spendable_note_record(&mut rng, 3, source, sender.clone(), 2),
-            spendable_note_record(&mut rng, 2, source, sender.clone(), 3),
-            spendable_note_record(&mut rng, 1, source, sender.clone(), 4),
-        ];
-        let mut view = MockNoteManagerView::new(notes, view_addresses);
+        let mut view = funded_view(&mut rng, source, sender, &[4, 3, 2, 1]);
         let mut note_manager = NoteManager::new(OsRng);
         note_manager.set_gas_prices(GasPrices::zero());
 
@@ -1977,12 +1984,7 @@ mod tests {
         let source = AddressIndex::new(0);
         let sender = test_address(20);
         let return_address = test_address(21);
-        let view_addresses = BTreeMap::from([(source, sender.clone())]);
-        let notes = vec![
-            spendable_note_record(&mut rng, 7, source, sender.clone(), 1),
-            spendable_note_record(&mut rng, 5, source, sender, 2),
-        ];
-        let mut view = MockNoteManagerView::new(notes, view_addresses);
+        let mut view = funded_view(&mut rng, source, sender, &[7, 5]);
 
         let mut note_manager = NoteManager::new(OsRng);
         note_manager.set_gas_prices(GasPrices::zero());
@@ -2008,14 +2010,7 @@ mod tests {
         let source = AddressIndex::new(0);
         let sender = test_address(22);
         let return_address = test_address(23);
-        let view_addresses = BTreeMap::from([(source, sender.clone())]);
-        let notes = vec![
-            spendable_note_record(&mut rng, 4, source, sender.clone(), 1),
-            spendable_note_record(&mut rng, 3, source, sender.clone(), 2),
-            spendable_note_record(&mut rng, 2, source, sender.clone(), 3),
-            spendable_note_record(&mut rng, 1, source, sender.clone(), 4),
-        ];
-        let mut view = MockNoteManagerView::new(notes, view_addresses);
+        let mut view = funded_view(&mut rng, source, sender, &[4, 3, 2, 1]);
         let mut note_manager = NoteManager::new(OsRng);
         note_manager.set_gas_prices(GasPrices::zero());
 
@@ -2064,12 +2059,7 @@ mod tests {
         let mut rng = OsRng;
         let source = AddressIndex::new(0);
         let sender = test_address(24);
-        let view_addresses = BTreeMap::from([(source, sender.clone())]);
-        let notes = vec![
-            spendable_note_record(&mut rng, 7, source, sender.clone(), 1),
-            spendable_note_record(&mut rng, 5, source, sender, 2),
-        ];
-        let mut view = MockNoteManagerView::new(notes, view_addresses);
+        let mut view = funded_view(&mut rng, source, sender, &[7, 5]);
         let withdrawal = test_host_withdrawal(10, "bankd1recipient");
 
         let mut note_manager = NoteManager::new(OsRng);
@@ -2105,14 +2095,7 @@ mod tests {
         let mut rng = OsRng;
         let source = AddressIndex::new(0);
         let sender = test_address(25);
-        let view_addresses = BTreeMap::from([(source, sender.clone())]);
-        let notes = vec![
-            spendable_note_record(&mut rng, 4, source, sender.clone(), 1),
-            spendable_note_record(&mut rng, 3, source, sender.clone(), 2),
-            spendable_note_record(&mut rng, 2, source, sender.clone(), 3),
-            spendable_note_record(&mut rng, 1, source, sender.clone(), 4),
-        ];
-        let mut view = MockNoteManagerView::new(notes, view_addresses);
+        let mut view = funded_view(&mut rng, source, sender, &[4, 3, 2, 1]);
         let withdrawal = test_host_withdrawal(10, "bankd1recipient");
         let mut note_manager = NoteManager::new(OsRng);
         note_manager.set_gas_prices(GasPrices::zero());

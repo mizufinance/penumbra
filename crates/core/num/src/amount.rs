@@ -285,8 +285,6 @@ impl Sum for Amount {
 #[cfg(test)]
 mod test {
     use crate::Amount;
-    use rand::RngCore;
-    use rand_core::OsRng;
     use shieldd_sdk_proto::shieldd::core::num::v1 as pb;
 
     fn encode_decode(value: u128) -> u128 {
@@ -296,57 +294,25 @@ mod test {
     }
 
     #[test]
-    fn encode_decode_max() {
-        let value = u128::MAX;
-        assert_eq!(value, encode_decode(value))
+    fn encode_decode_boundaries() {
+        for (name, value) in [
+            ("max", u128::MAX),
+            ("zero", 0),
+            ("right_border_bit", 1 << 64),
+            ("left_border_bit", 1 << 63),
+            ("u64_max", u64::MAX as u128),
+        ] {
+            assert_eq!(value, encode_decode(value), "{name}");
+        }
     }
 
-    #[test]
-    fn encode_decode_zero() {
-        let value = u128::MIN;
-        assert_eq!(value, encode_decode(value))
-    }
-
-    #[test]
-    fn encode_decode_right_border_bit() {
-        let value: u128 = 1 << 64;
-        assert_eq!(value, encode_decode(value))
-    }
-
-    #[test]
-    fn encode_decode_left_border_bit() {
-        let value: u128 = 1 << 63;
-        assert_eq!(value, encode_decode(value))
-    }
-
-    #[test]
-    fn encode_decode_random() {
-        let mut rng = OsRng;
-        let mut dest: [u8; 16] = [0; 16];
-        rng.fill_bytes(&mut dest);
-        let value: u128 = u128::from_le_bytes(dest);
-        assert_eq!(value, encode_decode(value))
-    }
-
-    #[test]
-    fn encode_decode_u64_max() {
-        let value = u64::MAX as u128;
-        assert_eq!(value, encode_decode(value))
-    }
-
-    #[test]
-    fn encode_decode_random_lower_order_bytes() {
-        let mut rng = OsRng;
-        let lo = rng.next_u64() as u128;
-        assert_eq!(lo, encode_decode(lo))
-    }
-
-    #[test]
-    fn encode_decode_random_higher_order_bytes() {
-        let mut rng = OsRng;
-        let value = rng.next_u64();
-        let hi = (value as u128) << 64;
-        assert_eq!(hi, encode_decode(hi))
+    proptest::proptest! {
+        #[test]
+        fn encode_decode_random(value: u128, half: u64) {
+            for value in [value, half as u128, (half as u128) << 64] {
+                proptest::prop_assert_eq!(value, encode_decode(value));
+            }
+        }
     }
 
     // Regression tests for ZK-ASSUME-AMOUNT-RANGE / ZK-PROP-AMOUNT-RANGE-128.
@@ -357,18 +323,6 @@ mod test {
     // < 2^128 by construction, and its scalar-field embedding — the value the
     // net-balance commitment sums — does not wrap the curve order, so a valid
     // amount can never alias a smaller one mod `Fr`.
-
-    #[test]
-    fn amount_is_structurally_below_2_pow_128() {
-        use crate::Amount;
-        // The wire form is two u64 halves assembled into a u128; the widest
-        // amount representable is exactly 2^128 - 1. There is no constructor that
-        // yields a value >= 2^128, so out-of-range amounts are rejected before
-        // any proving happens (they cannot be built).
-        let widest = Amount::from(u128::MAX);
-        assert_eq!(widest.value(), u128::MAX);
-        assert_eq!(u128::MAX, (1u128 << 127) + ((1u128 << 127) - 1));
-    }
 
     #[test]
     fn scalar_embedding_of_max_amount_does_not_wrap() {

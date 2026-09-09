@@ -17,7 +17,7 @@ bundled-proving-keys = [
 [dependencies]
 anyhow = { workspace = true }
 base64 = { workspace = true }
-cnidarium = { workspace = true, features = ["migration", "rpc"], default-features = true }
+cnidarium = { workspace = true, features = ["migration"], default-features = true }
 decaf377 = { workspace = true, default-features = true }
 decaf377-rdsa = { workspace = true }
 hex = { workspace = true }

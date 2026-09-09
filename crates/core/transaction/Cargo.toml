@@ -9,6 +9,7 @@ edition = {workspace = true}
 
 [features]
 default = ["std", "parallel"]
+prover = ["shieldd-sdk-shielded-pool/prover"]
 std = ["ark-ff/std", "ibc-types/std"]
 parallel = [
     "tokio",
@@ -48,6 +49,7 @@ tokio = {workspace = true, features = ["full"], optional = true}
 tracing = {workspace = true}
 
 [dev-dependencies]
+shieldd-sdk-transaction = {path = ".", features = ["prover"]}
 ark-groth16 = { workspace = true }
 ark-serialize = { workspace = true }
 shieldd-sdk-shielded-pool = { workspace = true, default-features = false, features = ["benchmark-helpers"] }

@@ -204,7 +204,7 @@ impl TransferProof {
         Ok(())
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     pub fn prove(
         public: TransferProofPublic,
         private: TransferProofPrivate,
@@ -243,7 +243,7 @@ impl TryFrom<pb::ZkTransferProof> for TransferProof {
 }
 
 #[cfg(feature = "component")]
-#[cfg(all(test, any(unix, windows)))]
+#[cfg(all(test, all(feature = "prover", any(unix, windows))))]
 mod tests {
     use std::sync::{LazyLock, Mutex};
 
@@ -267,6 +267,15 @@ mod tests {
     use shieldd_sdk_tct as tct;
 
     static TRANSFER_PROOF_TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    fn proof_runtime() -> std::sync::MutexGuard<'static, ()> {
+        let guard = TRANSFER_PROOF_TEST_MUTEX
+            .lock()
+            .expect("lock transfer test mutex");
+        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Transfer)
+            .expect("proof test prerequisites must be present");
+        guard
+    }
 
     fn compliance_leaf_for(address: &shieldd_sdk_keys::Address) -> ComplianceLeaf {
         ComplianceLeaf::synthetic_unregulated(address.clone(), *BASE_ASSET_ID)
@@ -304,35 +313,36 @@ mod tests {
     }
 
     #[test]
+    fn transfer_public_projection_matches_builder_without_proving() {
+        for regulated in [false, true] {
+            let (transfer, expected, context) = crate::test_proof_helpers::proof_test_helpers::build_transfer_action_and_public_without_proof(regulated);
+            let actual =
+                transfer_extract_public(&transfer, &context).expect("extract public inputs");
+            assert_eq!(
+                actual.statement_hash().unwrap(),
+                expected.statement_hash().unwrap()
+            );
+        }
+    }
+
+    #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_transfer_proof_roundtrip_regulated() {
-        let _guard = TRANSFER_PROOF_TEST_MUTEX
-            .lock()
-            .expect("lock transfer test mutex");
-        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Transfer)
-            .expect("proof test prerequisites must be present");
+        let _guard = proof_runtime();
         full_proof_roundtrip(CircuitType::Transfer, true);
     }
 
     #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_transfer_proof_roundtrip_unregulated() {
-        let _guard = TRANSFER_PROOF_TEST_MUTEX
-            .lock()
-            .expect("lock transfer test mutex");
-        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Transfer)
-            .expect("proof test prerequisites must be present");
+        let _guard = proof_runtime();
         full_proof_roundtrip(CircuitType::Transfer, false);
     }
 
     #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_transfer_accumulator_origin() {
-        let _guard = TRANSFER_PROOF_TEST_MUTEX
-            .lock()
-            .expect("lock transfer test mutex");
-        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Transfer)
-            .expect("proof test prerequisites must be present");
+        let _guard = proof_runtime();
 
         let (public, private) = crate::test_proof_helpers::proof_test_helpers::
             build_transfer_accumulating_hidden_arity_roundtrip_inputs_with_rng(
@@ -348,11 +358,7 @@ mod tests {
     #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_transfer_accumulator_continuation() {
-        let _guard = TRANSFER_PROOF_TEST_MUTEX
-            .lock()
-            .expect("lock transfer test mutex");
-        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Transfer)
-            .expect("proof test prerequisites must be present");
+        let _guard = proof_runtime();
 
         let (public, private) = crate::test_proof_helpers::proof_test_helpers::
             build_transfer_continuing_accumulator_roundtrip_inputs_with_rng(
@@ -367,11 +373,7 @@ mod tests {
     #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_transfer_hidden_arity_1x1_roundtrip_sender_to_self() {
-        let _guard = TRANSFER_PROOF_TEST_MUTEX
-            .lock()
-            .expect("lock transfer test mutex");
-        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Transfer)
-            .expect("proof test prerequisites must be present");
+        let _guard = proof_runtime();
 
         let (public, private) = crate::test_proof_helpers::proof_test_helpers::
             build_transfer_hidden_arity_roundtrip_inputs_with_rng(
@@ -388,11 +390,7 @@ mod tests {
     #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_repro_unregulated_nonbase_test_usd() {
-        let _guard = TRANSFER_PROOF_TEST_MUTEX
-            .lock()
-            .expect("lock transfer test mutex");
-        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Transfer)
-            .expect("proof test prerequisites must be present");
+        let _guard = proof_runtime();
         // test_usd real asset id (base denom wtest_usd).
         let test_usd = shieldd_sdk_asset::asset::REGISTRY
             .parse_unit("test_usd")
@@ -414,11 +412,7 @@ mod tests {
     #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_repro_unregulated_nonbase_test_usd_populated_tree() {
-        let _guard = TRANSFER_PROOF_TEST_MUTEX
-            .lock()
-            .expect("lock transfer test mutex");
-        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Transfer)
-            .expect("proof test prerequisites must be present");
+        let _guard = proof_runtime();
         let test_usd = shieldd_sdk_asset::asset::REGISTRY
             .parse_unit("test_usd")
             .id();
@@ -442,11 +436,7 @@ mod tests {
     #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_transfer_hidden_arity_1x1_roundtrip_sender_to_other() {
-        let _guard = TRANSFER_PROOF_TEST_MUTEX
-            .lock()
-            .expect("lock transfer test mutex");
-        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Transfer)
-            .expect("proof test prerequisites must be present");
+        let _guard = proof_runtime();
 
         let (public, private) = crate::test_proof_helpers::proof_test_helpers::
             build_transfer_hidden_arity_roundtrip_inputs_with_rng(
@@ -463,11 +453,7 @@ mod tests {
     #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_transfer_hidden_arity_1x1_roundtrip_base_asset_sender_to_other() {
-        let _guard = TRANSFER_PROOF_TEST_MUTEX
-            .lock()
-            .expect("lock transfer test mutex");
-        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Transfer)
-            .expect("proof test prerequisites must be present");
+        let _guard = proof_runtime();
 
         let (public, private) = build_transfer_hidden_arity_roundtrip_inputs_for_asset_with_rng(
             &mut rand::thread_rng(),
@@ -484,11 +470,7 @@ mod tests {
     #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_transfer_hidden_arity_1x1_roundtrip_test_keys_base_asset_sender_to_other() {
-        let _guard = TRANSFER_PROOF_TEST_MUTEX
-            .lock()
-            .expect("lock transfer test mutex");
-        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Transfer)
-            .expect("proof test prerequisites must be present");
+        let _guard = proof_runtime();
 
         let mut rng = rand::thread_rng();
         let input_note = Note::from_parts(
@@ -565,11 +547,7 @@ mod tests {
     #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_transfer_hidden_arity_1x1_roundtrip_registered_base_asset_sender_to_other() {
-        let _guard = TRANSFER_PROOF_TEST_MUTEX
-            .lock()
-            .expect("lock transfer test mutex");
-        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Transfer)
-            .expect("proof test prerequisites must be present");
+        let _guard = proof_runtime();
 
         let mut rng = rand::thread_rng();
         let input_note = Note::from_parts(
@@ -656,11 +634,7 @@ mod tests {
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_transfer_hidden_arity_1x1_roundtrip_registered_base_asset_sender_to_other_high_position(
     ) {
-        let _guard = TRANSFER_PROOF_TEST_MUTEX
-            .lock()
-            .expect("lock transfer test mutex");
-        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Transfer)
-            .expect("proof test prerequisites must be present");
+        let _guard = proof_runtime();
 
         let mut rng = rand::thread_rng();
         let input_note = Note::from_parts(
@@ -761,11 +735,7 @@ mod tests {
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_transfer_hidden_arity_1x1_roundtrip_registered_base_asset_sender_to_other_real_user_tree(
     ) {
-        let _guard = TRANSFER_PROOF_TEST_MUTEX
-            .lock()
-            .expect("lock transfer test mutex");
-        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Transfer)
-            .expect("proof test prerequisites must be present");
+        let _guard = proof_runtime();
 
         let mut rng = rand::thread_rng();
         let input_note = Note::from_parts(
@@ -852,11 +822,7 @@ mod tests {
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_transfer_hidden_arity_1x2_roundtrip_registered_base_asset_with_change_real_user_tree(
     ) {
-        let _guard = TRANSFER_PROOF_TEST_MUTEX
-            .lock()
-            .expect("lock transfer test mutex");
-        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Transfer)
-            .expect("proof test prerequisites must be present");
+        let _guard = proof_runtime();
 
         let mut rng = rand::thread_rng();
         let input_note = Note::from_parts(
@@ -962,11 +928,7 @@ mod tests {
     #[test]
     #[ignore = "expensive: real release-mode Gnark proof generation"]
     fn gnark_proof_transfer_action_public_matches_proving_public_regulated() {
-        let _guard = TRANSFER_PROOF_TEST_MUTEX
-            .lock()
-            .expect("lock transfer test mutex");
-        crate::gnark::require_proof_test_runtime(crate::gnark::ProofTestFamily::Transfer)
-            .expect("proof test prerequisites must be present");
+        let _guard = proof_runtime();
 
         let (transfer, proving_public, context) = build_transfer_action_and_public(true);
         let extracted_public =

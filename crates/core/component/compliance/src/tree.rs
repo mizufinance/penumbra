@@ -484,16 +484,6 @@ mod tests {
     }
 
     #[test]
-    fn test_auth_path_length() {
-        let mut tree = QuadTree::new();
-        let leaf_hash = StateCommitment(Fq::from(123u64));
-        tree.update(5, leaf_hash).unwrap();
-
-        let path = tree.auth_path(5).unwrap();
-        assert_eq!(path.len(), DEFAULT_DEPTH as usize);
-    }
-
-    #[test]
     fn test_verify_auth_path() {
         let mut tree = QuadTree::new();
         let leaf_hash = StateCommitment(Fq::from(999u64));
@@ -502,6 +492,7 @@ mod tests {
         tree.update(position, leaf_hash).unwrap();
         let root = tree.root();
         let path = tree.auth_path(position).unwrap();
+        assert_eq!(path.len(), DEFAULT_DEPTH as usize);
 
         // Verification should succeed
         assert!(QuadTree::verify_auth_path(

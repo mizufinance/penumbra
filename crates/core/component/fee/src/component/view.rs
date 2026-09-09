@@ -1,11 +1,17 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use cnidarium::{StateRead, StateWrite};
-use shieldd_sdk_asset::asset;
 use shieldd_sdk_num::Amount;
 use shieldd_sdk_proto::{StateReadProto, StateWriteProto};
 
-use crate::{params::FeeParameters, state_key, Fee, GasPrices};
+use crate::{params::FeeParameters, state_key, GasPrices};
+
+/// Block-local fee totals, paid exclusively in the base asset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BlockFees {
+    pub base: Amount,
+    pub tip: Amount,
+}
 
 /// This trait provides read access to fee-related parts of the Shieldd
 /// state store.
@@ -20,20 +26,9 @@ pub trait StateReadExt: StateRead {
 
     /// Gets the current gas prices for the fee token.
     async fn get_gas_prices(&self) -> Result<GasPrices> {
-        // When we implement dynamic gas pricing, we will want
-        // to read the prices we computed. But until then, we need to
-        // read these from the _fee params_ instead, since those are
-        // the values that will get updated by governance.
         let params = self.get_fee_params().await?;
         params.validate_base_asset_only()?;
         Ok(params.fixed_gas_prices)
-    }
-
-    /// The reduced chain does not expose alternative fee tokens.
-    async fn get_alt_gas_prices(&self) -> Result<Vec<GasPrices>> {
-        let params = self.get_fee_params().await?;
-        params.validate_base_asset_only()?;
-        Ok(Vec::new())
     }
 
     /// Returns true if the gas prices have been changed in this block.
@@ -42,8 +37,8 @@ pub trait StateReadExt: StateRead {
             .is_some()
     }
 
-    /// The accumulated base fees and tips for this block, indexed by asset ID.
-    fn accumulated_base_fees_and_tips(&self) -> imbl::OrdMap<asset::Id, (Amount, Amount)> {
+    /// The accumulated required fees and tips for this block.
+    fn block_fees(&self) -> BlockFees {
         self.object_get(state_key::fee_accumulator())
             .unwrap_or_default()
     }
@@ -60,62 +55,15 @@ pub trait StateWriteExt: StateWrite {
         self.object_put(state_key::gas_prices_changed(), ());
     }
 
-    /*
-    We shouldn't be setting gas prices directly, until we have dynamic gas pricing.
-    /// Writes the provided gas prices to the JMT.
-    fn put_gas_prices(&mut self, gas_prices: GasPrices) {
-        // Change the gas prices:
-        self.put(state_key::gas_prices().into(), gas_prices);
-
-        // Mark that they've changed
-        self.object_put(state_key::gas_prices_changed(), ());
-    }
-     */
-
-    /// Takes the accumulated base fees and tips for this block, resetting them to zero.
-    fn take_accumulated_base_fees_and_tips(&mut self) -> imbl::OrdMap<asset::Id, (Amount, Amount)> {
-        let old = self.accumulated_base_fees_and_tips();
-        let new = imbl::OrdMap::<asset::Id, (Amount, Amount)>::new();
-        self.object_put(state_key::fee_accumulator(), new);
-        old
-    }
-
-    fn raw_accumulate_base_fee(&mut self, base_fee: Fee) {
-        let old = self.accumulated_base_fees_and_tips();
-        let new = old.alter(
-            |maybe_amounts| match maybe_amounts {
-                Some((base, tip)) => Some((base + base_fee.amount(), tip)),
-                None => Some((base_fee.amount(), Amount::zero())),
+    fn accumulate_fees(&mut self, base: Amount, tip: Amount) {
+        let fees = self.block_fees();
+        self.object_put(
+            state_key::fee_accumulator(),
+            BlockFees {
+                base: fees.base + base,
+                tip: fees.tip + tip,
             },
-            base_fee.asset_id(),
         );
-        self.object_put(state_key::fee_accumulator(), new);
-    }
-
-    fn raw_accumulate_tip(&mut self, tip_fee: Fee) {
-        let old = self.accumulated_base_fees_and_tips();
-        let new = old.alter(
-            |maybe_amounts| match maybe_amounts {
-                Some((base, tip)) => Some((base, tip + tip_fee.amount())),
-                None => Some((Amount::zero(), tip_fee.amount())),
-            },
-            tip_fee.asset_id(),
-        );
-        self.object_put(state_key::fee_accumulator(), new);
-    }
-
-    fn raw_accumulate_base_fee_and_tip(&mut self, base_fee: Fee, tip_fee: Fee) {
-        debug_assert_eq!(base_fee.asset_id(), tip_fee.asset_id());
-
-        let old = self.accumulated_base_fees_and_tips();
-        let new = old.alter(
-            |maybe_amounts| match maybe_amounts {
-                Some((base, tip)) => Some((base + base_fee.amount(), tip + tip_fee.amount())),
-                None => Some((base_fee.amount(), tip_fee.amount())),
-            },
-            base_fee.asset_id(),
-        );
-        self.object_put(state_key::fee_accumulator(), new);
     }
 }
 

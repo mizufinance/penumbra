@@ -9,7 +9,6 @@ license.workspace = true
 
 [dependencies]
 anyhow = {workspace = true}
-async-trait = {workspace = true}
 cnidarium = {workspace = true, default-features = true}
 decaf377 = {workspace = true, default-features = true}
 shieldd-sdk-asset = {workspace = true}
@@ -22,7 +21,7 @@ shieldd-sdk-shielded-pool = {workspace = true, features = [
     "component",
 ], default-features = true}
 shieldd-sdk-tct = {workspace = true, default-features = true}
-shieldd-sdk-transaction = {workspace = true, default-features = true}
+shieldd-sdk-transaction = {workspace = true, default-features = true, features = ["prover"]}
 shieldd-sdk-view = {workspace = true, default-features = true}
 rand_core = {workspace = true}
 

@@ -336,59 +336,30 @@ mod test {
     use super::*;
 
     #[test]
-    fn provide_then_require() {
-        let mut balance = Balance::zero();
-        balance += Value {
+    fn cancellation_preserves_zero() {
+        let value = Value {
             amount: 1u64.into(),
             asset_id: *BASE_ASSET_ID,
         };
-        balance -= Value {
-            amount: 1u64.into(),
-            asset_id: *BASE_ASSET_ID,
-        };
-        assert!(balance.is_zero());
-    }
-
-    #[test]
-    fn require_then_provide() {
-        let mut balance = Balance::zero();
-        balance -= Value {
-            amount: 1u64.into(),
-            asset_id: *BASE_ASSET_ID,
-        };
-        balance += Value {
-            amount: 1u64.into(),
-            asset_id: *BASE_ASSET_ID,
-        };
-        assert!(balance.is_zero());
-    }
-
-    #[test]
-    fn provide_then_require_negative_zero() {
-        let mut balance = -Balance::zero();
-        balance += Value {
-            amount: 1u64.into(),
-            asset_id: *BASE_ASSET_ID,
-        };
-        balance -= Value {
-            amount: 1u64.into(),
-            asset_id: *BASE_ASSET_ID,
-        };
-        assert!(balance.is_zero());
-    }
-
-    #[test]
-    fn require_then_provide_negative_zero() {
-        let mut balance = -Balance::zero();
-        balance -= Value {
-            amount: 1u64.into(),
-            asset_id: *BASE_ASSET_ID,
-        };
-        balance += Value {
-            amount: 1u64.into(),
-            asset_id: *BASE_ASSET_ID,
-        };
-        assert!(balance.is_zero());
+        for (name, mut balance, provide_first) in [
+            ("provide_then_require", Balance::zero(), true),
+            ("require_then_provide", Balance::zero(), false),
+            ("provide_then_require_negative_zero", -Balance::zero(), true),
+            (
+                "require_then_provide_negative_zero",
+                -Balance::zero(),
+                false,
+            ),
+        ] {
+            if provide_first {
+                balance += value;
+                balance -= value;
+            } else {
+                balance -= value;
+                balance += value;
+            }
+            assert!(balance.is_zero(), "{name}");
+        }
     }
 
     #[derive(Debug, Clone)]

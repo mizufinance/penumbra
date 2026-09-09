@@ -572,7 +572,9 @@ mod tests {
         }
     }
 
-    struct FixtureProver;
+    struct FixtureProver {
+        invalid_proof: bool,
+    }
 
     #[async_trait]
     impl HistoricalProofProvider for FixtureProver {
@@ -592,7 +594,11 @@ mod tests {
                 generation_root: archived.generation_root,
                 generation_start_position: archived.generation_start_position,
                 generation_end_position: archived.generation_end_position,
-                groth16_proof: historical::encode_generation_proof_json(proof_json)?,
+                groth16_proof: if self.invalid_proof {
+                    vec![0; BLS12_377_PROOF_BYTES]
+                } else {
+                    historical::encode_generation_proof_json(proof_json)?
+                },
             })
         }
 
@@ -671,9 +677,11 @@ mod tests {
             window,
             &FixtureArchive {
                 nullifier,
-                proof: archived,
+                proof: archived.clone(),
             },
-            &FixtureProver,
+            &FixtureProver {
+                invalid_proof: false,
+            },
         )
         .await?;
 
@@ -681,6 +689,29 @@ mod tests {
         assert_eq!(cache.proof.coverage()?.generation_count, 1);
         assert_eq!(cache.proof.tail.len(), 1);
         cache.bundle_for(window)?;
+        for invalid_archive in [true, false] {
+            let mut proof = archived.clone();
+            if invalid_archive {
+                proof.generation_root = Fq::from(123u64).to_bytes();
+            }
+            let result = advance_historical_proof_cache(
+                HistoricalProofCache::pending(nullifier),
+                window,
+                &FixtureArchive { nullifier, proof },
+                &FixtureProver {
+                    invalid_proof: !invalid_archive,
+                },
+            )
+            .await;
+            assert!(
+                matches!(
+                    (&result, invalid_archive),
+                    (Err(HistoricalProofUpdateError::WitnessSource(_)), true)
+                        | (Err(HistoricalProofUpdateError::Prover(_)), false)
+                ),
+                "invalid archive={invalid_archive} must not produce a ready cache: {result:?}"
+            );
+        }
         Ok(())
     }
 }

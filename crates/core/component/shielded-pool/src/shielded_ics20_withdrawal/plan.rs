@@ -490,7 +490,7 @@ impl ShieldedIcs20WithdrawalPlan {
         })
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     pub fn build_unauth_shielded_ics20_withdrawal(
         &self,
         fvk: &FullViewingKey,

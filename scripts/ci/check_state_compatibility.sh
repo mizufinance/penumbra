@@ -1,28 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-baseline=76a5a03dc83d9253bec3048a2d1e3e8ec8efe8e7
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-mkdir -p "$work/baseline" "$work/bankd/components/shieldd"
-git -C "$root" archive "$baseline" | tar -x -C "$work/baseline"
-git -C "$root" archive HEAD | tar -x -C "$work/bankd/components/shieldd"
 export CARGO_BUILD_JOBS=2 RAYON_NUM_THREADS=2 GOMAXPROCS=2
 export CARGO_TARGET_DIR="$root/target"
-for source in "$work/baseline" "$work/bankd/components/shieldd"; do
-    mkdir -p "$source/crates/bin/shieldd/examples"
-    cp "$root/scripts/ci/fixtures/state_compatibility.rs" "$source/crates/bin/shieldd/examples/state_compatibility.rs"
+# Include the current working tree so local checks exercise the proposed changes.
+python3 - "$root" "$work" <<'COPY'
+import pathlib, shutil, subprocess, sys
+root, work = map(pathlib.Path, sys.argv[1:])
+names = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=root).decode().split("\0")
+for relative in set(names):
+    source = root / relative
+    if not source.is_file():
+        continue
+    for location in ("source", "bankd/components/shieldd"):
+        target = work / location / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+for location in ("source", "bankd/components/shieldd"):
+    target = work / location / "crates/bin/shieldd/examples/state_compatibility.rs"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(root / "scripts/ci/fixtures/state_compatibility.rs", target)
+COPY
+for location in source bankd/components/shieldd; do
+    source_dir="$work/$location"
+    result_name="$(basename "$location")"
+    (cd "$source_dir" && cargo run --locked --release -p shieldd --example state_compatibility -- "$work/db-$result_name" "$work/result-$result_name")
 done
-run_fixture() {
-    local source="$1"
-    shift
-    (cd "$source" && cargo run --locked --release -p shieldd --example state_compatibility -- "$@")
-}
-run_fixture "$work/baseline" create "$work/database" "$work/created"
-cp -a "$work/database" "$work/control"
-cp "$work/database.snapshot" "$work/control.snapshot"
-cp "$work/database.history" "$work/control.history"
-run_fixture "$work/baseline" continue "$work/control" "$work/control-result"
-run_fixture "$work/bankd/components/shieldd" continue "$work/database" "$work/candidate-result"
-cmp "$work/control-result" "$work/candidate-result"
-echo 'Pre-change database queries, replay, spent markers, and next committed root match.'
+cmp "$work/result-source" "$work/result-shieldd"
+echo 'Current-version reopen, checkpoint, history, replay and next-root parity passed at both source locations.'

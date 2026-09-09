@@ -70,7 +70,7 @@ int main(int argc, char **argv) {
 
   result =
       shieldd_call(handle, SHIELDD_METHOD_QUERY_NULLIFIER_WINDOW, NULL, 0);
-  if (result.status != SHIELDD_STATUS_FAILED_PRECONDITION) {
+  if (result.status != SHIELDD_STATUS_INTERNAL || result.error.len == 0) {
     print_error(&result);
     free_result(&result);
     result = shieldd_close(handle);

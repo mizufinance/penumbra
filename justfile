@@ -188,8 +188,6 @@ orbis-integration-preflight-binaries:
 
 # Build the binaries required by the Orbis integration flow.
 orbis-integration-build:
-    python3 scripts/proof_artifacts.py materialize --bundle runtime
-    cargo build --release -p pcli
     cargo build --release -p orbis-audit -p orbis-integration
 
 # Bring up the Orbis stack for use with Bankd.
@@ -243,3 +241,11 @@ artifacts-provers:
 
 artifacts-audit:
     python3 scripts/stage_artifacts.py audit
+
+# Opt-in circuit sizing diagnostics; no correctness assertions.
+gnark-profile:
+    cd tools/gnark && GOMAXPROCS=2 go test -p 2 -tags diagnostics ./internal/circuits -run '^TestConstraintProfiles$' -v
+
+# Explicitly regenerate the frozen seizure witness fixture.
+gnark-bless-seizure:
+    cd tools/gnark && GOMAXPROCS=2 go test -p 2 -tags fixtures ./internal/abi -run '^TestBlessNoteSeizureWitness$' -v

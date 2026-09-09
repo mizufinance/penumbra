@@ -263,4 +263,4 @@ circuits under `tools/gnark/`. No second circuit architecture is supported.
 | Rust statement builder | `crates/core/component/shielded-pool/src/public_input_hash.rs` |
 | Scanner | `crates/core/component/compliance/src/scanner/` |
 | Evidence and audit | `crates/core/component/compliance/src/evidence.rs`, `audit.rs` |
-| Formal verification | [`shieldd-formal`](https://github.com/mizufinance/shieldd-security) |
+| Formal verification | [`shieldd-security`](https://github.com/mizufinance/shieldd-security) |

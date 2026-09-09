@@ -377,38 +377,6 @@ mod tests {
     }
 
     #[test]
-    fn test_detection_tier_roundtrip() {
-        let mut rng = OsRng;
-        let dk = DetectionKey::demo();
-        let asset_id = asset::Id(Fq::from(12345u64));
-
-        let (ciphertext, epk) = dk.encrypt_to_public(&mut rng, &asset_id, false);
-
-        let (decrypted_asset, decrypted_flag, _salt) = dk
-            .try_decrypt_detection(&epk, &ciphertext, &asset_id)
-            .expect("decryption should succeed");
-
-        assert_eq!(decrypted_asset, asset_id);
-        assert!(!decrypted_flag);
-    }
-
-    #[test]
-    fn test_detection_tier_flagged() {
-        let mut rng = OsRng;
-        let dk = DetectionKey::demo();
-        let asset_id = asset::Id(Fq::from(99999u64));
-
-        let (ciphertext, epk) = dk.encrypt_to_public(&mut rng, &asset_id, true);
-
-        let (decrypted_asset, decrypted_flag, _salt) = dk
-            .try_decrypt_detection(&epk, &ciphertext, &asset_id)
-            .expect("decryption should succeed");
-
-        assert_eq!(decrypted_asset, asset_id);
-        assert!(decrypted_flag);
-    }
-
-    #[test]
     fn test_encrypt_to_dk_pub_without_dk() {
         let mut rng = OsRng;
         let dk = DetectionKey::demo();
@@ -481,74 +449,32 @@ mod tests {
     }
 
     #[test]
-    fn test_flag_roundtrip_variety_of_asset_ids() {
-        let mut rng = OsRng;
+    fn detection_flags_roundtrip_across_asset_bits() {
+        let mut realistic = [0u8; 32];
+        realistic[0] = 0x42;
+        realistic[31] = 0x05;
+        let mut high_byte = [0u8; 32];
+        high_byte[0] = 0x01;
+        high_byte[31] = 0x11;
         let dk = DetectionKey::demo();
-
-        let asset_ids = [
-            asset::Id(Fq::from(0u64)),
-            asset::Id(Fq::from(1u64)),
-            asset::Id(Fq::from(u64::MAX)),
-            asset::Id(Fq::from(12345678901234567890u128)),
-        ];
-
-        for asset_id in asset_ids {
-            for is_flagged in [false, true] {
-                let (ct, epk) = dk.encrypt_to_public(&mut rng, &asset_id, is_flagged);
-                let (dec_id, dec_flag, _salt) = dk
-                    .try_decrypt_detection(&epk, &ct, &asset_id)
-                    .expect("decryption should succeed");
-
-                assert_eq!(dec_id, asset_id, "Asset ID mismatch");
-                assert_eq!(
-                    dec_flag, is_flagged,
-                    "Flag mismatch for asset {:?}",
-                    asset_id
-                );
+        for (name, value) in [
+            ("zero", Fq::from(0u64)),
+            ("one", Fq::from(1u64)),
+            ("u64_max", Fq::from(u64::MAX)),
+            ("large", Fq::from(12345678901234567890u128)),
+            ("roundtrip", Fq::from(12345u64)),
+            ("flagged", Fq::from(99999u64)),
+            ("realistic", Fq::from_le_bytes_mod_order(&realistic)),
+            ("high_byte", Fq::from_le_bytes_mod_order(&high_byte)),
+        ] {
+            let asset_id = asset::Id(value);
+            for flag in [false, true] {
+                let (ct, epk) = dk.encrypt_to_public(&mut OsRng, &asset_id, flag);
+                let (actual_id, actual_flag, _) =
+                    dk.try_decrypt_detection(&epk, &ct, &asset_id).unwrap();
+                assert_eq!((actual_id, actual_flag), (asset_id, flag), "{name}");
             }
         }
-    }
-
-    #[test]
-    fn test_flag_survives_encrypt_decrypt_realistic_asset_id() {
-        // Regression: the flag is independent of every asset-ID bit.
-        let mut rng = OsRng;
-        let dk = DetectionKey::demo();
-
-        let mut asset_bytes = [0u8; 32];
-        asset_bytes[0] = 0x42;
-        asset_bytes[31] = 0x05;
-        let asset_id = asset::Id(Fq::from_le_bytes_mod_order(&asset_bytes));
-
-        let (ciphertext, epk) = dk.encrypt_to_public(&mut rng, &asset_id, true);
-        let (decrypted_asset, decrypted_flag, _salt) = dk
-            .try_decrypt_detection(&epk, &ciphertext, &asset_id)
-            .expect("decryption should succeed");
-
-        assert_eq!(decrypted_asset, asset_id, "asset ID should match");
-        assert!(decrypted_flag, "flag should survive for realistic asset ID");
-    }
-
-    #[test]
-    fn test_no_false_positive_flag_for_asset_with_high_byte() {
-        // Regression: high asset-ID bits cannot alias the separately packed flag.
-        let mut rng = OsRng;
-        let dk = DetectionKey::demo();
-
-        let mut asset_bytes = [0u8; 32];
-        asset_bytes[0] = 0x01;
-        asset_bytes[31] = 0x11;
-        let asset_id = asset::Id(Fq::from_le_bytes_mod_order(&asset_bytes));
-
-        let (ciphertext, epk) = dk.encrypt_to_public(&mut rng, &asset_id, false);
-        let (_, decrypted_flag, _salt) = dk
-            .try_decrypt_detection(&epk, &ciphertext, &asset_id)
-            .expect("decryption should succeed");
-
-        assert!(
-            !decrypted_flag,
-            "unflagged TX should not be detected as flagged"
-        );
     }
 
     #[test]

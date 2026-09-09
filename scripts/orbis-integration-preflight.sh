@@ -39,22 +39,14 @@ log_success "Runtime dependencies found"
 
 if [ "$require_binaries" -eq 1 ]; then
     for bin in \
-        "$COMPLIANCE_REPO_ROOT/target/release/pcli" \
         "$COMPLIANCE_REPO_ROOT/target/release/orbis-audit" \
         "$COMPLIANCE_REPO_ROOT/target/release/orbis-integration"
     do
         if [ ! -x "$bin" ]; then
             log_error "required release binary not found: $bin"
-            log_error "Run `just orbis-integration-build` first"
+            log_error 'Run just orbis-integration-build first'
             exit 1
         fi
     done
     log_success "Release binaries found"
-fi
-
-
-if [ "${SHIELDD_ORBIS_USE_DEMO_GNARK:-0}" = "1" ]; then
-    log_info "Demo gnark override mode enabled via SHIELDD_ORBIS_USE_DEMO_GNARK=1"
-else
-    log_info "Using bundled gnark runtimes from the release binaries"
 fi

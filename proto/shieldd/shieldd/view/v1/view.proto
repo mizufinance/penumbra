@@ -430,10 +430,8 @@ message NullifierWindowResponse {
 message GasPricesRequest {}
 
 message GasPricesResponse {
-  // The current gas prices, in the preferred (native) token.
+  // The current base-asset gas prices.
   core.component.fee.v1.GasPrices gas_prices = 1;
-  // Other gas prices for other accepted tokens.
-  repeated core.component.fee.v1.GasPrices alt_gas_prices = 2;
 }
 
 // Requests the current note-discovery parameters from the view service.

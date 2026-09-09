@@ -1,7 +1,5 @@
 use {
     anyhow::anyhow,
-    cnidarium::TempStorage,
-    common::TempStorageExt as _,
     decaf377::Fr,
     rand_core::OsRng,
     shieldd_sdk_app::genesis::{self, AppState},
@@ -21,7 +19,7 @@ mod common;
 #[tokio::test]
 async fn app_can_transfer_notes_and_detect_new_notes() -> anyhow::Result<()> {
     let guard = common::set_tracing_subscriber();
-    let storage = TempStorage::new_with_shieldd_prefixes().await?;
+    let storage = common::new_storage().await?;
     let mut test_node = {
         let app_state =
             AppState::Content(genesis::Content::default().with_chain_id(TEST_CHAIN_ID.to_string()));

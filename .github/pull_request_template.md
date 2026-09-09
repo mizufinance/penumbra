@@ -1,16 +1,11 @@
-## Describe your changes
+## Change
 
-<!--
-Describe what's changed and why. If interactive testing is required, explain
-to the reviewer how the PR should be tested.
--->
+<!-- Describe the concrete problem and resulting behavior. -->
 
-## Issue ticket number and link
+## Verification
 
-## Checklist before requesting a review
+<!-- Report checks actually run. Identify unrun prover/release/platform gates. -->
 
-- [ ] I have added guiding text to explain how a reviewer should test these changes.
+## Integration impact
 
-- [ ] If this code contains consensus-breaking changes, I have added the "consensus-breaking" label. Otherwise, I declare my belief that there are not consensus-breaking changes, for the following reason:
-
-  > REPLACE THIS TEXT WITH RATIONALE (CAN BE BRIEF)
+<!-- Identify changed protocol/host boundaries and required Bankd consumer updates. -->

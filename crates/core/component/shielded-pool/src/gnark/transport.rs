@@ -5,18 +5,18 @@ use std::{
     sync::Mutex,
 };
 
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 use std::{ffi::CString, ptr};
 
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 use anyhow::Context;
 use anyhow::{anyhow, bail, Result};
 use ark_groth16::PreparedVerifyingKey;
 use decaf377::Bls12_377;
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 use libloading::Library;
 
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 use crate::gnark::artifacts::sha256_hex;
 use crate::gnark::artifacts::{
     load_artifact_metadata, load_artifact_metadata_bytes, load_prepared_vk, load_prepared_vk_bytes,
@@ -53,7 +53,7 @@ pub(crate) type ShielddGnarkFree = unsafe extern "C" fn(*mut c_void, usize);
 pub(crate) type ShielddGnarkShutdown = unsafe extern "C" fn(u64);
 
 pub(crate) enum GnarkTransport {
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     Library {
         _library: Library,
         prove: ShielddGnarkProve,
@@ -261,11 +261,11 @@ impl GnarkClient {
     ) -> Result<Self> {
         match &configured.executable {
             TransportExecutable::Library(library) => {
-                #[cfg(any(unix, windows))]
+                #[cfg(all(feature = "prover", any(unix, windows)))]
                 {
                     load_library_transport(&library, &configured.artifact_dir, config)
                 }
-                #[cfg(not(any(unix, windows)))]
+                #[cfg(not(all(feature = "prover", any(unix, windows))))]
                 {
                     let _ = library;
                     bail!("gnark library transport is not supported on this platform")
@@ -282,7 +282,7 @@ impl GnarkClient {
         library: &Path,
         artifacts: BundledArtifacts<'_>,
     ) -> Result<Self> {
-        #[cfg(any(unix, windows))]
+        #[cfg(all(feature = "prover", any(unix, windows)))]
         {
             load_bundled_transport(
                 library,
@@ -292,7 +292,7 @@ impl GnarkClient {
                 config,
             )
         }
-        #[cfg(not(any(unix, windows)))]
+        #[cfg(not(all(feature = "prover", any(unix, windows))))]
         {
             let _ = (config, library, artifacts);
             bail!("gnark bundled library loading is not supported on this platform")
@@ -310,7 +310,7 @@ impl Drop for GnarkTransport {
     }
 }
 
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 pub(crate) fn load_library_transport(
     lib_path: &Path,
     artifact_dir: &Path,
@@ -406,7 +406,7 @@ pub(crate) fn load_daemon_transport(
     })
 }
 
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 pub(crate) fn load_bundled_transport(
     lib_path: &Path,
     pk_bytes: &[u8],
@@ -507,7 +507,7 @@ pub(crate) fn prove_with_transport(
 ) -> Result<Vec<u8>> {
     validate_prove_request_len(family, witness)?;
     match transport {
-        #[cfg(any(unix, windows))]
+        #[cfg(all(feature = "prover", any(unix, windows)))]
         GnarkTransport::Library {
             prove,
             free,
@@ -553,7 +553,7 @@ pub(crate) fn prove_with_transport(
 }
 
 pub(crate) fn shutdown_transport(transport: &mut GnarkTransport) {
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     if let GnarkTransport::Library {
         shutdown, handle, ..
     } = transport
@@ -563,7 +563,7 @@ pub(crate) fn shutdown_transport(transport: &mut GnarkTransport) {
             *handle = 0;
         }
     }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(all(feature = "prover", any(unix, windows))))]
     let _ = transport;
 }
 

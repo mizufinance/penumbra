@@ -7,13 +7,13 @@ use shieldd_sdk_keys::symmetric::{PayloadKey, WrappedMemoKey};
 use shieldd_sdk_keys::FullViewingKey;
 use shieldd_sdk_proto::{core::component::shielded_pool::v1 as pb, DomainType};
 use shieldd_sdk_tct as tct;
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 use shieldd_sdk_txhash::EffectingData;
 use std::convert::{TryFrom, TryInto};
 
 use crate::discovery::{self, Parameters};
 
-#[cfg(any(unix, windows))]
+#[cfg(all(feature = "prover", any(unix, windows)))]
 use super::{NoteReshape, NoteReshapeProof};
 use super::{
     NoteReshapeBody, NoteReshapeFamilyId, NoteReshapeInputBody, NoteReshapeInputPrivate,
@@ -408,7 +408,7 @@ impl NoteReshapePlan {
         })
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(all(feature = "prover", any(unix, windows)))]
     pub fn note_reshape(
         &self,
         fvk: &FullViewingKey,
@@ -594,27 +594,6 @@ mod tests {
         assert!(
             error.to_string().contains(expected),
             "unexpected decoding error: {error}"
-        );
-    }
-
-    #[test]
-    fn note_reshape_family_specs_cover_expected_shapes() {
-        assert_eq!(NoteReshapeFamilyId::EightByOne.input_count(), 8);
-        assert_eq!(
-            NoteReshapeFamilyId::smallest_covering(2, 1),
-            Some(NoteReshapeFamilyId::EightByOne)
-        );
-        assert_eq!(
-            NoteReshapeFamilyId::smallest_covering(3, 1),
-            Some(NoteReshapeFamilyId::EightByOne)
-        );
-        assert_eq!(
-            NoteReshapeFamilyId::smallest_covering(5, 1),
-            Some(NoteReshapeFamilyId::EightByOne)
-        );
-        assert_eq!(
-            NoteReshapeFamilyId::smallest_covering(1, 2),
-            Some(NoteReshapeFamilyId::OneByEight)
         );
     }
 

@@ -10,7 +10,6 @@ use crate::GasPrices;
 #[serde(try_from = "pb::FeeParameters", into = "pb::FeeParameters")]
 pub struct FeeParameters {
     pub fixed_gas_prices: GasPrices,
-    pub fixed_alt_gas_prices: Vec<GasPrices>,
 }
 
 impl FeeParameters {
@@ -19,10 +18,6 @@ impl FeeParameters {
             self.fixed_gas_prices.asset_id == *BASE_ASSET_ID,
             "only base-asset gas prices are supported, found {}",
             self.fixed_gas_prices.asset_id,
-        );
-        ensure!(
-            self.fixed_alt_gas_prices.is_empty(),
-            "alternate gas-price configuration is not supported on the reduced chain",
         );
         Ok(())
     }
@@ -38,11 +33,6 @@ impl TryFrom<pb::FeeParameters> for FeeParameters {
     fn try_from(msg: pb::FeeParameters) -> anyhow::Result<Self> {
         let params = FeeParameters {
             fixed_gas_prices: msg.fixed_gas_prices.unwrap_or_default().try_into()?,
-            fixed_alt_gas_prices: msg
-                .fixed_alt_gas_prices
-                .into_iter()
-                .map(|p| p.try_into())
-                .collect::<Result<_, _>>()?,
         };
         params.validate_base_asset_only()?;
         Ok(params)
@@ -53,11 +43,6 @@ impl From<FeeParameters> for pb::FeeParameters {
     fn from(params: FeeParameters) -> Self {
         pb::FeeParameters {
             fixed_gas_prices: Some(params.fixed_gas_prices.into()),
-            fixed_alt_gas_prices: params
-                .fixed_alt_gas_prices
-                .into_iter()
-                .map(Into::into)
-                .collect(),
         }
     }
 }

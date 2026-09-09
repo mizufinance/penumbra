@@ -111,3 +111,29 @@ async fn local_wallet_plan_preserves_inputs_outputs_context_and_insufficient_bal
         .expect_err("reader must not mix wallet heights");
     Ok(())
 }
+
+#[tokio::test]
+async fn wallet_catch_up_uses_each_blocks_timestamp() -> anyhow::Result<()> {
+    use shieldd_sdk_sct::component::clock::EpochRead as _;
+    let chain = TempStorage::new().await?;
+    let mut host = TestHost::new(
+        chain.as_ref().clone(),
+        AppState::Content(Content::default().with_chain_id(TEST_CHAIN_ID.into())),
+        tendermint::Time::parse_from_rfc3339("2026-01-01T00:00:00Z")?,
+    )
+    .await?;
+    host.execute(vec![]).await?;
+    host.execute(vec![]).await?;
+    let snapshot = chain.latest_snapshot();
+    let first = snapshot.get_block_timestamp(1).await?.unix_timestamp() as u64;
+    let second = snapshot.get_block_timestamp(2).await?.unix_timestamp() as u64;
+    assert_ne!(first, second, "fixture must have distinct block times");
+    for (height, expected) in [(0, 0), (1, first), (2, second)] {
+        assert_eq!(
+            common::wallet_block(&snapshot, height).await?.timestamp,
+            expected,
+            "height {height}"
+        );
+    }
+    Ok(())
+}

@@ -40,8 +40,8 @@ func TestLoadCircuitMetadataBytesRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCircuitMetadataBytes: %v", err)
 	}
-	if metadata.Circuit != "output" {
-		t.Fatalf("unexpected circuit %q", metadata.Circuit)
+	if *metadata != testCircuitMetadata() {
+		t.Fatalf("metadata roundtrip mismatch: got %+v want %+v", *metadata, testCircuitMetadata())
 	}
 }
 

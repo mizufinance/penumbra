@@ -1,62 +1,22 @@
 # Shieldd
 
-Shieldd is Bankd's private execution subsystem for shielded assets. It is not a
-separate product chain: Bankd owns consensus, validators, authorization, asset
-accounting, and application logic, and invokes Shieldd through the typed host
-execution API in the same validator process.
+Shieldd is Bankd’s embedded private execution subsystem, forked from Penumbra.
+It owns shielded notes, nullifiers, proof verification, compliance commitments,
+and compact wallet/auditor data. Bankd owns consensus, issuer authorization,
+asset accounting, escrow settlement, public queries, and transaction submission.
+Both are active prototypes.
 
-> **Not production ready.** Shieldd and its Bankd integration are active prototypes.
+Bankd calls `HostExecution` through the `shieldd` static library’s C ABI. Shieldd
+also provides wallet planning and synchronization libraries, an issuer scanner,
+native proof builders, and offline `pcli` custody/key tools. IBC relay and ICS20
+withdrawal execution remain implemented in Shieldd.
 
-## Target deployment
+Regulated participation uses asset policy and per-address/per-asset lifecycle
+commitments. Fees use the base asset. The `SeizeNote` host call verifies recovery
+capsule proofs; capsule location, ACP/Orbis release orchestration, and Bankd seizure
+settlement remain incomplete. See [enforcement and seizure](docs/compliance/enforcement-and-seizure.md).
 
-Bankd and Shieldd are atomic at the block boundary. The same validator set
-orders a Bankd block, calls Shieldd with canonical Bankd transaction locations,
-and commits both state transitions. Shieldd has no independent validator set,
-governance authority, or externally operated bridge in the target design.
-
-Shieldd owns the privacy-specific state machine: shielded notes and nullifiers,
-proof verification, regulated-asset policy commitments, per-address/per-asset
-status commitments, encrypted compliance records, and compact data for wallets
-and auditors. Bankd owns deposits, withdrawals, issuer authority, compliance
-action authorization, and any release from its existing Shieldd custody escrow
-caused by an authorized seizure.
-
-The currently supported Bankd compliance actions are typed `FreezeUserAsset`
-and `UnfreezeUserAsset` calls. A frozen `(address, asset_id)` cannot send or
-receive that regulated asset, withdraw it, deposit it, or use `NoteReshape`.
-Fees are base-asset-only. Unregulated assets and the same address's other
-regulated assets are unaffected. There is no global address blacklist and no
-asset-pause action.
-
-The privileged `SeizeNote` host call verifies one authority-approved recovery
-capsule proof, consumes the real note with its canonical nullifier, advances the
-leaf to terminal `Seized`, and returns an exact Bankd withdrawal. The private
-capsule locator, ACP/Orbis release workflow, and Bankd settlement integration
-are not implemented yet. See [the enforcement and seizure design](docs/compliance/enforcement-and-seizure.md).
-
-## Compliance visibility
-
-Regulated transfers carry encrypted detection and audit records. The asset
-issuer can scan its asset's activity; unregulated transfers retain the same
-fixed proof shape without promising issuer decryptability. See:
-
-- [compliance flow](docs/compliance/flow.md)
-- [technical reference](docs/compliance/reference.md)
-- [enforcement and seizure](docs/compliance/enforcement-and-seizure.md)
-
-## Integration surfaces
-
-`HostExecution` owns the genesis/block/commit/rollback lifecycle. Component hooks
-receive the host height and timestamp; execution is exposed through the C ABI. Batch preparation and validation remain library
-capabilities for host integration.
-
-`shieldd-sdk-view` scans host-supplied `WalletBlock` records, validates committed
-roots, and persists wallet state atomically. `StoragePlanningIo` plans against a
-fixed local height; hosts can implement `PlanningIo` for external reads. Issuer
-scanners receive canonical block identities and transactions through `ScannerSource`.
-`pcli` provides offline wallet initialization, addresses, custody and compliance-key
-tooling. Bankd owns live wallet queries and transaction submission.
-
-See [testing](docs/compliance/testing.md) for direct host tests and live workflow ownership.
-
-See [embedded artifacts](docs/embedded-artifacts.md) for builds and relocation.
+Start with [the code and documentation map](docs/README.md), then use
+[development](docs/development.md) for commands or
+[embedded artifacts](docs/embedded-artifacts.md) for Bankd integration.
+Engineering rules live in [AGENTS.md](AGENTS.md).

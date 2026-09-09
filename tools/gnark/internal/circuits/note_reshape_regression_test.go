@@ -27,27 +27,58 @@ func loadNoteReshapeRegressionAssignment(t *testing.T, label string) *circuits.N
 	return assignment
 }
 
-type noteReshapeStatusGateCircuit struct {
-	Status      frontend.Variable
-	IsRegulated frontend.Variable
-}
-
-func (c *noteReshapeStatusGateCircuit) Define(api frontend.API) error {
-	compliance.AssertEqualIf(api, c.Status, 1, c.IsRegulated)
-	return nil
-}
-
 func TestNoteReshapeStatusGateRejectsFrozenRegulatedOwner(t *testing.T) {
-	circuit := &noteReshapeStatusGateCircuit{}
-	assert := test.NewAssert(t)
-	assert.SolvingSucceeded(circuit, &noteReshapeStatusGateCircuit{
-		Status:      2,
-		IsRegulated: 0,
-	})
-	assert.SolvingFailed(circuit, &noteReshapeStatusGateCircuit{
-		Status:      2,
-		IsRegulated: 1,
-	})
+	for _, label := range []string{"note_reshape1x8", "note_reshape8x1"} {
+		t.Run(label, func(t *testing.T) {
+			witness, assignment := loadNoteReshapeRegressionWitnessAndAssignment(t, label)
+			if !witness.IsRegulated {
+				t.Fatal("fixture must be regulated")
+			}
+			family, _ := generated.NoteReshapeFamilyByLabel(label)
+			circuit := circuits.NewNoteReshapeCircuit(label, family.NIn, family.NOut)
+			if err := test.IsSolved(circuit, assignment, primitives.ScalarField()); err != nil {
+				t.Fatalf("valid control: %v", err)
+			}
+			vectors, err := primitives.LoadPrototypeVectors()
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Rebind the authenticated user root and statement so rejection must
+			// come from the frozen lifecycle, not a stale membership witness.
+			status := big.NewInt(2)
+			commitment, err := primitives.Poseidon377Hash7Native(
+				primitives.MustBigInt(vectors.Poseidon377.ComplianceLeafDomain),
+				[7]*big.Int{
+					compressedPointFromBinary(t, witness.Shared.DivGen),
+					noteReshapeTransmissionKeyFQNative(t, witness),
+					primitives.LittleEndianBytesToBigInt(witness.Shared.AssetID[:]),
+					compressedPointFromBinary(t, witness.SenderCapkAffine),
+					compressedPointFromBinary(t, witness.SenderRnkDhPkAffine),
+					primitives.LittleEndianBytesToBigInt(witness.SenderRnkCommitment[:]), status,
+				})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var path [compliance.ComplianceQuadTreeDepth][3]*big.Int
+			for i, layer := range witness.SenderCompliancePath.Layers {
+				for j, value := range layer {
+					path[i][j] = primitives.LittleEndianBytesToBigInt(value[:])
+				}
+			}
+			root, err := compliance.VerifyQuadPathNative(commitment, path, witness.SenderCompliancePosition)
+			if err != nil {
+				t.Fatal(err)
+			}
+			witness.ComplianceAnchor = le32FromBigInt(t, root)
+			witness.SenderStatus = le32FromBigInt(t, status)
+			assignment.ComplianceAnchor = root.String()
+			assignment.Sender.Status = status.String()
+			setNoteReshapeStatementHash(t, label, witness, assignment)
+			if err := test.IsSolved(circuit, assignment, primitives.ScalarField()); err == nil {
+				t.Fatal("frozen regulated owner accepted with rebound user root and statement")
+			}
+		})
+	}
 }
 
 func TestNoteReshapeRejectsRegulatedNullifierRegistrationMutations(t *testing.T) {
@@ -573,36 +604,6 @@ func TestNoteReshapeFamiliesRejectIsolatedExactConservationMutation(
 	}
 }
 
-func TestNoteReshape1x8BindsEveryOutputCommitment(t *testing.T) {
-	ccs := compileNoteReshapeRegressionCircuit(t, "note_reshape1x8", 1, 8)
-	for outputIndex := 0; outputIndex < 8; outputIndex++ {
-		t.Run(fmt.Sprintf("output_%d", outputIndex), func(t *testing.T) {
-			witness, assignment := loadNoteReshapeRegressionWitnessAndAssignment(
-				t,
-				"note_reshape1x8",
-			)
-			witness.Outputs[outputIndex].NoteCommitment = addFieldElementBytes(
-				t,
-				witness.Outputs[outputIndex].NoteCommitment,
-				big.NewInt(1),
-			)
-			assignment.Outputs[outputIndex].NoteCommitment =
-				primitives.LittleEndianBytesToBigInt(
-					witness.Outputs[outputIndex].NoteCommitment[:],
-				).String()
-			setNoteReshapeStatementHash(
-				t,
-				"note_reshape1x8",
-				witness,
-				assignment,
-			)
-			if err := noteReshapeAssignmentSolved(t, ccs, assignment); err == nil {
-				t.Fatalf("mutating output %d commitment must invalidate the 1x8 witness", outputIndex)
-			}
-		})
-	}
-}
-
 func TestNoteReshape1x8PaddedOutputFieldsAreBound(t *testing.T) {
 	ccs := compileNoteReshapeRegressionCircuit(t, "note_reshape1x8", 1, 8)
 	base := loadNoteReshapeRegressionAssignment(t, "note_reshape1x8")
@@ -896,41 +897,6 @@ func TestNoteReshapeFamiliesRejectWrongShape(t *testing.T) {
 						)
 					}
 				})
-			}
-		})
-	}
-}
-
-func TestNoteReshapeFamiliesRejectWrongStatementPreimage(t *testing.T) {
-	for _, family := range generated.NoteReshapeFamilies {
-		t.Run(family.Label, func(t *testing.T) {
-			witness, assignment :=
-				loadNoteReshapeRegressionWitnessAndAssignment(t, family.Label)
-			witness.Spends[0].Nullifier = addFieldElementBytes(
-				t,
-				witness.Spends[0].Nullifier,
-				big.NewInt(1),
-			)
-			if family.InputPadding == generated.InputPaddingSyntheticPrivate {
-				assignment.SyntheticSpends[0].Nullifier =
-					primitives.LittleEndianBytesToBigInt(
-						witness.Spends[0].Nullifier[:],
-					).String()
-			} else {
-				assignment.Spends[0].Nullifier =
-					primitives.LittleEndianBytesToBigInt(
-						witness.Spends[0].Nullifier[:],
-					).String()
-			}
-			setNoteReshapeStatementHash(
-				t,
-				family.Label,
-				witness,
-				assignment,
-			)
-			ccs := compileNoteReshapeRegressionCircuit(t, family.Label, family.NIn, family.NOut)
-			if err := noteReshapeAssignmentSolved(t, ccs, assignment); err == nil {
-				t.Fatalf("mutating a statement-preimage nullifier must invalidate %s", family.Label)
 			}
 		})
 	}

@@ -74,5 +74,5 @@ evidence.
 
 Internal compute changes must preserve semantics and the committed proof and
 transcript bytes. Wire changes require a protocol-version bump. Transcript
-changes require corresponding updates in `shieldd-formal`. The workflow is in
+changes require corresponding updates in `shieldd-security`. The workflow is in
 [optimization-playbook.md](../../crates/crypto/proof-aggregation/optimization-playbook.md).

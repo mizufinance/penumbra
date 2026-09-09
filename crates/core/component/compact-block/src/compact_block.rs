@@ -43,8 +43,6 @@ pub struct CompactBlock {
     pub app_parameters_updated: bool,
     /// Updated gas prices for the native token, if they have changed.
     pub gas_prices: Option<GasPrices>,
-    /// Updated gas prices for alternative fee tokens, if they have changed.
-    pub alt_gas_prices: Vec<GasPrices>,
     // The epoch index
     pub epoch_index: u64,
     /// Compliance user tree anchor (root) for this block.
@@ -78,7 +76,6 @@ impl Default for CompactBlock {
             routing_action_payloads: Vec::new(),
             app_parameters_updated: false,
             gas_prices: None,
-            alt_gas_prices: Vec::new(),
             epoch_index: 0,
             compliance_user_anchor: None,
             compliance_asset_anchor: None,
@@ -99,7 +96,6 @@ impl CompactBlock {
             || !self.routing_records.is_empty() // need to scan routing records
             || self.app_parameters_updated // need to save latest app parameters
             || self.gas_prices.is_some() // need to save latest gas prices
-            || !self.alt_gas_prices.is_empty() // need to save latest alt gas prices
             || !self.compliance_user_registrations.is_empty() // need to sync user tree
             || !self.compliance_user_status_changes.is_empty() // need to update user tree
             || !self.compliance_asset_registrations.is_empty() // need to sync asset tree
@@ -128,7 +124,6 @@ impl From<CompactBlock> for pb::CompactBlock {
             routing_records: cb.routing_records.into_iter().map(Into::into).collect(),
             app_parameters_updated: cb.app_parameters_updated,
             gas_prices: cb.gas_prices.map(Into::into),
-            alt_gas_prices: cb.alt_gas_prices.into_iter().map(Into::into).collect(),
             epoch_index: cb.epoch_index,
             compliance_user_anchor: cb
                 .compliance_user_anchor
@@ -216,11 +211,6 @@ impl TryFrom<pb::CompactBlock> for CompactBlock {
                 .collect::<Result<Vec<_>>>()?,
             app_parameters_updated: value.app_parameters_updated,
             gas_prices: value.gas_prices.map(TryInto::try_into).transpose()?,
-            alt_gas_prices: value
-                .alt_gas_prices
-                .into_iter()
-                .map(GasPrices::try_from)
-                .collect::<Result<Vec<GasPrices>>>()?,
             epoch_index: value.epoch_index,
             compliance_user_anchor,
             compliance_asset_anchor,
